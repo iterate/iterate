@@ -1,16 +1,19 @@
 # @iterate-com/voice-agent
 
-The realtime voice agent for iterate projects — the server side that the ESP32
+The GPT-Live voice agent for iterate projects — the server side that the ESP32
 boards, the voicelab host CLI, and the mobile app talk to — as an ordinary
-package. A project's config repo declares it and re-exports it from a
+package. The voice model (`gpt-live-1`) holds the conversation, full duplex;
+it delegates anything that needs looking up or doing to a backend model
+(`gpt-6-astra` on the fast tier by default) armed with `exec_typescript`
+against the project and the tools the setup names. A project's config repo declares it and re-exports it from a
 three-line `voice-agent.ts`; the platform builds that file the way it builds
 `worker.ts`. The repo holds the agent's name, not a copy.
 
 - [What it is](#what-it-is)
 - [Enabling voice on a project](#enabling-voice-on-a-project)
 - [From the project's own worker: `VoiceAgentApp`](#from-the-projects-own-worker-voiceagentapp)
-- [Provider secrets](#provider-secrets)
-- [What `setup` does, and the colleague](#what-setup-does-and-the-colleague)
+- [The provider secret](#the-provider-secret)
+- [What `setup` does, and the backend](#what-setup-does-and-the-backend)
 - [Talking to a line: the stream protocol](#talking-to-a-line-the-stream-protocol)
 - [From anything that holds a project handle: the worker refs](#from-anything-that-holds-a-project-handle-the-worker-refs)
 - [The installer](#the-installer)
@@ -29,10 +32,11 @@ and that entry has two halves.
 - **The stateless entrypoint** (the default export) is what you call:
   `health`, `setupVoiceAgent`, `removeVoiceAgent`. It lives for a request.
 - **The stateful facet** (`VoiceAgentFacet`, a Durable Object) is one per
-  conversation stream. It holds the provider's WebSocket (Grok or OpenAI
-  realtime), paces the answer's audio back at playback rate, keeps the
-  transcript, and folds every event on the stream into the state that survives
-  a restart. Its durable key is `voice-agent-facet`.
+  conversation stream. It holds the GPT-Live WebSocket, turns the provider's
+  continuous output stream into paced speaker frames (idle silence dropped,
+  each answer closed with an end marker), answers the backend model's
+  function calls, keeps the transcript, and folds every event on the stream
+  into the state that survives a restart. Its durable key is `voice-agent-facet`.
 
 Everything between a client and the facet is **events on one stream**: the
 microphone goes up as ephemeral `mic-frame`s, the answer comes down as
@@ -122,20 +126,17 @@ The browser client that will answer on that slug is not built yet
 501 and says so. The methods work today:
 
 ```ts
-// Give a chat its own phone line. The chat becomes the call's "colleague":
-// the transcript lands on the chat's stream and every message the chat agent
-// writes is spoken into the live call.
+// Give a phone its own line. Hold-to-talk or open mic is the client's own
+// business: GPT-Live takes every turn itself either way.
 const line = await this.#voice.setup({
-  streamPath: `/agents/voice/chat${chatPath}`,
-  colleaguePath: chatPath,
-  provider: "openai",
+  streamPath: `/agents/voice/phone`,
   instructions:
     "You are on a phone call with a colleague who knows you well. Casual, direct, brief.",
-  clientTakesTurns: true, // push-to-talk client; omit for an open-mic board
   greeting: true, // speak first when the call connects
   tools: [
     {
-      // No expression: a name the agent already knows how to be.
+      // No expression: a name the agent already knows how to be. The backend
+      // model calls it when the person says goodbye.
       name: "hang_up",
       description: "End the call when the user says goodbye. Say goodbye BEFORE calling this.",
     },
@@ -151,9 +152,11 @@ whose `get()` yields a project handle). Every method opens a project session,
 dials the guest, and releases both handles when done, whether the call
 returned or threw.
 
-### Tools the model can call
+### Tools the backend can call
 
-A tool is data on the setup: what the provider shows the model, plus an
+The voice model has no tools of its own — GPT-Live delegates — so every tool
+reaches the BACKEND model beside `exec_typescript`, which it calls in a
+second or two. A tool is data on the setup: what the model is shown, plus an
 **itx expression** — a walk from the project root to a function. The model's
 parsed arguments object becomes that function's single argument. The
 expression names a capability; authority is re-derived from a fresh project
@@ -192,30 +195,28 @@ A step is a property name (`"worker"`) or a call with its own arguments
 
 ### The setup options
 
-| Option             | What it does                                                                                                                                                         |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `streamPath`       | The conversation stream. A fresh `/agents/voice/<uuid>` when omitted. Must be absolute.                                                                              |
-| `provider`         | `"grok"` (default) or `"openai"`. `providerModel` / `providerVoice` override that provider's defaults.                                                               |
-| `instructions`     | What the model is told it is. Empty leaves the provider's own default.                                                                                               |
-| `clientTakesTurns` | `true` for a push-to-talk client that sends `ptt-start` / `ptt-end`. Omit for an open microphone, where the provider's VAD decides turns (`turnDetection` tunes it). |
-| `greeting`         | Speak first when a call connects — "hi again" on a stream with history, via the recap.                                                                               |
-| `colleague`        | On unless `false`: the stream gets a colleague agent (below).                                                                                                        |
-| `colleaguePath`    | Make an existing agent (a chat) the colleague instead of the derived one — "call any chat".                                                                          |
-| `tools`            | As above.                                                                                                                                                            |
-| `visemes`          | Classify the answer into mouth shapes for a face-rendering client (the boards with a display).                                                                       |
-| `providerBaseUrl`  | Dial this instead of the provider. Carries no credential and needs no secret — for tests and fakes.                                                                  |
-| `reinstall`        | Install the subscription under a fresh key even if an identical one exists.                                                                                          |
+| Option            | What it does                                                                                                                                             |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `streamPath`      | The conversation stream. A fresh `/agents/voice/<uuid>` when omitted. Must be absolute.                                                                  |
+| `providerModel`   | The GPT-Live model (`gpt-live-1`) and, with `providerVoice`, the voice (`marin`).                                                                        |
+| `instructions`    | The voice's persona and tone; the agent appends the delegation policy. Keep it short.                                                                    |
+| `greeting`        | Speak first when a call connects — "hi again" on a stream with history, via the seeded transcript.                                                       |
+| `backend`         | Overrides for the backend model: `{ model, reasoningEffort, serviceTier, instructions }`; the defaults are `gpt-6-astra`, `low`, `priority` (Fast mode). |
+| `tools`           | As above.                                                                                                                                                |
+| `visemes`         | Classify the answer into mouth shapes for a face-rendering client (the boards with a display).                                                           |
+| `providerBaseUrl` | Dial this instead of the provider. Carries no credential and needs no secret — for tests and fakes.                                                      |
+| `reinstall`       | Install the subscription under a fresh key even if an identical one exists.                                                                              |
 
 Re-running `setup` with identical options appends nothing: the certificate
 is content-hashed. Changing the options supersedes the old certificate.
 
-## Provider secrets
+## The provider secret
 
-`setup` demands the secret its provider will spend, before it writes
-anything: `/secrets/openai` for OpenAI, `/secrets/xai` for Grok. A
-`providerBaseUrl` pointing at a host that is no known provider's needs no
-secret. The secret is a project secret with egress pinned to the provider,
-created once by an operator — the key never travels through the worker:
+`setup` demands the secret the dial will spend, before it writes anything:
+`/secrets/openai`. A `providerBaseUrl` pointing at a host that is not
+OpenAI's needs no secret. The secret is a project secret with egress pinned
+to the provider, created once by an operator — the key never travels through
+the worker:
 
 ```ts
 // From an itx script (the OS MCP server, `pnpm cli itx run`, or a project agent):
@@ -225,32 +226,34 @@ await itx.secrets
 ```
 
 ```bash
-# Or let the CLI do it from a Doppler config that carries OPENAI_API_KEY / XAI_API_KEY:
-doppler run --config prd -- pnpm cli voicelab talk --project <slug> --setup-only --provider openai
+# Or let the CLI do it from a Doppler config that carries OPENAI_API_KEY:
+doppler run --config prd -- pnpm cli voicelab talk --project <slug> --setup-only
 ```
 
 Existing material is left alone; a voice command never rotates a running
 project's key.
 
-## What `setup` does, and the colleague
+## What `setup` does, and the backend
 
 `setupVoiceAgent` appends a **birth certificate** to the stream — the
 `events.iterate.com/voice-agent/configured` event carrying every option above
 — and the subscription that wakes the facet for that stream (the worker ref
 above). Then it waits for the facet to fold the certificate (a cold build is
 most of the wait; `warmMs` in the result is that clock), so a returned
-`setup` means the line is live. Contract version `19.0.0`.
+`setup` means the line is live. Contract version `20.0.0`.
 
-Every stream is born with a **colleague**: a normal text agent
-(`/agents/voice-notes/…` by default, or the chat you named in
-`colleaguePath`). The call's transcript lands on the colleague's stream as
-context, so the backend _reads_ the conversation instead of being briefed
-second-hand; the model's `note_to_self` tool writes a `colleague-note` to it;
-and everything the colleague says back (`web-message-sent`) is copied onto
-the voice stream and spoken into whichever call is live. The colleague's own
-status narration (`colleague-status`: "writing code", "running code", a
-failed script) is whispered into the session as quiet context. Thinking fast
-and slow, on one stream.
+Every call is **two models**. GPT-Live listens and speaks — it stops when
+talked over, backchannels, and decides when a request needs the backend.
+When it delegates, the provider runs the backend model (`gpt-6-astra` on the
+fast tier at low effort unless `backend` says otherwise) with the brief this
+package gives it and two kinds of function: `exec_typescript`, which the
+facet runs on the project's own capability host — the same script runner the
+OS MCP server's tool uses — and the setup's `tools`, walked as itx
+expressions (`hang_up` ends the call after the goodbye plays). The backend's
+final text is spoken by the voice and recorded on the stream as
+`backend-reply`. Measured from a Mac: asked how many files the config repo
+holds, Astra wrote three itx scripts in a row and the voice answered seven
+seconds later.
 
 ## Talking to a line: the stream protocol
 
@@ -259,21 +262,22 @@ events. Every type below is prefixed `events.iterate.com/voice-agent/`.
 
 | Event                        | Direction | Durable   | Payload                                                                                                         |
 | ---------------------------- | --------- | --------- | --------------------------------------------------------------------------------------------------------------- |
-| `ptt-start`                  | client →  | durable   | `{}` — the user began speaking; opens a call if none is up (push-to-talk clients only)                          |
+| `ptt-start`                  | client →  | durable   | `{}` — the user pressed to talk; opens a call if none is up, interrupts what the device is playing              |
 | `mic-frame`                  | client →  | ephemeral | `{ conversationId, seq, pcm }` — 20 ms of base64 PCM16 mono 16 kHz, numbered by the device                      |
-| `ptt-end`                    | client →  | durable   | `{}` — the turn is complete                                                                                     |
+| `ptt-end`                    | client →  | ephemeral | `{}` — the button came up; the provider hears the audio stop and needs nothing else                             |
 | `conversation-end-requested` | either    | durable   | `{ conversationId, reason }` — somebody decided the call is over (the hang-up button, the `hang_up` tool, idle) |
 | `call-started`               | ← server  | durable   | `{ conversationId }` — the server opened a call                                                                 |
 | `conversation-accepted`      | ← server  | durable   | `{ conversationId, handshakeTookMs, heldMicFrames }` — the provider accepted the session; the call is live      |
 | `spk-frame`                  | ← server  | ephemeral | `{ conversationId, deviceSpeakerFrameSeq, pcm, drop?, last? }` — one paced chunk of the answer                  |
 | `utterance-transcript`       | ← server  | durable   | `{ conversationId, text }` — the provider's transcription of one finished listener turn                         |
-| `answer-transcript`          | ← server  | durable   | `{ conversationId, text, cancelled?, kind? }` — one finished answer, in words                                   |
+| `answer-transcript`          | ← server  | durable   | `{ conversationId, text, cancelled? }` — one finished answer, in words                                          |
+| `backend-reply`              | ← server  | durable   | `{ conversationId, text }` — the backend model's final text for one delegation                                  |
 | `conversation-ended`         | ← server  | durable   | `{ conversationId, reason }` — the call is over                                                                 |
-| `colleague-note`             | ← server  | durable   | `{ text }` — one message from the colleague, spoken into the live call                                          |
 
 **A client's entire speaker policy is three lines.** On a `spk-frame`: if
-`drop`, clear the speaker buffer (the listener barged in; discard what has not
-played); write `pcm`; if `last`, the answer is over. The server holds the
+`clearSpeakerBufferBeforeFrame`, clear the speaker buffer (the button took
+the floor; discard what has not played); write `pcm`; if `lastFrameOfAnswer`,
+the answer is over. The server holds the
 answer and releases it at playback rate, so a client never buffers more than
 a few seconds and never has to number, catch up, or skip. The frame sequence
 number is contiguous within a conversation, which is how a client (or the
@@ -306,7 +310,7 @@ using itx = session.projects.get("my-project");
 // contract, which the entrypoint class implements.
 using guest = itx.workers.get(voiceAgentEntrypointRef) as unknown as VoiceAgentRpc & Disposable;
 console.log(await guest.health()); // builds the guest if it is not built yet
-const line = await guest.setupVoiceAgent({ streamPath: "/agents/voice/desk", provider: "openai" });
+const line = await guest.setupVoiceAgent({ streamPath: "/agents/voice/desk" });
 
 // After upgrading the package: a WARM stateful facet keeps the bundle it
 // booted with. Killing the incarnation is the upgrade — the next dispatch
@@ -393,14 +397,15 @@ install that changed the repo; the ref example above shows the call.
 pnpm --dir packages/voice-agent build      # tsdown (two entries, every dependency external) + tsc declarations
 pnpm --dir packages/voice-agent typecheck
 pnpm --dir packages/voice-agent test       # the installer, the refs, VoiceAgentApp
-pnpm --dir apps/os exec vitest run scripts/voicelab/voice-agent.test.ts   # the agent itself, against a fake provider
+pnpm --dir apps/os exec vitest run scripts/voicelab/voice-agent.test.ts   # the agent itself, against a fake GPT-Live
+doppler run --config dev -- pnpm cli voicelab live-probe                     # the raw wire, from this Mac
+doppler run --config dev -- pnpm cli voicelab duplex --project <slug> --setup # full duplex through the platform
 ```
 
 Layout:
 
 - `src/voice-agent.ts` — the agent: the processor contract, the facet, and
-  the stateless entrypoint. `src/face.ts`, `src/pcm.ts`, `src/viseme.ts` —
-  what it imports. `src/viseme-model.generated.ts` — the HeadAudio viseme
+  the stateless entrypoint. `src/face.ts`, `src/viseme.ts` — what it imports. `src/viseme-model.generated.ts` — the HeadAudio viseme
   model (met4citizen/HeadAudio, MIT — see `HEAD_AUDIO_LICENSE.txt`),
   embedded as a module by `viseme-model.codegen.cjs` from
   `viseme-model.bin`; drift is a fixable `codegen/codegen` lint error.
@@ -425,7 +430,7 @@ The agent's behavioural tests live with the lab tooling in
 ## Troubleshooting
 
 - **`voice-agent setup requires secret "/secrets/openai" with material`** —
-  see [Provider secrets](#provider-secrets). Tests pass a `providerBaseUrl`
+  see [The provider secret](#the-provider-secret). Tests pass a `providerBaseUrl`
   instead.
 - **The first call after enabling is slow, or fails with a build error** —
   a dynamic worker builds on the first call into it (npm install of the

@@ -8,9 +8,6 @@
  * `implements` VoiceAgentRpc, so the two cannot drift.
  */
 
-/** A realtime voice provider this agent can dial. */
-export type VoiceProvider = "grok" | "openai";
-
 /**
  * One step of an itx expression — the platform's persisted-capability shape
  * (apps/os/src/itx/expression.ts): a string is a property read,
@@ -20,7 +17,7 @@ export type VoiceProvider = "grok" | "openai";
 export type ItxExpressionStepInput = string | [method: string, ...args: unknown[]];
 
 /**
- * One tool the model may call, as data on the birth certificate.
+ * One tool the backend model may call, as data on the birth certificate.
  *
  * `expression` is a walk from the PROJECT ROOT to a function; the model's
  * parsed arguments object is that function's single argument. Persisting an
@@ -28,10 +25,13 @@ export type ItxExpressionStepInput = string | [method: string, ...args: unknown[
  * call re-derives authority from a fresh project session. A tool with NO
  * expression is a name the agent already knows how to be: `hang_up` is the
  * only one.
+ *
+ * The voice model itself has no tools — GPT-Live delegates — so every tool
+ * here reaches the BACKEND model, which calls it in a second or two.
  */
 export interface VoiceToolInput {
   name: string;
-  /** What the provider shows the model; usage guidance lives here, not in
+  /** What the model is shown; usage guidance lives here, not in
    * `instructions` — "say goodbye BEFORE calling this" rides the tool. */
   description: string;
   /** JSON Schema for the arguments, handed to the provider verbatim.
@@ -40,52 +40,46 @@ export interface VoiceToolInput {
   expression?: ItxExpressionStepInput[];
 }
 
+/**
+ * The backend the voice delegates to (GPT-Live's Responses delegation): a
+ * hosted model armed with `exec_typescript` against this project plus the
+ * certificate's tools. Every field is an override of the package's defaults
+ * — `gpt-6-astra`, reasoning effort `low`, the `priority` (Fast) tier.
+ */
+export interface VoiceBackendInput {
+  /** The Responses model, e.g. `gpt-6-astra`, `gpt-5.6-terra`. */
+  model?: string;
+  /** `reasoning.effort` for that model. */
+  reasoningEffort?: string;
+  /** `service_tier`; `priority` is OpenAI's Fast mode. */
+  serviceTier?: string;
+  /** Extra backend instructions, appended to the package's own brief. */
+  instructions?: string;
+}
+
 export interface SetupVoiceAgentOptions {
   /** The conversation stream. A fresh /agents/voice/* path is generated when omitted. */
   streamPath?: string;
   /**
-   * Dial THIS instead of x.ai, for a deterministic test.
+   * Dial THIS instead of api.openai.com, for a deterministic test.
    *
    * NO CREDENTIAL FOLLOWS IT — see `secretForHost` in voice-agent.ts: a host
-   * that is no known provider's gets no Authorization header and no setup
-   * gate.
+   * that is not OpenAI's gets no Authorization header and no setup gate.
    */
   providerBaseUrl?: string;
-  /** Which realtime voice provider the birth certificate names. Default grok. */
-  provider?: VoiceProvider;
-  /** Model and voice overrides for that provider. */
+  /** Model and voice overrides; `gpt-live-1` and `marin` by default. */
   providerModel?: string;
   providerVoice?: string;
-  /** What to tell the model it is. Empty leaves the provider's own default. */
+  /** What the voice is told it is — persona and tone. The delegation
+   * policy is appended by the agent; keep this short. */
   instructions?: string;
-  /**
-   * This client segments its own turns with the push-to-talk verbs.
-   *
-   * Omitted means Grok listens, which is what every board wants. Say true only
-   * for a client that really does own its turns — a terminal holding the space
-   * bar — because on an open microphone it means Grok is never told a turn
-   * ended, and the call goes silent with nothing logged.
-   */
-  clientTakesTurns?: boolean;
-  /** The provider's own turn_detection object, verbatim, for open-mic VAD
-   * tuning per stream. Omitted takes the measured defaults. */
-  turnDetection?: Record<string, unknown> & { type: string };
   /** Classify the answer into mouth shapes for a face-rendering client. */
   visemes?: boolean;
   /** Speak first when a call connects (contract 17.0.0). */
   greeting?: boolean;
-  /** `note_to_self` writes to the stream's one colleague agent (per stream,
-   * not per conversation — contract 12.0.0) and its chat replies are read
-   * back into whichever call is live. ON unless explicitly false — every
-   * stream is born with its colleague (contract 10.0.0). */
-  colleague?: boolean;
-  /** Make an EXISTING agent (a chat) the colleague instead of the derived
-   * `/agents/voice-notes/...` desk — contract 18.0.0's "call any chat"
-   * mode. The call's transcript lands on that agent's stream and its every
-   * chat message is spoken into the live call. */
-  colleaguePath?: string;
-  /** Tools the model may call: name/description/parameters go to the
-   * provider; the itx expression is the run. No expression = hang_up. */
+  /** Backend overrides — see {@link VoiceBackendInput}. */
+  backend?: VoiceBackendInput;
+  /** Tools the backend may call — see {@link VoiceToolInput}. */
   tools?: VoiceToolInput[];
   /** Install the subscription under a fresh key even if an identical one exists. */
   reinstall?: boolean;

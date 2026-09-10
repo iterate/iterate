@@ -1,18 +1,16 @@
 /**
- * The voice agent's second cut, against a pretend Grok realtime server.
+ * The voice agent's third cut, against a pretend GPT-Live server.
  *
- * WHAT THE FAKE IS FOR. Every claim this file makes is a claim about a
- * conversation with a provider that behaves badly in specific, observed ways:
- * it fires `speech_started` on echo residue, it finishes generating long before
- * the listener has heard the answer, and it never cancels anything on its own.
- * A fake is the only way to stage those on purpose — and `fetch` is mocked
- * rather than the dial injected, so `dialGrokSocket` itself is under test too.
+ * WHAT THE FAKE IS FOR. GPT-Live's output is a CONTINUOUS stream — one delta
+ * per 100 ms whether or not anything is being said — and it has no response
+ * lifecycle, no VAD onsets, no item ids. Every claim here is about how the
+ * facet turns that stream into the device's three-sentence contract (numbered
+ * frames, a clear that names a sequence number, an end-of-answer marker) and
+ * how it answers the backend model's function calls. `fetch` is mocked rather
+ * than the dial injected, so `dialProviderSocket` itself is under test too.
  *
- * THE SEQUENCE NUMBERS ARE THE POINT. Most of what follows is an assertion
- * about `deviceSpeakerFrameSeq`: that it is contiguous, that a flush names one,
- * and that nothing after a flush's watermark is ever lost. The bug this file
- * exists to prevent — a boolean `drop` chopping an answer it did not mean — is
- * only expressible if those numbers are absent.
+ * THE SEQUENCE NUMBERS ARE STILL THE POINT: contiguous, a flush names one,
+ * nothing after a flush's watermark is ever lost.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeProcessorHarness } from "iterate/processors/testing";
@@ -26,49 +24,50 @@ import {
 } from "../../../../packages/voice-agent/src/voice-agent.ts";
 
 /* ========================================================================== */
-/* A PRETEND GROK                                                             */
+/* A PRETEND GPT-LIVE                                                         */
 /* ========================================================================== */
 
-/**
- * 16 kHz mono PCM16: sixteen samples, thirty-two bytes, per millisecond.
- *
- * ONE NUMBER NOW, where there were two. The wire carried mu-law at half this
- * and the ring held PCM16 at all of it, so every length in this file had to
- * say which of the two it meant — and the day it got that wrong the call went
- * silent with nothing logged. Same units end to end is the point of the
- * change.
- */
+/** 16 kHz mono PCM16: sixteen samples, thirty-two bytes, per millisecond. */
 const PCM16_BYTES_PER_MS = 32;
-/**
- * The tick this file advances the clock by, and nothing more.
- *
- * NOT A CONSTANT OF THE SYSTEM. It read "must match the constants in
- * voice-agent.ts", and the constant it was matching — a fixed 100 ms speaker
- * frame — no longer exists: a frame is now whatever a delta gave us, up to
- * MAX_SPEAKER_PAYLOAD_BYTES. What is left is a step size for the pretend clock,
- * chosen because it is the largest frame the pacer can emit and so advances
- * the drain by exactly one frame per tick.
- */
-const SPEAKER_FRAME_MS = MAX_SPEAKER_PAYLOAD_BYTES / PCM16_BYTES_PER_MS;
-/* IMPORTED, not re-declared: a copy under a "must match" comment passes
- * silently the day the two diverge. */
+/** One provider delta: 100 ms, which is also the device's frame ceiling. */
+const DELTA_MS = 100;
 const MAX_DEVICE_SPEAKER_BUFFER_MS = MAX_DEVICE_SPEAKER_BACKLOG_BYTES / PCM16_BYTES_PER_MS;
 
+function base64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  }
+  return btoa(binary);
+}
+
+/** `ms` of audible speech: a ramp, so a test that loses audio can say WHICH. */
+function speechDelta(ms: number, seed = 1): string {
+  const pcm = new Uint8Array(ms * PCM16_BYTES_PER_MS);
+  for (let index = 0; index + 1 < pcm.length; index += 2) {
+    const sample = 4_000 + ((index / 2 + seed * 7) % 2_000);
+    pcm[index] = sample & 0xff;
+    pcm[index + 1] = (sample >> 8) & 0xff;
+  }
+  return base64(pcm);
+}
+
+/** `ms` of what the idle stream carries: digital zero. */
+function silenceDelta(ms: number): string {
+  return base64(new Uint8Array(ms * PCM16_BYTES_PER_MS));
+}
+
 /**
- * The pretend provider, and the pretend socket it speaks over.
- *
- * Deliberately not a WebSocket subclass: the facet only ever calls
- * `addEventListener`, `send`, `close` and `accept`, and a fake that offers
- * exactly those is a readable statement of the surface being depended on.
+ * The pretend provider, and the pretend socket it speaks over. Deliberately
+ * not a WebSocket subclass: the facet only ever calls `addEventListener`,
+ * `send`, `close` and `accept`.
  */
-class FakeProvider {
+class FakeLive {
   /** Everything the facet sent us, parsed, oldest first. */
   readonly sent: Record<string, unknown>[] = [];
-  /** True once the facet closed its end. */
   closed = false;
   binaryType = "blob";
   accepted = false;
-
   #listeners = new Map<string, ((event: unknown) => void)[]>();
 
   accept(): void {
@@ -90,149 +89,112 @@ class FakeProvider {
     for (const listener of this.#listeners.get("close") ?? []) listener({});
   }
 
+  sentOfType(type: string) {
+    return this.sent.filter((message) => message.type === type);
+  }
+
+  /** The `session.start` the facet opened with, or throws. */
+  get startedWith(): Record<string, unknown> {
+    const start = this.sentOfType("session.start")[0];
+    if (start === undefined) throw new Error("no session.start was sent");
+    return start.session as Record<string, unknown>;
+  }
+
   /* ------------------------------------------------- the provider's voice */
 
-  /** Push something the provider should never send: bad JSON, or bytes. */
   pushRaw(data: unknown): void {
     for (const listener of this.#listeners.get("message") ?? []) listener({ data });
   }
 
-  /** Push one raw provider message at the facet. */
   push(message: Record<string, unknown>): void {
     for (const listener of this.#listeners.get("message") ?? []) {
       listener({ data: JSON.stringify(message) });
     }
   }
 
-  /** The two edges that make a session usable. */
-  completeHandshake(): void {
-    this.push({ type: "session.created" });
-    this.push({ type: "session.updated" });
+  /** The one edge that makes a session usable. */
+  start(): void {
+    this.push({ type: "session.started", event_id: "e1", session: { id: "live_fake" } });
   }
 
-  /**
-   * One audio delta carrying `ms` of speech.
-   *
-   * The samples are a ramp rather than silence so a test that loses audio can
-   * say WHICH audio it lost, and so mu-law encoding has something to do.
-   */
-  answerAudio(ms: number, itemId = "item_fake"): void {
-    const pcm = new Uint8Array(ms * PCM16_BYTES_PER_MS);
-    for (let index = 0; index < pcm.length; index++) pcm[index] = index % 251;
+  /** `ms` of speech, as 100 ms deltas. */
+  speech(ms: number): void {
+    for (let sent = 0; sent < ms; sent += DELTA_MS) {
+      this.push({
+        type: "session.output_audio.delta",
+        delta: speechDelta(Math.min(DELTA_MS, ms - sent), sent / DELTA_MS),
+      });
+    }
+  }
+
+  /** `ms` of the idle stream. */
+  silence(ms: number): void {
+    for (let sent = 0; sent < ms; sent += DELTA_MS) {
+      this.push({
+        type: "session.output_audio.delta",
+        delta: silenceDelta(Math.min(DELTA_MS, ms - sent)),
+      });
+    }
+  }
+
+  userSays(delta: string, startMs: number, endMs: number): void {
+    this.push({ type: "session.input_transcript.delta", delta, start_ms: startMs, end_ms: endMs });
+  }
+
+  assistantSays(delta: string, startMs: number, endMs: number): void {
+    this.push({ type: "session.output_transcript.delta", delta, start_ms: startMs, end_ms: endMs });
+  }
+
+  /** The backend asked for a function, nested the way the wire nests it. */
+  backendFunctionCall(callId: string, name: string, args: string): void {
     this.push({
-      type: "response.output_audio.delta",
-      delta: base64(pcm),
-      item_id: itemId,
-      content_index: 0,
+      type: "response.event",
+      event_id: "e_fn",
+      delegation_id: "item_b",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "function_call", call_id: callId, name, arguments: args },
+      },
     });
   }
 
-  /** The provider's own transcript of the answer, streamed beside the audio. */
-  answerTranscript(text: string): void {
-    this.push({ type: "response.output_audio_transcript.delta", delta: text });
-  }
-
-  /** The provider decides somebody in the room is talking. */
-  speechStarted(): void {
-    this.push({ type: "input_audio_buffer.speech_started" });
-  }
-
-  /**
-   * The room went quiet again. On its own — no commit, no new response —
-   * this is how a tentative onset retracts: the measured echo-residue blip
-   * is a started/stopped pair and nothing else. A REAL turn follows it with
-   * `input_audio_buffer.committed` in the same server tick.
-   */
-  speechStopped(): void {
-    this.push({ type: "input_audio_buffer.speech_stopped" });
-  }
-
-  /** A new answer begins. */
-  responseCreated(): void {
-    this.push({ type: "response.created" });
-  }
-
-  /**
-   * Generation is finished — which is NOT the same as the listener hearing it.
-   *
-   * BOTH EDGES, in the order the real provider sends them. The facet acts on
-   * `response.output_audio.done`, because that one is specifically about the
-   * audio; a fake that sent only `response.done` let two tests pass against a
-   * facet that would never have marked the end of an answer at all.
-   */
-  answerComplete(): void {
-    this.push({ type: "response.output_audio.done" });
-    this.push({ type: "response.done" });
-  }
-
-  /** Everything the facet sent, of one type. */
-  sentOfType(type: string): Record<string, unknown>[] {
-    return this.sent.filter((message) => message.type === type);
+  /** The backend's final words. */
+  backendMessage(itemId: string, text: string): void {
+    this.push({
+      type: "response.event",
+      event_id: "e_msg",
+      delegation_id: "item_b",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "message", id: itemId, content: [{ type: "output_text", text }] },
+      },
+    });
   }
 }
 
-function base64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
-/* ========================================================================== */
-/* HARNESS                                                                    */
-/* ========================================================================== */
-
-/*
- * WHO TAKES THE TURNS is now a setting on the birth certificate, not a guess
- * from the client's name. These two read as the old board names on purpose —
- * the behaviours are the same two behaviours — but nothing about the string
- * decides anything any more, which is the whole repair.
- */
-const GROK_LISTENS = false;
-const CLIENT_TAKES_TURNS = true;
+/* ================================================================ harness */
 
 function makeHarness() {
-  /*
-   * ONE FAKE SOCKET PER DIAL, because that is what a provider does.
-   * Re-using a single fake across an eviction leaves the DEAD incarnation's
-   * message listener attached to the same object as the live one, so every
-   * push reaches two processors and the suite quietly tests a situation that
-   * cannot happen. It also makes "the old socket goes quiet" unassertable.
-   */
-  const sockets: FakeProvider[] = [];
-  const dialledUrls: string[] = [];
-  /*
-   * `fetch` IS THE SEAM, because that is what `dialGrokSocket` uses. Mocking
-   * the dial dependency instead would leave the one function that has actually
-   * broken in production — the `response.webSocket ?? null` line — untested.
-   */
-  vi.stubGlobal("fetch", async (url: string) => {
-    dialledUrls.push(String(url));
-    const socket = new FakeProvider();
+  const sockets: FakeLive[] = [];
+  const dialled: { url: string; headers: Record<string, string> }[] = [];
+  /* `fetch` IS THE SEAM, because that is what `dialProviderSocket` uses. */
+  vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string> }) => {
+    dialled.push({ url: String(url), headers: init?.headers ?? {} });
+    const socket = new FakeLive();
     sockets.push(socket);
     return { webSocket: socket } as unknown as Response;
   });
 
-  /* What a tool expression walks: a stand-in for the project root that a
-   * test replaces with whatever capabilities its tool needs. The DEFAULT
-   * quietly accepts the colleague link's calls (create, subscribe, brief,
-   * message, recap reads) — a working desk is every unrelated test's
-   * reality, and a failing one now leaves a durable "backend link error"
-   * status that would shift every event count. */
+  /* What a backend function walks: a stand-in for the project root that
+   * records the scripts it was asked to run. */
+  const scripts: string[] = [];
   const projectRoot: { current: unknown } = {
     current: {
-      agents: {
-        get: () => ({
-          create: async () => {},
-          append: async () => {},
-          message: async () => {},
-        }),
-      },
-      streams: {
-        get: () => ({
-          append: async () => {},
-          getEventPage: async () => ({ streamMaxOffset: 0 }),
-          getEvents: async () => [],
-        }),
+      capabilityHost: {
+        runScript: async (code: string) => {
+          scripts.push(code);
+          return { result: { files: 3 } };
+        },
       },
     },
   };
@@ -244,32 +206,26 @@ function makeHarness() {
         ...deps,
         nowAtFacetMs: deps.now,
         buildCacheKey: "test-build",
-        /* The REAL dial, so the mocked `fetch` above is what stands in for the
-         * provider — including the `response.webSocket ?? null` line that has
-         * broken in production. */
-        dialProvider: (provider, baseUrl, model) => dialProviderSocket(provider, baseUrl, model),
+        dialProvider: (baseUrl) => dialProviderSocket(baseUrl),
         withProject: (fn) => fn(projectRoot.current),
       }),
   });
-  /* `grok` is always the socket of the CURRENT dial; `sockets` is every one
-   * ever opened, so a test can address an abandoned socket on purpose. */
   return {
     ...harness,
     sockets,
     get provider() {
       return sockets[sockets.length - 1]!;
     },
-    dialledUrls,
+    dialled,
     projectRoot,
+    scripts,
   };
 }
 
 type Harness = ReturnType<typeof makeHarness>;
 
 /* ------------------------------------------------------------ read helpers */
-/* Named for the QUESTION they answer, so an assertion reads as a sentence. */
 
-/** Every speaker frame the device was sent, oldest first. */
 function speakerFrames(h: Harness) {
   return h
     .events()
@@ -285,11 +241,6 @@ function speakerFrames(h: Harness) {
     );
 }
 
-/**
- * Every clear the device was told about, oldest first — the empty frames
- * carrying `clearSpeakerBufferBeforeFrame`. (A durable speaker-flush record
- * used to exist beside these; nothing read it, so the frames ARE the record.)
- */
 function speakerClears(h: Harness) {
   return speakerFrames(h).filter(
     (frame) => frame.clearSpeakerBufferBeforeFrame === true && frame.pcm === "",
@@ -300,7 +251,6 @@ function eventsOfType(h: Harness, type: string) {
   return h.events().filter((event) => event.type === `events.iterate.com/voice-agent/${type}`);
 }
 
-/** How much audio, in milliseconds, actually reached the device. */
 function speakerMsDelivered(h: Harness): number {
   return speakerFrames(h).reduce(
     (total, frame) => total + atob(frame.pcm).length / PCM16_BYTES_PER_MS,
@@ -308,9 +258,13 @@ function speakerMsDelivered(h: Harness): number {
   );
 }
 
+/** The mirror lane's payloads, oldest first. */
+function mirrored(h: Harness) {
+  return eventsOfType(h, "grok-event").map((event) => event.payload as Record<string, unknown>);
+}
+
 /* ----------------------------------------------------------- write helpers */
 
-/** One microphone frame, as the device would send it. */
 function micFrame(deviceMicFrameSeq: number) {
   return {
     type: "events.iterate.com/voice-agent/mic-frame" as const,
@@ -322,45 +276,27 @@ function micFrame(deviceMicFrameSeq: number) {
   };
 }
 
+const SEAM = "https://fake.provider.test/v1/live/sessions";
+
 /**
- * Get to "a live call with a usable provider session", which almost every test
- * needs and none of them is about. Appends `configured` alone: existence is
- * the fold's default state, so `created` (an empty strict payload under a
- * stable key, setup's job) adds nothing a unit test could observe.
+ * Get to "a live call with a started session", which almost every test needs
+ * and none of them is about.
  */
-async function callIsLive(h: Harness, clientTakesTurns = GROK_LISTENS): Promise<string> {
+async function callIsLive(h: Harness, configured: Record<string, unknown> = {}): Promise<string> {
   await h.append({
     type: "events.iterate.com/voice-agent/configured",
-    payload: {
-      providerBaseUrl: "https://fake.provider.test/v1/realtime",
-      provider: "grok",
-      clientTakesTurns,
-    },
+    payload: { providerBaseUrl: SEAM, ...configured },
   });
   await h.append(micFrame(1));
   await h.settle();
-  h.provider.completeHandshake();
+  h.provider.start();
   await h.settle();
   const started = eventsOfType(h, "call-started");
   return (started[0]!.payload as { conversationId: string }).conversationId;
 }
 
-/**
- * Let the paced drain loop run until it has nothing left to hand over.
- *
- * The lane deliberately holds audio back, so a test that wants to see a whole
- * answer has to spend the time the listener would have spent hearing it — but
- * not at 100 ms per step: the harness cascades nested timers and background
- * closures across one big advance (the idle test drives a 70 s tick chain
- * with a single advanceTime), so coarse 1 s steps buy the same playout at a
- * tenth of the settle cycles. `Math.min` keeps totals EXACT — a 600 ms
- * playout still spends exactly 600, which the frozen heard-ms pins depend on.
- */
+/** Let the pacer and the tick chains run `ms` of the fake clock, in coarse steps. */
 async function playOutEverything(h: Harness, ms: number): Promise<void> {
-  /* Settle FIRST: the pacer's opening burst must anchor before the clock
-   * moves, or a coarse first jump lands the burst at its far edge and a
-   * press "600ms in" finds nothing heard (the pacer's anti-credit clamp
-   * eats the lead). */
   await h.settle();
   for (let spent = 0; spent < ms; ) {
     const step = Math.min(1_000, ms - spent);
@@ -368,6 +304,20 @@ async function playOutEverything(h: Harness, ms: number): Promise<void> {
     await h.settle();
     spent += step;
   }
+}
+
+/** Speech, then enough silence to end the answer, then the drain. */
+async function answer(h: Harness, speechMs: number): Promise<void> {
+  h.provider.speech(speechMs);
+  h.provider.silence(1_000);
+  await playOutEverything(h, speechMs + 2_000);
+}
+
+/** Eviction: abandon the incarnation; the next frame wakes the successor. */
+async function evict(h: Harness): Promise<void> {
+  h.crash();
+  await h.append(micFrame(9));
+  await h.settle();
 }
 
 beforeEach(() => {
@@ -390,1676 +340,196 @@ describe("opening a call", () => {
     expect(eventsOfType(h, "call-started")).toHaveLength(1);
   });
 
-  it("holds capture through the handshake and releases it in one go", async () => {
+  it("starts the session the moment the socket is adopted, and holds capture until it is started", async () => {
     const h = makeHarness();
-    await h.append({ type: "events.iterate.com/voice-agent/created", payload: {} });
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { providerBaseUrl: SEAM, instructions: "You are Iterate on a small speaker." },
+    });
     await h.append(micFrame(1), micFrame(2), micFrame(3));
     await h.settle();
-    /* Nothing has reached the provider: it has not finished handshaking. */
-    expect(h.provider.sentOfType("input_audio_buffer.append")).toHaveLength(0);
+    /* session.start is the FIRST message — there is no session.created to wait for. */
+    expect(h.provider.sent[0]!.type).toBe("session.start");
+    expect(h.provider.sentOfType("session.input_audio.append")).toHaveLength(0);
+    const session = h.provider.startedWith;
+    expect(session.model).toBe("gpt-live-1");
+    expect(session.audio).toEqual({
+      format: { type: "audio/pcm", rate: 16_000 },
+      output: { voice: "marin" },
+    });
+    expect(String(session.instructions)).toContain("You are Iterate on a small speaker.");
+    expect(String(session.instructions)).toContain("Delegation policy:");
+    /* ONE backend, the fast Astra, with exec_typescript. */
+    const delegation = session.delegation as {
+      type: string;
+      responses: {
+        model: string;
+        reasoning: { effort: string };
+        service_tier: string;
+        tools: { name: string }[];
+        parallel_tool_calls: boolean;
+        instructions: string;
+      };
+    };
+    expect(delegation.type).toBe("responses");
+    expect(delegation.responses.model).toBe("gpt-6-astra");
+    expect(delegation.responses.reasoning).toEqual({ effort: "low" });
+    expect(delegation.responses.service_tier).toBe("priority");
+    expect(delegation.responses.tools.map((tool) => tool.name)).toEqual(["exec_typescript"]);
+    expect(delegation.responses.parallel_tool_calls).toBe(false);
+    expect(delegation.responses.instructions).toContain("exec_typescript runs one TypeScript");
 
-    h.provider.completeHandshake();
+    h.provider.start();
     await h.settle();
-    expect(h.provider.sentOfType("input_audio_buffer.append")).toHaveLength(3);
+    /* Every held frame, VERBATIM — the device's own base64, no transcode. */
+    const appends = h.provider.sentOfType("session.input_audio.append");
+    expect(appends).toHaveLength(3);
+    expect(appends[0]!.audio).toBe(micFrame(1).payload.pcm);
     const accepted = eventsOfType(h, "conversation-accepted")[0]!.payload as {
       heldMicFrames: number;
     };
     expect(accepted.heldMicFrames).toBe(3);
+    /* And the briefing is on the record. */
+    const configured = eventsOfType(h, "session-configured")[0]!.payload as {
+      provider: string;
+      backendModel: string;
+      tools: string[];
+    };
+    expect(configured.provider).toBe("gpt-live");
+    expect(configured.backendModel).toBe("gpt-6-astra");
+    expect(configured.tools).toEqual(["exec_typescript"]);
   });
 
-  /*
-   * THE WHOLE ORDINARY CASE: speak, release, and have both halves survive the
-   * connect. Holding the audio and dropping the question is worse than holding
-   * neither — the provider receives a complete sentence, waits to be asked
-   * about it, and is still waiting when the idle deadline kills the call a
-   * minute later. Measured on a real session: `heldMicFrames: 296`, no answer,
-   * `conversation-end-requested` at 80.7s for "no input from the device".
-   */
-  it("holds the end of the turn through the handshake too, and then asks", async () => {
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: { clientTakesTurns: CLIENT_TAKES_TURNS },
-    });
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.append(micFrame(1), micFrame(2), micFrame(3));
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-end", payload: {} });
-    await h.settle();
-    expect(h.provider.sentOfType("response.create")).toHaveLength(0);
-
-    h.provider.completeHandshake();
-    await h.settle();
-    /* Every frame, and then exactly one question about them. */
-    expect(h.provider.sentOfType("input_audio_buffer.append")).toHaveLength(3);
-    expect(h.provider.sentOfType("input_audio_buffer.commit")).toHaveLength(1);
-    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
-    /* THE COMMIT COMES AFTER THE AUDIO IT COMMITS. */
-    const order = h.provider.sent.map((message) => message.type);
-    expect(order.lastIndexOf("input_audio_buffer.append")).toBeLessThan(
-      order.indexOf("input_audio_buffer.commit"),
-    );
-  });
-
-  /** And a client whose turns the provider takes never commits, early or late. */
-  it("does not commit a held turn when the provider owns the turns", async () => {
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: { clientTakesTurns: GROK_LISTENS },
-    });
-    await h.append(micFrame(1));
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-end", payload: {} });
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    expect(h.provider.sentOfType("input_audio_buffer.commit")).toHaveLength(0);
-  });
-
-  it("sends later capture straight through", async () => {
+  it("sends later capture straight through, and the button edges say nothing", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    const before = h.provider.sentOfType("input_audio_buffer.append").length;
+    const before = h.provider.sent.length;
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
     await h.append(micFrame(2), micFrame(3));
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-end", payload: {} });
     await h.settle();
-    expect(h.provider.sentOfType("input_audio_buffer.append")).toHaveLength(before + 2);
+    const later = h.provider.sent.slice(before).map((message) => message.type);
+    /* Two frames, and nothing else: no commit, no response.create, no mute. */
+    expect(later).toEqual(["session.input_audio.append", "session.input_audio.append"]);
   });
 
-  it("lets Grok listen by default and stands down when the client owns turns", async () => {
-    const open = makeHarness();
-    await callIsLive(open, GROK_LISTENS);
-    const openSession = open.provider.sentOfType("session.update")[0] as {
-      session: { audio: { input: { turn_detection: unknown } } };
-    };
-    expect(openSession.session.audio.input.turn_detection).toMatchObject({
-      type: "server_vad",
-      threshold: 0.85,
-    });
-
-    const button = makeHarness();
-    await callIsLive(button, CLIENT_TAKES_TURNS);
-    const buttonSession = button.provider.sentOfType("session.update")[0] as {
-      session: { audio: { input: { turn_detection: unknown } } };
-    };
-    expect(buttonSession.session.audio.input.turn_detection).toBeNull();
-  });
-
-  /*
-   * THE MICROPHONE ARRIVES AS PCM16 AND IS HANDED ON UNTOUCHED.
-   *
-   * There was a mu-law decode here and a test asserting it doubled the length.
-   * Both are gone with the codec. The assertion that remains is the one that
-   * matters: whatever the device sent reaches Grok the same size, because
-   * nothing in between is allowed to have an opinion about the encoding. The
-   * bug this replaces was exactly such an opinion, held wrongly, in silence.
-   */
-  it("hands the device's PCM16 to Grok untouched", async () => {
+  it("certificate overrides ride session.start: model, voice, backend, tools", async () => {
     const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime", provider: "grok" },
-    });
-    const pcmBytes = 320;
-    const devicePcm = base64(new Uint8Array(pcmBytes));
-    await h.append({
-      type: "events.iterate.com/voice-agent/mic-frame",
-      payload: {
-        deviceMicFrameSeq: 1,
-        pcm: devicePcm,
-        capturedAtDeviceMs: 20,
-      },
-    });
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-
-    const appended = h.provider.sentOfType("input_audio_buffer.append") as { audio: string }[];
-    expect(appended).toHaveLength(1);
-    /* The EXACT string, not merely the same byte count: the identity path
-     * forwards the device's own base64 with no decode/re-encode round trip. */
-    expect(appended[0]!.audio).toBe(devicePcm);
-  });
-
-  /*
-   * EVERY CHUNK IS A WHOLE NUMBER OF THE DEVICE'S WIRE FRAMES.
-   *
-   * 320 mu-law bytes is the only length the board's speaker path accepts, and a
-   * chunk with a remainder is counted as a protocol violation and DROPPED — it
-   * will not splice one frame onto the next at an arbitrary phase. Grok's
-   * deltas are whatever length they are, so cutting each independently left a
-   * runt on nearly every one: 118 dropped chunks in a three-turn call against
-   * the real provider, which no unit test here could see because none of them
-   * asserted on chunk length.
-   */
-  it("cuts a delta only to fit the device, and loses none of it", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    /* Lengths chosen to be awkward on purpose: no two divide the same way, and
-     * not one is a multiple of anything the device cares about. Measured
-     * against the real provider, 0 of 77 deltas in one answer were. */
-    const sizes = [1234, 999, 4567, 321];
-    for (const pcmBytes of sizes) {
-      h.provider.push({
-        type: "response.output_audio.delta",
-        delta: base64(new Uint8Array(pcmBytes * 2)),
-      });
-    }
-    h.provider.answerComplete();
-    await playOutEverything(h, 5_000);
-    const frames = speakerFrames(h).filter((frame) => frame.pcm !== "");
-    expect(frames.length).toBeGreaterThan(0);
-    /*
-     * THE ONLY RULE LEFT IS THE CEILING. This asserted `% 320 === 0` when a
-     * 640-byte wire frame was a unit rather than a maximum, and enforcing that
-     * cost a residual carry on this side and a remainder-is-a-violation
-     * counter on the device's. Neither survives; what survives is that no
-     * single frame exceeds the device's receive buffer.
-     */
-    for (const frame of frames) {
-      expect(atob(frame.pcm).length).toBeLessThanOrEqual(MAX_SPEAKER_PAYLOAD_BYTES);
-    }
-    /* EVERY BYTE, AND NO EXTRA ONES. Nothing is carried between deltas and
-     * nothing is padded, so what the provider generated is exactly what the
-     * device is handed. */
-    const generated = sizes.reduce((total, pcmBytes) => total + pcmBytes * 2, 0);
-    expect(speakerMsDelivered(h) * PCM16_BYTES_PER_MS).toBe(generated);
-  });
-
-  /** And an answer smaller than one wire frame goes out at once, unpadded. */
-  it("sends a fragment shorter than a wire frame without waiting or padding", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    /*
-     * 200 bytes. Under the alignment rule this could not be sent at all until
-     * the answer ended, and then went out padded to 640 — a whole wire frame
-     * of manufactured silence appended to somebody's last syllable. It is now
-     * simply a short frame, sent as soon as the pacer reaches it.
-     */
-    h.provider.push({
-      type: "response.output_audio.delta",
-      delta: base64(new Uint8Array(200)),
-    });
-    /* 5s, not 60: the idle deadline is a minute, and a test that advances the
-     * clock past it hangs up the call it is measuring. */
-    await playOutEverything(h, 5_000);
-    const audible = speakerFrames(h).filter((f) => atob(f.pcm).length > 0);
-    expect(audible).toHaveLength(1);
-    expect(atob(audible[0]!.pcm).length).toBe(200);
-  });
-
-  it("commits a turn only for a client that owns them", async () => {
-    const button = makeHarness();
-    await callIsLive(button, CLIENT_TAKES_TURNS);
-    await button.append({
-      type: "events.iterate.com/voice-agent/ptt-end",
-      payload: {},
-    });
-    await button.settle();
-    expect(button.provider.sentOfType("input_audio_buffer.commit")).toHaveLength(1);
-    expect(button.provider.sentOfType("response.create")).toHaveLength(1);
-
-    /*
-     * AND A BUTTON PRESS ON AN OPEN MICROPHONE SAYS NOTHING, which is the half
-     * that used to be an allowlist. Server VAD on top of a commit answers
-     * halfway through a sentence.
-     */
-    const open = makeHarness();
-    await callIsLive(open, GROK_LISTENS);
-    await open.append({
-      type: "events.iterate.com/voice-agent/ptt-end",
-      payload: {},
-    });
-    await open.settle();
-    expect(open.provider.sentOfType("input_audio_buffer.commit")).toHaveLength(0);
-  });
-});
-
-/* ========================================================================== */
-/* THE OTHER PROVIDER                                                         */
-/* ========================================================================== */
-
-describe("the openai provider", () => {
-  /** A live call whose birth certificate names OpenAI. */
-  async function openaiCallIsLive(h: Harness): Promise<void> {
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime", provider: "openai" },
-    });
-    await h.append(micFrame(1));
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-  }
-
-  it("asks the session for 24 kHz audio and the provider's voice", async () => {
-    const h = makeHarness();
-    await openaiCallIsLive(h);
-    const update = h.provider.sentOfType("session.update")[0] as {
-      session: {
-        audio: {
-          input: { format: { rate: number } };
-          output: { format: { rate: number }; voice: string };
-        };
-      };
-    };
-    expect(update.session.audio.input.format.rate).toBe(24_000);
-    expect(update.session.audio.output.format.rate).toBe(24_000);
-    expect(update.session.audio.output.voice).toBe("marin");
-  });
-
-  it("pins the server-VAD knobs the barge machinery assumes, and far-field NR", async () => {
-    /* The VAD barge arm never sends response.cancel BECAUSE the provider
-     * cancels server-side at the onset — on OpenAI that is
-     * `interrupt_response`, a default today. A default is a dependency
-     * nobody can grep for, so the session pins it (and its siblings)
-     * explicitly. Grok stays bare: its support for these knobs is unprobed. */
-    const h = makeHarness();
-    await openaiCallIsLive(h);
-    const update = h.provider.sentOfType("session.update")[0] as {
-      session: {
-        audio: { input: { turn_detection: Record<string, unknown>; noise_reduction: unknown } };
-      };
-    };
-    expect(update.session.audio.input.turn_detection).toMatchObject({
-      type: "server_vad",
-      threshold: 0.85,
-      interrupt_response: true,
-      create_response: true,
-      silence_duration_ms: 500,
-    });
-    expect(update.session.audio.input.noise_reduction).toEqual({ type: "far_field" });
-
-    const grok = makeHarness();
-    await callIsLive(grok, GROK_LISTENS);
-    const grokUpdate = grok.provider.sentOfType("session.update")[0] as {
-      session: {
-        audio: { input: { turn_detection: Record<string, unknown>; noise_reduction?: unknown } };
-      };
-    };
-    expect(grokUpdate.session.audio.input.turn_detection).not.toHaveProperty("interrupt_response");
-    expect(grokUpdate.session.audio.input.noise_reduction).toBeUndefined();
-  });
-
-  it("a certificate turn_detection rides the session verbatim, beating the defaults", async () => {
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: {
-        providerBaseUrl: "https://fake.provider.test/v1/realtime",
-        provider: "openai",
-        turnDetection: { type: "semantic_vad", eagerness: "high", create_response: true },
-      },
-    });
-    await h.append(micFrame(1));
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    const update = h.provider.sentOfType("session.update")[0] as {
-      session: { audio: { input: { turn_detection: Record<string, unknown> } } };
-    };
-    /* VERBATIM: the certificate's object, not a merge with the defaults —
-     * a stream that names its VAD owns every knob of it. */
-    expect(update.session.audio.input.turn_detection).toEqual({
-      type: "semantic_vad",
-      eagerness: "high",
-      create_response: true,
-    });
-  });
-
-  it("a push-to-talk client's button beats any certificate turn_detection", async () => {
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: {
-        providerBaseUrl: "https://fake.provider.test/v1/realtime",
-        provider: "grok",
-        clientTakesTurns: true,
-        turnDetection: { type: "server_vad", threshold: 0.2 },
-      },
-    });
-    await h.append(micFrame(1));
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    const update = h.provider.sentOfType("session.update")[0] as {
-      session: { audio: { input: { turn_detection: unknown } } };
-    };
-    expect(update.session.audio.input.turn_detection).toBeNull();
-  });
-
-  it("upsamples the device's 16 kHz capture on its way in", async () => {
-    const h = makeHarness();
-    await openaiCallIsLive(h);
-    /* 20 ms is 640 bytes at 16 kHz and 960 at 24. The FIRST append runs a
-     * couple of ms short — the filter holds its half-kernel of input until
-     * the next frame proves what follows — and only the first: the debt is
-     * fixed, so from then on every 20 ms in is exactly 20 ms out. */
-    const flushed = h.provider.sentOfType("input_audio_buffer.append")[0] as { audio: string };
-    expect(atob(flushed.audio).length).toBeGreaterThanOrEqual(800);
-    expect(atob(flushed.audio).length).toBeLessThanOrEqual(960);
-    await h.append(micFrame(2));
-    await h.settle();
-    const live = h.provider.sentOfType("input_audio_buffer.append")[1] as { audio: string };
-    expect(atob(live.audio).length).toBe(960);
-  });
-
-  it("downsamples the provider's 24 kHz answer before the device hears it", async () => {
-    const h = makeHarness();
-    await openaiCallIsLive(h);
-    /* 100 ms at 24 kHz: 2,400 samples, 4,800 bytes. */
-    const pcm = new Uint8Array(4_800);
-    for (let index = 0; index < pcm.length; index++) pcm[index] = index % 251;
-    h.provider.push({ type: "response.output_audio.delta", delta: base64(pcm) });
-    await h.settle();
-    await playOutEverything(h, 200);
-    const frames = speakerFrames(h).filter((frame) => frame.pcm !== "");
-    const deliveredBytes = frames.reduce((sum, frame) => sum + atob(frame.pcm).length, 0);
-    /* The same 100 ms at the pipeline's 16 kHz is 3,200 bytes, less the
-     * resampler's held half-kernel — the next delta would carry it. */
-    expect(deliveredBytes).toBeGreaterThanOrEqual(3_100);
-    expect(deliveredBytes).toBeLessThanOrEqual(3_200);
-  });
-
-  it("leaves grok's audio untouched", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    const flushed = h.provider.sentOfType("input_audio_buffer.append")[0] as { audio: string };
-    expect(atob(flushed.audio).length).toBe(640);
-  });
-});
-
-/* ========================================================================== */
-/* TOOLS                                                                      */
-/* ========================================================================== */
-
-describe("tools on the birth certificate", () => {
-  const HANG_UP = { name: "hang_up", description: "End the call." };
-
-  /** A live push-to-talk call whose certificate names some tools. */
-  async function callWithTools(
-    h: Harness,
-    tools: {
-      name: string;
-      description: string;
-      parameters?: Record<string, unknown>;
-      expression?: (string | [string, ...unknown[]])[];
-    }[],
-  ): Promise<string> {
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: {
-        providerBaseUrl: "https://fake.provider.test/v1/realtime",
-        provider: "grok",
-        clientTakesTurns: CLIENT_TAKES_TURNS,
-        tools,
-      },
-    });
-    await h.append(micFrame(1));
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    const started = eventsOfType(h, "call-started");
-    return (started[0]!.payload as { conversationId: string }).conversationId;
-  }
-
-  /** Every tool debt the facet answered, oldest first. */
-  function toolOutputs(h: Harness) {
-    return h.provider
-      .sentOfType("conversation.item.create")
-      .map((message) => message.item as { type: string; call_id: string; output: string })
-      .filter((item) => item.type === "function_call_output");
-  }
-
-  it("declares the certificate's tools in the one session.update", async () => {
-    const h = makeHarness();
-    await callWithTools(h, [
-      HANG_UP,
-      {
-        name: "add_note",
-        description: "Add a note.",
-        parameters: { type: "object", properties: { text: { type: "string" } } },
-        expression: ["notes", "add"],
-      },
-    ]);
-    const update = h.provider.sentOfType("session.update")[0] as {
-      session: {
-        tool_choice?: string;
-        tools?: { type: string; name: string; parameters: unknown }[];
-      };
-    };
-    expect(update.session.tool_choice).toBe("auto");
-    /* `note_to_self` rides along uninvited: the colleague is on by default
-     * (contract 10.0.0), so a certificate that names tools declares them
-     * PLUS the note. */
-    expect(update.session.tools!.map((tool) => tool.name)).toEqual([
-      "hang_up",
-      "add_note",
-      "note_to_self",
-    ]);
-    /* A no-argument tool still declares an argument shape — the provider
-     * requires one. */
-    expect(update.session.tools![0]!.parameters).toEqual({ type: "object", properties: {} });
-  });
-
-  it("a bare certificate still declares its colleague — the default is ON", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    const update = h.provider.sentOfType("session.update")[0] as {
-      session: { tool_choice?: string; tools?: { name: string }[] };
-    };
-    expect(update.session.tools!.map((tool) => tool.name)).toEqual(["note_to_self"]);
-    expect(update.session.tool_choice).toBe("auto");
-  });
-
-  it("declares nothing when the certificate has no tools and refuses its colleague", async () => {
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: {
-        providerBaseUrl: "https://fake.provider.test/v1/realtime",
-        provider: "grok",
-        clientTakesTurns: CLIENT_TAKES_TURNS,
-        colleague: false,
-      },
-    });
-    await h.append(micFrame(1));
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    const update = h.provider.sentOfType("session.update")[0] as {
-      session: Record<string, unknown>;
-    };
-    expect(update.session.tools).toBeUndefined();
-    expect(update.session.tool_choice).toBeUndefined();
-  });
-
-  it("walks the expression to a function, applies the model's arguments, answers the debt", async () => {
-    const h = makeHarness();
-    const added: unknown[] = [];
-    h.projectRoot.current = {
-      notes: {
-        for(day: string) {
-          return {
-            add: async (args: unknown) => {
-              added.push(args);
-              return { noted: day };
-            },
-          };
+    await callIsLive(h, {
+      providerModel: "gpt-live-2",
+      providerVoice: "vesper",
+      backend: { model: "gpt-5.6-terra", reasoningEffort: "none", serviceTier: "default" },
+      tools: [
+        { name: "hang_up", description: "End the call." },
+        {
+          name: "nod",
+          description: "Nod the head.",
+          parameters: { type: "object", properties: { times: { type: "number" } } },
+          expression: ["clients", ["get", "/clients/stackchan"], "capabilities", "nod"],
         },
-      },
-    };
-    await callWithTools(h, [
-      {
-        name: "add_note",
-        description: "Add a note.",
-        expression: ["notes", ["for", "today"], "add"],
-      },
-    ]);
-    h.provider.push({
-      type: "response.function_call_arguments.done",
-      call_id: "call_1",
-      name: "add_note",
-      arguments: JSON.stringify({ text: "buy milk" }),
+      ],
     });
-    await h.settle();
-    expect(added).toEqual([{ text: "buy milk" }]);
-    const outputs = toolOutputs(h);
-    expect(outputs).toHaveLength(1);
-    expect(outputs[0]!.call_id).toBe("call_1");
-    expect(JSON.parse(outputs[0]!.output)).toEqual({ noted: "today" });
-    /* An expression's result deserves a spoken follow-up: exactly one. */
-    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    const session = h.provider.startedWith;
+    expect(session.model).toBe("gpt-live-2");
+    expect((session.audio as { output: { voice: string } }).output.voice).toBe("vesper");
+    const responses = (session.delegation as { responses: Record<string, unknown> }).responses;
+    expect(responses.model).toBe("gpt-5.6-terra");
+    expect(responses.reasoning).toEqual({ effort: "none" });
+    expect(responses.service_tier).toBe("default");
+    const tools = responses.tools as { name: string; parameters?: unknown }[];
+    expect(tools.map((tool) => tool.name)).toEqual(["exec_typescript", "hang_up", "nod"]);
+    expect(tools[2]!.parameters).toEqual({
+      type: "object",
+      properties: { times: { type: "number" } },
+    });
+    expect(String(responses.instructions)).toContain("nod: Nod the head.");
   });
 
-  it("a failing expression answers the model with the error", async () => {
-    const h = makeHarness();
-    h.projectRoot.current = {
-      boom() {
-        throw new Error("the capability said no");
-      },
-    };
-    await callWithTools(h, [{ name: "boom", description: "Fails.", expression: ["boom"] }]);
-    h.provider.push({
-      type: "response.function_call_arguments.done",
-      call_id: "call_2",
-      name: "boom",
-      arguments: "{}",
-    });
-    await h.settle();
-    const outputs = toolOutputs(h);
-    expect(outputs).toHaveLength(1);
-    expect(outputs[0]!.output).toContain("the capability said no");
-    /* The follow-up is what turns the error into the model SAYING so. */
-    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
-  });
-
-  it("an unknown tool name is answered, never ignored", async () => {
-    const h = makeHarness();
-    await callWithTools(h, [HANG_UP]);
-    h.provider.push({
-      type: "response.function_call_arguments.done",
-      call_id: "call_3",
-      name: "does_not_exist",
-      arguments: "{}",
-    });
-    await h.settle();
-    expect(JSON.parse(toolOutputs(h)[0]!.output)).toEqual({ error: "no such tool" });
-  });
-
-  it("a barged response's tool call never runs", async () => {
-    const h = makeHarness();
-    let ran = 0;
-    h.projectRoot.current = {
-      count: async () => {
-        ran += 1;
-        return ran;
-      },
-    };
-    await callWithTools(h, [{ name: "count", description: "Count.", expression: ["count"] }]);
-    h.provider.responseCreated();
-    h.provider.answerAudio(100);
-    await h.settle();
-    /* The press cancels the response; the tool call is its residue — an
-     * intent the user erased, and a side effect must not survive it. */
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    h.provider.push({
-      type: "response.function_call_arguments.done",
-      call_id: "call_4",
-      name: "count",
-      arguments: "{}",
-    });
-    await h.settle();
-    expect(ran).toBe(0);
-    expect(toolOutputs(h)).toHaveLength(0);
-  });
-
-  it("hang_up ends the call only after the goodbye finishes playing", async () => {
-    const h = makeHarness();
-    await callWithTools(h, [HANG_UP]);
-    h.provider.responseCreated();
-    h.provider.answerAudio(200);
-    h.provider.push({
-      type: "response.function_call_arguments.done",
-      call_id: "call_5",
-      name: "hang_up",
-      arguments: "{}",
-    });
-    h.provider.answerComplete();
-    await h.settle();
-    /* The debt is answered at once; the call is NOT over yet. */
-    expect(toolOutputs(h)[0]!.output).toContain("hanging up");
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
-    await playOutEverything(h, 400);
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
-    const requested = eventsOfType(h, "conversation-end-requested")[0]!.payload as {
-      reason: string;
-    };
-    expect(requested.reason).toBe("the model hung up");
-    /* Something the assistant DID, not something to talk about. */
-    expect(h.provider.sentOfType("response.create")).toHaveLength(0);
-  });
-
-  it("note_to_self mints the stream's colleague and reads its reply back", async () => {
-    const h = makeHarness();
-    const gotten: string[] = [];
-    const created: string[] = [];
-    const briefs: { type: string; payload: { role?: string; content?: string } }[] = [];
-    const subscriptions: { path: string; type: string; payload: any }[] = [];
-    const messaged: string[] = [];
-    h.projectRoot.current = {
-      agents: {
-        get(path: string) {
-          gotten.push(path);
-          return {
-            create: async () => {
-              created.push(path);
-            },
-            append: async (event: (typeof briefs)[number]) => {
-              briefs.push(event);
-            },
-            message: async (input: string) => {
-              messaged.push(input);
-            },
-          };
-        },
-      },
-      streams: {
-        get(path: string) {
-          return {
-            append: async (event: any) => {
-              subscriptions.push({ path, ...event });
-            },
-          };
-        },
-      },
-    };
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: {
-        providerBaseUrl: "https://fake.provider.test/v1/realtime",
-        provider: "grok",
-        clientTakesTurns: CLIENT_TAKES_TURNS,
-        colleague: true,
-      },
-    });
-    await h.append(micFrame(1));
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-
-    /* The certificate had no tools; the colleague flag alone arms the one
-     * injected tool and the fast-half framing. */
-    const update = h.provider.sentOfType("session.update")[0] as {
-      session: { instructions?: string; tools?: { name: string }[] };
-    };
-    expect(update.session.tools!.map((tool) => tool.name)).toEqual(["note_to_self"]);
-    expect(update.session.instructions).toContain("backend");
-
-    h.provider.push({
-      type: "response.function_call_arguments.done",
-      call_id: "call_9",
-      name: "note_to_self",
-      arguments: JSON.stringify({ note: "look up the March invoice" }),
-    });
-    await h.settle();
-    /* The debt settles NOW; the model keeps the floor. */
-    expect(toolOutputs(h)[0]!.output).toContain("noted");
-    /* One colleague, on ITS OWN agent stream named for THIS stream — the
-     * same desk for every conversation the stream ever holds. */
-    expect(gotten[0]).toBe("/agents/voice-notes/voice/test");
-    expect(created).toEqual(["/agents/voice-notes/voice/test"]);
-    /* And the link wires the status forwarding: the colleague's own narration is
-     * forwarded to this stream as colleague-status events, under a name
-     * OWNED BY THIS LINE (two lines sharing a desk must not fight over one
-     * name), with the legacy shared name removed. (The transcript subscription
-     * rides SETUP's batch — the facet cannot append a subscription to its
-     * own stream.) */
-    expect(subscriptions).toHaveLength(2);
-    expect(subscriptions[1]).toMatchObject({
-      type: "events.iterate.com/stream/subscription-removed",
-      payload: { name: "voice-colleague-status" },
-    });
-    expect(subscriptions[0]).toMatchObject({
-      path: "/agents/voice-notes/voice/test",
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        name: "voice-colleague-status:/agents/voice/test",
-        filter: {
-          eventTypes: [
-            "events.iterate.com/agent/summary-updated",
-            "events.iterate.com/agent/llm-request-requested",
-            "events.iterate.com/capability-host/script-run-started",
-            "events.iterate.com/capability-host/script-run-settled",
-            "events.iterate.com/agents/web-message-sent",
-          ],
-        },
-        receiver: { action: "copy-to-stream", receivingStreamPath: "/agents/voice/test" },
-      },
-    });
-    expect(subscriptions[0]!.payload.receiver.jsonataTransform).toContain(
-      "voice-agent/colleague-status",
-    );
-    /* Born briefed, as a system context item that triggers no turn. */
-    expect(briefs[0]!.type).toBe("events.iterate.com/agents/context-added");
-    expect(briefs[0]!.payload.role).toBe("system");
-    expect(briefs[0]!.payload.content).toContain("the backend of ONE assistant");
-    /* The note carries its own reply-channel coda, because the platform
-     * stamps a reply-routing label on the same message that points at a
-     * path which is not an agent. */
-    expect(messaged).toHaveLength(1);
-    expect(messaged[0]).toMatch(/^<voice-note>\nlook up the March invoice\n<\/voice-note>\n/);
-    expect(messaged[0]).toContain("itx.chat.sendMessage");
-
-    /* The reply arrives as a durable colleague-note (the copy-to-stream
-     * lane, not ask()): injected as a bracketed note, and the model is
-     * nudged to speak because the floor is free. */
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-note",
-      payload: { text: "The March invoice was never sent." },
-    });
-    await h.settle();
-    const items = h.provider.sentOfType("conversation.item.create") as {
-      item: { type: string; content?: { text: string }[] };
-    }[];
-    const note = items.find((entry) => entry.item.content?.[0]?.text.startsWith("[note from"));
-    expect(note).toBeDefined();
-    expect(note!.item.content![0]!.text).toBe(
-      "[note from your backend] The March invoice was never sent.",
-    );
-    /* Dispatching the note was itself a status: the dead-air before the
-     * colleague's first narration has something honest in it. */
-    const opening = eventsOfType(h, "colleague-status");
-    expect(opening).toHaveLength(1);
-    expect(opening[0]!.payload).toMatchObject({
-      activity: "picking up a note from the frontend",
-    });
-    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
-  });
-
-  /*
-   * THE REPLY THAT OUTLIVES ITS CALL, which is every hard question's shape:
-   * the idle deadline (60s) is shorter than the note deadline (180s), so a
-   * person who asks something slow and then waits quietly gets hung up on
-   * before the answer exists. Measured live (prd, 2026-08-26): four calls,
-   * four amnesiac per-conversation colleagues, a correct answer computed
-   * twice and spoken zero times. The colleague is per STREAM now, and its
-   * late reply is spoken into whichever call is live when it arrives.
-   */
-  it("a note that outlives its call reaches the next one — or its briefing", async () => {
-    const h = makeHarness();
-    const gotten: string[] = [];
-    const created: string[] = [];
-    const messaged: string[] = [];
-    h.projectRoot.current = {
-      agents: {
-        get(path: string) {
-          gotten.push(path);
-          return {
-            create: async () => {
-              created.push(path);
-            },
-            append: async () => {},
-            message: async (input: string) => {
-              messaged.push(input);
-            },
-          };
-        },
-      },
-      streams: { get: () => ({ append: async () => {} }) },
-    };
-    await callIsLive(h, CLIENT_TAKES_TURNS);
-    h.provider.push({
-      type: "response.function_call_arguments.done",
-      call_id: "call_10",
-      name: "note_to_self",
-      arguments: JSON.stringify({ note: "factorize the first 23 digits of pi" }),
-    });
-    await h.settle();
-    expect(messaged).toHaveLength(1);
-    expect(messaged[0]).toMatch(/^<voice-note>\nfactorize the first 23 digits of pi\n/);
-    const firstSocket = h.provider;
-
-    /* The person waits quietly for the answer, so the idle deadline kills
-     * the call while the colleague is still thinking. */
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
-    await h.settle();
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
-
-    /* The colleague's first reply lands BETWEEN calls — spoken to nobody,
-     * but durable: the fold keeps it for the next session's briefing. */
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-note",
-      payload: { text: "Early lead: the number is even, so 2 divides it." },
-    });
-    await h.settle();
-    await h.advanceTime(2_000);
-    await h.settle();
-
-    /* They press again: a fresh call, a fresh socket, the SAME stream. */
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    expect(eventsOfType(h, "call-started")).toHaveLength(2);
-    expect(h.provider).not.toBe(firstSocket);
-    const update = h.provider.sentOfType("session.update")[0] as {
-      session: { instructions?: string };
-    };
-    expect(update.session.instructions).toContain("Recent notes from your backend");
-    expect(update.session.instructions).toContain("the number is even, so 2 divides it");
-
-    /* A note arriving DURING the new call lands in it, never the dead one. */
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-note",
-      payload: { text: "The factorization is done." },
-    });
-    await h.settle();
-    const items = h.provider.sentOfType("conversation.item.create") as {
-      item: { type: string; content?: { text: string }[] };
-    }[];
-    const note = items.find((entry) =>
-      entry.item.content?.[0]?.text.startsWith("[note from your backend] The factorization"),
-    );
-    expect(note).toBeDefined();
-    const staleItems = firstSocket.sentOfType("conversation.item.create") as {
-      item: { type: string; content?: { text: string }[] };
-    }[];
-    expect(
-      staleItems.filter((entry) => entry.item.content?.[0]?.text.startsWith("[note from")),
-    ).toHaveLength(0);
-
-    /* A follow-up in the new call reaches the same desk: one colleague,
-     * created and briefed once, remembering across the reconnect. */
-    h.provider.push({
-      type: "response.function_call_arguments.done",
-      call_id: "call_11",
-      name: "note_to_self",
-      arguments: JSON.stringify({ note: "now double-check it" }),
-    });
-    await h.settle();
-    expect(new Set(gotten)).toEqual(new Set(["/agents/voice-notes/voice/test"]));
-    expect(created).toEqual(["/agents/voice-notes/voice/test"]);
-    expect(messaged).toHaveLength(2);
-    expect(messaged[1]).toMatch(/^<voice-note>\nnow double-check it\n/);
-  });
-
-  /*
-   * THE RECONNECT IS INVISIBLE, OR IT IS AMNESIA. A fresh provider session
-   * starts from instructions alone, and the idle deadline manufactures fresh
-   * sessions mid-conversation — so without a durable transcript folded back
-   * into the next dial's briefing, every reconnect greeted the listener as a
-   * stranger (measured on prd, 2026-08-26: "what's going on?" after a
-   * reconnect drew a blank). The transcript events are also the stream's only
-   * readable record of what was actually said, which is what an eval asserts
-   * on.
-   */
-  it("finished turns land durably and brief the next dial's session", async () => {
-    const h = makeHarness();
-    await callIsLive(h, CLIENT_TAKES_TURNS);
-
-    /* The listener's side, transcribed by the provider. */
-    h.provider.push({
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item_user_1",
-      transcript: "what is the capital of France?",
-    });
-    /* The model's side: transcript rides its own done event. */
-    h.provider.responseCreated();
-    h.provider.answerAudio(400);
-    h.provider.push({
-      type: "response.output_audio_transcript.done",
-      item_id: "item_fake",
-      transcript: "The capital of France is Paris.",
-    });
-    h.provider.answerComplete();
-    await playOutEverything(h, 600);
-
-    const utterances = eventsOfType(h, "utterance-transcript");
-    expect(utterances).toHaveLength(1);
-    expect(utterances[0]!.payload).toMatchObject({ text: "what is the capital of France?" });
-    const answers = eventsOfType(h, "answer-transcript");
-    expect(answers).toHaveLength(1);
-    expect(answers[0]!.payload).toMatchObject({ text: "The capital of France is Paris." });
-    /* And the fold carries both turns — the recap below hangs off this. */
-    expect(h.state().transcript).toEqual([
-      { role: "listener", text: "what is the capital of France?" },
-      { role: "assistant", text: "The capital of France is Paris." },
-    ]);
-
-    /* The call dies of silence; the next press dials a FRESH session. The
-     * extra beat before the press clears the 1.5s dying-breath mint
-     * cooldown — a press in the same instant as the obituary is treated as
-     * the dead call's own drained input, by design. */
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
-    await h.settle();
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
-    await h.advanceTime(2_000);
-    await h.settle();
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-
-    /* And that session is briefed with what was said before it existed. */
-    const update = h.provider.sentOfType("session.update")[0] as {
-      session: { instructions?: string };
-    };
-    expect(update.session.instructions).toContain("RESUMES an earlier conversation");
-    expect(update.session.instructions).toContain("Listener: what is the capital of France?");
-    expect(update.session.instructions).toContain("You: The capital of France is Paris.");
-  });
-
-  /*
-   * THE STATUS WHISPER. The colleague's own narration (forwarded onto this
-   * stream as colleague-status events) reaches the live session as a quiet
-   * context item — the model KNOWS what stage the work is at without ever
-   * announcing it unprompted — and the folded latest status survives into
-   * the next session's briefing, which is what tells a reconnect that its
-   * note is still being worked rather than lost.
-   */
-  it("colleague status whispers into the live session and briefs the reconnect", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-status",
-      payload: { activity: "running the factorization script" },
-    });
-    await h.settle();
-    const whispers = () =>
-      (
-        h.provider.sentOfType("conversation.item.create") as {
-          item: { type: string; content?: { text: string }[] };
-        }[]
-      ).filter((entry) => entry.item.content?.[0]?.text.startsWith("[backend status"));
-    expect(whispers()).toHaveLength(1);
-    expect(whispers()[0]!.item.content![0]!.text).toBe(
-      "[backend status: running the factorization script]",
-    );
-    /* Quiet on purpose: knowing is not announcing. */
-    expect(h.provider.sentOfType("response.create")).toHaveLength(0);
-
-    /* A redelivered or waitingFor-only patch is not whispered twice… */
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-status",
-      payload: { activity: "running the factorization script" },
-    });
-    await h.settle();
-    expect(whispers()).toHaveLength(1);
-    /* Lifecycle phases whisper too — the OS UI's "writing code" / "running
-     * code" vocabulary, straight from the transform — and a failed script
-     * carries its error, which is what "say so, don't invent" runs on. */
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-status",
-      payload: { phase: "running code" },
-    });
-    await h.settle();
-    expect(whispers()).toHaveLength(2);
-    /* BOTH halves ride the whisper now: the lifecycle phase and the
-     * colleague's own words, from the fold — the frontend always knows the
-     * general stage AND the specific status. */
-    expect(whispers()[1]!.item.content![0]!.text).toBe(
-      "[backend status: running code — running the factorization script]",
-    );
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-status",
-      payload: { phase: "a script failed", failure: "TypeError: cannot read digits of pi" },
-    });
-    await h.settle();
-    expect(whispers()).toHaveLength(3);
-    expect(whispers()[2]!.item.content![0]!.text).toBe(
-      "[backend status: a script failed — running the factorization script " +
-        "(TypeError: cannot read digits of pi)]",
-    );
-    /* …and a CHANGED activity is whispered as well. */
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-status",
-      payload: { activity: "writing up the answer" },
-    });
-    await h.settle();
-    expect(whispers()).toHaveLength(4);
-
-    /* The reconnect's briefing carries the folded status, mid-task framing
-     * and all — the line that stops a fresh session re-sending the note. */
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
-    await h.settle();
-    await h.advanceTime(2_000);
-    await h.settle();
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    const update = h.provider.sentOfType("session.update")[0] as {
-      session: { instructions?: string };
-    };
-    expect(update.session.instructions).toContain("mid-task right now");
-    expect(update.session.instructions).toContain('"a script failed — writing up the answer"');
-    expect(update.session.instructions).toContain("do not send another note");
-
-    /* Once the colleague reports itself idle, the framing retires. */
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-status",
-      payload: { activity: "done — answer delivered", waitingFor: "user_input" },
-    });
-    await h.settle();
-    expect(h.state().colleagueStatus).toEqual({
-      activity: "done — answer delivered",
-      phase: "a script failed",
-      /* The failure travels with its phase: an activity-only patch keeps
-       * both until a new phase supersedes them. */
-      failure: "TypeError: cannot read digits of pi",
-      waitingFor: "user_input",
-    });
-  });
-
-  /*
-   * THE SPOKEN STATUS. Whispering keeps the model informed; SPEAKING keeps
-   * the person informed — but only for news (the colleague's own words, or
-   * a failure), only when the floor is free, and never more than once per
-   * gap. Bare phase churn (writing → running → finished, every few seconds)
-   * whispers and stays quiet, or the call becomes a ticker.
-   */
-  it("a newsworthy status draws one spoken line — throttled, and never for phase churn", async () => {
+  it("seeds the session with the fold's transcript as typed history", async () => {
     const h = makeHarness();
     await h.append({
       type: "events.iterate.com/voice-agent/configured",
-      payload: {
-        providerBaseUrl: "https://fake.provider.test/v1/realtime",
-        provider: "grok",
-        clientTakesTurns: CLIENT_TAKES_TURNS,
-      },
+      payload: { providerBaseUrl: SEAM },
     });
-    /* Mint with the press alone — no mic frames, so nothing is mid-turn
-     * and the floor is genuinely free once the handshake completes. */
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    expect(h.provider.sentOfType("response.create")).toHaveLength(0);
-
-    /* The colleague's own words: spoken. */
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-status",
-      payload: { activity: "reading the March ledger" },
-    });
-    await h.settle();
-    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
-    /* The provider answers the drawn line (created clears the follow-up
-     * flag; done settles the answer) — the floor is free again. */
-    h.provider.responseCreated();
-    h.provider.answerComplete();
-    await h.settle();
-
-    /* New words straight after: whispered, but inside the gap — throttled. */
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-status",
-      payload: { activity: "summing the refunds" },
-    });
-    await h.settle();
-    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
-
-    /* Past the gap, a bare lifecycle phase is still not news. */
-    await h.advanceTime(16_000);
-    await h.settle();
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-status",
-      payload: { phase: "running code" },
-    });
-    await h.settle();
-    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
-
-    /* A failure is always news (and the whisper carries the error). */
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-status",
-      payload: { phase: "a script failed", failure: "TypeError: no ledger" },
-    });
-    await h.settle();
-    expect(h.provider.sentOfType("response.create")).toHaveLength(2);
-    h.provider.responseCreated();
-    h.provider.answerComplete();
-    await h.settle();
-
-    /* The facet's own note-dispatch echo wears `quiet`: never spoken. */
-    await h.advanceTime(16_000);
-    await h.settle();
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-status",
-      payload: { activity: "picking up a note from the frontend", quiet: true },
-    });
-    await h.settle();
-    expect(h.provider.sentOfType("response.create")).toHaveLength(2);
-  });
-
-  /*
-   * THE ANSWER RIGHT AFTER THE STATUS. A note that lands while an answer
-   * holds the floor ("it's running the code now") used to wait for the
-   * person's NEXT press — the promised answer sat in context, unspoken.
-   * The pending flag drains at response.done: status line finishes, answer
-   * follows.
-   */
-  it("a note landing mid-answer is spoken at response.done, not at the next press", async () => {
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: {
-        providerBaseUrl: "https://fake.provider.test/v1/realtime",
-        provider: "grok",
-        clientTakesTurns: CLIENT_TAKES_TURNS,
-      },
-    });
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-
-    /* An answer is streaming when the note arrives. */
-    h.provider.responseCreated();
-    h.provider.answerAudio(200);
-    await h.settle();
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-note",
-      payload: { text: "The answer is 42." },
-    });
-    await h.settle();
-    /* Injected, not yet drawn: the floor is busy. */
-    const notes = () =>
-      (
-        h.provider.sentOfType("conversation.item.create") as {
-          item: { content?: { text: string }[] };
-        }[]
-      ).filter((entry) => entry.item.content?.[0]?.text.startsWith("[note from"));
-    expect(notes()).toHaveLength(1);
-    expect(h.provider.sentOfType("response.create")).toHaveLength(0);
-
-    /* The moment the streaming answer settles, the note gets its turn. */
-    h.provider.answerComplete();
-    await h.settle();
-    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
-  });
-
-  /*
-   * CALL ANY CHAT (contract 18.0.0): a certificate `colleaguePath` points
-   * the whole arrangement at an EXISTING agent — the link is established at
-   * call start (the transcript must flow even if no note is ever sent), the
-   * chat keeps its own configuration, and notes go to ITS desk.
-   */
-  it("colleaguePath makes an existing chat the desk: linked at call start, config untouched", async () => {
-    const h = makeHarness();
-    const created: string[] = [];
-    const agentAppends: { path: string; type: string; payload: any }[] = [];
-    const subscriptions: { path: string; type: string; payload: any }[] = [];
-    const messaged: string[] = [];
-    h.projectRoot.current = {
-      agents: {
-        get(path: string) {
-          return {
-            create: async () => {
-              created.push(path);
-            },
-            append: async (event: any) => {
-              agentAppends.push({ path, ...event });
-            },
-            message: async (input: string) => {
-              messaged.push(input);
-            },
-          };
-        },
-      },
-      streams: {
-        get(path: string) {
-          return {
-            append: async (event: any) => {
-              subscriptions.push({ path, ...event });
-            },
-            /* The chat's history, for the recap fetch the dial runs. */
-            getEventPage: async () => ({ streamMaxOffset: 42 }),
-            getEvents: async () => [
-              {
-                type: "events.iterate.com/agents/context-added",
-                payload: { role: "user", content: "what's the March invoice total?" },
-              },
-              {
-                type: "events.iterate.com/agents/web-message-sent",
-                payload: { message: "£4,120 — want the breakdown?" },
-              },
-              /* The call's own residue must not recap itself. */
-              {
-                type: "events.iterate.com/agents/context-added",
-                payload: { role: "user", content: '<voice-turn speaker="person">hi</voice-turn>' },
-              },
-            ],
-          };
-        },
-      },
-    };
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: {
-        providerBaseUrl: "https://fake.provider.test/v1/realtime",
-        provider: "grok",
-        clientTakesTurns: CLIENT_TAKES_TURNS,
-        colleaguePath: "/agents/mobile/1234",
-      },
-    });
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-
-    /* Linked at CALL START — before any note exists. */
-    expect(created).toEqual(["/agents/mobile/1234"]);
-
-    /* THE CHAT'S RECAP briefs the session: a call to an existing chat picks
-     * up the thread, never greets a stranger — and the fetch lands durably
-     * for the next incarnation's fold. */
-    const update = h.provider.sentOfType("session.update")[0] as {
-      session: { instructions?: string };
-    };
-    expect(update.session.instructions).toContain("continues an ongoing TEXT conversation");
-    expect(update.session.instructions).toContain("the person: what's the March invoice total?");
-    expect(update.session.instructions).toContain("you: £4,120 — want the breakdown?");
-    expect(update.session.instructions).not.toContain("<voice-turn");
-    const recaps = eventsOfType(h, "colleague-recap");
-    expect(recaps).toHaveLength(1);
-    expect(recaps[0]!.payload).toMatchObject({
-      text: "the person: what's the March invoice total?\nyou: £4,120 — want the breakdown?",
-    });
-
-    /* AND THE BRIEFING IS ON THE RECORD: one durable event says what this
-     * session was told and armed with — the stream shows how the frontend
-     * was initialized instead of that being invisible provider state. */
-    const configuredSessions = eventsOfType(h, "session-configured");
-    expect(configuredSessions).toHaveLength(1);
-    expect(configuredSessions[0]!.payload).toMatchObject({
-      provider: "grok",
-      greeting: false,
-      recapIncluded: true,
-      tools: ["note_to_self"],
-    });
-    expect((configuredSessions[0]!.payload as { instructions: string }).instructions).toContain(
-      "continues an ongoing TEXT conversation",
-    );
-    /* Status forwarding: the chat's narration and replies flow HERE, under this
-     * line's own name. (The transcript subscription the other way rides SETUP's
-     * batch, not the link.) */
-    expect(subscriptions.filter((s) => s.type.endsWith("subscription-configured"))).toHaveLength(1);
-    expect(subscriptions[0]).toMatchObject({
-      path: "/agents/mobile/1234",
-      payload: {
-        name: "voice-colleague-status:/agents/voice/test",
-        receiver: { receivingStreamPath: "/agents/voice/test" },
-      },
-    });
-    /* The brief lands; the chat's own configuration is NOT rewritten — no
-     * debounce append for a desk this facet does not own. */
-    expect(agentAppends.map((entry) => entry.type)).toEqual([
-      "events.iterate.com/agents/context-added",
-    ]);
-    expect(agentAppends[0]!.payload.key).toBe("voice-agent/colleague-brief");
-
-    /* And a note goes to the chat's desk. */
-    h.provider.push({
-      type: "response.function_call_arguments.done",
-      call_id: "call_20",
-      name: "note_to_self",
-      arguments: JSON.stringify({ note: "check the calendar" }),
-    });
-    await h.settle();
-    expect(messaged).toHaveLength(1);
-    expect(messaged[0]).toMatch(/^<voice-note>\ncheck the calendar\n/);
-  });
-
-  /*
-   * ONE NOTE, HOWEVER MANY FORWARDERS. A stale duplicate subscription (the
-   * legacy shared name beside a per-line one) delivers the same reply as
-   * two different offsets, and the caller heard every answer twice
-   * (misha, on-device, 2026-08-29). Identical text inside the window is
-   * one note: injected once, spoken once.
-   */
-  it("a duplicated colleague note is injected and spoken once", async () => {
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: {
-        providerBaseUrl: "https://fake.provider.test/v1/realtime",
-        provider: "grok",
-        clientTakesTurns: CLIENT_TAKES_TURNS,
-      },
-    });
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
     await h.append(
       {
-        type: "events.iterate.com/voice-agent/colleague-note",
-        payload: { text: "The answer is 42." },
+        type: "events.iterate.com/voice-agent/utterance-transcript",
+        payload: { conversationId: "conv_old", text: "Count to three." },
       },
       {
-        type: "events.iterate.com/voice-agent/colleague-note",
-        payload: { text: "The answer is 42." },
+        type: "events.iterate.com/voice-agent/answer-transcript",
+        payload: { conversationId: "conv_old", text: "One, two,", cancelled: true },
       },
     );
+    await h.append(micFrame(1));
     await h.settle();
-    const notes = (
-      h.provider.sentOfType("conversation.item.create") as {
-        item: { content?: { text: string }[] };
-      }[]
-    ).filter((entry) => entry.item.content?.[0]?.text.startsWith("[note from"));
-    expect(notes).toHaveLength(1);
-    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
-    /* The pending drain must not resurrect the duplicate either. */
-    h.provider.responseCreated();
-    h.provider.answerComplete();
-    await h.settle();
-    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    const input = h.provider.startedWith.input as { role: string; content: { text: string }[] }[];
+    expect(input.map((item) => item.role)).toEqual(["user", "assistant"]);
+    expect(input[0]!.content[0]!.text).toBe("Count to three.");
+    expect(input[1]!.content[0]!.text).toContain("the listener interrupted this answer partway");
+    /* Instructions carry the policy, not the history. */
+    expect(String(h.provider.startedWith.instructions)).not.toContain("Count to three.");
   });
 
-  /*
-   * THE HEARTBEAT HOLDS THE LINE. The idle reaper counts device input, and
-   * a caller waiting quietly for a slow answer — or away from the app with
-   * the call up — sends none. The client's keepalive stamps the same clock;
-   * when it stops (hang-up, dead app), the reaper re-arms.
-   */
-  it("keepalives defer the idle reaper; their absence re-arms it", async () => {
-    const h = makeHarness();
-    await callIsLive(h, CLIENT_TAKES_TURNS);
-    /* Two 40s stretches of silence, each bridged by a keepalive: 80s of
-     * no mic input and the call lives. */
-    for (let i = 0; i < 2; i++) {
-      await h.advanceTime(40_000);
-      await h.append({ type: "events.iterate.com/voice-agent/keepalive", payload: { t: i } });
-      await h.settle();
-    }
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
-    /* The heartbeat stops; the reaper takes it from there. */
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
-    await h.settle();
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+  it("greets on pickup with an instructions append — unless the caller already spoke", async () => {
+    const greeted = makeHarness();
+    await greeted.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { providerBaseUrl: SEAM, greeting: true },
+    });
+    await greeted.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await greeted.settle();
+    greeted.provider.start();
+    await greeted.settle();
+    const appended = greeted.provider.sentOfType("session.instructions.append");
+    expect(appended).toHaveLength(1);
+    expect(appended[0]!.delegation_id).toBeNull();
+    expect(String(appended[0]!.content)).toContain("Greet them now");
+
+    const talkedFirst = makeHarness();
+    await callIsLive(talkedFirst, { greeting: true });
+    expect(talkedFirst.provider.sentOfType("session.instructions.append")).toHaveLength(0);
   });
 
-  /*
-   * THE ANSWER OUTRANKS THE COMMENTARY. A status line the facet drew is
-   * progress ping, not conversation — when the real note lands mid-status,
-   * the status is cancelled (device silenced) and the note speaks the
-   * moment the provider settles the cancelled response. A PERSON's answer
-   * is never cut this way.
-   */
-  it("a note barges status lines AND turn answers (hold music); note answers stay whole", async () => {
+  it("ends the call when the handshake never completes", async () => {
     const h = makeHarness();
     await h.append({
       type: "events.iterate.com/voice-agent/configured",
-      payload: {
-        providerBaseUrl: "https://fake.provider.test/v1/realtime",
-        provider: "grok",
-        clientTakesTurns: CLIENT_TAKES_TURNS,
-      },
+      payload: { providerBaseUrl: SEAM },
     });
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.append(micFrame(1));
     await h.settle();
-    h.provider.completeHandshake();
+    await h.advanceTime(20_000);
     await h.settle();
-
-    /* A newsworthy status draws a spoken line; the provider starts it. */
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-status",
-      payload: { activity: "reading the ledger" },
-    });
-    await h.settle();
-    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
-    h.provider.responseCreated();
-    h.provider.answerAudio(200);
-    await h.settle();
-
-    /* Mid-status, the actual answer lands: the status is cancelled... */
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-note",
-      payload: { text: "The ledger totals £4,120." },
-    });
-    await h.settle();
-    expect(h.provider.sentOfType("response.cancel")).toHaveLength(1);
-    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
-    /* ...and the note speaks as soon as the cancelled response settles. */
-    h.provider.push({ type: "response.done" });
-    await h.settle();
-    expect(h.provider.sentOfType("response.create")).toHaveLength(2);
-
-    /* The NOTE answer now streaming is never cut by the next note — the
-     * previous answer's delivery stays whole; the newcomer pends. */
-    h.provider.responseCreated();
-    h.provider.answerAudio(200);
-    await h.settle();
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-note",
-      payload: { text: "One more thing — the March total was higher." },
-    });
-    await h.settle();
-    expect(h.provider.sentOfType("response.cancel")).toHaveLength(1);
-    h.provider.answerComplete();
-    await h.settle();
-    /* Spoken after the answer finishes, not through it. */
-    expect(h.provider.sentOfType("response.create")).toHaveLength(3);
-
-    /* Consume the drained note answer whole, so the follow-up flag is
-     * spent and the NEXT response reads as the person's own turn. */
-    h.provider.responseCreated();
-    h.provider.answerComplete();
-    await h.settle();
-
-    /* HOLD MUSIC LOSES TO THE THING BEING WAITED FOR: a PERSON-drawn
-     * answer ("count to 100 while it works") is cut the moment the real
-     * answer lands, exactly like status commentary. */
-    h.provider.responseCreated();
-    h.provider.answerAudio(200);
-    await h.settle();
-    await h.append({
-      type: "events.iterate.com/voice-agent/colleague-note",
-      payload: { text: "Done: the factors are 5, 1499 and two big primes." },
-    });
-    await h.settle();
-    expect(h.provider.sentOfType("response.cancel")).toHaveLength(2);
-    h.provider.push({ type: "response.done" });
-    await h.settle();
-    expect(h.provider.sentOfType("response.create")).toHaveLength(4);
-  });
-
-  /*
-   * A BROKEN DESK IS NEWS, NOT SILENCE. The link and the note dispatch
-   * used to swallow their failures whole; a caller then heard "it's
-   * picking up the note" forever while four notes in a row went nowhere,
-   * and the mid-task briefing turned the stale status into a wall of
-   * refusals (observed live, 2026-08-29). Now both failures land as
-   * durable "backend link error" statuses — whispered, newsworthy, and
-   * carried into the next session's briefing like any other status.
-   */
-  it("a failed colleague link or note lands as a backend link error status", async () => {
-    const h = makeHarness();
-    h.projectRoot.current = {}; /* no agents, no streams — everything throws */
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: {
-        providerBaseUrl: "https://fake.provider.test/v1/realtime",
-        provider: "grok",
-        clientTakesTurns: CLIENT_TAKES_TURNS,
-      },
-    });
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    /* The call-start link failure is on the record. */
-    const linkFailures = eventsOfType(h, "colleague-status").filter(
-      (event) => (event.payload as { phase?: string }).phase === "backend link error",
-    );
-    expect(linkFailures.length).toBeGreaterThanOrEqual(1);
-    expect(linkFailures[0]!.payload).toMatchObject({
-      activity: "connecting to the backend failed",
-    });
-
-    /* And a note that cannot be delivered says so too. */
-    h.provider.push({
-      type: "response.function_call_arguments.done",
-      call_id: "call_30",
-      name: "note_to_self",
-      arguments: JSON.stringify({ note: "look this up" }),
-    });
-    await h.settle();
-    const noteFailures = eventsOfType(h, "colleague-status").filter(
-      (event) =>
-        (event.payload as { activity?: string }).activity ===
-        "the last note FAILED to reach the backend",
-    );
-    expect(noteFailures).toHaveLength(1);
-    expect((noteFailures[0]!.payload as { failure: string }).failure).not.toBe("");
-  });
-
-  it("greeting on the certificate makes the model speak first at pickup — unless the caller already did", async () => {
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: { clientTakesTurns: CLIENT_TAKES_TURNS, greeting: true },
-    });
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    const items = h.provider.sentOfType("conversation.item.create") as {
-      item: { content?: { text: string }[] };
-    }[];
-    expect(items.some((i) => i.item.content?.[0]?.text.includes("call just connected"))).toBe(true);
-    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
-
-    /* A caller mid-sentence is not welcomed over: held frames suppress it. */
-    const busy = makeHarness();
-    await busy.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: { clientTakesTurns: CLIENT_TAKES_TURNS, greeting: true },
-    });
-    await busy.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await busy.append(micFrame(1));
-    await busy.settle();
-    busy.provider.completeHandshake();
-    await busy.settle();
-    const busyItems = busy.provider.sentOfType("conversation.item.create") as {
-      item: { content?: { text: string }[] };
-    }[];
-    expect(busyItems.some((i) => i.item.content?.[0]?.text.includes("call just connected"))).toBe(
-      false,
-    );
-
-    /* And absent from the certificate, nobody speaks first. */
-    const plain = makeHarness();
-    await callIsLive(plain, CLIENT_TAKES_TURNS);
-    const plainItems = plain.provider.sentOfType("conversation.item.create") as {
-      item: { content?: { text: string }[] };
-    }[];
-    expect(plainItems.some((i) => i.item.content?.[0]?.text.includes("call just connected"))).toBe(
-      false,
-    );
-  });
-
-  it("a press during the goodbye un-decides the hang-up", async () => {
-    const h = makeHarness();
-    await callWithTools(h, [HANG_UP]);
-    h.provider.responseCreated();
-    h.provider.answerAudio(200);
-    h.provider.push({
-      type: "response.function_call_arguments.done",
-      call_id: "call_6",
-      name: "hang_up",
-      arguments: "{}",
-    });
-    h.provider.answerComplete();
-    await h.settle();
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    await playOutEverything(h, 400);
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
-  });
-
-  it("a tool finishing after its call ended answers nobody", async () => {
-    /* The identity fence in #runTool's closure is the ONLY thing between a
-     * slow tool's completion and a function_call_output written into the
-     * wrong session — nothing ever nulls dial.socket, so without the fence
-     * the debt lands on the dead socket and the follow-up on nobody's
-     * question. Staged with end-plus-new-call rather than h.crash(),
-     * because the fence lives per-instance: a crash orphans the old
-     * instance whose #dial still points at the old dial, and the fence
-     * would pass vacuously. */
-    const h = makeHarness();
-    let release!: (value: unknown) => void;
-    const gate = new Promise((resolve) => {
-      release = resolve;
-    });
-    h.projectRoot.current = { slow: () => gate };
-    const conversationId = await callWithTools(h, [
-      { name: "slow", description: "Slow.", expression: ["slow"] },
-    ]);
-    h.provider.push({
-      type: "response.function_call_arguments.done",
-      call_id: "call_slow_1",
-      name: "slow",
-      arguments: "{}",
-    });
-    await h.settle();
-
-    /* The call ends while the tool is still running… */
-    await h.append({
-      type: "events.iterate.com/voice-agent/conversation-end-requested",
-      payload: { conversationId, reason: "goodbye" },
-    });
-    await h.settle();
-    /* …and a NEW call opens on a fresh socket. */
-    await h.append(micFrame(50));
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    const followUpsBefore = h.provider.sentOfType("response.create").length;
-
-    release({ done: true });
-    await h.settle();
-    /* The completion reaches a dead dial and is dropped whole: no output on
-     * ANY socket — the dead one still records sends, which is exactly what
-     * catches a broken fence — and no follow-up on the new one. */
-    for (const socket of h.sockets) {
-      const outputs = socket
-        .sentOfType("conversation.item.create")
-        .map((message) => message.item as { type: string })
-        .filter((item) => item.type === "function_call_output");
-      expect(outputs).toHaveLength(0);
-    }
-    expect(h.provider.sentOfType("response.create")).toHaveLength(followUpsBefore);
-  });
-
-  it("a tool finishing after a barge answers the debt but asks for nothing", async () => {
-    /* A tool that STARTED before the press completes after it: the side
-     * effect happened, so the debt is real and the output must go out — but
-     * the press owns the floor it took, so no follow-up response.create.
-     * Unpinned until now: a future edit could silently start talking over
-     * the user's press. */
-    const h = makeHarness();
-    let release!: (value: unknown) => void;
-    const gate = new Promise((resolve) => {
-      release = resolve;
-    });
-    h.projectRoot.current = { slow: () => gate };
-    await callWithTools(h, [{ name: "slow", description: "Slow.", expression: ["slow"] }]);
-    h.provider.responseCreated();
-    h.provider.answerAudio(200);
-    h.provider.push({
-      type: "response.function_call_arguments.done",
-      call_id: "call_slow_2",
-      name: "slow",
-      arguments: "{}",
-    });
-    await h.settle();
-
-    /* The press barges mid-run: response cancelled, residue window open. */
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-
-    release({ done: true });
-    await h.settle();
-    expect(toolOutputs(h)).toHaveLength(1);
-    expect(h.provider.sentOfType("response.create")).toHaveLength(0);
+    const requested = eventsOfType(h, "conversation-end-requested");
+    expect(requested).toHaveLength(1);
+    expect((requested[0]!.payload as { reason: string }).reason).toContain("handshake");
+    expect(h.provider.closed).toBe(true);
   });
 });
 
-/* ========================================================================== */
-/* THE PROVIDER'S TIMELINE, FOR INSTRUMENTS                                   */
-/* ========================================================================== */
-
-describe("the grok-event lane", () => {
-  it("replaces an audio delta's bytes with their decoded length", async () => {
-    /*
-     * The delta's content already goes out once, cut and paced, on
-     * `spk-frame`. Riding this lane too meant every answer went out twice —
-     * the second time whole, in one message, to every subscriber.
-     */
+describe("the dial", () => {
+  it("carries no model in the URL and the credential only to OpenAI", async () => {
     const h = makeHarness();
-    await callIsLive(h);
-    h.provider.answerAudio(100);
-    await h.settle();
-    const deltas = eventsOfType(h, "grok-event")
-      .map((event) => event.payload as Record<string, unknown>)
-      .filter((payload) => payload.type === "response.output_audio.delta");
-    expect(deltas).toHaveLength(1);
-    expect(deltas[0]!.delta).toBeUndefined();
-    /* 100 ms of 16 kHz PCM16 is 3,200 bytes, and the field means BYTES —
-     * not the base64 string's length, which is a third longer. */
-    expect(deltas[0]!.deltaBytes).toBe(100 * PCM16_BYTES_PER_MS);
+    await dialProviderSocket(null);
+    await dialProviderSocket(SEAM);
+    expect(h.dialled[0]!.url).toBe("https://api.openai.com/v1/live/sessions");
+    expect(h.dialled[0]!.url).not.toContain("model=");
+    expect(h.dialled[0]!.headers.Authorization).toBe('Bearer getSecret("/secrets/openai")');
+    expect(h.dialled[1]!.headers.Authorization).toBeUndefined();
+    expect(h.sockets[0]!.accepted).toBe(true);
+    expect(h.sockets[0]!.binaryType).toBe("arraybuffer");
   });
 
-  it("still carries every other provider event whole", async () => {
+  it("ends the call when the provider refuses the upgrade", async () => {
     const h = makeHarness();
-    await callIsLive(h);
-    h.provider.push({ type: "response.done", usage: { total_tokens: 7 } });
+    vi.stubGlobal("fetch", async () => ({}) as Response);
+    await h.append({ type: "events.iterate.com/voice-agent/created", payload: {} });
+    await h.append(micFrame(1));
     await h.settle();
-    const done = eventsOfType(h, "grok-event")
-      .map((event) => event.payload as Record<string, unknown>)
-      .filter((payload) => payload.type === "response.done");
-    expect(done).toHaveLength(1);
-    expect(done[0]!.usage).toEqual({ total_tokens: 7 });
+    const requested = eventsOfType(h, "conversation-end-requested");
+    expect(requested).toHaveLength(1);
+    expect((requested[0]!.payload as { reason: string }).reason).toContain("refused");
   });
 });
 
@@ -2068,928 +538,411 @@ describe("the grok-event lane", () => {
 /* ========================================================================== */
 
 describe("the speaker lane", () => {
-  it("numbers every frame contiguously from one", async () => {
+  it("drops the idle stream's silence and sends nothing", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.provider.answerAudio(1_000);
-    h.provider.answerComplete();
-    await playOutEverything(h, 2_000);
-
-    const seqs = speakerFrames(h).map((frame) => frame.deviceSpeakerFrameSeq);
-    expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, index) => index + 1));
-    expect(seqs.length).toBeGreaterThan(0);
+    h.provider.silence(5_000);
+    await playOutEverything(h, 6_000);
+    expect(speakerFrames(h)).toHaveLength(0);
   });
 
-  it("numbers the end-of-answer marker like any other frame", async () => {
-    /* (Frames used to carry `fromProviderDeltaSeq` too — which delta each was
-     * cut from; "debugging, not ordering" by its own docstring, read by
-     * nobody, deleted with the field.) */
+  it("numbers every frame contiguously from one and delivers every millisecond of speech", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.provider.answerAudio(400); /* delta 1 -> five frames of ~99.94ms (3,198-byte slices) */
-    h.provider.answerAudio(400); /* delta 2 -> five more */
-    h.provider.answerComplete();
-    await playOutEverything(h, 2_000);
-
+    await answer(h, 1_000);
     const frames = speakerFrames(h);
-    /* Behind the audio sits the end-of-answer marker, carrying no audio of
-     * its own. It is numbered like any other frame, because a device that
-     * skipped it would score the next one as a gap. */
+    const seqs = frames.map((frame) => frame.deviceSpeakerFrameSeq);
+    expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, index) => index + 1));
+    /* Ten deltas of 100 ms, each one frame — no two-byte tails — plus the
+     * trailing silence the answer is allowed to carry, then the marker. */
+    const audible = frames.filter((frame) => frame.pcm !== "");
+    expect(audible.length).toBeGreaterThanOrEqual(10);
+    expect(atob(audible[0]!.pcm).length).toBe(MAX_SPEAKER_PAYLOAD_BYTES);
+    expect(speakerMsDelivered(h)).toBeGreaterThanOrEqual(1_000);
+  });
+
+  it("ends the answer after 700 ms of silence with a numbered marker, and keeps short pauses", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    h.provider.speech(300);
+    h.provider.silence(400); /* a pause inside the answer: sent */
+    h.provider.speech(300);
+    h.provider.silence(700); /* the end */
+    h.provider.silence(3_000); /* idle: dropped */
+    await playOutEverything(h, 6_000);
+    const frames = speakerFrames(h);
+    const markers = frames.filter((frame) => frame.lastFrameOfAnswer === true);
+    expect(markers).toHaveLength(1);
     const last = frames.at(-1)!;
-    expect(last.pcm).toBe("");
     expect(last.lastFrameOfAnswer).toBe(true);
+    expect(last.pcm).toBe("");
     expect(last.deviceSpeakerFrameSeq).toBe(frames.length);
+    /* 300 + 400 + 300 of the answer, up to 700 of trailing silence, and none
+     * of the three idle seconds. */
+    expect(speakerMsDelivered(h)).toBeGreaterThanOrEqual(1_000);
+    expect(speakerMsDelivered(h)).toBeLessThanOrEqual(1_700);
   });
 
-  it("delivers every millisecond the provider generated", async () => {
+  it("re-cuts a delta that is not group-aligned base64", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.provider.answerAudio(3_000);
-    h.provider.answerComplete();
-    await playOutEverything(h, 5_000);
-    expect(speakerMsDelivered(h)).toBe(3_000);
+    /* 4,000 bytes: over the ceiling, and a base64 length that is not a
+     * multiple of 4 once the padding is trimmed. */
+    const oversized = speechDelta(125).replace(/=+$/, "");
+    h.provider.push({ type: "session.output_audio.delta", delta: oversized });
+    h.provider.silence(1_000);
+    await playOutEverything(h, 3_000);
+    for (const frame of speakerFrames(h)) {
+      expect(atob(frame.pcm).length).toBeLessThanOrEqual(MAX_SPEAKER_PAYLOAD_BYTES);
+    }
+    expect(speakerMsDelivered(h)).toBeGreaterThanOrEqual(124);
   });
 
-  it("never hands the device more than the lead", async () => {
+  it("never asks the device to hold more than the byte budget, even from a burst", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    /* Ten seconds of answer, generated in one burst, as the real provider
-     * does — the whole point of pacing is that the device does not get it. */
-    h.provider.answerAudio(10_000);
-    await h.settle();
-    expect(speakerMsDelivered(h)).toBeLessThanOrEqual(
-      MAX_DEVICE_SPEAKER_BUFFER_MS + SPEAKER_FRAME_MS,
-    );
-  });
-
-  /* (A "tells the device nothing about the answer ending" test sat here,
-   * left over from the deleted no-marker design: its prose contradicted the
-   * restored lastFrameOfAnswer pin above, and its negative assertion looked
-   * for a literal "last" key nothing ever produced — a check that could not
-   * fail. The marker behavior is pinned at "numbers the end-of-answer
-   * marker"; the delivery total at "delivers every millisecond". ) */
-
-  it("never asks the device to hold more than the byte budget", async () => {
-    /*
-     * THE ONE CLAIM THE DEVICE'S RAM DEPENDS ON, stated in bytes because bytes
-     * are what it runs out of. Grok hands over ninety seconds — about 1.4 MB of
-     * mu-law — in a single burst. An ESP32-S3 has a few hundred KB in total, so
-     * exceeding the budget is not a glitch, it is the firmware dying.
-     */
-    const h = makeHarness();
-    await callIsLive(h);
-    h.provider.answerAudio(90_000);
+    h.provider.speech(90_000);
     let elapsedMs = 0;
     let worstOutstandingBytes = 0;
     for (let tick = 0; tick < 60; tick++) {
-      await h.advanceTime(SPEAKER_FRAME_MS);
+      await h.advanceTime(DELTA_MS);
       await h.settle();
-      elapsedMs += SPEAKER_FRAME_MS;
-      /* Sent, minus what the board has had time to play at 16 bytes/ms. */
+      elapsedMs += DELTA_MS;
       const outstandingBytes =
         speakerMsDelivered(h) * PCM16_BYTES_PER_MS - elapsedMs * PCM16_BYTES_PER_MS;
       worstOutstandingBytes = Math.max(worstOutstandingBytes, outstandingBytes);
     }
-    /* One frame of slack: the frame that crosses the line is sent whole. */
     expect(worstOutstandingBytes).toBeLessThanOrEqual(
-      MAX_DEVICE_SPEAKER_BACKLOG_BYTES + SPEAKER_FRAME_MS * PCM16_BYTES_PER_MS,
+      MAX_DEVICE_SPEAKER_BACKLOG_BYTES + DELTA_MS * PCM16_BYTES_PER_MS,
     );
-    /* And the budget is actually being used — a pacer that dribbled would pass
-     * the bound above while sounding terrible on a jittery network. */
     expect(worstOutstandingBytes).toBeGreaterThan(MAX_DEVICE_SPEAKER_BACKLOG_BYTES / 2);
-    /* And it really is still sending — a pacer that had stalled would also
-     * pass both bounds above. (Two further tests asserted the same drain
-     * inequality per tick in MILLISECONDS — the byte bound divided by 32,
-     * over fewer ticks; strict subsets of this one, deleted whole.) */
-    expect(speakerMsDelivered(h)).toBeGreaterThan(elapsedMs);
+    expect(speakerMsDelivered(h)).toBeLessThanOrEqual(
+      MAX_DEVICE_SPEAKER_BUFFER_MS + elapsedMs + DELTA_MS,
+    );
+  });
+
+  it("clears once at the start of a session and never again unprompted", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    await answer(h, 500);
+    await answer(h, 500);
+    const frames = speakerFrames(h);
+    expect(frames[0]!.clearSpeakerBufferBeforeFrame).toBe(true);
+    expect(frames.slice(1).filter((frame) => frame.clearSpeakerBufferBeforeFrame)).toHaveLength(0);
   });
 });
 
 /* ========================================================================== */
-/* THE BUG THIS FILE EXISTS FOR                                               */
+/* THE BUTTON                                                                 */
 /* ========================================================================== */
 
-describe("a flush names a sequence number", () => {
-  /**
-   * THE STUTTER, staged.
-   *
-   * Five tentative onsets during one answer is not a hypothetical: it is what
-   * the board's own drop counter reported, and with a boolean `drop` each one
-   * emptied the speaker and the count restarted. Here the second through fifth
-   * name a watermark that has already been passed, so they are no-ops, and the
-   * audio generated afterwards is untouched. Each blip is a started/stopped
-   * PAIR because that is the measured signature — a false onset retracts as a
-   * `speech_stopped` with no commit behind it; five bare starts would be one
-   * onset the provider never settled, and the pacer rightly holds for that.
-   */
-  it("survives five spurious onsets during one answer", async () => {
+describe("the button takes the floor", () => {
+  it("clears the device with a numbered frame, drops the queue, and mutes the model's last words", async () => {
     const h = makeHarness();
     await callIsLive(h);
-
-    h.provider.answerAudio(4_000);
-    await playOutEverything(h, 600);
-
-    for (let blip = 0; blip < 5; blip++) {
-      h.provider.speechStarted();
-      h.provider.speechStopped();
-      await h.settle();
-    }
-    expect(speakerClears(h)).toHaveLength(1);
-
-    /* The answer continues — the provider never cancelled it — and every
-     * millisecond after the flush still reaches the device. */
-    const before = speakerMsDelivered(h);
-    h.provider.answerAudio(1_000);
-    h.provider.answerComplete();
-    await playOutEverything(h, 3_000);
-    expect(speakerMsDelivered(h) - before).toBe(1_000);
-  });
-
-  it("flushes through the highest frame minted at that moment, and no further", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    h.provider.answerAudio(2_000);
-    await playOutEverything(h, 600);
-    const mintedBefore = Math.max(...speakerFrames(h).map((frame) => frame.deviceSpeakerFrameSeq));
-
-    h.provider.speechStarted();
+    /* A ten-second answer arriving as a burst: four seconds reach the device,
+     * six sit in the queue. */
+    h.provider.speech(10_000);
     await h.settle();
-    /* Exactly ONE clear, riding a frame of its own: empty, numbered, and
-     * above everything it cancels — so a device ordering by sequence number
-     * cannot apply it to the wrong audio however late it arrives. */
-    const clears = speakerClears(h);
-    expect(clears).toHaveLength(1);
-    const clear = clears[0]!;
-    expect(clear.deviceSpeakerFrameSeq).toBeGreaterThan(mintedBefore);
-
-    /* Everything the device is sent from now on is beyond the watermark, so
-     * nothing it plays was ever declared dead. */
-    h.provider.responseCreated();
-    h.provider.answerAudio(1_000);
-    h.provider.answerComplete();
-    await playOutEverything(h, 3_000);
-    const afterClear = speakerFrames(h).filter(
-      (frame) => frame.deviceSpeakerFrameSeq > clear.deviceSpeakerFrameSeq,
-    );
-    expect(afterClear.length).toBeGreaterThan(0);
-  });
-
-  /*
-   * UPDATED for the provider-cancellation policy: the queued tail is
-   * destroyed on an onset only when the provider CANCELLED the response
-   * server-side at that onset — openai's server_vad `interrupt_response`,
-   * which is why this test pins the openai provider. So the tail is dead
-   * for certain and holding it would resume an answer the provider already
-   * killed. On grok NOTHING cancels at an onset (no interrupt_response; a
-   * client cancel drew an error every time), so even a mid-burst onset
-   * HOLDS the tail; that policy is pinned in "the open-mic barge" below.
-   */
-  it("drops the queued tail of the answer that was interrupted mid-generation", async () => {
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime", provider: "openai" },
-    });
-    await h.append(micFrame(1));
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    h.provider.responseCreated();
-    h.provider.answerAudio(8_000);
-    await playOutEverything(h, 600);
-    const deliveredBeforeBarge = speakerMsDelivered(h);
-
-    h.provider.speechStarted();
-    await h.settle();
-    /* Time passes with nothing new generated. A lane that had merely stopped
-     * being topped up would keep playing out the seconds it holds — and a
-     * RETRACTION must resume nothing, because the answer is dead server-side. */
-    h.provider.speechStopped();
-    await playOutEverything(h, 4_000);
-    expect(speakerMsDelivered(h)).toBe(deliveredBeforeBarge);
-  });
-
-  /*
-   * THE CASE THAT HAD NO CALLER, and the one push-to-talk actually uses.
-   *
-   * Both flush triggers above are provider events, and a client that owns its
-   * turns is configured with `turn_detection: null` — so the provider never
-   * reports speech starting, and the only other trigger is the NEXT answer.
-   * Measured on a real session: the button went down, the device kept playing
-   * the dead answer for the whole press, and the queue was not dropped until
-   * seconds later when the reply to the interruption began.
-   */
-  it("drops the answer when a push-to-talk client takes the floor", async () => {
-    const h = makeHarness();
-    await callIsLive(h, CLIENT_TAKES_TURNS);
-    h.provider.answerAudio(8_000);
-    await playOutEverything(h, 600);
-    const deliveredBeforeBarge = speakerMsDelivered(h);
-    expect(deliveredBeforeBarge).toBeGreaterThan(0);
+    const deliveredBefore = speakerMsDelivered(h);
+    expect(deliveredBefore).toBeLessThan(10_000);
 
     await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
     await h.settle();
-    /*
-     * THE CLEAR RIDES A FRAME, so the device learns about it in sequence order
-     * rather than on a lane that could arrive behind the audio it cancels.
-     * Filtered to the empty ones: the session's opening frame also carries a
-     * clear, and that one has audio on it.
-     */
-    const clearing = speakerClears(h);
-    expect(clearing).toHaveLength(1);
-    expect(clearing[0]!.deviceSpeakerFrameSeq).toBeGreaterThan(0);
+    const clears = speakerClears(h);
+    expect(clears).toHaveLength(1);
+    /* The clear names the highest frame minted so far, plus one. */
+    const framesBefore = speakerFrames(h).filter((frame) => frame.pcm !== "");
+    expect(clears[0]!.deviceSpeakerFrameSeq).toBe(framesBefore.length + 1);
 
-    /* And the seven and a half seconds still queued never go out. */
-    await playOutEverything(h, 4_000);
-    expect(speakerMsDelivered(h)).toBe(deliveredBeforeBarge);
+    /* The model has not heard the person yet; its next words are dead air. */
+    h.provider.speech(500);
+    await playOutEverything(h, 2_000);
+    expect(speakerMsDelivered(h)).toBe(deliveredBefore);
+    /* It yields (silence), then answers the person: that IS a new answer. */
+    h.provider.silence(200);
+    h.provider.speech(300);
+    h.provider.silence(1_000);
+    await playOutEverything(h, 3_000);
+    expect(speakerMsDelivered(h)).toBeGreaterThan(deliveredBefore);
+    const replacing = speakerFrames(h).find(
+      (frame) => frame.pcm !== "" && frame.deviceSpeakerFrameSeq > clears[0]!.deviceSpeakerFrameSeq,
+    )!;
+    /* AND THE NEXT REAL FRAME SAYS IT AGAIN. */
+    expect(replacing.clearSpeakerBufferBeforeFrame).toBe(true);
   });
 
-  /*
-   * THE DIAL'S OWN ECHO IS NOT AN INTERRUPTION. The device re-presses every
-   * 3s while it still wants the call, and the delivery lane can hand one of
-   * those presses to the facet SECONDS later — mid-answer. Measured on the
-   * HA Voice PE (2026-08-20): every long answer died at "1, 2," on a bare
-   * clear with no provider event in sight, because the call's own opening
-   * retry arrived late and barged the answer it had minted, cancel and all.
-   * A press stamped before the answer began must barge nothing.
-   */
+  it("a press with nothing playing clears nothing", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    expect(speakerClears(h)).toHaveLength(0);
+  });
+
   it("the dial's own opening retry, delivered mid-answer, barges nothing", async () => {
     const h = makeHarness();
-    await callIsLive(h, CLIENT_TAKES_TURNS);
+    await callIsLive(h);
     /* The want-retry: committed (and stamped) now, delivered only when the
      * runner next drives — which this test arranges to be mid-answer. */
     await h.stream.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
     /* The answer begins two virtual seconds after that stamp. */
     h.clock.now += 2_000;
-    h.provider.responseCreated();
-    h.provider.answerAudio(8_000);
+    h.provider.speech(8_000);
     /* Driving playout is what delivers the stale press — mid-answer. */
     await playOutEverything(h, 600);
     const deliveredBefore = speakerMsDelivered(h);
     expect(deliveredBefore).toBeGreaterThan(0);
-    await h.settle();
     await playOutEverything(h, 1_000);
-    /* No barge: no bare clear frame, no response.cancel, audio still moving. */
+    /* No barge: no bare clear frame, audio still moving. */
     expect(speakerClears(h)).toHaveLength(0);
-    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
     expect(speakerMsDelivered(h)).toBeGreaterThan(deliveredBefore);
   });
 
-  /*
-   * THE HALF THE QUEUE-DROP CANNOT DO. Emptying the queue kills what already
-   * arrived; a provider that streams near real time (gpt-realtime) has barely
-   * anything queued and keeps generating — measured 2026-08-18, "count to a
-   * hundred" counted straight through a barge. The press must also CANCEL the
-   * response, and the cancelled answer's late deltas must stay dead.
-   */
-  it("cancels the provider's response on a barge and deafens its residue", async () => {
-    const h = makeHarness();
-    await callIsLive(h, CLIENT_TAKES_TURNS);
-    h.provider.responseCreated();
-    h.provider.answerAudio(8_000);
-    await playOutEverything(h, 600);
-    const deliveredBeforeBarge = speakerMsDelivered(h);
-    expect(deliveredBeforeBarge).toBeGreaterThan(0);
-
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    expect(h.provider.sentOfType("response.cancel")).toHaveLength(1);
-
-    /* The cancel is asynchronous: residue of the dead answer still arrives —
-     * and none of it may reach the speaker, nor mark an end nobody heard. */
-    h.provider.answerAudio(2_000);
-    h.provider.answerComplete();
-    await playOutEverything(h, 4_000);
-    expect(speakerMsDelivered(h)).toBe(deliveredBeforeBarge);
-    expect(speakerFrames(h).filter((frame) => frame.lastFrameOfAnswer === true)).toHaveLength(0);
-
-    /* The NEXT answer is live again from its first delta. */
-    h.provider.responseCreated();
-    h.provider.answerAudio(400);
-    await playOutEverything(h, 1_000);
-    expect(speakerMsDelivered(h)).toBeGreaterThan(deliveredBeforeBarge);
-  });
-
-  /*
-   * CANCELLING STOPS THE SOUND; THE REPAIR FIXES THE MEMORY. The provider's
-   * conversation still holds the ENTIRE answer it generated, so barged mid-
-   * count it will swear it "counted all the way to one hundred" — the model
-   * remembers what it said, not what anybody heard. On a provider whose
-   * truncate works, the item is trimmed to the heard milliseconds. On grok
-   * — this harness's default — NO wire verb repairs an assistant item
-   * (truncate: silent no-op; delete: "Item not found"; both probed live
-   * 2026-08-18), so the heard-prefix note is the entire repair there.
-   */
-  it("repairs the barged answer's memory — on grok, the note is the whole repair", async () => {
-    const h = makeHarness();
-    await callIsLive(h, CLIENT_TAKES_TURNS);
-    h.provider.responseCreated();
-    h.provider.answerAudio(400, "item_count");
-    h.provider.answerTranscript("one two three four five");
-    h.provider.answerAudio(7_600, "item_count");
-    await playOutEverything(h, 600);
-    expect(speakerMsDelivered(h)).toBeGreaterThan(0);
-
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-
-    /* Not yet: repairing an item its own response is still finalizing races
-     * the transcript write — observed live, the ack shared a millisecond with
-     * the response's done and the model still remembered the full count. */
-    expect(h.provider.sentOfType("conversation.item.create")).toHaveLength(0);
-
-    /* Transcript that arrives AFTER the press models the transcriber's lag:
-     * residue, never part of what the note says was heard. */
-    h.provider.answerTranscript(" six seven eight nine ten twenty");
-    h.provider.answerComplete();
-    await h.settle();
-    /* Neither verb goes out on grok — a truncate is swallowed silently and
-     * a delete draws "Item not found"; either would be noise on the wire. */
-    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
-    expect(h.provider.sentOfType("conversation.item.delete")).toHaveLength(0);
-
-    /* The note is the answer's only memory — the heard PREFIX, never the
-     * whole thing. */
-    const notes = h.provider.sentOfType("conversation.item.create");
-    expect(notes).toHaveLength(1);
-    const noteText = JSON.stringify(notes[0]);
-    expect(noteText).toContain("heard only this much");
-    expect(noteText).toContain("one");
-    expect(noteText).not.toContain("twenty");
-  });
-
-  it("repairs immediately when the barged answer had already finished generating", async () => {
-    const h = makeHarness();
-    await callIsLive(h, CLIENT_TAKES_TURNS);
-    h.provider.responseCreated();
-    h.provider.answerAudio(400, "item_done");
-    h.provider.answerTranscript("one two three");
-    h.provider.answerAudio(7_600, "item_done");
-    h.provider.answerComplete();
-    await playOutEverything(h, 600);
-
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    /* Immediate on grok means the NOTE goes now — no deferral, no verb. */
-    const notes = h.provider.sentOfType("conversation.item.create");
-    expect(notes).toHaveLength(1);
-    expect(JSON.stringify(notes[0])).toContain("heard only this much");
-    /* No cancel: there was nothing generating to cancel. */
-    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
-  });
-
-  it("sends no repair and no cancel when the press finds nothing playing", async () => {
-    const h = makeHarness();
-    await callIsLive(h, CLIENT_TAKES_TURNS);
-    h.provider.responseCreated();
-    h.provider.answerAudio(400, "item_short");
-    h.provider.answerComplete();
-    await playOutEverything(h, 2_000);
-
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    /* Fully played: nothing to repair — no note, no truncate — and nothing
-     * generating to cancel. Three zeros, two distinct guards (the heard-ms
-     * slack test and the was-streaming snapshot), one staging. */
-    expect(h.provider.sentOfType("conversation.item.create")).toHaveLength(0);
-    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
-    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
-  });
-
-  it("a redelivered ptt-end with no new audio commits nothing", async () => {
-    /* The ephemeral lane redelivers by design; a duplicate ptt-end against
-     * an empty provider buffer drew input_audio_buffer_commit_empty and,
-     * sometimes, an unprompted second answer spoken from bare context. Only
-     * a turn that carried audio since the last commit may ask. */
-    const h = makeHarness();
-    await callIsLive(h, CLIENT_TAKES_TURNS);
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-end", payload: {} });
-    await h.settle();
-    const commitsAfterFirstEnd = h.provider.sentOfType("input_audio_buffer.commit").length;
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-end", payload: {} });
-    await h.settle();
-    expect(h.provider.sentOfType("input_audio_buffer.commit")).toHaveLength(commitsAfterFirstEnd);
-    /* New audio re-arms the gate. */
-    await h.append(micFrame(2));
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-end", payload: {} });
-    await h.settle();
-    expect(h.provider.sentOfType("input_audio_buffer.commit")).toHaveLength(
-      commitsAfterFirstEnd + 1,
-    );
-  });
-
-  /** A button held down while nothing is playing costs one comparison. */
-  it("says nothing when the floor was already free", async () => {
-    const h = makeHarness();
-    await callIsLive(h, CLIENT_TAKES_TURNS);
-    for (let press = 0; press < 3; press++) {
-      await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-      await h.settle();
-    }
-    expect(speakerClears(h)).toHaveLength(0);
-    expect(speakerFrames(h)).toHaveLength(0);
-  });
-
-  it("treats a new answer as a flush of the old one", async () => {
+  it("marks the interrupted answer's transcript as cancelled", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.provider.answerAudio(2_000);
-    await playOutEverything(h, 400);
-    h.provider.responseCreated();
+    h.provider.speech(2_000);
+    h.provider.assistantSays("One, two, three,", 1_000, 2_000);
     await h.settle();
-    expect(speakerClears(h)).toHaveLength(1);
-  });
-});
-
-/* ========================================================================== */
-/* THE OPEN-MIC BARGE                                                         */
-/* ========================================================================== */
-
-/*
- * `input_audio_buffer.speech_started` is the ONLY interruption an open-mic
- * board ever produces — no button, so the whole ptt barge chain used to be
- * unreachable from it: the in-flight answer was dropped and the model went on
- * believing it said everything it generated. And the onset is TENTATIVE
- * (five per turn measured from echo residue), so what it may and may not
- * destroy depends on whether the provider is still generating.
- */
-describe("the face", () => {
-  /** An answer with real spectral shape, so the classifier has something to
-   * classify — silence classifies as SIL, which proves nothing moved. */
-  function voicedAudio(ms: number): string {
-    const samples = new Int16Array(ms * 16);
-    for (let index = 0; index < samples.length; index++) {
-      samples[index] = Math.round(
-        9_000 * Math.sin((2 * Math.PI * 220 * index) / 16_000) +
-          4_000 * Math.sin((2 * Math.PI * 700 * index) / 16_000),
-      );
-    }
-    return base64(new Uint8Array(samples.buffer));
-  }
-
-  async function faceOf(h: Harness) {
-    const state = (await h.processor().getRuntimeState()) as {
-      runtime: { face: { viseme: number; answer: number; at: number } | null };
-    };
-    return state.runtime.face;
-  }
-
-  it("a visemes certificate publishes mouth shapes in the runtime bag", async () => {
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: {
-        providerBaseUrl: "https://fake.provider.test/v1/realtime",
-        provider: "grok",
-        clientTakesTurns: CLIENT_TAKES_TURNS,
-        visemes: true,
-      },
-    });
-    await h.append(micFrame(1));
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    expect(await faceOf(h)).toBeNull();
-
-    h.provider.responseCreated();
-    h.provider.push({
-      type: "response.output_audio.delta",
-      delta: voicedAudio(600),
-      item_id: "item_face",
-      content_index: 0,
-    });
-    await h.settle();
-    const face = await faceOf(h);
-    expect(face).not.toBeNull();
-    expect(face!.answer).toBe(1);
-    /* The mouth closes with SIL when the answer's track ends. */
-    h.provider.answerComplete();
-    await h.settle();
-    expect((await faceOf(h))!.viseme).toBe(14);
-  });
-
-  it("a barge shuts the mouth immediately", async () => {
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: {
-        providerBaseUrl: "https://fake.provider.test/v1/realtime",
-        provider: "grok",
-        clientTakesTurns: CLIENT_TAKES_TURNS,
-        visemes: true,
-      },
-    });
-    await h.append(micFrame(1));
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    h.provider.responseCreated();
-    h.provider.push({
-      type: "response.output_audio.delta",
-      delta: voicedAudio(2_000),
-      item_id: "item_face",
-      content_index: 0,
-    });
-    await h.settle();
-
     await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
     await h.settle();
-    const face = await faceOf(h);
-    expect(face!.viseme).toBe(14);
-    expect(face!.answer).toBe(1);
-  });
-
-  it("without the certificate flag the bag stays empty and nothing classifies", async () => {
-    const h = makeHarness();
-    await callIsLive(h, CLIENT_TAKES_TURNS);
-    h.provider.responseCreated();
-    h.provider.push({
-      type: "response.output_audio.delta",
-      delta: voicedAudio(600),
-      item_id: "item_noface",
-      content_index: 0,
-    });
+    /* The row closes when the metronome moves the timeline past the gap. */
+    h.provider.silence(1_500);
     await h.settle();
-    expect(await faceOf(h)).toBeNull();
-  });
-});
-
-describe("the open-mic barge", () => {
-  it("repairs the memory of a barged active response, and never sends cancel", async () => {
-    /* An OPENAI call, because the destructive mid-stream arm is openai's:
-     * its server_vad `interrupt_response` (pinned true in the session)
-     * cancelled the response server-side at the onset, so the tail is dead
-     * for certain. Grok's mid-burst onset takes the hold instead — pinned
-     * below. */
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime", provider: "openai" },
-    });
-    await h.append(micFrame(1));
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    h.provider.responseCreated();
-    h.provider.answerAudio(400, "item_vad");
-    h.provider.answerTranscript("one two three four five");
-    h.provider.answerAudio(7_600, "item_vad");
-    await playOutEverything(h, 600);
-    const deliveredBeforeBarge = speakerMsDelivered(h);
-    expect(deliveredBeforeBarge).toBeGreaterThan(0);
-
-    h.provider.speechStarted();
-    await h.settle();
-    /*
-     * NO `response.cancel` from this arm, ever: the provider cancelled this
-     * response server-side at the very onset, and a client cancel on top is
-     * a second owner of one cancellation. (On grok a VAD-triggered cancel
-     * drew an error every time it was tried — and this arm never runs
-     * there.)
-     */
-    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
-    /* And not yet: repairing an item its own response is still finalizing
-     * races the transcript write — the repair waits for `response.done`. */
-    expect(h.provider.sentOfType("conversation.item.create")).toHaveLength(0);
-
-    /* The provider finalizes the barged response on its own. */
-    h.provider.answerComplete();
-    await h.settle();
-    /* On openai the truncate WORKS, so the settled repair is the verb plus
-     * the note — the item trimmed to the heard milliseconds, the note
-     * restoring the heard prefix the truncation deleted. */
-    const truncations = h.provider.sentOfType("conversation.item.truncate");
-    expect(truncations).toHaveLength(1);
-    expect(truncations[0]).toMatchObject({ item_id: "item_vad", content_index: 0 });
-    const notes = h.provider.sentOfType("conversation.item.create");
-    expect(notes).toHaveLength(1);
-    expect(JSON.stringify(notes[0])).toContain("heard only this much");
-    expect(JSON.stringify(notes[0])).toContain("one");
-    /* Still none — the finalization did not sneak one out. */
-    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
-  });
-
-  /*
-   * THE BURST-WINDOW BLIP, grok's worst case: `speech_started` lands while
-   * the burst is STILL STREAMING — several seconds of a long answer, exactly
-   * when the board's speaker is loudest and echo residue likeliest. Grok
-   * cancelled nothing server-side (no interrupt_response; a client cancel
-   * errors), so destroying the answer here was the counting bug resurrected
-   * inside the burst window: the answer died after ~1.5 s, the user sat in
-   * silence, and a note told the model it was interrupted when nobody spoke.
-   */
-  it("holds a mid-burst onset on grok and resumes the still-growing tail", async () => {
-    const h = makeHarness();
-    await callIsLive(h, GROK_LISTENS);
-    h.provider.responseCreated();
-    h.provider.answerAudio(8_000);
-    await playOutEverything(h, 600);
-    const deliveredAtOnset = speakerMsDelivered(h);
-    expect(deliveredAtOnset).toBeGreaterThan(0);
-    expect(deliveredAtOnset).toBeLessThan(8_000);
-
-    /* The blip, mid-generation. NO answerComplete has arrived. */
-    h.provider.speechStarted();
-    await h.settle();
-    /* The burst continues into the hold: deltas keep queueing behind the
-     * pause, which is exactly what the hold wants. */
-    h.provider.answerAudio(1_000);
-    await playOutEverything(h, 2_000);
-    expect(speakerMsDelivered(h)).toBe(deliveredAtOnset);
-
-    /* The retraction: quiet again, no commit — echo residue. Everything
-     * resumes, the late deltas included. */
-    h.provider.speechStopped();
-    h.provider.answerComplete();
-    await playOutEverything(h, 12_000);
-    expect(speakerMsDelivered(h)).toBe(9_000);
-    /* Nobody cancelled and nobody's memory was touched. */
-    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
-    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
-    expect(h.provider.sentOfType("conversation.item.create")).toHaveLength(0);
-  });
-
-  it("a committed mid-burst barge on grok discards the tail and repairs at response.done", async () => {
-    const h = makeHarness();
-    await callIsLive(h, GROK_LISTENS);
-    h.provider.responseCreated();
-    h.provider.answerAudio(400);
-    h.provider.answerTranscript("one two three");
-    h.provider.answerAudio(7_600);
-    await playOutEverything(h, 600);
-    const deliveredAtOnset = speakerMsDelivered(h);
-
-    h.provider.speechStarted();
-    await h.settle();
-    /* A real turn: stopped and committed in the same server tick. The
-     * confirm discards the held tail with the heard-ms frozen at the
-     * onset's clear. */
-    h.provider.speechStopped();
-    h.provider.push({ type: "input_audio_buffer.committed" });
-    await h.settle();
-    /* The rest of the burst is residue now: dead on arrival. */
-    h.provider.answerAudio(2_000);
-    h.provider.answerComplete();
-    await playOutEverything(h, 4_000);
-    expect(speakerMsDelivered(h) - deliveredAtOnset).toBeLessThanOrEqual(SPEAKER_FRAME_MS);
-    /* An answer that died unheard marks no end. */
-    expect(speakerFrames(h).filter((frame) => frame.lastFrameOfAnswer === true)).toHaveLength(0);
-    /* The repair settles at response.done — on grok, note only, no verb,
-     * and never a cancel. */
-    const notes = h.provider.sentOfType("conversation.item.create");
-    expect(notes).toHaveLength(1);
-    expect(JSON.stringify(notes[0])).toContain("heard only this much");
-    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
-    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
-  });
-
-  it("a response.created that finds a live hold settles it with no repair", async () => {
-    /* A created that finds a live hold can only be one this agent asked
-     * for itself — every real turn's committed precedes its created — so
-     * nobody interrupted and there is nothing to repair. The old
-     * confirm-on-created here fabricated "the user interrupted your
-     * previous spoken reply" out of an echo blip. */
-    const h = makeHarness();
-    await callIsLive(h, GROK_LISTENS);
-    h.provider.responseCreated();
-    h.provider.answerAudio(8_000, "item_held");
-    h.provider.answerTranscript("one two three");
-    h.provider.answerComplete();
-    await playOutEverything(h, 600);
-    h.provider.speechStarted();
-    await h.settle();
-    const deliveredAtOnset = speakerMsDelivered(h);
-
-    /* An unrelated created lands while the hold is open (this one was not
-     * asked for by a tool, so it also flushes the old tail — a new answer
-     * is a flush of the old one). */
-    h.provider.responseCreated();
-    h.provider.answerAudio(1_000);
-    h.provider.answerComplete();
-    await playOutEverything(h, 4_000);
-    /* No note, no truncate — and the pacer is unparked: the new answer
-     * plays. */
-    expect(h.provider.sentOfType("conversation.item.create")).toHaveLength(0);
-    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
-    expect(speakerMsDelivered(h)).toBe(deliveredAtOnset + 1_000);
-
-    /* A commit arriving later finds nothing to confirm: the stale frozen
-     * heard-ms died with the hold and cannot touch the fresh answer. */
-    h.provider.push({ type: "input_audio_buffer.committed" });
-    await h.settle();
-    expect(h.provider.sentOfType("conversation.item.create")).toHaveLength(0);
-    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
-  });
-
-  it("a provider-created reply confirms the hold BEFORE the answer swap — grok's wire order", async () => {
-    /* Measured live 2026-08-19 (wiretap, stream notecheck-074638): at a real
-     * grok barge the reply's `response.created` arrives at .456, the barged
-     * turn's `speech_stopped` at .652 and its `committed` at .708 — created
-     * FIRST. A created arm that only dropped the hold (waiting for the
-     * commit to confirm) erased the barged answer's identity and transcript
-     * in the swap, and the note never went out: the model recalled a count
-     * nobody heard. The provider's own created IS the confirmation. */
-    const h = makeHarness();
-    await callIsLive(h, GROK_LISTENS);
-    h.provider.responseCreated();
-    h.provider.answerAudio(400, "item_stream");
-    h.provider.answerTranscript("one two three");
-    h.provider.answerAudio(15_600, "item_stream");
-    await playOutEverything(h, 12_000);
-    expect(speakerMsDelivered(h)).toBeGreaterThan(0);
-
-    /* Grok cancels the streaming response server-side at the onset: a bare
-     * response.done with empty output, then the onset, in one breath. */
-    h.provider.push({ type: "response.done", response: { output: [] } });
-    h.provider.speechStarted();
-    await h.settle();
-
-    /* The reply's created lands BEFORE stopped/committed. */
-    h.provider.responseCreated();
-    h.provider.speechStopped();
-    h.provider.push({ type: "input_audio_buffer.committed" });
-    await h.settle();
-
-    /* The repair went out, built from the BARGED answer: the note carries
-     * its transcript, not the fresh reply's empty one. */
-    const notes = h.provider.sentOfType("conversation.item.create");
-    expect(notes).toHaveLength(1);
-    expect(JSON.stringify(notes[0])).toContain("one two three");
-  });
-
-  it("holds the finished answer's tail through a false onset and resumes it", async () => {
-    const h = makeHarness();
-    await callIsLive(h, GROK_LISTENS);
-    /* Grok's shape: the whole answer bursts up front and generation is over
-     * long before the listener has heard it — the tail lives ONLY in the
-     * facet's queue, which is exactly what an onset must not destroy. */
-    h.provider.responseCreated();
-    h.provider.answerAudio(8_000);
-    h.provider.answerComplete();
-    await playOutEverything(h, 600);
-    const deliveredAtOnset = speakerMsDelivered(h);
-    expect(deliveredAtOnset).toBeGreaterThan(0);
-    expect(deliveredAtOnset).toBeLessThan(8_000);
-
-    h.provider.speechStarted();
-    await h.settle();
-    /* The device is silenced at once — the interrupt still FEELS instant. */
-    expect(speakerClears(h)).toHaveLength(1);
-    /* But the tail is held, not destroyed: nothing more goes out while the
-     * onset's verdict is pending. */
-    await playOutEverything(h, 2_000);
-    expect(speakerMsDelivered(h)).toBe(deliveredAtOnset);
-
-    /* The retraction: quiet again, no commit — it was echo residue. The
-     * tail resumes; what the false onset cost is the HOLE where the
-     * device's cleared lead was, not the remaining thirty-odd seconds. */
-    h.provider.speechStopped();
-    await playOutEverything(h, 12_000);
-    expect(speakerMsDelivered(h)).toBe(8_000);
-    /* Nobody's memory was touched: no commit means nothing to repair. */
-    expect(h.provider.sentOfType("conversation.item.delete")).toHaveLength(0);
-    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
-    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
-  });
-
-  it("a confirmed onset discards the held tail and repairs with heard-ms frozen at the clear", async () => {
-    /* An OPENAI open-mic call, deliberately: the frozen number rides the
-     * truncate's audio_end_ms, and grok's repair (delete) carries no number
-     * to pin. OpenAI's 24 kHz deltas mean the fake's byte counts are 1.5x
-     * the real milliseconds — inputs below are scaled so the frozen number
-     * stays the same round 600 as the grok drop tests. */
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime", provider: "openai" },
-    });
-    await h.append(micFrame(1));
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    h.provider.responseCreated();
-    h.provider.answerAudio(600, "item_burst");
-    h.provider.answerTranscript("one two three four five");
-    h.provider.answerAudio(11_400, "item_burst");
-    h.provider.answerComplete();
-    await playOutEverything(h, 600);
-    const deliveredAtOnset = speakerMsDelivered(h);
-
-    h.provider.speechStarted();
-    await h.settle();
-    /* The user keeps talking while the pacer holds; the schedule would keep
-     * advancing, which is why heard-ms is frozen AT the onset — repaired at
-     * the commit two seconds later, the number must still be the one from
-     * the moment the room went silent. */
-    await playOutEverything(h, 2_000);
-
-    /* A real turn: stopped and committed arrive in the same server tick —
-     * the retraction must not erase the frozen number the commit still
-     * owes. */
-    h.provider.speechStopped();
-    h.provider.push({ type: "input_audio_buffer.committed" });
-    await h.settle();
-
-    const truncations = h.provider.sentOfType("conversation.item.truncate");
-    expect(truncations).toHaveLength(1);
-    expect(truncations[0]).toMatchObject({ item_id: "item_burst", content_index: 0 });
-    /* Frozen: 600 ms had been HANDED OVER when the clear fired, and the
-     * cone runs DEVICE_START_LAG_MS (150) behind the schedule — delivery,
-     * DMA ring, start-up fill — so what the listener actually heard at the
-     * silence is 450. The subtraction applies because the schedule was
-     * still mid-answer at the freeze; a schedule that has sat empty past
-     * the lag returns its sent figure whole instead (pinned by "sends no
-     * repair and no cancel when the press finds nothing playing" — a
-     * fully-played answer must never be truncated by its own start lag).
-     * Recomputed at the commit this would claim 4,600 — everything ever
-     * handed over, none of the cleared buffer subtracted — which is
-     * exactly the lie the freeze prevents. */
-    expect(truncations[0]!.audio_end_ms).toBe(450);
-    const notes = h.provider.sentOfType("conversation.item.create");
-    expect(notes).toHaveLength(1);
-    expect(JSON.stringify(notes[0])).toContain("heard only this much");
-    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
-
-    /* The held tail is gone for good — the retraction restarted the pacer
-     * one message before the commit landed, so the single in-flight frame
-     * may slip, and no more; the confirm's own watermark re-clears the
-     * device (the second clear), so the blurt is never heard. */
-    await playOutEverything(h, 2_000);
-    const deliveredAfterConfirm = speakerMsDelivered(h);
-    expect(deliveredAfterConfirm - deliveredAtOnset).toBeLessThanOrEqual(SPEAKER_FRAME_MS);
-    expect(speakerClears(h)).toHaveLength(2);
-
-    /* And the reply to the interruption plays clean, with none of the dead
-     * answer resuming underneath it. (1,500 fake-ms = 1,000 real at 24 kHz;
-     * the resampler's half-kernel lookahead holds back ~1.3 ms of tail.) */
-    h.provider.responseCreated();
-    h.provider.answerAudio(1_500);
-    h.provider.answerComplete();
-    await playOutEverything(h, 3_000);
-    expect(Math.abs(speakerMsDelivered(h) - (deliveredAfterConfirm + 1_000))).toBeLessThan(2);
+    const answers = eventsOfType(h, "answer-transcript");
+    expect(answers).toHaveLength(1);
+    expect(answers[0]!.payload).toMatchObject({ text: "One, two, three,", cancelled: true });
   });
 });
 
 /* ========================================================================== */
-/* ENDING                                                                     */
+/* THE TRANSCRIPT                                                             */
 /* ========================================================================== */
 
-describe("ending a call", () => {
-  it("a device-appended obituary silences the speaker and frees the dial NOW", async () => {
-    /* The hang-up button appends conversation-ended directly — no
-     * end-requested ever exists, so the caught-up settlement never runs.
-     * Measured on HAVPE: without this arm the zombie dial squatted until
-     * the 60s idle tick and every press in between was deaf, while the
-     * ring played out four more seconds of a call that was over. */
+describe("the transcript", () => {
+  it("groups fragments into turns closed by the metronome, both speakers, and folds the recap", async () => {
     const h = makeHarness();
-    const conversationId = await callIsLive(h, GROK_LISTENS);
-    h.provider.responseCreated();
-    h.provider.answerAudio(8_000);
-    await playOutEverything(h, 600);
-    const clearsBefore = speakerClears(h).length;
-    const socketsBefore = h.sockets.length;
+    await callIsLive(h);
+    /* The output stream is the clock: 1.6 s of idle silence puts the
+     * timeline where the fragments say they are. */
+    h.provider.silence(1_600);
+    h.provider.userSays(" What", 1_000, 1_200);
+    h.provider.userSays(" time", 1_200, 1_400);
+    h.provider.userSays(" is it?", 1_400, 1_600);
+    /* A backchannel overlapping the question: its own row. */
+    h.provider.assistantSays(" Mm-hm.", 1_300, 1_500);
+    /* 1.2 s later both rows are finished turns. */
+    h.provider.silence(1_200);
+    await h.settle();
+    expect(eventsOfType(h, "utterance-transcript")).toHaveLength(1);
+    expect(eventsOfType(h, "answer-transcript")).toHaveLength(1);
+    h.provider.assistantSays(" It's", 3_000, 3_200);
+    h.provider.assistantSays(" four.", 3_200, 3_400);
+    h.provider.silence(600); /* not yet */
+    await h.settle();
+    expect(eventsOfType(h, "answer-transcript")).toHaveLength(1);
+    h.provider.silence(1_000); /* now */
+    await h.settle();
 
+    const utterances = eventsOfType(h, "utterance-transcript").map(
+      (event) => (event.payload as { text: string }).text,
+    );
+    const answers = eventsOfType(h, "answer-transcript").map(
+      (event) => (event.payload as { text: string }).text,
+    );
+    expect(utterances).toEqual(["What time is it?"]);
+    expect(answers).toEqual(["Mm-hm.", "It's four."]);
+    /* Rows close in the order their LAST fragment ended: the backchannel
+     * (1,500) before the question (1,600). */
+    expect(h.state().transcript).toEqual([
+      { role: "assistant", text: "Mm-hm." },
+      { role: "listener", text: "What time is it?" },
+      { role: "assistant", text: "It's four." },
+    ]);
+  });
+
+  it("a fragment far behind its row's last opens a new row even before the metronome", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    h.provider.userSays(" Hello.", 1_000, 1_400);
+    h.provider.userSays(" Anyone there?", 4_000, 4_600);
+    await h.settle();
+    expect(
+      eventsOfType(h, "utterance-transcript").map((e) => (e.payload as { text: string }).text),
+    ).toEqual(["Hello."]);
+  });
+
+  it("closes the open rows when the call ends", async () => {
+    const h = makeHarness();
+    const conversationId = await callIsLive(h);
+    h.provider.userSays(" Bye for now.", 1_000, 1_600);
+    await h.settle();
+    expect(eventsOfType(h, "utterance-transcript")).toHaveLength(0);
     await h.append({
       type: "events.iterate.com/voice-agent/conversation-ended",
       payload: { conversationId, reason: "button" },
     });
     await h.settle();
-    /* The device is silenced immediately — the buffered lead dies with the
-     * call — and the provider socket is gone. */
-    expect(speakerClears(h).length).toBe(clearsBefore + 1);
+    expect(eventsOfType(h, "utterance-transcript")).toHaveLength(1);
+  });
+});
+
+/* ========================================================================== */
+/* THINKING, FAST AND SLOW — the backend                                      */
+/* ========================================================================== */
+
+describe("the backend", () => {
+  it("runs exec_typescript on the project's capability host and continues the response", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    h.provider.backendFunctionCall(
+      "call_1",
+      "exec_typescript",
+      JSON.stringify({ code: "async (itx) => itx.repo.listFiles()" }),
+    );
+    await h.settle();
+    expect(h.scripts).toEqual(["async (itx) => itx.repo.listFiles()"]);
+    const results = h.provider.sentOfType("response.item.create");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.item).toEqual({
+      type: "function_call_output",
+      call_id: "call_1",
+      output: JSON.stringify({ files: 3 }),
+    });
+    /* The output, THEN the continuation — appending a result does not
+     * continue the response on its own. */
+    const order = h.provider.sent.map((message) => message.type);
+    expect(order.indexOf("response.item.create")).toBeLessThan(order.indexOf("response.create"));
+  });
+
+  it("a failing script answers the backend with the error, and an unknown function too", async () => {
+    const h = makeHarness();
+    h.projectRoot.current = {
+      capabilityHost: {
+        runScript: async () => {
+          throw new Error("Repo has no commits yet");
+        },
+      },
+    };
+    await callIsLive(h);
+    h.provider.backendFunctionCall("call_x", "exec_typescript", '{"code":"async (itx) => 1"}');
+    h.provider.backendFunctionCall("call_y", "teleport", "{}");
+    await h.settle();
+    const outputs = h.provider
+      .sentOfType("response.item.create")
+      .map((message) => message.item as { call_id: string; output: string });
+    expect(outputs.find((item) => item.call_id === "call_x")!.output).toContain("no commits yet");
+    expect(outputs.find((item) => item.call_id === "call_y")!.output).toContain("no such function");
+    expect(h.provider.sentOfType("response.create")).toHaveLength(2);
+  });
+
+  it("walks a certificate tool's expression with the backend's arguments", async () => {
+    const h = makeHarness();
+    const nods: unknown[] = [];
+    h.projectRoot.current = {
+      ...(h.projectRoot.current as object),
+      clients: {
+        get: (path: string) => ({
+          capabilities: {
+            nod: async (args: unknown) => {
+              nods.push([path, args]);
+              return { nodded: true };
+            },
+          },
+        }),
+      },
+    };
+    await callIsLive(h, {
+      tools: [
+        {
+          name: "nod",
+          description: "Nod the head.",
+          parameters: { type: "object", properties: { times: { type: "number" } } },
+          expression: ["clients", ["get", "/clients/stackchan"], "capabilities", "nod"],
+        },
+      ],
+    });
+    h.provider.backendFunctionCall("call_nod", "nod", '{"times":2}');
+    await h.settle();
+    expect(nods).toEqual([["/clients/stackchan", { times: 2 }]]);
+    const result = h.provider.sentOfType("response.item.create")[0]!.item as { output: string };
+    expect(result.output).toBe(JSON.stringify({ nodded: true }));
+  });
+
+  it("hang_up ends the call only after the goodbye finishes playing", async () => {
+    const h = makeHarness();
+    await callIsLive(h, { tools: [{ name: "hang_up", description: "End the call." }] });
+    h.provider.speech(1_000);
+    h.provider.backendFunctionCall("call_bye", "hang_up", "{}");
+    await h.settle();
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+    h.provider.silence(1_000);
+    await playOutEverything(h, 4_000);
+    const requested = eventsOfType(h, "conversation-end-requested");
+    expect(requested).toHaveLength(1);
+    expect((requested[0]!.payload as { reason: string }).reason).toContain("hung up");
+  });
+
+  it("a press during the goodbye un-decides the hang-up", async () => {
+    const h = makeHarness();
+    await callIsLive(h, { tools: [{ name: "hang_up", description: "End the call." }] });
+    h.provider.speech(3_000);
+    h.provider.backendFunctionCall("call_bye", "hang_up", "{}");
+    await h.settle();
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    h.provider.silence(1_000);
+    await playOutEverything(h, 5_000);
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+  });
+
+  it("records the backend's final words durably", async () => {
+    const h = makeHarness();
+    const conversationId = await callIsLive(h);
+    h.provider.backendMessage("msg_1", "The repo holds eight files.");
+    await h.settle();
+    const replies = eventsOfType(h, "backend-reply");
+    expect(replies).toHaveLength(1);
+    expect(replies[0]!.payload).toEqual({ conversationId, text: "The repo holds eight files." });
+  });
+});
+
+/* ========================================================================== */
+/* ENDING A CALL                                                              */
+/* ========================================================================== */
+
+describe("ending a call", () => {
+  it("a device-appended obituary silences the speaker, closes the session and frees the dial NOW", async () => {
+    const h = makeHarness();
+    const conversationId = await callIsLive(h);
+    h.provider.speech(10_000);
+    await h.settle();
+    await h.append({
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { conversationId, reason: "button" },
+    });
+    await h.settle();
+    expect(speakerClears(h)).toHaveLength(1);
+    expect(h.provider.sentOfType("session.close")).toHaveLength(1);
     expect(h.provider.closed).toBe(true);
-
-    /* The dying call's OWN last frames mint nothing: a device drains its
-     * mic for ~100 ms after the far end hangs up, and the call those
-     * frames used to mint was the zombie a person heard as a second
-     * "call ended". */
-    await h.append(micFrame(2));
-    await h.settle();
-    expect(h.sockets.length).toBe(socketsBefore);
-
-    /* And the next press is NOT deaf: once the trailing-frame window has
-     * passed, speech dials a fresh provider socket at once instead of
-     * waiting out a zombie's idle deadline. */
+    /* The next press mints a fresh call on a fresh socket. */
     await h.advanceTime(2_000);
-    await h.append(micFrame(3));
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
     await h.settle();
-    expect(h.sockets.length).toBe(socketsBefore + 1);
+    expect(eventsOfType(h, "call-started")).toHaveLength(2);
+    expect(h.sockets).toHaveLength(2);
   });
 
   it("a stale obituary for a dead call cannot touch the live one", async () => {
     const h = makeHarness();
-    await callIsLive(h, GROK_LISTENS);
-    h.provider.responseCreated();
-    h.provider.answerAudio(2_000);
-    await playOutEverything(h, 200);
-    const socketsBefore = h.sockets.length;
+    await callIsLive(h);
     await h.append({
       type: "events.iterate.com/voice-agent/conversation-ended",
-      payload: { conversationId: "conv_from_last_week", reason: "button" },
+      payload: { conversationId: "conv_somebody_else", reason: "button" },
     });
     await h.settle();
     expect(h.provider.closed).toBe(false);
-    expect(h.sockets.length).toBe(socketsBefore);
+    expect(h.state().call).not.toBeNull();
   });
 
   it("ends after a minute with no input from the device", async () => {
@@ -2997,169 +950,102 @@ describe("ending a call", () => {
     await callIsLive(h);
     await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
     await h.settle();
-
     const requested = eventsOfType(h, "conversation-end-requested");
     expect(requested).toHaveLength(1);
     expect((requested[0]!.payload as { reason: string }).reason).toContain("no input");
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
     expect(h.state().call).toBeNull();
+    expect(h.provider.sentOfType("session.close")).toHaveLength(1);
   });
 
-  /*
-   * THE GHOST CALL: a call whose provider never materialises — a dial that
-   * never resolves, or a socket that dies without ever firing its close
-   * event — used to have NO deadline at all: the countdown armed only after
-   * a socket was adopted, so the fold said a call was up for ever and every
-   * later press was swallowed by "a call is already up" (measured live
-   * 2026-08-20: six minutes of 3-second press retries into a black hole,
-   * ended only by a manual zombie-cleanup). The deadline arms AT MINT now,
-   * and call-started time counts as the device's initial input.
-   */
   it("buries a call whose dial never resolves at the same idle deadline", async () => {
     const h = makeHarness();
-    /* A dial that HANGS: the fetch never settles, so no socket is ever
-     * adopted, no handshake deadline arms, and no close event can fire. */
     vi.stubGlobal("fetch", () => new Promise(() => {}));
     await h.append({ type: "events.iterate.com/voice-agent/created", payload: {} });
     await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(1);
-
     await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
     await h.settle();
-    const requested = eventsOfType(h, "conversation-end-requested");
-    expect(requested).toHaveLength(1);
-    expect((requested[0]!.payload as { reason: string }).reason).toContain("no input");
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
-    expect(h.state().call).toBeNull();
-
-    /* And the next press is not deaf: it mints a fresh call. */
     await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(2);
   });
 
-  /*
-   * A LONG ANSWER IS NOT AN ABANDONED CALL.
-   *
-   * The deadline watches the device's input because that is the only side that
-   * leaves durable events, and a listener hearing out a two-minute answer sends
-   * nothing at all. "Count to one hundred" therefore ran the clock out
-   * mid-sentence and hung up: six dropped calls in one ten-minute run against
-   * real Grok, every one of them a working conversation cut off in the middle.
-   */
-  it("does not end a call while it is still speaking", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    /* Three minutes of answer, which is longer than the deadline. */
-    h.provider.answerAudio(180_000);
-    await h.settle();
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
-    await h.settle();
-    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
-    expect(h.state().call).not.toBeNull();
+  it("does not end a call while it is still speaking, nor one the device keeps feeding", async () => {
+    const speaking = makeHarness();
+    await callIsLive(speaking);
+    speaking.provider.speech(180_000);
+    await speaking.settle();
+    await speaking.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await speaking.settle();
+    expect(eventsOfType(speaking, "conversation-end-requested")).toHaveLength(0);
 
-    /*
-     * AND THE CLOCK RESTARTS WHEN THE ANSWER ENDS, rather than resuming from a
-     * stamp that aged behind it.
-     *
-     * Merely refusing to hang up while speaking left the durable stamp 70
-     * seconds stale, so the call died one tick after the audio drained —
-     * measured on preview-3 as `conversation-ended` 1.1s after a 64s answer
-     * finished, with the listener about to take their turn. Immediately after
-     * playout the call must still be up.
-     */
-    await playOutEverything(h, 200_000);
-    await h.settle();
-    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
-    expect(h.state().call).not.toBeNull();
-
-    /* A minute of silence AFTER it stopped talking does end it: the deadline is
-     * postponed and restarted, never removed. */
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
-    await h.settle();
-    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(1);
-  });
-
-  it("does not end a call the device keeps feeding", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
+    const fed = makeHarness();
+    await callIsLive(fed);
     for (let tick = 0; tick < 8; tick++) {
-      await h.advanceTime(10_000);
-      await h.append(micFrame(tick + 2));
-      await h.settle();
+      await fed.advanceTime(10_000);
+      await fed.append({ type: "events.iterate.com/voice-agent/keepalive", payload: {} });
+      await fed.settle();
     }
-    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+    expect(eventsOfType(fed, "conversation-end-requested")).toHaveLength(0);
   });
 
-  it("asks to end when the provider hangs up", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    h.provider.close();
-    await h.settle();
-    const requested = eventsOfType(h, "conversation-end-requested");
+  it("asks to end when the provider closes the session or the socket", async () => {
+    const closed = makeHarness();
+    await callIsLive(closed);
+    closed.provider.push({ type: "session.closed", reason: "expired", usage: { seconds: 9 } });
+    await closed.settle();
+    let requested = eventsOfType(closed, "conversation-end-requested");
     expect(requested).toHaveLength(1);
-    expect((requested[0]!.payload as { reason: string }).reason).toContain("socket closed");
-  });
+    expect((requested[0]!.payload as { reason: string }).reason).toContain("expired");
 
-  it("closes the provider socket when the call ends", async () => {
-    const h = makeHarness();
-    const conversationId = await callIsLive(h);
-    await h.append({
-      type: "events.iterate.com/voice-agent/conversation-end-requested",
-      payload: { conversationId, reason: "the person said goodbye" },
-    });
-    await h.settle();
-    expect(h.provider.closed).toBe(true);
-    expect(h.state().call).toBeNull();
-  });
-
-  it("the idle tick chain dies with its call", async () => {
-    /* The dial-identity fence at the top of each tick is the ONLY thing
-     * that kills the self-rescheduling chain when the call ends — #hangUp
-     * nulls #dial but cannot reach the pending sleep. A fence-less chain
-     * keeps running with its captured closure and, because the "goodbye"
-     * path never used the `idle:` idempotency key, appends a SECOND
-     * end-requested with reason "no input" for a call already buried. */
-    const h = makeHarness();
-    const conversationId = await callIsLive(h);
-    await h.append({
-      type: "events.iterate.com/voice-agent/conversation-end-requested",
-      payload: { conversationId, reason: "the person said goodbye" },
-    });
-    await h.settle();
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
-    await h.settle();
-    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(1);
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    const dropped = makeHarness();
+    await callIsLive(dropped);
+    dropped.provider.close();
+    await dropped.settle();
+    requested = eventsOfType(dropped, "conversation-end-requested");
+    expect(requested).toHaveLength(1);
+    expect(eventsOfType(dropped, "conversation-ended")).toHaveLength(1);
   });
 
   it("writes the provider's error where somebody can read it", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.provider.push({ type: "error", error: { message: "commit on an empty buffer" } });
+    h.provider.push({
+      type: "error",
+      error: { type: "invalid_request_error", code: "unknown_parameter", message: "nope" },
+    });
     await h.settle();
     const errors = eventsOfType(h, "provider-error");
     expect(errors).toHaveLength(1);
-    expect((errors[0]!.payload as { message: string }).message).toContain("empty buffer");
+    expect((errors[0]!.payload as { message: string }).message).toContain("unknown_parameter");
   });
 });
 
 /* ========================================================================== */
-/* SURVIVING AN EVICTION                                                      */
+/* EVICTION AND RECOVERY                                                      */
 /* ========================================================================== */
 
 describe("eviction", () => {
-  it("re-dials a call the log still says is open", async () => {
+  it("re-dials a call the log still says is open, and clears the device before playing anything", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    const dialsBefore = h.dialledUrls.length;
-
-    h.crash();
-    await h.append(micFrame(9));
+    await answer(h, 300);
+    const framesBefore = speakerFrames(h).length;
+    await evict(h);
+    expect(h.sockets).toHaveLength(2);
+    h.provider.start();
     await h.settle();
-
-    expect(h.dialledUrls.length).toBe(dialsBefore + 1);
+    await answer(h, 300);
+    const fresh = speakerFrames(h).slice(framesBefore);
+    /* The first frame of the new session says clear: the device may hold the
+     * dead incarnation's tail. And the numbering restarts at one. */
+    expect(fresh[0]!.clearSpeakerBufferBeforeFrame).toBe(true);
+    expect(fresh[0]!.deviceSpeakerFrameSeq).toBe(1);
+    /* Two dials, two handshakes, both on the record. */
+    expect(eventsOfType(h, "conversation-accepted")).toHaveLength(2);
   });
 
   it("does not re-dial a call that has been ended", async () => {
@@ -3167,93 +1053,16 @@ describe("eviction", () => {
     const conversationId = await callIsLive(h);
     await h.append({
       type: "events.iterate.com/voice-agent/conversation-end-requested",
-      payload: { conversationId, reason: "done" },
+      payload: { conversationId, reason: "test" },
     });
     await h.settle();
-    const dialsBefore = h.dialledUrls.length;
-
-    h.crash();
-    await h.append(micFrame(9));
-    await h.settle();
-    /* A new call may be opened by that frame, but the ENDED one is not revived. */
+    await evict(h);
+    /* The waking frame may open a NEW call; the ENDED one is not revived. */
     const revived = eventsOfType(h, "call-started").filter(
       (event) => (event.payload as { conversationId: string }).conversationId === conversationId,
     );
     expect(revived).toHaveLength(1);
-    expect(h.dialledUrls.length).toBeGreaterThanOrEqual(dialsBefore);
-  });
-});
-
-/* ========================================================================== */
-/* THE DUMB CLIENT'S CONTRACT                                                 */
-/* ========================================================================== */
-
-describe("what the device is told", () => {
-  /* (The clear-rides-a-numbered-frame claim is pinned by "flushes through
-   * the highest frame minted at that moment" — a test here staged the same
-   * construction and asserted a subset of it.) */
-  it("clears once at the start of a session and never again unprompted", async () => {
-    /* The first frame of a fresh socket empties whatever the board was holding
-     * from a session that is gone. After that, an uninterrupted answer must not
-     * clear at all — a clear mid-answer is the stutter. */
-    const h = makeHarness();
-    await callIsLive(h);
-    h.provider.answerAudio(1_000);
-    h.provider.answerComplete();
-    await playOutEverything(h, 3_000);
-    const frames = speakerFrames(h);
-    expect(frames[0]!.clearSpeakerBufferBeforeFrame).toBe(true);
-    expect(
-      frames.slice(1).filter((frame) => frame.clearSpeakerBufferBeforeFrame === true),
-    ).toHaveLength(0);
-  });
-});
-
-describe("recovery holes the review found", () => {
-  it("empties the device before playing anything from a fresh socket", async () => {
-    /* The board may still hold frames from the incarnation that died, numbered
-     * higher than the ones about to arrive. Rather than remembering how high —
-     * durable state written to survive a thing that cannot be survived — the
-     * first frame of the new session says "clear". Whatever it was holding
-     * belonged to an answer whose socket is gone. */
-    const h = makeHarness();
-    await callIsLive(h);
-    h.provider.answerAudio(2_000);
-    await playOutEverything(h, 600);
-    const framesBefore = speakerFrames(h).length;
-    expect(framesBefore).toBeGreaterThan(0);
-
-    h.crash();
-    await h.append(micFrame(9));
-    await h.settle();
-    h.provider.completeHandshake();
-    h.provider.answerAudio(1_000);
-    await h.settle();
-
-    const afterRecovery = speakerFrames(h).slice(framesBefore);
-    expect(afterRecovery.length).toBeGreaterThan(0);
-    expect(afterRecovery[0]!.clearSpeakerBufferBeforeFrame).toBe(true);
-  });
-
-  it("writes the obituary an incarnation died before writing", async () => {
-    const h = makeHarness();
-    const conversationId = await callIsLive(h);
-    /* The decision lands, but the incarnation that would perform it is gone
-     * before it can. Nothing re-dials a call with `endRequested` set, so
-     * without a recovery pass this call is stuck open for ever. */
-    await h.stream.append({
-      type: "events.iterate.com/voice-agent/conversation-end-requested",
-      payload: { conversationId, reason: "the person hung up" },
-    });
-    h.crash();
-
-    await h.append(micFrame(9));
-    await h.settle();
-    const ended = eventsOfType(h, "conversation-ended").filter(
-      (event) => (event.payload as { conversationId: string }).conversationId === conversationId,
-    );
-    expect(ended).toHaveLength(1);
-    expect((ended[0]!.payload as { reason: string }).reason).toBe("the person hung up");
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
   });
 
   it("ignores a superseded socket that is still talking", async () => {
@@ -3265,121 +1074,19 @@ describe("recovery holes the review found", () => {
       payload: { conversationId, reason: "done" },
     });
     await h.settle();
-    const micSentBefore = abandoned.sentOfType("input_audio_buffer.append").length;
-
-    /* close() is not instant: a message already in flight arrives after it.
-     * It must not revive the call or empty the microphone queue into a dead
-     * connection. */
-    abandoned.push({ type: "session.updated" });
-    await h.settle();
-    expect(abandoned.sentOfType("input_audio_buffer.append")).toHaveLength(micSentBefore);
+    const micSentBefore = abandoned.sentOfType("session.input_audio.append").length;
+    const framesBefore = speakerFrames(h).length;
+    /* close() is not instant: messages already in flight arrive after it.
+     * They must not revive the call, empty the microphone queue into a dead
+     * connection, reach the device, or be recorded as the live call's. */
+    abandoned.start();
+    abandoned.speech(1_000);
+    abandoned.push({ type: "error", error: { type: "x", code: "y", message: "from the grave" } });
+    await playOutEverything(h, 2_000);
+    expect(abandoned.sentOfType("session.input_audio.append")).toHaveLength(micSentBefore);
+    expect(speakerFrames(h)).toHaveLength(framesBefore);
+    expect(eventsOfType(h, "provider-error")).toHaveLength(0);
     expect(h.state().call).toBeNull();
-  });
-});
-
-/* ========================================================================== */
-/* BUGS A REVIEW PROVED, EACH PINNED HERE                                     */
-/* ========================================================================== */
-
-describe("bugs the review proved", () => {
-  it("sends a short answer in one go rather than pacing it out", async () => {
-    /* An answer that fits inside the head start has no reason to be dribbled
-     * out: the whole point of the head start is that the first second of any
-     * answer goes immediately. This is the latency claim, and it used to be
-     * where the end-of-answer marker went missing. */
-    const h = makeHarness();
-    await callIsLive(h);
-    h.provider.answerAudio(600);
-    await h.settle();
-    expect(speakerMsDelivered(h)).toBe(600);
-  });
-
-  it("does not let another call's obituary hang up the live one", async () => {
-    const h = makeHarness();
-    const first = await callIsLive(h);
-    await h.append({
-      type: "events.iterate.com/voice-agent/conversation-end-requested",
-      payload: { conversationId: first, reason: "done" },
-    });
-    await h.settle();
-
-    /* Past the trailing-frame mint cooldown: this frame is a person
-     * speaking again, not the dead call's last drained audio. */
-    await h.advanceTime(2_000);
-    await h.append(micFrame(20));
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    const live = h.state().call!.conversationId;
-    expect(live).not.toBe(first);
-    const sentBefore = h.provider.sentOfType("input_audio_buffer.append").length;
-
-    /* At-least-once delivery means the first call's obituary can arrive
-     * again — or a replay from offset 0 can. It named a call that is over. */
-    await h.append({
-      type: "events.iterate.com/voice-agent/conversation-ended",
-      payload: { conversationId: first, reason: "done" },
-    });
-    await h.append(micFrame(21));
-    await h.settle();
-
-    expect(h.state().call!.conversationId).toBe(live);
-    expect(h.provider.closed).toBe(false);
-    expect(h.provider.sentOfType("input_audio_buffer.append").length).toBeGreaterThan(sentBefore);
-  });
-
-  it("lets a re-dial record its own handshake", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    h.crash();
-    await h.append(micFrame(9));
-    await h.settle();
-    h.provider.completeHandshake();
-    await h.settle();
-    /* Keyed on the conversation alone, the second acceptance is refused and
-     * the number a cold call is judged on is lost. */
-    expect(eventsOfType(h, "conversation-accepted").length).toBeGreaterThanOrEqual(2);
-  });
-});
-
-describe("edges nothing was holding down", () => {
-  it("sends the short tail of an answer that is not a whole number of frames", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    h.provider.answerAudio(250);
-    h.provider.answerComplete();
-    await playOutEverything(h, 1_000);
-    /*
-     * 250 ms is 8,000 bytes of PCM16, and the only thing that shapes it on the
-     * way out is the identity path's 3,198-byte slice (the largest whole
-     * number of base64 groups under the 3,200-byte ceiling): 3,198 + 3,198 +
-     * 1,604, so three frames and a short tail of 50.125 ms.
-     *
-     * WHAT THIS USED TO SAY, because the difference is the whole change. The
-     * device's frame was 640 bytes and a chunk with a remainder was dropped
-     * rather than spliced, so 250 ms went out as 100 + 100 + 40 and then a
-     * fourth frame carrying the last 10 ms PADDED OUT to 20 — 260 ms
-     * delivered for 250 generated, ten milliseconds of manufactured silence
-     * welded to the end of somebody's sentence. Nothing is padded now and the
-     * tail is simply short.
-     */
-    const frames = speakerFrames(h).filter((frame) => frame.pcm !== "");
-    expect(frames).toHaveLength(3);
-    expect(speakerMsDelivered(h)).toBe(250);
-    expect(atob(frames[2]!.pcm).length / PCM16_BYTES_PER_MS).toBe(50.125);
-  });
-
-  it("ends the call when the provider refuses the upgrade", async () => {
-    const h = makeHarness();
-    /* A Response with no `webSocket` at all — the shape a refusal takes, and
-     * the one that used to become a TypeError on the next line. */
-    vi.stubGlobal("fetch", async () => ({}) as unknown as Response);
-    await h.append({ type: "events.iterate.com/voice-agent/created", payload: {} });
-    await h.append(micFrame(1));
-    await h.settle();
-    const requested = eventsOfType(h, "conversation-end-requested");
-    expect(requested).toHaveLength(1);
-    expect((requested[0]!.payload as { reason: string }).reason).toContain("refused");
   });
 
   it("survives a malformed provider message and keeps listening", async () => {
@@ -3388,31 +1095,29 @@ describe("edges nothing was holding down", () => {
     h.provider.pushRaw("{not json");
     h.provider.pushRaw(new ArrayBuffer(8));
     await h.settle();
-    h.provider.answerAudio(400);
-    h.provider.answerComplete();
-    await playOutEverything(h, 1_000);
-    expect(speakerMsDelivered(h)).toBe(400);
+    await answer(h, 200);
+    expect(speakerMsDelivered(h)).toBeGreaterThan(0);
   });
+});
 
-  it("sends each provider's credential to its host and to nobody else", async () => {
-    const seen: { url: string; headers: Record<string, string> }[] = [];
-    vi.stubGlobal("fetch", async (url: string, init: { headers: Record<string, string> }) => {
-      seen.push({ url: String(url), headers: init.headers });
-      return { webSocket: new FakeProvider() } as unknown as Response;
-    });
-    await dialProviderSocket(
-      "grok",
-      "https://fake.provider.test/v1/realtime",
-      "grok-voice-think-fast-2.0",
-    );
-    await dialProviderSocket("grok", null, "grok-voice-think-fast-2.0");
-    await dialProviderSocket("openai", null, "gpt-realtime");
-    /* A test seam gets no credential, whichever provider it fakes. */
-    expect(seen[0]!.headers.Authorization).toBeUndefined();
-    expect(seen[1]!.headers.Authorization).toContain("/secrets/xai");
-    expect(seen[1]!.url).toContain("model=grok-voice-think-fast-2.0");
-    expect(seen[2]!.headers.Authorization).toContain("/secrets/openai");
-    expect(seen[2]!.url).toContain("api.openai.com");
-    expect(seen[2]!.url).toContain("model=gpt-realtime");
+/* ========================================================================== */
+/* THE MIRROR                                                                 */
+/* ========================================================================== */
+
+describe("the mirror lane", () => {
+  it("replaces an audio delta's bytes with their length and records client commands", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    h.provider.speech(100);
+    h.provider.push({ type: "session.usage.updated", usage: { seconds: 3 } });
+    h.provider.backendFunctionCall("call_m", "exec_typescript", '{"code":"async (itx) => 1"}');
+    await h.settle();
+    const lane = mirrored(h);
+    const delta = lane.find((payload) => payload.type === "session.output_audio.delta")!;
+    expect(delta.delta).toBeUndefined();
+    expect(delta.deltaBytes).toBe(MAX_SPEAKER_PAYLOAD_BYTES);
+    expect(lane.some((payload) => payload.type === "session.usage.updated")).toBe(true);
+    expect(lane.some((payload) => payload.type === "client.response.item.create")).toBe(true);
+    expect(lane.some((payload) => payload.type === "client.response.create")).toBe(true);
   });
 });

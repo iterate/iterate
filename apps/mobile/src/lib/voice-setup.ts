@@ -34,20 +34,18 @@ export function chatVoiceStreamPath(chatPath: string): string {
 }
 
 /**
- * The birth certificate this app asserts. Push-to-talk (clientTakesTurns:
- * the phone segments turns with the hold-to-talk button — the first
- * on-device session showed open-mic needs AEC tuning this demo hasn't
- * earned yet), colleague on, and the same hang_up tool talk.ts arms — the
- * model saying goodbye is one of the three ways a call ends (tap, hang_up,
- * 60s idle).
+ * The birth certificate this app asserts. The phone holds a hold-to-talk
+ * button and sends audio only while it is held; GPT-Live takes the turns
+ * itself either way, so the certificate carries no posture. The same
+ * hang_up tool talk.ts arms — called by the backend model when the person
+ * says goodbye — is one of the three ways a call ends (tap, hang_up, 60s
+ * idle).
  */
 export const MOBILE_VOICE_SETUP = {
   instructions:
     "You are Iterate, on a phone call with a colleague who knows you well. Casual, " +
     "direct, brief — never customer-service polish. Greet in a couple of words ('hey', " +
     "'hi again'), answer in plain short sentences, acknowledge in two or three words.",
-  clientTakesTurns: true,
-  colleague: true,
   /** The phone rings, so the other end picks up (facet 17.0.0): the model
    * greets first — "hi again" on a stream with history, via the recap. */
   greeting: true,

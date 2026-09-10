@@ -51,14 +51,12 @@ test("the marker is stable for one stream and distinct across streams and config
   );
 });
 
-test("a chat's voice line derives from its path; the chat itself is the colleague", () => {
+test("a chat's voice line derives from its path and names the chat", () => {
   expect(chatVoiceStreamPath("/agents/mobile/1756422")).toBe("/agents/voice/chat/mobile/1756422");
   expect(voiceSetupConfig("/agents/mobile/1756422")).toMatchObject({
     colleaguePath: "/agents/mobile/1756422",
-    colleague: true,
   });
-  /* The device's own line sends no colleaguePath at all — absent means the
-   * facet derives its private voice-notes desk. */
+  /* The device's own line sends no colleaguePath at all. */
   expect("colleaguePath" in voiceSetupConfig(null)).toBe(false);
 });
 
@@ -94,8 +92,7 @@ test("a missing marker runs setup with the full config, then records the marker"
   expect(calls).toHaveLength(1);
   expect(calls[0]).toMatchObject({
     streamPath: "/agents/voice/chat/mobile/device-1",
-    clientTakesTurns: true,
-    colleague: true,
+    greeting: true,
     instructions: MOBILE_VOICE_SETUP.instructions,
   });
   expect(calls[0].tools.map((tool: any) => tool.name)).toEqual(["hang_up"]);

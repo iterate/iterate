@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "A project that runs the realtime voice agent as a guest worker, pulled in from @iterate-com/voice-agent.",
+  "description": "A project that runs the GPT-Live voice agent as a guest worker, pulled in from @iterate-com/voice-agent.",
   "dependencies": {
     "@iterate-com/voice-agent": "https://pkg.pr.new/iterate/iterate/@iterate-com/voice-agent@main",
     "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",

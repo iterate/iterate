@@ -1,24 +1,24 @@
 # Voice lab
 
-Experiments answering one question: **can realtime voice (Grok Voice Agent,
-16kHz PCM16 both directions) ride the streams abstraction** — mic and speaker
-audio as ephemeral stream events — **and what does that cost against a plain
-WebSocket proxy?**
+Instruments for the GPT-Live voice agent (`packages/voice-agent`) over the
+streams abstraction: mic and speaker audio as ephemeral stream events, the
+provider's own events mirrored beside them, and a durable transcript.
 
-## Topology under test
+## Topology
 
 ```
-direct     mic ──────────────────────────► Grok WS ──► speaker        (latency floor)
-streams    mic ──► stream (ephemeral) ──► bridge ──► Grok WS
-                                            │
-           speaker ◄── stream (ephemeral) ◄─┘
+live-probe   mic ──────────────────────────► GPT-Live WS ──► speaker   (the raw wire, from this Mac)
+platform     mic ──► stream (ephemeral) ──► facet ──► GPT-Live WS
+                                              │            └─► backend model (gpt-6-astra) ──► exec_typescript on the project
+             speaker ◄── stream (ephemeral) ◄─┘
 ```
 
-The bridge is the "server side": it holds the Grok WebSocket and relays both
-directions through the stream. It exists in two variants with identical
-protocol: a **node process** (`voicelab bridge`, isolates stream-transport cost
-from Cloudflare execution) and a **userspace worker** in a project's config
-repo (the real deployment shape).
+The facet is the server side: it holds the GPT-Live WebSocket in the
+stream's own Durable Object, relays both directions through the stream, and
+answers the backend model's function calls. `live-probe` dials the provider
+directly with no iterate infrastructure in the path — the measurements every
+design decision in the facet rests on; `duplex` proves the same things
+through a deployed platform from the wire alone, no microphone anywhere.
 
 ## Event protocol (one stream per call)
 

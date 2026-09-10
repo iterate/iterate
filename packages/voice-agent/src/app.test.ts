@@ -58,7 +58,7 @@ describe("VoiceAgentApp", () => {
       removeVoiceAgent: async (options: { streamPath: string }) => options,
     });
     const app = VoiceAgentApp.create(env);
-    expect(await app.setup({ streamPath: "/agents/voice/x", provider: "openai" })).toEqual({
+    expect(await app.setup({ streamPath: "/agents/voice/x", greeting: true })).toEqual({
       streamPath: "/agents/voice/x",
       warmMs: 12,
     });

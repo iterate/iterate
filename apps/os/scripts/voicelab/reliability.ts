@@ -120,6 +120,7 @@ export async function reliability(options: ReliabilityOptions) {
       connectionKey: `reliability-${Date.now()}-g${generation}`,
       eventTypes: [
         "events.iterate.com/voice-agent/grok-event",
+        "events.iterate.com/voice-agent/spk-frame",
         "events.iterate.com/voice-agent/conversation-accepted",
       ],
       processEventBatch: (batch: { events: { type: string; payload?: unknown }[] }) => {
@@ -128,11 +129,22 @@ export async function reliability(options: ReliabilityOptions) {
             callLiveAt = Date.now();
             continue;
           }
-          const inner = (event.payload as { event?: { type?: string; delta?: string } })?.event;
-          if (inner?.type === "response.output_audio_transcript.delta") {
-            transcript += inner.delta ?? "";
+          const payload = (event.payload ?? {}) as {
+            type?: string;
+            delta?: string;
+            lastFrameOfAnswer?: boolean;
+          };
+          if (payload.type === "session.output_transcript.delta") {
+            transcript += payload.delta ?? "";
           }
-          if (inner?.type === "response.done") answeredAt = Date.now();
+          /* GPT-Live has no response lifecycle; the facet's end-of-answer
+           * marker on the speaker lane is the "answered" edge. */
+          if (
+            event.type === "events.iterate.com/voice-agent/spk-frame" &&
+            payload.lastFrameOfAnswer === true
+          ) {
+            answeredAt = Date.now();
+          }
         }
       },
     });

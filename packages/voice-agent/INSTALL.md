@@ -62,7 +62,7 @@ export default class extends IterateWorkerEntrypoint {
 
 `fetch` answers requests for the `voice` app slug (`voice--<project>`) and
 returns null for everything else, so the worker's own routing carries on.
-`this.#voice.setup({ streamPath, colleaguePath, instructions, tools, … })`
+`this.#voice.setup({ streamPath, instructions, tools, backend, … })`
 puts the agent on a stream; `this.#voice.remove({ streamPath })` takes it
 off. The package README documents every option.
 

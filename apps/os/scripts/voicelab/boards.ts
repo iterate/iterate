@@ -188,32 +188,34 @@ export async function boards(options: BoardsOptions) {
       let responsesCreated = 0;
       const connection = await itx.streams.get(streamPath).openConnection({
         connectionKey: `boards-${board.name}-${askedAt}`,
-        eventTypes: ["events.iterate.com/voice-agent/grok-event"],
-        processEventBatch: (batch: { events?: { payload?: unknown }[] }) => {
+        eventTypes: [
+          "events.iterate.com/voice-agent/grok-event",
+          "events.iterate.com/voice-agent/spk-frame",
+        ],
+        processEventBatch: (batch: { events?: { type: string; payload?: unknown }[] }) => {
           for (const event of batch.events ?? []) {
-            /* v2 mirrors provider events FLAT on the payload; the bridge era
-             * nested them under `.event`. Read both so this instrument keeps
-             * working across the tracks. */
             const payload = (event.payload ?? {}) as {
-              event?: { type?: string; delta?: string; transcript?: string };
               type?: string;
               delta?: string;
-              transcript?: string;
+              lastFrameOfAnswer?: boolean;
             };
-            const inner = payload.event ?? payload;
-            /* One count per answer the model began — the barge check below
-             * reads it, because a new response is the one edge the barge's
-             * own clear frame cannot fake. */
-            if (inner?.type === "response.created") responsesCreated += 1;
-            if (inner?.type === "response.output_audio_transcript.delta") {
-              saidBack += inner.delta ?? "";
+            /* One count per answer the voice finished — GPT-Live has no
+             * response lifecycle; the facet marks the end of each run of
+             * speech on the speaker lane, and the barge check below reads it. */
+            if (
+              event.type === "events.iterate.com/voice-agent/spk-frame" &&
+              payload.lastFrameOfAnswer === true
+            ) {
+              responsesCreated += 1;
+              continue;
             }
-            /* The provider streams the user's transcription TWICE — every
-             * delta, then the completed whole. Summing both wrote every
-             * utterance into the evidence twice; the completed event alone
-             * is each utterance exactly once, one line per turn. */
-            if (inner?.type?.endsWith("input_audio_transcription.completed")) {
-              heardUs += (heardUs === "" ? "" : "\n") + (inner.transcript ?? "");
+            /* The mirror carries the provider's transcript fragments for
+             * both speakers; the user's arrive as one stream of deltas. */
+            if (payload.type === "session.output_transcript.delta") {
+              saidBack += payload.delta ?? "";
+            }
+            if (payload.type === "session.input_transcript.delta") {
+              heardUs += payload.delta ?? "";
             }
           }
         },

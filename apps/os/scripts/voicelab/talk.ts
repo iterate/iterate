@@ -1,5 +1,6 @@
 // Hold a voice conversation from this Mac: real microphone in, speakers out,
-// hold-to-talk. No ESP32 involved.
+// hold-to-talk (or an open microphone). No ESP32 involved. GPT-Live on the
+// far end, delegating to a fast Astra with exec_typescript on the project.
 //
 //   pnpm cli voicelab talk                # asks which environment and project
 //   pnpm cli voicelab talk --auto         # defaults for both prompts: default project, fresh stream
@@ -65,16 +66,6 @@ import { discardRpcResult, withRpcResult } from "./rpc-ownership.ts";
  */
 const DEFAULT_PROJECT = "iterate";
 const DEFAULT_MINUTES = 30;
-const XAI_SECRET = "/secrets/xai";
-/**
- * The provider key in the Doppler config this command already runs inside.
- *
- * Named exactly as Doppler has it so nobody has to map one name to another;
- * see docs/devops-cloudflare-doppler.md for where env config comes from.
- */
-const XAI_ENV = "APP_CONFIG_X_AI_API_KEY";
-/** Where the key may be sent. A secret pinned nowhere can be sent anywhere. */
-const XAI_EGRESS = ["https://api.x.ai"];
 
 /**
  * What to tell the model it is, when the caller does not say.
@@ -134,7 +125,7 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   converse?: number;
   /** PCM16 mono 16 kHz WAVs the unattended driver speaks. Required by --converse. */
   utteranceDir?: string;
-  /** Force a back-office consultation every Nth utterance. */
+  /** Force a backend consultation every Nth utterance. */
   colleagueEvery?: number;
   /**
    * Play into this file instead of this Mac's speaker.
@@ -147,14 +138,22 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   pretendSpeaker?: string;
   /** What the model is told it is. Defaults to a short assistant prompt. */
   instructions?: string;
-  /** Dial this instead of the provider. Carries no credential. */
+  /** Dial this instead of api.openai.com. Carries no credential. */
   providerBaseUrl?: string;
-  /** Which realtime voice provider the stream's birth certificate names.
-   * OPENAI unless you say otherwise — the fleet's default provider. */
-  provider?: "grok" | "openai";
-  /** Model and voice overrides for that provider. */
+  /** Model and voice overrides; gpt-live-1 and marin by default. */
   providerModel?: string;
   providerVoice?: string;
+  /**
+   * The backend model the voice delegates to (GPT-Live's Responses
+   * delegation) — `gpt-6-astra` on the fast tier at low effort unless you
+   * say otherwise. It gets exec_typescript against the project and the
+   * certificate's tools (hang_up included).
+   */
+  backendModel?: string;
+  /** Reasoning effort for --backend-model (`low` is a good voice default). */
+  backendEffort?: string;
+  /** Service tier for --backend-model; `priority` is OpenAI's Fast mode. */
+  backendServiceTier?: string;
   /** Install the subscription under a fresh key even if an identical one exists. */
   reinstall?: boolean;
   /**
@@ -164,48 +163,17 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
    */
   hangUp?: boolean;
   /**
-   * Hold the microphone open for the whole call and let Grok find the turns.
+   * Hold the microphone open for the whole call instead of holding SPACE.
    *
-   * OFF BY DEFAULT, BECAUSE THIS CLI IS NOT AN OPEN-MIC CLIENT. It sends audio
-   * only while a turn is in progress — the space bar in attended mode, one
-   * utterance at a time in unattended mode — and then stops. Server VAD needs
-   * the silence AFTER speech to decide the turn ended, so on a stream that
-   * simply stops it hears `speech_started` and then waits for ever. Measured:
-   * Grok took the audio, detected the speech, and never once answered.
-   *
-   * The boards ARE open-mic and this is the path they take, so it is worth
-   * being able to exercise from here — with a driver that keeps sending.
+   * A DRIVER flag, not a certificate one: GPT-Live takes every turn itself
+   * and answers a button-release-shaped stop just as it answers silence
+   * (measured 475 ms after the last frame, live-probe 2026-09-10), so the
+   * stream carries no turn posture any more. Off by default because this
+   * Mac's speaker feeds its microphone; the boards have echo cancellation.
    */
   openMic?: boolean;
-  /**
-   * The provider's own turn_detection object as JSON, passed to the birth
-   * certificate verbatim — open-mic VAD tuning per stream. Example:
-   * '{"type":"server_vad","threshold":0.5,"silence_duration_ms":300}'.
-   */
-  turnDetection?: string;
-  /**
-   * Deliberately change an existing stream's turn posture (clientTakesTurns).
-   *
-   * Without this, a reinstall whose posture differs from the stream's current
-   * certificate REFUSES. A posture flip is not a tweak: an open-mic board on a
-   * clientTakesTurns stream is never told a turn ended and goes silent, and a
-   * button board on an open-mic stream double-commits every turn. One silent
-   * flip — a `talk --setup-only` without `--open-mic` onto a board stream —
-   * took two boards down for hours on 2026-08-20.
-   */
-  flipTurnPosture?: boolean;
   /** Classify the answer into mouth shapes for a face-rendering board. */
   visemes?: boolean;
-  /**
-   * Thinking fast and slow: `note_to_self` writes to the stream's ONE
-   * colleague agent — minted under `/agents/voice-notes/` at a path derived
-   * from this stream's, remembering across every call on the stream — and
-   * its chat replies are read back into whichever call is live.
-   *
-   * ON BY DEFAULT — every stream is born with its colleague; pass
-   * `--colleague false` to install one without.
-   */
-  colleague?: boolean;
   /**
    * Extra tools for the birth certificate, as a JSON array of
    * `{name, description, parameters?, expression}` entries — appended after
@@ -274,14 +242,10 @@ export async function talk(options: TalkOptions = {}) {
       : `the repo already names ${install.spec} (${install.commitOid.slice(0, 8)})`,
   );
 
-  /* Only the secret the chosen provider's dial will spend — setup's gate is
-   * per-provider (secretForHost), and a baseUrl seam needs none at all. */
+  /* The secret the dial will spend — setup's gate demands the same one
+   * (secretForHost), and a baseUrl seam needs none at all. */
   if (options.providerBaseUrl === undefined) {
-    console.log(
-      options.provider === "grok"
-        ? `xai secret ${await ensureXaiSecret(itx)}`
-        : `openai secret ${await ensureOpenaiSecret(itx)}`,
-    );
+    console.log(`openai secret ${await ensureOpenaiSecret(itx)}`);
   }
 
   using voiceAgent = itx.workers.get(
@@ -325,31 +289,18 @@ export async function talk(options: TalkOptions = {}) {
     await facetWorker.kill().catch(() => {});
     console.log(`restarted voice-agent facet worker for the new build`);
   }
-  await refuseSilentPostureFlip(itx, streamPath, {
-    intendedClientTakesTurns: options.openMic !== true,
-    flipTurnPosture: options.flipTurnPosture === true,
-  });
   const setup = await withRpcResult(
     voiceAgent.setupVoiceAgent({
       streamPath,
       instructions: options.instructions ?? DEFAULT_INSTRUCTIONS,
-      /*
-       * THIS CLI SEGMENTS ITS OWN TURNS, in both of its modes.
-       *
-       * Attended, a person holds the space bar. Unattended, the driver plays
-       * one utterance and stops. Either way the audio ENDS rather than going
-       * quiet, and server VAD cannot tell a finished sentence from a stalled
-       * connection without hearing the silence that follows it. `--open-mic`
-       * exists to exercise the boards' path deliberately; it is not the
-       * default because on this client it produces a call that hears you and
-       * never replies.
-       */
-      clientTakesTurns: options.openMic !== true,
       ...(options.visemes === true && { visemes: true }),
-      colleague: options.colleague !== false,
-      ...(options.turnDetection !== undefined && {
-        turnDetection: JSON.parse(options.turnDetection) as Record<string, unknown> & {
-          type: string;
+      ...(options.backendModel !== undefined && {
+        backend: {
+          model: options.backendModel,
+          ...(options.backendEffort !== undefined && { reasoningEffort: options.backendEffort }),
+          ...(options.backendServiceTier !== undefined && {
+            serviceTier: options.backendServiceTier,
+          }),
         },
       }),
       ...(() => {
@@ -376,7 +327,6 @@ export async function talk(options: TalkOptions = {}) {
         ];
         return tools.length > 0 ? { tools } : {};
       })(),
-      ...(options.provider === undefined ? {} : { provider: options.provider }),
       ...(options.providerModel === undefined ? {} : { providerModel: options.providerModel }),
       ...(options.providerVoice === undefined ? {} : { providerVoice: options.providerVoice }),
       ...(options.providerBaseUrl === undefined
@@ -534,92 +484,6 @@ function reportSpeakerContinuity(reportJson: string): void {
   }
 }
 
-/** The slice of a `voice-agent/configured` event this guard reads. */
-interface ConfiguredEventLike {
-  offset: number;
-  payload?: { clientTakesTurns?: boolean };
-}
-
-/**
- * THE TURN POSTURE IS PART OF THE HARDWARE, NOT OF THE RUN.
- *
- * `clientTakesTurns` on the certificate must match what the physical client
- * does: an open-mic board on a clientTakesTurns stream is never told its turn
- * ended and the call goes silent; a push-to-talk client on an open-mic stream
- * double-commits. Setup re-appends `configured` on every run, so a reinstall
- * that forgets `--open-mic` silently flips a board stream's posture — which
- * muted two boards for hours on 2026-08-20. So: if the stream already has a
- * certificate and the posture would CHANGE, refuse loudly, naming both
- * postures and the stream, unless `--flip-turn-posture` says it is on
- * purpose. A stream with no `configured` yet is a fresh install and passes.
- */
-export async function refuseSilentPostureFlip(
-  itx: unknown,
-  streamPath: string,
-  args: { intendedClientTakesTurns: boolean; flipTurnPosture: boolean },
-): Promise<void> {
-  const streams = (
-    itx as {
-      streams: {
-        get(path: string): {
-          getEvents(input: {
-            afterOffset: number;
-            eventTypes: string[];
-            limit: number;
-          }): Promise<ConfiguredEventLike[] | null>;
-        };
-      };
-    }
-  ).streams;
-  const stream = streams.get(streamPath);
-  let latest: ConfiguredEventLike | null = null;
-  try {
-    /* Filtered to `configured` only, so even a long-lived board stream is a
-     * page or two — and paged anyway, because "surely under 500" is how
-     * guards rot. */
-    let afterOffset = 0;
-    for (;;) {
-      const page =
-        (await stream.getEvents({
-          afterOffset,
-          eventTypes: ["events.iterate.com/voice-agent/configured"],
-          limit: 500,
-        })) ?? [];
-      if (page.length === 0) break;
-      latest = page[page.length - 1]!;
-      afterOffset = latest.offset;
-      if (page.length < 500) break;
-    }
-  } finally {
-    disposeIgnoredRpcResult(stream);
-  }
-  if (latest === null) return; /* fresh stream: nothing to preserve */
-  const current = latest.payload?.clientTakesTurns ?? false;
-  if (current === args.intendedClientTakesTurns) return;
-  if (args.flipTurnPosture) {
-    console.log(
-      `flipping turn posture of ${streamPath}: ${postureName(current)} -> ` +
-        `${postureName(args.intendedClientTakesTurns)} (--flip-turn-posture)`,
-    );
-    return;
-  }
-  throw new Error(
-    `refusing to reinstall ${streamPath}: its current certificate says ` +
-      `${postureName(current)}, and this install would write ` +
-      `${postureName(args.intendedClientTakesTurns)}. A silent posture flip mutes the ` +
-      `client that lives on this stream. Either match the stream (` +
-      `${current ? "drop" : "pass"} --open-mic), or pass --flip-turn-posture to ` +
-      `change the posture on purpose.`,
-  );
-}
-
-/** One posture, named the way the certificate and the failure both read. */
-function postureName(clientTakesTurns: boolean): string {
-  return clientTakesTurns
-    ? "clientTakesTurns=true (push-to-talk: the client segments turns)"
-    : "clientTakesTurns=false (open mic: server VAD owns the turns)";
-}
-
 /** Wait until the guest answers, retrying a cold build; re-throw the last error verbatim. */
 async function waitForVoiceAgent(
   voiceAgent: DynamicWorkerCapability<VoiceAgentSetup>,
@@ -656,15 +520,6 @@ async function waitForVoiceAgent(
  * matches; silently rotating the provider key of a running project because
  * somebody ran a voice command would be a genuinely bad surprise.
  */
-export async function ensureXaiSecret(itx: unknown): Promise<string> {
-  return await ensureProviderSecret(itx, {
-    path: XAI_SECRET,
-    envNames: [XAI_ENV],
-    egress: XAI_EGRESS,
-  });
-}
-
-/** The OpenAI twin of the xAI secret, for the voice provider comparison. */
 export async function ensureOpenaiSecret(itx: unknown): Promise<string> {
   return await ensureProviderSecret(itx, {
     path: "/secrets/openai",
@@ -674,7 +529,7 @@ export async function ensureOpenaiSecret(itx: unknown): Promise<string> {
 }
 
 /** The subset of the secret capability this command uses. */
-interface XaiSecret {
+interface ProviderSecret {
   __describe(): Promise<{ created?: boolean; hasMaterial?: boolean }>;
   create(input: { egress: { urls: string[] }; material: string }): Promise<unknown>;
   update(input: { material: string }): Promise<unknown>;
@@ -684,7 +539,7 @@ async function ensureProviderSecret(
   itx: unknown,
   args: { path: string; envNames: string[]; egress: string[] },
 ): Promise<string> {
-  const secret = (itx as { secrets: { get(path: string): XaiSecret } }).secrets.get(args.path);
+  const secret = (itx as { secrets: { get(path: string): ProviderSecret } }).secrets.get(args.path);
   try {
     const described = await withRpcResult(secret.__describe(), ({ created, hasMaterial }) => ({
       created,
@@ -754,9 +609,8 @@ export function resolveKitDir(explicit?: string): string {
 export function driverArgs(
   options: TalkOptions,
   minutes: number,
-  /** Attended open mic: the C streams continuously and the server's VAD owns
-   * the turns. Off, the space bar owns them. Must match the stream's
-   * certificate, which is why talk passes its own --open-mic here. */
+  /** Attended open mic: the C streams continuously and GPT-Live hears the
+   * room. Off, the space bar gates the microphone. */
   openMic = false,
 ): string[] {
   if (options.converse === undefined) {

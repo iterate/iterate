@@ -31,6 +31,6 @@ export type {
   SetupVoiceAgentResult,
   VoiceAgentHealth,
   VoiceAgentRpc,
-  VoiceProvider,
+  VoiceBackendInput,
   VoiceToolInput,
 } from "./setup-options.ts";
