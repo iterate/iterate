@@ -2,8 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { browserAuthorization } from "../browser-client.ts";
 import { appConfigOf } from "../app-config.ts";
-import { isLocalOrigin } from "../identity.ts";
-import { sameOriginPath } from "../lib.ts";
+import { isLocalOrigin, sameOriginPath } from "../lib.ts";
 import { consoleContext } from "./-console-context.ts";
 
 const loginOptions = createServerFn({ method: "GET" })

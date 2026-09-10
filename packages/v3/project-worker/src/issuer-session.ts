@@ -15,10 +15,7 @@ export async function startIssuerSession(env: Env, user: User, next: string) {
     sameOriginPath(next, issuer),
   );
   const helpers = oauthHelpers(env);
-  const request = await parseAuthorization(
-    { ...env, OAUTH_PROVIDER: helpers },
-    new Request(flow.location),
-  );
+  const request = await parseAuthorization(env, new Request(flow.location));
   const approved = await helpers.completeAuthorization({
     request,
     userId: user.id,

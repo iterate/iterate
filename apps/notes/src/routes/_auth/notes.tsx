@@ -74,7 +74,7 @@ function Editor({ project, initial }: { project: string; initial: string }) {
     setStatus("Saving…");
     try {
       using itx = await api.projects.get(project);
-      await itx.invoke(["itx", "kv", ["set", "notes.document", note]]);
+      await itx.invoke(["itx", "kv", ["put", "notes.document", note]]);
       setStatus("Saved");
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));

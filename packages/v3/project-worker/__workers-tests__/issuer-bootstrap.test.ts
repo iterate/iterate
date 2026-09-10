@@ -1,4 +1,4 @@
-import { env, SELF } from "cloudflare:test";
+import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import type { Env } from "../src/control-plane.ts";
@@ -176,4 +176,53 @@ test("copied issuer client metadata and account scope confer app permissions but
   await expect(app.consent.approve({ query: flow.url.search, projects: ["*"] })).rejects.toThrow(
     /Sign in to Iterate/,
   );
+});
+
+test("consent requires PKCE, defaults empty scopes, rejects empty reach and returns a cancellable request", async () => {
+  const user = await directory(bindings.DB).upsertUser("consent-checks@example.com");
+  const login = await startIssuerSession(bindings, user, "/");
+  const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: origin };
+  const api = await connect(headers);
+  const flow = await authorizationCodeRequest({
+    issuer: origin,
+    clientId: `${origin}/.auth/client.json`,
+    redirectUri: `${origin}/.auth/callback`,
+    resources: [`${origin}/api`],
+  });
+  flow.url.searchParams.delete("scope");
+  const view = await api.consent.describe(flow.url.search);
+  expect(view.kind).toBe("consent");
+  if (view.kind !== "consent") throw new Error("Expected consent");
+  expect(view.scopes).toEqual(["iterate"]);
+  const cancel = new URL(view.denyLocation);
+  expect(cancel.searchParams.get("error")).toBe("access_denied");
+  expect(cancel.searchParams.get("state")).toBe(flow.state);
+  expect(cancel.searchParams.get("iss")).toBe(origin);
+  expect(await api.consent.approve({ query: flow.url.search, projects: [] })).toEqual({
+    error: "Choose at least one project you can access.",
+  });
+  expect((await api.grants.list()).items).toHaveLength(1);
+  flow.url.searchParams.delete("code_challenge");
+  flow.url.searchParams.delete("code_challenge_method");
+  const invalid = await api.consent.describe(flow.url.search);
+  expect(invalid.kind).toBe("redirect");
+  if (invalid.kind !== "redirect") throw new Error("Expected validated redirect");
+  expect(new URL(invalid.location).searchParams.get("error_description")).toMatch(/must use PKCE/);
+  const page = await SELF.fetch(`${origin}/authorize`);
+  expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
+  expect(page.headers.get("X-Frame-Options")).toBe("DENY");
+  // Force the client to refresh through the real public token endpoint.
+  const session = appSession(bindings.BROWSER_SESSION, new Request(origin, { headers }))!;
+  const before = await session.bearer();
+  await runInDurableObject(session, async (_instance, state) => {
+    const stored = await state.storage.get<Record<string, unknown>>("session");
+    await state.storage.put("session", { ...stored, expiresAt: 0 });
+  });
+  const refreshed = await session.bearer();
+  expect(refreshed).not.toBe(before);
+  expect(await session.scopes()).toEqual(["iterate", "account"]);
+  expect(
+    (await connect({ Authorization: `Bearer ${refreshed}` }).then((api) => api.info())).principal
+      .actor,
+  ).toBe(user.id);
 });

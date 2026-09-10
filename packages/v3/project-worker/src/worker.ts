@@ -141,7 +141,7 @@ export default {
           { status: 421 },
         );
       const projectId = project.id;
-      const browserResponse = await browserClient(request, env, ctx, projectId);
+      const browserResponse = await browserClient(request, env, ctx);
       if (browserResponse) return browserResponse;
       const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
       const authorization = bearer
@@ -201,7 +201,7 @@ export default {
     const identityResponse = await identityDoor(request, env);
     if (identityResponse) return identityResponse;
     if (!appConfig.mcpOrigin && url.pathname === "/mcp") return oauthResponse(request, env, ctx);
-    const browserResponse = await browserClient(request, env, ctx, null);
+    const browserResponse = await browserClient(request, env, ctx);
     if (browserResponse) return browserResponse;
     if (url.pathname.startsWith("/api")) return new Response("Not found", { status: 404 });
 

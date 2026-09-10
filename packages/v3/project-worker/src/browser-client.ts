@@ -22,18 +22,12 @@ export async function browserAuthorization(env: Env, request: Request, ctx: Exec
   return authorization;
 }
 
-export function browserClient(
-  request: Request,
-  env: Env,
-  ctx: ExecutionContext,
-  projectId: string | null,
-) {
+export function browserClient(request: Request, env: Env, ctx: ExecutionContext) {
   const { issuer, api } = oauthAddresses(env);
   return appAuth(request, {
     sessions: env.BROWSER_SESSION,
     issuer,
     resource: api,
-    defaultScopes: projectId ? ["iterate"] : ["iterate", "account"],
     api: (request) => oauthResponse(request, env, ctx),
     ...(new URL(request.url).origin === issuer && { loginPage: "/login" }),
   });

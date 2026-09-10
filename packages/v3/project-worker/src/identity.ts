@@ -24,12 +24,6 @@ const GoogleIdentity = z.object({
   email_verified: z.literal(true),
 });
 
-/** Bare-email fixtures exist only on loopback hosts, never a deployed origin. */
-export function isLocalOrigin(origin: string) {
-  const { hostname } = new URL(origin);
-  return hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "127.0.0.1";
-}
-
 /** Google proves identity to our issuer; its credentials never authorize our API. */
 export async function identityDoor(request: Request, env: Env) {
   const url = new URL(request.url);

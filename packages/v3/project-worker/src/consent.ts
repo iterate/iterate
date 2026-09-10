@@ -25,6 +25,7 @@ type ConsentView =
       orgs: Org[];
       projectBound: boolean;
       scopes: string[];
+      denyLocation: string;
     }
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
@@ -70,7 +71,7 @@ export class Consent extends RpcTarget {
     super();
     if (grant.kind !== "issuer")
       throw codedError("FORBIDDEN", "Sign in to Iterate to approve access.");
-    this.#env = { ...env, OAUTH_PROVIDER: oauthHelpers(env) };
+    this.#env = env;
     this.#grant = grant;
   }
   async #request(query: unknown) {
@@ -87,10 +88,16 @@ export class Consent extends RpcTarget {
     const env = this.#env;
     try {
       const request = await this.#request(query);
-      const client = await env.OAUTH_PROVIDER.lookupClient(request.clientId);
+      const client = await oauthHelpers(env).lookupClient(request.clientId);
+      const denied = new URL(request.redirectUri);
+      denied.searchParams.set("error", "access_denied");
+      denied.searchParams.set("error_description", "The user declined access.");
+      if (request.state) denied.searchParams.set("state", request.state);
+      if (request.issuer) denied.searchParams.set("iss", request.issuer);
       return {
         kind: "consent",
         query,
+        denyLocation: denied.href,
         clientName: client?.clientName ?? request.clientId,
         email: this.#grant.email,
         scopes: request.scope,
@@ -109,7 +116,7 @@ export class Consent extends RpcTarget {
     const data = z.object({ query: z.string(), projects: z.array(z.string()) }).parse(input);
     try {
       const request = await this.#request(data.query);
-      const client = await env.OAUTH_PROVIDER.lookupClient(request.clientId);
+      const client = await oauthHelpers(env).lookupClient(request.clientId);
       const { projects, projectBound } = await projectsForClient(
         env,
         request.clientId,
@@ -117,7 +124,10 @@ export class Consent extends RpcTarget {
       );
       const checked = new Set(data.projects);
       const granted = projects.filter((p) => checked.has(p.id)).map((p) => p.id);
-      return await env.OAUTH_PROVIDER.completeAuthorization({
+      const allProjects = !projectBound && checked.has("*");
+      if (!allProjects && !granted.length)
+        return { error: "Choose at least one project you can access." };
+      return await oauthHelpers(env).completeAuthorization({
         request,
         userId: this.#grant.userId,
         metadata: { clientName: client?.clientName ?? request.clientId },
@@ -128,7 +138,7 @@ export class Consent extends RpcTarget {
           version: 2,
           userId: this.#grant.userId,
           email: this.#grant.email,
-          projects: !projectBound && checked.has("*") ? null : granted,
+          projects: allProjects ? null : granted,
           deadline: Date.now() + 30 * 24 * 3600_000,
         } satisfies GrantProps,
       });

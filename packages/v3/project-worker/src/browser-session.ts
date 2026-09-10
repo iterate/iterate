@@ -4,6 +4,7 @@ import { newHttpBatchRpcSession } from "capnweb";
 import { z } from "zod";
 import { authorizationCodeRequest } from "./client/oauth.ts";
 import { OAuthScopes } from "./oauth-scopes.ts";
+import { isLocalOrigin } from "./lib.ts";
 import type { Session } from "./session.ts";
 
 const TokenResponse = z.object({
@@ -35,11 +36,7 @@ export class BrowserSession extends DurableObject {
     return this.#serial(async () => {
       if (await this.ctx.storage.get("session")) throw new Error("Browser session already exists");
       const origin = new URL(host.origin);
-      const local =
-        origin.protocol === "http:" &&
-        (origin.hostname === "localhost" ||
-          origin.hostname.endsWith(".localhost") ||
-          origin.hostname === "127.0.0.1");
+      const local = isLocalOrigin(host.origin);
       if (origin.protocol !== "https:" && !local) throw new Error("Browser login requires HTTPS");
       let clientId = `${host.origin}/.auth/client.json`;
       if (local) {

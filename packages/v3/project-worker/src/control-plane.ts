@@ -1,9 +1,8 @@
 // The fixed issuer shell. Authenticated UI uses the public Cap’n Web session.
 import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import type { ServerEntry } from "@tanstack/react-start/server-entry";
-import { isLocalOrigin } from "./identity.ts";
 import { startIssuerSession } from "./issuer-session.ts";
-import { codedError, errorCode, isSameOriginBrowserRequest } from "./lib.ts";
+import { codedError, errorCode, isSameOriginBrowserRequest, isLocalOrigin } from "./lib.ts";
 import { directory } from "./directory.ts";
 import { appConfigOf } from "./app-config.ts";
 import { verifyAdminSecret } from "./principal.ts";
@@ -112,6 +111,8 @@ export const consoleHandler: Handler = {
     if (!answer.headers.get("content-type")?.startsWith("text/html")) return answer;
     const page = new Response(answer.body, answer);
     page.headers.set("cache-control", "no-store");
+    page.headers.set("Content-Security-Policy", "frame-ancestors 'none'");
+    page.headers.set("X-Frame-Options", "DENY");
     return page;
   },
 };

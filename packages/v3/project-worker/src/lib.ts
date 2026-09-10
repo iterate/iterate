@@ -289,3 +289,14 @@ export function sameOriginPath(next: string, origin: string): string {
     return "/";
   }
 }
+
+/** Only plain HTTP loopback origins use development login and client registration. */
+export function isLocalOrigin(origin: string) {
+  const url = new URL(origin);
+  return (
+    url.protocol === "http:" &&
+    (url.hostname === "localhost" ||
+      url.hostname.endsWith(".localhost") ||
+      url.hostname === "127.0.0.1")
+  );
+}

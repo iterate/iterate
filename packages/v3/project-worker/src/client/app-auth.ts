@@ -33,8 +33,6 @@ type AppAuth = {
   sessions: DurableObjectNamespace<BrowserSession>;
   issuer: string;
   resource: string;
-  /** Default request; any supported account permission still requires issuer consent. */
-  defaultScopes?: string[];
   /** Platform dispatches in process to avoid /api recursion; other apps pass fetch. */
   api: (request: Request) => Promise<Response> | Response;
   /** The issuer proves identity before establishing its own ordinary app session. */
@@ -66,7 +64,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     const parsed = OAuthScopes.safeParse(
       url.searchParams.has("scope")
         ? url.searchParams.get("scope")!.split(" ").filter(Boolean)
-        : (config.defaultScopes ?? []),
+        : [],
     );
     if (!parsed.success) return new Response("Unsupported permission", { status: 400 });
     const scopes = parsed.data;
@@ -92,7 +90,12 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
         return new Response(
           `<!doctype html><html lang="en"><meta charset="utf-8"><title>Update permissions</title><h1>Update app permissions</h1><p>This app needs additional permissions. Continue to sign in and review them.</p><form method="post" action="/.auth/logout?next=${encodeURIComponent(url.pathname + url.search)}"><button type="submit">Continue</button></form></html>`,
           {
-            headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+            headers: {
+              "Content-Type": "text/html; charset=utf-8",
+              "Cache-Control": "no-store",
+              "Content-Security-Policy": "frame-ancestors 'none'",
+              "X-Frame-Options": "DENY",
+            },
           },
         );
       }

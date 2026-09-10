@@ -426,6 +426,7 @@ test("console and project browsers use the same CIMD flow and independent grants
       redirect: "manual",
     });
     expect(upgrade.status).toBe(200);
+    expect(upgrade.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
     expect(await upgrade.text()).toContain('method="post"');
     expect((await helpers().listUserGrants(user.id)).items).toHaveLength(2);
     const consoleLogin = logins[0]!;

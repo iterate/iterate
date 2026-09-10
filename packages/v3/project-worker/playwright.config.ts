@@ -9,7 +9,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const PORT = Number(process.env.DEMO_PORT ?? 8788);
-const baseURL = process.env.DEMO_BASE_URL ?? `http://127.0.0.1:${PORT}`;
+const baseURL = process.env.DEMO_BASE_URL ?? `http://localhost:${PORT}`;
 
 export default defineConfig({
   testDir: "specs",
@@ -24,7 +24,7 @@ export default defineConfig({
   webServer: process.env.DEMO_BASE_URL
     ? undefined
     : {
-        command: `pnpm exec wrangler dev --port ${PORT}`,
+        command: `pnpm dev -- --port ${PORT}`,
         url: `${baseURL}/version`,
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,

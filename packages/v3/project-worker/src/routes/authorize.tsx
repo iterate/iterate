@@ -4,9 +4,11 @@ import { iterate } from "./-client.ts";
 
 export const Route = createFileRoute("/authorize")({
   ssr: false,
-  beforeLoad: ({ location }) => iterate.authenticate(location.href),
-  loader: async ({ context, location }) => {
-    const answer = await context.api.consent.describe(location.searchStr);
+  beforeLoad: () => iterate.authenticate(window.location.pathname + window.location.search),
+  loader: async ({ context }) => {
+    // OAuth allows repeated keys and form-encoded spaces. The router search codec
+    // is for application state; this protocol query must remain byte-for-byte intact.
+    const answer = await context.api.consent.describe(window.location.search);
     if (answer.kind === "redirect") throw redirect({ href: answer.location, reloadDocument: true });
     return answer;
   },
@@ -29,7 +31,7 @@ function ConsentPage() {
       </main>
     );
 
-  const { query, clientName, email, projects, orgs, projectBound, scopes } = answer;
+  const { query, clientName, email, projects, orgs, projectBound, scopes, denyLocation } = answer;
   const perform = async (work: () => Promise<void>) => {
     setError(null);
     setBusy(true);
@@ -84,13 +86,16 @@ function ConsentPage() {
             ))
           ) : (
             <p className="muted">
-              Create your first organization and project below, then approve access.
+              {projectBound
+                ? "You do not have access to this app’s project."
+                : "Create your first organization and project below, then approve access."}
             </p>
           )}
         </fieldset>
         <button type="submit" disabled={busy}>
           Approve
         </button>
+        <a href={denyLocation}>Cancel</a>
       </form>
       {!projectBound && (
         <section aria-label="Create an organization or project">

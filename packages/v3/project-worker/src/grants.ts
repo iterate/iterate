@@ -164,10 +164,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       resources: [api, mcp],
     });
     const helpers = oauthHelpers(env);
-    const auth = await parseAuthorization(
-      { ...env, OAUTH_PROVIDER: helpers },
-      new Request(flow.url),
-    );
+    const auth = await parseAuthorization(env, new Request(flow.url));
     const expiresAt = Date.now() + 30 * 24 * 3600_000;
     const approved = await helpers.completeAuthorization({
       request: auth,

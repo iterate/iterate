@@ -57,7 +57,7 @@ export function oauthAddresses(env: Env) {
 /** The provider validates clients, redirects and PKCE. We own the finite set of
  * resources this authorization server may grant; omission never creates an unbound token. */
 export async function parseAuthorization(env: Env, request: Request): Promise<AuthRequest> {
-  const auth = await env.OAUTH_PROVIDER.parseAuthRequest(request);
+  const auth = await oauthHelpers(env).parseAuthRequest(request);
   const { api, mcp } = oauthAddresses(env);
   const resources = [...new Set(auth.resource ? [auth.resource].flat() : [])];
   if (
