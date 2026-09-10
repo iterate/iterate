@@ -907,6 +907,13 @@ interface Dial {
   /** The answer in flight — replaced wholesale at the onset of speech. */
   answer: Answer;
   /**
+   * Backend functions this dial is still running. A person who asked for
+   * something slow waits in SILENCE — no frames from a push-to-talk client,
+   * nothing on the speaker — and the idle deadline must not read that as an
+   * abandoned call while the backend is mid-script.
+   */
+  openBackendCalls: number;
+  /**
    * The furthest point on the provider's SESSION TIMELINE seen so far —
    * transcript `end_ms`, delegation `offset_ms`, and the running total of
    * output audio, whichever is largest. What closes a transcript row: a row
@@ -935,6 +942,7 @@ const freshDial = (conversationId: string): Dial => ({
   face: null,
   hangUpAfterAnswerDrains: null,
   answer: freshAnswer(),
+  openBackendCalls: 0,
   timelineMs: 0,
   turns: { user: null, assistant: null },
 });
@@ -1466,9 +1474,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
         this.runInBackground(idleTick);
         return;
       }
-      /* Still holding audio it has not handed over yet: not idle by any
-       * reading, whatever the clocks say. */
-      if (dial.speakerQueue.length > 0) {
+      /* Still holding audio it has not handed over yet, or still running
+       * something the person asked for: not idle by any reading, whatever
+       * the clocks say. */
+      if (dial.speakerQueue.length > 0 || dial.openBackendCalls > 0) {
         this.runInBackground(idleTick);
         return;
       }
@@ -2019,6 +2028,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     } catch {
       /* Raw it is; the function decides what that means. */
     }
+    dial.openBackendCalls += 1;
     runInBackground(async () => {
       let output: string;
       const tool = state.tools.find((candidate) => candidate.name === name);
@@ -2095,6 +2105,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         /* The backend HEARS the failure and can say so. */
         output = JSON.stringify({ error: String(error).slice(0, 1_000) });
       }
+      dial.openBackendCalls = Math.max(0, dial.openBackendCalls - 1);
       /* The fence every provider-lane completion wears: a re-dialed call is
        * a NEW session that never issued this call_id. */
       if (this.#dial !== dial) return;

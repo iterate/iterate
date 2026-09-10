@@ -973,6 +973,33 @@ describe("ending a call", () => {
     expect(eventsOfType(h, "call-started")).toHaveLength(2);
   });
 
+  it("does not end a call while the backend is still running a function for it", async () => {
+    const h = makeHarness();
+    let finish: (() => void) | null = null;
+    h.projectRoot.current = {
+      capabilityHost: {
+        runScript: () =>
+          new Promise<{ result: unknown }>((resolve) => {
+            finish = () => resolve({ result: { slow: true } });
+          }),
+      },
+    };
+    await callIsLive(h);
+    h.provider.backendFunctionCall("call_slow", "exec_typescript", '{"code":"async (itx) => 1"}');
+    await h.settle();
+    /* The person waits in silence past the deadline; the script is the activity. */
+    await h.advanceTime(IDLE_TIMEOUT_MS - 5_000);
+    await h.settle();
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+    finish!();
+    await h.settle();
+    expect(h.provider.sentOfType("response.item.create")).toHaveLength(1);
+    /* And once the backend is done and nothing else happens, the deadline bites. */
+    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await h.settle();
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(1);
+  });
+
   it("does not end a call while it is still speaking, nor one the device keeps feeding", async () => {
     const speaking = makeHarness();
     await callIsLive(speaking);
