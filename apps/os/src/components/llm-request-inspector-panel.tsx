@@ -50,14 +50,24 @@ export function LlmRequestInspectorContent({
 }) {
   const lifecycle = useStreamQuery(
     database,
-    `SELECT MAX(offset) AS offset FROM events WHERE offset = ?
+    `SELECT (SELECT stream_id FROM stream_sync WHERE singleton = 1) AS stream_id,
+      MAX(offset) AS offset FROM events WHERE offset = ?
       OR json_extract(raw_jsonb, '$.payload.llmRequestOffset') = ?
       OR json_extract(raw_jsonb, '$.payload.requestOffset') = ?`,
     [llmRequestOffset, llmRequestOffset, llmRequestOffset],
   );
+  const source = lifecycle.data[0];
+  const streamId = typeof source?.stream_id === "string" ? source.stream_id : null;
   const request = useQuery({
+    enabled: lifecycle.status === "ok" && streamId !== null,
     staleTime: Infinity,
-    queryKey: ["llm-request", database.databasePath, llmRequestOffset, lifecycle.data[0]?.offset],
+    queryKey: ["llm-request", database.databasePath, streamId, llmRequestOffset, source?.offset],
+    // A later lifecycle event refreshes this request without flashing its
+    // loading state. A recreated source or another request must never inherit it.
+    placeholderData: (previous, query) =>
+      query?.queryKey[2] === streamId && query.queryKey[3] === llmRequestOffset
+        ? previous
+        : undefined,
     queryFn: async () => {
       const stream = await streamSource(streamPath);
       try {
