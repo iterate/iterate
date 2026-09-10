@@ -54,6 +54,7 @@ import {
   LiveStateSubscriptionRpcTarget,
   type LiveStateRpc,
   type LiveStateSubscriptionHandle,
+  type LiveStateSubscriptionOptions,
   type LiveUpdate,
 } from "iterate/sdk/capnweb";
 import type {
@@ -84,6 +85,8 @@ import {
   deploymentStatusFromState,
   deploymentStatusesFromProbes,
 } from "./project-deployment-status.ts";
+import type { LlmRequestReplay } from "./lib/llm-request-replay.ts";
+import { inspectLlmRequest } from "./lib/inspect-llm-request.ts";
 import { timedStep } from "./lib/step-timing.ts";
 import { buildCollectSecretUrl } from "./lib/collect-secret-link.ts";
 import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
@@ -380,6 +383,7 @@ import type {
   DeviceEnrollInput,
 } from "./domains/devices/types.ts";
 import type { StreamRuntimeDebugState } from "./domains/streams/stream-runtime-state.ts";
+import type { FeedLiveState } from "./domains/streams/feed-contract.ts";
 import type {
   StreamSubscriptionDescription,
   StreamSubscriptionListEntry,
@@ -802,6 +806,11 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     return detachPlainRpcResult(result);
   }
 
+  /** Reconstruct a request on the server; rejects above 10,000 events or 16 MiB. */
+  async inspectLlmRequest(llmRequestOffset: number): Promise<LlmRequestReplay | null> {
+    return inspectLlmRequest((input) => this.getEventPage(input), llmRequestOffset);
+  }
+
   /**
    * A stateful pager over a read window: repeated `next()` calls walk forward
    * through pages, `[]` means "caught up for now". Dispose it when finished
@@ -982,6 +991,15 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         label: `stream ${this.props.path}`,
       }),
     );
+  }
+
+  /** Server-rendered current presentation; historical items are immutable stream events. */
+  get feedLiveState(): LiveStateRpc<FeedLiveState> {
+    return facetProcessorLiveStateRelay<FeedLiveState>({
+      name: "feed",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -2149,6 +2167,7 @@ class AgentCollectionLiveStateRpcTarget
 
   async subscribe(
     onUpdate: (update: LiveUpdate<AgentCollectionProcessorState>) => unknown,
+    options?: LiveStateSubscriptionOptions,
   ): Promise<LiveStateSubscriptionHandle> {
     // The Pager's upgrade is routed by the Stream DO's committed subscription
     // catalog and therefore fails before the relay can inspect the facade's
@@ -2156,7 +2175,7 @@ class AgentCollectionLiveStateRpcTarget
     // birth batch first; get() supplies that narrow initialization and leaves
     // no retained subscription.
     await this.get();
-    return await this.#relay().subscribe(onUpdate);
+    return await this.#relay().subscribe(onUpdate, options);
   }
 }
 
@@ -8994,8 +9013,9 @@ class RelayedLiveStateRpcTarget<State extends object>
 
   async subscribe(
     onUpdate: (update: LiveUpdate<State>) => unknown,
+    options?: LiveStateSubscriptionOptions,
   ): Promise<LiveStateSubscriptionHandle> {
-    return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
+    return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate, options));
   }
 }
 
@@ -9091,11 +9111,12 @@ class LiveStateRelayRpcTarget<State extends object>
 
   async subscribe(
     onUpdate: (update: LiveUpdate<State>) => unknown,
+    options?: LiveStateSubscriptionOptions,
   ): Promise<LiveStateSubscriptionHandle> {
     if (this.#relay !== undefined) {
-      return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
+      return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate, options));
     }
-    return await (await (await this.#stub()).liveState).subscribe(onUpdate);
+    return await (await (await this.#stub()).liveState).subscribe(onUpdate, options);
   }
 }
 
@@ -9263,6 +9284,7 @@ class LiveDemoTickerRpcTarget
 
   async subscribe(
     onUpdate: (update: LiveUpdate<{ tick: number; startedAt: number }>) => unknown,
+    options?: LiveStateSubscriptionOptions,
   ): Promise<LiveStateSubscriptionHandle> {
     const engine = new LiveState<{ tick: number; startedAt: number }>({
       tick: 0,
@@ -9270,8 +9292,8 @@ class LiveDemoTickerRpcTarget
     });
     return await new LiveStateRpcTarget({
       getState: () => engine.getState(),
-      subscribe: (listener) => {
-        const inner = engine.subscribe(listener);
+      subscribe: (listener, subscriptionOptions) => {
+        const inner = engine.subscribe(listener, subscriptionOptions);
         // LiveState drops a listener itself when an update call rejects (dead
         // client), and exposes no drop hook to the owner, so this driving loop
         // checks `ping()` to avoid leaving its timer behind.
@@ -9292,7 +9314,7 @@ class LiveDemoTickerRpcTarget
           [Symbol.dispose]: stop,
         };
       },
-    }).subscribe(onUpdate);
+    }).subscribe(onUpdate, options);
   }
 }
 

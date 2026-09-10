@@ -26,7 +26,6 @@ function llmStep(
     status: "done",
     thinkingText: "",
     responseText: "",
-    responseWindows: [],
     outcome: "completed",
     startedAtMs,
     ...overrides,
@@ -76,6 +75,23 @@ function renderMessage(item: AgentUiMessageItem): HTMLDivElement {
   );
   return container;
 }
+
+test("a shortened response in an activity is visibly labelled", () => {
+  const container = renderActivity(
+    activity({
+      status: "running",
+      steps: [
+        llmStep(1, 0, {
+          status: "running",
+          outcome: undefined,
+          responseText: "preview prefix",
+          previewTruncated: true,
+        }),
+      ],
+    }),
+  );
+  expect(container.textContent).toContain("Live preview shortened.");
+});
 
 test("an empty mention list preserves the visible message text", () => {
   const container = renderMessage({
@@ -139,7 +155,6 @@ test("the live tail shows accumulated work above a timer for the current LLM pha
         status: "done",
         thinkingText: "",
         responseText: "done",
-        responseWindows: ["done"],
         outcome: "completed",
         startedAtMs: now - 6_000,
         durationMs: 2_000,
@@ -151,7 +166,6 @@ test("the live tail shows accumulated work above a timer for the current LLM pha
         status: "running",
         thinkingText: "Considering the next step",
         responseText: "",
-        responseWindows: [],
         startedAtMs: now - 3_400,
       },
     ],
@@ -253,7 +267,6 @@ test("known and unknown cancellations render distinctly inside a failed activity
           outcome: "cancelled",
           cancelReason: "interrupted-by-user-input",
           responseText: "partial",
-          responseWindows: ["partial"],
         }),
         llmStep(3, startedAtMs + 1, { outcome: "cancelled" }),
       ],
@@ -283,7 +296,6 @@ test("a pending request without a running step shows its own status, not a finis
         status: "done",
         thinkingText: "",
         responseText: "done",
-        responseWindows: ["done"],
         outcome: "completed",
         startedAtMs: now - 8_000,
         durationMs: 2_000,

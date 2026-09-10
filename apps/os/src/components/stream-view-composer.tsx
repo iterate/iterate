@@ -7,6 +7,7 @@ import {
 } from "@iterate-com/shared/message";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { StreamEventInput, type StreamEvent } from "iterate/processors";
+import { useStreamSubmission } from "./use-stream-submission.ts";
 import type { StreamBrowserStore } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
 import { AttachmentChips, AttachmentFileInput } from "~/components/composer-attachments.tsx";
@@ -25,6 +26,8 @@ const DEFAULT_RAW_EVENT_YAML =
  * out by forgetting it.
  */
 export type StreamMessageComposer = {
+  /** Server acknowledgement delivered together with its resulting runtime state. */
+  acknowledgedThroughOffset?: number;
   placeholder?: string;
   suggestionProviders?: readonly ComposerSuggestionProvider[];
   onInterrupt?: (llmRequestOffset: number) => Promise<void>;
@@ -83,27 +86,22 @@ export function StreamViewComposer({
   const [message, setMessage] = useState(() => emptyMessage());
   const attachments = useComposerAttachments();
   const [rawText, setRawText] = useState(DEFAULT_RAW_EVENT_YAML);
-  const [submitError, setSubmitError] = useState<string | undefined>();
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  async function runSubmit(action: () => Promise<void>): Promise<boolean> {
-    setIsSubmitting(true);
-    setSubmitError(undefined);
-    try {
-      await action();
-      return true;
-    } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : String(error));
-      return false;
-    } finally {
-      setIsSubmitting(false);
-    }
-  }
+  const {
+    acknowledgedThroughOffset,
+    onInterrupt: _onInterrupt,
+    onSubmit,
+    onSubmitFiles,
+    ...messageOptions
+  } = messageComposer ?? {};
+  const {
+    runSubmit,
+    isSubmitting,
+    error: submitError,
+  } = useStreamSubmission(acknowledgedThroughOffset);
 
   async function submitMessage() {
     const visibleText = agentMessageToEditorDocument(message).text;
-    if (messageComposer == null) return;
-    const { onSubmit, onSubmitFiles } = messageComposer;
+    if (!onSubmit) return;
     // Time the whole submit: this is the real consume-own-append t0, and the
     // committed offset the handler returns is what closes the loop when this
     // tab's own subscription ingests past it.
@@ -111,6 +109,7 @@ export function StreamViewComposer({
       const t0 = Date.now();
       const committed = await submit();
       store.noteExternalAppend({ maxCommittedOffset: committed.offset, t0 });
+      return committed.offset;
     };
     if (attachments.files.length > 0 && onSubmitFiles != null) {
       const didSubmit = await runSubmit(() =>
@@ -163,9 +162,7 @@ export function StreamViewComposer({
 
   return (
     <>
-      {messageComposer?.onSubmitFiles == null ? null : (
-        <AttachmentFileInput attachments={attachments} />
-      )}
+      {onSubmitFiles == null ? null : <AttachmentFileInput attachments={attachments} />}
       <AgentPillComposer
         mode={mode}
         onModeChange={setMode}
@@ -180,20 +177,15 @@ export function StreamViewComposer({
                 onSubmit: submitMessage,
                 canSubmit:
                   agentMessageToEditorDocument(message).text.trim() !== "" ||
-                  (attachments.files.length > 0 && messageComposer.onSubmitFiles != null),
-                ...(attachmentChips == null ? {} : { attachments: attachmentChips }),
-                ...(messageComposer.onSubmitFiles == null
+                  (attachments.files.length > 0 && onSubmitFiles != null),
+                attachments: attachmentChips,
+                ...messageOptions,
+                ...(onSubmitFiles == null
                   ? {}
                   : {
                       onAttach: attachments.openFilePicker,
                       onAddFiles: attachments.addFiles,
                     }),
-                ...(messageComposer.placeholder == null
-                  ? {}
-                  : { placeholder: messageComposer.placeholder }),
-                ...(messageComposer.suggestionProviders == null
-                  ? {}
-                  : { suggestionProviders: messageComposer.suggestionProviders }),
               },
               ...(interrupt == null
                 ? {}

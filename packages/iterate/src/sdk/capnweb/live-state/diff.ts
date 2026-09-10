@@ -11,15 +11,35 @@ import type { LiveStatePatch } from "./protocol.ts";
  * thousand-entry index yields one tiny patch instead of a full rescan.
  *
  * PLAIN objects (prototype `Object.prototype` or `null`) are treated as keyed
- * maps and diffed per key. Everything else — primitives, `null`, arrays, and
+ * maps and diffed per key. Dense arrays are diffed by position. Everything
+ * else — primitives, `null`, sparse arrays, and
  * non-plain instances like `Date`/`Map`/`Set` — is a leaf, replaced wholesale.
  * Descending into an instance would diff its own enumerable keys, which for a
  * `Date` is NONE — two different Dates would read as "unchanged" and the
- * subscriber would stay stale forever. (Model collections that need
- * fine-grained diffing as keyed objects, not arrays.)
+ * subscriber would stay stale forever. Keyed objects remain preferable for
+ * collections whose entries frequently move; positional patches do not infer moves.
  */
-export function diff(prev: unknown, next: unknown): LiveStatePatch | undefined {
+export function diff(
+  prev: unknown,
+  next: unknown,
+  options: { arrays?: boolean } = {},
+): LiveStatePatch | undefined {
   if (Object.is(prev, next)) return undefined;
+  if (Array.isArray(prev) && Array.isArray(next) && options.arrays !== false) {
+    const items: [number, LiveStatePatch][] = [];
+    for (let index = 0; index < next.length; index++) {
+      // Sparse arrays retain the replacement semantics of their wire value.
+      if (!Object.hasOwn(next, index) || (index < prev.length && !Object.hasOwn(prev, index))) {
+        return { set: next };
+      }
+      const patch =
+        index < prev.length ? diff(prev[index], next[index], options) : { set: next[index] };
+      if (patch) items.push([index, patch]);
+    }
+    return items.length > 0 || prev.length !== next.length
+      ? { array: { length: next.length, items } }
+      : undefined;
+  }
   if (!isPlainObject(prev) || !isPlainObject(next)) return { set: next };
 
   // Entries + fromEntries, not `bag[key] = …`: assignment with key "__proto__"
@@ -39,7 +59,7 @@ export function diff(prev: unknown, next: unknown): LiveStatePatch | undefined {
       if (Object.hasOwn(prev, key)) drop.push(key); // a key set to `undefined` reads as removed
       continue;
     }
-    const childPatch = diff(Object.hasOwn(prev, key) ? prev[key] : undefined, next[key]);
+    const childPatch = diff(Object.hasOwn(prev, key) ? prev[key] : undefined, next[key], options);
     if (childPatch !== undefined) fields.push([key, childPatch]);
   }
   for (const key of Object.keys(prev)) {
@@ -64,6 +84,20 @@ export function diff(prev: unknown, next: unknown): LiveStatePatch | undefined {
  */
 export function applyPatch<State>(prev: State, patch: LiveStatePatch): State {
   if ("set" in patch) return patch.set as State;
+  if ("array" in patch) {
+    if (!Array.isArray(prev)) throw new Error("Live-state array patch requires an array baseline");
+    const next = prev.slice(0, patch.array.length);
+    next.length = patch.array.length;
+    for (const [index, child] of patch.array.items) {
+      if (!Number.isSafeInteger(index) || index < 0 || index >= next.length) {
+        throw new Error("Live-state array patch index is outside its resulting length");
+      }
+      next[index] = applyPatch(prev[index], child);
+    }
+    // The array operation preserves State's shape; only the generic parameter
+    // prevents TypeScript from expressing the Array.isArray narrowing on return.
+    return next as State;
+  }
   const base: Record<string, unknown> = isPlainObject(prev) ? prev : {};
   const next: Record<string, unknown> = { ...base };
   if (patch.fields) {

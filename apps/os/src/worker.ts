@@ -45,6 +45,7 @@ import { STREAM_CONTEXT_HEADER } from "./domains/projects/stream-context.ts";
 // this class up by the EXACT export name "ProcessorFacet"
 // (stream-durable-object.ts's facet dial) — never rename the export.
 export { ProcessorFacet } from "./domains/processor-facet-durable-object.ts";
+export { FeedFacet } from "./domains/streams/feed-entrypoint.ts";
 export { DeviceDurableObject } from "./domains/devices/device-durable-object.ts";
 // One sandbox container class per instance type — see src/domains/sandboxes/instance-types.ts.
 export {

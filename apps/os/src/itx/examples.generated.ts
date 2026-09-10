@@ -170,11 +170,18 @@ const [done] = await stream.append({
   payload: { result: "ok" },
 });
 
-const defaults = await stream.getEvents({ afterOffset: tick.offset - 1 });
-const raw = await stream.getEvents({ afterOffset: tick.offset - 1, includeEphemeral: true });
+const window = {
+  afterOffset: tick.offset - 1,
+  beforeOffset: done.offset + 1,
+  eventTypes: [tick.type, done.type],
+};
+const [defaults, raw] = await Promise.all([
+  stream.getEvents(window),
+  stream.getEvents({ ...window, includeEphemeral: true }),
+]);
 return {
   tickOffset: tick.offset, // memory-only events consume offsets like any commit
-  doneOffset: done.offset, // the durable event landed right after it
+  doneOffset: done.offset, // other stream writers may have appended between the two
   defaultOffsets: defaults.map((e) => e.offset), // [done.offset] — the tick is excluded
   rawOffsets: raw.map((e) => e.offset), // [tick.offset, done.offset]
 };

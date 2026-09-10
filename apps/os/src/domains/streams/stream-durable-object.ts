@@ -21,8 +21,19 @@ import { StreamOffsetConflictError, streamOffsetConflictMessage } from "iterate/
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
 import { StreamRuntimeMetrics } from "iterate/processors";
-import { disposeIgnoredRpcResult, LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
-import type { LiveStateRpc, LiveStateSubscriptionHandle, LiveUpdate } from "iterate/sdk/capnweb";
+import {
+  createLiveStateStore,
+  disposeIgnoredRpcResult,
+  LiveState,
+  LiveStateRpcTarget,
+} from "iterate/sdk/capnweb";
+import type { LiveStateCursor, LiveStateRead } from "iterate/sdk/capnweb";
+import type {
+  LiveStateRpc,
+  LiveStateSubscriptionHandle,
+  LiveStateSubscriptionOptions,
+  LiveUpdate,
+} from "iterate/sdk/capnweb";
 import { streamDeliveryAuthContext } from "../../auth.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
@@ -105,7 +116,10 @@ import {
   type CoreProcessorState,
   type SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
-import { unconfiguredSubscriptionError } from "./utils.ts";
+import {
+  buildFacetProcessorSubscriptionConfiguredEvent,
+  unconfiguredSubscriptionError,
+} from "./utils.ts";
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
@@ -385,6 +399,7 @@ type ProcessorFacetStub = {
   getRuntimeState(args?: { name?: string }): Promise<ProcessorRuntimeState>;
   waitUntilProcessed(args: { offset: number; timeoutMs?: number; name?: string }): Promise<void>;
   liveState(): Promise<LiveStateRpc<Record<string, unknown>>>;
+  readLiveState(cursor?: LiveStateCursor): Promise<LiveStateRead<Record<string, unknown>>>;
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   provideCapability(
     input: CapabilityProvidedPayload,
@@ -757,8 +772,9 @@ class FacetLiveStateRelayRpcTarget
 
   async subscribe(
     onUpdate: (update: LiveUpdate<Record<string, unknown>>) => unknown,
+    options?: LiveStateSubscriptionOptions,
   ): Promise<LiveStateSubscriptionHandle> {
-    const handle = await (await this.#dialLive()).subscribe(onUpdate);
+    const handle = await (await this.#dialLive()).subscribe(onUpdate, options);
     return {
       ping: () => handle.ping(),
       unsubscribe: () => handle.unsubscribe(),
@@ -910,7 +926,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #liveState!: LiveState<StreamRuntimeDebugState>;
   #liveStateRefreshScheduled = false;
-  readonly name = parseStreamDurableObjectName(this.ctx.id.name);
+  readonly name = readStreamDurableObjectName(this.ctx);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   /** Ephemeral event bodies scoped to this one Durable Object incarnation. */
   readonly #ephemeralEvents = new EphemeralEventBuffer();
@@ -1071,21 +1087,29 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (lane === undefined) {
       // The cache the flusher reads (readState must be synchronous — the
       // flusher sends what it read with no await in between). Pulls are
-      // chained so a slower OLDER pull can never overwrite a newer one — the
-      // wire has no revision guard by design, so cache monotonicity is the
-      // whole rewind defense.
-      let state: Record<string, unknown> = {};
+      // serialized so each pull starts at the previous pull's cursor. The
+      // mirror validates revisions and retains untouched object identities.
+      const mirror = createLiveStateStore<Record<string, unknown>>();
+      let cursor: LiveStateCursor | undefined;
       let chain: Promise<void> = Promise.resolve();
       const pull = async () => {
-        state = await this.#callProcessorFacet(name, async (facet) =>
-          (await facet.liveState()).get(),
+        const { epoch, update } = await this.#callProcessorFacet(name, (facet) =>
+          facet.readLiveState(cursor),
         );
+        if (!update) return;
+        if (epoch !== cursor?.epoch && update.type !== "snapshot") {
+          throw new Error("Facet live-state incarnation changed without a snapshot");
+        }
+        mirror.apply(update, () => {
+          throw new Error("Facet live-state revision gap");
+        });
+        cursor = { epoch, revision: update.type === "snapshot" ? update.revision : update.to };
       };
       const tag = liveStatePagerLaneTag(name);
       lane = new LiveStatePagers({
         getWebSockets: () => this.ctx.getWebSockets(tag),
         acceptWebSocket: (ws) => this.ctx.acceptWebSocket(ws, [tag]),
-        readState: () => state,
+        readState: () => mirror.getState() ?? {},
         refresh: () => {
           // Every refresh gets a FRESH pull that starts after its trigger
           // (sharing an in-flight pull could return state read before the
@@ -1221,6 +1245,19 @@ export class StreamDurableObject extends DurableObject<Env> {
         // presence is the integration boundary.
         if ("APP_CONFIG_POSTHOG" in this.env) this.append(posthogSubscriptionEvent());
       }
+    }
+    // The presentation facet is a platform subscription whose durable cursor
+    // starts at zero, so hosted delivery publishes the complete source history.
+    if (
+      "FeedFacet" in this.ctx.exports &&
+      !this.#coreProcessorState.subscriptions.outbound.byName.feed
+    ) {
+      this.#append({ authority: "core-event" }, [
+        buildFacetProcessorSubscriptionConfiguredEvent({
+          name: "feed",
+          idempotencyKey: "feed/subscription:v1",
+        }),
+      ]);
     }
     if (this.#invalidCheckpointError !== undefined) {
       console.error("stream core-state checkpoint was invalid; rebuilt from the event log", {
@@ -1369,7 +1406,7 @@ export class StreamDurableObject extends DurableObject<Env> {
             receiver.source.worker,
             this.#facetRecoveryNonce,
           )
-        : this.#builtinFacetClass();
+        : this.#builtinFacetClass(name);
     // Rebuild the facet whenever its resolved class changed: ctx.facets.get
     // reuses an existing facet and IGNORES a new startup class, so a source
     // commit, a same-source className re-point, and a builtin<->userspace flip
@@ -1385,10 +1422,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       class: resolved.class,
     })) as unknown as ProcessorFacetStub;
     if (!this.#configuredProcessorFacets.has(name)) {
-      const parentName = this.ctx.id.name;
-      if (parentName === undefined) {
-        throw new Error("Stream Durable Object must be addressed by name.");
-      }
+      const parentName = DurableObjectNameCodec.stringify(this.name, { allowNullProjectId: true });
       await facet.configure({
         parentName,
         projectId: this.name.projectId,
@@ -1426,18 +1460,17 @@ export class StreamDurableObject extends DurableObject<Env> {
    * (the sibling `ProcessorFacet` export from `iterate/processors/cloudflare`).
    * Its version is a constant: the built-in class only changes on an OS deploy,
    * which evicts every DO anyway. */
-  #builtinFacetClass(): { class: DurableObjectClass; version: string } {
+  #builtinFacetClass(name: string): { class: DurableObjectClass; version: string } {
     // Loose lookup on purpose: ctx.exports carries every exported entrypoint by
     // name.
-    const facetClass = (this.ctx.exports as Record<string, unknown>).ProcessorFacet as
+    const entrypoint = name === "feed" ? "FeedFacet" : "ProcessorFacet";
+    const facetClass = (this.ctx.exports as Record<string, unknown>)[entrypoint] as
       | DurableObjectClass
       | undefined;
     if (facetClass === undefined) {
-      throw new Error(
-        'facet-processor subscriptions require the OS worker to export the "ProcessorFacet" entrypoint',
-      );
+      throw new Error(`facet-processor subscription ${name} requires the ${entrypoint} entrypoint`);
     }
-    return { class: facetClass, version: "builtin" };
+    return { class: facetClass, version: name === "feed" ? "builtin:FeedFacet" : "builtin" };
   }
 
   /** Lazily built loader for userspace facet sources. Shared scope: the
@@ -3340,9 +3373,15 @@ const StreamAppendInput = StreamEventInputSchema.safeExtend({
   offset: z.number().int().nonnegative().optional(),
 }).strict();
 
-function parseStreamDurableObjectName(name: string | undefined) {
-  if (!name) {
-    throw new Error("Stream Durable Object must be addressed by name.");
-  }
-  return DurableObjectNameCodec.parse(name, { allowNullProjectId: true });
+function readStreamDurableObjectName(ctx: DurableObjectState) {
+  if (ctx.id.name) return DurableObjectNameCodec.parse(ctx.id.name, { allowNullProjectId: true });
+  // Alarm/hibernation wakes can arrive without the original getByName hint.
+  // The committed birth event is the durable identity of this stream.
+  const first = new StreamEventLog(ctx.storage.sql, "/").getByOffset(1);
+  if (!first) throw new Error("A new Stream Durable Object must be addressed by name.");
+  const created = parseCommittedCoreEvent(first, "events.iterate.com/stream/created");
+  return DurableObjectNameCodec.parse(
+    DurableObjectNameCodec.stringify(created.payload, { allowNullProjectId: true }),
+    { allowNullProjectId: true },
+  );
 }

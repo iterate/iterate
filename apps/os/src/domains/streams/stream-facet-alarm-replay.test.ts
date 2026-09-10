@@ -18,6 +18,18 @@ import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { StreamDurableObject } from "./stream-durable-object.ts";
 
+test("a nameless alarm wake recovers the stream address from its committed birth", async () => {
+  const harness = await bootStreamWithAgentFacet();
+  Object.defineProperty(harness.context.ctx, "id", { value: { name: undefined } });
+  const rebooted = new StreamDurableObject(harness.context.ctx, fakeEnv());
+  await harness.context.waitForInitialization();
+  expect(rebooted.name).toMatchObject({ projectId: PROJECT_ID, path: AGENT_PATH });
+  rebooted.proxySetAlarm(Date.now() - 1);
+  await expect(rebooted.alarm()).resolves.toBeUndefined();
+  await harness.context.settle();
+  harness.context.close();
+});
+
 test("a failed facet alarm replay rejects the alarm invocation and re-merges the bounded retry desire", async () => {
   const harness = await bootStreamWithAgentFacet();
   harness.facet.handleAlarmError = new Error("Durable Object reset because its code was updated");

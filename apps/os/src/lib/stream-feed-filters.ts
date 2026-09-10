@@ -3,7 +3,7 @@
 // event types / kinds render. Mode selection lives in stream-view-search.ts.
 //
 // feed_items is ONE table holding both pretty agent rows (kind `agent.*`) and
-// raw rows (kind `raw.group` / `raw.<component>`), interleaved in local_index
+// raw rows (kind `raw.event` / `raw.<component>`), interleaved in local_index
 // order. Modes are filters over it:
 //   - Pretty        — agent rows only (minus debug kinds), search over them.
 //   - Pretty + raw  — agent rows PLUS the raw rows the raw filters select,
@@ -15,17 +15,14 @@
 // Filter model (URL):
 //   - `types`      — primary event types inside a raw feed item (group
 //                    eventType or singleton events[0].type)
-//   - `components` — raw feed_items.kind values (raw.group, raw.stream.woken, …)
+//   - `components` — raw feed_items.kind values (raw.event, raw.stream.woken, …)
 //   - `q`/`from`/`to` as before
 // A raw row matches when it satisfies ALL active constraints. Modes decide
 // which of these controls are shown (Pretty: search only; Pretty+raw / Raw:
 // full).
 
 import type { SqlValue } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import {
-  AGENT_KIND_PREFIX,
-  RAW_KIND_PREFIX,
-} from "~/domains/streams/client-libraries/processors/browser-feed/projector.ts";
+import { AGENT_KIND_PREFIX, RAW_KIND_PREFIX } from "~/domains/streams/feed-item-types.ts";
 import {
   modeCapabilities,
   streamViewMode,
@@ -55,7 +52,7 @@ export function feedFiltersActive(search: StreamViewSearch, streamPath: string):
  * Primary event type of a raw feed_items row — group `data.eventType` or a
  * singleton's first event type.
  */
-export const FEED_TYPE_EXPRESSION = `COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type'))`;
+export const FEED_TYPE_EXPRESSION = `json_extract(data, '$.type')`;
 
 /**
  * How the raw side of the feed is narrowed. Modes and URL params map into

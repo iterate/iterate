@@ -186,28 +186,3 @@ it("does not notify queries whose results did not change", async () => {
   await new Promise((resolve) => setTimeout(resolve, 25));
   expect(constantNotifications).toBe(constantBaseline);
 });
-
-it("stores the exact stream lifetime ID independently for each processor cache", async () => {
-  database = createDatabase();
-  const firstStreamId = "11111111-1111-4111-8111-111111111111";
-  const recreatedStreamId = "22222222-2222-4222-8222-222222222222";
-
-  // A creation timestamp from the old cache format is deliberately not an
-  // identity fallback: two recreated streams can have the same millisecond.
-  await database.exec(
-    `CREATE TABLE processor_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
-  );
-  await database.exec(
-    `INSERT INTO processor_metadata (key, value) VALUES ('created-at:raw-events', '2026-07-22T12:00:00.000Z')`,
-  );
-  expect(await database.readProcessorStreamId("raw-events")).toBeUndefined();
-
-  await database.writeProcessorStreamId("raw-events", firstStreamId);
-  await database.writeProcessorStreamId("feed", recreatedStreamId);
-  expect(await database.readProcessorStreamId("raw-events")).toBe(firstStreamId);
-  expect(await database.readProcessorStreamId("feed")).toBe(recreatedStreamId);
-
-  await database.writeProcessorStreamId("raw-events", recreatedStreamId);
-  expect(await database.readProcessorStreamId("raw-events")).toBe(recreatedStreamId);
-  expect(await database.readProcessorStreamId("feed")).toBe(recreatedStreamId);
-});

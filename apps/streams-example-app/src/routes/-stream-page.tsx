@@ -29,7 +29,6 @@ import {
   type StreamBrowserDatabase,
   type StreamEventRow,
 } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { BROWSER_STREAM_PROCESSORS } from "~/domains/streams/client-libraries/browser/browser-stream-processors.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
 export function StreamPage({ streamView }: { streamView: StreamViewSearch }) {
@@ -179,7 +178,6 @@ function useStreamProcessor(args: { streamPath: string; streamProjectId?: string
         streamPath,
         ...(streamProjectId === undefined ? {} : { projectId: streamProjectId }),
         createStreamClient: createCapnwebStreamClient,
-        processors: BROWSER_STREAM_PROCESSORS,
       }),
     [streamPath, streamProjectId],
   );
@@ -761,23 +759,7 @@ function EventRows({
         />
         <StreamRuntimeNotice eventCount={eventCount} snapshot={snapshot} />
         {eventCount === 0 ? (
-          <div className="flex min-h-60 flex-1 items-center justify-center gap-2.5 text-sm text-slate-500">
-            {snapshot.connectionStatus === "receiving-events" ? null : (
-              <div
-                className="size-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"
-                aria-hidden="true"
-              />
-            )}
-            <span>
-              {eventTypeFilter !== ""
-                ? "SQLite is ready; no events match the selected event type"
-                : snapshot.connectionError === undefined
-                  ? snapshot.connectionStatus === "receiving-events"
-                    ? "SQLite is ready; no events are stored locally yet"
-                    : `SQLite is ready; stream connection is ${snapshot.connectionStatus}`
-                  : `SQLite is ready; stream connection is ${snapshot.connectionStatus}: ${snapshot.connectionError}`}
-            </span>
-          </div>
+          <EmptyStreamEvents snapshot={snapshot} eventTypeFilter={eventTypeFilter} />
         ) : (
           <>
             {/* directDomUpdates contract: the virtualizer owns this container's
@@ -827,20 +809,8 @@ function EventRows({
                 aria-hidden
               />
               <div className="pointer-events-auto absolute left-1/2 z-20 -translate-x-1/2 bottom-4">
-                <button
-                  aria-label={
-                    newEventCount === 0
-                      ? "Scroll to bottom"
-                      : `Scroll to bottom, ${newEventCount} new ${
-                          newEventCount === 1 ? "event" : "events"
-                        }`
-                  }
-                  className={
-                    newEventCount === 0
-                      ? "pointer-events-auto grid size-8 cursor-pointer place-items-center rounded-full border border-[#e8ebf0] bg-white text-base leading-none text-[#16181d] opacity-60 shadow-[0_4px_12px_rgb(15_23_42_/_8%)] hover:opacity-90"
-                      : "pointer-events-auto inline-grid h-8 auto-cols-max grid-flow-col place-items-center gap-1.5 rounded-full border border-[#e8ebf0] bg-white px-2.5 text-[13px] text-[#16181d] opacity-60 shadow-[0_4px_12px_rgb(15_23_42_/_8%)] hover:opacity-90"
-                  }
-                  type="button"
+                <NewEventsButton
+                  count={newEventCount}
                   onClick={() => {
                     setNewEventCount(0);
                     // Direct DOM write: lands at the exact bottom, and the
@@ -848,18 +818,63 @@ function EventRows({
                     const scroller = parentRef.current;
                     if (scroller != null) scroller.scrollTop = scroller.scrollHeight;
                   }}
-                >
-                  <span className="text-base leading-none">↓</span>
-                  {newEventCount === 0 ? null : (
-                    <span className="font-mono text-xs leading-none">{newEventCount}</span>
-                  )}
-                </button>
+                />
               </div>
             </div>
           ) : null}
           <StreamComposer key={`composer:${streamPath}`} streamStore={streamStore} />
         </div>
       </section>
+    </div>
+  );
+}
+
+function NewEventsButton({ count, onClick }: { count: number; onClick(): void }) {
+  return (
+    <button
+      aria-label={
+        count === 0
+          ? "Scroll to bottom"
+          : `Scroll to bottom, ${count} new ${count === 1 ? "event" : "events"}`
+      }
+      className={
+        count === 0
+          ? "pointer-events-auto grid size-8 cursor-pointer place-items-center rounded-full border border-[#e8ebf0] bg-white text-base leading-none text-[#16181d] opacity-60 shadow-[0_4px_12px_rgb(15_23_42_/_8%)] hover:opacity-90"
+          : "pointer-events-auto inline-grid h-8 auto-cols-max grid-flow-col place-items-center gap-1.5 rounded-full border border-[#e8ebf0] bg-white px-2.5 text-[13px] text-[#16181d] opacity-60 shadow-[0_4px_12px_rgb(15_23_42_/_8%)] hover:opacity-90"
+      }
+      type="button"
+      onClick={onClick}
+    >
+      <span className="text-base leading-none">↓</span>
+      {count === 0 ? null : <span className="font-mono text-xs leading-none">{count}</span>}
+    </button>
+  );
+}
+
+function EmptyStreamEvents({
+  snapshot,
+  eventTypeFilter,
+}: {
+  snapshot: StreamBrowserSnapshot;
+  eventTypeFilter: string;
+}) {
+  return (
+    <div className="flex min-h-60 flex-1 items-center justify-center gap-2.5 text-sm text-slate-500">
+      {snapshot.connectionStatus === "receiving-events" ? null : (
+        <div
+          className="size-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"
+          aria-hidden="true"
+        />
+      )}
+      <span>
+        {eventTypeFilter !== ""
+          ? "SQLite is ready; no events match the selected event type"
+          : snapshot.connectionError === undefined
+            ? snapshot.connectionStatus === "receiving-events"
+              ? "SQLite is ready; no events are stored locally yet"
+              : `SQLite is ready; stream connection is ${snapshot.connectionStatus}`
+            : `SQLite is ready; stream connection is ${snapshot.connectionStatus}: ${snapshot.connectionError}`}
+      </span>
     </div>
   );
 }
@@ -1590,14 +1605,14 @@ function InsertEventsTool({
         insertEventCount: string;
         insertBatchSize: string;
         periodSeconds: string;
-        appendResponseMode: "await" | "background" | "dispose";
+        appendResponseMode: "await" | "background";
         insertState: "idle" | "inserting" | "done" | "error";
       },
       action:
         | { type: "set-insert-event-count"; value: string }
         | { type: "set-insert-batch-size"; value: string }
         | { type: "set-period-seconds"; value: string }
-        | { type: "set-append-response-mode"; value: "await" | "background" | "dispose" }
+        | { type: "set-append-response-mode"; value: "await" | "background" }
         | { type: "set-insert-state"; value: "idle" | "inserting" | "done" | "error" },
     ) => {
       switch (action.type) {
@@ -1668,16 +1683,10 @@ function InsertEventsTool({
             if (insertState.appendResponseMode === "await") {
               pendingResponses.push(result);
             } else if (insertState.appendResponseMode === "background") {
-              // CapnWeb RpcPromises are lazy. Calling `.then()` starts the
-              // append without making this form wait for the returned events.
+              // Report background failures without waiting in the form.
               void result.then(undefined, (error: unknown) => {
                 console.error("background appendBatch failed", error);
               });
-            } else if (insertState.appendResponseMode === "dispose") {
-              // CapnWeb says callers should dispose RpcPromises they do not
-              // await. This option tests whether that still lets a write-only
-              // append reach the Durable Object before cancellation wins.
-              result[Symbol.dispose]();
             }
           }),
         ),
@@ -1753,18 +1762,12 @@ function InsertEventsTool({
           onChange={(event) =>
             dispatchInsertState({
               type: "set-append-response-mode",
-              value:
-                event.currentTarget.value === "dispose"
-                  ? "dispose"
-                  : event.currentTarget.value === "background"
-                    ? "background"
-                    : "await",
+              value: event.currentTarget.value === "background" ? "background" : "await",
             })
           }
         >
           <option value="await">Await</option>
           <option value="background">Background</option>
-          <option value="dispose">Dispose</option>
         </select>
       </label>
       <button

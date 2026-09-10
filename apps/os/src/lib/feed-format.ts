@@ -3,6 +3,7 @@
 // durations, file sizes, timestamps). Pure string functions — no locale
 // state, no React.
 
+import { sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
 import {
   formatAgentUiDuration,
   type AgentUiStep,
@@ -40,7 +41,7 @@ export function liveActivityLabel(runningSteps: readonly AgentUiStep[]): string 
 
   const llm = runningSteps.findLast((step) => step.kind === "llm");
   if (llm == null || llm.kind !== "llm") return "Working…";
-  if (llm.thinkingText !== "" && llm.responseText === "") return "Thinking";
+  if (llm.thinkingText.length > 0 && llm.responseText.length === 0) return "Thinking";
   return "Waiting for a response";
 }
 
@@ -65,8 +66,13 @@ export function formatBytesPerSecond(bytesPerSecond: number): string {
  * prose reads as a glitch. */
 const CODE_START_PATTERN = /^\s*(async|await|function|const|let|import)\b/;
 const CODEMODE_TAG_PATTERN = /^[ \t]*<codemode(\s|>)/m;
-export function looksLikeCode(text: string): boolean {
-  return text.includes("```") || CODE_START_PATTERN.test(text) || CODEMODE_TAG_PATTERN.test(text);
+export function looksLikeCode(text: StreamText): boolean {
+  // Only a bounded prefix is examined while streaming; settled strings retain
+  // the full-text heuristic, including a late embedded code block.
+  const prefix = typeof text === "string" ? text : sliceText(text, 0, 4096);
+  return (
+    prefix.includes("```") || CODE_START_PATTERN.test(prefix) || CODEMODE_TAG_PATTERN.test(prefix)
+  );
 }
 
 /** Locale time-of-day with seconds, for step start times. */

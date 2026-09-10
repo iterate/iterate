@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { expect, type Page } from "@playwright/test";
 import { spinnerWaiter } from "middlewright";
 import { test } from "./test-support/test.ts";
@@ -39,6 +40,19 @@ const HEALTHY_DELIVERY_MS = 30_000;
 // locally, so 90s leaves headroom for slower preview CI boxes without hiding
 // a real wedge (the wedge is permanent; any finite window catches it).
 const RECOVERY_DELIVERY_MS = 90_000;
+
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status === testInfo.expectedStatus || page.isClosed()) return;
+  const mirrors = await page.evaluate(() =>
+    (
+      window as unknown as { __streamRuntimeDebug?: () => Record<string, unknown> }
+    ).__streamRuntimeDebug?.(),
+  );
+  await testInfo.attach("stream-mirror-state", {
+    body: JSON.stringify(mirrors ?? {}, null, 2),
+    contentType: "application/json",
+  });
+});
 
 test("control: appended event is delivered to a live stream feed", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("suspend-control");
@@ -118,13 +132,18 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
     await page.evaluate(() =>
       (window as unknown as { __armSuspendTimerProbe: () => void }).__armSuspendTimerProbe(),
     );
-    await cdp.send("Emulation.setScriptExecutionDisabled", { value: true });
-    // This sleep IS the suspend stimulus: wall-clock passing while the page
-    // is frozen (scripts disabled), so there is no UI to wait on.
+    // Disabling script execution discards one-shot timers that expire while
+    // disabled, permanently stranding retry promises. Pause the debugger so
+    // queued callbacks survive the suspension, as they do during a real freeze.
+    await cdp.send("Debugger.enable");
+    await cdp.send("Debugger.pause");
+    // This runner-side timer IS the suspend stimulus. A Playwright page wait
+    // can block while its execution is paused, preventing the resume command.
     // timeout: the stimulus itself — nothing for the spinner-waiter here
-    await page.waitForTimeout(SUSPEND_STIMULUS_MS);
+    await delay(SUSPEND_STIMULUS_MS);
     await page.context().setOffline(false);
-    await cdp.send("Emulation.setScriptExecutionDisabled", { value: false });
+    await cdp.send("Debugger.resume");
+    await cdp.send("Debugger.disable");
     await expect
       .poll(async () => (await readSuspendTimerEvidence(page)).maxTimerGapMs, {
         message: "the armed page timer should remain suspended for the stimulus window",
@@ -197,6 +216,7 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   // mirror paint and settle the composer. There is intentionally no spinner in
   // that push-only gap, so Middlewright's 1ms no-progress clamp must not replace
   // the explicit bounded waits.
+  const sentDuringOutage = `during-outage-${Date.now()}`;
   await test.step("half-open: paint reply and settle composer", async () => {
     await spinnerWaiter.settings.run({ disabled: true }, async () => {
       // 90s, not 30s: on a cold preview deployment this first paint rides a
@@ -213,7 +233,12 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
         .locator('[data-testid="agent-feed-message"][data-kind="assistant"]')
         .first()
         .waitFor({ timeout: 90_000 }); // timeout: manual, see the cold-preview note above — spinner-waiter is disabled for this step
-      await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 }); // timeout: manual, same cold-preview lane — spinner-waiter is disabled for this step
+      // Fill before muting so enabled proves transport readiness as well as
+      // a non-empty draft. The actual send still starts during the outage.
+      await page.getByPlaceholder("Message this agent").fill(sentDuringOutage);
+      await page
+        .getByRole("button", { name: "Send message", disabled: false })
+        .waitFor({ timeout: 120_000 }); // timeout: the composer must be ready before the deliberate outage — spinner-waiter is disabled for this step
     });
   });
 
@@ -239,9 +264,7 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   // getSnapshot re-dial overwrote the transport slot before it was read), so
   // the corpse survived and the composer spun forever with no error — even
   // while the feed looked fully recovered.
-  const sentDuringOutage = `during-outage-${Date.now()}`;
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    await page.getByPlaceholder("Message this agent").fill(sentDuringOutage);
     await page.getByRole("button", { name: "Send message" }).click();
   });
 

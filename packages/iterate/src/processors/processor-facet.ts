@@ -16,6 +16,7 @@
 // alarm boots) reconstructs its host from that stash alone.
 
 import { DurableObject } from "cloudflare:workers";
+import type { LiveStateCursor } from "../sdk/capnweb/live-state/protocol.ts";
 import type { LiveStateRpc } from "../sdk/capnweb/live-state/types.ts";
 import { disposeIgnoredRpcResult } from "../sdk/capnweb/live-state/retain.ts";
 import type { ProcessorStream } from "./stream-handle.ts";
@@ -338,6 +339,12 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
    * facet as ordinary argument capabilities; the engine dups them on receipt
    * (`retainCallback`) so they survive past the subscribe call.
    */
+  async readLiveState(cursor?: LiveStateCursor) {
+    const { registry } = this.#requireHost();
+    await registry.loadAndRefreshLive();
+    return registry.live.readSince(cursor);
+  }
+
   liveState(): LiveStateRpc<Record<string, unknown>> {
     const { registry } = this.#requireHost();
     return {
@@ -345,9 +352,9 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
         await registry.loadAndRefreshLive();
         return registry.live.getState();
       },
-      subscribe: async (onUpdate) => {
+      subscribe: async (onUpdate, options) => {
         await registry.loadAndRefreshLive();
-        const subscription = registry.live.subscribe(onUpdate);
+        const subscription = registry.live.subscribe(onUpdate, options);
         return {
           ping: () => subscription.ping(),
           unsubscribe: () => subscription.unsubscribe(),

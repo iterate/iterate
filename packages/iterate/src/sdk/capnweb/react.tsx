@@ -201,6 +201,32 @@ export function useCapnWebRoot<Root extends CapnWebRoot>(): Root | undefined {
   return connection.root as Root | undefined;
 }
 
+type LiveStateOptions<Root extends CapnWebRoot> = {
+  enabled?: boolean;
+  makeConnection?: MakeCapnWebConnection<Root>;
+  root?: Root | null;
+};
+
+/** Resolve provider, owned connection, or borrowed root with one logical scope. */
+function useLiveStateConnection<Root extends CapnWebRoot>(options?: LiveStateOptions<Root>) {
+  const provider = useContext(CapnWebContext);
+  const hasRootOverride = options !== undefined && Object.hasOwn(options, "root");
+  const connectionFactory = hasRootOverride ? undefined : options?.makeConnection;
+  const owned = useCapnWebConnection(
+    connectionFactory,
+    !hasRootOverride && (options?.enabled ?? true),
+  );
+  if (!hasRootOverride && !connectionFactory && !provider) {
+    throw new Error(
+      "useLiveState needs <CapnWebProvider>, a makeConnection option, or an explicit { root } override.",
+    );
+  }
+  const connection = hasRootOverride ? undefined : connectionFactory ? owned : provider;
+  const root = (hasRootOverride ? options.root : connection?.root) ?? undefined;
+  const scope = hasRootOverride ? root : (connectionFactory ?? connection?.scope);
+  return { connection, root, scope };
+}
+
 /**
  * Render a selected slice of any LiveStateRpc reachable from the provider root.
  * Pass `{ root }` to borrow an explicit root instead; borrowed roots are never
@@ -210,32 +236,14 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
   live: (root: Root) => LiveStateRpc<State>,
   selector: (state: State) => Selected = (state) => state as unknown as Selected,
   deps: unknown[] = [],
-  options?: {
-    enabled?: boolean;
-    makeConnection?: MakeCapnWebConnection<Root>;
-    root?: Root | null;
-  },
+  options?: LiveStateOptions<Root>,
 ): {
   error?: string;
   refresh: () => void;
   status: LiveStateStatus;
   value: Selected | undefined;
 } {
-  const provider = useContext(CapnWebContext);
-  const hasRootOverride = options !== undefined && Object.hasOwn(options, "root");
-  const connectionFactory = hasRootOverride ? undefined : options?.makeConnection;
-  const owned = useCapnWebConnection(
-    connectionFactory,
-    !hasRootOverride && (options?.enabled ?? true),
-  );
-  const hasConnectionOverride = connectionFactory !== undefined;
-  if (!hasRootOverride && !hasConnectionOverride && provider === undefined) {
-    throw new Error(
-      "useLiveState needs <CapnWebProvider>, a makeConnection option, or an explicit { root } override.",
-    );
-  }
-  const connection = hasRootOverride ? undefined : hasConnectionOverride ? owned : provider;
-  const root = (hasRootOverride ? options.root : connection?.root) ?? undefined;
+  const { connection, root, scope } = useLiveStateConnection(options);
   const enabled = options?.enabled ?? true;
   const [epoch, setEpoch] = useState(0);
   const liveRef = useRef(live);
@@ -248,13 +256,8 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
   // A different provider/factory, explicit borrowed root, or logical node gets
   // an empty store synchronously. A new transport generation within the same
   // connection scope keeps the last value visible while it re-subscribes.
-  const logicalConnection = hasRootOverride
-    ? root
-    : hasConnectionOverride
-      ? connectionFactory
-      : connection?.scope;
   // oxlint-disable-next-line react-hooks/exhaustive-deps -- this memo is intentionally keyed; deps complete the caller's logical-node identity
-  const store = useMemo(() => createLiveStateStore<State>(), [logicalConnection, ...deps]);
+  const store = useMemo(() => createLiveStateStore<State>(), [scope, ...deps]);
   // oxlint-disable-next-line react-hooks/exhaustive-deps -- store is the logical subscription identity; its replacement must reset the retry budget
   const subscribeRetries = useMemo(() => ({ count: 0 }), [store]);
   const refresh = useCallback(() => {
@@ -310,10 +313,13 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
       // The context erases its root parameter; this hook's provider/factory/root
       // inputs are the only sources, so restoring the caller's Root is safe.
       try {
-        const pending = liveRef.current(root as Root).subscribe((update) => {
-          if (disposed || stale) return;
-          store.apply(update, refresh);
-        });
+        const pending = liveRef.current(root as Root).subscribe(
+          (update) => {
+            if (disposed || stale) return;
+            store.apply(update, refresh);
+          },
+          { patchVersion: 2 },
+        );
         timeout = setTimeout(
           () =>
             report(
@@ -387,8 +393,7 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
     return value;
   };
   const value = useSyncExternalStore(store.subscribe, getSelected, () => undefined);
-  const providerError =
-    !hasRootOverride && connection?.status === "error" ? connection.error : undefined;
+  const providerError = connection?.status === "error" ? connection.error : undefined;
   const activeSubscriptionState =
     subscriptionState.store === store &&
     subscriptionState.epoch === epoch &&
@@ -400,12 +405,12 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
           status: "connecting" as const,
           store,
         };
-  const connectionIsConnecting = !hasRootOverride && connection?.status === "connecting";
+  const connectionIsConnecting = connection?.status === "connecting";
   return {
     error:
       providerError ??
       (connectionIsConnecting || !enabled ? undefined : activeSubscriptionState.error),
-    refresh: !hasRootOverride && connection?.status === "error" ? connection.reconnect : refresh,
+    refresh: connection?.status === "error" ? connection.reconnect : refresh,
     status:
       providerError !== undefined
         ? "error"

@@ -7,6 +7,7 @@
 // must never pull the StreamProcessor class or the Workers AI transport into
 // their bundles.
 
+import { z } from "zod";
 import {
   agentRuntimesEqual,
   isAgentRuntimeZero,
@@ -41,7 +42,12 @@ export function reduceAgentEvent(input: {
   event: AgentConsumedEvent;
   state: AgentProcessorState;
 }): AgentProcessorState {
-  const state = reduceAgentEventCore(input);
+  const reduced = reduceAgentEventCore(input);
+  const pendingInputConsequences = reducePendingInputConsequences(input);
+  const state =
+    pendingInputConsequences === reduced.pendingInputConsequences
+      ? reduced
+      : { ...reduced, pendingInputConsequences };
   const runtime: AgentRuntime = deriveAgentRuntime(state);
   // Genesis zero stays absent. Every later count change is significant,
   // including changes which retain the same compact display state.
@@ -58,6 +64,52 @@ export function reduceAgentEvent(input: {
       since: input.event.createdAt,
     },
   };
+}
+
+const MentionResolutionInput = z.object({ sourceOffset: z.number().int().positive() });
+
+/** Only unresolved derived inputs are retained; ordinary and no-op messages use the runner cursor. */
+function reducePendingInputConsequences({
+  event,
+  state,
+}: {
+  event: AgentConsumedEvent;
+  state: AgentProcessorState;
+}): AgentProcessorState["pendingInputConsequences"] {
+  const pending = state.pendingInputConsequences;
+  if (event.type === "events.iterate.com/agents/context-added") {
+    if (contextNeedsMentionMaterialization(event.payload)) {
+      return { ...pending, [`mention:${event.offset}`]: event.offset };
+    }
+    const slash =
+      event.payload.role === "user" && state.config.interpretResponses
+        ? resolveSlashCommand(event.payload.content)
+        : null;
+    if (slash) {
+      return {
+        ...pending,
+        [`${SLASH_COMMAND_EXECUTION_PREFIX}${slash.command}:${event.offset}`]: event.offset,
+      };
+    }
+  }
+  const source = event.source?.processor;
+  if (source?.slug !== AgentProcessorContract.slug || source.stream.path !== event.path)
+    return pending;
+  let key: string | undefined;
+  if (event.type === "events.iterate.com/capability-host/script-run-requested") {
+    key = event.payload.executionId;
+  } else if (
+    event.type === "events.iterate.com/agents/context-added" &&
+    event.payload.actor?.type === "integration" &&
+    event.payload.actor.name === "agent-mention-resolver"
+  ) {
+    const resolution = MentionResolutionInput.safeParse(event.payload.mentionResolution);
+    if (resolution.success) key = `mention:${resolution.data.sourceOffset}`;
+  }
+  if (!key || !pending[key] || source.whileProcessing?.offset !== pending[key]) return pending;
+  const next = { ...pending };
+  delete next[key];
+  return next;
 }
 
 function reduceAgentEventCore(input: {

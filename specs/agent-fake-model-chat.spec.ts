@@ -26,7 +26,8 @@ test("a config file mention is materialized before the model sees the turn", asy
   const composer = page.getByRole("combobox", { name: "Message this agent" });
   await composer.fill("@onb");
   await page.getByRole("option", { name: "ONBOARDING.md" }).click();
-  await composer.press("Enter");
+  // File completion can finish before the stream connection enables submission.
+  await page.getByRole("button", { name: "Send message" }).click();
 
   await page.getByText("Mention resolved").waitFor();
   await page
@@ -81,6 +82,100 @@ test("multi-turn chat with a sarcastic agent served by the spec's own fake-model
   await composer.fill("Fine. I will just do it myself.");
   await send.click();
   await page.getByText(/"fine. .*" do you hear yourself/i).waitFor();
+});
+
+test("switching agents clears the previous stream's submission acknowledgement", async ({
+  helpers,
+  page,
+}) => {
+  await using fixture = await helpers.createFixture("agent-composer-navigation");
+  const first = await fixture.createAgent({ infix: "first" });
+  const second = await fixture.createAgent({ infix: "second" });
+  // A well-used stream has a much higher input offset than the fresh destination.
+  await first.stream.append(
+    ...Array.from({ length: 100 }, (_, index) => ({
+      type: "events.iterate.com/test/navigation-padding",
+      payload: { index },
+    })),
+  );
+  first.responses.set(
+    async () => '```ts\nasync (itx) => { await itx.chat.sendMessage("First agent replied") }\n```',
+  );
+  second.responses.set(
+    async () => '```ts\nasync (itx) => { await itx.chat.sendMessage("Second agent replied") }\n```',
+  );
+
+  await page.goto(first.webUrl);
+  const composer = page.getByRole("combobox", { name: "Message this agent" });
+  await composer.fill("Hello first");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByText("First agent replied").waitFor();
+  const firstInputs = await first.stream.getEvents({
+    eventTypes: ["events.iterate.com/agents/context-added"],
+    limit: 500,
+  });
+  const input = firstInputs.find((event) => event.payload?.content === "Hello first")!;
+  expect(input.offset).toBeGreaterThan(
+    (await second.liveState.get()).inputAcknowledgedThroughOffset,
+  );
+
+  // Navigate in the mounted application: page.goto would hide leaked composer state.
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.getByPlaceholder("Search agents…").fill(second.path);
+  await page.getByRole("option", { name: new RegExp(second.path) }).click();
+  // The old composer remains mounted while the router loads the destination.
+  await page
+    .locator(`[data-stream-path="${second.path}"]`)
+    .getByRole("combobox", { name: "Message this agent" })
+    .fill("Hello second");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByText("Second agent replied").waitFor();
+});
+
+test("recreating an agent at the same path resets its composer", async ({ helpers, page }) => {
+  await using fixture = await helpers.createFixture("agent-composer-recreation");
+  const agent = await fixture.createAgent();
+  await agent.stream.append(
+    ...Array.from({ length: 100 }, (_, index) => ({
+      type: "events.iterate.com/test/recreation-padding",
+      payload: { index },
+    })),
+  );
+  agent.responses.set(
+    async () =>
+      '```ts\nasync (itx) => { await itx.chat.sendMessage("Original agent replied") }\n```',
+  );
+  await page.goto(agent.webUrl);
+  const composer = page.getByRole("combobox", { name: "Message this agent" });
+  await composer.fill("Hello original");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByText("Original agent replied").waitFor();
+  // Finish the original turn before replacing its stream, so this checks
+  // composer lifetime rather than racing an old script's remaining writes.
+  await composer.fill("Draft for the original stream");
+  await page.getByRole("button", { name: "Send message", disabled: false }).waitFor();
+
+  // The admin-only test operation deletes this fixture stream and aborts its
+  // current incarnation; an abort response is expected, other failures are not.
+  await (agent.stream as unknown as { testReset(): Promise<void> })
+    .testReset()
+    .catch((error: unknown) => {
+      if (!/kill requested|aborted|reset|disconnected|shut down|canceled/i.test(String(error))) {
+        throw error;
+      }
+    });
+  const recreated = await fixture.createAgent({ path: agent.path });
+  recreated.responses.set(
+    async () =>
+      '```ts\nasync (itx) => { await itx.chat.sendMessage("Recreated agent replied") }\n```',
+  );
+  // Stay on this page: a reload would hide stale composer state. The old row
+  // disappearing proves that the browser has recognized the new stream identity.
+  await page.getByText("Original agent replied").waitFor({ state: "hidden", timeout: 30_000 }); // timeout: server recreation and event-mirror recovery have no spinner for the spinner-waiter
+  await composer.getByText("Message this agent", { exact: true }).waitFor();
+  await composer.fill("Hello recreated");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByText("Recreated agent replied").waitFor();
 });
 
 // -----------------------------------------------------------------------------

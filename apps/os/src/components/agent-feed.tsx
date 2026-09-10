@@ -1,4 +1,4 @@
-import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import type { AgentRuntime } from "@iterate-com/shared/agent-events";
 import { decodeMessageMentions } from "@iterate-com/shared/message";
@@ -38,6 +38,7 @@ import { Badge } from "@iterate-com/ui/components/badge";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { StreamingText, StreamingCodeBlock, StreamingCursor } from "./streaming-text.tsx";
 import { deriveAgentDisplayState } from "~/domains/agents/agent-presence.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import {
@@ -54,8 +55,7 @@ import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 // The clean agent chat rows: user and assistant messages plus archived
 // activity rows ("Ran code 2× · 3 requests · 7.4 s"), and the live in-flight
-// activity tail. The rows are `agent.*` feed_items written by the browser-feed
-// projector; the virtualized list that windows over them lives in
+// activity tail. The rows are `agent.*` feed_items from server publications; the virtualized list that windows over them lives in
 // stream-feed-view.tsx — this file owns only how each item renders.
 
 // Memoized: the feed re-renders on every 16ms live-streaming tick, and settled
@@ -838,7 +838,7 @@ function AgentLiveStatus({
 
 function liveStepHasVisibleContent(step: AgentUiStep) {
   if (step.kind === "code") return step.code !== "";
-  return step.thinkingText !== "" || step.responseText !== "";
+  return step.thinkingText.length > 0 || step.responseText.length > 0;
 }
 
 /**
@@ -876,86 +876,21 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
 
   return (
     <div className="flex flex-col gap-1.5 py-1">
-      {step.thinkingText === "" ? null : (
+      {step.thinkingText.length === 0 ? null : (
         <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm italic leading-relaxed text-muted-foreground">
-          {step.thinkingText}
-          {step.responseText === "" ? <StreamingCursor /> : null}
+          <StreamingText text={step.thinkingText} />
+          {step.responseText.length === 0 ? <StreamingCursor /> : null}
         </div>
       )}
-      {step.responseText === "" ? null : looksLikeCode(step.responseText) ? (
+      {step.responseText.length === 0 ? null : looksLikeCode(step.responseText) ? (
         <StreamingCodeBlock code={step.responseText} />
       ) : (
         <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm leading-relaxed">
-          <TokenRevealText windows={step.responseWindows} />
+          <StreamingText text={step.responseText} animate />
           <StreamingCursor />
         </div>
       )}
     </div>
-  );
-}
-
-/** The streamed response, one span per token with a CSS stagger: chunk events
- * arrive as ~150ms coalescing windows (~8 tokens each), and rendering a window
- * in one jump reads as chugging. Each window fans its tokens' animation-delay
- * across the gap to the next window instead — CSS is the clock, so there are
- * no timers and no extra re-renders. Keys are stable and windows are
- * append-only, so finished windows keep their DOM nodes and never re-animate. */
-function TokenRevealText({ windows }: { windows: string[] }) {
-  return windows.map((window, windowIndex) => {
-    const tokens = window.split(/(?<=\s)/);
-    return (
-      <span key={windowIndex}>
-        {tokens.map((token, tokenIndex) => (
-          <span
-            key={tokenIndex}
-            className="animate-token-in"
-            // Fan across ~140ms regardless of token count, so a large window
-            // always finishes revealing before the next window's tokens land.
-            style={{ animationDelay: `${Math.round((tokenIndex / tokens.length) * 140)}ms` }}
-          >
-            {token}
-          </span>
-        ))}
-      </span>
-    );
-  });
-}
-
-/** Amber-tinted block the response/code streams into, character by character.
- * Clamped to the same height as settled code and tail-pinned so the newest
- * tokens stay visible: a long codemode turn (minutes, thousands of chunks)
- * otherwise grows to fill the viewport and reads as one never-ending code
- * block. Scrolling up unpins; returning to the bottom re-pins. */
-function StreamingCodeBlock({ code }: { code: string }) {
-  const preRef = useRef<HTMLPreElement>(null);
-  const pinnedRef = useRef(true);
-  useLayoutEffect(() => {
-    const el = preRef.current;
-    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
-  }, [code]);
-  return (
-    <pre
-      ref={preRef}
-      onScroll={(event) => {
-        const el = event.currentTarget;
-        pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-      }}
-      className="max-h-80 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-words rounded-xl bg-amber-50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground dark:bg-amber-950/20"
-    >
-      {code}
-      <StreamingCursor className="bg-amber-600" />
-    </pre>
-  );
-}
-
-function StreamingCursor({ className }: { className?: string }) {
-  return (
-    <span
-      className={cn(
-        "ml-px inline-block h-3.5 w-[7px] animate-caret-blink bg-muted-foreground/40 align-[-2px]",
-        className,
-      )}
-    />
   );
 }
 

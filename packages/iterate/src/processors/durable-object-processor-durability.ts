@@ -77,6 +77,8 @@ export function durableObjectProgressStore<State>(args: {
   /** The registered processor name (subscription name = contract slug) —
    * keys the progress record. */
   name: string;
+  /** Synchronously clear related projections when the source stream is replaced. */
+  resetForStream?: () => void;
 }): ProcessorProgressStore<State> {
   const { storage, name } = args;
   const progressKey = processorProgressKey(name);
@@ -137,6 +139,7 @@ export function durableObjectProgressStore<State>(args: {
       }
       // Old-lifetime recovery desires must not append revival facts into the
       // recreated stream. A new obligation will arm a fresh record.
+      args.resetForStream?.();
       storage.kv.delete(processorKeepaliveKey(name));
       storage.kv.put(progressKey, progress);
     },

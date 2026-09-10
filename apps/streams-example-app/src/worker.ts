@@ -11,6 +11,7 @@ import { STREAM_DURABLE_OBJECT_STUB, StreamRpcTarget } from "~/rpc-targets.ts";
 import { resolveStreamPath } from "~/domains/streams/utils.ts";
 
 export { StreamDurableObject } from "~/domains/streams/stream-durable-object.ts";
+export { FeedFacet } from "~/domains/streams/feed-entrypoint.ts";
 
 /**
  * The capnweb surface this playground serves at `/api/streams`.

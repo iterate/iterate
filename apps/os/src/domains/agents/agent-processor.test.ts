@@ -2541,7 +2541,7 @@ describe("AgentProcessor summary", () => {
     });
   });
 
-  it("runtimeChange tracks the fold through a full turn without any journal event", async () => {
+  it("journals runtime changes at their causal offsets for the server feed", async () => {
     const h = makeAgentHarness();
     await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("Hello")], ["advanceTime", 10_000]);
 
@@ -2569,8 +2569,12 @@ describe("AgentProcessor summary", () => {
       sinceOffset: settled.offset,
     });
 
-    // The presence lane is pure state: no runtime event type is ever journaled.
-    expect(h.events().every((row) => !row.type.includes("runtime"))).toBe(true);
+    const transitions = h.events("events.iterate.com/agent/runtime-changed");
+    expect(transitions.at(-1)?.payload).toEqual(h.state().runtimeChange);
+    expect(transitions.some(({ payload }) => payload.sinceOffset === requested.offset)).toBe(true);
+    expect(new Set(transitions.map(({ payload }) => payload.sinceOffset)).size).toBe(
+      transitions.length,
+    );
   });
 });
 
