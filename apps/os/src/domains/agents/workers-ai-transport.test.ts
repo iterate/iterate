@@ -7,7 +7,7 @@ import {
   runWorkersAiAttempt,
 } from "./workers-ai-transport.ts";
 
-createFailing(it, /AI attempt should report its timeout before provider cleanup finishes/)(
+createFailing(it, /attempt should report its timeout/)(
   "reports the AI attempt timeout while provider stream cleanup is still pending",
   async () => {
     vi.useFakeTimers();
@@ -44,11 +44,8 @@ createFailing(it, /AI attempt should report its timeout before provider cleanup 
       expect(cancelled).toBe(true);
       // Cancellation was requested, but reporting the deadline must not wait
       // for the provider's cleanup promise. This assertion currently fails.
-      expect(
-        failure,
-        "AI attempt should report its timeout before provider cleanup finishes",
-      ).toBeDefined();
-      expect(failure).toMatchObject({ message: expect.stringContaining("timed out") });
+      const note = "AI attempt should report its timeout before provider cleanup finishes";
+      expect(failure, note).toMatchObject({ message: expect.stringContaining("timed out") });
     } finally {
       cleanup.resolve();
       await attempt;
