@@ -140,9 +140,10 @@ export function useAgentFeed(agentPath: string): AgentFeed {
   const live = useMemo(() => {
     const snapshot = presented.current;
     if (snapshot === undefined) return undefined;
-    const liveActivity = snapshot.agent.live;
+    // A preview the server omitted for size carries no agent presentation.
+    const liveActivity = snapshot.agent?.live ?? null;
     if (liveActivity === null || !fold.publishedIds.has(liveActivity.id)) return snapshot;
-    return { ...snapshot, agent: { ...snapshot.agent, live: null } };
+    return { ...snapshot, agent: { ...snapshot.agent, live: null } } as FeedLiveState;
     // presented.current changes exactly when incoming or the fold does.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [incoming, fold]);

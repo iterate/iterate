@@ -4,7 +4,7 @@ import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
 import type { StreamEvent } from "iterate/processors";
 import { makeMemoryProgressStore, makeProcessorHarness } from "iterate/processors/testing";
 import { FeedItemPublication } from "@iterate-com/ui/components/events/feed-publication";
-import { FeedProcessorContract } from "./feed-contract.ts";
+import { FeedLiveState, FeedProcessorContract } from "./feed-contract.ts";
 import { createFeedPublicationStore, FeedProcessor, reduceFeed } from "./feed-processor.ts";
 
 const databases: DatabaseSync[] = [];
@@ -57,9 +57,15 @@ describe("server feed publications", () => {
     await harness.settle();
     const prior = publications.get("user-1")!;
     publications.save({ ...prior, firstOffset: 50, revisionOffset: 100 }, 101);
-    expect(harness.processor().presentation(harness.state()).publicationOffset).toBe(101);
+    expect(
+      harness.processor().presentation(harness.state(), harness.runner().currentStreamId ?? null)
+        .publicationOffset,
+    ).toBe(101);
     harness.processor().resetForStream();
-    expect(harness.processor().presentation(harness.state()).publicationOffset).toBe(0);
+    expect(
+      harness.processor().presentation(harness.state(), harness.runner().currentStreamId ?? null)
+        .publicationOffset,
+    ).toBe(0);
     expect(publications.get("user-1")).toBeUndefined();
     publications.save(prior, 2);
     expect(publications.get("user-1")).toEqual(prior);
@@ -70,9 +76,10 @@ describe("server feed publications", () => {
     await harness.stream.append(userMessage());
     await harness.settle();
     expect(harness.events("events.iterate.com/feed/item-published")).toHaveLength(1);
-    expect(harness.processor().presentation(harness.state()).publicationOffset).toBe(
-      harness.events("events.iterate.com/feed/item-published")[0]!.offset,
-    );
+    expect(
+      harness.processor().presentation(harness.state(), harness.runner().currentStreamId ?? null)
+        .publicationOffset,
+    ).toBe(harness.events("events.iterate.com/feed/item-published")[0]!.offset);
     expect(
       FeedItemPublication.parse(
         harness.events("events.iterate.com/feed/item-published")[0]!.payload,
@@ -244,25 +251,210 @@ describe("server feed publications", () => {
       scannedThroughOffset: 2,
       streamMaxOffset: 2,
     });
-    expect(harness.processor().presentation(harness.state()).agent.live?.steps[0]).toMatchObject({
+    expect(
+      harness.processor().presentation(harness.state(), harness.runner().currentStreamId ?? null)
+        .agent!.live?.steps[0],
+    ).toMatchObject({
       responseText: "hello",
     });
-    expect(harness.state().agent.live?.steps[0]).toMatchObject({ responseText: "" });
+    expect(harness.state().agent!.live?.steps[0]).toMatchObject({ responseText: "" });
     expect(harness.events("events.iterate.com/feed/item-published")).toHaveLength(0);
     expect(refreshLive).toHaveBeenCalled();
     // A source replacement can keep the same warm facet instance. Clear its
     // volatile overlay before publishing the new lifetime's initial state.
     harness.processor().resetForStream();
     expect(
-      harness.processor().presentation(FeedProcessorContract.stateSchema.parse({})).agent.live,
+      harness.processor().presentation(FeedProcessorContract.stateSchema.parse({}), null).agent!
+        .live,
     ).toBeNull();
     const durableState = harness.state();
     harness.crash();
     // A new facet has the durable state but no ephemeral text from its predecessor.
-    expect(harness.processor().presentation(durableState).agent.live?.steps[0]).toMatchObject({
+    expect(
+      harness.processor().presentation(durableState, harness.runner().currentStreamId ?? null)
+        .agent!.live?.steps[0],
+    ).toMatchObject({
       responseText: "",
     });
   });
+
+  it.each(["response", "thinking", "mixed"])(
+    "bounds streamed %s preview without truncating the durable response",
+    async (kind) => {
+      const { harness } = createHarness();
+      await harness.stream.append({
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: { model: "test/model" },
+      });
+      await harness.settle();
+      const opened = await harness.runner().openHostedEventBatchCallback(harness.stream.streamId);
+      const chunkText = "\u0000🦊".repeat(4_000);
+      for (let sequence = 0; sequence < 40; sequence++) {
+        const [chunk] = await harness.stream.append({
+          type: "events.iterate.com/agent/llm-response-chunks",
+          payload: {
+            llmRequestOffset: 1,
+            sequence,
+            chunks: [
+              {
+                delta: {
+                  text: kind === "thinking" ? "" : chunkText,
+                  thinking: kind === "response" ? "" : chunkText,
+                },
+              },
+            ],
+          },
+          ephemeral: true,
+        });
+        await opened.processEventBatch({
+          streamId: harness.stream.streamId,
+          events: [chunk!],
+          scannedAfterOffset: chunk!.offset - 1,
+          scannedThroughOffset: chunk!.offset,
+          streamMaxOffset: chunk!.offset,
+        });
+      }
+      const live = harness
+        .processor()
+        .presentation(harness.state(), harness.runner().currentStreamId ?? null);
+      expect(new TextEncoder().encode(JSON.stringify(live)).byteLength).toBeLessThan(1_000_000);
+      expect(live.agent!.live?.steps[0]).toMatchObject({ previewTruncated: true });
+      const fullText = chunkText.repeat(40);
+      await harness.stream.append({
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "assistant", llmRequestOffset: 1, content: fullText },
+      });
+      await harness.settle();
+      expect(harness.state().agent!.live?.steps[0]).toMatchObject({ responseText: fullText });
+      expect(harness.state().agent!.live?.steps[0]).not.toHaveProperty("previewTruncated");
+      expect(
+        new TextEncoder().encode(
+          JSON.stringify(
+            harness
+              .processor()
+              .presentation(harness.state(), harness.runner().currentStreamId ?? null),
+          ),
+        ).byteLength,
+      ).toBeLessThan(1_000_000);
+      harness.crash();
+      await harness.runner().snapshot();
+      expect(
+        harness.processor().presentation(harness.state(), harness.runner().currentStreamId ?? null)
+          .agent!.live?.steps[0],
+      ).toMatchObject({
+        previewTruncated: true,
+      });
+      await harness.append({
+        type: "events.iterate.com/agent/runtime-changed",
+        payload: {
+          runtime: ZERO_AGENT_RUNTIME,
+          sinceOffset: 1,
+          since: new Date().toISOString(),
+        },
+      });
+      await harness.settle();
+      const publication = FeedItemPublication.parse(
+        harness.events("events.iterate.com/feed/item-published").at(-1)!.payload,
+      );
+      expect(publication.item).toMatchObject({ steps: [{ responseText: fullText }] });
+      expect(
+        harness.processor().presentation(harness.state(), harness.runner().currentStreamId ?? null)
+          .agent!.live,
+      ).toBeNull();
+    },
+  );
+
+  it("shares the preview budget across requests and preserves complete Unicode characters", () => {
+    const { harness } = createHarness();
+    let state = FeedProcessorContract.stateSchema.parse({});
+    for (let request = 0; request < 8; request++) {
+      const offset = request * 2 + 1;
+      state = reduceFeed(
+        state,
+        event(offset, "events.iterate.com/agent/llm-request-requested", {
+          model: "test/model",
+        }),
+      ).state;
+      state = reduceFeed(
+        state,
+        event(offset + 1, "events.iterate.com/agents/context-added", {
+          role: "assistant",
+          llmRequestOffset: offset,
+          content: "A" + "🦊".repeat(10_000),
+        }),
+      ).state;
+    }
+    const live = harness.processor().presentation(state, null).agent!.live!;
+    const requests = live.steps.filter((step) => step.kind === "llm");
+    expect(requests).toHaveLength(8);
+    expect(
+      requests.reduce(
+        (size, step) => size + step.responseText.length + step.thinkingText.length,
+        0,
+      ),
+    ).toBeLessThanOrEqual(65_536);
+    expect(requests.at(-1)!.responseText).toBe("A" + "🦊".repeat(10_000));
+    expect(requests[0]).toMatchObject({ responseText: "", previewTruncated: true });
+    for (const step of requests) {
+      expect(step.responseText.isWellFormed()).toBe(true);
+      expect(step.responseWindows.join("")).toBe(step.responseText);
+    }
+  });
+
+  it.each(["code", "result", "queued-input"])(
+    "explicitly omits oversized %s without changing durable data",
+    async (kind) => {
+      const { harness } = createHarness();
+      const large = "x".repeat(1_048_576);
+      await harness.append({
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: { model: "test/model" },
+      });
+      if (kind === "queued-input") {
+        await harness.append(userMessage(large));
+        expect(harness.state().agent.queuedUserMessages[0]?.text).toBe(large);
+      } else {
+        await harness.append({
+          type: "events.iterate.com/capability-host/script-run-requested",
+          payload: {
+            executionId: "large-preview",
+            code: kind === "code" ? large : "return largeResult",
+            expiresAt: 2_000_000,
+          },
+        });
+        if (kind === "result") {
+          await harness.append({
+            type: "events.iterate.com/capability-host/script-run-settled",
+            payload: {
+              executionId: "large-preview",
+              settlement: { status: "succeeded", result: { text: large } },
+            },
+          });
+        }
+        expect(harness.state().agent.live?.steps.at(-1)).toMatchObject(
+          kind === "code" ? { code: large } : { result: { text: large } },
+        );
+      }
+      const snapshot = harness.processor().presentation(harness.state(), harness.stream.streamId);
+      expect(FeedLiveState.parse(snapshot)).toMatchObject({
+        streamId: harness.stream.streamId,
+        previewStatus: "omitted",
+        agent: null,
+      });
+      expect(new TextEncoder().encode(JSON.stringify(snapshot)).byteLength).toBeLessThan(1_000);
+      await harness.append({
+        type: "events.iterate.com/agent/runtime-changed",
+        payload: { runtime: ZERO_AGENT_RUNTIME, sinceOffset: 2, since: new Date().toISOString() },
+      });
+      expect(
+        harness.processor().presentation(harness.state(), harness.stream.streamId),
+      ).toMatchObject({
+        previewStatus: "available",
+        agent: { live: null },
+      });
+      expect(harness.events("events.iterate.com/feed/item-published").length).toBeGreaterThan(0);
+    },
+  );
 
   it("does not settle a newer request when an older idle transition arrives late", () => {
     const started = reduceFeed(
@@ -278,7 +470,7 @@ describe("server feed publications", () => {
       }),
     );
     expect(late.items).toEqual([]);
-    expect(late.state.agent.live?.steps[0]).toMatchObject({
+    expect(late.state.agent!.live?.steps[0]).toMatchObject({
       llmRequestOffset: 5,
       status: "running",
     });
@@ -297,7 +489,7 @@ describe("server feed publications", () => {
         since: new Date(2000).toISOString(),
       }),
     );
-    expect(settled.state.agent.live).toBeNull();
+    expect(settled.state.agent!.live).toBeNull();
     expect(settled.items).toHaveLength(1);
     expect(
       reduceFeed(
@@ -309,5 +501,56 @@ describe("server feed publications", () => {
         }),
       ).items,
     ).toEqual([]);
+  });
+
+  it("publishes a source lifetime only after that lifetime delivers", async () => {
+    const { harness } = createHarness();
+    expect(
+      harness.processor().presentation(harness.state(), harness.runner().currentStreamId ?? null)
+        .streamId,
+    ).toBeNull();
+
+    await harness.append(userMessage("first lifetime"));
+    expect(
+      harness.processor().presentation(harness.state(), harness.runner().currentStreamId ?? null)
+        .streamId,
+    ).toBe(harness.stream.streamId);
+
+    harness.processor().resetForStream();
+    // Resetting the projection does not change its runner checkpoint; it is
+    // still a coherent view of the first source lifetime until replacement
+    // binds a new checkpoint.
+    expect(
+      harness.processor().presentation(harness.state(), harness.runner().currentStreamId ?? null)
+        .streamId,
+    ).toBe(harness.stream.streamId);
+    const replacementId = crypto.randomUUID();
+    harness.stream.streamId = replacementId;
+    harness.stream.events = [];
+    await harness.runner().openHostedEventBatchCallback(replacementId);
+    expect(
+      harness.processor().presentation(harness.state(), harness.runner().currentStreamId ?? null)
+        .streamId,
+    ).toBe(replacementId);
+
+    harness.crash();
+    expect(
+      harness.processor().presentation(harness.state(), harness.runner().currentStreamId ?? null)
+        .streamId,
+    ).toBeNull();
+    // The runner reloads through the normal one-way delivery path. The
+    // source may be caught up, so that delivery can be an empty batch.
+    const revived = await harness.runner().openHostedEventBatchCallback(replacementId);
+    await revived.processEventBatch({
+      streamId: replacementId,
+      events: [],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 0,
+      streamMaxOffset: 0,
+    });
+    expect(
+      harness.processor().presentation(harness.state(), harness.runner().currentStreamId ?? null)
+        .streamId,
+    ).toBe(replacementId);
   });
 });

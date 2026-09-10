@@ -78,6 +78,24 @@ function renderMessage(item: AgentUiMessageItem): HTMLDivElement {
   return container;
 }
 
+test("a shortened response in an activity is visibly labelled", () => {
+  const container = renderActivity(
+    activity({
+      status: "running",
+      steps: [
+        llmStep(1, 0, {
+          status: "running",
+          outcome: undefined,
+          responseText: "preview prefix",
+          responseWindows: ["preview prefix"],
+          previewTruncated: true,
+        }),
+      ],
+    }),
+  );
+  expect(container.textContent).toContain("Live preview shortened.");
+});
+
 test("an empty mention list preserves the visible message text", () => {
   const container = renderMessage({
     kind: "user",

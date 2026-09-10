@@ -65,6 +65,32 @@ type FeedPublicationStore = {
 
 const ScriptSettlement = z.object({ executionId: z.string() });
 
+/** Bound retained LLM preview text across the activity, prioritizing the newest request.
+ * 64K UTF-16 units keeps escaped LLM text and its duplicate reveal windows below 1 MiB.
+ * This projection never runs on the durable reducer or its published item revisions. */
+function boundLlmPreview(agent: AgentUiState): AgentUiState {
+  if (!agent.live) return agent;
+  let remaining = 64 * 1024;
+  const steps = agent.live.steps.toReversed().map((step) => {
+    if (step.kind !== "llm") return step;
+    const responseText = step.responseText.slice(0, remaining).replace(/[\uD800-\uDBFF]$/, "");
+    remaining -= responseText.length;
+    const thinkingText = step.thinkingText.slice(0, remaining).replace(/[\uD800-\uDBFF]$/, "");
+    remaining -= thinkingText.length;
+    if (responseText === step.responseText && thinkingText === step.thinkingText) return step;
+    let windowRemaining = responseText.length;
+    const responseWindows: string[] = [];
+    for (const window of step.responseWindows) {
+      if (windowRemaining === 0) break;
+      const prefix = window.slice(0, windowRemaining);
+      if (prefix) responseWindows.push(prefix);
+      windowRemaining -= prefix.length;
+    }
+    return { ...step, responseText, thinkingText, responseWindows, previewTruncated: true };
+  });
+  return { ...agent, live: { ...agent.live, steps: steps.toReversed() } };
+}
+
 export class FeedProcessor extends StreamProcessor<
   FeedProcessorContract,
   {
@@ -82,9 +108,13 @@ export class FeedProcessor extends StreamProcessor<
     this.#volatileThroughOffset = 0;
   }
 
-  presentation(state: FeedState): FeedLiveState {
-    const agent = this.#volatileAgent ?? state.agent;
-    return {
+  presentation(state: FeedState, streamId: string | null): FeedLiveState {
+    const agent = this.#volatileAgent ?? boundLlmPreview(state.agent);
+    const snapshot = {
+      previewStatus: agent.live?.steps.some((step) => step.kind === "llm" && step.previewTruncated)
+        ? "shortened"
+        : "available",
+      streamId,
       publicationOffset: this.deps.publications.latestOffset(),
       agent: {
         live: agent.live,
@@ -93,7 +123,20 @@ export class FeedProcessor extends StreamProcessor<
         tokenUsage: agent.tokenUsage,
       },
       runtimeChange: state.runtimeChange,
-    };
+    } satisfies FeedLiveState;
+    // Code, results, queued messages and presence are also unbounded inputs.
+    // Omit an oversized preview explicitly, keeping the source/cursor/runtime
+    // usable and leaving complete data in the durable events and publications.
+    if (new TextEncoder().encode(JSON.stringify(snapshot)).byteLength > 1_000_000) {
+      return {
+        previewStatus: "omitted",
+        streamId,
+        publicationOffset: snapshot.publicationOffset,
+        runtimeChange: snapshot.runtimeChange,
+        agent: null,
+      };
+    }
+    return snapshot;
   }
 
   protected override reduce({ state, event }: ReduceArgs<FeedProcessorContract>) {
@@ -107,20 +150,21 @@ export class FeedProcessor extends StreamProcessor<
     if (event.ephemeral) {
       if (event.offset <= this.#volatileThroughOffset) return;
       this.#volatileThroughOffset = event.offset;
-      this.#volatileAgent = reduceAgentUi(this.#volatileAgent ?? args.previousState.agent, {
-        ...event,
-        streamPath: event.path,
-      }).endState;
+      this.#volatileAgent = boundLlmPreview(
+        reduceAgentUi(this.#volatileAgent ?? args.previousState.agent, {
+          ...event,
+          streamPath: event.path,
+        }).endState,
+      );
       this.deps.refreshLive();
       return;
     }
     const advanceVolatile = () => {
       if (this.#volatileAgent && event.offset > this.#volatileThroughOffset) {
         this.#volatileThroughOffset = event.offset;
-        this.#volatileAgent = reduceFeed(
-          { ...args.previousState, agent: this.#volatileAgent },
-          event,
-        ).state.agent;
+        this.#volatileAgent = boundLlmPreview(
+          reduceFeed({ ...args.previousState, agent: this.#volatileAgent }, event).state.agent,
+        );
       }
     };
     const { items } = reduceFeed(args.previousState, event);

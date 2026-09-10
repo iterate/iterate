@@ -16,6 +16,7 @@ import {
   looksLikeCode,
 } from "@iterate-com/ui/components/events/feed-format";
 import { buildRoundMetaYaml, resultYaml } from "./agent-round-meta-yaml.ts";
+import { LlmPreviewNotice } from "./llm-preview-notice.tsx";
 import { MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS } from "./script-result-preview.ts";
 
 // The web feed's ROUND rendering: an expanded "Ran code N×" activity is a list
@@ -258,6 +259,7 @@ function LlmOnlyRound({
           {llm.responseText}
         </div>
       )}
+      <LlmPreviewNotice truncated={llm.previewTruncated} />
       {llm.errorMessage == null ? null : (
         <pre className="max-w-2xl whitespace-pre-wrap px-1.5 font-mono text-xs text-destructive">
           {llm.errorMessage}

@@ -4077,128 +4077,149 @@ export type StreamRuntimeDebugState = {
 };
 
 /** Current server-rendered activity, queued messages, presence, and agent runtime. */
-export type FeedLiveState = {
-  publicationOffset: number;
-  agent: {
-    live: {
-      kind: "activity";
-      id: string;
-      status: "done" | "running";
-      steps: (
+export type FeedLiveState =
+  | {
+      streamId: string | null;
+      publicationOffset: number;
+      runtimeChange?:
         | {
-            kind: "llm";
-            id: string;
-            llmRequestOffset: number;
-            status: "done" | "running";
-            model?: string | undefined;
-            thinkingText: string;
-            responseText: string;
-            responseWindows: string[];
-            assistantEventOffset?: number | undefined;
-            interpreted?: boolean | undefined;
-            inputTokens?: number | undefined;
-            outputTokens?: number | undefined;
-            durationMs?: number | undefined;
-            outcome?: "cancelled" | "completed" | "failed" | undefined;
-            cancelReason?: "expired" | "interrupted-by-user-input" | undefined;
-            errorMessage?: string | undefined;
-            startedAtMs: number;
-          }
-        | {
-            kind: "code";
-            id: string;
-            executionId: string;
-            status: "done" | "running";
-            code: string;
-            result?: unknown;
-            errorMessage?: string | undefined;
-            durationMs?: number | undefined;
-            success?: boolean | undefined;
-            outcomeSource?: "durable" | "inferred" | undefined;
-            startedAtMs: number;
-            expiresAtMs: number;
-            activitySummary?: string | undefined;
-          }
-      )[];
-      startedAtMs: number;
-      endedAtMs?: number | undefined;
-    } | null;
-    queuedUserMessages: {
-      kind: "assistant" | "user";
-      id: string;
-      text: string;
-      timestampMs: number;
-      files?:
-        | { contentType: string; filename: string; path: string; size: number; url: string }[]
-        | undefined;
-      mentions?:
-        | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
-        | undefined;
-      mentionResolutions?:
-        | Record<
-            string,
-            {
-              status: "binary" | "missing" | "read-failed" | "resolved";
-              truncated?: boolean | undefined;
-            }
-          >
-        | undefined;
-      via?:
-        | {
-            service: "agent" | "email" | "github" | "slack" | "telegram";
-            sender?: string | undefined;
+            runtime: {
+              triggers: { pending: number; runnable: number };
+              llmRequests: { scheduled: number; requested: number; started: number };
+              runningScripts: number;
+            };
+            sinceOffset: number;
+            since: string;
           }
         | undefined;
-    }[];
-    presence: {
-      connectionKey: string;
-      connectionKind: "hosted" | "session";
-      connected: boolean;
-      description?: string | undefined;
-      user?:
-        | {
-            id?: string | undefined;
-            email: string;
-            name?: string | undefined;
-            picture?: string | undefined;
-          }
-        | undefined;
-      processor?:
-        | {
-            slug: string;
-            version: string;
-            description: string;
-            consumes: string[];
-            emits: string[];
-            ownedEvents: { type: string; description?: string | undefined }[];
-          }
-        | undefined;
-    }[];
-    tokenUsage: {
-      totalInputTokens: number;
-      totalOutputTokens: number;
-      totalCachedInputTokens: number;
-      totalReasoningOutputTokens: number;
-      lastReport: {
-        model: string;
-        maxContextTokens: number;
-        inputTokens: number;
-        outputTokens: number;
-      } | null;
-    };
-  };
-  runtimeChange?:
-    | {
-        runtime: {
-          triggers: { pending: number; runnable: number };
-          llmRequests: { scheduled: number; requested: number; started: number };
-          runningScripts: number;
+      previewStatus: "available" | "shortened";
+      agent: {
+        live: {
+          kind: "activity";
+          id: string;
+          status: "done" | "running";
+          steps: (
+            | {
+                kind: "llm";
+                id: string;
+                llmRequestOffset: number;
+                status: "done" | "running";
+                model?: string | undefined;
+                thinkingText: string;
+                responseText: string;
+                responseWindows: string[];
+                previewTruncated?: boolean | undefined;
+                assistantEventOffset?: number | undefined;
+                interpreted?: boolean | undefined;
+                inputTokens?: number | undefined;
+                outputTokens?: number | undefined;
+                durationMs?: number | undefined;
+                outcome?: "cancelled" | "completed" | "failed" | undefined;
+                cancelReason?: "expired" | "interrupted-by-user-input" | undefined;
+                errorMessage?: string | undefined;
+                startedAtMs: number;
+              }
+            | {
+                kind: "code";
+                id: string;
+                executionId: string;
+                status: "done" | "running";
+                code: string;
+                result?: unknown;
+                errorMessage?: string | undefined;
+                durationMs?: number | undefined;
+                success?: boolean | undefined;
+                outcomeSource?: "durable" | "inferred" | undefined;
+                startedAtMs: number;
+                expiresAtMs: number;
+                activitySummary?: string | undefined;
+              }
+          )[];
+          startedAtMs: number;
+          endedAtMs?: number | undefined;
+        } | null;
+        queuedUserMessages: {
+          kind: "assistant" | "user";
+          id: string;
+          text: string;
+          timestampMs: number;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          mentions?:
+            | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
+            | undefined;
+          mentionResolutions?:
+            | Record<
+                string,
+                {
+                  status: "binary" | "missing" | "read-failed" | "resolved";
+                  truncated?: boolean | undefined;
+                }
+              >
+            | undefined;
+          via?:
+            | {
+                service: "agent" | "email" | "github" | "slack" | "telegram";
+                sender?: string | undefined;
+              }
+            | undefined;
+        }[];
+        presence: {
+          connectionKey: string;
+          connectionKind: "hosted" | "session";
+          connected: boolean;
+          description?: string | undefined;
+          user?:
+            | {
+                id?: string | undefined;
+                email: string;
+                name?: string | undefined;
+                picture?: string | undefined;
+              }
+            | undefined;
+          processor?:
+            | {
+                slug: string;
+                version: string;
+                description: string;
+                consumes: string[];
+                emits: string[];
+                ownedEvents: { type: string; description?: string | undefined }[];
+              }
+            | undefined;
+        }[];
+        tokenUsage: {
+          totalInputTokens: number;
+          totalOutputTokens: number;
+          totalCachedInputTokens: number;
+          totalReasoningOutputTokens: number;
+          lastReport: {
+            model: string;
+            maxContextTokens: number;
+            inputTokens: number;
+            outputTokens: number;
+          } | null;
         };
-        sinceOffset: number;
-        since: string;
-      }
-    | undefined;
-};
+      };
+    }
+  | {
+      streamId: string | null;
+      publicationOffset: number;
+      runtimeChange?:
+        | {
+            runtime: {
+              triggers: { pending: number; runnable: number };
+              llmRequests: { scheduled: number; requested: number; started: number };
+              runningScripts: number;
+            };
+            sinceOffset: number;
+            since: string;
+          }
+        | undefined;
+      previewStatus: "omitted";
+      agent: null;
+    };
 
 /**
  * Callback invoked by the stream send loop for each delivered batch.

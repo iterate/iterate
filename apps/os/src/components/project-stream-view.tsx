@@ -23,6 +23,7 @@ import { useLiveState } from "iterate/sdk/capnweb/react";
 import { QueuedMessagesPanel } from "@iterate-com/ui/components/agent-feed/agent-live-activity";
 import type { Stream } from "../itx-api.generated.ts";
 import type { FeedLiveState } from "~/domains/streams/feed-contract.ts";
+import { FeedPreviewNotice } from "~/components/feed-preview-notice.tsx";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import { useEventSynchronizedLiveState } from "~/domains/streams/client-libraries/browser/hooks/use-event-synchronized-live-state.ts";
 import { useBrowserStreamStore } from "~/domains/streams/client-libraries/browser/hooks/use-browser-stream-store.ts";
@@ -251,6 +252,7 @@ function BrowserDatabaseProjectStreamView({
   const feedColumn = (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-stream-path={streamPath}>
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        <FeedPreviewNotice status={presentedFeed?.previewStatus} />
         <ProjectStreamFeed
           data={streamData}
           runtime={agentRuntime}
@@ -394,7 +396,7 @@ function ProjectStreamFeed({
       onInspectScriptExecution={panels.inspectScriptExecution}
       emptyLabel={error ?? (streamContentsReady ? emptyLabel : snapshot.connectionStatus)}
       projectSlug={projectSlug}
-      isPending={caps.agentFeed ? agentUiState == null : !streamContentsReady}
+      isPending={caps.agentFeed ? presentedFeed == null : !streamContentsReady}
       pendingLabel={error ?? (caps.agentFeed ? "Initializing agent" : undefined)}
     />
   );
@@ -550,10 +552,13 @@ function useProjectStreamData({
     () => resolvedStreamSource(streamPath),
     [resolvedStreamSource, streamPath],
   );
+  // A source-lifetime replacement atomically clears and repopulates the raw
+  // mirror, advancing clearVersion. That is the generation which invalidates a
+  // relay retained for the deleted source.
   const feed = useLiveState(
     (stream: Stream) => stream.feedLiveState,
     (state) => state,
-    [streamPath],
+    [streamPath, browserStore.snapshot.clearVersion],
     { makeConnection: makeFeedConnection },
   );
   const presentedFeed = useEventSynchronizedLiveState(store.streamDatabase, feed.value);

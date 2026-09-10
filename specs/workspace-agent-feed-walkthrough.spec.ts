@@ -29,10 +29,15 @@ test("workspace agent feed walkthrough", async ({ page }) => {
   const osHost = `https://os.iterate-preview-${slot}.com`;
   const docsHost = `https://docs--${project}.iterate-preview-${slot}.app`;
 
-  // 1. One-click test login: auth creates the pr<N> user + project if needed.
+  // 1. One-click test login on the auth origin (creates the pr<N> user +
+  //    project if needed; a same-origin return keeps it independent of the
+  //    slot's registered relying parties), then the OS relying-party login
+  //    completes silently against that session.
   await page.goto(
-    `https://auth.iterate-preview-${slot}.com/test-login?email=${project}%2Btest%40nustom.com&project=${project}&return_to=${encodeURIComponent(`${osHost}/api/iterate-auth/login`)}`,
+    `https://auth.iterate-preview-${slot}.com/test-login?email=${project}%2Btest%40nustom.com&project=${project}&return_to=%2F`,
   );
+  await page.waitForLoadState("networkidle");
+  await page.goto(`${osHost}/api/iterate-auth/login`);
   await page.getByRole("button", { name: "Toggle Sidebar" }).waitFor({ timeout: 90_000 }); // timeout: cross-server OAuth hop + cold preview shell — past the spinner-waiter's 30s ceiling
 
   // 2. Docs: a new workspace from the sidebar, then a first file of my own.

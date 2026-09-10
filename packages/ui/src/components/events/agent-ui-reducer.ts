@@ -35,6 +35,8 @@ export type AgentUiLlmStep = {
    * window), so the UI can stagger each window's tokens into view instead of
    * jumping ~8 tokens per event. Concatenation always equals responseText. */
   responseWindows: string[];
+  /** Server preview omitted text to stay bounded; durable request replay retains the full output. */
+  previewTruncated?: boolean;
   /** Offset of the committed assistant context-added event carrying this
    * step's final text; links interpretation events back to the step. */
   assistantEventOffset?: number;
@@ -467,6 +469,7 @@ const AgentUiLlmStepSchema = z
     thinkingText: z.string(),
     responseText: z.string(),
     responseWindows: z.array(z.string()),
+    previewTruncated: z.boolean().optional(),
     assistantEventOffset: z.number().int().positive().optional(),
     interpreted: z.boolean().optional(),
     inputTokens: z.number().int().nonnegative().optional(),

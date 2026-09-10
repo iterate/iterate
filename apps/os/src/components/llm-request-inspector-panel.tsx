@@ -13,6 +13,7 @@ import {
   formatSeconds,
   looksLikeCode,
 } from "@iterate-com/ui/components/events/feed-format";
+import { LlmPreviewNotice } from "@iterate-com/ui/components/agent-feed/llm-preview-notice";
 import type { Stream } from "../itx-api.generated.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
@@ -21,6 +22,8 @@ import {
   type LlmRequestReplayMessage,
   type LlmRequestReplayStats,
 } from "~/lib/llm-request-replay.ts";
+
+type LlmRequestPreview = LlmRequestReplay & { previewTruncated?: boolean };
 
 /** The server reconstructs durable request history; live state supplies in-progress text. */
 export function LlmRequestInspectorContent({
@@ -170,17 +173,19 @@ function withLiveResponse(
   replay: LlmRequestReplay | null,
   liveStep: AgentUiLlmStep | undefined,
   llmRequestOffset: number,
-): LlmRequestReplay | null {
+): LlmRequestPreview | null {
   if (
     replay == null ||
     replay.outcome != null ||
+    replay.response?.source === "output" ||
     liveStep?.llmRequestOffset !== llmRequestOffset ||
-    (liveStep.responseText === "" && liveStep.thinkingText === "")
+    (!liveStep.previewTruncated && liveStep.responseText === "" && liveStep.thinkingText === "")
   ) {
     return replay;
   }
   return {
     ...replay,
+    previewTruncated: liveStep.previewTruncated,
     response: {
       text: liveStep.responseText,
       thinkingText: liveStep.thinkingText,
@@ -277,7 +282,7 @@ const ReplayResponseSection = memo(
     replay,
     renderMode,
   }: {
-    replay: LlmRequestReplay;
+    replay: LlmRequestPreview;
     renderMode: "markdown" | "plain";
   }) {
     const { response, outcome } = replay;
@@ -301,6 +306,7 @@ const ReplayResponseSection = memo(
           )}
         </div>
         <ResponseBody response={response} renderMode={renderMode} />
+        <LlmPreviewNotice truncated={replay.previewTruncated} />
         {outcome?.errorMessage == null ? null : (
           <pre className="mt-2 overflow-x-auto rounded-xl bg-destructive/5 px-4 py-2.5 font-mono text-xs leading-relaxed text-destructive">
             {outcome.errorMessage}
@@ -308,7 +314,7 @@ const ReplayResponseSection = memo(
         )}
         {/* A committed output CAN be the empty string — an empty-text response
             with no thinking must still say so instead of a bare header. */}
-        {hasNoResponseText && outcome?.errorMessage == null ? (
+        {hasNoResponseText && !replay.previewTruncated && outcome?.errorMessage == null ? (
           <p className="text-sm text-muted-foreground">
             {outcome == null
               ? "Nothing has streamed back yet."
@@ -320,6 +326,7 @@ const ReplayResponseSection = memo(
   },
   (previous, next) =>
     previous.renderMode === next.renderMode &&
+    previous.replay.previewTruncated === next.replay.previewTruncated &&
     previous.replay.response?.text === next.replay.response?.text &&
     previous.replay.response?.thinkingText === next.replay.response?.thinkingText &&
     previous.replay.response?.source === next.replay.response?.source &&

@@ -52,9 +52,9 @@ export function AgentFeedPane({ agentPath }: { agentPath: string }) {
 
   const runtime = feed.live?.runtimeChange?.runtime ?? IDLE_RUNTIME;
   const working = isAgentRuntimeVisiblyActive(runtime);
-  const liveActivity = feed.live?.agent.live ?? null;
-  const queued = (feed.live?.agent.queuedUserMessages ?? []) as AgentUiMessageItem[];
-  const viewers = (feed.live?.agent.presence ?? [])
+  const liveActivity = feed.live?.agent?.live ?? null;
+  const queued = (feed.live?.agent?.queuedUserMessages ?? []) as AgentUiMessageItem[];
+  const viewers = (feed.live?.agent?.presence ?? [])
     .filter((entry) => entry.connected && entry.connectionKind === "session" && entry.user)
     .map((entry) => ({
       clientId: entry.connectionKey,

@@ -459,6 +459,11 @@ export class StreamProcessorRunner<
     return this.#progress?.processing.acknowledgedThroughOffset ?? 0;
   }
 
+  /** Source lifetime paired atomically with the current committed state and cursor. */
+  get currentStreamId(): string | undefined {
+    return this.#progress?.streamId;
+  }
+
   /**
    * The current committed fold, synchronously (the schema default until the
    * first load) — the legacy `StreamProcessor.currentState`,
