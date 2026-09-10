@@ -1,24 +1,54 @@
-// principal.ts — the credentials a test mints for the worker under test, each through the real door
-// on the admin session: a PROJECT TOKEN through `projects.get(project).mintToken()`, a PROJECT API
-// KEY through `.rotateApiKey()`. Nothing is signed locally, so a deployed run needs no secret but the
-// admin's.
-import { adminCredentials, session } from "./client.ts";
+// Real issuer login, consent and code exchange. Only identity proof is an admin fixture.
+// eslint-disable-next-line iterate/no-capnweb-http-batch -- Bounded fixture calls; the returned public client uses WebSocket.
+import { newHttpBatchRpcSession } from "capnweb";
+import { authorizationCodeRequest } from "../../src/client/oauth.ts";
+import type { Session } from "../../src/session.ts";
+import { adminCredentials, publicSession, workerUrl } from "./client.ts";
 
-/** A project token for `project` — `projects.get(project).mintToken({ ttlSeconds })` as `as` (a
- *  member: `registerProject(project, as)` made them one — the token carries them) or, without, as
- *  the admin (`{ actor: "admin" }`). 15 minutes unless `ttlSeconds` says otherwise. */
-export const mintProjectToken = (
-  project: string,
-  as?: { email: string },
-  ttlSeconds?: number,
-): Promise<string> =>
-  session()
-    .authenticate(adminCredentials(as))
-    .projects.get(project)
-    .mintToken(ttlSeconds === undefined ? {} : { ttlSeconds });
-
-/** The project's API key, minted fresh — `projects.get(project).rotateApiKey()` on the admin session
- *  (a previous key stops verifying). What a device presents: `authenticate({ type: "project-secret",
- *  project, secret })` over `/api`, or `Authorization: Bearer` on the project's host. */
-export const mintProjectApiKey = (project: string): Promise<string> =>
-  session().authenticate(adminCredentials()).projects.get(project).rotateApiKey();
+export async function oauthSession(project: string, user: { email: string }) {
+  const issuer = new URL(workerUrl("/")).origin;
+  const login = await fetch(workerUrl("/login"), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${adminCredentials().secret}` },
+    body: new URLSearchParams({ email: user.email, next: "/" }),
+    redirect: "manual",
+  });
+  if (login.status !== 302)
+    throw new Error(`Identity fixture: ${login.status} ${await login.text()}`);
+  const cookie = login.headers
+    .getSetCookie()
+    .map((value) => value.split(";")[0])
+    .join("; ");
+  await login.body?.cancel();
+  const headers = { Origin: issuer, Cookie: cookie };
+  const clientId = "https://claude.ai/oauth/claude-code-client-metadata";
+  const redirectUri = "http://127.0.0.1/callback";
+  const flow = await authorizationCodeRequest({
+    issuer,
+    clientId,
+    redirectUri,
+    resources: [workerUrl("/api")],
+  });
+  // eslint-disable-next-line iterate/no-capnweb-http-batch -- The same consent capability the browser calls, with an issuer session.
+  using issuerApi = newHttpBatchRpcSession<Session>(new Request(workerUrl("/api"), { headers }));
+  const approved = await issuerApi.consent.approve({ query: flow.url.search, projects: [project] });
+  if (!("redirectTo" in approved)) throw new Error(JSON.stringify(approved));
+  const callback = new URL(approved.redirectTo);
+  if (callback.searchParams.get("state") !== flow.state) throw new Error("OAuth state changed");
+  const exchange = await fetch(workerUrl("/oauth/token"), {
+    method: "POST",
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      code: callback.searchParams.get("code")!,
+      code_verifier: flow.verifier,
+      resource: workerUrl("/api"),
+    }),
+  });
+  if (!exchange.ok) throw new Error(`Token exchange: ${exchange.status} ${await exchange.text()}`);
+  const { access_token: token } = (await exchange.json()) as { access_token: string };
+  const api = publicSession(token);
+  const principal = await api.whoami();
+  return { api, token, principal, issuerHeaders: headers };
+}

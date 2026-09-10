@@ -9,8 +9,8 @@
 // is deployed-only: it egresses to one of THIS project's own apps on a real project host.
 
 import { expect, test } from "vitest";
-import { freshCtx, openItx, readAll, session } from "./support/client.ts";
-import { mintProjectToken } from "./support/principal.ts";
+import { freshCtx, openItx, readAll } from "./support/client.ts";
+import { oauthSession } from "./support/principal.ts";
 import {
   deployedOnly,
   freshDnsSafeProjectId,
@@ -52,11 +52,9 @@ test("an authenticated session's set is attributed — the change carries the pr
   const projectId = freshDnsSafeProjectId("secrets-who");
   const email = `${projectId}@example.com`;
   const ada = { email };
-  const principal = { actor: `user_${email}`, email };
-  await registerProject(projectId, ada); // her project: she mints her own token through the door
-  const itx = session()
-    .authenticate({ type: "project-token", token: await mintProjectToken(projectId, ada) })
-    .projects.get(projectId);
+  await registerProject(projectId, ada);
+  const { api, principal } = await oauthSession(projectId, ada);
+  const itx = api.projects.get(projectId);
   await itx.secrets.set("token", "t0p");
   const change = (await readAll(itx)).find((e) => e.type === CHANGED);
   expect(change?.source?.principal).toEqual(principal);

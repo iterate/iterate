@@ -5,7 +5,8 @@
 // A project host — the one HTTP way into a project — is support/project-host.ts.
 
 import { newWebSocketRpcSession } from "capnweb";
-import type { SessionCredentials } from "../../src/session.ts";
+import { WebSocket as UndiciWebSocket } from "undici";
+import type { Session, SessionCredentials } from "../../src/session.ts";
 
 const baseUrl = (): string => {
   const u = process.env.WORKER_BASE_URL;
@@ -53,6 +54,17 @@ export function session(): any {
   const s = newWebSocketRpcSession(wsApi());
   openSessions.push(s);
   return s;
+}
+
+/** A normal OAuth client supplies its bearer before the public WebSocket opens. */
+export function publicSession(token: string) {
+  const url = new URL(workerUrl("/api"));
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new UndiciWebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
+  const api = newWebSocketRpcSession<Session>(ws as unknown as WebSocket);
+  openSessions.push(api);
+  openSockets.push(ws as unknown as WebSocket);
+  return api;
 }
 
 /** A capnweb session whose underlying WebSocket WE hold — so a test can sever the transport

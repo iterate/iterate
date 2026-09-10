@@ -4,12 +4,9 @@
 // whose connector dials the worker's own address and port whatever the URL says — the URL, the
 // Host header, cookies, bearers and a WebSocket upgrade all intact; against a deployed worker the
 // wildcard DNS is real and the default dispatcher does. One test runs both ways.
-import { join } from "node:path";
 import { Agent, buildConnector, fetch as undiciFetch, WebSocket as UndiciWebSocket } from "undici";
 import { test } from "vitest";
-import { experimental_readRawConfig } from "wrangler";
 import { adminCredentials, session, workerUrl } from "./client.ts";
-import { PACKAGE_DIR } from "./worker-config.ts";
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
 const worker = (): URL => new URL(workerUrl("/"));
@@ -24,8 +21,9 @@ export const deployedOnly = test.skipIf(projectHostsAreLocal());
  *  deployed worker's `APP_CONFIG_PROJECT_HOSTNAME_BASE` (wrangler.jsonc) otherwise. */
 export function projectHostnameBase(): string {
   if (projectHostsAreLocal()) return "localhost";
-  const { rawConfig } = experimental_readRawConfig({ config: join(PACKAGE_DIR, "wrangler.jsonc") });
-  return String((rawConfig.vars as Record<string, unknown>).APP_CONFIG_PROJECT_HOSTNAME_BASE);
+  const base = process.env.PROJECT_HOSTNAME_BASE;
+  if (!base) throw new Error("PROJECT_HOSTNAME_BASE is required for deployed ingress tests");
+  return base;
 }
 
 /** The Agent every project-host request goes through against the local worker: its connector dials
