@@ -67,6 +67,7 @@ import {
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
 import { useIterateSessionQuery, useLiveState } from "iterate/sdk/itx/react";
+import { deriveAgentDisplayState } from "@iterate-com/shared/agent-events";
 import type { ProjectListEntry } from "../project-deployment-status.ts";
 import { sidebarAgentRowsVisible } from "./agents/sidebar-agent-visibility.ts";
 import { SidebarAgents } from "./agents/sidebar-agents.tsx";
@@ -74,7 +75,6 @@ import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-
 import { DeferredSurface } from "~/components/deferred-surface.tsx";
 import { ProjectWorkerHealthWarning } from "~/components/project-worker-health.tsx";
 import type { AppConfig } from "~/config.ts";
-import { deriveAgentDisplayState } from "~/domains/agents/agent-presence.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import { getProjectCustomHostnames } from "~/lib/project-custom-hostnames.ts";
 import { projectsListStaleTime } from "~/lib/projects-query.ts";

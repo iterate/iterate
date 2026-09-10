@@ -13,6 +13,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useLiveState } from "iterate/sdk/itx/react";
+import { useTickingNowMs } from "@iterate-com/ui/hooks/use-ticking-now-ms";
 import {
   defaultPaletteTab,
   hasPathDescendant,
@@ -28,7 +29,6 @@ import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 import type { StreamIndexRow } from "~/domains/projects/stream-database.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 import { updateAgentSummary } from "~/components/agents/agent-summary.ts";
 import { useAgentTreeTable } from "~/components/agents/agent-tree-table.ts";
 import { AgentCommandHeader, AgentCommandItem } from "~/components/agents/agent.tsx";

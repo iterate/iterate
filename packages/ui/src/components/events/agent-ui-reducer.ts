@@ -176,7 +176,7 @@ export type AgentUiActivityRound = {
  * every llm step (or at a code step with no llm before it — replays can drop
  * the llm half). Both round renderers — mobile's activity card
  * (apps/mobile/src/components/activity-card.tsx) and the os web feed
- * (apps/os/src/components/agent-feed.tsx) — group through this one function.
+ * (packages/ui/src/components/agent-feed/agent-feed-item.tsx) — group through this one function.
  */
 export function groupActivityRounds(steps: readonly AgentUiStep[]) {
   const rounds: AgentUiActivityRound[] = [];

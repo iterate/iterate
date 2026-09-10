@@ -20,6 +20,7 @@ import {
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { connectItx, connectIterateSession, reportTransportSuspicion } from "iterate/sdk/itx/react";
 import { useLiveState } from "iterate/sdk/capnweb/react";
+import { QueuedMessagesPanel } from "@iterate-com/ui/components/agent-feed/agent-live-activity";
 import type { Stream } from "../itx-api.generated.ts";
 import type { FeedLiveState } from "~/domains/streams/feed-contract.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
@@ -27,7 +28,6 @@ import { useEventSynchronizedLiveState } from "~/domains/streams/client-librarie
 import { useBrowserStreamStore } from "~/domains/streams/client-libraries/browser/hooks/use-browser-stream-store.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { asBrowserStreamClient } from "~/domains/streams/client-libraries/browser/stream-transport.ts";
-import { QueuedMessagesPanel } from "~/components/agent-feed.tsx";
 import { DeferredSurface } from "~/components/deferred-surface.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
 import { RawEventInspectorContent } from "~/components/raw-event-inspector-panel.tsx";

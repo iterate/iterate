@@ -7,8 +7,9 @@ import type {
   AgentUiLlmStep,
   AgentUiMessageItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import { AgentFeedItemRow, AgentLiveActivity } from "./agent-feed.tsx";
-import { buildRoundMetaYaml } from "~/lib/agent-round-meta-yaml.ts";
+import { AgentFeedItemRow } from "./agent-feed-item.tsx";
+import { AgentLiveActivity } from "./agent-live-activity.tsx";
+import { buildRoundMetaYaml } from "./agent-round-meta-yaml.ts";
 
 afterEach(() => {
   vi.useRealTimers();

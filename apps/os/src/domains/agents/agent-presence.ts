@@ -1,7 +1,6 @@
 import { z } from "zod";
 import {
   AgentRuntime,
-  ZERO_AGENT_RUNTIME,
   type AgentRuntime as AgentRuntimeRecord,
 } from "@iterate-com/shared/agent-events";
 
@@ -32,7 +31,6 @@ export const AgentPath = z
 export type AgentPath = z.infer<typeof AgentPath>;
 
 const AgentWaitingFor = z.enum(["user_input", "external_event", "timer"]);
-type AgentWaitingFor = z.infer<typeof AgentWaitingFor>;
 
 export const AgentSummary = z.strictObject({
   title: boundedText(AGENT_TITLE_MAX_LENGTH).optional(),
@@ -176,15 +174,6 @@ export function normalizeAgentBindingLabel(value: string | undefined): string | 
   return normalized.slice(0, AGENT_BINDING_LABEL_MAX_LENGTH);
 }
 
-export type AgentDisplayState =
-  | "running_code"
-  | "waiting_for_model"
-  | "queued"
-  | "waiting_for_user_input"
-  | "waiting_for_external_event"
-  | "waiting_for_timer"
-  | "idle";
-
 export function applyAgentSummaryUpdate(
   summary: AgentSummary,
   update: AgentSummaryUpdate,
@@ -282,28 +271,4 @@ export function deriveAgentRuntime(state: AgentRuntimeSource): AgentRuntimeRecor
     },
     runningScripts: state.activeScriptExecutions.length,
   };
-}
-
-/** Deterministic work state only. Agent-authored waiting requirements are a
- * separate attention signal and must never replace this runtime truth in UI. */
-export function deriveAgentRuntimeDisplayState(runtime: AgentRuntimeRecord | undefined) {
-  const current = runtime ?? ZERO_AGENT_RUNTIME;
-  if (current.runningScripts > 0) return "running_code";
-  if (current.llmRequests.requested > 0 || current.llmRequests.started > 0) {
-    return "waiting_for_model";
-  }
-  if (current.llmRequests.scheduled > 0 || current.triggers.runnable > 0) return "queued";
-  return "idle";
-}
-
-export function deriveAgentDisplayState(
-  runtime: AgentRuntimeRecord | undefined,
-  waitingFor?: AgentWaitingFor,
-): AgentDisplayState {
-  const runtimeState = deriveAgentRuntimeDisplayState(runtime);
-  if (runtimeState !== "idle") return runtimeState;
-  if (waitingFor === "user_input") return "waiting_for_user_input";
-  if (waitingFor === "external_event") return "waiting_for_external_event";
-  if (waitingFor === "timer") return "waiting_for_timer";
-  return "idle";
 }

@@ -8,10 +8,14 @@ import { MessageResponse } from "@iterate-com/ui/components/ai-elements/message"
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { AgentUiLlmStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import {
+  formatDateTime,
+  formatSeconds,
+  looksLikeCode,
+} from "@iterate-com/ui/components/events/feed-format";
 import type { Stream } from "../itx-api.generated.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { formatDateTime, formatSeconds, looksLikeCode } from "~/lib/feed-format.ts";
 import {
   type LlmRequestReplay,
   type LlmRequestReplayMessage,

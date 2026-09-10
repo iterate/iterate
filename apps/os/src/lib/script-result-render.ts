@@ -2,7 +2,7 @@
 // agent's context (`renderScriptSettlement` in
 // domains/agents/agent-processor-implementation.ts), extracted here so the
 // feed's Result tab can compute the SAME text and check the rendered event
-// for verbatim containment (agent-activity-rounds.tsx `renderIsTransformed`).
+// for verbatim containment (agent-activity-round-detail.tsx `renderIsTransformed`).
 // Pure by design — importable from the client bundle, so keep processor and
 // contract imports out of this module.
 

@@ -146,7 +146,7 @@ export function ActivityCard({
  * directly; several rounds each collapse to an "N · <status> ·
  * <duration>" header row so the per-round summary statuses read as a list —
  * the os feed's AgentActivityRoundRow shape
- * (apps/os/src/components/agent-activity-rounds.tsx). A round whose code
+ * (packages/ui/src/components/agent-feed/agent-activity-rounds.tsx). A round whose code
  * step is still running expands automatically so the live run stays
  * watchable.
  */
@@ -254,7 +254,7 @@ function ApprovalGlyphs({
  * The round header's muted suffix: the agent's summary `activity` as of the
  * round plus its code duration — "Searching the five most recent FirstFT
  * emails · 0.2s". Same idea as the os web feed's roundHeaderMeta
- * (apps/os/src/components/agent-activity-rounds.tsx); with no summary the
+ * (packages/ui/src/components/agent-feed/agent-activity-rounds.tsx); with no summary the
  * header stays bare (the Meta tab carries the stats).
  */
 function roundHeaderMeta(round: { llm: AgentUiLlmStep | null; code: AgentUiCodeStep | null }) {
@@ -709,7 +709,7 @@ function tail(text: string, max: number): string {
 
 /**
  * A script result as display YAML — same fold as the os web feed's
- * resultYaml (apps/os/src/lib/agent-round-meta-yaml.ts), plus the bounded
+ * resultYaml (packages/ui/src/components/agent-feed/agent-round-meta-yaml.ts), plus the bounded
  * preview cap the JSON view used to apply.
  */
 function previewResultYaml(value: unknown) {

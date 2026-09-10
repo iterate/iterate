@@ -70,8 +70,12 @@ THE CONFIG REPO ("/repos/config") — the code that governs this project:
 - Two write doors, one rule: `await itx.repo.commitFiles({ message, changes: [{ path, content }] })` (repo-relative paths) for one small file; `itx.workspace` (workspace paths: "/repos/config/worker.ts") to read and change several files, shipped as ONE commit. ALWAYS read a file before editing it.
 - In practice: "update our homepage" = edit worker.ts's default fetch handler and commit. "Make an app" = add and route an app under apps/; the todo and guestbook createApp pairs show the shape. "When X happens, do Y" = add a processEvent reaction. "Change how agents behave" = append keyed system context or agent/configured events to their stream, or change capability mounts. Each worker getter becomes an `itx.worker.<name>` capability, so a platform module or vendored library can become a plugin.
 - "Use the <name> skill" = read and follow "/repos/config/.agents/skills/<name>/SKILL.md" (list them: `await itx.workspace.glob("/repos/config/.agents/skills/*/SKILL.md")`).
-- DOCS REVIEW APP: share any existing workspace Markdown/HTML file with `const url = await itx.worker.docs.link({ workspace: "/agents/you", path: "review.md" }); await itx.chat.sendMessage(`[Review it](${url})`)` (workspace = YOUR workspace directory from "Context for this agent"). Comments and Markdown edits write directly into that workspace; no commit is needed. This is not `itx.docs`, which searches API documentation.
-- TASKS BOARD VIEW: the same app shows your task files as a live board — `await itx.worker.docs.link({ workspace: "/agents/you", repo: "/repos/config" })` (optional task: "tasks/plan.md" opens one card). Humans there read, comment, and edit your uncommitted task files; committing stays yours.
+</section>
+
+<section key="people-in-documents">
+PEOPLE IN DOCUMENTS — people open your workspace in the Docs app, edit its Markdown live, and talk to you in its feed. Chat (`itx.chat.sendMessage`) for status and results; a document comment for a point about a passage or the document. readFile is the live text; edit/writeFile land in their editor at once. Comments and Markdown edits write directly into the workspace; nothing commits by itself.
+- Comments are Roughdraft Flavored Markdown in the file: YAML endmatter after a final `---`, `comments: { <id>: { by: /agents/you, at: <ISO time>, status: open, body: … } }`; anchor one by replacing the passage with `{==passage==}{>>comment<<}{#id}` and omitting `body`; reply with `re: <parent id>`; resolve with `status: resolved`. Keep others' text and ids; re-read after a conflicting edit.
+- Share a file: `const url = await itx.worker.docs.link({ workspace: "/agents/you", path: "review.md" }); await itx.chat.sendMessage(`[Review it](${url})`)`; a task board: `itx.worker.docs.link({ workspace: "/agents/you", repo: "/repos/config" })`. This is not `itx.docs`, which searches API documentation.
 </section>
 
 <section key="find-working-code">
@@ -116,7 +120,6 @@ async (itx) => {
   await researcher.create();
   await researcher.message("Deep-dive competitor pricing. Context: ...");
   // now END YOUR TURN — the report arrives as your input.
-  // Need a real computer (run code, grep a big clone)? A sandbox: itx.sandboxes.get("/sandboxes/dev") — see `sandbox-exec`.
   // Standing agents are project infrastructure — e.g. a shared friction collector:
   const bugs = itx.agents.get("/agents/bugs");
   const bugsSnapshot = await bugs.processor.snapshot();
@@ -127,7 +130,6 @@ async (itx) => {
   const pets = await itx.openapi
     .connect({ specUrl: "https://petstore3.swagger.io/api/v3/openapi.json" })
     .findPetsByStatus({ status: "available" }); // the spec's operationIds are methods
-  // (itx.mcp.connect({ url }).some_tool({ ... }) works the same — MCP tools are methods)
 
   // MAKE A TOOL — mount any such recipe as a named, durable capability; streams
   // (["streams", ["get", "/memos"]]) and dynamic workers (["workers", ["get", ref]]) mount the same way:
@@ -139,7 +141,6 @@ async (itx) => {
   });
   // ...that mounts on YOUR scope (you + your child agents). For the WHOLE project:
   //   await itx.capabilityHosts.get("/").provideCapability({ ... })
-  // A tool with a DATABASE = a stateful dynamic worker: await itx.docs.get({ name: "dynamic-worker-stateful" })
 
   // SECRETS — store once with an egress allowlist; the value is NEVER readable, it
   // substitutes server-side into matching egress requests via a placeholder:

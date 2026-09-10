@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
 import type { StreamEvent } from "iterate/processors";
 import { makeMemoryProgressStore, makeProcessorHarness } from "iterate/processors/testing";
-import { FeedItemPublication, FeedProcessorContract } from "./feed-contract.ts";
+import { FeedItemPublication } from "@iterate-com/ui/components/events/feed-publication";
+import { FeedProcessorContract } from "./feed-contract.ts";
 import { createFeedPublicationStore, FeedProcessor, reduceFeed } from "./feed-processor.ts";
 
 const databases: DatabaseSync[] = [];

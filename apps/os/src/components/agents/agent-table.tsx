@@ -22,6 +22,11 @@ import {
 } from "@iterate-com/ui/components/table";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useLiveState } from "iterate/sdk/itx/react";
+import {
+  deriveAgentDisplayState,
+  deriveAgentRuntimeDisplayState,
+  type AgentDisplayState,
+} from "@iterate-com/shared/agent-events";
 import { BindingLink, PinButton, StateDot } from "./agent.tsx";
 import { AGENT_DISPLAY_STATE_PRESENTATION, runtimeCountFragments } from "./agent-presentation.ts";
 import {
@@ -31,12 +36,7 @@ import {
 } from "./agent-path-tree.ts";
 import { agentNodeWaitingFor, agentSearchText, agentTitle } from "./agent-tree.ts";
 import type { AgentRuntimeTransition } from "~/domains/agents/agent-processor-contract.ts";
-import {
-  deriveAgentDisplayState,
-  deriveAgentRuntimeDisplayState,
-  type AgentDisplayState,
-  type AgentRecord,
-} from "~/domains/agents/agent-presence.ts";
+import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 
 const TABLE_GRID =

@@ -8,6 +8,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/u
 import { Input } from "@iterate-com/ui/components/input";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { useTickingNowMs } from "@iterate-com/ui/hooks/use-ticking-now-ms";
 import { AgentListRow } from "./agent.tsx";
 import { AgentTable } from "./agent-table.tsx";
 import { useAgentTreeTable } from "./agent-tree-table.ts";
@@ -15,7 +16,6 @@ import { agentMatchesSearch } from "./agent-tree.ts";
 import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 import type { AgentCatalogView } from "~/lib/agent-catalog-search.ts";
 import { toggledSet } from "~/lib/tree-rows.ts";
-import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 const CLOCK_TICK_MS = 15_000;
 const NO_AGENTS: Record<string, AgentRecord> = {};

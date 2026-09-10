@@ -1,5 +1,5 @@
 /** Whether raw LLM response text reads as code — parity copy of the os web
- * feed's heuristic (apps/os/src/lib/feed-format.ts looksLikeCode); change
+ * feed's heuristic (packages/ui/src/components/events/feed-format.ts looksLikeCode); change
  * both together. */
 export function looksLikeCode(text: string): boolean {
   return (

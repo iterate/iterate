@@ -7,16 +7,16 @@ import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { withDocsProject } from "../lib/docs-client.ts";
 
 /**
- * Docs home — the workspace picker: every workspace of the project (agents'
- * included), a path you know, or a new one by name. Opening one lands on its
- * file tree; deep links (?workspace=&path=) keep working unchanged.
+ * Docs home — the workspace picker: every workspace of the project, a path
+ * you know, or a new one at a path of your choosing. Opening one lands on
+ * its file tree; deep links (?workspace=&path=) keep working unchanged.
  */
 export function DeepLinkEmptyState() {
   const navigate = useNavigate();
   const [workspaces, setWorkspaces] = useState<{ path: string; createdAt: string }[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [chosen, setChosen] = useState("");
-  const canOpen = chosen.startsWith("/workspaces/") || chosen.startsWith("/agents/");
+  const canOpen = chosen.startsWith("/agents/");
 
   useEffect(() => {
     let cancelled = false;
@@ -43,8 +43,8 @@ export function DeepLinkEmptyState() {
           <h1 className="text-xl font-semibold tracking-tight">Workspaces</h1>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             Every file lives in a workspace: every project repo mounted under repos/, the
-            workspace&rsquo;s own files beside them. Agents have one each; make your own from the
-            sidebar.
+            workspace&rsquo;s own files beside them. Each workspace is also an agent you can talk
+            to; make your own from the sidebar.
           </p>
         </div>
 

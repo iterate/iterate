@@ -7,26 +7,36 @@ import {
   useRef,
   useState,
   type ComponentProps,
+  type ReactNode,
 } from "react";
+import { Link } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ZERO_AGENT_RUNTIME, type AgentRuntime } from "@iterate-com/shared/agent-events";
 import {
   AgentUiItemSchema,
   isAgentRuntimeVisiblyActive,
+  type AgentUiCodeStep,
   type AgentUiItem,
+  type AgentUiLlmStep,
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { AgentFeedItemRow } from "@iterate-com/ui/components/agent-feed/agent-feed-item";
+import { AgentLiveActivity } from "@iterate-com/ui/components/agent-feed/agent-live-activity";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { useStickToBottom } from "@iterate-com/ui/hooks/use-stick-to-bottom";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type {
   SqlValue,
   StreamBrowserDatabase,
 } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { AGENT_KIND_PREFIX } from "~/domains/streams/feed-item-types.ts";
-import { AgentFeedItemRow, AgentLiveActivity } from "~/components/agent-feed.tsx";
-import { useStickToBottom } from "~/lib/use-stick-to-bottom.ts";
+import {
+  AgentRenderedRoundResult,
+  RoundMetaWithPrompt,
+} from "~/components/agent-activity-round-detail.tsx";
+import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import {
   buildStreamFeedWhere,
   shortEventType,
@@ -57,7 +67,7 @@ type FeedRow = {
  * interleaved (see {@link StreamFeedQueryInput}) — so pretty chat rows and raw
  * debug rows share one scroll position and one total order.
  *
- * Virtualization scheme (see agent-feed.tsx history — PRs #1847/#1848 — for
+ * Virtualization scheme (see the agent-feed.tsx history — PRs #1847/#1848 — for
  * the failure modes each piece prevents): the stick owns the tail in DOM
  * truth (useStickToBottom; followOnAppend off), the row window is a live SQL
  * LIMIT/OFFSET query over the filtered collection's dense positions, rows are
@@ -238,6 +248,32 @@ export function StreamFeedView({
       return next;
     });
   }, []);
+  // The SQL-backed halves of a round's tabs and the child-stream link, as
+  // identity-stable render props for the same reason.
+  const roundResult = useCallback(
+    (code: AgentUiCodeStep) => <AgentRenderedRoundResult code={code} database={database} />,
+    [database],
+  );
+  const roundMeta = useCallback(
+    (llm: AgentUiLlmStep, code: AgentUiCodeStep) => (
+      <RoundMetaWithPrompt llm={llm} code={code} database={database} />
+    ),
+    [database],
+  );
+  const renderStreamLink = useMemo(
+    () =>
+      projectSlug == null
+        ? undefined
+        : (path: string, children: ReactNode) => (
+            <Link
+              {...linkOptionsForStreamPath(projectSlug, path)}
+              className="min-w-0 truncate font-mono text-foreground/80 underline-offset-4 hover:text-foreground hover:underline"
+            >
+              {children}
+            </Link>
+          ),
+    [projectSlug],
+  );
 
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
@@ -278,7 +314,8 @@ export function StreamFeedView({
                     onToggle={toggleExpanded}
                     onInspectLlmRequest={onInspectLlmRequest}
                     onInspectScriptExecution={onInspectScriptExecution}
-                    database={database}
+                    roundResult={roundResult}
+                    roundMeta={roundMeta}
                   />
                 ) : row == null ? (
                   // Not-yet-loaded rows must measure exactly estimateSize
@@ -301,8 +338,9 @@ export function StreamFeedView({
                     onToggle={toggleExpanded}
                     onInspectLlmRequest={onInspectLlmRequest}
                     onInspectScriptExecution={onInspectScriptExecution}
-                    projectSlug={projectSlug}
-                    database={database}
+                    renderStreamLink={renderStreamLink}
+                    roundResult={roundResult}
+                    roundMeta={roundMeta}
                   />
                 ) : (
                   <RawFeedItemRow

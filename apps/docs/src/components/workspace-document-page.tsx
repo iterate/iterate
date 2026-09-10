@@ -24,6 +24,7 @@ import { isSessionTransportError, withDocsProject } from "../lib/docs-client.ts"
 import { workspaceTransport } from "../lib/project-rpc.ts";
 import { withRetries } from "../lib/retry.ts";
 import type { DocsUser, WorkspaceDocumentSnapshot } from "../lib/docs-api.ts";
+import { AgentFeedPane } from "./agent-feed-pane.tsx";
 import { DocumentError } from "./document-error.tsx";
 import { HtmlDocumentPreview } from "./html-document-preview.tsx";
 import { DocumentToolbar } from "./document-toolbar.tsx";
@@ -57,6 +58,9 @@ export function WorkspaceDocumentPage({
   const [view, setView] = useState<"rich" | "source">("rich");
   const [status, setStatus] = useState("connecting…");
   const [commentsOpen, setCommentsOpen] = useState(false);
+  // The side column shows the document's comments or the workspace's agent
+  // feed; on narrow screens the same choice fills the drawer.
+  const [asidePane, setAsidePane] = useState<"comments" | "agent">("comments");
   // Everyone with a live caret on this document, self first — delivered by
   // the editor's collab session whenever the presence generation advances
   // (join announces + 25s heartbeats keep idle readers present).
@@ -211,6 +215,7 @@ export function WorkspaceDocumentPage({
         }}
         canComment={Boolean(review.comments.onAction)}
         onComment={() => {
+          setAsidePane("comments");
           if (window.matchMedia("(max-width: 1023px)").matches) {
             if (commentsOpen) mobileCommentsRef.current?.focusDocumentComment();
             else {
@@ -218,6 +223,15 @@ export function WorkspaceDocumentPage({
               setCommentsOpen(true);
             }
           } else commentsRef.current?.focusDocumentComment();
+        }}
+        agentOpen={asidePane === "agent"}
+        onToggleAgent={() => {
+          const next = asidePane === "agent" ? "comments" : "agent";
+          setAsidePane(next);
+          if (window.matchMedia("(max-width: 1023px)").matches) {
+            focusMobileComposer.current = false;
+            setCommentsOpen(next === "agent" ? true : commentsOpen);
+          }
         }}
         view={view}
         onViewChange={setView}
@@ -269,7 +283,11 @@ export function WorkspaceDocumentPage({
         </section>
 
         <aside className="hidden min-h-0 border-l bg-muted/5 lg:block">
-          <DocumentComments ref={commentsRef} {...review.comments} />
+          {asidePane === "agent" ? (
+            <AgentFeedPane agentPath={workspacePath} />
+          ) : (
+            <DocumentComments ref={commentsRef} {...review.comments} />
+          )}
         </aside>
         <Drawer
           open={commentsOpen}
@@ -288,8 +306,14 @@ export function WorkspaceDocumentPage({
               mobileCommentsRef.current?.focusDocumentComment();
             }}
           >
-            <DrawerTitle className="sr-only">Comments</DrawerTitle>
-            <DocumentComments ref={mobileCommentsRef} {...review.comments} />
+            <DrawerTitle className="sr-only">
+              {asidePane === "agent" ? "Agent" : "Comments"}
+            </DrawerTitle>
+            {asidePane === "agent" ? (
+              <AgentFeedPane agentPath={workspacePath} />
+            ) : (
+              <DocumentComments ref={mobileCommentsRef} {...review.comments} />
+            )}
           </DrawerContent>
         </Drawer>
       </div>

@@ -14,8 +14,9 @@ import {
   type AgentUiItem,
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { FeedItemPublication } from "@iterate-com/ui/components/events/feed-publication";
 import { AgentRuntimeTransition } from "../agents/agent-processor-contract.ts";
-import { FeedItemPublication, FeedProcessorContract, type FeedLiveState } from "./feed-contract.ts";
+import { FeedProcessorContract, type FeedLiveState } from "./feed-contract.ts";
 
 type FeedState = ReturnType<typeof FeedProcessorContract.stateSchema.parse>;
 

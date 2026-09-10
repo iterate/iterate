@@ -67,12 +67,15 @@ script containing RFM, separate from the HTML body.
 ## Sharing a workspace
 
 The URL of a workspace is the thing to share: everyone on it edits the same
-live files, and an agent invited to it (or born with it — every agent has its
-own at `/workspaces/agents/<agent>`) reads and writes the same overlay.
-**New workspace** in the sidebar names one — pre-filled with three random
-words — and creates it with every project repo mounted. Each dirty repo's
-Commit control auto-commits about a minute after the last change unless
-switched off; a failed commit pauses the timer and reports the error.
+live files. A workspace is a path under `/agents/`, and that path is also the
+agent sharing it: the **Agent** pane beside the editor is that agent's feed,
+the same one the OS renders, with a composer to talk to it. Opening the pane
+births the agent on the workspace's own stream if it has never been born;
+its private files sit at `/workspace` in the same tree. **New workspace** in
+the sidebar takes a path, pre-filled with three random words, and creates it
+with every project repo mounted. Each dirty repo's Commit control
+auto-commits about a minute after the last change unless switched off; a
+failed commit pauses the timer and reports the error.
 
 ## Install into a project
 

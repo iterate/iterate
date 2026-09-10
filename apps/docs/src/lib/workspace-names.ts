@@ -1,55 +1,72 @@
 /**
- * Workspace naming. A workspace is its path under /workspaces/; a name is
- * whatever a person types there, pre-filled with three random words
- * (`apple-cow-hat`) so nobody has to invent one.
+ * A workspace is its path under /agents/, and that path is also the agent
+ * sharing it. Nothing here validates: the platform's agent-path rule
+ * (lowercase segments) applies when the workspace's agent is born. The one
+ * helper draws a suggestion so nobody has to invent a path.
  */
 
 const WORDS = [
+  "acorn",
+  "amber",
   "apple",
-  "bear",
+  "aspen",
+  "badger",
+  "bamboo",
+  "basil",
+  "beacon",
   "birch",
-  "boat",
-  "brick",
-  "cactus",
-  "candle",
+  "bison",
+  "bramble",
+  "breeze",
+  "canyon",
   "cedar",
-  "cloud",
+  "cinder",
+  "clover",
+  "cobalt",
   "comet",
   "coral",
-  "cow",
-  "crane",
+  "cricket",
+  "dahlia",
   "delta",
-  "drum",
-  "eagle",
+  "dune",
   "ember",
+  "falcon",
   "fern",
-  "flint",
-  "fox",
+  "finch",
+  "fjord",
   "garnet",
-  "goose",
+  "ginger",
+  "glacier",
   "harbor",
-  "hat",
   "hazel",
   "heron",
+  "indigo",
   "iris",
-  "ivy",
   "jade",
-  "kite",
+  "juniper",
+  "kestrel",
+  "lagoon",
   "lantern",
-  "lemon",
-  "lily",
-  "lynx",
+  "lark",
+  "lilac",
+  "lotus",
   "maple",
+  "marble",
   "meadow",
+  "mesa",
   "moss",
-  "oak",
+  "nectar",
+  "nutmeg",
+  "ocean",
   "olive",
-  "orbit",
+  "onyx",
+  "orchid",
   "otter",
-  "pearl",
   "pebble",
+  "pepper",
   "pine",
   "plum",
+  "poppy",
   "quartz",
   "raven",
   "reef",
@@ -57,6 +74,7 @@ const WORDS = [
   "robin",
   "saffron",
   "sage",
+  "sequoia",
   "slate",
   "sparrow",
   "spruce",
@@ -69,21 +87,8 @@ const WORDS = [
   "zebra",
 ];
 
-/** Three random words, dash-joined: the pre-filled name for a new workspace. */
-export function newWorkspaceName(random: () => number = Math.random): string {
+/** A suggested path for a new workspace: three random words under /agents/. */
+export function newWorkspacePath(random: () => number = Math.random): string {
   const pick = () => WORDS[Math.floor(random() * WORDS.length)]!;
-  return `${pick()}-${pick()}-${pick()}`;
-}
-
-/**
- * The path a typed name lands at: `/workspaces/<name>`. Segments may nest
- * (`team/notes`); each is letters, digits, dots, dashes, or underscores.
- * Returns null for anything else.
- */
-export function workspacePathForName(name: string): string | null {
-  const trimmed = name.trim().replace(/^\/+|\/+$/g, "");
-  if (trimmed === "") return null;
-  const segments = trimmed.split("/");
-  if (segments.some((segment) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment))) return null;
-  return `/workspaces/${segments.join("/")}`;
+  return `/agents/${pick()}-${pick()}-${pick()}`;
 }

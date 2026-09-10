@@ -3,10 +3,7 @@
 // durations, file sizes, timestamps). Pure string functions — no locale
 // state, no React.
 
-import {
-  formatAgentUiDuration,
-  type AgentUiStep,
-} from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { formatAgentUiDuration, type AgentUiStep } from "./agent-ui-reducer.ts";
 
 /** `950`, `2.5k` — compact token count; `?` when the model reported none. */
 export function formatTokens(count: number | undefined): string {

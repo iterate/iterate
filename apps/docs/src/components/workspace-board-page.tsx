@@ -9,7 +9,7 @@ import { fallbackCommitMessage } from "@iterate-com/workspace-documents/change-s
 import { CommitControls } from "@iterate-com/workspace-documents/commit-controls";
 import { useCommit } from "@iterate-com/workspace-documents/use-commit";
 import { useWorkspaceBoard } from "../lib/use-workspace-board.ts";
-import { whoami, withProject } from "../lib/project-rpc.ts";
+import { whoami } from "../lib/project-rpc.ts";
 import { projectBoard } from "../lib/board-engine.ts";
 import {
   taskPathInFolder,
@@ -589,23 +589,6 @@ export function WorkspaceBoardPage({
           if (!api) return false;
           api.applyTransform(transform);
           return true;
-        }}
-        onAssignAgent={async () => {
-          if (openTask === null) return;
-          setActionError(null);
-          try {
-            // Server-side write + commit — reseed so the card wears its
-            // durable assignment (and clean status) without waiting on a
-            // poll tick.
-            await withProject((project) =>
-              project.assignAgent({ workspacePath, repoPath, path: openTask.path }),
-            );
-            await board.refresh();
-          } catch (cause) {
-            setActionError(
-              `assign agent failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-            );
-          }
         }}
         focusHeadline={
           openTask !== null && openTask.path === draftPath ? draftFocusRef.current : undefined

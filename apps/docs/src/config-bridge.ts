@@ -20,11 +20,11 @@ export type DocsLinkInput =
        * stream path. Must end in .md, .markdown, .html, or .htm.
        */
       path: string;
-      /** Absolute /agents/** or /workspaces/** stream path of the reviewing workspace. */
+      /** Absolute /agents/** stream path of the reviewing workspace. */
       workspace: string;
     }
   | {
-      /** Absolute /agents/** or /workspaces/** stream path of the workspace the board renders. */
+      /** Absolute /agents/** stream path of the workspace the board renders. */
       workspace: string;
       /** Absolute /repos/** path of the repo whose task files the board shows. */
       repo: string;
@@ -134,7 +134,7 @@ export const DocsApp = {
 };
 
 export function requireWorkspacePath(value: string): string {
-  if (!value.startsWith("/workspaces/") && !value.startsWith("/agents/")) {
+  if (!value.startsWith("/agents/")) {
     throw new Error(`invalid workspace path: ${JSON.stringify(value)}`);
   }
   return requireCanonicalPath(value, "workspace path");

@@ -16,9 +16,13 @@ import { ageStreamThroughputMetrics, type ProcessorRuntimeState } from "iterate/
 import { useIterateSessionLiveState, useLiveState } from "iterate/sdk/itx/react";
 // The Stream DO's real pushed shape, typed from the domain source of truth
 // (the generated itx surface mirrors it).
+import {
+  formatBytesPerSecond,
+  formatFileSize,
+} from "@iterate-com/ui/components/events/feed-format";
+import { useTickingNowMs } from "@iterate-com/ui/hooks/use-ticking-now-ms";
 import type { StreamRuntimeDebugState } from "../domains/streams/stream-runtime-state.ts";
 import { readAgentTokenUsageVitals } from "~/lib/agent-token-usage.ts";
-import { formatBytesPerSecond, formatFileSize } from "~/lib/feed-format.ts";
 import {
   AgentPrettyState,
   CorePrettyState,
@@ -26,7 +30,6 @@ import {
   SectionHeading,
 } from "~/components/stream-processor-pretty-state.tsx";
 import { readNumber, readRuntimeRecord } from "~/lib/runtime-record.ts";
-import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 import {
   presenceColorClasses,
   presenceInitials,

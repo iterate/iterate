@@ -1,6 +1,6 @@
 /**
  * Pure terminal formatting for agent feed items. Phrasing deliberately rhymes
- * with the web feed (apps/os/src/components/agent-feed.tsx): activities read
+ * with the web feed (packages/ui/src/components/agent-feed/agent-feed-item.tsx): activities read
  * "Ran code 2× · 3 requests · 7.4 s", steps read "gpt-5 · 1.2s". Live status
  * is "Thinking" / "Waiting for a response" / "Running code 0.9s".
  */
