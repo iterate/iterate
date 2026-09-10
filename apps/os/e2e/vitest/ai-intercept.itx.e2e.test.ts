@@ -1,3 +1,4 @@
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { expect, test, vi } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -142,72 +143,85 @@ test("streams SSE chunks over RPC and finishes when the producer closes", async 
   expect(await race(reader.read(), 2000)).toMatchObject({ done: true });
 });
 
-test("cancelling an SSE reader cancels the interceptor producer", async () => {
-  await using interception = await createStreamInterception();
-  const response: any = await race(
-    interception.project.ai.run("intercepted/test-stream", {}, { returnRawResponse: true }),
-    2000,
-  );
-  expect(response.headers.get("content-type")).toBe("text/event-stream");
-  const reader = interception.createReader(response);
-  expect(await race(reader.read(), 2000)).toMatchObject({
-    done: false,
-    value: 'data: {"response":"first"}\n\n',
-  });
-  // The second event does not exist until the first has crossed every RPC hop.
-  interception.producer.enqueue(new TextEncoder().encode('data: {"response":"second"}\n\n'));
-  expect(await race(reader.read(), 2000)).toMatchObject({
-    done: false,
-    value: 'data: {"response":"second"}\n\n',
-  });
-  await race(reader.cancel("test consumer finished"), 2000);
-  await race(interception.cancelled.promise, 2000);
-});
+createFailing(test, /producer should observe cancellation/)(
+  "cancelling an SSE reader cancels the interceptor producer",
+  async () => {
+    await using interception = await createStreamInterception();
+    const response: any = await race(
+      interception.project.ai.run("intercepted/test-stream", {}, { returnRawResponse: true }),
+      2000,
+    );
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    const reader = interception.createReader(response);
+    expect(await race(reader.read(), 2000)).toMatchObject({
+      done: false,
+      value: 'data: {"response":"first"}\n\n',
+    });
+    // The second event does not exist until the first has crossed every RPC hop.
+    interception.producer.enqueue(new TextEncoder().encode('data: {"response":"second"}\n\n'));
+    expect(await race(reader.read(), 2000)).toMatchObject({
+      done: false,
+      value: 'data: {"response":"second"}\n\n',
+    });
+    await race(reader.cancel("test consumer finished"), 2000);
+    await race(interception.cancelled.promise, 2000).catch((cause) => {
+      throw new Error("producer should observe cancellation", { cause });
+    });
+  },
+);
 
-test("an SSE producer error reaches the reader", async () => {
-  await using interception = await createStreamInterception();
-  const response: any = await race(
-    interception.project.ai.run("intercepted/test-stream", {}, { returnRawResponse: true }),
-    2000,
-  );
-  expect(response.headers.get("content-type")).toBe("text/event-stream");
-  const reader = interception.createReader(response);
-  expect(await race(reader.read(), 2000)).toMatchObject({
-    done: false,
-    value: 'data: {"response":"first"}\n\n',
-  });
-  // The second event does not exist until the first has crossed every RPC hop.
-  interception.producer.enqueue(new TextEncoder().encode('data: {"response":"second"}\n\n'));
-  expect(await race(reader.read(), 2000)).toMatchObject({
-    done: false,
-    value: 'data: {"response":"second"}\n\n',
-  });
-  interception.producer.error(new Error("test producer failed"));
-  await expect(race(reader.read(), 2000)).rejects.toThrow("test producer failed");
-});
+createFailing(test, /ReadableStream received over RPC disc/)(
+  "an SSE producer error reaches the reader",
+  async () => {
+    await using interception = await createStreamInterception();
+    const response: any = await race(
+      interception.project.ai.run("intercepted/test-stream", {}, { returnRawResponse: true }),
+      2000,
+    );
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    const reader = interception.createReader(response);
+    expect(await race(reader.read(), 2000)).toMatchObject({
+      done: false,
+      value: 'data: {"response":"first"}\n\n',
+    });
+    // The second event does not exist until the first has crossed every RPC hop.
+    interception.producer.enqueue(new TextEncoder().encode('data: {"response":"second"}\n\n'));
+    expect(await race(reader.read(), 2000)).toMatchObject({
+      done: false,
+      value: 'data: {"response":"second"}\n\n',
+    });
+    interception.producer.error(new Error("test producer failed"));
+    await expect(race(reader.read(), 2000)).rejects.toThrow("test producer failed");
+  },
+);
 
-test("disconnecting the interceptor session errors the reader and cancels the producer", async () => {
-  await using interception = await createStreamInterception();
-  const response: any = await race(
-    interception.project.ai.run("intercepted/test-stream", {}, { returnRawResponse: true }),
-    2000,
-  );
-  expect(response.headers.get("content-type")).toBe("text/event-stream");
-  const reader = interception.createReader(response);
-  expect(await race(reader.read(), 2000)).toMatchObject({
-    done: false,
-    value: 'data: {"response":"first"}\n\n',
-  });
-  // The second event does not exist until the first has crossed every RPC hop.
-  interception.producer.enqueue(new TextEncoder().encode('data: {"response":"second"}\n\n'));
-  expect(await race(reader.read(), 2000)).toMatchObject({
-    done: false,
-    value: 'data: {"response":"second"}\n\n',
-  });
-  interception.provider[Symbol.dispose]();
-  await expect(race(reader.read(), 2000)).rejects.toThrow(/disconnected|closed/i);
-  await race(interception.cancelled.promise, 2000);
-});
+createFailing(test, /producer should observe cancellation/)(
+  "disconnecting the interceptor session errors the reader and cancels the producer",
+  async () => {
+    await using interception = await createStreamInterception();
+    const response: any = await race(
+      interception.project.ai.run("intercepted/test-stream", {}, { returnRawResponse: true }),
+      2000,
+    );
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    const reader = interception.createReader(response);
+    expect(await race(reader.read(), 2000)).toMatchObject({
+      done: false,
+      value: 'data: {"response":"first"}\n\n',
+    });
+    // The second event does not exist until the first has crossed every RPC hop.
+    interception.producer.enqueue(new TextEncoder().encode('data: {"response":"second"}\n\n'));
+    expect(await race(reader.read(), 2000)).toMatchObject({
+      done: false,
+      value: 'data: {"response":"second"}\n\n',
+    });
+    interception.provider[Symbol.dispose]();
+    await expect(race(reader.read(), 2000)).rejects.toThrow(/disconnected|closed/i);
+    await race(interception.cancelled.promise, 2000).catch((cause) => {
+      throw new Error("producer should observe cancellation", { cause });
+    });
+  },
+);
 
 test("an interceptor returning a plain object rejects without losing the session", async () => {
   using session = withItxSession();

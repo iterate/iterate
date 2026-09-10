@@ -1,0 +1,63 @@
+diff --git a/dist/index-bun.js b/dist/index-bun.js
+index 2eadc025c9a447207a5ed1163d96e45fd5aa441f..76d7536c64afecb914b3925d79dbae05be194df3 100644
+--- a/dist/index-bun.js
++++ b/dist/index-bun.js
+@@ -527,7 +527,15 @@ var RpcPayload = class RpcPayload {
+ 			if (promises.length > 0) await Promise.all(promises);
+ 			let result = Function.prototype.apply.call(func, thisArg, this.value);
+ 			if (result instanceof RpcPromise$1) return RpcPayload.fromAppReturn(result);
+-			else return RpcPayload.fromAppReturn(await result);
++			else {
++                result = await result;
++                // Reject unusable response bodies while this call can still reject normally,
++                // before serialization attempts to acquire the body's reader.
++                if (result instanceof Response && (result.bodyUsed || result.body?.locked)) {
++                    throw new TypeError("RPC callback must return a Response with an unused, unlocked body");
++                }
++                return RpcPayload.fromAppReturn(result);
++            }
+ 		} finally {
+ 			this.dispose();
+ 		}
+diff --git a/dist/index-workers.js b/dist/index-workers.js
+index 24c0b791d1ace8db30e075cc60dd8bc6063f0fce..30caea25fcc53d64e49ba78df16a5a31168df2c5 100644
+--- a/dist/index-workers.js
++++ b/dist/index-workers.js
+@@ -533,7 +533,15 @@ var RpcPayload = class RpcPayload {
+ 			if (promises.length > 0) await Promise.all(promises);
+ 			let result = Function.prototype.apply.call(func, thisArg, this.value);
+ 			if (result instanceof RpcPromise$1) return RpcPayload.fromAppReturn(result);
+-			else return RpcPayload.fromAppReturn(await result);
++			else {
++                result = await result;
++                // Reject unusable response bodies while this call can still reject normally,
++                // before serialization attempts to acquire the body's reader.
++                if (result instanceof Response && (result.bodyUsed || result.body?.locked)) {
++                    throw new TypeError("RPC callback must return a Response with an unused, unlocked body");
++                }
++                return RpcPayload.fromAppReturn(result);
++            }
+ 		} finally {
+ 			this.dispose();
+ 		}
+diff --git a/dist/index.js b/dist/index.js
+index 9953a82ac3ad0c30375d06f103a47e7d7a6be21d..63641758e25d3acb46ffe3c85eb3f9c2960ebed7 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -527,7 +527,15 @@ var RpcPayload = class RpcPayload {
+ 			if (promises.length > 0) await Promise.all(promises);
+ 			let result = Function.prototype.apply.call(func, thisArg, this.value);
+ 			if (result instanceof RpcPromise$1) return RpcPayload.fromAppReturn(result);
+-			else return RpcPayload.fromAppReturn(await result);
++			else {
++                result = await result;
++                // Reject unusable response bodies while this call can still reject normally,
++                // before serialization attempts to acquire the body's reader.
++                if (result instanceof Response && (result.bodyUsed || result.body?.locked)) {
++                    throw new TypeError("RPC callback must return a Response with an unused, unlocked body");
++                }
++                return RpcPayload.fromAppReturn(result);
++            }
+ 		} finally {
+ 			this.dispose();
+ 		}
