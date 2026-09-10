@@ -183,7 +183,9 @@ export function AgentFeedPane({ agentPath }: { agentPath: string }) {
           isInterrupting={interrupting}
           onInterrupt={interrupt}
         />
-        <form onSubmit={send} className="flex items-end gap-2">
+        {/* Right padding clears the project host's floating iterate badge,
+            which sits over the pane's bottom-right corner. */}
+        <form onSubmit={send} className="flex items-end gap-2 pr-14">
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.currentTarget.value)}

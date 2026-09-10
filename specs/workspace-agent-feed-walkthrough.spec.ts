@@ -15,7 +15,13 @@ import { test } from "./test-support/test.ts";
  * Opt-in only — `DEMO_RECORDING=1 VIDEO_MODE=1 DEMO_PREVIEW_SLOT=<n>
  * DEMO_PROJECT=pr<N> pnpm spec -g "workspace agent feed walkthrough"`.
  * Skipped everywhere else, including the preview e2e run: the agent's turn
- * is a real model turn, so the waits are generous.
+ * is a real model turn, so the waits are generous. The slot must be
+ * populated (the e2e run erases it afterwards: `pnpm preview deploy
+ * --pull-request-number <N> --all-apps` redeploys without that erase), and
+ * the project's Docs origin knob must point at the slot's docs vessel, which
+ * the erase also clears:
+ * `pnpm cli itx run --context pr<N> -e 'await itx.kv.set("docs-app-origin", "https://docs-preview-<n>.iterate-dev-preview.workers.dev")'`
+ * from apps/os under `doppler run --config preview_<n>`.
  */
 test("workspace agent feed walkthrough", async ({ page }) => {
   test.skip(
@@ -74,9 +80,10 @@ test("workspace agent feed walkthrough", async ({ page }) => {
   await composer.fill(
     "Read plan.md in this workspace and leave ONE document comment suggesting a concrete improvement, then tell me here when it is in.",
   );
-  const send = pane.getByRole("button", { name: "Send message" });
-  await send.waitFor();
-  await send.click();
+  // Enter submits the composer form (Shift+Enter is a newline), the way a
+  // person sends; the button is the same submit.
+  await pane.getByRole("button", { name: "Send message" }).waitFor();
+  await composer.press("Enter");
   const userRow = pane.locator('[data-testid="agent-feed-message"][data-kind="user"]').first();
   await userRow.waitFor({ timeout: 60_000 }); // timeout: the feed facet publishes the user message on the next commit — no loading UI for the spinner-waiter in between
   const reply = pane.locator('[data-testid="agent-feed-message"][data-kind="assistant"]').first();
