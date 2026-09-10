@@ -356,6 +356,9 @@ type FacetStub = {
   snapshot(args?: { name?: string }): Promise<ProcessorSnapshot<unknown>>;
   getRuntimeState(args?: { name?: string }): Promise<ProcessorRuntimeState>;
   liveState(): Promise<{ get(): Promise<unknown> } & Partial<Disposable>>;
+  readLiveState(
+    cursor?: import("../sdk/capnweb/live-state/protocol.ts").LiveStateCursor,
+  ): Promise<unknown>;
   wakeStreamProcessor(request: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse>;
   handleAlarm(info?: AlarmInvocationInfo): Promise<void>;
 };
@@ -494,6 +497,12 @@ export class FacetTestParent extends DurableObject<Env> {
     } finally {
       disposeIgnoredRpcResult(target);
     }
+  }
+
+  async facetLiveRead(args: {
+    cursor?: import("../sdk/capnweb/live-state/protocol.ts").LiveStateCursor;
+  }) {
+    return await this.#facet().readLiveState(args.cursor);
   }
 
   /** R2: call the facet's wakeStreamProcessor and RETAIN processEventBatch in

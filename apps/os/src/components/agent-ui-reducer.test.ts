@@ -1,3 +1,4 @@
+import { appendText } from "@iterate-com/shared/chunked-text";
 // Reducer coverage for the browser-side agent UI fold: a full simulated
 // turn — user message, LLM request with streamed thinking + response deltas,
 // code execution, completion, assistant reply — must reduce into the chat
@@ -190,8 +191,8 @@ describe("agent-ui reducer", () => {
       kind: "llm",
       status: "running",
       model: "gpt-test",
-      thinkingText: "Reading the stream",
-      responseText: "const n = await stream.count();",
+      thinkingText: appendText("", "Reading the stream"),
+      responseText: appendText(appendText("", "const n = await "), "stream.count();"),
     });
   });
 
@@ -234,11 +235,8 @@ describe("agent-ui reducer", () => {
     expect(state.live?.steps[0]).toMatchObject({
       kind: "llm",
       status: "running",
-      thinkingText: "Reading the stream",
-      responseText: "const n = await stream.count();",
-      // One entry per window whose chunks carried response text — the UI's
-      // token-reveal stagger animates each window as a unit.
-      responseWindows: ["const n = await ", "stream.count();"],
+      thinkingText: appendText("", "Reading the stream"),
+      responseText: appendText(appendText("", "const n = await "), "stream.count();"),
     });
   });
 
@@ -272,7 +270,6 @@ describe("agent-ui reducer", () => {
     expect(state.live?.steps[0]).toMatchObject({
       kind: "llm",
       responseText: "The lighthouse keeper",
-      responseWindows: ["The lighthouse", " keeper"],
     });
   });
 
@@ -317,7 +314,6 @@ describe("agent-ui reducer", () => {
       kind: "llm",
       outcome: "cancelled",
       responseText: "The lighthouse keeper",
-      responseWindows: ["The lighthouse", " keeper"],
     });
   });
 
@@ -806,8 +802,8 @@ describe("agent-ui reducer", () => {
 
     expect(state.live?.steps[0]).toMatchObject({
       kind: "llm",
-      responseText: "Hello",
-      thinkingText: "hmm",
+      responseText: appendText(appendText("", "Hel"), "lo"),
+      thinkingText: appendText("", "hmm"),
     });
   });
 
@@ -1529,7 +1525,7 @@ describe("agent-ui reducer", () => {
       kind: "llm",
       llmRequestOffset: 7,
       outcome: "cancelled",
-      responseText: "old partial",
+      responseText: appendText("", "old partial"),
     });
     expect(state.items[1]).toMatchObject({
       kind: "user",

@@ -1,4 +1,4 @@
-import type { LiveUpdate } from "./protocol.ts";
+import type { LiveStateSubscriptionOptions, LiveUpdate } from "./protocol.ts";
 
 /** Owned handle for one live-state subscription. */
 export type LiveStateSubscriptionHandle = Disposable & {
@@ -9,5 +9,8 @@ export type LiveStateSubscriptionHandle = Disposable & {
 /** Read-only live value exposed across a Cap'n Web capability boundary. */
 export interface LiveStateRpc<State = unknown> {
   get(): Promise<State>;
-  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;
+  subscribe(
+    onUpdate: (update: LiveUpdate<State>) => unknown,
+    options?: LiveStateSubscriptionOptions,
+  ): Promise<LiveStateSubscriptionHandle>;
 }

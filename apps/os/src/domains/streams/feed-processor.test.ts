@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { appendText, sliceText } from "@iterate-com/shared/chunked-text";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
 import type { StreamEvent } from "iterate/processors";
@@ -254,7 +255,7 @@ describe("server feed publications", () => {
       harness.processor().presentation(harness.state(), harness.runner().currentStreamId ?? null)
         .agent!.live?.steps[0],
     ).toMatchObject({
-      responseText: "hello",
+      responseText: appendText("", "hello"),
     });
     expect(harness.state().agent!.live?.steps[0]).toMatchObject({ responseText: "" });
     expect(harness.events("events.iterate.com/feed/item-published")).toHaveLength(0);
@@ -287,7 +288,7 @@ describe("server feed publications", () => {
       });
       await harness.settle();
       const opened = await harness.runner().openHostedEventBatchCallback(harness.stream.streamId);
-      const chunkText = "\u0000🦊".repeat(4_000);
+      const chunkText = "\u0000🦊".repeat(10_000);
       for (let sequence = 0; sequence < 40; sequence++) {
         const [chunk] = await harness.stream.append({
           type: "events.iterate.com/agent/llm-response-chunks",
@@ -316,7 +317,9 @@ describe("server feed publications", () => {
       const live = harness
         .processor()
         .presentation(harness.state(), harness.runner().currentStreamId ?? null);
-      expect(new TextEncoder().encode(JSON.stringify(live)).byteLength).toBeLessThan(1_000_000);
+      expect(new TextEncoder().encode(JSON.stringify(live)).byteLength).toBeLessThan(
+        8 * 1024 * 1024,
+      );
       expect(live.agent!.live?.steps[0]).toMatchObject({ previewTruncated: true });
       const fullText = chunkText.repeat(40);
       await harness.stream.append({
@@ -334,7 +337,7 @@ describe("server feed publications", () => {
               .presentation(harness.state(), harness.runner().currentStreamId ?? null),
           ),
         ).byteLength,
-      ).toBeLessThan(1_000_000);
+      ).toBeLessThan(8 * 1024 * 1024);
       harness.crash();
       await harness.runner().snapshot();
       expect(
@@ -379,7 +382,7 @@ describe("server feed publications", () => {
         event(offset + 1, "events.iterate.com/agents/context-added", {
           role: "assistant",
           llmRequestOffset: offset,
-          content: "A" + "🦊".repeat(10_000),
+          content: "A" + "🦊".repeat(100_000),
         }),
       ).state;
     }
@@ -391,12 +394,11 @@ describe("server feed publications", () => {
         (size, step) => size + step.responseText.length + step.thinkingText.length,
         0,
       ),
-    ).toBeLessThanOrEqual(65_536);
-    expect(requests.at(-1)!.responseText).toBe("A" + "🦊".repeat(10_000));
+    ).toBeLessThanOrEqual(1_048_576);
+    expect(requests.at(-1)!.responseText).toBe("A" + "🦊".repeat(100_000));
     expect(requests[0]).toMatchObject({ responseText: "", previewTruncated: true });
     for (const step of requests) {
-      expect(step.responseText.isWellFormed()).toBe(true);
-      expect(step.responseWindows.join("")).toBe(step.responseText);
+      expect(sliceText(step.responseText).isWellFormed()).toBe(true);
     }
   });
 
@@ -404,7 +406,7 @@ describe("server feed publications", () => {
     "explicitly omits oversized %s without changing durable data",
     async (kind) => {
       const { harness } = createHarness();
-      const large = "x".repeat(1_048_576);
+      const large = "x".repeat(8 * 1024 * 1024);
       await harness.append({
         type: "events.iterate.com/agent/llm-request-requested",
         payload: { model: "test/model" },

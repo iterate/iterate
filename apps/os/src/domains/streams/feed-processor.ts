@@ -1,3 +1,5 @@
+import { takeText } from "@iterate-com/shared/chunked-text";
+import { createJsonByteLength } from "@iterate-com/shared/json-byte-length";
 import { z } from "zod";
 import {
   StreamProcessor,
@@ -65,27 +67,19 @@ type FeedPublicationStore = {
 const ScriptSettlement = z.object({ executionId: z.string() });
 
 /** Bound retained LLM preview text across the activity, prioritizing the newest request.
- * 64K UTF-16 units keeps escaped LLM text and its duplicate reveal windows below 1 MiB.
+ * Immutable text blocks make a 1 MiB preview cheap to patch and render.
  * This projection never runs on the durable reducer or its published item revisions. */
 function boundLlmPreview(agent: AgentUiState): AgentUiState {
   if (!agent.live) return agent;
-  let remaining = 64 * 1024;
+  let remaining = 1024 * 1024;
   const steps = agent.live.steps.toReversed().map((step) => {
     if (step.kind !== "llm") return step;
-    const responseText = step.responseText.slice(0, remaining).replace(/[\uD800-\uDBFF]$/, "");
+    const responseText = takeText(step.responseText, remaining);
     remaining -= responseText.length;
-    const thinkingText = step.thinkingText.slice(0, remaining).replace(/[\uD800-\uDBFF]$/, "");
+    const thinkingText = takeText(step.thinkingText, remaining);
     remaining -= thinkingText.length;
     if (responseText === step.responseText && thinkingText === step.thinkingText) return step;
-    let windowRemaining = responseText.length;
-    const responseWindows: string[] = [];
-    for (const window of step.responseWindows) {
-      if (windowRemaining === 0) break;
-      const prefix = window.slice(0, windowRemaining);
-      if (prefix) responseWindows.push(prefix);
-      windowRemaining -= prefix.length;
-    }
-    return { ...step, responseText, thinkingText, responseWindows, previewTruncated: true };
+    return { ...step, responseText, thinkingText, previewTruncated: true };
   });
   return { ...agent, live: { ...agent.live, steps: steps.toReversed() } };
 }
@@ -100,6 +94,7 @@ export class FeedProcessor extends StreamProcessor<
   readonly contract = FeedProcessorContract;
   #volatileAgent: AgentUiState | undefined;
   #volatileThroughOffset = 0;
+  readonly #jsonByteLength = createJsonByteLength();
 
   resetForStream(): void {
     this.deps.publications.clear();
@@ -126,7 +121,7 @@ export class FeedProcessor extends StreamProcessor<
     // Code, results, queued messages and presence are also unbounded inputs.
     // Omit an oversized preview explicitly, keeping the source/cursor/runtime
     // usable and leaving complete data in the durable events and publications.
-    if (new TextEncoder().encode(JSON.stringify(snapshot)).byteLength > 1_000_000) {
+    if (this.#jsonByteLength(snapshot) > 8 * 1024 * 1024) {
       return {
         previewStatus: "omitted",
         streamId,
