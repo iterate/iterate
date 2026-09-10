@@ -409,8 +409,8 @@ export interface Ai {
    * handler — an in-memory function on YOUR side of the connection — instead
    * of a real provider. The handler receives
    * `{ source: "agent-turn" | "ai-run", model, request }` with the prepared
-   * request and no provider credentials. Return `{ status, headers, body }`
-   * containing the provider’s JSON or SSE response. Live means session-bound, with the
+   * request and no provider credentials. Return a `Response` containing the provider’s
+   * JSON or SSE response; its body may be a `ReadableStream<Uint8Array>`. Live means session-bound, with the
    * mount invariant: the interception lives exactly as long as your session
    * connection, and if the platform's half dies while your socket is open,
    * the socket closes (4901) — reconnect and intercept() again.
@@ -2618,7 +2618,7 @@ export type CfAiRunOptions = {
 /** Replace only the provider call; response classification and decoding still run. */
 export type ProjectAiInterceptor = (
   input: ProjectAiInterceptorInput,
-) => Promise<InterceptedAiResponse>;
+) => Response | Promise<Response>;
 
 /** One file format the markdown converter accepts (extension plus MIME type);
  * `ai.toMarkdown()` with no arguments returns the full list. */
@@ -4634,13 +4634,6 @@ export type ProjectAiInterceptorInput = {
   model: string;
   request: AiRequest;
 } & ({ source: "agent-turn"; agentPath: string } | { source: "ai-run" });
-
-/** Serialized provider response consumed by the normal response decoder. */
-export type InterceptedAiResponse = {
-  status: number;
-  headers: Record<string, string>;
-  body: string | null;
-};
 
 /**
  * A durable processor input. Wake processors never receive ephemeral events, so

@@ -27,15 +27,13 @@ using session = await connectItxReady({
 using project = session.projects.get("my-project");
 
 // Replace only provider dispatch, after host request preparation.
-using interception = await project.ai.intercept(async (call) => ({
-  status: 200,
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify(
+using interception = await project.ai.intercept((call) =>
+  Response.json(
     call.source === "ai-run"
       ? { echo: call.request.body }
       : { choices: [{ message: { content: "scripted reply" } }] },
   ),
-}));
+);
 
 // Direct invocation path:
 await project.ai.run("intercepted/anything", { prompt: "hi" });
@@ -61,12 +59,14 @@ Handlers receive `source` (`agent-turn` or `ai-run`), the original
 Agent calls also carry `agentPath`. Credentials are excluded from both shapes.
 The sender does not change the prepared body or choose a provider from the model name.
 
-Return `{ status, headers, body }`, where body is an HTTP response string (JSON
-or SSE), or `null` for no body. The normal response decoder processes
-it. Malformed results fail the attempt. There is one intercepted namespace and
+Return a `Response`, synchronously or from a promise. Use `Response.json(value)`
+for JSON, or `new Response(stream, { headers: { "content-type": "text/event-stream" } })`
+for SSE. Streams carry bytes (`ReadableStream<Uint8Array>`); chunks flow through
+the normal decoder as they arrive. Return an unused, unlocked body. Invalid
+responses and stream failures fail the attempt. There is one intercepted namespace and
 one request preparation path.
 
-Tests can use `aiTextResponse(textOrUsage, call)` or `aiJsonResponse(value)` from
+Tests can use `aiTextResponse(textOrUsage, call)` from
 `@iterate-com/shared/test-support/resilient-ai-interceptor`. Text/usage estimates live in that test
 helper; production interception always consumes a provider-shaped response.
 

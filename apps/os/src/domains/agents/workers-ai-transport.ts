@@ -257,10 +257,13 @@ async function drainSseResponse(input: {
       }
     }
   } catch (error) {
-    // Deadline (or a mid-drain read failure): stop the source before the
-    // error settles the attempt, so no chunk can land after the completion.
-    await reader.cancel().catch(() => {});
+    // Cancel closes this reader immediately, but the interceptor's cleanup may
+    // never settle. Do not let that cleanup extend the attempt deadline or
+    // replace its failure; no further chunks are read or delivered.
+    void reader.cancel().catch(() => {});
     throw error;
+  } finally {
+    reader.releaseLock();
   }
   buffered += decoder.decode();
   const finalChunk = parseSseFrame(buffered);
@@ -502,13 +505,11 @@ export async function sendAiRequest(
   const { sourceModel, credential: _credential, ...request } = prepared;
   if (modelInterception.isInterceptedModel(sourceModel)) {
     if (!host.consultInterceptor) throw modelInterception.noAiInterceptorError(sourceModel);
-    const response = modelInterception.InterceptedAiResponse.parse(
-      await host.consultInterceptor({ ...host.source, model: sourceModel, request }),
-    );
-    return new Response(response.body, {
-      status: response.status,
-      headers: response.headers,
-    });
+    const response = await host.consultInterceptor({ ...host.source, model: sourceModel, request });
+    if (!(response instanceof Response)) throw new Error("AI interceptor must return a Response");
+    if (response.bodyUsed || response.body?.locked)
+      throw new Error("AI interceptor must return a Response with an unused, unlocked body");
+    return response;
   }
   switch (prepared.kind) {
     case "openai-http": {

@@ -3431,8 +3431,8 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * handler — an in-memory function on YOUR side of the connection — instead
    * of a real provider. The handler receives
    * `{ source: "agent-turn" | "ai-run", model, request }` with the prepared
-   * request and no provider credentials. Return `{ status, headers, body }`
-   * containing the provider’s JSON or SSE response. Live means session-bound, with the
+   * request and no provider credentials. Return a `Response` containing the provider’s
+   * JSON or SSE response; its body may be a `ReadableStream<Uint8Array>`. Live means session-bound, with the
    * mount invariant: the interception lives exactly as long as your session
    * connection, and if the platform's half dies while your socket is open,
    * the socket closes (4901) — reconnect and intercept() again.

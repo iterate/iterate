@@ -1,11 +1,12 @@
-status: complete
+status: in-progress
 
 # Intercept prepared AI requests
 
 The Gateway work is saved on `codex/ai-gateway-metadata`. This prerequisite
-extracts its interception changes onto current main. Implementation, independent
-review, repository CI, and deployed preview verification are complete. PR #2613
-is ready for human review; ongoing review comments are monitored.
+extracts its interception changes onto current main. The initial extraction passed
+review and preview CI. The requested native `Response` / live SSE follow-up is
+left uncommitted. Stream cancellation remains unresolved. The user closed the
+external RPC PR and stopped that work; its dependency pin has been removed.
 
 Intercepted models should exercise the same request preparation and response
 decoding as provider calls. Strip only `intercepted/`; tests choose their model
@@ -13,15 +14,16 @@ explicitly when provider behaviour matters, and keep generic test names otherwis
 
 - [x] Share request preparation and decoding between intercepted and real calls. *Both routes dispatch in workers-ai-transport; agent interception no longer bypasses decoding.*
 - [x] Expose the prepared request to handlers without provider credentials. *Named OpenAI/Workers AI request types exclude the dispatch credential; parity matrix checks both.*
-- [x] Use the reviewed HTTP-shaped result (`status`, `headers`, `body`) and migrate callers through existing test helpers. *Existing resilient-ai-interceptor helper now creates provider-shaped text/JSON fixtures; null represents absent bodies.*
+- [x] Return native `Response` objects from interceptors, including live SSE bodies. *Callbacks use `Response.json` or `new Response`; the existing text helper returns a Response.*
+- [ ] Verify incremental SSE, cancellation, producer errors, disconnects, and invalid responses across the real RPC chain.
+- [ ] Resolve streaming limitations within the agreed scope. *External RPC work stopped at user request; do not reopen or create external PRs.*
 - [x] Preserve public `ai.run` decoding and its existing `returnRawResponse` option. *JSON/media/raw e2e covers the binding’s decoding rules, HTTP failures, and empty versus absent bodies.*
 - [x] Verify text, usage, provider errors, and interception lifecycle through meaningful tests and a preview. *119 focused tests, four local and deployed API tests, and both deployed agent browser scenarios passed.*
 - [x] Complete repository checks and independent PR review. *Full CI passed on 8c5e2fca9; independent review and Iterate GitHub AI linter found no remaining issues.*
 
 No Gateway metadata, budget rules, cost events, or budget-specific failure
-handling belong here. Returning actual `Response` objects from callbacks remains
-a possible next change to review; this extraction does not introduce live
-response streaming over RPC. Leave the Gateway branch untouched until this lands.
+handling belong here. Native `Response` callbacks and live SSE were subsequently
+requested in this PR. Leave the Gateway branch untouched until this lands.
 
 ## Implementation notes
 

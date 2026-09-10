@@ -10,7 +10,6 @@
 // purpose — a turn whose journal says `openai/*` can never have been served by
 // a handler.
 
-import { z } from "zod";
 import type { CfAiRunOptions } from "../domains/itx/cf-capabilities.ts";
 
 /** The model-name namespace served by the live AI interceptor. */
@@ -27,16 +26,6 @@ export const AI_INTERCEPTOR_CAPABILITY_NAME = "aiInterceptor";
 export function isInterceptedModel(model: string): boolean {
   return model.startsWith(INTERCEPTED_MODEL_PREFIX);
 }
-
-/** Serializable provider response, consumed by the same decoder as a real call. */
-export const InterceptedAiResponse = z.object({
-  status: z.number().int().min(200).max(599),
-  headers: z.record(z.string(), z.string()),
-  body: z.string().nullable(),
-});
-
-/** Serialized provider response consumed by the normal response decoder. */
-export type InterceptedAiResponse = z.infer<typeof InterceptedAiResponse>;
 
 /** The two concrete outbound APIs, after host policy and request preparation. No credentials. */
 export type AiRequest = OpenAiHttpRequest | WorkersAiRequest;
@@ -69,7 +58,7 @@ export type ProjectAiInterceptorInput = {
 /** Replace only the provider call; response classification and decoding still run. */
 export type ProjectAiInterceptor = (
   input: ProjectAiInterceptorInput,
-) => Promise<InterceptedAiResponse>;
+) => Response | Promise<Response>;
 
 /** Disposable handle for one live AI interception. */
 export interface ProjectAiIntercept extends Disposable {

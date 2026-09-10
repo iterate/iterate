@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   adaptMessagesForModel,
   cloudflareAiGatewayResponseCacheKey,
@@ -65,7 +65,7 @@ it.each([
             expect(call.model).toBe(`intercepted/${providerModel}`);
             expect(JSON.stringify(call)).not.toContain("must-not-leak");
             requests.push(call.request);
-            return fixture;
+            return new Response(fixture.body, fixture);
           },
         }),
       );
@@ -79,6 +79,41 @@ it.each([
     });
     expect(results[1]).toEqual(results[0]);
     expect(chunks[1]).toEqual(chunks[0]);
+  },
+);
+
+it.each(["plain object", "consumed body", "locked body"])(
+  "interception rejects a %s before decoding",
+  async (invalidResponse) => {
+    const response = Response.json({ response: "test-result" });
+    if (invalidResponse === "consumed body") await response.text();
+    const reader = invalidResponse === "locked body" ? response.body!.getReader() : undefined;
+    try {
+      await expect(
+        runWorkersAiAttempt({
+          model: "intercepted/test-model",
+          messages: [{ role: "user", content: "test-prompt" }],
+          deadlineMs: 1000,
+          onChunk: async () => {},
+          transport: { kind: "unified" },
+          ai: {
+            run: async () => {
+              throw new Error("Provider must not be called");
+            },
+          },
+          consultInterceptor: async () =>
+            invalidResponse === "plain object"
+              ? { status: 200, headers: {}, body: "test-result" }
+              : response,
+        }),
+      ).rejects.toThrow(
+        invalidResponse === "plain object"
+          ? "AI interceptor must return a Response"
+          : "AI interceptor must return a Response with an unused, unlocked body",
+      );
+    } finally {
+      reader?.releaseLock();
+    }
   },
 );
 
@@ -160,6 +195,52 @@ describe("runWorkersAiAttempt", () => {
     // caller records the timeout failure.
     expect(cancelled).toBe(true);
     expect(chunks).toEqual([{ response: "hel" }]);
+  });
+
+  it("an interceptor's stalled cancellation cannot extend the attempt deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const firstChunk = Promise.withResolvers<void>();
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: {"response":"test"}\n\n'));
+        },
+        cancel() {
+          cancelled = true;
+          return new Promise(() => {});
+        },
+      });
+      let failure: unknown;
+      const attempt = runWorkersAiAttempt({
+        ai: {
+          run: async () => {
+            throw new Error("Provider must not be called");
+          },
+        },
+        model: "intercepted/test-model",
+        messages: [],
+        deadlineMs: 50,
+        consultInterceptor: async () =>
+          new Response(body, {
+            headers: { "content-type": "text/event-stream" },
+          }),
+        onChunk: async () => {
+          firstChunk.resolve();
+        },
+      }).catch((error) => {
+        failure = error;
+      });
+
+      await firstChunk.promise;
+      await vi.advanceTimersByTimeAsync(50);
+      expect(failure).toMatchObject({ message: expect.stringContaining("timed out") });
+      expect(cancelled).toBe(true);
+      expect(body.locked).toBe(false);
+      await attempt;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("applies the attempt deadline while a chunk callback is in flight", async () => {
@@ -577,7 +658,7 @@ it("gateway interception strips credentials and cannot replace real model calls"
       calls++;
       expect(JSON.stringify(request)).not.toContain("sk-real");
       expect(request.headers.authorization).toBeUndefined();
-      return { status: 429, headers: {}, body: "slow down" };
+      return new Response("slow down", { status: 429 });
     },
   };
   await expect(runWorkersAiAttempt({ ...input, model: "intercepted/openai/test" })).rejects.toThrow(

@@ -160,15 +160,12 @@ export function aiTextResponse(
     inputTokens: Math.ceil(JSON.stringify(request.request.body).length / 4),
     outputTokens: Math.ceil(text.length / 4),
   };
-  return {
-    status: 200,
-    headers: { "content-type": "text/event-stream" },
-    body:
-      text
-        .split(/\b/)
-        .filter(Boolean)
-        .map((content) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`)
-        .join("") +
+  return new Response(
+    text
+      .split(/\b/)
+      .filter(Boolean)
+      .map((content) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`)
+      .join("") +
       `data: ${JSON.stringify({
         choices: [],
         usage: {
@@ -178,13 +175,6 @@ export function aiTextResponse(
           completion_tokens_details: { reasoning_tokens: counts.reasoningOutputTokens || 0 },
         },
       })}\n\ndata: [DONE]\n\n`,
-  };
-}
-
-export function aiJsonResponse(body: unknown) {
-  return {
-    status: 200,
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  };
+    { headers: { "content-type": "text/event-stream" } },
+  );
 }

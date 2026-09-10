@@ -1,5 +1,4 @@
 import { expect, test, vi } from "vitest";
-import { aiJsonResponse } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 // The intercepted/* namespace's ai-run path from very far away: a live handler installed
@@ -15,11 +14,7 @@ test("itx.ai.run('intercepted/…') is served by the live interceptor; releasing
   using project = await itx.projects.get(`ai-intercept-${crypto.randomUUID()}`).create({});
 
   using interception = await project.ai.intercept(async (input) => {
-    return {
-      status: 200,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ served: input }),
-    };
+    return Response.json({ served: input });
   });
 
   const result = await project.ai.run("intercepted/echo-args", { prompt: "ping" });
@@ -47,13 +42,16 @@ test("ai.run decodes JSON, preserves binary/SSE streams and raw responses, and r
       model: "test-model",
       options: { returnRawResponse: true, gateway: { id: "test-gateway", skipCache: true } },
     });
-    return call.request.body as any;
+    return new Response(call.request.body.body as any, call.request.body);
   });
   const options = { gateway: { id: "test-gateway", skipCache: true } };
   expect(
     await project.ai.run(
       "intercepted/test-model",
-      aiJsonResponse({ value: "test-result" }),
+      {
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: "test-result" }),
+      },
       options,
     ),
   ).toMatchObject({ value: "test-result" });
@@ -104,6 +102,106 @@ test("ai.run decodes JSON, preserves binary/SSE streams and raw responses, and r
   expect(noContent).toMatchObject({ status: 204, body: null });
 });
 
+test.for(["close", "cancel", "error", "disconnect"])(
+  "interceptor SSE streams over RPC (%s)",
+  async (ending) => {
+    using session = withItxSession();
+    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+    using project = await itx.projects.get(`ai-stream-${crypto.randomUUID()}`).create({});
+    const description = await project.__describe();
+    using provider = withItxSession({ auth: { type: "admin-secret", secret: adminSecret() } });
+    using providerProject = provider.projects.get(description.projectId);
+    const cancelled = Promise.withResolvers<unknown>();
+    let producer!: ReadableStreamDefaultController<Uint8Array>;
+    const encoder = new TextEncoder();
+    using _interception = await providerProject.ai.intercept(
+      () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              producer = controller;
+              controller.enqueue(encoder.encode('data: {"response":"first"}\n\n'));
+            },
+            cancel(reason) {
+              cancelled.resolve(reason);
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    );
+
+    const response: any = await project.ai.run(
+      "intercepted/test-stream",
+      {},
+      { returnRawResponse: true },
+    );
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+    try {
+      expect(await reader.read()).toMatchObject({
+        done: false,
+        value: 'data: {"response":"first"}\n\n',
+      });
+      // The second event does not exist until the first has crossed every RPC hop.
+      producer.enqueue(encoder.encode('data: {"response":"second"}\n\n'));
+      expect(await reader.read()).toMatchObject({
+        done: false,
+        value: 'data: {"response":"second"}\n\n',
+      });
+      switch (ending) {
+        case "close":
+          producer.close();
+          expect(await reader.read()).toMatchObject({ done: true });
+          break;
+        case "cancel":
+          await reader.cancel("test consumer finished");
+          await cancelled.promise;
+          break;
+        case "error":
+          producer.error(new Error("test producer failed"));
+          await expect(reader.read()).rejects.toThrow("test producer failed");
+          break;
+        case "disconnect":
+          provider[Symbol.dispose]();
+          await expect(reader.read()).rejects.toThrow();
+          await cancelled.promise;
+          break;
+      }
+    } finally {
+      // An errored reader rejects cancellation too; release its lock regardless.
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
+  },
+);
+
+test.for(["plain object", "consumed body", "locked body"])(
+  "invalid interceptor response rejects without losing the session (%s)",
+  async (invalid) => {
+    using session = withItxSession();
+    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+    using project = await itx.projects.get(`ai-invalid-${crypto.randomUUID()}`).create({});
+    let lockedReader: ReadableStreamDefaultReader | undefined;
+    using _interception = await project.ai.intercept(async (call) => {
+      if (!call.request.body.invalid) return Response.json({ healthy: true });
+      if (invalid === "plain object") return { body: "invalid" } as any;
+      const response = Response.json({ value: "test" });
+      if (invalid === "consumed body") await response.text();
+      if (invalid === "locked body") lockedReader = response.body!.getReader();
+      return response;
+    });
+    try {
+      await expect(project.ai.run("intercepted/test-model", { invalid: true })).rejects.toThrow(
+        /Response|locked|consumed|used/,
+      );
+      expect(await project.ai.run("intercepted/test-model", {})).toMatchObject({ healthy: true });
+    } finally {
+      await lockedReader?.cancel();
+      lockedReader?.releaseLock();
+    }
+  },
+);
+
 // The interceptor is a live capability mount on the root scope, so
 // churn recovery is the shipped mount invariant — no interceptor-specific transport exists. The DO
 // whose death matters is the ROOT STREAM DO (capability host + Pager parent):
@@ -123,7 +221,7 @@ test("a root stream DO restart closes the installing session with 4901; reconnec
   });
   using interceptorProject = interceptorSession.projects.get(description.projectId);
   using _interception = await interceptorProject.ai.intercept(async ({ model }) =>
-    aiJsonResponse({
+    Response.json({
       servedBy: "first install",
       model,
     }),
@@ -157,7 +255,7 @@ test("a root stream DO restart closes the installing session with 4901; reconnec
   });
   using recoveredProject = recoveredSession.projects.get(description.projectId);
   using _recovered = await recoveredProject.ai.intercept(async () =>
-    aiJsonResponse({
+    Response.json({
       servedBy: "re-install",
     }),
   );
@@ -178,9 +276,9 @@ test("a newer intercept() supersedes the older one; the older handle's release c
     auth: { type: "admin-secret", secret: adminSecret() },
   });
   using firstProject = firstSession.projects.get(description.projectId);
-  using first = await firstProject.ai.intercept(async () => aiJsonResponse({ servedBy: "first" }));
+  using first = await firstProject.ai.intercept(async () => Response.json({ servedBy: "first" }));
 
-  using _second = await project.ai.intercept(async () => aiJsonResponse({ servedBy: "second" }));
+  using _second = await project.ai.intercept(async () => Response.json({ servedBy: "second" }));
   expect(await project.ai.run("intercepted/echo", {})).toMatchObject({ servedBy: "second" });
 
   // The superseded handle is inert: releasing it must not tear down the winner.
