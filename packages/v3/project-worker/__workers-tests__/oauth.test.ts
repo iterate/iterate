@@ -443,7 +443,11 @@ test("console and project browsers use the same CIMD flow and independent grants
       logins[1]!.root.grants.mint({ name: "Denied", projects: ["browser-a"] }),
     ).rejects.toThrow(/Account permission/);
     await expect(logins[1]!.root.grants.end("foreign-grant")).rejects.toThrow(/Account permission/);
-    expect(personal.expiresAt - Date.now()).toBeGreaterThan(29 * 24 * 3600_000);
+    const storedPersonal = await helpers().unwrapToken(personal.token);
+    expect(storedPersonal).not.toBeNull();
+    expect(storedPersonal!.expiresAt * 1000 - Date.now()).toBeGreaterThan(29 * 24 * 3600_000);
+    // The provider rounds TTLs to seconds; the displayed deadline must agree with its actual token.
+    expect(Math.abs(storedPersonal!.expiresAt * 1000 - personal.expiresAt)).toBeLessThan(2000);
     expect(JSON.parse((await tool(personal.token, "whoami")).body.result.content[0].text)).toEqual({
       actor: user.id,
       email: user.email,

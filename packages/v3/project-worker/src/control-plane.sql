@@ -9,7 +9,7 @@
 -- `pnpm db:schema:remote` re-applies it to the deployed D1 as a no-op.
 
 create table if not exists users (
-  id text primary key,            -- user_<lowercased-email> (colon-free: OAuth tokens split on ':')
+  id text primary key,            -- opaque stable user id (colon-free: OAuth tokens split on ':')
   email text not null unique,
   created_at text not null default current_timestamp
 );

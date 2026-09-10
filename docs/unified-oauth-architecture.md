@@ -2,6 +2,7 @@
 
 Implementation snapshot, 2026-09-10. Clean-room deployment: `os.iterate2.com`,
 `mcp.iterate2.com`, `*.iterate2.app`; independent example: `notes.iterate2.com`.
+[Deployment and acceptance evidence](unified-oauth-deployment-proof.md).
 
 ## One authenticated session model
 
@@ -46,6 +47,9 @@ An issuer session alone receives `session.consent.describe/approve`. Organizatio
 creation and project creation use the ordinary `Session` capabilities, including
 explicit organization selection. The original client's OAuth query remains in
 the URL throughout onboarding; approval revalidates it and current memberships.
+The issuer router uses a form search codec: repeated resource parameters stay
+repeated parameters through Start's server canonicalization. RPC-returning
+loaders use `async` to normalize callable Cap’n Web promises for the router.
 Organization and owner creation is one D1 transaction. Project creation is
 idempotent within its owning organization and refuses foreign ownership.
 
@@ -88,3 +92,15 @@ reloads, ingress, MCP and socket renewal all agree on the effective user. It wil
 need a real admin-role check, visible mode indication and explicit decisions
 about writes and credential-management capabilities. No speculative fields,
 roles or impersonation UI were added in this implementation.
+
+## Still open
+
+An independently hosted app exposing a capability at `itx.notes` (for example,
+`itx.notes.add()`) needs an explicit remote capability/authentication design.
+The current example proves browser access and pass-through HTTP hosting; it does
+not add a remote capability bridge.
+
+Third-party apps currently use the shared BFF session DO. A mostly stateless app
+that verifies JWT signatures locally remains a separate design choice: it must
+preserve audience restrictions, delegation, membership changes and bounded
+revocation. No JWT issuer or second verification lane was added speculatively.

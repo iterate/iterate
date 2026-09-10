@@ -1,6 +1,7 @@
 // Public OAuth admission, principal propagation and Cap’n Web resource teardown.
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- the /api one-shot batch door itself is under test; everything else is WS
-import { newHttpBatchRpcSession } from "capnweb";
+import { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
+import { WebSocket as UndiciWebSocket } from "undici";
 import { expect, test } from "vitest";
 import type { Session } from "../src/session.ts";
 import {
@@ -67,6 +68,43 @@ test("an OAuth grant: identity, unforgeable append attribution, project boundary
   expect(revoked.status).toBe(401);
   await revoked.body?.cancel();
 });
+
+test("revoking a grant closes its live public socket and held capability within one minute", async () => {
+  const project = freshDnsSafeProjectId("live-revoke");
+  const member = { email: `${project}@example.com` };
+  await registerProject(project, member);
+  const { api, token } = await oauthSession(project, member);
+  const url = new URL(workerUrl("/api"));
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  const socket = new UndiciWebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
+  let onClose!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    onClose = resolve;
+  });
+  socket.addEventListener("close", onClose, { once: true });
+  using held = newWebSocketRpcSession<Session>(socket as unknown as WebSocket);
+  using itx = await held.projects.get(project);
+  expect((await itx.whoami()).projectId).toBe(project);
+  await api.logout();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // The production lease is thirty seconds, with a sixty-second hard bound.
+    await Promise.race([
+      closed,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Revoked socket survived its 60-second lease")),
+          60_000,
+        );
+      }),
+    ]);
+    await expect(itx.whoami()).rejects.toThrow();
+  } finally {
+    clearTimeout(timer);
+    socket.removeEventListener("close", onClose);
+    socket.close();
+  }
+}, 75_000);
 
 test("the built-in cd carries the OAuth principal to a sibling context", async () => {
   const projectId = freshDnsSafeProjectId("cd-who");
