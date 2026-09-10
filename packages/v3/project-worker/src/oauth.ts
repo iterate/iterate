@@ -145,7 +145,8 @@ export function providerOptions(
     scopesSupported: OAuthScope.options,
     resourceMetadata: {
       ...(issuer.startsWith("https:") && { authorization_servers: [issuer] }),
-      scopes_supported: OAuthScope.options,
+      // Initial challenges request the minimum permission; account is explicit opt-in.
+      scopes_supported: ["iterate"],
     },
     clientIdMetadataDocumentEnabled: true,
     allowPlainPKCE: false,

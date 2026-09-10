@@ -145,6 +145,8 @@ test("discovery advertises CIMD and neither publishes nor serves DCR", async () 
     await call("/.well-known/oauth-authorization-server")
   ).json<Record<string, unknown>>();
   expect(metadata.client_id_metadata_document_supported).toBe(true);
+  expect(metadata.token_endpoint_auth_methods_supported).toContain("none");
+  expect(metadata.code_challenge_methods_supported).toEqual(["S256"]);
   expect(metadata.registration_endpoint).toBeUndefined();
   expect((await call("/oauth/register", { method: "POST" })).status).toBe(404);
   for (const protocol of ["api", "mcp"]) {
@@ -153,9 +155,11 @@ test("discovery advertises CIMD and neither publishes nor serves DCR", async () 
     ).toMatchObject({
       resource: `${ORIGIN}/${protocol}`,
       authorization_servers: [ORIGIN],
-      scopes_supported: ["iterate", "account"],
+      scopes_supported: protocol === "mcp" ? ["iterate"] : ["iterate", "account"],
     });
-    expect((await call(`/${protocol}`)).status).toBe(401);
+    const challenge = await call(`/${protocol}`);
+    expect(challenge.status).toBe(401);
+    expect(challenge.headers.get("WWW-Authenticate")).toContain('scope="iterate"');
   }
 });
 

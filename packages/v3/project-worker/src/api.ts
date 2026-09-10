@@ -38,7 +38,7 @@ export function oauthResponse(
     return Response.json({
       resource,
       authorization_servers: [issuer],
-      scopes_supported: OAuthScope.options,
+      scopes_supported: resource === mcp ? ["iterate"] : OAuthScope.options,
       bearer_methods_supported: ["header"],
     });
   }
