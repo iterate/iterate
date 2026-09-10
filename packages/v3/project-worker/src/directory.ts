@@ -10,7 +10,7 @@ import type { Principal } from "./principal.ts";
 
 /** A `users` row. */
 export interface User {
-  id: string; // user_<lowercased-email>
+  id: string; // Stable, opaque user id; email can change.
   email: string;
 }
 /** An `orgs` row, with the reader's `role` when read through `org_members`. */
@@ -71,19 +71,50 @@ const newOrgId = () => `org_${crypto.randomUUID().replaceAll("-", "")}`;
 export function directory(db: D1Database) {
   const d1Directory = {
     /** Find-or-create the user for an email (login is the only writer). */
-    async upsertUser(email: string): Promise<User> {
+    async upsertUser(email: string, verifiedId?: string): Promise<User> {
       const normalized = email.trim().toLowerCase();
       // NB: user id must be colon-free — the OAuth provider encodes tokens as `{userId}:{grantId}:{secret}`
       // and splits on ':'. A `user:<email>` id would break that (and the token/grant KV keys).
       const user = await db
         .prepare(
           `INSERT INTO users (id, email) VALUES (?, ?)
-ON CONFLICT(id) DO UPDATE SET email = excluded.email
+ON CONFLICT(email) DO UPDATE SET email = excluded.email
 RETURNING id, email;`,
         )
-        .bind(`user_${normalized}`, normalized)
+        .bind(verifiedId ?? `user_${crypto.randomUUID()}`, normalized)
         .first<User>();
       return user!;
+    },
+
+    /** Link once by verified email, then resolve by Google's stable subject.
+     * A different Google identity cannot adopt an already-linked account. */
+    async upsertGoogleUser(subject: string, email: string): Promise<User> {
+      const normalized = email.trim().toLowerCase();
+      const lookup = () =>
+        db
+          .prepare("SELECT user_id FROM google_identities WHERE subject = ?")
+          .bind(subject)
+          .first<{ user_id: string }>();
+      let identity = await lookup();
+      if (!identity) {
+        const user = await d1Directory.upsertUser(normalized, `user_google_${subject}`);
+        await db
+          .prepare(
+            "INSERT INTO google_identities (subject, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+          )
+          .bind(subject, user.id)
+          .run();
+        identity = await lookup();
+      }
+      if (!identity)
+        throw codedError("IDENTITY_CONFLICT", "This email belongs to another linked account.");
+      const user = await db
+        .prepare(`UPDATE users SET email = ? WHERE id = ?
+AND NOT EXISTS (SELECT 1 FROM users WHERE email = ? AND id != ?) RETURNING id, email`)
+        .bind(normalized, identity.user_id, normalized, identity.user_id)
+        .first<User>();
+      if (!user) throw codedError("IDENTITY_CONFLICT", "This email belongs to another account.");
+      return user;
     },
 
     /** Create an org (a minted org_ id; the name is free text, two orgs may share one) and make the

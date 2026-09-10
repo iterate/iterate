@@ -10,12 +10,14 @@ import viteReact from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
+import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
 
 // The processor SDK bundle (src/generated/*, gitignored — what the host injects into every loaded
 // isolate) and the hosted /demo page (public/demo.html) are esbuild's, not Vite's: build-sdk.mjs
 // writes both before Vite reads either — at config load, as apps/auth writes its wrangler config.
 // Idempotent writes, so a no-op rebuild leaves the watched `src` untouched. (An edit under src/sdk
 // or src/stream during `vite dev` needs a restart — the SDK bundle is not watched.)
+writeWranglerConfig();
 execSync("node build-sdk.mjs", { cwd: import.meta.dirname, stdio: "inherit" });
 
 /** dist/server/wrangler.json as this package's wrangler (4.127.1 — `pnpm dev`, `pnpm deploy`, the e2e

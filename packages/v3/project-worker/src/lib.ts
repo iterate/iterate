@@ -18,6 +18,8 @@
 
 /** The stable machine-readable codes — SCREAMING_SNAKE, defined once, both ends import this. */
 type ErrorCode =
+  | "INVALID_INPUT"
+  | "IDENTITY_CONFLICT" // verified login cannot replace another linked identity
   | "GRANT_NOT_FOUND" // a caller may revoke only a grant in their own inventory
   | "NO_ITX_EXPRESSION_MATCH" // no rewrite rule matches the call (default-deny)
   | "IDEMPOTENCY_CONFLICT"

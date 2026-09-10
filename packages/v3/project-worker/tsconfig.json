@@ -13,7 +13,13 @@
     "isolatedModules": true
   },
   "include": ["src"],
-  // The console (the TanStack Start routes, the router, the generated tree) and the browser demo are
-  // React + DOM: checked by tsconfig.client.json, not here (workerd-typed, no DOM/JSX on purpose).
-  "exclude": ["src/routes", "src/router.tsx", "src/routeTree.gen.ts", "src/client/demo.tsx"]
+  "exclude": [
+    "src/routes",
+    "src/router.tsx",
+    "src/routeTree.gen.ts",
+    "src/client/demo.tsx",
+    "src/client/browser.ts",
+    "src/client/dashboard.tsx",
+    "src/client/dashboard-data.ts"
+  ]
 }

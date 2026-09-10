@@ -25,6 +25,7 @@
 // reach answer); the first door that reaches a context materializes it.
 
 import { RpcTarget } from "capnweb";
+import type { Grants } from "./grants.ts";
 import {
   DurableObjectNameCodec,
   IterateContext,
@@ -167,34 +168,42 @@ export class UnauthenticatedSession extends RpcTarget {
       throw codedError("INVALID_CREDENTIALS", "The operator RPC door requires the admin secret.");
     const principal = await verifyCredentials(credentials, this.#input);
     if (!principal) throw codedError("INVALID_CREDENTIALS", "The admin secret did not match.");
-    return new Session(
-      this.#input,
-      this.#sessionTeardown,
+    return new Session(this.#input, this.#sessionTeardown, {
       principal,
-      reachOf(principal),
-      this.#input,
-    );
+      reach: reachOf(principal),
+      projectDoors: this.#input,
+    });
   }
 }
 
 /** What you authenticate into: a catalog that vends contexts. A session is NOT a context — it is
  *  the directory you reach one through (apps/os: "a session is what authenticate() returns"). */
+type SessionAuthority = {
+  principal: SessionPrincipal;
+  reach: Reach;
+  projectDoors: ProjectDoorsInput | null;
+  grants?: Grants;
+  scopes?: string[];
+};
+
 export class Session extends RpcTarget {
   readonly #sessionTeardown: SessionTeardown;
   readonly #projects: ProjectCollection;
-  readonly #principal: SessionPrincipal;
+  readonly #input: SessionInput;
+  readonly #authority: SessionAuthority;
 
-  constructor(
-    input: SessionInput,
-    sessionTeardown: SessionTeardown,
-    principal: SessionPrincipal,
-    reach: Reach,
-    projectDoors: ProjectDoorsInput | null,
-  ) {
+  constructor(input: SessionInput, sessionTeardown: SessionTeardown, authority: SessionAuthority) {
     super();
-    this.#principal = principal;
+    this.#input = input;
+    this.#authority = authority;
     this.#sessionTeardown = sessionTeardown;
-    this.#projects = new ProjectCollection(input, sessionTeardown, principal, reach, projectDoors);
+    this.#projects = new ProjectCollection(
+      input,
+      sessionTeardown,
+      authority.principal,
+      authority.reach,
+      authority.projectDoors,
+    );
   }
 
   [Symbol.dispose](): void {
@@ -205,7 +214,36 @@ export class Session extends RpcTarget {
    *  project), the project itself (`{ projectId, actor: "project:<projectId>" }`), or
    *  `{ actor: "admin" }`. */
   whoami(): SessionPrincipal {
-    return this.#principal;
+    return this.#authority.principal;
+  }
+
+  /** Safe bootstrap data for every app, regardless of which host serves it. */
+  info() {
+    return {
+      principal: this.#authority.principal,
+      scopes: this.#authority.scopes ?? [],
+      platformOrigin: this.#input.appConfig.platformOrigin,
+      projectHostnameBase: this.#input.appConfig.projectHostnameBase,
+    };
+  }
+
+  async orgs() {
+    const { reach, principal } = this.#authority;
+    if (reach === "every") return [];
+    const orgs = await this.#input.directory.listOrgs(principal.actor);
+    if (!("projectIds" in reach)) return orgs;
+    const projects = await this.#input.directory.reachableProjects(reach);
+    return orgs.filter((org) => projects.some((project) => project.orgId === org.id));
+  }
+
+  get grants() {
+    if (!this.#authority.grants)
+      throw codedError("FORBIDDEN", "This session cannot manage OAuth grants.");
+    return this.#authority.grants;
+  }
+
+  logout() {
+    return this.grants.endCurrent();
   }
 
   /** The project catalog. A GETTER, not a field: capnweb (like Workers RPC) exposes prototype

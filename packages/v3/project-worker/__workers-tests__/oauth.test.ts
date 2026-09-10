@@ -1,9 +1,11 @@
 import { env, SELF, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { newWebSocketRpcSession, RpcTarget, RpcStub } from "capnweb";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { directory } from "../src/directory.ts";
+import { browserAuthorization } from "../src/browser-client.ts";
+import { appSession } from "../src/client/app-auth.ts";
 import { oauthHelpers } from "../src/oauth.ts";
-import { listGrants } from "../src/grants.ts";
 import type { Env } from "../src/control-plane.ts";
 import type { Session } from "../src/session.ts";
 import definitions from "../src/control-plane.sql?raw";
@@ -12,8 +14,11 @@ const bindings = env as unknown as Env;
 const ORIGIN = "https://control.test";
 const adminSecret = bindings.APP_CONFIG_ADMIN_API_SECRET!;
 const sessions: Disposable[] = [];
-const call = (path: string, init?: RequestInit) =>
-  SELF.fetch(new Request(`${ORIGIN}${path}`, { redirect: "manual", ...init }));
+const call = (path: string, init?: RequestInit) => {
+  const headers = new Headers(init?.headers);
+  if (path === "/login") headers.set("Authorization", `Bearer ${adminSecret}`);
+  return SELF.fetch(new Request(`${ORIGIN}${path}`, { redirect: "manual", ...init, headers }));
+};
 const helpers = () => oauthHelpers(bindings);
 
 beforeAll(async () => {
@@ -148,7 +153,7 @@ test("discovery advertises CIMD and neither publishes nor serves DCR", async () 
     ).toMatchObject({
       resource: `${ORIGIN}/${protocol}`,
       authorization_servers: [ORIGIN],
-      scopes_supported: ["iterate"],
+      scopes_supported: ["iterate", "account"],
     });
     expect((await call(`/${protocol}`)).status).toBe(401);
   }
@@ -317,10 +322,15 @@ test.each(["revoked", "membership"])(
 );
 
 test("console and project browsers use the same CIMD flow and independent grants", async () => {
-  const metadataFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    if (url.pathname !== "/.auth/client.json") throw new Error(`Unexpected external fetch: ${url}`);
-    return SELF.fetch(url.href);
+  let logoutUnavailable = false;
+  const metadataFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    if (!["/.auth/client.json", "/oauth/token", "/api"].includes(url.pathname))
+      throw new Error(`Unexpected external fetch: ${url}`);
+    if (logoutUnavailable && url.pathname === "/api")
+      return new Response("Unavailable", { status: 503 });
+    return SELF.fetch(request);
   });
   const issuerLogin = await call("/login", {
     method: "POST",
@@ -351,6 +361,15 @@ test("console and project browsers use the same CIMD flow and independent grants
         ]),
       });
       expect(approve.status, await approve.clone().text()).toBe(302);
+      for (const field of ["state", "iss"]) {
+        const invalid = new URL(approve.headers.get("location")!);
+        invalid.searchParams.delete(field);
+        const rejected = await SELF.fetch(invalid.href, {
+          redirect: "manual",
+          headers: { cookie },
+        });
+        expect(rejected.status).toBe(400);
+      }
       const callback = await SELF.fetch(approve.headers.get("location")!, {
         redirect: "manual",
         headers: { cookie },
@@ -371,21 +390,29 @@ test("console and project browsers use the same CIMD flow and independent grants
         (await SELF.fetch(`${origin}/api`, { headers: { cookie, Origin: "https://evil.test" } }))
           .status,
       ).toBe(403);
-      logins.push({ origin, cookie });
+      logins.push({ origin, cookie, root });
     }
+    const upgrade = await SELF.fetch(`${logins[1]!.origin}/.auth/login?scope=iterate%20account`, {
+      headers: { cookie: logins[1]!.cookie },
+      redirect: "manual",
+    });
+    expect(upgrade.status).toBe(200);
+    expect(await upgrade.text()).toContain('method="post"');
     expect((await helpers().listUserGrants(user.id)).items).toHaveLength(2);
     const consoleLogin = logins[0]!;
     const repeatedLogin = await call("/.auth/login", { headers: { cookie: consoleLogin.cookie } });
     expect(repeatedLogin.status).toBe(303);
     expect(repeatedLogin.headers.get("set-cookie")).toBeNull();
     expect((await helpers().listUserGrants(user.id)).items).toHaveLength(2);
-    const minted = await call("/sessions/token", {
-      method: "POST",
-      headers: { cookie: consoleLogin.cookie, Origin: ORIGIN },
-      body: new URLSearchParams({ name: "My CLI", project: "browser-a" }),
+    const personal = await consoleLogin.root.grants.mint({
+      name: "My CLI",
+      projects: ["browser-a"],
     });
-    expect(minted.status, await minted.clone().text()).toBe(200);
-    const personal = await minted.json<{ token: string; expiresAt: number }>();
+    await expect(logins[1]!.root.grants.list()).rejects.toThrow(/Account permission/);
+    await expect(
+      logins[1]!.root.grants.mint({ name: "Denied", projects: ["browser-a"] }),
+    ).rejects.toThrow(/Account permission/);
+    await expect(logins[1]!.root.grants.end("foreign-grant")).rejects.toThrow(/Account permission/);
     expect(personal.expiresAt - Date.now()).toBeGreaterThan(29 * 24 * 3600_000);
     expect(JSON.parse((await tool(personal.token, "whoami")).body.result.content[0].text)).toEqual({
       actor: user.id,
@@ -407,13 +434,7 @@ test("console and project browsers use the same CIMD flow and independent grants
         })
       ).status,
     ).toBe(400);
-    const inventoryContext = createExecutionContext();
-    const inventory = await listGrants({
-      env: bindings,
-      ctx: inventoryContext,
-      request: new Request(`${ORIGIN}/sessions`, { headers: { cookie: consoleLogin.cookie } }),
-    });
-    await waitOnExecutionContext(inventoryContext);
+    const inventory = await consoleLogin.root.grants.list();
     const [, personalId] = personal.token.split(":");
     expect(inventory.items.find((item) => item.id === personalId)).toMatchObject({
       name: "My CLI",
@@ -421,38 +442,51 @@ test("console and project browsers use the same CIMD flow and independent grants
       current: false,
     });
     expect(JSON.stringify(inventory)).not.toContain(personal.token);
-    expect(
-      (
-        await call("/sessions/revoke", {
-          method: "POST",
-          headers: { cookie: consoleLogin.cookie, Origin: ORIGIN },
-          body: new URLSearchParams({ grantId: "foreign-grant" }),
-        })
-      ).status,
-    ).toBe(404);
+    await expect(consoleLogin.root.grants.end("foreign-grant")).rejects.toThrow(
+      /Session not found/,
+    );
     expect(
       await bindings.DB.prepare("SELECT 1 FROM oauth_activity WHERE user_id = ? AND grant_id = ?")
         .bind(user.id, "foreign-grant")
         .first(),
     ).toBeNull();
-    expect(
-      (
-        await call("/sessions/revoke", {
-          method: "POST",
-          headers: { cookie: consoleLogin.cookie, Origin: ORIGIN },
-          body: new URLSearchParams({ grantId: personalId! }),
-        })
-      ).status,
-    ).toBe(303);
+    await consoleLogin.root.grants.end(personalId!);
     expect((await tool(personal.token, "whoami")).status).toBe(401);
-    expect(
-      (
-        await call("/.auth/logout", {
-          method: "POST",
-          headers: { cookie: consoleLogin.cookie, Origin: ORIGIN },
-        })
-      ).status,
-    ).toBe(303);
+    const cookieRequest = new Request(`${ORIGIN}/`, { headers: { cookie: consoleLogin.cookie } });
+    const heldSession = appSession(bindings.BROWSER_SESSION, cookieRequest)!;
+    const bearerBefore = await heldSession.bearer();
+    const providerFailure = vi
+      .spyOn(OAuthProvider.prototype, "fetch")
+      .mockResolvedValueOnce(new Response("Unavailable", { status: 503 }));
+    const failedAdmissionContext = createExecutionContext();
+    await expect(
+      browserAuthorization(bindings, cookieRequest, failedAdmissionContext),
+    ).rejects.toThrow(/Token admission failed \(503\)/);
+    await waitOnExecutionContext(failedAdmissionContext);
+    providerFailure.mockRestore();
+    expect(await heldSession.bearer()).toBe(bearerBefore);
+    logoutUnavailable = true;
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const failedLogout = await call("/.auth/logout", {
+      method: "POST",
+      headers: { cookie: consoleLogin.cookie, Origin: ORIGIN },
+    });
+    expect(failedLogout.status).toBe(503);
+    expect(failedLogout.headers.has("set-cookie")).toBe(false);
+    expect(await heldSession.bearer()).toBe(bearerBefore);
+    log.mockRestore();
+    logoutUnavailable = false;
+    const logout = await call("/.auth/logout", {
+      method: "POST",
+      headers: { cookie: consoleLogin.cookie, Origin: ORIGIN },
+    });
+    expect(logout.status).toBe(303);
+    expect(logout.headers.getSetCookie()).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("__Host-itx-session=;"),
+        expect.stringContaining("__Host-itx-control-plane-session=;"),
+      ]),
+    );
     expect(
       (await call("/api", { headers: { cookie: consoleLogin.cookie, Origin: ORIGIN } })).status,
     ).toBe(401);
@@ -467,4 +501,9 @@ test("console and project browsers use the same CIMD flow and independent grants
   } finally {
     metadataFetch.mockRestore();
   }
+});
+
+test("malformed and foreign resources are expected authorization refusals", async () => {
+  for (const resource of ["not a URL", "https://foreign.test/api"])
+    expect((await grant([resource])).error).toBe("invalid_target");
 });

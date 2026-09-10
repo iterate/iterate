@@ -8,6 +8,7 @@ export type {
   SessionCredentials,
   SessionPrincipal,
   UnauthenticatedSession,
+  Session,
 } from "./session.ts";
 export type { Principal, ProjectTokenClaims } from "./principal.ts";
 export type { BuiltInScope } from "./context/built-ins.ts";

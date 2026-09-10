@@ -16,6 +16,7 @@ import {
   type StreamEvent,
 } from "../stream/processor.ts";
 import type { ItxEntrypoint } from "../iterate-context.ts";
+import { auth } from "./auth.ts";
 
 export {
   StreamProcessor,
@@ -178,6 +179,8 @@ export type ConfigEventArgs = { event: StreamEvent; range: ScannedRange; itx: Co
 export abstract class ConfigWorker<
   Env extends { ITX: Service<ItxEntrypoint> } = { ITX: Service<ItxEntrypoint> },
 > extends WorkerEntrypoint<Env> {
+  /** At fetch entry: `const denied = this.auth.require(request); if (denied) return denied;` */
+  protected readonly auth = auth;
   /** THE SUBSCRIBED METHOD: a committed batch, in offset order. One `env.ITX.get()` for the whole
    *  batch (the calls pipeline through it), disposed in the `finally` — bounded to this one turn. */
   async processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {

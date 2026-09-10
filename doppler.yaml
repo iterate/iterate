@@ -32,3 +32,7 @@ setup:
     path: apps/dummy-petshop/
   - project: docs
     path: apps/docs/
+  - project: project-worker
+    path: packages/v3/project-worker/
+  - project: notes
+    path: apps/notes/

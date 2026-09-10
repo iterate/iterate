@@ -32,6 +32,8 @@ const MINIMAL = {
 /** What MINIMAL becomes: every optional var blank, the deploy id defaulted. */
 const MINIMAL_CONFIG = {
   platformOrigin: "https://control.test",
+  googleClientId: "",
+  googleClientSecret: "",
   mcpOrigin: "",
   environmentName: "poc",
   projectHostnameBase: "",

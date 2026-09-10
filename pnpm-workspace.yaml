@@ -104,6 +104,7 @@ overrides:
   # 4.107.0 workerd still gates it behind --experimental). Scoped like the capnweb bump above — the
   # monorepo-wide pin stays 4.107.0 until each consumer is verified.
   'project-worker>wrangler': 4.127.1
+  '@iterate-com/notes>wrangler': 4.127.1
   ws: 8.19.0
 
 packageExtensions:

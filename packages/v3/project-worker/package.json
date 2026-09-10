@@ -5,20 +5,27 @@
   "description": "The clean-room platform — ONE worker, one package: worker.ts (the stateless capnweb edge + ingress router) + IterateContextDurableObject (iterate-context-durable-object.ts) + control-plane.ts (OAuth AS + D1 directory + /mcp + the console's server half, always in-process) + routes/ (the console: a TanStack Start app) + context/ stream/ sdk/ client/ + lib.ts + library.ts",
   "exports": {
     "./types": "./src/types.ts",
-    "./client": "./src/client/live-state.ts"
+    "./client": "./src/client/live-state.ts",
+    "./app": "./src/client/browser.ts",
+    "./app-server": "./src/client/app-auth.ts",
+    "./app-session": "./src/browser-session.ts",
+    "./dashboard": "./src/client/dashboard.tsx",
+    "./dashboard-data": "./src/client/dashboard-data.ts"
   },
   "scripts": {
     "dev": "node scripts/dev.ts",
     "build": "vite build",
-    "deploy": "vite build && wrangler deploy --config dist/server/wrangler.json",
+    "deploy": "tsx scripts/deploy.ts",
     "routes:generate": "node scripts/generate-route-tree.ts",
     "routes:check": "node scripts/generate-route-tree.ts --check",
-    "typecheck": "pnpm routes:check && node build-sdk.mjs && tsc --noEmit && tsc --noEmit -p tsconfig.client.json && tsc --noEmit -p tsconfig.tests.json",
-    "test": "vitest run",
-    "e2e": "vitest run --project e2e",
+    "typecheck": "pnpm routes:check && node build-sdk.mjs && tsc --noEmit && tsc --noEmit -p tsconfig.client.json && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.scripts.json",
+    "test": "vitest run --configLoader runner",
+    "e2e": "vitest run --configLoader runner --project e2e",
     "spec": "playwright test",
-    "bench": "vitest bench --run --project bench",
-    "db:schema:remote": "wrangler d1 execute control-plane-directory --remote --file src/control-plane.sql"
+    "bench": "vitest bench --configLoader runner --run --project bench",
+    "db:schema:remote": "wrangler d1 execute control-plane-directory --remote --file src/control-plane.sql",
+    "gen:wrangler": "tsx scripts/generate-wrangler-config.ts",
+    "ensure-resources": "tsx scripts/ensure-resources.ts"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "0.10.3",
@@ -30,7 +37,8 @@
     "pako": "^3.0.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "zod": "^4.1.5"
+    "zod": "^4.1.5",
+    "oauth4webapi": "^3.8.5"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:cloudflare",
@@ -45,6 +53,8 @@
     "undici": "^7.29.0",
     "vite": "^8.0.0",
     "vitest": "^4.1.7",
-    "wrangler": "4.127.1"
+    "wrangler": "4.127.1",
+    "trpc-cli": "0.15.1",
+    "tsx": "^4.20.6"
   }
 }

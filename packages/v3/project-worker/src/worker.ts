@@ -10,6 +10,8 @@ import {
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 // the one worker's env: the DO's bindings plus the in-process control plane's (control-plane.ts `Env`)
 import type { Env as WorkerEnv } from "./control-plane.ts";
+import { auth } from "./sdk/auth.ts";
+import { identityDoor } from "./identity.ts";
 import { oauthResponse } from "./api.ts";
 import { consoleHandler } from "./control-plane.ts";
 import { appConfigOf } from "./app-config.ts";
@@ -21,7 +23,7 @@ import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
 import { DurableObjectNameCodec } from "./iterate-context.ts";
 import { UnauthenticatedSession, type SessionInput } from "./session.ts";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "./principal.ts";
-import { authorizationForToken, recordGrantUse } from "./oauth.ts";
+import { authorizationForToken, recordGrantUse, cleanGrantActivity } from "./oauth.ts";
 
 /** A project host's re-entry count — THE COUNT THE APP FORWARDS: an app that fetches its own host
  *  and forwards the headers it was handed re-enters with the count on them, each pass adds one, and
@@ -89,6 +91,9 @@ export { BrowserSession } from "./browser-session.ts";
 export { ItxEntrypoint } from "./iterate-context.ts";
 
 export default {
+  async scheduled(_event: ScheduledController, env: WorkerEnv) {
+    await cleanGrantActivity(env);
+  },
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     // THE HOP COUNT — what the app forwards: a request carrying the count it was handed re-enters
@@ -194,6 +199,9 @@ export default {
       return newWorkersRpcResponse(request, new UnauthenticatedSession(sessionInput));
     }
 
+    const identityResponse = await identityDoor(request, env);
+    if (identityResponse) return identityResponse;
+    if (!appConfig.mcpOrigin && url.pathname === "/mcp") return oauthResponse(request, env, ctx);
     const browserResponse = await browserClient(request, env, ctx, null);
     if (browserResponse) return browserResponse;
     if (url.pathname.startsWith("/api")) return new Response("Not found", { status: 404 });
@@ -207,6 +215,21 @@ export default {
     if ((request.method === "GET" || request.method === "HEAD") && env.ASSETS) {
       const asset = await env.ASSETS.fetch(request);
       if (asset.status !== 404) return asset;
+    }
+
+    const issuerRoute =
+      ["/login", "/logout", "/authorize", "/oauth/token", "/oauth/register"].includes(
+        url.pathname,
+      ) ||
+      url.pathname.startsWith("/.well-known/") ||
+      url.pathname.startsWith("/_serverFn/");
+    if (!issuerRoute) {
+      const authorization = await browserAuthorization(env, request, ctx);
+      const headers = new Headers(request.headers);
+      headers.delete(ITX_PRINCIPAL_HEADER);
+      if (authorization) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(authorization.principal));
+      const denied = auth.require(new Request(request, { headers }));
+      if (denied) return denied;
     }
 
     // Everything else on the platform host is the CONTROL PLANE, in-process (src/control-plane.ts

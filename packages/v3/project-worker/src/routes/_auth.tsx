@@ -1,12 +1,8 @@
-// Console pages require the console host’s ordinary OAuth browser grant.
-import { createFileRoute, redirect } from "@tanstack/react-router";
-import { sessionOf } from "./-session.ts";
+import { createFileRoute } from "@tanstack/react-router";
+import { createIterateClient } from "../client/browser.ts";
 
+const iterate = createIterateClient({ scopes: ["iterate", "account"] });
 export const Route = createFileRoute("/_auth")({
-  beforeLoad: async ({ location }) => {
-    const session = await sessionOf();
-    if (!session)
-      throw redirect({ href: `/.auth/login?next=${encodeURIComponent(location.href)}` });
-    return { session };
-  },
+  ssr: false,
+  beforeLoad: ({ location }) => iterate.authenticate(location.href),
 });

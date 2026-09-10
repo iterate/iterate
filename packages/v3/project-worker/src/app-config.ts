@@ -17,6 +17,8 @@ const APP_CONFIG_VARS = [
   "APP_CONFIG_ADMIN_API_SECRET",
   "APP_CONFIG_PLATFORM_ORIGIN",
   "APP_CONFIG_MCP_ORIGIN",
+  "APP_CONFIG_GOOGLE_CLIENT_ID",
+  "APP_CONFIG_GOOGLE_CLIENT_SECRET",
 ] as const;
 /** One of the `APP_CONFIG_*` vars — the only names `parseAppConfig` reads. */
 type AppConfigVarName = (typeof APP_CONFIG_VARS)[number];
@@ -26,6 +28,8 @@ type AppConfigVarName = (typeof APP_CONFIG_VARS)[number];
 export interface AppConfig {
   /** The fixed issuer/console origin, and an optional separate MCP origin. */
   readonly platformOrigin: string;
+  readonly googleClientId: string;
+  readonly googleClientSecret: string;
   readonly mcpOrigin: string;
   /** Which deployment this is, as a word a human reads at `/version`: "poc" (the deployment), "test"
    *  (the workers lane), "e2e" (the e2e lane). Required. */
@@ -101,8 +105,14 @@ export function parseAppConfig(vars: object, deployId = "unversioned"): AppConfi
   }
   if (mcpOrigin && (!platformOrigin || mcpOrigin === platformOrigin))
     throw new Error("APP_CONFIG_MCP_ORIGIN: requires a distinct APP_CONFIG_PLATFORM_ORIGIN");
+  const googleClientId = read("APP_CONFIG_GOOGLE_CLIENT_ID");
+  const googleClientSecret = read("APP_CONFIG_GOOGLE_CLIENT_SECRET");
+  if (Boolean(googleClientId) !== Boolean(googleClientSecret))
+    throw new Error("Google client ID and secret must be configured together.");
   return {
     platformOrigin,
+    googleClientId,
+    googleClientSecret,
     mcpOrigin,
     environmentName,
     projectHostnameBase: read("APP_CONFIG_PROJECT_HOSTNAME_BASE"),

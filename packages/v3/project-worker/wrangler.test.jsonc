@@ -55,6 +55,8 @@
   "vars": {
     "APP_CONFIG_ENVIRONMENT_NAME": "test",
     "APP_CONFIG_PLATFORM_ORIGIN": "https://control.test",
+    "APP_CONFIG_GOOGLE_CLIENT_ID": "google-test-client",
+    "APP_CONFIG_GOOGLE_CLIENT_SECRET": "google-test-secret",
     "APP_CONFIG_PROJECT_HOSTNAME_BASE": "projects.test",
     "APP_CONFIG_PROJECT_TOKEN_SECRET": "test-project-token-secret",
     "APP_CONFIG_SESSION_SECRET": "test-session-secret",

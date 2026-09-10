@@ -1,0 +1,40 @@
+import { notesEnvs } from "../../../envs.ts";
+import {
+  OBSERVABILITY,
+  writeGeneratedWranglerConfig,
+} from "../../../scripts/lib/wrangler-config.ts";
+
+export function writeWranglerConfig() {
+  const bindings = {
+    compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
+    durable_objects: { bindings: [{ name: "BROWSER_SESSION", class_name: "BrowserSession" }] },
+    exports: { BrowserSession: { type: "durable-object", storage: "sqlite" } },
+    vars: { ITERATE_ORIGIN: "https://os.iterate2.com" },
+    observability: OBSERVABILITY,
+    assets: { binding: "ASSETS", not_found_handling: "none", run_worker_first: true },
+  };
+  return writeGeneratedWranglerConfig({
+    configUrl: new URL("../wrangler.jsonc", import.meta.url),
+    appLabel: "apps/notes",
+    config: {
+      $schema: "node_modules/wrangler/config-schema.json",
+      name: "notes",
+      main: "src/worker.ts",
+      compatibility_date: "2026-09-01",
+      ...bindings,
+      env: Object.fromEntries(
+        Object.entries(notesEnvs).map(([name, env]) => [
+          name,
+          {
+            name: env.workerName,
+            account_id: env.cloudflareAccountId,
+            workers_dev: true,
+            ...bindings,
+            routes: [{ pattern: `${new URL(env.baseUrl).hostname}/*`, zone_name: "iterate2.com" }],
+          },
+        ]),
+      ),
+    },
+  });
+}
+if (process.argv[1]?.endsWith("generate-wrangler-config.ts")) console.log(writeWranglerConfig());

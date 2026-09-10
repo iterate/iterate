@@ -7,6 +7,7 @@ import {
   type OAuthProviderOptions,
 } from "@cloudflare/workers-oauth-provider";
 import { z } from "zod";
+import { OAuthScope, OAuthScopes } from "./oauth-scopes.ts";
 import type { Env, Handler } from "./control-plane.ts";
 import { type Reach } from "./directory.ts";
 import { verifyAdminSecret, type Principal } from "./principal.ts";
@@ -20,8 +21,8 @@ export const GrantProps = z.object({
   userId: z.string().startsWith("user_"),
   email: z.string(),
   projects: z.array(z.string()).nullable(),
-  tokenKind: z.enum(["oauth", "personal", "device"]),
-  deadline: z.number().int().positive().nullable(),
+  tokenKind: z.enum(["oauth", "personal"]),
+  deadline: z.number().int().positive(),
 });
 export type GrantProps = z.infer<typeof GrantProps>;
 
@@ -63,7 +64,9 @@ export async function parseAuthorization(env: Env, request: Request): Promise<Au
   if (
     !resources.length ||
     resources.some(
-      (resource) => ![api, mcp].some((allowed) => new URL(resource).href === new URL(allowed).href),
+      (resource) =>
+        !URL.canParse(resource) ||
+        ![api, mcp].some((allowed) => new URL(resource).href === new URL(allowed).href),
     )
   )
     throw new AuthorizationError("invalid_target", {
@@ -72,14 +75,15 @@ export async function parseAuthorization(env: Env, request: Request): Promise<Au
       state: auth.state,
       issuer: auth.issuer,
     });
-  if (auth.scope.length && !auth.scope.includes("iterate"))
+  const scopes = OAuthScopes.safeParse(auth.scope);
+  if (!scopes.success)
     throw new AuthorizationError("invalid_scope", {
-      description: "This API requires the iterate scope.",
+      description: "This API supports iterate and account scopes.",
       redirectUri: auth.redirectUri,
       state: auth.state,
       issuer: auth.issuer,
     });
-  return { ...auth, scope: ["iterate"], resource: resources };
+  return { ...auth, scope: scopes.data, resource: resources };
 }
 
 export async function grantIsRevoked(env: Env, userId: string, grantId: string): Promise<boolean> {
@@ -102,7 +106,7 @@ export async function authorizationOf(env: Env, props: unknown): Promise<Authori
   if (
     grant.expiresAt <= Date.now() ||
     !grant.scope.includes("iterate") ||
-    (grant.deadline && grant.deadline <= Date.now()) ||
+    grant.deadline <= Date.now() ||
     (await grantIsRevoked(env, grant.userId, grant.grantId))
   )
     return null;
@@ -137,10 +141,11 @@ export function providerOptions(
     defaultHandler,
     authorizeEndpoint: `${issuer}/authorize`,
     tokenEndpoint: `${issuer}/oauth/token`,
-    scopesSupported: ["iterate"],
+    ...(issuer.startsWith("http:") && { clientRegistrationEndpoint: `${issuer}/oauth/register` }),
+    scopesSupported: OAuthScope.options,
     resourceMetadata: {
       ...(issuer.startsWith("https:") && { authorization_servers: [issuer] }),
-      scopes_supported: ["iterate"],
+      scopes_supported: OAuthScope.options,
     },
     clientIdMetadataDocumentEnabled: true,
     allowPlainPKCE: false,
@@ -157,14 +162,12 @@ export function providerOptions(
       )
         throw new OAuthError("invalid_grant", { description: "The session is no longer active." });
       const grant = parsed.data;
-      if (grant.deadline && grant.deadline - Date.now() < 60_000)
+      if (grant.deadline - Date.now() < 60_000)
         throw new OAuthError("invalid_grant", { description: "The session has expired." });
       if (grant.tokenKind === "personal" && input.grantType !== "authorization_code")
         throw new OAuthError("invalid_grant", { description: "Personal tokens cannot refresh." });
       const ttl = grant.tokenKind === "personal" ? 30 * 24 * 3600 : 3600;
-      const accessTokenTTL = grant.deadline
-        ? Math.min(ttl, Math.floor((grant.deadline - Date.now()) / 1000))
-        : ttl;
+      const accessTokenTTL = Math.min(ttl, Math.floor((grant.deadline - Date.now()) / 1000));
       return {
         accessTokenTTL,
         accessTokenProps: {
@@ -175,9 +178,7 @@ export function providerOptions(
         } satisfies AccessGrant,
         // The key MUST be absent on refresh, including when its value is undefined.
         ...(input.grantType === "authorization_code" &&
-          grant.tokenKind === "personal" && { refreshTokenTTL: 0 }),
-        ...(input.grantType === "authorization_code" &&
-          grant.tokenKind === "device" && { refreshTokenTTL: undefined }),
+          grant.tokenKind === "personal" && { refreshTokenTTL: accessTokenTTL }),
       };
     },
   };
@@ -187,36 +188,7 @@ export function oauthHelpers(env: Env) {
   return getOAuthApi(providerOptions(env), env);
 }
 
-/** The same code/PKCE parameters for browser login and a console-minted token. */
-export async function authorizationCodeRequest(input: {
-  issuer: string;
-  clientId: string;
-  redirectUri: string;
-  resources: string[];
-}) {
-  const verifier =
-    crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
-  const hash = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
-  );
-  const challenge = btoa(String.fromCharCode(...hash))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
-  const state = crypto.randomUUID();
-  const url = new URL("/authorize", input.issuer);
-  url.search = new URLSearchParams({
-    response_type: "code",
-    client_id: input.clientId,
-    redirect_uri: input.redirectUri,
-    scope: "iterate",
-    state,
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-  }).toString();
-  for (const resource of input.resources) url.searchParams.append("resource", resource);
-  return { url, state, verifier };
-}
+export { authorizationCodeRequest } from "./client/oauth.ts";
 
 /** The browser adapter asks the same provider gate to admit its server-held token
  * at the API resource. No public validation endpoint or second token verifier. */
@@ -231,12 +203,18 @@ export async function authorizationForToken(env: Env, ctx: ExecutionContext, tok
   const apiRequest = new Request(oauthAddresses(env).api, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  await new OAuthProvider(providerOptions(env, admission)).fetch(apiRequest, env, ctx);
+  const response = await new OAuthProvider(providerOptions(env, admission)).fetch(
+    apiRequest,
+    env,
+    ctx,
+  );
+  if (response.status !== 204 && response.status !== 401)
+    throw new Error(`Token admission failed (${response.status})`);
   return authorization as Authorization | null; // Assigned inside the awaited handler; TS cannot track that closure assignment.
 }
 
 /** The caller must already own this grant: a checked provider inventory row or
- * the BrowserSession's stored token summary. The D1 marker precedes KV cleanup. */
+ * the authenticated request's grant. The D1 marker precedes KV cleanup. */
 export async function revokeGrant(env: Env, grant: { userId: string; grantId: string }) {
   await env.DB.prepare(`INSERT INTO oauth_activity (user_id, grant_id, revoked_at, cleanup_pending)
 VALUES (?, ?, ?, 1) ON CONFLICT(user_id, grant_id) DO UPDATE
@@ -263,7 +241,20 @@ SET revoked_at = COALESCE(oauth_activity.revoked_at, excluded.revoked_at), clean
 
 const notFound: Handler = { fetch: () => new Response("Not found", { status: 404 }) };
 
-/** In-process token exchange, also used by the browser session DO. */
+/** Personal token minting uses the provider in process; browser apps use its public endpoint. */
 export function exchangeToken(request: Request, env: Env, ctx: ExecutionContext) {
   return new OAuthProvider(providerOptions(env)).fetch(request, env, ctx);
+}
+
+/** All issued grants last at most thirty days. Keep completed revocation markers
+ * another day beyond their last possible authority; failed cleanup stays visible.
+ * Each hourly cron does at most one thousand deletes. */
+export async function cleanGrantActivity(env: Env) {
+  const cutoff = Date.now() - 31 * 24 * 3600_000;
+  const result = await env.DB.prepare(`DELETE FROM oauth_activity WHERE rowid IN (
+SELECT rowid FROM oauth_activity WHERE cleanup_pending = 0
+AND COALESCE(last_used_at, 0) < ? AND COALESCE(revoked_at, 0) < ? LIMIT 1000)`)
+    .bind(cutoff, cutoff)
+    .run();
+  console.info("oauth.activity_cleanup", { deleted: result.meta.changes });
 }

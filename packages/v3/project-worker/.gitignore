@@ -5,3 +5,5 @@ src/generated/
 # The Vite build (vite.config.ts): dist/client (the console's bundle + public/) and
 # dist/server (index.js + wrangler.json) — what `pnpm deploy` and the local lanes consume.
 dist/
+
+/wrangler.jsonc

@@ -1,5 +1,6 @@
 import { newWorkersRpcResponse, RpcSession, WebSocketTransport } from "capnweb";
 import type { Env } from "./control-plane.ts";
+import { Grants } from "./grants.ts";
 import { directory } from "./directory.ts";
 import { authorizationOf, recordGrantUse, type Authorization } from "./oauth.ts";
 import { Session, SessionTeardown, type SessionInput } from "./session.ts";
@@ -7,7 +8,7 @@ import { appConfigOf } from "./app-config.ts";
 
 /** Cap’n Web always terminates at /api in the stateless edge. Its root is an
  * already-authorized session; authority never comes from a later caller-supplied actor. */
-export function rpcResponse(
+export async function rpcResponse(
   request: Request,
   env: Env,
   ctx: ExecutionContext,
@@ -24,15 +25,27 @@ export function rpcResponse(
     secretsKv: env.SECRETS_KV,
     onProjectAccess: (projectId) => projects.add(projectId),
   };
-  const root = new Session(input, teardown, auth.principal, auth.reach, auth.grant ? null : input);
+  const root = new Session(input, teardown, {
+    principal: auth.principal,
+    reach: auth.reach,
+    projectDoors: auth.grant ? null : input,
+    grants: new Grants(env, ctx, auth),
+    scopes: auth.grant?.scope,
+  });
   const grant = auth.grant;
-  if (!grant || request.headers.get("upgrade")?.toLowerCase() !== "websocket")
-    return newWorkersRpcResponse(request, root, {
-      onCall: (_call, invoke) => {
-        if (grant && grant.expiresAt <= Date.now()) throw new Error("Session expired");
-        return invoke();
-      },
-    });
+  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+    try {
+      return await newWorkersRpcResponse(request, root, {
+        onCall: (_call, invoke) => {
+          if (grant && grant.expiresAt <= Date.now()) throw new Error("Session expired");
+          return invoke();
+        },
+      });
+    } finally {
+      teardown.disposeAll();
+    }
+  }
+  if (!grant) return newWorkersRpcResponse(request, root);
 
   const pair = new WebSocketPair();
   const socket = pair[0];

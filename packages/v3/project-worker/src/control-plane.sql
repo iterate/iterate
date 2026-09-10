@@ -14,6 +14,13 @@ create table if not exists users (
   created_at text not null default current_timestamp
 );
 
+-- Google subjects stay stable when an email changes. A verified first login may
+-- adopt an existing operator-created user, but cannot replace another identity.
+create table if not exists google_identities (
+  subject text primary key,
+  user_id text not null unique references users(id)
+);
+
 create table if not exists orgs (
   id text primary key,            -- org_<hex> (minted), or org_admin — the deployment's own, no members (control-plane.ts adminOrg)
   name text not null,

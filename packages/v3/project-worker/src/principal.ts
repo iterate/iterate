@@ -83,7 +83,7 @@ export async function signClaims(claims: unknown, secret: string): Promise<strin
 /** The claims of a token that is well-formed and signed with `secret` — else null (no reason: a
  *  caller answers every bad token the same way). A blank secret verifies nothing. The caller checks
  *  the claims' SHAPE and expiry. */
-async function verifyClaims(token: string, secret: string): Promise<unknown> {
+export async function verifyClaims(token: string, secret: string): Promise<unknown> {
   if (!secret) return null;
   const dot = token.indexOf(".");
   if (dot <= 0) return null;

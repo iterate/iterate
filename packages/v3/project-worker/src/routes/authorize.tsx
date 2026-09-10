@@ -1,14 +1,4 @@
-// _auth/authorize.tsx — /authorize: the OAuth consent AND THE PROJECT SELECTION. The provider's
-// authorize endpoint (control-plane.ts `authorizeEndpoint: "/authorize"`), so the file is named for
-// the path. The OAuth parameters ride the URL verbatim — the server fn hands the raw query to
-// `env.OAUTH_PROVIDER.parseAuthRequest` (control-plane.ts `consentOf`); a request the provider
-// refuses is sent back to the client with `error` (`AuthorizationError.redirectUri`) or shown here.
-// The user's projects are checkboxes, all checked; approving grants the client the USER on the
-// checked ones (`completeAuthorization` — `props.actor / email / projects`, what every /mcp tool
-// acts within), then the browser goes to the client's redirect URI. The form is a real one —
-// `method="post"` to the machine's approve door, `POST /authorize?<the same query>` (control-plane.ts
-// `consoleDoor`, the same `approveConsent`), the server function taking over once hydrated
-// (login.tsx says why).
+// Issuer consent uses Start server functions; app data uses the public RPC session.
 import { useState, type FormEvent } from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
@@ -58,7 +48,7 @@ function ConsentPage() {
       </main>
     );
 
-  const { query, clientName, email, projects, projectBound } = answer;
+  const { query, clientName, email, projects, projectBound, scopes } = answer;
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const chosen = new FormData(event.currentTarget).getAll("project").map(String);
@@ -81,6 +71,12 @@ function ConsentPage() {
         <strong>{clientName}</strong> wants to connect as <strong>{email}</strong>.
       </p>
       <form method="post" action={`/authorize${query}`} onSubmit={submit}>
+        {scopes.includes("account") && (
+          <p>
+            <strong>Account permission:</strong> this app can view and end all your sessions and
+            create API tokens for the projects you grant it.
+          </p>
+        )}
         <fieldset>
           <legend>Projects it may reach</legend>
           {!projectBound && (

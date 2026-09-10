@@ -7,31 +7,24 @@ import {
   type OAuthHelpers,
 } from "@cloudflare/workers-oauth-provider";
 import type { ServerEntry } from "@tanstack/react-start/server-entry";
-import { grantsDoor } from "./grants.ts";
+import { isLocalOrigin } from "./identity.ts";
 import { parseAuthorization, type GrantProps } from "./oauth.ts";
-import { codedError, isSameOriginBrowserRequest } from "./lib.ts";
-import { directory, projectSlug, type Org, type Project } from "./directory.ts";
-import { browserSessionOf, requireBrowserSession } from "./browser-client.ts";
+import { codedError, errorCode, isSameOriginBrowserRequest } from "./lib.ts";
+import { directory, type Project } from "./directory.ts";
 import { projectHostOf } from "./hosts.ts";
 import { appConfigOf } from "./app-config.ts";
 import { sameOriginPath } from "./lib.ts";
 import {
+  verifyAdminSecret,
   clearSessionCookie,
   setSessionCookie,
   verifySessionCookie,
-  type Principal,
   type SessionCookieClaims,
 } from "./principal.ts";
-import { DurableObjectNameCodec } from "./iterate-context.ts";
 import type { BrowserSession } from "./browser-session.ts";
 import type { Env as DurableObjectEnv } from "./iterate-context-durable-object.ts";
 
-/** THE ONE WORKER's bindings: the DO's (`iterate-context-durable-object.ts` `Env` — `ITERATE_CONTEXT`,
- *  where `/mcp`'s `itx.invoke` and the account page's app listing run an expression in-process
- *  through the named project's root context; `SECRETS_KV`, where a project's API-key hash sits for
- *  the project-secret bearer; the `APP_CONFIG_*` vars `appConfigOf(env)` parses) plus the control
- *  plane's own below. src/worker.ts is typed on this. `OAUTH_PROVIDER` is injected by the
- *  OAuthProvider wrapper at request time. */
+/** Platform bindings for the issuer, public APIs and project ingress. */
 export interface Env extends DurableObjectEnv {
   BROWSER_SESSION: DurableObjectNamespace<BrowserSession>;
   /** Provider-owned store: grants, tokens, DCR clients. Required by @cloudflare/workers-oauth-provider. */
@@ -52,18 +45,8 @@ export interface Handler {
   fetch(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response>;
 }
 
-/** What every server function of the console sees as `context` (apps/auth's `context.cloudflare.env`
- *  shape): the worker's env — with the provider's `OAUTH_PROVIDER` on it — the execution context, and
- *  the request itself: the page's under SSR, the function's own fetch on a client call — both carry
- *  the session cookie. Handed to the Start entry below; typed for the routes by ONE Start middleware
- *  (src/routes/-console-context.ts) rather than through Start's `Register` augmentation: tsc 5.9
- *  keeps one `Register` augmentation per program (the generated route tree's), a second shadows it. */
+/** Request-local context for issuer login and consent server functions. */
 export type ConsoleRequestContext = { env: Env; ctx: ExecutionContext; request: Request };
-
-// ── the console's server half ── one function per action, what the routes' server functions
-// (src/routes/**) and the machine doors below share. Each reads the session off the request it is
-// handed: the cookie is the truth, and a server function called from the browser carries it on its
-// own fetch.
 
 /** The session the request's cookie establishes (principal.ts `verifySessionCookie`), or null. */
 export function issuerSessionOf(env: Env, request: Request): Promise<SessionCookieClaims | null> {
@@ -76,16 +59,22 @@ async function requireIssuerSession(env: Env, request: Request) {
   return session;
 }
 
-/** Sign in as `email` (the demo login verifies nothing — an email IS a user, upserted lowercased):
- *  the `Set-Cookie` that establishes the session and where to go — `next` as a path on this origin
- *  (worker.ts `sameOriginPath`: the post-login redirect never leaves the host). A blank email is refused. */
+/** Local login fixture, or explicit administrator impersonation for automated
+ * acceptance tests. Deployed visitors prove identity through Google. */
 export async function signIn(
   env: Env,
   request: Request,
   input: { email: string; next: string },
 ): Promise<{ setCookie: string; location: string }> {
+  const config = appConfigOf(env);
+  const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
+  if (
+    !isLocalOrigin(config.platformOrigin) &&
+    !(bearer && (await verifyAdminSecret(bearer, config.adminApiSecret)))
+  )
+    throw codedError("UNAUTHENTICATED", "Sign in with Google.");
   const email = input.email.trim();
-  if (!email) throw new Error("Enter an email.");
+  if (!email) throw codedError("INVALID_INPUT", "Enter an email.");
   const user = await directory(env.DB).upsertUser(email);
   const setCookie = await setSessionCookie(
     { sub: user.id, email: user.email, iat: Math.floor(Date.now() / 1000) },
@@ -97,74 +86,6 @@ export async function signIn(
 /** The `Set-Cookie` that ends the session. */
 export const signOut = (): string => clearSessionCookie();
 
-/** The account page (src/routes/_auth/index.tsx): who, their orgs, their projects — each with its
- *  "open" link and one per app it serves. */
-export interface Account {
-  email: string;
-  orgs: Org[];
-  projects: (Project & { open: string | null; apps: { label: string; open: string }[] })[];
-}
-
-export async function accountOf(
-  env: Env,
-  request: Request,
-  ctx: ExecutionContext,
-): Promise<Account> {
-  const session = await requireBrowserSession(env, request, ctx);
-  const d1Directory = directory(env.DB);
-  const [orgs, projects] = await Promise.all([
-    d1Directory.listOrgs(session.sub),
-    d1Directory.reachableProjects(session.reach),
-  ]);
-  const { projectHostnameBase } = appConfigOf(env);
-  const { protocol, port } = new URL(request.url); // the deployment's scheme and port (a local worker's, too)
-  const principal: Principal = { actor: session.sub, email: session.email };
-  const rows = await Promise.all(
-    projects.map(async (project) => {
-      if (!projectHostnameBase) return { ...project, open: null, apps: [] };
-      const door = (host: string) =>
-        `${protocol}//${host}.${projectHostnameBase}${port ? `:${port}` : ""}/`;
-      const labels = await appLabelsOf(env, project.id, principal);
-      return {
-        ...project,
-        open: door(project.id),
-        apps: labels.map((label) => ({ label, open: door(`${label}--${project.id}`) })),
-      };
-    }),
-  );
-  return { email: session.email, orgs, projects: rows };
-}
-
-/** The apps a project serves — the labels of the `itx.apps.<label>` rows in its root context's
- *  rewrite table (`itx.rewriteRules.list()`, run in-process as the user through the DO's `invokeAs`,
- *  the /mcp tool's door). A masked row is no app; a context that cannot answer lists none. */
-async function appLabelsOf(env: Env, projectId: string, principal: Principal): Promise<string[]> {
-  try {
-    const rows = (await env.ITERATE_CONTEXT.getByName(
-      DurableObjectNameCodec.stringify({ projectId, path: "/" }),
-    ).invokeAs(principal, "itx.rewriteRules.list()")) as { match: string; target: unknown }[];
-    return rows
-      .filter((row) => row.target !== null && row.match.startsWith("itx.apps."))
-      .map((row) => row.match.slice("itx.apps.".length))
-      .filter((label) => /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(label)); // one host label (worker.ts APP_LABEL)
-  } catch {
-    return [];
-  }
-}
-
-/** The console's create door: `directory.createProject({ userId }, name)` — the same door as
- *  `projects.create` over /api (session.ts). A taken name is coded PROJECT_NAME_TAKEN, an empty
- *  or invalid one refused: the visitor's problem, shown on the page, never a 500. */
-export async function createProjectFor(
-  env: Env,
-  request: Request,
-  name: string,
-  ctx: ExecutionContext,
-): Promise<Project> {
-  const session = await requireBrowserSession(env, request, ctx);
-  return directory(env.DB).createProject(session.reach, name);
-}
-
 /** What the consent page shows, or where the browser goes instead. */
 export type Consent =
   /** The consent: the client, the user, THE PROJECT SELECTION (their projects, offered all checked). */
@@ -175,6 +96,7 @@ export type Consent =
       email: string;
       projects: Project[];
       projectBound: boolean;
+      scopes: string[];
     }
   /** The provider's refusal, sent back to the client — `error`, `error_description`, `state`, `iss`
    *  — as its README says, when the client and its redirect URI validated. */
@@ -232,6 +154,7 @@ export async function consentOf(env: Env, request: Request, query: string): Prom
       query,
       clientName: client?.clientName ?? oauthRequest.clientId,
       email: session.email,
+      scopes: oauthRequest.scope,
       ...(await projectsForClient(env, oauthRequest.clientId, session.sub)),
     };
   } catch (error) {
@@ -264,7 +187,7 @@ export async function approveConsent(
       request: oauthRequest,
       userId: session.sub,
       metadata: { clientName: client?.clientName ?? oauthRequest.clientId },
-      scope: ["iterate"],
+      scope: oauthRequest.scope,
       revokeExistingGrants: false,
       props: {
         kind: "user-grant",
@@ -302,21 +225,11 @@ const loadStartServerEntry = (): Promise<ServerEntry> =>
 const redirectResponse = (location: string, headers: Record<string, string> = {}): Response =>
   new Response(null, { status: 302, headers: { location, ...headers } });
 
-/** THE MACHINE DOORS: the console's four actions as plain form POSTs — /login (email, next),
- *  /logout (`?next=`, a path on this origin, `/` by default), /projects (slug), /authorize?<the OAuth
- *  query> (project, repeated) — each the very function the route's server function calls, answered
- *  as a form post is: a 302 on success (the session cookie set or cleared on it), a text refusal
- *  otherwise. The console's own forms post here too (src/routes/login.tsx says how: a form submitted
- *  before the page hydrates), so each door's fields are the form's. Null for anything else: the console's. */
-async function consoleDoor(
-  request: Request,
-  env: Env,
-  ctx: ExecutionContext,
-): Promise<Response | null> {
+/** Issuer forms work before hydration. App actions use Cap’n Web. */
+async function consoleDoor(request: Request, env: Env): Promise<Response | null> {
   if (request.method !== "POST") return null;
   const url = new URL(request.url);
   const { pathname, search } = url;
-  const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
   if (pathname === "/login") {
     const form = await request.formData();
     try {
@@ -326,26 +239,17 @@ async function consoleDoor(
       });
       return redirectResponse(location, { "set-cookie": setCookie });
     } catch (error) {
-      return new Response(`400: ${message(error)}\n`, { status: 400 });
+      const code = errorCode(error);
+      if (!["UNAUTHENTICATED", "INVALID_INPUT"].includes(code ?? "")) throw error;
+      return new Response(error instanceof Error ? error.message : String(error), {
+        status: code === "UNAUTHENTICATED" ? 401 : 400,
+      });
     }
   }
   if (pathname === "/logout")
     return redirectResponse(sameOriginPath(url.searchParams.get("next") ?? "/", url.origin), {
       "set-cookie": signOut(),
     });
-  if (pathname === "/projects") {
-    // The console's form. A program creates projects over /api — `authenticate().projects.create`
-    // (src/session.ts) — the same directory door.
-    if (!(await browserSessionOf(env, request, ctx))) return redirectResponse("/"); // no session: back to sign in
-    const slug = String((await request.formData()).get("slug") ?? "");
-    if (!projectSlug(slug)) return redirectResponse("/");
-    try {
-      await createProjectFor(env, request, slug, ctx);
-      return redirectResponse("/");
-    } catch (error) {
-      return new Response(`409: ${message(error)}\n`, { status: 409 }); // a name another org holds — the visitor's problem, not a 500
-    }
-  }
   if (pathname === "/authorize") {
     if (!(await issuerSessionOf(env, request)))
       return redirectResponse(`/login?next=${encodeURIComponent(pathname + search)}`);
@@ -358,22 +262,14 @@ async function consoleDoor(
   return null;
 }
 
-/** THE CONSOLE — the provider's default handler: everything that is NOT the OAuth token/metadata
- *  endpoints or the /mcp API route. Every door that ACTS is a POST — a server function's
- *  (`/_serverFn/*`) or a machine door's — and a POST from a foreign origin is 403: a browser stamps
- *  the page's origin on a form post and on a fetch alike, so a foreign one is another site driving
- *  the visitor's session cookie (a script's POST carries no Origin and passes). Then the machine
- *  doors; then the Start server entry — the routes, SSR'd, and their server functions — handed the
- *  env, the execution context and the request as every server function's `context`. A page is the
- *  visitor's own (the session, the consent): never cached. */
+/** TanStack issuer routes and the console shell, with same-origin POST checks. */
 export const consoleHandler: Handler = {
   async fetch(request, env, ctx) {
     if (request.method === "POST" && !isSameOriginBrowserRequest(request))
       return new Response("403: a cross-site request cannot act on this session\n", {
         status: 403,
       });
-    const door =
-      (await grantsDoor({ env, request, ctx })) ?? (await consoleDoor(request, env, ctx));
+    const door = await consoleDoor(request, env);
     if (door) return door;
     const context: ConsoleRequestContext = { env, ctx, request };
     const entry = await loadStartServerEntry();

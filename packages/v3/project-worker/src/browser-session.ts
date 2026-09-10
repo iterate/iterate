@@ -1,78 +1,76 @@
 import { DurableObject } from "cloudflare:workers";
+// eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded logout request, no live capabilities.
+import { newHttpBatchRpcSession } from "capnweb";
 import { z } from "zod";
-import type { Env } from "./control-plane.ts";
-import { authorizationCodeRequest, exchangeToken, oauthHelpers, revokeGrant } from "./oauth.ts";
+import { authorizationCodeRequest } from "./client/oauth.ts";
+import { OAuthScopes } from "./oauth-scopes.ts";
+import type { Session } from "./session.ts";
 
 const TokenResponse = z.object({
-  token_type: z.literal("bearer"),
+  token_type: z
+    .string()
+    .transform((type) => type.toLowerCase())
+    .pipe(z.literal("bearer")),
   access_token: z.string().min(1),
   refresh_token: z.string().min(1),
   expires_in: z.number().positive(),
+  scope: z.string(),
 });
-
-export type BrowserHost = {
-  origin: string;
-  issuer: string;
-  resource: string;
-  projectId: string | null;
-};
-type Base = BrowserHost & { clientId: string; next: string; localClient: boolean };
-type Pending = Base & {
-  phase: "pending";
-  state: string;
-  verifier: string;
-  until: number;
-};
+export type BrowserHost = { origin: string; issuer: string; resource: string; scopes: string[] };
+type Base = BrowserHost & { clientId: string; next: string; until: number };
+type Pending = Base & { phase: "pending"; state: string; verifier: string };
 type Active = Base & {
   phase: "active";
   accessToken: string;
   refreshToken: string;
   expiresAt: number;
-  userId: string;
-  grantId: string;
-  until: number;
 };
-type Ended = Base & { phase: "ended"; reason: string };
-type StoredSession = Pending | Active | Ended;
+type StoredSession = Pending | Active;
 
-/** One browser login owns one provider grant. The DO's input gate serializes all
- * token operations, including refresh racing with logout. Tokens never leave the platform. */
-export class BrowserSession extends DurableObject<Env> {
+/** Each app binds this same class. Token exchange and logout use the issuer's
+ * public protocol, so separately deployed apps need no platform bindings.
+ * The input gate serializes refresh and logout across tabs. */
+export class BrowserSession extends DurableObject {
   begin(host: BrowserHost, next: string) {
-    return this.ctx.blockConcurrencyWhile(async () => {
+    return this.#serial(async () => {
       if (await this.ctx.storage.get("session")) throw new Error("Browser session already exists");
-      const hostUrl = new URL(host.origin);
-      const localClient =
-        hostUrl.protocol === "http:" &&
-        (hostUrl.hostname === "localhost" ||
-          hostUrl.hostname.endsWith(".localhost") ||
-          hostUrl.hostname === "127.0.0.1");
-      if (hostUrl.protocol !== "https:" && !localClient)
-        throw new Error("Browser login requires HTTPS");
-      // CIMD requires public HTTPS. A local-only client fixture still uses the
-      // identical code/PKCE flow, and is deleted when this DO's session ends.
-      const clientId = localClient
-        ? (
-            await oauthHelpers(this.env).createClient({
-              clientName: new URL(host.origin).host,
-              redirectUris: [`${host.origin}/.auth/callback`],
-              tokenEndpointAuthMethod: "none",
-              grantTypes: ["authorization_code", "refresh_token"],
-              responseTypes: ["code"],
-            })
-          ).clientId
-        : `${host.origin}/.auth/client.json`;
+      const origin = new URL(host.origin);
+      const local =
+        origin.protocol === "http:" &&
+        (origin.hostname === "localhost" ||
+          origin.hostname.endsWith(".localhost") ||
+          origin.hostname === "127.0.0.1");
+      if (origin.protocol !== "https:" && !local) throw new Error("Browser login requires HTTPS");
+      let clientId = `${host.origin}/.auth/client.json`;
+      if (local) {
+        const response = await fetch(`${host.issuer}/oauth/register`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            client_name: origin.host,
+            redirect_uris: [`${host.origin}/.auth/callback`],
+            token_endpoint_auth_method: "none",
+            grant_types: ["authorization_code", "refresh_token"],
+            response_types: ["code"],
+          }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) throw new Error(`Local client registration failed (${response.status})`);
+        clientId = z
+          .object({ client_id: z.string().min(1) })
+          .parse(await response.json()).client_id;
+      }
       const { url, state, verifier } = await authorizationCodeRequest({
         issuer: host.issuer,
         clientId,
         redirectUri: `${host.origin}/.auth/callback`,
         resources: [host.resource],
+        scopes: host.scopes,
       });
       const data: Pending = {
         ...host,
         next,
         clientId,
-        localClient,
         phase: "pending",
         state,
         verifier,
@@ -85,7 +83,7 @@ export class BrowserSession extends DurableObject<Env> {
   }
 
   complete(input: { state: string; issuer: string; code: string; error: string }) {
-    return this.ctx.blockConcurrencyWhile(async () => {
+    return this.#serial(async () => {
       const data = await this.ctx.storage.get<StoredSession>("session");
       if (
         !data ||
@@ -98,116 +96,141 @@ export class BrowserSession extends DurableObject<Env> {
           error: "This sign-in expired or does not match this browser. Start sign-in again.",
         };
       if (input.error || !input.code) {
-        await this.#end(data, "Authorization declined");
+        await this.#clear();
         return { error: "Authorization was declined." };
       }
-      const response = await this.#exchange(data, {
+      const stored = await this.#exchange(data, {
         grant_type: "authorization_code",
         code: input.code,
         redirect_uri: `${data.origin}/.auth/callback`,
         code_verifier: data.verifier,
       });
-      if (!response.ok) {
-        await this.#end(data, `Code exchange refused (${response.status})`);
-        return { error: "Sign-in could not complete. Start sign-in again." };
-      }
-      await this.#saveTokens(data, response);
+      if (!stored) return { error: "Sign-in could not complete. Start sign-in again." };
       return { next: data.next };
     });
   }
 
   bearer() {
-    return this.ctx.blockConcurrencyWhile(async () => {
-      const data = await this.ctx.storage.get<StoredSession>("session");
-      if (!data || !("accessToken" in data)) return null;
-      if (data.until <= Date.now()) {
-        await this.#end(data, "Session expired");
-        return null;
-      }
-      // The provider retains the refresh token we used until we use a newer one.
-      // If a response or storage write is lost, this stored pair is safe to retry.
-      if (data.expiresAt > Date.now() + 30_000) return data.accessToken;
-      const response = await this.#exchange(data, {
-        grant_type: "refresh_token",
-        refresh_token: data.refreshToken,
-      });
-      if (!response.ok) {
-        await this.#end(data, `Refresh refused (${response.status})`);
-        return null;
-      }
-      return (await this.#saveTokens(data, response)).accessToken;
-    });
+    return this.#serial(() => this.#bearer());
+  }
+  async scopes() {
+    const data = await this.ctx.storage.get<StoredSession>("session");
+    return data?.phase === "active" ? data.scopes : [];
+  }
+  /** A verified 401 means this local credential no longer grants access. */
+  discard() {
+    return this.#serial(() => this.#clear());
   }
 
   end() {
-    return this.ctx.blockConcurrencyWhile(async () => {
+    return this.#serial(async () => {
+      const token = await this.#bearer();
       const data = await this.ctx.storage.get<StoredSession>("session");
-      if (!data || data.phase === "ended") return { cleanupPending: false };
-      return this.#end(data, "Signed out");
+      if (token && data) {
+        // Probe classifies a revoked/expired credential without interpreting RPC error text.
+        const probe = await fetch(
+          new Request(data.resource, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}` },
+            body: "",
+            signal: AbortSignal.timeout(10_000),
+          }),
+        );
+        await probe.body?.cancel();
+        if (probe.status !== 401) {
+          if (!probe.ok)
+            throw new Error(`Sign-out could not reach Iterate (${probe.status}). Try again.`);
+          // eslint-disable-next-line iterate/no-capnweb-http-batch -- A bounded logout command returns no live capabilities.
+          using api = newHttpBatchRpcSession<Session>(
+            new Request(data.resource, {
+              headers: { Authorization: `Bearer ${token}` },
+              signal: AbortSignal.timeout(10_000),
+            }),
+          );
+          await api.logout();
+        }
+      }
+      // Network failures preserve the session and are shown to the caller.
+      // Successful logout has written the issuer's durable revocation marker.
+      await this.#clear();
     });
   }
 
   async alarm() {
+    // Pending flows expire in ten minutes; active grants have the same absolute
+    // thirty-day lifetime at the issuer. No refresh token survives this bound.
+    await this.#clear();
+  }
+  async #bearer() {
     const data = await this.ctx.storage.get<StoredSession>("session");
-    if (!data) return;
-    if (data.phase !== "ended") await this.#end(data, "Session expired");
-    if (data.localClient) await oauthHelpers(this.env).deleteClient(data.clientId);
-    await this.ctx.storage.deleteAll();
-    await this.ctx.storage.deleteAlarm();
+    if (!data || data.phase !== "active") return null;
+    if (data.until <= Date.now()) {
+      await this.#clear();
+      return null;
+    }
+    if (data.expiresAt > Date.now() + 30_000) return data.accessToken;
+    return (
+      (
+        await this.#exchange(data, {
+          grant_type: "refresh_token",
+          refresh_token: data.refreshToken,
+        })
+      )?.accessToken ?? null
+    );
   }
-
-  async #end(data: Pending | Active, reason: string) {
-    const result =
-      "grantId" in data ? await revokeGrant(this.env, data) : { cleanupPending: false };
-    const { origin, issuer, resource, projectId, clientId, localClient, next } = data;
-    await this.ctx.storage.put("session", {
-      origin,
-      issuer,
-      resource,
-      projectId,
-      clientId,
-      localClient,
-      next,
-      phase: "ended",
-      reason,
-    } satisfies Ended);
-    await this.ctx.storage.setAlarm(Date.now() + 10 * 60_000);
-    return result;
-  }
-
-  #exchange(data: Base, fields: Record<string, string>) {
-    const request = new Request(`${data.issuer}/oauth/token`, {
+  async #exchange(data: StoredSession, fields: Record<string, string>) {
+    const started = Date.now();
+    const response = await fetch(`${data.issuer}/oauth/token`, {
       method: "POST",
       body: new URLSearchParams({ ...fields, client_id: data.clientId, resource: data.resource }),
+      signal: AbortSignal.timeout(10_000),
     });
-    // The provider's token endpoint does not use ExecutionContext. DO state also
-    // supplies waitUntil; this is an in-process dispatch, never a network self-fetch.
-    return exchangeToken(request, this.env, this.ctx as unknown as ExecutionContext);
-  }
-
-  async #saveTokens(data: Pending | Active, response: Response) {
+    if (!response.ok) {
+      const refusal = z
+        .object({ error: z.string() })
+        .safeParse(await response.json().catch(() => null));
+      if (response.status === 400 && refusal.success && refusal.data.error === "invalid_grant") {
+        await this.#clear();
+        return null;
+      }
+      throw new Error(`Iterate token exchange failed (${response.status}). Try again.`);
+    }
     const tokens = TokenResponse.parse(await response.json());
-    const summary = await oauthHelpers(this.env).unwrapToken<unknown>(tokens.access_token);
-    if (!summary) throw new Error("The newly issued browser token could not be resolved");
-    const { origin, issuer, resource, projectId, clientId, localClient, next } = data;
+    const { origin, issuer, resource, clientId, next } = data;
     const stored: Active = {
       origin,
       issuer,
       resource,
-      projectId,
       clientId,
-      localClient,
       next,
       phase: "active",
+      scopes: OAuthScopes.parse(tokens.scope.split(" ").filter(Boolean)),
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
-      expiresAt: summary.expiresAt * 1000,
-      userId: summary.userId,
-      grantId: summary.grantId,
-      until: data.phase === "pending" ? Date.now() + 30 * 24 * 3600_000 : data.until,
+      expiresAt: started + tokens.expires_in * 1000,
+      until: data.phase === "pending" ? started + 30 * 24 * 3600_000 : data.until,
     };
     await this.ctx.storage.put("session", stored);
     await this.ctx.storage.setAlarm(stored.until);
     return stored;
+  }
+  /** An operation failure must not reset the DO or fail other tabs' requests. */
+  #serial<T>(work: () => Promise<T>): Promise<T> {
+    return this.ctx
+      .blockConcurrencyWhile(() =>
+        work().then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        ),
+      )
+      .then((result) => {
+        if ("error" in result) throw result.error;
+        return result.value;
+      });
+  }
+
+  async #clear() {
+    await this.ctx.storage.deleteAll();
+    await this.ctx.storage.deleteAlarm();
   }
 }
