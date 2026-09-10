@@ -3,7 +3,7 @@ import type { Env } from "./control-plane.ts";
 import { directory } from "./directory.ts";
 import type { Authorization } from "./oauth.ts";
 import { Session, SessionTeardown, type SessionInput } from "./session.ts";
-import { appConfigOf } from "./worker.ts";
+import { appConfigOf } from "./app-config.ts";
 
 /** Cap’n Web always terminates at /api in the stateless edge. Its root is an
  * already-authorized session; authority never comes from a later caller-supplied actor. */

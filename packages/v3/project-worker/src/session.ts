@@ -32,7 +32,7 @@ import {
   type WaitUntil,
 } from "./iterate-context.ts";
 import { describeReach, reachOf, type Directory, type Project, type Reach } from "./directory.ts";
-import type { AppConfig } from "./worker.ts";
+import type { AppConfig } from "./app-config.ts";
 import { codedError, isSameOriginBrowserRequest } from "./lib.ts";
 import {
   verifyAdminSecret,

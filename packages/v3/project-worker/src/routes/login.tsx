@@ -17,7 +17,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { setResponseHeader } from "@tanstack/react-start/server";
 import { signIn, signOut } from "../control-plane.ts";
 import { consoleContext } from "./-console-context.ts";
-import { sessionOf } from "./-session.ts";
+import { issuerOf } from "./-session.ts";
 
 /** Sign in as `email`: the user upserted, the cookie set on THIS response, where to go next (a path
  *  on this origin). The same door as the machine's `POST /login` (control-plane.ts). */
@@ -42,7 +42,7 @@ export const Route = createFileRoute("/login")({
   validateSearch: (search: Record<string, unknown>) => ({
     ...(typeof search.next === "string" && search.next && { next: search.next }),
   }),
-  beforeLoad: async () => ({ session: await sessionOf() }),
+  beforeLoad: async () => ({ session: await issuerOf() }),
   loader: ({ context }) => context.session,
   component: LoginPage,
 });

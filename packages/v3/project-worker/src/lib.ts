@@ -274,3 +274,15 @@ export function isSameOriginBrowserRequest(request: Pick<Request, "url" | "heade
     return false;
   }
 }
+
+/** `next` as a path on `origin`, else "/" — a redirect never leaves the host: `//evil.example`,
+ *  `/\evil.example` and an absolute URL all resolve to a foreign origin and fall back to "/". The
+ *  control plane's login redirect uses it too (control-plane.ts). */
+export function sameOriginPath(next: string, origin: string): string {
+  try {
+    const url = new URL(next, origin);
+    return url.origin === origin ? url.pathname + url.search : "/";
+  } catch {
+    return "/";
+  }
+}

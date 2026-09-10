@@ -10,13 +10,18 @@
 
 import { Route as rootRouteImport } from "./routes/__root.tsx";
 import { Route as LoginRouteImport } from "./routes/login.tsx";
+import { Route as AuthorizeRouteImport } from "./routes/authorize.tsx";
 import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as AuthIndexRouteImport } from "./routes/_auth/index.tsx";
-import { Route as AuthAuthorizeRouteImport } from "./routes/_auth/authorize.tsx";
 
 const LoginRoute = LoginRouteImport.update({
   id: "/login",
   path: "/login",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const AuthorizeRoute = AuthorizeRouteImport.update({
+  id: "/authorize",
+  path: "/authorize",
   getParentRoute: () => rootRouteImport,
 } as any);
 const AuthRoute = AuthRouteImport.update({
@@ -28,39 +33,35 @@ const AuthIndexRoute = AuthIndexRouteImport.update({
   path: "/",
   getParentRoute: () => AuthRoute,
 } as any);
-const AuthAuthorizeRoute = AuthAuthorizeRouteImport.update({
-  id: "/authorize",
-  path: "/authorize",
-  getParentRoute: () => AuthRoute,
-} as any);
 
 export interface FileRoutesByFullPath {
   "/": typeof AuthIndexRoute;
+  "/authorize": typeof AuthorizeRoute;
   "/login": typeof LoginRoute;
-  "/authorize": typeof AuthAuthorizeRoute;
 }
 export interface FileRoutesByTo {
+  "/authorize": typeof AuthorizeRoute;
   "/login": typeof LoginRoute;
-  "/authorize": typeof AuthAuthorizeRoute;
   "/": typeof AuthIndexRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/_auth": typeof AuthRouteWithChildren;
+  "/authorize": typeof AuthorizeRoute;
   "/login": typeof LoginRoute;
-  "/_auth/authorize": typeof AuthAuthorizeRoute;
   "/_auth/": typeof AuthIndexRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: "/" | "/login" | "/authorize";
+  fullPaths: "/" | "/authorize" | "/login";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/login" | "/authorize" | "/";
-  id: "__root__" | "/_auth" | "/login" | "/_auth/authorize" | "/_auth/";
+  to: "/authorize" | "/login" | "/";
+  id: "__root__" | "/_auth" | "/authorize" | "/login" | "/_auth/";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
   AuthRoute: typeof AuthRouteWithChildren;
+  AuthorizeRoute: typeof AuthorizeRoute;
   LoginRoute: typeof LoginRoute;
 }
 
@@ -71,6 +72,13 @@ declare module "@tanstack/react-router" {
       path: "/login";
       fullPath: "/login";
       preLoaderRoute: typeof LoginRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/authorize": {
+      id: "/authorize";
+      path: "/authorize";
+      fullPath: "/authorize";
+      preLoaderRoute: typeof AuthorizeRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/_auth": {
@@ -87,23 +95,14 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthIndexRouteImport;
       parentRoute: typeof AuthRoute;
     };
-    "/_auth/authorize": {
-      id: "/_auth/authorize";
-      path: "/authorize";
-      fullPath: "/authorize";
-      preLoaderRoute: typeof AuthAuthorizeRouteImport;
-      parentRoute: typeof AuthRoute;
-    };
   }
 }
 
 interface AuthRouteChildren {
-  AuthAuthorizeRoute: typeof AuthAuthorizeRoute;
   AuthIndexRoute: typeof AuthIndexRoute;
 }
 
 const AuthRouteChildren: AuthRouteChildren = {
-  AuthAuthorizeRoute: AuthAuthorizeRoute,
   AuthIndexRoute: AuthIndexRoute,
 };
 
@@ -111,6 +110,7 @@ const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren);
 
 const rootRouteChildren: RootRouteChildren = {
   AuthRoute: AuthRouteWithChildren,
+  AuthorizeRoute: AuthorizeRoute,
   LoginRoute: LoginRoute,
 };
 export const routeTree = rootRouteImport

@@ -70,11 +70,15 @@
   // THE context DO: one per {projectId, path}, codec-named — the stream, the routing table, and
   // every hibernatable socket in one addressable parent.
   "durable_objects": {
-    "bindings": [{ "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" }],
+    "bindings": [
+      { "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" },
+      { "name": "BROWSER_SESSION", "class_name": "BrowserSession" },
+    ],
   },
   // The DO's lifecycle, declaratively: one SQLite-backed class, no migration history to replay.
   "exports": {
     "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "BrowserSession": { "type": "durable-object", "storage": "sqlite" },
   },
 
   // The in-process control plane's directory (src/control-plane.sql: users, orgs,

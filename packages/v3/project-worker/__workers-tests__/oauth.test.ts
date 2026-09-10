@@ -1,6 +1,6 @@
 import { env, SELF } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
-import { afterEach, beforeAll, expect, test } from "vitest";
+import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { directory } from "../src/directory.ts";
 import { oauthHelpers } from "../src/oauth.ts";
 import type { Env } from "../src/control-plane.ts";
@@ -241,4 +241,87 @@ test("an issuer cookie alone cannot authorize API calls or the operator RPC door
   expect((await call("/api", { headers: { cookie: flow.cookie, Origin: ORIGIN } })).status).toBe(
     401,
   );
+});
+
+test("console and project browsers use the same CIMD flow and independent grants", async () => {
+  const metadataFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.pathname !== "/.auth/client.json") throw new Error(`Unexpected external fetch: ${url}`);
+    return SELF.fetch(url.href);
+  });
+  const issuerLogin = await call("/login", {
+    method: "POST",
+    body: new URLSearchParams({ email: "browser@example.com", next: "/" }),
+  });
+  const issuerCookie = issuerLogin.headers.get("set-cookie")!.split(";")[0]!;
+  const user = await directory(bindings.DB).upsertUser("browser@example.com");
+  await directory(bindings.DB).createProject({ userId: user.id }, "browser-a");
+  await directory(bindings.DB).createProject({ userId: user.id }, "browser-b");
+  const logins = [];
+  try {
+    for (const origin of [ORIGIN, "https://notes--browser-a.projects.test"]) {
+      const metadata = await SELF.fetch(`${origin}/.auth/client.json`);
+      expect(metadata.status).toBe(200);
+      const start = await SELF.fetch(`${origin}/.auth/login?next=/`, { redirect: "manual" });
+      const cookie = start.headers.get("set-cookie")!.split(";")[0]!;
+      const authorize = new URL(start.headers.get("location")!);
+      expect(authorize.origin).toBe(ORIGIN);
+      expect(authorize.searchParams.get("client_id")).toBe(`${origin}/.auth/client.json`);
+      const approve = await SELF.fetch(authorize.href, {
+        method: "POST",
+        redirect: "manual",
+        headers: { cookie: issuerCookie, Origin: ORIGIN },
+        body: new URLSearchParams([
+          ["project", "*"],
+          ["project", "browser-a"],
+          ["project", "browser-b"],
+        ]),
+      });
+      expect(approve.status, await approve.clone().text()).toBe(302);
+      const callback = await SELF.fetch(approve.headers.get("location")!, {
+        redirect: "manual",
+        headers: { cookie },
+      });
+      expect(callback.status, await callback.clone().text()).toBe(303);
+      const response = await SELF.fetch(`${origin}/api`, {
+        headers: { cookie, Origin: origin, Upgrade: "websocket" },
+      });
+      expect(response.status, response.status === 101 ? "" : await response.text()).toBe(101);
+      response.webSocket!.accept();
+      const root = newWebSocketRpcSession<Session>(response.webSocket! as unknown as WebSocket);
+      sessions.push(root);
+      expect(await root.whoami()).toEqual({ actor: user.id, email: user.email });
+      expect((await root.projects.list()).map((p: { id: string }) => p.id).sort()).toEqual(
+        origin === ORIGIN ? ["browser-a", "browser-b"] : ["browser-a"],
+      );
+      expect(
+        (await SELF.fetch(`${origin}/api`, { headers: { cookie, Origin: "https://evil.test" } }))
+          .status,
+      ).toBe(403);
+      logins.push({ origin, cookie });
+    }
+    expect((await helpers().listUserGrants(user.id)).items).toHaveLength(2);
+    const consoleLogin = logins[0]!;
+    expect(
+      (
+        await call("/.auth/logout", {
+          method: "POST",
+          headers: { cookie: consoleLogin.cookie, Origin: ORIGIN },
+        })
+      ).status,
+    ).toBe(303);
+    expect(
+      (await call("/api", { headers: { cookie: consoleLogin.cookie, Origin: ORIGIN } })).status,
+    ).toBe(401);
+    const app = logins[1]!;
+    expect(
+      (
+        await SELF.fetch(`${app.origin}/api`, {
+          headers: { cookie: app.cookie, Origin: app.origin, Upgrade: "websocket" },
+        })
+      ).status,
+    ).toBe(101);
+  } finally {
+    metadataFetch.mockRestore();
+  }
 });

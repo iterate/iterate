@@ -29,9 +29,15 @@
   // worker (e2e/ai-root-shadow-and-fable.e2e.test.ts). `env.AI` is undefined in this lane.
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "durable_objects": {
-    "bindings": [{ "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" }],
+    "bindings": [
+      { "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" },
+      { "name": "BROWSER_SESSION", "class_name": "BrowserSession" },
+    ],
   },
-  "exports": { "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" } },
+  "exports": {
+    "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "BrowserSession": { "type": "durable-object", "storage": "sqlite" },
+  },
   // The control plane is in-process: a local (empty) D1 + OAuth KV so the worker loads; the e2e lane
   // applies the schema (support/global-setup.ts). ids are meaningless locally.
   "d1_databases": [
@@ -48,6 +54,7 @@
   // mint and authenticate with them).
   "vars": {
     "APP_CONFIG_ENVIRONMENT_NAME": "test",
+    "APP_CONFIG_PLATFORM_ORIGIN": "https://control.test",
     "APP_CONFIG_PROJECT_HOSTNAME_BASE": "projects.test",
     "APP_CONFIG_PROJECT_TOKEN_SECRET": "test-project-token-secret",
     "APP_CONFIG_SESSION_SECRET": "test-session-secret",

@@ -7,12 +7,10 @@ import {
   type OAuthProviderOptions,
 } from "@cloudflare/workers-oauth-provider";
 import { z } from "zod";
-import { consoleHandler, type Env, type Handler } from "./control-plane.ts";
+import type { Env, Handler } from "./control-plane.ts";
 import { type Reach } from "./directory.ts";
-import { mcpResponse } from "./mcp.ts";
 import { verifyAdminSecret, type Principal } from "./principal.ts";
-import { rpcResponse } from "./rpc.ts";
-import { appConfigOf } from "./worker.ts";
+import { appConfigOf } from "./app-config.ts";
 
 /** Encrypted by the provider. Every grant is created through parseAuthorization,
  * so this version also proves the grant has a nonempty, allowed resource audience. */
@@ -46,12 +44,15 @@ export type Authorization = {
   grant: AccessGrant | null;
 };
 
-/** Canonical resource identifiers. The MCP origin intentionally has no trailing
- * slash, matching its public protected-resource metadata. */
+/** Canonical resource identifiers, including the MCP root's explicit slash. */
 export function oauthAddresses(env: Env, request: Request) {
   const config = appConfigOf(env);
   const issuer = config.platformOrigin || new URL(request.url).origin;
-  return { issuer, api: `${issuer}/api`, mcp: config.mcpOrigin || `${issuer}/mcp` };
+  return {
+    issuer,
+    api: `${issuer}/api`,
+    mcp: config.mcpOrigin ? `${config.mcpOrigin}/` : `${issuer}/mcp`,
+  };
 }
 
 /** The provider validates clients, redirects and PKCE. We own the finite set of
@@ -60,14 +61,26 @@ export async function parseAuthorization(env: Env, request: Request): Promise<Au
   const auth = await env.OAUTH_PROVIDER.parseAuthRequest(request);
   const { api, mcp } = oauthAddresses(env, request);
   const resources = [...new Set(auth.resource ? [auth.resource].flat() : [])];
-  if (!resources.length || resources.some((resource) => resource !== api && resource !== mcp))
+  if (
+    !resources.length ||
+    resources.some(
+      (resource) => ![api, mcp].some((allowed) => new URL(resource).href === new URL(allowed).href),
+    )
+  )
     throw new AuthorizationError("invalid_target", {
       description: "Choose an advertised Iterate API resource.",
       redirectUri: auth.redirectUri,
       state: auth.state,
       issuer: auth.issuer,
     });
-  return { ...auth, resource: resources };
+  if (auth.scope.length && !auth.scope.includes("iterate"))
+    throw new AuthorizationError("invalid_scope", {
+      description: "This API requires the iterate scope.",
+      redirectUri: auth.redirectUri,
+      state: auth.state,
+      issuer: auth.issuer,
+    });
+  return { ...auth, scope: ["iterate"], resource: resources };
 }
 
 export async function grantIsRevoked(env: Env, userId: string, grantId: string): Promise<boolean> {
@@ -111,29 +124,19 @@ WHERE oauth_activity.last_used_at IS NULL OR oauth_activity.last_used_at < ?`)
     .run();
 }
 
-const protectedApi: Handler = {
-  async fetch(request, env, ctx) {
-    const authorization = await authorizationOf(env, ctx.props);
-    if (!authorization)
-      return new Response("Invalid or revoked session", {
-        status: 401,
-        headers: { "WWW-Authenticate": 'Bearer error="invalid_token"' },
-      });
-    if (authorization.grant) ctx.waitUntil(recordGrantUse(env, authorization.grant));
-    return new URL(request.url).pathname === "/api"
-      ? rpcResponse(request, env, ctx, authorization)
-      : mcpResponse(request, env, authorization);
-  },
-};
-
 /** One provider configuration owns issuance and both resource protocols. No global
  * resource pin: the provider supports audience arrays and downscoping itself.
  * parseAuthorization is the only public consent path and requires allowed resources. */
-function providerOptions(env: Env, request: Request): OAuthProviderOptions<Env> {
+export function providerOptions(
+  env: Env,
+  request: Request,
+  apiHandler: Handler = notFound,
+  defaultHandler: Handler = notFound,
+): OAuthProviderOptions<Env> {
   const { issuer, api, mcp } = oauthAddresses(env, request);
   return {
-    apiHandlers: { [api]: protectedApi, [mcp]: protectedApi },
-    defaultHandler: consoleHandler,
+    apiHandlers: { [api]: apiHandler, [mcp]: apiHandler },
+    defaultHandler,
     authorizeEndpoint: `${issuer}/authorize`,
     tokenEndpoint: `${issuer}/oauth/token`,
     scopesSupported: ["iterate"],
@@ -156,7 +159,7 @@ function providerOptions(env: Env, request: Request): OAuthProviderOptions<Env> 
       )
         throw new OAuthError("invalid_grant", { description: "The session is no longer active." });
       const grant = parsed.data;
-      if (grant.deadline && grant.deadline <= Date.now())
+      if (grant.deadline && grant.deadline - Date.now() < 60_000)
         throw new OAuthError("invalid_grant", { description: "The session has expired." });
       if (grant.tokenKind === "personal" && input.grantType !== "authorization_code")
         throw new OAuthError("invalid_grant", { description: "Personal tokens cannot refresh." });
@@ -186,26 +189,61 @@ export function oauthHelpers(env: Env, request: Request) {
   return getOAuthApi(providerOptions(env, request), env);
 }
 
-export const oauth: Handler = {
-  fetch(request, env, ctx) {
-    const url = new URL(request.url);
-    const { issuer, api, mcp } = oauthAddresses(env, request);
-    if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
-      const resource =
-        url.origin === new URL(mcp).origin && mcp !== `${issuer}/mcp`
-          ? mcp
-          : url.pathname.endsWith("/mcp")
-            ? mcp
-            : api;
-      return Response.json({
-        resource,
-        authorization_servers: [issuer],
-        scopes_supported: ["iterate"],
-        bearer_methods_supported: ["header"],
-      });
-    }
-    // Public registration is disabled; it must not fall through to a console route.
-    if (url.pathname === "/oauth/register") return new Response("Not found", { status: 404 });
-    return new OAuthProvider(providerOptions(env, request)).fetch(request, env, ctx);
-  },
-};
+/** The browser adapter asks the same provider gate to admit its server-held token
+ * at the API resource. No public validation endpoint or second token verifier. */
+export async function authorizationForToken(
+  env: Env,
+  request: Request,
+  ctx: ExecutionContext,
+  token: string,
+) {
+  let authorization: Authorization | null = null;
+  const admission: Handler = {
+    async fetch(_request, bindings, context) {
+      authorization = await authorizationOf(bindings, context.props);
+      return new Response(null, { status: authorization ? 204 : 401 });
+    },
+  };
+  const apiRequest = new Request(oauthAddresses(env, request).api, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  await new OAuthProvider(providerOptions(env, request, admission)).fetch(apiRequest, env, ctx);
+  return authorization as Authorization | null; // Assigned inside the awaited handler; TS cannot track that closure assignment.
+}
+
+/** The caller must already own this grant: a checked provider inventory row or
+ * the BrowserSession's stored token summary. The D1 marker precedes KV cleanup. */
+export async function revokeGrant(
+  env: Env,
+  request: Request,
+  grant: { userId: string; grantId: string },
+) {
+  await env.DB.prepare(`INSERT INTO oauth_activity (user_id, grant_id, revoked_at, cleanup_pending)
+VALUES (?, ?, ?, 1) ON CONFLICT(user_id, grant_id) DO UPDATE
+SET revoked_at = COALESCE(oauth_activity.revoked_at, excluded.revoked_at), cleanup_pending = 1`)
+    .bind(grant.userId, grant.grantId, Date.now())
+    .run();
+  try {
+    await oauthHelpers(env, request).revokeGrant(grant.grantId, grant.userId);
+  } catch (error) {
+    console.error("oauth.revoke_cleanup_failed", {
+      userId: grant.userId,
+      grantId: grant.grantId,
+      error,
+    });
+    return { cleanupPending: true };
+  }
+  await env.DB.prepare(
+    "UPDATE oauth_activity SET cleanup_pending = 0 WHERE user_id = ? AND grant_id = ?",
+  )
+    .bind(grant.userId, grant.grantId)
+    .run();
+  return { cleanupPending: false };
+}
+
+const notFound: Handler = { fetch: () => new Response("Not found", { status: 404 }) };
+
+/** In-process token exchange, also used by the browser session DO. */
+export function exchangeToken(request: Request, env: Env, ctx: ExecutionContext) {
+  return new OAuthProvider(providerOptions(env, request)).fetch(request, env, ctx);
+}

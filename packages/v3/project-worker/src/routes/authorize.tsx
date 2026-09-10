@@ -13,8 +13,9 @@ import { useState, type FormEvent } from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { setResponseHeader } from "@tanstack/react-start/server";
-import { approveConsent, consentOf, signOut } from "../../control-plane.ts";
-import { consoleContext } from "../-console-context.ts";
+import { approveConsent, consentOf, signOut } from "../control-plane.ts";
+import { issuerOf } from "./-session.ts";
+import { consoleContext } from "./-console-context.ts";
 
 const consent = createServerFn({ method: "GET" })
   .middleware([consoleContext])
@@ -33,8 +34,9 @@ const logout = createServerFn({ method: "POST" }).handler(() => {
   return null;
 });
 
-export const Route = createFileRoute("/_auth/authorize")({
+export const Route = createFileRoute("/authorize")({
   beforeLoad: async ({ location }) => {
+    if (!(await issuerOf())) throw redirect({ to: "/login", search: { next: location.href } });
     const answer = await consent({ data: { query: location.searchStr } });
     // the provider's refusal, sent back to the client (its redirect URI validated) as the README says
     if (answer.kind === "redirect") throw redirect({ href: answer.location, statusCode: 302 });
@@ -56,7 +58,7 @@ function ConsentPage() {
       </main>
     );
 
-  const { query, clientName, email, projects } = answer;
+  const { query, clientName, email, projects, projectBound } = answer;
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const chosen = new FormData(event.currentTarget).getAll("project").map(String);
@@ -80,6 +82,17 @@ function ConsentPage() {
       <form method="post" action={`/authorize${query}`} onSubmit={submit}>
         <fieldset>
           <legend>Projects it may reach</legend>
+          {!projectBound && (
+            <label>
+              <input
+                type="checkbox"
+                name="project"
+                value="*"
+                defaultChecked={projects.length === 0}
+              />{" "}
+              All my current and future projects
+            </label>
+          )}
           {projects.length ? (
             projects.map((project) => (
               <label key={project.id}>
@@ -88,7 +101,7 @@ function ConsentPage() {
               </label>
             ))
           ) : (
-            <p className="muted">No projects yet — every project you join is reachable.</p>
+            <p className="muted">No projects to choose from yet.</p>
           )}
         </fieldset>
         <button type="submit">Approve</button>

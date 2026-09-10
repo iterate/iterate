@@ -59,7 +59,7 @@ import {
 import { buildLibrary, type LibraryItx } from "./library.ts";
 import { Stream, type StreamPage } from "./stream/stream.ts";
 import { DurableObjectNameCodec, itxEntrypointFor } from "./iterate-context.ts";
-import { appConfigOf, type AppConfigEnv } from "./worker.ts";
+import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
 import {
   CONFIG_WORKER_PLATFORM_ROW,
   ItxExpressionResolver,

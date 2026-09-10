@@ -49,3 +49,16 @@ Kit provisioning remains a subsequent slice of the earlier plan; RFC 8628 and
   passed with the same five pre-existing expected failures; typecheck and lint
   passed. The older cookie/project-token browser fixtures still need migration
   with the browser-client slice. Live-connection revocation is not implemented yet.
+
+- Shared browser client: the console and project hosts publish CIMD metadata and
+  use one code/PKCE adapter, with tokens held in a BrowserSession DO. Refresh is
+  serialized and interruption ends the session. Console page actions validate
+  their OAuth grant; only login/consent use the issuer identity cookie. Project
+  app clients are restricted to their project. Old project-token URL cookies
+  were removed from ingress and console links. OAuth policy, protocol dispatch,
+  app configuration and host parsing have no value import cycles.
+  Validation: six workerd OAuth tests, all 522 unit tests (five pre-existing
+  expected failures), typecheck and lint passed. React Doctor found no new React
+  correctness error; its broad base-branch scan could not compute a complete
+  score and reported existing diagnostics plus a navigation-link suggestion.
+  The legacy auth browser/worker fixtures still need migration.

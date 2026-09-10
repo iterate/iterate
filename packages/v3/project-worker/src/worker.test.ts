@@ -13,7 +13,9 @@ vi.mock("cloudflare:workers", () => ({
   RpcPromise: class {},
   RpcProperty: class {},
 }));
-import worker, { appConfigOf, parseAppConfig, projectHostOf } from "./worker.ts";
+import worker from "./worker.ts";
+import { appConfigOf, parseAppConfig } from "./app-config.ts";
+import { projectHostOf } from "./hosts.ts";
 import type { Env } from "./control-plane.ts";
 
 // ── app config ── THE TABLE for the app config: what the vars become, what is refused (by name),
@@ -143,7 +145,7 @@ describe("public protocol origins", () => {
     )![1]!;
     expect(metadataUrl).toMatch(/^https:\/\/mcp\.iterate2\.com\//);
     expect(await (await request(metadataUrl)).json()).toMatchObject({
-      resource: "https://mcp.iterate2.com",
+      resource: "https://mcp.iterate2.com/",
       authorization_servers: ["https://os.iterate2.com"],
     });
     expect(
