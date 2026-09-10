@@ -4673,4 +4673,7 @@ tutorial's chapter 0), and kernel-vs-library namespacing (an open question in ch
   browser with every `/assets/*.js` request aborted — no hydration at all — logging in, creating a
   project, logging out and switching account through the doors alone (7/7 checks); and the deployed
   run: the line below. GATES: tsc ×3 · `routes:check` · oxlint · `pnpm test` 51 files / 755 passed /
-  17 expected-fail / 19 deployed-only skips. DEPLOYED: the line below.
+  17 expected-fail / 19 deployed-only skips. DEPLOYED (f67d01edd, version 53b6620b): the API lanes 22
+  files / 194 passed / 4 expected-fail / 2 skipped; THE BROWSER PROOF 10/10 (8 auth flows + 2 demo)
+  against the deployment; the no-script probe 7/7 against the deployment — ALL GREEN. Every auth flow
+  is now proven in a real browser against the deployed worker.
