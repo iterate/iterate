@@ -64,7 +64,7 @@ function setup() {
             <SheetContent>
               <LlmRequestInspectorContent
                 database={database}
-                streamSource={() => ({ inspectLlmRequest: inspect }) as Stream}
+                streamSource={() => ({ inspectLlmRequest: inspect }) as unknown as Stream}
                 streamPath="/agents/same-path"
                 llmRequestOffset={4}
               />
