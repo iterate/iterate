@@ -2,6 +2,7 @@
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- the /api one-shot batch door itself is under test; everything else is WS
 import { newHttpBatchRpcSession } from "capnweb";
 import { expect, test } from "vitest";
+import type { Session } from "../src/session.ts";
 import {
   adminCredentials,
   codeOf,
@@ -15,7 +16,6 @@ import {
   workerUrl,
 } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
-import type { Session } from "../src/session.ts";
 import {
   deployedOnly,
   freshDnsSafeProjectId,

@@ -108,7 +108,14 @@ test("first Claude consent creates the organization and project in the SPA befor
   try {
     await page.goto(flow.url.href);
     await signIn(page, origin, email, flow.url.pathname + flow.url.search);
-    await page.getByRole("heading", { name: "Authorize Claude Code", exact: true }).waitFor();
+    await Promise.race([
+      page.getByRole("heading", { name: "Authorize Claude Code", exact: true }).waitFor(),
+      callback.then((url) => {
+        throw new Error(
+          `Authorization ended before consent: ${url.searchParams.get("error")}: ${url.searchParams.get("error_description")}`,
+        );
+      }),
+    ]);
     await page
       .getByRole("heading", { name: "Create your first organization", exact: true })
       .waitFor();

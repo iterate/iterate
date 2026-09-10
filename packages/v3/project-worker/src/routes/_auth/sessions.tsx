@@ -6,7 +6,8 @@ export const Route = createFileRoute("/_auth/sessions")({
     cursor: typeof search.cursor === "string" ? search.cursor : undefined,
   }),
   loaderDeps: ({ search }) => ({ cursor: search.cursor }),
-  loader: ({ deps, context }) => context.api.grants.list(deps.cursor),
+  // RpcPromise is callable; normalize it to a native Promise for the router loader.
+  loader: async ({ deps, context }) => await context.api.grants.list(deps.cursor),
   component: SessionsPage,
 });
 
