@@ -129,6 +129,8 @@ export async function reliability(options: ReliabilityOptions) {
             callLiveAt = Date.now();
             continue;
           }
+          /* Stream payloads arrive as untyped JSON; the assertion names the
+           * three optional fields this instrument reads, each guarded. */
           const payload = (event.payload ?? {}) as {
             type?: string;
             delta?: string;
@@ -138,7 +140,7 @@ export async function reliability(options: ReliabilityOptions) {
             transcript += payload.delta ?? "";
           }
           /* GPT-Live has no response lifecycle; the facet's end-of-answer
-           * marker on the speaker lane is the "answered" edge. */
+           * marker in the speaker frames is the "answered" edge. */
           if (
             event.type === "events.iterate.com/voice-agent/spk-frame" &&
             payload.lastFrameOfAnswer === true

@@ -52,7 +52,7 @@ Ephemeral frames are only visible to live `openConnection()` callbacks — never
 to durable subscriptions or hosted processors — which is exactly the delivery
 contract audio wants (no replay of stale audio after reconnect).
 
-## The speaker lane
+## The speaker frames
 
 **A client's entire buffer policy is three lines.** On a `spk-frame`: if
 `clearSpeakerBufferBeforeFrame`, clear the speaker buffer; write `pcm`; if
@@ -101,7 +101,7 @@ in EITHER direction for sixty seconds, or when a person or the model hangs up.
 
 There is one way to end a call and three things that can decide to. Whoever
 decides appends `voice-agent/conversation-end-requested` with a reason; the
-facet consumes it on its ordinary delivery lane, lets the provider socket go,
+facet consumes it on its ordinary delivery, lets the provider socket go,
 and appends `voice-agent/conversation-ended`. Both are on the stream, so a
 teardown is readable after the fact rather than inferred from silence.
 

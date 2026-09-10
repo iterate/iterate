@@ -158,7 +158,7 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   reinstall?: boolean;
   /**
    * Offer the model a hang_up tool: say goodbye, end the call — the baseline
-   * proof the tool lane works end to end. ON BY DEFAULT — every stream is
+   * proof the tool path works end to end. ON BY DEFAULT — every stream is
    * born able to end its own call; pass `--hang-up false` to withhold it.
    */
   hangUp?: boolean;
@@ -243,7 +243,7 @@ export async function talk(options: TalkOptions = {}) {
   );
 
   /* The secret the dial will spend — setup's gate demands the same one
-   * (secretForHost), and a baseUrl seam needs none at all. */
+   * (secretForHost), and a baseUrl hook needs none at all. */
   if (options.providerBaseUrl === undefined) {
     console.log(`openai secret ${await ensureOpenaiSecret(itx)}`);
   }
@@ -539,6 +539,9 @@ async function ensureProviderSecret(
   itx: unknown,
   args: { path: string; envNames: string[]; egress: string[] },
 ): Promise<string> {
+  /* The project handle arrives untyped (the generated client type lives in
+   * apps/os); the assertion spells exactly the one member this command uses,
+   * so a wrong assertion fails loudly at the RPC boundary. */
   const secret = (itx as { secrets: { get(path: string): ProviderSecret } }).secrets.get(args.path);
   try {
     const described = await withRpcResult(secret.__describe(), ({ created, hasMaterial }) => ({

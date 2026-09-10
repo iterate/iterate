@@ -189,16 +189,17 @@ function makeHarness() {
    * records the scripts it was asked to run — and, like a real voice
    * stream, has no capability host until somebody creates it. */
   const scripts: string[] = [];
-  let hostCreated = false;
+  let hostCreates = 0;
   const projectRoot: { current: unknown } = {
     current: {
       capabilityHost: {
         create: async () => {
-          hostCreated = true;
+          hostCreates += 1;
         },
         runScript: async (code: string) => {
-          if (!hostCreated)
+          if (hostCreates === 0) {
             throw new Error("capability host at /agents/voice/test has not been created");
+          }
           scripts.push(code);
           return { result: { files: 3 } };
         },
@@ -226,6 +227,7 @@ function makeHarness() {
     dialled,
     projectRoot,
     scripts,
+    hostCreates: () => hostCreates,
   };
 }
 
@@ -800,7 +802,7 @@ describe("the transcript", () => {
 /* ========================================================================== */
 
 describe("the backend", () => {
-  it("runs exec_typescript on the stream's own capability host, creating it once, and continues the response", async () => {
+  it("runs exec_typescript on the stream's own capability host, created once per dial, and continues the response", async () => {
     const h = makeHarness();
     await callIsLive(h);
     h.provider.backendFunctionCall(
@@ -810,7 +812,8 @@ describe("the backend", () => {
     );
     await h.settle();
     expect(h.scripts).toEqual(["async (itx) => itx.repo.listFiles()"]);
-    /* The second call finds the host already there: one script, no retry. */
+    expect(h.hostCreates()).toBe(1);
+    /* The second call finds the host already there: one script, no create. */
     h.provider.backendFunctionCall(
       "call_2",
       "exec_typescript",
@@ -818,6 +821,7 @@ describe("the backend", () => {
     );
     await h.settle();
     expect(h.scripts).toEqual(["async (itx) => itx.repo.listFiles()", "async (itx) => 2"]);
+    expect(h.hostCreates()).toBe(1);
     const results = h.provider.sentOfType("response.item.create");
     expect(results).toHaveLength(2);
     expect(results[0]!.item).toEqual({
@@ -886,18 +890,62 @@ describe("the backend", () => {
     expect(result.output).toBe(JSON.stringify({ nodded: true }));
   });
 
-  it("hang_up ends the call only after the goodbye finishes playing", async () => {
+  it("hang_up ends the call only after the goodbye — spoken AFTER the call — finishes playing", async () => {
     const h = makeHarness();
     await callIsLive(h, { tools: [{ name: "hang_up", description: "End the call." }] });
-    h.provider.speech(1_000);
+    /* The backend hangs up first; the voice's goodbye follows a moment later. */
     h.provider.backendFunctionCall("call_bye", "hang_up", "{}");
     await h.settle();
+    await h.advanceTime(1_000);
+    await h.settle();
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+    h.provider.speech(1_500);
+    h.provider.assistantSays(" Bye for now.", 1_000, 2_400);
+    await playOutEverything(h, 1_000);
+    /* Mid-goodbye: still not over. */
     expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
     h.provider.silence(1_000);
     await playOutEverything(h, 4_000);
     const requested = eventsOfType(h, "conversation-end-requested");
     expect(requested).toHaveLength(1);
     expect((requested[0]!.payload as { reason: string }).reason).toContain("hung up");
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    /* And the goodbye is on the record: the end path closed the open row
+     * before the dial went. */
+    expect(
+      eventsOfType(h, "answer-transcript").map((event) => (event.payload as { text: string }).text),
+    ).toEqual(["Bye for now."]);
+  });
+
+  it("hang_up with nothing playing ends the call once the goodbye grace runs out", async () => {
+    const h = makeHarness();
+    await callIsLive(h, { tools: [{ name: "hang_up", description: "End the call." }] });
+    h.provider.backendFunctionCall("call_bye", "hang_up", "{}");
+    await h.settle();
+    await h.advanceTime(5_000);
+    await h.settle();
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+    await h.advanceTime(4_000);
+    await h.settle();
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(1);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+  });
+
+  it("an end decided in the fold still lands the open answer row durably", async () => {
+    const h = makeHarness();
+    const conversationId = await callIsLive(h);
+    h.provider.speech(500);
+    h.provider.assistantSays(" Goodbye then.", 1_000, 1_500);
+    await h.settle();
+    expect(eventsOfType(h, "answer-transcript")).toHaveLength(0);
+    await h.append({
+      type: "events.iterate.com/voice-agent/conversation-end-requested",
+      payload: { conversationId, reason: "test" },
+    });
+    await h.settle();
+    const answers = eventsOfType(h, "answer-transcript");
+    expect(answers).toHaveLength(1);
+    expect((answers[0]!.payload as { text: string }).text).toBe("Goodbye then.");
   });
 
   it("a press during the goodbye un-decides the hang-up", async () => {

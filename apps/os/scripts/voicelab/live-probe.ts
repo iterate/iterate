@@ -300,6 +300,8 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
   socket.on("message", (data) => {
     const text =
       typeof data === "string" ? data : Buffer.isBuffer(data) ? data.toString("utf8") : "";
+    /* Wire frames are JSON objects; the assertion names the record shape and
+     * the switch below checks `type` and every field it reads. */
     let event: Record<string, unknown>;
     try {
       event = JSON.parse(text) as Record<string, unknown>;
@@ -310,6 +312,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
     const type = String(event.type ?? "");
     switch (type) {
       case "session.started": {
+        /* Per the provider's SessionStartedEvent schema; only `id` is read. */
         const session = event.session as { id?: string; audio?: unknown; delegation?: unknown };
         sessionId = session.id ?? null;
         sessionStartedAtMs = clock();
@@ -353,6 +356,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
         return;
       }
       case "session.delegation.created": {
+        /* Per the provider's DelegationCreatedEvent schema. */
         const info = event.delegation as { id: string; target: string; response_id?: string };
         const now = clock();
         const record: DelegationRecord = {
@@ -382,6 +386,8 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
         return;
       }
       case "response.event": {
+        /* The nested Responses event is untyped; asserted as a record and
+         * read field by field with typeof checks. */
         const inner = (event.event ?? {}) as Record<string, unknown>;
         const innerType = String(inner.type ?? "");
         const delegationId = typeof event.delegation_id === "string" ? event.delegation_id : null;
@@ -391,6 +397,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
           return;
         }
         if (innerType === "response.output_item.done") {
+          /* Same: a record whose fields are checked before use. */
           const item = (inner.item ?? {}) as Record<string, unknown>;
           if (item.type === "function_call") {
             const callId = String(item.call_id ?? "");
@@ -420,6 +427,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
         log(`← session.input_audio.unmuted`);
         return;
       case "session.usage.updated": {
+        /* Per the provider's SessionUsageUpdatedEvent schema; both optional. */
         const usage = event.usage as { seconds?: number } | undefined;
         const window = event.context_window as { usage_ratio?: number } | undefined;
         usageSeconds = usage?.seconds ?? usageSeconds;
@@ -428,6 +436,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
         return;
       }
       case "session.closed": {
+        /* Per the provider's SessionClosedEvent schema. */
         const usage = event.usage as { seconds?: number } | undefined;
         usageSeconds = usage?.seconds ?? usageSeconds;
         closedReason = String(event.reason ?? "");
@@ -488,6 +497,8 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
     if (name === EXEC_TYPESCRIPT_TOOL.name && exec !== null) {
       let code = "";
       try {
+        /* The backend's arguments follow the function's own JSON schema
+         * (`{ code }`); anything else reads as an empty string. */
         code = String((JSON.parse(args) as { code?: unknown }).code ?? "");
       } catch {
         code = args;
@@ -789,7 +800,9 @@ function backendInstructions(withExec: boolean): string {
 }
 
 /* The CLI runtime's own wrapping (scripts/itx.ts): the body becomes an async
- * function body, here one that calls the backend's arrow function with `itx`. */
+ * function body, here one that calls the backend's arrow function with `itx`.
+ * The constructor of an async function IS the AsyncFunction constructor, which
+ * TypeScript types only as `Function`; the assertion restates what it builds. */
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]
 ) => (itx: unknown) => Promise<unknown>;
@@ -808,6 +821,8 @@ async function execRunner(options: LiveProbeOptions): Promise<(code: string) => 
   return async (code: string) => {
     try {
       const fn = new AsyncFunction("itx", `return await (${code})(itx);`);
+      /* The sentinel widens to unknown so the race's type admits both
+       * outcomes; the identity check below is the discriminator. */
       const timedOut = Symbol("exec deadline");
       const result = await Promise.race([fn(itx), sleep(60_000).then(() => timedOut as unknown)]);
       if (result === timedOut)

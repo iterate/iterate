@@ -1,6 +1,6 @@
 /**
  * The voice agent, third cut: GPT-Live on the wire, one fold, one reaction,
- * and a sequence number on every frame that says which lane it belongs to.
+ * and a sequence number on every frame that says which direction it travels.
  *
  * WHAT CHANGED, AND WHY IT IS A CUT RATHER THAN AN EDIT.
  *
@@ -10,7 +10,7 @@
  * model's memory matched what the room heard, a `note_to_self` tool and a
  * response.create choreography so the voice could ask its own backend for
  * help and find a moment to speak the answer. GPT-Live is FULL DUPLEX and
- * owns every one of those seams natively — measured from this Mac before a
+ * handles every one of those hand-offs natively — measured from this Mac before a
  * line of this was written (apps/os/scripts/voicelab/live-probe.ts):
  *
  *   - Output audio is a CONTINUOUS stream at exactly realtime, one 100 ms
@@ -30,7 +30,7 @@
  *   - Input may simply STOP (a button released, 12 s of nothing) and the
  *     answer still comes.
  *
- * So this cut deletes the realtime dialect AND the hand-built colleague seam
+ * So this cut deletes the realtime dialect AND the hand-built colleague hand-off
  * whole, and keeps what was never about the provider: the device contract,
  * the pacer, the flush watermark, the durable transcript, the idle deadline,
  * eviction recovery.
@@ -256,6 +256,19 @@ const BACKEND_FUNCTION_DEADLINE_MS = 60_000;
 const FUNCTION_OUTPUT_MAX_CHARS = 8_000;
 
 /**
+ * How long a decided hang-up waits for the goodbye. The BACKEND calls
+ * `hang_up`, and the voice speaks its farewell only after the backend's
+ * response completes — so the flag is armed before the goodbye exists, and
+ * settling at the next quiet moment would cut the call before "bye" is said.
+ * The hang-up settles after the first answer that ENDS after it was armed,
+ * or after this grace with no answer at all (a backend that hung up without
+ * the voice saying anything). Measured: delegation → first speech runs
+ * 0.2–0.9 s on preview; eight seconds is generous to a slow farewell and
+ * still ends a silent call while somebody is standing there.
+ */
+const HANG_UP_GOODBYE_GRACE_MS = 8_000;
+
+/**
  * How much conversation the fold remembers, and so how much a fresh provider
  * session is seeded with. Turns beyond the newest TRANSCRIPT_MAX_TURNS fall
  * off the front; a single turn longer than TRANSCRIPT_TURN_MAX_CHARS is kept
@@ -291,14 +304,14 @@ function foldTranscriptTurn(
 }
 
 /* ===========================================================================
- * THINKING, FAST AND SLOW — now the provider's own seam.
+ * THINKING, FAST AND SLOW — now the provider's own hand-off.
  *
  * The voice model is a mouth, a pair of ears and about 200 ms of judgement;
  * anything that needs reading a repo, calling a tool chain, or being RIGHT
- * belongs to a text model with no clock on it. The second cut built the seam
+ * belongs to a text model with no clock on it. The second cut built the hand-off
  * by hand: a `note_to_self` tool, a "keep talking" instruction, a colleague
  * agent whose replies were read back at the right moment. GPT-Live has the
- * seam built in: the model DELEGATES when it judges a request needs the
+ * hand-off built in: the model DELEGATES when it judges a request needs the
  * backend, the provider runs the backend model's loop, and the voice speaks
  * the result when it judges the moment right. What this agent adds is the
  * backend's HANDS: `exec_typescript` against this project (the same contract
@@ -430,7 +443,7 @@ function base64ToBytes(base64: string): Uint8Array {
 /**
  * Decoded byte length of a base64 string, WITHOUT decoding it — how the
  * pipeline does its byte arithmetic on audio it never decodes. Also what
- * puts `deltaBytes` on the mirror lane.
+ * puts `deltaBytes` on the mirrored provider events.
  */
 function base64ByteLength(base64: string): number {
   const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
@@ -514,7 +527,7 @@ const VoiceBackend = z.strictObject({
  * Reduced state that depends on a buffer no restart can replay is a lie.
  */
 const VoiceState = z.object({
-  /** Dial this instead of api.openai.com. Test seam; carries no credential. */
+  /** Dial this instead of api.openai.com. A test hook; carries no credential. */
   providerBaseUrl: z.string().nullable().default(null),
   /** Model and voice overrides; null takes the package's defaults. */
   providerModel: z.string().nullable().default(null),
@@ -638,7 +651,7 @@ export const VoiceAgentContract = defineProcessorContract({
       description: "One capture frame, numbered by the device that captured it.",
       ...EPH,
       payloadSchema: z.looseObject({
-        /** 16 kHz mono PCM16, base64. The only encoding this lane carries. */
+        /** 16 kHz mono PCM16, base64. The only encoding these frames carry. */
         pcm: z.string(),
       }),
     },
@@ -701,7 +714,7 @@ export const VoiceAgentContract = defineProcessorContract({
       description:
         "The backend model's final text for one delegation, as the voice received it — the " +
         "durable record of what the backend concluded (its function calls are on the " +
-        "provider's mirror lane and the capability host's script record).",
+        "mirrored provider events and the capability host's script record).",
       payloadSchema: z.looseObject({ conversationId: z.string(), text: z.string() }),
     },
     "events.iterate.com/voice-agent/session-configured": {
@@ -721,7 +734,7 @@ export const VoiceAgentContract = defineProcessorContract({
     },
 
     /*
-     * THE SPEAKER LANE. Two events, and between them the device's entire buffer
+     * THE SPEAKER FRAMES. Two events, and between them the device's entire buffer
      * policy: play frames in sequence order, and throw away anything at or
      * below a watermark.
      */
@@ -749,7 +762,7 @@ export const VoiceAgentContract = defineProcessorContract({
       description:
         "The provider's own events for instruments — verbatim, except an audio delta's bytes " +
         "become `deltaBytes`, and the facet's own client commands as `client.<type>`. The " +
-        "lane keeps its historical name: every instrument reads it by this string.",
+        "event keeps its historical name: every instrument reads it by this string.",
       ...EPH,
       payloadSchema: z.looseObject({
         conversationId: z.string(),
@@ -904,6 +917,12 @@ interface Dial {
    * the goodbye PLAYS. Runtime on purpose: evicted, the idle deadline backstops.
    */
   hangUpAfterAnswerDrains: string | null;
+  /** Facet clock when the hang-up was decided — see HANG_UP_GOODBYE_GRACE_MS. */
+  hangUpArmedAtFacetMs: number;
+  /** Facet clock when the last answer's end marker went out; 0 before any. */
+  answerEndedAtFacetMs: number;
+  /** This dial has created the stream's capability host (or found it). */
+  capabilityHostReady: boolean;
   /** The answer in flight — replaced wholesale at the onset of speech. */
   answer: Answer;
   /**
@@ -941,6 +960,9 @@ const freshDial = (conversationId: string): Dial => ({
   suppressSpeechUntilSilence: false,
   face: null,
   hangUpAfterAnswerDrains: null,
+  hangUpArmedAtFacetMs: 0,
+  answerEndedAtFacetMs: 0,
+  capabilityHostReady: false,
   answer: freshAnswer(),
   openBackendCalls: 0,
   timelineMs: 0,
@@ -1013,7 +1035,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
   /** When the last dial FAILED, for the retry cooldown. */
   #lastDialFailedAtFacetMs = 0;
   /**
-   * The mirror lane's outbox, drained by ONE background flush at a time. The
+   * The mirror's outbox, drained by ONE background flush at a time. The
    * drain swaps this queue out whole and sends it as ONE variadic append, so
    * whatever accumulated while the previous append RPC was in flight
    * coalesces naturally — GPT-Live emits ten audio deltas a second forever.
@@ -1150,6 +1172,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
      */
     if (owedCall !== null && owedCall.endRequested !== null) {
       const { conversationId, endRequested } = owedCall;
+      /* The last words of the call — usually the goodbye that decided it —
+       * are still an open row; #hangUp fences the close listener out, so
+       * this is the one chance to land them durably. */
+      if (this.#dial !== null) this.#flushTurns(this.#dial, append, true);
       this.#hangUp();
       args.blockProcessorWhile(() =>
         append({
@@ -1179,7 +1205,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         if (state.call === null && !this.#callRequested) {
           /*
            * A CALL IS OPENED BY SOMEBODY TALKING, not by anybody asking for
-           * one. ONLY SPEECH OPENS A CALL: the ephemeral lane drops and
+           * one. ONLY SPEECH OPENS A CALL: ephemeral delivery drops and
            * re-delivers, so a lone ptt-end arrives here, and a call minted
            * for it would be a zombie squatting out the idle deadline.
            */
@@ -1250,7 +1276,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           const dial = this.#dial;
           /* AND NOT THE DIAL'S OWN ECHO. The device re-presses every 3s while
            * it still wants the call, stamped BEFORE any answer existed; the
-           * delivery lane hands them over seconds late. An interruption is a
+           * delivery hands them over seconds late. An interruption is a
            * press stamped AFTER the answer it means to stop began. The 250ms
            * guard band absorbs stream-vs-facet wall-clock skew. */
           const pressedAtStreamMs = Date.parse(event.createdAt);
@@ -1389,7 +1415,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
        * THE THIRD SWITCH, AND WHY IT IS NOT A STREAM EVENT. Everything else
        * in this file reaches `processEvent` by being appended. The provider's
        * messages do not, and the reason is measured rather than stylistic:
-       * the ephemeral lane coalesces, delivering in clumps seconds late.
+       * ephemeral delivery coalesces, delivering in clumps seconds late.
        * Routing an audio delta through it would put a full stream round trip
        * in front of every word. The provider's timeline is still appended
        * for instruments — just not waited for.
@@ -1684,7 +1710,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
 
       case "session.delegation.created":
         /* The voice handed something to the backend; the provider runs it.
-         * On the mirror for instruments; nothing for this facet to do but
+         * In the mirror for instruments; nothing for this facet to do but
          * note where the timeline is. */
         if (typeof live.offset_ms === "number") {
           dial.timelineMs = Math.max(dial.timelineMs, live.offset_ms);
@@ -1698,6 +1724,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * deliberately, so the function calls are read off
          * `response.output_item.done`, whose finished item carries
          * `call_id`, `name` and `arguments` together.
+         *
+         * The provider's JSON is untyped here (the message was parsed as a
+         * bare record); the assertions below only name the shape the code
+         * then checks field by field with typeof/Array.isArray, so a message
+         * that is not that shape is ignored rather than trusted.
          */
         const inner = (live.event ?? {}) as Record<string, unknown>;
         if (String(inner.type ?? "") !== "response.output_item.done") return;
@@ -1768,7 +1799,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
 
       default:
         /* Acknowledgements (`*.appended`), `session.usage.updated`, `info`:
-         * on the mirror lane already, nothing to act on. */
+         * in the mirror already, nothing to act on. */
         return;
     }
   }
@@ -1917,7 +1948,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * The provider's timeline, for instruments — WITHOUT the audio in it. The
    * delta rides as its LENGTH: the shape of the answer stays visible and the
    * bytes go once, on `spk-frame`. GPT-Live emits an audio delta every 100 ms
-   * for the life of the call, so this lane would otherwise carry the whole
+   * for the life of the call, so the mirror would otherwise carry the whole
    * output stream twice.
    */
   #forwardProviderEvent(
@@ -1946,7 +1977,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     }
   }
 
-  /** Put one payload on the mirror lane — see `#mirrorQueue`. */
+  /** Put one payload in the mirror — see `#mirrorQueue`. */
   #appendMirror(
     payload: Record<string, unknown> & { conversationId: string; receivedAtFacetMs: number },
     append: ProcessEventArgs<VoiceAgentContract>["append"],
@@ -1956,7 +1987,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     this.#mirrorFlushing = true;
     this.runInBackground(async () => {
       /* The flag clears in a finally around the WHOLE loop: a rejected
-       * append loses only its own batch, never the lane. */
+       * append loses only its own batch, never the mirror. */
       try {
         while (this.#mirrorQueue.length > 0) {
           const batch = this.#mirrorQueue;
@@ -2022,6 +2053,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
     append: ProcessEventArgs<VoiceAgentContract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
   ): void {
+    /* The backend's arguments are JSON text; parsed, they are whatever the
+     * model produced, so every read below narrows with typeof first and the
+     * assertions only spell the property being looked for. */
     let modelArgs: unknown = rawArguments;
     try {
       modelArgs = JSON.parse(rawArguments === "" ? "{}" : rawArguments);
@@ -2048,34 +2082,46 @@ export class VoiceAgentProcessor extends StreamProcessor<
              * exec_typescript uses, on THIS STREAM's own capability host —
              * the guest's itx is scoped to the voice stream, so the script
              * runs are journaled beside the transcript. A voice stream is
-             * not an agent and nobody created its host: the first run on a
-             * stream finds "has not been created" and creates it (idempotent
-             * — measured on preview: a second create is a no-op). */
+             * not an agent and nobody created its host, so the first run of
+             * each dial creates it first — idempotent (measured on preview:
+             * a second create is a no-op), one extra RPC per dial, and no
+             * retry that could run a failed script twice. */
             const typed = project as {
               capabilityHost: {
                 create(): Promise<unknown>;
                 runScript(code: string): Promise<{ result: unknown }>;
               };
             };
-            try {
-              return (await typed.capabilityHost.runScript(code)).result;
-            } catch (error) {
-              if (!String(error).includes("has not been created")) throw error;
+            if (!dial.capabilityHostReady) {
               await typed.capabilityHost.create();
-              return (await typed.capabilityHost.runScript(code)).result;
+              dial.capabilityHostReady = true;
             }
+            return (await typed.capabilityHost.runScript(code)).result;
           });
         } else if (tool !== undefined && tool.expression === undefined) {
           /* THE BASE CASE, NOT A REGISTRY: hanging up is one atomic append of
            * conversation-end-requested, deferred to the drain point so the
-           * goodbye being spoken right now gets PLAYED, not cut. */
+           * goodbye — spoken AFTER this call returns — gets PLAYED, not cut.
+           * See HANG_UP_GOODBYE_GRACE_MS for how the drain point knows. */
           dial.hangUpAfterAnswerDrains = "the backend hung up";
+          dial.hangUpArmedAtFacetMs = this.deps.nowAtFacetMs();
+          /* Nothing may be playing, so nothing else would start the pacer
+           * that settles this: kick it once the grace is up, whatever the
+           * stream did meanwhile (a spoken goodbye settles it sooner). */
+          runInBackground(async () => {
+            await this.deps.sleep(HANG_UP_GOODBYE_GRACE_MS);
+            if (this.#dial !== dial) return;
+            this.#sendSpeakerAudio(dial, append, runInBackground);
+          });
           work = Promise.resolve({ status: "hanging up once the goodbye finishes playing" });
         } else if (tool !== undefined) {
           const expression = tool.expression!;
           work = this.deps.withProject(async (project) => {
             /* The platform's own walk (apps/os/src/itx/expression.ts):
-             * reads pipeline, calls invoke. */
+             * reads pipeline, calls invoke. The expression walks an untyped
+             * capability tree, so each step's target is asserted as an
+             * object and the final value checked to be a function — a wrong
+             * step throws here and the backend hears it. */
             let receiver: unknown;
             let value: unknown = project;
             for (const step of expression) {
@@ -2120,7 +2166,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         output = JSON.stringify({ error: String(error).slice(0, 1_000) });
       }
       dial.openBackendCalls = Math.max(0, dial.openBackendCalls - 1);
-      /* The fence every provider-lane completion wears: a re-dialed call is
+      /* The fence every provider-side completion wears: a re-dialed call is
        * a NEW session that never issued this call_id. */
       if (this.#dial !== dial) return;
       this.#sendControl(
@@ -2137,8 +2183,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
   }
 
   /**
-   * Send one client command AND record it on the mirror lane as
-   * `client.<type>` — the lane is the wire's flight recorder, and a recorder
+   * Send one client command AND record it in the mirror as
+   * `client.<type>` — the mirror is the wire's flight recorder, and a recorder
    * that hears only one direction cannot explain a silence.
    */
   #sendControl(
@@ -2196,6 +2242,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     append: ProcessEventArgs<VoiceAgentContract>["append"],
   ): void {
     dial.hangUpAfterAnswerDrains = null;
+    dial.hangUpArmedAtFacetMs = 0;
     if (dial.answer.phase !== "speaking" && dial.speakerQueue.length === 0) return;
     dial.face?.barge(decidedAtFacetMs);
     if (dial.turns.assistant !== null) dial.turns.assistant.interrupted = true;
@@ -2208,7 +2255,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
   /**
    * Throw away the answer being spoken, here and on the device, right now.
    * Every frame minted so far belongs to an answer nobody will hear. AND THE
-   * NEXT REAL FRAME SAYS IT AGAIN: the clear is one empty frame on a lane
+   * NEXT REAL FRAME SAYS IT AGAIN: the clear is one empty frame in a stream of frames
    * that documents its own drops; the first frame of the replacing answer
    * carries the clear too, so it cannot be lost without losing the
    * replacement itself.
@@ -2307,7 +2354,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
             dial.deviceBufferEmptyAtFacetMs += frameBytes / PCM16_BYTES_PER_MS;
             dial.answer.sentMs += frameBytes / PCM16_BYTES_PER_MS;
             /* THE FACE FOLDS AT SEND TIME, on the frame the device is about
-             * to play. The decode is the one this lane pays for a face, and
+             * to play. The decode is the one the speaker path pays for a face, and
              * only when a face is rendering. */
             if (dial.face !== null) {
               dial.face.audio(base64ToBytes(frame), nowAtFacetMs);
@@ -2336,6 +2383,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
             /* The mouth closes WITH the marker, not at the provider's
              * silence: SIL at ingest shut it before the speech finished. */
             dial.face?.answerAudioDone(this.deps.nowAtFacetMs());
+            dial.answerEndedAtFacetMs = this.deps.nowAtFacetMs();
             dial.lastDeviceSpeakerFrameSeq += 1;
             const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
             dial.clearSpeakerBufferBeforeNextFrame = false;
@@ -2356,8 +2404,16 @@ export class VoiceAgentProcessor extends StreamProcessor<
            * the device holds the whole goodbye; the pacer's own deadline
            * says when it finishes PLAYING. Sleep that off, re-check (a press
            * during playout un-decides it), then one atomic append. Not
-           * settleable while the voice is still speaking. */
-          if (dial.hangUpAfterAnswerDrains !== null && dial.answer.phase !== "speaking") {
+           * settleable while the voice is still speaking, and not before the
+           * goodbye has been spoken at all — an answer must END after the
+           * hang-up was armed, or the grace must run out. */
+          if (
+            dial.hangUpAfterAnswerDrains !== null &&
+            dial.answer.phase !== "speaking" &&
+            ((dial.answerEndedAtFacetMs > 0 &&
+              dial.answerEndedAtFacetMs >= dial.hangUpArmedAtFacetMs) ||
+              this.deps.nowAtFacetMs() - dial.hangUpArmedAtFacetMs >= HANG_UP_GOODBYE_GRACE_MS)
+          ) {
             await this.deps.sleep(
               Math.max(0, dial.deviceBufferEmptyAtFacetMs - this.deps.nowAtFacetMs()),
             );
@@ -2407,7 +2463,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
 /* ========================================================================== */
 
 /**
- * The credential follows the HOST, never a flag: a test seam pointing at a
+ * The credential follows the HOST, never a flag: a test hook pointing at a
  * fake gets no secret at all. THE ONE COPY of the host→secret rule — the
  * dial spends it and setup's gate demands it, so the two cannot disagree.
  */
@@ -2493,7 +2549,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint implem
 
     const project = await this.itx;
     /* Demand exactly the secret the dial will spend — the one host→credential
-     * rule in secretForHost. A providerBaseUrl seam resolves to no secret and
+     * rule in secretForHost. A providerBaseUrl hook resolves to no secret and
      * gets no gate. */
     const dialTarget = new URL(options.providerBaseUrl ?? LIVE.url);
     const secretPath = secretForHost(dialTarget.hostname);

@@ -333,6 +333,8 @@ export async function device(options: DeviceOptions) {
         ],
         processEventBatch: (batch: { events: { type: string; payload?: unknown }[] }) => {
           for (const event of batch.events) {
+            /* Stream payloads arrive as untyped JSON; the assertion names the
+             * three optional fields this instrument reads, each guarded. */
             const payload = (event.payload ?? {}) as {
               type?: string;
               delta?: string;
@@ -342,7 +344,7 @@ export async function device(options: DeviceOptions) {
               spokenText += payload.delta ?? "";
             }
             /* No response lifecycle on GPT-Live: the facet's end-of-answer
-             * marker on the speaker lane is what says the voice finished. */
+             * marker in the speaker frames is what says the voice finished. */
             if (
               event.type === "events.iterate.com/voice-agent/spk-frame" &&
               payload.lastFrameOfAnswer === true
@@ -386,7 +388,7 @@ export async function device(options: DeviceOptions) {
   throw new Error(`unknown action: ${action}`);
 }
 
-/** 16kHz mono S16LE, the format both device lanes record in. */
+/** 16kHz mono S16LE, the format both device recordings use. */
 function wrapWav(pcm: Uint8Array): Buffer {
   const header = Buffer.alloc(44);
   header.write("RIFF", 0);

@@ -201,7 +201,7 @@ export async function boards(options: BoardsOptions) {
             };
             /* One count per answer the voice finished — GPT-Live has no
              * response lifecycle; the facet marks the end of each run of
-             * speech on the speaker lane, and the barge check below reads it. */
+             * speech in the speaker frames, and the barge check below reads it. */
             if (
               event.type === "events.iterate.com/voice-agent/spk-frame" &&
               payload.lastFrameOfAnswer === true
@@ -248,7 +248,7 @@ export async function boards(options: BoardsOptions) {
           await sleep(1000);
         }
         console.error(`  ${JSON.stringify(record.after)}`);
-        /* The transcription lane lags the audio it describes: the answer
+        /* The transcription lags the audio it describes: the answer
          * starts a second or two before the provider finishes transcribing
          * the question that provoked it. Reading the evidence the instant
          * audio moves reads as a device that heard nothing. */
@@ -261,7 +261,7 @@ export async function boards(options: BoardsOptions) {
           heardUs.toLowerCase().includes(expect) || saidBack.toLowerCase().includes(expect);
         /*
          * "audio only" is deliberately not a pass. Frames moving in both
-         * directions proves the lanes are alive; it does not prove the device
+         * directions proves the transport is alive; it does not prove the device
          * understood anything, and those are different claims.
          */
         record.verdict = answered

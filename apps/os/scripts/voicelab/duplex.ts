@@ -7,7 +7,7 @@
 //
 // The driver is the dumbest possible client: it appends microphone frames at
 // realtime pace for the whole run (silence when it has nothing to say) and
-// reads the speaker lane and the provider's mirror back. Everything below is
+// reads the speaker frames and the mirrored provider events back. Everything below is
 // read off the wire rather than assumed:
 //
 //   1. SESSION — the facet dialled GPT-Live and the session started: the
@@ -15,10 +15,10 @@
 //      mode, `conversation-accepted` carries the handshake time.
 //   2. FULL DUPLEX — the microphone never stops: frames flow up for the whole
 //      run, including while answer frames flow down.
-//   3. ANSWERS — a spoken request draws speech on the speaker lane, and each
+//   3. ANSWERS — a spoken request draws speech in the speaker frames, and each
 //      answer ends with the facet's `lastFrameOfAnswer` marker (GPT-Live has
 //      no end-of-answer event; the marker is inferred from silence).
-//   4. IDLE DOWNLINK — between answers the speaker lane is QUIET: the
+//   4. IDLE DOWNLINK — between answers NO speaker frames flow: the
 //      provider's continuous silence is dropped at the facet, not shipped.
 //   5. THE SPOKEN BARGE — talking over the answer makes the voice stop within
 //      a bounded time, with no clear needed, and the interruption is answered.
@@ -136,6 +136,8 @@ export async function duplex(options: DuplexOptions): Promise<void> {
     ],
     processEventBatch: (batch: { events?: { type: string; payload?: unknown }[] }) => {
       for (const event of batch.events ?? []) {
+        /* Stream payloads arrive as untyped JSON; the assertion only names
+         * the record shape, and every field read below is checked by type. */
         const payload = (event.payload ?? {}) as Record<string, unknown>;
         if (event.type === "events.iterate.com/voice-agent/spk-frame") {
           const pcm = typeof payload.pcm === "string" ? payload.pcm : "";
@@ -154,9 +156,13 @@ export async function duplex(options: DuplexOptions): Promise<void> {
         const type = String(payload.type ?? "");
         if (type === "session.delegation.created") {
           delegationCreatedAtMs = clock();
+          /* The provider's delegation object, per its schema; an absent or
+           * differently shaped one reads as an empty target. */
           delegationTarget = String((payload.delegation as { target?: string })?.target ?? "");
         }
         if (type === "response.event") {
+          /* The nested Responses event, per the provider's schema; the
+           * optional fields are all this instrument reads, each guarded. */
           const inner = (payload.event ?? {}) as {
             type?: string;
             item?: { type?: string; name?: string; arguments?: string };
@@ -353,6 +359,7 @@ export async function duplex(options: DuplexOptions): Promise<void> {
   console.log(`\n  heard:  ${inputTranscript.trim().slice(0, 400)}`);
   console.log(`  said:   ${outputTranscript.trim().slice(0, 600)}`);
   for (const note of notes) {
+    /* backend-reply's payload is `{ text }` by the agent's contract. */
     console.log(
       `  backend: ${String((note.payload as { text?: string }).text ?? "").slice(0, 300)}`,
     );
@@ -387,6 +394,9 @@ interface VoiceStreamReads {
 }
 
 async function readVoiceEvents(stream: unknown, sinceMs: number) {
+  /* The stream handle is typed to the append surface the probes share
+   * (probe-audio.ts); its read surface is asserted here to exactly the one
+   * call made — a wrong assertion fails loudly at the RPC boundary. */
   const readable = stream as unknown as VoiceStreamReads;
   const events = await readable.getEvents({
     afterOffset: 0,
