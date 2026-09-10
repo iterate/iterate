@@ -257,13 +257,10 @@ async function drainSseResponse(input: {
       }
     }
   } catch (error) {
-    // Cancel closes this reader immediately, but the interceptor's cleanup may
-    // never settle. Do not let that cleanup extend the attempt deadline or
-    // replace its failure; no further chunks are read or delivered.
-    void reader.cancel().catch(() => {});
+    // Deadline (or a mid-drain read failure): stop the source before the
+    // error settles the attempt, so no chunk can land after the completion.
+    await reader.cancel().catch(() => {});
     throw error;
-  } finally {
-    reader.releaseLock();
   }
   buffered += decoder.decode();
   const finalChunk = parseSseFrame(buffered);

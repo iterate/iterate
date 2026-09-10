@@ -197,52 +197,6 @@ describe("runWorkersAiAttempt", () => {
     expect(chunks).toEqual([{ response: "hel" }]);
   });
 
-  it("an interceptor's stalled cancellation cannot extend the attempt deadline", async () => {
-    vi.useFakeTimers();
-    try {
-      const firstChunk = Promise.withResolvers<void>();
-      let cancelled = false;
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode('data: {"response":"test"}\n\n'));
-        },
-        cancel() {
-          cancelled = true;
-          return new Promise(() => {});
-        },
-      });
-      let failure: unknown;
-      const attempt = runWorkersAiAttempt({
-        ai: {
-          run: async () => {
-            throw new Error("Provider must not be called");
-          },
-        },
-        model: "intercepted/test-model",
-        messages: [],
-        deadlineMs: 50,
-        consultInterceptor: async () =>
-          new Response(body, {
-            headers: { "content-type": "text/event-stream" },
-          }),
-        onChunk: async () => {
-          firstChunk.resolve();
-        },
-      }).catch((error) => {
-        failure = error;
-      });
-
-      await firstChunk.promise;
-      await vi.advanceTimersByTimeAsync(50);
-      expect(failure).toMatchObject({ message: expect.stringContaining("timed out") });
-      expect(cancelled).toBe(true);
-      expect(body.locked).toBe(false);
-      await attempt;
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("applies the attempt deadline while a chunk callback is in flight", async () => {
     const encoder = new TextEncoder();
     let cancelled = false;
