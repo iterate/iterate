@@ -120,21 +120,16 @@ AND NOT EXISTS (SELECT 1 FROM users WHERE email = ? AND id != ?) RETURNING id, e
     /** Create an org (a minted org_ id; the name is free text, two orgs may share one) and make the
      *  creator its owner. */
     async createOrg(userId: string, name: string): Promise<Org> {
-      const org = await db
-        .prepare(
-          `INSERT INTO orgs (id, name) VALUES (?, ?)
-RETURNING id, name;`,
-        )
-        .bind(newOrgId(), name)
-        .first<Org>();
-      await db
-        .prepare(
-          `INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)
-ON CONFLICT(org_id, user_id) DO NOTHING;`,
-        )
-        .bind(org!.id, userId, "owner")
-        .run();
-      return { ...org!, role: "owner" };
+      const org = { id: newOrgId(), name: name.trim(), role: "owner" };
+      if (!org.name) throw codedError("INVALID_INPUT", "Enter an organization name.");
+      // D1 batch is transactional: an organization never survives without its owner.
+      await db.batch([
+        db.prepare("INSERT INTO orgs (id, name) VALUES (?, ?)").bind(org.id, org.name),
+        db
+          .prepare("INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)")
+          .bind(org.id, userId, org.role),
+      ]);
+      return org;
     },
 
     /** Orgs the user belongs to. */
@@ -152,14 +147,11 @@ ORDER BY o.name ASC;`,
       return results;
     },
 
-    /** Create the project `name` (slugified: that IS its id, GLOBALLY unique) for `reach` — in the
-     *  user's first org by name, created as `<email>'s org` with them as owner when they have none;
-     *  in the deployment's own org for the admin secret. A reach that names its projects (a token,
-     *  the secret, a grant that chose) creates none: FORBIDDEN. A name already taken in ANY org is
-     *  PROJECT_NAME_TAKEN; the same org's again is idempotent (the insert is ON CONFLICT DO NOTHING,
-     *  then re-selected to cover both "just created" and "already existed"). Both create-a-project
-     *  doors — `projects.create` over /api and the console's form — are this. */
-    async createProject(reach: Reach, name: string): Promise<Project> {
+    /** Create a globally unique project slug in the selected member organization.
+     * Without a selection, use the user's first/default organization or the admin
+     * organization. Fixed project grants cannot create projects. Repeating a name
+     * in its owning organization is idempotent; another organization is refused. */
+    async createProject(reach: Reach, name: string, orgId?: string): Promise<Project> {
       if (typeof reach === "object" && "projectIds" in reach)
         throw codedError(
           "FORBIDDEN",
@@ -167,10 +159,14 @@ ORDER BY o.name ASC;`,
         );
       const id = projectSlug(name);
       if (!id) throw new Error("project name is empty or invalid");
-      const org =
-        reach === "every"
+      const org = orgId
+        ? reach === "every"
+          ? await db.prepare("SELECT id, name FROM orgs WHERE id = ?").bind(orgId).first<Org>()
+          : (await d1Directory.listOrgs(reach.userId)).find((org) => org.id === orgId)
+        : reach === "every"
           ? await d1Directory.adminOrg()
           : await d1Directory.ensureOrg(reach.userId);
+      if (!org) throw codedError("FORBIDDEN", "You cannot create a project in that organization.");
       await db
         .prepare(
           `INSERT INTO projects (id, org_id) VALUES (?, ?)

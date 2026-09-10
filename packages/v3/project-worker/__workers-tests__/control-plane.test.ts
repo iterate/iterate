@@ -3,6 +3,7 @@ import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, expect, test } from "vitest";
 import type { Env } from "../src/control-plane.ts";
 import type { UnauthenticatedSession } from "../src/session.ts";
+import { directory } from "../src/directory.ts";
 import { applyDirectorySchema, SRC_ECHO_APP } from "./support.ts";
 
 const origin = "https://control.test";
@@ -60,6 +61,37 @@ test("the directory keeps creation, listing, membership and event attribution co
   );
   using other = await admin.projects.get("adas-directory");
   expect(await other.whoami()).toEqual({ projectId: "adas-directory", path: "/" });
+});
+
+test("onboarding creates owned organizations atomically and checks the selected organization", async () => {
+  const db = (env as unknown as Env).DB;
+  const catalog = directory(db);
+  const user = await catalog.upsertUser("onboarding@directory.test");
+  const reach = { userId: user.id };
+  const first = await catalog.createOrg(user.id, "A first organization");
+  const chosen = await catalog.createOrg(user.id, "Z selected organization");
+  expect(await catalog.createProject(reach, "selected-org-project", chosen.id)).toEqual({
+    id: "selected-org-project",
+    orgId: chosen.id,
+  });
+  expect((await catalog.listOrgs(user.id)).map((org) => org.id)).toEqual([first.id, chosen.id]);
+  const other = await catalog.upsertUser("other-onboarding@directory.test");
+  await expect(
+    catalog.createProject({ userId: other.id }, "foreign-org-project", chosen.id),
+  ).rejects.toThrow(/cannot create/);
+  await expect(
+    catalog.createProject(
+      { ...reach, projectIds: ["selected-org-project"] },
+      "bound-new-project",
+      chosen.id,
+    ),
+  ).rejects.toThrow(/creating a project needs/);
+  expect(await catalog.getProject("foreign-org-project")).toBeNull();
+  expect(await catalog.getProject("bound-new-project")).toBeNull();
+  await expect(catalog.createOrg("missing-owner", "No orphan organization")).rejects.toThrow();
+  expect(
+    await db.prepare("SELECT id FROM orgs WHERE name = ?").bind("No orphan organization").first(),
+  ).toBeNull();
 });
 
 test("operator RPC accepts only its administrator credential; issuer cookies grant no API access", async () => {
