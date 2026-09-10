@@ -117,6 +117,15 @@ test("surfaces Git failures instead of silently exempting violations", () => {
   });
 });
 
+test("handles renamed paths containing Git pathspec characters", () => {
+  using fixture = createFixture();
+  fixture.write("const BAD_OLD = 1;\n");
+  fixture.commit("2020-01-01T00:00:00Z");
+  fixture.git(["mv", "input.ts", "input[1].ts"]);
+  fixture.git(["commit", "--quiet", "-m", "Rename file"]);
+  expect(fixture.lint("input[1].ts")).toMatchObject({ status: 0, names: [] });
+});
+
 test("rejects invalid cutoff dates", () => {
   expect(() =>
     grandfatherRule({ create: () => ({}) }, { allowedUpTo: new Date("invalid") }),
