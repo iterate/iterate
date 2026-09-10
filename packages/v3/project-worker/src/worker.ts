@@ -168,6 +168,14 @@ export default {
     // on a project host is the app's; the platform's own doors live on the worker's hostname.
     const appConfig = appConfigOf(env);
     const { projectHostnameBase, projectTokenSecret, environmentName, deployId } = appConfig;
+    if (appConfig.mcpOrigin && url.origin === appConfig.mcpOrigin) {
+      // The MCP origin exposes its root as the protocol endpoint. This internal
+      // rewrite preserves its public origin and leaves /api as Cap'n Web.
+      if (url.pathname === "/") url.pathname = "/mcp";
+      else if (!url.pathname.startsWith("/.well-known/"))
+        return new Response("Not found", { status: 404 });
+      return controlPlane.fetch(new Request(url, request), env, ctx);
+    }
     /** What every session and every lane's identity is built from — ONE object per request. */
     const sessionInput: SessionInput = {
       contextNamespace: env.ITERATE_CONTEXT,
@@ -213,6 +221,9 @@ export default {
         `421: ${url.hostname} is not a project host under ${projectHostnameBase}\n`,
         { status: 421 },
       );
+
+    if (appConfig.platformOrigin && url.origin !== appConfig.platformOrigin)
+      return new Response("Unknown platform origin", { status: 421 });
 
     // `<deployId> <environmentName>`: Cloudflare's version id of this deploy — the stamp a smoke
     // waits for (`wrangler deploy` prints it) — and which deployment this is (the app config section below).
@@ -264,6 +275,8 @@ const APP_CONFIG_VARS = [
   "APP_CONFIG_ARTIFACTS_NAMESPACE",
   "APP_CONFIG_SESSION_SECRET",
   "APP_CONFIG_ADMIN_API_SECRET",
+  "APP_CONFIG_PLATFORM_ORIGIN",
+  "APP_CONFIG_MCP_ORIGIN",
 ] as const;
 /** One of the `APP_CONFIG_*` vars — the only names `parseAppConfig` reads. */
 type AppConfigVarName = (typeof APP_CONFIG_VARS)[number];
@@ -271,6 +284,9 @@ type AppConfigVarName = (typeof APP_CONFIG_VARS)[number];
 /** THE WORKER'S CONFIGURATION: what differs between deployments of the same code, parsed once per
  *  isolate (`appConfigOf`) from the `APP_CONFIG_*` vars and the deploy identity. */
 export interface AppConfig {
+  /** Fixed public origins. Unset only in the existing local/test configuration. */
+  readonly platformOrigin: string;
+  readonly mcpOrigin: string;
   /** Which deployment this is, as a word a human reads at `/version`: "poc" (the deployment), "test"
    *  (the workers lane), "e2e" (the e2e lane). Required. */
   readonly environmentName: string;
@@ -331,7 +347,22 @@ export function parseAppConfig(vars: object, deployId = "unversioned"): AppConfi
   if (!sessionSecret) throw new Error("APP_CONFIG_SESSION_SECRET: required, but unset or blank");
   const adminApiSecret = read("APP_CONFIG_ADMIN_API_SECRET");
   if (!adminApiSecret) throw new Error("APP_CONFIG_ADMIN_API_SECRET: required, but unset or blank");
+  const platformOrigin = read("APP_CONFIG_PLATFORM_ORIGIN");
+  const mcpOrigin = read("APP_CONFIG_MCP_ORIGIN");
+  for (const [name, value] of [
+    ["APP_CONFIG_PLATFORM_ORIGIN", platformOrigin],
+    ["APP_CONFIG_MCP_ORIGIN", mcpOrigin],
+  ]) {
+    if (!value) continue;
+    const url = new URL(value);
+    if (url.origin !== value || !["https:", "http:"].includes(url.protocol))
+      throw new Error(`${name}: expected an HTTP(S) origin without a path`);
+  }
+  if (mcpOrigin && (!platformOrigin || mcpOrigin === platformOrigin))
+    throw new Error("APP_CONFIG_MCP_ORIGIN: requires a distinct APP_CONFIG_PLATFORM_ORIGIN");
   return {
+    platformOrigin,
+    mcpOrigin,
     environmentName,
     projectHostnameBase: read("APP_CONFIG_PROJECT_HOSTNAME_BASE"),
     projectTokenSecret,

@@ -13,7 +13,8 @@ vi.mock("cloudflare:workers", () => ({
   RpcPromise: class {},
   RpcProperty: class {},
 }));
-import { appConfigOf, parseAppConfig, projectHostOf } from "./worker.ts";
+import worker, { appConfigOf, parseAppConfig, projectHostOf } from "./worker.ts";
+import type { Env } from "./control-plane.ts";
 
 // ── app config ── THE TABLE for the app config: what the vars become, what is refused (by name),
 // and the per-env memo. Each row is `{ vars, becomes | throws }`.
@@ -27,6 +28,8 @@ const MINIMAL = {
 };
 /** What MINIMAL becomes: every optional var blank, the deploy id defaulted. */
 const MINIMAL_CONFIG = {
+  platformOrigin: "",
+  mcpOrigin: "",
   environmentName: "poc",
   projectHostnameBase: "",
   projectTokenSecret: "token-secret",
@@ -110,8 +113,7 @@ describe("parseAppConfig", () => {
     // the deleted login mode among them
     {
       vars: { ...MINIMAL, APP_CONFIG_LOGIN_MODE: "open" },
-      throws:
-        /^APP_CONFIG_LOGIN_MODE: unknown configuration variable \(known: APP_CONFIG_ENVIRONMENT_NAME, APP_CONFIG_PROJECT_HOSTNAME_BASE, APP_CONFIG_PROJECT_TOKEN_SECRET, APP_CONFIG_ARTIFACTS_ACCOUNT_ID, APP_CONFIG_ARTIFACTS_NAMESPACE, APP_CONFIG_SESSION_SECRET, APP_CONFIG_ADMIN_API_SECRET\)$/,
+      throws: /^APP_CONFIG_LOGIN_MODE: unknown configuration variable \(known:/,
     },
   ];
   for (const { vars, becomes, throws } of rows)
@@ -121,6 +123,53 @@ describe("parseAppConfig", () => {
     });
   test("the deploy id is handed in", () => {
     expect(parseAppConfig(MINIMAL, "v-123").deployId).toBe("v-123");
+  });
+});
+
+describe("public protocol origins", () => {
+  const origins = {
+    ...MINIMAL,
+    APP_CONFIG_PLATFORM_ORIGIN: "https://os.iterate2.com",
+    APP_CONFIG_MCP_ORIGIN: "https://mcp.iterate2.com",
+  };
+  const request = (url: string) =>
+    worker.fetch(new Request(url), origins as unknown as Env, {} as ExecutionContext);
+
+  test("MCP discovery uses its public origin and the console's issuer", async () => {
+    const denied = await request("https://mcp.iterate2.com/");
+    expect(denied.status).toBe(401);
+    const metadataUrl = /resource_metadata="([^"]+)"/.exec(
+      denied.headers.get("www-authenticate")!,
+    )![1]!;
+    expect(metadataUrl).toMatch(/^https:\/\/mcp\.iterate2\.com\//);
+    expect(await (await request(metadataUrl)).json()).toMatchObject({
+      resource: "https://mcp.iterate2.com/",
+      authorization_servers: ["https://os.iterate2.com"],
+    });
+    expect(
+      await (
+        await request("https://os.iterate2.com/.well-known/oauth-authorization-server")
+      ).json(),
+    ).toMatchObject({
+      issuer: "https://os.iterate2.com",
+      authorization_endpoint: "https://os.iterate2.com/authorize",
+      token_endpoint: "https://os.iterate2.com/oauth/token",
+    });
+  });
+
+  test("MCP does not acquire a Cap'n Web or console route", async () => {
+    expect((await request("https://mcp.iterate2.com/api")).status).toBe(404);
+    expect((await request("https://mcp.iterate2.com/login")).status).toBe(404);
+    expect((await request("https://unconfigured.example/api")).status).toBe(421);
+  });
+
+  test("configured origins must be distinct origins without paths", () => {
+    expect(() =>
+      parseAppConfig({ ...origins, APP_CONFIG_MCP_ORIGIN: "https://mcp.iterate2.com/path" }),
+    ).toThrow(/origin/);
+    expect(() =>
+      parseAppConfig({ ...origins, APP_CONFIG_MCP_ORIGIN: origins.APP_CONFIG_PLATFORM_ORIGIN }),
+    ).toThrow(/distinct/);
   });
 });
 

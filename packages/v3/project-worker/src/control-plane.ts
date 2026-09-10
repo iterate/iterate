@@ -59,7 +59,9 @@ async function resolveExternalToken({
         ...principal,
         ...(projectId !== undefined && { projects: [projectId] }),
       } satisfies McpProps,
-      audience: `${url.origin}/mcp`,
+      audience: appConfigOf(bindings).mcpOrigin
+        ? `${appConfigOf(bindings).mcpOrigin}/`
+        : `${url.origin}/mcp`,
     };
   }
   return null;
@@ -399,35 +401,28 @@ const consoleHandler: Handler = {
   },
 };
 
-/** The control plane's front door: the OAuth 2.1 AS around the console — `/oauth/token`,
- *  `/oauth/register`, the `.well-known` documents and the bearer check on `/mcp` are the provider's;
- *  everything else falls through to `consoleHandler`. ONE resource, pinned: `<origin>/mcp`, the
- *  provider its own authorization server — every token is bound to it and a foreign one refused. The
- *  provider wants that resource as an absolute URL at construction, and the platform's origin is the
- *  request's (`https://project-worker.iterate.workers.dev`, the custom hostname,
- *  `http://localhost:<port>` in the local lanes), so the provider is built per request from
- *  `new URL(request.url).origin` — its constructor only checks its options. An issuer must be https
- *  (RFC 8414; the provider refuses another), so on an http origin — a local lane — the provider
- *  carries no resource document: the console, the login and the bearer check still serve, and no
- *  token binds to a resource. */
+/** The OAuth authorization server and MCP bearer gate. Both public hosts advertise
+ *  the configured platform issuer. MCP's public origin is its resource audience;
+ *  local configurations use /mcp on the platform origin. */
 export const controlPlane: Handler = {
   fetch(request, env, ctx) {
-    const { origin, protocol } = new URL(request.url);
+    const { origin } = new URL(request.url);
+    const config = appConfigOf(env);
+    const issuer = config.platformOrigin || origin;
+    const resource = config.mcpOrigin ? `${config.mcpOrigin}/` : `${issuer}/mcp`;
     return new OAuthProvider<Env>({
       apiRoute: "/mcp", // the ONLY OAuth-protected boundary
       apiHandler: mcpHandler,
       defaultHandler: consoleHandler, // login + session + /authorize consent + the account page
-      authorizeEndpoint: "/authorize",
-      tokenEndpoint: "/oauth/token",
-      clientRegistrationEndpoint: "/oauth/register", // DCR — the spec-sanctioned MAY-fallback: a client with no CIMD document (Cursor; a client on an http origin, which CIMD cannot serve)
+      authorizeEndpoint: `${issuer}/authorize`,
+      tokenEndpoint: `${issuer}/oauth/token`,
+      clientRegistrationEndpoint: `${issuer}/oauth/register`,
       scopesSupported: ["project"],
-      ...(protocol === "https:" && {
-        resourceMetadata: {
-          resource: `${origin}/mcp`,
-          authorization_servers: [origin],
-          scopes_supported: ["project"],
-        },
-      }),
+      resourceMetadata: {
+        resource,
+        ...(issuer.startsWith("https:") && { authorization_servers: [issuer] }),
+        scopes_supported: ["project"],
+      },
       clientIdMetadataDocumentEnabled: true, // CIMD — clients register themselves by URL (the `global_fetch_strictly_public` flag, wrangler.jsonc)
       allowPlainPKCE: false, // OAuth 2.1: S256 only
       resolveExternalToken, // a project token, the admin secret, a project secret
