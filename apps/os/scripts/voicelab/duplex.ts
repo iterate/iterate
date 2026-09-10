@@ -122,6 +122,8 @@ export async function duplex(options: DuplexOptions): Promise<void> {
   let delegationCreatedAtMs: number | null = null;
   let delegationTarget: string | null = null;
   let backendFunctionCalls = 0;
+  /** What the backend asked for and what the facet answered, off the mirror. */
+  const backendCalls: string[] = [];
   let outputTranscript = "";
   let inputTranscript = "";
   let bargeSpokenAtMs: number | null = null;
@@ -155,10 +157,19 @@ export async function duplex(options: DuplexOptions): Promise<void> {
           delegationTarget = String((payload.delegation as { target?: string })?.target ?? "");
         }
         if (type === "response.event") {
-          const inner = (payload.event ?? {}) as { type?: string; item?: { type?: string } };
+          const inner = (payload.event ?? {}) as {
+            type?: string;
+            item?: { type?: string; name?: string; arguments?: string };
+          };
           if (inner.type === "response.output_item.done" && inner.item?.type === "function_call") {
             backendFunctionCalls += 1;
+            backendCalls.push(
+              `→ ${String(inner.item.name)}(${String(inner.item.arguments ?? "").slice(0, 200)})`,
+            );
           }
+        }
+        if (type === "client.response.item.create") {
+          backendCalls.push(`← ${String(payload.itemSummary ?? "").slice(0, 300)}`);
         }
         if (type === "session.output_transcript.delta") {
           outputTranscript += String(payload.delta ?? "");
@@ -338,6 +349,7 @@ export async function duplex(options: DuplexOptions): Promise<void> {
   console.log(
     `    durable transcript        ${String(utterances.length)} utterances, ${String(answers.length)} answers, ${String(notes.length)} backend notes`,
   );
+  for (const line of backendCalls) console.log(`  backend call ${line}`);
   console.log(`\n  heard:  ${inputTranscript.trim().slice(0, 400)}`);
   console.log(`  said:   ${outputTranscript.trim().slice(0, 600)}`);
   for (const note of notes) {

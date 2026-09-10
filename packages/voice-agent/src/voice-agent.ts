@@ -2041,15 +2041,29 @@ export class VoiceAgentProcessor extends StreamProcessor<
               ? (modelArgs as { code: string }).code
               : String(modelArgs ?? "");
           work = this.deps.withProject(async (project) => {
-            /* Asserted, not typed: withProject hands over the project root
+            /* Asserted, not typed: withProject hands over the guest's itx
              * untyped (the generated client type lives in apps/os and a
              * package cannot import it); a wrong assertion fails loudly at
              * the RPC boundary. The same runScript the OS MCP server's
-             * exec_typescript uses, on this scope's own capability host. */
+             * exec_typescript uses, on THIS STREAM's own capability host —
+             * the guest's itx is scoped to the voice stream, so the script
+             * runs are journaled beside the transcript. A voice stream is
+             * not an agent and nobody created its host: the first run on a
+             * stream finds "has not been created" and creates it (idempotent
+             * — measured on preview: a second create is a no-op). */
             const typed = project as {
-              capabilityHost: { runScript(code: string): Promise<{ result: unknown }> };
+              capabilityHost: {
+                create(): Promise<unknown>;
+                runScript(code: string): Promise<{ result: unknown }>;
+              };
             };
-            return (await typed.capabilityHost.runScript(code)).result;
+            try {
+              return (await typed.capabilityHost.runScript(code)).result;
+            } catch (error) {
+              if (!String(error).includes("has not been created")) throw error;
+              await typed.capabilityHost.create();
+              return (await typed.capabilityHost.runScript(code)).result;
+            }
           });
         } else if (tool !== undefined && tool.expression === undefined) {
           /* THE BASE CASE, NOT A REGISTRY: hanging up is one atomic append of

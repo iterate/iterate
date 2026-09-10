@@ -185,13 +185,20 @@ function makeHarness() {
     return { webSocket: socket } as unknown as Response;
   });
 
-  /* What a backend function walks: a stand-in for the project root that
-   * records the scripts it was asked to run. */
+  /* What a backend function walks: a stand-in for the guest's itx that
+   * records the scripts it was asked to run — and, like a real voice
+   * stream, has no capability host until somebody creates it. */
   const scripts: string[] = [];
+  let hostCreated = false;
   const projectRoot: { current: unknown } = {
     current: {
       capabilityHost: {
+        create: async () => {
+          hostCreated = true;
+        },
         runScript: async (code: string) => {
+          if (!hostCreated)
+            throw new Error("capability host at /agents/voice/test has not been created");
           scripts.push(code);
           return { result: { files: 3 } };
         },
@@ -793,7 +800,7 @@ describe("the transcript", () => {
 /* ========================================================================== */
 
 describe("the backend", () => {
-  it("runs exec_typescript on the project's capability host and continues the response", async () => {
+  it("runs exec_typescript on the stream's own capability host, creating it once, and continues the response", async () => {
     const h = makeHarness();
     await callIsLive(h);
     h.provider.backendFunctionCall(
@@ -803,8 +810,16 @@ describe("the backend", () => {
     );
     await h.settle();
     expect(h.scripts).toEqual(["async (itx) => itx.repo.listFiles()"]);
+    /* The second call finds the host already there: one script, no retry. */
+    h.provider.backendFunctionCall(
+      "call_2",
+      "exec_typescript",
+      JSON.stringify({ code: "async (itx) => 2" }),
+    );
+    await h.settle();
+    expect(h.scripts).toEqual(["async (itx) => itx.repo.listFiles()", "async (itx) => 2"]);
     const results = h.provider.sentOfType("response.item.create");
-    expect(results).toHaveLength(1);
+    expect(results).toHaveLength(2);
     expect(results[0]!.item).toEqual({
       type: "function_call_output",
       call_id: "call_1",
@@ -820,6 +835,7 @@ describe("the backend", () => {
     const h = makeHarness();
     h.projectRoot.current = {
       capabilityHost: {
+        create: async () => {},
         runScript: async () => {
           throw new Error("Repo has no commits yet");
         },
@@ -978,6 +994,7 @@ describe("ending a call", () => {
     let finish: (() => void) | null = null;
     h.projectRoot.current = {
       capabilityHost: {
+        create: async () => {},
         runScript: () =>
           new Promise<{ result: unknown }>((resolve) => {
             finish = () => resolve({ result: { slow: true } });
