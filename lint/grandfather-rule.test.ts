@@ -1,11 +1,12 @@
-import { spawnSync } from "node:child_process";
+import { createServer } from "node:http";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { grandfatherRule } from "./grandfather-rule.ts";
 
-test("grandfathers through the inclusive author-date cutoff, despite shifted line numbers", () => {
+test("grandfathers through the inclusive author-date cutoff, despite shifted line numbers", async () => {
   using fixture = createFixture();
   fixture.write("const BAD_OLD = 1;\n");
   fixture.commit("2020-01-01T00:00:00Z");
@@ -16,10 +17,10 @@ test("grandfathers through the inclusive author-date cutoff, despite shifted lin
   );
   fixture.commit("2021-01-01T00:00:01Z");
 
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_NEW"] });
+  expect(await fixture.lint()).toMatchObject({ status: 1, names: ["BAD_NEW"] });
 });
 
-test("checks unstaged and staged edits even when the cutoff is in the future", () => {
+test("checks unstaged and staged edits even when the cutoff is in the future", async () => {
   using fixture = createFixture();
   fixture.write("const BAD_OLD = 1;\nconst BAD_EDITED = 2;\n");
   fixture.commit("2020-01-01T00:00:00Z");
@@ -29,28 +30,28 @@ test("checks unstaged and staged edits even when the cutoff is in the future", (
     readFileSync(fixture.plugin, "utf8").replace("2021-01-01", "2999-01-01"),
   );
 
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_EDITED", "BAD_ADDED"] });
+  expect(await fixture.lint()).toMatchObject({ status: 1, names: ["BAD_EDITED", "BAD_ADDED"] });
   fixture.git(["add", "input.ts"]);
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_EDITED", "BAD_ADDED"] });
+  expect(await fixture.lint()).toMatchObject({ status: 1, names: ["BAD_EDITED", "BAD_ADDED"] });
 });
 
-test("checks files without committed history and files outside Git", () => {
+test("checks files without committed history and files outside Git", async () => {
   using fixture = createFixture();
   fixture.write("const BAD_UNTRACKED = 1;\n");
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
+  expect(await fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
   fixture.git(["add", "input.ts"]);
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
+  expect(await fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
   fixture.git(["reset"]);
   fixture.git(["add", "plugin.ts"]);
   fixture.git(["commit", "--quiet", "-m", "Plugin only"]);
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
+  expect(await fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
   fixture.git(["add", "input.ts"]);
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
+  expect(await fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
   rmSync(join(fixture.root, ".git"), { recursive: true });
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
+  expect(await fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
 });
 
-test("uses explicit report locations before node locations, including location-only reports", () => {
+test("uses explicit report locations before node locations, including location-only reports", async () => {
   using fixture = createFixture();
   fixture.write("const BAD_OLD = 1;\n");
   fixture.commit("2020-01-01T00:00:00Z");
@@ -61,7 +62,7 @@ test("uses explicit report locations before node locations, including location-o
     fixture.plugin,
     plugin.replace("{ node, messageId:", "{ node, loc: { line: 1, column: 0 }, messageId:"),
   );
-  expect(fixture.lint()).toMatchObject({ status: 0, names: [] });
+  expect(await fixture.lint()).toMatchObject({ status: 0, names: [] });
   writeFileSync(
     fixture.plugin,
     plugin.replace(
@@ -69,19 +70,19 @@ test("uses explicit report locations before node locations, including location-o
       "{ loc: { start: { line: 2, column: 0 }, end: { line: 2, column: 5 } }, messageId:",
     ),
   );
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_OLD", "BAD_NEW"] });
+  expect(await fixture.lint()).toMatchObject({ status: 1, names: ["BAD_OLD", "BAD_NEW"] });
 });
 
-test("keeps rule metadata and fixes, fixing only new violations", () => {
+test("keeps rule metadata and fixes, fixing only new violations", async () => {
   using fixture = createFixture();
   fixture.write("const BAD_OLD = 1;\n");
   fixture.commit("2020-01-01T00:00:00Z");
   fixture.write("const BAD_OLD = 1;\nconst BAD_NEW = 2;\n");
-  expect(fixture.lint("--fix")).toMatchObject({ status: 0, names: [] });
+  expect(await fixture.lint("--fix")).toMatchObject({ status: 0, names: [] });
   expect(readFileSync(fixture.file, "utf8")).toBe("const BAD_OLD = 1;\nconst goodNEW = 2;\n");
 });
 
-test("checks shallow boundary lines whose true author date is unavailable", () => {
+test("checks shallow boundary lines whose true author date is unavailable", async () => {
   using fixture = createFixture();
   fixture.write("const BAD_OLD = 1;\n");
   fixture.commit("2020-01-01T00:00:00Z");
@@ -94,39 +95,39 @@ test("checks shallow boundary lines whose true author date is unavailable", () =
     "file://" + fixture.root,
     join(fixture.root, "shallow"),
   ]);
-  expect(fixture.lint()).toMatchObject({ status: 0, names: [] });
-  expect(fixture.lint("shallow/input.ts")).toMatchObject({ status: 1, names: ["BAD_OLD"] });
+  expect(await fixture.lint()).toMatchObject({ status: 0, names: [] });
+  expect(await fixture.lint("shallow/input.ts")).toMatchObject({ status: 1, names: ["BAD_OLD"] });
 });
 
-test("resolves history in linked worktrees", () => {
+test("resolves history in linked worktrees", async () => {
   using fixture = createFixture();
   fixture.write("const BAD_OLD = 1;\n");
   fixture.commit("2020-01-01T00:00:00Z");
   fixture.git(["worktree", "add", "--detach", join(fixture.root, "linked"), "HEAD"]);
-  expect(fixture.lint("linked/input.ts")).toMatchObject({ status: 0, names: [] });
+  expect(await fixture.lint("linked/input.ts")).toMatchObject({ status: 0, names: [] });
 });
 
-test("surfaces Git failures instead of silently exempting violations", () => {
+test("surfaces Git failures instead of silently exempting violations", async () => {
   using fixture = createFixture();
   fixture.write("const BAD_OLD = 1;\n");
   fixture.commit("2020-01-01T00:00:00Z");
   fixture.git(["config", "blame.ignoreRevsFile", "missing-ignore-revs"]);
-  expect(fixture.lint()).toMatchObject({
+  expect(await fixture.lint()).toMatchObject({
     status: 1,
     output: expect.stringContaining("missing-ignore-revs"),
   });
 });
 
-test("handles renamed paths containing Git pathspec characters", () => {
+test("handles renamed paths containing Git pathspec characters", async () => {
   using fixture = createFixture();
   fixture.write("const BAD_OLD = 1;\n");
   fixture.commit("2020-01-01T00:00:00Z");
   fixture.git(["mv", "input.ts", "input[1].ts"]);
   fixture.git(["commit", "--quiet", "-m", "Rename file"]);
-  expect(fixture.lint("input[1].ts")).toMatchObject({ status: 0, names: [] });
+  expect(await fixture.lint("input[1].ts")).toMatchObject({ status: 0, names: [] });
 });
 
-test("PR mode checks changed lines regardless of dates and trusts untouched lines", () => {
+test("PR mode checks changed lines regardless of dates and trusts untouched lines", async () => {
   using fixture = createFixture();
   fixture.write("const BAD_BASE = 1;\nconst BAD_EDIT = 2;\n");
   fixture.commit("2022-01-01T00:00:00Z");
@@ -137,12 +138,12 @@ test("PR mode checks changed lines regardless of dates and trusts untouched line
   fixture.commit("2020-01-01T00:00:00Z");
 
   // The edited lines predate the cutoff; the untouched line is newer than it.
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_BASE"] });
-  fixture.env.ITERATE_LINT_PR_BASE = base;
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_EDIT", "BAD_PR"] });
+  expect(await fixture.lint()).toMatchObject({ status: 1, names: ["BAD_BASE"] });
+  await fixture.pr(base);
+  expect(await fixture.lint()).toMatchObject({ status: 1, names: ["BAD_EDIT", "BAD_PR"] });
 });
 
-test("PR mode works with shallow history and no usable blame", () => {
+test("PR mode works with shallow history and no usable blame", async () => {
   using fixture = createFixture();
   fixture.write("const BAD_BASE = 1;\n");
   fixture.commit("2022-01-01T00:00:00Z");
@@ -151,22 +152,23 @@ test("PR mode works with shallow history and no usable blame", () => {
   fixture.commit("2020-01-01T00:00:00Z");
   const shallow = join(fixture.root, "shallow");
   fixture.git(["clone", "--quiet", "--depth=1", "file://" + fixture.root, shallow]);
-  fixture.git(["-C", shallow, "fetch", "--quiet", "--depth=1", "origin", base]);
   fixture.git(["-C", shallow, "config", "blame.ignoreRevsFile", "missing"]);
   expect(fixture.git(["-C", shallow, "rev-parse", "--is-shallow-repository"])).toBe("true");
-  fixture.env.ITERATE_LINT_PR_BASE = base;
-  expect(fixture.lint("shallow/input.ts")).toMatchObject({
+  await fixture.pr(base);
+  expect(await fixture.lint("shallow/input.ts")).toMatchObject({
     status: 1,
     names: ["BAD_NEW", "BAD_NEW"],
   });
 });
 
-test("PR autofix recomputes changed lines after a fix inserts a line", () => {
+test("PR autofix recomputes changed lines after a fix inserts a line", async () => {
   using fixture = createFixture();
   fixture.write("const BAD_BASE = 1;\n");
   fixture.commit("2022-01-01T00:00:00Z");
-  fixture.env.ITERATE_LINT_PR_BASE = fixture.git(["rev-parse", "HEAD"]);
+  const base = fixture.git(["rev-parse", "HEAD"]);
   fixture.write("const BAD_NEW = 2;\nconst BAD_BASE = 1;\n");
+  fixture.commit("2020-01-01T00:00:00Z");
+  await fixture.pr(base);
   writeFileSync(
     fixture.plugin,
     readFileSync(fixture.plugin, "utf8").replace(
@@ -174,17 +176,17 @@ test("PR autofix recomputes changed lines after a fix inserts a line", () => {
       '"good" + node.name.slice(4) + "\\n"',
     ),
   );
-  expect(fixture.lint("--fix")).toMatchObject({ status: 0, names: [] });
+  expect(await fixture.lint("--fix")).toMatchObject({ status: 0, names: [] });
   expect(readFileSync(fixture.file, "utf8")).toBe("const goodNEW\n = 2;\nconst BAD_BASE = 1;\n");
 });
 
-test("PR mode follows a rename and checks only edits in the renamed file", () => {
+test("PR mode follows a rename and checks only edits in the renamed file", async () => {
   using fixture = createFixture();
   fixture.write(
     "const BAD_BASE = 1;\n// padding for rename detection\n// more unchanged content\n",
   );
   fixture.commit("2022-01-01T00:00:00Z");
-  fixture.env.ITERATE_LINT_PR_BASE = fixture.git(["rev-parse", "HEAD"]);
+  const base = fixture.git(["rev-parse", "HEAD"]);
   mkdirSync(join(fixture.root, "nested folder"));
   fixture.git(["mv", "input.ts", "nested folder/renamed.ts"]);
   writeFileSync(
@@ -193,24 +195,35 @@ test("PR mode follows a rename and checks only edits in the renamed file", () =>
   );
   fixture.git(["add", "nested folder/renamed.ts"]);
   fixture.git(["commit", "--quiet", "-m", "Rename and edit"]);
-  expect(fixture.lint("nested folder/renamed.ts")).toMatchObject({ status: 1, names: ["BAD_NEW"] });
-});
-
-test("PR mode checks new files and fails for unavailable comparison history", () => {
-  using fixture = createFixture();
-  fixture.git(["add", "plugin.ts"]);
-  fixture.git(["commit", "--quiet", "-m", "Initial"]);
-  fixture.env.ITERATE_LINT_PR_BASE = fixture.git(["rev-parse", "HEAD"]);
-  fixture.write("const BAD_NEW = 1;\n");
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_NEW"] });
-  fixture.env.ITERATE_LINT_PR_BASE = "a".repeat(40);
-  expect(fixture.lint()).toMatchObject({
+  await fixture.pr(base);
+  expect(await fixture.lint("nested folder/renamed.ts")).toMatchObject({
     status: 1,
-    output: expect.stringContaining("not a tree object"),
+    names: ["BAD_NEW"],
   });
 });
 
-test("rejects invalid cutoff dates", () => {
+test("PR mode checks new files and surfaces GitHub failures", async () => {
+  using fixture = createFixture();
+  fixture.git(["add", "plugin.ts"]);
+  fixture.git(["commit", "--quiet", "-m", "Initial"]);
+  const base = fixture.git(["rev-parse", "HEAD"]);
+  fixture.write("const BAD_NEW = 1;\n");
+  fixture.commit("2020-01-01T00:00:00Z");
+  await fixture.pr(base);
+  expect(await fixture.lint()).toMatchObject({ status: 1, names: ["BAD_NEW"] });
+  fixture.response.diff = "unexpected response";
+  expect(await fixture.lint()).toMatchObject({
+    status: 1,
+    output: expect.stringContaining("did not return a PR diff"),
+  });
+  fixture.response.status = 503;
+  expect(await fixture.lint()).toMatchObject({
+    status: 1,
+    output: expect.stringContaining("HTTP 503"),
+  });
+});
+
+test("rejects invalid cutoff dates", async () => {
   expect(() => grandfatherRule({ allowedUpTo: new Date("invalid"), create: () => ({}) })).toThrow(
     "valid allowedUpTo date",
   );
@@ -262,9 +275,40 @@ function createFixture() {
   git(["init", "--quiet"]);
   git(["config", "user.name", "Lint Test"]);
   git(["config", "user.email", "lint@test.invalid"]);
-  const env = { ...process.env, ITERATE_LINT_PR_BASE: "" };
+  const env = {
+    ...process.env,
+    GITHUB_EVENT_NAME: "",
+    GH_TOKEN: "",
+    GITHUB_EVENT_PATH: "",
+    GITHUB_API_URL: "",
+  };
+  const response = { status: 200, diff: "" };
+  const server = createServer((_req, res) => {
+    res.writeHead(response.status);
+    res.end(response.diff);
+  });
   return {
     env,
+    response,
+    async pr(base: string) {
+      response.diff = git(["diff", "--binary", base, "HEAD"]) + "\n";
+      const event = join(root, "event.json");
+      writeFileSync(
+        event,
+        JSON.stringify({
+          repository: { full_name: "iterate/fixture" },
+          pull_request: { base: { sha: base }, head: { sha: git(["rev-parse", "HEAD"]) } },
+        }),
+      );
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address() as any;
+      Object.assign(env, {
+        GITHUB_EVENT_NAME: "pull_request",
+        GH_TOKEN: "test-token",
+        GITHUB_EVENT_PATH: event,
+        GITHUB_API_URL: `http://127.0.0.1:${address.port}`,
+      });
+    },
     root,
     file,
     plugin: join(root, "plugin.ts"),
@@ -279,20 +323,32 @@ function createFixture() {
         GIT_COMMITTER_DATE: "2025-01-01T00:00:00Z",
       });
     },
-    lint(...args: string[]) {
-      const result = spawnSync(
+    async lint(...args: string[]) {
+      const child = spawn(
         join(repoRoot, "node_modules/.bin/oxlint"),
         ["input.ts", "--config", join(root, ".oxlintrc.json"), "--threads", "1", ...args],
-        { cwd: root, encoding: "utf8", env },
+        { cwd: root, env },
       );
-      const output = result.stdout + result.stderr;
+      let output = "";
+      child.stdout.on("data", (chunk) => {
+        output += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        output += chunk;
+      });
+      const status = await new Promise<number | null>((resolve, reject) => {
+        child.on("error", reject);
+        child.on("close", resolve);
+      });
       return {
-        status: result.status,
+        status,
         names: [...output.matchAll(/Found (BAD_\w+)/g)].map((match) => match[1]),
         output,
       };
     },
     [Symbol.dispose]() {
+      server.closeAllConnections();
+      server.close();
       rmSync(root, { recursive: true, force: true });
     },
   };

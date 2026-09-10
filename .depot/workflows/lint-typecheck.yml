@@ -26,14 +26,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Reconcile dependencies (baked)
         run: pnpm install --frozen-lockfile --prefer-offline
-      - name: Prepare PR lint comparison
-        if: github.event_name == 'pull_request'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: pnpm tsx scripts/ci/prepare-pr-lint.ts
       - fail-fast: false
         parallel:
           - name: Run Lint
+            env:
+              GH_TOKEN: ${{ github.token }}
             run: pnpm exec oxlint . --threads 1 --deny-warnings
           - name: Run Typecheck
             run: pnpm typecheck

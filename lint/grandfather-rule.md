@@ -30,20 +30,20 @@ not when the surrounding code first became a violation.
 
 ## Pull requests
 
-CI sets `ITERATE_LINT_PR_BASE` to the PR's merge-base SHA. In this mode,
-**only added/changed lines are checked; the date cutoff does not apply**.
-Untouched lines are trusted, even if their blame dates are after the cutoff.
-An old commit on a PR branch can therefore pass local lint but fail PR lint.
+On GitHub PR runs with `GH_TOKEN`, the plugin reads the event metadata and
+fetches the PR diff once, pinned to the event's base/head SHAs. **Only
+added/changed lines are checked; the date cutoff does not apply.** Untouched
+lines are trusted. An old commit on a PR branch can therefore pass local lint
+but fail PR lint.
 
-`scripts/ci/prepare-pr-lint.ts` asks GitHub for the merge base of the event's
-base/head SHAs, verifies that the checked-out HEAD matches, and fetches only
-that commit. The PR checkout stays shallow. Main and other non-PR jobs retain
-full history for blame. API/fetch failures stop the job before lint runs.
+There is no setup script or extra Git fetch. PR checkouts stay shallow;
+local/main runs keep using blame. The two CI lint steps just receive the
+existing GitHub token. API failures fail lint rather than exempting code.
 
-The helper compares the base file with the actual linted source on each pass,
-so autofix edits and shifted line numbers work. Git-detected renames preserve
-unchanged lines; new files are checked in full. Unknown report locations are
-checked rather than silently exempted. It needs no network calls while linting.
+For autofix, the helper reverses each file's PR patch against the committed
+head to recover its original text, then compares that with each lint pass.
+This keeps line numbers correct after fixes. Renamed files use their PR patch;
+new files are checked in full. Reports with unknown locations are checked.
 
 ## Shared behavior
 
