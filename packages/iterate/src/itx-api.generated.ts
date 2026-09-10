@@ -4803,7 +4803,7 @@ export type ProcessorSnapshot<State> = {
 export type ProcessStreamWakeEventBatch = (batch: StreamWakeEventBatch) => unknown;
 
 /**
- * A structural patch turning a previous JSON value into the next one. Two
+ * A structural patch turning a previous JSON value into the next one. Three
  * shapes, discriminated by `set`, `array`, or an object patch:
  * - `{ set }` — replace this position wholesale. Used for primitives,
  *   `null`, type changes,
