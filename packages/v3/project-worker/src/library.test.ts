@@ -121,6 +121,45 @@ describe("the library", () => {
       expect(await b.callTool("echo", {})).toBe("ok");
     });
 
+    test("a held connection reused CONCURRENTLY after close re-handshakes ONCE — no session-less post", async () => {
+      // The idle quiesce closes the memoized client while a caller still holds the connection; its
+      // next request re-handshakes. Two concurrent requests must share ONE handshake and neither may
+      // post before the session id is established — this fake server delays initialize and rejects a
+      // session-less non-initialize (a real MCP server 400s), so a request that skips the shared
+      // handshake fails.
+      let initializeCount = 0;
+      const itx = {
+        fetch: async (request: Request) => {
+          if (request.method === "DELETE") return new Response(null, { status: 204 });
+          const body = JSON.parse(await request.text()) as { id?: number; method: string };
+          if (body.method === "notifications/initialized")
+            return new Response(null, { status: 202 });
+          if (body.method === "initialize") {
+            initializeCount++;
+            await new Promise((r) => setTimeout(r, 5)); // let a racing request interleave first
+            return json(
+              { jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "f" } } },
+              { headers: { "mcp-session-id": "s-1" } },
+            );
+          }
+          if (!request.headers.get("mcp-session-id"))
+            return json({ jsonrpc: "2.0", id: body.id, error: { code: -32000, message: "no session" } }, { status: 400 });
+          const result =
+            body.method === "tools/list"
+              ? { tools: [{ name: "echo" }] }
+              : { content: [{ type: "text", text: '"ok"' }] };
+          return json({ jsonrpc: "2.0", id: body.id, result });
+        },
+      } as unknown as LibraryItx;
+      const { roots, releaseConnections } = buildLibrary(itx);
+      const conn = await roots.connectToMcp("https://mcp.example/");
+      releaseConnections();
+      await new Promise((r) => setTimeout(r, 10)); // the close rides a `.then` off the memoized promise
+      const [r1, r2] = await Promise.all([conn.callTool("echo", {}), conn.callTool("echo", {})]);
+      expect([r1, r2]).toEqual(["ok", "ok"]);
+      expect(initializeCount).toBe(2); // one for connect, one shared re-handshake — never a third
+    });
+
     test("releaseConnections closes a WebSocket capnweb connection LOCALLY — `close` is the connection's own member, never the dotted proxy's remote call", async () => {
       // What egress's 101 would carry: a WebSocket-shaped object capnweb's session can drive.
       const closed: [number | undefined, string | undefined][] = [];

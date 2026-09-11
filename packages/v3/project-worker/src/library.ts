@@ -509,24 +509,41 @@ class McpJsonRpcClient {
   #nextId = 1;
   #sessionId: string | null = null;
   #closed = false;
+  /** The in-flight handshake, shared while it runs so concurrent requests await ONE — and never post
+   *  before the session id is established. Cleared on failure so the next request retries it. */
+  #handshake: Promise<McpServerInfo> | null = null;
   constructor(itx: LibraryItx, url: string, headers: Record<string, string>) {
     this.#itx = itx;
     this.#url = url;
     this.#headers = headers;
   }
-  /** The handshake: `initialize` → `notifications/initialized`. */
+  /** The handshake: `initialize` → `notifications/initialized`. Memoized while in flight — a second
+   *  caller (a concurrent request re-opening a closed client) joins the same one instead of racing a
+   *  second handshake or posting session-less mid-handshake. `#closed` stays true until it completes. */
   async initialize(): Promise<McpServerInfo> {
-    this.#closed = false;
-    const serverInfo = (await this.request("initialize", {
+    this.#handshake ??= this.#runHandshake().catch((error) => {
+      this.#handshake = null; // a failed handshake must not stick — the next request retries
+      throw error;
+    });
+    return this.#handshake;
+  }
+  async #runHandshake(): Promise<McpServerInfo> {
+    const serverInfo = (await this.#send("initialize", {
       protocolVersion: MCP_PROTOCOL_VERSION,
       capabilities: {},
       clientInfo: CLIENT_INFO,
     })) as McpServerInfo;
     await this.notify("notifications/initialized");
+    this.#closed = false; // only now — session id set, initialized sent — is the client usable
     return serverInfo;
   }
   async request(method: string, params: unknown): Promise<unknown> {
     if (this.#closed) await this.initialize();
+    return this.#send(method, params);
+  }
+  /** Post one JSON-RPC request and return its result — the handshake guard is `request`'s, so
+   *  `#runHandshake` uses this directly (the guard would deadlock on its own in-flight handshake). */
+  async #send(method: string, params: unknown): Promise<unknown> {
     const id = this.#nextId++;
     const response = await this.#post({ jsonrpc: "2.0", id, method, params });
     const message = await readJsonRpcResponse(response, id);
@@ -540,6 +557,7 @@ class McpJsonRpcClient {
   }
   async close(): Promise<void> {
     this.#closed = true;
+    this.#handshake = null; // a re-open must run a fresh handshake, not reuse this session's
     if (this.#sessionId === null) return;
     const headers = new Headers(this.#headers);
     headers.set("mcp-session-id", this.#sessionId);
