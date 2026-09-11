@@ -66,9 +66,24 @@ the normal decoder as they arrive. Return an unused, unlocked body. Invalid
 responses and stream failures fail the attempt. There is one intercepted namespace and
 one request preparation path.
 
-Tests can use `aiTextResponse(textOrUsage, call)` from
-`@iterate-com/test-support`. Text/usage estimates live in that test
-helper; production interception always consumes a provider-shaped response.
+Test helpers are grouped under the `interceptor` export from
+`@iterate-com/test-support`:
+
+```ts
+import { interceptor } from "@iterate-com/test-support";
+
+// Plain text, or { text, usage } for explicit token counts.
+interceptor.aiTextResponse("reply", call);
+
+// Agent code: wraps the source in a TypeScript fence before building the SSE response.
+interceptor.codemodeBackticksResponse(
+  'async (itx) => { await itx.chat.sendMessage("scripted reply"); }',
+  call,
+);
+```
+
+Both helpers emit SSE and estimate token usage unless explicit counts are supplied.
+Production interception always consumes a provider-shaped response.
 
 ## The lifetime contract
 
@@ -108,12 +123,16 @@ again**. An in-flight agent turn survives the gap on its own retries
 dedicated to the interception:
 
 ```ts
+import { interceptor } from "@iterate-com/test-support";
+
 await using fixture = await helpers.createFixture("my-spec");
-await using interception = await fixture.interceptAi(async (call) => aiTextResponse("reply", call));
+await using interception = await fixture.interceptAi(async (call) =>
+  interceptor.aiTextResponse("reply", call),
+);
 ```
 
 (`fixture.interceptAi` wraps
-[installResilientAiInterceptor](../packages/shared/src/test-support/resilient-ai-interceptor.ts);
+[interceptor.installResilientAiInterceptor](../packages/test-support/src/resilient-ai-interceptor.ts);
 real usage: [agent-fake-model-chat.spec.ts](../specs/agent-fake-model-chat.spec.ts).)
 
 **Plain node** — the node client is deliberately vanilla and never reconnects

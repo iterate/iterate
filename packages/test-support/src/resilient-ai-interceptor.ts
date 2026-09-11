@@ -142,6 +142,19 @@ export async function installResilientAiInterceptor(input: {
   };
 }
 
+function wrapCodemode(text: string) {
+  return "```ts\n" + text.toString() + "\n```";
+}
+
+/** Wrap code in a TypeScript fence, preserving explicit usage counts when provided. */
+export function codemodeBackticksResponse(...args: Parameters<typeof aiTextResponse>) {
+  if (typeof args[0] === "string") {
+    return aiTextResponse(wrapCodemode(args[0]), args[1]);
+  }
+
+  return aiTextResponse({ ...args[0], text: wrapCodemode(args[0].text) }, args[1]);
+}
+
 /** Scripted text still passes through the real SSE decoder and usage accounting. */
 export function aiTextResponse(
   result:

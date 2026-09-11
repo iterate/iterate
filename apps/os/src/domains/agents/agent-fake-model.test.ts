@@ -7,7 +7,7 @@
 import { expect, test } from "vitest";
 import { makeProcessorHarness } from "iterate/processors/testing";
 import type { ConsumedInput } from "iterate/processors";
-import { aiTextResponse } from "@iterate-com/test-support";
+import { interceptor } from "@iterate-com/test-support";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AgentProcessor, type AgentProcessorDeps } from "./agent-processor-implementation.ts";
 
@@ -195,7 +195,7 @@ function makeInterceptedModelHarness(
           ? {}
           : {
               consultAiInterceptor: async (input) =>
-                aiTextResponse((await consultAiInterceptor(input)) as any, input),
+                interceptor.aiTextResponse((await consultAiInterceptor(input)) as any, input),
             }),
       }),
     path: "/agents/test",

@@ -1,1 +1,1 @@
-export * from "./resilient-ai-interceptor.ts";
+export * as interceptor from "./resilient-ai-interceptor.ts";

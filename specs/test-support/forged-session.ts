@@ -14,7 +14,7 @@ import {
   type ProjectAiInterceptorInput,
 } from "iterate/node";
 import dedent from "dedent";
-import { installResilientAiInterceptor, aiTextResponse } from "@iterate-com/test-support";
+import { interceptor } from "@iterate-com/test-support";
 import { doppler, localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "./email-otp-signup.ts";
@@ -310,7 +310,7 @@ export function createAgentHelper<
 
   // The churn-surviving handler dials its own dedicated admin session.
   const interceptAi = (handler: ProjectAiInterceptor) =>
-    installResilientAiInterceptor({
+    interceptor.installResilientAiInterceptor({
       projectId: input.projectId,
       handler,
       connect: (options) => connectAdminItx(input.baseUrl, options),
@@ -428,7 +428,7 @@ export function createAgentHelper<
         const next = responses.take(call);
         if (!next) throw new Error(`No responses available for agent ${path}`);
         const s = await next(call as Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>);
-        return aiTextResponse(s, call);
+        return interceptor.aiTextResponse(s, call);
       });
     }
     const webUrl = `/projects/${input.projectSlug}/agents/streams${path}`;
