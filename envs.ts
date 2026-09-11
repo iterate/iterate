@@ -564,6 +564,57 @@ export const docsEnvs = {
   ...mapDeployedPreviewEnvs((env) => docsPreviewSlot(previewEnvironmentSlotNumber(env))),
 } satisfies Record<EnvName, DocsEnv>;
 
+/**
+ * packages/v4/project-worker — an intentionally isolated production-account
+ * deployment for the v4 project-worker. It is not the OS production app:
+ * routes are restricted to the approved `iterate2.app` v4 namespace and it
+ * has its own Doppler project and KV namespaces.
+ */
+export interface ProjectV4Env {
+  cloudflareAccountId: string;
+  /** Doppler config in the dedicated `project-v4` project. */
+  dopplerConfig: string;
+  workerName: string;
+  bundlerWorkerName: string;
+  publicOrigin: string;
+  projectHostnameBase: string;
+  projects: Record<string, string>;
+  customHostnames: Record<string, string>;
+  routes: { pattern: string; zone_name: string }[];
+  resources: {
+    oauthKvId: string;
+    itxKvId: string;
+    secretsKvId: string;
+    buildCacheKvId: string;
+  };
+}
+
+export const projectV4Envs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "iterate-v4-simplification",
+    bundlerWorkerName: "iterate-v4-simplification-bundler",
+    publicOrigin: "https://v4.iterate2.app",
+    projectHostnameBase: "iterate2.app",
+    projects: { "v4-demo": "prj_v4_demo" },
+    customHostnames: { "v4-custom.iterate2.app": "prj_v4_demo" },
+    // Do not widen these patterns: this experiment owns only its dashboard,
+    // its app-prefixed demo hosts, and its one explicit custom hostname.
+    routes: [
+      { pattern: "v4.iterate2.app/*", zone_name: "iterate2.app" },
+      { pattern: "*v4-demo.iterate2.app/*", zone_name: "iterate2.app" },
+      { pattern: "v4-custom.iterate2.app/*", zone_name: "iterate2.app" },
+    ],
+    resources: {
+      oauthKvId: "77d3f69ffa7740f38d290657ec596055",
+      itxKvId: "6525688dfba847d7b3feb2dbc165098c",
+      secretsKvId: "7a1a7c9908564939983bfa091e742c1a",
+      buildCacheKvId: "cca17c74e1f041b39c7328f5abfe92f0",
+    },
+  },
+} satisfies Record<string, ProjectV4Env>;
+
 /** The clean-room OAuth deployment is isolated from apps/os and the earlier experiments. */
 export interface ProjectWorkerEnv {
   cloudflareAccountId: string;

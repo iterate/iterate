@@ -1,0 +1,813 @@
+// __workers-tests__/uncontrolled-degradation.test.ts — THE RED PINS of the 2026-09-04 hunt for
+// UNCONTROLLED degradation: every way this context can still fail in a manner the PLATFORM decides
+// for us — a message we did not write, a wedge with no operator door, a retry that never ends —
+// beyond out-of-memory (local workerd enforces no memory limit; the memory pins live in
+// src/stream/memory-budget.test.ts and e2e/stream-memory-budget.e2e.test.ts). Each row stages one
+// scenario against a REAL `IterateContextDurableObject` inside workerd (runInDurableObject for its
+// storage, evictDurableObject for a fresh incarnation, runDurableObjectAlarm for the ladder) and
+// pins EXACTLY what it dies of today: the observed message, verbatim.
+//
+// THE CONVENTION. Every red row is `test.fails` (the house convention for a known-red proof — the
+// lane stays green; flipping a row back to `test` is how a fix is proved), and every one opens with
+// the PIN GUARD `stillDiesOf` / `stillRed`: the failure the row dies of TODAY, as a pattern on the
+// observed message. While it still matches, the row goes on to assert the behavior it WANTS and
+// fails there (an expected failure, green). The moment the observed failure MOVES — fixed, or broken
+// some other way — the guard returns false, the row `return`s early and COMPLETES, and `test.fails`
+// turns it RED with the guard's own line in the output: the one signal that says "look at this pin
+// again". A bare `test.fails` cannot tell a fix from a different breakage; the guard can. To flip a
+// fixed row to `test`, delete its guard line and keep its assertions.
+//
+// Two cell-cap facts these rows lean on (scratchpad/platform-facts.md §5): a SQLite-backed DO's
+// storage cell — a kv value, a TEXT column — is capped by SQLITE_LIMIT_LENGTH: 4 MiB in local
+// workerd, 2 MB in production (docs). The append ceiling (stream.ts EVENT_BODY_MAX_CHARS) is 8 MiB,
+// so a body can be small enough to append and too big to checkpoint or memo.
+//
+// The CONTROL rows (plain `test`) pin the half that is handled well beside each red half, so a
+// change to either shows up. The rows, by theme:
+//   A. THE CELL CAP — core state, a facet's checkpoint, a facet's source memo
+//   B. A SOURCE THAT CANNOT START — class not exported, module throws, constructor throws
+//   C. POISON EVENTS — a throwing processEvent, an unparseable row, that row under a re-reduce
+//   D. THE CONSTRUCTOR — the core cursor lost bricks every wake
+//   E. THE LADDER — a deterministic failure walks all 15 rungs; on a paused stream it never ends
+//   F. STORAGE UNDER A LIVE INCARNATION — deleteAll() with the stream still in memory
+//   G. THE RESERVED NAME — a raw row named `core`
+
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { afterAll, expect, test, vi } from "vitest";
+import { print, type ItxExpression } from "../src/context/expression.ts";
+import { rewriteRuleConfiguredEvent } from "../src/context/itx-expression-rewriting.ts";
+import { errorCode } from "../src/lib/errors.ts";
+const codeOf = errorCode;
+import { subscriptionConfiguredEvent } from "../src/stream/subscriptions.ts";
+import { quiesce, stub } from "./support.ts";
+
+const MiB = 1024 * 1024;
+const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
+
+// ── THE PIN GUARD (see the header) ──
+
+/** `holds` is whether the row's pinned failure is still what happens; `observed` describes what was
+ *  seen. True ⇒ still red for the stated reason, carry on to the WANTED assertions. False ⇒ the pin
+ *  MOVED: the caller returns early, the row completes, `test.fails` turns it red, and this line says why. */
+function stillRed(pinnedReason: string, holds: boolean, observed: string): boolean {
+  if (holds) return true;
+  console.warn(`PIN MOVED — pinned: ${pinnedReason} — observed: ${observed}`);
+  return false;
+}
+/** The pin guard for a row whose failure is an ERROR: still red while `observed` is an Error whose
+ *  message matches `reason`. */
+function stillDiesOf(observed: unknown, reason: RegExp): boolean {
+  const message = observed instanceof Error ? observed.message : undefined;
+  return stillRed(
+    `dies of ${reason}`,
+    message !== undefined && reason.test(message),
+    observed === undefined ? "no failure at all" : `${String(observed)}`,
+  );
+}
+
+// ── the observation plumbing ──
+
+/** The error a call rejects with (own enumerable props kept — `code`, workerd's `remote`,
+ *  `durableObjectReset`, `retryable`, `overloaded` ride as own props across every hop), or undefined. */
+type ObservedError = Error & Record<string, unknown>;
+async function rejectionOf(fn: () => unknown): Promise<ObservedError | undefined> {
+  try {
+    await fn();
+    return undefined;
+  } catch (error) {
+    return (error instanceof Error ? error : new Error(String(error))) as ObservedError;
+  }
+}
+
+/** Every `reportIssue` line (lib/errors.ts prints ONE console.error object per issue, `event:
+ *  "issue"`) the DO emits while a row runs — the DO shares this isolate, so its console is ours.
+ *  Issue lines are captured (not printed: they are the noise these rows are about); anything else
+ *  console.error'd passes through. */
+type IssueLine = {
+  event: string;
+  failureSite?: string;
+  code?: string;
+  error?: { type: string; message: string };
+};
+const issues: IssueLine[] = [];
+const originalConsoleError = console.error.bind(console);
+const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+  const [first] = args;
+  if (typeof first === "object" && first !== null && (first as IssueLine).event === "issue")
+    issues.push(first as IssueLine);
+  else originalConsoleError(...args);
+});
+afterAll(() => consoleErrorSpy.mockRestore());
+const drainIssues = (): IssueLine[] => issues.splice(0);
+/** Poll until an issue line at `failureSite` whose message matches `pattern` has been reported. */
+const untilIssue = (failureSite: string, pattern: RegExp, timeoutMs = 10_000): Promise<IssueLine> =>
+  until(
+    `issue ${failureSite} ${pattern}`,
+    async () =>
+      issues.find((i) => i.failureSite === failureSite && pattern.test(i.error?.message ?? "")),
+    timeoutMs,
+  );
+
+async function until<T>(
+  label: string,
+  fn: () => Promise<T | undefined | false>,
+  timeoutMs = 10_000,
+): Promise<T> {
+  const t0 = Date.now();
+  for (;;) {
+    const v = await fn();
+    if (v !== undefined && v !== false) return v;
+    if (Date.now() - t0 > timeoutMs)
+      throw new Error(`until(${label}): timed out after ${timeoutMs}ms`);
+    await settle(25);
+  }
+}
+
+// ── the DO doors, spelled the way the edge spells them ──
+
+/** The edge's `enableProcessor(name, { source, className })`: ONE subscription-configured row whose
+ *  target hosts the class as the facet `name` (alarm-quiesce.test.ts spells it the same way). */
+const hostingTarget = (name: string, source: string, className: string): ItxExpression => [
+  "itx",
+  "facets",
+  ["get", name, { source: { "cap.js": source }, className }],
+  "processEventBatch",
+];
+const enableProcessor = (
+  ctx: string,
+  name: string,
+  source: string,
+  className: string,
+  consumes?: string[],
+) =>
+  stub(ctx).append(
+    subscriptionConfiguredEvent({
+      name,
+      target: hostingTarget(name, source, className),
+      ...(consumes && { consumes }),
+    }),
+  );
+const disableProcessor = (ctx: string, name: string) =>
+  stub(ctx).append(subscriptionConfiguredEvent({ name, target: null }));
+const snapshotOf = (ctx: string, name: string) =>
+  stub(ctx).invoke(["itx", "facets", ["get", name], ["snapshot"]]);
+type SubscriptionRow = {
+  name: string;
+  cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
+  halted?: { afterOffset: number; attempts: number; error?: string };
+} | null;
+const subscriptionRow = (ctx: string, name: string) =>
+  stub(ctx).invoke(`itx.subscriptions.get('${name}')`) as Promise<SubscriptionRow>;
+const facetStartupMemoPresent = (ctx: string, name: string) =>
+  runInDurableObject(stub(ctx), (_instance, state) =>
+    Promise.resolve(state.storage.kv.get(`facet:${name}`) !== undefined),
+  );
+/** The offset of the first event `append` returned (workers-types' Rpc.Serializable types a
+ *  StreamEvent-returning stub method as `never`, hence the cast). */
+const offsetOf = (appended: unknown): number => (appended as { offset: number }[])[0].offset;
+
+/** A bare, well-behaved hosted class — a processor host with no engine, enough for the load chain. */
+const FINE_SRC = /* js */ `
+import { DurableObject } from "cloudflare:workers";
+export class FineDurableObject extends DurableObject {
+  processEventBatch() {}
+  catchUpFromLog() {}
+  snapshot() { return { ok: true }; }
+}
+`;
+
+// ═══════════════════════════════ A. THE CELL CAP ═══════════════════════════════
+
+/** A rewrite-rule target that carries a `workers.get({ source })` spec inline: post-M1 a HOSTED facet's
+ *  source is elided from core state, but a `workers.get` source is not (oom-audit.md item 6) — so
+ *  each such rule adds its whole source to the core checkpoint's state cell. */
+const bigWorkerRuleTarget = (tag: string, chars: number): ItxExpression => [
+  "itx",
+  "workers",
+  ["get", { source: { "cap.js": `// ${tag}\n` + "x".repeat(chars) } }],
+  "hello",
+];
+
+// The core checkpoint is one storage cell: a configure whose state would not fit is refused CODED
+// (REDUCE_CHECKPOINT_TOO_LARGE — reduce-checkpoint.ts measures the state BEFORE the write), naming
+// the cell, the size, the ceiling and "nothing was written". BORN RED: SQLite's own `string or blob
+// too big: SQLITE_TOOBIG` crossed the hop with no code, no cap named, from a write already inside
+// the transaction (flipped with the one-row checkpoint, BUILD-LOG 2026-09-04). The ceiling is the
+// documented production cell (2 MB), so local workerd (4 MiB) and the edge now refuse alike.
+test("A1 — core state over the checkpoint ceiling: the configure is refused coded, REDUCE_CHECKPOINT_TOO_LARGE, in our words", async () => {
+  const ctx = "prj_ud_corecap_message";
+  const s = stub(ctx);
+  await s.append(rewriteRuleConfiguredEvent("itx.bigA", bigWorkerRuleTarget("A", 1 * MiB))); // state ≈ 1 MiB: lands
+  const err = await rejectionOf(() =>
+    s.append(rewriteRuleConfiguredEvent("itx.bigB", bigWorkerRuleTarget("B", 1.5 * MiB))),
+  ); // state ≈ 2.5 MiB: over the 2 MB cell
+  expect(errorCode(err)).toBe("REDUCE_CHECKPOINT_TOO_LARGE");
+  expect(err?.message).toMatch(/checkpoint "core".*over the .*ceiling.*nothing was written/);
+});
+
+// CONTROL: the refusal is CLEAN — the transaction rolled back, so memory and the log agree (the perf
+// review's do-now #1): the table keeps rule A only, the refused configure burns no offset, a smaller
+// configure lands right after. Only GROWTH past the ceiling is refused; nothing is wedged.
+test("A2 — CONTROL: the refused configure leaves memory and the log consistent — rule A stays, no offset burnt, a smaller rule lands, only growth is refused", async () => {
+  const ctx = "prj_ud_corecap_consistent";
+  const s = stub(ctx);
+  const a = offsetOf(
+    await s.append(rewriteRuleConfiguredEvent("itx.bigA", bigWorkerRuleTarget("A", 1 * MiB))),
+  );
+  const err = await rejectionOf(() =>
+    s.append(rewriteRuleConfiguredEvent("itx.bigB", bigWorkerRuleTarget("B", 1.5 * MiB))),
+  );
+  expect(errorCode(err)).toBe("REDUCE_CHECKPOINT_TOO_LARGE");
+  const core = (await s.invoke("itx.facets.get('core').snapshot()")) as {
+    offset: number;
+    state: { itxExpressionRewriteRules: Record<string, unknown> };
+  };
+  expect(Object.keys(core.state.itxExpressionRewriteRules)).toEqual(["itx.bigA"]);
+  expect(core.offset).toBe(a); // reduced through rule A, not a phantom B
+  // The refused batch's offset was never burnt: A's live-state delta took a+1, so the next durable
+  // event lands at a+2 — exactly where B would have.
+  const c = offsetOf(await s.append(rewriteRuleConfiguredEvent("itx.small", "itx.whoami")));
+  expect(c).toBe(a + 2);
+  const page = (await s.invoke(["itx", ["readEvents", 0, 500]])) as {
+    events: { offset: number }[];
+  };
+  expect(page.events.map((e) => e.offset)).toEqual([1, 2, a, c]);
+  expect(drainIssues()).toEqual([]);
+});
+
+// A subscription may intentionally name a target that nobody has configured yet. It is a durable
+// promise to deliver later, not an admission-time invocation: its eventual first delivery owns the
+// NO_ITX_EXPRESSION_MATCH outcome. A retry under the same key remains the original receipt.
+test("A3 — an unresolved subscription is retained without a resolution probe", async () => {
+  const s = stub("prj_ud_unresolved_subscription");
+  const before = ((await s.read(0)) as { events: { offset: number }[] }).events;
+  const event = {
+    ...subscriptionConfiguredEvent({ name: "sink1", target: "itx.notConfigured.sink1" }),
+    idempotencyKey: "unresolved-sink1",
+  };
+  const [first] = (await s.append(event)) as { offset: number }[];
+  const [again] = (await s.append(event)) as { offset: number }[];
+  expect(again.offset).toBe(first.offset);
+  expect(
+    (await s.invoke("itx.subscriptions.get('sink1')")) as {
+      target: string;
+      configuredAtOffset: number;
+    },
+  ).toMatchObject({ target: "itx.notConfigured.sink1", configuredAtOffset: first.offset });
+  expect(((await s.read(0)) as { events: { offset: number }[] }).events).toHaveLength(
+    before.length + 1,
+  );
+});
+
+// A hosted facet's source is recovered into `facet:<name>` after eviction, so its serialized
+// startup memo must fit one production 2 MB storage cell before its configuration can land. The
+// rule and its subscription share ONE commit; a harmless earlier fact proves the refusal rolls the
+// entire batch back rather than leaving an alias or a row that will retry a raw SQLITE_TOOBIG forever.
+test("A3 — a same-batch alias to an oversized hosted-facet memo is refused atomically", async () => {
+  const ctx = "prj_ud_facetmemo_cap";
+  const s = stub(ctx);
+  drainIssues();
+  const source = FINE_SRC + "\n// " + "x".repeat(4.5 * MiB) + "\n";
+  const before = (await s.read(0)) as { events: { offset: number }[] };
+  const enableErr = await rejectionOf(() =>
+    s.append(
+      { type: "batch-control" },
+      rewriteRuleConfiguredEvent("itx.bigAlias", [
+        "itx",
+        "facets",
+        ["get", "big", { source: { "cap.js": source }, className: "FineDurableObject" }],
+      ]),
+      subscriptionConfiguredEvent({
+        name: "big",
+        target: "itx.bigAlias.processEventBatch",
+      }),
+    ),
+  );
+  expect(errorCode(enableErr)).toBe("FACET_STARTUP_MEMO_TOO_LARGE");
+  expect(enableErr?.retryable).toBe(false);
+  expect(enableErr?.message).toMatch(/facet "big".*startup memo.*2 MB.*nothing was appended/);
+  expect(await subscriptionRow(ctx, "big")).toBeNull();
+  expect(await facetStartupMemoPresent(ctx, "big")).toBe(false);
+  const after = (await s.read(0)) as { events: { offset: number }[] };
+  expect(after.events.map((event) => event.offset)).toEqual(
+    before.events.map((event) => event.offset),
+  );
+  expect(drainIssues()).toEqual([]);
+});
+
+// JavaScript's `.length` counts UTF-16 code units. This source is below the old character ceiling
+// but its UTF-8 serialization exceeds a 2 MB cell, so it proves the admission measures bytes.
+test("A3 — a non-ASCII hosted-facet memo is refused by UTF-8 bytes, before configuration lands", async () => {
+  const ctx = "prj_ud_facetmemo_unicode";
+  const s = stub(ctx);
+  const source = FINE_SRC + "\n// " + "😀".repeat(550_000) + "\n";
+  expect(source.length).toBeLessThan(2 * MiB);
+  const err = await rejectionOf(() =>
+    s.append(
+      subscriptionConfiguredEvent({
+        name: "unicode",
+        target: hostingTarget("unicode", source, "FineDurableObject"),
+      }),
+    ),
+  );
+  expect(errorCode(err)).toBe("FACET_STARTUP_MEMO_TOO_LARGE");
+  expect(err?.retryable).toBe(false);
+  expect(await subscriptionRow(ctx, "unicode")).toBeNull();
+  expect(await facetStartupMemoPresent(ctx, "unicode")).toBe(false);
+});
+
+/** A processor whose reduce HOARDS every payload: the checkpoint cell grows with the log. */
+const HOARDER_SRC = /* js */ `
+import { StreamProcessor, StreamProcessorDurableObject } from "./processor.js";
+class HoarderProcessor extends StreamProcessor {
+  contract = { slug: "hoarder", version: "1.0.0", consumes: ["blob"], emits: [], initialState: () => ({ blobs: [] }) };
+  reduce({ event, state }) { return { blobs: [...state.blobs, event.payload.blob] }; }
+  projectLiveState(state) { return { n: state.blobs.length }; }
+}
+export class HoarderDurableObject extends StreamProcessorDurableObject { processor = new HoarderProcessor(); }
+`;
+
+// A facet whose reduce keeps every payload outgrows its checkpoint cell at the third MiB. The
+// processor's refusal is coded and non-retryable; delivery records one halt fact, including when
+// several already-queued commits observe the same latched refusal. A resume of unchanged code tries
+// once and re-halts; a replacement processor is the explicit repair path.
+test("A4 — a facet checkpoint ceiling refusal records one durable halt, survives a wake, and a repaired configuration runs again", async () => {
+  const ctx = "prj_ud_facetcheckpoint_cap";
+  const s = stub(ctx);
+  await enableProcessor(ctx, "hoarder", HOARDER_SRC, "HoarderDurableObject", ["blob"]);
+  let last = 0;
+  for (let i = 0; i < 4; i++) {
+    last = offsetOf(await s.append({ type: "blob", payload: { blob: `${i}:` + "x".repeat(MiB) } }));
+    await settle(200);
+  }
+  const halted = await until("the deterministic facet halt", async () => {
+    const row = await subscriptionRow(ctx, "hoarder");
+    return row?.halted ? row : undefined;
+  });
+  expect(halted.halted).toMatchObject({
+    attempts: 1,
+    error: expect.stringMatching(/checkpoint "hoarder".*one storage cell/),
+  });
+  expect(halted.halted!.afterOffset).toBeLessThan(last);
+
+  // The refusal itself is still coded to an explicit caller; delivery turns it into the durable
+  // halt fact instead of calling the facet on every later commit.
+  const snapshotErr = await rejectionOf(() => snapshotOf(ctx, "hoarder"));
+  expect(errorCode(snapshotErr)).toBe("REDUCE_CHECKPOINT_TOO_LARGE");
+  drainIssues();
+  await s.append({ type: "blob", payload: { blob: "small" } });
+  await settle(200);
+  expect(await subscriptionRow(ctx, "hoarder")).toEqual(halted);
+  const facts = (await s.read(0, 100)) as { events: { type: string; payload?: unknown }[] };
+  expect(
+    facts.events.filter(
+      (event) =>
+        event.type === "events.iterate.com/stream/subscription-delivery-halted" &&
+        (event.payload as { name?: string } | undefined)?.name === "hoarder",
+    ),
+  ).toHaveLength(1);
+  expect(
+    drainIssues().filter((issue) => issue.failureSite === "subscription-delivery.deliver"),
+  ).toEqual([]);
+
+  // The fact is the recovery boundary, not an in-memory latch: an eviction may not revive delivery.
+  await quiesce(ctx); // an idle materialized facet pins a DO; production quiesce aborts it first
+  await evictDurableObject(s);
+  expect(await subscriptionRow(ctx, "hoarder")).toEqual(halted);
+
+  // Resume asks the same still-broken processor to try once; it re-halts rather than starting a
+  // retry storm. Explicit replacement (disable, then configure new code) clears the old halt and
+  // catches up from the durable log.
+  await s.append({
+    type: "events.iterate.com/stream/subscription-delivery-resumed",
+    payload: { name: "hoarder" },
+  });
+  // A cold wake discovers the facet through the cursor lane; the next matching commit is its first
+  // push after the explicit resume.
+  await settle(100);
+  await s.append({ type: "blob", payload: { blob: "still broken" } });
+  const rehalted = await until("the resumed broken facet to halt once", async () => {
+    const row = await subscriptionRow(ctx, "hoarder");
+    return row?.halted ? row : undefined;
+  });
+  expect(rehalted.halted?.attempts).toBe(1);
+  await disableProcessor(ctx, "hoarder");
+  await enableProcessor(ctx, "hoarder", FINE_SRC, "FineDurableObject", ["blob"]);
+  await settle(200);
+  expect((await snapshotOf(ctx, "hoarder")) as { ok?: boolean }).toEqual({ ok: true });
+});
+
+// ═══════════════════════ B. A SOURCE THAT CANNOT START ═══════════════════════
+
+/** Host `src` as the facet `p`, wait for its first failed push, and return what `snapshot()` dies of. */
+async function facetThatCannotStart(
+  ctx: string,
+  src: string,
+  className: string,
+): Promise<ObservedError | undefined> {
+  drainIssues();
+  await enableProcessor(ctx, "p", src, className);
+  await stub(ctx).append({ type: "work" });
+  await untilIssue("subscription-delivery.deliver", /./);
+  return rejectionOf(() => snapshotOf(ctx, "p"));
+}
+
+// WHAT IT DIES OF: `Error: internal error; reference = <opaque id>` — workerd's catch-all, one fresh
+// reference id per call, no class name, no hint. `#invokeFacet`'s own `if (!klass) throw new Error(
+// 'loaded worker does not export class …')` is DEAD CODE: `getDurableObjectClass` never returns
+// falsy — it hands back a handle that fails inside the runtime when the facet starts. Every push
+// (one `subscription-delivery.deliver` line per commit) and every read dies of it, until disabled.
+test.fails("B1 — className not exported: every push and every read dies of workerd's OPAQUE `internal error; reference = <id>` — the door's own `does not export class` check is dead code", async () => {
+  const err = await facetThatCannotStart("prj_ud_start_noclass", FINE_SRC, "Nope");
+  if (!stillDiesOf(err, /^internal error; reference = [a-z0-9]+$/)) return; // the pin MOVED
+  // WANTED: the message names the missing class.
+  expect(err?.message).toContain("Nope");
+});
+
+const EVAL_THROWS_SRC = /* js */ `
+import { DurableObject } from "cloudflare:workers";
+export class EvalBoomDurableObject extends DurableObject { processEventBatch() {} catchUpFromLog() {} snapshot() { return { ok: true }; } }
+throw new Error("boom at module evaluation");
+`;
+
+// WHAT IT DIES OF: `Error: Failed to start Worker:\nUncaught Error: boom at module evaluation\n  at
+// cap.js:4:7` — the platform's envelope around the author's throw, no code. workerd keeps the failed
+// isolate under its loader id for the process's life (the worker-loader.ts WORKAROUND covers a
+// PRODUCER that threw, not code that fails to start), so every push re-hits it — one
+// `subscription-delivery.deliver` line per commit — and every read rejects the same way.
+test.fails("B2 — a module that throws at evaluation: every push and read dies of the platform's `Failed to start Worker: Uncaught Error: …` envelope, replayed per commit", async () => {
+  const err = await facetThatCannotStart(
+    "prj_ud_start_evalthrows",
+    EVAL_THROWS_SRC,
+    "EvalBoomDurableObject",
+  );
+  if (!stillDiesOf(err, /^Failed to start Worker:\nUncaught Error: boom at module evaluation/))
+    return; // the pin MOVED
+  // WANTED: a coded error in our words, wrapping the author's.
+  expect(errorCode(err)).toBeDefined();
+});
+
+const CTOR_THROWS_SRC = /* js */ `
+import { DurableObject } from "cloudflare:workers";
+export class CtorBoomDurableObject extends DurableObject {
+  constructor(ctx, env) { super(ctx, env); throw new Error("boom in the facet constructor"); }
+  processEventBatch() {} catchUpFromLog() {} snapshot() { return { ok: true }; }
+}
+`;
+
+// WHAT IT DIES OF: the author's own `boom in the facet constructor` — but through the platform's
+// `broken.constructorFailed` path (workerd io/worker.c++ annotates the actor as broken and aborts
+// it), so it arrives stamped `durableObjectReset: true` with no code, and the container is torn down
+// and rebuilt on EVERY call: the constructor throws again per push (one `subscription-delivery.deliver`
+// line per commit, one "Annotating with brokenness" runtime line each) and per read.
+test.fails("B3 — a class whose constructor throws: `broken.constructorFailed` — the author's message arrives stamped durableObjectReset, no code, the constructor re-run on every push and read", async () => {
+  const err = await facetThatCannotStart(
+    "prj_ud_start_ctorthrows",
+    CTOR_THROWS_SRC,
+    "CtorBoomDurableObject",
+  );
+  if (
+    !stillDiesOf(err, /^boom in the facet constructor$/) ||
+    !stillRed("stamped durableObjectReset", err?.durableObjectReset === true, JSON.stringify(err))
+  )
+    return; // the pin MOVED
+  // WANTED: a coded error in our words, wrapping the author's.
+  expect(errorCode(err)).toBeDefined();
+});
+
+// CONTROL: none of the three is a wedge — `disableProcessor` (the null row) still lands, and takes
+// the row, the facet and its startup memo with it, so the operator door out exists.
+test("B4 — CONTROL: a facet that cannot start is still disable-able — the null row lands, the memo and the row go", async () => {
+  for (const [ctx, src, className] of [
+    ["prj_ud_disable_noclass", FINE_SRC, "Nope"],
+    ["prj_ud_disable_evalthrows", EVAL_THROWS_SRC, "EvalBoomDurableObject"],
+    ["prj_ud_disable_ctorthrows", CTOR_THROWS_SRC, "CtorBoomDurableObject"],
+  ] as const) {
+    await facetThatCannotStart(ctx, src, className);
+    expect(await facetStartupMemoPresent(ctx, "p")).toBe(true);
+    await disableProcessor(ctx, "p");
+    expect(await facetStartupMemoPresent(ctx, "p")).toBe(false);
+    expect(await subscriptionRow(ctx, "p")).toBeNull();
+    expect(errorCode(await rejectionOf(() => snapshotOf(ctx, "p")))).toBe("NO_FACET");
+  }
+  drainIssues();
+});
+
+// ═══════════════════════════ C. POISON EVENTS ═══════════════════════════
+
+/** A processor whose EFFECT hook throws on one marked event. The reduce is guarded (processor.ts
+ *  `#reduceAndProcessEvent` reports and skips a throwing reduce); `processEvent` is not. */
+const POISON_SRC = /* js */ `
+import { StreamProcessor, StreamProcessorDurableObject } from "./processor.js";
+class PoisonProcessor extends StreamProcessor {
+  contract = { slug: "poison", version: "1.0.0", consumes: ["work"], emits: [], initialState: () => ({ n: 0 }) };
+  reduce({ state }) { return { n: state.n + 1 }; }
+  processEvent({ event }) { if (event && event.payload && event.payload.poison) throw new Error("poison: refusing offset " + event.offset); }
+}
+export class PoisonDurableObject extends StreamProcessorDurableObject { processor = new PoisonProcessor(); }
+`;
+
+// WHAT IT DIES OF: the author's `poison: refusing offset N` — informative, but the ENGINE has no
+// answer to a deterministic throw: the batch persists nothing ("retried whole"), so every later
+// commit's push gap-repairs from the checkpoint, re-reads the log from there (a span that grows by
+// one event per commit), re-throws at the same event (one `subscription-delivery.deliver` line per
+// commit), and `snapshot()` — which catches up first — rejects with it. Disable + re-enable rebuilds
+// from the log and hits the same event again. The only way out is to change the code.
+test.fails("C1 — a processEvent that throws on ONE event wedges the facet at that offset forever: every commit re-reads the gap and re-throws, snapshot() rejects, disable + re-enable rebuilds into the same wedge", async () => {
+  const ctx = "prj_ud_poison_effect";
+  const s = stub(ctx);
+  await enableProcessor(ctx, "poison", POISON_SRC, "PoisonDurableObject", ["work"]);
+  await s.append({ type: "work" });
+  await until(
+    "n = 1",
+    async () => ((await snapshotOf(ctx, "poison")) as { state: { n: number } }).state.n === 1,
+  );
+  drainIssues();
+  const poison = offsetOf(await s.append({ type: "work", payload: { poison: true } }));
+  await untilIssue("subscription-delivery.deliver", /poison: refusing offset/);
+  drainIssues();
+  await s.append({ type: "work" }); // a clean commit after it: dies again (the gap repair re-reads the poison)
+  await untilIssue("subscription-delivery.deliver", /poison: refusing offset/);
+  const snapshotErr = await rejectionOf(() => snapshotOf(ctx, "poison"));
+  // The rebuild: the same log, the same event, the same wall.
+  await disableProcessor(ctx, "poison");
+  await enableProcessor(ctx, "poison", POISON_SRC, "PoisonDurableObject", ["work"]);
+  drainIssues();
+  const rebuiltErr = await rejectionOf(() => snapshotOf(ctx, "poison"));
+  if (
+    !stillDiesOf(snapshotErr, new RegExp(`^poison: refusing offset ${poison}$`)) ||
+    !stillDiesOf(rebuiltErr, new RegExp(`^poison: refusing offset ${poison}$`))
+  )
+    return; // the pin MOVED
+  // WANTED: a throwing effect is reported and skipped like a throwing reduce, so the facet stays
+  // readable — `snapshot()` answers as of its checkpoint.
+  expect(snapshotErr).toBeUndefined();
+});
+
+/** Overwrite one row's body with something JSON.parse refuses — the shape of a corrupted cell. */
+const corruptRow = (ctx: string, offset: number) =>
+  runInDurableObject(stub(ctx), (_instance, state) => {
+    state.storage.sql.exec("UPDATE events SET body = 'not json' WHERE offset = ?", offset);
+    return Promise.resolve();
+  });
+
+// WHAT IT DIES OF: `SyntaxError: Unexpected token 'o', "not json" is not valid JSON` — V8's parser,
+// from `Stream.read`'s `JSON.parse` of the cell, naming NO offset. Every reader pages through
+// `read`: the client's own `read`, `waitForEvent`'s history scan, every facet's catch-up and gap
+// repair, the cursor lane's pages, the M1 memo recovery. One bad cell, every reader dead, no way to
+// tell WHICH row from the message.
+// An unparseable stored body is coded EVENT_UNREADABLE naming its offset, so a reader can read on
+// past it — BORN RED as V8's raw `is not valid JSON` from `read()` / waitForEvent's scan, naming
+// nothing (flipped 2026-09-04, the typed storage read).
+test("C2 — one unparseable row body is a coded EVENT_UNREADABLE naming its offset, from read() and from waitForEvent's history scan", async () => {
+  const ctx = "prj_ud_corrupt_row";
+  const s = stub(ctx);
+  const seed = offsetOf(await s.append({ type: "seed" }));
+  await corruptRow(ctx, seed);
+  const readErr = await rejectionOf(() => s.read(0));
+  const waitErr = await rejectionOf(() =>
+    s.waitForEvent({ type: "never", afterOffset: 0, timeoutMs: 100 }),
+  );
+  expect(codeOf(readErr)).toBe("EVENT_UNREADABLE");
+  expect(codeOf(waitErr)).toBe("EVENT_UNREADABLE");
+  expect(readErr?.message).toContain(String(seed)); // it names the offset to read on from
+  // …and read(seed) skips it: the seed row is the only durable, so the next page is empty and at head.
+  expect(((await s.read(seed)) as { events: unknown[] }).events).toEqual([]);
+});
+
+// WHAT IT DIES OF: the same SyntaxError — from the CONSTRUCTOR. A core contract version bump
+// discards the checkpoint (`readReduceCheckpoint` gates the state on `reducerVersion`) and
+// re-reduces the log from offset 0 in `new Stream(…)`; the re-reduce pages `read`, `read` dies at the
+// bad cell, the constructor throws, and it throws again on every wake — `runInDurableObject`
+// included, so there is no door left to repair the row through. Staged here by writing a foreign
+// `reducerVersion` into the cursor cell (what a deploy with a bumped `CoreContract.version` does).
+// The constructor's re-reduce (a core version bump discards the checkpoint and re-reduces from 0)
+// SKIPS an unreadable row and reports it, so the context wakes — BORN RED as the raw SyntaxError
+// from `new Stream(…)` on EVERY wake, bricking the context, runInDurableObject included (flipped
+// 2026-09-04, the typed storage read skips it in the re-reduce loop).
+test("C3 — that row under a core version bump: the constructor's re-reduce skips the unreadable row and reports it, and the context wakes", async () => {
+  const ctx = "prj_ud_corrupt_row_rereduce";
+  const s = stub(ctx);
+  const seed = offsetOf(await s.append({ type: "seed" }));
+  await corruptRow(ctx, seed);
+  await runInDurableObject(s, (_instance, state) => {
+    state.storage.sql.exec(
+      "UPDATE reduce_checkpoints SET reducer_version = '0.0.0' WHERE slug = 'core'",
+    );
+    return Promise.resolve();
+  });
+  await evictDurableObject(s);
+  const snapshot = (await s.invoke("itx.facets.get('core').snapshot()")) as { offset: number };
+  expect(snapshot.offset).toBeGreaterThanOrEqual(seed); // re-reduced past the skipped row
+  expect(offsetOf(await s.append({ type: "after" }))).toBeGreaterThan(seed); // and the log goes on
+});
+
+// ═══════════════════════════ D. THE CONSTRUCTOR ═══════════════════════════
+
+// The core checkpoint row is a CACHE of the log: with it gone the constructor re-derives the mark
+// from the rows (`MAX(offset)`), re-reduces the core state from offset 0, and reports one issue
+// line — never fatal. BORN RED: the constructor read mark 0, decided the store was VIRGIN,
+// re-appended `stream/created` over offset 1 and died of `UNIQUE constraint failed: events.offset`
+// on EVERY wake, every door, `runInDurableObject` included — bricked, no operator door. Flipped
+// with the SQL storage module (BUILD-LOG 2026-09-04).
+test("D1 — the core checkpoint row lost: the constructor re-derives the mark from the rows, re-reduces the log, and the context wakes", async () => {
+  const ctx = "prj_ud_cursor_lost";
+  const s = stub(ctx);
+  const seed = offsetOf(await s.append({ type: "seed" }));
+  await runInDurableObject(s, (_instance, state) => {
+    state.storage.sql.exec("DELETE FROM reduce_checkpoints WHERE slug = 'core'");
+    return Promise.resolve();
+  });
+  await evictDurableObject(s);
+  const snapshot = (await s.invoke("itx.facets.get('core').snapshot()")) as {
+    offset: number;
+    state: unknown;
+  };
+  expect(snapshot.offset).toBeGreaterThanOrEqual(seed); // the mark came back from the rows
+  expect(JSON.stringify(snapshot.state)).toContain(ctx); // the state was re-reduced from `stream/created`
+  expect(offsetOf(await s.append({ type: "after" }))).toBeGreaterThan(seed); // and the log goes on
+});
+
+// ═══════════════════════════════ E. THE LADDER ═══════════════════════════════
+
+/** A CURSOR row whose target can never be called: `itx.kv` is a two-step target, root-called whole
+ *  (subscription-delivery.ts `#evaluateItxExpressionTargetHead`), and the kv root is a plain object
+ *  — `callOn` refuses it, deterministically, every time. */
+/** A cursor row (a stateless worker's `processEventBatch`, which cannot own its progress) whose
+ *  every delivery throws a PLAIN Error — retryable, so it climbs the ladder (E1). */
+const RETRYING_WORKER_SRC = /* js */ `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class extends WorkerEntrypoint { processEventBatch() { throw new Error("flaky sink: try again"); } }`;
+async function retryingCursorRow(ctx: string): Promise<SubscriptionRow> {
+  const s = stub(ctx);
+  await s.append(
+    subscriptionConfiguredEvent({
+      name: "u",
+      target: [
+        "itx",
+        "workers",
+        ["get", { source: { "cap.js": RETRYING_WORKER_SRC } }],
+        "processEventBatch",
+      ],
+      consumes: ["mark"],
+    }),
+  );
+  await s.append({ type: "mark" });
+  return until("the first ladder attempt", async () => {
+    const row = await subscriptionRow(ctx, "u");
+    return (row?.cursor?.attempt ?? 0) >= 1 ? row : undefined;
+  });
+}
+async function uncallableCursorRow(ctx: string): Promise<SubscriptionRow> {
+  const s = stub(ctx);
+  await s.append(subscriptionConfiguredEvent({ name: "u", target: "itx.kv", consumes: ["mark"] }));
+  await s.append({ type: "mark" });
+  return until("the first failure (a halt or a ladder attempt)", async () => {
+    const row = await subscriptionRow(ctx, "u");
+    return row?.halted !== undefined || (row?.cursor?.attempt ?? 0) >= 1 ? row : undefined;
+  });
+}
+/** Fire the DO's alarm up to `fires` times with Date faked 40 minutes further each time (past the
+ *  ladder's 30-minute ceiling plus its 20% jitter; sockets and real timers stay real — support.ts's quiesce shape), and
+ *  return how many alarms actually ran and the row after the last. Stops early when `halted`. */
+async function walkLadder(
+  ctx: string,
+  fires: number,
+): Promise<{ fired: number; row: SubscriptionRow }> {
+  let fired = 0;
+  let row: SubscriptionRow = null;
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  try {
+    for (let i = 0; i < fires; i++) {
+      vi.setSystemTime(Date.now() + 40 * 60_000);
+      if (await runDurableObjectAlarm(stub(ctx))) fired++;
+      await settle(30);
+      row = await subscriptionRow(ctx, "u");
+      if (row?.halted) break;
+    }
+  } finally {
+    vi.useRealTimers();
+  }
+  return { fired, row };
+}
+
+// CONTROL: the ladder is finite and the halt is OURS — 1 failure + 14 alarm wakes (1s·2ⁿ capped at
+// 30 min: ~7 hours of ladder clock, each rung a billed wake) then `subscription-delivery-halted` with
+// the message the loop threw, clipped, in the row.
+test("E1 — CONTROL: a RETRYABLE failure (a sink that throws a plain error) walks the whole ladder — 14 alarm wakes after the first failure — then halts with our message", async () => {
+  const ctx = "prj_ud_ladder_live";
+  const first = await retryingCursorRow(ctx);
+  expect(first?.cursor).toMatchObject({ attempt: 1 });
+  expect(first?.halted).toBeUndefined();
+  const { fired, row } = await walkLadder(ctx, 20);
+  expect(fired).toBeLessThanOrEqual(14); // a real rung may have fired on its own in between
+  expect(row?.halted).toEqual({
+    afterOffset: first!.cursor!.confirmedOffset,
+    attempts: 15,
+    error: "flaky sink: try again",
+  });
+  // The ladder is not an issue line; the halt is a fact in the log. (Scoped to this row: an earlier
+  // row's wedged facet may still be reporting in the background.)
+  expect(drainIssues().filter((i) => (i as { name?: string }).name === "u")).toEqual([]);
+});
+
+// A deterministic failure — an uncallable target throws coded NOT_A_METHOD (callOn, both the dotted
+// and the root-apply case), which a retry cannot change — HALTS the row at its FIRST failure, not
+// after 14 more rungs over ~7 h. BORN RED as the full ladder (flipped 2026-09-04: deterministicFailure
+// in the delivery loop, and callOn root-apply coded).
+test("E2 — a deterministic failure (an uncallable target, NOT_A_METHOD) halts the row at once, no ladder", async () => {
+  const first = await uncallableCursorRow("prj_ud_ladder_deterministic");
+  expect(first?.halted).toBeDefined(); // halted at the first failure
+  expect(first?.halted?.attempts).toBe(1);
+});
+
+// On a PAUSED stream the halt fact STILL LANDS — `subscription-delivery-halted` is pause-exempt
+// (like created/woken/paused/resumed) — so a cursor row failing while a breaker holds the stream
+// reaches `halted` and stops, instead of the halt being refused (STREAM_PAUSED) and the ladder
+// restarting from attempt 0 forever. BORN RED as that restart loop (flipped 2026-09-04: the exempt
+// list + halt-at-once; the uncallable target here halts at its first failure, NOT_A_METHOD).
+test("E3 — on a PAUSED stream the halt fact still lands (pause-exempt) and the row halts, no restart loop", async () => {
+  const ctx = "prj_ud_ladder_paused";
+  await uncallableCursorRow(ctx);
+  await stub(ctx).append({
+    type: "events.iterate.com/stream/paused",
+    payload: { reason: "breaker" },
+  });
+  drainIssues();
+  const { row } = await walkLadder(ctx, 3); // it halts at once; a couple of alarm passes confirm no restart
+  const refused = issues.find(
+    (i) => i.failureSite === "subscription-delivery.cursor" && i.code === "STREAM_PAUSED",
+  );
+  expect(refused).toBeUndefined(); // the halt append was NOT refused by the pause (pause-exempt)
+  expect(row?.halted).toBeDefined(); // the row halted on a paused stream…
+  expect(row?.cursor?.attempt ?? 0).toBe(0); // …and did not restart the ladder from attempt 0
+});
+
+// ═══════════════════ F. STORAGE UNDER A LIVE INCARNATION ═══════════════════
+
+// WHAT IT DIES OF: `deleteAll()` drops every SQLite table, but the live incarnation still holds
+// its offsets, core state and table-exists assumption (the constructor only creates tables on a
+// store with no incarnation cell). The first append-side projection is now trust, so append dies
+// of `no such table: provenance_trust_policy`; read still dies of `no such table: events`. Those
+// names are implementation order, not the defect: either proves a live actor whose durable state
+// was erased underneath it. The core snapshot keeps answering from memory, describing a gone log.
+// This remains an intentionally destructive test hook, not a supported operational recovery API.
+test.fails("F1 — deleteAll() under a live incarnation: durable state is gone while the actor stays live, so append/read fail raw until eviction", async () => {
+  const ctx = "prj_ud_deleteall_live";
+  const s = stub(ctx);
+  const errs = await runInDurableObject(s, async (instance, state) => {
+    await instance.append({ type: "before" });
+    await state.storage.deleteAll();
+    return {
+      append: await rejectionOf(() => instance.append({ type: "after" })),
+      read: await rejectionOf(() => Promise.resolve(instance.read(0))),
+      snapshot: await rejectionOf(() => instance.invoke("itx.facets.get('core').snapshot()")),
+    };
+  });
+  const viaStub = await rejectionOf(() => s.append({ type: "after, via the stub" }));
+  const noTrustTable = /^no such table: provenance_trust_policy: SQLITE_ERROR$/;
+  const noEventsTable = /^no such table: events: SQLITE_ERROR$/;
+  if (
+    !stillDiesOf(errs.append, noTrustTable) ||
+    !stillDiesOf(errs.read, noEventsTable) ||
+    !stillDiesOf(viaStub, noTrustTable) ||
+    !stillRed(
+      "the core snapshot still answers from memory",
+      errs.snapshot === undefined,
+      String(errs.snapshot),
+    )
+  )
+    return; // the pin MOVED
+  // WANTED: the stream notices its store was reset and starts over, or refuses in its own words.
+  expect(errs.append).toBeUndefined();
+});
+
+// ═══════════════════════════ G. THE RESERVED NAME ═══════════════════════════
+
+// G1: the builder already rejects `core`, and raw append must make the same decision BEFORE Stream
+// assigns an offset. Otherwise a row targets the inline core view (not a facet), delivery raises
+// NOT_A_METHOD on every commit, and a removal can land before its post-commit facet effect rejects.
+test("G1 — a raw `subscription-configured` row named `core` is classified and refused before commit", async () => {
+  const ctx = "prj_ud_reserved_core";
+  const s = stub(ctx);
+  drainIssues();
+  const target = print(hostingTarget("core", FINE_SRC, "FineDurableObject"));
+  const refusal = await rejectionOf(() =>
+    s.append({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: { name: "core", target },
+    }),
+  );
+  expect(codeOf(refusal)).toBe("SUBSCRIPTION_RESERVED");
+  expect(
+    ((await s.invoke("itx.subscriptions.list()")) as { name: string }[]).map((r) => r.name),
+  ).not.toContain("core");
+  await s.append({ type: "work" });
+  expect(drainIssues()).toEqual([]);
+  const removal = await rejectionOf(() =>
+    s.append({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: { name: "core", target: null },
+    }),
+  );
+  expect(codeOf(removal)).toBe("SUBSCRIPTION_RESERVED");
+});

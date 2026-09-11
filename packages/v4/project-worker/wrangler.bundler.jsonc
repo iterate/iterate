@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "iterate-v4-simplification-bundler",
+  "main": "src/bundler.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "define": { "process.browser": "true" },
+  "workers_dev": false,
+  "preview_urls": false,
+  "kv_namespaces": [{ "binding": "BUILD_CACHE" }],
+  "version_metadata": { "binding": "VERSION" },
+  "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } },
+}

@@ -1,0 +1,35 @@
+{
+  "name": "iterate-v4-simplification",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["allow_irrevocable_stub_storage"],
+  "assets": { "directory": "./public", "binding": "ASSETS" },
+  "durable_objects": {
+    "bindings": [{ "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["IterateContextDurableObject"] }],
+  "services": [
+    {
+      "binding": "BUNDLER",
+      "service": "iterate-v4-simplification-bundler",
+      "entrypoint": "Bundler",
+    },
+    {
+      "binding": "FALLBACK",
+      "service": "iterate-v4-simplification",
+      "entrypoint": "DummyControlPlane",
+    },
+  ],
+  "kv_namespaces": [
+    { "binding": "SECRETS_KV", "id": "v4-celld-secrets" },
+    { "binding": "ITX_KV", "id": "v4-celld-itx" },
+  ],
+  "vars": {
+    "APP_CONFIG_ENVIRONMENT_NAME": "v4-celld-local",
+    "APP_CONFIG_PROJECT_HOSTNAME_BASE": "localhost",
+    "APP_CONFIG_PROJECTS_JSON": "{\"demo\":\"prj_ingress_demo\",\"blue-team\":\"prj_ingress_blue\",\"team\":\"prj_ingress_team\"}",
+    "APP_CONFIG_CUSTOM_HOSTNAMES_JSON": "{\"custom.localhost\":\"prj_ingress_custom\"}",
+    "EGRESS_KEY": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "EXPERIMENT_ADMIN_TOKEN": "e2e-admin-token",
+  },
+}

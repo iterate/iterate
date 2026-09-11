@@ -1,0 +1,47 @@
+{
+  "name": "@iterate-experiments/project-v4",
+  "private": true,
+  "type": "module",
+  "description": "The clean-room API, preserved, with layered project capabilities.",
+  "scripts": {
+    "dev": "node build-sdk.mjs && wrangler dev -c wrangler.jsonc -c wrangler.bundler.jsonc",
+    "dev:celld": "tsx scripts/celld.ts dev",
+    "e2e:celld": "tsx scripts/celld.ts test",
+    "deploy": "tsx ./scripts/deploy.ts",
+    "gen:deploy-config": "tsx ./scripts/generate-deploy-config.ts",
+    "size": "tsx ./scripts/size.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.client.json && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.scripts.json",
+    "check:docs": "tsx ./scripts/check-reading-guide.ts",
+    "test": "pnpm check:docs && node build-sdk.mjs && vitest run",
+    "test:unit": "vitest run --project unit",
+    "e2e": "node build-sdk.mjs && vitest run --config e2e/vitest.config.ts",
+    "spec": "node build-sdk.mjs && playwright test"
+  },
+  "exports": {
+    ".": "./src/worker.ts"
+  },
+  "dependencies": {
+    "@cloudflare/worker-bundler": "0.2.1",
+    "@cloudflare/workers-oauth-provider": "0.10.3",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "capnweb": "npm:@iterate-com/capnweb@^0.12.2",
+    "json5": "^2.2.3",
+    "yjs": "^13.6.32",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.1.2",
+    "@cloudflare/workers-types": "^5.20260831.1",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "esbuild": "^0.27.4",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "typescript": "^5.9.3",
+    "tsx": "^4.20.6",
+    "undici": "^7.29.0",
+    "vitest": "^4.1.7",
+    "wrangler": "4.129.0"
+  }
+}

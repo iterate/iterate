@@ -1,0 +1,7 @@
+{
+  "name": "iterate-v4-simplification-bundler",
+  "main": "src/bundler.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "kv_namespaces": [{ "binding": "BUILD_CACHE", "id": "v4-celld-build-cache" }],
+}

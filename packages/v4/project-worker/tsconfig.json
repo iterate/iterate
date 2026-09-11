@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "ESNext.Disposable"],
+    "types": ["@cloudflare/workers-types"],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true
+  },
+  "include": ["src"],
+  // The browser client .tsx (React + DOM) is checked by tsconfig.client.json, not here.
+  "exclude": [
+    "src/client/react.tsx",
+    "src/client/demo.tsx",
+    "src/client/docs.ts",
+    "src/generated/itx-types"
+  ]
+}
