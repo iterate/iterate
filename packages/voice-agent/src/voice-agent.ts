@@ -937,6 +937,8 @@ interface Dial {
   /** Facet clock when device audio was last forwarded to the provider; the
    * silence fill covers everything after it. */
   lastMicAudioAtFacetMs: number;
+  /** Silence frames this dial has sent in the device's place. */
+  silenceFillFrames: number;
   /** How much of `userTranscript` the backend has been given — carried by
    * the delegation itself at creation, forwarded with tool results after. */
   forwardedUserChars: number;
@@ -976,6 +978,7 @@ const freshDial = (conversationId: string): Dial => ({
   userTranscript: "",
   lastUserFragmentAtFacetMs: null,
   lastMicAudioAtFacetMs: 0,
+  silenceFillFrames: 0,
   forwardedUserChars: 0,
   timelineMs: 0,
   turns: { user: null, assistant: null },
@@ -1601,7 +1604,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         for (const held of this.#micQueue) this.#sendMicAudio(dial.socket!, held);
         this.#micQueue = [];
         dial.lastMicAudioAtFacetMs = receivedAtFacetMs;
-        this.#startSilenceFill(dial);
+        this.#startSilenceFill(dial, append);
         this.runInBackground(() =>
           append({
             type: "events.iterate.com/voice-agent/conversation-accepted",
@@ -2069,7 +2072,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * relay once already (measured again with the chain: 52 underruns in a
    * 9 s answer). One loop registers once; it ends with the dial.
    */
-  #startSilenceFill(dial: Dial): void {
+  #startSilenceFill(dial: Dial, append: ProcessEventArgs<VoiceAgentContract>["append"]): void {
     this.runInBackground(async () => {
       while (this.#dial === dial && dial.socket !== null && dial.ready) {
         await this.deps.sleep(SILENCE_FILL_MS);
@@ -2086,6 +2089,20 @@ export class VoiceAgentProcessor extends StreamProcessor<
           dial.lastMicAudioAtFacetMs += SILENCE_FILL_MS;
           owedMs -= SILENCE_FILL_MS;
           this.#sendMicAudio(dial.socket, SILENCE_FILL_FRAME_B64);
+          dial.silenceFillFrames += 1;
+          /* Visible on the mirror once every few seconds of fill, so an
+           * instrument can tell a fill that runs from one that does not. */
+          if (dial.silenceFillFrames % 50 === 0) {
+            this.#appendMirror(
+              {
+                type: "client.silence-fill",
+                frames: dial.silenceFillFrames,
+                conversationId: dial.conversationId,
+                receivedAtFacetMs: nowAtFacetMs,
+              },
+              append,
+            );
+          }
         }
       }
     });
