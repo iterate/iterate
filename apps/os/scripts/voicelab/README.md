@@ -79,11 +79,25 @@ from the Doppler config (local dev server is the fallback).
 doppler run --config dev -- pnpm cli voicelab live-probe --save-wav out.wav
 doppler run --config dev -- pnpm cli voicelab live-probe --barge-after-ms 4000 --say2 "Stop. What was the last number?"
 doppler run --config prd -- pnpm cli voicelab live-probe --delegation responses --exec --project templestein
+# ...a second request while the backend works (delegations serialize), progress
+# notes into the voice per backend step, late speech forwarded to the backend
+doppler run --config prd -- pnpm cli voicelab live-probe --delegation responses --exec --project <slug> \
+  --say2 "How is it going?" --say2-after-delegation-ms 9000 --progress-thinking
+doppler run --config prd -- pnpm cli voicelab live-probe --delegation responses --exec --allow-writes --project <slug> \
+  --say2 "Oh, and put purple elephant in it." --say2-after-delegation-ms 300 --forward-transcript
 
 # full duplex through the platform, from the wire alone (no microphone): session,
 # continuous mic, answers + markers, quiet idle downlink, spoken barge,
 # durable transcript, the Astra delegation round trip
 doppler run --config prd -- pnpm cli voicelab duplex --project <slug> --setup
+
+# the task battery: speak real requests to a deployed agent and read back the
+# delegation (and how much of the request it carried), every backend script
+# and its result, the backend's text, the voice's words; --verify checks the
+# project's actual state afterwards with an itx script body
+doppler run --config prd -- pnpm cli voicelab ask --project <slug> --setup \
+  --requests '["Create a markdown file called hello dot md in the notes folder of my config repo, containing hello world, and commit it."]' \
+  --verify 'return await itx.repo.readFile({ path: "notes/hello.md" })'
 
 # a real conversation from this Mac: hold SPACE to talk (or --open-mic)
 doppler run --config prd -- pnpm cli voicelab talk --project <slug>

@@ -5,10 +5,10 @@
 //   doppler run --config prd -- pnpm cli voicelab duplex --project templestein \
 //     --stream-path /agents/voice/duplex-1 --setup --backend-model gpt-6-astra
 //
-// The driver is the dumbest possible client: it appends microphone frames at
-// realtime pace for the whole run (silence when it has nothing to say) and
-// reads the speaker frames and the mirrored provider events back. Everything below is
-// read off the wire rather than assumed:
+// The driver (wire-call.ts) is the dumbest possible client: it appends
+// microphone frames at realtime pace for the whole run (silence when it has
+// nothing to say) and reads the speaker frames and the mirrored provider
+// events back. Everything below is read off the wire rather than assumed:
 //
 //   1. SESSION — the facet dialled GPT-Live and the session started: the
 //      durable `session-configured` names the provider and the delegation
@@ -34,15 +34,9 @@ import path from "node:path";
 import process from "node:process";
 
 import { type VoicelabConnectOptions } from "./connect.ts";
-import {
-  deliveredMsOf,
-  FRAME_BYTES,
-  FRAME_MS,
-  openStream,
-  sleep,
-  synthesizeFrames,
-} from "./probe-audio.ts";
+import { sleep, synthesizeFrames } from "./probe-audio.ts";
 import { talk } from "./talk.ts";
+import { openWireCall } from "./wire-call.ts";
 
 /** Options for `pnpm cli voicelab duplex`. */
 export interface DuplexOptions extends VoicelabConnectOptions {
@@ -62,13 +56,12 @@ export interface DuplexOptions extends VoicelabConnectOptions {
   delegationTimeoutMs?: number;
 }
 
-/** What an open microphone in a quiet room is: 20 ms of silence, forever. */
-const SILENCE_FRAME = Buffer.alloc(FRAME_BYTES).toString("base64");
-
 export async function duplex(options: DuplexOptions): Promise<void> {
   const streamPath =
     options.streamPath ??
-    `/agents/voice/duplex-${new Date().toISOString().replace(/\D/g, "").slice(2, 12)}`;
+    `/agents/voice/duplex-${new Date().toISOString().replace(/\D/g, "").slice(2, 14)}-${Math.random()
+      .toString(36)
+      .slice(2, 6)}`;
   const bargeAfterMs = options.bargeAfterMs ?? 4_000;
   const delegationTimeoutMs = options.delegationTimeoutMs ?? 150_000;
 
@@ -108,119 +101,8 @@ export async function duplex(options: DuplexOptions): Promise<void> {
   );
   rmSync(dir, { recursive: true, force: true });
 
-  const stream = await openStream({ ...options, streamPath });
-  const startedAtMs = Date.now();
-  const clock = () => Date.now() - startedAtMs;
-
-  /* Everything asserted below is collected from the wire by this listener. */
-  let answersEnded = 0;
-  let answerDeliveredMs = 0;
-  let lastAudioFrameAtMs: number | null = null;
-  let clearsSeen = 0;
-  let spkFramesInQuietWindow = 0;
-  let quietWindowOpen = false;
-  let delegationCreatedAtMs: number | null = null;
-  let delegationTarget: string | null = null;
-  let backendFunctionCalls = 0;
-  /** What the backend asked for and what the facet answered, off the mirror. */
-  const backendCalls: string[] = [];
-  let outputTranscript = "";
-  let inputTranscript = "";
-  let bargeSpokenAtMs: number | null = null;
-  let firstAudioAfterDelegationAtMs: number | null = null;
-  const connection = await stream.openConnection({
-    connectionKey: `duplex-${Date.now()}`,
-    eventTypes: [
-      "events.iterate.com/voice-agent/spk-frame",
-      "events.iterate.com/voice-agent/grok-event",
-    ],
-    processEventBatch: (batch: { events?: { type: string; payload?: unknown }[] }) => {
-      for (const event of batch.events ?? []) {
-        /* Stream payloads arrive as untyped JSON; the assertion only names
-         * the record shape, and every field read below is checked by type. */
-        const payload = (event.payload ?? {}) as Record<string, unknown>;
-        if (event.type === "events.iterate.com/voice-agent/spk-frame") {
-          const pcm = typeof payload.pcm === "string" ? payload.pcm : "";
-          if (quietWindowOpen) spkFramesInQuietWindow += 1;
-          if (payload.clearSpeakerBufferBeforeFrame === true && pcm === "") clearsSeen += 1;
-          if (payload.lastFrameOfAnswer === true) answersEnded += 1;
-          if (pcm !== "") {
-            answerDeliveredMs += deliveredMsOf(pcm);
-            lastAudioFrameAtMs = clock();
-            if (delegationCreatedAtMs !== null && firstAudioAfterDelegationAtMs === null) {
-              firstAudioAfterDelegationAtMs = clock();
-            }
-          }
-          continue;
-        }
-        const type = String(payload.type ?? "");
-        if (type === "session.delegation.created") {
-          delegationCreatedAtMs = clock();
-          /* The provider's delegation object, per its schema; an absent or
-           * differently shaped one reads as an empty target. */
-          delegationTarget = String((payload.delegation as { target?: string })?.target ?? "");
-        }
-        if (type === "response.event") {
-          /* The nested Responses event, per the provider's schema; the
-           * optional fields are all this instrument reads, each guarded. */
-          const inner = (payload.event ?? {}) as {
-            type?: string;
-            item?: { type?: string; name?: string; arguments?: string };
-          };
-          if (inner.type === "response.output_item.done" && inner.item?.type === "function_call") {
-            backendFunctionCalls += 1;
-            backendCalls.push(
-              `→ ${String(inner.item.name)}(${String(inner.item.arguments ?? "").slice(0, 200)})`,
-            );
-          }
-        }
-        if (type === "client.response.item.create") {
-          backendCalls.push(`← ${String(payload.itemSummary ?? "").slice(0, 300)}`);
-        }
-        if (type === "session.output_transcript.delta") {
-          outputTranscript += String(payload.delta ?? "");
-        }
-        if (type === "session.input_transcript.delta")
-          inputTranscript += String(payload.delta ?? "");
-      }
-    },
-  });
-
-  /*
-   * THE MICROPHONE NEVER STOPS. One realtime-paced loop feeds a queue of
-   * utterance frames, padding with silence when the queue is empty.
-   */
-  let pending: string[] = [];
-  let micFramesSent = 0;
-  let stopMic = false;
-  const speak = (frames: string[]) => {
-    pending = pending.concat(frames);
-  };
-  const micLoop = (async () => {
-    const startedAt = Date.now();
-    let sequence = 0;
-    while (!stopMic) {
-      const due = startedAt + (sequence + 25) * FRAME_MS;
-      const wait = due - Date.now();
-      if (wait > 0) await sleep(wait);
-      const events = [];
-      for (let index = 0; index < 25; index++) {
-        events.push({
-          type: "events.iterate.com/voice-agent/mic-frame" as const,
-          ephemeral: true as const,
-          payload: { deviceMicFrameSeq: sequence, pcm: pending.shift() ?? SILENCE_FRAME },
-        });
-        sequence += 1;
-      }
-      micFramesSent += 25;
-      void stream.append(...events).catch(() => undefined);
-    }
-  })();
-  const waitFor = async (predicate: () => boolean, timeoutMs: number) => {
-    const until = Date.now() + timeoutMs;
-    while (!predicate() && Date.now() < until) await sleep(100);
-    return predicate();
-  };
+  const call = await openWireCall({ ...options, streamPath });
+  const { watch } = call;
 
   const verdict: Record<string, boolean | null> = {};
   const fail = (message: string) => {
@@ -231,101 +113,108 @@ export async function duplex(options: DuplexOptions): Promise<void> {
   /* 1. SESSION: the first frames mint the call and dial. */
   console.log(`  open mic running on ${streamPath}; waiting for the session…`);
   await sleep(1_500);
-  const accepted = await waitFor(
-    () => micFramesSent > 0 && sessionAccepted(stream, startedAtMs),
+  const started = await call.waitFor(
+    () => call.micFramesSent() > 0 && watch.providerEventCounts["session.started"] !== undefined,
     30_000,
   );
-  verdict.session = accepted;
-  if (!accepted) fail("the call never became live (no conversation-accepted)");
+  if (!started) fail("the call never became live (no session.started on the mirror)");
 
   /* 3/4/5. The counting answer, a quiet window is impossible mid-count, so
    * measure the idle downlink before speaking: the session is up and the
    * voice has nothing to say. */
-  quietWindowOpen = true;
+  const spkFramesBeforeQuiet = watch.spkFrames;
   await sleep(3_000);
-  quietWindowOpen = false;
+  const spkFramesInQuietWindow = watch.spkFrames - spkFramesBeforeQuiet;
   verdict.idleDownlink = spkFramesInQuietWindow === 0;
   if (!verdict.idleDownlink)
     fail(`${String(spkFramesInQuietWindow)} speaker frames arrived while the voice was idle`);
 
   console.log(`  speaking the count request (${String(request.length)} frames)…`);
-  speak(request);
-  const counting = await waitFor(() => answerDeliveredMs >= bargeAfterMs, 60_000);
-  if (!counting) fail(`only ${String(Math.round(answerDeliveredMs))}ms of answer arrived in 60s`);
-  const answersBeforeBarge = answersEnded;
-  const clearsBeforeBarge = clearsSeen;
+  void call.speak(request);
+  const counting = await call.waitFor(() => watch.answerDeliveredMs >= bargeAfterMs, 60_000);
+  if (!counting)
+    fail(`only ${String(Math.round(watch.answerDeliveredMs))}ms of answer arrived in 60s`);
+  const answersBeforeBarge = watch.answersEnded;
+  const clearsBeforeBarge = watch.clearsSeen;
 
   console.log(
-    `  answer playing (${String(Math.round(answerDeliveredMs))}ms delivered); talking over it…`,
+    `  answer playing (${String(Math.round(watch.answerDeliveredMs))}ms delivered); talking over it…`,
   );
-  bargeSpokenAtMs = clock();
-  speak(interjection);
+  const bargeSpokenAtMs = call.clock();
+  void call.speak(interjection);
   /* The voice should go quiet: no audio frame for 700 ms after the barge began. */
-  const stopped = await waitFor(
-    () =>
-      lastAudioFrameAtMs !== null &&
-      clock() - lastAudioFrameAtMs > 700 &&
-      clock() > bargeSpokenAtMs! + 700,
+  const stopped = await call.waitFor(
+    () => call.quietFor(700) && call.clock() > bargeSpokenAtMs + 700,
     20_000,
   );
   const stoppedAfterBargeMs =
-    stopped && lastAudioFrameAtMs !== null
-      ? Math.max(0, lastAudioFrameAtMs - bargeSpokenAtMs)
+    stopped && watch.lastAudioFrameAtMs !== null
+      ? Math.max(0, watch.lastAudioFrameAtMs - bargeSpokenAtMs)
       : null;
-  const replied = await waitFor(() => answersEnded >= answersBeforeBarge + 2, 30_000);
-  verdict.answers = answersEnded >= 2;
+  const replied = await call.waitFor(() => watch.answersEnded >= answersBeforeBarge + 2, 30_000);
+  verdict.answers = watch.answersEnded >= 2;
   verdict.barge = stoppedAfterBargeMs !== null && stoppedAfterBargeMs < 2_500 && replied;
   if (!verdict.barge) {
     fail(
-      `barge: voice stopped ${String(stoppedAfterBargeMs)}ms after the interruption; answers ended ${String(answersEnded)} (wanted ≥ ${String(answersBeforeBarge + 2)})`,
+      `barge: voice stopped ${String(stoppedAfterBargeMs)}ms after the interruption; answers ended ${String(watch.answersEnded)} (wanted ≥ ${String(answersBeforeBarge + 2)})`,
     );
   }
   /* No clear is NEEDED on GPT-Live — the model yields itself — so a clear
    * here would only come from a button, which this driver has none of. */
-  verdict.noClearNeeded = clearsSeen === clearsBeforeBarge;
+  verdict.noClearNeeded = watch.clearsSeen === clearsBeforeBarge;
 
   /* 7. DELEGATION. */
+  let firstSpeechAfterDelegationMs: number | null = null;
   if (options.skipDelegation !== true) {
-    await waitFor(
-      () => lastAudioFrameAtMs !== null && clock() - lastAudioFrameAtMs > 1_500,
-      15_000,
-    );
+    await call.waitFor(() => call.quietFor(1_500), 15_000);
     console.log(`  asking something that needs the backend…`);
-    const answersBefore = answersEnded;
-    speak(delegation);
-    const delegated = await waitFor(() => delegationCreatedAtMs !== null, 30_000);
-    if (!delegated) fail("no session.delegation.created within 30s of the request");
-    else
-      console.log(
-        `  delegation created (target ${String(delegationTarget)}); waiting for the backend…`,
+    const answersBefore = watch.answersEnded;
+    const delegationsBefore = watch.delegations.length;
+    void call.speak(delegation);
+    const delegated = await call.waitFor(
+      () => watch.delegations.length > delegationsBefore,
+      30_000,
+    );
+    const raised = watch.delegations[delegationsBefore];
+    if (!delegated || raised === undefined) {
+      fail("no session.delegation.created within 30s of the request");
+    } else {
+      console.log(`  delegation created (target ${raised.target}); waiting for the backend…`);
+      /* First speech after the delegation, to the 100 ms poll. */
+      await call.waitFor(
+        () => watch.lastAudioFrameAtMs !== null && watch.lastAudioFrameAtMs > raised.createdAtMs,
+        30_000,
       );
-    const answeredByBackend = await waitFor(
+      if (watch.lastAudioFrameAtMs !== null && watch.lastAudioFrameAtMs > raised.createdAtMs) {
+        firstSpeechAfterDelegationMs = watch.lastAudioFrameAtMs - raised.createdAtMs;
+      }
+    }
+    const answeredByBackend = await call.waitFor(
       () =>
-        delegationCreatedAtMs !== null &&
-        backendFunctionCalls > 0 &&
-        answersEnded > answersBefore + 1,
+        raised !== undefined &&
+        raised.functionCalls > 0 &&
+        raised.finalTextDoneAtMs !== null &&
+        watch.answersEnded > answersBefore + 1,
       delegationTimeoutMs,
     );
     verdict.delegation = delegated && answeredByBackend;
     if (!answeredByBackend) {
       fail(
-        `the backend's reply never reached the voice (function calls ${String(backendFunctionCalls)}, answers ended ${String(answersEnded)})`,
+        `the backend's reply never reached the voice (function calls ${String(watch.backendFunctionCalls)}, answers ended ${String(watch.answersEnded)})`,
       );
     }
-    await waitFor(
-      () => lastAudioFrameAtMs !== null && clock() - lastAudioFrameAtMs > 1_500,
-      30_000,
-    );
+    await call.waitFor(() => call.quietFor(1_500), 30_000);
   }
 
-  stopMic = true;
-  await micLoop;
-  connection.close();
+  await call.stop();
   /* Let the durable transcript appends land. */
   await sleep(2_500);
 
-  /* 6. TRANSCRIPT: durable, readable after the fact. */
-  const durable = await readVoiceEvents(stream, startedAtMs);
+  /* 1 + 6. SESSION and TRANSCRIPT: durable, readable after the fact. */
+  const durable = await call.durableEvents();
+  const accepted = durable.some((e) => e.type.endsWith("/conversation-accepted"));
+  verdict.session = started && accepted;
+  if (!accepted) fail("the call never became live (no conversation-accepted on the stream)");
   const utterances = durable.filter((e) => e.type.endsWith("/utterance-transcript"));
   const answers = durable.filter((e) => e.type.endsWith("/answer-transcript"));
   const notes = durable.filter((e) => e.type.endsWith("/backend-reply"));
@@ -335,29 +224,30 @@ export async function duplex(options: DuplexOptions): Promise<void> {
       `transcript: ${String(utterances.length)} utterances, ${String(answers.length)} answers on the stream`,
     );
   }
-  verdict.duplex = micFramesSent > 0;
+  verdict.duplex = call.micFramesSent() > 0;
 
+  const raised = watch.delegations[0];
   console.log(`\n  FULL DUPLEX THROUGH THE PLATFORM (GPT-Live)`);
   console.log(
-    `    mic frames sent           ${String(micFramesSent)} (continuous, zero ptt verbs)`,
+    `    mic frames sent           ${String(call.micFramesSent())} (continuous, zero ptt verbs)`,
   );
   console.log(
     `    idle speaker frames       ${String(spkFramesInQuietWindow)} in a 3 s quiet window`,
   );
-  console.log(`    answers ended (markers)   ${String(answersEnded)}`);
-  console.log(`    answer audio delivered    ${String(Math.round(answerDeliveredMs))}ms`);
+  console.log(`    answers ended (markers)   ${String(watch.answersEnded)}`);
+  console.log(`    answer audio delivered    ${String(Math.round(watch.answerDeliveredMs))}ms`);
   console.log(`    voice stopped after barge ${String(stoppedAfterBargeMs)}ms`);
-  console.log(`    clears                    ${String(clearsSeen)}`);
+  console.log(`    clears                    ${String(watch.clearsSeen)}`);
   console.log(
-    `    delegation                ${delegationCreatedAtMs === null ? "none" : `${String(delegationTarget)}, first speech ${String(firstAudioAfterDelegationAtMs === null ? "?" : firstAudioAfterDelegationAtMs - delegationCreatedAtMs)}ms after it`}`,
+    `    delegation                ${raised === undefined ? "none" : `${raised.target}, first speech ${String(firstSpeechAfterDelegationMs ?? "?")}ms after it`}`,
   );
-  console.log(`    backend function calls    ${String(backendFunctionCalls)}`);
+  console.log(`    backend function calls    ${String(watch.backendFunctionCalls)}`);
   console.log(
     `    durable transcript        ${String(utterances.length)} utterances, ${String(answers.length)} answers, ${String(notes.length)} backend notes`,
   );
-  for (const line of backendCalls) console.log(`  backend call ${line}`);
-  console.log(`\n  heard:  ${inputTranscript.trim().slice(0, 400)}`);
-  console.log(`  said:   ${outputTranscript.trim().slice(0, 600)}`);
+  for (const line of watch.backendCalls) console.log(`  backend call ${line}`);
+  console.log(`\n  heard:  ${watch.inputTranscript.trim().slice(0, 400)}`);
+  console.log(`  said:   ${watch.outputTranscript.trim().slice(0, 600)}`);
   for (const note of notes) {
     /* backend-reply's payload is `{ text }` by the agent's contract. */
     console.log(
@@ -372,42 +262,4 @@ export async function duplex(options: DuplexOptions): Promise<void> {
   } else {
     process.exitCode = 1;
   }
-}
-
-let cachedAccepted = false;
-function sessionAccepted(stream: unknown, sinceMs: number): boolean {
-  if (cachedAccepted) return true;
-  void readVoiceEvents(stream, sinceMs).then((events) => {
-    if (events.some((event) => event.type.endsWith("/conversation-accepted")))
-      cachedAccepted = true;
-  });
-  return cachedAccepted;
-}
-
-/** The stream handle's read surface the verdict needs. */
-interface VoiceStreamReads {
-  getEvents(input: {
-    afterOffset: number;
-    eventTypes?: string[];
-    limit: number;
-  }): Promise<{ type: string; createdAt: string; payload?: unknown }[]>;
-}
-
-async function readVoiceEvents(stream: unknown, sinceMs: number) {
-  /* The stream handle is typed to the append surface the probes share
-   * (probe-audio.ts); its read surface is asserted here to exactly the one
-   * call made — a wrong assertion fails loudly at the RPC boundary. */
-  const readable = stream as unknown as VoiceStreamReads;
-  const events = await readable.getEvents({
-    afterOffset: 0,
-    eventTypes: [
-      "events.iterate.com/voice-agent/conversation-accepted",
-      "events.iterate.com/voice-agent/session-configured",
-      "events.iterate.com/voice-agent/utterance-transcript",
-      "events.iterate.com/voice-agent/answer-transcript",
-      "events.iterate.com/voice-agent/backend-reply",
-    ],
-    limit: 500,
-  });
-  return (events ?? []).filter((event) => Date.parse(event.createdAt) >= sinceMs - 5_000);
 }

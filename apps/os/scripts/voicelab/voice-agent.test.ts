@@ -158,6 +158,15 @@ class FakeLive {
     });
   }
 
+  /** The voice handed the conversation so far to the backend. */
+  delegationCreated(id = "item_b", offsetMs = 0): void {
+    this.push({
+      type: "session.delegation.created",
+      offset_ms: offsetMs,
+      delegation: { id, target: "responses" },
+    });
+  }
+
   /** The backend's final words. */
   backendMessage(itemId: string, text: string): void {
     this.push({
@@ -347,6 +356,27 @@ describe("opening a call", () => {
     await h.append(micFrame(1), micFrame(2), micFrame(3));
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(1);
+  });
+
+  it("drops an empty mic frame instead of forwarding it (the provider rejects empty audio)", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { providerBaseUrl: SEAM, instructions: "You are Iterate on a small speaker." },
+    });
+    const empty = { ...micFrame(1), payload: { ...micFrame(1).payload, pcm: "" } };
+    await h.append(empty);
+    await h.settle();
+    /* An empty frame opens no call, either. */
+    expect(eventsOfType(h, "call-started")).toHaveLength(0);
+    await h.append(micFrame(2), empty, micFrame(3));
+    h.provider.start();
+    await h.settle();
+    const appends = h.provider.sentOfType("session.input_audio.append");
+    expect(appends.map((append) => append.audio)).toEqual([
+      micFrame(2).payload.pcm,
+      micFrame(3).payload.pcm,
+    ]);
   });
 
   it("starts the session the moment the socket is adopted, and holds capture until it is started", async () => {
@@ -833,6 +863,73 @@ describe("the backend", () => {
      * continue the response on its own. */
     const order = h.provider.sent.map((message) => message.type);
     expect(order.indexOf("response.item.create")).toBeLessThan(order.indexOf("response.create"));
+  });
+
+  it("tells the voice what the backend did, one progress note per completed step", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    h.provider.backendFunctionCall(
+      "call_1",
+      "exec_typescript",
+      JSON.stringify({ code: "async (itx) => itx.repo.listFiles()" }),
+    );
+    await h.settle();
+    h.provider.backendFunctionCall("call_2", "exec_typescript", '{"code":"async (itx) => 2"}');
+    await h.settle();
+    const notes = h.provider.sentOfType("session.thinking.append");
+    expect(notes).toHaveLength(2);
+    /* General context, not the delegation's own: the Responses delegation
+     * refuses its id here (measured 2026-09-10). */
+    expect(notes[0]!.delegation_id).toBeNull();
+    expect(String(notes[0]!.content)).toContain("step 1: ran exec_typescript");
+    expect(String(notes[0]!.content)).toContain(JSON.stringify({ files: 3 }));
+    expect(String(notes[1]!.content)).toContain("step 2");
+    /* The note lands before the result that continues the response. */
+    const order = h.provider.sent.map((message) => message.type);
+    expect(order.indexOf("session.thinking.append")).toBeLessThan(
+      order.indexOf("response.item.create"),
+    );
+  });
+
+  it("holds a delegation's tool result while the person is still talking, then hands the backend the rest of the request", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    /* The voice delegates at the first pause, mid-request. */
+    h.provider.userSays(" Open a workspace called scratch.", 1_000, 2_400);
+    h.provider.delegationCreated();
+    h.provider.backendFunctionCall("call_1", "exec_typescript", '{"code":"async (itx) => 1"}');
+    await h.settle();
+    /* The script has run, but the person is mid-sentence: no result yet. */
+    expect(h.scripts).toEqual(["async (itx) => 1"]);
+    expect(h.provider.sentOfType("response.item.create")).toHaveLength(0);
+    h.provider.userSays(" In it, write a file called", 2_600, 3_600);
+    await h.advanceTime(1_000);
+    await h.settle();
+    expect(h.provider.sentOfType("response.item.create")).toHaveLength(0);
+    h.provider.userSays(" note dot md.", 3_600, 4_200);
+    await h.advanceTime(2_000);
+    await h.settle();
+    /* The rest of the request, then the result, then the continuation. */
+    const items = h.provider.sentOfType("response.item.create");
+    expect(items.map((message) => (message.item as { type: string }).type)).toEqual([
+      "message",
+      "function_call_output",
+    ]);
+    expect(JSON.stringify(items[0]!.item)).toContain(
+      'said more since this delegation was raised: \\"In it, write a file called note dot md.\\"',
+    );
+    const order = h.provider.sent.map((message) => message.type);
+    expect(order.lastIndexOf("response.item.create")).toBeLessThan(
+      order.lastIndexOf("response.create"),
+    );
+    /* Nothing new to hand over on the next call, and no hold for a person
+     * who has finished: straight through. */
+    h.provider.backendFunctionCall("call_2", "exec_typescript", '{"code":"async (itx) => 2"}');
+    await h.settle();
+    expect(h.provider.sentOfType("response.item.create")).toHaveLength(3);
+    expect((h.provider.sentOfType("response.item.create")[2]!.item as { type: string }).type).toBe(
+      "function_call_output",
+    );
   });
 
   it("a failing script answers the backend with the error, and an unknown function too", async () => {

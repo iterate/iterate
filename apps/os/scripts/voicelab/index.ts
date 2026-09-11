@@ -12,6 +12,7 @@ export { talk } from "./talk.ts";
 export { tap } from "./tap.ts";
 export { liveProbe } from "./live-probe.ts";
 export { duplex } from "./duplex.ts";
+export { ask } from "./ask.ts";
 export { timeline } from "./timeline.ts";
 export { transcript } from "./transcript.ts";
 export { utterances } from "./utterances.ts";

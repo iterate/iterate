@@ -218,6 +218,21 @@ const TURN_GAP_MS = 1_200;
 export const IDLE_TIMEOUT_MS = 60_000;
 
 /**
+ * A person whose last transcript fragment is younger than this is still
+ * talking. GPT-Live raises a delegation at the first pause, mid-request, and
+ * the backend then works from the first clause alone (measured 2026-09-11:
+ * "Open a workspace called scratch." created the workspace and asked what
+ * file; "Create an agent at" made up a path and asked what it should do).
+ * The facet hears the whole request, so a delegation's tool result is HELD
+ * while the person is still talking and the rest of what they said goes to
+ * the backend with it. Input transcription lags real time by ~250 ms and
+ * arrives in fragments; a gap this long is a finished sentence.
+ */
+export const USER_STILL_TALKING_MS = 1_500;
+/** The longest a tool result waits for the person to finish. */
+export const FORWARD_HOLD_MAX_MS = 15_000;
+
+/**
  * The idle stamp advances in steps of this, not per frame. Folding every mic
  * frame's commit stamp made EVERY delivery batch dirty the reduced state; the
  * deadline is sixty seconds, so knowing the device's last input to five is
@@ -348,11 +363,16 @@ const LIVE_DELEGATION_POLICY = [
   "Do not delegate to the backend when:",
   "- You can answer from the conversation or a result you already have.",
   "- You need a brief clarification first.",
+  "Let the person finish: a pause after a comma or an unfinished sentence is not the end of",
+  "the request, and a request delegated half-heard comes back as a clarifying question.",
+  "Every request to create, change, run or check something is its own delegation, however",
+  "small, and however similar to work already done.",
   "Delegate before giving an answer that depends on backend work. Do not guess the result",
-  "while waiting: say you've handed it over and keep the conversation going. Relay backend",
-  "results faithfully, read one out in full when the person wants the details, and correct",
-  "yourself plainly if one contradicts something you said. If the backend reports a",
-  "failure, SAY SO — never invent an explanation for a delay or a result you have not seen.",
+  "while waiting: say you've handed it over and keep the conversation going. Say a thing is",
+  "done only when the backend has reported it done for THAT request. Relay backend results",
+  "faithfully, read one out in full when the person wants the details, and correct yourself",
+  "plainly if one contradicts something you said. If the backend reports a failure, SAY SO",
+  "— never invent an explanation for a delay or a result you have not seen.",
 ].join("\n");
 
 /**
@@ -365,7 +385,13 @@ const BACKEND_BRIEF = [
   "## Voice conversation context",
   "You are the backend of ONE assistant on a live voice call with a person who knows it",
   "well; the frontend voice speaks your result. Transcripts can contain mistakes and later",
-  "corrections; use the latest context. If a needed detail is unclear, say what you need.",
+  "corrections; use the latest context. Names, paths and identifiers arrive as SPOKEN words",
+  '("hello dot md inside the notes folder", "slash agents slash helper", "com dot example',
+  'slash report requested"): resolve them to the obvious literal form (notes/hello.md,',
+  "/agents/helper, com.example/report-requested) and proceed. Ask for clarification only",
+  "when two readings would lead to materially different actions. The transcript can end",
+  "mid-request when the person is still talking: do whatever is unambiguous already, and",
+  "for the rest say plainly what you still need — the voice sends it on.",
   "",
   "## Task instructions",
   "exec_typescript runs one TypeScript async arrow function, `async (itx) => { ... }`,",
@@ -380,8 +406,10 @@ const BACKEND_BRIEF = [
   "directly.",
   "",
   "## Return the result",
-  "Two or three plain spoken sentences: the facts, whether it is done, and what comes next.",
-  "No lists, no code, no URLs. Never claim an action succeeded unless a tool proved it.",
+  "Plain spoken sentences: the facts, whether it is done, and what comes next. Two or three",
+  "sentences by default; when the person asked for details or a full readout, give all of it",
+  "as prose the voice can read aloud. No bullet lists, no code, no URLs. Never claim an",
+  "action succeeded unless a tool proved it.",
 ].join("\n");
 
 const EXEC_TYPESCRIPT_FUNCTION = {
@@ -932,6 +960,15 @@ interface Dial {
    * abandoned call while the backend is mid-script.
    */
   openBackendCalls: number;
+  /** Backend function calls completed on this dial, for the progress notes. */
+  backendSteps: number;
+  /** Every user transcript fragment of this dial, in order. */
+  userTranscript: string;
+  /** Facet clock at the last user transcript fragment. */
+  lastUserFragmentAtFacetMs: number | null;
+  /** How much of `userTranscript` the backend has been given — carried by
+   * the delegation itself at creation, forwarded with tool results after. */
+  forwardedUserChars: number;
   /**
    * The furthest point on the provider's SESSION TIMELINE seen so far —
    * transcript `end_ms`, delegation `offset_ms`, and the running total of
@@ -965,6 +1002,10 @@ const freshDial = (conversationId: string): Dial => ({
   capabilityHostReady: false,
   answer: freshAnswer(),
   openBackendCalls: 0,
+  backendSteps: 0,
+  userTranscript: "",
+  lastUserFragmentAtFacetMs: null,
+  forwardedUserChars: 0,
   timelineMs: 0,
   turns: { user: null, assistant: null },
 });
@@ -1199,6 +1240,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * base64 string all the way to the wire. */
         const micB64 =
           event.type === "events.iterate.com/voice-agent/mic-frame" ? event.payload.pcm : null;
+        /* An empty frame is a client bug, not audio: the provider rejects
+         * "audio/pcm audio must not be empty" and it can open no call. */
+        if (micB64 === "") return;
         /* A buried call takes no further input. A NULL call passes — the
          * mint below is what handles the null. */
         if (state.call?.endRequested != null) return;
@@ -1683,6 +1727,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
       case "session.output_transcript.delta": {
         if (typeof live.delta !== "string") return;
         const speaker = type === "session.input_transcript.delta" ? "user" : "assistant";
+        if (speaker === "user") {
+          dial.userTranscript += live.delta;
+          dial.lastUserFragmentAtFacetMs = receivedAtFacetMs;
+        }
         const startTimelineMs = typeof live.start_ms === "number" ? live.start_ms : dial.timelineMs;
         const endTimelineMs = typeof live.end_ms === "number" ? live.end_ms : startTimelineMs;
         dial.timelineMs = Math.max(dial.timelineMs, endTimelineMs);
@@ -1709,9 +1757,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
       }
 
       case "session.delegation.created":
-        /* The voice handed something to the backend; the provider runs it.
-         * In the mirror for instruments; nothing for this facet to do but
-         * note where the timeline is. */
+        /* The voice handed something to the backend; the provider runs it
+         * with the transcript so far. What the person says AFTER this goes
+         * with the tool results (see USER_STILL_TALKING_MS). */
+        dial.forwardedUserChars = dial.userTranscript.length;
         if (typeof live.offset_ms === "number") {
           dial.timelineMs = Math.max(dial.timelineMs, live.offset_ms);
         }
@@ -2169,6 +2218,70 @@ export class VoiceAgentProcessor extends StreamProcessor<
       /* The fence every provider-side completion wears: a re-dialed call is
        * a NEW session that never issued this call_id. */
       if (this.#dial !== dial) return;
+      /*
+       * THE REST OF THE REQUEST. Held while the person is still talking (no
+       * hold for a person who has finished), then whatever they said since
+       * the delegation was raised goes to the backend as a developer message
+       * ahead of this result — the Responses delegation accepts the item
+       * (measured 2026-09-11) and the backend acts on it instead of asking.
+       */
+      const heldFromFacetMs = this.deps.nowAtFacetMs();
+      while (
+        dial.lastUserFragmentAtFacetMs !== null &&
+        this.deps.nowAtFacetMs() - dial.lastUserFragmentAtFacetMs < USER_STILL_TALKING_MS &&
+        this.deps.nowAtFacetMs() - heldFromFacetMs < FORWARD_HOLD_MAX_MS
+      ) {
+        await this.deps.sleep(250);
+        if (this.#dial !== dial) return;
+      }
+      const saidSince = dial.userTranscript
+        .slice(dial.forwardedUserChars)
+        .replace(/\s+/g, " ")
+        .trim();
+      dial.forwardedUserChars = dial.userTranscript.length;
+      if (saidSince !== "") {
+        this.#sendControl(
+          dial,
+          {
+            type: "response.item.create",
+            event_id: `heard_${callId}`,
+            item: {
+              type: "message",
+              role: "developer",
+              content: [
+                {
+                  type: "input_text",
+                  text: `The person has said more since this delegation was raised: "${saidSince}"`,
+                },
+              ],
+            },
+          },
+          append,
+        );
+      }
+      /*
+       * THE VOICE HEARS THE BACKEND WORK, one line per step. The backend's
+       * response reaches the voice only when it completes; until then the
+       * voice knows nothing, and asked "how is it going?" it makes something
+       * up (measured 2026-09-11: "started scanning, no summaries yet" while
+       * the backend had run eight scripts). With these notes it answered
+       * with the actual steps. General context, not a delegation's own
+       * (the Responses delegation refuses its id here).
+       */
+      dial.backendSteps += 1;
+      this.#sendControl(
+        dial,
+        {
+          type: "session.thinking.append",
+          event_id: `progress_${callId}`,
+          delegation_id: null,
+          content:
+            `Backend progress, step ${String(dial.backendSteps)}: ran ${name}` +
+            `(${rawArguments.replace(/\s+/g, " ").slice(0, 160)}) → ` +
+            `${output.replace(/\s+/g, " ").slice(0, 240)}. Still working.`,
+        },
+        append,
+      );
       this.#sendControl(
         dial,
         {

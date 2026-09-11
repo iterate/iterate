@@ -31,7 +31,7 @@ import process from "node:process";
 import WebSocket from "ws";
 
 import { EXEC_TYPESCRIPT_DESCRIPTION } from "../../src/domains/inbound-mcp-server/exec-typescript-description.ts";
-import { connectProject } from "./connect.ts";
+import { connectProject, ensureProjectExists } from "./connect.ts";
 import { FRAME_BYTES, FRAME_MS, sleep, synthesizeFrames } from "./probe-audio.ts";
 
 /** Options for `pnpm cli voicelab live-probe`. */
@@ -58,6 +58,23 @@ export interface LiveProbeOptions {
   serviceTier?: string;
   /** Responses mode: give the backend an exec_typescript function run against --project. */
   exec?: boolean;
+  /** Hold every function result this long before returning it — parks the
+   * backend's response so a second request can be made while it waits. */
+  execDelayMs?: number;
+  /** Speak --say2 this long after the FIRST delegation is created (a second
+   * request while the backend is still working). */
+  say2AfterDelegationMs?: number;
+  /** Responses mode: after every function call, append a one-line progress
+   * note to the voice's context (`session.thinking.append`, no delegation
+   * id) — does the voice then know what the backend has done so far? */
+  progressThinking?: boolean;
+  /** Responses mode: let the backend CHANGE the project (the default brief
+   * keeps it read-only, for measurement runs against a real project). */
+  allowWrites?: boolean;
+  /** Responses mode: before each function result, hand the backend whatever
+   * the person said AFTER the delegation was raised, as a developer message
+   * item — does the delegation accept it, and does the backend act on it? */
+  forwardTranscript?: boolean;
   /** Project slug or id for --exec (APP_CONFIG_* from the Doppler config). */
   project?: string;
   /** OS base URL for --exec. */
@@ -134,6 +151,21 @@ interface DelegationRecord {
   backendText: string;
   functionCalls: { name: string; arguments: string; outputPreview: string; tookMs: number }[];
   completedAtMs: number | null;
+  /** Responses mode: when the backend's FINAL text started streaming to us. */
+  firstTextDeltaAtMs: number | null;
+  /** Responses mode: the FIRST nested completion (a function round ends here too). */
+  firstCompletedAtMs: number | null;
+  /** Responses mode: the backend's final `message` item is complete. THE end
+   * of a delegation's work; every earlier completion was a function round. */
+  finalTextDoneAtMs: number | null;
+  /** Nested lifecycle, in arrival order, for reading overlap off the wire. */
+  lifecycle: string[];
+  /** --forward-transcript: user fragments already handed to the backend. */
+  forwardedUserFragments: number;
+  forwardedTexts: string[];
+  /** First speaking delta and first assistant transcript after this delegation. */
+  firstSpeechAfterMs: number | null;
+  firstTranscriptAfterMs: number | null;
 }
 
 export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
@@ -183,6 +215,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
   let unmutedAckAtMs: number | null = null;
   let transcriptWhileMuted = 0;
   let bargeSpokenAtMs: number | null = null;
+  let secondRequestSpoken = false;
   let outputAfterBargeMs: number | null = null;
   let outputStoppedAfterBargeMs: number | null = null;
   /** Responses mode: function calls collected per backend response id. */
@@ -213,7 +246,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
             type: "responses",
             responses: {
               model: options.backendModel ?? "gpt-6-astra",
-              instructions: backendInstructions(exec !== null),
+              instructions: backendInstructions(exec !== null, options.allowWrites === true),
               ...(options.reasoningEffort && { reasoning: { effort: options.reasoningEffort } }),
               service_tier: options.serviceTier ?? "priority",
               tools: exec === null ? [] : [EXEC_TYPESCRIPT_TOOL],
@@ -271,6 +304,11 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
       return;
     }
     lastSpeechAtMs = now;
+    for (const record of delegations.values()) {
+      if (record.firstSpeechAfterMs === null && now > record.createdAtMs) {
+        record.firstSpeechAfterMs = now - record.createdAtMs;
+      }
+    }
     const audioMs = bytes / ((rate * 2) / 1000);
     const current = answers.at(-1);
     if (current !== undefined && now - current.lastAudioAtMs < ANSWER_GAP_MS) {
@@ -371,8 +409,28 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
           backendText: "",
           functionCalls: [],
           completedAtMs: null,
+          firstTextDeltaAtMs: null,
+          firstCompletedAtMs: null,
+          finalTextDoneAtMs: null,
+          lifecycle: [],
+          forwardedUserFragments: fragments.filter((f) => f.speaker === "user").length,
+          forwardedTexts: [],
+          firstSpeechAfterMs: null,
+          firstTranscriptAfterMs: null,
         };
         delegations.set(info.id, record);
+        if (
+          options.say2AfterDelegationMs !== undefined &&
+          utterance2 !== null &&
+          !secondRequestSpoken
+        ) {
+          secondRequestSpoken = true;
+          void (async () => {
+            await sleep(options.say2AfterDelegationMs!);
+            if (socket.readyState !== WebSocket.OPEN) return;
+            await speak(utterance2, "the SECOND request, while the backend works");
+          })();
+        }
         log(
           `← session.delegation.created ${info.id} target=${info.target} offset=${String(record.offsetMs)}ms` +
             (record.afterUtteranceEndMs === null
@@ -393,8 +451,15 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
         const delegationId = typeof event.delegation_id === "string" ? event.delegation_id : null;
         const record = delegationId === null ? null : (delegations.get(delegationId) ?? null);
         if (innerType === "response.output_text.delta" && record !== null) {
+          if (record.firstTextDeltaAtMs === null) {
+            record.firstTextDeltaAtMs = clock();
+            log(`← backend text starts streaming (${delegationId})`);
+          }
           record.backendText += String(inner.delta ?? "");
           return;
+        }
+        if (record !== null && !innerType.endsWith(".delta")) {
+          record.lifecycle.push(`${String(clock())}ms ${innerType}`);
         }
         if (innerType === "response.output_item.done") {
           /* Same: a record whose fields are checked before use. */
@@ -410,9 +475,18 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
             void runFunctionCall(callId, name, args, record);
             return;
           }
+          if (item.type === "message" && record !== null) {
+            record.finalTextDoneAtMs = clock();
+            log(`← backend final text complete (${delegationId})`);
+          }
         }
         if (innerType === "response.completed" || innerType === "response.done") {
-          if (record !== null) record.completedAtMs = clock();
+          /* Every function round ends in a completed; the LAST one is the
+           * backend's final text, so this is overwritten each time. */
+          if (record !== null) {
+            record.completedAtMs = clock();
+            record.firstCompletedAtMs ??= record.completedAtMs;
+          }
         }
         if (innerType.endsWith(".delta")) return;
         log(`← response.event ${innerType}${delegationId ? ` (${delegationId})` : ""}`);
@@ -494,6 +568,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
   ) {
     const startedAt = clock();
     let output: string;
+    if (options.execDelayMs !== undefined) await sleep(options.execDelayMs);
     if (name === EXEC_TYPESCRIPT_TOOL.name && exec !== null) {
       let code = "";
       try {
@@ -518,12 +593,51 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
       tookMs,
     });
     pendingCalls.delete(callId);
+    if (options.forwardTranscript === true && record !== null) {
+      const userFragments = fragments.filter((f) => f.speaker === "user");
+      const unsent = userFragments.slice(record.forwardedUserFragments);
+      record.forwardedUserFragments = userFragments.length;
+      const text = unsent
+        .map((f) => f.text)
+        .join("")
+        .trim();
+      if (text !== "") {
+        record.forwardedTexts.push(text);
+        send({
+          type: "response.item.create",
+          event_id: `forward_${callId}`,
+          item: {
+            type: "message",
+            role: "developer",
+            content: [
+              {
+                type: "input_text",
+                text: `The person has said more since this delegation was raised: "${text}"`,
+              },
+            ],
+          },
+        });
+        log(`→ forwarded to the backend: "${text.slice(0, 200)}"`);
+      }
+    }
     send({
       type: "response.item.create",
       event_id: `result_${callId}`,
       item: { type: "function_call_output", call_id: callId, output },
     });
     send({ type: "response.create", event_id: `continue_${callId}` });
+    if (options.progressThinking === true) {
+      const step = record?.functionCalls.length ?? 0;
+      send({
+        type: "session.thinking.append",
+        event_id: `progress_${callId}`,
+        delegation_id: null,
+        content:
+          `Backend progress, step ${String(step)}: ran ${name} → ` +
+          `${output.replace(/\s+/g, " ").slice(0, 220)}${output.length > 220 ? "…" : ""}. Still working.`,
+      });
+      log(`→ session.thinking.append (progress step ${String(step)})`);
+    }
   }
 
   /* -------------------------------------------------------------- the mic */
@@ -658,6 +772,10 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
       if (!(await waitFor(() => answers.length > before, 45_000))) {
         errors.push("no answer within 45s of utterance 2 after unmute");
       }
+    } else if (utterance2 !== null && options.say2AfterDelegationMs !== undefined) {
+      /* The second request is spoken from the delegation arm; just give the
+       * whole exchange time to play out. */
+      await waitFor(() => delegations.size >= 2, 60_000);
     } else if (utterance2 !== null) {
       await waitFor(() => answerSettled(), 60_000);
       const before = answers.length;
@@ -668,21 +786,19 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
     }
 
     /* Let delegated work and its spoken result land: every delegation done
-     * (client: commentary spoken; responses: backend completed AND the voice
-     * spoke after it), then quiet. */
+     * (client: commentary spoken; responses: the backend's FINAL text is
+     * complete — a function round's completion is not the end), no function
+     * call in flight, then quiet. Bounded by the run's deadline only, since a
+     * thorough backend can work for minutes. */
     await waitFor(
       () =>
         pendingCalls.size === 0 &&
         [...delegations.values()].every((d) =>
-          d.target === "client"
-            ? d.spokenAfterCommentaryMs !== null
-            : d.completedAtMs !== null &&
-              lastSpeechAtMs !== null &&
-              lastSpeechAtMs > d.completedAtMs,
+          d.target === "client" ? d.spokenAfterCommentaryMs !== null : d.finalTextDoneAtMs !== null,
         ),
-      90_000,
+      deadlineMs,
     );
-    await waitFor(() => answerSettled(), 60_000);
+    await waitFor(() => answerSettled(), 120_000);
   })();
 
   await Promise.race([scenario, sleep(deadlineMs)]);
@@ -739,6 +855,21 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
       backendText: d.backendText.slice(0, 600),
       functionCalls: d.functionCalls,
       completedAfterMs: d.completedAtMs === null ? null : d.completedAtMs - d.createdAtMs,
+      createdAtMs: d.createdAtMs,
+      finalTextStreamedAtMs: d.firstTextDeltaAtMs,
+      finalTextDoneAtMs: d.finalTextDoneAtMs,
+      finalCompletedAtMs: d.completedAtMs,
+      /* Did the voice start speaking BEFORE the backend finished? */
+      backendTextStartedAfterMs:
+        d.firstTextDeltaAtMs === null ? null : d.firstTextDeltaAtMs - d.createdAtMs,
+      firstSpeechAfterMs: d.firstSpeechAfterMs,
+      firstTranscriptAfterMs: d.firstTranscriptAfterMs,
+      spokeBeforeBackendCompleted:
+        d.firstSpeechAfterMs !== null && d.completedAtMs !== null
+          ? d.createdAtMs + d.firstSpeechAfterMs < d.completedAtMs
+          : null,
+      lifecycle: d.lifecycle,
+      forwardedTexts: d.forwardedTexts,
     })),
     mute:
       options.mute === true
@@ -782,16 +913,18 @@ const EXEC_TYPESCRIPT_TOOL = {
   strict: false,
 } as const;
 
-function backendInstructions(withExec: boolean): string {
+function backendInstructions(withExec: boolean, allowWrites: boolean): string {
   return [
     "## Voice conversation context",
     "You are the backend of a live voice assistant for an iterate project. Transcripts can contain",
     "mistakes and later corrections; use the latest context. If a needed detail is unclear, ask.",
     "",
     "## Task instructions",
-    withExec
-      ? "You have exec_typescript: run itx scripts against the project to read files, list things, and look things up. READ-ONLY for this session: never commit, write, delete, or send anything. Prefer one or two small scripts; return only the facts."
-      : "You have no tools in this session; answer from reasoning alone and say so when a lookup would be needed.",
+    !withExec
+      ? "You have no tools in this session; answer from reasoning alone and say so when a lookup would be needed."
+      : allowWrites
+        ? "You have exec_typescript: run itx scripts against the project to read it and to make the changes the person asks for (commit files, create things). Research with itx.docs.search before guessing a call shape. Prefer a few small scripts; return only the facts, and never claim an action succeeded unless a tool proved it."
+        : "You have exec_typescript: run itx scripts against the project to read files, list things, and look things up. READ-ONLY for this session: never commit, write, delete, or send anything. Prefer one or two small scripts; return only the facts.",
     "",
     "## Return the result",
     "Return two or three plain spoken sentences: the facts, whether the task is complete, and what comes",
@@ -814,6 +947,10 @@ const AsyncFunction = async function () {}.constructor as new (
  */
 async function execRunner(options: LiveProbeOptions): Promise<(code: string) => Promise<string>> {
   if (!options.project) throw new Error("--exec needs --project");
+  await ensureProjectExists({
+    project: options.project,
+    ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+  });
   const itx = await connectProject({
     project: options.project,
     ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
@@ -864,7 +1001,14 @@ function upsample16kTo24k(pcm16: Buffer): Buffer {
 
 /** Fragments into rows per speaker, split on a timeline gap — how the facet will do it. */
 function groupTurns(fragments: TranscriptFragment[]) {
-  const rows: { speaker: string; startMs: number; endMs: number; text: string }[] = [];
+  const rows: {
+    speaker: string;
+    startMs: number;
+    endMs: number;
+    text: string;
+    /** Probe clock when the row's first fragment arrived. */
+    arrivedAtMs: number;
+  }[] = [];
   for (const fragment of fragments) {
     const last = rows.at(-1);
     if (
@@ -880,6 +1024,7 @@ function groupTurns(fragments: TranscriptFragment[]) {
         startMs: fragment.startMs,
         endMs: fragment.endMs,
         text: fragment.text,
+        arrivedAtMs: fragment.arrivedAtMs,
       });
     }
   }
