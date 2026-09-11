@@ -382,9 +382,12 @@ describe("opening a call", () => {
     const h = makeHarness();
     await callIsLive(h);
     const sentAtStart = h.provider.sentOfType("session.input_audio.append").length;
-    /* A released button: nothing from the device for a second. */
-    await h.advanceTime(1_000);
-    await h.settle();
+    /* A released button: nothing from the device for a second. The fill is
+     * a tick chain, so the clock steps through it. */
+    for (let step = 0; step < 10; step++) {
+      await h.advanceTime(SILENCE_FILL_MS);
+      await h.settle();
+    }
     const fills = h.provider.sentOfType("session.input_audio.append").slice(sentAtStart);
     expect(fills.length).toBeGreaterThanOrEqual(9);
     const silence = Buffer.from(String(fills[0]!.audio), "base64");
