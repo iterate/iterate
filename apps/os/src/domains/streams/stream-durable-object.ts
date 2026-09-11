@@ -1416,7 +1416,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
     const resolved =
       receiver.source.kind === "userspace"
-        ? await this.#loadUserspaceFacetClass(
+        ? await this.#prepareUserspaceFacetClass(
             name,
             receiver.source.worker,
             this.#facetRecoveryNonce,
@@ -1434,7 +1434,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // (the OS built-in or the userspace StreamProcessorFacet base), whose RPC
     // surface ProcessorFacetStub over-approximates.
     const facet = this.ctx.facets.get(name, () => ({
-      class: resolved.class,
+      class: resolved.loadClass(),
     })) as unknown as ProcessorFacetStub;
     if (!this.#configuredProcessorFacets.has(name)) {
       const parentName = DurableObjectNameCodec.stringify(this.name, { allowNullProjectId: true });
@@ -1475,7 +1475,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * (the sibling `ProcessorFacet` export from `iterate/processors/cloudflare`).
    * Its version is a constant: the built-in class only changes on an OS deploy,
    * which evicts every DO anyway. */
-  #builtinFacetClass(name: string): { class: DurableObjectClass; version: string } {
+  #builtinFacetClass(name: string): { loadClass: () => DurableObjectClass; version: string } {
     // Loose lookup on purpose: ctx.exports carries every exported entrypoint by
     // name.
     const entrypoint = name === "feed" ? "FeedFacet" : "ProcessorFacet";
@@ -1485,7 +1485,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (facetClass === undefined) {
       throw new Error(`facet-processor subscription ${name} requires the ${entrypoint} entrypoint`);
     }
-    return { class: facetClass, version: name === "feed" ? "builtin:FeedFacet" : "builtin" };
+    return {
+      loadClass: () => facetClass,
+      version: name === "feed" ? "builtin:FeedFacet" : "builtin",
+    };
   }
 
   /** Lazily built loader for userspace facet sources. Shared scope: the
@@ -1511,27 +1514,27 @@ export class StreamDurableObject extends DurableObject<Env> {
     }));
   }
 
-  /** Load a userspace facet class from its source ref. The version marker is
+  /** Prepare a userspace facet class from its source ref. The version marker is
    * `(className, sourceCacheKey)` — the same identity StatefulWorkerDurableObject
    * versions by — so both a config-repo commit and a same-source className
    * re-point rebuild the facet (the shared abort in `#dialProcessorFacet`). */
-  async #loadUserspaceFacetClass(
+  async #prepareUserspaceFacetClass(
     name: string,
     ref: StatefulDynamicWorkerRef,
     freshInstanceNonce?: string,
-  ): Promise<{ class: DurableObjectClass; version: string }> {
+  ): Promise<{ loadClass: () => DurableObjectClass; version: string }> {
     const projectId = this.name.projectId;
     if (projectId === null) {
       throw new Error(`userspace facet "${name}" requires a project stream`);
     }
-    const loaded = await this.#workerRunnerForFacets(projectId).loadStatefulClass(
+    const loaded = await this.#workerRunnerForFacets(projectId).prepareStatefulClass(
       ref,
       undefined,
       freshInstanceNonce,
     );
     if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure);
     return {
-      class: loaded.klass,
+      loadClass: loaded.loadClass,
       version: JSON.stringify({ className: ref.className, cacheKey: loaded.resolved.cacheKey }),
     };
   }
