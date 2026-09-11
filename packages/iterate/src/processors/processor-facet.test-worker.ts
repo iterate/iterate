@@ -369,6 +369,7 @@ type FacetStub = {
   readLiveState(args: {
     streamId: string;
     cursor?: import("../sdk/capnweb/live-state/protocol.ts").LiveStateCursor;
+    patchVersion?: 2 | 3;
   }): Promise<unknown>;
   wakeStreamProcessor(request: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse>;
   handleAlarm(info?: AlarmInvocationInfo): Promise<void>;
@@ -512,10 +513,12 @@ export class FacetTestParent extends DurableObject<Env> {
 
   async facetLiveRead(args: {
     cursor?: import("../sdk/capnweb/live-state/protocol.ts").LiveStateCursor;
+    patchVersion?: 2 | 3;
   }) {
     return await this.#facet().readLiveState({
       streamId: this.ctx.storage.kv.get<string>("stream-id") ?? FACET_STREAM_ID,
       cursor: args.cursor,
+      patchVersion: args.patchVersion,
     });
   }
 

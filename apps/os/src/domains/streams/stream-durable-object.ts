@@ -404,6 +404,7 @@ type ProcessorFacetStub = {
   readLiveState(args: {
     streamId: string;
     cursor?: LiveStateCursor;
+    patchVersion?: 2 | 3;
   }): Promise<LiveStateRead<Record<string, unknown>>>;
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   provideCapability(
@@ -1103,7 +1104,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           throw new Error("stream identity is unavailable after stream creation");
         }
         const read = await this.#callProcessorFacet(name, (facet) =>
-          facet.readLiveState({ streamId, cursor }),
+          facet.readLiveState({ streamId, cursor, patchVersion: 3 }),
         );
         try {
           const { epoch, update } = read;

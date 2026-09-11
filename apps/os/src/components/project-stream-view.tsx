@@ -20,7 +20,7 @@ import {
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { connectItx, connectIterateSession, reportTransportSuspicion } from "iterate/sdk/itx/react";
 import { useLiveState } from "iterate/sdk/capnweb/react";
-import type { Stream } from "../itx-api.generated.ts";
+import type { Agent, Stream } from "../itx-api.generated.ts";
 import type { FeedLiveState } from "~/domains/streams/feed-contract.ts";
 import { FeedPreviewNotice } from "~/components/feed-preview-notice.tsx";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
@@ -60,12 +60,8 @@ import type { BrowserStreamSubscriberUser } from "~/domains/streams/client-libra
 type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
 
 type ProjectStreamViewProps = {
-  /**
-   * Runtime supplied by a parent which already listens to the selected agent's
-   * live state. `undefined` lets this generic stream view open its own listener;
-   * `null` means the parent has no transition yet.
-   */
-  agentRuntimeTransition?: AgentUiRuntimeTransition | null;
+  /** A domain agent supplies acknowledgement state, scoped to the current stream lifetime. */
+  agentSource?: () => Agent | Promise<Agent>;
   autoFocusMessageComposer?: boolean;
   /** Domain identity shown directly below the generic stream header. */
   contextHeader?: ReactNode;
@@ -161,7 +157,7 @@ function FullPanelProjectStreamView({
 }
 
 function BrowserDatabaseProjectStreamView({
-  agentRuntimeTransition: suppliedAgentRuntimeTransition,
+  agentSource,
   autoFocusMessageComposer = false,
   defaultComposerMode,
   emptyLabel = "No events in this stream yet.",
@@ -203,8 +199,9 @@ function BrowserDatabaseProjectStreamView({
     void store.nudge();
   }, [store]);
 
-  const agentRuntimeTransition = suppliedAgentRuntimeTransition ?? presentedFeed?.runtimeChange;
-  const agentRuntime = agentRuntimeTransition?.runtime;
+  // Runtime and presentation must describe the same source lifetime and revision.
+  // A separate agent subscription may already be idle or still hold a deleted stream.
+  const agentRuntime = presentedFeed?.runtimeChange?.runtime;
 
   const runningLlmRequestId = agentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestOffset;
   const interrupt = useAgentInterrupt({
@@ -277,6 +274,8 @@ function BrowserDatabaseProjectStreamView({
           defaultComposerMode={defaultComposerMode}
           interrupt={interrupt}
           messageComposer={messageComposer}
+          agentSource={agentSource}
+          runtimeChange={presentedFeed?.runtimeChange}
           onNudgeDeliveries={nudgeDeliveries}
           presence={presence}
           store={store}
@@ -404,6 +403,9 @@ function ProjectStreamFeed({
 
 /** Keeps cached-connection feedback and queued input attached to the composer. */
 function StreamComposerFooter({
+  agentSource,
+  runtimeChange,
+  messageComposer,
   agentFeed,
   agentUiState,
   defaultComposerMode,
@@ -412,6 +414,8 @@ function StreamComposerFooter({
   connectionError,
   ...composer
 }: Omit<ComponentProps<typeof StreamViewComposer>, "defaultMode"> & {
+  agentSource: ProjectStreamViewProps["agentSource"];
+  runtimeChange: FeedLiveState["runtimeChange"];
   agentFeed: boolean;
   agentUiState: FeedLiveState["agent"] | null;
   defaultComposerMode: ProjectStreamViewProps["defaultComposerMode"];
@@ -450,10 +454,51 @@ function StreamComposerFooter({
             isInterrupting={composer.interrupt?.isInterrupting ?? false}
             onInterrupt={composer.disabled ? undefined : composer.interrupt?.run}
           />
-          <StreamViewComposer defaultMode={defaultMode} {...composer} />
+          <AcknowledgedStreamComposer
+            defaultMode={defaultMode}
+            {...composer}
+            messageComposer={messageComposer}
+            agentSource={agentSource}
+            runtimeChange={runtimeChange}
+          />
         </div>
       </div>
     </div>
+  );
+}
+
+/** Owns the acknowledgement subscription for this composer's stream lifetime. */
+function AcknowledgedStreamComposer({
+  agentSource,
+  runtimeChange,
+  messageComposer,
+  ...composer
+}: ComponentProps<typeof StreamViewComposer> & {
+  agentSource: ProjectStreamViewProps["agentSource"];
+  runtimeChange: FeedLiveState["runtimeChange"];
+}) {
+  // This component remounts with the event mirror's source lifetime, so the
+  // acknowledgement subscription cannot retain a deleted agent's cursor.
+  const agentLiveState = useLiveState(
+    (agent: Agent) => agent.liveState,
+    (state) => state,
+    [],
+    agentSource ? { makeConnection: agentSource } : { root: undefined, enabled: false },
+  ).value;
+  // Do not release the submitted message until its resulting runtime is on screen.
+  const acknowledgedThroughOffset = Math.min(
+    agentLiveState?.inputAcknowledgedThroughOffset ?? 0,
+    runtimeChange?.sinceOffset ?? 0,
+  );
+  return (
+    <StreamViewComposer
+      {...composer}
+      messageComposer={
+        messageComposer && agentSource
+          ? { ...messageComposer, acknowledgedThroughOffset }
+          : messageComposer
+      }
+    />
   );
 }
 
