@@ -215,3 +215,29 @@ already logged). Each re-verified here, then fixed with a test where determinist
   cannot dispose the peer's in-flight result. `uncontrolled-degradation` ALONE is clean; it only shows
   under the full run's teardown interleaving. Treated as a harness teardown artifact, not a leak in a
   path production exercises. Revisit if it ever turns deterministic.
+
+## Round 4 — codex astra round 4: five NEW findings, all fixed with tests
+
+Several are direct adjacent-gaps of the round-2/3 fixes (the nature of deep review — each fix reveals
+the next seam). All re-verified, all fixed:
+
+- **[bug] #1 (P1) version replay bypassed payload validation.** Round-3 put validation/normalization in
+  #reduceAndProcessEvent, but #rereduceIfVersionChanged reduced RAW — a coercing schema gave a number
+  live and a raw string after a version bump ({n:"2"} → 2 live, "02" on replay), silently rewriting
+  state. Extracted #validateNormalizeAndReduce; live AND replay both route through it. Replay-coercion
+  test. (processor.ts)
+- **[bug] #5 dep-vs-dep event clashes were allowed.** The one-owner guard only caught local-vs-dep; two
+  processorDeps declaring the same type with different schemas passed, and `resolve` picked the first
+  while ConsumedEvent's union held both. Rejected at defineProcessorContract. Test added. (processor.ts)
+- **[bug] #2 child secrets cached a broken root stub.** `deps.context("/")` was captured once at
+  buildBuiltIns; after a root DO failure it stayed broken until eviction. Acquire it PER CALL
+  (Cloudflare DO error-handling). (context/built-ins.ts)
+- **[bug] #4 child secret mutations lost caller attribution.** The child forwarded to the root WITHOUT
+  a Caller, so the durable secrets/changed event dropped the authenticated principal. Forward
+  deps.caller(). (context/built-ins.ts)
+- **[bug] #3 closing during an MCP re-handshake revived the client + leaked a session.** A handshake in
+  flight when close() ran completed afterwards, set #closed=false + #sessionId=s-2 (close had DELETE'd
+  s-1, could not know s-2). close() now bumps a #generation; a stale handshake refuses to revive and
+  DELETEs the session it established. Deterministic test (both s-1 and s-2 get DELETE). (library.ts)
+
+Round tally so far: R1 12 · R2 5 · R3 5 · R4 5 — all fixed or deferred-with-reasoning above.
