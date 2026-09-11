@@ -47,7 +47,7 @@ test("opening a notification lets sandbox curl fetch through this browser's IP",
     async (url) => (await fetch(url)).json(),
     echo.url + "/browser",
   );
-  const server = await (await itx.egress.fetch(echo.url + "/server")).json();
+  const server: any = await (await itx.egress.fetch(echo.url + "/server")).json();
   expect(isIP(browser.ip)).not.toBe(0);
   expect(isIP(server.ip)).not.toBe(0);
   expect(server).not.toEqual(browser);
@@ -58,8 +58,9 @@ test("opening a notification lets sandbox curl fetch through this browser's IP",
     vars: { deviceId, targetUrl, sandboxPath: "/sandboxes/browser-fetch" },
   });
   try {
-    // This unsolicited notification has no loading spinner: wait on its stream.
-    await itx.streams.get(`/devices/${deviceId}`).waitForEvent({
+    // Like notifications.spec.ts: the screen cannot show progress for work it
+    // doesn't know about yet. Wait for the event, then let Middlewright handle UI.
+    const notification = await itx.streams.get(`/devices/${deviceId}`).waitForEvent({
       afterOffset: 0,
       eventTypes: ["events.iterate.com/device/notification-requested"],
       timeoutMs: 90_000, // Includes the real sandbox's cold boot.
@@ -70,8 +71,9 @@ test("opening a notification lets sandbox curl fetch through this browser's IP",
     page.on("response", (response) => {
       if (response.url() === targetUrl) browserResponses.push(response);
     });
-    await page.getByText("HTTP request waiting for your phone", { exact: true }).click();
-    await page.getByText("Phone ready.", { exact: true }).waitFor();
+    const row = page.getByTestId(`notification-row-${notification.offset}`);
+    await row.getByRole("button").click();
+    await row.getByText("Phone ready.", { exact: true }).waitFor();
 
     expect(await run).toMatchObject({
       exitCode: 0,
