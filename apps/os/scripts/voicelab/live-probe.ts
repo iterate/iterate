@@ -68,6 +68,10 @@ export interface LiveProbeOptions {
    * note to the voice's context (`session.thinking.append`, no delegation
    * id) — does the voice then know what the backend has done so far? */
   progressThinking?: boolean;
+  /** Microphone audio per `session.input_audio.append`, in ms (default 100):
+   * does the provider's output cadence suffer when input arrives in large
+   * appends? */
+  micAppendMs?: number;
   /** Responses mode: let the backend CHANGE the project (the default brief
    * keeps it read-only, for measurement runs against a real project). */
   allowWrites?: boolean;
@@ -670,7 +674,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
       }, 20);
     });
   const micLoop = (async () => {
-    const framesPerSend = 5; // 100 ms per message
+    const framesPerSend = Math.max(1, Math.round((options.micAppendMs ?? 100) / FRAME_MS));
     let sequence = 0;
     const startedAt = Date.now();
     while (micRunning) {

@@ -59,6 +59,10 @@ export interface DuplexOptions extends VoicelabConnectOptions {
   micBatchFrames?: number;
   /** Frames joined into one mic event (default 1). */
   micEventFrames?: number;
+  /** Unconsumed ephemeral events added to every mic append (default 0). */
+  noiseEventsPerAppend?: number;
+  /** Consumed-but-not-forwarded keepalive events added to every mic append (default 0). */
+  keepaliveEventsPerAppend?: number;
 }
 
 export async function duplex(options: DuplexOptions): Promise<void> {
@@ -305,6 +309,16 @@ export async function duplex(options: DuplexOptions): Promise<void> {
         );
   const fmt = (g: ReturnType<typeof gapStats>) =>
     `p50 ${String(g.p50)} p90 ${String(g.p90)} p99 ${String(g.p99)} max ${String(g.max)} ms; >150 ms: ${String(g.over150)}, >250 ms: ${String(g.over250)} of ${String(g.count)}`;
+  const appendLatencies = [...watch.micAppendLatenciesMs].sort((a, b) => a - b);
+  const latencyAt = (q: number) =>
+    appendLatencies.length === 0
+      ? 0
+      : appendLatencies[
+          Math.min(appendLatencies.length - 1, Math.floor(q * appendLatencies.length))
+        ]!;
+  console.log(
+    `    mic append round trip     p50 ${String(latencyAt(0.5))} p90 ${String(latencyAt(0.9))} p99 ${String(latencyAt(0.99))} max ${String(appendLatencies.at(-1) ?? 0)} ms over ${String(appendLatencies.length)} appends`,
+  );
   console.log(`    provider→facet delta gaps ${fmt(providerGaps)}`);
   console.log(`    facet send gaps           ${fmt(sentGaps)}`);
   console.log(

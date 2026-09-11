@@ -67,6 +67,9 @@ export interface WireWatch {
   /** Facet clock at every audio-carrying provider delta, off the mirror
    * (`receivedAtFacetMs`): the provider→facet cadence. */
   providerDeltaReceivedAtFacetMs: number[];
+  /** Round-trip time of each microphone append, driver clock: network plus
+   * the stream Durable Object's synchronous append work for that batch. */
+  micAppendLatenciesMs: number[];
 }
 
 export interface WireCall {
@@ -105,6 +108,13 @@ export async function openWireCall(
     /** Frames joined into ONE mic event (default 1): the same audio as fewer,
      * longer events — is the facet's cost per event or per byte? */
     micEventFrames?: number;
+    /** Extra ephemeral events of a type NO processor consumes, added to every
+     * mic append: the stream's own per-event cost, isolated from the facet's. */
+    noiseEventsPerAppend?: number;
+    /** Extra `keepalive` events per mic append: consumed by the facet's runner
+     * (parse, reduce, processEvent) but never forwarded to the provider — the
+     * runner's per-event cost without the WebSocket send. */
+    keepaliveEventsPerAppend?: number;
   },
 ): Promise<WireCall> {
   const micBatchFrames = options.micBatchFrames ?? 25;
@@ -128,6 +138,7 @@ export async function openWireCall(
     providerEventCounts: {},
     spkArrivals: [],
     providerDeltaReceivedAtFacetMs: [],
+    micAppendLatenciesMs: [],
   };
 
   const connection = await stream.openConnection({
@@ -265,8 +276,26 @@ export async function openWireCall(
         });
         sequence += group.length;
       }
+      for (let index = 0; index < (options.keepaliveEventsPerAppend ?? 0); index++) {
+        events.push({
+          type: "events.iterate.com/voice-agent/keepalive" as const,
+          ephemeral: true as const,
+          payload: {},
+        });
+      }
+      for (let index = 0; index < (options.noiseEventsPerAppend ?? 0); index++) {
+        events.push({
+          type: "events.iterate.com/voicelab/noise" as const,
+          ephemeral: true as const,
+          payload: { deviceMicFrameSeq: -1 - index, pcm: SILENCE_FRAME },
+        });
+      }
       micFramesSent += micBatchFrames;
-      void stream.append(...events).catch(() => undefined);
+      const appendStartedAtMs = Date.now();
+      void stream
+        .append(...events)
+        .then(() => watch.micAppendLatenciesMs.push(Date.now() - appendStartedAtMs))
+        .catch(() => undefined);
     }
   })();
 
