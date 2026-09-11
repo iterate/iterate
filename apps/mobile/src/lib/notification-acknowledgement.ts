@@ -4,6 +4,7 @@ import { notificationOpenedEvent } from "./notification-routing.ts";
 
 const Notification = z.object({
   offset: z.number(),
+  // Device streams contain both direct requests and forwarded project notification intents.
   type: z.enum([
     "events.iterate.com/device/notification-requested",
     "events.iterate.com/notification/requested",

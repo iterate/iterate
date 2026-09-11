@@ -6,7 +6,10 @@ import { MobileFetchCapabilities } from "./mobile-fetch.ts";
 test("phone fetch preserves binary request and response bodies and HTTP failure status", async () => {
   await using server = await withTunnel(async (request) => {
     expect(request.method).toBe("POST");
-    expect(request.headers.get("x-phone-proof")).toBe("from-script");
+    expect(Object.fromEntries(request.headers)).toMatchObject({
+      "x-phone-proof": "from-script",
+      "x-iterate-client": "mobile",
+    });
     expect(new Uint8Array(await request.arrayBuffer())).toEqual(new Uint8Array([0, 255, 42]));
     return new Response(new Uint8Array([42, 255, 0]), {
       status: 422,
@@ -14,7 +17,7 @@ test("phone fetch preserves binary request and response bodies and HTTP failure 
     });
   });
   const phone = new MobileFetchCapabilities(fetch, () => true);
-  const response = await phone.fetch({
+  const response = await phone.doFetch({
     url: server.url,
     method: "POST",
     headers: [["x-phone-proof", "from-script"]],
@@ -36,7 +39,7 @@ test("native redirects stay on the phone and decoded bytes lose compression head
       headers: { "content-encoding": "gzip", "content-length": String(body.byteLength) },
     });
   });
-  const response = await new MobileFetchCapabilities(fetch, () => true).fetch({
+  const response = await new MobileFetchCapabilities(fetch, () => true).doFetch({
     url: server.url,
     method: "GET",
     headers: [],
@@ -55,7 +58,7 @@ test("background phones reject before making a network request", async () => {
     return new Response("unexpected");
   });
   await expect(
-    new MobileFetchCapabilities(fetch, () => false).fetch({
+    new MobileFetchCapabilities(fetch, () => false).doFetch({
       url: server.url,
       method: "GET",
       headers: [],
@@ -73,10 +76,10 @@ test("bodyless responses and oversized responses retain explicit outcomes", asyn
   );
   const phone = new MobileFetchCapabilities(fetch, () => true);
   expect(
-    await phone.fetch({ url: server.url, method: "GET", headers: [], body: null }),
+    await phone.doFetch({ url: server.url, method: "GET", headers: [], body: null }),
   ).toMatchObject({ status: 204, body: null });
   await expect(
-    phone.fetch({ url: server.url + "/large", method: "GET", headers: [], body: null }),
+    phone.doFetch({ url: server.url + "/large", method: "GET", headers: [], body: null }),
   ).rejects.toThrow("exceeds 8 MiB");
 });
 
@@ -88,7 +91,7 @@ test("HEAD metadata can describe a large resource without downloading it", async
       }),
   );
   expect(
-    await new MobileFetchCapabilities(fetch, () => true).fetch({
+    await new MobileFetchCapabilities(fetch, () => true).doFetch({
       url: server.url,
       method: "HEAD",
       headers: [],

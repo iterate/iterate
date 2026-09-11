@@ -76,7 +76,7 @@ test("notification acknowledgements replay before subscription and phone HTTP cr
       });
       const interceptor = await itx.egress.intercept(async (request, next) => {
         if (request.url !== url) return await next(request);
-        const response = await itx.clients.get("/clients/mobile/test-phone").capabilities.fetch({
+        const response = await itx.clients.get("/clients/mobile/test-phone").capabilities.doFetch({
           url: request.url,
           method: "GET",
           headers: [...request.headers.entries()],
@@ -111,7 +111,7 @@ test("notification acknowledgements replay before subscription and phone HTTP cr
       .vars({ url: upstream.url })
       .execute(
         async (itx, { url }) =>
-          await itx.clients.get("/clients/mobile/test-phone").capabilities.fetch({
+          await itx.clients.get("/clients/mobile/test-phone").capabilities.doFetch({
             url,
             method: "GET",
             headers: [],

@@ -496,7 +496,7 @@ const interceptor = await itx.egress.intercept(async (request, next) => {
     return Response.json({ message: "Phone request expired." }, { status: 504 });
   }
   try {
-    const response = await itx.clients.get(clientPath).capabilities.fetch({
+    const response = await itx.clients.get(clientPath).capabilities.doFetch({
       url: request.url,
       method: "GET",
       headers: [...request.headers.entries()],

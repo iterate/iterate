@@ -525,7 +525,7 @@ return await itx.projects.get(pid).__describe();
     clients: {
       get(path: string): CapabilityHost & {
         capabilities: {
-          fetch(request: {
+          doFetch(request: {
             url: string;
             method: "GET";
             headers: [string, string][];
@@ -603,7 +603,7 @@ return await itx.projects.get(pid).__describe();
           return Response.json({ message: "Phone request expired." }, { status: 504 });
         }
         try {
-          const response = await itx.clients.get(clientPath).capabilities.fetch({
+          const response = await itx.clients.get(clientPath).capabilities.doFetch({
             url: request.url,
             method: "GET",
             headers: [...request.headers.entries()],

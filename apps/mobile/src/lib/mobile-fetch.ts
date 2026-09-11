@@ -32,14 +32,17 @@ export class MobileFetchCapabilities extends RpcTarget {
     this.#isForeground = isForeground;
   }
 
-  async fetch(input: MobileFetchRequest): Promise<MobileFetchResponse> {
+  // React Native's Response lacks .body, so Cap'n Web needs an explicit byte envelope.
+  async doFetch(input: MobileFetchRequest): Promise<MobileFetchResponse> {
     const request = MobileFetchRequest.parse(input);
     if (!this.#isForeground())
       throw new Error("Phone fetch is unavailable while the app is in the background.");
     const abort = new AbortController();
+    // React Native's AbortSignal does not provide timeout().
     const timer = setTimeout(() => abort.abort(), 30_000);
     try {
       const headers = new Headers(request.headers);
+      headers.set("x-iterate-client", "mobile");
       // The client's HTTP stack owns framing for the newly constructed request.
       for (const name of ["host", "connection", "content-length", "transfer-encoding"])
         headers.delete(name);
@@ -73,7 +76,7 @@ export class MobileFetchCapabilities extends RpcTarget {
 export const MOBILE_FETCH_TYPES = `export interface MobileCapabilities {
   /** HTTP(S) from the foreground client. Buffered bodies up to 8 MiB; 30s timeout.
    * Redirects stay on the client; its cookie and CORS rules apply. */
-  fetch(request: {
+  doFetch(request: {
     url: string;
     method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
     headers: [string, string][];
