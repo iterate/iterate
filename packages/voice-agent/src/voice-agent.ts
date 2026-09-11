@@ -211,6 +211,14 @@ export const IDLE_TIMEOUT_MS = 60_000;
  */
 export const SILENCE_FILL_MS = 100;
 /**
+ * A delayed Durable Object must not burst an unbounded amount of synthetic
+ * input ahead of a person who has started speaking again. One second is long
+ * enough to recover ordinary scheduling jitter. A larger discontinuity leaves
+ * the provider's input timeline untrustworthy, so the call ends with a
+ * classified reason rather than dropping that debt without an explanation.
+ */
+const MAX_SILENCE_FILL_CATCH_UP_MS = 1_000;
+/**
  * How often a background loop waiting for work re-checks that its dial is
  * still the live one, and how long the mirror flush lingers for the next
  * event before releasing its registration. See #startSpeakerSender.
@@ -456,19 +464,17 @@ const EXEC_TYPESCRIPT_FUNCTION = {
 } as const;
 
 /**
- * How many microphone frames may be held while the provider completes its
- * handshake. Bounded because a handshake that never finishes must not grow a
- * queue without limit. The NEWEST frames are refused once it is full, not the
- * oldest: the start of what somebody said is what makes the rest of it
- * intelligible.
+ * How much decoded microphone audio may be held while the provider completes
+ * its handshake. The wire accepts any even PCM byte length, so a frame count
+ * cannot bound memory or stale speech. Five seconds matches the opening
+ * capture budget on the clients and keeps a measured two-second handshake
+ * margin without silently truncating a request.
  *
- * 60 covers a slow handshake with margin — measured handshakes run 1-2 s
- * (`handshakeTookMs` 2051 on 2026-09-11), and frames arrive every 50 ms from
- * the board / 64 ms from the phone, so 60 frames is 3-3.8 s. Past that the
- * dial has failed, and replaying stale speech into GPT-Live is worse than
- * dropping it.
+ * Overflow ends this opening once with a durable reason. Keeping the prefix
+ * while silently discarding its ending would tell the model a different
+ * request, so the next activation is the only honest recovery.
  */
-const MAX_HELD_MIC_FRAMES = 60;
+const MAX_HELD_MIC_BYTES = 16_000 * 2 * 5;
 
 /* ========================================================================== */
 /* AUDIO                                                                      */
@@ -1053,6 +1059,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * deliveries that arrive before the caught-up pass re-dials.
    */
   #micQueue: string[] = [];
+  /** Decoded PCM bytes in #micQueue; the provider accepts variable payloads. */
+  #micQueueBytes = 0;
+  /** The opening already failed for a full held-audio budget. */
+  #heldMicOverflowFor: string | null = null;
   /**
    * A call has been ASKED for, and the log has not caught up yet. A board
    * streams microphone frames continuously, so the window between asking
@@ -1293,8 +1303,27 @@ export class VoiceAgentProcessor extends StreamProcessor<
             Math.max(dial.micAudioCoveredUntilFacetMs, nowAtFacetMs) +
             base64ByteLength(micB64) / PCM16_BYTES_PER_MS;
           this.#sendMicAudio(dial.socket, micB64);
-        } else if (this.#micQueue.length < MAX_HELD_MIC_FRAMES) {
-          this.#micQueue.push(micB64);
+        } else {
+          const micBytes = base64ByteLength(micB64);
+          const openingConversationId = dial?.conversationId;
+          if (openingConversationId === undefined) return;
+          if (this.#heldMicOverflowFor === openingConversationId) return;
+          if (this.#micQueueBytes + micBytes <= MAX_HELD_MIC_BYTES) {
+            this.#micQueue.push(micB64);
+            this.#micQueueBytes += micBytes;
+            return;
+          }
+          this.#micQueue = [];
+          this.#micQueueBytes = 0;
+          this.#heldMicOverflowFor = openingConversationId;
+          this.runInBackground(() =>
+            this.#requestEnd(
+              openingConversationId,
+              "held-mic-overflow",
+              `the provider did not become ready before ${MAX_HELD_MIC_BYTES / 32}ms of microphone audio accumulated`,
+              append,
+            ),
+          );
         }
         return;
       }
@@ -1457,7 +1486,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
           conversationId,
           dialStartedAtFacetMs,
           `the provider's socket closed (${String(event.code)}${event.reason ? ` ${event.reason}` : ""})`,
+          state,
           append,
+          runInBackground,
         );
       });
 
@@ -1634,6 +1665,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         const heldMicFrames = this.#micQueue.length;
         for (const held of this.#micQueue) this.#sendMicAudio(dial.socket!, held);
         this.#micQueue = [];
+        this.#micQueueBytes = 0;
         dial.micAudioCoveredUntilFacetMs = receivedAtFacetMs;
         this.#startSilenceFill(dial, append);
         this.runInBackground(() =>
@@ -1783,7 +1815,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
           conversationId,
           dialStartedAtFacetMs,
           `the provider closed the session (${String(live.reason ?? "unknown")})`,
+          state,
           append,
+          runInBackground,
         );
         return;
       }
@@ -2139,6 +2173,15 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * moves the stamp forward itself, so the fill covers only the gaps. */
         const nowAtFacetMs = this.deps.nowAtFacetMs();
         let owedMs = nowAtFacetMs - dial.micAudioCoveredUntilFacetMs;
+        if (owedMs > MAX_SILENCE_FILL_CATCH_UP_MS) {
+          await this.#requestEnd(
+            dial.conversationId,
+            "input-clock-stalled",
+            `the provider input clock fell ${owedMs}ms behind`,
+            append,
+          );
+          return;
+        }
         while (owedMs >= SILENCE_FILL_MS) {
           dial.micAudioCoveredUntilFacetMs += SILENCE_FILL_MS;
           owedMs -= SILENCE_FILL_MS;
@@ -2174,8 +2217,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
    */
   /*
    * The provider went away under a call the log still says is open. Recorded
-   * durably with its reason; the call stays open, so the next device frame's
-   * caught-up pass re-dials (the eviction path), seeded with the transcript.
+   * durably with its reason; the call stays open and re-dials immediately,
+   * seeded with the transcript. That also recovers a caller who has finished
+   * speaking and therefore has no next microphone frame to trigger recovery.
    * A hang-up in progress (end requested) or a call already over is left to
    * its own ending. Three closes inside two minutes is a provider that will
    * not hold a session, and then the call ends with the reason on the log.
@@ -2184,7 +2228,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
     conversationId: string,
     dialStartedAtFacetMs: number,
     reason: string,
+    state: ProcessEventArgs<VoiceAgentContract>["state"],
     append: ProcessEventArgs<VoiceAgentContract>["append"],
+    runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
   ): void {
     /* The dial's state snapshot predates its own call-started fold, so the
      * call's standing is read from this instance: an end already requested
@@ -2203,6 +2249,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
       nowAtFacetMs,
     ];
     const gaveUp = this.#providerClosesAtFacetMs.length >= PROVIDER_CLOSES_BEFORE_GIVING_UP;
+    if (!gaveUp) {
+      this.#openProviderConnection(conversationId, state, append, runInBackground);
+    }
     this.runInBackground(async () => {
       await append({
         type: "events.iterate.com/voice-agent/provider-disconnected",
@@ -2221,7 +2270,14 @@ export class VoiceAgentProcessor extends StreamProcessor<
 
   async #requestEnd(
     conversationId: string,
-    keyClass: "dial-failed" | "handshake-timeout" | "socket-closed" | "idle" | "hang-up",
+    keyClass:
+      | "dial-failed"
+      | "handshake-timeout"
+      | "held-mic-overflow"
+      | "input-clock-stalled"
+      | "socket-closed"
+      | "idle"
+      | "hang-up",
     reason: string,
     append: ProcessEventArgs<VoiceAgentContract>["append"],
   ): Promise<void> {
@@ -2509,6 +2565,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
    */
   #hangUp(): void {
     this.#micQueue = [];
+    this.#micQueueBytes = 0;
     const dial = this.#dial;
     this.#dial = null;
     try {

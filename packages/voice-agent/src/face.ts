@@ -18,8 +18,9 @@
  * `face_poll_completed`): it reads `runtime.face` off
  * `getProcessorRuntimeState({ name: "voice-agent" })`, validates
  * `answer >= 0`, `playoutSamples >= 0`, `viseme` in 0..14 and `at > 0`
- * (`confidence` alone may be omitted), and DEDUPES ON `at` — the same shape
- * at the same stamp is forwarded to the avatar zero times. That shape holds,
+ * (`confidence` alone may be omitted), and DEDUPES ON `at`. `at` is a
+ * monotonic revision token as well as a clock reading, so two folds in one
+ * clock tick cannot make the latter shape disappear. That shape holds,
  * whatever the transport becomes.
  */
 import { createVisemeTracker, type VisemeChangeEvent } from "./viseme.ts";
@@ -47,9 +48,8 @@ export interface FaceValue {
   viseme: number;
   /** Classification confidence 0-255; 0 for SIL. */
   confidence: number;
-  /** The caller's facet clock at the fold — the firmware dedupes identical
-   * polls on `at`, so the stamp is what makes a repeated shape at a new
-   * moment still a new fact. */
+  /** Monotonic revision stamped from the caller's facet clock. Firmware
+   * dedupes identical polls on it. */
   at: number;
 }
 
@@ -65,17 +65,20 @@ export function createFace() {
   const tracker = createVisemeTracker();
   let answerNumber = 0;
   let newest: FaceValue | null = null;
+  let lastAt = 0;
 
-  /** Fold the newest mouth shape into the face value, stamped with the
-   * caller's clock — see {@link FaceValue.at} for why a repeat still gets a
-   * fresh stamp. */
+  /** Fold the newest mouth shape into the face value. The runtime poll uses
+   * `at` as its sole duplicate key, so it must advance even if the caller's
+   * millisecond clock did not. */
   const fold = (shape: VisemeChangeEvent, atMs: number): void => {
+    const at = Math.max(atMs, lastAt + 1);
+    lastAt = at;
     newest = {
       answer: answerNumber,
       playoutSamples: shape.playoutSamples,
       viseme: shape.viseme,
       confidence: shape.confidence,
-      at: atMs,
+      at,
     };
   };
 

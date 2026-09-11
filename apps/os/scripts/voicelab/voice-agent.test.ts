@@ -405,6 +405,50 @@ describe("opening a call", () => {
     );
   });
 
+  it("ends rather than truncating microphone audio beyond the five-second opening budget", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { providerBaseUrl: SEAM },
+    });
+    const held = Array.from({ length: 5 }, (_, index) => ({
+      ...micFrame(index + 1),
+      payload: { ...micFrame(index + 1).payload, pcm: speechDelta(1_000, index) },
+    }));
+    await h.append(...held);
+    await h.settle();
+    h.provider.start();
+    await h.settle();
+    const delivered = h.provider.sentOfType("session.input_audio.append");
+    expect(delivered.map((append) => append.audio)).toEqual(held.map((frame) => frame.payload.pcm));
+
+    const overflowing = makeHarness();
+    await overflowing.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { providerBaseUrl: SEAM },
+    });
+    await overflowing.append(...held, micFrame(99));
+    await overflowing.settle();
+    const endings = eventsOfType(overflowing, "conversation-end-requested");
+    expect(endings).toHaveLength(1);
+    expect((endings[0]!.payload as { reason: string }).reason).toContain("microphone audio");
+    await overflowing.append(micFrame(100));
+    expect(eventsOfType(overflowing, "conversation-end-requested")).toHaveLength(1);
+  });
+
+  it("ends a call whose silence clock cannot catch up without a burst", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    const sentBefore = h.provider.sentOfType("session.input_audio.append").length;
+    /* The test clock resumes after one missed second, not on every 100 ms tick. */
+    await h.advanceTime(SILENCE_FILL_MS * 11);
+    await h.settle();
+    expect(h.provider.sentOfType("session.input_audio.append")).toHaveLength(sentBefore);
+    const endings = eventsOfType(h, "conversation-end-requested");
+    expect(endings).toHaveLength(1);
+    expect((endings[0]!.payload as { reason: string }).reason).toContain("input clock");
+  });
+
   it("drops an empty mic frame instead of forwarding it (the provider rejects empty audio)", async () => {
     const h = makeHarness();
     await h.append({
@@ -582,7 +626,7 @@ describe("opening a call", () => {
     });
     await h.append(micFrame(1));
     await h.settle();
-    await h.advanceTime(20_000);
+    await playOutEverything(h, 20_000);
     await h.settle();
     const requested = eventsOfType(h, "conversation-end-requested");
     expect(requested).toHaveLength(1);
@@ -769,7 +813,7 @@ describe("a quiet listener", () => {
         tick * 10_000 + 3_000,
         tick * 10_000 + 3_400,
       );
-      await h.advanceTime(10_000);
+      await playOutEverything(h, 10_000);
       await h.settle();
     }
     expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
@@ -902,7 +946,7 @@ describe("the backend", () => {
     h.provider.backendFunctionCall("call_1b", "exec_typescript", '{"code":"async (itx) => 1"}');
     await h.settle();
     expect(h.provider.sentOfType("session.thinking.append")).toHaveLength(1);
-    await h.advanceTime(5_000);
+    await playOutEverything(h, 5_000);
     h.provider.backendFunctionCall("call_2", "exec_typescript", '{"code":"async (itx) => 2"}');
     await h.settle();
     const notes = h.provider.sentOfType("session.thinking.append");
@@ -939,7 +983,7 @@ describe("the backend", () => {
     await h.settle();
     expect(h.provider.sentOfType("response.item.create")).toHaveLength(0);
     h.provider.userSays(" note dot md.", 3_600, 4_200);
-    await h.advanceTime(2_000);
+    await playOutEverything(h, 2_000);
     await h.settle();
     /* The rest of the request, then the result, then the continuation. */
     const items = h.provider.sentOfType("response.item.create");
@@ -1032,10 +1076,10 @@ describe("the backend", () => {
     await callIsLive(h, { tools: [{ name: "hang_up", description: "End the call." }] });
     h.provider.backendFunctionCall("call_bye", "hang_up", "{}");
     await h.settle();
-    await h.advanceTime(5_000);
+    await playOutEverything(h, 5_000);
     await h.settle();
     expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
-    await h.advanceTime(4_000);
+    await playOutEverything(h, 4_000);
     await h.settle();
     expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(1);
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
@@ -1089,7 +1133,7 @@ describe("ending a call", () => {
     expect(h.provider.closed).toBe(true);
     /* The next frame, past the dying-breath guard, mints a fresh call on a
      * fresh socket. */
-    await h.advanceTime(2_000);
+    await playOutEverything(h, 2_000);
     await h.append(micFrame(20));
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(2);
@@ -1109,7 +1153,7 @@ describe("ending a call", () => {
     await h.append(micFrame(20), micFrame(21));
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(1);
-    await h.advanceTime(2_000);
+    await playOutEverything(h, 2_000);
     await h.append(micFrame(22));
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(2);
@@ -1130,7 +1174,7 @@ describe("ending a call", () => {
   it("ends after a minute with no input from the device", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await playOutEverything(h, IDLE_TIMEOUT_MS + 10_000);
     await h.settle();
     const requested = eventsOfType(h, "conversation-end-requested");
     expect(requested).toHaveLength(1);
@@ -1147,7 +1191,7 @@ describe("ending a call", () => {
     await h.append(micFrame(1));
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(1);
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await playOutEverything(h, IDLE_TIMEOUT_MS + 10_000);
     await h.settle();
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
     await h.append(micFrame(2));
@@ -1171,14 +1215,14 @@ describe("ending a call", () => {
     h.provider.backendFunctionCall("call_slow", "exec_typescript", '{"code":"async (itx) => 1"}');
     await h.settle();
     /* The person waits in silence past the deadline; the script is the activity. */
-    await h.advanceTime(IDLE_TIMEOUT_MS - 5_000);
+    await playOutEverything(h, IDLE_TIMEOUT_MS - 5_000);
     await h.settle();
     expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
     finish!();
     await h.settle();
     expect(h.provider.sentOfType("response.item.create")).toHaveLength(1);
     /* And once the backend is done and nothing else happens, the deadline bites. */
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await playOutEverything(h, IDLE_TIMEOUT_MS + 10_000);
     await h.settle();
     expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(1);
   });
@@ -1190,7 +1234,7 @@ describe("ending a call", () => {
      * the idle deadline: the frames going out ARE the activity. */
     for (let tick = 0; tick < 8; tick++) {
       speaking.provider.speech(10_000);
-      await speaking.advanceTime(10_000);
+      await playOutEverything(speaking, 10_000);
       await speaking.settle();
     }
     expect(eventsOfType(speaking, "conversation-end-requested")).toHaveLength(0);
@@ -1198,17 +1242,18 @@ describe("ending a call", () => {
     const fed = makeHarness();
     await callIsLive(fed);
     for (let tick = 0; tick < 8; tick++) {
-      await fed.advanceTime(10_000);
+      await playOutEverything(fed, 10_000);
       await fed.append({ type: "events.iterate.com/voice-agent/keepalive", payload: {} });
       await fed.settle();
     }
     expect(eventsOfType(fed, "conversation-end-requested")).toHaveLength(0);
   });
 
-  it("re-dials when the provider closes the session or the socket under a live call", async () => {
+  it("re-dials immediately when the provider closes under a quiet live call", async () => {
     /* OpenAI's socket dropped 2:51 into a live call with no session.closed
      * first (2026-09-11); ending the conversation for it cut a sentence in
-     * half. The drop is recorded and the next device frame re-dials. */
+     * half. The drop is recorded and the existing call re-dials without
+     * waiting for a caller who has already finished speaking. */
     const closed = makeHarness();
     await callIsLive(closed);
     const firstSocket = closed.provider;
@@ -1218,8 +1263,6 @@ describe("ending a call", () => {
     const recorded = eventsOfType(closed, "provider-disconnected");
     expect(recorded).toHaveLength(1);
     expect((recorded[0]!.payload as { reason: string }).reason).toContain("expired");
-    await closed.append(micFrame(1));
-    await closed.settle();
     expect(closed.provider).not.toBe(firstSocket);
     expect(closed.provider.sentOfType("session.start")).toHaveLength(1);
     expect(eventsOfType(closed, "conversation-ended")).toHaveLength(0);
@@ -1230,8 +1273,6 @@ describe("ending a call", () => {
     await dropped.settle();
     expect(eventsOfType(dropped, "conversation-end-requested")).toHaveLength(0);
     expect(eventsOfType(dropped, "provider-disconnected")).toHaveLength(1);
-    await dropped.append(micFrame(1));
-    await dropped.settle();
     expect(dropped.provider.sentOfType("session.start")).toHaveLength(1);
   });
 
@@ -1242,8 +1283,6 @@ describe("ending a call", () => {
       h.provider.close();
       await h.settle();
       if (drop < 2) {
-        await h.append(micFrame(10 + drop));
-        await h.settle();
         expect(h.provider.sentOfType("session.start")).toHaveLength(1);
       }
     }
@@ -1252,6 +1291,30 @@ describe("ending a call", () => {
     expect((requested[0]!.payload as { reason: string }).reason).toContain("3 times");
     await h.settle();
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+  });
+
+  it("does not revive an ended call when its abandoned provider closes or the facet restarts", async () => {
+    const h = makeHarness();
+    const conversationId = await callIsLive(h);
+    const abandoned = h.provider;
+    await h.append({
+      type: "events.iterate.com/voice-agent/conversation-end-requested",
+      payload: { conversationId, reason: "button" },
+    });
+    abandoned.close();
+    await h.settle();
+    expect(h.sockets).toHaveLength(1);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+
+    h.crash();
+    await h.append(micFrame(99));
+    await h.settle();
+    const calls = eventsOfType(h, "call-started").map(
+      (event) => (event.payload as { conversationId: string }).conversationId,
+    );
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).not.toBe(conversationId);
+    expect(h.sockets).toHaveLength(2);
   });
 
   it("writes the provider's error where somebody can read it", async () => {
