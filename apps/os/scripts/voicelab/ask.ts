@@ -152,6 +152,16 @@ export async function ask(options: AskOptions): Promise<void> {
       );
     }, requestTimeoutMs);
     const functionCalls = watch.backendCalls.slice(before.calls);
+    /* What the FACET kept receiving from the provider (every audio delta,
+     * silence included, off the mirror's receivedAtFacetMs): if this stops
+     * while the request is open, we stopped listening; if it keeps ticking
+     * while speaker frames stop, the model went quiet. */
+    const facetDeltas = watch.providerDeltaReceivedAtFacetMs;
+    const facetSpan =
+      facetDeltas.length > 1 ? facetDeltas[facetDeltas.length - 1]! - facetDeltas[0]! : 0;
+    console.log(
+      `    facet received ${String(facetDeltas.length)} provider deltas spanning ${String(Math.round(facetSpan / 1000))} s of facet clock (call so far ${String(Math.round(call.clock() / 1000))} s)`,
+    );
     const framesThisRequest = watch.spkArrivals.filter((a) => a.atMs >= startedAt);
     const lastFrameAtMs = framesThisRequest.at(-1)?.atMs ?? null;
     console.log(
