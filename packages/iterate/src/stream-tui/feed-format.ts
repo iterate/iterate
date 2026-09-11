@@ -9,6 +9,8 @@ import type {
   AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
+import { sliceText, textGroupSize, type StreamText } from "../../../shared/src/chunked-text.ts";
+
 export { formatAgentUiActivitySummary as formatActivitySummary } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 export function formatStepLine(step: AgentUiStep): string {
@@ -58,7 +60,7 @@ export function formatLiveActivityLabel(
   if (llm == null || llm.kind !== "llm") {
     return "Working…";
   }
-  if (llm.thinkingText !== "" && llm.responseText === "") return "Thinking";
+  if (llm.thinkingText.length > 0 && llm.responseText.length === 0) return "Thinking";
   return "Waiting for a response";
 }
 
@@ -73,10 +75,22 @@ function formatTokens(count: number | undefined): string {
 }
 
 /** The last `maxChars` of streamed text, trimmed to whole lines where possible. */
-export function streamingTail(text: string, maxChars = 600): string {
-  const trimmed = text.trimEnd();
-  if (trimmed.length <= maxChars) return trimmed;
-  const tail = trimmed.slice(-maxChars);
+export function streamingTail(text: StreamText, maxChars = 600): string {
+  let end = text.length;
+  if (typeof text === "string") {
+    end = text.trimEnd().length;
+  } else {
+    // Walk only trailing whitespace blocks; do not join a megabyte response
+    // to display the terminal's final few hundred characters.
+    for (let index = text.blockCount - 1; index >= 0; index--) {
+      const block = text.groups[Math.floor(index / textGroupSize)]![index]!;
+      const trimmed = block.trimEnd();
+      end -= block.length - trimmed.length;
+      if (trimmed.length > 0) break;
+    }
+  }
+  if (end <= maxChars) return sliceText(text, 0, end);
+  const tail = sliceText(text, end - maxChars, end);
   const firstNewline = tail.indexOf("\n");
   return `…${firstNewline === -1 ? tail : tail.slice(firstNewline)}`;
 }

@@ -1,3 +1,4 @@
+import { sliceText } from "@iterate-com/shared/chunked-text";
 import { useMemo, useState } from "react";
 import { ChevronRightIcon } from "lucide-react";
 import type {
@@ -10,6 +11,8 @@ import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { StreamingText } from "./streaming-text.tsx";
+import { LlmPreviewNotice } from "./feed-preview-notice.tsx";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { buildRoundMetaYaml, resultYaml } from "~/lib/agent-round-meta-yaml.ts";
@@ -219,17 +222,21 @@ function LlmOnlyRound({
           </Button>
         )}
       </div>
-      {llm.thinkingText === "" ? null : (
+      {llm.thinkingText.length === 0 ? null : (
         <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm italic leading-relaxed text-muted-foreground">
-          {llm.thinkingText}
+          <StreamingText text={llm.thinkingText} />
         </div>
       )}
-      {llm.responseText === "" ? null : looksLikeCode(llm.responseText) ? (
+      {llm.responseText.length === 0 ? null : looksLikeCode(llm.responseText) ? (
         <div
           className={cn("w-full max-w-2xl", llm.interpreted && "opacity-75")}
           data-testid={llm.interpreted ? "agent-feed-raw-response" : undefined}
         >
-          <SourceCodeBlock code={llm.responseText} language="typescript" showLineNumbers={false} />
+          <SourceCodeBlock
+            code={sliceText(llm.responseText)}
+            language="typescript"
+            showLineNumbers={false}
+          />
         </div>
       ) : (
         <div
@@ -239,9 +246,10 @@ function LlmOnlyRound({
           )}
           data-testid={llm.interpreted ? "agent-feed-raw-response" : undefined}
         >
-          {llm.responseText}
+          <StreamingText text={llm.responseText} />
         </div>
       )}
+      <LlmPreviewNotice truncated={llm.previewTruncated} />
       {llm.errorMessage == null ? null : (
         <pre className="max-w-2xl whitespace-pre-wrap px-1.5 font-mono text-xs text-destructive">
           {llm.errorMessage}

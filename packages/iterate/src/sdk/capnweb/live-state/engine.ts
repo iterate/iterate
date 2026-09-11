@@ -5,7 +5,12 @@ import {
   type RetainedCallback,
 } from "./retain.ts";
 import { diff } from "./diff.ts";
-import type { LiveUpdate } from "./protocol.ts";
+import type {
+  LiveStateCursor,
+  LiveStateRead,
+  LiveStateSubscriptionOptions,
+  LiveUpdate,
+} from "./protocol.ts";
 
 /** Handle returned by `LiveState.subscribe` — the ownership + liveness surface for one subscriber. */
 export type LiveStateSubscription = {
@@ -16,6 +21,15 @@ export type LiveStateSubscription = {
 };
 
 const DEFAULT_DEBOUNCE_MS = 100;
+const ACK_TIMEOUT_MS = 10_000;
+
+type Subscriber<State> = {
+  version: 1 | 2;
+  state: State;
+  revision: number;
+  busy: boolean;
+  timeout?: ReturnType<typeof setTimeout>;
+};
 
 /**
  * A source-agnostic live store: hold a state value, and when it changes push the
@@ -28,19 +42,21 @@ const DEFAULT_DEBOUNCE_MS = 100;
  * - Updates are IMMUTABLE (`setState`/`assign` build a new value, never mutate),
  *   so the diff short-circuits unchanged branches by identity — O(changed), not
  *   O(size). See `diff.ts`.
- * - Diffing and broadcasting happen only while a subscriber exists; a dormant
- *   engine just holds its value and schedules nothing.
+ * - Push work runs only while a subscriber exists. Transient readers call
+ *   `readSince` explicitly; a dormant engine schedules nothing.
  *
- * All subscribers ride ONE revision line: a new subscriber gets a full snapshot
- * at the current revision, and every flush pushes the same patch to everyone. A
- * subscriber that misses a patch (its `from` ≠ its revision) resyncs.
+ * All subscribers share one revision line. Fast subscribers share a patch;
+ * slow subscribers receive a coalesced patch from their acknowledged state.
+ * A revision mismatch makes the client resync instead of applying stale data.
  */
 export class LiveState<State extends object> {
   #current: State;
-  /** The state every current subscriber has been brought to — the diff baseline. */
+  /** Latest flushed state — the shared diff baseline. */
   #broadcast: State;
   #revision = 0;
-  readonly #subscribers = new Set<RetainedCallback<LiveUpdate<State>>>();
+  readonly #epoch = crypto.randomUUID();
+  #lastUpdate: Extract<LiveUpdate<State>, { type: "patch" }> | undefined;
+  readonly #subscribers = new Map<RetainedCallback<LiveUpdate<State>>, Subscriber<State>>();
   readonly #debounceMs: number;
   #flushTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -53,6 +69,24 @@ export class LiveState<State extends object> {
   /** The current state — reflects every `setState`/`assign`, even while dormant. */
   getState(): State {
     return this.#current;
+  }
+
+  /** One retained delta bounds history while a single parent can pull incrementally.
+   * A late reader or a new incarnation receives an explicit snapshot instead. */
+  readSince(cursor?: LiveStateCursor): LiveStateRead<State> {
+    if (this.#flushTimer !== undefined) clearTimeout(this.#flushTimer);
+    this.#flushTimer = undefined;
+    this.#flush();
+    if (cursor?.epoch === this.#epoch) {
+      if (cursor.revision === this.#revision) return { epoch: this.#epoch, update: null };
+      if (cursor.revision === this.#lastUpdate?.from) {
+        return { epoch: this.#epoch, update: this.#lastUpdate };
+      }
+    }
+    return {
+      epoch: this.#epoch,
+      update: { type: "snapshot", revision: this.#revision, state: this.#broadcast },
+    };
   }
 
   /** True while at least one live subscriber makes projection work observable. */
@@ -71,14 +105,24 @@ export class LiveState<State extends object> {
     this.setState((prev) => ({ ...prev, ...partial }));
   }
 
-  subscribe(sink: (update: LiveUpdate<State>) => unknown): LiveStateSubscription {
+  subscribe(
+    sink: (update: LiveUpdate<State>) => unknown,
+    options: LiveStateSubscriptionOptions = {},
+  ): LiveStateSubscription {
     // First subscriber after dormancy: adopt the latest state as the shared
     // baseline. While subscribers exist, `#broadcast` only advances inside a
     // flush (with a patch to everyone), so it always matches what they've seen.
-    if (this.#subscribers.size === 0) this.#broadcast = this.#current;
+    if (this.#subscribers.size === 0) {
+      this.#flush();
+    }
 
     const retained = retainCallback(sink);
-    this.#subscribers.add(retained);
+    this.#subscribers.set(retained, {
+      version: options.patchVersion ?? 1,
+      state: this.#broadcast,
+      revision: this.#revision,
+      busy: false,
+    });
     retained.onRpcBroken?.(() => this.#drop(retained));
     // The initial snapshot is the first paint — delivered now, never debounced.
     // A synchronously-throwing sink is dropped here and never becomes live.
@@ -99,21 +143,44 @@ export class LiveState<State extends object> {
   }
 
   #flush(): void {
-    const patch = diff(this.#broadcast, this.#current);
+    const previous = this.#broadcast;
+    const patch = diff(previous, this.#current);
     if (patch === undefined) return;
     const from = this.#revision;
     const to = (this.#revision += 1);
     this.#broadcast = this.#current;
-    const update: LiveUpdate<State> = { type: "patch", from, to, patch };
-    for (const subscriber of [...this.#subscribers]) this.#deliver(subscriber, update);
+    const update = { type: "patch", from, to, patch } satisfies LiveUpdate<State>;
+    this.#lastUpdate = update;
+    for (const subscriber of this.#subscribers.keys()) {
+      this.#sendLatest(subscriber);
+    }
   }
 
-  /**
-   * Fire-and-forget delivery that observes rejection. A dead stub rejects every
-   * push (and can throw synchronously), so any failure drops the subscriber —
-   * otherwise a corpse would keep its slot and its `ping()` would lie forever.
-   */
+  /** Slow subscribers hold one call and one baseline, never a queue of token updates. */
+  #sendLatest(subscriber: RetainedCallback<LiveUpdate<State>>): void {
+    const held = this.#subscribers.get(subscriber);
+    if (!held || held.busy || held.revision === this.#revision) return;
+    const patch =
+      held.version === 2 && held.revision === this.#lastUpdate?.from
+        ? this.#lastUpdate.patch
+        : diff(held.state, this.#broadcast, { arrays: held.version === 2 });
+    // A coalesced sequence may return to the same value. An empty object patch
+    // still advances its revision so the following shared update applies.
+    this.#deliver(subscriber, {
+      type: "patch",
+      from: held.revision,
+      to: this.#revision,
+      patch: patch ?? {},
+    });
+  }
+
+  /** Only acknowledgement releases the next coalesced update; a dead sink is dropped. */
   #deliver(subscriber: RetainedCallback<LiveUpdate<State>>, update: LiveUpdate<State>): void {
+    const held = this.#subscribers.get(subscriber);
+    if (!held) return;
+    held.state = this.#broadcast;
+    held.revision = this.#revision;
+    held.busy = true;
     let result: unknown;
     try {
       result = subscriber(update);
@@ -122,15 +189,32 @@ export class LiveState<State extends object> {
       return;
     }
     if (isThenable(result)) {
+      held.timeout = setTimeout(() => {
+        console.warn("Live-state subscriber dropped: acknowledgement timed out", {
+          revision: held.revision,
+          timeoutMs: ACK_TIMEOUT_MS,
+        });
+        this.#drop(subscriber);
+      }, ACK_TIMEOUT_MS);
       void Promise.resolve(result)
-        .then(undefined, () => this.#drop(subscriber))
+        .then(
+          () => {
+            if (held.timeout !== undefined) clearTimeout(held.timeout);
+            held.busy = false;
+            this.#sendLatest(subscriber);
+          },
+          () => this.#drop(subscriber),
+        )
         .finally(() => disposeIgnoredRpcResult(result));
       return;
     }
+    held.busy = false;
     disposeIgnoredRpcResult(result);
   }
 
   #drop(subscriber: RetainedCallback<LiveUpdate<State>>): void {
+    const timeout = this.#subscribers.get(subscriber)?.timeout;
+    if (timeout !== undefined) clearTimeout(timeout);
     if (!this.#subscribers.delete(subscriber)) return;
     subscriber[Symbol.dispose]();
     if (this.#subscribers.size === 0 && this.#flushTimer !== undefined) {

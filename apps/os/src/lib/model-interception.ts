@@ -10,7 +10,6 @@
 // purpose — a turn whose journal says `openai/*` can never have been served by
 // a handler.
 
-import { z } from "zod";
 import type { CfAiRunOptions } from "../domains/itx/cf-capabilities.ts";
 
 /** The model-name namespace served by the live AI interceptor. */
@@ -28,19 +27,10 @@ export function isInterceptedModel(model: string): boolean {
   return model.startsWith(INTERCEPTED_MODEL_PREFIX);
 }
 
-/** Serializable provider response, consumed by the same decoder as a real call. */
-export const InterceptedAiResponse = z.object({
-  status: z.number().int().min(200).max(599),
-  headers: z.record(z.string(), z.string()),
-  body: z.string(),
-});
-
-/** Serialized provider response consumed by the normal response decoder. */
-export type InterceptedAiResponse = z.infer<typeof InterceptedAiResponse>;
-
 /** The two concrete outbound APIs, after host policy and request preparation. No credentials. */
 export type AiRequest = OpenAiHttpRequest | WorkersAiRequest;
 
+/** Prepared OpenAI HTTP request, with authorization supplied only at dispatch. */
 export type OpenAiHttpRequest = {
   kind: "openai-http";
   gatewayId: string;
@@ -49,6 +39,7 @@ export type OpenAiHttpRequest = {
   body: Record<string, unknown>;
 };
 
+/** Prepared Workers AI binding invocation, including its raw-response option. */
 export type WorkersAiRequest = {
   kind: "workers-ai";
   model: string;
@@ -60,15 +51,27 @@ export type WorkersAiRequest = {
 };
 
 /** Original model name and the complete credential-free request that would be dispatched. */
-export type ProjectAiInterceptorInput = {
-  model: string;
-  request: AiRequest;
-} & ({ source: "agent-turn"; agentPath: string } | { source: "ai-run" } | { source: "egress" });
+export type ProjectAiInterceptorInput =
+  | {
+      source: "agent-turn";
+      agentPath: string;
+      model: string;
+      request: AiRequest & {
+        body: {
+          messages: {
+            role: "system" | "developer" | "user" | "assistant";
+            content: string;
+          }[];
+        };
+      };
+    }
+  | { source: "ai-run"; model: string; request: AiRequest }
+  | { source: "egress"; model: string; request: AiRequest };
 
 /** Replace only the provider call; response classification and decoding still run. */
 export type ProjectAiInterceptor = (
   input: ProjectAiInterceptorInput,
-) => Promise<InterceptedAiResponse>;
+) => Response | Promise<Response>;
 
 /** Disposable handle for one live AI interception. */
 export interface ProjectAiIntercept extends Disposable {

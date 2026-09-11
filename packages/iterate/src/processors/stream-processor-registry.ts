@@ -158,6 +158,10 @@ export type RegisteredProcessorReads<State> = Omit<ProcessorReads<State>, "waitU
   ): Promise<void>;
   /** The runner's committed fold, synchronously (schema default until loaded). */
   readonly currentState: State;
+  /** Committed processing cursor, read atomically with currentState in live assembly. */
+  readonly currentAcknowledgedThroughOffset: number;
+  /** Source lifetime paired atomically with currentState and its cursor. */
+  readonly currentStreamId: string | undefined;
   /** Whether `currentState` is a real fold — gate live publishing on it. */
   readonly isLoaded: boolean;
   /**
@@ -186,6 +190,8 @@ type RegistryEntry = {
  * and `durableObjectProgressStore`), so the instances stay independent.
  */
 export type RegisterProcessorOptions = {
+  /** Clear this processor's related projections synchronously with source-lifetime replacement. */
+  resetForStream?: () => void;
   /** Post-eviction keepalive recovery — REQUIRED for consequential
    * `runInBackground` work (see the module doc). */
   recovery?: boolean;
@@ -580,6 +586,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
           progress: durableObjectProgressStore({
             storage: ctx.storage,
             name,
+            resetForStream: opts?.resetForStream,
           }),
           ...(recovery === undefined ? {} : { recovery }),
         },
@@ -616,6 +623,12 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         waitUntilEvent: (input) =>
           "offset" in input ? runner.waitUntilEvent(input) : runner.waitUntilEvent(input),
         catchUp: () => runner.catchUp(),
+        get currentAcknowledgedThroughOffset() {
+          return runner.currentAcknowledgedThroughOffset;
+        },
+        get currentStreamId() {
+          return runner.currentStreamId;
+        },
         get currentState() {
           return runner.currentState;
         },

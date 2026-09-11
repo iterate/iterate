@@ -95,11 +95,16 @@ test("memory-only ephemeral events preserve offsets while normal reads omit them
   });
   const [after] = await stream.append({ type: EVENT_TYPE, payload: { marker, position: "after" } });
 
-  expect(ephemeral).toMatchObject({ ephemeral: true, offset: before!.offset + 1 });
-  expect(after!).toMatchObject({ offset: ephemeral!.offset + 1 });
+  expect(ephemeral).toMatchObject({ ephemeral: true });
+  expect(ephemeral!.offset).toBeGreaterThan(before!.offset);
+  expect(after!.offset).toBeGreaterThan(ephemeral!.offset);
   await expect(stream.getEvent({ offset: ephemeral!.offset })).resolves.toEqual(ephemeral);
 
-  const window = { afterOffset: before!.offset - 1, beforeOffset: after!.offset + 1 };
+  const window = {
+    afterOffset: before!.offset - 1,
+    beforeOffset: after!.offset + 1,
+    eventTypes: [EVENT_TYPE, ephemeralType],
+  };
   expect((await stream.getEvents(window)).map((event) => event.offset)).toEqual([
     before!.offset,
     after!.offset,
@@ -113,8 +118,8 @@ test("memory-only ephemeral events preserve offsets while normal reads omit them
     limit: 2,
   });
   const secondPage = await stream.getEventPage({
+    ...window,
     afterOffset: firstPage.events.at(-1)!.offset,
-    beforeOffset: window.beforeOffset,
     includeEphemeral: true,
     limit: 2,
   });
@@ -123,8 +128,8 @@ test("memory-only ephemeral events preserve offsets while normal reads omit them
     ephemeral!.offset,
   ]);
   expect(secondPage.events.map((event) => event.offset)).toEqual([after!.offset]);
-  expect(firstPage).toMatchObject({ streamMaxOffset: after!.offset });
-  expect(secondPage).toMatchObject({ streamMaxOffset: after!.offset });
+  expect(firstPage.streamMaxOffset).toBeGreaterThanOrEqual(after!.offset);
+  expect(secondPage.streamMaxOffset).toBeGreaterThanOrEqual(firstPage.streamMaxOffset);
   await expect(
     stream.append({
       type: "events.iterate.com/stream/paused",
@@ -167,7 +172,14 @@ test("an idempotency key on an ephemeral event rejects the whole append batch", 
     type: EVENT_TYPE,
     payload: { marker, position: "after" },
   });
-  expect(after!).toMatchObject({ offset: before!.offset + 1 });
+  expect(after!.offset).toBeGreaterThan(before!.offset);
+  expect(
+    await stream.getEvents({
+      afterOffset: before!.offset,
+      eventTypes: [EVENT_TYPE, `${EVENT_TYPE}/ephemeral`],
+      includeEphemeral: true,
+    }),
+  ).toEqual([after]);
 });
 
 test("ephemeral events are forgotten after the stream Durable Object restarts", async () => {

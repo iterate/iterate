@@ -1,10 +1,12 @@
 // Hourly Durable Objects cost alarm (do-duration-probe.yml). Runs the
 // duration probe (apps/os/scripts/do-duration-probe.ts --json) against both
-// Cloudflare accounts and keeps ONE Slack thread per UTC day in #error-pulse:
-// the headline is rewritten every hour with each account's picture (latest
-// hour, today's total, hours over the ceiling), and anything that needs a
-// human — an hour over the ceiling, a probe that could not run — is a reply
-// in that thread. The channel itself sees one message a day.
+// Cloudflare accounts and keeps ONE Slack thread per UTC day in #error-pulse.
+// The headline is one sentence, rewritten every hour: "We're spending $X/day
+// on durable objects based on current usage ($A dev/preview, $B prd)". The
+// thread's first reply is the per-account table (latest hour, today so far,
+// hours over the ceiling, pinned invocations), also rewritten every hour;
+// anything that needs a human — an hour over the ceiling, a probe that could
+// not run — is a further reply. The channel itself sees one message a day.
 // Exists because the 2026-09-01 preview stream-DO wake loop burned ~$300/hour
 // for 28 hours before a human noticed it on the bill.
 //
@@ -77,7 +79,7 @@ export async function run(options: {
   }
 
   const thread = renderDailyThread({ now, readings, runUrl, testRun: override !== undefined });
-  console.log(`\n${thread.headline}\n`);
+  console.log(`\n${thread.headline}\n\n${thread.details}\n`);
   for (const reply of thread.replies) console.log(`\n${reply}\n`);
 
   const slack = getSlackClient();
@@ -89,6 +91,7 @@ export async function run(options: {
     headline: thread.headline,
     testRun: override !== undefined,
   });
+  await upsertDetailsReply({ slack, channel, headlineTs, details: thread.details });
   for (const text of thread.replies) {
     await slack.chat.postMessage({ channel, thread_ts: headlineTs, text });
   }
@@ -142,9 +145,10 @@ function probe(dopplerConfig: string, ceilingDoHours: number) {
 }
 
 /**
- * The day's Slack thread as text: a headline that is the whole picture at a
- * glance, and the replies this run has to add (only what a human should look
- * at now). Pure, so the wording is testable.
+ * The day's Slack thread as text: the one-sentence headline, the per-account
+ * details table that lives in the thread's first reply, and the alert replies
+ * this run has to add (only what a human should look at now). Pure, so the
+ * wording is testable.
  */
 export function renderDailyThread(input: {
   now: Date;
@@ -153,39 +157,48 @@ export function renderDailyThread(input: {
   testRun: boolean;
 }) {
   const date = input.now.toISOString().slice(0, 10);
-  const time = input.now.toISOString().slice(11, 16);
+  // The probe runs at :41 and analytics lag ~15–20 minutes, so the current
+  // hour is always partial: "current usage" is the last complete hour.
+  const lastCompleteHour = new Date(input.now.getTime() - 3600_000).toISOString().slice(0, 13);
   const recentSince = new Date(input.now.getTime() - RECENT_HOURS * 3600_000).toISOString();
   const testPrefix = input.testRun ? "🧪 TEST RUN — " : "";
-  const usd = (doHours: number) =>
-    `$${(doHours * USD_PER_DO_HOUR).toFixed(doHours * USD_PER_DO_HOUR < 10 ? 2 : 0)}`;
   const hourOf = (row: { hour: string; doHours: number }) =>
-    `${row.hour.slice(11, 16)} → ${row.doHours.toLocaleString("en-US")} DO-hours (~${usd(row.doHours)}/h)`;
+    `${row.hour.slice(11, 16)} → ${row.doHours.toLocaleString("en-US")} (~${usd(row.doHours)}/h)`;
 
-  const lines = [`${testPrefix}📒 Durable Objects — ${date} (UTC) · updated ${time}`];
+  let usdPerDay = 0;
+  const perAccount: string[] = [];
+  const tableRows: string[][] = [];
   const replies: string[] = [];
   for (const reading of input.readings) {
     if (reading.summary === null) {
-      lines.push(`${reading.label}: ⚠️ probe failed this run — ${reading.failure}`);
+      perAccount.push(`${reading.label}: probe failed`);
+      tableRows.push([reading.label, `probe failed: ${reading.failure}`]);
       replies.push(
         `${testPrefix}⚠️ DO duration probe FAILED to run. account: ${reading.label}.\n${reading.failure}\n${links(input.runUrl)}`,
       );
       continue;
     }
     const { activeTime, pinnedInvocations } = reading.summary;
+    // Rows exist only for hours with activity: no row for the last complete
+    // hour means nothing ran in it (dev/preview overnight, slots erased).
+    const current = activeTime.hours.find((row) => row.hour.startsWith(lastCompleteHour));
+    const accountUsdPerDay = (current ? current.doHours : 0) * 24 * USD_PER_DO_HOUR;
+    usdPerDay += accountUsdPerDay;
+    perAccount.push(`${money(accountUsdPerDay)} ${reading.label}`);
+
     const today = activeTime.hours.filter((row) => row.hour.startsWith(date));
     const todayTotal = today.reduce((total, row) => total + row.doHours, 0);
     const breachedToday = activeTime.breachedHours.filter((row) => row.hour.startsWith(date));
     const recent = activeTime.breachedHours.filter((row) => row.hour >= recentSince);
     const latest = activeTime.hours.at(-1);
-    const status = recent.length > 0 ? "🚨" : "✅";
-    const parts = [
-      `${reading.label}: ${status} ${latest ? hourOf(latest) : "no DO activity in the lookback"}`,
-      `today ${todayTotal.toLocaleString("en-US")} DO-hours ≈ ${usd(todayTotal)}`,
-      `${breachedToday.length}/${today.length} h over ${reading.ceilingDoHours}`,
-    ];
     const pinned = pinnedInvocations.rows[0];
-    if (pinned) parts.push(`pinned: ${pinned.script} P99=${pinned.wallTimeP99Hours}h`);
-    lines.push(parts.join(" · "));
+    tableRows.push([
+      reading.label,
+      latest ? hourOf(latest) : "no activity in the lookback",
+      `${todayTotal.toLocaleString("en-US")} ≈ ${usd(todayTotal)}`,
+      `${breachedToday.length}/${today.length} over ${reading.ceilingDoHours}`,
+      pinned ? `${pinned.script} P99=${pinned.wallTimeP99Hours}h` : "—",
+    ]);
 
     const worst = recent.at(-1);
     if (worst) {
@@ -201,8 +214,50 @@ export function renderDailyThread(input: {
       );
     }
   }
-  lines.push(links(input.runUrl));
-  return { date, headline: lines.join("\n"), replies };
+
+  const headline = `${testPrefix}We're spending ${money(usdPerDay)}/day on durable objects based on current usage (${perAccount.join(", ")})`;
+  const details = [
+    "```",
+    ...table([DETAILS_HEADER, ...tableRows]),
+    "```",
+    links(input.runUrl),
+  ].join("\n");
+  return { date, headline, details, replies };
+}
+
+/** The details table's header row; also how the reply is recognised in the thread. */
+const DETAILS_HEADER = [
+  "account",
+  "latest hour",
+  "today (DO-hours)",
+  "hours over ceiling",
+  "pinned invocations",
+];
+
+/** Rows padded into aligned columns for a Slack code block. */
+function table(rows: string[][]) {
+  const widths = rows[0]!.map((_, column) =>
+    Math.max(...rows.map((row) => (row[column] || "").length)),
+  );
+  return rows.map((row) =>
+    row
+      .map((cell, column) => (column === row.length - 1 ? cell : cell.padEnd(widths[column]!)))
+      .join("  ")
+      .trimEnd(),
+  );
+}
+
+/** Dollars for a headline: whole dollars, cents only under $10, $0 when nothing. */
+function money(usdAmount: number) {
+  if (usdAmount === 0) return "$0";
+  if (usdAmount < 10) return `$${usdAmount.toFixed(2)}`;
+  return `$${Math.round(usdAmount).toLocaleString("en-US")}`;
+}
+
+/** Dollars for a DO-hours figure inside the table. */
+function usd(doHours: number) {
+  const usdAmount = doHours * USD_PER_DO_HOUR;
+  return `$${usdAmount.toFixed(usdAmount < 10 ? 2 : 0)}`;
 }
 
 function links(runUrl: string | null) {
@@ -217,10 +272,10 @@ function links(runUrl: string | null) {
 
 /**
  * Today's headline message, created on the day's first run. Found by text:
- * the bot's own messages since 00:00 UTC whose text carries the day stamp
- * (Slack rewrites emoji as :shortcodes: in history, so the stamp is matched
- * without it). A forced-threshold test run keeps its own thread: it must
- * never rewrite the real day's headline with test text.
+ * the bot's own messages since 00:00 UTC that read "We're spending …"
+ * (Slack rewrites emoji as :shortcodes: in history, so the test-run prefix
+ * is matched by its words). A forced-threshold test run keeps its own thread:
+ * it must never rewrite the real day's headline with test text.
  */
 async function findOrCreateHeadline(input: {
   slack: WebClient;
@@ -236,12 +291,12 @@ async function findOrCreateHeadline(input: {
     oldest: String(dayStart),
     limit: 200,
   });
-  const stamp = `Durable Objects — ${date}`;
   const existing = (history.messages || []).find(
     (message) =>
       message.bot_id &&
       message.ts &&
-      message.text?.includes(stamp) &&
+      message.text?.includes("spending") &&
+      message.text.includes("/day on durable objects") &&
       message.text.includes("TEST RUN") === input.testRun,
   );
   if (existing?.ts) return existing.ts;
@@ -251,6 +306,39 @@ async function findOrCreateHeadline(input: {
   });
   if (!posted.ts) throw new Error("Slack accepted the headline but returned no ts");
   return posted.ts;
+}
+
+/**
+ * The thread's first reply is the per-account table: posted on the day's
+ * first run, rewritten in place on every run after. Recognised among the
+ * bot's replies by the table's header row.
+ */
+async function upsertDetailsReply(input: {
+  slack: WebClient;
+  channel: string;
+  headlineTs: string;
+  details: string;
+}) {
+  const replies = await input.slack.conversations.replies({
+    channel: input.channel,
+    ts: input.headlineTs,
+    limit: 200,
+  });
+  const existing = (replies.messages || []).find(
+    (message) =>
+      message.bot_id &&
+      message.ts !== input.headlineTs &&
+      message.text?.includes(DETAILS_HEADER.join("  ").slice(0, 20)),
+  );
+  if (existing?.ts) {
+    await input.slack.chat.update({ channel: input.channel, ts: existing.ts, text: input.details });
+    return;
+  }
+  await input.slack.chat.postMessage({
+    channel: input.channel,
+    thread_ts: input.headlineTs,
+    text: input.details,
+  });
 }
 
 if (isMainModule(import.meta.url)) {

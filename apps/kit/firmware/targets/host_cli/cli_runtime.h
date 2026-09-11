@@ -54,7 +54,7 @@
 #include "iterate/kit/platforms/darwin_audio_codec.h"
 #include "iterate/kit/platforms/posix_itx_transport.h"
 #include "iterate/kit/spsc_ring.h"
-#include "iterate/kit/voice_playback_clock.h"
+#include "iterate/kit/voice_playout.h"
 #include "iterate/kit/voicelab_stream.h"
 
 struct cli_runtime {
@@ -91,7 +91,13 @@ struct cli_runtime {
   uint32_t frame_sequence;
   struct cli_microphone microphone;
   struct cli_speaker speaker;
-  struct iterate_kit_voice_playback_clock playback_clock;
+  /*
+   * The playout step shared with the board — the clock, the answer's
+   * timeline and every counter the report calls spk* — and the frame in
+   * flight between the ring and the room. See iterate/kit/voice_playout.h.
+   */
+  struct iterate_kit_voice_playout playout;
+  uint8_t playout_frame[ITERATE_KIT_VOICE_FRAME_BYTES];
   struct cli_wav_source source;
   struct cli_wav_sink sink;
   /* What the microphone captured; opened only when --mic-record was given. */
@@ -163,14 +169,6 @@ struct cli_runtime {
   uint32_t turn_room_completed_start_bytes;
   /** Bytes this scripted turn successfully submitted to the room boundary. */
   uint32_t turn_room_submitted_bytes;
-  /**
-   * The current answer's playout timeline: when its first frame reached the
-   * speaker, and how many MILLISECONDS have been emitted since. See iterate_kit_voice_playout_lag_ms —
-   * both targets measure lateness the same way, from the same helper.
-   */
-  uint64_t answer_started_ms;
-  uint32_t answer_emitted_ms;
-  uint32_t speaker_lag_max_ms;
   uint64_t next_mic_at_ms;
   uint64_t next_playback_at_ms;
   uint64_t next_stats_at_ms;
@@ -184,18 +182,11 @@ struct cli_runtime {
   uint32_t mic_frames_captured;
   uint32_t mic_frames_dropped;
   uint32_t mic_frames_gated;
-  uint32_t speaker_frames_played;
   uint32_t speaker_overflow_drops;
   uint32_t speaker_underruns;
-  uint32_t speaker_conceal_frames;
-  uint32_t speaker_catchup_frames;
-  uint32_t speaker_write_failures;
   uint32_t mic_write_failures;
   /* Frames the room never got because the speaker ring was full. */
   uint32_t speaker_room_drops;
-  uint32_t speaker_margin_min_ms;
-  uint32_t speaker_margin_max_ms;
-  uint32_t speaker_writes;
   uint32_t speaker_bad_frames;
   uint32_t barge_in_flushes;
   uint32_t liveness_restarts;

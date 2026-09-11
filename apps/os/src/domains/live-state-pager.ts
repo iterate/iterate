@@ -14,20 +14,24 @@
 // serves the client's Cap'n Web subscription from that engine, so the DO
 // holds no callback and the relay holds no DO-side stub.
 //
-// Every Page is the FULL state, read at send time, on one ordered Pager —
-// which is exactly liveState's latest-wins semantics, so there is no cursor,
-// no replay, and no revision guard anywhere: a reconnect is just a fresh
-// first Page. State only changes while the DO is awake, and every change
-// runs the host's one materialization point, so pushing there is complete
-// coverage. Outgoing Pages carry no per-message request charge, and a
-// hibernated DO bills no duration while its watchers stay attached — but the
-// execution that materializes and sends a Page is billed like any other.
+// Each incarnation seeds surviving sockets, then sends structural patches on
+// an ordered revision line. No callback, replay log or ACK timer lives in the
+// watched DO. A gap closes the relay socket so its bounded recovery re-seeds.
+// Codec negotiation is attached to hibernating sockets for deployment skew.
 //
 // Delete this module when hibernatable RPC ships: a retained callback that
 // survives hibernation makes the Pager redundant.
 
 import { z } from "zod";
-import { LiveState, type LiveStateSubscription, type LiveUpdate } from "iterate/sdk/capnweb";
+import {
+  createLiveStateStore,
+  LiveState,
+  type LiveStateCursor,
+  type LiveStatePatch,
+  type LiveStateSubscription,
+  type LiveStateSubscriptionOptions,
+  type LiveUpdate,
+} from "iterate/sdk/capnweb";
 
 /**
  * Internal upgrade header marking a Live State Pager dial. Presence CLAIMS
@@ -100,20 +104,51 @@ const FLUSH_DEBOUNCE_MS = 50;
 /** How long the relay waits for the seed Page before giving up on the Pager. */
 const SEED_PAGE_TIMEOUT_MS = 5_000;
 
-/**
- * A Page sent DO → relay: the full liveState, latest-wins. Loose object on
- * purpose: a newer DO may add fields the relay's deploy does not know yet,
- * and the payload stays `unknown` here — the relay feeds it to a typed engine
- * whose consumers already validate shape by use.
- */
-const LiveStatePage = z.object({ type: z.literal("state"), state: z.unknown() });
+const Patch: z.ZodType<LiveStatePatch> = z.lazy(() =>
+  z.union([
+    z.strictObject({ set: z.unknown() }),
+    z.strictObject({
+      array: z.strictObject({
+        length: z.number().int().nonnegative(),
+        items: z.array(z.tuple([z.number().int().nonnegative(), Patch])),
+      }),
+    }),
+    z.strictObject({
+      fields: z.record(z.string(), Patch).optional(),
+      drop: z.array(z.string()).optional(),
+    }),
+  ]),
+);
 
-/** Decode one Live State Page; anything unparseable is dropped whole. */
-export function parseLiveStatePage(data: unknown): { state: unknown } | undefined {
+const LiveStatePage = z.union([
+  // Existing relays keep their full-state protocol until their socket closes.
+  z.object({ type: z.literal("state"), state: z.unknown() }),
+  z.object({
+    type: z.literal("update"),
+    epoch: z.string(),
+    update: z.discriminatedUnion("type", [
+      z.object({
+        type: z.literal("snapshot"),
+        revision: z.number().int().nonnegative(),
+        state: z.unknown(),
+      }),
+      z.object({
+        type: z.literal("patch"),
+        from: z.number().int().nonnegative(),
+        to: z.number().int().nonnegative(),
+        patch: Patch,
+      }),
+    ]),
+  }),
+]);
+
+/** Validate protocol metadata once; state is owned by the source's domain schema. */
+export function parseLiveStatePage(data: unknown) {
   if (typeof data !== "string") return undefined;
   try {
     const parsed = LiveStatePage.safeParse(JSON.parse(data));
-    return parsed.success ? { state: parsed.data.state } : undefined;
+    if (!parsed.success) return undefined;
+    return parsed.data.type === "state" ? { state: parsed.data.state } : parsed.data;
   } catch {
     return undefined;
   }
@@ -140,9 +175,9 @@ type LiveStatePagersHooks = {
 
 /**
  * The Durable-Object half: accept client-given Live State Pagers and Page the
- * current state to every attached watcher when it changes. Pagers carry no
- * attachment — their existence is their whole state — so the class itself is
- * stateless and survives eviction for free.
+ * current state to every attached watcher when it changes. Only the negotiated
+ * codec is attached durably. The baseline and seed set are transient: a fresh
+ * incarnation sends snapshots to every surviving socket before more patches.
  */
 export class LiveStatePagers {
   readonly #hooks: LiveStatePagersHooks;
@@ -150,6 +185,9 @@ export class LiveStatePagers {
   #reloadInFlight: Promise<void> | undefined;
   #externalRefresh: Promise<void> | undefined;
   #externalRefreshAgain = false;
+  readonly #wire = new LiveState<object>({});
+  readonly #seeded = new WeakSet<WebSocket>();
+  #cursor: LiveStateCursor | undefined;
 
   constructor(hooks: LiveStatePagersHooks) {
     this.#hooks = hooks;
@@ -161,9 +199,8 @@ export class LiveStatePagers {
    * {@link LIVE_STATE_PAGER_HEADER}): no header → not ours; header without a
    * WebSocket upgrade → 400, never a fall-through to an egress/proxy lane;
    * an upgrade → accept, then seed the new socket via refresh + flush. The
-   * seed rides the shared flusher — a full-state re-send to older sockets is
-   * latest-wins and harmless, and a fold-driven Page landing first is an
-   * equally valid seed.
+   * seed rides the shared flusher; established sockets keep their revision
+   * line while the new socket receives its own current snapshot.
    */
   async acceptUpgrade(request: Request): Promise<Response | undefined> {
     if (request.headers.get(LIVE_STATE_PAGER_HEADER) === null) return undefined;
@@ -175,6 +212,9 @@ export class LiveStatePagers {
     }
     const pair = new WebSocketPair();
     this.#hooks.acceptWebSocket(pair[1], [LIVE_STATE_PAGER_TAG]);
+    pair[1].serializeAttachment(
+      request.headers.get(LIVE_STATE_PAGER_HEADER) === "watch-v2" ? 2 : 1,
+    );
     this.#hooks.waitUntil(
       Promise.resolve()
         .then(() => this.#hooks.refresh())
@@ -294,23 +334,43 @@ export class LiveStatePagers {
   #flush(): void {
     const sockets = this.#hooks.getWebSockets(LIVE_STATE_PAGER_TAG);
     if (sockets.length === 0) return;
-    let page: string;
     try {
-      page = JSON.stringify({ type: "state", state: this.#hooks.readState() });
+      const state = this.#hooks.readState();
+      // Source state is an object by the live-state contract; readState is
+      // unknown here because hosts have unrelated domain shapes.
+      this.#wire.setState(state as object);
+      const read = this.#wire.readSince(this.#cursor);
+      this.#cursor = read.update
+        ? {
+            epoch: read.epoch,
+            revision: read.update.type === "snapshot" ? read.update.revision : read.update.to,
+          }
+        : this.#cursor;
+      let snapshot: string | undefined;
+      let patch: string | undefined;
+      let legacy: string | undefined;
+      for (const ws of sockets) {
+        let page: string;
+        if (ws.deserializeAttachment() !== 2) {
+          legacy ??= JSON.stringify({ type: "state", state });
+          page = legacy;
+        } else if (!this.#seeded.has(ws)) {
+          snapshot ??= JSON.stringify({ type: "update", ...this.#wire.readSince() });
+          page = snapshot;
+        } else {
+          if (!read.update) continue;
+          patch ??= JSON.stringify({ type: "update", ...read });
+          page = patch;
+        }
+        try {
+          ws.send(page);
+          this.#seeded.add(ws);
+        } catch (error) {
+          this.#dropWatchers("Page send failed", error, [ws]);
+        }
+      }
     } catch (error) {
       this.#dropWatchers("state could not be serialized", error, sockets);
-      return;
-    }
-    for (const ws of sockets) {
-      try {
-        ws.send(page);
-      } catch (error) {
-        // Includes the Page exceeding the platform's WebSocket message limit
-        // (liveState is full-state and some hosts' state is unbounded). A
-        // socket that is merely closing lands here too and is dropped anyway —
-        // it was leaving regardless.
-        this.#dropWatchers("Page send failed", error, [ws]);
-      }
     }
   }
 }
@@ -337,7 +397,7 @@ export async function dialLiveStatePager(
       ? LIVE_STATE_PAGER_URL
       : `${LIVE_STATE_PAGER_URL}lane/${encodeURIComponent(options.lane)}`;
   return await stub.fetch(url, {
-    headers: { Upgrade: "websocket", [LIVE_STATE_PAGER_HEADER]: "watch" },
+    headers: { Upgrade: "websocket", [LIVE_STATE_PAGER_HEADER]: "watch-v2" },
   });
 }
 
@@ -355,9 +415,8 @@ export async function dialLiveStatePager(
  * stay snapshot-per-read and dial nothing.
  *
  * When the Pager cannot be established, `pagerFailureDegrade` picks the
- * posture: `"reject"` makes `subscribe` throw so the call site can fall back
- * (the four DO hosts fall back to today's pinning subscribe — no liveness
- * regression, loudly logged); `"snapshot-only"` seeds the engine once from
+ * posture: `"reject"` makes `subscribe` throw for the caller's bounded,
+ * observable recovery; `"snapshot-only"` seeds the engine once from
  * `readSnapshot` and serves a live-shaped but push-less subscription (the
  * stream posture — stream subscriptions must never pin their DO).
  */
@@ -371,7 +430,10 @@ export function openRelayedLiveState<State extends object>(input: {
   label: string;
 }): {
   get(): Promise<State>;
-  subscribe(sink: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscription>;
+  subscribe(
+    sink: (update: LiveUpdate<State>) => unknown,
+    options?: LiveStateSubscriptionOptions,
+  ): Promise<LiveStateSubscription>;
 } {
   // Placeholder until the seed applies; subscribe never attaches the engine
   // before a seed, so the placeholder is never delivered.
@@ -388,7 +450,7 @@ export function openRelayedLiveState<State extends object>(input: {
   // engine: after a fast unsubscribe→resubscribe, the fresh dial's seed could
   // otherwise be overwritten by an older Page the closed Pager had already
   // queued — the one rewind path the one-ordered-channel design must close
-  // explicitly (there is no revision guard by design). `close()` alone is not
+  // explicitly. `close()` alone is not
   // the mark: its close EVENT fires after any already-queued Pages.
   const abandonedSockets = new WeakSet<WebSocket>();
 
@@ -417,9 +479,14 @@ export function openRelayedLiveState<State extends object>(input: {
           throw new Error(`Live State Pager upgrade refused with status ${upgrade.status}`);
         }
         ws.accept();
+        const mirror = createLiveStateStore<State>();
+        let epoch: string | undefined;
         await new Promise<void>((resolve, reject) => {
           const fail = (reason: string) => {
+            clearTimeout(timer);
             abandonedSockets.add(ws);
+            if (socket === ws) socket = undefined;
+            console.warn("Live State Pager reset", { reason, label: input.label });
             try {
               ws.close(1000, reason);
             } catch {
@@ -433,14 +500,32 @@ export function openRelayedLiveState<State extends object>(input: {
             // trusting may touch the engine, however late it arrives.
             if (abandonedSockets.has(ws)) return;
             const page = parseLiveStatePage(event.data);
-            if (page === undefined) return;
-            // The only producer of state Pages is the host DO's flusher,
-            // which sends exactly what its snapshot read returns typed. The
-            // protocol keeps the payload `unknown` for forward-compat across
-            // deploy skew; consumers are read-only surfaces that tolerate
-            // transient shape drift, so re-validating here would buy nothing
-            // but a second schema to keep in sync.
-            engine.setState(page.state as State);
+            if (!page) {
+              fail("invalid Page");
+              return;
+            }
+            try {
+              if ("state" in page) {
+                // Legacy host during deployment skew; its domain owns state.
+                engine.setState(page.state as State);
+              } else {
+                if (page.epoch !== epoch && page.update.type !== "snapshot") {
+                  throw new Error("incarnation changed without snapshot");
+                }
+                // The protocol validates the envelope; the typed host owns
+                // its payload, so no duplicate domain schema is maintained here.
+                mirror.apply(page.update as LiveUpdate<State>, () => {
+                  throw new Error("revision gap");
+                });
+                epoch = page.epoch;
+                const state = mirror.getState();
+                if (!state) throw new Error("missing state after Page");
+                engine.setState(state);
+              }
+            } catch (error) {
+              fail(error instanceof Error ? error.message : "invalid state update");
+              return;
+            }
             clearTimeout(timer);
             resolve();
           });
@@ -464,7 +549,7 @@ export function openRelayedLiveState<State extends object>(input: {
 
   return {
     get: () => input.readSnapshot(),
-    subscribe: async (sink) => {
+    subscribe: async (sink, options) => {
       pendingSubscribes += 1;
       let socketFed = true;
       try {
@@ -481,7 +566,7 @@ export function openRelayedLiveState<State extends object>(input: {
           // still gets a current first paint — it just will not receive pushes.
           engine.setState(await input.readSnapshot());
         }
-        const subscription = engine.subscribe(sink);
+        const subscription = engine.subscribe(sink, options);
         const dialedSocket = socket;
         const unsubscribe = () => {
           subscription.unsubscribe();

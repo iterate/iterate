@@ -1,3 +1,4 @@
+import { appendText } from "@iterate-com/shared/chunked-text";
 // Reducer coverage for the browser-side agent UI fold: a full simulated
 // turn — user message, LLM request with streamed thinking + response deltas,
 // code execution, completion, assistant reply — must reduce into the chat
@@ -62,6 +63,85 @@ function projectRuntime(
 }
 
 describe("agent-ui reducer", () => {
+  test("preserves valid linked mentions and falls back to plain text on mismatch", () => {
+    const mentions = [
+      {
+        id: "config-repo/AGENTS.md",
+        type: "repo-file",
+        repoPath: "/repos/config",
+        path: "AGENTS.md",
+      },
+    ];
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "Read [@AGENTS.md](mention://config-repo/AGENTS.md)",
+          mentions,
+        },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "plain fallback",
+          mentions,
+        },
+      },
+    ]);
+
+    expect(state.items[0]).toMatchObject({ kind: "user", mentions });
+    expect(state.items[1]).toMatchObject({ kind: "user", text: "plain fallback" });
+    expect(state.items[1]).not.toHaveProperty("mentions");
+  });
+
+  test("projects durable mention outcomes onto their original occurrences", () => {
+    const mentions = [
+      {
+        id: "config-repo/AGENTS.md",
+        type: "repo-file",
+        repoPath: "/repos/config",
+        path: "AGENTS.md",
+      },
+    ];
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "[@AGENTS.md](mention://config-repo/AGENTS.md)",
+          mentions,
+        },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "developer",
+          actor: { type: "integration", name: "agent-mention-resolver" },
+          content: "resolution details",
+          mentionResolution: {
+            sourceOffset: 1,
+            outcomes: [{ status: "missing", mentionIds: ["config-repo/AGENTS.md"] }],
+          },
+        },
+      },
+    ]);
+
+    expect(state.items).toMatchObject([
+      { id: "user-1", mentions },
+      {
+        id: "user-1",
+        mentions,
+        mentionResolutions: { "config-repo/AGENTS.md": { status: "missing" } },
+      },
+    ]);
+    expect(state.pendingMentionMessages).toEqual({});
+  });
+
   test("streams thinking and response deltas into the live llm step", () => {
     const state = reduceAll([
       {
@@ -111,8 +191,8 @@ describe("agent-ui reducer", () => {
       kind: "llm",
       status: "running",
       model: "gpt-test",
-      thinkingText: "Reading the stream",
-      responseText: "const n = await stream.count();",
+      thinkingText: appendText("", "Reading the stream"),
+      responseText: appendText(appendText("", "const n = await "), "stream.count();"),
     });
   });
 
@@ -155,11 +235,8 @@ describe("agent-ui reducer", () => {
     expect(state.live?.steps[0]).toMatchObject({
       kind: "llm",
       status: "running",
-      thinkingText: "Reading the stream",
-      responseText: "const n = await stream.count();",
-      // One entry per window whose chunks carried response text — the UI's
-      // token-reveal stagger animates each window as a unit.
-      responseWindows: ["const n = await ", "stream.count();"],
+      thinkingText: appendText("", "Reading the stream"),
+      responseText: appendText(appendText("", "const n = await "), "stream.count();"),
     });
   });
 
@@ -193,7 +270,6 @@ describe("agent-ui reducer", () => {
     expect(state.live?.steps[0]).toMatchObject({
       kind: "llm",
       responseText: "The lighthouse keeper",
-      responseWindows: ["The lighthouse", " keeper"],
     });
   });
 
@@ -238,7 +314,6 @@ describe("agent-ui reducer", () => {
       kind: "llm",
       outcome: "cancelled",
       responseText: "The lighthouse keeper",
-      responseWindows: ["The lighthouse", " keeper"],
     });
   });
 
@@ -727,8 +802,8 @@ describe("agent-ui reducer", () => {
 
     expect(state.live?.steps[0]).toMatchObject({
       kind: "llm",
-      responseText: "Hello",
-      thinkingText: "hmm",
+      responseText: appendText(appendText("", "Hel"), "lo"),
+      thinkingText: appendText("", "hmm"),
     });
   });
 
@@ -1295,6 +1370,65 @@ describe("agent-ui reducer", () => {
     expect(state.live?.steps[0]).toMatchObject({ kind: "llm", status: "running" });
   });
 
+  test("updates a queued file mention when its resolution arrives mid-turn", () => {
+    const mentions = [
+      {
+        id: "config-repo/AGENTS.md",
+        type: "repo-file",
+        repoPath: "/repos/config",
+        path: "AGENTS.md",
+      },
+    ];
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 7,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        offset: 8,
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "[@AGENTS.md](mention://config-repo/AGENTS.md)",
+          mentions,
+        },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        offset: 9,
+        payload: {
+          role: "developer",
+          actor: { type: "integration", name: "agent-mention-resolver" },
+          content: "resolution details",
+          mentionResolution: {
+            sourceOffset: 8,
+            outcomes: [
+              {
+                status: "resolved",
+                truncated: true,
+                mentionIds: ["config-repo/AGENTS.md"],
+              },
+            ],
+          },
+        },
+      },
+    ]);
+
+    expect(state.items).toHaveLength(0);
+    expect(state.queuedUserMessages).toMatchObject([
+      {
+        id: "user-8",
+        mentions,
+        mentionResolutions: {
+          "config-repo/AGENTS.md": { status: "resolved", truncated: true },
+        },
+      },
+    ]);
+    expect(state.pendingMentionMessages).toEqual({});
+  });
+
   test("settles queued user messages before the next LLM request starts", () => {
     const state = reduceAll([
       {
@@ -1391,7 +1525,7 @@ describe("agent-ui reducer", () => {
       kind: "llm",
       llmRequestOffset: 7,
       outcome: "cancelled",
-      responseText: "old partial",
+      responseText: appendText("", "old partial"),
     });
     expect(state.items[1]).toMatchObject({
       kind: "user",

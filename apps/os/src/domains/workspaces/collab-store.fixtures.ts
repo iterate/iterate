@@ -8,9 +8,8 @@ export function fakeSessionStore() {
   const ops = new Map<string, PersistedCollabOp[]>();
   const snapshots = new Map<string, CollabSnapshot>();
   const sessions = new Map<string, { epoch: string; head: number; overlay: number }>();
-  const bases = new Map<string, { content: string; version: number }>();
   const prune = (path: string) => {
-    const floor = Math.min(snapshots.get(path)?.version ?? 0, bases.get(path)?.version ?? 0);
+    const floor = snapshots.get(path)?.version ?? 0;
     ops.set(
       path,
       (ops.get(path) ?? []).filter((op) => op.version >= floor),
@@ -41,9 +40,6 @@ export function fakeSessionStore() {
           overlay: snapshot.version,
         });
       }
-      if (!bases.has(path)) {
-        bases.set(path, { content: snapshot.content, version: snapshot.version });
-      }
       prune(path);
     },
     readOps: async (path, _epoch, afterVersion) =>
@@ -59,21 +55,11 @@ export function fakeSessionStore() {
       const row = sessions.get(path);
       if (row && (epoch === undefined || row.epoch === epoch)) row.overlay = version;
     },
-    setBases: (files) => {
-      for (const file of files) {
-        const row = sessions.get(file.path);
-        if (row === undefined || row.epoch !== file.epoch) continue;
-        bases.set(file.path, { content: file.content, version: file.version });
-        prune(file.path);
-      }
-    },
-    getBase: (path) => structuredClone(bases.get(path) ?? null),
     endSession: (path) => {
       sessions.delete(path);
       snapshots.delete(path);
       ops.delete(path);
-      bases.delete(path);
     },
   };
-  return { bases, ops, sessions, snapshots, store };
+  return { ops, sessions, snapshots, store };
 }

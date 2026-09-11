@@ -5,6 +5,7 @@ import { ZERO_AGENT_RUNTIME, type AgentRuntime } from "@iterate-com/shared/agent
 import type {
   AgentUiActivity,
   AgentUiLlmStep,
+  AgentUiMessageItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { AgentFeedItemRow, AgentLiveActivity } from "./agent-feed.tsx";
 import { buildRoundMetaYaml } from "~/lib/agent-round-meta-yaml.ts";
@@ -25,7 +26,6 @@ function llmStep(
     status: "done",
     thinkingText: "",
     responseText: "",
-    responseWindows: [],
     outcome: "completed",
     startedAtMs,
     ...overrides,
@@ -68,6 +68,67 @@ function renderLiveActivity(
   return container;
 }
 
+function renderMessage(item: AgentUiMessageItem): HTMLDivElement {
+  const container = document.createElement("div");
+  container.innerHTML = renderToStaticMarkup(
+    <AgentFeedItemRow item={item} toggledIds={new Set()} onToggle={() => {}} />,
+  );
+  return container;
+}
+
+test("a shortened response in an activity is visibly labelled", () => {
+  const container = renderActivity(
+    activity({
+      status: "running",
+      steps: [
+        llmStep(1, 0, {
+          status: "running",
+          outcome: undefined,
+          responseText: "preview prefix",
+          previewTruncated: true,
+        }),
+      ],
+    }),
+  );
+  expect(container.textContent).toContain("Live preview shortened.");
+});
+
+test("an empty mention list preserves the visible message text", () => {
+  const container = renderMessage({
+    kind: "user",
+    id: "user-1",
+    text: "Hello with no mentions",
+    mentions: [],
+    timestampMs: 0,
+  });
+  expect(container.textContent).toContain("Hello with no mentions");
+  expect(container.querySelector("[data-mention-type]")).toBeNull();
+});
+
+test("a failed mention resolution marks the exact sent pill", () => {
+  const container = renderMessage({
+    kind: "user",
+    id: "user-1",
+    text: "Use [@AGENTS.md](mention://config-repo/AGENTS.md)",
+    timestampMs: 0,
+    mentions: [
+      {
+        id: "config-repo/AGENTS.md",
+        type: "repo-file",
+        repoPath: "/repos/config",
+        path: "AGENTS.md",
+      },
+    ],
+    mentionResolutions: { "config-repo/AGENTS.md": { status: "missing" } },
+  });
+  const pill = container.querySelector('[data-mention-type="repo-file"]');
+
+  expect(pill?.getAttribute("data-mention-resolution")).toBe("missing");
+  expect(pill?.getAttribute("aria-label")).toBe(
+    "@AGENTS.md: File was not found when this message was processed",
+  );
+});
+
 test("the live tail shows accumulated work above a timer for the current LLM phase", () => {
   vi.useFakeTimers();
   const now = Date.UTC(2026, 6, 15, 22, 0, 0);
@@ -94,7 +155,6 @@ test("the live tail shows accumulated work above a timer for the current LLM pha
         status: "done",
         thinkingText: "",
         responseText: "done",
-        responseWindows: ["done"],
         outcome: "completed",
         startedAtMs: now - 6_000,
         durationMs: 2_000,
@@ -106,7 +166,6 @@ test("the live tail shows accumulated work above a timer for the current LLM pha
         status: "running",
         thinkingText: "Considering the next step",
         responseText: "",
-        responseWindows: [],
         startedAtMs: now - 3_400,
       },
     ],
@@ -208,7 +267,6 @@ test("known and unknown cancellations render distinctly inside a failed activity
           outcome: "cancelled",
           cancelReason: "interrupted-by-user-input",
           responseText: "partial",
-          responseWindows: ["partial"],
         }),
         llmStep(3, startedAtMs + 1, { outcome: "cancelled" }),
       ],
@@ -238,7 +296,6 @@ test("a pending request without a running step shows its own status, not a finis
         status: "done",
         thinkingText: "",
         responseText: "done",
-        responseWindows: ["done"],
         outcome: "completed",
         startedAtMs: now - 8_000,
         durationMs: 2_000,

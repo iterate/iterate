@@ -7,7 +7,7 @@
 import { expect, test } from "vitest";
 import { makeProcessorHarness } from "iterate/processors/testing";
 import type { ConsumedInput } from "iterate/processors";
-import { aiTextResponse } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
+import { interceptor } from "@iterate-com/test-support";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AgentProcessor, type AgentProcessorDeps } from "./agent-processor-implementation.ts";
 
@@ -16,9 +16,9 @@ const SETTLED = "events.iterate.com/agent/llm-request-settled";
 const RESPONSE_CHUNKS = "events.iterate.com/agent/llm-response-chunks";
 
 test("an intercepted/* turn is served by the interceptor: prompt in, text out, usage estimated, chunks journaled", async () => {
-  const seen: { source: string; model: string; body: { messages: { content: string }[] } }[] = [];
+  const seen: any[] = [];
   const h = makeInterceptedModelHarness(async (input) => {
-    seen.push(input as never);
+    seen.push(input);
     return "well well well, look who needs a deterministic model";
   });
 
@@ -39,7 +39,7 @@ test("an intercepted/* turn is served by the interceptor: prompt in, text out, u
   ]);
   expect(JSON.stringify(seen)).not.toContain("must-not-leak");
   expect(
-    (seen[0] as any).request.body.messages.some((m: any) => m.content.includes("Hello fake model")),
+    seen[0].request.body.messages.some((m: any) => m.content.includes("Hello fake model")),
   ).toBe(true);
 
   const requested = h.events(REQUESTED)[0]!;
@@ -160,15 +160,14 @@ test("Gateway 429 responses exhaust ordinary retries without introducing a budge
         }),
         consultAiInterceptor: async () => {
           calls++;
-          return {
-            status: 429,
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
+          return Response.json(
+            {
               name: "AiGatewayError",
               internalCode: 2041,
               message: "Spend limit exceeded",
-            }),
-          };
+            },
+            { status: 429 },
+          );
         },
       }),
   });
@@ -256,7 +255,7 @@ function makeInterceptedModelHarness(
           ? {}
           : {
               consultAiInterceptor: async (input) =>
-                aiTextResponse((await consultAiInterceptor(input)) as any, input),
+                interceptor.aiTextResponse((await consultAiInterceptor(input)) as any, input),
             }),
       }),
     path: "/agents/test",

@@ -4,6 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LiveUpdate } from "iterate/sdk/capnweb";
+import { createLiveStateStore } from "iterate/sdk/capnweb";
 import {
   LiveStatePagers,
   openRelayedLiveState,
@@ -16,9 +17,16 @@ type FakeSocket = WebSocket & {
   closed: { code?: number; reason?: string }[];
 };
 
-function fakeSocket(): FakeSocket {
+function fakeSocket(version = 1): FakeSocket {
+  let attachment = version;
   const socket = {
     sent: [] as string[],
+    serializeAttachment(value: number) {
+      attachment = value;
+    },
+    deserializeAttachment() {
+      return attachment;
+    },
     closed: [] as { code?: number; reason?: string }[],
     send(data: string) {
       socket.sent.push(data);
@@ -62,6 +70,54 @@ describe("LiveStatePagers", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("sends small patches, independently seeds joiners, and re-seeds surviving sockets after eviction", () => {
+    const watcher = fakeSocket(2);
+    const sockets = [watcher];
+    let state = { rows: [{ body: "a".repeat(64_000) }, { body: "tail" }] };
+    const hooks = { sockets, readState: () => state };
+    const { host } = socketsOver(hooks);
+    const mirror = createLiveStateStore<typeof state>();
+    const apply = (frame: string) => {
+      const page = parseLiveStatePage(frame);
+      if (!page || !("update" in page)) throw new Error("expected an update");
+      mirror.apply(page.update as LiveUpdate<typeof state>, () => {
+        throw new Error("revision gap");
+      });
+    };
+    host.scheduleFlush();
+    vi.runAllTimers();
+    apply(watcher.sent[0]!);
+    const first = mirror.getState()!;
+    state = { rows: [state.rows[0]!, { body: "tail appended" }] };
+    host.scheduleFlush();
+    vi.runAllTimers();
+    expect(watcher.sent[1]!.length).toBeLessThan(400);
+    apply(watcher.sent[1]!);
+    expect(mirror.getState()).toEqual(state);
+    expect(mirror.getState()!.rows[0]).toBe(first.rows[0]);
+
+    const joiner = fakeSocket(2);
+    sockets.push(joiner);
+    host.scheduleFlush();
+    vi.runAllTimers();
+    expect(watcher.sent).toHaveLength(2);
+    expect(parseLiveStatePage(joiner.sent[0])).toMatchObject({
+      update: { type: "snapshot", state },
+    });
+
+    const restarted = socketsOver(hooks).host;
+    restarted.scheduleFlush();
+    vi.runAllTimers();
+    const fresh = parseLiveStatePage(watcher.sent[2]);
+    expect(fresh).toMatchObject({ update: { type: "snapshot", state } });
+    expect(fresh).not.toMatchObject({
+      epoch: (JSON.parse(watcher.sent[0]!) as { epoch: string }).epoch,
+    });
+    apply(watcher.sent[2]!);
+    expect(mirror.getState()).toEqual(state);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("ignores requests without the lane header so hosts fall through", async () => {
@@ -217,6 +273,7 @@ describe("LiveStatePagers", () => {
 // ---------------------------------------------------------------------------
 
 type FakeRelaySocket = WebSocket & {
+  emitRaw(data: unknown): void;
   emitFrame(state: unknown): void;
   emitClose(): void;
   closed: { code?: number; reason?: string }[];
@@ -237,6 +294,9 @@ function fakeRelaySocket(): FakeRelaySocket {
     close(code?: number, reason?: string) {
       socket.closed.push({ code, reason });
     },
+    emitRaw(data: unknown) {
+      for (const listener of listeners.message ?? []) listener({ data });
+    },
     emitFrame(state: unknown) {
       const data = JSON.stringify({ type: "state", state });
       for (const listener of listeners.message ?? []) listener({ data });
@@ -254,6 +314,56 @@ function collectUpdates() {
 }
 
 describe("openRelayedLiveState", () => {
+  it("applies ordered patches and reports a revision gap as a dead subscription", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const socket = fakeRelaySocket();
+      const relay = openRelayedLiveState<{ n: number }>({
+        dialPager: async () => ({ status: 101, webSocket: socket }),
+        readSnapshot: async () => ({ n: -1 }),
+        pagerFailureDegrade: "reject",
+        label: "patch test",
+      });
+      const { updates, sink } = collectUpdates();
+      const pending = relay.subscribe(sink, { patchVersion: 2 });
+      await Promise.resolve();
+      socket.emitRaw(
+        JSON.stringify({
+          type: "update",
+          epoch: "first",
+          update: { type: "snapshot", revision: 0, state: { n: 1 } },
+        }),
+      );
+      const subscription = await pending;
+      socket.emitRaw(
+        JSON.stringify({
+          type: "update",
+          epoch: "first",
+          update: { type: "patch", from: 0, to: 1, patch: { fields: { n: { set: 2 } } } },
+        }),
+      );
+      vi.advanceTimersByTime(100);
+      expect(updates.at(-1)).toMatchObject({ type: "patch", patch: { fields: { n: { set: 2 } } } });
+      socket.emitRaw(
+        JSON.stringify({
+          type: "update",
+          epoch: "first",
+          update: { type: "patch", from: 7, to: 8, patch: { fields: { n: { set: 99 } } } },
+        }),
+      );
+      expect(subscription.ping()).toBe(false);
+      expect(socket.closed).toContainEqual({ code: 1000, reason: "revision gap" });
+      expect(warn).toHaveBeenCalledWith("Live State Pager reset", {
+        reason: "revision gap",
+        label: "patch test",
+      });
+      subscription.unsubscribe();
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
   it("get() is a transient read that never dials", async () => {
     let dials = 0;
     const relay = openRelayedLiveState<{ n: number }>({
@@ -287,7 +397,7 @@ describe("openRelayedLiveState", () => {
     const subscription = await pending;
 
     expect(socket.accepted).toBe(true);
-    expect(updates).toEqual([{ type: "snapshot", revision: 0, state: { n: 1 } }]);
+    expect(updates).toEqual([{ type: "snapshot", revision: 1, state: { n: 1 } }]);
     expect(subscription.ping()).toBe(true);
 
     vi.useFakeTimers();
@@ -386,7 +496,7 @@ describe("openRelayedLiveState", () => {
     });
     const { updates, sink } = collectUpdates();
     const subscription = await relay.subscribe(sink);
-    expect(updates).toEqual([{ type: "snapshot", revision: 0, state: { n: 5 } }]);
+    expect(updates).toEqual([{ type: "snapshot", revision: 1, state: { n: 5 } }]);
     // A degraded subscription is frozen at its first paint, so it must report
     // unhealthy — the owner's watchdog is the only way back to live data, and
     // a healthy-looking frozen subscription is a silently stale page forever.
@@ -417,7 +527,7 @@ describe("openRelayedLiveState", () => {
     sockets[1]!.emitFrame({ n: 3 });
     await second;
     sockets[0]!.emitFrame({ n: 2 });
-    expect(updates).toEqual([{ type: "snapshot", revision: 0, state: { n: 3 } }]);
+    expect(updates).toEqual([{ type: "snapshot", revision: 2, state: { n: 3 } }]);
     vi.useFakeTimers();
     try {
       vi.runAllTimers();
@@ -454,10 +564,36 @@ describe("openRelayedLiveState", () => {
       await second;
       // The abandoned socket's late frame must not rewind the engine.
       slow.emitFrame({ n: 1 });
-      expect(updates).toEqual([{ type: "snapshot", revision: 0, state: { n: 2 } }]);
+      expect(updates).toEqual([{ type: "snapshot", revision: 1, state: { n: 2 } }]);
       vi.runAllTimers();
       expect(updates).toHaveLength(1);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases the seed deadline immediately after an invalid first frame", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const socket = fakeRelaySocket();
+      const relay = openRelayedLiveState<{ n: number }>({
+        dialPager: async () => ({ status: 101, webSocket: socket }),
+        readSnapshot: async () => ({ n: 0 }),
+        pagerFailureDegrade: "reject",
+        label: "invalid seed",
+      });
+      const pending = relay.subscribe(collectUpdates().sink);
+      const rejected = expect(pending).rejects.toThrow("invalid Page");
+      await Promise.resolve();
+      socket.emitRaw("not JSON");
+      await rejected;
+      expect(vi.getTimerCount()).toBe(0);
+      vi.runAllTimers();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(socket.closed).toEqual([{ code: 1000, reason: "invalid Page" }]);
+    } finally {
+      warn.mockRestore();
       vi.useRealTimers();
     }
   });

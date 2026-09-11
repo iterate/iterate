@@ -1,7 +1,11 @@
+import type { RepoFileStatus } from "@iterate-com/ui/components/repo-file-tree";
+import type { FileChangeSummary } from "@iterate-com/workspace-documents/change-summary";
+
 /**
- * One task card, parsed from a markdown file under tasks/ in the project's
- * /repos/config repo (frontmatter `state`/`labels`/`agent` plus title and
- * body). `path` is the repo-relative file path and doubles as the card id.
+ * One task card, parsed from a markdown file under tasks/ in a repo mounted
+ * in the workspace, the config repo by default (frontmatter
+ * `state`/`labels`/`agent` plus title and body). `path` is the repo-relative
+ * file path and doubles as the card id.
  */
 export type TaskCard = {
   path: string;
@@ -18,15 +22,15 @@ export type TaskCard = {
    * parse — the file is then treated as plain text (no state/tags). */
   frontmatterError: boolean;
   /** Non-deleted comments in the file's discussion store (0 when the store
-   * is absent or the file fails the strict annotated-markdown parse). */
+   * is absent or the file contains malformed RFM). */
   commentCount: number;
 };
 
 /** The canonical Kanban columns, in board order. Custom states get their own column after these. */
 export const BOARD_COLUMNS = ["todo", "in-progress", "in-review", "done"] as const;
 
-/** Uncommitted board status for a changed task path (working or staged). */
-export type TaskChangeStatus = "added" | "modified" | "deleted";
+/** Uncommitted board status for a changed task path — the shared tree's status letters. */
+export type TaskChangeStatus = RepoFileStatus;
 
-/** What the commit UI (and the AI message generator) knows about one change. */
-export type TaskChangeSummary = { path: string; status: TaskChangeStatus; title: string };
+/** What the commit UI (and the message writer) knows about one changed task. */
+export type TaskChangeSummary = FileChangeSummary;

@@ -18,7 +18,15 @@ import { z } from "zod";
 const ProjectAppSessionClaims = z
   .object({
     audience: z.string(),
+    // Display identity (presence, authorship) — optional, no authority.
+    email: z.string().trim().min(1).max(320).optional(),
     exp: z.number().int(),
+    iat: z.number().int().optional(),
+    image: z.string().trim().min(1).max(2048).optional(),
+    // The sign-in this token descends from (renewals carry it forward);
+    // a pre-rollout token counts as signed in when it was issued.
+    loginAt: z.number().int().optional(),
+    name: z.string().trim().min(1).max(256).optional(),
     projectId: z.string().trim().min(1).max(256),
     type: z.literal("project-app-session"),
     userId: z.string().trim().min(1).max(256),
@@ -41,11 +49,25 @@ export function localProjectAppSessionValidator(secret: string) {
     audience: string;
     projectId: string;
     token: string;
-  }): Promise<{ expiresAt: number; userId: string } | null> => {
+  }): Promise<{
+    email?: string;
+    expiresAt: number;
+    image?: string;
+    loginAt: number;
+    name?: string;
+    userId: string;
+  } | null> => {
     const claims = await verifyProjectAppSessionToken(input.token, secret);
     if (claims === null) return null;
     if (claims.audience !== input.audience || claims.projectId !== input.projectId) return null;
-    return { expiresAt: claims.exp, userId: claims.userId };
+    return {
+      ...(claims.email === undefined ? {} : { email: claims.email }),
+      expiresAt: claims.exp,
+      loginAt: claims.loginAt ?? claims.iat ?? claims.exp,
+      ...(claims.image === undefined ? {} : { image: claims.image }),
+      ...(claims.name === undefined ? {} : { name: claims.name }),
+      userId: claims.userId,
+    };
   };
 }
 

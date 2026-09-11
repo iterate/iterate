@@ -27,15 +27,13 @@ using session = await connectItxReady({
 using project = session.projects.get("my-project");
 
 // Replace only provider dispatch, after host request preparation.
-using interception = await project.ai.intercept(async (call) => ({
-  status: 200,
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify(
+using interception = await project.ai.intercept((call) =>
+  Response.json(
     call.source === "ai-run"
       ? { echo: call.request.body }
       : { choices: [{ message: { content: "scripted reply" } }] },
   ),
-}));
+);
 
 // Direct invocation path:
 await project.ai.run("intercepted/anything", { prompt: "hi" });
@@ -55,20 +53,38 @@ await interception.release(); // or let `using` dispose it
 Handlers receive `source` (`agent-turn`, `ai-run`, or `egress`), the original
 `model`, and a completed `request` with one of two shapes:
 
-- `kind: "openai-http"`: gateway ID, endpoint, body, and headers (including trusted metadata).
-- `kind: "workers-ai"`: model, body, and binding options (including the host-owned gateway ID and metadata).
+- `kind: "openai-http"`: gateway ID, endpoint, body, and headers.
+- `kind: "workers-ai"`: model, body, and binding options.
 
-Agent calls also carry `agentPath`. Credentials are excluded from both shapes.
+Agent calls also carry `agentPath`. Gateway-routed OpenAI HTTP calls use `egress`.
+Requests include host-owned Gateway metadata; credentials are excluded from both shapes.
 The sender does not change the prepared body or choose a provider from the model name.
 
-Return `{ status, headers, body }`, where body is an HTTP response string (JSON
-or SSE). The normal response decoder processes
-it. Malformed results fail the attempt. There is one intercepted namespace and
+Return a `Response`, synchronously or from a promise. Use `Response.json(value)`
+for JSON, or `new Response(stream, { headers: { "content-type": "text/event-stream" } })`
+for SSE. Streams carry bytes (`ReadableStream<Uint8Array>`); chunks flow through
+the normal decoder as they arrive. Return an unused, unlocked body. Invalid
+responses and stream failures fail the attempt. There is one intercepted namespace and
 one request preparation path.
 
-Tests can use `aiTextResponse(textOrUsage, call)` or `aiJsonResponse(value)` from
-`@iterate-com/shared/test-support/resilient-ai-interceptor`. Text/usage estimates live in that test
-helper; production interception always consumes a provider-shaped response.
+Test helpers are grouped under the `interceptor` export from
+`@iterate-com/test-support`:
+
+```ts
+import { interceptor } from "@iterate-com/test-support";
+
+// Plain text, or { text, usage } for explicit token counts.
+interceptor.aiTextResponse("reply", call);
+
+// Agent code: wraps the source in a TypeScript fence before building the SSE response.
+interceptor.codemodeBackticksResponse(
+  'async (itx) => { await itx.chat.sendMessage("scripted reply"); }',
+  call,
+);
+```
+
+Both helpers emit SSE and estimate token usage unless explicit counts are supplied.
+Production interception always consumes a provider-shaped response.
 
 ## The lifetime contract
 
@@ -108,12 +124,16 @@ again**. An in-flight agent turn survives the gap on its own retries
 dedicated to the interception:
 
 ```ts
+import { interceptor } from "@iterate-com/test-support";
+
 await using fixture = await helpers.createFixture("my-spec");
-await using interception = await fixture.interceptAi(async (call) => aiTextResponse("reply", call));
+await using interception = await fixture.interceptAi(async (call) =>
+  interceptor.aiTextResponse("reply", call),
+);
 ```
 
 (`fixture.interceptAi` wraps
-[installResilientAiInterceptor](../packages/shared/src/test-support/resilient-ai-interceptor.ts);
+[interceptor.installResilientAiInterceptor](../packages/test-support/src/resilient-ai-interceptor.ts);
 real usage: [agent-fake-model-chat.spec.ts](../specs/agent-fake-model-chat.spec.ts).)
 
 **Plain node** — the node client is deliberately vanilla and never reconnects
@@ -135,8 +155,13 @@ async function keepIntercepting(handler) {
 exercises install, release, the 4901 close on a real DO restart, and
 supersession.
 
-## Gateway response fixtures
+## HTTP response fixtures
 
 Use any `intercepted/*` model with an HTTP fixture. The same handler can return
-streamed success or an HTTP failure. Refusals use the existing bounded agent
-failure policy; interception does not introduce budget-specific outcomes.
+streamed success or an HTTP failure. HTTP failures use the existing bounded agent failure policy.
+
+Direct `ai.run` retains the Workers AI binding's decoding rules: exactly
+`application/json` is decoded; other content types return a body stream.
+`returnRawResponse: true` returns the response even for HTTP errors. Decoded
+HTTP failures now throw an error with the status and response-body excerpt,
+rather than the binding's private `InferenceUpstreamError` class.

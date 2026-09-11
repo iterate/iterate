@@ -17,7 +17,6 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as WIndexRouteImport } from './routes/w.index'
-import { Route as WBoardIdRouteImport } from './routes/w.$boardId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -29,39 +28,30 @@ const WIndexRoute = WIndexRouteImport.update({
   path: '/w/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const WBoardIdRoute = WBoardIdRouteImport.update({
-  id: '/w/$boardId',
-  path: '/w/$boardId',
-  getParentRoute: () => rootRouteImport,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/w/$boardId': typeof WBoardIdRoute
   '/w/': typeof WIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/w/$boardId': typeof WBoardIdRoute
   '/w': typeof WIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/w/$boardId': typeof WBoardIdRoute
   '/w/': typeof WIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/w/$boardId' | '/w/'
+  fullPaths: '/' | '/w/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/w/$boardId' | '/w'
-  id: '__root__' | '/' | '/w/$boardId' | '/w/'
+  to: '/' | '/w'
+  id: '__root__' | '/' | '/w/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  WBoardIdRoute: typeof WBoardIdRoute
   WIndexRoute: typeof WIndexRoute
 }
 
@@ -81,19 +71,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/w/$boardId': {
-      id: '/w/$boardId'
-      path: '/w/$boardId'
-      fullPath: '/w/$boardId'
-      preLoaderRoute: typeof WBoardIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  WBoardIdRoute: WBoardIdRoute,
   WIndexRoute: WIndexRoute,
 }
 export const routeTree = rootRouteImport

@@ -34,19 +34,47 @@ describe("DocsApp", () => {
     );
 
     const request = new Request(
-      "https://docs--demo.iterate.app/?workspace=%2Fworkspaces%2Fagents%2Freviewer&path=plan.md",
+      "https://docs--demo.iterate.app/?workspace=%2Fagents%2Freviewer&path=plan.md",
       { body: "still here", method: "POST" },
     );
     const response = await app.fetch(request);
 
     await expect(response.text()).resolves.toBe(
-      "https://docs.iterate.workers.dev/?workspace=%2Fworkspaces%2Fagents%2Freviewer&path=plan.md|still here",
+      "https://docs.iterate.workers.dev/?workspace=%2Fagents%2Freviewer&path=plan.md|still here",
     );
     expect(authFetch).toHaveBeenCalledOnce();
     expect(authFetch.mock.calls[0]![0]).not.toBe(request);
     expect(authFetch.mock.calls[0]![0].body).toBeNull();
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  test("drops the project host's own port when the origin names none", async () => {
+    const fetchMock = vi.fn(async (request: Request) => new Response(request.url));
+    vi.stubGlobal("fetch", fetchMock);
+    const app = DocsApp.create(
+      {
+        ITX: {
+          get: async () => ({
+            [Symbol.dispose]: () => undefined,
+            appUrl: async () => "http://docs--demo.localhost:50209",
+            auth: { get: () => ({ fetch: async () => null }) },
+            kv: { get: async () => "https://jonas-docs.tunnels.iterate.com" },
+          }),
+        },
+      },
+      {
+        auth: { policy: "project-member" },
+        proxy: {
+          origin: "https://docs.iterate.workers.dev",
+          originOverrideKvKey: "docs-app-origin",
+        },
+      },
+    );
+
+    const response = await app.fetch(new Request("http://docs--demo.localhost:50209/jam"));
+
+    await expect(response.text()).resolves.toBe("https://jonas-docs.tunnels.iterate.com/jam");
   });
 
   test("returns the member gate response without contacting the vessel", async () => {
@@ -102,11 +130,11 @@ describe("DocsApp", () => {
 
     await expect(
       app.rpc.link({
-        workspace: "/workspaces/agents/reviewer",
+        workspace: "/agents/reviewer",
         path: "reviews/launch plan.md",
       }),
     ).resolves.toBe(
-      "https://docs--demo.iterate-preview-3.app/?workspace=%2Fworkspaces%2Fagents%2Freviewer&path=reviews%2Flaunch+plan.md",
+      "https://docs--demo.iterate-preview-3.app/?workspace=%2Fagents%2Freviewer&path=reviews%2Flaunch+plan.md",
     );
     expect(appUrl).toHaveBeenCalledWith("docs");
     expect(dispose).toHaveBeenCalledOnce();
@@ -137,30 +165,30 @@ describe("DocsApp", () => {
 
     await expect(
       app.rpc.link({
-        workspace: "/workspaces/agents/reviewer",
+        workspace: "/agents/reviewer",
         repo: "/repos/config",
         task: "tasks/plan.md",
       }),
     ).resolves.toBe(
-      "https://docs--demo.iterate-preview-3.app/w?workspace=%2Fworkspaces%2Fagents%2Freviewer&repo=%2Frepos%2Fconfig&task=tasks%2Fplan.md",
+      "https://docs--demo.iterate-preview-3.app/w?workspace=%2Fagents%2Freviewer&repo=%2Frepos%2Fconfig&task=tasks%2Fplan.md",
     );
     expect(appUrl).toHaveBeenCalledWith("docs");
     expect(dispose).toHaveBeenCalledOnce();
   });
 
   test.each([
-    { path: "../review.md", workspace: "/workspaces/agents/reviewer" },
-    { path: "reviews/../review.md", workspace: "/workspaces/agents/reviewer" },
-    { path: "review.txt", workspace: "/workspaces/agents/reviewer" },
-    { path: "", workspace: "/workspaces/agents/reviewer" },
+    { path: "../review.md", workspace: "/agents/reviewer" },
+    { path: "reviews/../review.md", workspace: "/agents/reviewer" },
+    { path: "review.txt", workspace: "/agents/reviewer" },
+    { path: "", workspace: "/agents/reviewer" },
     { path: "review.md", workspace: "/repos/config" },
-    { path: "review.md", workspace: "/workspaces/agents/../reviewer" },
+    { path: "review.md", workspace: "/agents/../reviewer" },
     // Board form: bad repos, absolute/non-task task paths, and both-lenses.
-    { repo: "/repos", workspace: "/workspaces/agents/reviewer" },
-    { repo: "config", workspace: "/workspaces/agents/reviewer" },
-    { repo: "/repos/config", task: "/tasks/plan.md", workspace: "/workspaces/agents/reviewer" },
-    { repo: "/repos/config", task: "docs/plan.md", workspace: "/workspaces/agents/reviewer" },
-    { path: "review.md", repo: "/repos/config", workspace: "/workspaces/agents/reviewer" },
+    { repo: "/repos", workspace: "/agents/reviewer" },
+    { repo: "config", workspace: "/agents/reviewer" },
+    { repo: "/repos/config", task: "/tasks/plan.md", workspace: "/agents/reviewer" },
+    { repo: "/repos/config", task: "docs/plan.md", workspace: "/agents/reviewer" },
+    { path: "review.md", repo: "/repos/config", workspace: "/agents/reviewer" },
   ])(
     "refuses to mint a link the UI would reject (%j)",
     async ({ path, repo, task, workspace }: Record<string, string | undefined>) => {

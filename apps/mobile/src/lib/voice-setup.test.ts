@@ -1,3 +1,9 @@
+import {
+  VOICE_AGENT_GUEST_SOURCE,
+  VOICE_AGENT_PACKAGE_NAME,
+  VOICE_AGENT_PACKAGE_SPEC,
+  VOICE_AGENT_ZOD_SPEC,
+} from "@iterate-com/voice-agent";
 import { expect, test } from "vitest";
 import {
   chatVoiceStreamPath,
@@ -7,13 +13,26 @@ import {
   voiceSetupConfig,
   MOBILE_VOICE_SETUP,
 } from "./voice-setup.ts";
-import { VOICE_AGENT_TEMPLATE_FILES } from "./voice-template.generated.ts";
 
-/** A repo that already has the template — the common case. */
+const packageJson = (dependencies: Record<string, string>) =>
+  JSON.stringify({ name: "a-project", dependencies }, null, 2);
+
+/** A repo that already has the agent: both dependency lines and the re-export — the common case. */
 const repoWithTemplate = {
-  readFile: async () => ({ content: "// installed" }),
+  readFile: async ({ path }: { path: string }) =>
+    path === "package.json"
+      ? {
+          commitOid: "0".repeat(40),
+          content: packageJson({
+            [VOICE_AGENT_PACKAGE_NAME]: VOICE_AGENT_PACKAGE_SPEC,
+            zod: VOICE_AGENT_ZOD_SPEC,
+          }),
+        }
+      : path === "voice-agent.ts"
+        ? { commitOid: "0".repeat(40), content: VOICE_AGENT_GUEST_SOURCE }
+        : null,
   commitFiles: async () => {
-    throw new Error("must not commit over an installed template");
+    throw new Error("must not commit over an installed package");
   },
 };
 
@@ -123,28 +142,50 @@ test("a failed setup writes no marker, so the next tap retries", async () => {
   expect(written).toEqual([]);
 });
 
-test("a project with no voice agent gets the embedded template committed, once", async () => {
+test("a project without the agent gets the dependency lines and voice-agent.ts, once", async () => {
   const commits: any[] = [];
-  const empty = {
-    readFile: async () => null,
+  const withoutPackage = {
+    readFile: async ({ path }: { path: string }) =>
+      path === "package.json"
+        ? {
+            commitOid: "0".repeat(40),
+            content: packageJson({ iterate: "https://pkg.pr.new/iterate/iterate/iterate@main" }),
+          }
+        : null,
     commitFiles: async (input: any) => {
       commits.push(input);
-      return {};
+      return {
+        commitOid: "1".repeat(40),
+        changedPaths: ["package.json", "voice-agent.ts"],
+        noChanges: false,
+      };
     },
   };
-  await ensureVoiceAgentInstalled(empty);
+  await ensureVoiceAgentInstalled(withoutPackage);
   expect(commits).toHaveLength(1);
-  expect(commits[0].changes.map((c: any) => c.path)).toContain("voice-agent.ts");
-  /* The embedded template is the deploy walk's result: entry point plus
-   * every relative import, flat. */
-  expect(VOICE_AGENT_TEMPLATE_FILES.map((f) => f.path).sort()).toEqual([
-    "face.ts",
-    "pcm.ts",
-    "viseme-model.generated.ts",
-    "viseme.ts",
-    "voice-agent.ts",
-  ]);
-  /* And a present template is never overwritten — voicelab deploy owns
-   * upgrades; an app must not downgrade. */
+  expect(commits[0].changes.map((c: any) => c.path)).toEqual(["package.json", "voice-agent.ts"]);
+  expect(JSON.parse(commits[0].changes[0].content).dependencies).toEqual({
+    iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
+    [VOICE_AGENT_PACKAGE_NAME]: VOICE_AGENT_PACKAGE_SPEC,
+    zod: VOICE_AGENT_ZOD_SPEC,
+  });
+  expect(commits[0].changes[1].content).toBe(VOICE_AGENT_GUEST_SOURCE);
+  /* And what is present is never rewritten — a pin somebody chose, or a
+   * voice-agent.ts holding an old committed copy: voicelab deploy owns
+   * upgrades; an app must not move a project. */
   await ensureVoiceAgentInstalled(repoWithTemplate);
+  await ensureVoiceAgentInstalled({
+    ...repoWithTemplate,
+    readFile: async ({ path }: { path: string }) =>
+      path === "package.json"
+        ? {
+            commitOid: "0".repeat(40),
+            content: packageJson({
+              [VOICE_AGENT_PACKAGE_NAME]:
+                "https://pkg.pr.new/iterate/iterate/@iterate-com/voice-agent@0123456789abcdef",
+              zod: VOICE_AGENT_ZOD_SPEC,
+            }),
+          }
+        : { commitOid: "0".repeat(40), content: "// the old committed agent\n" },
+  });
 });

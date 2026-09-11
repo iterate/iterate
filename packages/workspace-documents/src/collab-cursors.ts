@@ -6,7 +6,7 @@ import {
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
-import { RangeSetBuilder } from "@codemirror/state";
+import type { Range } from "@codemirror/state";
 import type { CollabConnection } from "./collab-client.ts";
 import type { CollabPresence } from "./types.ts";
 import { authorColor, authorLabel } from "./collab-author.ts";
@@ -16,7 +16,7 @@ import { authorColor, authorLabel } from "./collab-author.ts";
  * flag, plus a tinted span for their selection. Positions arrive in the
  * sender's head coordinates over the session's wait() long-poll; between
  * refreshes the decorations MAP through local and remote edits (the same
- * anchoring trick the redlines use), and every announce self-heals drift.
+ * anchoring trick), and every announce self-heals drift.
  *
  * Budgeted for ten concurrent participants: sends are trailing-throttled per
  * client, the server coalesces wakes, and one refresh rebuilds one small
@@ -50,43 +50,30 @@ class CursorWidget extends WidgetType {
   }
 }
 
-function cursorDecorations(
+export function cursorDecorations(
   clients: CollabPresence["clients"],
   ownClientId: string,
   docLength: number,
 ): DecorationSet {
-  const builder = new RangeSetBuilder<Decoration>();
-  const remote: (CollabPresence["clients"][number] & { from: number; to: number })[] = [];
+  const ranges: Range<Decoration>[] = [];
   for (const client of clients) {
     if (client.clientId === ownClientId) continue;
-    remote.push({
-      ...client,
-      from: Math.min(Math.min(client.anchor, client.head), docLength),
-      to: Math.min(Math.max(client.anchor, client.head), docLength),
-    });
-  }
-  remote.sort(
-    (left, right) => left.from - right.from || left.clientId.localeCompare(right.clientId),
-  );
-  for (const client of remote) {
-    if (client.from < client.to) {
-      builder.add(
-        client.from,
-        client.to,
+    const from = Math.min(Math.min(client.anchor, client.head), docLength);
+    const to = Math.min(Math.max(client.anchor, client.head), docLength);
+    if (from < to) {
+      ranges.push(
         Decoration.mark({
           attributes: { style: `background: ${authorColor(client.clientId, 0.22)}` },
           class: "cm-remote-selection",
-        }),
+        }).range(from, to),
       );
     }
     const head = Math.min(client.head, docLength);
-    builder.add(
-      head,
-      head,
-      Decoration.widget({ side: 1, widget: new CursorWidget(client.clientId) }),
+    ranges.push(
+      Decoration.widget({ side: 1, widget: new CursorWidget(client.clientId) }).range(head),
     );
   }
-  return builder.finish();
+  return Decoration.set(ranges, true);
 }
 
 export function remoteCursorsExtension(connection: CollabConnection) {
@@ -157,6 +144,7 @@ const theme = EditorView.baseTheme({
     display: "inline-block",
     height: "1.15em",
     marginLeft: "-1px",
+    marginRight: "-1px",
     position: "relative",
     verticalAlign: "text-bottom",
   },

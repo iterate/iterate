@@ -358,15 +358,14 @@ Vendor work that is **idempotent-by-overwrite** inside a durable lane
 (re-downloading Slack-shared files to a per-event storage key) is acceptable:
 wasteful on replay, never wrong.
 
-One guarantee holds in both directions: **processors never see ephemeral
-events** (`append({ ephemeral: true })` — LLM streaming chunks and other
-transient signals). The wake lane drops them from delivery and catch-up reads
-exclude them, so neither a live reduction nor a replay ever contains one: you
-never need to filter them out yourself, and you cannot reduce or side-effect
-on one.
-Corollary: anything your reducer or `processEvent` depends on must NOT be appended
-ephemeral — the durable truth is always its own event (chunks →
-an assistant-role `agents/context-added` item).
+Wildcard processor subscriptions receive durable events only. A processor may
+explicitly name ephemeral event types in `consumes` to receive those signals
+while its facet is live. Catch-up and replay never reconstruct ephemeral events.
+The Feed processor uses this opt-in for response chunks and connection presence:
+`processEvent` updates volatile presentation, while its durable reducer ignores
+the signals. Ephemeral signals must never determine durable publications or
+required consequences. Durable truth comes from its own event (chunks → an
+assistant-role `agents/context-added` item).
 
 ### The replay test
 

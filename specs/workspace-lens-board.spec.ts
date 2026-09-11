@@ -42,7 +42,7 @@ test("workspace lens board demo", async ({ page }) => {
   await page.goto(OS_PROJECT_URL);
 
   // 1. Ask a fresh agent for five jokes and a review link.
-  const composer = page.getByRole("textbox", { name: "Message a new agent" });
+  const composer = page.getByRole("combobox", { name: "Message a new agent" });
   await composer.waitFor({ timeout: 60_000 }); // timeout: cold live-preview route load — past the spinner-waiter's 30s ceiling
   // "your own workspace" on purpose: agents sometimes echo a workspace path
   // from earlier context instead of the one in their own boot context.
@@ -77,7 +77,7 @@ test("workspace lens board demo", async ({ page }) => {
 
   // 3. Tell the agent to incorporate the feedback and stage tasks.
   await page.goto(threadUrl);
-  const reply = page.getByRole("textbox", { name: "Message this agent" });
+  const reply = page.getByRole("combobox", { name: "Message this agent" });
   await reply.waitFor({ timeout: 60_000 }); // timeout: thread route cold load on the live preview — past the spinner-waiter's 30s ceiling
   await reply.fill(
     'thanks — incorporate my feedback in jokes.md, then create 5 task files under tasks/ in /repos/config in your workspace (one per joke, do NOT commit). Then send me a board link minted with itx.worker.docs.link({ workspace: <your workspace>, repo: "/repos/config" }) so I can review them.',
@@ -94,7 +94,6 @@ test("workspace lens board demo", async ({ page }) => {
   // breadcrumbs, the agent's uncommitted joke tasks, no Commit control.
   await page.goto(boardHref);
   await passProjectGate(page);
-  await page.getByText("GUEST").waitFor({ timeout: 60_000 }); // timeout: board lens cold load on the live preview — past the spinner-waiter's 30s ceiling
   await page.getByText("/repos/config").first().waitFor();
   await page.getByRole("button", { name: /joke/i }).first().click();
   await page.getByRole("combobox", { name: "Task state" }).waitFor({ timeout: 30_000 }); // timeout: manual demo-lane budget — the task drawer renders with no spinner-waiter-visible loading UI

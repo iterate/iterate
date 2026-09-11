@@ -255,6 +255,26 @@ function makeRunner(args: {
 // =============================================================================
 
 describe("durableObjectProgressStore", () => {
+  it("clears related projections only after the stream replacement fence passes", () => {
+    const { storage } = makeStorage();
+    const resetForStream = vi.fn();
+    const store = durableObjectProgressStore<State>({ storage, name: SLUG, resetForStream });
+    store.commit(progressAt(20), { expectedCursorRevision: 0, expectedStreamId: undefined });
+    expect(() =>
+      store.replaceForStream!(progressAt(0, 1, RECREATED_STREAM_ID), {
+        expectedStreamId: "wrong",
+        expectedCursorRevision: 0,
+      }),
+    ).toThrow("stream replacement fenced");
+    expect(resetForStream).not.toHaveBeenCalled();
+    store.replaceForStream!(progressAt(0, 1, RECREATED_STREAM_ID), {
+      expectedStreamId: TEST_STREAM_ID,
+      expectedCursorRevision: 0,
+    });
+    expect(resetForStream).toHaveBeenCalledOnce();
+    expect(store.read()).toEqual(progressAt(0, 1, RECREATED_STREAM_ID));
+  });
+
   const progressKey = processorProgressKey(SLUG);
   const makeStore = () => {
     const { storage, map } = makeStorage();

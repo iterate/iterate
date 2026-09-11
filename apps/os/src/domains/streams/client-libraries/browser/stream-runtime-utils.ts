@@ -44,8 +44,3 @@ export function raceWithTimeout<T>(promise: Promise<T>, ms: number, message: str
     }),
   ]).finally(() => clearTimeout(timer));
 }
-
-/** Whether a SQL statement writes (so the runtime nudges its reactive queries). */
-export function isWriteStatement(sql: string): boolean {
-  return /^\s*(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|REPLACE|PRAGMA\s+user_version)/i.test(sql);
-}

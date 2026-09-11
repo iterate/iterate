@@ -142,20 +142,20 @@ static bool cli_main_write_playback(
     struct cli_runtime *runtime, const uint8_t *pcm);
 
 /* Feeds the converter until it stops asking; unpaced, exactly one frame. */
-static void cli_main_feed_playback(
-    struct cli_runtime *runtime, uint64_t now_ms);
+static void cli_main_feed_playback(struct cli_runtime *runtime);
 
 /* Completes an answered or overdue turn before consuming another frame. */
 static void cli_main_finish_answer_if_ready(
     struct cli_runtime *runtime, uint64_t now_ms);
 
-/* Produces one concealment frame when the playback clock requires it. */
-static void cli_main_conceal_if_needed(
-    struct cli_runtime *runtime, uint64_t now_ms);
-
-/* Applies the playback clock's decision to one dequeued frame. */
-static void cli_main_play_frame(
-    struct cli_runtime *runtime, const uint8_t *frame, uint64_t now_ms);
+/* The speaker ring and the room, as the shared playout step sees them. */
+static uint32_t cli_main_ring_queued_bytes(void *context);
+static enum iterate_kit_voice_playout_read cli_main_ring_read(
+    void *context, const uint8_t **frame, size_t *length);
+static uint64_t cli_main_sink_now_ms(void *context);
+static enum iterate_kit_voice_playout_write cli_main_sink_write(
+    void *context, const uint8_t *frame, size_t length);
+static bool cli_main_sink_conceal(void *context);
 
 /* Advances the real-time playback clock by at most one frame. */
 static void cli_main_poll_playback(
@@ -760,7 +760,7 @@ static bool cli_main_init_runtime(struct cli_runtime *runtime)
   if (!cli_main_init_keyboard(runtime)) return false;
   cli_speaker_clear(&runtime->speaker);
   cli_microphone_clear(&runtime->microphone);
-  iterate_kit_voice_playback_clock_init(&runtime->playback_clock);
+  iterate_kit_voice_playout_init(&runtime->playout);
   cli_runtime_log(
       "info", "iterate-kit-cli ready client=%s stream=%s staticBytes=%zu outbox=%u",
       runtime->client_path, runtime->options.stream_path, sizeof(*runtime),
@@ -874,7 +874,7 @@ static void cli_main_accept_speaker_frame(
     return;
   }
   if (iterate_kit_voice_playback_clock_audio_arrived(
-          &runtime->playback_clock, cli_runtime_now_ms(NULL))) {
+          &runtime->playout.clock, cli_runtime_now_ms(NULL))) {
     ++runtime->speaker_underruns;
     if (runtime->conversation.current_turn != NULL) {
       ++runtime->conversation.current_turn->underruns;
@@ -976,10 +976,8 @@ static void cli_main_on_control(
      */
     iterate_kit_darwin_audio_codec_set_playback_expected(&runtime->audio_codec, false);
     cli_speaker_clear(&runtime->speaker);
-    iterate_kit_voice_playback_clock_reprime(&runtime->playback_clock);
-    /* A new answer is a new timeline: lag does not carry across answers. */
-    runtime->answer_started_ms = 0U;
-    runtime->answer_emitted_ms = 0U;
+    /* A new answer is a new timeline: the reprime forgets the old one. */
+    iterate_kit_voice_playback_clock_reprime(&runtime->playout.clock);
     ++runtime->barge_in_flushes;
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE) {
     /*
@@ -988,7 +986,7 @@ static void cli_main_on_control(
      * handed over. Only the clock is told; nothing is thrown away.
      */
     runtime->answer_done = true;
-    iterate_kit_voice_playback_clock_answer_done(&runtime->playback_clock);
+    iterate_kit_voice_playback_clock_answer_done(&runtime->playout.clock);
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED) {
     cli_runtime_log("info", "call accepted");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
@@ -1020,7 +1018,6 @@ static bool cli_main_record_frame(
   assert(runtime != NULL && pcm != NULL);
   if (cli_wav_sink_write(
           &runtime->sink, pcm, ITERATE_KIT_VOICE_FRAME_BYTES) != CLI_WAV_OK) {
-    ++runtime->speaker_write_failures;
     runtime->stop_requested = true;
     return false;
   }
@@ -1161,72 +1158,73 @@ static void cli_main_finish_answer_if_ready(
   }
 }
 
-static void cli_main_conceal_if_needed(
-    struct cli_runtime *runtime, uint64_t now_ms)
+static uint32_t cli_main_ring_queued_bytes(void *context)
 {
+  const struct cli_runtime *runtime = context;
   assert(runtime != NULL);
-  const enum iterate_kit_voice_playback_action action =
-      iterate_kit_voice_playback_clock_empty(&runtime->playback_clock, now_ms);
-  if (action != ITERATE_KIT_VOICE_PLAYBACK_CONCEAL) return;
+  return (uint32_t)runtime->speaker.used;
+}
+
+static enum iterate_kit_voice_playout_read cli_main_ring_read(
+    void *context, const uint8_t **frame, size_t *length)
+{
+  struct cli_runtime *runtime = context;
+  assert(runtime != NULL && frame != NULL && length != NULL);
+  if (cli_speaker_read(
+          &runtime->speaker, runtime->playout_frame,
+          sizeof(runtime->playout_frame)) != CLI_SPEAKER_OK) {
+    return ITERATE_KIT_VOICE_PLAYOUT_READ_DRY;
+  }
+  *frame = runtime->playout_frame;
+  *length = sizeof(runtime->playout_frame);
+  return ITERATE_KIT_VOICE_PLAYOUT_READ_FRAME;
+}
+
+static uint64_t cli_main_sink_now_ms(void *context)
+{
+  (void)context;
+  return cli_runtime_now_ms(NULL);
+}
+
+static enum iterate_kit_voice_playout_write cli_main_sink_write(
+    void *context, const uint8_t *frame, size_t length)
+{
+  struct cli_runtime *runtime = context;
+  assert(runtime != NULL && frame != NULL);
+  assert(length == (size_t)ITERATE_KIT_VOICE_FRAME_BYTES);
+  (void)length;
+  if (!cli_main_write_playback(runtime, frame)) {
+    return ITERATE_KIT_VOICE_PLAYOUT_WRITE_FAILED;
+  }
+  /*
+   * The turn's own ledger, from audio the room actually took: what the
+   * report calls occupancy and played, the progress the turn watchdog
+   * measures instead of elapsed time, and when the answer was first heard.
+   */
+  {
+    const uint64_t now_ms = cli_runtime_now_ms(NULL);
+    struct cli_report_turn *turn = runtime->conversation.current_turn;
+    if (turn != NULL) {
+      cli_report_observe_occupancy(
+          turn, cli_speaker_queued_ms(&runtime->speaker));
+      ++turn->frames_played;
+      runtime->turn_progress_ms = now_ms;
+      if (turn->first_audio_ms == 0U) turn->first_audio_ms = now_ms;
+    }
+  }
+  return ITERATE_KIT_VOICE_PLAYOUT_WRITE_OK;
+}
+
+static bool cli_main_sink_conceal(void *context)
+{
+  struct cli_runtime *runtime = context;
   static const uint8_t silence[ITERATE_KIT_VOICE_FRAME_BYTES] = {0};
-  if (!cli_main_write_playback(runtime, silence)) return;
-  ++runtime->speaker_conceal_frames;
+  assert(runtime != NULL);
+  if (!cli_main_write_playback(runtime, silence)) return false;
   if (runtime->conversation.current_turn != NULL) {
     ++runtime->conversation.current_turn->frames_concealed;
   }
-}
-
-static void cli_main_play_frame(
-    struct cli_runtime *runtime, const uint8_t *frame, uint64_t now_ms)
-{
-  assert(runtime != NULL && frame != NULL);
-  const enum iterate_kit_voice_playback_action action =
-      iterate_kit_voice_playback_clock_frame(
-          &runtime->playback_clock, (uint32_t)runtime->speaker.used,
-          iterate_kit_voice_playout_lag_ms(
-              runtime->answer_started_ms, runtime->answer_emitted_ms,
-              now_ms),
-          now_ms);
-  if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP) {
-    /* The skipped frame still spent its place in the timeline; see the
-     * device's copy of this branch for why leaving it makes skipping run
-     * away and delete half an answer. */
-    ++runtime->speaker_catchup_frames;
-    runtime->answer_emitted_ms += ITERATE_KIT_VOICE_FRAME_MS;
-    return;
-  }
-  if (action != ITERATE_KIT_VOICE_PLAYBACK_PLAY) return;
-  if (!cli_main_write_playback(runtime, frame)) return;
-  ++runtime->speaker_frames_played;
-  ++runtime->speaker_writes;
-  {
-    if (runtime->answer_started_ms == 0U) {
-      runtime->answer_started_ms = now_ms;
-      runtime->answer_emitted_ms = 0U;
-    }
-    {
-      const uint32_t lag = iterate_kit_voice_playout_lag_ms(
-          runtime->answer_started_ms, runtime->answer_emitted_ms, now_ms);
-      if (lag > runtime->speaker_lag_max_ms) {
-        runtime->speaker_lag_max_ms = lag;
-      }
-    }
-    runtime->answer_emitted_ms += ITERATE_KIT_VOICE_FRAME_MS;
-  }
-  const uint32_t margin = cli_speaker_queued_ms(&runtime->speaker);
-  if (runtime->speaker_writes == 1U ||
-      margin < runtime->speaker_margin_min_ms) {
-    runtime->speaker_margin_min_ms = margin;
-  }
-  if (margin > runtime->speaker_margin_max_ms) {
-    runtime->speaker_margin_max_ms = margin;
-  }
-  struct cli_report_turn *turn = runtime->conversation.current_turn;
-  if (turn == NULL) return;
-  cli_report_observe_occupancy(turn, margin);
-  ++turn->frames_played;
-  runtime->turn_progress_ms = now_ms;
-  if (turn->first_audio_ms == 0U) turn->first_audio_ms = now_ms;
+  return true;
 }
 
 static void cli_main_poll_playback(
@@ -1257,7 +1255,7 @@ static void cli_main_poll_playback(
      * reuse a completed buffer.
      */
     cli_main_finish_answer_if_ready(runtime, now_ms);
-    cli_main_feed_playback(runtime, now_ms);
+    cli_main_feed_playback(runtime);
     return;
   }
   if (runtime->next_playback_at_ms == 0U) {
@@ -1272,11 +1270,10 @@ static void cli_main_poll_playback(
     runtime->next_playback_at_ms = now_ms + ITERATE_KIT_VOICE_FRAME_MS;
   }
   cli_main_finish_answer_if_ready(runtime, now_ms);
-  cli_main_feed_playback(runtime, now_ms);
+  cli_main_feed_playback(runtime);
 }
 
-static void cli_main_feed_playback(
-    struct cli_runtime *runtime, uint64_t now_ms)
+static void cli_main_feed_playback(struct cli_runtime *runtime)
 {
   assert(runtime != NULL);
   const bool room_pulls = runtime->options.live_audio ||
@@ -1300,25 +1297,41 @@ static void cli_main_feed_playback(
    * without a count a discard policy would drain the whole thirty-second ring
    * in one iteration while the converter went on asking.
    */
+  const struct iterate_kit_voice_playout_ring ring = {
+    .context = runtime,
+    .queued_bytes = cli_main_ring_queued_bytes,
+    .read = cli_main_ring_read,
+  };
+  /*
+   * WHO CONCEALS. The hardware puller is the exact authority for missing
+   * room audio: feeding software-generated concealment on this loop's 5 ms
+   * poll would fill a 20 ms hardware queue four times too fast and hide the
+   * callback's own starvation evidence. The unpaced/file-only model has no
+   * such authority, so it supplies the silence itself. Everything else —
+   * including asking the clock on EVERY dry read, which this loop once
+   * skipped for a live room and paid for with a back-office turn played one
+   * block in five (prd, 2026-09-09) — is the step's, shared with the board.
+   */
+  const struct iterate_kit_voice_playout_sink sink = {
+    .context = runtime,
+    .now_ms = cli_main_sink_now_ms,
+    .write = cli_main_sink_write,
+    .conceal = room_pulls ? NULL : cli_main_sink_conceal,
+  };
   uint32_t fed = 0U;
   do {
-    if (!iterate_kit_voice_playback_clock_ready(
-            &runtime->playback_clock, (uint32_t)runtime->speaker.used)) return;
-    uint8_t frame[ITERATE_KIT_VOICE_FRAME_BYTES] = {0};
-    if (cli_speaker_read(&runtime->speaker, frame, sizeof(frame)) !=
-        CLI_SPEAKER_OK) {
-      /*
-       * The hardware puller is the exact authority for missing room audio.
-       * Feeding software-generated concealment on this loop's 5 ms poll
-       * would fill a 20 ms hardware queue four times too fast and hide the
-       * callback's own starvation evidence. The unpaced/file-only model has
-       * no such authority, so it retains the core concealment decision.
-       */
-      if (room_pulls) return;
-      cli_main_conceal_if_needed(runtime, now_ms);
+    switch (iterate_kit_voice_playout_step(&runtime->playout, &ring, &sink)) {
+    case ITERATE_KIT_VOICE_PLAYOUT_PRIMING:
+    case ITERATE_KIT_VOICE_PLAYOUT_ABANDONED:
+    case ITERATE_KIT_VOICE_PLAYOUT_STARVED:
+    case ITERATE_KIT_VOICE_PLAYOUT_SETTLED:
       return;
+    case ITERATE_KIT_VOICE_PLAYOUT_SKIPPED:
+    case ITERATE_KIT_VOICE_PLAYOUT_PLAYED:
+    case ITERATE_KIT_VOICE_PLAYOUT_REPLACED:
+    case ITERATE_KIT_VOICE_PLAYOUT_REFUSED:
+      break;
     }
-    cli_main_play_frame(runtime, frame, now_ms);
     ++fed;
   } while (fed < CLI_PACED_SINK_MAX_DEPTH_FRAMES &&
            (cli_paced_sink_ready(&runtime->paced_sink) ||
@@ -1532,7 +1545,7 @@ static void cli_main_start_talk(
   runtime->frame_sequence = 0U;
   cli_microphone_clear(&runtime->microphone);
   cli_speaker_clear(&runtime->speaker);
-  iterate_kit_voice_playback_clock_reprime(&runtime->playback_clock);
+  iterate_kit_voice_playback_clock_reprime(&runtime->playout.clock);
   /*
    * A LOST ptt-start IS A LOST BARGE-IN: the server's answer-drop triggers on
    * this exact event, so a press that captures audio but fails to say
@@ -1765,13 +1778,13 @@ static void cli_main_draw_screen(struct cli_runtime *runtime, uint64_t now_ms)
     .mic_sent = runtime->voicelab.frames_sent,
     .mic_lost = audio.capture_frames_dropped,
     .spk_received = runtime->voicelab.spk_frames_received,
-    .spk_played = runtime->speaker_frames_played,
+    .spk_played = runtime->playout.stats.frames_played,
     .spk_ring_ms = cli_speaker_queued_ms(&runtime->speaker),
-    .spk_conceal = runtime->speaker_conceal_frames,
+    .spk_conceal = runtime->playout.stats.conceal_frames,
     .spk_underruns = runtime->speaker_underruns,
     .spk_dropped = runtime->speaker_room_drops + runtime->speaker_overflow_drops,
     .spk_starved = audio.playback_starved_buffers,
-    .spk_catchup = runtime->speaker_catchup_frames,
+    .spk_catchup = runtime->playout.stats.catchup_frames,
     .turn_release_to_commit_ms = runtime->turn_release_to_commit_ms,
     .turn_commit_to_audio_ms = runtime->turn_commit_to_audio_ms,
     .outbox_used = (uint32_t)outbox.current_slots,
@@ -1894,7 +1907,7 @@ static void cli_main_pulse(
       runtime->transport.control_sender.messages_sent,
       runtime->voicelab.frames_sent, runtime->voicelab.batches_on_connection,
       runtime->voicelab.spk_frames_received,
-      runtime->speaker_frames_played, runtime->speaker_conceal_frames,
+      runtime->playout.stats.frames_played, runtime->playout.stats.conceal_frames,
       runtime->speaker_underruns, cli_speaker_queued_ms(&runtime->speaker),
       /*
        * A live microphone that macOS refused looks exactly like a quiet room

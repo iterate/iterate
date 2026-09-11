@@ -4,6 +4,13 @@ OS is an authenticated app where users manage organization-owned projects and ru
 
 ## Language
 
+**Mention**:
+A resource identified within a message's readable content, with metadata describing its target. The target may be a repository file, user, agent, or stream.
+_Avoid_: message reference, annotation, attachment (for mentions of existing resources), rich-text document
+
+**Mention Resolution**:
+The recorded outcome of retrieving a Mention's target, including the source identity and any content included for the agent.
+
 > **Historical note (itx-v4 cutover 2026-07 + single-worker cutover
 > PR #1636):** entries below that describe the legacy stacks — the Ingress
 > Route Table machinery, `__null__` Durable Object name encoding,

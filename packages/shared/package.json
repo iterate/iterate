@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./chunked-text": "./src/chunked-text.ts",
+    "./json-byte-length": "./src/json-byte-length.ts",
+    "./message": "./src/message.ts",
     "./agent-events": "./src/agent-events.ts",
     "./config": "./src/config.ts",
     "./mobile-channel-status": "./src/mobile-channel-status.ts",
@@ -25,7 +28,6 @@
     "./test-support/preview-rollout-gate": "./src/test-support/preview-rollout-gate.ts",
     "./test-support/fetch-safe-port": "./src/test-support/fetch-safe-port.ts",
     "./test-support/fixture-slug": "./src/test-support/fixture-slug.ts",
-    "./test-support/resilient-ai-interceptor": "./src/test-support/resilient-ai-interceptor.ts",
     "./request-logging": "./src/request-logging.ts",
     "./script-execution": "./src/script-execution.ts",
     "./slugify": "./src/slugify.ts",

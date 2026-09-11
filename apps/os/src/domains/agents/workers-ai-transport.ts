@@ -15,21 +15,14 @@ import type { AiGatewayMetadata } from "./ai-gateway-metadata.ts";
 // models actually return, and capping the whole attempt's lifetime.
 
 /** The `env.AI` surface one attempt needs. `gateway` is optional so bare test
- * fakes stay two-line objects; the BYOK lane requires it and fails the attempt
+ * fakes stay two-line objects; the BYOK transport requires it and fails the attempt
  * loudly when the host's binding lacks it. */
 export type WorkersAiBinding = {
-  run(
-    model: string,
-    body: unknown,
-    options?: {
-      returnRawResponse?: boolean;
-      gateway: { id: string; metadata: Record<string, string | number> };
-    },
-  ): Promise<unknown>;
+  run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown>;
   gateway?(gatewayId: string): CloudflareAiGatewayBinding;
 };
 
-/** `env.AI.gateway(id)` — the universal-endpoint door used by the BYOK lane. */
+/** `env.AI.gateway(id)` — the universal endpoint used by the BYOK transport. */
 export type CloudflareAiGatewayBinding = {
   run(data: {
     provider: string;
@@ -533,10 +526,19 @@ export async function sendAiRequest(
   const { sourceModel, credential: _credential, ...request } = prepared;
   if (modelInterception.isInterceptedModel(sourceModel)) {
     if (!host.consultInterceptor) throw modelInterception.noAiInterceptorError(sourceModel);
-    const response = modelInterception.InterceptedAiResponse.parse(
-      await host.consultInterceptor({ ...host.source, model: sourceModel, request }),
-    );
-    return new Response(response.body, { status: response.status, headers: response.headers });
+    // The only agent-turn caller is runWorkersAiAttempt, which builds body.messages
+    // with adaptMessagesForModel. Shared preparation erases that shape because
+    // ai-run and egress also accept arbitrary model inputs; restore the source/body correlation.
+    const intercepted = {
+      ...host.source,
+      model: sourceModel,
+      request,
+    } as modelInterception.ProjectAiInterceptorInput;
+    const response = await host.consultInterceptor(intercepted);
+    if (!(response instanceof Response)) throw new Error("AI interceptor must return a Response");
+    if (response.bodyUsed || response.body?.locked)
+      throw new Error("AI interceptor must return a Response with an unused, unlocked body");
+    return response;
   }
   switch (prepared.kind) {
     case "openai-http": {

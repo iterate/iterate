@@ -1,4 +1,11 @@
+import { appendText, sliceText, StreamText } from "@iterate-com/shared/chunked-text";
 import { AgentLlmRequestCancelReason, type AgentRuntime } from "@iterate-com/shared/agent-events";
+import {
+  MessageMentions,
+  decodeMessageMentions,
+  hasConfigRepoFileMentions,
+  type Mention,
+} from "@iterate-com/shared/message";
 import { ScriptExecutionSettlement } from "@iterate-com/shared/script-execution";
 import { z } from "zod";
 import type { Event } from "./types.ts";
@@ -8,17 +15,10 @@ import type { Event } from "./types.ts";
 //
 // The agent UI is a clean chat: user message → activity ("Ran code 2× · 3
 // requests · 7.4 s") → assistant message, with quiet stream wake dividers.
-// SETTLED items are emitted in order; the browser-feed projector
-// (apps/os .../processors/browser-feed) interleaves them with raw feed rows
-// and allocates each one a `feed_items.local_index`. The reduced state holds
-// only what is still in flight — the live activity with partially streamed
-// thinking/response text and the presence roster. The live part renders as
-// one element below the list, straight from this state, and exists only
-// while work is active.
-//
-// `reduce` advances state one event at a time; `processEventBatch` plans the
-// whole batch from the same entry state to produce one idempotent SQLite
-// transaction.
+// Settled items are published by the server Feed facet as immutable revisions.
+// Browsers query those publications alongside raw events in a SQLite view.
+// Reduced state holds in-flight activity, streamed text and presence; the
+// server exposes that current presentation separately through live state.
 // ---------------------------------------------------------------------------
 
 export type AgentUiLlmStep = {
@@ -29,13 +29,11 @@ export type AgentUiLlmStep = {
   status: "running" | "done";
   model?: string;
   /** Streamed reasoning summary ("thinking") text. */
-  thinkingText: string;
+  thinkingText: StreamText;
   /** Streamed response text — for code-mode agents this is source code. */
-  responseText: string;
-  /** responseText split at chunk-event boundaries (one entry per coalesced
-   * window), so the UI can stagger each window's tokens into view instead of
-   * jumping ~8 tokens per event. Concatenation always equals responseText. */
-  responseWindows: string[];
+  responseText: StreamText;
+  /** Server preview omitted text to stay bounded; durable request replay retains the full output. */
+  previewTruncated?: boolean;
   /** Offset of the committed assistant context-added event carrying this
    * step's final text; links interpretation events back to the step. */
   assistantEventOffset?: number;
@@ -117,7 +115,8 @@ export function summarizeAgentUiActivity(
     const cancelled = step.outcome === "cancelled";
     if (cancelled && step.cancelReason === "interrupted-by-user-input") {
       interrupted = true;
-      interruptedWithPartialResponse ||= step.thinkingText !== "" || step.responseText !== "";
+      interruptedWithPartialResponse ||=
+        step.thinkingText.length > 0 || step.responseText.length > 0;
     } else if (step.outcome === "failed" || cancelled) {
       // Any cancellation other than the user's own interrupt (expired, or a
       // reason this UI doesn't recognize) means the turn produced nothing.
@@ -264,8 +263,8 @@ export function deriveAgentUiLiveStatus(state: AgentUiState): AgentUiLiveStatus 
   const phase = () => {
     const current = live.steps.findLast((step) => step.status === "running");
     if (current?.kind === "code") return "running";
-    if (current?.kind === "llm" && current.responseText !== "") return "writing";
-    if (current?.kind === "llm" && current.thinkingText !== "") return "thinking";
+    if (current?.kind === "llm" && current.responseText.length > 0) return "writing";
+    if (current?.kind === "llm" && current.thinkingText.length > 0) return "thinking";
     if (current?.kind === "llm") return "waiting";
     const last = live.steps.at(-1);
     // A paused loop owes no follow-up, whatever the last step promised — a
@@ -291,7 +290,8 @@ export function deriveAgentUiLiveStatus(state: AgentUiState): AgentUiLiveStatus 
       if (
         last.status === "done" &&
         last.outcome === "completed" &&
-        (/^[ \t]*```/m.test(last.responseText) || last.responseText.includes("<codemode"))
+        (/^[ \t]*```/m.test(sliceText(last.responseText)) ||
+          sliceText(last.responseText).includes("<codemode"))
       ) {
         return "processing";
       }
@@ -318,12 +318,19 @@ export type AgentUiMessageVia = {
   sender?: string;
 };
 
+export type AgentUiMentionResolution = {
+  status: "resolved" | "missing" | "binary" | "read-failed";
+  truncated?: boolean;
+};
+
 export type AgentUiMessageItem = {
   kind: "user" | "assistant";
   id: string;
   text: string;
   timestampMs: number;
   files?: AgentUiFileAttachment[];
+  mentions?: Mention[];
+  mentionResolutions?: Record<string, AgentUiMentionResolution>;
   via?: AgentUiMessageVia;
 };
 
@@ -426,6 +433,8 @@ export type AgentUiState = {
   deferredAssistantMessages: AgentUiMessageItem[];
   /** User messages that landed while the current request was already running. */
   queuedUserMessages: AgentUiMessageItem[];
+  /** Rich user messages waiting for their durable mention-resolution event. */
+  pendingMentionMessages: Record<string, AgentUiMessageItem>;
   eventCount: number;
   /** Connection roster reduced from connection-opened/connection-closed facts. */
   presence: AgentUiPresenceEntry[];
@@ -456,9 +465,9 @@ const AgentUiLlmStepSchema = z
     llmRequestOffset: z.number().int().nonnegative(),
     status: z.enum(["running", "done"]),
     model: z.string().optional(),
-    thinkingText: z.string(),
-    responseText: z.string(),
-    responseWindows: z.array(z.string()),
+    thinkingText: StreamText,
+    responseText: StreamText,
+    previewTruncated: z.boolean().optional(),
     assistantEventOffset: z.number().int().positive().optional(),
     interpreted: z.boolean().optional(),
     inputTokens: z.number().int().nonnegative().optional(),
@@ -512,14 +521,65 @@ const AgentUiMessageViaSchema = z.strictObject({
   sender: z.string().optional(),
 }) satisfies z.ZodType<AgentUiMessageVia>;
 
+const AgentUiMentionResolutionSchema = z.strictObject({
+  status: z.enum(["resolved", "missing", "binary", "read-failed"]),
+  truncated: z.boolean().optional(),
+}) satisfies z.ZodType<AgentUiMentionResolution>;
+
 const AgentUiMessageItemSchema = z.strictObject({
   kind: z.enum(["user", "assistant"]),
   id: z.string(),
   text: z.string(),
   timestampMs: z.number().finite(),
   files: z.array(AgentUiFileAttachmentSchema).optional(),
+  mentions: MessageMentions.optional(),
+  mentionResolutions: z.record(z.string(), AgentUiMentionResolutionSchema).optional(),
   via: AgentUiMessageViaSchema.optional(),
 }) satisfies z.ZodType<AgentUiMessageItem>;
+
+/** The server-published presentation contract shared by all feed renderers. */
+export const AgentUiItemSchema = z.discriminatedUnion("kind", [
+  AgentUiMessageItemSchema,
+  AgentUiActivitySchema,
+  z.strictObject({
+    kind: z.literal("stream-woken"),
+    id: z.string(),
+    text: z.string(),
+    timestampMs: z.number().finite(),
+    count: z.number().int().positive().optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("child-stream-created"),
+    id: z.string(),
+    childPath: z.string(),
+    timestampMs: z.number().finite(),
+  }),
+  z.strictObject({
+    kind: z.enum(["stream-paused", "stream-resumed"]),
+    id: z.string(),
+    text: z.string(),
+    reason: z.string().optional(),
+    timestampMs: z.number().finite(),
+  }),
+  z.strictObject({
+    kind: z.literal("processor-revived"),
+    id: z.string(),
+    processorSlug: z.string().optional(),
+    revivals: z.number().int().nonnegative().optional(),
+    timestampMs: z.number().finite(),
+  }),
+]) satisfies z.ZodType<AgentUiItem>;
+
+const AgentMentionResolutionEvent = z.object({
+  sourceOffset: z.number().int().nonnegative(),
+  outcomes: z.array(
+    z.object({
+      status: z.enum(["resolved", "missing", "binary", "read-failed"]),
+      mentionIds: z.array(z.string().min(1)),
+      truncated: z.boolean().optional(),
+    }),
+  ),
+});
 
 const AgentUiProcessorAnnouncementSchema = z.strictObject({
   slug: z.string(),
@@ -566,6 +626,7 @@ export const AgentUiStateSchema = z
     live: AgentUiActivitySchema.nullable(),
     deferredAssistantMessages: z.array(AgentUiMessageItemSchema),
     queuedUserMessages: z.array(AgentUiMessageItemSchema),
+    pendingMentionMessages: z.record(z.string(), AgentUiMessageItemSchema),
     eventCount: z.number().int().nonnegative(),
     presence: z.array(AgentUiPresenceEntrySchema),
     tokenUsage: AgentUiTokenUsageSchema,
@@ -581,6 +642,15 @@ export const AgentUiStateSchema = z
           code: "custom",
           message: `provisional activity key ${JSON.stringify(id)} does not match its id`,
           path: ["provisionalActivities", id, "id"],
+        });
+      }
+    }
+    for (const [sourceOffset, message] of Object.entries(state.pendingMentionMessages)) {
+      if (message.id !== `user-${sourceOffset}`) {
+        context.addIssue({
+          code: "custom",
+          message: `pending mention message ${JSON.stringify(sourceOffset)} does not match its id`,
+          path: ["pendingMentionMessages", sourceOffset, "id"],
         });
       }
     }
@@ -601,12 +671,14 @@ export function isCurrentAgentUiState(value: unknown): value is AgentUiState {
  * bound.
  */
 export const AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT = 32;
+export const AGENT_UI_PENDING_MENTION_LIMIT = 32;
 
 export function initialAgentUiState(): AgentUiState {
   return {
     live: null,
     deferredAssistantMessages: [],
     queuedUserMessages: [],
+    pendingMentionMessages: {},
     eventCount: 0,
     presence: [],
     tokenUsage: initialAgentUiTokenUsage(),
@@ -619,7 +691,7 @@ export function initialAgentUiState(): AgentUiState {
 
 /**
  * Fold ONE event into settled items + the resulting state. Items are appended
- * to `items` in emission order; the caller (the browser-feed projector) owns
+ * to `items` in emission order; the caller owns
  * list positions. Idempotent by construction: replaying the same event from
  * the same entry state yields the same items.
  */
@@ -745,6 +817,20 @@ function reduceAgentUiEvent(
           tokenUsage: { ...state.tokenUsage, lastReport: null },
         };
       }
+      const actor = readRecord(event, "actor");
+      const actorType = typeof actor?.type === "string" ? actor.type : undefined;
+      if (
+        role === "developer" &&
+        actorType === "integration" &&
+        actor?.name === "agent-mention-resolver"
+      ) {
+        const resolution = AgentMentionResolutionEvent.safeParse(
+          readPayloadRecord(event)?.mentionResolution,
+        );
+        return resolution.success
+          ? applyAgentMentionResolution(contextState, items, resolution.data)
+          : contextState;
+      }
 
       if (role === "assistant") {
         const llmRequestOffset = readLlmRequestOffset(event);
@@ -754,17 +840,6 @@ function reduceAgentUiEvent(
             ? {
                 ...step,
                 responseText: text,
-                // Keep the reveal windows covering the full text: a swallowed
-                // tail flush leaves the last window's tokens unjournaled, and
-                // the live prose renders from windows. Extend with the missing
-                // suffix; on any divergence the committed text replaces the
-                // windows wholesale.
-                responseWindows:
-                  text === step.responseText
-                    ? step.responseWindows
-                    : text.startsWith(step.responseText)
-                      ? [...step.responseWindows, text.slice(step.responseText.length)]
-                      : [text],
                 assistantEventOffset: event.offset,
               }
             : step,
@@ -772,17 +847,22 @@ function reduceAgentUiEvent(
       }
       if (role === "system") return contextState;
 
-      const actor = readRecord(event, "actor");
-      const actorType = typeof actor?.type === "string" ? actor.type : undefined;
       const files = readFileAttachments(event);
       if (role === "user") {
-        return emitUserMessageItem(contextState, items, {
+        const decodedMessage = decodeMessageMentions(text, readPayloadRecord(event)?.mentions);
+        const item: AgentUiMessageItem = {
           kind: "user",
           id: `user-${event.offset}`,
           text,
           ...(files.length === 0 ? {} : { files }),
+          ...(decodedMessage === null ? {} : { mentions: decodedMessage.mentions }),
           timestampMs,
-        });
+        };
+        const pendingState =
+          decodedMessage !== null && hasConfigRepoFileMentions(decodedMessage.mentions)
+            ? rememberPendingMentionMessage(contextState, event.offset, item)
+            : contextState;
+        return emitUserMessageItem(pendingState, items, item);
       }
       if (
         actorType === "agent" ||
@@ -856,7 +936,6 @@ function reduceAgentUiEvent(
         ...(model == null ? {} : { model }),
         thinkingText: "",
         responseText: "",
-        responseWindows: [],
         startedAtMs: timestampMs,
       };
       return { ...ready, live: { ...live, steps: [...live.steps, step] } };
@@ -879,13 +958,13 @@ function reduceAgentUiEvent(
       return updateLlmStep(state, llmRequestOffset, (step) => ({
         ...step,
         responseText:
-          step.status === "running" ? step.responseText + responseDelta : step.responseText,
-        responseWindows:
           step.status === "running" && responseDelta !== ""
-            ? [...step.responseWindows, responseDelta]
-            : step.responseWindows,
+            ? appendText(step.responseText, responseDelta)
+            : step.responseText,
         thinkingText:
-          step.status === "running" ? step.thinkingText + thinkingDelta : step.thinkingText,
+          step.status === "running" && thinkingDelta !== ""
+            ? appendText(step.thinkingText, thinkingDelta)
+            : step.thinkingText,
       }));
     }
 
@@ -917,16 +996,11 @@ function reduceAgentUiEvent(
               // partialText is the authoritative superset: it accrued per
               // provider chunk, while responseText only holds FLUSHED windows
               // — an interrupt can strand up to one coalescing window's tail
-              // in the buffer. Adopt it whenever it extends what streamed;
-              // the suffix becomes a final window so the reveal animates it.
+              // in the buffer. Adopt the recorded text when it extends the preview.
               ...(partialText &&
                 partialText.length > step.responseText.length &&
-                partialText.startsWith(step.responseText) && {
+                partialText.startsWith(sliceText(step.responseText)) && {
                   responseText: partialText,
-                  responseWindows: [
-                    ...step.responseWindows,
-                    partialText.slice(step.responseText.length),
-                  ],
                 }),
               ...(typeof payload.durationMs === "number"
                 ? { durationMs: payload.durationMs }
@@ -1391,6 +1465,53 @@ function flushDeferredMessages(state: AgentUiState, items: AgentUiItem[]): Agent
     next = emitItem(next, items, item);
   }
   return flushQueuedUserMessages(next, items);
+}
+
+function rememberPendingMentionMessage(
+  state: AgentUiState,
+  sourceOffset: number,
+  item: AgentUiMessageItem,
+): AgentUiState {
+  const pendingMentionMessages = {
+    ...state.pendingMentionMessages,
+    [String(sourceOffset)]: item,
+  };
+  while (Object.keys(pendingMentionMessages).length > AGENT_UI_PENDING_MENTION_LIMIT) {
+    const oldestOffset = Object.keys(pendingMentionMessages)[0];
+    if (oldestOffset === undefined) break;
+    delete pendingMentionMessages[oldestOffset];
+  }
+  return { ...state, pendingMentionMessages };
+}
+
+function applyAgentMentionResolution(
+  state: AgentUiState,
+  items: AgentUiItem[],
+  resolution: z.infer<typeof AgentMentionResolutionEvent>,
+): AgentUiState {
+  const sourceOffset = String(resolution.sourceOffset);
+  const pending = state.pendingMentionMessages[sourceOffset];
+  if (pending === undefined) return state;
+
+  const mentionResolutions: Record<string, AgentUiMentionResolution> = {};
+  for (const outcome of resolution.outcomes) {
+    for (const mentionId of outcome.mentionIds) {
+      mentionResolutions[mentionId] = {
+        status: outcome.status,
+        ...(outcome.truncated === undefined ? {} : { truncated: outcome.truncated }),
+      };
+    }
+  }
+  const corrected = { ...pending, mentionResolutions };
+  const pendingMentionMessages = { ...state.pendingMentionMessages };
+  delete pendingMentionMessages[sourceOffset];
+  const queuedIndex = state.queuedUserMessages.findIndex((message) => message.id === pending.id);
+  if (queuedIndex !== -1) {
+    const queuedUserMessages = [...state.queuedUserMessages];
+    queuedUserMessages[queuedIndex] = corrected;
+    return { ...state, pendingMentionMessages, queuedUserMessages };
+  }
+  return emitItem({ ...state, pendingMentionMessages }, items, corrected);
 }
 
 // A user message while steps are still running must not archive those steps

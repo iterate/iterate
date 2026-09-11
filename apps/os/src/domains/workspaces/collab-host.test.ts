@@ -167,132 +167,6 @@ describe("collab host", () => {
     }
   });
 
-  test("redline cycle: attributed changes since birth, reset by commit, resumed after", async () => {
-    const { store } = fakeSessionStore();
-    const { fs } = fakeFs({ [PATH]: SEED });
-    const host = new CollabHost({ fs, store });
-    const opened = await host.open(PATH);
-
-    // Two humans and an agent touch the file.
-    await pushOne(host, opened, "one ", SEED.length, 0, "alice");
-    await host.push({
-      baseVersion: 1,
-      clientId: "bob",
-      epoch: opened.epoch,
-      ops: [
-        {
-          changes: ChangeSet.of(
-            { from: 4, insert: "", to: 4 + SEED.length },
-            SEED.length + 4,
-          ).toJSON(),
-          clientSeq: 0,
-        },
-      ],
-      path: PATH,
-    });
-    await host.writeFile(PATH, "one [agent]");
-
-    const before = await host.changes(PATH);
-    expect(before.baseVersion).toBe(0);
-    expect(before.headVersion).toBe(3);
-    const authors = new Set(
-      [...before.inserted, ...before.deleted].map((segment) => segment.clientId),
-    );
-    expect(authors).toEqual(new Set(["alice", "bob", "external"]));
-    expect(before.deleted[0]).toMatchObject({ text: SEED }); // bob deleted the base text
-
-    // Commit: the fence settles, commits, and stamps as one job.
-    await host.commitBarrier(
-      async () => ({ mount: "/repos/config" }),
-      () => true,
-    );
-    const after = await host.changes(PATH);
-    expect(after).toMatchObject({ baseVersion: 3, deleted: [], headVersion: 3, inserted: [] });
-
-    // Post-commit edits redline against the NEW base only. (clientSeq
-    // continues from alice's confirmed count — seq 0 would be deduped.)
-    await pushOne(host, { epoch: opened.epoch, version: 3 }, "post ", 11, 1, "alice");
-    const next = await host.changes(PATH);
-    expect(next.inserted).toEqual([
-      { clientId: "alice", createdAt: expect.any(Number), from: 0, to: 5 },
-    ]);
-  });
-
-  test("redline survives compaction: ops retained back to the baseline", async () => {
-    const { store } = fakeSessionStore();
-    const { fs } = fakeFs({ [PATH]: SEED });
-    const host = new CollabHost({ fs, store });
-    const opened = await host.open(PATH);
-
-    // Drive far past SNAPSHOT_EVERY without committing; the first op deletes
-    // base text whose recovery requires the full op tail back to version 0.
-    await host.push({
-      baseVersion: 0,
-      clientId: "deleter",
-      epoch: opened.epoch,
-      ops: [
-        {
-          changes: ChangeSet.of({ from: 0, insert: "", to: 8 }, SEED.length).toJSON(),
-          clientSeq: 0,
-        },
-      ],
-      path: PATH,
-    });
-    for (let index = 0; index < 300; index++) {
-      const head = (await host.readFile(PATH))!;
-      const result = await host.push({
-        baseVersion: index + 1,
-        clientId: "typist",
-        epoch: opened.epoch,
-        ops: [
-          {
-            changes: ChangeSet.of({ from: 0, insert: "x", to: 0 }, head.length).toJSON(),
-            clientSeq: index,
-          },
-        ],
-        path: PATH,
-      });
-      expect(result.status).toBe("accepted");
-    }
-
-    const redline = await host.changes(PATH);
-    expect(redline.headVersion).toBe(301);
-    expect(redline.deleted[0]).toMatchObject({ clientId: "deleter", text: "settled " });
-  });
-
-  test("mount-scoped commit stamping: unstamped sessions keep their redline", async () => {
-    const OTHER = "/other/task.md";
-    const { store } = fakeSessionStore();
-    const { fs } = fakeFs({ [PATH]: SEED, [OTHER]: "other seed" });
-    const host = new CollabHost({ fs, store });
-    const opened = await host.open(PATH);
-    const openedOther = await host.open(OTHER);
-    await pushOne(host, opened, "committed ", SEED.length);
-    await host.push({
-      baseVersion: openedOther.version,
-      clientId: "peer",
-      epoch: openedOther.epoch,
-      ops: [
-        { changes: ChangeSet.of({ from: 0, insert: "kept ", to: 0 }, 10).toJSON(), clientSeq: 0 },
-      ],
-      path: OTHER,
-    });
-
-    // The DO's ownsPath predicate scopes stamping to the committed mount:
-    // only owned paths advance, inside the one commit fence.
-    await host.commitBarrier(
-      async () => ({ mount: "/A" }),
-      (path, mount) => (mount === "/A" ? path === PATH : path !== PATH),
-    );
-
-    const stamped = await host.changes(PATH);
-    expect([...stamped.inserted, ...stamped.deleted]).toEqual([]);
-    const other = await host.changes(OTHER);
-    expect(other.inserted).toEqual([
-      { clientId: "peer", createdAt: expect.any(Number), from: 0, to: 5 },
-    ]);
-  });
-
   test("first touch after eviction must NOT idle-end other live sessions", async () => {
     vi.useFakeTimers({ now: 10 * 60_000 }); // well past IDLE_END_MS since epoch 0
     try {
@@ -357,45 +231,6 @@ describe("collab host", () => {
     expect(files.get(PATH)).toBe(SEED); // never written — no resurrection
   });
 
-  test("commit stamping matches EXACTLY what was flushed, even under racing pushes", async () => {
-    const { store } = fakeSessionStore();
-    const { files, fs } = fakeFs({ [PATH]: SEED });
-    let slowWrites = false;
-    let releaseWrite: () => void = () => {};
-    const gate = new Promise<void>((resolve) => (releaseWrite = resolve));
-    const slowFs: CollabSettledFs = {
-      readFile: fs.readFile,
-      writeFile: async (path, content) => {
-        if (slowWrites) await gate;
-        return fs.writeFile(path, content);
-      },
-    };
-    const host = new CollabHost({ fs: slowFs, store });
-    const opened = await host.open(PATH);
-    await pushOne(host, opened, "committed ", SEED.length);
-
-    slowWrites = true;
-    const barrier = host.commitBarrier(
-      async () => {
-        // A keystroke races the commit: accepted after the settle, before the
-        // stamp — the fence must stamp the settled state, not the new head.
-        await pushOne(host, { epoch: opened.epoch, version: 1 }, "late ", SEED.length + 10, 1);
-        return { mount: "/repos/config" };
-      },
-      () => true,
-    );
-    releaseWrite();
-    await barrier;
-
-    // The overlay (and the commit) contains exactly the settled snapshot…
-    expect(files.get(PATH)).toBe(`committed ${SEED}`);
-    // …and the raced push SURVIVES in the redline instead of vanishing.
-    const redline = await host.changes(PATH);
-    expect(redline.inserted).toEqual([
-      { clientId: "peer", createdAt: expect.any(Number), from: 0, to: 5 },
-    ]);
-  });
-
   test("a delete racing a slow-seeding open wins: no resurrection", async () => {
     const { sessions, store } = fakeSessionStore();
     const { fs } = fakeFs({ [PATH]: SEED });
@@ -449,34 +284,6 @@ describe("collab host regressions", () => {
     const versions = rebooted.versions();
     expect(versions[PATH]).toBeGreaterThanOrEqual(1);
   });
-
-  test("changes() carries createdAt for inserted and deleted segments", async () => {
-    const { store } = fakeSessionStore();
-    const { fs } = fakeFs({ [PATH]: SEED });
-    const host = new CollabHost({ fs, store });
-    const opened = await host.open(PATH);
-    await pushOne(host, opened, "new ", SEED.length);
-    await host.push({
-      baseVersion: opened.version + 1,
-      clientId: "peer",
-      epoch: opened.epoch,
-      ops: [
-        {
-          changes: ChangeSet.of(
-            { from: 4, to: 4 + "settled".length },
-            "new settled text".length,
-          ).toJSON(),
-          clientSeq: 1,
-        },
-      ],
-      path: PATH,
-    });
-    const changes = await host.changes(PATH);
-    expect(changes.inserted.length).toBeGreaterThan(0);
-    expect(changes.deleted.length).toBeGreaterThan(0);
-    for (const span of changes.inserted) expect(typeof span.createdAt).toBe("number");
-    for (const span of changes.deleted) expect(typeof span.createdAt).toBe("number");
-  });
 });
 
 describe("flush dirtiness", () => {
@@ -501,25 +308,6 @@ describe("flush dirtiness", () => {
     await pushOne(host, opened, "hi ", SEED.length);
     await host.reconcile();
     expect(files.get(PATH)).toBe(`hi ${SEED}`);
-  });
-});
-
-describe("commit stamping after prior settles", () => {
-  test("commitBarrier stamps sessions the debounce already flushed", async () => {
-    const { store } = fakeSessionStore();
-    const { fs } = fakeFs({ [PATH]: SEED });
-    const host = new CollabHost({ fs, store });
-    const opened = await host.open(PATH);
-    await pushOne(host, opened, "hi ", SEED.length);
-    await host.reconcile(); // an earlier barrier settles it — session is clean now
-    await host.commitBarrier(
-      async () => ({ mount: "/repos/config" }),
-      () => true,
-    );
-    // The commit contained the flushed text, so the redline must reset.
-    const changes = await host.changes(PATH);
-    expect(changes.inserted).toEqual([]);
-    expect(changes.deleted).toEqual([]);
   });
 });
 
@@ -587,80 +375,7 @@ describe("open unwind windows", () => {
   });
 });
 
-describe("retention quota on the agent gateway", () => {
-  test("writeFile and edit refuse past the uncommitted-ops quota, exactly like push", async () => {
-    const { store } = fakeSessionStore();
-    const { fs } = fakeFs({ [PATH]: SEED });
-    const host = new CollabHost({ fs, store });
-    const opened = await host.open(PATH);
-    await pushOne(host, opened, "hi ", SEED.length);
-    // Rewind the baseline so the head sits exactly at the quota — the same
-    // arithmetic a 10k-op session reaches, without pushing 10k ops.
-    store.setBases([{ content: SEED, epoch: opened.epoch, path: PATH, version: 1 - 10_000 }]);
-    await expect(host.writeFile(PATH, "agent text")).rejects.toThrow(/retention quota/);
-    await expect(host.edit({ newString: "x", oldString: "hi", path: PATH })).rejects.toThrow(
-      /retention quota/,
-    );
-    await expect(
-      pushOne(host, { epoch: opened.epoch, version: 1 }, "y", `hi ${SEED}`.length, 1),
-    ).rejects.toThrow(/retention quota/);
-  });
-});
-
-describe("clean-session commit stamping", () => {
-  test("a push racing the settle loop stays above the stamped baseline", async () => {
-    const { store } = fakeSessionStore();
-    const files = new Map<string, string>([
-      ["/a.md", "aaa"],
-      [PATH, SEED],
-    ]);
-    let releaseWrite: () => void = () => {};
-    const gate = new Promise<void>((resolve) => (releaseWrite = resolve));
-    let slow = false;
-    const fs: CollabSettledFs = {
-      readFile: async (path) => files.get(path) ?? null,
-      writeFile: async (path, content) => {
-        if (slow && path === "/a.md") await gate;
-        files.set(path, content);
-      },
-    };
-    const host = new CollabHost({ fs, store });
-    const openedA = await host.open("/a.md");
-    const openedB = await host.open(PATH);
-    await pushOne(host, { epoch: openedB.epoch, version: openedB.version }, "early ", SEED.length);
-    await host.reconcile(); // B settles — clean at overlay v1
-    await pushOne(host, { epoch: openedA.epoch, version: openedA.version }, "dirty ", 3);
-    slow = true;
-    // The barrier flushes dirty A first (parked); B's mid-loop push lands
-    // while the loop is suspended, BEFORE B's clean-branch report runs.
-    const fence = host.commitBarrier(
-      async () => ({ mount: "/repos/config" }),
-      () => true,
-    );
-    await Promise.resolve();
-    await host.push({
-      baseVersion: 1,
-      clientId: "peer",
-      epoch: openedB.epoch,
-      ops: [
-        {
-          changes: ChangeSet.of(
-            { from: 0, insert: "late ", to: 0 },
-            `early ${SEED}`.length,
-          ).toJSON(),
-          clientSeq: 9,
-        },
-      ],
-      path: PATH,
-    });
-    releaseWrite();
-    await fence;
-    // The racing push is NOT in the commit — it must still be a redline.
-    const changes = await host.changes(PATH);
-    expect(changes.inserted.length).toBeGreaterThan(0);
-    expect(changes.baseVersion).toBe(1);
-  });
-
+describe("presence", () => {
   test("presence: announces wake parked waits coalesced, deliver on the pull, and die with the session", async () => {
     vi.useFakeTimers();
     try {

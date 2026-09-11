@@ -7,11 +7,13 @@
 // must never pull the StreamProcessor class or the Workers AI transport into
 // their bundles.
 
+import { z } from "zod";
 import {
   agentRuntimesEqual,
   isAgentRuntimeZero,
   type AgentRuntime,
 } from "@iterate-com/shared/agent-events";
+import { decodeMessageMentions, hasConfigRepoFileMentions } from "@iterate-com/shared/message";
 import {
   cachedEventSchema,
   getConsumedEventDefinition,
@@ -40,7 +42,12 @@ export function reduceAgentEvent(input: {
   event: AgentConsumedEvent;
   state: AgentProcessorState;
 }): AgentProcessorState {
-  const state = reduceAgentEventCore(input);
+  const reduced = reduceAgentEventCore(input);
+  const pendingInputConsequences = reducePendingInputConsequences(input);
+  const state =
+    pendingInputConsequences === reduced.pendingInputConsequences
+      ? reduced
+      : { ...reduced, pendingInputConsequences };
   const runtime: AgentRuntime = deriveAgentRuntime(state);
   // Genesis zero stays absent. Every later count change is significant,
   // including changes which retain the same compact display state.
@@ -57,6 +64,52 @@ export function reduceAgentEvent(input: {
       since: input.event.createdAt,
     },
   };
+}
+
+const MentionResolutionInput = z.object({ sourceOffset: z.number().int().positive() });
+
+/** Only unresolved derived inputs are retained; ordinary and no-op messages use the runner cursor. */
+function reducePendingInputConsequences({
+  event,
+  state,
+}: {
+  event: AgentConsumedEvent;
+  state: AgentProcessorState;
+}): AgentProcessorState["pendingInputConsequences"] {
+  const pending = state.pendingInputConsequences;
+  if (event.type === "events.iterate.com/agents/context-added") {
+    if (contextNeedsMentionMaterialization(event.payload)) {
+      return { ...pending, [`mention:${event.offset}`]: event.offset };
+    }
+    const slash =
+      event.payload.role === "user" && state.config.interpretResponses
+        ? resolveSlashCommand(event.payload.content)
+        : null;
+    if (slash) {
+      return {
+        ...pending,
+        [`${SLASH_COMMAND_EXECUTION_PREFIX}${slash.command}:${event.offset}`]: event.offset,
+      };
+    }
+  }
+  const source = event.source?.processor;
+  if (source?.slug !== AgentProcessorContract.slug || source.stream.path !== event.path)
+    return pending;
+  let key: string | undefined;
+  if (event.type === "events.iterate.com/capability-host/script-run-requested") {
+    key = event.payload.executionId;
+  } else if (
+    event.type === "events.iterate.com/agents/context-added" &&
+    event.payload.actor?.type === "integration" &&
+    event.payload.actor.name === "agent-mention-resolver"
+  ) {
+    const resolution = MentionResolutionInput.safeParse(event.payload.mentionResolution);
+    if (resolution.success) key = `mention:${resolution.data.sourceOffset}`;
+  }
+  if (!key || !pending[key] || source.whileProcessing?.offset !== pending[key]) return pending;
+  const next = { ...pending };
+  delete next[key];
+  return next;
 }
 
 function reduceAgentEventCore(input: {
@@ -375,6 +428,26 @@ export function reduceAgentEvents(events: readonly StreamEvent[]): AgentProcesso
 // Pure reduce helpers — exported for direct unit testing.
 // -----------------------------------------------------------------------------
 
+type AgentContextSchedulingSemantics = {
+  triggerSource: "external" | "agent-loop" | null;
+  clearsWaitingFor: boolean;
+};
+
+/** Capture the source item's scheduling meaning before mention resolution
+ * replaces it as the event that actually drives the turn loop. */
+export function contextSchedulingSemanticsForMentionResolution(
+  payload: AgentContextAddedPayload,
+): AgentContextSchedulingSemantics {
+  return {
+    // `agent.message()` stages a mention-bearing source with
+    // dont-trigger-request. Resolution replaces that gate, so derive the
+    // source's actual actor/role meaning without carrying the staging policy
+    // onto the resolver event.
+    triggerSource: intrinsicContextTriggerSource(payload, false),
+    clearsWaitingFor: intrinsicContextClearsWaitingFor(payload, false),
+  };
+}
+
 /** Which turn-loop trigger a context item carries. A trigger only ever comes
  * from context or from a failed settlement's reduction — there is no other
  * scheduling input. The agent's own notes, its scripts, and platform
@@ -382,8 +455,21 @@ export function reduceAgentEvents(events: readonly StreamEvent[]): AgentProcesso
  * named outside author — a user, slack/telegram/email/github, any
  * integration — is an external trigger that refills the loop budget. */
 function contextTriggerSource(payload: AgentContextAddedPayload): "external" | "agent-loop" | null {
+  if (contextNeedsMentionMaterialization(payload)) return null;
+  const sourceScheduling = mentionResolutionSourceScheduling(payload);
+  return sourceScheduling === undefined
+    ? intrinsicContextTriggerSource(payload)
+    : sourceScheduling.triggerSource;
+}
+
+function intrinsicContextTriggerSource(
+  payload: AgentContextAddedPayload,
+  honorLlmRequestPolicy = true,
+): "external" | "agent-loop" | null {
   if (payload.role === "system" || payload.role === "assistant") return null;
-  if (payload.llmRequestPolicy.behaviour === "dont-trigger-request") return null;
+  if (honorLlmRequestPolicy && payload.llmRequestPolicy.behaviour === "dont-trigger-request") {
+    return null;
+  }
   if (payload.role === "user") {
     // A resolving slash command runs deterministically (the processor's
     // event handler appends the script request from the SAME pure resolver)
@@ -401,13 +487,60 @@ function contextTriggerSource(payload: AgentContextAddedPayload): "external" | "
  * input" summary. Script results and platform feedback (no actor) are
  * continuations of the same turn, so they deliberately do not clear it. */
 export function contextClearsWaitingFor(payload: AgentContextAddedPayload): boolean {
+  if (contextNeedsMentionMaterialization(payload)) return false;
+  return (
+    mentionResolutionSourceScheduling(payload)?.clearsWaitingFor ??
+    intrinsicContextClearsWaitingFor(payload)
+  );
+}
+
+function intrinsicContextClearsWaitingFor(
+  payload: AgentContextAddedPayload,
+  honorLlmRequestPolicy = true,
+): boolean {
   if (payload.role !== "user" && payload.role !== "developer") return false;
-  if (payload.llmRequestPolicy.behaviour === "dont-trigger-request") return false;
+  if (honorLlmRequestPolicy && payload.llmRequestPolicy.behaviour === "dont-trigger-request") {
+    return false;
+  }
   // A resolving slash command is a side-band action, not an answer — the
   // agent is still waiting for the human's actual reply (same pure resolver
   // as contextTriggerSource, so the two derivations can never disagree).
   if (payload.role === "user") return resolveSlashCommand(payload.content) === null;
   return payload.actor !== undefined && payload.actor.type !== "script";
+}
+
+function mentionResolutionSourceScheduling(
+  payload: AgentContextAddedPayload,
+): AgentContextSchedulingSemantics | undefined {
+  if (
+    payload.role !== "developer" ||
+    payload.actor?.type !== "integration" ||
+    payload.actor.name !== "agent-mention-resolver"
+  ) {
+    return undefined;
+  }
+  const resolution = payload.mentionResolution;
+  if (!isUnknownRecord(resolution)) return undefined;
+  const scheduling = resolution.sourceScheduling;
+  if (!isUnknownRecord(scheduling)) return undefined;
+  const { clearsWaitingFor, triggerSource } = scheduling;
+  if (
+    typeof clearsWaitingFor !== "boolean" ||
+    (triggerSource !== null && triggerSource !== "external" && triggerSource !== "agent-loop")
+  ) {
+    return undefined;
+  }
+  return { clearsWaitingFor, triggerSource };
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function contextNeedsMentionMaterialization(payload: AgentContextAddedPayload): boolean {
+  if (payload.mentions === undefined) return false;
+  const message = decodeMessageMentions(payload.content, payload.mentions);
+  return message !== null && hasConfigRepoFileMentions(message.mentions);
 }
 
 type AgentContextItems = AgentProcessorState["contextItems"];
@@ -710,6 +843,8 @@ function renderContextRef(ref: NonNullable<AgentContextAddedPayload["refs"]>[num
       return JSON.stringify(`file:${ref.path}`);
     case "git-commit":
       return JSON.stringify(`${ref.repoPath}@${ref.commitOid}`);
+    case "repo-file":
+      return JSON.stringify(`${ref.repoPath}/${ref.path}@latest`);
   }
 }
 

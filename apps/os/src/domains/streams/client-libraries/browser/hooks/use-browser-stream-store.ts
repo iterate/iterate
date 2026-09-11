@@ -4,16 +4,14 @@ import {
   type StreamBrowserSnapshot,
   type StreamBrowserStore,
 } from "../stream-browser-store.ts";
+import type { BrowserStreamSubscriberUser } from "../browser-subscriber.ts";
 import type { BrowserStreamClientFactory } from "../stream-transport.ts";
-import { BROWSER_STREAM_PROCESSORS } from "../browser-stream-processors.ts";
 
 /**
  * Mount the browser database for a `(projectId, streamPath)` and register this
  * component as a listener. This is the one browser entry point for storing a
  * stream locally: it acquires (or joins) the single per-stream runtime, which
- * downloads the stream once and passes every batch to the raw-event writer and
- * feed projector — see
- * browser-stream-processors.ts. Views read whichever tables they need off the
+ * copies durable events without interpreting their payloads. Views read whichever tables they need off the
  * returned `store.streamDatabase` via `useStreamQuery`.
  *
  * Adding the first listener starts the download (the runtime refcounts listeners), so
@@ -27,8 +25,9 @@ export function useBrowserStreamStore(input: {
   resetTransport?: () => void;
   projectId: string;
   streamPath: string;
+  subscriberUser?: BrowserStreamSubscriberUser;
 }): { store: StreamBrowserStore; snapshot: StreamBrowserSnapshot } {
-  const { createStreamClient, resetTransport, projectId, streamPath } = input;
+  const { createStreamClient, resetTransport, projectId, streamPath, subscriberUser } = input;
   // Self-heal for the acquire-to-subscribe gap: React can yield between the
   // render that acquired the runtime and the commit that subscribes (Suspense,
   // lazy chunks — longer than any idle grace), and a runtime disposed inside
@@ -43,10 +42,10 @@ export function useBrowserStreamStore(input: {
         ...(resetTransport === undefined ? {} : { resetTransport }),
         projectId,
         streamPath,
-        processors: BROWSER_STREAM_PROCESSORS,
+        subscriberUser,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reacquireEpoch drives the self-heal re-acquire.
-    [createStreamClient, resetTransport, projectId, streamPath, reacquireEpoch],
+    [createStreamClient, resetTransport, projectId, streamPath, subscriberUser, reacquireEpoch],
   );
   const subscribe = useCallback(
     (listener: () => void) => {

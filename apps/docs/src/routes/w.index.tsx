@@ -5,12 +5,11 @@ import { WorkspaceBoardPage, type BoardSearch } from "../components/workspace-bo
 import { DEFAULT_REPO_PATH, normalizeRepoPath } from "../lib/board-shared.ts";
 
 /**
- * The board as a LENS on an existing workspace, addressed purely by its
- * platform path — the deep-link form `tasks.link` mints and agents share.
- * Plain get: nothing is created; outside the app's own /workspaces/tasks/
- * namespace the board is a guest (read, comment, edit — never Commit or
- * Discard all).
- *   /w?workspace=/workspaces/agents/you&repo=/repos/config&task=<path>
+ * The board as a VIEW on an existing workspace, addressed purely by its
+ * platform path — the deep-link form `docs.link` mints and agents share,
+ * and the form the board home navigates to after creating a workspace.
+ * Plain get: nothing is created here.
+ *   /w?workspace=/agents/you&repo=/repos/config&task=<path>
  */
 export const Route = createFileRoute("/w/")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -57,13 +56,13 @@ function BoardLensPage() {
     );
   }
   // No workspace addressed: /w is the tasks view's HOME, not an error.
-  if (!search.workspace.startsWith("/workspaces/")) {
+  if (!search.workspace.startsWith("/workspaces/") && !search.workspace.startsWith("/agents/")) {
     return <BoardHome />;
   }
   return (
     <WorkspaceBoardPage
       key={`${search.workspace}:${repoPath}`}
-      address={{ boardId: null, repoPath, workspacePath: search.workspace }}
+      address={{ repoPath, workspacePath: search.workspace }}
       search={{ group: search.group, q: search.q, task: search.task }}
       patchSearch={patchSearch}
     />

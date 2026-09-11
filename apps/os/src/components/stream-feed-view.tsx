@@ -1,7 +1,21 @@
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { StreamEvent } from "iterate/processors";
+import {
+  memo,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ZERO_AGENT_RUNTIME, type AgentRuntime } from "@iterate-com/shared/agent-events";
-import type { AgentUiItem, AgentUiState } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import {
+  AgentUiItemSchema,
+  isAgentRuntimeVisiblyActive,
+  type AgentUiItem,
+  type AgentUiState,
+} from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { cn } from "@iterate-com/ui/lib/utils";
@@ -10,10 +24,7 @@ import type {
   SqlValue,
   StreamBrowserDatabase,
 } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import {
-  AGENT_KIND_PREFIX,
-  type RawFeedItemData,
-} from "~/domains/streams/client-libraries/processors/browser-feed/projector.ts";
+import { AGENT_KIND_PREFIX } from "~/domains/streams/feed-item-types.ts";
 import { AgentFeedItemRow, AgentLiveActivity } from "~/components/agent-feed.tsx";
 import { useStickToBottom } from "~/lib/use-stick-to-bottom.ts";
 import {
@@ -26,18 +37,17 @@ import {
 const TAIL_PREFETCH_ROWS = 32;
 /** Cap on rows retained across window shifts (memory bound for long feeds). */
 const MAX_RETAINED_ROWS = 2000;
-const EMPTY_AGENT_ITEMS: readonly AgentUiItem[] = [];
 
 /** One parsed feed_items row, ready to render. */
 type FeedRow = {
   kind: string;
+  error?: string;
   firstOffset: number;
   lastOffset: number;
-  eventCount: number;
   /** The settled chat item for `agent.*` rows. */
   agentItem: AgentUiItem | null;
-  /** The grouped raw events for `raw.*` rows. */
-  rawData: RawFeedItemData | null;
+  /** The individual raw event for `raw.*` rows. */
+  rawData: StreamEvent | null;
 };
 
 /**
@@ -67,7 +77,6 @@ export function StreamFeedView({
   isPending = false,
   pendingLabel = "Connecting to the stream",
   liveState,
-  transientAgentItems = EMPTY_AGENT_ITEMS,
   runtime = ZERO_AGENT_RUNTIME,
   onInspectEvent,
   onInspectLlmRequest,
@@ -81,9 +90,7 @@ export function StreamFeedView({
   isPending?: boolean;
   pendingLabel?: string;
   /** Reduced agent state for the live tail; null hides the trailing items. */
-  liveState: AgentUiState | null;
-  /** Runtime-projected settled items which are not journal database rows. */
-  transientAgentItems?: readonly AgentUiItem[];
+  liveState: Pick<AgentUiState, "live"> | null;
   /** Current processor runtime from the agent live-state subscription. */
   runtime?: AgentRuntime;
   /** Opens the raw-event inspector panel at this offset (raw rows only). */
@@ -103,8 +110,17 @@ export function StreamFeedView({
     params,
   );
   const itemCount = Number(countResult.data[0]?.count ?? 0);
-  const live = filter.agent == null ? null : (liveState?.live ?? null);
-  const transientItems = filter.agent == null ? EMPTY_AGENT_ITEMS : transientAgentItems;
+  const candidateLive = filter.agent == null ? null : (liveState?.live ?? null);
+  const publishedLive = useStreamQuery(
+    database,
+    `SELECT json_extract(raw_jsonb, '$.payload.item.id') AS item_id FROM events
+      WHERE type = 'events.iterate.com/feed/item-published'
+        AND json_extract(raw_jsonb, '$.payload.item.id') = ? LIMIT 1`,
+    [candidateLive?.id ?? null],
+  );
+  // Query handles can retain the previous parameters' result while loading.
+  // Only suppress the live item whose publication is actually in that result.
+  const live = publishedLive.data[0]?.item_id === candidateLive?.id ? null : candidateLive;
   const scrollRef = useRef<HTMLDivElement>(null);
   // Ids of activity summaries the user expanded. Operation rows inside an
   // expanded activity open their URL-backed inspector instead of nesting a
@@ -116,9 +132,11 @@ export function StreamFeedView({
   // sizer's height, which is what the stick's ResizeObserver follows and what
   // anchorTo's mid-history compensation measures. Rendering it outside the
   // list would hide its height from both.
-  const transientCount = transientItems.length;
-  const liveCount = live == null ? 0 : 1;
-  const totalCount = itemCount + transientCount + liveCount;
+  // Runtime can remain busy after the journal replaces the last live activity,
+  // while its next presentation snapshot is still in transit.
+  const hasLiveWork = filter.agent != null && isAgentRuntimeVisiblyActive(runtime);
+  const liveCount = live != null || hasLiveWork ? 1 : 0;
+  const totalCount = itemCount + liveCount;
 
   // Settled rows are append-only at dense positions, so the position is a
   // stable key for them. The live activity keeps its own key: its index
@@ -128,10 +146,9 @@ export function StreamFeedView({
   const getItemKey = useCallback(
     (index: number) => {
       if (index < itemCount) return index;
-      const transient = transientItems[index - itemCount];
-      return transient == null ? "live" : `transient:${transient.id}`;
+      return "live";
     },
-    [itemCount, transientItems],
+    [itemCount],
   );
 
   const virtualizer = useVirtualizer({
@@ -222,36 +239,18 @@ export function StreamFeedView({
     });
   }, []);
 
-  const filtersNarrow =
-    (filter.agent?.searchQuery != null && filter.agent.searchQuery !== "") ||
-    (filter.raw != null &&
-      ((filter.raw.eventTypes?.length ?? 0) > 0 ||
-        (filter.raw.components?.length ?? 0) > 0 ||
-        (filter.raw.searchQuery != null && filter.raw.searchQuery !== "") ||
-        filter.raw.offsetFrom != null ||
-        filter.raw.offsetTo != null));
-
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
       {/* Horizontal chrome only — vertical spacing is the virtualizer's
           paddingStart/paddingEnd so its coordinates match the DOM exactly. */}
       <div className="mx-auto w-full max-w-3xl px-4 md:px-6">
         {totalCount === 0 ? (
-          <Empty className="min-h-48">
-            <EmptyHeader>
-              {isPending || !filtersNarrow ? <Spinner className="size-4" /> : null}
-              <EmptyTitle>
-                {isPending
-                  ? pendingLabel
-                  : filtersNarrow
-                    ? "Nothing matches the current filters"
-                    : "Waiting for events…"}
-              </EmptyTitle>
-              {isPending || filtersNarrow || emptyLabel === null ? null : (
-                <EmptyDescription>{emptyLabel}</EmptyDescription>
-              )}
-            </EmptyHeader>
-          </Empty>
+          <StreamFeedEmptyState
+            filter={filter}
+            isPending={isPending}
+            pendingLabel={pendingLabel}
+            emptyLabel={emptyLabel}
+          />
         ) : null}
         <div
           ref={contentRef}
@@ -261,8 +260,7 @@ export function StreamFeedView({
         >
           {virtualItems.map((virtualItem) => {
             const index = virtualItem.index;
-            const transientItem = transientItems[index - itemCount];
-            const isLiveItem = live != null && index === itemCount + transientCount;
+            const isLiveItem = liveCount > 0 && index === itemCount;
             const row = index < itemCount ? rowsByIndex.get(index)?.row : undefined;
             return (
               <div
@@ -273,23 +271,13 @@ export function StreamFeedView({
                 style={{ transform: `translateY(${virtualItem.start}px)` }}
               >
                 {isLiveItem ? (
-                  <AgentLiveActivity
+                  <StreamFeedLiveActivity
                     live={live}
                     runtime={runtime}
                     toggledIds={toggledIds}
                     onToggle={toggleExpanded}
                     onInspectLlmRequest={onInspectLlmRequest}
                     onInspectScriptExecution={onInspectScriptExecution}
-                    database={database}
-                  />
-                ) : transientItem != null ? (
-                  <AgentFeedItemRow
-                    item={transientItem}
-                    toggledIds={toggledIds}
-                    onToggle={toggleExpanded}
-                    onInspectLlmRequest={onInspectLlmRequest}
-                    onInspectScriptExecution={onInspectScriptExecution}
-                    projectSlug={projectSlug}
                     database={database}
                   />
                 ) : row == null ? (
@@ -302,6 +290,10 @@ export function StreamFeedView({
                   <div className="h-14 py-2">
                     <div className="h-full rounded-xl bg-muted/40" />
                   </div>
+                ) : row.error ? (
+                  <p className="px-4 py-2 text-sm text-destructive" role="alert">
+                    Invalid feed item at offset {row.firstOffset}: {row.error}
+                  </p>
                 ) : row.agentItem != null ? (
                   <AgentFeedItemRow
                     item={row.agentItem}
@@ -328,6 +320,61 @@ export function StreamFeedView({
         </div>
       </div>
     </div>
+  );
+}
+
+function StreamFeedLiveActivity({
+  live,
+  ...props
+}: Omit<ComponentProps<typeof AgentLiveActivity>, "live"> & {
+  live: ComponentProps<typeof AgentLiveActivity>["live"] | null;
+}) {
+  if (live) return <AgentLiveActivity live={live} {...props} />;
+  return (
+    <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground" role="status">
+      <Spinner className="size-4" />
+      Working…
+    </div>
+  );
+}
+
+function StreamFeedEmptyState({
+  filter,
+  isPending,
+  pendingLabel,
+  emptyLabel,
+}: {
+  filter: StreamFeedQueryInput;
+  isPending: boolean;
+  pendingLabel: string;
+  emptyLabel: string | null;
+}) {
+  const { agent, raw } = filter;
+  const filtersNarrow = [
+    agent?.searchQuery,
+    raw?.eventTypes?.length,
+    raw?.components?.length,
+    raw?.searchQuery,
+    raw?.offsetFrom != null,
+    raw?.offsetTo != null,
+  ].some(Boolean);
+
+  return (
+    <Empty className="min-h-48">
+      <EmptyHeader>
+        {isPending || !filtersNarrow ? <Spinner className="size-4" /> : null}
+        <EmptyTitle>
+          {isPending
+            ? pendingLabel
+            : filtersNarrow
+              ? "Nothing matches the current filters"
+              : "Waiting for events…"}
+        </EmptyTitle>
+        {isPending || filtersNarrow || emptyLabel === null ? null : (
+          <EmptyDescription>{emptyLabel}</EmptyDescription>
+        )}
+      </EmptyHeader>
+    </Empty>
   );
 }
 
@@ -361,9 +408,9 @@ function useRetainedFeedRows({
   // IS the virtualizer's row window in dense positions.
   const rowsResult = useStreamQuery(
     database,
-    `SELECT local_index, kind, first_offset, last_offset, event_count, json(data) AS data
+    `SELECT local_index, kind, first_offset, last_offset, json(data) AS data
      FROM feed_items WHERE ${whereSql}
-     ORDER BY local_index ASC LIMIT ? OFFSET ?`,
+     ORDER BY local_index ASC, ordinal ASC LIMIT ? OFFSET ?`,
     [...params, windowSize, queryOffset],
   );
   const retainKey = `${whereSql}:${params.join(" ")}`;
@@ -371,7 +418,7 @@ function useRetainedFeedRows({
     retainKey: string;
     rows: Map<number, { fingerprint: string; row: FeedRow }>;
   } | null>(null);
-  return useMemo(() => {
+  const visibleRows = useMemo(() => {
     const retained =
       lastRowsRef.current?.retainKey === retainKey
         ? lastRowsRef.current.rows
@@ -392,20 +439,30 @@ function useRetainedFeedRows({
       if (rows.get(index)?.fingerprint === fingerprint) return;
       try {
         const isAgent = kind.startsWith(AGENT_KIND_PREFIX);
-        const parsed = JSON.parse(raw) as AgentUiItem | RawFeedItemData;
+        const parsed: unknown = JSON.parse(raw);
+        const agentItem = isAgent ? AgentUiItemSchema.parse(parsed) : null;
         rows.set(index, {
           fingerprint,
           row: {
             kind,
             firstOffset: Number(sqlRow.first_offset),
             lastOffset: Number(sqlRow.last_offset),
-            eventCount: Number(sqlRow.event_count),
-            agentItem: isAgent ? (parsed as AgentUiItem) : null,
-            rawData: isAgent ? null : (parsed as RawFeedItemData),
+            agentItem,
+            rawData: isAgent ? null : StreamEvent.parse(parsed),
           },
         });
-      } catch {
-        // Skip unparseable rows; the row stays a skeleton.
+      } catch (error) {
+        rows.set(index, {
+          fingerprint,
+          row: {
+            kind,
+            firstOffset: Number(sqlRow.first_offset),
+            lastOffset: Number(sqlRow.last_offset),
+            agentItem: null,
+            rawData: null,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
       }
     });
     // Keep memory bounded on very long histories: drop the oldest-inserted
@@ -419,9 +476,12 @@ function useRetainedFeedRows({
         dropped++;
       }
     }
-    lastRowsRef.current = { retainKey, rows };
     return rows;
   }, [rowsResult.data, rowsResult.status, retainKey, queryOffset]);
+  useLayoutEffect(() => {
+    lastRowsRef.current = { retainKey, rows: visibleRows };
+  }, [retainKey, visibleRows]);
+  return visibleRows;
 }
 
 const RawFeedItemRow = memo(function RawFeedItemRow({
@@ -435,9 +495,8 @@ const RawFeedItemRow = memo(function RawFeedItemRow({
   row: FeedRow;
 }) {
   const data = row.rawData;
-  const eventType =
-    data != null && "eventType" in data ? data.eventType : (data?.events[0]?.type ?? row.kind);
-  const createdAt = data?.events[0]?.createdAt;
+  const eventType = data?.type ?? row.kind;
+  const createdAt = data?.createdAt;
   const createdAtMs = createdAt == null ? null : Date.parse(createdAt);
   const deltaMs =
     previousTimestampMs == null || createdAtMs == null || Number.isNaN(createdAtMs)
@@ -458,17 +517,8 @@ const RawFeedItemRow = memo(function RawFeedItemRow({
         "hover:bg-muted/60 hover:text-foreground",
       )}
     >
-      <span className="shrink-0 tabular-nums text-muted-foreground/70">
-        {row.firstOffset === row.lastOffset
-          ? `#${row.firstOffset}`
-          : `#${row.firstOffset}–${row.lastOffset}`}
-      </span>
+      <span className="shrink-0 tabular-nums text-muted-foreground/70">#{row.firstOffset}</span>
       <span className="min-w-0 truncate text-foreground/80">{shortEventType(eventType)}</span>
-      {row.eventCount > 1 ? (
-        <span className="shrink-0 tabular-nums text-muted-foreground/60">
-          ×{row.eventCount.toLocaleString()}
-        </span>
-      ) : null}
       <span className="ml-auto flex shrink-0 items-baseline gap-2.5 tabular-nums">
         {deltaMs != null ? (
           <span
@@ -496,7 +546,7 @@ const RawFeedItemRow = memo(function RawFeedItemRow({
 function rowLastTimestampMs(row: FeedRow | undefined): number | null {
   if (row == null) return null;
   if (row.rawData != null) {
-    const createdAt = row.rawData.events.at(-1)?.createdAt;
+    const createdAt = row.rawData.createdAt;
     const parsed = createdAt == null ? Number.NaN : Date.parse(createdAt);
     return Number.isNaN(parsed) ? null : parsed;
   }

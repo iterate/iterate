@@ -54,12 +54,14 @@ import {
   LiveStateSubscriptionRpcTarget,
   type LiveStateRpc,
   type LiveStateSubscriptionHandle,
+  type LiveStateSubscriptionOptions,
   type LiveUpdate,
 } from "iterate/sdk/capnweb";
 import type {
   ValidateProjectAppSessionInput,
   ValidatedProjectAppSession,
 } from "@iterate-com/auth-contract/worker";
+import { decodeMessageMentions, type Message } from "@iterate-com/shared/message";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import { closeItxSessionTransport } from "./session-transport.ts";
@@ -83,6 +85,8 @@ import {
   deploymentStatusFromState,
   deploymentStatusesFromProbes,
 } from "./project-deployment-status.ts";
+import type { LlmRequestReplay } from "./lib/llm-request-replay.ts";
+import { inspectLlmRequest } from "./lib/inspect-llm-request.ts";
 import { timedStep } from "./lib/step-timing.ts";
 import { buildCollectSecretUrl } from "./lib/collect-secret-link.ts";
 import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
@@ -137,7 +141,6 @@ import {
 } from "./domains/sandboxes/sandbox-processor-contract.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
 import {
-  agentWorkspacePath,
   effectiveWorkspaceMounts,
   normalizeWorkspaceMountKeys,
   normalizeWorkspacePath,
@@ -270,6 +273,8 @@ import type {
   LinkGithubResult,
   RepoCommitDetails,
   RepoLogResult,
+  SearchRepoFilesInput,
+  SearchRepoFilesResult,
 } from "./domains/repos/types.ts";
 import type {
   BuiltinIntegrationSlug,
@@ -379,6 +384,7 @@ import type {
   DeviceEnrollInput,
 } from "./domains/devices/types.ts";
 import type { StreamRuntimeDebugState } from "./domains/streams/stream-runtime-state.ts";
+import type { FeedLiveState } from "./domains/streams/feed-contract.ts";
 import type {
   StreamSubscriptionDescription,
   StreamSubscriptionListEntry,
@@ -410,7 +416,6 @@ import type {
   WorkspaceProcessorState,
 } from "./domains/workspaces/workspace-processor-contract.ts";
 import type { CollabPresenceFlat } from "./domains/workspaces/collab-host.ts";
-import type { CollabChangesResult } from "./domains/workspaces/collab-host.ts";
 import {
   DynamicWorkerRunner,
   type DynamicWorkerTraceRole,
@@ -801,6 +806,11 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     return detachPlainRpcResult(result);
   }
 
+  /** Reconstruct a request on the server; rejects above 10,000 events or 16 MiB. */
+  async inspectLlmRequest(llmRequestOffset: number): Promise<LlmRequestReplay | null> {
+    return inspectLlmRequest((input) => this.getEventPage(input), llmRequestOffset);
+  }
+
   /**
    * A stateful pager over a read window: repeated `next()` calls walk forward
    * through pages, `[]` means "caught up for now". Dispose it when finished
@@ -981,6 +991,15 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         label: `stream ${this.props.path}`,
       }),
     );
+  }
+
+  /** Server-rendered current presentation; historical items are immutable stream events. */
+  get feedLiveState(): LiveStateRpc<FeedLiveState> {
+    return facetProcessorLiveStateRelay<FeedLiveState>({
+      name: "feed",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -1622,6 +1641,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         linkGithub:
           "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, fast-forward default-branch pushes import in, and webhooks arrive on this repo's stream.",
         listFiles: "List file paths.",
+        searchFiles:
+          "Fuzzy-search committed file paths without returning the full manifest ({ query, limit? }).",
         log: "Commit history, newest first ({ limit?, branch? }); per-commit file stats live on commitDetails.",
         pushToGithub:
           "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
@@ -1794,6 +1815,11 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }> {
     return this.#durableObjectStub.listFiles();
+  }
+
+  /** Fuzzy-search committed paths at HEAD without returning the full manifest. */
+  searchFiles(input: SearchRepoFilesInput): Promise<SearchRepoFilesResult> {
+    return this.#durableObjectStub.searchFiles(input);
   }
 
   /**
@@ -2141,8 +2167,15 @@ class AgentCollectionLiveStateRpcTarget
 
   async subscribe(
     onUpdate: (update: LiveUpdate<AgentCollectionProcessorState>) => unknown,
+    options?: LiveStateSubscriptionOptions,
   ): Promise<LiveStateSubscriptionHandle> {
-    return await this.#bornThenRetry(() => this.#relay().subscribe(onUpdate));
+    // The Pager's upgrade is routed by the Stream DO's committed subscription
+    // catalog and therefore fails before the relay can inspect the facade's
+    // unconfigured-subscription refusal. Ensure this collection's idempotent
+    // birth batch first; get() supplies that narrow initialization and leaves
+    // no retained subscription.
+    await this.get();
+    return await this.#relay().subscribe(onUpdate, options);
   }
 }
 
@@ -2454,11 +2487,10 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
 /**
  * Catalog of durable workspaces within one project: EVENT-SOURCED,
  * MOUNT-ROUTED workspace filesystems (Durable-Object-hosted, no container,
- * always warm). Every workspace is addressed by its FULL path under
- * `/workspaces/` — the same domain-prefix convention as `/sandboxes/...` and
- * `/repos/...`: an agent's workspace is the agent path under the prefix
- * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
- * scope), and standalone workspaces live under `/workspaces/<anything>`.
+ * always warm). Agent workspaces share their agent's FULL path under `/agents/`
+ * (exposed as `itx.workspace` in that agent's scope). Standalone workspaces
+ * live under `/workspaces/<anything>`. These identities address streams;
+ * private files inside either kind of workspace live under `/workspace/`.
  *
  * A workspace's identity + configuration are stream facts. `get(path)` only
  * addresses a handle; `get(path).create({ mounts? })` appends the atomic birth
@@ -2468,9 +2500,10 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns a handle without creating anything; call handle.create({ mounts? }) once before use. Every project repo is mounted at its own /repos/** path automatically (commit-to-main); supplied mounts are overlay DEVIATIONS committed atomically as an initial configured patch. An agent\'s own workspace is its agent path under the prefix (what itx.workspace resolves to).',
+        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns a handle without creating anything; call handle.create({ mounts? }) once before use. list() every created workspace (the project catalog of copied workspace/created facts). Every project repo is mounted at its own /repos/** path automatically (commit-to-main); supplied mounts are overlay DEVIATIONS committed atomically as an initial configured patch. An agent\'s own workspace shares its /agents/** path (what itx.workspace resolves to).',
       children: {
         get: "A possibly nonexistent workspace handle; call get(path).create({ mounts? }) before use.",
+        list: "Known workspaces: every workspace/created copied to the project catalog.",
       },
       parent: "a project itx (itx.workspaces)",
     });
@@ -2489,6 +2522,11 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
       projectId: this.props.projectId,
     });
   }
+
+  /** Known workspaces, read from the project processor's reduced state. */
+  list(): Promise<StreamListItem[]> {
+    return projectProcessorState(this.props.projectId).then((state) => state.workspaces);
+  }
 }
 
 /**
@@ -2499,14 +2537,13 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
  * HEAD, writes land in a private copy-on-write local layer (large files spill
  * to R2 transparently), and `git.commit({ scope })` turns ONE mount's changes
  * into one commit on that repo's main (honoring the mount's policy). Private
- * files live only under the workspace's own path (relative paths resolve
- * there); writes anywhere else error. The `.git` name is reserved
- * (platform-managed).
+ * files live only under /workspace (relative paths resolve there); writes
+ * anywhere else error. The `.git` name is reserved (platform-managed).
  */
 class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A workspace at "${this.props.path}" — your private working copy of the project's one path namespace. Every project repo is mounted at its own /repos/** path automatically (reads track that repo's latest main until a local write shadows a path; a freshly created repo just appears). Private files live under the workspace's own directory ("${this.props.path}/..."; relative paths resolve there) — writable anywhere under it, never committable. Writes under a mounted repo stay in a private overlay until git.commit({ message, scope? }) commits ONE mount's changes to that repo's main (read-only mounts reject commits; scope is required when more than one mount is dirty). Writes anywhere else error loudly.`,
+      instructions: `A workspace at "${this.props.path}" — your private working copy of the project's one path namespace. Every project repo is mounted at its own /repos/** path automatically (reads track that repo's latest main until a local write shadows a path; a freshly created repo just appears). Private files live under "/workspace/..." (relative paths resolve there) — writable anywhere under it, never committable. Writes under a mounted repo stay in a private overlay until git.commit({ message, scope? }) commits ONE mount's changes to that repo's main (read-only mounts reject commits; scope is required when more than one mount is dirty). Writes anywhere else error loudly.`,
       children: {
         create:
           "Create this workspace (every project repo is auto-mounted at its /repos/** path; optional mounts are overlay deviations); waits through the atomic birth batch and returns this handle.",
@@ -2517,7 +2554,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
         exists: "Whether a path exists in the merged view.",
         getConfig: "The live EFFECTIVE mount table (derived default merged with overlays).",
         collab:
-          "Collaborative session lane: open(path) / push(batch) / wait(path, epoch, afterVersion) / changes(path) — live rebase-model editing plus attributed redlines.",
+          "Collaborative editing API: open(path) / push(batch) / wait(path, epoch, afterVersion) — live rebase-model editing.",
         git: "Per-mount git surface: status (changes grouped by mount), commit ({ message, scope? }), log ({ scope? }).",
         glob: "Merged file paths matching a glob pattern.",
         kill: "Restart the workspace's server-side object; the next request boots it fresh.",
@@ -2647,7 +2684,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     return this.#read("readFile", () => this.durableObjectStub.readFile(path));
   }
 
-  /** The collaborative session lane (rebase model, no Yjs) — workspace.collab. */
+  /** Collaborative editing sessions (rebase model, no Yjs) — workspace.collab. */
   get collab(): WorkspaceCollabRpcTarget {
     return new WorkspaceCollabRpcTarget(this.props);
   }
@@ -2788,19 +2825,18 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
 }
 
 /**
- * The collaborative session lane of a workspace: server-authoritative
+ * The collaborative editing API of a workspace: server-authoritative
  * rebase-model editing (@codemirror/collab wire — per-file op logs, integer
  * versions, optimistic clients rebasing unconfirmed edits). Sessions are
  * durable; the workspace's ordinary filesystem RPC reads/writes route through
  * live sessions automatically, so this surface is only for LIVE participants
- * (editors) and redline consumers.
+ * (editors).
  */
 class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `Collaborative session lane of the workspace at "${this.props.path}": open(path) joins (or starts) a durable per-file session; push(batch) submits client updates (idempotent via clientSeq, rebased server-side when stale); wait(path, epoch, afterVersion) long-polls for accepted ops (snapshot past the retained floor, "ended" after a destructive op); changes(path) returns attributed redline segments since the last commit.`,
+      instructions: `Collaborative editing API of the workspace at "${this.props.path}": open(path) joins (or starts) a durable per-file session; push(batch) submits client updates (idempotent via clientSeq, rebased server-side when stale); wait(path, epoch, afterVersion) long-polls for accepted ops (snapshot past the retained floor, "ended" after a destructive op).`,
       children: {
-        changes: "Attributed tracked changes since the last commit (redline segments).",
         open: "Join (or start) the collaborative editing session for one file.",
         push: "Submit a client update batch ({ path, epoch, baseVersion, clientId, ops }).",
         wait: "Long-poll catch-up: ops after a version, a snapshot past the floor, or ended.",
@@ -2862,11 +2898,6 @@ class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
   /** Head versions of every live session (a cheap board change cursor). */
   versions(): Promise<Record<string, number>> {
     return this.durableObjectStub.collabVersions();
-  }
-
-  /** Attributed tracked changes since the last commit (redline segments). */
-  changes(path: string): Promise<CollabChangesResult> {
-    return this.durableObjectStub.collabChanges(path);
   }
 
   /** Fresh caret presence per live session — "who has this file open". */
@@ -3426,10 +3457,19 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
       },
       request,
     );
+    // run<T> is caller-instantiated: the chosen model determines the output shape.
     if (callOptions.returnRawResponse) return response as T;
-    if (!response.ok) throw new Error(`Workers AI request failed with status ${response.status}`);
-    if (response.headers.get("content-type")?.includes("application/json"))
+    if (!response.ok || !response.body) {
+      const detail = await response.text();
+      throw new Error(
+        `Workers AI request failed with status ${response.status}: ${detail.slice(0, 500)}`,
+      );
+    }
+    // Match the Workers AI binding: JSON is decoded, all other media remain a stream.
+    // The caller chooses T because model-specific outputs have no common runtime schema.
+    if (response.headers.get("content-type") === "application/json")
       return response.json() as Promise<T>;
+    // Binary and SSE model outputs are both represented by their response body stream.
     return response.body as T;
   }
 
@@ -3439,7 +3479,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * handler — an in-memory function on YOUR side of the connection — instead
    * of a real provider. The handler receives
    * `{ source, model, request }`, including prepared body, safe headers and
-   * host-owned attribution. Return `{ status, headers, body }` with the provider's
+   * host-owned attribution. Return a `Response` with the provider's
    * JSON or SSE response. The normal decoder handles it. Live means session-bound, with the
    * mount invariant: the interception lives exactly as long as your session
    * connection, and if the platform's half dies while your socket is open,
@@ -5087,6 +5127,16 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     return this.#props.capabilityHost.revokeCapability(input);
   }
 
+  /** The workspace at this agent's path; equivalent to `itx.workspaces.get(agentPath)`.
+   * Addressing does not create it; `agent.create()` creates both. */
+  get workspace(): WorkspaceRpcTarget {
+    return new WorkspaceRpcTarget({
+      auth: this.#props.auth,
+      path: this.#path,
+      projectId: this.#props.projectId,
+    });
+  }
+
   /** The agent stream processor (snapshot/state) — facet-hosted on the agent stream. */
   get processor(): StreamProcessorRpc<AgentProcessorState> {
     return agentProcessorRelay({
@@ -5166,7 +5216,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   ): Promise<AgentRpcTarget> {
     const workspace = new WorkspaceRpcTarget({
       auth: this.#props.auth,
-      path: agentWorkspacePath(this.#path),
+      path: this.#path,
       projectId: this.#props.projectId,
     });
     const workspaceReady = workspace.create({});
@@ -5261,29 +5311,47 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
-   * Send a message to this agent — THE inbound method for every caller. The
+   * Send a message to this agent — the canonical entry point for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
    * (itx scoped to an agent path), the message is stamped
    * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
    * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
    * (web UI, CLI, MCP session) it is a user message. The agent must already
-   * have been created explicitly. Optional files
-   * are stored in project file storage and ride the message as attachments
-   * (images stay visible to vision-capable models).
+   * have been created explicitly. `mentions` are typed resources addressed
+   * from `content` with Markdown-like links such as
+   * `[@AGENTS.md](mention://config-repo/AGENTS.md)`. Optional files are stored
+   * in project file storage and ride the same event (images stay visible to
+   * vision-capable models).
    */
   async message(
     input:
       | string
+      | (Message & {
+          files?: Array<{ contentType: string; data: FileData; filename: string }>;
+        })
       | {
           message: string;
           files?: Array<{ contentType: string; data: FileData; filename: string }>;
         },
   ): Promise<StreamEvent> {
     await this.#assertCreated();
-    const { message, files: fileInputs } =
-      typeof input === "string"
-        ? { message: input, files: undefined }
-        : { message: input.message, files: input.files };
+    const {
+      message,
+      files: fileInputs,
+      mentions: mentionInputs,
+    } = typeof input === "string"
+      ? { message: input, files: undefined, mentions: undefined }
+      : "content" in input
+        ? { message: input.content, files: input.files, mentions: input.mentions }
+        : { message: input.message, files: input.files, mentions: undefined };
+    const decodedMessage =
+      mentionInputs === undefined ? undefined : decodeMessageMentions(message, mentionInputs);
+    if (decodedMessage === null) {
+      throw new Error(
+        "agent.message mentions must each have a unique id and a matching inline mention link.",
+      );
+    }
+    const mentions = decodedMessage?.mentions.length ? decodedMessage.mentions : undefined;
     const actor = this.#contextActor();
     const files =
       fileInputs === undefined || fileInputs.length === 0
@@ -5301,6 +5369,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         content: message,
         actor,
         ...(files === undefined ? {} : { files }),
+        ...(mentions === undefined ? {} : { mentions }),
+        ...(mentions === undefined
+          ? {}
+          : { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
       },
     });
     return event;
@@ -5427,6 +5499,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         provideCapability: "Shortcut: mount a capability on THIS agent's scope.",
         revokeCapability: "Shortcut: remove a mount from THIS agent's scope.",
         stream: "The agent's own event stream.",
+        workspace: "The workspace at this same agent path; created by agent.create().",
       },
       parent: `project ${this.#props.projectId}, via agents.get("${this.#path}")`,
       agentPath: this.#path,
@@ -6535,6 +6608,10 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
    */
   async fetch(request: Request): Promise<Response | null> {
     return await handleProjectAuthFetch({
+      // Renewal mints through the auth worker like login does; validation
+      // stays local (the HS256 check in project-app-session-token.ts, no
+      // auth-worker call).
+      mintSession: (input) => env.AUTH.mintProjectAppSession(input),
       osBaseUrl: parseConfig(env).baseUrl,
       projectId: this.props.projectId,
       request,
@@ -6607,7 +6684,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
   workspaces:
-    "Event-sourced, mount-routed workspaces by path: get(\"/workspaces/<name>\") returns a possibly nonexistent handle; handle.create({}) commits the atomic birth batch. Every project repo is auto-mounted at its own /repos/** path; private files live under the workspace's own path. git.commit({ scope? }) commits per mount. An agent's own workspace is itx.workspace.",
+    'Event-sourced, mount-routed workspaces by path: get("/workspaces/<name>") returns a possibly nonexistent handle; handle.create({}) commits the atomic birth batch; list() every created workspace. Every project repo is auto-mounted at its own /repos/** path; private files live under /workspace. git.commit({ scope? }) commits per mount. An agent\'s own workspace is itx.workspace.',
 };
 
 type ExistingProjectRpcTargetProps = {
@@ -8983,8 +9060,9 @@ class RelayedLiveStateRpcTarget<State extends object>
 
   async subscribe(
     onUpdate: (update: LiveUpdate<State>) => unknown,
+    options?: LiveStateSubscriptionOptions,
   ): Promise<LiveStateSubscriptionHandle> {
-    return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
+    return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate, options));
   }
 }
 
@@ -9003,10 +9081,9 @@ type LiveStateDurableObjectStub<State> = {
  * read must never leave a capability pinning the DO for the session's life.
  * `subscribe()` rides the client-given hibernatable Live State Pager
  * (domains/live-state-pager.ts) when the host declares the lane, so a
- * watched idle DO leaves memory; a host without the lane — and any socket
- * failure — falls back to forwarding the subscription into the DO, which
- * retains the callback there and pins it (exactly the pre-socket behavior,
- * loudly logged so pinning regressions are greppable).
+ * watched idle DO leaves memory. A Pager failure rejects the subscription;
+ * the browser hook reports it and performs its bounded re-subscribe, rather
+ * than retaining a callback that pins the Durable Object.
  */
 class LiveStateRelayRpcTarget<State extends object>
   extends IterateRpcRelay<"LiveStateRpc">
@@ -9081,18 +9158,12 @@ class LiveStateRelayRpcTarget<State extends object>
 
   async subscribe(
     onUpdate: (update: LiveUpdate<State>) => unknown,
+    options?: LiveStateSubscriptionOptions,
   ): Promise<LiveStateSubscriptionHandle> {
     if (this.#relay !== undefined) {
-      try {
-        return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
-      } catch (error) {
-        console.warn(
-          "Live State Pager unavailable; subscription falls back to pinning the durable object",
-          { label: this.#label, error },
-        );
-      }
+      return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate, options));
     }
-    return await (await (await this.#stub()).liveState).subscribe(onUpdate);
+    return await (await (await this.#stub()).liveState).subscribe(onUpdate, options);
   }
 }
 
@@ -9260,6 +9331,7 @@ class LiveDemoTickerRpcTarget
 
   async subscribe(
     onUpdate: (update: LiveUpdate<{ tick: number; startedAt: number }>) => unknown,
+    options?: LiveStateSubscriptionOptions,
   ): Promise<LiveStateSubscriptionHandle> {
     const engine = new LiveState<{ tick: number; startedAt: number }>({
       tick: 0,
@@ -9267,8 +9339,8 @@ class LiveDemoTickerRpcTarget
     });
     return await new LiveStateRpcTarget({
       getState: () => engine.getState(),
-      subscribe: (listener) => {
-        const inner = engine.subscribe(listener);
+      subscribe: (listener, subscriptionOptions) => {
+        const inner = engine.subscribe(listener, subscriptionOptions);
         // LiveState drops a listener itself when an update call rejects (dead
         // client), and exposes no drop hook to the owner, so this driving loop
         // checks `ping()` to avoid leaving its timer behind.
@@ -9289,7 +9361,7 @@ class LiveDemoTickerRpcTarget
           [Symbol.dispose]: stop,
         };
       },
-    }).subscribe(onUpdate);
+    }).subscribe(onUpdate, options);
   }
 }
 

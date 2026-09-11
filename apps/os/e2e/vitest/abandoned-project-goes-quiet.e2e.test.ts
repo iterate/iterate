@@ -22,10 +22,7 @@
 //   doppler run --config preview_N -- pnpm --dir apps/os e2e --run abandoned-project-goes-quiet
 import { expect, test } from "vitest";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
-import {
-  installResilientAiInterceptor,
-  aiTextResponse,
-} from "@iterate-com/shared/test-support/resilient-ai-interceptor";
+import { interceptor } from "@iterate-com/test-support";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { createAdminOsItx } from "../test-support/os-client.ts";
 import { deployedBaseUrl } from "./test-helpers.ts";
@@ -69,16 +66,12 @@ failWakeUp(
       // specs/agent-fake-model-chat.spec.ts). The interceptor rides the shared
       // churn-surviving loop, so a DO restart mid-turn re-installs it instead
       // of failing the test for a reason that proves nothing about the pin.
-      await using _interception = await installResilientAiInterceptor({
+      await using _interception = await interceptor.installResilientAiInterceptor({
         projectId: handle.project.id,
         connect: (options) => createAdminOsItx({ baseUrl: handle.baseUrl, ...options }),
-        handler: async (call: any) =>
-          aiTextResponse(
-            [
-              "```ts",
-              `async (itx) => {\n  await itx.chat.sendMessage("scripted reply")\n}`,
-              "```",
-            ].join("\n"),
+        handler: async (call) =>
+          interceptor.codemodeBackticksResponse(
+            `async (itx) => {\n  await itx.chat.sendMessage("scripted reply")\n}`,
             call,
           ),
       });
