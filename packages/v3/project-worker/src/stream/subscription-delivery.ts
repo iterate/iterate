@@ -707,6 +707,15 @@ export class SubscriptionDelivery {
             this.#cursorReadCharsInFlight.release(inFlightRoomHeld - batchChars);
             inFlightRoomHeld = batchChars;
           }
+          // A reconfigure that landed while this iteration awaited budget REPLACED the row
+          // (#forgetSubscription cleared its cursor): this batch, offsets and `cursor` all belong to
+          // the OLD target. Advancing now would write the old scan offset into the fresh row's cursor
+          // — its afterOffset (a `0` = full history) never applied. Loop back to re-read and re-birth.
+          if (
+            this.#stream.coreReducedState.subscriptions[name]?.configuredAtOffset !==
+            row.configuredAtOffset
+          )
+            continue;
           if (eventBatch.events.length === 0) {
             this.#adoptCursor(name, { ...cursor, confirmedOffset: range.through }, true); // a log page: durable ground
             continue;
