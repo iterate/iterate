@@ -1,7 +1,7 @@
 // The call core against fakes of its two injected dependencies — the stream
 // handle and the audio session (the same interfaces the phone, the Node e2e,
 // and a future library swap use; nothing here mocks internals).
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import {
   captionForEvent,
   startVoiceCall,
@@ -194,25 +194,42 @@ test("a microphone that will not start ends the call cleanly instead of leaving 
   /* Failed before any connection opened — nothing to close. */
 });
 
-test("the keepalive heartbeat runs for the call's life and dies with it", async () => {
-  const h = makeHarness();
-  const call = await startVoiceCall({ ...h.deps, keepaliveIntervalMs: 4 });
-  const beats = () => h.appends.filter((a) => a.type.endsWith("/keepalive"));
-  /* Poll-until with a watchdog, not a fixed sleep: a loaded CI runner can
-   * starve a 4ms interval past any fixed wait (measured: one beat in 20ms
-   * on Depot). Two beats prove periodicity. */
-  const deadline = Date.now() + 2_000;
-  while (beats().length < 2 && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 5));
+test("a quiet call renews its presence lease until it ends", async () => {
+  vi.useFakeTimers();
+  try {
+    const h = makeHarness();
+    const call = await startVoiceCall({ ...h.deps, keepaliveIntervalMs: 4 });
+    const beats = () => h.appends.filter((a) => a.type.endsWith("/keepalive"));
+    /* Four timer periods prove the fallback keeps renewing a quiet call,
+     * rather than sending one startup pulse. */
+    await vi.advanceTimersByTimeAsync(16);
+    expect(beats()).toHaveLength(4);
+    expect(beats()[0]).toMatchObject({ ephemeral: true });
+    await call.hangUp();
+    const after = beats().length;
+    await vi.advanceTimersByTimeAsync(25);
+    expect(beats()).toHaveLength(after);
+  } finally {
+    vi.useRealTimers();
   }
-  expect(beats().length).toBeGreaterThanOrEqual(2);
-  expect(beats()[0]).toMatchObject({ ephemeral: true });
-  await call.hangUp();
-  /* A cleared interval cannot fire again, so a short fixed wait suffices
-   * to catch a timer that survived finish(). */
-  const after = beats().length;
-  await new Promise((resolve) => setTimeout(resolve, 25));
-  expect(beats().length).toBe(after);
+});
+
+test("continuous successful microphone appends suppress quiet keepalives", async () => {
+  vi.useFakeTimers();
+  try {
+    const h = makeHarness();
+    const call = await startVoiceCall({ ...h.deps, keepaliveIntervalMs: 20 });
+    call.setTalking(true);
+    for (let tick = 0; tick < 10; tick++) {
+      h.captureFrame("BBBB", 0.5);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(10);
+    }
+    expect(h.appends.filter((append) => append.type.endsWith("/keepalive"))).toEqual([]);
+    await call.hangUp();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("a stalled socket drops mic frames instead of queueing the past", async () => {

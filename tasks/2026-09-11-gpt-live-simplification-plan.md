@@ -89,7 +89,9 @@ without waiting for new input or adding a replay timer.
 An open GPT-Live session requires continuous input. Keep one dial-owned backend
 loop supplying elapsed-time digital silence when device input is quiet. It must
 stop with that dial, keep catch-up work finite, and never replace held speech.
-Synthetic silence is not device liveness. Keep the client keepalive separately.
+Synthetic silence is not device liveness. Send a client heartbeat after 20 seconds
+without microphone traffic while the call is intentionally open. Share this
+policy between ESP and CLI; do not send redundant heartbeats during capture.
 An ambiguous established-session loss is an explicit interrupted conversation;
 do not silently replay uncertain speech or actions into a replacement session.
 
@@ -149,9 +151,9 @@ Acceptance remains open until these are demonstrated:
 - [x] Share first/50 ms/tail microphone flushing between firmware and CLI.
 - [x] Preserve a complete pre-mount utterance and fence A → end → B.
 - [x] Remove board provider modes while retaining volume and real hardware controls.
-- [ ] Cover activation during an in-flight capture, mute, opening timeout and overflow.
-- [ ] Finish provider/config/launch/turn deletions and update every consumer.
-- [ ] Run focused behavior tests, all host tests and all five fresh ESP builds on the final source.
+- [x] Cover activation during an in-flight capture, mute, opening timeout and overflow.
+- [x] Finish provider/config/launch/turn deletions and update every consumer.
+- [x] Run focused behavior tests, all host tests and all five fresh ESP builds on the final source.
 - [ ] Complete required repository checks and review the final changes with Claude Fable 5.1 xhigh.
 - [ ] Deploy an isolated preview; verify coherent state, traces and failure classification.
 - [ ] Measure capture-to-first-append, provider-first-output and output-to-playout separately.

@@ -197,7 +197,7 @@ export async function openWireCall(
     },
   });
 
-  let pending: Array<string | symbol> = [];
+  const pending: Array<string | symbol> = [];
   let micFramesSent = 0;
   let stopMic = false;
   const micLoop = (async () => {

@@ -1,94 +1,4 @@
-/**
- * The voice agent, third cut: GPT-Live on the wire, one fold, one reaction,
- * and a sequence number on every frame that says which direction it travels.
- *
- * WHAT CHANGED, AND WHY IT IS A CUT RATHER THAN AN EDIT.
- *
- * The second cut ran a TURN-BASED provider (gpt-realtime, grok) and spent most
- * of its lines on what that implies: a VAD onset that may or may not be an
- * echo blip, a response lifecycle to cancel, an item to truncate so the
- * model's memory matched what the room heard, a `note_to_self` tool and a
- * response.create choreography so the voice could ask its own backend for
- * help and find a moment to speak the answer. GPT-Live is FULL DUPLEX and
- * handles every one of those hand-offs natively — measured from this Mac before a
- * line of this was written (apps/os/scripts/voicelab/live-probe.ts):
- *
- *   - Output audio is a CONTINUOUS stream at exactly realtime, one 100 ms
- *     delta per 100 ms, silence included — and idle silence is digital
- *     zero. So there is no burst to pace, no "the provider is ahead of the
- *     room", and an answer is simply a run of deltas that are not silent.
- *   - Interrupted mid-count, the voice went quiet 71 ms after the person
- *     began speaking, and recalled the last number it had said. No cancel,
- *     no truncate, no heard-prefix note: the model reasons over its own
- *     outgoing audio and knows what it said.
- *   - The model DELEGATES: `session.delegation.created` arrives ~0.8 s after
- *     the person stops asking, a hosted backend model reasons and calls
- *     functions, and the voice speaks the result. Asked how many files the
- *     config repo holds, gpt-6-astra wrote three itx scripts in a row and
- *     the voice answered 7 s later. That is the front-office/back-office
- *     split this agent built by hand, now a property of the provider.
- *   - Input may simply STOP (a button released, 12 s of nothing) and the
- *     answer still comes.
- *
- * So this cut deletes the realtime dialect AND the hand-built colleague hand-off
- * whole, and keeps what was never about the provider: the device contract,
- * the durable transcript, the idle deadline, eviction recovery.
- *
- * TWO SEQUENCES, AND THEY ARE NOT INTERCHANGEABLE:
- *
- *   `deviceMicFrameSeq`      device microphone -> facet -> provider. Minted by
- *                            the DEVICE; the facet never renumbers it.
- *   `deviceSpeakerFrameSeq`  facet -> device speaker. One per forwarded chunk.
- *                            A flush names THIS one and no other.
- *
- * EVERY TIMESTAMP SAYS WHERE IT WAS TAKEN, in its name. FOUR CLOCKS, and a
- * fifth that is not a clock of ours:
- *
- *   `...AtDeviceMs`    the client that holds the microphone
- *   `...AtFacetMs`     read inside this processor, `deps.nowAtFacetMs()`
- *   `...AtStreamMs`    the Stream Durable Object's commit stamp
- *   `...AtProviderMs`  a stamp the provider put on its own event
- *   `...TimelineMs`    GPT-Live's SESSION TIMELINE — `start_ms`/`end_ms` on
- *                      transcript fragments, `offset_ms` on a delegation:
- *                      milliseconds of session audio, zero at session.started.
- *                      Comparable only with itself; the transcript grouping
- *                      below is the one consumer.
- *
- * A duration has no `At`: it is `...Ms`, belongs to no clock, and is the ONLY
- * thing safe to send across a boundary.
- *
- * THE CLIENT IS DUMB, AND THAT IS THE DESIGN. Its entire contract is three
- * sentences: send microphone frames up, numbered, forever (or while a button
- * is held — GPT-Live does not care which); play speaker frames in
- * `deviceSpeakerFrameSeq` order; if a frame says
- * `clearSpeakerBufferBeforeFrame`, throw away everything queued before
- * playing it. `lastFrameOfAnswer` still marks the end of each answer, which
- * this cut derives from the stream going silent — the provider has no
- * end-of-answer event, and the clients that wait for one were never taught
- * to infer it from silence.
- *
- * THE FACET IS A RELAY, in the shape of OpenAI's own reference clients (their
- * Node and Python WebSocket examples, the Twilio GPT-Live relay): a mic chunk
- * goes to the provider the moment it arrives, whatever its length; a provider
- * delta goes to the device the moment it arrives, verbatim. NOTHING IS PACED
- * AND NOTHING IS HELD. The second cut's pacer existed for a provider that
- * burst a whole answer ahead of time; GPT-Live delivers at exactly play rate
- * (measured 2026-09-11: 558 deltas, median gap 100 ms, p90 103 ms), so the
- * pacer never once engaged and its schedule only stood between a frame and
- * the wire. Smoothing belongs where the docs put it — "your application
- * handles capture, buffering, playback" — in the device's own playout
- * buffer, sized to the network it sits on. Two things this relay still
- * decides, because the devices need them and the provider offers neither:
- * idle SILENCE is dropped (the downlink carries speech, not the zeros GPT-Live
- * streams between answers), and `lastFrameOfAnswer` is inferred from the
- * stream going quiet.
- *
- * THE SHAPE: REDUCED STATE is what survives an eviction; RUNTIME STATE is the
- * provider socket, the answer in flight, and the open transcript rows. TWO
- * SWITCHES — `reduce` folds, `processEvent` acts — and a third inside the
- * provider socket's message listener, whose comment says why it cannot be a
- * stream event like everything else.
- */
+/** GPT-Live relay and durable call fold for one voice stream. */
 import { IterateWorkerEntrypoint, StreamProcessorFacet, type ProcessorHostDeps } from "iterate/sdk";
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import {
@@ -117,16 +27,7 @@ import type {
 
 const OPENAI_SECRET = "/secrets/openai";
 
-/**
- * The provider. One row, not a table: the realtime dialects (grok,
- * gpt-realtime) were deleted with the second cut, and a table of one is a
- * conditional waiting for a second row.
- *
- * `rate` is the PIPELINE's 16 kHz — GPT-Live speaks it natively, so the
- * device's base64 goes to the wire verbatim and the provider's comes back the
- * same way. No resampler anywhere (pcm.ts went with it). The model rides
- * `session.start`, never the URL.
- */
+/** Fixed GPT-Live session configuration. */
 const LIVE = {
   url: "https://api.openai.com/v1/live/sessions",
   model: "gpt-live-1",
@@ -258,12 +159,7 @@ const IDLE_STAMP_STEP_MS = 5_000;
 /** How often the idle countdown looks at the facet clock. */
 const IDLE_TICK_MS = 5_000;
 
-/**
- * How long the provider gets from socket adoption to `session.started`.
- * Nothing else bounds this gap, and an open-mic call that never becomes
- * ready is SILENT FOREVER: mic frames keep the idle stamp fresh, so the
- * sixty-second backstop can never fire. Measured handshakes run ~0.5-1 s.
- */
+/** Socket creation and `session.started` must both finish within this bound. */
 const OPENING_DEADLINE_MS = 15_000;
 
 /**
@@ -299,15 +195,6 @@ const HANG_UP_GOODBYE_GRACE_MS = 8_000;
  */
 const GOODBYE_PLAYOUT_ALLOWANCE_MS = 500;
 /**
- * A PROVIDER DROP IS A RE-DIAL, NOT A HANG-UP. OpenAI's socket closed under a
- * live three-minute call with no `session.closed` first (2026-09-11, 2:51 in),
- * and the facet ended the conversation for it — the device saw "call ended
- * by the bridge" in the middle of a sentence. A fresh session is seeded with
- * the transcript so far and the next device frame opens it, the same way an
- * eviction is recovered; only a provider that keeps dropping ends the call.
- */
-
-/**
  * How much conversation the fold remembers, and so how much a fresh provider
  * session is seeded with. Turns beyond the newest TRANSCRIPT_MAX_TURNS fall
  * off the front; a single turn longer than TRANSCRIPT_TURN_MAX_CHARS is kept
@@ -332,23 +219,9 @@ function foldTranscriptTurn(transcript: TranscriptTurn[], turn: TranscriptTurn):
   return [...transcript, { role: turn.role, text }].slice(-TRANSCRIPT_MAX_TURNS);
 }
 
-/* ===========================================================================
- * THINKING, FAST AND SLOW — now the provider's own hand-off.
- *
- * The voice model is a mouth, a pair of ears and about 200 ms of judgement;
- * anything that needs reading a repo, calling a tool chain, or being RIGHT
- * belongs to a text model with no clock on it. The second cut built the hand-off
- * by hand: a `note_to_self` tool, a "keep talking" instruction, a colleague
- * agent whose replies were read back at the right moment. GPT-Live has the
- * hand-off built in: the model DELEGATES when it judges a request needs the
- * backend, the provider runs the backend model's loop, and the voice speaks
- * the result when it judges the moment right. What this agent adds is the
- * backend's HANDS: `exec_typescript` against this project (the same contract
- * the OS MCP server hands every client) plus the certificate's tools, run
- * here and answered back into the response. The scripts run on the
- * project's own capability host, so the stream's `backend-reply` events and
- * the host's script-run record are the durable trace of what the backend did.
- * ======================================================================== */
+/* ========================================================================== */
+/* BACKEND                                                                     */
+/* ========================================================================== */
 
 /**
  * What the voice is told about the arrangement, after the certificate's own
@@ -605,32 +478,6 @@ export const VoiceAgentContract = defineProcessorContract({
    * the live subscription is named for it, and the device speaks these event
    * names already. */
   slug: "voice-agent",
-  /* 20.0.0: GPT-Live, and only GPT-Live, delegating to one hosted backend.
-   * `provider`, `clientTakesTurns`, `turnDetection`, `colleague` and
-   * `colleaguePath` leave the certificate (there is one provider; it takes
-   * every turn itself; it has no VAD to tune; its backend is a hosted model,
-   * not an agent on a desk), `backend` joins it. The colleague's three
-   * events become one `backend-reply`. The transcript is grouped from
-   * timeline fragments rather than read off item ids. A persisted 19.x fold
-   * misnames these; the major bump re-reduces instead of loading it. Clean
-   * break as ever. */
-  /* 21.0.0: push-to-talk leaves the contract. `ptt-start` and `ptt-end` are
-   * gone: a mic frame is what opens a call, GPT-Live yields by itself when
-   * it hears the person (71 ms, measured), and a client's button — if it has
-   * one — is "unmute the microphone while held", a fact about the client
-   * that never reaches this stream. With no press there is no barge and no
-   * interrupted answer, so `answer-transcript` loses `cancelled`. Clean
-   * break as ever.
-   *
-   * Also in 21.0.0 (unreleased, so no second major): a certificate tool
-   * loses `expression`. The backend's `exec_typescript` reaches the same
-   * capabilities with types, so the persisted itx walk bought a second tool
-   * kind and an untyped Reflect walk for nothing. */
-  /* 22.0.0: each local call has an opaque activation identity. It fences
-   * delayed input and cancellation exactly, including cancellation before a
-   * server conversation has been accepted. */
-  /* 23.0.0: GPT-Live-1 at its one production endpoint and voice is fixed.
-   * The raw provider event mirror and pickup greeting are gone. */
   version: "23.0.0",
   description:
     "Runs a GPT-Live voice call in the stream's own Durable Object, relaying audio both ways as it arrives.",
@@ -643,12 +490,7 @@ export const VoiceAgentContract = defineProcessorContract({
       payloadSchema: z.strictObject({}),
     },
     "events.iterate.com/voice-agent/configured": {
-      description:
-        "The agent's whole configuration, REPLACED WHOLESALE: an absent field means its " +
-        "default, never 'keep the old value'. Appended by every setup run whose content " +
-        "differs. Loose: a key from an older certificate (`clientTakesTurns`, `provider`, " +
-        "`colleague`) is ignored rather than refused, so a project worker that re-appends " +
-        "last month's shape keeps working.",
+      description: "The agent configuration. An absent field resets to its default.",
       payloadSchema: z.strictObject({
         instructions: z.string().optional(),
         visemes: z.boolean().optional(),
@@ -667,7 +509,7 @@ export const VoiceAgentContract = defineProcessorContract({
         "The client's call UI is alive, said every ~20s: feeds the idle deadline so a caller " +
         "who waits quietly is not reaped at 60s of mic silence.",
       ...EPH,
-      payloadSchema: z.looseObject({ t: z.number().optional() }),
+      payloadSchema: z.strictObject({}),
     },
     "events.iterate.com/voice-agent/mic-frame": {
       description:
@@ -760,6 +602,7 @@ export const VoiceAgentContract = defineProcessorContract({
         "One chunk of the answer, forwarded as it arrived, numbered within the conversation.",
       ...EPH,
       payloadSchema: z.looseObject({
+        activation: Activation,
         conversationId: z.string(),
         /** Monotonic within the call. The only ordering the device trusts. */
         deviceSpeakerFrameSeq: z.number(),
@@ -1015,17 +858,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * closure the dial spawns fences itself with `this.#dial !== dial`.
    */
   #dial: Dial | null = null;
-  /**
-   * Capture that arrived before the provider's handshake finished, oldest
-   * first — the device's own base64 strings. NOT ON THE DIAL, because it can
-   * start filling before one exists: a revived incarnation holds frames from
-   * deliveries that arrive before the caught-up pass re-dials.
-   */
+  /** Capture that arrived before this dial's handshake finished, oldest first. */
   #micQueue: string[] = [];
   /** Decoded PCM bytes in #micQueue; the provider accepts variable payloads. */
   #micQueueBytes = 0;
-  /** The opening already failed for a full held-audio budget. */
-  #heldMicOverflowForActivation: string | null = null;
   /**
    * A call has been ASKED for, and the log has not caught up yet. A board
    * streams microphone frames continuously, so the window between asking
@@ -1041,12 +877,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
   #lastDeviceInputAtStreamMsMirror = 0;
   /** The activation whose terminal event is still travelling through the log. */
   #endingActivation: string | null = null;
-  /**
-   * The mirror's outbox, drained by ONE background flush at a time. The
-   * drain swaps this queue out whole and sends it as ONE variadic append, so
-   * whatever accumulated while the previous append RPC was in flight
-   * coalesces naturally — GPT-Live emits ten audio deltas a second forever.
-   */
   /* ------------------------------------------------------------------ fold */
 
   reduce({ state, event }: ReduceArgs<VoiceAgentContract>) {
@@ -1085,13 +915,27 @@ export class VoiceAgentProcessor extends StreamProcessor<
         };
 
       case "events.iterate.com/voice-agent/mic-frame":
-      case "events.iterate.com/voice-agent/keepalive":
         /* Their BODIES never reach the fold, but their commit stamps are as
          * durable as any event's, and folding the newest is what makes the
          * idle deadline outlive an eviction. `max` so a redelivered batch
          * cannot walk the deadline backwards. */
         return state.call === null ||
           state.call.activation !== event.payload.activation ||
+          committedAtStreamMs - state.call.lastDeviceInputAtStreamMs < IDLE_STAMP_STEP_MS
+          ? state
+          : {
+              ...state,
+              call: {
+                ...state.call,
+                lastDeviceInputAtStreamMs: Math.max(
+                  state.call.lastDeviceInputAtStreamMs,
+                  committedAtStreamMs,
+                ),
+              },
+            };
+
+      case "events.iterate.com/voice-agent/keepalive":
+        return state.call === null ||
           committedAtStreamMs - state.call.lastDeviceInputAtStreamMs < IDLE_STAMP_STEP_MS
           ? state
           : {
@@ -1151,18 +995,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
       this.#lastDeviceInputAtStreamMsMirror = state.call.lastDeviceInputAtStreamMs;
     }
 
-    /*
-     * THE CAUGHT-UP PASS IS THE RECOVERY, and it runs FIRST. An eventless
-     * caught-up delivery is how a revived incarnation learns it owes a call.
-     */
+    /* A provider session is volatile. Its durable record cannot revive it. */
     const owedCall = delivery.caughtUp ? state.call : null;
-    if (owedCall !== null) {
-      this.#openProviderConnection(
-        owedCall.conversationId,
-        owedCall.activation,
-        state,
-        append,
-        runInBackground,
+    if (owedCall !== null && this.#dial?.activation !== owedCall.activation) {
+      args.blockProcessorWhile(() =>
+        this.#end(owedCall.activation, "the voice session was interrupted", append),
       );
     }
 
@@ -1192,18 +1029,18 @@ export class VoiceAgentProcessor extends StreamProcessor<
             this.#lastDeviceInputAtStreamMsMirror,
             this.deps.nowAtFacetMs(),
           );
-          /* The one append the whole call hangs off: if it silently fails,
-           * The opening marker can never clear. The cursor waits the one write;
-           * a refusal un-asks. */
+          /* The call is not live until this append succeeds. */
           args.blockProcessorWhile(() =>
             append({
               type: "events.iterate.com/voice-agent/call-started",
               idempotencyKey: this.idempotencyKey(`call:${activation}`),
               payload: { activation, conversationId },
-            }).catch(() => {
+            }).catch((error: unknown) => {
               if (this.#callRequestedForActivation === activation) {
                 this.#callRequestedForActivation = null;
               }
+              if (this.#dial?.activation === activation) this.#hangUp();
+              throw error;
             }),
           );
           /*
@@ -1226,19 +1063,15 @@ export class VoiceAgentProcessor extends StreamProcessor<
           const micBytes = base64ByteLength(micB64);
           const openingDial = dial?.activation === activation ? dial : null;
           if (openingDial === null) return;
-          if (this.#heldMicOverflowForActivation === activation) return;
           if (this.#micQueueBytes + micBytes <= MAX_HELD_MIC_BYTES) {
             this.#micQueue.push(micB64);
             this.#micQueueBytes += micBytes;
             return;
           }
-          this.#micQueue = [];
-          this.#micQueueBytes = 0;
-          this.#heldMicOverflowForActivation = activation;
-          this.runInBackground(() =>
+          this.#hangUp();
+          runInBackground(() =>
             this.#end(
               activation,
-              "held-mic-overflow",
               `the provider did not become ready before ${MAX_HELD_MIC_BYTES / 32}ms of microphone audio accumulated`,
               append,
             ),
@@ -1274,11 +1107,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
   /**
    * Open a provider connection for this call, now.
    *
-   * WHY THIS IS CALLED FROM TWO PLACES. The mint dials immediately (waiting
-   * for the log to deliver `call-started` back put seven seconds in front of
-   * the first word); the caught-up path is how a REVIVED incarnation learns
-   * it owes a call nobody is dialling. The dial object's synchronous
-   * creation is what makes the two callers safe together.
+   * The mint dials immediately: waiting for the log to fold `call-started`
+   * puts a stream round trip in front of the first word.
    */
   #openProviderConnection(
     conversationId: string,
@@ -1294,7 +1124,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (state.visemes) dial.face = createFace();
     this.#dial = dial;
     const dialStartedAtFacetMs = this.deps.nowAtFacetMs();
-    this.runInBackground(async () => {
+    runInBackground(async () => {
       await this.deps.sleep(OPENING_DEADLINE_MS);
       if (this.#dial !== dial || dial.ready) return;
       this.#dial = null;
@@ -1305,7 +1135,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
       }
       await this.#end(
         activation,
-        "handshake-timeout",
         `the provider did not become ready within ${OPENING_DEADLINE_MS}ms`,
         append,
       );
@@ -1324,7 +1153,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
       if (socket === null) {
         if (this.#dial !== dial) return;
         this.#dial = null;
-        await this.#end(activation, "dial-failed", failure, append);
+        await this.#end(activation, failure, append);
         return;
       }
       if (this.#dial !== dial) {
@@ -1389,6 +1218,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           activation,
           `the provider's socket closed (${String(event.code)}${event.reason ? ` ${event.reason}` : ""})`,
           append,
+          runInBackground,
         );
       });
 
@@ -1426,23 +1256,22 @@ export class VoiceAgentProcessor extends StreamProcessor<
         dial.lastSpeakerFrameAtFacetMs,
       );
       if (nowAtFacetMs - lastActivityAtFacetMs < IDLE_TIMEOUT_MS) {
-        this.runInBackground(idleTick);
+        runInBackground(idleTick);
         return;
       }
       /* Still running something the person asked for: not idle by any
        * reading, whatever the clocks say. */
       if (dial.openBackendCalls > 0) {
-        this.runInBackground(idleTick);
+        runInBackground(idleTick);
         return;
       }
       await this.#end(
         activation,
-        "idle",
         `no input from the device for ${IDLE_TIMEOUT_MS / 1000}s`,
         append,
       );
     };
-    this.runInBackground(idleTick);
+    runInBackground(idleTick);
   }
 
   /* ---------------------------------------------------------- the session */
@@ -1567,12 +1396,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
         this.#micQueue = [];
         this.#micQueueBytes = 0;
         dial.micAudioCoveredUntilFacetMs = receivedAtFacetMs;
-        this.#startSilenceFill(dial, append);
+        this.#startSilenceFill(dial, append, runInBackground);
         this.runInBackground(() =>
           append({
             type: "events.iterate.com/voice-agent/conversation-accepted",
-            /* PER DIAL, not per conversation: a call rescued after an
-             * eviction handshakes a second time and its numbers are its own. */
+            /* Per dial: each provider session reports its own handshake time. */
             idempotencyKey: this.idempotencyKey(`accepted:${conversationId}:${dial.dialId}`),
             payload: {
               activation: dial.activation,
@@ -1686,10 +1514,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
       }
 
       case "session.closed": {
-        /* The provider finalized the session — expired, a safety filter, a
-         * lost upstream. The socket close follows; the dial is dropped here
-         * so that close is a stranger's, and the call re-dials on the next
-         * device frame (see #providerClosed). */
+        /* The provider finalized the session. The close handler records the
+         * classified terminal outcome. */
         this.#flushTurns(dial, append, true);
         if (this.#dial === dial) this.#dial = null;
         this.#providerClosed(
@@ -1697,6 +1523,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           dial.activation,
           `the provider closed the session (${String(live.reason ?? "unknown")})`,
           append,
+          runInBackground,
         );
         return;
       }
@@ -1834,7 +1661,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (this.#dial !== dial || dial.hangUpReason === null) return;
     const reason = dial.hangUpReason;
     dial.hangUpReason = null;
-    await this.#end(dial.activation, "hang-up", reason, append);
+    await this.#end(dial.activation, reason, append);
   }
 
   /**
@@ -1959,8 +1786,12 @@ export class VoiceAgentProcessor extends StreamProcessor<
     );
   }
 
-  #startSilenceFill(dial: Dial, append: ProcessEventArgs<VoiceAgentContract>["append"]): void {
-    this.runInBackground(async () => {
+  #startSilenceFill(
+    dial: Dial,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+    runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
+  ): void {
+    runInBackground(async () => {
       while (this.#dial === dial && dial.socket !== null && dial.ready) {
         await this.deps.sleep(SILENCE_FILL_MS);
         if (this.#dial !== dial || dial.socket === null || !dial.ready) return;
@@ -1975,7 +1806,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
         if (owedMs > MAX_SILENCE_FILL_CATCH_UP_MS) {
           await this.#end(
             dial.activation,
-            "input-clock-stalled",
             `the provider input clock fell ${owedMs}ms behind`,
             append,
           );
@@ -1996,21 +1826,13 @@ export class VoiceAgentProcessor extends StreamProcessor<
     socket.send(JSON.stringify({ type: "session.input_audio.append", audio: padded }));
   }
 
-  /**
-   * One obituary shape for every reason this processor decides a call is
-   * over. The key class scopes the dedupe: a retried decision collides with
-   * itself and never with a different reason's.
-   */
-  /*
-   * A provider close interrupts an uncertain session. Record it, then end
-   * this activation rather than replaying audio or backend actions into a
-   * fresh session.
-   */
+  /** A provider close ends the uncertain session; it is never replayed. */
   #providerClosed(
     conversationId: string,
     activation: string,
     reason: string,
     append: ProcessEventArgs<VoiceAgentContract>["append"],
+    runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
   ): void {
     /* The dial's state snapshot predates its own call-started fold, so the
      * call's standing is read from this instance: an end already requested
@@ -2018,8 +1840,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (this.#endingActivation === activation) {
       return;
     }
-    this.runInBackground(async () => {
-      await this.#end(activation, "socket-closed", reason, append);
+    runInBackground(async () => {
+      await this.#end(activation, reason, append);
       await append({
         type: "events.iterate.com/voice-agent/provider-disconnected",
         payload: { conversationId, reason },
@@ -2029,23 +1851,27 @@ export class VoiceAgentProcessor extends StreamProcessor<
 
   async #end(
     activation: string,
-    keyClass:
-      | "dial-failed"
-      | "handshake-timeout"
-      | "held-mic-overflow"
-      | "input-clock-stalled"
-      | "socket-closed"
-      | "idle"
-      | "hang-up",
     reason: string,
     append: ProcessEventArgs<VoiceAgentContract>["append"],
   ): Promise<void> {
+    if (this.#endingActivation === activation) return;
     this.#endingActivation = activation;
-    await append({
-      type: "events.iterate.com/voice-agent/conversation-ended",
-      idempotencyKey: this.idempotencyKey(`${keyClass}:${activation}`),
-      payload: { activation, reason },
-    });
+    const dial = this.#dial;
+    if (dial?.activation === activation) {
+      this.#flushTurns(dial, append, true);
+      this.#clearDeviceSpeaker(dial, this.deps.nowAtFacetMs(), append);
+      this.#hangUp();
+    }
+    try {
+      await append({
+        type: "events.iterate.com/voice-agent/conversation-ended",
+        idempotencyKey: this.idempotencyKey(`ended:${activation}`),
+        payload: { activation, reason },
+      });
+    } catch (error) {
+      if (this.#endingActivation === activation) this.#endingActivation = null;
+      throw error;
+    }
   }
 
   /* ----------------------------------------------------------- the backend */

@@ -180,17 +180,16 @@ export async function startVoiceCall(deps: {
    * facet — a recycled preview backend, an unprovisioned project — otherwise
    * rings forever at a press nobody consumes. */
   ringTimeoutMs?: number;
-  /** How often to tell the server this call UI is still alive (default
-   * 20s). The facet's 60s idle reaper counts DEVICE INPUT; without the
-   * heartbeat, waiting quietly for a slow answer — or stepping away from
-   * the app with the call up — ends the call under you (observed live,
-   * 2026-08-29 evening). Injectable so tests need not wait 20 seconds. */
+  /** Quiet-call liveness lease interval (default 20s). Successful mic
+   * appends already renew it, so the fallback runs only while capture is
+   * quiet. Injectable so tests need not wait 20 seconds. */
   keepaliveIntervalMs?: number;
 }): Promise<VoiceCallHandle> {
   let ended = false;
   let accepted = false;
   let connection: unknown;
   let inflightMicAppends = 0;
+  let lastSuccessfulMicAppendAt: number | null = null;
   let spkFramesHeard = 0;
   let spkMsHeard = 0;
   let ringTimer: ReturnType<typeof setInterval> | null = null;
@@ -243,6 +242,9 @@ export async function startVoiceCall(deps: {
           activation,
           pcm: pcmBase64,
         },
+      })
+      .then(() => {
+        lastSuccessfulMicAppendAt = Date.now();
       })
       .catch(() => {
         /* A dropped mic frame is a moment of lost audio, not an error the
@@ -347,10 +349,9 @@ export async function startVoiceCall(deps: {
 
   /*
    * The mint goes out NOW, before any hold: one silent mic frame opens the
-   * call, so with `greeting` on the certificate the provider dials during
-   * the ring and says hi at pickup — the ring keeps sounding until
-   * conversation-accepted (the actual pickup), where the live caption takes
-   * over. ONCE: a new call mints again, a lost mint does not.
+   * call, so the provider dials during the ring — the ring keeps sounding
+   * until conversation-accepted (the actual pickup), where the live caption
+   * takes over. ONCE: a new call mints again, a lost mint does not.
    */
   appendMicFrame(SILENT_MIC_FRAME_B64);
   /* A mint nobody consumes must not ring forever: no pickup in time ends
@@ -362,10 +363,18 @@ export async function startVoiceCall(deps: {
   noAnswerTimer = setTimeout(() => {
     finish("no answer — try again");
   }, deps.ringTimeoutMs ?? 25_000);
-  /* The heartbeat runs for the call's whole life — it dies with finish(),
-   * so a dead app re-arms the server's reaper. Ephemeral: losing one costs
-   * nothing (the next is 20s away), and history is not presence. */
+  /* A successful mic append is already proof that this client is alive.
+   * Between holds, renew that proof once per interval so the 60s server
+   * reaper retains an intentional quiet call while a dead app still expires. */
+  const keepaliveIntervalMs = deps.keepaliveIntervalMs ?? 20_000;
   keepaliveTimer = setInterval(() => {
+    if (
+      ended ||
+      (lastSuccessfulMicAppendAt !== null &&
+        Date.now() - lastSuccessfulMicAppendAt < keepaliveIntervalMs)
+    ) {
+      return;
+    }
     deps.stream
       .append({
         type: EVENT.keepalive,

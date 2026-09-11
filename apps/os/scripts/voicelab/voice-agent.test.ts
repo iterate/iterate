@@ -352,6 +352,21 @@ describe("opening a call", () => {
     expect(eventsOfType(h, "call-started")).toHaveLength(1);
   });
 
+  it("closes a dial whose call-started record was rejected", async () => {
+    const h = makeHarness();
+    h.stream.failAppendsOfType = "events.iterate.com/voice-agent/call-started";
+    await expect(h.append(micFrame(1))).rejects.toThrow("injected append failure");
+    expect(h.sockets).toHaveLength(1);
+    expect(h.provider.closed).toBe(true);
+
+    h.stream.failAppendsOfType = undefined;
+    h.crash();
+    await h.append(micFrame(2));
+    await h.settle();
+    expect(eventsOfType(h, "call-started")).toHaveLength(1);
+    expect(h.sockets).toHaveLength(2);
+  });
+
   it("pads the kit firmware's unpadded base64 before the provider sees it", async () => {
     const h = makeHarness();
     await callIsLive(h);
@@ -844,7 +859,7 @@ describe("the transcript", () => {
 
   it("closes the open rows when the call ends", async () => {
     const h = makeHarness();
-    const conversationId = await callIsLive(h);
+    await callIsLive(h);
     h.provider.userSays(" Bye for now.", 1_000, 1_600);
     await h.settle();
     expect(eventsOfType(h, "utterance-transcript")).toHaveLength(0);
@@ -1047,7 +1062,7 @@ describe("the backend", () => {
 
   it("an end decided in the fold still lands the open answer row durably", async () => {
     const h = makeHarness();
-    const conversationId = await callIsLive(h);
+    await callIsLive(h);
     h.provider.speech(500);
     h.provider.assistantSays(" Goodbye then.", 1_000, 1_500);
     await h.settle();
@@ -1148,7 +1163,7 @@ describe("ending a call", () => {
 
   it("a device-appended obituary silences the speaker, closes the session and frees the dial NOW", async () => {
     const h = makeHarness();
-    const conversationId = await callIsLive(h);
+    await callIsLive(h);
     h.provider.speech(10_000);
     await h.settle();
     await h.append({
@@ -1170,7 +1185,7 @@ describe("ending a call", () => {
 
   it("a frame in the last call's dying breath mints no zombie; one after it opens the next call", async () => {
     const h = makeHarness();
-    const conversationId = await callIsLive(h);
+    await callIsLive(h);
     await h.append({
       type: "events.iterate.com/voice-agent/conversation-ended",
       payload: { activation: ACTIVATION, reason: "button" },
@@ -1268,10 +1283,8 @@ describe("ending a call", () => {
 
     const fed = makeHarness();
     await callIsLive(fed);
-    for (let tick = 0; tick < 8; tick++) {
-      /* Advance on the input clock's normal cadence: a ten-second fake-clock
-       * jump is itself the classified stalled-clock terminal outcome. */
-      await playOutEverything(fed, 1_000);
+    for (let tick = 0; tick < 5; tick++) {
+      await playOutEverything(fed, 20_000);
       await fed.append({ type: "events.iterate.com/voice-agent/keepalive", payload: {} });
       await fed.settle();
     }
@@ -1294,6 +1307,26 @@ describe("ending a call", () => {
     await dropped.settle();
     expect(eventsOfType(dropped, "conversation-ended")).toHaveLength(1);
     expect(eventsOfType(dropped, "provider-disconnected")).toHaveLength(1);
+  });
+
+  it("retries a rejected terminal append through the processor recovery alarm", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    h.stream.failAppendsOfType = "events.iterate.com/voice-agent/conversation-ended";
+    h.provider.close();
+    await h.settle();
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
+    expect(h.state().call).not.toBeNull();
+    expect(h.sockets).toHaveLength(1);
+
+    h.stream.failAppendsOfType = undefined;
+    await playOutEverything(h, 30_000);
+    expect(h.events().map((event) => event.type)).toContain(
+      "events.iterate.com/stream/processor-revived",
+    );
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    expect(h.state().call).toBeNull();
+    expect(h.sockets).toHaveLength(1);
   });
 
   it("does not revive an ended call when its abandoned provider closes or the facet restarts", async () => {
@@ -1339,23 +1372,40 @@ describe("ending a call", () => {
 /* ========================================================================== */
 
 describe("eviction", () => {
-  it("re-dials a call the log still says is open, and clears the device before playing anything", async () => {
+  it("ends an active call after eviction instead of reconnecting it", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    await answer(h, 300);
-    const framesBefore = speakerFrames(h).length;
     await evict(h);
+    expect(h.sockets).toHaveLength(1);
+    const ended = eventsOfType(h, "conversation-ended");
+    expect(ended).toHaveLength(1);
+    expect((ended[0]!.payload as { reason: string }).reason).toContain("interrupted");
+
+    await h.append(micFrame(10, "test-activation-b"));
+    await h.settle();
+    expect(eventsOfType(h, "call-started")).toHaveLength(2);
     expect(h.sockets).toHaveLength(2);
+  });
+
+  it("does not replay held opening audio after eviction", async () => {
+    const h = makeHarness();
+    await h.append({ type: "events.iterate.com/voice-agent/configured", payload: {} });
+    await h.append(micFrame(1));
+    await h.settle();
+    const abandoned = h.provider;
+    expect(abandoned.sentOfType("session.input_audio.append")).toHaveLength(0);
+
+    await evict(h);
+    expect(h.sockets).toHaveLength(1);
+    expect(abandoned.sentOfType("session.input_audio.append")).toHaveLength(0);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+
+    await h.append(micFrame(10, "test-activation-b"));
+    await h.settle();
     h.provider.start();
     await h.settle();
-    await answer(h, 300);
-    const fresh = speakerFrames(h).slice(framesBefore);
-    /* The first frame of the new session says clear: the device may hold the
-     * dead incarnation's tail. And the numbering restarts at one. */
-    expect(fresh[0]!.clearSpeakerBufferBeforeFrame).toBe(true);
-    expect(fresh[0]!.deviceSpeakerFrameSeq).toBe(1);
-    /* Two dials, two handshakes, both on the record. */
-    expect(eventsOfType(h, "conversation-accepted")).toHaveLength(2);
+    expect(h.sockets).toHaveLength(2);
+    expect(h.provider.sentOfType("session.input_audio.append")).toHaveLength(1);
   });
 
   it("does not re-dial a call that has been ended", async () => {
@@ -1377,7 +1427,7 @@ describe("eviction", () => {
 
   it("ignores a superseded socket that is still talking", async () => {
     const h = makeHarness();
-    const conversationId = await callIsLive(h);
+    await callIsLive(h);
     const abandoned = h.provider;
     await h.append({
       type: "events.iterate.com/voice-agent/conversation-ended",

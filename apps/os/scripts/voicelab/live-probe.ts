@@ -6,21 +6,16 @@
 //   doppler run --config dev -- pnpm cli voicelab live-probe --barge-after-ms 4000 --say2 "…"
 //   doppler run --config dev -- pnpm cli voicelab live-probe --mute --say2 "…"
 //   doppler run --config prd -- pnpm cli voicelab live-probe --delegation responses \
-//     --backend-model gpt-6-astra --exec --project templestein
+//     --exec --project templestein
 //
-// WHY THIS EXISTS. The voice agent is about to grow a `gpt-live` dialect, and
-// every design decision in it hangs off facts the docs state but nobody here
-// has measured: does the model hand audio over at the pace it plays (so the
-// device's lead stays small and an interruption needs no clear), or in a
-// burst like gpt-realtime; does a gap in the input stream stall the session
-// timeline; how long after the person stops talking does a client delegation
-// arrive, and how long after `session.commentary.append` does the voice say
-// it; does muting really silence the transcript. Each is a flag here, each
-// prints what the wire said, and the summary is JSON.
+// WHY THIS EXISTS. It measures the GPT-Live wire under pressure: whether
+// output arrives at playout pace or in bursts, whether a gap in input stalls
+// the session timeline, delegation latency, and whether muting silences the
+// transcript. Each experiment is a flag here, each prints what the wire said,
+// and the summary is JSON.
 //
-// The second mode dials the SAME model with Responses delegation and hands
-// the backend model an `exec_typescript` function that runs against a real
-// project over the itx CLI's own connection — "can a hosted backend write itx
+// Responses delegation gives the fixed backend an `exec_typescript` function
+// against a real project over the itx CLI's own connection — "can a hosted backend write itx
 // scripts for the voice" answered by watching it try.
 import { Buffer } from "node:buffer";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -50,12 +45,6 @@ export interface LiveProbeOptions {
   stopAfterUtteranceMs?: number;
   /** `client` (default) hands delegations to this probe; `responses` to a hosted backend. */
   delegation?: "client" | "responses";
-  /** Responses-mode backend model. */
-  backendModel?: string;
-  /** Responses-mode reasoning effort. */
-  reasoningEffort?: string;
-  /** Responses-mode service tier; `priority` is OpenAI's Fast mode (the default here). */
-  serviceTier?: string;
   /** Responses mode: give the backend an exec_typescript function run against --project. */
   exec?: boolean;
   /** Hold every function result this long before returning it — parks the
@@ -89,8 +78,6 @@ export interface LiveProbeOptions {
   baseUrl?: string;
   /** Live audio format rate: 16000 (the pipeline's) or 24000. */
   rate?: number;
-  voice?: string;
-  model?: string;
   /** Frontend instructions; a delegation-policy prompt when omitted. */
   instructions?: string;
   /** Client mode: what the probe says back for a delegation. */
@@ -112,7 +99,6 @@ const SILENCE_FRAME = Buffer.alloc(FRAME_BYTES);
 const ANSWER_GAP_MS = 1_200;
 /** A delta whose loudest sample is under this is silence (idle deltas are exact zero). */
 const SPEECH_PEAK = 300;
-
 const DEFAULT_INSTRUCTIONS = [
   "You are Iterate, a calm voice assistant on a small speaker. Speak briefly and naturally.",
   "Backchannel policy: Use moderate backchannels.",
@@ -241,11 +227,11 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
   };
 
   const sessionConfig: Record<string, unknown> = {
-    model: options.model ?? "gpt-live-1",
+    model: "gpt-live-1",
     instructions: options.instructions ?? DEFAULT_INSTRUCTIONS,
     audio: {
       format: { type: "audio/pcm", rate },
-      output: { voice: options.voice ?? "marin" },
+      output: { voice: "marin" },
     },
     delegation:
       delegation === "client"
@@ -253,10 +239,10 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
         : {
             type: "responses",
             responses: {
-              model: options.backendModel ?? "gpt-6-astra",
+              model: "gpt-6-astra",
               instructions: backendInstructions(exec !== null, options.allowWrites === true),
-              ...(options.reasoningEffort && { reasoning: { effort: options.reasoningEffort } }),
-              service_tier: options.serviceTier ?? "priority",
+              reasoning: { effort: "low" },
+              service_tier: "priority",
               tools: exec === null ? [] : [EXEC_TYPESCRIPT_TOOL],
               tool_choice: "auto",
               parallel_tool_calls: false,
@@ -669,7 +655,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
   /* -------------------------------------------------------------- the mic */
 
   /*
-   * ONE REALTIME-PACED LOOP, silence when there is nothing to say — an open
+   * ONE REAL-TIME-PACED LOOP, silence when there is nothing to say — an open
    * microphone in a quiet room. `speak()` splices an utterance in without
    * breaking the cadence; `gapSeconds` stops the loop dead on purpose, to
    * see whether the timeline survives NO frames at all.
@@ -868,7 +854,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
       deltas: answer.deltas,
       wallMs: answer.lastAudioAtMs - answer.firstAudioAtMs,
       /* audio-ms per wall-ms of arrival: ≈1 means the model hands audio over
-       * at the pace it plays; ≫1 is a gpt-realtime-style burst. */
+       * at the pace it plays; ≫1 is a burst. */
       cadence:
         answer.lastAudioAtMs > answer.firstAudioAtMs
           ? Number((answer.audioMs / (answer.lastAudioAtMs - answer.firstAudioAtMs)).toFixed(2))
