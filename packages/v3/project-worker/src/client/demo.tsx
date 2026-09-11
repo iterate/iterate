@@ -8,15 +8,20 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { newWebSocketRpcSession } from "capnweb";
+import { z } from "zod";
 import { PRESENCE_PROCESSOR_SOURCE } from "../generated/presence-processor-source.ts";
+import type { IterateRpcTarget } from "../types.ts";
 import { useLiveState } from "./react.tsx";
 
 /** Dial /api with the console's login cookie (it rode the handshake; the visitor signed in at `/`)
- *  and open the visitor's own demo project — `demo-<email>`, created in their org on first visit. */
-async function connectAndEnable(): Promise<any> {
+ *  and open the visitor's own demo project — `demo-<email>`, created in their org on first visit.
+ *  The return type is INFERRED: over the wire an `IterateContextRpcTarget` is a capnweb stub (a
+ *  structural proxy), not the concrete class, so we let its stub type flow rather than annotate it. */
+async function connectAndEnable() {
   const url = new URL("/api", location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  const session = (newWebSocketRpcSession(url.toString()) as any).authenticate({
+  // The public root is the IterateRpcTarget; capnweb pipelines, so the returned session is usable at once.
+  const session = newWebSocketRpcSession<IterateRpcTarget>(url.toString()).authenticate({
     type: "from-server-cookie",
   });
   const { email } = await session.whoami();
@@ -31,9 +36,12 @@ async function connectAndEnable(): Promise<any> {
   return itx;
 }
 
+/** The connected project itx as the wire hands it back — a capnweb stub of `IterateContextRpcTarget`. */
+type DemoItx = Awaited<ReturnType<typeof connectAndEnable>>;
+
 // oxlint-disable-next-line react/only-export-components -- entry-point bundle: Demo is rendered below, never imported, so fast refresh doesn't apply
 function Demo() {
-  const [itx, setItx] = useState<any>();
+  const [itx, setItx] = useState<DemoItx>();
   const [connectError, setConnectError] = useState<string>();
   useEffect(() => {
     let disposed = false;
@@ -49,7 +57,12 @@ function Demo() {
 
   const { value, rev, status, error } = useLiveState<{ ticks: number; lastPokeMs: number }>(itx, {
     key: "presence",
-    door: () => itx.invoke("itx.facets.get('presence').liveSnapshot()"),
+    door: async () => {
+      if (!itx) throw new Error("no connection"); // useLiveState calls the door only once itx is set
+      return z
+        .object({ rev: z.number(), state: z.object({ ticks: z.number(), lastPokeMs: z.number() }) })
+        .parse(await itx.invoke("itx.facets.get('presence').liveSnapshot()"));
+    },
   });
 
   // A failed append (a dropped socket, a paused stream) must surface on the page, not vanish as an
