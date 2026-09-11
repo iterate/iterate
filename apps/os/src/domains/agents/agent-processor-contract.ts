@@ -43,7 +43,7 @@ export const AgentProcessorContract = defineProcessorContract({
   stateSchema: z.object({
     pendingInputConsequences: z.record(z.string(), z.number().int().positive()).default({}).meta({
       description:
-        "Unresolved mention or slash-command consequences, keyed by their expected result identity and carrying the original input offset. Removed when the processor reduces that result.",
+        "Unresolved mention, slash-command, or script-result consequences, keyed by their expected result identity and carrying the original input offset. Removed when the processor reduces that result.",
     }),
     birthCertificate: z
       .object({

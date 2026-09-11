@@ -14,7 +14,6 @@ import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/shee
 import { toast } from "@iterate-com/ui/components/sonner";
 import {
   isAgentUiActivityWorking,
-  isAgentRuntimeVisiblyActive,
   type AgentUiLlmStep,
   type AgentUiRuntimeTransition,
   type AgentUiStep,
@@ -23,6 +22,7 @@ import { connectItx, connectIterateSession, reportTransportSuspicion } from "ite
 import { useLiveState } from "iterate/sdk/capnweb/react";
 import type { Agent, Stream } from "../itx-api.generated.ts";
 import type { FeedLiveState } from "~/domains/streams/feed-contract.ts";
+import { presentAgentProgress } from "~/components/agent-progress.ts";
 import { FeedPreviewNotice } from "~/components/feed-preview-notice.tsx";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import { useEventSynchronizedLiveState } from "~/domains/streams/client-libraries/browser/hooks/use-event-synchronized-live-state.ts";
@@ -573,19 +573,7 @@ function useProjectStreamData({
     agentSource ? { makeConnection: agentSource } : { root: undefined, enabled: false },
   ).value;
   const presentedFeed = useEventSynchronizedLiveState(store.streamDatabase, feed.value);
-  // Keep displayed work active until its publications arrive, and show new work
-  // as soon as the agent reports it. Both subscriptions reset with the source lifetime.
-  const feedRuntime = presentedFeed?.runtimeChange?.runtime;
-  const agentRuntime = isAgentRuntimeVisiblyActive(feedRuntime)
-    ? feedRuntime
-    : (agentLiveState?.runtimeChange?.runtime ?? feedRuntime);
-  // Release the submitted message only once its resulting runtime is on screen.
-  const inputAcknowledgedThroughOffset = agentSource
-    ? Math.min(
-        agentLiveState?.inputAcknowledgedThroughOffset ?? 0,
-        presentedFeed?.runtimeChange?.sinceOffset ?? 0,
-      )
-    : undefined;
+  const progress = presentAgentProgress(presentedFeed?.runtimeChange, agentLiveState);
   // Readers need actual shared history, not merely a pending writer election.
   // Both roles wait for the current live snapshot's publications to reach SQLite.
   const streamTransportReady =
@@ -597,8 +585,10 @@ function useProjectStreamData({
     resolvedStreamSource,
     ...browserStore,
     eventCount,
-    inputAcknowledgedThroughOffset,
-    agentRuntime,
+    inputAcknowledgedThroughOffset: agentSource
+      ? progress.inputAcknowledgedThroughOffset
+      : undefined,
+    agentRuntime: progress.agentRuntime,
     feed,
     presentedFeed,
     streamTransportReady,
