@@ -295,6 +295,23 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const onRootContext = <T>(call: ItxExpressionStep, here: () => Promise<T>): Promise<T> =>
     rootContext ? (rootContext.invoke(["itx", "builtins", "secrets", call]) as Promise<T>) : here();
 
+  // A secret mutation is append-THEN-KV, two awaits; a concurrent set and delete of the SAME name
+  // could commit the log in one order while their KV writes land in the other, leaving egress a value
+  // the catalog says is gone (or vice versa). Serialize per name — on the root DO, where every verb
+  // runs (`onRootContext`) — so the log order IS the KV order. Different names never contend.
+  // (This is `#builtIns`, built ONCE per DO instance, so the chain persists across calls.) An eviction
+  // BETWEEN a delete's append and its KV delete can still strand a value — a durable reconciliation
+  // sweep is the follow-up; see docs/cleanup-log.md.
+  const secretMutations = new Map<string, Promise<unknown>>();
+  const serializeSecretMutation = <T>(name: string, work: () => Promise<T>): Promise<T> => {
+    const result = (secretMutations.get(name) ?? Promise.resolve()).then(work, work);
+    secretMutations.set(
+      name,
+      result.catch(() => {}),
+    );
+    return result;
+  };
+
   // Each root implements one member of `BuiltInScope` above (the canonical doc of the surface); the
   // comments here add only the WHY of a code branch.
   return {
@@ -326,29 +343,36 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     },
     secrets: {
       set: (name, value, options) =>
-        onRootContext(["set", name, value, options], async () => {
-          const origin = options?.origin === undefined ? undefined : new URL(options.origin).origin;
-          // The change is appended FIRST: a refused append (a paused stream) leaves the value
-          // untouched; a KV failure after it leaves a catalog row whose value egress cannot find —
-          // loud, not silent.
-          const key = secretKey(name);
-          await append({
-            type: "events.iterate.com/secrets/changed",
-            payload: { name, ...(origin && { origin }) },
-          });
-          await env.SECRETS_KV.put(key, String(value), { metadata: { ...(origin && { origin }) } });
-          return { ok: true as const };
-        }),
+        onRootContext(["set", name, value, options], () =>
+          serializeSecretMutation(name, async () => {
+            const origin =
+              options?.origin === undefined ? undefined : new URL(options.origin).origin;
+            // The change is appended FIRST: a refused append (a paused stream) leaves the value
+            // untouched; a KV failure after it leaves a catalog row whose value egress cannot find —
+            // loud, not silent.
+            const key = secretKey(name);
+            await append({
+              type: "events.iterate.com/secrets/changed",
+              payload: { name, ...(origin && { origin }) },
+            });
+            await env.SECRETS_KV.put(key, String(value), {
+              metadata: { ...(origin && { origin }) },
+            });
+            return { ok: true as const };
+          }),
+        ),
       delete: (name) =>
-        onRootContext(["delete", name], async () => {
-          const key = secretKey(name);
-          await append({
-            type: "events.iterate.com/secrets/changed",
-            payload: { name, deleted: true },
-          });
-          await env.SECRETS_KV.delete(key);
-          return { ok: true as const };
-        }),
+        onRootContext(["delete", name], () =>
+          serializeSecretMutation(name, async () => {
+            const key = secretKey(name);
+            await append({
+              type: "events.iterate.com/secrets/changed",
+              payload: { name, deleted: true },
+            });
+            await env.SECRETS_KV.delete(key);
+            return { ok: true as const };
+          }),
+        ),
       list: () => onRootContext(["list"], async () => deps.secrets()),
     },
     ai: env.AI, // the binding object itself — dispatch walks its methods
