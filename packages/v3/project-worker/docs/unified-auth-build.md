@@ -1,7 +1,7 @@
 # Unified auth implementation
 
 This is the current contract, incorporating the owner's corrections to the
-[earlier plan](../../../../docs/unified-oauth-implementation-plan.md).
+[earlier plan](research/unified-oauth-implementation-plan.md).
 
 - `/api` is Cap’n Web. MCP is `https://mcp.iterate2.com/`, optionally routed to
   `/mcp` internally. Sharing authentication never changes these protocol routes.

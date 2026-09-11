@@ -280,10 +280,6 @@ const config: KnipConfig = {
     "!packages/ui",
     "!packages/iterate",
     "!packages/workspace-documents",
-    // The clean room: only the context worker is wired; its siblings (shared, the untracked
-    // project-core packages) stay out until they have a config of their own.
-    "packages/v3/*",
-    "!packages/v3/project-worker",
   ],
   ignoreIssues: {
     "apps/os/e2e/test-support/app-config-env.ts": ["files", "exports"],

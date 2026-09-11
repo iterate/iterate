@@ -599,7 +599,10 @@ export const notesEnvs = {
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
-    workerName: "notes-prd",
-    baseUrl: "https://notes.iterate2.com",
+    workerName: "notes",
+    // Its own workers.dev subdomain — NOT a custom domain. iterate2.com is reserved to become a
+    // project custom hostname (the iterate project in iterate.iterate2.app), mirroring production
+    // where os.iterate.com maps to a project. A workers.dev baseUrl adds no custom route (below).
+    baseUrl: "https://notes.iterate.workers.dev",
   },
 };

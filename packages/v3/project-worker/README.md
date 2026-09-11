@@ -38,8 +38,9 @@ admin secret and a project's own secret (`/mcp?project=<id>`) are bearers on `/m
 - `docs/clean-room-api-walkthrough.md` — the long-form walkthrough, module by module
 - `docs/design-onion-subscriptions-processors.md` — the design of record for subscriptions + processors
 - `LAYERS.md` — the layer map; `BUILD-LOG.md` — what landed, when, and the proofs
-- `docs/plan-v4-features-layered-on-v3.md` — the roadmap (its STATUS block says what is done)
-- `docs/history/` — every earlier plan, review, proposal and log, dated; read as history, never as the code
+- [Archived experiments](../../../docs/archived-experiments.md) — the single backup of retired implementations and research
+- [Design research](docs/research/README.md) — OAuth research, implementation reviews, and deployment evidence
+- [Archived history](docs/history/README.md) — earlier plans, reviews, proposals, and logs on GitHub
 
 ## Configuration
 
@@ -79,7 +80,7 @@ approve the pending client's access without leaving the flow. Other apps may req
 permission through explicit consent, but cannot approve grants. All apps use the same
 `/.auth/*` adapter, opaque HttpOnly cookie, public token exchange and `/api` proxy.
 
-See [the current OAuth design](../../../docs/unified-oauth-architecture.md) for boundaries,
+See [the current OAuth design](docs/unified-oauth-architecture.md) for boundaries,
 revocation and the deferred impersonation design. The historical walkthroughs describe the
 pre-unification project-credential interface; they are not the public authorization contract.
 

@@ -30,7 +30,18 @@ export function writeWranglerConfig() {
             account_id: env.cloudflareAccountId,
             workers_dev: true,
             ...bindings,
-            routes: [{ pattern: `${new URL(env.baseUrl).hostname}/*`, zone_name: "iterate2.com" }],
+            // A workers.dev baseUrl is served by workers_dev itself — no custom route. A custom
+            // domain (a real zone) gets a route bound to that zone.
+            ...(new URL(env.baseUrl).hostname.endsWith(".workers.dev")
+              ? {}
+              : {
+                  routes: [
+                    {
+                      pattern: `${new URL(env.baseUrl).hostname}/*`,
+                      zone_name: new URL(env.baseUrl).hostname.split(".").slice(-2).join("."),
+                    },
+                  ],
+                }),
           },
         ]),
       ),

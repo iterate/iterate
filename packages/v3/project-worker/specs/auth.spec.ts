@@ -259,6 +259,9 @@ test("the same Notes app and dashboard work on their own origin and through a pr
   const projectOrigin = new URL(
     (await page.getByRole("link", { name: "open", exact: true }).getAttribute("href"))!,
   ).origin;
+  // The notes app on this project is served at the app-slug host notes--<project>.<base> (the edge
+  // hands the config worker x-iterate-app: notes), not the apex — the apex has no app label.
+  const appOrigin = projectOrigin.replace(`${project}.`, `notes--${project}.`);
   const source = transformSync(
     readFileSync(resolve(import.meta.dirname, "../../../../apps/notes/config-worker.ts"), "utf8"),
     { loader: "ts", format: "esm" },
@@ -266,10 +269,20 @@ test("the same Notes app and dashboard work on their own origin and through a pr
   // Install the repository's actual config-worker source, preserving its auth.require gate.
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- One operator fixture installs the proxy; all app interactions are real browser RPC.
   using operator = newHttpBatchRpcSession<IterateRpcTarget>(`${origin}/internal/rpc`);
-  await operator
+  const projectContext = operator
     .authenticate({ type: "admin-secret", secret: adminSecret(origin) })
-    .projects.get(project)
-    .provide("itx.worker", ["itx", "workers", ["get", { source: { "cap.js": source } }]]);
+    .projects.get(project);
+  // Both rules in ONE batch (an HTTP-batch session is one-shot): install the config worker, and point
+  // the `notes` app label at it — so notes--<project>.<base> reaches the config worker with the app
+  // slug in x-iterate-app (the apps/os header), and it fetches through to the Notes worker.
+  await Promise.all([
+    projectContext.provide("itx.worker", [
+      "itx",
+      "workers",
+      ["get", { source: { "cap.js": source } }],
+    ]),
+    projectContext.provide("itx.apps.notes", ["itx", "worker"]),
+  ]);
   await page.goto(notesOrigin);
   await page.getByRole("link", { name: "Log in with Iterate", exact: true }).click();
   await page
@@ -287,9 +300,9 @@ test("the same Notes app and dashboard work on their own origin and through a pr
   await page.getByRole("link", { name: "Project dashboard", exact: true }).click();
   await page.getByRole("heading", { name: `Signed in as ${email}`, exact: true }).waitFor();
   await page.getByRole("link", { name: "open", exact: true }).waitFor();
-  await page.goto(`${projectOrigin}/notes`);
+  await page.goto(`${appOrigin}/notes`);
   await page
-    .getByRole("heading", { name: `Authorize ${new URL(projectOrigin).host}`, exact: true })
+    .getByRole("heading", { name: `Authorize ${new URL(appOrigin).host}`, exact: true })
     .waitFor();
   await page.getByRole("button", { name: "Approve", exact: true }).click();
   expect(await page.getByRole("textbox", { name: project, exact: true }).inputValue()).toBe(note);
@@ -306,11 +319,11 @@ test("the same Notes app and dashboard work on their own origin and through a pr
     `${note}; edited through the project proxy`,
   );
   await page.goto(`${origin}/sessions`);
-  const appSession = page.getByRole("row").filter({ hasText: new URL(projectOrigin).host });
+  const appSession = page.getByRole("row").filter({ hasText: new URL(appOrigin).host });
   await appSession.getByRole("button", { name: "Log out", exact: true }).click();
-  await page.goto(`${projectOrigin}/notes`);
+  await page.goto(`${appOrigin}/notes`);
   await page
-    .getByRole("heading", { name: `Authorize ${new URL(projectOrigin).host}`, exact: true })
+    .getByRole("heading", { name: `Authorize ${new URL(appOrigin).host}`, exact: true })
     .waitFor();
   // The independently granted Notes session remains usable after proxy revocation.
   await page.goto(`${notesOrigin}/notes`);

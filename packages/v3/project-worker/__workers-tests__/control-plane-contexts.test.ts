@@ -6,7 +6,7 @@
 // enforced. Every "naughty thing" a caller can currently do is written here as `test.fails`: the body
 // asserts the SECURE outcome, so while the code is insecure the assertion fails and the expected-fail
 // passes; when enforcement lands the assertion passes, the expected-fail turns into a real failure,
-// and whoever wired the fix deletes the `.fails`. See docs/control-plane-context-resolved-design.md.
+// and whoever wired the fix deletes the `.fails`. See packages/v3/project-worker/docs/control-plane-context-resolved-design.md.
 import { beforeAll, describe, expect, test } from "vitest";
 import { AccountProcessor } from "../src/account/contract.ts";
 import { ACCOUNT_PROCESSOR_SOURCE } from "../src/generated/account-processor-source.ts";
