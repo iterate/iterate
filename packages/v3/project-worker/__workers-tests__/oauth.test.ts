@@ -147,15 +147,29 @@ async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
   return { token, cookie, clientId: client.clientId, user };
 }
 
-test("discovery advertises CIMD and neither publishes nor serves DCR", async () => {
+test("discovery advertises CIMD AND DCR: the registration endpoint is published and registers a client", async () => {
+  // CIMD is the console's own path (browser-session.ts), but standard MCP clients (the MCP Inspector,
+  // Claude's connector) require dynamic registration — so both are advertised, on every deployment.
   const metadata = await (
     await call("/.well-known/oauth-authorization-server")
   ).json<Record<string, unknown>>();
   expect(metadata.client_id_metadata_document_supported).toBe(true);
   expect(metadata.token_endpoint_auth_methods_supported).toContain("none");
   expect(metadata.code_challenge_methods_supported).toEqual(["S256"]);
-  expect(metadata.registration_endpoint).toBeUndefined();
-  expect((await call("/oauth/register", { method: "POST" })).status).toBe(404);
+  expect(metadata.registration_endpoint).toBe(`${ORIGIN}/oauth/register`);
+  const registered = await call("/oauth/register", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      client_name: "an MCP client",
+      redirect_uris: ["https://client.example/callback"],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+    }),
+  });
+  expect(registered.status).toBe(201);
+  expect((await registered.json<{ client_id?: string }>()).client_id).toBeTruthy();
   for (const protocol of ["api", "mcp"]) {
     expect(
       await (await call(`/.well-known/oauth-protected-resource/${protocol}`)).json(),

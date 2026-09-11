@@ -42,9 +42,6 @@ export function oauthResponse(
       bearer_methods_supported: ["header"],
     });
   }
-  // Public registration is disabled; it must not fall through to a console route.
-  if (url.pathname === "/oauth/register" && !issuer.startsWith("http:"))
-    return new Response("Not found", { status: 404 });
   return new OAuthProvider(providerOptions(env, protectedApi, defaultHandler)).fetch(
     request,
     env,
