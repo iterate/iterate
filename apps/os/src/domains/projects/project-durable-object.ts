@@ -8,7 +8,7 @@ import { ProjectEgressInterceptRpcTarget, StreamRpcTarget } from "../../rpc-targ
 import {
   AI_INTERCEPTOR_CAPABILITY_NAME,
   noAiInterceptorError,
-  type ProjectAiInterceptorInput,
+  type ProjectAiInterceptor,
 } from "../../lib/model-interception.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { isCapabilityUnservedError } from "../capability-host/capability-unserved.ts";
@@ -763,7 +763,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
    * place. No mount, or a mount whose provider Pager is away → the canonical
    * loud error.
    */
-  async consultAiInterceptor(input: ProjectAiInterceptorInput): Promise<unknown> {
+  async consultAiInterceptor(input: ProjectAiInterceptor.Input): Promise<unknown> {
     // Safe: the root stream's facet composition hosts the capability-host
     // processor, and its facade carries invokeCapability. As with the
     // reduced-state facade above, the cast narrows the generated facade stub

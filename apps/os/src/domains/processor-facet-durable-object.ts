@@ -33,7 +33,7 @@ import {
   type ProcessorFacetIdentity,
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
-import type { ProjectAiInterceptorInput } from "../lib/model-interception.ts";
+import type { ProjectAiInterceptor } from "../lib/model-interception.ts";
 import { trustedInternalAuthContext } from "../auth.ts";
 import { parseConfig } from "../config.ts";
 import { workerVersion, type Env } from "../env.ts";
@@ -548,7 +548,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       // intercepted/* model turns are served by the project's live AI interceptor
       // (itx.ai.intercept); the slot lives on the Project DO so both egress
       // paths share one handler, and this hop only happens for intercepted/* models.
-      consultAiInterceptor: (input: ProjectAiInterceptorInput) =>
+      consultAiInterceptor: (input: ProjectAiInterceptor.Input) =>
         projectStub(this.env.PROJECT, projectId).consultAiInterceptor(input),
       // Resolved per attempt (not at construction) so a config problem
       // fails the turn with a journaled error instead of bricking the host.

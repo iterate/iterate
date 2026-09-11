@@ -15,6 +15,39 @@ import {
 
 const byName = declarationsByName(ITX_API_DECLARATIONS);
 
+test("qualified references pull in the namespace, not unrelated member names", () => {
+  expect(
+    referencedPlatformTypeNames(
+      "export type Handler = ProjectAiInterceptor.Input; export type Imported = vendor.Stream;",
+      byName,
+    ),
+  ).toEqual(["ProjectAiInterceptor"]);
+  const slice = typeSlice({
+    declarations: byName,
+    rootName: "ProjectAiInterceptor",
+    maxTokens: 4_000,
+  });
+  expect(slice).toMatchObject({
+    includedNames: [
+      "ProjectAiInterceptor",
+      "AiRequest",
+      "OpenAiHttpRequest",
+      "WorkersAiRequest",
+      "CfAiRunOptions",
+    ],
+    frontierNames: [],
+  });
+  expect(slice.sourceText).toContain("export declare namespace ProjectAiInterceptor");
+  expect(slice.sourceText).toContain("export type ProjectAiInterceptor =");
+  expect(byName.get("ProjectAiInterceptor")).toMatchObject({
+    kind: "namespace",
+    memberSummaries: {
+      AgentTurnInput: "An agent turn, with the messages prepared for its model.",
+      AiRunInput: "A direct AI call, whose body can contain any model's inputs.",
+    },
+  });
+});
+
 describe("the generated graph", () => {
   test("declaration names are unique and references resolve", () => {
     expect(byName.size).toBe(ITX_API_DECLARATIONS.length);

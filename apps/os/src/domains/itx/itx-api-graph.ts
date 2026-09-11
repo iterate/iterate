@@ -16,8 +16,8 @@
 // shared by the docs RpcTarget and the generator.
 
 /**
- * One exported declaration of the public itx surface, as the itx api
- * generator emits it. `sourceText` is the exact text of that declaration in
+ * One named group of declarations in the public itx surface. A type and its
+ * same-named namespace stay together. `sourceText` contains their exact text in
  * itx-api.generated.ts (leading JSDoc included); the other fields are derived
  * from it so runtime consumers (docs search, closure assembly) never re-parse
  * TypeScript.
@@ -26,16 +26,15 @@ export interface ItxApiDeclaration {
   /** Exported declaration name, e.g. "Stream". Unique across the surface;
    * the key for docs lookups and docs-site deep links. */
   name: string;
-  /** Which TypeScript declaration form this is. */
-  kind: "interface" | "typeAlias";
+  /** Namespace groups may also include a same-named alias or interface. */
+  kind: "interface" | "typeAlias" | "namespace";
   /** Verbatim TypeScript source including the leading JSDoc comment — the
    * exact text that appears in itx-api.generated.ts. */
   sourceText: string;
   /** The declaration's JSDoc summary (the prose before the first block tag),
    * first sentence. What search results and children maps show. */
   summary: string;
-  /** JSDoc summary per interface member, keyed by member name. Empty for
-   * type aliases. */
+  /** JSDoc summary per interface member or namespace type, keyed by member name. */
   memberSummaries: Record<string, string>;
   /** Names of other declarations in this graph that this declaration's
    * signatures mention — the edges a closure walk follows. Computed from
@@ -231,8 +230,8 @@ export function typeSlice(input: {
 /**
  * The platform declarations a free-form TypeScript text mentions: PascalCase
  * identifiers in its CODE (comments stripped) that name a declaration in the
- * graph. The same scan the generator uses for `referencedTypeNames`, applied
- * to text from OUTSIDE the graph — a mount's Capability Type Declaration —
+ * graph. Qualified names depend on their root namespace. This scan handles
+ * text from OUTSIDE the graph — a mount's Capability Type Declaration —
  * so mount types get reference edges into the platform layer.
  */
 export function referencedPlatformTypeNames(
@@ -254,8 +253,9 @@ export function referencedPlatformTypeNames(
     }
   }
   const referenced = new Set<string>();
-  for (const match of codeOnly.matchAll(/\b[A-Z][A-Za-z0-9_]*\b/g)) {
-    if (declarations.has(match[0]) && !locallyBound.has(match[0])) referenced.add(match[0]);
+  for (const match of codeOnly.matchAll(/\b([A-Za-z_$][\w$]*)(?:\s*\.\s*[A-Za-z_$][\w$]*)*/g)) {
+    const root = match[1]!;
+    if (declarations.has(root) && !locallyBound.has(root)) referenced.add(root);
   }
   return [...referenced];
 }
