@@ -645,7 +645,7 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
 
   // THE MARKER FOLLOWS THE RULES: every rule commit re-derives `hostedFacet` for every row that is not
   // builtins-rooted, through the new table — the delivery loop re-resolves a target at every push, so
-  // the marker must name the facet the row would host NOW, or `disableProcessor` would delete the
+  // the marker must name the facet the row would host NOW, or `processors.disable` would delete the
   // wrong facet (or orphan one). A row the change leaves unresolvable keeps its marker, conservatively.
   const RULE = "events.iterate.com/itx/rewrite-rule-configured";
   const facetF = "itx.builtins.facets.get('f',{source:{'cap.js':'x'},className:'F'})";

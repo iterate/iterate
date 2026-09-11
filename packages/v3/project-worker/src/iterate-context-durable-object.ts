@@ -8,7 +8,7 @@
 //
 // PURE WORKERS-RPC: capnweb never terminates here — the stateless `/api` worker relays. Dispatch is
 // ONE door, `invoke(call)`; every OTHER change to this context is an appended event (the edge's
-// `provide`/`subscribe`/`enableProcessor` verbs build one and call `append`; a lent stub's rule or
+// `provide`/`subscribe` and the `processors` root build one and call `append`; a lent stub's rule or
 // row rides its pager upgrade and is appended as the pager is accepted) — there are no
 // configuration verbs here. The events this class appends on its own initiative: the birth `config`
 // subscription (the constructor), the un-set of whatever named an rpc stub whose last pager closed

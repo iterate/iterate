@@ -25,7 +25,7 @@
 // (`CounterDurableObject`, the class the load chain names) — loaded through the Worker Loader and
 // hosted as facets (there are no built-in processors). The workers lane materializes them fine (the
 // loader accepts allow_irrevocable_stub_storage), so every facet-lifecycle pin rides the inline
-// `CounterProcessor` source below, enabled the way the edge's `enableProcessor` spells it — ONE
+// `CounterProcessor` source below, enabled the way the `itx.processors.enable` root spells it — ONE
 // `subscription-configured` whose target is the facet's `processEventBatch` through the load chain,
 // appended at the DO's one write door (`append`; the DO has no configuration verbs). Live stubs
 // (over hibernatable stub pager sockets) work fully here too — see hibernation-at-scale.test.ts.
@@ -68,7 +68,7 @@ const durableCount = async (ctx: string): Promise<number> =>
   ((await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: unknown[] }).events
     .length;
 
-/** The edge's `enableProcessor(name, { source, className })`, spelled at the DO door: ONE
+/** The `itx.processors.enable(name, { source, className })` root, spelled raw at the DO door: ONE
  *  subscription-configured event — built by `subscriptionConfiguredEvent`, appended through `append`
  *  — whose target is the facet's `processEventBatch` through the load chain (the facet name = the
  *  subscription name = the `.get(name)` name). */
@@ -86,7 +86,7 @@ async function enableCounter(ctx: string, name = "counter"): Promise<void> {
     }),
   );
 }
-/** The edge's `disableProcessor(name)`: ONE event — `target: null`; the DO deletes the facet the
+/** The `itx.processors.disable(name)` root: ONE event — `target: null`; the DO deletes the facet the
  *  row hosted, storage included, before the append returns. */
 async function disableCounter(ctx: string, name = "counter"): Promise<void> {
   await stub(ctx).append(subscriptionConfiguredEvent({ name, target: null }));
@@ -172,7 +172,7 @@ test("QUIESCE THEN EVICT THEN WAKE: the facet re-drives from its durable checkpo
 });
 
 test("DISABLE deletes the facet's storage; RE-ENABLE rebuilds from the log (no stale checkpoint, no skipped events)", async () => {
-  // `disableProcessor` = unsubscribe + `itx.facets.delete(name)` (ctx.facets.delete exists on every
+  // `processors.disable` = unsubscribe + `itx.facets.delete(name)` (ctx.facets.delete exists on every
   // runtime we run — the storage-keeping abort() fallback was dead code). PINS the correct
   // consequence: a re-enable rebuilds the reduce from the durable log — including events appended
   // while the processor was disabled — with no stale checkpoint causing a silent skip.
@@ -206,7 +206,7 @@ test("a facet TWO rows host survives the removal of ONE of them — memo and sto
   const context = stub("prj_shared_facet");
   const spec = { source: { "cap.js": BUMP_COUNTER_SRC }, className: "BumpCounterDurableObject" };
   const target: ItxExpression = ["itx", "facets", ["get", "shared", spec], "processEventBatch"];
-  // Two rows, both HOSTING the same facet — the `enableProcessor` shape, twice.
+  // Two rows, both HOSTING the same facet — the `processors.enable` shape, twice.
   await context.append(subscriptionConfiguredEvent({ name: "a", target, consumes: ["demo/ping"] }));
   await context.append(subscriptionConfiguredEvent({ name: "b", target, consumes: ["demo/ping"] }));
   await context.invoke(["itx", "facets", ["get", "shared", spec], ["bump"]]);

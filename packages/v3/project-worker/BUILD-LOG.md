@@ -4677,3 +4677,55 @@ tutorial's chapter 0), and kernel-vs-library namespacing (an open question in ch
   files / 194 passed / 4 expected-fail / 2 skipped; THE BROWSER PROOF 10/10 (8 auth flows + 2 demo)
   against the deployment; the no-script probe 7/7 against the deployment — ALL GREEN. Every auth flow
   is now proven in a real browser against the deployed worker.
+
+## 2026-09-11 — `itx.run`, and the processor pair becomes the `processors` root
+
+- JONAS (from the API jam): "itx.run is the first i'd pick up … a thin layer over itx.workers.get that
+  inserts the script in a boilerplate template … and runs it by calling run()"; and "change
+  enableProcessor and disableProcessor to be under a .processors builtin … we have .rpcStubs and on top
+  of that subscriptions, and on top of that processors … cleanly layered."
+- `itx.run(script, { args? })` — THE LIBRARY's fourth verb (src/library.ts): the text of
+  `async (itx, ...args) => …` spliced verbatim into the smallest WorkerEntrypoint (`runScriptModule`: a
+  default class whose `run(...args)` mints `env.ITX.get()`, calls the script, disposes the scope), then
+  `itx.workers.get({ source }).run(...args)` through the handle the library holds — so a rule on
+  `itx.workers` applies, the same text is the same module (the loader's content hash reuses the
+  isolate), and a text that is not one function fails at load without poisoning the isolate id. The
+  library's `itx` widened from `fetch` to `fetch` + `workers`; `run` joins BUILT_IN_ROOTS in the library
+  group. It belongs in the library by the one rule: it takes only `itx`.
+- `itx.processors` — a built-in ROOT beside `rpcStubs` and `subscriptions`, the onion's three layers as
+  three roots: `enable(name, { source, className, consumes? })` (ONE `subscription-configured` event
+  whose target is `itx.builtins.facets.get(name, spec).processEventBatch`; DURABLE, no handle),
+  `disable(name)` (ONE event, `{ name, target: null }`; the DO deletes the facet the row hosted before the
+  append returns) and `list()` (the subscriptions that host a facet). The two edge verbs
+  `enableProcessor` / `disableProcessor` are DELETED from `IterateContext`: they were two appends
+  spelled for you and needed nothing of the session, so as a root the same door serves a client, loaded
+  code (`env.ITX.get().processors.enable(…)`) and a sibling (`itx.cd(p).processors…`) — the asymmetry
+  the jam's open question 3 named is gone. The proxy-verb list (rule 6) is `cd`, `invoke`, `provide`,
+  `subscribe`. `enable` refuses a missing spec by name before anything is appended.
+- The sweep: every spelling in e2e, the workers lane, the demo and the comments; the raw-event helpers in
+  `uncontrolled-degradation.test.ts` renamed `enableProcessorByEvent` / `disableProcessorByEvent` (they
+  spell the event on the DO's `append`, not the root). Docs describe the code as it now is: LAYERS.md,
+  the as-built surface (a `processors` row and a `run` row in §5, the edge table two rows shorter, a
+  dated "decided" entry in §12), the walkthrough, the tutorial (an `itx.run` subsection in chapter 9;
+  the chapter-6 processor text), the onion design doc. The dated report and BUILD-LOG history untouched.
+- PROOFS: `src/library.test.ts` "run" (the module, the args, the same text ⇒ the same module, a blank
+  script refused before any load); `e2e/workers-and-facets` "itx.run" (whoami agrees, args through, an
+  append inside is the project's with no principal, a non-function text refused and the next run fine);
+  `e2e/processor-facets` "itx.processors.list()" (the birth config row hosts none; the fixture appears
+  with its hostedFacet and leaves with `disable`); every renamed processor test is the proof of the move.
+- THE SHARED BRANCH MOVED UNDER THIS WORK. Between the last entry (1a0ffc202) and this one's gate, the
+  peer agent rebased SIXTEEN commits onto the branch (253cc821a…0fea0c703, 20:16 yesterday to 08:21
+  today — the OAuth/auth restructuring: `src/oauth.ts`, `src/mcp.ts`, `src/rpc.ts`, `src/hosts.ts`,
+  `worker.ts` rewritten, the operator capnweb door moved from `/api` to `/internal/rpc`, an
+  `APP_CONFIG_PLATFORM_ORIGIN` check, `wrangler.jsonc` → `wrangler.base.jsonc` + a generated config,
+  `scripts/deploy.ts` over `envs.ts` and Doppler with `os.iterate2.com` / `mcp.iterate2.com` origins,
+  `specs/auth.spec.ts` rewritten). None of it touches the files this entry changes; this entry sits on
+  top. What the gate found at THEIR HEAD, kept apart from this change: the workers lane red in 13 tests
+  because the shared `openSession` helper (`__workers-tests__/support.ts`) still dialed
+  `https://test.local` while the new lane config says `https://control.test` — fixed here in its own
+  commit, one line; and four e2e tests that dial this worker's own `/api` (fetch-door's deleted-routes
+  pin, library-connectors' self-dial, workers-and-facets' remote capnweb dial, the push-delivery
+  measured finding) fail because their edge now answers `/api` with 404 — theirs, left as found. NOT
+  DEPLOYED by this entry: the deploy pipeline is now the peer's (`tsx scripts/deploy.ts`, uncommitted
+  root `envs.ts`, a Doppler project), aimed at iterate2 origins — deploying it is their call; the POC
+  worker still serves 53b6620b (this morning's console fix), whose `/api` the current tree no longer has.

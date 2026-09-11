@@ -44,11 +44,6 @@ import {
   rewriteRuleConfiguredEvent,
   rewriteRuleRemovedEvent,
 } from "./context/itx-expression-rewriting.ts";
-import {
-  assertFacetSourceWithinCeiling,
-  facetSpecOf,
-  type FacetSpec,
-} from "./context/worker-loader.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { SessionTeardown, type ProjectDoorsInput } from "./session.ts";
 import {
@@ -352,43 +347,6 @@ export class IterateContext extends RpcTarget {
   }
 
   // ── processors: durable configuration, two lines each over the subscription event ──
-
-  /** Enable a processor: host `className` (the `StreamProcessorDurableObject` subclass exported by
-   *  the loaded `source` — the host whose `processor` field holds the pure `StreamProcessor`) as the
-   *  facet named `name`, and subscribe its `processEventBatch` to every commit. Literally the
-   *  subscription event with the target `itx.builtins.facets.get(name, spec).processEventBatch` — a processor
-   *  is a named facet that is pushed the log; `spec` is the `FacetSpec` `itx.facets.get` takes
-   *  (`source`, `cacheKey?`, `className`). DURABLE (no handle): a processor outlives the session that
-   *  enabled it; `disableProcessor` is the explicit inverse. `consumes` is the SUBSCRIPTION's filter
-   *  (what is sent; absent = every durable event). */
-  async enableProcessor(
-    name: string,
-    spec: FacetSpec & { consumes?: string[] },
-  ): Promise<{ name: string }> {
-    assertFacetSourceWithinCeiling(spec, `enableProcessor("${name}")`); // refused HERE: nothing appended
-    await this.#append(
-      subscriptionConfiguredEvent({
-        name,
-        target: [
-          "itx",
-          "builtins",
-          "facets",
-          ["get", name, facetSpecOf(spec)],
-          "processEventBatch",
-        ],
-        ...(spec.consumes && { consumes: spec.consumes }),
-      }),
-    );
-    return { name };
-  }
-
-  /** Disable a processor: ONE event — `subscription-configured { name, target: null }`. The DO deletes
-   *  the facet the removed row HOSTED (its `itx.facets.get(name, { source, className })` target),
-   *  storage included, before the append returns — a re-enable is a clean rebuild from the log, never
-   *  a resume from orphaned state. The raw event is the same disablement. */
-  async disableProcessor(name: string): Promise<void> {
-    await this.#append(subscriptionConfiguredEvent({ name, target: null }));
-  }
 
   /** THE ONE WRITE: every verb above builds an event and appends it here, spelled `itx.builtins.append`
    *  — the platform never spells a short name (context/itx-expression-rewriting.ts), so a context's own

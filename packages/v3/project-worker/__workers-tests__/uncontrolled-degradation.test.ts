@@ -109,15 +109,16 @@ const untilIssue = (failureSite: string, pattern: RegExp, timeoutMs = 10_000): P
 
 // ── the DO doors, spelled the way the edge spells them ──
 
-/** The edge's `enableProcessor(name, { source, className })`: ONE subscription-configured row whose
- *  target hosts the class as the facet `name` (alarm-quiesce.test.ts spells it the same way). */
+/** What `itx.enableProcessorByEvent(name, { source, className })` appends, spelled RAW on the DO's `append`:
+ *  ONE subscription-configured row whose target hosts the class as the facet `name`
+ *  (alarm-quiesce.test.ts spells it the same way). */
 const hostingTarget = (name: string, source: string, className: string): ItxExpression => [
   "itx",
   "facets",
   ["get", name, { source: { "cap.js": source }, className }],
   "processEventBatch",
 ];
-const enableProcessor = (
+const enableProcessorByEvent = (
   ctx: string,
   name: string,
   source: string,
@@ -131,7 +132,7 @@ const enableProcessor = (
       ...(consumes && { consumes }),
     }),
   );
-const disableProcessor = (ctx: string, name: string) =>
+const disableProcessorByEvent = (ctx: string, name: string) =>
   stub(ctx).append(subscriptionConfiguredEvent({ name, target: null }));
 const snapshotOf = (ctx: string, name: string) =>
   stub(ctx).invoke(["itx", "facets", ["get", name], ["snapshot"]]);
@@ -231,7 +232,7 @@ test.fails("A3 — a hosting spec whose source is over the cell cap but under th
   drainIssues();
   const source = FINE_SRC + "\n// " + "x".repeat(4.5 * MiB) + "\n";
   const enableErr = await rejectionOf(() =>
-    enableProcessor(ctx, "big", source, "FineDurableObject"),
+    enableProcessorByEvent(ctx, "big", source, "FineDurableObject"),
   );
   await untilIssue("subscription-delivery.configured", /SQLITE_TOOBIG/);
   await s.append({ type: "work" });
@@ -263,7 +264,7 @@ export class HoarderDurableObject extends StreamProcessorDurableObject { process
 test.fails("A4 — a facet whose checkpoint outgrows the cell ceiling is refused coded, then WEDGED at that batch forever: the same refusal on every commit and every wake, never a halt", async () => {
   const ctx = "prj_ud_facetcheckpoint_cap";
   const s = stub(ctx);
-  await enableProcessor(ctx, "hoarder", HOARDER_SRC, "HoarderDurableObject", ["blob"]);
+  await enableProcessorByEvent(ctx, "hoarder", HOARDER_SRC, "HoarderDurableObject", ["blob"]);
   let last = 0;
   for (let i = 0; i < 4; i++) {
     last = offsetOf(await s.append({ type: "blob", payload: { blob: `${i}:` + "x".repeat(MiB) } }));
@@ -300,7 +301,7 @@ async function facetThatCannotStart(
   className: string,
 ): Promise<ObservedError | undefined> {
   drainIssues();
-  await enableProcessor(ctx, "p", src, className);
+  await enableProcessorByEvent(ctx, "p", src, className);
   await stub(ctx).append({ type: "work" });
   await untilIssue("subscription-delivery.deliver", /./);
   return rejectionOf(() => snapshotOf(ctx, "p"));
@@ -369,7 +370,7 @@ test.fails("B3 — a class whose constructor throws: `broken.constructorFailed` 
   expect(errorCode(err)).toBeDefined();
 });
 
-// CONTROL: none of the three is a wedge — `disableProcessor` (the null row) still lands, and takes
+// CONTROL: none of the three is a wedge — `processors.disable` (the null row) still lands, and takes
 // the row, the facet and its startup memo with it, so the operator door out exists.
 test("B4 — CONTROL: a facet that cannot start is still disable-able — the null row lands, the memo and the row go", async () => {
   for (const [ctx, src, className] of [
@@ -379,7 +380,7 @@ test("B4 — CONTROL: a facet that cannot start is still disable-able — the nu
   ] as const) {
     await facetThatCannotStart(ctx, src, className);
     expect(await facetStartupMemoPresent(ctx, "p")).toBe(true);
-    await disableProcessor(ctx, "p");
+    await disableProcessorByEvent(ctx, "p");
     expect(await facetStartupMemoPresent(ctx, "p")).toBe(false);
     expect(await subscriptionRow(ctx, "p")).toBeNull();
     expect(errorCode(await rejectionOf(() => snapshotOf(ctx, "p")))).toBe("NO_FACET");
@@ -410,7 +411,7 @@ export class PoisonDurableObject extends StreamProcessorDurableObject { processo
 test.fails("C1 — a processEvent that throws on ONE event wedges the facet at that offset forever: every commit re-reads the gap and re-throws, snapshot() rejects, disable + re-enable rebuilds into the same wedge", async () => {
   const ctx = "prj_ud_poison_effect";
   const s = stub(ctx);
-  await enableProcessor(ctx, "poison", POISON_SRC, "PoisonDurableObject", ["work"]);
+  await enableProcessorByEvent(ctx, "poison", POISON_SRC, "PoisonDurableObject", ["work"]);
   await s.append({ type: "work" });
   await until(
     "n = 1",
@@ -424,8 +425,8 @@ test.fails("C1 — a processEvent that throws on ONE event wedges the facet at t
   await untilIssue("subscription-delivery.deliver", /poison: refusing offset/);
   const snapshotErr = await rejectionOf(() => snapshotOf(ctx, "poison"));
   // The rebuild: the same log, the same event, the same wall.
-  await disableProcessor(ctx, "poison");
-  await enableProcessor(ctx, "poison", POISON_SRC, "PoisonDurableObject", ["work"]);
+  await disableProcessorByEvent(ctx, "poison");
+  await enableProcessorByEvent(ctx, "poison", POISON_SRC, "PoisonDurableObject", ["work"]);
   drainIssues();
   const rebuiltErr = await rejectionOf(() => snapshotOf(ctx, "poison"));
   if (

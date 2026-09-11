@@ -140,12 +140,13 @@ no constructor arguments, so `new PresenceProcessor().reduce(...)` is a unit tes
 live-state publishing) over its facet kv and `env.ITX`. A processor class ends in `Processor`, a Durable Object
 class in `DurableObject`. The host is hosted like ANY class:
 `itx.facets.get('presence', { source, className: 'PresenceDurableObject' })`, identity in
-`ctx.props`. `enableProcessor(name, { source, className, consumes? })` appends the
+`ctx.props`. `itx.processors.enable(name, { source, className, consumes? })` — a built-in root
+(context/built-ins.ts), the third layer of the onion on `rpcStubs` and `subscriptions` — appends the
 `subscription-configured` event whose target is that chain + `.processEventBatch`;
-`disableProcessor(name)` appends `subscription-configured { name, target: null }` — ONE event; the
+`itx.processors.disable(name)` appends `subscription-configured { name, target: null }` — ONE event; the
 DO deletes the facet the removed row hosted, storage included, before the append returns. Processors
-are DURABLE configuration (no handle: `enableProcessor`
-returns `{ name }`) — `disableProcessor` is the explicit inverse. No built-in processor runs as a facet — `tally` is a
+are DURABLE configuration (no handle: `enable` returns `{ name }`) — `disable` is the explicit
+inverse; `itx.processors.list()` is the subscriptions that host a facet. No built-in processor runs as a facet — `tally` is a
 fixture, and the one built-in `StreamProcessor` is the core reduce, hosted inline (layer 1). Policy
 that need not gate an append synchronously is a userspace facet processor speaking core's control
 events: `BreakerProcessor` (`e2e/support/sources.ts`) reduces durable events into a token bucket and,
@@ -168,8 +169,9 @@ with the expression in `x-itx-expression`). The class declares only what must be
 (pure addressing, an EDGE context), `invoke` (the hop's landing door), `provide` (THE ONE FRONT
 DOOR — a live target is the ONE PHYSICAL ACT: the client's capnweb stub must live here, never in the
 DO, so the lend happens here through the DON'T-PIN pager relay `context/rpc-stubs.ts`'s
-`lendRpcStubOverPager`; an expression target is the rule alone), and `subscribe` /
-`enableProcessor` / `disableProcessor` — each visibly "build the event, append it";
-the DO has `append` and no configuration verbs. Every lend is undone at session end by the
+`lendRpcStubOverPager`; an expression target is the rule alone), and `subscribe` — each visibly
+"build the event, append it"; the processor pair is a built-in root (`itx.processors.enable` /
+`disable`, layer 4), two appends spelled for you inside the DO; the DO has `append` and no
+configuration verbs. Every lend is undone at session end by the
 session's `SessionTeardown` (`session.ts`), keyed `JSON.stringify([iterateContextName, rpcStubKey])` (a context path may hold a space). Everything a
 client ever does — Slack-bridge RpcTargets included — is these layers composed.

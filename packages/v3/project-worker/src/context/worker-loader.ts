@@ -51,7 +51,7 @@ export type WorkerSource = WorkerModules | ItxExpressionInput;
  *  owns "same key ⇒ same code"), optional beside literal modules (it then replaces the content hash). */
 export type WorkerCacheKey = string;
 
-/** What hosts a class as a durable FACET — `itx.facets.get(name, spec)`, `enableProcessor(name, spec)`:
+/** What hosts a class as a durable FACET — `itx.facets.get(name, spec)`, `processors.enable(name, spec)`:
  *  the source (modules, or a producer expression with its `cacheKey`) and the exported class. */
 export type FacetSpec = { source: WorkerSource; cacheKey?: WorkerCacheKey; className: string };
 /** The most a facet's LITERAL source may be, serialized — the startup memo is one kv cell in the DO
@@ -59,8 +59,8 @@ export type FacetSpec = { source: WorkerSource; cacheKey?: WorkerCacheKey; class
  *  ceiling; an oversize source must fail at the door, coded, not late at materialization (the 2026-09-07
  *  wave-0 plan, issue 2). A producer EXPRESSION is small by nature and is not measured. */
 export const FACET_SOURCE_MAX_CHARS = 1 << 20;
-/** Refuse a spec whose literal source is over the ceiling — the one check both doors (the edge's
- *  `enableProcessor`, the DO's facet door) make, so the refusal is atomic: nothing appended, no memo. */
+/** Refuse a spec whose literal source is over the ceiling — the one check both doors
+ *  (`itx.processors.enable`, the DO's facet door) make, so the refusal is atomic: nothing appended, no memo. */
 export function assertFacetSourceWithinCeiling(spec: FacetSpec, where: string): void {
   if (typeof spec.source === "string" || Array.isArray(spec.source)) return; // a producer expression
   const chars = JSON.stringify(spec.source).length;

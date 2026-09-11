@@ -150,7 +150,7 @@ for the next match — chapter 4.
 ### The explicit door and the dotted sugar
 
 `IterateContext` declares only a handful of methods (`cd`, `invoke`, `provide`, `subscribe`,
-`enableProcessor`, `disableProcessor`). Everything else you write on `itx` — `itx.whoami()`,
+`mintToken`, `rotateApiKey`). Everything else you write on `itx` — `itx.whoami()`,
 `itx.kv.put('k','v')`, `itx.slack.chat.postMessage(…)` — is a prototype hop that accumulates the
 unknown segments into ONE `invoke(expression)` (`installPrototypeInvokeFallback`,
 `src/context/expression.ts`). The two spellings are the same call:
@@ -494,7 +494,7 @@ Every rule below is a row in its table test.
    that is a built-in is the IMPLICIT PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>`, applied and
    done; anything else is `NO_ITX_EXPRESSION_MATCH`, default-deny. 32 rewrites is the budget.
 6. **The door.** A match is rooted at `itx`, never at `itx.builtins`, never at a proxy verb
-   (`cd`, `invoke`, `provide`, `subscribe`, `enableProcessor`, `disableProcessor`). A target is
+   (`cd`, `invoke`, `provide`, `subscribe`). A target is
    rooted at `itx`. A whole-context override must target the physical spelling `itx.builtins.…`
    and may not name its own context.
 7. **`@` is the caller's input.** A target whose final call step holds `@` is a template. As a
@@ -1072,14 +1072,16 @@ export class TallyDurableObject extends StreamProcessorDurableObject {
 }
 ```
 
-`enableProcessor(name, { source, className, consumes? })` is literally the subscription event of
+`itx.processors.enable(name, { source, className, consumes? })` — a built-in root, the third layer
+of the onion on `rpcStubs` and `subscriptions` — is literally the subscription event of
 chapter 5 whose target is `itx.builtins.facets.get(name, spec).processEventBatch`. It is DURABLE
-configuration — no handle; `disableProcessor(name)` is the explicit inverse. `className` names the
+configuration — no handle; `itx.processors.disable(name)` is the explicit inverse, and
+`itx.processors.list()` is the subscriptions that host a facet. `className` names the
 HOST, never the pure processor:
 
 ```ts
 await itx.provide("itx.before", "itx.kv"); // a rule BEFORE enabling — counted by cold catch-up
-await itx.enableProcessor("tally", { source: SOURCES.tally, className: "TallyDurableObject" });
+await itx.processors.enable("tally", { source: SOURCES.tally, className: "TallyDurableObject" });
 const s1 = await itx.invoke("itx.facets.get('tally').snapshot()"); // { offset, state }
 expect(s1.state.counts["events.iterate.com/itx/rewrite-rule-configured"]).toBe(1);
 const row = (await itx.subscriptions.list()).find((r) => r.name === "tally");
@@ -1110,9 +1112,9 @@ expect((await itx.invoke(["itx", "counts", ["snapshot"]])).state.counts.mark).to
 // e2e/processor-facets.e2e.test.ts
 ```
 
-### `disableProcessor` is one event, and the facet goes with it
+### `processors.disable` is one event, and the facet goes with it
 
-`disableProcessor(name)` appends `subscription-configured { name, target: null }`. When that commits
+`processors.disable(name)` appends `subscription-configured { name, target: null }`. When that commits
 and the removed row HOSTED a facet, the DO deletes the facet, storage included, before the append
 returns. The raw event agrees with the verb in both directions:
 
@@ -1123,7 +1125,7 @@ await itx.append({
 }); // a hand-appended row IS the enablement
 await itx.append({ type: "events.iterate.com/stream/subscription-configured", payload: { name: "tally", target: null } });
 await expect(itx.invoke("itx.facets.get('tally').snapshot()")).rejects.toThrow(/no facet/); // NO_FACET
-await itx.enableProcessor("tally", { source: SOURCES.tally, className: "TallyDurableObject" }); // a clean rebuild from the log
+await itx.processors.enable("tally", { source: SOURCES.tally, className: "TallyDurableObject" }); // a clean rebuild from the log
 // e2e/processor-facets.e2e.test.ts
 ```
 
@@ -1139,7 +1141,7 @@ spends one token per durable non-control event, refilled from the EVENT's `creat
 replayable), and its `processEvent` trips exactly on the crossing by appending `stream/paused`:
 
 ```ts
-await itx.enableProcessor("breaker", { source: SOURCES.breaker, className: "BreakerDurableObject" });
+await itx.processors.enable("breaker", { source: SOURCES.breaker, className: "BreakerDurableObject" });
 const burst = await itx.append(...Array.from({ length: 8 }, (_, i) => ({ type: "burst", payload: { i } })));
 expect(burst).toHaveLength(8); // the burst was admitted — policy reads the REDUCE, after the commit
 const paused = await itx.waitForEvent({ type: "events.iterate.com/stream/paused", afterOffset: 0, timeoutMs: 20_000 });
@@ -1558,7 +1560,7 @@ is the same for every project.
 ### `connectToMcp`, `connectToOpenApi`, `connectToCapnweb`
 
 The built-ins record has two groups. The ROOTS are implemented against `ctx` and `env`. THE LIBRARY
-(`src/library/`) is first-party code whose ONLY dependency is `itx` — the same dotted handle a loaded
+(`src/library.ts`) is first-party code whose ONLY dependency is `itx` — the same dotted handle a loaded
 worker holds. That signature is the litmus test ("could this be written in a userspace worker?") and
 the whole layering: a library module could move to userspace unchanged, and the surface shows no
 level. Every connector does ALL its HTTP through `itx.fetch`, so secrets substitute for free and a
@@ -1591,6 +1593,27 @@ outbound fetch cannot upgrade). A loaded worker can also SERVE a capnweb API —
 `<app>--<project>.<base>/<path>`, the path arriving verbatim (`e2e/library-connectors.e2e.test.ts`,
 deployed only — the DO's egress cannot resolve a local host; the local twin dials the host's 101 with
 `newWebSocketRpcSession`, `__workers-tests__/ws-fetch-live-101.test.ts`).
+
+### `itx.run`: a script as a loaded worker's one call
+
+The fourth library verb is the smallest: `itx.run(script, { args? })` takes the TEXT of a function
+whose first parameter is `itx` — `async (itx, ...args) => { … }` — and runs it once inside a confined
+isolate. It is sugar over `itx.workers.get`: the text is spliced verbatim into the smallest
+WorkerEntrypoint (`src/library.ts` `runScriptModule` — a default class whose `run(...args)` mints
+`env.ITX.get()`, calls the script with it and the args, and disposes the scope after), then
+`workers.get({ source }).run(...args)` is called through the handle the library holds, so a rule on
+`itx.workers` applies to it like any other call. The same text is the same module, and the loader's
+content hash reuses the warm isolate across calls. The script's `itx` is THIS context — but with no
+principal: loaded code speaks for the project, never for a person, so an append inside carries no
+`source.principal`. A text that is not one function expression fails at load, in the loader's words,
+and does not poison the isolate id.
+
+```ts
+expect(await itx.run("async (itx) => itx.whoami()")).toEqual(await itx.whoami());
+expect(await itx.run("async (itx, a, b) => a + b", { args: [2, 3] })).toBe(5);
+await itx.run("async (itx) => { await itx.append({ type: 'run/hello', payload: { n: 1 } }); }");
+// e2e/workers-and-facets.e2e.test.ts
+```
 
 ### Open question: one root, or `kernel` and `lib`?
 

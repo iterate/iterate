@@ -14,8 +14,11 @@ import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream
 import { stampPrincipal, type Principal } from "../principal.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/processor.ts";
 import type { LibraryRoots } from "../library.ts";
+import { subscriptionConfiguredEvent } from "../stream/core-processor.ts";
 import { resolveContextPath } from "../iterate-context.ts";
 import {
+  assertFacetSourceWithinCeiling,
+  facetSpecOf,
   loadConfinedWorker,
   type FacetSpec,
   type WorkerCacheKey,
@@ -166,6 +169,23 @@ export interface BuiltInScope extends LibraryRoots {
   subscriptions: {
     list(): SubscriptionListEntry[];
     get(name: string): SubscriptionListEntry | null;
+  };
+  /** THE PROCESSORS LAYER — the third of the onion's three, each on the one below: `rpcStubs` (a live
+   *  value), `subscriptions` (a delivery to a target), `processors` (a subscription whose target is a
+   *  hosted facet's `processEventBatch`). `enable(name, spec)` hosts `className` (the
+   *  `StreamProcessorDurableObject` subclass `source` exports — the host whose `processor` field holds
+   *  the pure `StreamProcessor`) as the facet `name` and subscribes it to every commit: literally ONE
+   *  `subscription-configured` event whose target is `itx.builtins.facets.get(name, spec).processEventBatch`;
+   *  DURABLE, no handle — a processor outlives the session that enabled it. `disable(name)` is ONE
+   *  event, `{ name, target: null }`: the DO deletes the facet the row hosted, storage included, before
+   *  the append returns, so a re-enable is a clean rebuild from the log. `list()` is the subscriptions
+   *  that host a facet. `consumes` is the subscription's filter (absent = every durable event). A root,
+   *  so loaded code (`env.ITX.get().processors.enable(…)`) and a sibling (`itx.cd(p).processors…`) do
+   *  it through the same door as a client. */
+  processors: {
+    enable(name: string, spec: FacetSpec & { consumes?: string[] }): Promise<{ name: string }>;
+    disable(name: string): Promise<void>;
+    list(): SubscriptionListEntry[];
   };
   /** The stateless host: `get({ source, cacheKey?, className?, props? })` → a `WorkerEntrypoint` in
    *  its own confined isolate (no DO, no storage) — ANY method it exports, reached by name (`run`,
@@ -355,6 +375,35 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     rpcStubs: deps.rpcStubs,
     facets: deps.facets,
     subscriptions: deps.subscriptions,
+    processors: {
+      enable: async (name, spec) => {
+        // Refused HERE, before anything is appended: a spec names the source's host class (there are
+        // no built-in processors to name), and its literal source is under the ceiling.
+        if (typeof spec !== "object" || spec === null || typeof spec.className !== "string")
+          throw new Error(
+            `processors.enable(${JSON.stringify(name)}, { source, className, consumes? }): name the host class the source exports — there are no built-in processors to enable by name`,
+          );
+        assertFacetSourceWithinCeiling(spec, `processors.enable("${name}")`);
+        await append(
+          subscriptionConfiguredEvent({
+            name,
+            target: [
+              "itx",
+              "builtins",
+              "facets",
+              ["get", name, facetSpecOf(spec)],
+              "processEventBatch",
+            ],
+            ...(spec.consumes && { consumes: spec.consumes }),
+          }),
+        );
+        return { name };
+      },
+      disable: async (name) => {
+        await append(subscriptionConfiguredEvent({ name, target: null }));
+      },
+      list: () => deps.subscriptions.list().filter((row) => row.hostedFacet !== undefined),
+    },
     rewriteRules: deps.rewriteRules,
     // A genuine InvokeHandle so `workers.get(spec).run()` pipelines on every lane (workerd#6873). A
     // terminal `fetch(request)` is this same call: `entrypoint.fetch(request)` IS the entrypoint's

@@ -115,7 +115,7 @@ async function connectAndEnable(): Promise<any> {
   });
   const { email } = await session.whoami();
   const itx = await session.projects.create({ project: `demo-${email}` });
-  await itx.enableProcessor("presence", {
+  await itx.processors.enable("presence", {
     source: PRESENCE_PROCESSOR_SOURCE, // the modules, literally — nothing seeded anywhere first
     className: "PresenceDurableObject",
     // What is SENT: the contract above says what is reduced. `poke` is ephemeral, and an

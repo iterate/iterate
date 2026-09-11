@@ -36,9 +36,9 @@
 //      `resolve()` are the only readers that spell them out.
 //   6. THE DOOR (`rewriteRuleConfiguredEvent`): a match is rooted at `itx`; never at `itx.builtins`
 //      (the fixed point is what every call rewrites TO, never a name a row claims); never at one of
-//      the proxy's own verbs (`cd`, `invoke`, `provide`, `subscribe`, `enableProcessor`,
-//      `disableProcessor` — the dotted surface never hands those to the table, so such a row could
-//      fire from a string invoke but never from the sugar). A target is rooted at `itx`.
+//      the proxy's own verbs (`cd`, `invoke`, `provide`, `subscribe` — the dotted surface never
+//      hands those to the table, so such a row could fire from a string invoke but never from the
+//      sugar). A target is rooted at `itx`.
 //   7. `@` IS THE CALLER'S INPUT (expression.ts lexes it; targets only, final step only — the door
 //      refuses it in a match, in a non-final step, and `parse` refuses it in a call). A target whose
 //      final call step holds `@` is a TEMPLATE, and rule 4's fold does not apply to it: as a top-level
@@ -106,8 +106,10 @@ export const BUILT_IN_ROOTS = [
   "rewriteRules",
   "facets",
   "subscriptions",
+  "processors",
   "workers",
   // THE LIBRARY (library.ts): first-party verbs that take only `itx` — could be userspace
+  "run",
   "connectToMcp",
   "connectToOpenApi",
   "connectToCapnweb",
@@ -147,14 +149,7 @@ export const CONFIG_WORKER_PLATFORM_ROW = {
 } as const;
 
 /** The proxy's own verbs — a match may not start with one (rule 6). */
-const PROXY_VERBS: readonly string[] = [
-  "cd",
-  "invoke",
-  "provide",
-  "subscribe",
-  "enableProcessor",
-  "disableProcessor",
-];
+const PROXY_VERBS: readonly string[] = ["cd", "invoke", "provide", "subscribe"];
 
 /** Is `call` at the fixed point — rooted at `itx.builtins` (a NAME step; `itx.builtins(…)` is not)? */
 export function isBuiltInsRooted(call: ItxExpression): boolean {

@@ -4,7 +4,7 @@
 // (lastPokeMs — a plain field on the pure class, NOT the reduce checkpoint, gone on eviction). A
 // 'poke' ephemeral event bumps the runtime field in processEvent; the engine re-projects after the
 // batch and emits the delta itself (the reduce never touches it). Two classes: the pure
-// `PresenceProcessor`, and the one-line host `PresenceDurableObject` that `enableProcessor`'s
+// `PresenceProcessor`, and the one-line host `PresenceDurableObject` that `processors.enable`'s
 // `className` names. Proves reduced ⊕ runtime through ONE projection + ONE revision chain
 // (live-state-chains-client-side.e2e, specs/live-state-demo.spec).
 

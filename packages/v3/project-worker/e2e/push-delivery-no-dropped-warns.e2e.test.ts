@@ -87,7 +87,7 @@ test("disable mid-drive: appends survive, no ongoing error storm, re-enable rebu
   const burst = Array.from({ length: 10 }, (_, i) =>
     append(itx, { type: "burst", payload: { i } }),
   );
-  const disabled = itx.disableProcessor("tally");
+  const disabled = itx.processors.disable("tally");
   await Promise.all([...burst, disabled]); // appends must all survive the disable
   expect(await processorNames(itx)).not.toContain("tally");
 

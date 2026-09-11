@@ -368,3 +368,30 @@ test("persistent stub: stash a live itx handle in DO storage, use the restored h
   const who2 = await itx.invoke(["itx", "keeper", ["useStashed"]]);
   expect(who2?.projectId).toBe(ctx); // second load replays again
 });
+
+// ── itx.run ── THE LIBRARY's sugar over workers.get: the text of `async (itx, ...args) => …` spliced
+// into the smallest WorkerEntrypoint (library.ts `runScriptModule`) and run as its one call.
+test("itx.run(script, { args? }): the script runs in a confined isolate with THIS context's itx, args go through, the return value comes back; an append inside is the project's (no principal); a text that is not a function is refused, and the next run is unaffected", async () => {
+  const itx = openItx(freshCtx("run"));
+  const who = await itx.whoami();
+
+  // the script's `itx` IS this context: whoami agrees
+  expect(await itx.run("async (itx) => itx.whoami()")).toEqual(who);
+  // args, after itx; the return value, back over Workers RPC
+  expect(await itx.run("async (itx, a, b) => a + b", { args: [2, 3] })).toBe(5);
+  expect(await itx.run("(itx, ...rest) => rest.length")).toBe(0); // a plain arrow works too; no args = run()
+
+  // an append from inside: the event lands on this context's log, attributed to no one — loaded
+  // code speaks for the project, never for a person (ItxEntrypoint.get() mints a principal-less itx)
+  await itx.run("async (itx) => { await itx.append({ type: 'run/hello', payload: { n: 1 } }); }");
+  const hello = (await itx.readEvents(0)).events.find(
+    (event: { type: string }) => event.type === "run/hello",
+  );
+  expect(hello?.payload).toEqual({ n: 1 });
+  expect((hello?.source as { principal?: unknown } | undefined)?.principal).toBeUndefined();
+
+  // not a function expression: the module fails to load, in the loader's words — and the isolate id
+  // is not poisoned (worker-loader.ts loaderIdGenerations): a well-formed script still runs after
+  await expect(itx.run("this is not a function")).rejects.toThrow();
+  expect(await itx.run("async () => 'still fine'")).toBe("still fine");
+});

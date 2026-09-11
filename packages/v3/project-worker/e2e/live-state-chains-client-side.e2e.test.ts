@@ -117,7 +117,7 @@ test("live state chains client-side from the door — mini-app + processor flavo
   expect(chat.applied).toBe(2);
 
   // ── processor flavor: chunky's reduce, door = liveSnapshot() ──
-  await itx.enableProcessor("chunky", {
+  await itx.processors.enable("chunky", {
     source: SOURCES.chunky,
     className: "ChunkyDurableObject",
   });
@@ -157,7 +157,7 @@ test("a dynamic-worker processor's live state combines reduced (ticks) + runtime
   // front of the facet's own contract filter — hence `consumes` on the enable. The facet is
   // materialized at enable time whatever the filter says (subscription-delivery.ts), so the door
   // answers before the first consumed event.
-  await itx.enableProcessor("presence", {
+  await itx.processors.enable("presence", {
     source: SOURCES.presence,
     className: "PresenceDurableObject",
     consumes: ["tick", "poke"],

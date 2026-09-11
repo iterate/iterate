@@ -140,7 +140,7 @@ packages/v3/project-worker/
                                  projects; a project's id IS its slug), /mcp — the ONE MCP server for every
                                  project (whoami, list_projects, itx.invoke); control-plane.sql is the schema
     iterate-context.ts           IterateContext, the client-facing RpcTarget: a PROXY in front of the DO —
-                                 cd · invoke · provide · subscribe · enableProcessor · disableProcessor · mintToken · rotateApiKey;
+                                 cd · invoke · provide · subscribe · mintToken · rotateApiKey;
                                  RewriteRuleHandle / SubscriptionHandle (disposable); the DO-name codec
                                  (DurableObjectNameCodec, resolveContextPath); ItxEntrypoint (what a loaded
                                  worker's env.ITX is)
@@ -393,17 +393,9 @@ class IterateContext extends RpcTarget {
   }): Promise<SubscriptionHandle>;
 
   // ── processors: DURABLE configuration, two lines each over the subscription event ──
-  /** Host `className` (the StreamProcessorDurableObject host exported by `source`) as the facet
-   *  named `name` and subscribe its `processEventBatch`. Literally the subscription event with the
-   *  target `itx.facets.get(name, { source, className }).processEventBatch`.
-   *  No handle: a processor outlives the session that enabled it. */
-  enableProcessor(
-    name: string,
-    ref: { source: WorkerSource; className: string; consumes?: string[] },
-  ): Promise<{ name: string }>;
-  /** `subscription-configured { name, target: null }` — ONE event; the DO deletes the facet the
-   *  removed row hosted, storage included: a re-enable is a clean rebuild. */
-  disableProcessor(name: string): Promise<void>;
+  // Processors are NOT edge verbs: `itx.processors.enable(name, { source, className, consumes? })`
+  // / `.disable(name)` / `.list()` is a built-in root (context/built-ins.ts) — two appends spelled
+  // for you inside the DO, reachable by a client, loaded code and a sibling through the same door.
 
   // ── the project doors: what the session that vended this context may do FOR THE PROJECT, no DO touched ──
   /** A PROJECT TOKEN for this project as this context's principal — `ProjectTokenClaims` signed
@@ -457,8 +449,8 @@ await itx.append({
 });
 ```
 
-Processors are the exception on purpose: `enableProcessor` returns `{ name }`,
-not a handle, and `disableProcessor` is the explicit inverse.
+Processors are the exception on purpose: `processors.enable` returns `{ name }`,
+not a handle, and `processors.disable` is the explicit inverse.
 
 The stream verbs `append` / `readEvents` / `waitForEvent` and egress `fetch` are DO
 built-ins (section 4.4) reached through the hop — `itx.append({...})` and
@@ -1066,7 +1058,7 @@ export class PresenceDurableObject extends StreamProcessorDurableObject {
 ```
 
 ```ts
-await itx.enableProcessor("presence", {
+await itx.processors.enable("presence", {
   source: { "cap.js": PRESENCE_SRC },
   className: "PresenceDurableObject",
   consumes: ["tick", "poke"], // what is SENT; the contract above says what is reduced
@@ -1075,10 +1067,10 @@ await itx.append({ type: "tick" });
 await itx.facets.get("presence").snapshot(); // { offset, state: { ticks: 1 } }
 await itx.facets.get("presence").liveSnapshot(); // { rev, state: { ticks: 1, lastPokeMs: 0 } }
 await itx.subscriptions.get("presence"); // { name, target: "itx.facets.get('presence', { source: {...}, className: 'PresenceDurableObject' }).processEventBatch", ... }
-await itx.disableProcessor("presence"); // removes the subscription, deletes the facet + storage
+await itx.processors.disable("presence"); // removes the subscription, deletes the facet + storage
 ```
 
-How it is hosted: `enableProcessor` is nothing but a subscription whose target
+How it is hosted: `processors.enable` is nothing but a subscription whose target
 is `itx.facets.get(name, { source, className }).processEventBatch`.
 The DO loads your module plus `processor.js` into one isolate, takes the HOST
 class by name, and hosts it as a facet named `name` with `props: { iterateContextName, name }`.
@@ -1097,7 +1089,7 @@ for the reduce; for the effect rules (serial chain, blockers, at-head pass) buil
 Two filters, in two places: the subscription's `consumes` decides what is
 **sent** (absent means every durable event), the contract's `consumes` decides
 what the engine **reduces**. A processor that reduces ephemerals must name them on
-`enableProcessor` too, or they never reach it.
+`processors.enable` too, or they never reach it.
 
 The DO remembers `{ source, className }` for each facet name in its own kv
 (`facet:<name>`), which is how `itx.facets.get(name)` re-materializes a facet
@@ -1154,7 +1146,7 @@ export class BreakerDurableObject extends StreamProcessorDurableObject {
 ```
 
 ```ts
-await itx.enableProcessor("breaker", {
+await itx.processors.enable("breaker", {
   source: { "cap.js": BREAKER_SRC },
   className: "BreakerDurableObject",
 });
@@ -1259,7 +1251,7 @@ await itx.append({ type: "events.iterate.com/stream/resumed" });
 | Event                                                           | Payload                                             | Written by                                                                                                                                |
 | --------------------------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `events.iterate.com/itx/rewrite-rule-configured`                | `{ match, target \| null }` (both strings)          | `provide` (a live stub or an expression); `null` on dispose / session end, or by the DO when the key's last pager closes                  |
-| `events.iterate.com/stream/subscription-configured`             | `{ name, target \| null, consumes?, afterOffset? }` | `subscribe` / `enableProcessor`; `null` from `disableProcessor`, dispose, session end, or the DO when a lent callback's last pager closes |
+| `events.iterate.com/stream/subscription-configured`             | `{ name, target \| null, consumes?, afterOffset? }` | `subscribe` / `processors.enable`; `null` from `processors.disable`, dispose, session end, or the DO when a lent callback's last pager closes |
 | `events.iterate.com/secrets/changed`                            | `{ name, origin? }` / `{ name, deleted: true }`     | `itx.secrets.set` / `.delete` — the name, never the value                                                                                 |
 | `events.iterate.com/stream/subscription-delivery-halted`        | `{ name, afterOffset, attempts, error? }`           | the delivery loop, after the ladder                                                                                                       |
 | `events.iterate.com/stream/subscription-delivery-resumed`       | `{ name, afterOffset? }`                            | you, to un-halt and optionally seek                                                                                                       |
@@ -1361,11 +1353,11 @@ Small print: a subscription name is one segment, `[A-Za-z0-9_-]+` (it doubles
 as a facet name and a registry key tail); `core` is reserved. A resume's seek is
 clamped to the stream head. Every subscription made through `subscribe` is
 removed when its handle is disposed or the session ends (capnweb disposes the
-exported handle); `enableProcessor` returns no handle, so a processor's row
-stays until `disableProcessor`. The DO's
+exported handle); `processors.enable` returns no handle, so a processor's row
+stays until `processors.disable`. The DO's
 quiet clock is 60 s: an alarm that finds no delivery or facet call in flight
 and no activity for a minute aborts every live facet and returns every borrowed
-stub; the next call re-materializes them (a facet delete — `disableProcessor`'s
+stub; the next call re-materializes them (a facet delete — `processors.disable`'s
 one effect — that lands while a facet's source is loading wins: the load refuses with `NO_FACET` instead of
 resurrecting an orphan), and a context with no live facet and no borrowed stub
 arms no alarm at all. Configuring a subscription drops whatever the loop remembered under
@@ -1384,9 +1376,9 @@ any halt or backoff.
 client, but this is the skeleton everything above forwards to. `IterateContext`
 calls `invoke` (and, for a terminal fetch, `fetch`); the edge relay calls the
 rpc-stub plumbing; facets reach the context only through `env.ITX`. There are
-NO configuration verbs here: the edge's `provide` / `subscribe` /
-`enableProcessor` / `disableProcessor` build an event and call `append` through
-`invoke`.
+NO configuration verbs here: the edge's `provide` / `subscribe` build an event and
+call `append` through `invoke`; the built-in root `processors.enable` / `disable`
+appends the same events inside the DO.
 
 ```ts
 class IterateContextDurableObject extends DurableObject<Env> {

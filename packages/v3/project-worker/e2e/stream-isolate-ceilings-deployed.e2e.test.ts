@@ -296,7 +296,7 @@ deployedOnly(
     const ctx = freshCtx("degrade-fanout");
     const itx = openItx(ctx);
     for (let i = 0; i < 10; i++)
-      await itx.enableProcessor(`sink${i}`, {
+      await itx.processors.enable(`sink${i}`, {
         source: SINK_SOURCE,
         className: "SinkDurableObject",
         consumes: ["blob"],
@@ -378,14 +378,14 @@ deployedOnly(
 );
 
 deployedOnly(
-  "POISON FACET: a processor whose reduce hoards every payload outgrows the 2 MB checkpoint cell — snapshot() rejects coded REDUCE_CHECKPOINT_TOO_LARGE on EVERY call (a poison-loop facet, cleared only by disableProcessor), but the parent DO stays fully serviceable (a controlled WEDGE, never a reset)",
+  "POISON FACET: a processor whose reduce hoards every payload outgrows the 2 MB checkpoint cell — snapshot() rejects coded REDUCE_CHECKPOINT_TOO_LARGE on EVERY call (a poison-loop facet, cleared only by processors.disable), but the parent DO stays fully serviceable (a controlled WEDGE, never a reset)",
   { timeout: 300_000 },
   async () => {
     const ctx = freshCtx("degrade-poison");
     const itx = openItx(ctx);
     for (let n = 0; n < 16; n++)
       await append(itx, { type: "blob", payload: { n, blob: blob(4 * MiB) } });
-    await itx.enableProcessor("hoarder", {
+    await itx.processors.enable("hoarder", {
       source: HOARDER_SOURCE,
       className: "HoarderDurableObject",
       consumes: ["blob"],

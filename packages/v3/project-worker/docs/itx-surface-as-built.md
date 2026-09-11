@@ -37,7 +37,8 @@ flowchart LR
   canonical match, written by one event. "A call starting with `match` runs as the same call with
   `match` replaced by `target`."
 - **Everything else is an event.** The DO has `append` and no configuration verbs. The edge's
-  verbs (`provide`, `subscribe`, `enableProcessor`, `disableProcessor`) build an event and append it.
+  verbs (`provide`, `subscribe`) build an event and append it; the built-in root
+  `itx.processors.enable` / `disable` does the same inside the DO (section 5).
 - **The DO is the parent** of: the stream, the core reduce (inline at commit), the one delivery
   loop, the facets (loaded DurableObject classes), the rpc-stub directory, the fetch door.
 - **Two hosts for loaded code, one door each:** `itx.workers.get(spec)` (stateless) and
@@ -85,12 +86,12 @@ await itx.subscribe({ name: "mirror", target: "itx.cd('/archive').append" }); //
 await itx.append({ type: "events.iterate.com/chat/message", payload: { text: "hi" } });
 
 // ── 5. processors: a subscription whose target is a facet's processEventBatch ──
-await itx.enableProcessor("presence", {
+await itx.processors.enable("presence", {
   source: { "cap.js": PRESENCE_SOURCE },
   className: "PresenceDurableObject",
 });
 await itx.facets.get("presence").snapshot();
-await itx.disableProcessor("presence"); // ONE event; the facet goes with it
+await itx.processors.disable("presence"); // ONE event; the facet goes with it
 
 // the durable spelling of any verb is its raw event (no handle, outlives the session)
 await itx.append({
@@ -153,8 +154,6 @@ reader of the file sees the whole surface, and `env.ITX.get().append(…)` typec
 | `invoke(call: ItxExpressionInput, ...args)`                                                          | `Promise<unknown>`                | THE door (live args fold into a name-final call BEFORE the rules). `durableObject.invoke(expression)`. One fork: a terminal `fetch(Request)` rides `durableObject.fetch` with the expression in `x-itx-expression`.                                                                                                                                                            |
 | `provide(match, target: ClientRpcStub \| ItxExpressionInput \| null)`                                | `RewriteRuleHandle`               | THE ONE FRONT DOOR: make `match` mean `target`. A live stub is lent to the DO through a pager owned here (DON'T-PIN) under the key = the canonical match; the rule `match ⇒ itx.builtins.rpcStubs.get('<match>')` RIDES the pager upgrade and the DO appends it as it accepts the pager (one round trip); an expression is the rule alone, appended from here; `null` un-sets. |
 | `subscribe({ name?, target: ItxExpressionInput \| ClientRpcStub \| null, consumes?, afterOffset? })` | `SubscriptionHandle` (has `name`) | A live target is lent under the key `subscription:<name>`, its row (target `itx.builtins.rpcStubs.get('subscription:<name>')`) riding the same pager upgrade; an expression target is `append(subscriptionConfiguredEvent(…))` from here. `afterOffset` is where the cursor lane starts (0 = the whole log; absent = from now); a push target ignores it.                      |
-| `enableProcessor(name, { source, className, consumes? })`                                            | `{ name }`                        | `append(subscriptionConfiguredEvent)` with target `itx.builtins.facets.get(name, { source, className }).processEventBatch`. DURABLE, no handle.                                                                                                                                                                                                                                |
-| `disableProcessor(name)`                                                                             | `void`                            | ONE append: `{ name, target: null }`. The DO deletes the facet the row hosted before the append returns (section 9).                                                                                                                                                                                                                                                           |
 | `mintToken({ ttlSeconds? })` | `Promise<string>` | A PROJECT TOKEN for this project as this context's principal — `ProjectTokenClaims` signed with `APP_CONFIG_PROJECT_TOKEN_SECRET` (`signClaims`), 15 minutes by default, 24 hours at most. No DO touched. The door is a member's, the admin's, or the project-secret session's for its own project (then the actor is `project:<projectId>`); a project-token session's handle (a delegation) and a handle no session vended (a loaded worker's `env.ITX`) are `FORBIDDEN`. |
 | `rotateApiKey()` | `Promise<string>` | The project's API KEY, minted fresh (32 random bytes, base64url) and answered ONCE: only its SHA-256 hash is stored, in `SECRETS_KV` under `project-api-key:<projectId>` (`rotateProjectApiKey`), so a reveal IS a rotation and the previous key stops verifying at once; a project has no key until the first call. No DO touched; the same door as `mintToken`'s; the key is the project's, so a `cd` child rotates the same one. |
 
@@ -254,7 +253,9 @@ own append, a lent stub's rule, a processor's row are all `itx.builtins.…`, so
 | `rewriteRules`                                        | `.list() → { match, target, origin }[]` (the EFFECTIVE table: context rows, masks as `target: null`, and the platform rows, `origin: "platform" \| "context"`) · `.get(match)` · `.resolve(call) → string[]` (the pure chain; `invoke(call) ≡ invoke(resolve(call).at(-1))`) | core state + the platform rows                                    |
 | `facets`                                              | `.get(name) → FacetHandle` (a RUNNING facet) · `.get(name, { source, cacheKey?, className })` (load and host it) — no delete: a facet leaves with the row that hosted it (section 9) | `ctx.facets`; mirrors `ctx.facets.get(name, startupCallback)`     |
 | `subscriptions`                                       | `.list() → SubscriptionListEntry[]` · `.get(name)` | core state ⋈ the loop's cursors                                   |
+| `processors`                                          | `.enable(name, { source, className, consumes? }) → { name }` — ONE `subscription-configured` event whose target is `itx.builtins.facets.get(name, spec).processEventBatch`; DURABLE, no handle · `.disable(name)` — ONE event `{ name, target: null }`; the DO deletes the facet the row hosted before the append returns · `.list()` — the subscriptions that host a facet. The third layer of the onion: `rpcStubs` → `subscriptions` → `processors`. | the stream (two appends) ⋈ `subscriptions.list()`                 |
 | `workers`                                             | `.get({ source, cacheKey?, className?, props? }) → InvokeHandle`, a stateless WorkerEntrypoint; any exported method                                                                                                                                                                                                                                                                                       | Worker Loader; the stateless twin of `facets.get`                 |
+| `run(script, { args? })`                              | THE LIBRARY: the text of `async (itx, ...args) => …` as a loaded worker's one call — spliced into the smallest WorkerEntrypoint (`run(...args)` hands it `env.ITX.get()` and disposes it after) and run through `itx.workers.get({ source }).run(...args)`; the same text is the same module, so the loader's content hash reuses the isolate | `src/library.ts`, over `itx.workers` only                        |
 | `connectToMcp(url, { headers? })`                     | THE LIBRARY: an MCP server over Streamable HTTP → `McpConnection`: `.callTool(name, args)` `.listTools()` `.tools()` `.close()` + one method per tool                                                                                                                                                                                                                                                     | `src/library.ts`, over `itx.fetch` only                       |
 | `connectToOpenApi(specOrUrl, { baseUrl?, headers? })` | THE LIBRARY: an OpenAPI 3 service → `OpenApiConnection`: `.call(operationId, input)` `.operations()` + one method per `operationId` (one input object: path, query, header, body fields)                                                                                                                                                                                                                  | `src/library.ts`, over `itx.fetch` only                   |
 | `connectToCapnweb(url, { headers?, transport? })`     | THE LIBRARY: a remote capnweb API's main object as a pipelinable handle — a WebSocket session through egress, or `{ transport: "batch" }` = one POST per chain                                                                                                                                                                                                                                            | `src/library.ts`, over `itx.fetch` only                   |
@@ -369,7 +370,7 @@ ONE file: the rules, the one event, the resolver. Every rule is a row in its tab
    is a built-in is the IMPLICIT PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>`, applied and done;
    anything else is `NO_ITX_EXPRESSION_MATCH` (default-deny). 32 rewrites is the budget.
 6. THE DOOR: a match is rooted at `itx`, never at `itx.builtins`, never at a proxy verb (`cd`,
-   `invoke`, `provide`, `subscribe`, `enableProcessor`, `disableProcessor`); a target is rooted at `itx`.
+   `invoke`, `provide`, `subscribe`); a target is rooted at `itx`.
 7. `@` IS THE CALLER'S INPUT. A target whose final call step holds `@` is a TEMPLATE, and rule 4's
    fold does not apply to it. As a top-level argument `@` is the unpinned argument list, SPLICED:
    `itx.fable ⇒ itx.ai.run('@cf/…', @)` makes `itx.fable(inputs, opts)` run
@@ -490,7 +491,7 @@ Nothing is declared on the event. The brand is minted where the built-in mints t
 
 **The one effect of a removal.** When `subscription-configured { name, target: null }` commits
 and the removed row's target HOSTED a facet (a target that RESOLVES to
-`itx.builtins.facets.get(name, spec)…` — the platform's spelling from `enableProcessor`, or a user's
+`itx.builtins.facets.get(name, spec)…` — the platform's spelling from `processors.enable`, or a user's
 short one), the DO deletes that facet, storage included, before the
 append returns (`#deleteFacetsWhoseHostingSubscriptionWasRemoved`). A row that only ADDRESSED a
 running facet (`itx.facets.get(name)…`, no spec) deletes nothing. So the raw event is the disablement.
@@ -527,7 +528,7 @@ initializer is one line over the scope:
 | a rule for a live stub       | `provide(match, stub)`                  | the stub's last pager closes (the DO un-sets it)                                                                                            |
 | a rule for an expression     | `provide(match, expression)`            | handle disposed, or the session ends (the handle appends the removal spelling `itx.builtins.<match…>`, only while the row is still its own) |
 | a subscription (expression)  | `subscribe`                             | same as above                                                                                                                               |
-| a processor                  | `enableProcessor`                       | its `null` event (verb or raw), which also deletes the facet it hosted                                                                      |
+| a processor                  | `itx.processors.enable`                 | its `null` event (`processors.disable`, or raw), which also deletes the facet it hosted                                                     |
 | anything spelled as an event | `itx.append(event)`                     | its `null` event                                                                                                                            |
 
 **Fetch** (`src/context/rpc-stubs.ts`, parked). A fetch-shaped capability is
@@ -898,6 +899,17 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
   `library-mcp-server` e2e and the per-project `mcp--<p>.<base>` mount — is DELETED, and with it
   the email-mode red pin (an anonymous `tools/call` on the mount): there is no unauthenticated MCP
   door left. Proof: `__workers-tests__/control-plane.test.ts`, the `/mcp` rows.
+
+### Decided on 2026-09-11, done (the processors root and `itx.run`)
+
+- `enableProcessor` / `disableProcessor` are no longer edge verbs: `itx.processors.enable(name, spec)`
+  / `.disable(name)` / `.list()` is a built-in root (section 5), two appends spelled for you inside the
+  DO — so loaded code and a sibling (`itx.cd(p).processors…`) reach them through the same door as a
+  client, and the onion's three layers are three roots: `rpcStubs` → `subscriptions` → `processors`.
+  The proxy-verb list (rule 6) is `cd`, `invoke`, `provide`, `subscribe`.
+- `itx.run(script, { args? })` joins THE LIBRARY: the text of `async (itx, ...args) => …` as a loaded
+  worker's one call, sugar over `itx.workers.get({ source }).run(...args)` (`src/library.ts`,
+  `runScriptModule` is the template). The library's `itx` widened to `fetch` + `workers`.
 
 ### Open
 

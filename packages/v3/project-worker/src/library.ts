@@ -1,6 +1,7 @@
 // library.ts — THE LIBRARY: the built-ins that could be userspace, ONE file the boundary test reads
-// whole. Four concepts:
+// whole. Five concepts:
 //   the library — `buildLibrary` (the memoized roots) + the rule, and the two refusal helpers
+//   run         — `itx.run(script, { args? })`: the text of `async (itx, ...args) => …` as a loaded worker's one call
 //   capnweb     — `itx.connectToCapnweb(url)`: a remote capnweb API as a pipelinable handle
 //   mcp         — `itx.connectToMcp(url)`: an MCP client over Streamable HTTP
 //   openapi     — `itx.connectToOpenApi(spec)`: an OpenAPI 3 service as an RpcTarget of operationIds
@@ -26,7 +27,8 @@ import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/e
 // from the stream, the DO or the context folder, except context/expression.ts — the codec and the
 // pipelinable handle).
 //
-// The verbs: `connectToMcp` · `connectToOpenApi` · `connectToCapnweb`. The three connectors each
+// The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb`. `run` is sugar over
+// `itx.workers.get` (the run section). The three connectors each
 // return a connection RpcTarget a caller can hold across calls, and each does ALL its HTTP through
 // `itx.fetch` (egress: `getSecret("/secrets/NAME")` placeholders in headers substitute for free; a user
 // rule shadowing `itx.fetch` redirects the library too, which is how a test fakes a remote). The
@@ -44,13 +46,23 @@ import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/e
 // reopens itself on its next use (the mcp and capnweb sections), so a memoized one is never dead.
 
 /** What a library module is handed: the itx handle (the record's own dotted surface), narrowed to
- *  what the library uses today — `fetch`, the connectors' HTTP. Widen it HERE when a module needs
- *  more of itx — never by importing something else. */
-export type LibraryItx = Pick<BuiltInScope, "fetch">;
+ *  what the library uses today — `fetch`, the connectors' HTTP, and `workers`, the host `run` loads
+ *  into. Widen it HERE when a module needs more of itx — never by importing something else. */
+export type LibraryItx = Pick<BuiltInScope, "fetch" | "workers">;
+
+/** `itx.run`'s options: `args`, handed to the script after `itx`. */
+export type RunOptions = { args?: unknown[] };
 
 /** The library's roots, exactly as the built-ins record spreads them in: each verb closed over ONE
  *  `itx`. `BuiltInScope` (context/built-ins.ts) extends this, so the typed surface has them once. */
 export interface LibraryRoots {
+  /** A script — the text of `async (itx, ...args) => { … }` — run ONCE in a confined isolate as a
+   *  loaded worker's one call: the text is wrapped in a WorkerEntrypoint whose `run` hands the script
+   *  `env.ITX.get()` (this context, as `workers.get` hosts it) and `options.args`, and returns what
+   *  the script returns (over Workers RPC, so JSON-serializable). Sugar over
+   *  `itx.workers.get({ source }).run(...args)`: the same text is the same module, so the loader's
+   *  content hash reuses the warm isolate across calls. */
+  run(script: string, options?: RunOptions): Promise<unknown>;
   /** An MCP server over Streamable HTTP: `callTool(name, args)`, `listTools()`, and one method per
    *  tool whose name is a legal identifier. */
   connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnection>;
@@ -88,6 +100,7 @@ export function buildLibrary(itx: LibraryItx): {
   };
   return {
     roots: {
+      run: (script, options) => runScript(itx, script, options),
       connectToMcp: (url, options) =>
         memoized(["mcp", url, options], () => connectToMcp(itx, url, options)),
       connectToOpenApi: (specOrUrl, options) =>
@@ -110,6 +123,55 @@ export function buildLibrary(itx: LibraryItx): {
       liveConnections.clear();
     },
   };
+}
+
+// ── run ── `itx.run(script, { args? })`: a script as a loaded worker's one call. The script is the
+// text of a function taking `itx` first — `async (itx, a, b) => …` — spliced VERBATIM into the
+// template below (a caller's own code in its own confined isolate: the trusted-client doctrine), so a
+// text that is not one function expression fails at load, in the loader's words. The template is the
+// smallest WorkerEntrypoint that hosts it: `run(...args)` mints the itx scope for the call and
+// disposes it after, as the SDK's ConfigWorker does. The call rides `itx.workers.get(...).run(...)`
+// on the handle the library holds, so a rule on `itx.workers` applies to it like any other call.
+
+/** The module `run` loads: `script` spliced in as `const script = (…)`. Exported for the unit pin. */
+export function runScriptModule(script: string): { "cap.js": string } {
+  return {
+    "cap.js": [
+      'import { WorkerEntrypoint } from "cloudflare:workers";',
+      `const script = (${script});`,
+      "export default class extends WorkerEntrypoint {",
+      "  async run(...args) {",
+      "    const itx = this.env.ITX.get();",
+      "    try {",
+      "      return await script(itx, ...args);",
+      "    } finally {",
+      "      itx[Symbol.dispose]?.();",
+      "    }",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  };
+}
+
+export function runScript(
+  itx: LibraryItx,
+  script: string,
+  options: RunOptions = {},
+): Promise<unknown> {
+  if (typeof script !== "string" || !script.trim())
+    throw new Error(
+      "itx.run(script, { args? }): script is the text of a function, `async (itx, ...args) => { … }`",
+    );
+  // TWO dotted calls, never one chain: the handle's dotted surface dispatches at the first call, and
+  // in-process the record hands the worker's handle back as a VALUE (a genuine RpcTarget), so `run`
+  // is its own dispatch on that value — exactly what a remote holder of the same handle would do.
+  return (async () => {
+    const worker = (await itx.workers.get({ source: runScriptModule(script) })) as unknown as {
+      run(...args: unknown[]): Promise<unknown>;
+    };
+    return worker.run(...(options.args ?? []));
+  })();
 }
 
 // ── what the three connectors share ──

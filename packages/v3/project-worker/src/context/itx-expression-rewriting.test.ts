@@ -509,13 +509,11 @@ describe("rewriteRuleConfiguredEvent — ONE event, both halves canonical, loud 
       throws: /may not be rooted at "itx\.builtins"/,
     },
     { match: "itx", target: "itx.cam", throws: /whole-context override .* "itx\.builtins/ }, // a short target would be its own next match
-    ...["cd", "invoke", "provide", "subscribe", "enableProcessor", "disableProcessor"].map(
-      (verb) => ({
-        match: `itx.${verb}`,
-        target: "itx.kv",
-        throws: new RegExp(`may not start with the proxy's own verb "${verb}"`),
-      }),
-    ),
+    ...["cd", "invoke", "provide", "subscribe"].map((verb) => ({
+      match: `itx.${verb}`,
+      target: "itx.kv",
+      throws: new RegExp(`may not start with the proxy's own verb "${verb}"`),
+    })),
     { match: "itx.cd('/x')", target: "itx.kv", throws: /proxy's own verb "cd"/ },
     { match: "itx.a(@)", target: "itx.kv", throws: /legal only in a rewrite rule's target/ }, // rule 7: never in a match…
     { match: ["itx", ["a", { "@": true }]], target: "itx.kv", throws: /not its match/ }, // …in either half

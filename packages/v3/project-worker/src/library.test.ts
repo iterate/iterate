@@ -13,6 +13,8 @@ import {
   connectToMcp,
   type McpConnection,
   connectToOpenApi,
+  runScript,
+  runScriptModule,
 } from "./library.ts";
 
 // ── the library ── the memo `buildLibrary` keeps over the three verbs: a connect with the same
@@ -178,6 +180,65 @@ describe("the library", () => {
 // (capnweb's own `newHttpBatchRpcResponse`), so a real capnweb round trip runs with no network: the
 // handle's dotted sugar, an explicit invoke, and a pipelined chain in one batch. The WebSocket
 // transport needs workerd's WebSocketPair and is proved in e2e.
+
+// ── run ── `itx.run(script, { args? })` over a fake `itx.workers.get`: the module the loader would get
+// (the script spliced verbatim, the smallest WorkerEntrypoint around it), the args handed through, the
+// same text ⇒ the same module (the loader's content hash reuses the isolate), a blank script refused.
+
+describe("run", () => {
+  function host(): { itx: LibraryItx; loaded: unknown[]; ran: unknown[][] } {
+    const loaded: unknown[] = [];
+    const ran: unknown[][] = [];
+    const itx = {
+      fetch: async () => new Response(null),
+      workers: {
+        get: (spec: unknown) => {
+          loaded.push(spec);
+          return {
+            run: async (...args: unknown[]) => {
+              ran.push(args);
+              return { ran: args };
+            },
+          };
+        },
+      },
+    } as unknown as LibraryItx;
+    return { itx, loaded, ran };
+  }
+
+  test("the module: the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it env.ITX.get() and disposes it", () => {
+    const module = runScriptModule("async (itx, a) => (await itx.whoami()).path + a");
+    expect(module["cap.js"]).toContain('import { WorkerEntrypoint } from "cloudflare:workers"');
+    expect(module["cap.js"]).toContain(
+      "const script = (async (itx, a) => (await itx.whoami()).path + a);",
+    );
+    expect(module["cap.js"]).toContain("export default class extends WorkerEntrypoint");
+    expect(module["cap.js"]).toContain("const itx = this.env.ITX.get();");
+    expect(module["cap.js"]).toContain("return await script(itx, ...args);");
+    expect(module["cap.js"]).toContain("itx[Symbol.dispose]?.();");
+  });
+
+  test("run(script, { args }) loads that module through itx.workers.get and calls run(...args); no args = run()", async () => {
+    const { itx, loaded, ran } = host();
+    const { roots } = buildLibrary(itx);
+    await expect(roots.run("async (itx, a, b) => a + b", { args: [2, 3] })).resolves.toEqual({
+      ran: [2, 3],
+    });
+    await expect(roots.run("async (itx) => 1")).resolves.toEqual({ ran: [] });
+    expect(loaded).toEqual([
+      { source: runScriptModule("async (itx, a, b) => a + b") },
+      { source: runScriptModule("async (itx) => 1") },
+    ]);
+    expect(ran).toEqual([[2, 3], []]);
+  });
+
+  test("the same text is the same module (byte-equal: the loader's content hash keys ONE isolate); a blank script is refused before any load", async () => {
+    expect(runScriptModule("async (itx) => 1")).toEqual(runScriptModule("async (itx) => 1"));
+    const { itx, loaded } = host();
+    expect(() => runScript(itx, "   ")).toThrow(/itx\.run\(script/);
+    expect(loaded).toEqual([]);
+  });
+});
 
 describe("capnweb", () => {
   class Counter extends RpcTarget {
