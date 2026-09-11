@@ -273,10 +273,14 @@ function BrowserDatabaseProjectStreamView({
           autoFocusMessage={autoFocusMessageComposer}
           defaultComposerMode={defaultComposerMode}
           interrupt={interrupt}
-          messageComposer={messageComposer}
-          agentSource={agentSource}
-          agentLiveState={streamData.agentLiveState}
-          runtimeChange={presentedFeed?.runtimeChange}
+          messageComposer={
+            messageComposer && {
+              ...messageComposer,
+              acknowledgedThroughOffset:
+                streamData.inputAcknowledgedThroughOffset ??
+                messageComposer.acknowledgedThroughOffset,
+            }
+          }
           onNudgeDeliveries={nudgeDeliveries}
           presence={presence}
           store={store}
@@ -404,10 +408,6 @@ function ProjectStreamFeed({
 
 /** Keeps cached-connection feedback and queued input attached to the composer. */
 function StreamComposerFooter({
-  agentSource,
-  agentLiveState,
-  runtimeChange,
-  messageComposer,
   agentFeed,
   agentUiState,
   defaultComposerMode,
@@ -416,9 +416,6 @@ function StreamComposerFooter({
   connectionError,
   ...composer
 }: Omit<ComponentProps<typeof StreamViewComposer>, "defaultMode"> & {
-  agentSource: ProjectStreamViewProps["agentSource"];
-  agentLiveState: ReturnType<typeof useProjectStreamData>["agentLiveState"];
-  runtimeChange: FeedLiveState["runtimeChange"];
   agentFeed: boolean;
   agentUiState: FeedLiveState["agent"] | null;
   defaultComposerMode: ProjectStreamViewProps["defaultComposerMode"];
@@ -457,46 +454,10 @@ function StreamComposerFooter({
             isInterrupting={composer.interrupt?.isInterrupting ?? false}
             onInterrupt={composer.disabled ? undefined : composer.interrupt?.run}
           />
-          <AcknowledgedStreamComposer
-            defaultMode={defaultMode}
-            {...composer}
-            messageComposer={messageComposer}
-            agentSource={agentSource}
-            agentLiveState={agentLiveState}
-            runtimeChange={runtimeChange}
-          />
+          <StreamViewComposer defaultMode={defaultMode} {...composer} />
         </div>
       </div>
     </div>
-  );
-}
-
-/** Releases a submitted message only after its resulting runtime is presented. */
-function AcknowledgedStreamComposer({
-  agentSource,
-  agentLiveState,
-  runtimeChange,
-  messageComposer,
-  ...composer
-}: ComponentProps<typeof StreamViewComposer> & {
-  agentSource: ProjectStreamViewProps["agentSource"];
-  agentLiveState: ReturnType<typeof useProjectStreamData>["agentLiveState"];
-  runtimeChange: FeedLiveState["runtimeChange"];
-}) {
-  // Do not release the submitted message until its resulting runtime is on screen.
-  const acknowledgedThroughOffset = Math.min(
-    agentLiveState?.inputAcknowledgedThroughOffset ?? 0,
-    runtimeChange?.sinceOffset ?? 0,
-  );
-  return (
-    <StreamViewComposer
-      {...composer}
-      messageComposer={
-        messageComposer && agentSource
-          ? { ...messageComposer, acknowledgedThroughOffset }
-          : messageComposer
-      }
-    />
   );
 }
 
@@ -618,6 +579,13 @@ function useProjectStreamData({
   const agentRuntime = isAgentRuntimeVisiblyActive(feedRuntime)
     ? feedRuntime
     : (agentLiveState?.runtimeChange?.runtime ?? feedRuntime);
+  // Release the submitted message only once its resulting runtime is on screen.
+  const inputAcknowledgedThroughOffset = agentSource
+    ? Math.min(
+        agentLiveState?.inputAcknowledgedThroughOffset ?? 0,
+        presentedFeed?.runtimeChange?.sinceOffset ?? 0,
+      )
+    : undefined;
   // Readers need actual shared history, not merely a pending writer election.
   // Both roles wait for the current live snapshot's publications to reach SQLite.
   const streamTransportReady =
@@ -629,7 +597,7 @@ function useProjectStreamData({
     resolvedStreamSource,
     ...browserStore,
     eventCount,
-    agentLiveState,
+    inputAcknowledgedThroughOffset,
     agentRuntime,
     feed,
     presentedFeed,
