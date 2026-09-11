@@ -10,7 +10,7 @@
 import { beforeAll, describe, expect, test } from "vitest";
 import { adminCredentials, applyDirectorySchema, openSession, until } from "./support.ts";
 import { AccountProcessor, tokenCreateRequestedEvent } from "../src/account/contract.ts";
-import { ACCOUNT_PROCESSOR_SOURCE } from "../src/account/account-processor-source.ts";
+import { ACCOUNT_PROCESSOR_SOURCE } from "../src/generated/account-processor-source.ts";
 
 beforeAll(applyDirectorySchema);
 

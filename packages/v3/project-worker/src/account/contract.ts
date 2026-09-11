@@ -3,9 +3,9 @@
 // A user's account context (global, /users/<id>) records authentication and credential-lifecycle
 // FACTS and accepts account COMMANDS; the AccountProcessor folds them into the account VIEW a client
 // reads through live state — the SAME StreamProcessor kernel every project processor uses, no new
-// framework. This module is the SPEC (the event builders and the tested pure reducer); the hosted
-// copy that actually runs in a facet is account-processor-source.ts, which mirrors `reduce` (a loaded
-// worker cannot import from src). No D1: the foundation processor only reduces its own stream, so it
+// framework. This module is the SPEC (the event builders and the tested pure reducer); the copy that
+// runs in a facet is NOT hand-kept — build-sdk.mjs bundles the `AccountProcessor` here (via its host
+// ./account-facet.ts) into the loaded `cap.js`, so there is one source. No D1: the foundation processor only reduces its own stream, so it
 // runs as an ordinary processor; the privileged ctx.exports variant (worker env, D1/OAuth) is only
 // for the later token-workflow EFFECTS, and is deferred.
 import { z } from "zod";
@@ -72,7 +72,7 @@ export type AccountView = z.infer<typeof AccountView>;
 
 /** The events the AccountProcessor consumes, as a discriminated union — the `Event` param that
  *  narrows `reduce`'s `event.payload` per `event.type` (no cast). Keep in step with the contract's
- *  `consumes` and with the hosted mirror in account-processor-source.ts. */
+ *  `consumes`. */
 type AccountEvent =
   | (StreamEvent & { type: "events.iterate.com/account/authenticated"; payload: AuthenticationFact })
   | (StreamEvent & {

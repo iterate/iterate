@@ -8,7 +8,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, type FormEvent } from "react";
 import { useLiveState } from "../../client/react.tsx";
-import { ACCOUNT_PROCESSOR_SOURCE } from "../../account/account-processor-source.ts";
+import { ACCOUNT_PROCESSOR_SOURCE } from "../../generated/account-processor-source.ts";
 import { tokenCreateRequestedEvent, type AccountView } from "../../account/contract.ts";
 
 export const Route = createFileRoute("/_auth/account")({
