@@ -24,12 +24,6 @@ const MintInput = z.object({
   name: z.string().trim().min(1).max(100),
   projects: z.array(z.string()).min(1),
 });
-type Activity = {
-  grant_id: string;
-  last_used_at: number | null;
-  revoked_at: number | null;
-  cleanup_pending: number;
-};
 
 /** Account capabilities are consented independently of project access. */
 export class Grants extends RpcTarget {
@@ -63,6 +57,12 @@ export class Grants extends RpcTarget {
     const env = this.#env;
     const session = this.#account();
     const page = await oauthHelpers(env).listUserGrants(session.sub, { limit: 50, cursor });
+    type Activity = {
+      grant_id: string;
+      last_used_at: number | null;
+      revoked_at: number | null;
+      cleanup_pending: number;
+    };
     const activity =
       await env.DB.prepare(`SELECT grant_id, last_used_at, revoked_at, cleanup_pending
 FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "?").join(",") || "NULL"}) OR cleanup_pending = 1)`)

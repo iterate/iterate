@@ -141,13 +141,17 @@ ORDER BY o.name ASC;`,
         );
       const id = projectSlug(name);
       if (!id) throw new Error("project name is empty or invalid");
-      const org = orgId
-        ? reach === "every"
-          ? await db.prepare("SELECT id, name FROM orgs WHERE id = ?").bind(orgId).first<Org>()
-          : (await d1Directory.listOrgs(reach.userId)).find((org) => org.id === orgId)
-        : reach === "every"
-          ? await d1Directory.adminOrg()
-          : await d1Directory.ensureOrg(reach.userId);
+      let org: Org | null | undefined;
+      if (orgId)
+        org =
+          reach === "every"
+            ? await db.prepare("SELECT id, name FROM orgs WHERE id = ?").bind(orgId).first<Org>()
+            : (await d1Directory.listOrgs(reach.userId)).find((entry) => entry.id === orgId);
+      else
+        org =
+          reach === "every"
+            ? await d1Directory.adminOrg()
+            : await d1Directory.ensureOrg(reach.userId);
       if (!org) throw codedError("FORBIDDEN", "You cannot create a project in that organization.");
       await db
         .prepare(

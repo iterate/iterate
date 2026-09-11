@@ -105,8 +105,7 @@ export function projectScopedArtifacts(
 
 // ── `itx.repos` — one file at a time, over git-wire ──
 
-const BRANCH = "main";
-const REF = `refs/heads/${BRANCH}`;
+const REF = "refs/heads/main";
 const ZERO_OID = "0".repeat(40);
 const TOKEN_TTL_SECONDS = 300;
 const AUTHOR = { email: "config@iterate.com", name: "iterate" };

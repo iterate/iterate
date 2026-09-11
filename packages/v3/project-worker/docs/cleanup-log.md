@@ -5,6 +5,22 @@ aligning to apps/os conventions. Each round: obvious style/TS → just fix; obvi
 just do; obvious bug → failing test + fix; bug needing a larger refactor → expected-fail test that
 pins it + a note here; API/abstraction/concept questions → research + note here for discussion.
 
+## Owner directives shaping this pass (tabula rasa — no backwards compatibility)
+
+- Events + built-in capabilities must be **fully type-safe**; `as` casts and `any` are a smell that
+  means it's done wrong. No compat shims — prd is resettable.
+- No event-builder helpers: write events literally (`itx.append({ type, payload, idempotencyKey })`)
+  so the type string and payload are always visible; `itx.append(...)` is the verb (not the
+  `invoke(["itx",["append",…]])` spelling).
+- `defineProcessorContract` follows apps/os (events map with payload schemas, `processorDeps`,
+  contract-bound `buildEvent`, derived `ConsumedEvent`/`ProcessorState`), minus any gross bits.
+- No single-use / extremely-thin helpers or indirection constants — inline them.
+- One documented **types-and-schemas** file (kept at `./types`) is the surface to read AND to import
+  from the frontend: the RPC hierarchy (IterateRpcTarget → SessionRpcTarget → IterateContextRpcTarget),
+  auth (SessionCredentials/Principal/ProjectTokenClaims), routing (project-host resolution), domain
+  (Project/Org/User/Reach), core event types, and the processor contracts — with prose + code examples.
+- Fewer files: consolidate small, related ones.
+
 ## Round 1 — codex astra (gpt-6-astra, xhigh) + subagents
 
 ### Done this round

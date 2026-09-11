@@ -67,10 +67,6 @@ const loadStartServerEntry = (): Promise<ServerEntry> =>
     (module) => module.default,
   ));
 
-/** A 302 to `location`, with `headers` (a Set-Cookie). */
-const redirectResponse = (location: string, headers: Record<string, string> = {}): Response =>
-  new Response(null, { status: 302, headers: { location, ...headers } });
-
 /** Issuer forms work before hydration. App actions use Cap’n Web. */
 async function consoleDoor(request: Request, env: Env): Promise<Response | null> {
   if (request.method !== "POST") return null;
@@ -83,7 +79,10 @@ async function consoleDoor(request: Request, env: Env): Promise<Response | null>
         email: String(form.get("email") ?? ""),
         next: String(form.get("next") ?? "/"),
       });
-      return redirectResponse(location, { "set-cookie": setCookie });
+      return new Response(null, {
+        status: 302,
+        headers: { location, "set-cookie": setCookie },
+      });
     } catch (error) {
       const code = errorCode(error);
       if (!["UNAUTHENTICATED", "INVALID_INPUT"].includes(code ?? "")) throw error;
