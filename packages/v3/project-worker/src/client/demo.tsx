@@ -7,17 +7,17 @@
 
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { newWebSocketRpcSession } from "capnweb";
+import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import { z } from "zod";
 import { PRESENCE_PROCESSOR_SOURCE } from "../generated/presence-processor-source.ts";
-import type { IterateRpcTarget } from "../types.ts";
+import type { IterateContextRpcTarget, IterateRpcTarget } from "../types.ts";
 import { useLiveState } from "./react.tsx";
 
 /** Dial /api with the console's login cookie (it rode the handshake; the visitor signed in at `/`)
  *  and open the visitor's own demo project — `demo-<email>`, created in their org on first visit.
- *  The return type is INFERRED: over the wire an `IterateContextRpcTarget` is a capnweb stub (a
- *  structural proxy), not the concrete class, so we let its stub type flow rather than annotate it. */
-async function connectAndEnable() {
+ *  Over the wire an `IterateContextRpcTarget` arrives as a capnweb `RpcStub<…>` (the pass-by-reference
+ *  proxy of its public methods), which is what `newWebSocketRpcSession<T>` and an awaited call yield. */
+async function connectAndEnable(): Promise<RpcStub<IterateContextRpcTarget>> {
   const url = new URL("/api", location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   // The public root is the IterateRpcTarget; capnweb pipelines, so the returned session is usable at once.
@@ -36,12 +36,9 @@ async function connectAndEnable() {
   return itx;
 }
 
-/** The connected project itx as the wire hands it back — a capnweb stub of `IterateContextRpcTarget`. */
-type DemoItx = Awaited<ReturnType<typeof connectAndEnable>>;
-
 // oxlint-disable-next-line react/only-export-components -- entry-point bundle: Demo is rendered below, never imported, so fast refresh doesn't apply
 function Demo() {
-  const [itx, setItx] = useState<DemoItx>();
+  const [itx, setItx] = useState<RpcStub<IterateContextRpcTarget>>();
   const [connectError, setConnectError] = useState<string>();
   useEffect(() => {
     let disposed = false;

@@ -21,12 +21,19 @@
 // `session.projects.get(id)` both return an `IterateContextRpcTarget`. `cd(path)` reaches a sibling
 // context in the same namespace; the itx verbs (`append`, `kv`, …) act on the context you hold.
 //
-//   import { newWebSocketRpcSession } from "capnweb";
-//   import type { IterateRpcTarget } from "project-worker/types";
+// ON THE WIRE THESE ARE CAPNWEB STUBS, never the concrete classes. `newWebSocketRpcSession<T>` returns
+// an `RpcStub<T>`; a method call returns an `RpcPromise` you can either `await` OR pipeline (call
+// straight through without awaiting — `session.projects.get(id).append(...)` is one round trip); and
+// awaiting a call that returns one of these targets resolves to an `RpcStub<…>` of it. The stub
+// exposes exactly the class's public methods, fully typed from `T` — so annotate a held handle as
+// `RpcStub<IterateContextRpcTarget>`, not the class (the class carries private fields a stub lacks).
 //
-//   const iterate = newWebSocketRpcSession<IterateRpcTarget>("wss://os.iterate2.com/api");
-//   const session = iterate.authenticate({ type: "from-server-cookie" }); // → SessionRpcTarget
-//   const project = await session.projects.get("prj_123");                // → IterateContextRpcTarget
+//   import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+//   import type { IterateRpcTarget, IterateContextRpcTarget } from "project-worker/types";
+//
+//   const iterate = newWebSocketRpcSession<IterateRpcTarget>("wss://os.iterate2.com/api"); // RpcStub<IterateRpcTarget>
+//   const session = iterate.authenticate({ type: "from-server-cookie" });   // RpcPromise<SessionRpcTarget>, pipelinable
+//   const project: RpcStub<IterateContextRpcTarget> = await session.projects.get("prj_123");
 //   await project.append({ type: "events.iterate.com/ping", payload: {} });
 //   const { events } = await project.readEvents();
 // ─────────────────────────────────────────────────────────────────────────────
