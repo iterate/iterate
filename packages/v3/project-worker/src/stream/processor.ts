@@ -67,11 +67,11 @@ export type ProcessorStream = {
  *  of these (each `after` === the previous `through`) is how a subscriber proves it missed nothing. */
 export type ScannedRange = { after: number; through: number };
 
-export type ReduceArgs<State> = { event: StreamEvent; state: State };
+export type ReduceArgs<State, Event = StreamEvent> = { event: Event; state: State };
 
-export type ProcessEventArgs<State> = {
+export type ProcessEventArgs<State, Event = StreamEvent> = {
   /** The consumed event — or `null` for the eventless at-head pass. */
-  event: StreamEvent | null;
+  event: Event | null;
   state: State;
   previousState: State;
   /** Emit (validated against `emits`, provenance-stamped) onto this processor's own stream. */
@@ -105,16 +105,19 @@ const reducesEvent = (consumes: readonly string[], event: { type: string; epheme
 /** THE AUTHOR CLASS: a contract, three hooks and one helper. Deps an effect needs arrive through
  *  the subclass's own constructor, as for any class. One instance lives as long as its host; a field
  *  on it is RUNTIME state (gone with the host), which `projectLiveState` may reduce into the live view. */
-export abstract class StreamProcessor<State> {
+export abstract class StreamProcessor<State, Event extends StreamEvent = StreamEvent> {
   abstract readonly contract: ProcessorContract<State>;
 
-  /** Pure reduce. Return the NEXT state (a new object) — or null/undefined to keep the current. */
-  reduce(_args: ReduceArgs<State>): State | null | undefined {
+  /** Pure reduce. Return the NEXT state (a new object) — or null/undefined to keep the current. The
+   *  `Event` type param — a discriminated union of the events the contract consumes — narrows
+   *  `event.payload` per `event.type` inside the body, so no cast is needed; it defaults to the
+   *  untyped `StreamEvent` for processors that don't declare one. */
+  reduce(_args: ReduceArgs<State, Event>): State | null | undefined {
     return undefined;
   }
 
   /** Side-effect hook. Synchronous by design: register async work via the two helpers on args. */
-  processEvent(_args: ProcessEventArgs<State>): undefined {}
+  processEvent(_args: ProcessEventArgs<State, Event>): undefined {}
 
   /** The live-state PROJECTION — the shape clients see and the diffs are computed over. DEFAULT: the
    *  reduced state verbatim, so every processor is live out of the box; that is deliberate — the

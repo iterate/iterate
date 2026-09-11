@@ -9,7 +9,8 @@
 // and whoever wired the fix deletes the `.fails`. See docs/control-plane-context-resolved-design.md.
 import { beforeAll, describe, expect, test } from "vitest";
 import { adminCredentials, applyDirectorySchema, openSession, until } from "./support.ts";
-import { ACCOUNT_AUTHENTICATED, AccountProcessor } from "../src/account/contract.ts";
+import { AccountProcessor, tokenCreateRequestedEvent } from "../src/account/contract.ts";
+import { ACCOUNT_PROCESSOR_SOURCE } from "../src/account/account-processor-source.ts";
 
 beforeAll(applyDirectorySchema);
 
@@ -82,11 +83,14 @@ describe("account — foundation shape (passing)", () => {
   test("AccountProcessor folds authentication facts into the account view (kernel reducer)", () => {
     const processor = new AccountProcessor();
     const initial = processor.contract.initialState();
-    const fact = (credential: string, operationId: string) => ({
-      event: { type: ACCOUNT_AUTHENTICATED, payload: { credential, at: 1, operationId } } as never,
+    const authenticated = (credential: string, operationId: string) => ({
+      event: {
+        type: "events.iterate.com/account/authenticated" as const,
+        payload: { credential, at: 1, operationId },
+      } as never,
     });
-    const one = processor.reduce({ ...fact("from-server-cookie", "op1"), state: initial }) ?? initial;
-    const two = processor.reduce({ ...fact("admin-secret", "op2"), state: one }) ?? one;
+    const one = processor.reduce({ ...authenticated("from-server-cookie", "op1"), state: initial }) ?? initial;
+    const two = processor.reduce({ ...authenticated("admin-secret", "op2"), state: one }) ?? one;
     expect(two.authentications.map((a) => a.operationId)).toEqual(["op1", "op2"]);
     // An unrelated event leaves the view unchanged.
     expect(processor.reduce({ event: { type: "note" } as never, state: two })).toBeUndefined();
@@ -97,9 +101,37 @@ describe("account — foundation shape (passing)", () => {
     // Publication is best-effort/async (waitUntil), so poll the user's own log until it lands.
     const fact = await until("account/authenticated fact", async () => {
       const page = (await s.user.invoke(["itx", ["readEvents"]])) as { events: { type: string }[] };
-      return page.events.find((event) => event.type === ACCOUNT_AUTHENTICATED);
+      return page.events.find(
+        (event) => event.type === "events.iterate.com/account/authenticated",
+      );
     });
-    expect(fact.type).toBe(ACCOUNT_AUTHENTICATED);
+    expect(fact.type).toBe("events.iterate.com/account/authenticated");
+  });
+
+  test("session.user hosts the account processor: a token-create command appears in its live view", async () => {
+    const s = await userSession("acct-live@sec.test");
+    await s.user.processors.enable("account", {
+      source: ACCOUNT_PROCESSOR_SOURCE,
+      className: "AccountDurableObject",
+      consumes: [
+        "events.iterate.com/account/authenticated",
+        "events.iterate.com/account/token-create-requested",
+      ],
+    });
+    await s.user.invoke([
+      "itx",
+      ["append", tokenCreateRequestedEvent({ requestId: "req-1", name: "CI token" })],
+    ]);
+    // The facet reduces the command into its live view — the exact snapshot `useLiveState`'s door reads.
+    const view = await until("account view has the token", async () => {
+      const snapshot = (await s.user.invoke("itx.facets.get('account').liveSnapshot()")) as {
+        state?: { tokens: { name: string }[] };
+      };
+      return snapshot.state?.tokens.some((token) => token.name === "CI token")
+        ? snapshot.state
+        : undefined;
+    });
+    expect(view.tokens.map((token) => token.name)).toContain("CI token");
   });
 });
 
