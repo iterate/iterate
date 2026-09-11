@@ -5,7 +5,7 @@ import { authorizationOf, recordGrantUse, oauthAddresses, providerOptions } from
 import { rpcResponse } from "./rpc.ts";
 import { mcpResponse } from "./mcp.ts";
 
-export const protectedApi: Handler = {
+const protectedApi: Handler = {
   async fetch(request, env, ctx) {
     const authorization = await authorizationOf(env, ctx.props);
     if (!authorization)

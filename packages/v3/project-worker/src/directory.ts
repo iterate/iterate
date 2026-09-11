@@ -27,7 +27,7 @@ export interface Project {
 
 /** Slugify as @iterate-com/shared/slug normalizes (lowercase, non-alphanumeric → dash, trimmed). A
  *  PROJECT has no minted id — its slug IS its id; an org has no slug at all. */
-export const projectSlug = (name: string) =>
+const projectSlug = (name: string) =>
   name
     .trim()
     .toLowerCase()

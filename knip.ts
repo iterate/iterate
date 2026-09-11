@@ -211,6 +211,9 @@ function makeProjectWorkerWorkspace(): WorkspaceConfig {
       "src/worker.ts!",
       "src/sdk/index.ts",
       "src/client/**/*.{ts,tsx}",
+      // build-sdk.mjs bundles this facet entry (the account processor DO host) into
+      // src/generated; like src/client/presence-processor.ts it is reached only through the build.
+      "src/account/account-facet.ts",
       "build-sdk.mjs",
       "vitest.config.ts",
       "vitest.global-setup.ts",

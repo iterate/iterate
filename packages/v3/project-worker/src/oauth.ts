@@ -85,7 +85,7 @@ export async function parseAuthorization(env: Env, request: Request): Promise<Au
   return { ...auth, scope: scopes.data, resource: resources };
 }
 
-export async function grantIsRevoked(env: Env, userId: string, grantId: string): Promise<boolean> {
+async function grantIsRevoked(env: Env, userId: string, grantId: string): Promise<boolean> {
   const row = await env.DB.prepare(
     "SELECT revoked_at FROM oauth_activity WHERE user_id = ? AND grant_id = ?",
   )
