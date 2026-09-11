@@ -4729,3 +4729,38 @@ tutorial's chapter 0), and kernel-vs-library namespacing (an open question in ch
   DEPLOYED by this entry: the deploy pipeline is now the peer's (`tsx scripts/deploy.ts`, uncommitted
   root `envs.ts`, a Doppler project), aimed at iterate2 origins — deploying it is their call; the POC
   worker still serves 53b6620b (this morning's console fix), whose `/api` the current tree no longer has.
+
+## 2026-09-11 — HEAD to green, and the first prd deployment (os.iterate2.com)
+
+- JONAS: "fix those things for the peer … then make a deployment. Tell me how to play around with it."
+  The peer (codex) had stopped. THE FOUR REDS, all the unified-auth restructuring's own tests lagging
+  its code, none in files this session's itx.run/processors work touched:
+  1–3. `/api` is now bearer-gated and the unauthenticated operator capnweb door moved to `/internal/rpc`
+  (worker.ts, rpc.ts). The three tests that self-dial the worker's own capnweb API with `.authenticate()`
+  — library-connectors self-dial, workers-and-facets remote-capnweb (`props.url`), the push-delivery
+  victim socket — now dial `/internal/rpc`. 4. The "deleted routes" pin expected 404 on `/expression`
+  `/call` `/ws` `/cap`; the platform host now gates every non-issuer path behind browser auth
+  (src/sdk/auth.ts `auth.require`), so an unauthenticated GET is a 302 to `/.auth/login` — a plain
+  `fetch` FOLLOWED it to the 200 login page (the observed 200). Rewritten to assert that redirect with
+  `redirect: "manual"` and that none upgrades. Diagnosed against a local worker built from HEAD (the
+  routes really answer 302→/.auth/login); the four then passed (27 passed / 2 xfail / 4 skipped).
+- THE DEPLOY is the peer's pipeline, unchanged: `doppler run --project project-worker --config prd --
+  pnpm run deploy --env prd` (`scripts/deploy.ts` → `deployApp` over `envs.ts`). Doppler carries the
+  prd Cloudflare token and the `APP_CONFIG_*` secrets; the `prd` env is the only one now (the old poc
+  workers.dev is gone from envs.ts). It built, applied `control-plane.sql` to the prd D1 through the CF
+  API (the `prepare` hook), deployed with atomic secrets, and smoked. `APP_CONFIG_TEST_EMAIL_LOGIN` is
+  "true" in prd, so the console's email sign-in verifies nothing.
+- LIVE: worker `project-worker-prd`, version **c462dd10-ff92-4aec-914a-b0f077226a64**, serving
+  `https://os.iterate2.com` (the console + Cap'n Web `/api`), `https://mcp.iterate2.com` (the MCP
+  server), project hosts `*.iterate2.app`. SMOKES green: `/version` 200, `/.well-known/oauth-authorization-server`
+  200, MCP `/` 401 (WWW-Authenticate: Bearer, resource_metadata at mcp.iterate2.com), `/api` 401.
+  END-TO-END proven by hand: `POST /login` with any email sets `__Host-itx-session` and 302s to `/`;
+  `GET /` with the cookie is the account page (200). The `/projects` no-JS door is gone in the peer's
+  console — project creation is the browser server function (or the itx API). Deployed e2e against
+  os.iterate2.com: 20/22 files, 184 passed / 4 xfail / 2 skipped with PROJECT_HOSTNAME_BASE=iterate2.app +
+  MCP_BASE_URL=https://mcp.iterate2.com — the two remaining reds are the KNOWN Cloudflare DO-storage-reset
+  flake at scale (`kv list 1001 keys`, `stream-isolate-ceilings`; "storage operation exceeded timeout", a
+  platform reset under load, tail-measured before — not a regression). PROVEN IN A REAL BROWSER: sign in
+  with any email → account page (an org auto-created) → create `demo-playground` → open its
+  `demo-playground.iterate2.app` host (TLS + the `/.itx/session` token accepted; the config worker's
+  default 404 for a project with no website yet). The console is fully usable.
