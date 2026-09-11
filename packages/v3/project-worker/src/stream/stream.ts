@@ -798,10 +798,12 @@ class StreamStorage {
 export interface ReachableContext {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   read(afterOffset?: number, limit?: number): Promise<StreamPage>;
-  invoke(call: ItxExpressionInput): Promise<unknown>;
-  /** `invoke` under a principal — what a caller's `cd(path)` carries across to a sibling. */
-  invokeAs(
-    principal: { actor: string; email?: string },
+  /** THE dispatch door. `caller` (WHO is calling) is what a `cd(path)` hop carries across to a
+   *  sibling — the same identity, so a sibling append is attributed too; `args` are the expression's
+   *  positional args. Both optional, so a bare `invoke(call)` is an anonymous probe. */
+  invoke(
     call: ItxExpressionInput,
+    args?: unknown[],
+    caller?: { principal: { actor: string; email?: string } | null; scopes?: string[] },
   ): Promise<unknown>;
 }

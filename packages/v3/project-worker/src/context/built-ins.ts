@@ -11,7 +11,7 @@
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
-import { stampPrincipal, type Principal } from "../principal.ts";
+import { stampPrincipal, type Caller } from "../principal.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/processor.ts";
 import type { LibraryRoots } from "../library.ts";
 import { subscriptionConfiguredEvent } from "../stream/core-processor.ts";
@@ -248,9 +248,10 @@ interface BuildBuiltInsDeps {
   context: (path: string) => ReachableContext;
   /** The context's egress terminal (secret substitution → `fetch`). */
   egress: (request: Request) => Promise<Response>;
-  /** WHO is calling right now — the principal the DO runs this call under (`invokeAs`, the fetch
-   *  lane's header), null for an anonymous session, a processor, a loaded worker. */
-  principal: () => Principal | null;
+  /** WHO is calling right now — the `Caller` the DO runs this call under (the fetch lane's header,
+   *  or the edge's stamp), `{ principal: null }` for an anonymous session, a processor, a loaded
+   *  worker. Carried across sibling `cd` hops; the path-mask that reads it is not yet enforced. */
+  caller: () => Caller;
   /** The rpcStubs view — closures over the DO's transport table (the pager sockets can never move). */
   rpcStubs: BuiltInScope["rpcStubs"];
   subscriptions: BuiltInScope["subscriptions"];
@@ -286,7 +287,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   /** THE append: every event appended through this scope carries WHO appended it — the DO's own
    *  stamp, never a client's (src/principal.ts): the session's verified principal, or none. */
   const append = (...events: StreamEventInput[]) =>
-    ownContext().append(...events.map((event) => stampPrincipal(event, deps.principal())));
+    ownContext().append(...events.map((event) => stampPrincipal(event, deps.caller().principal)));
   /** Secrets are the PROJECT's: the value's key is project-scoped, so the catalog lives in ONE log —
    *  the root context's. Each `secrets` verb runs `here` on the root context, and on a child context
    *  runs as the same call on the root, over the DO hop. */
@@ -366,10 +367,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     cd: (contextPath: string) =>
       new InvokeHandle((itxExpressionSteps) => {
         const context = deps.context(resolveContextPath(path, contextPath)); // a ReachableContext
-        const principal = deps.principal();
-        return principal
-          ? context.invokeAs(principal, ["itx", ...itxExpressionSteps])
-          : context.invoke(["itx", ...itxExpressionSteps]);
+        // The caller crosses with the call: the sibling runs it under the same Caller, so an event
+        // appended there is attributed too. (No path-mask check here yet — carried, not enforced.)
+        return context.invoke(["itx", ...itxExpressionSteps], [], deps.caller());
       }),
     fetch: (request: Request) => deps.egress(request),
     rpcStubs: deps.rpcStubs,

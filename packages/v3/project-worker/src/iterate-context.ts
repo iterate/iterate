@@ -142,11 +142,9 @@ export class IterateContextRpcTarget extends RpcTarget {
 
   /** Dispatch on the DO under this context's principal — the one place the edge chooses the door. */
   #invokeOnDurableObject(itxExpression: ItxExpression, args: unknown[] = []): Promise<unknown> {
-    return (
-      this.#principal
-        ? this.#durableObject.invokeAs(this.#principal, itxExpression, ...args)
-        : this.#durableObject.invoke(itxExpression, ...args)
-    ) as Promise<unknown>;
+    return this.#durableObject.invoke(itxExpression, args, {
+      principal: this.#principal,
+    }) as Promise<unknown>;
   }
 
   /** Another context of THIS project. Absolute by convention (`cd("/agents/support")`); relative

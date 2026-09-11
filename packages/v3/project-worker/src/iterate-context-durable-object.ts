@@ -69,7 +69,7 @@ import {
   type ItxExpressionRewriteRule,
   BUILT_IN_ROOTS,
 } from "./context/itx-expression-rewriting.ts";
-import { ITX_PRINCIPAL_HEADER, stampPrincipal, type Principal } from "./principal.ts";
+import { ITX_PRINCIPAL_HEADER, stampPrincipal, type Caller, type Principal } from "./principal.ts";
 import {
   buildBuiltIns,
   type RewriteRuleListEntry,
@@ -396,7 +396,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             }),
           ),
     egress: (request) => this.#egress(request),
-    principal: () => this.#principalStorage.getStore() ?? null,
+    caller: () => this.#callerStorage.getStore() ?? { principal: null },
     // `get(key)` is a GENUINE RpcTarget so `itx.rpcStubs.get('k').hello()` pipelines the mid-chain
     // `.hello()` on every lane (workerd's classifier rejects a Proxy, #6873), branded RpcStubHandle
     // for the delivery loop.
@@ -777,23 +777,22 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  dotted STRING never could (callbacks, Dates, bytes: `["itx","tools",["transform",21,cb]]`);
    *  `args`, when given, are LIVE args applied to the value the expression denotes
    *  (`invoke("itx.kv.get", "k")` ≡ `itx.kv.get("k")`; the fetch lane's Request is the same door). */
-  async invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown> {
+  /** THE ONE DISPATCH DOOR. `caller` is WHO is calling (and, later, what they may reach) — carried
+   *  for the whole call so every append it makes stamps `source.principal`, and threaded across each
+   *  sibling `cd` hop. A DO-only Workers-RPC verb (never capnweb-exposed), so a client cannot forge
+   *  the caller. `args`/`caller` default, so a bare `invoke(call)` is an anonymous probe. NOTE: the
+   *  path-mask authority that would READ `caller` to allow/refuse the call is not yet enforced (its
+   *  requirements are the control-plane security spec's expected-fails). */
+  async invoke(
+    call: ItxExpressionInput,
+    args: unknown[] = [],
+    caller: Caller = { principal: null },
+  ): Promise<unknown> {
     this.#notePublicDoor();
     this.#recordActivityForQuietClock();
-    return this.#itxExpressionResolver.invoke(call, ...args);
+    return this.#callerStorage.run(caller, () => this.#itxExpressionResolver.invoke(call, ...args));
   }
-
-  /** WHO IS CALLING, for the duration of one call: every append the call makes carries
-   *  `source.principal`. A DO-only Workers-RPC verb — a loaded worker's `env.ITX` has no such door —
-   *  so the stamp is the platform's and a client cannot forge it. */
-  async invokeAs(
-    principal: Principal,
-    call: ItxExpressionInput,
-    ...args: unknown[]
-  ): Promise<unknown> {
-    return this.#principalStorage.run(principal, () => this.invoke(call, ...args));
-  }
-  readonly #principalStorage = new AsyncLocalStorage<Principal>();
+  readonly #callerStorage = new AsyncLocalStorage<Caller>();
 
   // ── native fetch: the rpc-stub pager door, the fetch lane, egress ──
 
@@ -835,7 +834,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         const forwarded = new Request(request, { headers });
         const invoke = () =>
           this.#itxExpressionResolver.invoke(itxExpressionEndingInFetch(itxExpression), forwarded);
-        const result = await (principal ? this.#principalStorage.run(principal, invoke) : invoke());
+        const result = await this.#callerStorage.run({ principal }, invoke);
         return result instanceof Response
           ? result
           : new Response(`fetch lane: ${JSON.stringify(result)}\n`);

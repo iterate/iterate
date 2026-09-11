@@ -105,7 +105,7 @@ function buildServer(env: Env, authorization: Authorization): McpServer {
         // `env.ITX` is the project (principal-less: loaded code speaks for the project, library.ts).
         const value = await env.ITERATE_CONTEXT.getByName(
           DurableObjectNameCodec.stringify({ projectId, path: "/" }),
-        ).invokeAs(principal, ["itx", ["run", toolArguments.script]]);
+        ).invoke(["itx", ["run", toolArguments.script]], [], { principal });
         // THE JSON BOUNDARY: a round trip drops what JSON cannot carry and throws on what it refuses.
         const json = JSON.stringify(value) ?? "null";
         return {
