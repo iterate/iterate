@@ -16,7 +16,7 @@ import { describeReach, type Directory, type Project, type Reach } from "./direc
 import type { AppConfig } from "./app-config.ts";
 import { codedError } from "./lib.ts";
 import { verifyAdminSecret, type Principal } from "./principal.ts";
-import { authenticatedEvent } from "./account/contract.ts";
+import type { AuthenticationFact } from "./account/contract.ts";
 
 /** One DNS-safe name — the directory row, the DO name, the host label; in this deployment a project's
  *  id IS its slug. */
@@ -131,11 +131,12 @@ export class IterateRpcTarget extends RpcTarget {
       projectId: GLOBAL_PROJECT_ID,
       path: `/users/${principal.actor}`,
     });
-    const fact = authenticatedEvent({
-      credential,
-      at: Date.now(),
-      operationId: crypto.randomUUID(),
-    });
+    const operationId = crypto.randomUUID();
+    const fact = {
+      type: "events.iterate.com/account/authenticated",
+      payload: { credential, at: Date.now(), operationId } satisfies AuthenticationFact,
+      idempotencyKey: `authenticated/${operationId}`,
+    };
     this.#input.waitUntil(
       (
         this.#input.contextNamespace

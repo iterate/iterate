@@ -8,11 +8,7 @@
 // passes; when enforcement lands the assertion passes, the expected-fail turns into a real failure,
 // and whoever wired the fix deletes the `.fails`. See docs/control-plane-context-resolved-design.md.
 import { beforeAll, describe, expect, test } from "vitest";
-import {
-  AccountProcessor,
-  tokenCreateRequestedEvent,
-  tokenRevokedEvent,
-} from "../src/account/contract.ts";
+import { AccountProcessor } from "../src/account/contract.ts";
 import { ACCOUNT_PROCESSOR_SOURCE } from "../src/generated/account-processor-source.ts";
 import { adminCredentials, applyDirectorySchema, openSession, until } from "./support.ts";
 
@@ -125,13 +121,11 @@ describe("account — foundation shape (passing)", () => {
       s.user.invoke("itx.facets.get('account').liveSnapshot()") as Promise<{
         state?: { tokens: { requestId: string; name: string; value: string }[] };
       }>;
-    await s.user.invoke([
-      "itx",
-      [
-        "append",
-        tokenCreateRequestedEvent({ requestId: "req-1", name: "CI token", value: "tok_ci" }),
-      ],
-    ]);
+    await s.user.append({
+      type: "events.iterate.com/account/token-create-requested",
+      payload: { requestId: "req-1", name: "CI token", value: "tok_ci", requestedAt: Date.now() },
+      idempotencyKey: "token-create/req-1",
+    });
     // The facet reduces the command into its live view — the exact snapshot `useLiveState`'s door reads.
     const created = await until("account view has the token", async () => {
       const snapshot = await readTokens();
@@ -143,7 +137,11 @@ describe("account — foundation shape (passing)", () => {
     expect(created.tokens.find((token) => token.name === "CI token")?.value).toBe("tok_ci");
 
     // Revoke is a single command; the token leaves the live view.
-    await s.user.invoke(["itx", ["append", tokenRevokedEvent({ requestId: "req-1" })]]);
+    await s.user.append({
+      type: "events.iterate.com/account/token-revoked",
+      payload: { requestId: "req-1" },
+      idempotencyKey: "token-revoke/req-1",
+    });
     const revoked = await until("account view drops the revoked token", async () => {
       const snapshot = await readTokens();
       return snapshot.state && !snapshot.state.tokens.some((token) => token.requestId === "req-1")

@@ -10,7 +10,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { useLiveState } from "../../client/react.tsx";
 import { useItx } from "../-itx.tsx";
 import { ACCOUNT_PROCESSOR_SOURCE } from "../../generated/account-processor-source.ts";
-import { tokenCreateRequestedEvent, type AccountView } from "../../account/contract.ts";
+import type { AccountView } from "../../account/contract.ts";
 
 export const Route = createFileRoute("/_auth/account")({
   // Host the account processor on the user's own context before the page reads its live view. The
@@ -47,17 +47,17 @@ function AccountLivePage() {
     setName("");
     setFailure(undefined);
     try {
-      await userItx.invoke([
-        "itx",
-        [
-          "append",
-          tokenCreateRequestedEvent({
-            requestId: crypto.randomUUID(),
-            name: requested,
-            value: `tok_${crypto.randomUUID().replace(/-/g, "")}`,
-          }),
-        ],
-      ]);
+      const requestId = crypto.randomUUID();
+      await userItx.append({
+        type: "events.iterate.com/account/token-create-requested",
+        payload: {
+          requestId,
+          name: requested,
+          value: `tok_${crypto.randomUUID().replace(/-/g, "")}`,
+          requestedAt: Date.now(),
+        },
+        idempotencyKey: `token-create/${requestId}`,
+      });
     } catch (e) {
       setFailure(e instanceof Error ? e.message : String(e));
     }

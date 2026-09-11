@@ -3,11 +3,7 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useItx } from "../-itx.tsx";
 import { useLiveState } from "../../client/react.tsx";
 import { ACCOUNT_PROCESSOR_SOURCE } from "../../generated/account-processor-source.ts";
-import {
-  tokenCreateRequestedEvent,
-  tokenRevokedEvent,
-  type AccountView,
-} from "../../account/contract.ts";
+import type { AccountView } from "../../account/contract.ts";
 
 export const Route = createFileRoute("/_auth/sessions")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -53,18 +49,18 @@ function SessionsPage() {
     setTokenName("");
     setError(null);
     try {
-      await userItx.invoke([
-        "itx",
-        [
-          "append",
-          tokenCreateRequestedEvent({
-            requestId: crypto.randomUUID(),
-            name,
-            // INSECURE-FIRST: a readable token value (a client-generated string for now).
-            value: `tok_${crypto.randomUUID().replace(/-/g, "")}`,
-          }),
-        ],
-      ]);
+      const requestId = crypto.randomUUID();
+      await userItx.append({
+        type: "events.iterate.com/account/token-create-requested",
+        payload: {
+          requestId,
+          name,
+          // INSECURE-FIRST: a readable token value (a client-generated string for now).
+          value: `tok_${crypto.randomUUID().replace(/-/g, "")}`,
+          requestedAt: Date.now(),
+        },
+        idempotencyKey: `token-create/${requestId}`,
+      });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
@@ -72,7 +68,11 @@ function SessionsPage() {
   const revokeToken = async (requestId: string) => {
     setError(null);
     try {
-      await userItx.invoke(["itx", ["append", tokenRevokedEvent({ requestId })]]);
+      await userItx.append({
+        type: "events.iterate.com/account/token-revoked",
+        payload: { requestId },
+        idempotencyKey: `token-revoke/${requestId}`,
+      });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }

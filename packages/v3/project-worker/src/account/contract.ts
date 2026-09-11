@@ -3,76 +3,48 @@
 // A user's account context (global, /users/<id>) records authentication and credential-lifecycle
 // FACTS and accepts account COMMANDS; the AccountProcessor folds them into the account VIEW a client
 // reads through live state — the SAME StreamProcessor kernel every project processor uses, no new
-// framework. This module is the SPEC (the event builders and the tested pure reducer); the copy that
-// runs in a facet is NOT hand-kept — build-sdk.mjs bundles the `AccountProcessor` here (via its host
-// ./account-facet.ts) into the loaded `cap.js`, so there is one source. No D1: the foundation processor only reduces its own stream, so it
-// runs as an ordinary processor; the privileged ctx.exports variant (worker env, D1/OAuth) is only
-// for the later token-workflow EFFECTS, and is deferred.
+// framework. This module is the SPEC (the event payload types and the tested pure reducer); the copy
+// that runs in a facet is NOT hand-kept — build-sdk.mjs bundles the `AccountProcessor` here (via its
+// host ./account-facet.ts) into the loaded `cap.js`, so there is one source. Events are written out
+// at their call sites (`itx.append({ type, payload, idempotencyKey })`) — the type string and payload
+// are always visible, no builder helpers. No D1: the foundation processor only reduces its own stream,
+// so it runs as an ordinary processor; the privileged ctx.exports variant (worker env, D1/OAuth) is
+// only for the later token-workflow EFFECTS, and is deferred.
 import { z } from "zod";
 import {
   defineProcessorContract,
   StreamProcessor,
   type ReduceArgs,
   type StreamEvent,
-  type StreamEventInput,
 } from "../stream/processor.ts";
 
-// ── facts (platform-published) ──
+// ── the event payloads (facts the platform publishes, commands a client submits) ──
 
-/** A successful authentication, recorded on the user's account context. Carries NO credential
- *  material — only which KIND of credential, when, and a stable operation id (for dedup on retry). */
+/** Payload of `events.iterate.com/account/authenticated` (a platform-published FACT, idempotency key
+ *  `authenticated/<operationId>`). Carries NO credential material — only which KIND of credential,
+ *  when, and a stable operation id (dedup on retry). Once the append type-gate is enforced a client
+ *  cannot forge this `events.iterate.com/**` type (a control-plane security-spec expected-fail today). */
 export type AuthenticationFact = {
   credential: "from-server-cookie" | "admin-secret";
   at: number;
   operationId: string;
 };
 
-/** The durable authentication fact, as an appendable event. The PLATFORM publishes it; once the
- *  append type-gate is enforced a client cannot forge this `events.iterate.com/**` type (today that
- *  refusal is one of the control-plane security spec's expected-fails). Idempotent on the operation
- *  id, so a retried publication of the SAME authentication never double-counts. */
-export function authenticatedEvent(fact: AuthenticationFact): StreamEventInput {
-  return {
-    type: "events.iterate.com/account/authenticated",
-    payload: fact,
-    idempotencyKey: `authenticated/${fact.operationId}`,
-  };
-}
-
-// ── commands (client-submitted) ──
-
-/** A request to create a personal token — a client COMMAND (not a fact): the client may append it,
- *  and the processor records it in the view immediately. INSECURE-FIRST: the token `value` is carried
- *  and stored READABLE (a client-generated string for now — a real minting EFFECT that stores only a
- *  hash follows with the security work). Enough to prove the live path: create it and it appears. */
+/** Payload of `events.iterate.com/account/token-create-requested` (a client COMMAND, idempotency key
+ *  `token-create/<requestId>`): the client appends it and the processor records it immediately.
+ *  INSECURE-FIRST — `value` is stored READABLE (a client string for now; a real minting EFFECT that
+ *  stores only a hash follows with the security work). */
 export type TokenCreateRequest = {
   requestId: string;
   name: string;
   value: string;
   requestedAt: number;
 };
-export function tokenCreateRequestedEvent(request: {
-  requestId: string;
-  name: string;
-  value: string;
-}): StreamEventInput {
-  return {
-    type: "events.iterate.com/account/token-create-requested",
-    payload: { ...request, requestedAt: Date.now() } satisfies TokenCreateRequest,
-    idempotencyKey: `token-create/${request.requestId}`,
-  };
-}
 
-/** Revoke a token — a client COMMAND. The processor drops it from the view immediately. (The real
- *  credential invalidation is the same deferred EFFECT as minting; for now this is the live view.) */
+/** Payload of `events.iterate.com/account/token-revoked` (a client COMMAND, idempotency key
+ *  `token-revoke/<requestId>`); the processor drops the token from the view. (Real credential
+ *  invalidation is the same deferred EFFECT as minting.) */
 export type TokenRevoke = { requestId: string };
-export function tokenRevokedEvent(request: { requestId: string }): StreamEventInput {
-  return {
-    type: "events.iterate.com/account/token-revoked",
-    payload: request satisfies TokenRevoke,
-    idempotencyKey: `token-revoke/${request.requestId}`,
-  };
-}
 
 // ── the view + reducer ──
 
