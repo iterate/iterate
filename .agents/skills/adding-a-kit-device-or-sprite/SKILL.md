@@ -47,7 +47,7 @@ The table carries the hardware facts and nothing else:
 
 | Field                                         | What it is                                                                                                       | Satellite1                            |
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `facts`                                       | the loop's `iterate_kit_board_facts`: stream/client paths, prose, `turns`, `radio_before_codec`                  | open mic, `/agents/voice/satellite1`  |
+| `facts`                                       | one `device_name`, fixed local `hold_to_talk`, and capture/playout timing                                        | `satellite1`, hands-free              |
 | `i2c`                                         | sda/scl/hz; board.c opens the bus                                                                                | 5/6 @ 400 kHz                         |
 | `boot[]`                                      | GPIO steps in order: rails, reset pulses, boot waits                                                             | `{4, 0, 0}` (XMOS runs)               |
 | `scripts[]`                                   | I2C register scripts, `BEFORE_I2S` or `AFTER_I2S`, with a settle                                                 | empty (its chips have drivers)        |
@@ -65,9 +65,12 @@ Three things are code because no table can say them:
 - `set_volume`: for a chip with no plain register (TAS2780's DVC map).
 - `extra`: a full `iterate_kit_board_ops` for what only this board has (a face,
   servos, a camera, a half-duplex fence, a dial, side buttons). board.c runs its
-  own half of every op first, then `extra`'s. `extra->poll` handles board-only
-  UI; `read_gestures` supplies normalized call input when `button.gpio == -1`.
+  shared half of each op and then the board extension. `extra->poll` runs first
+  so physical mute is known before wake/gesture handling; `read_gestures` supplies normalized call input when `button.gpio == -1`.
   The shared board poll owns grammar, intent, and chime ordering for every board.
+  Hands-free activation uses the debounced button-down edge, never release.
+  Capture retains 500 ms of processed pre-roll and must open before networking
+  or a chime can delay the user’s first words. Test the actual board flags.
   Set `play_sound` only for a dedicated hardware sound path.
 
 Everything below the table is shared and must not be re-implemented:

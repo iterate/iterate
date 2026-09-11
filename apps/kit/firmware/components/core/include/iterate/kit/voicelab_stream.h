@@ -214,9 +214,6 @@ struct iterate_kit_voicelab_options {
    * says the board went away. Optional: a caller with no client scope simply
    * gets no presence copies.
    */
-  const char *client_path;
-  /** Short call identity stamped into every frame payload. */
-  const char *conversation_id;
   /** Client-owned, RAM-only activation for the local microphone edge. */
   const char *activation;
   /**
@@ -226,7 +223,6 @@ struct iterate_kit_voicelab_options {
    * server VAD does the segmenting. A board with no turn machine that
    * requests manual turns gets a provider that never listens.
    */
-  const char *turns;
   /** Monotonic clock in milliseconds; stamps every frame and every deadline. */
   uint64_t (*now_ms)(void *clock_context);
   void *clock_context;
@@ -296,11 +292,9 @@ struct iterate_kit_voicelab {
   bool has_callback_capability;
   uint32_t frames_sent;
   uint32_t frame_send_failures;
-  /* Call control: startCall is in flight / the bridge answered / it hung up. */
-  bool call_pending;
+  /* Last successful microphone or presence append on this device clock. */
+  uint64_t last_presence_at_ms;
   bool call_active;
-  uint32_t call_starts;
-  uint32_t call_failures;
   /** One face poll in flight at a time; see iterate_kit_voicelab_poll_face. */
   bool face_poll_pending;
   uint32_t face_polls;
@@ -432,17 +426,6 @@ enum capnweb_status iterate_kit_voicelab_append_raw(
     size_t length);
 
 /**
- * Note that this device wants a call. NOTHING GOES ON THE WIRE: the call is
- * opened by the first microphone frame the facet receives, so "starting" a
- * call is letting frames flow. This only raises `call_pending`, so the
- * owner's launch ladder can tell a dial in progress from an idle device;
- * conversation-accepted clears it. `greeting` is accepted for source
- * compatibility and ignored (greetings are the server's to decide).
- */
-enum capnweb_status iterate_kit_voicelab_start_call(
-    struct iterate_kit_voicelab *voicelab, const char *greeting);
-
-/**
  * Hang up: a durable events.iterate.com/voice-agent/conversation-ended event
  * carrying this call's id, which is what the bridge watches for. One-way —
  * the bridge's own conversation-ended echo
@@ -452,22 +435,13 @@ enum capnweb_status iterate_kit_voicelab_start_call(
 enum capnweb_status iterate_kit_voicelab_end_call(
     struct iterate_kit_voicelab *voicelab, const char *reason);
 
-/**
- * Forget a call this device can no longer prove exists, WITHOUT announcing
- * an end that would be a lie — a bridge that stopped answering may well be
- * gone already, and a conversation-ended carrying a stale bridge id is ignored by
- * design. This drops the local belief only, so the owner's "the user wants a
- * call" intent can reconcile by starting a fresh one.
- */
-void iterate_kit_voicelab_forget_call(struct iterate_kit_voicelab *voicelab);
 
 /**
- * One ephemeral `keepalive` append: the call UI is alive. The facet's idle
- * deadline counts device input, and a hold-to-talk board between presses (or
- * an open-mic board whose silence the facet drops) sends none — see
- * ITERATE_KIT_VOICE_CALL_KEEPALIVE_MS.
+ * Send one keepalive only for a quiet accepted call. Successful microphone
+ * appends share the same presence stamp, so callers may poll this every pass
+ * without adding traffic while speech is flowing.
  */
-enum capnweb_status iterate_kit_voicelab_keepalive(
+enum capnweb_status iterate_kit_voicelab_keepalive_if_due(
     struct iterate_kit_voicelab *voicelab);
 
 /**
@@ -490,8 +464,6 @@ bool iterate_kit_voicelab_downlink_expected(
  * ever calls for a recycle. Kept as a function so the owners' poll loops need
  * no change; reconnects are failure-driven only.
  */
-bool iterate_kit_voicelab_needs_recycle(
-    const struct iterate_kit_voicelab *voicelab);
 
 /** Open the successor connection; the old one is released on success. */
 /**

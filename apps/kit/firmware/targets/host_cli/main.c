@@ -47,6 +47,8 @@ enum {
    * far end, but a wedged transport must not hold a person's terminal.
    */
   CLI_MAIN_HANGUP_GRACE_MS = 3000,
+  /* One local activation gets one finite chance to reach acceptance. */
+  CLI_MAIN_OPENING_DEADLINE_MS = 20000,
   /* Frames one feed pass may hand the room before returning to the loop. */
   CLI_MAIN_FEED_MAX_FRAMES = 64,
 };
@@ -58,11 +60,15 @@ enum {
 static struct cli_runtime cli_main_runtime;
 static volatile sig_atomic_t cli_main_interrupted = 0;
 
-static void cli_main_begin_activation(struct cli_runtime *runtime) {
+static void cli_main_begin_activation(
+    struct cli_runtime *runtime, uint64_t now_ms) {
   (void)snprintf(
       runtime->activation, sizeof(runtime->activation),
       "%08" PRIx32 "%08" PRIx32 "%08" PRIx32 "%08" PRIx32,
       arc4random(), arc4random(), arc4random(), arc4random());
+  runtime->activation_started_ms = now_ms;
+  runtime->opening_pending = true;
+  runtime->opening_timed_out = false;
 }
 
 /* Records SIGINT or SIGTERM for the cooperative owner to observe. */
@@ -209,6 +215,10 @@ static bool cli_main_request_talk(
 
 /* Publishes the maximum-turn edge before this loop drains device controls. */
 static void cli_main_enforce_talk_deadline(
+    struct cli_runtime *runtime, uint64_t now_ms);
+
+/* Ends a local activation that never reached provider acceptance. */
+static void cli_main_enforce_opening_deadline(
     struct cli_runtime *runtime, uint64_t now_ms);
 
 /* Advances the interactive session: keys, the deadline, and the hang-up. */
@@ -912,7 +922,6 @@ static void cli_main_start_voicelab(struct cli_runtime *runtime)
     .project_id = runtime->configuration.project_id,
     .project_api_key = runtime->configuration.project_api_key,
     .stream_path = runtime->options.stream_path,
-    .conversation_id = runtime->options.name,
     .activation = runtime->activation,
     .now_ms = cli_runtime_now_ms,
     .on_speaker = cli_main_on_speaker,
@@ -1074,6 +1083,7 @@ static void cli_main_on_control(
     runtime->answer_done = true;
     iterate_kit_voice_playback_clock_answer_done(&runtime->playout.clock);
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED) {
+    runtime->opening_pending = false;
     cli_runtime_log("info", "call accepted");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
     cli_runtime_log("warn", "call ended by the bridge");
@@ -1081,6 +1091,7 @@ static void cli_main_on_control(
     ++runtime->calls_lost;
     runtime->talking = false;
     runtime->activation_active = false;
+    runtime->opening_pending = false;
     (void)cli_main_request_talk(
         runtime, false, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
     if (runtime->options.open_mic && !runtime->hanging_up) {
@@ -1633,7 +1644,7 @@ static void cli_main_start_talk(
   }
   runtime->talking = true;
   if (!runtime->activation_active) {
-    cli_main_begin_activation(runtime);
+    cli_main_begin_activation(runtime, now_ms);
     runtime->activation_active = true;
   }
   runtime->turn_started_ms = now_ms;
@@ -1690,6 +1701,10 @@ static void cli_main_reconcile_call(
    * lifecycle left on this side is ENDING one, below, because hanging up is
    * something a person does and the server cannot guess.
    */
+  if (!runtime->hanging_up && runtime->voicelab.call_active &&
+      outbox_free >= CLI_MAIN_CALL_OUTBOX_SLOTS) {
+    (void)iterate_kit_voicelab_keepalive_if_due(&runtime->voicelab);
+  }
   if (runtime->hanging_up && runtime->voicelab.call_active &&
       outbox_free >= CLI_MAIN_CALL_OUTBOX_SLOTS) {
     (void)iterate_kit_voicelab_end_call(
@@ -1829,7 +1844,7 @@ static void cli_main_draw_screen(struct cli_runtime *runtime, uint64_t now_ms)
         ? 0U
         : iterate_kit_voice_elapsed_ms(
               runtime->call_established_at_ms, runtime->started_ms),
-    .call_pending = runtime->voicelab.call_pending,
+    .call_pending = false,
     .transport_state =
         iterate_kit_posix_itx_transport_state_name(runtime->transport.state),
     .space_held = runtime->wants_talk,
@@ -2184,6 +2199,33 @@ static void cli_main_enforce_talk_deadline(
       runtime, false, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
 }
 
+static void cli_main_enforce_opening_deadline(
+    struct cli_runtime *runtime, uint64_t now_ms)
+{
+  assert(runtime != NULL);
+  if (!runtime->opening_pending || runtime->voicelab.call_active ||
+      iterate_kit_voice_elapsed_ms(
+          now_ms, runtime->activation_started_ms) <
+          CLI_MAIN_OPENING_DEADLINE_MS) {
+    return;
+  }
+  runtime->opening_pending = false;
+  runtime->opening_timed_out = true;
+  ++runtime->opening_timeouts;
+  runtime->activation_active = false;
+  runtime->wants_talk = false;
+  runtime->talking = false;
+  runtime->source_finished = true;
+  cli_microphone_clear(&runtime->microphone);
+  (void)cli_main_request_talk(
+      runtime, false, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
+  if (runtime->voicelab.state == ITERATE_KIT_VOICELAB_READY) {
+    (void)iterate_kit_voicelab_end_call(&runtime->voicelab, "opening-timeout");
+  }
+  cli_runtime_log(
+      "error", "activation opening timed out before provider acceptance");
+}
+
 static void cli_main_sleep(void)
 {
   const struct timespec delay = {
@@ -2220,6 +2262,7 @@ static void cli_main_run_loop(struct cli_runtime *runtime)
       cli_runtime_log("error", "device control handler failed");
       runtime->stop_requested = true;
     }
+    cli_main_enforce_opening_deadline(runtime, now_ms);
     struct iterate_kit_spsc_ring_metrics outbox = {0};
     iterate_kit_spsc_ring_metrics(&runtime->control_outbox, &outbox);
     const size_t outbox_free = ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS -

@@ -76,5 +76,9 @@ idf.py -B /tmp/kit-havpe-build -D SDKCONFIG=/tmp/kit-havpe.sdkconfig build
 For silent HAVPE diagnostics, compile with
 `CONFIG_ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT=y`. This holds its amplifier disabled,
 suppresses local sounds, and writes only zero PCM while preserving XMOS clocks.
+It latches the amplifier off before networking and accepts the OTA image early,
+preventing automatic rollback into audible firmware. A non-networking diagnostic
+image therefore needs explicit serial recovery. Use only a board with a verified
+amplifier shutdown GPIO and reset circuit.
 It proves digital capture/transport behavior; acoustic wake, AEC and audible
 playout require a separate physical measurement.

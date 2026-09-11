@@ -229,7 +229,7 @@ static void cli_capabilities_write_health_start(
       writer,
       "{\"transport\":\"%s\",\"voicelab\":\"%s\","
       "\"voicelabFailure\":\"%s\",\"connectionState\":%d,"
-      "\"callActive\":%s,\"callPending\":%s,\"wantsCall\":%s,"
+      "\"callActive\":%s,\"wantsCall\":%s,"
       "\"talking\":%s,\"gateOpen\":%s,\"seq\":%u,\"t\":%" PRIu64
       ",\"framesSent\":%u,\"frameFailures\":%u,\"micCaptured\":%u,"
       "\"micDropped\":%u,\"micGated\":%u,\"spkFrames\":%u,"
@@ -239,7 +239,6 @@ static void cli_capabilities_write_health_start(
       iterate_kit_voicelab_failure_name(runtime->voicelab.failure),
       (int)runtime->connection.state,
       runtime->voicelab.call_active ? "true" : "false",
-      runtime->voicelab.call_pending ? "true" : "false",
       runtime->hanging_up ? "true" : "false",
       runtime->talking ? "true" : "false", gate ? "true" : "false",
       runtime->stats_sequence++, cli_runtime_now_ms(NULL),

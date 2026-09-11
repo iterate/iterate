@@ -35,7 +35,8 @@ enum {
       ITERATE_KIT_VOICE_FRAME_SAMPLES * 1000 / ITERATE_KIT_VOICE_FRAME_MS,
 
   /* Preserve up to five seconds of opening speech while mounting. */
-  ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH = 5000 / ITERATE_KIT_VOICE_FRAME_MS,
+  /* 20 s opening deadline plus 500 ms wake history. */
+  ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH = 21000 / ITERATE_KIT_VOICE_FRAME_MS,
 
   /* Eight is the catch-up cap; normal partial batches flush every 50 ms. */
   ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND = 8,

@@ -210,40 +210,7 @@ const struct iterate_kit_register_script m5sticks3_audio_script = {
 
 static const struct iterate_kit_board board = {
   .facts = {
-  .stream_path = "/agents/voice/m5stick-s3",
-  .client_path = "/clients/m5stick-s3",
-  .conversation_id = "stickdev",
-  .instructions =
-      "M5StickS3: a small voice endpoint with a text status screen. "
-      "The front button is push-to-talk; the side button starts and ends a "
-      "call. pushToTalk.start() is the whole gesture: it opens a call if none "
-      "is up and holds the microphone open, exactly as holding the front "
-      "button does; pushToTalk.stop() commits the turn and asks for an answer. "
-      "It has no echo cancellation and its microphone and speaker share pins, "
-      "so it only listens while talk is held. "
-      "conversation.start() opens a call WITHOUT holding the microphone, for "
-      "when you want it to greet you first; conversation.end() hangs up. "
-      "face.set({face}) changes which animated face it wears; the catalogue "
-      "is dot-matrix-oracle, furnace-imp, karakuri-brass, moonscope, "
-      "starbyte. "
-      "health() returns this device's full diagnostics — start there when it "
-      "seems unwell. "
-      "speaker.setVolume({percent}) sets how loud it plays, 0-100; "
-      "speaker.volume() reads it back. Both answer {percent,ceiling}. "
-      "Audio and lifecycle events share this stream connection.",
-  .peer_description =
-      "{\"instructions\":\"M5StickS3 voice endpoint. "
-      "pushToTalk.start() opens a call and holds the microphone open the way "
-      "the front button does, and pushToTalk.stop() commits the turn; "
-      "conversation.start() opens a call without holding the microphone and "
-      "conversation.end() hangs up. face.set({face}) changes which animated "
-      "face it wears; the catalogue is dot-matrix-oracle, furnace-imp, "
-      "karakuri-brass, moonscope, starbyte. speaker.setVolume({percent}) sets "
-      "how loud it plays, 0-100, and answers {percent,ceiling}, which "
-      "speaker.volume() also returns. health() returns this device's full "
-      "diagnostics document.\",\"children\":{}}",
-  .talk_hint = "hold the front button to talk",
-  .call_hint = "connection lost — press side to call",
+  .device_name = "m5stick-s3",
   .speaker = {
     .context = NULL,
     /*
@@ -260,8 +227,7 @@ static const struct iterate_kit_board board = {
    * step can sit before the ring genuinely empties.
    */
   .speaker_dry_wait_ms = 80,
-  .turns = ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK,
-  .radio_before_codec = false,
+  .hold_to_talk = true,
   },
   .i2c = {.sda = 47, .scl = 48, .hz = 100000},
   .scripts = &m5sticks3_audio_script, .script_count = 1,

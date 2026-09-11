@@ -117,7 +117,7 @@ static void boot_table(void) {
   assert(!iterate_kit_board_boot_steps(NULL, 1, drive, wait_ms));
 }
 
-/** Omitted facts acquire defaults; explicit facts and absent audio survive. */
+/** Omitted audio facts acquire defaults; explicit facts and absent audio survive. */
 static void iterate_kit_board_defaults_table(void) {
   const struct iterate_kit_i2s_codec_facts audio = {
     .playback = {.clk_cfg = {.sample_rate_hz = 48000}},
@@ -127,38 +127,36 @@ static void iterate_kit_board_defaults_table(void) {
   const struct {
     struct iterate_kit_board_facts facts;
     const struct iterate_kit_i2s_codec_facts *audio;
-    const char *greeting;
     size_t processing, capture, stack;
     uint32_t dry_wait;
   } rows[] = {
-    /* One omitted field at a time, keeping the other four explicit. */
+    /* One omitted audio field at a time, keeping the other three explicit. */
     {{.processing_frame_samples = 256, .capture_chunk_samples = 128,
       .capture_stack_bytes = 8192, .speaker_dry_wait_ms = 25}, NULL,
-      "Hi, I am your Iterate device. What can I do for you?", 256, 128, 8192, 25},
-    {{.greeting = "custom", .capture_chunk_samples = 128,
+      256, 128, 8192, 25},
+    {{.capture_chunk_samples = 128,
       .capture_stack_bytes = 8192, .speaker_dry_wait_ms = 25}, NULL,
-      "custom", 320, 128, 8192, 25},
-    {{.greeting = "custom", .processing_frame_samples = 256,
+      320, 128, 8192, 25},
+    {{.processing_frame_samples = 256,
       .capture_stack_bytes = 8192, .speaker_dry_wait_ms = 25}, NULL,
-      "custom", 256, 320, 8192, 25},
-    {{.greeting = "custom", .processing_frame_samples = 256,
+      256, 320, 8192, 25},
+    {{.processing_frame_samples = 256,
       .capture_chunk_samples = 128, .speaker_dry_wait_ms = 25}, NULL,
-      "custom", 256, 128, 4096, 25},
-    {{.greeting = "custom", .processing_frame_samples = 256,
+      256, 128, 4096, 25},
+    {{.processing_frame_samples = 256,
       .capture_chunk_samples = 128, .capture_stack_bytes = 8192}, &audio,
-      "custom", 256, 128, 8192, 40},
+      256, 128, 8192, 40},
     /* Explicit wait overrides TX geometry; absent/invalid audio cannot divide. */
-    {{.greeting = "custom", .processing_frame_samples = 256,
+    {{.processing_frame_samples = 256,
       .capture_chunk_samples = 128, .capture_stack_bytes = 8192,
-      .speaker_dry_wait_ms = 25}, &audio, "custom", 256, 128, 8192, 25},
-    {{0}, NULL, "Hi, I am your Iterate device. What can I do for you?", 320, 320, 4096, 0},
-    {{0}, &invalid_audio, "Hi, I am your Iterate device. What can I do for you?", 320, 320, 4096, 0},
-    {{0}, &audio, "Hi, I am your Iterate device. What can I do for you?", 320, 320, 4096, 40},
+      .speaker_dry_wait_ms = 25}, &audio, 256, 128, 8192, 25},
+    {{0}, NULL, 320, 320, 4096, 0},
+    {{0}, &invalid_audio, 320, 320, 4096, 0},
+    {{0}, &audio, 320, 320, 4096, 40},
   };
   for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
     const struct iterate_kit_board board = {.facts = rows[i].facts, .audio = rows[i].audio};
     const struct iterate_kit_board_facts facts = iterate_kit_board_defaults(&board);
-    assert(strcmp(facts.greeting, rows[i].greeting) == 0);
     assert(facts.processing_frame_samples == rows[i].processing);
     assert(facts.capture_chunk_samples == rows[i].capture);
     assert(facts.capture_stack_bytes == rows[i].stack);
@@ -180,29 +178,29 @@ static void normalized_gestures_use_the_shared_grammar(void) {
   /* M5's physical side tap and injected tap both become a wake. */
   iterate_kit_board_apply_gestures(
       &session, &(struct iterate_kit_board_gestures){.tap = true}, &m5,
-      ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK, &idle, 1U, &actions);
+      true, &idle, 1U, &actions);
   assert(actions.start_call && actions.wake_chime && !actions.talk_held);
 
   /* Waveshare's dedicated lower button has no board-specific end branch. */
   iterate_kit_board_apply_gestures(
       &session, &(struct iterate_kit_board_gestures){.end_press = true}, &waveshare,
-      ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK,
+      true,
       &(struct iterate_kit_voice_view){.wants_call = true, .call_active = true},
       2U, &actions);
   assert(actions.end_call);
 
-  /* HAVPE keeps its mode reminder: a PTT bare tap opens no unusable call. */
+  /* HAVPE is fixed open-mic: a tap opens the call. */
   session = (struct iterate_kit_session){0};
   iterate_kit_board_apply_gestures(
       &session, &(struct iterate_kit_board_gestures){.tap = true}, &havpe,
-      ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK, &idle, 3U, &actions);
-  assert(actions.mode_flash && !actions.start_call);
+      false, &idle, 3U, &actions);
+  assert(actions.start_call && actions.wake_chime);
 
   /* StackChan's side tap has the provider-VAD open-mic meaning. */
   session = (struct iterate_kit_session){0};
   iterate_kit_board_apply_gestures(
       &session, &(struct iterate_kit_board_gestures){.tap = true}, &stackchan,
-      ITERATE_KIT_VOICE_TURNS_SERVER_VAD, &idle, 4U, &actions);
+      false, &idle, 4U, &actions);
   assert(actions.start_call && actions.wake_chime);
 }
 
@@ -210,18 +208,19 @@ static void down_edge_wakes_before_release(void) {
   struct iterate_kit_session session = {0};
   struct iterate_kit_session_actions actions;
   const struct iterate_kit_gpio_button button = {
-    .gpio = 0, .active_low = true, .tap_wakes = true, .tap_ends = true,
+    /* HAVPE's tap_wakes flag applied only to its deleted selectable PTT mode. */
+    .gpio = 0, .active_low = true, .tap_wakes = false, .tap_ends = true,
   };
   const struct iterate_kit_voice_view idle = {0};
   iterate_kit_board_apply_gestures(
       &session, &(struct iterate_kit_board_gestures){.pressed = true}, &button,
-      ITERATE_KIT_VOICE_TURNS_SERVER_VAD, &idle, 30U, &actions);
+      false, &idle, 30U, &actions);
   assert(actions.start_call && actions.wake_chime);
   /* The same down-edge during a call does not accidentally end it. */
   const struct iterate_kit_voice_view active = {.wants_call = true, .call_active = true};
   iterate_kit_board_apply_gestures(
       &session, &(struct iterate_kit_board_gestures){.pressed = true}, &button,
-      ITERATE_KIT_VOICE_TURNS_SERVER_VAD, &active, 2000U, &actions);
+      false, &active, 2000U, &actions);
   assert(!actions.start_call && !actions.end_call);
 }
 

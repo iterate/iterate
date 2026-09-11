@@ -50,7 +50,7 @@ static const struct iterate_kit_register_write initial_writes[] = {
 
 /*
  * Keep the DAC at 0 dB even though ESPHome's theoretical 100% endpoint is
- * +24 dB. A production full-duplex run at that endpoint made Grok transcribe
+ * +24 dB. A production full-duplex run at that endpoint transcribed
  * its own speaker output almost verbatim on XMOS's processed channel: the
  * positive digital gain exhausted acoustic/AEC headroom before the DSP could
  * provide useful cancellation. PCM reaches this boundary unscaled, so 0 dB is

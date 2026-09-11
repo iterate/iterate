@@ -23,7 +23,6 @@
 #include "esp_timer.h"
 
 #include "iterate/kit/audio_processor.h"
-#include "iterate/kit/conversation_launch.h"
 #include "iterate/kit/voice_device_profile.h"
 
 #include <stdbool.h>
@@ -61,6 +60,7 @@ static const struct iterate_kit_audio_codec_properties codec_properties = {
  */
 static size_t capture_frames_pending;
 static int16_t capture_frame_value = 1000;
+static void (*capture_read_hook)(void);
 
 static enum iterate_kit_status codec_read(
     void *context,
@@ -80,6 +80,11 @@ static enum iterate_kit_status codec_read(
     capture[index] = capture_frame_value;
   }
   ++capture_frame_value;
+  if (capture_read_hook != NULL) {
+    void (*hook)(void) = capture_read_hook;
+    capture_read_hook = NULL;
+    hook();
+  }
   *sample_count = capacity_samples;
   return ITERATE_KIT_OK;
 }
@@ -131,21 +136,13 @@ static const struct iterate_kit_board_ops board_ops = {
 };
 
 static const struct iterate_kit_board_facts push_to_talk_facts = {
-  .stream_path = "/agents/voice/host-test",
-  .client_path = "/clients/host-test",
-  .conversation_id = "hosttest",
-  .greeting = "hello",
-  .instructions = "a board that exists only in a test",
-  .peer_description = "{\"instructions\":\"host test\",\"children\":{}}",
-  .talk_hint = "hold to talk",
-  .call_hint = "press to call",
+  .device_name = "host-test",
   .speaker = {0},
   .speaker_dry_wait_ms = 40U,
   .processing_frame_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
   .capture_chunk_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
   .capture_stack_bytes = 4096U,
-  .turns = ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK,
-  .radio_before_codec = false,
+  .hold_to_talk = true,
 };
 
 /* --- driving the loop ----------------------------------------------------- */
@@ -222,6 +219,11 @@ static void remote_call(const char *first, const char *second) {
       message, sizeof(message), "[\"release\",%lld,1]",
       (long long)next_inbound_call_id++);
   deliver(connection, message);
+}
+
+/* Model a wake/control edge arriving while codec read has not returned. */
+static void activate_during_codec_read(void) {
+  remote_call("pushToTalk", "start");
 }
 
 /** Back to idle, and prove it, so the next scenario starts from nothing. */
@@ -585,8 +587,6 @@ static void dial_speech_flows_at_once_and_no_turn_is_marked(void) {
   size_t after_accept;
   char activation[65];
   quiescent();
-  /* Wait out the ladder, so the press below is a fresh dial. */
-  run_ms(ITERATE_KIT_LAUNCH_PLACE_RETRY_MS + 500U);
 
   /* Press from sleep and speak into the dial: 400 ms of words. */
   after_press = iterate_kit_fake_platform_sent_count();
@@ -635,7 +635,6 @@ static void dial_speech_flows_at_once_and_no_turn_is_marked(void) {
 static void a_silent_dial_release_commits_no_turn(void) {
   size_t after_accept;
   quiescent();
-  run_ms(ITERATE_KIT_LAUNCH_PLACE_RETRY_MS + 500U);
 
   /* Press from sleep, HOLD — long enough to be a hold, not a tap — and let
    * go without a single captured frame, the stick's fence-closed dial. */
@@ -690,7 +689,6 @@ static void an_idle_accepted_call_is_not_recycled_for_silence(void) {
   size_t after_accept;
   size_t after_answer;
   quiescent();
-  run_ms(ITERATE_KIT_LAUNCH_PLACE_RETRY_MS + 500U);
   after_accept = iterate_kit_fake_platform_sent_count();
   remote_call("pushToTalk", "start");
   /* A HOLD, not a tap: a tap is the end-call gesture. */
@@ -721,7 +719,6 @@ static void a_lane_silent_mid_answer_is_recycled(void) {
   size_t after_accept;
   size_t after_chunk;
   quiescent();
-  run_ms(ITERATE_KIT_LAUNCH_PLACE_RETRY_MS + 500U);
   after_accept = iterate_kit_fake_platform_sent_count();
   remote_call("pushToTalk", "start");
   /* A HOLD, not a tap: a tap is the end-call gesture. */
@@ -739,6 +736,42 @@ static void a_lane_silent_mid_answer_is_recycled(void) {
   assert(sent_after_contains(after_chunk, "openConnection"));
 }
 
+/* The frame that was in a blocking read when wake arrived remains behind the
+ * idle history. The next active frame flushes all of it in chronological order. */
+static void activation_during_codec_read_keeps_idle_pre_roll(void) {
+  uint8_t pcm[7U * ITERATE_KIT_VOICE_FRAME_BYTES];
+  const size_t before = iterate_kit_fake_platform_sent_count();
+  quiescent();
+  capture_frame_value = 3000;
+  speak_frames(5U);
+  capture_read_hook = activate_during_codec_read;
+  speak_frames(1U);
+  step();
+  speak_frames(1U);
+  pump();
+  run_ms(50U);
+  assert(collect_sent_microphone(before, pcm, sizeof(pcm)) == sizeof(pcm));
+  assert(collected_sample(pcm, 0U) == 3000);
+  assert(collected_sample(pcm, 5U) == 3005);
+  assert(collected_sample(pcm, 6U) == 3006);
+  remote_call("pushToTalk", "stop");
+  step();
+}
+
+/* An unanswered activation stops once at 20 seconds and says why. */
+static void an_unaccepted_activation_times_out_once(void) {
+  const size_t before = iterate_kit_fake_platform_sent_count();
+  quiescent();
+  remote_call("pushToTalk", "start");
+  step();
+  pump();
+  run_ms(20000U);
+  assert(!board.last_view.wants_call);
+  assert(strcmp(board.last_view.status, "opening timed out") == 0);
+  assert(sent_after_contains(before, "conversation-ended"));
+  assert(sent_after_contains(before, "opening-timeout"));
+}
+
 int main(void) {
   boot();
   a_remote_press_raises_wants_call_with_no_button();
@@ -753,5 +786,7 @@ int main(void) {
   pump();
   an_idle_accepted_call_is_not_recycled_for_silence();
   a_lane_silent_mid_answer_is_recycled();
+  activation_during_codec_read_keeps_idle_pre_roll();
+  an_unaccepted_activation_times_out_once();
   return 0;
 }

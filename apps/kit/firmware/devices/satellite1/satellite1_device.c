@@ -183,26 +183,9 @@ static const struct iterate_kit_i2s_codec_facts audio = {
 
 static const struct iterate_kit_board board = {
   .facts = {
-    .stream_path = "/agents/voice/satellite1", .client_path = "/clients/satellite1",
-    .conversation_id = "sat1dev",
-    .instructions =
-        "FutureProofHomes Satellite1 voice endpoint with XMOS hardware echo cancellation. "
-        "conversation.start() and conversation.end() begin and end an open-mic call. "
-        "button.press() taps the action button: wake while idle, end while in a call. "
-        "Saying Jarvis while idle also wakes it with a chime, then you can speak freely. "
-        "speaker.setVolume({percent}) and speaker.volume() answer {percent,ceiling}. "
-        "health() returns diagnostics including XMOS version, amplifier supply and faults, "
-        "and micMuted, the hardware microphone rail cut. "
-        "There is no raw microphone tap: micRawPeak and echoRawPeak are unavailable (zero).",
-    .peer_description =
-        "{\"instructions\":\"Satellite1 voice endpoint. The LED ring is its local feedback. "
-        "Tap action to start or end a call, or say Jarvis while idle to wake it with "
-        "a chime; speak freely during the call. Vol+ and Vol- "
-        "change speaker volume. Hardware mute cuts the microphone rail.\",\"children\":{}}",
-    .talk_hint = "speak whenever you like",
-    .call_hint = "connection lost — press the action button to call",
+    .device_name = "satellite1",
     .speaker = {.ceiling = ITERATE_KIT_SATELLITE1_SPEAKER_CEILING},
-    .turns = ITERATE_KIT_VOICE_TURNS_SERVER_VAD, .radio_before_codec = true,
+    .hold_to_talk = false,
   },
   .i2c = {.sda = 5, .scl = 6, .hz = 400000},
   .boot = boot, .boot_count = 1,

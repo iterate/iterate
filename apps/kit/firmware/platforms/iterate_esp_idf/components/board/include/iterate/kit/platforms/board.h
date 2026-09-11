@@ -82,7 +82,7 @@ struct iterate_kit_board {
  */
 void iterate_kit_board_run(const struct iterate_kit_board *board);
 
-/** Copy loop facts with omitted greeting, frame sizes and capture stack filled.
+/** Copy loop facts with omitted frame sizes and capture stack filled.
  * A zero dry wait becomes two thirds of the table's TX ring when audio supplies
  * a nonzero clock. Explicit values win; the board table is never modified.
  */
@@ -128,7 +128,7 @@ void iterate_kit_board_apply_gestures(
     struct iterate_kit_session *session,
     const struct iterate_kit_board_gestures *gestures,
     const struct iterate_kit_gpio_button *button,
-    enum iterate_kit_voice_turns turns,
+    bool hold_to_talk,
     const struct iterate_kit_voice_view *view,
     uint64_t now_ms,
     struct iterate_kit_session_actions *actions);

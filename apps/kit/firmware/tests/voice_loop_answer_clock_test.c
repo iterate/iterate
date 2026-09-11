@@ -168,21 +168,13 @@ static const struct iterate_kit_board_ops board_ops = {
  * boards that work and the two that do not.
  */
 static const struct iterate_kit_board_facts open_mic_facts = {
-  .stream_path = "/agents/voice/host-test-open-mic",
-  .client_path = "/clients/host-test-open-mic",
-  .conversation_id = "hostmic",
-  .greeting = "hello",
-  .instructions = "an open-mic board that exists only in a test",
-  .peer_description = "{\"instructions\":\"host test\",\"children\":{}}",
-  .talk_hint = "speak whenever you like",
-  .call_hint = "press to call",
+  .device_name = "host-test-open-mic",
   .speaker = {0},
   .speaker_dry_wait_ms = 40U,
   .processing_frame_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
   .capture_chunk_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
   .capture_stack_bytes = 4096U,
-  .turns = ITERATE_KIT_VOICE_TURNS_SERVER_VAD,
-  .radio_before_codec = false,
+  .hold_to_talk = false,
 };
 
 /* --- driving the loop ----------------------------------------------------- */
@@ -358,8 +350,8 @@ static void deliver_chunk(bool drop, bool last, size_t frames) {
       callback_export_id(),
       offset,
       test_activation(),
-      drop ? "\"drop\":true," : "",
-      last ? "\"last\":true," : "",
+      drop ? "\"clearSpeakerBufferBeforeFrame\":true," : "",
+      last ? "\"lastFrameOfAnswer\":true," : "",
       frames_b64(frames),
       offset);
   assert(

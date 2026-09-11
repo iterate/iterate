@@ -1,7 +1,6 @@
 set(ITERATE_KIT_CORE_SOURCES
   src/button.c
   src/configuration.c
-  src/conversation_launch.c
   src/conversation_lights.c
   src/conversation_overlay.c
   src/device_events.c

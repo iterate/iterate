@@ -51,7 +51,6 @@ static bool valid_options(
       nonempty(options->project_id) &&
       nonempty(options->project_api_key) &&
       nonempty(options->stream_path) &&
-      nonempty(options->conversation_id) &&
       options->now_ms != NULL;
 }
 
@@ -258,9 +257,6 @@ static void handle_spk_frame(
   if (!voicelab->call_active) return;
 
 
-  if (capnweb_value_object_get(payload, "drop", &flag)) {
-    (void)capnweb_value_get_boolean(&flag, &drop);
-  }
   /*
    * THE SAME INSTRUCTION UNDER THE SECOND AGENT'S NAME FOR IT.
    *
@@ -277,9 +273,6 @@ static void handle_spk_frame(
   if (!drop &&
       capnweb_value_object_get(payload, "clearSpeakerBufferBeforeFrame", &flag)) {
     (void)capnweb_value_get_boolean(&flag, &drop);
-  }
-  if (capnweb_value_object_get(payload, "last", &flag)) {
-    (void)capnweb_value_get_boolean(&flag, &last);
   }
   /*
    * The second agent's name for the same edge. It says what the frame MEANS —
@@ -344,8 +337,8 @@ static void handle_spk_frame(
    *
    * IT USED TO GO OUT 640 BYTES AT A TIME, and that rule cost more than it ever
    * bought. It made a chunk with anything left over on the end a protocol
-   * violation to be counted and dropped, which every chunk had, because Grok's
-   * deltas are audio of no particular length: 118 dropped chunks in three turns.
+   * violation to be counted and dropped, which every chunk had, because audio
+   * deltas are of no particular length: 118 dropped chunks in three turns.
    * Buying it back needed the sender to carry a remainder between deltas and pad
    * an answer's tail with silence. The click that the rule was supposed to
    * prevent cannot happen — a ring has no phase, and consecutive PCM16 samples
@@ -374,12 +367,12 @@ static void handle_spk_frame(
 }
 
 /*
- * `handle_viseme` and `handle_grok_event` were here.
+ * Face and provider-event handlers were here.
  *
  * The face is no longer an event: it is reduced processor runtime state in
  * the facet's runtime bag, read by a direct RPC poll, and the `viseme` type
- * is deleted from the contract. `grok-event` carried exactly two facts this device acted on,
- * `speech_started` and `response.done`, and both now ride the `spk-frame` that
+ * is deleted from the contract. The old event mirror carried exactly two facts
+ * this device acted on, `speech_started` and `response.done`, and both now ride the `spk-frame` that
  * they are about — see the two notes in `handle_spk_frame` for why that is not
  * merely tidier but removes an ordering question neither lane could answer.
  */
@@ -494,7 +487,6 @@ static enum capnweb_status batch_dispatch(
       }
       voicelab->call_active = true;
       voicelab->answer_open = false;
-      voicelab->call_pending = false;
       if (voicelab->options.on_control != NULL) {
         voicelab->options.on_control(
             voicelab->options.downlink_context,
@@ -506,7 +498,8 @@ static enum capnweb_status batch_dispatch(
       voicelab->live_bridge_id[0] = '\0';
       voicelab->live_conversation_id[0] = '\0';
       voicelab->call_active = false;
-  voicelab->answer_open = false;
+      voicelab->answer_open = false;
+      voicelab->last_presence_at_ms = 0U;
       if (voicelab->options.on_control != NULL) {
         voicelab->options.on_control(
             voicelab->options.downlink_context,
@@ -578,13 +571,6 @@ bool iterate_kit_voicelab_downlink_expected(
   return !voicelab->call_active || voicelab->answer_open;
 }
 
-bool iterate_kit_voicelab_needs_recycle(
-    const struct iterate_kit_voicelab *voicelab) {
-  /* No proactive recycle any more — see the header. */
-  (void)voicelab;
-  return false;
-}
-
 enum capnweb_status iterate_kit_voicelab_recycle_connection(
     struct iterate_kit_voicelab *voicelab) {
   static const char *const open_path[] = {"openConnection"};
@@ -627,7 +613,7 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
       key_text,
       sizeof(key_text),
       "%s-cb-g%" PRIu32,
-      voicelab->options.conversation_id,
+      voicelab->options.stream_path,
       voicelab->connection_generation);
   if (key_length < 0 || (size_t)key_length >= sizeof(key_text)) {
     return CAPNWEB_E_LIMIT;
@@ -1091,6 +1077,8 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
       offset);
   if (status == CAPNWEB_OK) {
     voicelab->frames_sent += (uint32_t)frame_count;
+    voicelab->last_presence_at_ms =
+        voicelab->options.now_ms(voicelab->options.clock_context);
   } else {
     ++voicelab->frame_send_failures;
   }
@@ -1224,76 +1212,38 @@ static bool json_literal_contents_are_safe(const char *value) {
   return true;
 }
 
-/*
- * THE PRESS OPENS THE CALL, so this asks for one WITHOUT naming it.
- *
- * This used to append `conversation-requested` carrying a device-minted
- * conversationId, a greeting, a turn mode and a colleague flag — a device
- * telling the server what kind of call to have. The server holds the state
- * that decides all of that, and two sides holding one fact is how a stream
- * wedges: the device asked for a call the server already had, nine times, and
- * every request went unanswered in silence.
- *
- * THE MICROPHONE IS THE WHOLE REQUEST NOW. A device with no call opens one
- * by sending audio, and a device already on a call is simply heard; this
- * function only raises the local `call_pending` the launch ladder reads.
- * The client path still rides along so the conversation can subscribe to
- * this board's presence.
- */
-enum capnweb_status iterate_kit_voicelab_start_call(
-    struct iterate_kit_voicelab *voicelab, const char *greeting) {
-  if (voicelab == NULL) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  if (voicelab->state != ITERATE_KIT_VOICELAB_READY ||
-      voicelab->call_pending || !voicelab->has_stream_capability) {
-    return CAPNWEB_E_STATE;
-  }
-  /*
-   * NO EVENT. This appended a durable `ptt-start` — the call request, the
-   * one press a board owed — until 2026-09-11. The facet now mints the call
-   * from the first microphone frame and holds what arrives while it dials,
-   * so the request IS the audio; `call_pending` stays so the launch ladder
-   * can tell a dial in progress from an idle device.
-   */
-  (void)greeting;
-  voicelab->call_pending = true;
-  return CAPNWEB_OK;
-}
-
-void iterate_kit_voicelab_forget_call(struct iterate_kit_voicelab *voicelab) {
-  if (voicelab == NULL) {
-    return;
-  }
-  voicelab->call_active = false;
-  voicelab->answer_open = false;
-  voicelab->call_pending = false;
-  voicelab->live_bridge_id[0] = '\0';
-  voicelab->last_bridge_ms = 0U;
-}
-
-
-enum capnweb_status iterate_kit_voicelab_keepalive(
+static enum capnweb_status iterate_kit_voicelab_send_keepalive(
     struct iterate_kit_voicelab *voicelab) {
-  int length;
-  if (voicelab == NULL) return CAPNWEB_E_INVALID_ARGUMENT;
-  if (voicelab->state != ITERATE_KIT_VOICELAB_READY) return CAPNWEB_E_STATE;
-  length = snprintf(
-      voicelab->args_buffer,
-      sizeof(voicelab->args_buffer),
+  static const char args[] =
       "[{\"type\":\"events.iterate.com/voice-agent/keepalive\",\"ephemeral\":true,"
-      "\"payload\":{\"t\":%" PRIu64 "}}]",
-      voicelab->options.now_ms(voicelab->options.clock_context));
-  if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
-    return CAPNWEB_E_LIMIT;
-  }
-  return capnweb_session_call_oneway_path(
+      "\"payload\":{}}]";
+  const enum capnweb_status status = capnweb_session_call_oneway_path(
       voicelab->options.session,
       voicelab->stream_capability,
       append_path,
       1U,
-      voicelab->args_buffer,
-      (size_t)length);
+      args,
+      sizeof(args) - 1U);
+  if (status == CAPNWEB_OK) {
+    voicelab->last_presence_at_ms =
+        voicelab->options.now_ms(voicelab->options.clock_context);
+  }
+  return status;
+}
+
+enum capnweb_status iterate_kit_voicelab_keepalive_if_due(
+    struct iterate_kit_voicelab *voicelab) {
+  uint64_t now;
+  if (voicelab == NULL) return CAPNWEB_E_INVALID_ARGUMENT;
+  if (voicelab->state != ITERATE_KIT_VOICELAB_READY ||
+      !voicelab->call_active) return CAPNWEB_E_STATE;
+  now = voicelab->options.now_ms(voicelab->options.clock_context);
+  if (voicelab->last_presence_at_ms != 0U &&
+      now - voicelab->last_presence_at_ms <
+          ITERATE_KIT_VOICE_CALL_KEEPALIVE_MS) {
+    return CAPNWEB_OK;
+  }
+  return iterate_kit_voicelab_send_keepalive(voicelab);
 }
 
 enum capnweb_status iterate_kit_voicelab_end_call(
@@ -1323,6 +1273,7 @@ enum capnweb_status iterate_kit_voicelab_end_call(
   }
   voicelab->call_active = false;
   voicelab->answer_open = false;
+  voicelab->last_presence_at_ms = 0U;
   return capnweb_session_call_oneway_path(
       voicelab->options.session,
       voicelab->stream_capability,

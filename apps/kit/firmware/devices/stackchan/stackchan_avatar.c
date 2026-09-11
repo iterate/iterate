@@ -40,7 +40,7 @@
 #define STACKCHAN_AVATAR_SAMPLE_RATE_HZ 16000U
 #define STACKCHAN_AVATAR_PLAYOUT_FRAME_SAMPLES 128U
 /*
- * The first production-shaped Grok turn measured only 464 bytes of unused
+ * The first production-shaped voice turn measured only 464 bytes of unused
  * stack while this task was rendering and submitting a real frame. That is a
  * valid measurement, not permission to run at the cliff: ESP-IDF display/SPI
  * internals can take a slightly deeper call path on an error or timeout. One
@@ -905,7 +905,7 @@ esp_err_t iterate_kit_stackchan_avatar_start(void) {
    * This target needs a talking head, not a general widget toolkit. LVGL's
    * generic CoreS3 startup consumed a task, a touch driver, approximately
    * 12.8 KiB even after tuning its DMA strip, and enough linked code/state to
-   * leave only 3.6 KiB of minimum internal heap during a real Grok turn. The
+   * leave only 3.6 KiB of minimum internal heap during a real voice turn. The
    * direct panel path has one source surface, one bounded DMA strip, and no
    * display queue above ESP-IDF's own DMA transaction. The 160x120 portable
    * face is expanded with exact nearest-neighbour pixels to fill 320x240; the

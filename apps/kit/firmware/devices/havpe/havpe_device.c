@@ -241,56 +241,7 @@ static const struct iterate_kit_gpio_step boot[] = {{47, 0, 0}, {4, 1, 1}, {4, 0
 
 static const struct iterate_kit_board board = {
   .facts = {
-  .stream_path = "/agents/voice/home-assistant-voice-preview-edition",
-  .client_path = "/clients/home-assistant-voice-preview-edition",
-  .conversation_id = "havpedev",
-  .instructions =
-      "Home Assistant Voice Preview Edition: a voice endpoint with no screen — "
-      "a twelve-LED ring is its only local feedback. A press on the centre "
-      "button WAKES it into a call (chime); saying Jarvis also wakes it. "
-      "A tap during the call ends it, and "
-      "an ended call — hang-up, tap, or idle timeout — says 'call ended' and "
-      "leaves it silent, sending no microphone audio, until the next press. "
-      "The rotary dial adjusts speaker volume. The microphone stays open for "
-      "the whole call because the XMOS DSP cancels speaker echo. "
-      "conversation.start() and conversation.end() begin and end a call. "
-      "health() returns this device's full diagnostics — start there when it "
-      "seems unwell. "
-      "speaker.setVolume({percent}) sets how loud it plays, 0-100, clamped to "
-      "a ceiling this board has a measured reason for; speaker.volume() reads "
-      "it back. Both answer {percent,ceiling}. "
-      "aec.setStage({channel,stage}) moves an XMOS output tap for diagnosis — "
-      "stage 0 is the raw microphone, 1 AEC, 2 AEC+IC, 3 AEC+IC+NS, 4 with AGC "
-      "— and health() reports echoRawPeak and echoCleanPeak measured while the "
-      "speaker was running, which is how its cancellation is measured. "
-      "Audio and lifecycle events share this stream connection.",
-  /*
-   * WHAT THE MODEL IS TOLD IT CAN DO — and it matters more on this board than
-   * on any other, because it has NO SCREEN. There is no glanceable state here
-   * at all: if the methods are not named, the only way to find out what this
-   * device can do is to read its firmware.
-   */
-  .peer_description =
-      "{\"instructions\":\"Home Assistant Voice PE voice endpoint. It has no "
-      "screen: its LED ring is the only local feedback. A press on the centre "
-      "button wakes it into a call; saying Jarvis also wakes it with a chime. "
-      "A tap during the call ends it, and an "
-      "ended call leaves it silent until the next press. "
-      "conversation.start() / conversation.end() begin and end a call. "
-      "aec.setStage({channel,stage}) moves an XMOS output tap — stage 0 is the "
-      "raw microphone, 1 AEC, 2 AEC+IC, 3 AEC+IC+NS, 4 with AGC — and health() "
-      "reports echoRawPeak and echoCleanPeak accumulated while the speaker was "
-      "running, which is how this board's cancellation is measured. "
-      "Its rotary dial adjusts speaker volume. The microphone is open for the "
-      "whole call because hardware echo cancellation in the XMOS DSP makes it "
-      "safe, and the server decides when you have finished speaking. "
-      "speaker.setVolume({percent}) sets how loud it plays, 0-100; it clamps "
-      "to a ceiling this board has a measured reason for and answers with "
-      "{percent,ceiling}, which speaker.volume() also returns. "
-      "health() returns this device's full diagnostics "
-      "document.\",\"children\":{}}",
-  .talk_hint = "speak whenever you like",
-  .call_hint = "connection lost — press the centre button to call",
+  .device_name = "home-assistant-voice-preview-edition",
   .speaker = {
     .context = NULL,
     /*
@@ -301,15 +252,7 @@ static const struct iterate_kit_board board = {
     .ceiling = 100,
   },
   /* XMOS cancellation makes a continuously open microphone safe. */
-  .turns = ITERATE_KIT_VOICE_TURNS_SERVER_VAD,
-  /*
-   * THE ONLY BOARD THAT ASKS FOR THIS. Its XMOS + AIC3204 bring-up is 6.2 s
-   * measured and nothing in the transport needs the codec — only the capture
-   * and playback tasks do, and they are created after both. Overlapping the
-   * two is very nearly free, because Wi-Fi association plus TLS plus the mount
-   * is itself ~6-8 s of waiting.
-   */
-  .radio_before_codec = true,
+  .hold_to_talk = false,
   },
   .i2c = {.sda = 5, .scl = 6, .hz = 400000},
   .boot = boot, .boot_count = sizeof(boot) / sizeof(boot[0]),

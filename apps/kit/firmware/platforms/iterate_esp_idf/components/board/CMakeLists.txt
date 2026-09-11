@@ -4,6 +4,6 @@ idf_component_register(
     codecs/pcm5122.c codecs/pcm5122_registers.c
     codecs/xmos_spi.c codecs/xmos_spi_registers.c
   INCLUDE_DIRS include
-  REQUIRES voice audio core capabilities esp_driver_i2s esp_driver_i2c esp_driver_gpio esp_driver_spi esp_timer espressif__led_strip)
+  REQUIRES voice audio core capabilities app_update esp_driver_i2s esp_driver_i2c esp_driver_gpio esp_driver_spi esp_timer espressif__led_strip)
 idf_component_optional_requires(PRIVATE board_wake_word)
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Werror)

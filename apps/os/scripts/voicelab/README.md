@@ -1,8 +1,8 @@
 # Voice lab
 
 Instruments for the GPT-Live voice agent (`packages/voice-agent`) over the
-streams abstraction: mic and speaker audio as ephemeral stream events, the
-provider's own events mirrored beside them, and a durable transcript.
+streams abstraction: mic and speaker audio as ephemeral stream events and a
+durable transcript.
 
 ## Topology
 
@@ -31,13 +31,12 @@ client has one, only unmutes its microphone while held.
 
 | Event                                               | Durability | Payload                                                                                                                                                         |
 | --------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `configured`                                        | durable    | the birth certificate: `instructions`, `greeting`, `backend` overrides, `tools`, `visemes`; replaced wholesale by every setup run                               |
+| `configured`                                        | durable    | the fixed GPT-Live setup: `instructions`, backend overrides, `tools`, `visemes`; replaced wholesale by every setup run                                          |
 | `mic-frame`                                         | ephemeral  | `{ conversationId, deviceMicFrameSeq, pcm }` — base64 PCM16 @ 16 kHz, any length, numbered by the device, sent verbatim to GPT-Live; the first one opens a call |
 | `call-started`                                      | durable    | `{ conversationId }`                                                                                                                                            |
 | `conversation-accepted`                             | durable    | `{ conversationId, handshakeTookMs, heldMicFrames }` — `session.started` arrived                                                                                |
-| `session-configured`                                | durable    | `{ instructions, backendModel, tools, greeting }` — what this provider session was started with                                                                 |
+| `session-configured`                                | durable    | `{ instructions, backendModel, tools }` — what the GPT-Live session was started with                                                                            |
 | `spk-frame`                                         | ephemeral  | `{ conversationId, deviceSpeakerFrameSeq, pcm, clearSpeakerBufferBeforeFrame?, lastFrameOfAnswer? }` — see below                                                |
-| `grok-event`                                        | ephemeral  | the provider's own events, verbatim (audio deltas as `deltaBytes`), plus the facet's client commands as `client.<type>`; the flight recorder                    |
 | `utterance-transcript`                              | durable    | `{ conversationId, text }` — one finished listener turn, grouped from the provider's timeline fragments                                                         |
 | `answer-transcript`                                 | durable    | `{ conversationId, text }` — one finished spoken answer, in words                                                                                               |
 | `backend-reply`                                     | durable    | `{ conversationId, text }` — the backend model's final text for one delegation                                                                                  |

@@ -542,36 +542,7 @@ static const struct iterate_kit_board board = {
    * three boards on one stream produced two call-started for a single press
    * and an answer that never reached anybody.
    */
-  .stream_path = "/agents/voice/waveshare",
-  .client_path = "/clients/waveshare",
-  .conversation_id = "wsdev",
-  .instructions =
-      "Waveshare AMOLED: a voice endpoint with a touch screen showing a face. "
-      "The upper button is push-to-talk; the lower button hangs up. "
-      "pushToTalk.start() is the whole gesture: it opens a call if none is up "
-      "and holds the microphone open, exactly as pressing the upper button "
-      "does; pushToTalk.stop() commits the turn and asks for an answer. It has "
-      "no echo cancellation, so it only listens while talk is held. "
-      "conversation.start() opens a call WITHOUT holding the microphone, for "
-      "when you want it to greet you first; conversation.end() hangs up. "
-      "health() returns this device's full diagnostics — start there when it "
-      "seems unwell. "
-      "speaker.setVolume({percent}) sets how loud it plays, 0-100, clamped to "
-      "a ceiling this board has a measured reason for; speaker.volume() reads "
-      "it back. Both answer {percent,ceiling}. "
-      "Audio and lifecycle events share this stream connection.",
-  .peer_description =
-      "{\"instructions\":\"Waveshare voice endpoint. "
-      "pushToTalk.start() opens a call and holds the microphone open the way "
-      "the upper button does, and pushToTalk.stop() commits the turn; "
-      "conversation.start() opens a call without holding the microphone and "
-      "conversation.end() hangs up. speaker.setVolume({percent}) sets how loud "
-      "it plays, 0-100; it clamps to a ceiling this board has a measured "
-      "reason for and answers with {percent,ceiling}, which speaker.volume() "
-      "also returns. health() returns this device's full diagnostics "
-      "document.\",\"children\":{}}",
-  .talk_hint = "hold the upper button to talk",
-  .call_hint = "press upper to call",
+  .device_name = "waveshare",
   .speaker = {
     /*
      * TURN IT UP. Every board here shipped at a volume somebody measured once
@@ -588,13 +559,12 @@ static const struct iterate_kit_board board = {
    * step can sit before the ring genuinely empties.
    */
   .speaker_dry_wait_ms = 60,
-  .turns = ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK,
+  .hold_to_talk = true,
   /*
    * The codec first. This board's panel and codec share reset lines, so the
    * order inside `start` is fixed — and its bring-up is fast, so there is
    * nothing for the radio to overlap with.
    */
-  .radio_before_codec = false,
   },
   .i2c = {.sda = 15, .scl = 14, .hz = 400000},
   .scripts = scripts, .script_count = sizeof(scripts) / sizeof(scripts[0]),

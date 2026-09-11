@@ -69,8 +69,6 @@ iterate_kit_add_core_test(iterate-kit-atomic-test atomic_test.c)
 iterate_kit_add_core_test(iterate-kit-button-test button_test.c)
 iterate_kit_add_core_test(iterate-kit-configuration-test configuration_test.c)
 iterate_kit_add_core_test(
-  iterate-kit-conversation-launch-test conversation_launch_test.c)
-iterate_kit_add_core_test(
   iterate-kit-conversation-lights-test conversation_lights_test.c)
 iterate_kit_add_core_test(
   iterate-kit-conversation-overlay-test conversation_overlay_test.c)

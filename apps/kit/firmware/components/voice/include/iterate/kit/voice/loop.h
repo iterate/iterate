@@ -16,33 +16,8 @@
 extern "C" {
 #endif
 
-/*
- * THE ONE PROGRAM EVERY ITERATE VOICE BOARD RUNS.
- *
- * Four boards shipped four copies of it. They were not merely similar: with
- * board prefixes normalised, the Waveshare and M5Stick capture tasks were
- * IDENTICAL — 46 lines, nothing differing — `on_speaker_pcm` differed by two or
- * three lines across all four, and `now_ms`, `initialise_rings`,
- * `playback_apply_reprime`, `on_session_ended`, `clock_slug`, `start_clock_once`
- * and `append_stats` were byte-equivalent once renamed. Of ~1,700 lines per
- * device file, ~110 touched a board-specific symbol.
- *
- * The cost was not the duplication. It was that every bug had to be found four
- * times, and several times was not: the missing disarm in the flush funnel, the
- * playout reset a new call needs, the liveness clock a never-ready transport
- * could hold open forever, the launch diagnostics that answer "why did that
- * press not become a call" — each was fixed on one board and left standing on
- * the rest for weeks. Two boards still carried a `park_with_fault` that
- * `return`ed instead, which with the watchdog already subscribed is a reboot
- * loop the file's own comment warns about.
- *
- * WHAT THE LOOP KEEPS, because it is policy rather than hardware: turn taking
- * (push-to-talk against server VAD), the half-duplex fence and its ordering, the
- * playout timeline, every watchdog and every retry ladder.
- *
- * WHAT THE BOARD OWNS: pixels, buttons, amplifiers, servos, cameras, and the
- * audio codec itself.
- */
+/* Shared voice control, capture, playout, and health policy. Boards own
+ * physical controls, codecs, speakers, and presentation. */
 
 /** What the person should be told is happening. */
 enum iterate_kit_voice_screen {
@@ -55,17 +30,7 @@ enum iterate_kit_voice_screen {
 /**
  * Everything the board is allowed to show, as one value.
  *
- * This replaces eight `ui_set_*` functions that appeared 48 times in one device
- * file. They were not eight facts; they were one fact written eight ways, and
- * writing it in pieces is how a board came to read "ready" while the server was
- * refusing it every three seconds — nine sites set the UI state and any of them
- * would erase what another had just published.
- *
- * Pushed once per app-loop pass, always, whether or not anything moved: a board
- * that wants a dirty check does it under its own lock in one comparison, which
- * is cheaper than the nine lock round trips the setters used to cost. It is also
- * the board's per-pass tick — the M5Stick, HAVPE and StackChan panels are pumped
- * by their caller rather than by a timer, and this is that pump.
+ * Pushed once per app-loop pass; boards may use it as their presentation tick.
  */
 struct iterate_kit_voice_view {
   enum iterate_kit_voice_screen screen;
@@ -93,7 +58,7 @@ struct iterate_kit_voice_view {
    */
   bool wants_call;
   bool talk_held;
-  /** A turn is open: the face attends and shuts its mouth. */
+  /** The local microphone gate is open. */
   bool listening;
   /**
    * Loudest sample in the last captured frame.
@@ -131,8 +96,7 @@ struct iterate_kit_voice_intent {
   bool start_call;
   /** An edge: end the session. */
   bool end_call;
-  /** A level: the talk control is down right now, in a state where the
-   * grammar says holding means talking. Push-to-talk boards. */
+  /** A level: the talk control is down on a hold-to-talk board. */
   bool talk_held;
   /** A level: hardware mute is engaged; capture continues for AEC only. */
   bool microphone_muted;
@@ -210,26 +174,6 @@ struct iterate_kit_board_audio {
   struct iterate_kit_audio_processor processor;
 };
 
-/** How this board takes turns. */
-enum iterate_kit_voice_turns {
-  /**
-   * A control is held while speaking; nothing is sent unless it is down.
-   *
-   * On a board with no echo cancellation this IS the echo story: the speaker is
-   * never live into an open microphone, and pressing to talk cancels an answer
-   * in flight instead of talking over it.
-   */
-  ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK,
-  /**
-   * The far end segments turns and the microphone rides the open call.
-   *
-   * Only safe behind real echo cancellation. Requesting the manual default with
-   * no turn machine produces an accepted call and a deaf assistant — a provider
-   * waiting forever for a commit no code sends.
-   */
-  ITERATE_KIT_VOICE_TURNS_SERVER_VAD,
-};
-
 /**
  * The board, as the loop needs to call it.
  *
@@ -244,9 +188,7 @@ struct iterate_kit_board_ops {
    * Power the board and hand back its audio seams.
    *
    * Ordering inside is the board's business — the Waveshare must bring the
-   * panel up before the codec because both resets hang off one TCA9554 — but
-   * whether the radio starts before or after this runs is the loop's, because
-   * that is a bring-up POLICY question. See `radio_before_codec`.
+   * panel up before the codec because both resets hang off one TCA9554.
    */
   bool (*start)(void *context, struct iterate_kit_board_audio *out);
   /** Show this, and pump whatever needs pumping. Once per app-loop pass. */
@@ -283,9 +225,7 @@ struct iterate_kit_board_ops {
       void *context, const struct iterate_kit_voice_answer_note *note);
   /**
    * The capabilities only this board has: an AEC stage, servos, a camera, a
-   * screen to fill. The loop registers conversation control, push-to-talk (when
-   * the board takes turns that way), the speaker and health itself, because
-   * those are the same four on every board.
+   * screen to fill. The loop registers its shared capabilities separately.
    */
   size_t (*modules)(
       void *context, struct iterate_kit_module *out, size_t capacity);
@@ -310,46 +250,8 @@ struct iterate_kit_board_ops {
  * nobody on any board. It is deleted rather than promoted.
  */
 struct iterate_kit_board_facts {
-  /**
-   * ONE CONVERSATION STREAM PER BOARD, not one shared by all of them.
-   *
-   * Every device once defaulted to "/agents/voice/device". Now that a stream
-   * carries many conversations, sharing one means every board presses into the
-   * same conversation and each press supersedes the last: three boards on one
-   * stream produced two call-started for a single press and an answer that
-   * reached nobody.
-   */
-  const char *stream_path;
-  /**
-   * THE OTHER PATH. The stream path above is one CONVERSATION and is minted
-   * fresh per call; this is the DEVICE, and it never changes.
-   */
-  const char *client_path;
-  const char *conversation_id;
-  const char *greeting;
-  /**
-   * THE ONLY DESCRIPTION A MODEL EVER SEES.
-   *
-   * Not `peer_description` — the capability host flattens this mount and reports
-   * `children: {}`, because sub-paths are routes the device interprets rather
-   * than members the host can list. So this is what an agent discovers in
-   * `itx.__describe().capabilities`. It was one 46-character line on one board,
-   * which is why an agent asked for that device's metrics went hunting through
-   * telemetry streams instead of calling `health()`.
-   */
-  const char *instructions;
-  /** What this device is, for whoever holds the capability. */
-  const char *peer_description;
-  /**
-   * How to ask for a turn, in this board's own words: "hold the upper button to
-   * talk", "hold the front button to talk", "speak whenever you like". The
-   * sentence is not decoration — it is the turn policy said out loud, and it was
-   * wrong on a board whose header still documented a push-to-talk grammar the
-   * device had stopped implementing.
-   */
-  const char *talk_hint;
-  /** How to ask for a call: "press upper to call", "press side to call". */
-  const char *call_hint;
+  /** Stable board identity; the loop derives its stream and client paths. */
+  const char *device_name;
   /**
    * The board's speaker, as the portable capability already describes one.
    *
@@ -392,18 +294,8 @@ struct iterate_kit_board_facts {
    * on the first frame.
    */
   uint16_t capture_stack_bytes;
-  enum iterate_kit_voice_turns turns;
-  /**
-   * Start the radio BEFORE powering the codec.
-   *
-   * One board's XMOS + AIC3204 bring-up takes 6.2 s measured, and it used to run
-   * to completion before Wi-Fi was even started — so two waits ran back to back
-   * for no reason and that board reached a ready mount at ~14 s where the others
-   * managed ~8. Nothing in the transport needs the codec; only the capture and
-   * playback tasks do, and they are created after both. Everywhere else the
-   * codec comes first, because the panel and the codec share reset lines.
-   */
-  bool radio_before_codec;
+  /** The board's physical capture control. False keeps the mic open in a call. */
+  bool hold_to_talk;
 };
 
 /**
@@ -429,32 +321,6 @@ bool iterate_kit_voice_loop_init(
 void iterate_kit_voice_loop_step(uint64_t now_ms);
 void iterate_kit_voice_loop_capture_step(void);
 void iterate_kit_voice_loop_playback_step(void);
-
-/**
- * Re-point the device at a different conversation stream.
- *
- * The other half of the getter above: the path IS the conversation's
- * identity, so writing it is how a board changes conversations. A mounted
- * stream is closed and remounted at the new path on the same connection;
- * before the first mount this only replaces the seed. Boards call it from
- * the app task with NO CALL WANTED — re-pointing underneath a call being
- * placed would strand the call — and health() reports the adopted path as
- * `conversation`, which is how a change is verified on a board whose console
- * port reboots it.
- */
-void iterate_kit_voice_loop_set_stream_path(const char *path);
-
-/**
- * Re-select the turn policy at runtime, overriding `facts->turns`.
- *
- * For the board whose dial chooses among streams whose far ends take turns
- * differently: posture must follow the path or the two halves of the call
- * disagree about who closes a turn. Takes effect on the next pass. It moves
- * only the per-pass policy — the microphone gate and the turn markers — not
- * the capability surface: whether pushToTalk is MOUNTED stays a compile-time
- * fact, because the peer was described once at mount.
- */
-void iterate_kit_voice_loop_set_turns(enum iterate_kit_voice_turns turns);
 
 #ifdef __cplusplus
 }

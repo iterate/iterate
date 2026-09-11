@@ -17,9 +17,8 @@
  * loop owns the conversion, so the fail-closed silence rule lives in one place
  * instead of being restated here.
  *
- * Turn taking is the PROVIDER'S, on the strength of that canceller: the
- * microphone rides the open call and server VAD segments turns. A recorded
- * divergence from decision A2, and the right one — push-to-talk's rationale is
+ * The microphone rides the open call on the strength of that canceller. A
+ * recorded divergence from decision A2, and the right one — hold-to-talk's rationale is
  * the echo story on boards WITHOUT cancellation, and gating this microphone
  * would defeat the ported AEC's entire purpose.
  *
@@ -202,7 +201,7 @@ static void present(
   last_present_ms = now;
   /* One fleet mapping, then two facts only this board has:
    * (a) the FACE opens its eyes on conversation_active, and it must open on
-   *     the press, not seconds later when the provider session is live —
+   *     the press, not seconds later when the GPT-Live session is live —
    *     otherwise the chime answers a sleeping face (the regression the
    *     deleted mapping's comment recorded, and review round 2 found again);
    * (b) the physical playout meter is the SPEAKER's level, not the mic's;
@@ -546,8 +545,8 @@ static enum capnweb_status head_shake(
  * What this board has that no other does: a head (raw moves and the two
  * named gestures), a camera, its own screen as an image source, the fill,
  * and a face that can be asked for by name. Conversation control, the
- * speaker and health are the loop's, and push-to-talk is not mounted at all
- * because this board's turns are the provider's.
+ * speaker and health are the loop's. This board has no remote hold-to-talk
+ * control because its microphone stays open during the call.
  */
 static size_t modules(
     void *context, struct iterate_kit_module *out, size_t capacity) {
@@ -746,71 +745,7 @@ static const struct iterate_kit_board_ops ops = {
 
 static const struct iterate_kit_board board = {
   .facts = {
-  .stream_path = "/agents/voice/stackchan-2",
-  .client_path = "/clients/stackchan",
-  .conversation_id = "scdev",
-  .instructions =
-      "StackChan: a small desk robot with a face, a moving head and a camera. "
-      "Its face or side button starts and ends the call — with a chime on wake "
-      "and a spoken \"call ended\" on every end — and its microphone stays OPEN "
-      "throughout: it cancels its own speaker, so it can be interrupted. "
-      "conversation.start() and conversation.end() begin and end a call. "
-      "health() returns this device's full diagnostics — start there when it "
-      "seems unwell. "
-      "speaker.setVolume({percent}) sets how loud it plays, 0-100, clamped to "
-      "a ceiling this board has a measured reason for; speaker.volume() reads "
-      "it back. Both answer {percent,ceiling}. "
-      "servos.move({yawDegrees,pitchDegrees,speed}) turns its head: yaw -128 "
-      "to 128, pitch 0 to 90, speed up to 1000. Returning to 0,0 is looking "
-      "straight ahead. head.nod() nods yes and head.shake() shakes no — one "
-      "call each, the itinerary is the board's. "
-      "face.set({face}) changes which face it wears; the catalogue is "
-      "dot-matrix-oracle, furnace-imp, karakuri-brass, moonscope, starbyte. "
-      "camera.take() photographs what it can see and returns "
-      "{width,height,contentType,bytes,chunkSize,chunks}; "
-      "camera.readChunk({index}) then returns each piece in order, because one "
-      "image is larger than a single message. The first take() powers the "
-      "sensor up, so it is the slow one. "
-      "screen.take() and screen.readChunk({index}) do the same for what is on "
-      "the panel right now, and screen.fill({colour}) paints it a flat RGB565 "
-      "colour — the only way to tell a dark panel from a dark face. "
-      "screen.show({url, seconds}) fetches a JPEG url and shows it "
-      "full-screen for that long, then the face returns. "
-      "Audio and lifecycle events share this stream connection.",
-  /*
-   * WHAT THE MODEL IS TOLD IT CAN DO. `children` stays empty because this is a
-   * flattened dispatch target — sub-paths are routes the device interprets,
-   * not members the host can enumerate — so the method list has to be in the
-   * prose or it is nowhere. A capability nothing advertises is one nothing
-   * calls: a back-office agent asked for this device's metrics once went
-   * hunting through telemetry streams because nothing told it health() existed.
-   */
-  .peer_description =
-      "{\"instructions\":\"StackChan voice robot. "
-      "conversation.start() / conversation.end() begin and end a call. "
-      "servos.move({yawDegrees,pitchDegrees,speed}) turns its head; yaw "
-      "-128..128, pitch 0..90, speed up to 1000. head.nod() nods yes and "
-      "head.shake() shakes no, one call each. "
-      "face.set({face}) changes which face it wears; the catalogue is "
-      "dot-matrix-oracle, furnace-imp, karakuri-brass, moonscope, starbyte. "
-      "speaker.setVolume({percent}) sets how loud it plays, 0-100; it clamps "
-      "to a ceiling this board has a measured reason for and answers with "
-      "{percent,ceiling}, which speaker.volume() also returns. "
-      "health() returns this device's full diagnostics document, including "
-      "whether its audio directions are alive. "
-      "camera.take() photographs what it can see and returns "
-      "{width,height,contentType,bytes,chunkSize,chunks}; then "
-      "camera.readChunk({index}) returns each piece in order — the image is "
-      "delivered in pieces because one is larger than a single message, and it "
-      "is held until the next take(). The sensor is powered up by the first "
-      "take(), so that call is the slow one and it is the call that reports a "
-      "unit whose camera cannot start. screen.take() / screen.readChunk() do "
-      "the same for the panel's current contents, and screen.fill({colour}) "
-      "paints it flat. screen.show({url, seconds}) fetches a JPEG url and "
-      "shows it full-screen for that long, then the face returns."
-      "\",\"children\":{}}",
-  .talk_hint = "speak whenever you like",
-  .call_hint = "connection lost — press the side button to call",
+  .device_name = "stackchan",
   .speaker = {
     .context = NULL,
     .volume = volume, /* Seed board.c from the NVS-restored hardware volume. */
@@ -836,13 +771,12 @@ static const struct iterate_kit_board board = {
    * first frame is processed.
    */
   .capture_stack_bytes = 8192,
-  .turns = ITERATE_KIT_VOICE_TURNS_SERVER_VAD,
+  .hold_to_talk = false,
   /*
    * Codec first, like everyone but the HA Voice PE. This board's bring-up is
    * not the long pole — the camera is, and it is deliberately deferred to its
    * first take() so it cannot take the internal DMA memory Wi-Fi needs.
    */
-  .radio_before_codec = false,
   },
   .i2c = {.sda = -1, .scl = -1}, /* The CoreS3 BSP owns all buses in extra. */
   .audio = NULL, /* Four-slot TDM and esp-sr remain board-owned. */

@@ -93,19 +93,19 @@ void iterate_kit_board_apply_gestures(
     struct iterate_kit_session *session,
     const struct iterate_kit_board_gestures *gestures,
     const struct iterate_kit_gpio_button *button,
-    enum iterate_kit_voice_turns turns,
+    bool hold_to_talk,
     const struct iterate_kit_voice_view *view,
     uint64_t now_ms,
     struct iterate_kit_session_actions *actions) {
   const struct iterate_kit_session_poll poll = {
-    .tap = gestures->tap || (gestures->pressed && button->tap_wakes &&
+    .tap = gestures->tap || (gestures->pressed && !hold_to_talk &&
         !view->wants_call && !view->call_active),
     .held = gestures->held,
     .end_hold = gestures->end_hold,
     .end_press = gestures->end_press,
     .wants_call = view->wants_call,
     .call_active = view->call_active,
-    .push_to_talk = turns == ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK,
+    .push_to_talk = hold_to_talk,
     .tap_wakes = button->tap_wakes,
     .tap_ends = button->tap_ends,
     .now_ms = now_ms,
@@ -113,12 +113,10 @@ void iterate_kit_board_apply_gestures(
   iterate_kit_session_step(session, &poll, actions);
 }
 
-/** Fill omitted loop facts before voice_loop validates processor/capture cadence. */
+/** Fill omitted audio facts before voice_loop validates processor/capture cadence. */
 struct iterate_kit_board_facts iterate_kit_board_defaults(
     const struct iterate_kit_board *board) {
   struct iterate_kit_board_facts facts = board->facts;
-  if (facts.greeting == NULL)
-    facts.greeting = "Hi, I am your Iterate device. What can I do for you?";
   if (facts.processing_frame_samples == 0U)
     facts.processing_frame_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES;
   if (facts.capture_chunk_samples == 0U)
@@ -138,6 +136,8 @@ struct iterate_kit_board_facts iterate_kit_board_defaults(
 
 #ifdef ESP_PLATFORM
 #include "driver/gpio.h"
+#include "esp_log.h"
+#include "esp_ota_ops.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -151,7 +151,6 @@ static struct iterate_kit_button button;
 static struct iterate_kit_session session;
 static struct iterate_kit_session_actions actions;
 static struct iterate_kit_voice_view view;
-static enum iterate_kit_voice_turns turns;
 static bool microphone_muted;
 static uint8_t volume_percent;
 
@@ -336,7 +335,7 @@ static void present(void *context, const struct iterate_kit_voice_view *value) {
   view = *value;
 #ifdef CONFIG_ITERATE_KIT_WAKE_WORD
   if (board->wake_word != NULL) iterate_kit_wake_word_set_enabled(
-      !microphone_muted && turns == ITERATE_KIT_VOICE_TURNS_SERVER_VAD &&
+      !microphone_muted && !board->facts.hold_to_talk &&
       !view.call_active && !view.wants_call);
 #endif
   if (board->ring.pixels != 0U) {
@@ -368,7 +367,7 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
 #ifdef CONFIG_ITERATE_KIT_WAKE_WORD
   /* Worker detections reach the same synthetic-tap queue as capabilities. */
   if (!microphone_muted && board->wake_word != NULL &&
-      turns == ITERATE_KIT_VOICE_TURNS_SERVER_VAD && !view.call_active && !view.wants_call &&
+      !board->facts.hold_to_talk && !view.call_active && !view.wants_call &&
       iterate_kit_wake_word_take_detection()) iterate_kit_board_inject_tap();
 #endif
   if (board->button.gpio >= 0) {
@@ -383,7 +382,8 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   const bool button_tap = iterate_kit_button_take_tap(&button);
   gestures.tap = gestures.tap || button_tap;
   iterate_kit_board_apply_gestures(
-      &session, &gestures, &board->button, turns, &view, now_ms, &actions);
+      &session, &gestures, &board->button, board->facts.hold_to_talk,
+      &view, now_ms, &actions);
   *out = (struct iterate_kit_voice_intent){
     .start_call = !microphone_muted && actions.start_call,
     .end_call = microphone_muted ? (view.call_active || view.wants_call) : actions.end_call,
@@ -446,7 +446,19 @@ static size_t iterate_kit_board_modules(
 /** Install shared startup, presentation, controls, health and modules, then run. */
 void iterate_kit_board_run(const struct iterate_kit_board *value) {
   board = value;
-  turns = board->facts.turns;
+#if ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
+  /* Latch before provisioning/network startup. A diagnostic must never roll
+   * back into the previous, potentially audible image if networking fails. */
+  const bool output_off = board->audio != NULL &&
+      board->audio->amplifier_gpio >= 0 &&
+      iterate_kit_i2s_codec_prepare_amplifier(board->audio);
+  const esp_err_t accepted = esp_ota_mark_app_valid_cancel_rollback();
+  if (!output_off || accepted != ESP_OK) {
+    ESP_LOGE("board", "silent startup failed: output_off=%d ota=%s",
+        output_off, esp_err_to_name(accepted));
+    for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+#endif
   volume_percent = board->facts.speaker.ceiling;
   struct iterate_kit_board_facts facts = iterate_kit_board_defaults(board);
   facts.speaker.set_volume = set_volume;

@@ -15,7 +15,7 @@
  * other — the client's, the facet's, the stream Durable Object's, and the
  * inference provider's. The taxonomy and the naming rule live in
  * `voice-agent2.ts`, which is where events are defined; on the wire they are
- * `...AtDeviceMs`, `...AtFacetMs`, `...AtStreamMs` and `...AtGrokMs`.
+ * `...AtDeviceMs`, `...AtFacetMs`, and `...AtStreamMs`.
  *
  * IN HERE, THIS MACHINE IS THE DEVICE, and every bare `_ms` below is
  * `cli_runtime_now_ms()` — this process's own monotonic clock, and nothing
@@ -24,7 +24,7 @@
  *
  * So the rule for this struct is the inverse of the rule on the wire: a bare
  * `_ms` is OURS, and a stamp from anywhere else must name where it came from
- * (`..._at_facet_ms`, `..._at_stream_ms`, `..._at_grok_ms`) and may never be
+ * (`..._at_facet_ms`, `..._at_stream_ms`) and may never be
  * subtracted from one of ours. There are currently NONE — this target reads no
  * foreign timestamp off any payload, and `turn-timing` is deliberately read by
  * the latency probes rather than by the client. Adding the first one is the
@@ -91,6 +91,12 @@ struct cli_runtime {
   /** RAM-only id for the current local microphone activation. */
   char activation[33];
   bool activation_active;
+  /** Monotonic local activation edge; zero before the first activation. */
+  uint64_t activation_started_ms;
+  /** True until provider acceptance or one terminal opening timeout. */
+  bool opening_pending;
+  bool opening_timed_out;
+  uint32_t opening_timeouts;
   struct cli_microphone microphone;
   struct cli_speaker speaker;
   /*
