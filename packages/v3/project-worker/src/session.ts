@@ -135,6 +135,7 @@ type SessionAuthority = {
 export class SessionRpcTarget extends RpcTarget {
   readonly #sessionTeardown: SessionTeardown;
   readonly #projects: ProjectCollection;
+  readonly #organizations: OrganizationCollection;
   readonly #input: SessionInput;
   readonly #authority: SessionAuthority;
 
@@ -149,6 +150,9 @@ export class SessionRpcTarget extends RpcTarget {
       authority.principal,
       authority.reach,
       authority.projectDoors,
+    );
+    this.#organizations = new OrganizationCollection((orgId) =>
+      this.#globalContext(`/organizations/${orgId}`),
     );
   }
 
@@ -213,6 +217,13 @@ export class SessionRpcTarget extends RpcTarget {
     return this.#projects;
   }
 
+  /** The organizations this session can reach, each as a global IterateContextRpcTarget at
+   *  `(global, /organizations/<orgId>)` — the same context surface as a user or a project. `orgs()`
+   *  returns the directory rows; this vends the org's context. */
+  get organizations(): OrganizationCollection {
+    return this.#organizations;
+  }
+
   /** The signed-in human's own context in the deployment-global namespace — an ORDINARY
    *  IterateContextRpcTarget at `(global, /users/<userId>)`, the exact surface a project context
    *  has (`session.user` is `session.projects.get(...)` one namespace over). A getter, like
@@ -244,6 +255,22 @@ export class SessionRpcTarget extends RpcTarget {
       this.#authority.principal,
       null,
     );
+  }
+}
+
+/** The organization catalog: `get(orgId)` vends an organization's context in the deployment-global
+ *  namespace. Thin — it holds only a factory for `(global, /organizations/<orgId>)`; which orgs a
+ *  caller may reach is the path-mask access policy (NOT YET ENFORCED — captured as failing tests). */
+class OrganizationCollection extends RpcTarget {
+  readonly #context: (orgId: string) => IterateContextRpcTarget;
+
+  constructor(context: (orgId: string) => IterateContextRpcTarget) {
+    super();
+    this.#context = context;
+  }
+
+  get(orgId: string): IterateContextRpcTarget {
+    return this.#context(z.string().trim().min(1).parse(orgId));
   }
 }
 
