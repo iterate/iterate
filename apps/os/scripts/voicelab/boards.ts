@@ -63,7 +63,8 @@ interface Board {
    *
    * The two boards with echo cancellation — StackChan in software, the HA
    * Voice PE in its XMOS DSP — run open-mic on the provider's server VAD.
-   * The two without it are push-to-talk, and speaking at one of those
+   * The two without it unmute the microphone only while the button is held
+   * (a fact about the board, never the stream), and speaking at one of those
    * without holding the button proves nothing.
    */
   pushToTalk: boolean;

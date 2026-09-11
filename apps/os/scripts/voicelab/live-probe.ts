@@ -46,7 +46,7 @@ export interface LiveProbeOptions {
   bargeAfterMs?: number;
   /** Mute input, speak --say2, unmute — the transcript must stay silent. */
   mute?: boolean;
-  /** Push-to-talk shape: stop sending ANY frames for this long the moment --say ends. */
+  /** A hold-to-unmute release: stop sending ANY frames for this long the moment --say ends. */
   stopAfterUtteranceMs?: number;
   /** `client` (default) hands delegations to this probe; `responses` to a hosted backend. */
   delegation?: "client" | "responses";

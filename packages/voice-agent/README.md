@@ -260,31 +260,38 @@ seconds later.
 A client is anything that can append to the stream and receive its ephemeral
 events. Every type below is prefixed `events.iterate.com/voice-agent/`.
 
-| Event                        | Direction | Durable   | Payload                                                                                                         |
-| ---------------------------- | --------- | --------- | --------------------------------------------------------------------------------------------------------------- |
-| `ptt-start`                  | client →  | durable   | `{}` — the user pressed to talk; opens a call if none is up, interrupts what the device is playing              |
-| `mic-frame`                  | client →  | ephemeral | `{ conversationId, seq, pcm }` — 20 ms of base64 PCM16 mono 16 kHz, numbered by the device                      |
-| `ptt-end`                    | client →  | ephemeral | `{}` — the button came up; the provider hears the audio stop and needs nothing else                             |
-| `conversation-end-requested` | either    | durable   | `{ conversationId, reason }` — somebody decided the call is over (the hang-up button, the `hang_up` tool, idle) |
-| `call-started`               | ← server  | durable   | `{ conversationId }` — the server opened a call                                                                 |
-| `conversation-accepted`      | ← server  | durable   | `{ conversationId, handshakeTookMs, heldMicFrames }` — the provider accepted the session; the call is live      |
-| `spk-frame`                  | ← server  | ephemeral | `{ conversationId, deviceSpeakerFrameSeq, pcm, drop?, last? }` — one paced chunk of the answer                  |
-| `utterance-transcript`       | ← server  | durable   | `{ conversationId, text }` — the provider's transcription of one finished listener turn                         |
-| `answer-transcript`          | ← server  | durable   | `{ conversationId, text, cancelled? }` — one finished answer, in words                                          |
-| `backend-reply`              | ← server  | durable   | `{ conversationId, text }` — the backend model's final text for one delegation                                  |
-| `conversation-ended`         | ← server  | durable   | `{ conversationId, reason }` — the call is over                                                                 |
+| Event                        | Direction | Durable   | Payload                                                                                                                                                 |
+| ---------------------------- | --------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mic-frame`                  | client →  | ephemeral | `{ conversationId, seq, pcm }` — base64 PCM16 mono 16 kHz, any length, numbered by the device; the first one on a quiet stream opens a call             |
+| `keepalive`                  | client →  | ephemeral | `{}` — the call UI is open, said every ~20 s; feeds the idle deadline so a quiet listener is not reaped                                                 |
+| `conversation-end-requested` | either    | durable   | `{ conversationId, reason }` — somebody decided the call is over (the hang-up button, the `hang_up` tool, idle)                                         |
+| `call-started`               | ← server  | durable   | `{ conversationId }` — the server opened a call                                                                                                         |
+| `conversation-accepted`      | ← server  | durable   | `{ conversationId, handshakeTookMs, heldMicFrames }` — the provider accepted the session; the call is live                                              |
+| `spk-frame`                  | ← server  | ephemeral | `{ conversationId, deviceSpeakerFrameSeq, pcm, clearSpeakerBufferBeforeFrame?, lastFrameOfAnswer? }` — one chunk of the answer, forwarded as it arrived |
+| `utterance-transcript`       | ← server  | durable   | `{ conversationId, text }` — the provider's transcription of one finished listener turn                                                                 |
+| `answer-transcript`          | ← server  | durable   | `{ conversationId, text }` — one finished answer, in words                                                                                              |
+| `backend-reply`              | ← server  | durable   | `{ conversationId, text }` — the backend model's final text for one delegation                                                                          |
+| `conversation-ended`         | ← server  | durable   | `{ conversationId, reason }` — the call is over                                                                                                         |
 
-**A client's entire speaker policy is three lines.** On a `spk-frame`: if
-`clearSpeakerBufferBeforeFrame`, clear the speaker buffer (the button took
-the floor; discard what has not played); write `pcm`; if `lastFrameOfAnswer`,
-the answer is over. The server holds the
-answer and releases it at playback rate, so a client never buffers more than
-a few seconds and never has to number, catch up, or skip. The frame sequence
-number is contiguous within a conversation, which is how a client (or the
-voicelab report) can prove nothing was lost.
+**A client's whole contract is four sentences.** Send `mic-frame`s while
+the microphone is open — the first one on a quiet stream opens the call, and a
+button, where the client has one, only unmutes the microphone while held.
+Play every `spk-frame` in `deviceSpeakerFrameSeq` order as it arrives; if
+`clearSpeakerBufferBeforeFrame`, empty the speaker buffer first (a re-dialled
+call flushes the dead incarnation's frames); `lastFrameOfAnswer` says the
+answer is over. Send `keepalive` every ~20 s while the call UI is open, so a
+quiet listener is not reaped at the 60 s idle deadline. Send
+`conversation-end-requested` to end the call.
+
+The facet is a relay: GPT-Live delivers audio at play rate and every delta is
+forwarded the instant it arrives, so the client's own playout buffer is the
+only buffer — size it to the network the client sits on (the kit firmware
+prefills 150 ms). The frame sequence number is contiguous within a
+conversation, which is how a client (or the voicelab report) can prove
+nothing was lost.
 
 Real clients to copy from: `apps/mobile/src/lib/voice-call.ts` (React
-Native, push-to-talk, the marker logic in `voice-setup.ts` that runs `setup`
+Native, hold-to-unmute, the marker logic in `voice-setup.ts` that runs `setup`
 once per config), `apps/kit/firmware` (the boards, open mic), and
 `apps/os/scripts/voicelab/talk.ts` (a Mac). Ephemeral frames are only
 visible to a live stream connection, never to a later read; the durable

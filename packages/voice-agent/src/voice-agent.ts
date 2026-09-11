@@ -294,23 +294,13 @@ interface TranscriptTurn {
   text: string;
 }
 
-/**
- * Fold one finished turn onto the recap, applying both bounds. The `suffix`
- * (a provenance marker such as "the listener interrupted") lands AFTER the
- * cut, so no long answer can truncate its own caveat away.
- */
-function foldTranscriptTurn(
-  transcript: TranscriptTurn[],
-  turn: TranscriptTurn,
-  suffix = "",
-): TranscriptTurn[] {
+/** Fold one finished turn onto the recap, applying both bounds. */
+function foldTranscriptTurn(transcript: TranscriptTurn[], turn: TranscriptTurn): TranscriptTurn[] {
   const text =
     turn.text.length > TRANSCRIPT_TURN_MAX_CHARS
       ? `${turn.text.slice(0, TRANSCRIPT_TURN_MAX_CHARS)}…`
       : turn.text;
-  return [...transcript, { role: turn.role, text: `${text}${suffix}` }].slice(
-    -TRANSCRIPT_MAX_TURNS,
-  );
+  return [...transcript, { role: turn.role, text }].slice(-TRANSCRIPT_MAX_TURNS);
 }
 
 /* ===========================================================================
@@ -623,7 +613,14 @@ export const VoiceAgentContract = defineProcessorContract({
    * timeline fragments rather than read off item ids. A persisted 19.x fold
    * misnames these; the major bump re-reduces instead of loading it. Clean
    * break as ever. */
-  version: "20.0.0",
+  /* 21.0.0: push-to-talk leaves the contract. `ptt-start` and `ptt-end` are
+   * gone: a mic frame is what opens a call, GPT-Live yields by itself when
+   * it hears the person (71 ms, measured), and a client's button — if it has
+   * one — is "unmute the microphone while held", a fact about the client
+   * that never reaches this stream. With no press there is no barge and no
+   * interrupted answer, so `answer-transcript` loses `cancelled`. Clean
+   * break as ever. */
+  version: "21.0.0",
   description:
     "Runs a GPT-Live voice call in the stream's own Durable Object, relaying audio both ways as it arrives.",
   stateSchema: VoiceState,
@@ -653,12 +650,10 @@ export const VoiceAgentContract = defineProcessorContract({
       }),
     },
     /*
-     * THE DEVICE'S HALF, and it is three verbs: the button went down, here is
-     * audio, the button came up. Whether a call exists, what it is called and
-     * when it ends are the server's. GPT-Live takes every turn itself, so the
-     * button edges carry no provider meaning any more — the press is still an
-     * interruption of whatever the device is playing, and the opening press
-     * still mints the call.
+     * THE DEVICE'S HALF is one verb and a heartbeat: here is audio, I am
+     * still here. Whether a call exists, what it is called and when it ends
+     * are the server's. A button, where a client has one, only unmutes its
+     * microphone while held; nothing about it travels.
      */
     "events.iterate.com/voice-agent/keepalive": {
       description:
@@ -667,26 +662,15 @@ export const VoiceAgentContract = defineProcessorContract({
       ...EPH,
       payloadSchema: z.looseObject({ t: z.number().optional() }),
     },
-    "events.iterate.com/voice-agent/ptt-start": {
-      description:
-        "The user began speaking (pressed to talk). Opens a call if one is not already up; " +
-        "interrupts whatever the device is playing. DURABLE, alone among the device's verbs: " +
-        "the opening press is the one event whose loss strands a human.",
-      payloadSchema: z.looseObject({}),
-    },
     "events.iterate.com/voice-agent/mic-frame": {
-      description: "One capture frame, numbered by the device that captured it.",
+      description:
+        "One capture chunk, of any length, numbered by the device that captured it. The first " +
+        "one on a quiet stream opens a call.",
       ...EPH,
       payloadSchema: z.looseObject({
         /** 16 kHz mono PCM16, base64. The only encoding these frames carry. */
         pcm: z.string(),
       }),
-    },
-    "events.iterate.com/voice-agent/ptt-end": {
-      description:
-        "The user released the button. Nothing for the provider: it hears the audio stop.",
-      ...EPH,
-      payloadSchema: z.looseObject({}),
     },
     "events.iterate.com/voice-agent/call-started": {
       description: "The server opened a call and what it is called.",
@@ -728,14 +712,9 @@ export const VoiceAgentContract = defineProcessorContract({
     },
     "events.iterate.com/voice-agent/answer-transcript": {
       description:
-        "The provider's own transcript of one finished spoken answer. `cancelled` marks an " +
-        "answer the listener cut off with the button; its text is what was said, not " +
-        "necessarily what was heard.",
-      payloadSchema: z.looseObject({
-        conversationId: z.string(),
-        text: z.string(),
-        cancelled: z.boolean().optional(),
-      }),
+        "The provider's own transcript of one finished spoken answer — what was said, not " +
+        "necessarily what was heard: the listener may have talked over it.",
+      payloadSchema: z.looseObject({ conversationId: z.string(), text: z.string() }),
     },
     "events.iterate.com/voice-agent/backend-reply": {
       description:
@@ -811,9 +790,7 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/answer-transcript",
     /* The live half. Naming them is the whole opt-in — `"*"` never matches an
      * ephemeral event, so nobody gets this firehose by accident. */
-    "events.iterate.com/voice-agent/ptt-start",
     "events.iterate.com/voice-agent/mic-frame",
-    "events.iterate.com/voice-agent/ptt-end",
     /* The client's "still here" heartbeat — consumed only for the idle
      * stamp; processEvent has no arm for it. */
     "events.iterate.com/voice-agent/keepalive",
@@ -850,17 +827,10 @@ interface Answer {
   /** Silence received since the last speech in this answer, in audio ms —
    * the counter that ends it. */
   trailingSilenceMs: number;
-  /** Facet clock at this answer's first speech — 0 until one arrives. What
-   * the button arm compares a press's `createdAt` against. */
-  startedAtFacetMs: number;
 }
 
 /** The between-answers state: nothing playing, nothing owed. */
-const freshAnswer = (): Answer => ({
-  phase: "settled",
-  trailingSilenceMs: 0,
-  startedAtFacetMs: 0,
-});
+const freshAnswer = (): Answer => ({ phase: "settled", trailingSilenceMs: 0 });
 
 /** One speaker's open transcript row: fragments not yet closed by a gap. */
 interface TurnBuffer {
@@ -868,8 +838,6 @@ interface TurnBuffer {
   /** Session timeline, both ends. */
   startTimelineMs: number;
   endTimelineMs: number;
-  /** The button cut this answer off while it was being spoken. */
-  interrupted: boolean;
 }
 
 /**
@@ -894,8 +862,8 @@ interface Dial {
   /**
    * Frames awaiting hand-over to the stream, oldest first — the delta's own
    * base64, or an empty frame carrying the end marker. NUMBERED WHEN SENT,
-   * not when queued, so a press that drops queued dead air leaves no hole in
-   * the numbering. In the ordinary course this holds one frame for the
+   * not when queued, so an obituary that drops queued frames leaves no hole
+   * in the numbering. In the ordinary course this holds one frame for the
    * duration of one append.
    */
   speakerOutbox: { pcm: string; lastFrameOfAnswer?: true }[];
@@ -913,8 +881,6 @@ interface Dial {
   lastSpeakerFrameAtFacetMs: number;
   /** Last speaker-frame sequence number minted, for this call. */
   lastDeviceSpeakerFrameSeq: number;
-  /** How far a clear has already been declared, so a repeated press is free. */
-  clearedThroughDeviceSpeakerFrameSeq: number;
   /**
    * The next frame out must tell the device to empty its speaker first.
    * TRUE FROM THE MOMENT THE DIAL IS DECIDED: the device may still hold
@@ -922,14 +888,6 @@ interface Dial {
    * about to arrive. Consumed by the sender.
    */
   clearSpeakerBufferBeforeNextFrame: boolean;
-  /**
-   * The button took the floor while the provider was mid-sentence. The
-   * model has not heard the person yet (the press precedes the words), so
-   * its speech keeps arriving for a beat; those deltas are dead — the
-   * person owns the floor — and are dropped until the stream goes silent
-   * once, which is the model itself yielding.
-   */
-  suppressSpeechUntilSilence: boolean;
   /** The face, when the certificate says something renders one; null costs nothing. */
   face: ReturnType<typeof createFace> | null;
   /**
@@ -987,9 +945,7 @@ const freshDial = (conversationId: string): Dial => ({
   sending: false,
   lastSpeakerFrameAtFacetMs: 0,
   lastDeviceSpeakerFrameSeq: 0,
-  clearedThroughDeviceSpeakerFrameSeq: 0,
   clearSpeakerBufferBeforeNextFrame: true,
-  suppressSpeechUntilSilence: false,
   face: null,
   hangUpReason: null,
   hangUpArmedAtFacetMs: 0,
@@ -1122,9 +1078,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           },
         };
 
-      case "events.iterate.com/voice-agent/ptt-start":
       case "events.iterate.com/voice-agent/mic-frame":
-      case "events.iterate.com/voice-agent/ptt-end":
       case "events.iterate.com/voice-agent/keepalive":
         /* Their BODIES never reach the fold, but their commit stamps are as
          * durable as any event's, and folding the newest is what makes the
@@ -1171,13 +1125,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
         if (event.payload.text === "") return state;
         return {
           ...state,
-          transcript: foldTranscriptTurn(
-            state.transcript,
-            { role: "assistant", text: event.payload.text },
-            event.payload.cancelled === true
-              ? " (the listener interrupted this answer partway)"
-              : "",
-          ),
+          transcript: foldTranscriptTurn(state.transcript, {
+            role: "assistant",
+            text: event.payload.text,
+          }),
         };
       }
 
@@ -1229,13 +1180,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (event === null) return;
 
     switch (event.type) {
-      case "events.iterate.com/voice-agent/ptt-start":
-      case "events.iterate.com/voice-agent/mic-frame":
-      case "events.iterate.com/voice-agent/ptt-end": {
+      case "events.iterate.com/voice-agent/mic-frame": {
         /* NOT DECODED HERE, on purpose. The frame stays the device's own
          * base64 string all the way to the wire. */
-        const micB64 =
-          event.type === "events.iterate.com/voice-agent/mic-frame" ? event.payload.pcm : null;
+        const micB64 = event.payload.pcm;
         /* An empty frame is a client bug, not audio: the provider rejects
          * "audio/pcm audio must not be empty" and it can open no call. */
         if (micB64 === "") return;
@@ -1245,12 +1193,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
         if (state.call === null && !this.#callRequested) {
           /*
            * A CALL IS OPENED BY SOMEBODY TALKING, not by anybody asking for
-           * one. ONLY SPEECH OPENS A CALL: ephemeral delivery drops and
-           * re-delivers, so a lone ptt-end arrives here, and a call minted
-           * for it would be a zombie squatting out the idle deadline.
-           */
-          if (event.type === "events.iterate.com/voice-agent/ptt-end") return;
-          /*
+           * one: the first frame on a quiet stream mints it. Frames are
+           * ephemeral, so a frame from another era cannot be replayed into
+           * an empty room.
+           *
            * AND NOT THE LAST CALL'S DYING BREATH. A device drains its mic
            * queue for ~100 ms after the far end hangs up; those frames land
            * on a null call and minted its successor within 171 ms.
@@ -1260,21 +1206,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
             this.deps.nowAtFacetMs() - this.#conversationEndedAtMs < 1500
           ) {
             return;
-          }
-          /*
-           * AND NOT A PRESS FROM ANOTHER ERA. ptt-start is durable, so a
-           * half-hour-old press replayed after a long facet outage must not
-           * mint a call to an empty room. The device re-presses every 3s
-           * while it still wants the call, so 30s of validity loses nobody.
-           */
-          if (event.type === "events.iterate.com/voice-agent/ptt-start") {
-            const pressedAtStreamMs = Date.parse(event.createdAt);
-            if (
-              Number.isFinite(pressedAtStreamMs) &&
-              this.deps.nowAtFacetMs() - pressedAtStreamMs > 30_000
-            ) {
-              return;
-            }
           }
           const conversationId = `conv_${crypto.randomUUID()}`;
           this.#callRequested = true;
@@ -1305,42 +1236,12 @@ export class VoiceAgentProcessor extends StreamProcessor<
           this.#openProviderConnection(conversationId, state, append, runInBackground);
         }
 
-        /*
-         * THE BUTTON IS AN INTERRUPTION of whatever the device is playing.
-         * GPT-Live will stop itself the moment it hears the person, but the
-         * press comes first and the device holds a beat of audio; the clear
-         * makes the interruption feel instant. Guarded on the FOLD's call,
-         * not just the dial: the press that MINTED the call barges nothing.
-         */
-        if (event.type === "events.iterate.com/voice-agent/ptt-start" && state.call !== null) {
-          const dial = this.#dial;
-          /* AND NOT THE DIAL'S OWN ECHO. The device re-presses every 3s while
-           * it still wants the call, stamped BEFORE any answer existed; the
-           * delivery hands them over seconds late. An interruption is a
-           * press stamped AFTER the answer it means to stop began. The 250ms
-           * guard band absorbs stream-vs-facet wall-clock skew. */
-          const pressedAtStreamMs = Date.parse(event.createdAt);
-          const answerStartedAtFacetMs = dial?.answer.startedAtFacetMs ?? 0;
-          const pressIsOpeningEcho =
-            Number.isFinite(pressedAtStreamMs) &&
-            answerStartedAtFacetMs > 0 &&
-            pressedAtStreamMs < answerStartedAtFacetMs - 250;
-          if (dial !== null && !pressIsOpeningEcho) {
-            this.#bargeAnswer(dial, this.deps.nowAtFacetMs(), append);
-          }
+        const dial = this.#dial;
+        if (dial !== null && dial.ready && dial.socket !== null) {
+          this.#sendMicAudio(dial.socket, micB64);
+        } else if (this.#micQueue.length < MAX_HELD_MIC_FRAMES) {
+          this.#micQueue.push(micB64);
         }
-
-        if (micB64 !== null) {
-          const dial = this.#dial;
-          if (dial !== null && dial.ready && dial.socket !== null) {
-            this.#sendMicAudio(dial.socket, micB64);
-          } else if (this.#micQueue.length < MAX_HELD_MIC_FRAMES) {
-            this.#micQueue.push(micB64);
-          }
-        }
-        /* ptt-end says nothing to the provider: it hears the audio stop, and
-         * measured from this Mac it answered 475 ms after a button-release-
-         * shaped stop with no frames behind it. */
         return;
       }
 
@@ -1674,6 +1575,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
         /* Usable. Everything the handshake made us hold goes now. */
         dial.ready = true;
         const heldMicFrames = this.#micQueue.length;
+        /* Read before the flush empties the hold: did the person speak while
+         * the dial was in flight? A quiet room's frames are silence. */
+        const callerSpoke = this.#micQueue.some((frame) => peakOfBase64Pcm16(frame) >= SPEECH_PEAK);
         for (const held of this.#micQueue) this.#sendMicAudio(dial.socket!, held);
         this.#micQueue = [];
         this.runInBackground(() =>
@@ -1692,10 +1596,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
         /*
          * THE PICKUP GREETING. Only when nobody has spoken yet: a caller
          * already mid-sentence came to talk, not to be welcomed over. The
-         * provider's own recipe — one instructions append asking it to
-         * speak first.
+         * frame that opened the call is always held through the dial, so
+         * "spoke" is read off that audio. The provider's own recipe — one
+         * instructions append asking it to speak first.
          */
-        if (state.greeting && heldMicFrames === 0) {
+        if (state.greeting && !callerSpoke) {
           this.#sendControl(
             dial,
             {
@@ -1742,7 +1647,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
             text: live.delta,
             startTimelineMs,
             endTimelineMs,
-            interrupted: false,
           };
         } else {
           row.text += live.delta;
@@ -1871,22 +1775,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
     dial.timelineMs += deltaMs;
     const speaking = peakOfBase64Pcm16(delta) >= SPEECH_PEAK;
 
-    if (dial.suppressSpeechUntilSilence) {
-      /* The button took the floor and the model has not yielded yet: its
-       * last words are dead air. The first silent delta is the model
-       * yielding, and lifts the suppression. */
-      if (speaking) return;
-      dial.suppressSpeechUntilSilence = false;
-    }
-
     if (dial.answer.phase === "settled") {
       if (!speaking) return;
       /* THE ONSET: a new answer, replaced wholesale. */
-      dial.answer = {
-        phase: "speaking",
-        trailingSilenceMs: 0,
-        startedAtFacetMs: receivedAtFacetMs,
-      };
+      dial.answer = { phase: "speaking", trailingSilenceMs: 0 };
       dial.face?.answerStarted();
     } else if (speaking) {
       dial.answer.trailingSilenceMs = 0;
@@ -1924,7 +1816,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
   /**
    * One frame to the device, now, with the next sequence number. The face
    * folds at hand-over time, on the frame the device is about to play; the
-   * clear owed from a press or a fresh dial rides on this frame too.
+   * clear a fresh dial owes rides on its first frame.
    */
   #sendSpeakerFrame(
     dial: Dial,
@@ -1955,7 +1847,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     this.#startSpeakerSender(dial, append);
     if (dial.hangUpReason !== null && dial.answerEndedAtFacetMs >= dial.hangUpArmedAtFacetMs) {
       /* The goodbye has been handed over whole; the device holds at most its
-       * own small buffer. A press inside the allowance un-decides it. */
+       * own small buffer. */
       runInBackground(async () => {
         await this.deps.sleep(GOODBYE_PLAYOUT_ALLOWANCE_MS);
         await this.#settleHangUp(dial, append);
@@ -1964,8 +1856,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
   }
 
   /**
-   * End the call the backend asked to end — unless a press took it back or
-   * the dial is gone. Idempotent: the reason is consumed on the way out.
+   * End the call the backend asked to end — unless the dial is already gone.
+   * Idempotent: the reason is consumed on the way out.
    */
   async #settleHangUp(
     dial: Dial,
@@ -1983,8 +1875,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * NOT A PACER: there is no schedule and no sleep — a frame goes the moment
    * the one before it has landed, and the awaits are only what keeps the
    * numbering and the stream order the same thing. The sequence number is
-   * minted here, at the send; the clear owed from a press or a fresh dial
-   * rides on the first real frame out; `sentAtFacetMs` is the instruments'
+   * minted here, at the send; the clear a fresh dial owes rides on its
+   * first frame out; `sentAtFacetMs` is the instruments'
    * facet-side clock, stamped when the append is issued so a sender running
    * behind a slow stream shows up as late sends, not as a slow network. An
    * append that fails is one ephemeral frame lost; the next carries on.
@@ -2069,11 +1961,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         : append({
             type: "events.iterate.com/voice-agent/answer-transcript",
             idempotencyKey: this.idempotencyKey(key),
-            payload: {
-              conversationId: dial.conversationId,
-              text,
-              ...(row.interrupted && { cancelled: true }),
-            },
+            payload: { conversationId: dial.conversationId, text },
           }),
     );
   }
@@ -2444,59 +2332,22 @@ export class VoiceAgentProcessor extends StreamProcessor<
   /* ------------------------------------------------------------ the floor */
 
   /**
-   * THE BUTTON TOOK THE FLOOR: kill the answer everywhere, now.
-   *
-   * GPT-Live will yield on its own the moment it hears the person — 71 ms,
-   * measured — and it remembers what it said, so there is no cancel to send
-   * and no memory to repair. What the press owes is the DEVICE: it holds a
-   * beat of the answer, and "interrupted" must not sound like a beat more of
-   * it. The device is cleared, the deltas that arrive until the model
-   * yields are dropped, and taking the floor back un-decides a pending
-   * hang-up ("the user talked past the goodbye").
-   */
-  #bargeAnswer(
-    dial: Dial,
-    decidedAtFacetMs: number,
-    append: ProcessEventArgs<VoiceAgentContract>["append"],
-  ): void {
-    dial.hangUpReason = null;
-    dial.hangUpArmedAtFacetMs = 0;
-    if (dial.answer.phase !== "speaking") return;
-    dial.face?.barge(decidedAtFacetMs);
-    if (dial.turns.assistant !== null) dial.turns.assistant.interrupted = true;
-    /* AND THE NEXT REAL FRAME SAYS IT AGAIN: the clear is one empty frame
-     * in a stream of frames that documents its own drops; the first frame of
-     * the replacing answer carries the clear too, so it cannot be lost
-     * without losing the replacement itself. */
-    this.#clearDeviceSpeaker(dial, decidedAtFacetMs, append);
-    dial.clearSpeakerBufferBeforeNextFrame = true;
-    dial.answer = freshAnswer();
-    dial.suppressSpeechUntilSilence = true;
-  }
-
-  /**
-   * Tell the device to empty its speaker, and touch nothing local.
-   *
-   * THE CLEAR RIDES ON A FRAME, and an empty one is still a frame. The device
-   * is holding dead audio and has to be told NOW; the instruction goes out as
-   * a frame of its own carrying the next sequence number, so the device
-   * orders it after everything it cancels. A watermark makes a repeated
-   * press free.
+   * Tell the device to empty its speaker: the call is over and it is holding
+   * dead audio. THE CLEAR RIDES ON A FRAME, and an empty one is still a
+   * frame — it carries the next sequence number, so the device orders it
+   * after everything it cancels.
    */
   #clearDeviceSpeaker(
     dial: Dial,
     decidedAtFacetMs: number,
     append: ProcessEventArgs<VoiceAgentContract>["append"],
   ): void {
-    /* Frames of the dead answer still waiting here would play AFTER the
-     * clear; they go first. Numbered at the send, so dropping them leaves
-     * no hole. */
+    /* Frames still waiting here would play AFTER the clear; they go first.
+     * Numbered at the send, so dropping them leaves no hole. */
     dial.speakerOutbox = [];
-    if (dial.lastDeviceSpeakerFrameSeq <= dial.clearedThroughDeviceSpeakerFrameSeq) return;
     /* Sent directly, not through the sender: the obituary path clears and
      * then buries the dial in the same breath, and the clear must still go. */
     const clearFrameSeq = ++dial.lastDeviceSpeakerFrameSeq;
-    dial.clearedThroughDeviceSpeakerFrameSeq = clearFrameSeq;
     this.runInBackground(() =>
       append({
         type: "events.iterate.com/voice-agent/spk-frame",

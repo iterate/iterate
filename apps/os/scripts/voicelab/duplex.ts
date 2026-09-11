@@ -241,7 +241,7 @@ export async function duplex(options: DuplexOptions): Promise<void> {
   const raised = watch.delegations[0];
   console.log(`\n  FULL DUPLEX THROUGH THE PLATFORM (GPT-Live)`);
   console.log(
-    `    mic frames sent           ${String(call.micFramesSent())} (continuous, zero ptt verbs)`,
+    `    mic frames sent           ${String(call.micFramesSent())} (continuous, no button events)`,
   );
   console.log(
     `    idle speaker frames       ${String(spkFramesInQuietWindow)} in a 3 s quiet window`,

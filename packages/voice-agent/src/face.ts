@@ -2,14 +2,14 @@
  * The face: the answer's own audio classified into mouth shapes, folded into
  * ONE newest value for whatever renders a mouth.
  *
- * A PURE MECHANISM, deliberately. PCM chunks, answer boundaries and barge
+ * A PURE MECHANISM, deliberately. PCM chunks and answer boundaries
  * events go IN; a face value comes OUT of `read()`; and nothing in here knows
  * about sockets, streams, dials or polls. Even the clock is the caller's:
  * every input carries its own `atMs` stamp, so the same inputs always produce
  * the same value — which is what lets face.test.ts pin the whole lifecycle
- * with no harness and no fake clock. The processor feeds it from four thin
- * call sites (the dial minting one, `response.created`, the audio delta,
- * `response.output_audio.done` and the barge) and publishes whatever `read()`
+ * with no harness and no fake clock. The processor feeds it from three thin
+ * call sites (the answer's onset, the audio delta, the answer's end) and
+ * publishes whatever `read()`
  * returns; HOW the value reaches a renderer is the transport's business, not
  * this file's.
  *
@@ -112,15 +112,6 @@ export function createFace() {
     answerAudioDone(atMs: number): void {
       const closing = tracker.end();
       if (closing !== undefined) fold(closing, atMs);
-    },
-
-    /**
-     * A barged answer's mouth shuts NOW — the shapes still queued belong to
-     * audio the clear just erased.
-     */
-    barge(atMs: number): void {
-      tracker.reset();
-      fold({ playoutSamples: 0, viseme: firmwareVisemes.SIL, confidence: 0 }, atMs);
     },
 
     /** The newest face value, or null before the mouth has first moved. */

@@ -613,7 +613,8 @@ export function driverArgs(
   options: TalkOptions,
   minutes: number,
   /** Attended open mic: the C streams continuously and GPT-Live hears the
-   * room. Off, the space bar gates the microphone. */
+   * room. Off, holding SPACE unmutes the microphone — a fact about this
+   * driver only; the stream sees frames while it is held and nothing else. */
   openMic = false,
 ): string[] {
   if (options.converse === undefined) {

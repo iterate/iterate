@@ -53,8 +53,6 @@ const LIVE_TYPES = [
   "events.iterate.com/voice-agent/spk-frame",
   "events.iterate.com/voice-agent/grok-event",
   "events.iterate.com/voice-agent/mic-frame",
-  "events.iterate.com/voice-agent/ptt-start",
-  "events.iterate.com/voice-agent/ptt-end",
   "events.iterate.com/voice-agent/call-started",
   "events.iterate.com/voice-agent/conversation-accepted",
   "events.iterate.com/voice-agent/conversation-end-requested",

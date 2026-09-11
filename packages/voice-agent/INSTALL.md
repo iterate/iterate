@@ -69,8 +69,8 @@ off. The package README documents every option.
 ## Before the first call: a provider secret
 
 `setup` refuses to run without the secret its provider will spend —
-`/secrets/openai` or `/secrets/xai` — created once by an operator with egress
-pinned to the provider:
+`/secrets/openai` — created once by an operator with egress pinned to the
+provider:
 
 ```ts
 await itx.secrets
@@ -78,12 +78,25 @@ await itx.secrets
   .create({ egress: { urls: ["https://api.openai.com"] }, material: process.env.OPENAI_API_KEY });
 ```
 
+## What a client does
+
+The whole client contract, in four sentences. Append `mic-frame`s while the
+microphone is open — the first one on a quiet stream opens the call; a button,
+where the client has one, only unmutes the microphone while held and sends
+nothing of its own. Play every `spk-frame` in order as it arrives (the facet
+is a relay; the client's playout buffer is the only buffer), emptying the
+speaker first when a frame says `clearSpeakerBufferBeforeFrame`, and treating
+`lastFrameOfAnswer` as the end of an answer. Append `keepalive` every ~20 s
+while the call UI is open. Append `conversation-end-requested` to end the
+call. The payloads are in `README.md`; the contract is
+`src/voice-agent.ts`.
+
 ## Verify
 
 From a checkout of iterate/iterate:
 
 ```bash
-doppler run --config prd -- pnpm cli voicelab talk --project <slug> --setup-only --provider openai
+doppler run --config prd -- pnpm cli voicelab talk --project <slug> --setup-only
 ```
 
 It reports the guest healthy (the cold build happens here), puts the agent on

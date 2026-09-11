@@ -292,6 +292,14 @@ function micFrame(deviceMicFrameSeq: number) {
   };
 }
 
+/** A mic frame with a person in it: 20 ms of speech rather than silence. */
+function speechMicFrame(deviceMicFrameSeq: number) {
+  return {
+    ...micFrame(deviceMicFrameSeq),
+    payload: { ...micFrame(deviceMicFrameSeq).payload, pcm: speechDelta(20) },
+  };
+}
+
 const SEAM = "https://fake.provider.test/v1/live/sessions";
 
 /**
@@ -450,13 +458,11 @@ describe("opening a call", () => {
     expect(configured.tools).toEqual(["exec_typescript"]);
   });
 
-  it("sends later capture straight through, and the button edges say nothing", async () => {
+  it("sends later capture straight through, and nothing else", async () => {
     const h = makeHarness();
     await callIsLive(h);
     const before = h.provider.sent.length;
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
     await h.append(micFrame(2), micFrame(3));
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-end", payload: {} });
     await h.settle();
     const later = h.provider.sent.slice(before).map((message) => message.type);
     /* Two frames, and nothing else: no commit, no response.create, no mute. */
@@ -508,7 +514,7 @@ describe("opening a call", () => {
       },
       {
         type: "events.iterate.com/voice-agent/answer-transcript",
-        payload: { conversationId: "conv_old", text: "One, two,", cancelled: true },
+        payload: { conversationId: "conv_old", text: "One, two," },
       },
     );
     await h.append(micFrame(1));
@@ -516,7 +522,7 @@ describe("opening a call", () => {
     const input = h.provider.startedWith.input as { role: string; content: { text: string }[] }[];
     expect(input.map((item) => item.role)).toEqual(["user", "assistant"]);
     expect(input[0]!.content[0]!.text).toBe("Count to three.");
-    expect(input[1]!.content[0]!.text).toContain("the listener interrupted this answer partway");
+    expect(input[1]!.content[0]!.text).toContain("One, two,");
     /* Instructions carry the policy, not the history. */
     expect(String(h.provider.startedWith.instructions)).not.toContain("Count to three.");
   });
@@ -527,7 +533,8 @@ describe("opening a call", () => {
       type: "events.iterate.com/voice-agent/configured",
       payload: { providerBaseUrl: SEAM, greeting: true },
     });
-    await greeted.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    /* A quiet room's frames open the call: silence, nobody spoke yet. */
+    await greeted.append(micFrame(1));
     await greeted.settle();
     greeted.provider.start();
     await greeted.settle();
@@ -536,8 +543,17 @@ describe("opening a call", () => {
     expect(appended[0]!.delegation_id).toBeNull();
     expect(String(appended[0]!.content)).toContain("Greet them now");
 
+    /* A caller already mid-sentence — speech in the frames held during the
+     * dial — came to talk, not to be welcomed over. */
     const talkedFirst = makeHarness();
-    await callIsLive(talkedFirst, { greeting: true });
+    await talkedFirst.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { providerBaseUrl: SEAM, greeting: true },
+    });
+    await talkedFirst.append(speechMicFrame(1));
+    await talkedFirst.settle();
+    talkedFirst.provider.start();
+    await talkedFirst.settle();
     expect(talkedFirst.provider.sentOfType("session.instructions.append")).toHaveLength(0);
   });
 
@@ -696,53 +712,13 @@ describe("the speaker lane", () => {
 /* THE BUTTON                                                                 */
 /* ========================================================================== */
 
-describe("the button takes the floor", () => {
-  it("clears the device with a numbered frame and mutes the model's last words", async () => {
+describe("a quiet listener", () => {
+  it("a long answer with no mic frames at all keeps flowing and the call stays up", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.provider.speech(2_000);
-    await h.settle();
-    const deliveredBefore = speakerMsDelivered(h);
-    expect(deliveredBefore).toBe(2_000);
-
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    const clears = speakerClears(h);
-    expect(clears).toHaveLength(1);
-    /* The clear names the highest frame minted so far, plus one. */
-    const framesBefore = speakerFrames(h).filter((frame) => frame.pcm !== "");
-    expect(clears[0]!.deviceSpeakerFrameSeq).toBe(framesBefore.length + 1);
-
-    /* The model has not heard the person yet; its next words are dead air. */
-    h.provider.speech(500);
-    await h.settle();
-    expect(speakerMsDelivered(h)).toBe(deliveredBefore);
-    /* It yields (silence), then answers the person: that IS a new answer. */
-    h.provider.silence(200);
-    h.provider.speech(300);
-    h.provider.silence(1_000);
-    await h.settle();
-    expect(speakerMsDelivered(h)).toBeGreaterThan(deliveredBefore);
-    const replacing = speakerFrames(h).find(
-      (frame) => frame.pcm !== "" && frame.deviceSpeakerFrameSeq > clears[0]!.deviceSpeakerFrameSeq,
-    )!;
-    /* AND THE NEXT REAL FRAME SAYS IT AGAIN. */
-    expect(replacing.clearSpeakerBufferBeforeFrame).toBe(true);
-  });
-
-  it("after a press, a long answer with no mic frames at all keeps flowing and the call stays up", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    /* Turn one is barged by the button: the model yields (silence), then
-     * starts a long answer. A half-duplex device sends NOTHING while it
-     * listens — no frames, no keepalive — for longer than the idle deadline. */
-    h.provider.speech(2_000);
-    await h.settle();
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    h.provider.silence(300);
-    await h.settle();
-    const deliveredAfterBarge = speakerMsDelivered(h);
+    /* A half-duplex device sends NOTHING while it listens — no frames, no
+     * keepalive — for longer than the idle deadline. The frames going out
+     * are the activity. */
     for (let tick = 0; tick < 7; tick++) {
       h.provider.speech(10_000);
       h.provider.assistantSays(
@@ -754,53 +730,9 @@ describe("the button takes the floor", () => {
       await h.settle();
     }
     expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
-    expect(speakerMsDelivered(h)).toBe(deliveredAfterBarge + 70_000);
+    expect(speakerMsDelivered(h)).toBe(70_000);
     /* The metronome kept running: the rows closed on the timeline. */
     expect(eventsOfType(h, "answer-transcript").length).toBeGreaterThan(0);
-  });
-
-  it("a press with nothing playing clears nothing", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    expect(speakerClears(h)).toHaveLength(0);
-  });
-
-  it("the dial's own opening retry, delivered mid-answer, barges nothing", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    /* The want-retry: committed (and stamped) now, delivered only when the
-     * runner next drives — which this test arranges to be mid-answer. */
-    await h.stream.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    /* The answer begins two virtual seconds after that stamp. */
-    h.clock.now += 2_000;
-    h.provider.speech(3_000);
-    /* Driving the runner is what delivers the stale press — mid-answer. */
-    await playOutEverything(h, 600);
-    const deliveredBefore = speakerMsDelivered(h);
-    expect(deliveredBefore).toBe(3_000);
-    /* No barge: no bare clear frame, no suppression of what comes next. */
-    h.provider.speech(500);
-    await h.settle();
-    expect(speakerClears(h)).toHaveLength(0);
-    expect(speakerMsDelivered(h)).toBe(deliveredBefore + 500);
-  });
-
-  it("marks the interrupted answer's transcript as cancelled", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    h.provider.speech(2_000);
-    h.provider.assistantSays("One, two, three,", 1_000, 2_000);
-    await h.settle();
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
-    /* The row closes when the metronome moves the timeline past the gap. */
-    h.provider.silence(1_500);
-    await h.settle();
-    const answers = eventsOfType(h, "answer-transcript");
-    expect(answers).toHaveLength(1);
-    expect(answers[0]!.payload).toMatchObject({ text: "One, two, three,", cancelled: true });
   });
 });
 
@@ -1116,18 +1048,6 @@ describe("the backend", () => {
     expect((answers[0]!.payload as { text: string }).text).toBe("Goodbye then.");
   });
 
-  it("a press during the goodbye un-decides the hang-up", async () => {
-    const h = makeHarness();
-    await callIsLive(h, { tools: [{ name: "hang_up", description: "End the call." }] });
-    h.provider.speech(3_000);
-    h.provider.backendFunctionCall("call_bye", "hang_up", "{}");
-    await h.settle();
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    h.provider.silence(1_000);
-    await playOutEverything(h, 5_000);
-    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
-  });
-
   it("records the backend's final words durably", async () => {
     const h = makeHarness();
     const conversationId = await callIsLive(h);
@@ -1157,12 +1077,32 @@ describe("ending a call", () => {
     expect(speakerClears(h)).toHaveLength(1);
     expect(h.provider.sentOfType("session.close")).toHaveLength(1);
     expect(h.provider.closed).toBe(true);
-    /* The next press mints a fresh call on a fresh socket. */
+    /* The next frame, past the dying-breath guard, mints a fresh call on a
+     * fresh socket. */
     await h.advanceTime(2_000);
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.append(micFrame(20));
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(2);
     expect(h.sockets).toHaveLength(2);
+  });
+
+  it("a frame in the last call's dying breath mints no zombie; one after it opens the next call", async () => {
+    const h = makeHarness();
+    const conversationId = await callIsLive(h);
+    await h.append({
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { conversationId, reason: "button" },
+    });
+    await h.settle();
+    /* The device drains its mic queue for ~100 ms after the far end hangs
+     * up; those frames must not open a call to an empty room. */
+    await h.append(micFrame(20), micFrame(21));
+    await h.settle();
+    expect(eventsOfType(h, "call-started")).toHaveLength(1);
+    await h.advanceTime(2_000);
+    await h.append(micFrame(22));
+    await h.settle();
+    expect(eventsOfType(h, "call-started")).toHaveLength(2);
   });
 
   it("a stale obituary for a dead call cannot touch the live one", async () => {
@@ -1194,13 +1134,13 @@ describe("ending a call", () => {
     const h = makeHarness();
     vi.stubGlobal("fetch", () => new Promise(() => {}));
     await h.append({ type: "events.iterate.com/voice-agent/created", payload: {} });
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.append(micFrame(1));
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(1);
     await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
     await h.settle();
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.append(micFrame(2));
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(2);
   });

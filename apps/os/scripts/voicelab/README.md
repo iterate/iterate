@@ -24,23 +24,24 @@ through a deployed platform from the wire alone, no microphone anywhere.
 
 Every type below is prefixed `events.iterate.com/voice-agent/`, elided here
 for width. The full contract, with every payload documented, is
-`packages/voice-agent/src/voice-agent.ts` (contract 20.0.0).
+`packages/voice-agent/src/voice-agent.ts` (contract 21.0.0). A client's
+whole contract: mic frames up, speaker frames down, `keepalive` while its
+call UI is open, `conversation-end-requested` to end. A button, where a
+client has one, only unmutes its microphone while held.
 
-| Event                                               | Durability | Payload                                                                                                                                      |
-| --------------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `configured`                                        | durable    | the birth certificate: `instructions`, `greeting`, `backend` overrides, `tools`, `visemes`; replaced wholesale by every setup run            |
-| `ptt-start`                                         | durable    | `{}` — the button went down: opens a call if none is up, interrupts what the device is playing                                               |
-| `mic-frame`                                         | ephemeral  | `{ conversationId, deviceMicFrameSeq, pcm }` — 20 ms base64 PCM16 @ 16 kHz, numbered by the device, sent verbatim to GPT-Live                |
-| `ptt-end`                                           | ephemeral  | `{}` — the button came up; the provider hears the audio stop and needs nothing else                                                          |
-| `call-started`                                      | durable    | `{ conversationId }`                                                                                                                         |
-| `conversation-accepted`                             | durable    | `{ conversationId, handshakeTookMs, heldMicFrames }` — `session.started` arrived                                                             |
-| `session-configured`                                | durable    | `{ instructions, backendModel, tools, greeting }` — what this provider session was started with                                              |
-| `spk-frame`                                         | ephemeral  | `{ conversationId, deviceSpeakerFrameSeq, pcm, clearSpeakerBufferBeforeFrame?, lastFrameOfAnswer? }` — see below                             |
-| `grok-event`                                        | ephemeral  | the provider's own events, verbatim (audio deltas as `deltaBytes`), plus the facet's client commands as `client.<type>`; the flight recorder |
-| `utterance-transcript`                              | durable    | `{ conversationId, text }` — one finished listener turn, grouped from the provider's timeline fragments                                      |
-| `answer-transcript`                                 | durable    | `{ conversationId, text, cancelled? }` — one finished spoken answer; `cancelled` marks one the button cut off                                |
-| `backend-reply`                                     | durable    | `{ conversationId, text }` — the backend model's final text for one delegation                                                               |
-| `conversation-end-requested` / `conversation-ended` | durable    | `{ conversationId, reason }` — decided, then done                                                                                            |
+| Event                                               | Durability | Payload                                                                                                                                                         |
+| --------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `configured`                                        | durable    | the birth certificate: `instructions`, `greeting`, `backend` overrides, `tools`, `visemes`; replaced wholesale by every setup run                               |
+| `mic-frame`                                         | ephemeral  | `{ conversationId, deviceMicFrameSeq, pcm }` — base64 PCM16 @ 16 kHz, any length, numbered by the device, sent verbatim to GPT-Live; the first one opens a call |
+| `call-started`                                      | durable    | `{ conversationId }`                                                                                                                                            |
+| `conversation-accepted`                             | durable    | `{ conversationId, handshakeTookMs, heldMicFrames }` — `session.started` arrived                                                                                |
+| `session-configured`                                | durable    | `{ instructions, backendModel, tools, greeting }` — what this provider session was started with                                                                 |
+| `spk-frame`                                         | ephemeral  | `{ conversationId, deviceSpeakerFrameSeq, pcm, clearSpeakerBufferBeforeFrame?, lastFrameOfAnswer? }` — see below                                                |
+| `grok-event`                                        | ephemeral  | the provider's own events, verbatim (audio deltas as `deltaBytes`), plus the facet's client commands as `client.<type>`; the flight recorder                    |
+| `utterance-transcript`                              | durable    | `{ conversationId, text }` — one finished listener turn, grouped from the provider's timeline fragments                                                         |
+| `answer-transcript`                                 | durable    | `{ conversationId, text }` — one finished spoken answer, in words                                                                                               |
+| `backend-reply`                                     | durable    | `{ conversationId, text }` — the backend model's final text for one delegation                                                                                  |
+| `conversation-end-requested` / `conversation-ended` | durable    | `{ conversationId, reason }` — decided, then done                                                                                                               |
 
 The two transcript events are the stream's only readable record of what was
 said — `pnpm cli voicelab transcript` prints them — and the fold's bounded
@@ -109,8 +110,8 @@ doppler run --config prd -- pnpm cli voicelab transcript --project <slug> --stre
 
 ## Ending a conversation
 
-A conversation is a **session**, not a press and not an answer: one provider
-socket across many presses and several minutes. It ends when nobody has spoken
+A conversation is a **session**, not a turn and not an answer: one provider
+socket across many turns and several minutes. It ends when nobody has spoken
 in EITHER direction for sixty seconds, or when a person or the model hangs up.
 
 There is one way to end a call and three things that can decide to. Whoever
@@ -124,8 +125,8 @@ a Durable Object that is still up and sees both directions — a keepalive-backe
 `runInBackground` loop that sleeps exactly as long as the call has left, NOT a
 `setTimeout` (one of those, armed from a delivery whose request context has
 already ended, silently never fires; measured on preview-3). The same deadline
-is also derivable from the fold (`call.lastHeardAtMs`, folded from the press
-verbs and every microphone frame using their own commit stamps, with no extra
+is also derivable from the fold (`call.lastHeardAtMs`, folded from every
+microphone frame and keepalive using their own commit stamps, with no extra
 appends), which is the half that survives the eviction the first cannot — and
 which is what stops a revived incarnation re-dialling an abandoned call every
 ten seconds forever. `voice-agent.ts`'s `idleDeadlinePassed` explains why the
@@ -135,7 +136,7 @@ Proving it takes a real deployment and real silence, because the interesting
 case is the Durable Object being evicted underneath the call:
 
 ```bash
-# one press, then 150s of nobody saying anything: expect the request and the end
+# one utterance, then 150s of nobody saying anything: expect the request and the end
 doppler run --config preview_3 -- pnpm cli voicelab teardown \
   --project marginal-1 --stream-path /agents/voice/teardown-1
 

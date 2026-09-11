@@ -7,7 +7,7 @@
 // spoke, and nothing came out", which is the only test that matters.
 //
 // One attempt is: restart the device, wait for it to come back, press call,
-// wait for the call to be LIVE, hold push-to-talk, release, and then require
+// wait for the call to be LIVE, hold the button to unmute, release, and then require
 // that AUDIO WAS PLAYED — bytes written to the speaker, not a transcript
 // event. A transcript proves the model answered; only the speaker counter
 // proves the person heard it.
