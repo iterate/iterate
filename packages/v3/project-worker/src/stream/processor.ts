@@ -437,24 +437,6 @@ export class ProcessorEngine<State> {
    *  event (malformed, or one an OLDER version accepted) must never wedge the processor: on a version
    *  replay it would fail the catch-up before the new checkpoint is written, every incarnation. */
   #reduceOrKeep(event: StreamEvent, state: State): State {
-    // Validate the payload against the contract's declared schema BEFORE folding: a malformed payload
-    // for a KNOWN event (a literal append with the wrong shape) must never land in reduced state —
-    // that state is what the exported view schema promises, and a live client parses it. A payload-less
-    // event validates as `{}` (the same "empty defaults" convention the contract requires of its
-    // stateSchema). A contract with no `events` catalog (the kernel-generic processors) has no schema
-    // here and reduces unvalidated, as before.
-    const payloadSchema = this.#contract.payloadSchemaFor?.(event.type);
-    if (payloadSchema) {
-      const parsed = payloadSchema.safeParse(event.payload ?? {});
-      if (!parsed.success) {
-        reportIssue("processor.reduce.payload", parsed.error, {
-          slug: this.#contract.slug,
-          offset: event.offset,
-          type: event.type,
-        });
-        return state;
-      }
-    }
     try {
       return this.processor.reduce({ event, state }) ?? state;
     } catch (error) {
@@ -473,7 +455,28 @@ export class ProcessorEngine<State> {
   ): Promise<State> {
     const { slug, version, emits } = this.#contract;
     const previousState = state;
-    if (event) state = this.#reduceOrKeep(event, state);
+    if (event) {
+      // Validate + NORMALIZE the payload against the contract's declared schema, so the reducer AND the
+      // effect hook below both see exactly what `ConsumedEvent<Contract>` promises — the schema's
+      // `z.output` (coercions/defaults applied), not the raw literal append. A payload-less event
+      // validates as `{}` (the "empty defaults" convention the contract already requires of its
+      // stateSchema). A malformed payload for a KNOWN event is NOT folded — it must never corrupt
+      // reduced state (the exported view a live client parses) — but the raw event still flows to
+      // processEvent so the batch's caught-up signalling is preserved. A contract with no `events`
+      // catalog (the kernel-generic processors) has no schema here and folds unvalidated, as before.
+      const parsed = this.#contract.payloadSchemaFor?.(event.type)?.safeParse(event.payload ?? {});
+      if (parsed && !parsed.success)
+        reportIssue("processor.reduce.payload", parsed.error, {
+          slug,
+          offset: event.offset,
+          type: event.type,
+        });
+      else {
+        // Owned-event payloads are object schemas, so `z.output` is a record.
+        if (parsed) event = { ...event, payload: parsed.data as Record<string, unknown> };
+        state = this.#reduceOrKeep(event, state);
+      }
+    }
     // FIFO blocker chain for THIS event (rule 2); background work escapes it (rule 3).
     let blockers: Promise<unknown> = Promise.resolve();
     this.processor.processEvent({
@@ -861,12 +864,6 @@ export type EventCatalog = Record<string, EventDefinition>;
 
 /** A `processorDeps` entry's own event catalog. */
 type DepCatalog<Dep> = Dep extends { events: infer Events extends EventCatalog } ? Events : never;
-/** Every event type string a `processorDeps` tuple contributes. */
-type DepEventType<Deps extends readonly unknown[]> = Deps[number] extends infer Dep
-  ? Dep extends unknown
-    ? keyof DepCatalog<Dep> & string
-    : never
-  : never;
 /** The definition owning `Type` — local events win, then each dep. */
 type DefinitionForType<
   Events extends EventCatalog,
@@ -920,22 +917,10 @@ export type ConsumedEvent<Contract> = Contract extends {
   ? EventForTypes<Events, DepsOf<Contract>, Consumes>
   : never;
 
-/** Every event type string resolvable from local `events` plus `processorDeps`. */
-type ResolvedType<Events extends EventCatalog, Deps extends readonly unknown[]> =
-  | (keyof Events & string)
-  | DepEventType<Deps>;
-
-/** `contract.buildEvent({ type, payload, … })`: validate the payload against the resolved event's
- *  schema and return the input. The type string stays visible at the call site; unresolved types and
- *  bad payloads throw. Owned or dep events only. */
-type BuildEvent<Events extends EventCatalog, Deps extends readonly unknown[]> = <
-  const Event extends { type: ResolvedType<Events, Deps> } & Omit<StreamEventInput, "type">,
->(
-  event: Event,
-) => Event;
-
-/** What `defineProcessorContract` returns: the base the engine reads, plus the events catalog, the
- *  resolved deps and the typed `buildEvent`. */
+/** What `defineProcessorContract` returns: the base the engine reads, plus the events catalog and the
+ *  resolved deps. (Events are written LITERALLY at the call site — `itx.append({ type, payload })` —
+ *  so there is no event-builder here; the engine validates the payload against `payloadSchemaFor` at
+ *  reduce, and `ConsumedEvent`/`ProcessorState` give the reduce its types.) */
 export type DefinedProcessorContract<
   StateSchema extends z.ZodType,
   Events extends EventCatalog,
@@ -948,7 +933,6 @@ export type DefinedProcessorContract<
   // consumed type to its event; the base ProcessorContract only needs `readonly string[]`.
   consumes: Consumes;
   processorDeps: Deps;
-  buildEvent: BuildEvent<Events, Deps>;
 };
 
 export function defineProcessorContract<
@@ -993,11 +977,5 @@ export function defineProcessorContract<
     processorDeps,
     initialState: () => contract.stateSchema.parse({}) as z.output<StateSchema>,
     payloadSchemaFor: (type: string) => resolve(type)?.payloadSchema,
-    buildEvent: ((event: { type: string; payload?: unknown }) => {
-      const definition = resolve(event.type);
-      if (!definition)
-        throw new Error(`contract "${contract.slug}": cannot build unresolved event "${event.type}"`);
-      return { ...event, payload: definition.payloadSchema.parse(event.payload) };
-    }) as BuildEvent<Events, Deps>,
   };
 }

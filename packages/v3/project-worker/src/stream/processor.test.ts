@@ -1051,6 +1051,39 @@ describe("contract payload validation", () => {
     expect(state).toEqual({ last: 5 });
     expect(contract.stateSchema.safeParse(state).success).toBe(true);
   });
+
+  test("the reducer receives the schema's z.output (coercions applied), not the raw appended payload", async () => {
+    const coerceContract = defineProcessorContract({
+      slug: "coerce-payload",
+      version: "1",
+      description: "sums a coerced n",
+      stateSchema: z.object({ sum: z.number().default(0) }),
+      events: {
+        "demo/add": { description: "add n", payloadSchema: z.object({ n: z.coerce.number() }) },
+      },
+      consumes: ["demo/add"],
+      emits: [],
+    });
+    class CoerceProcessor extends StreamProcessor<z.infer<typeof coerceContract.stateSchema>> {
+      contract = coerceContract;
+      reduce({ event, state }: ReduceArgs<z.infer<typeof coerceContract.stateSchema>>) {
+        // The engine normalizes the payload to z.output, so `n` is a NUMBER here even for `"2"`.
+        if (event.type === "demo/add") return { sum: state.sum + (event.payload as { n: number }).n };
+        return undefined;
+      }
+    }
+    const mem = memoryStream();
+    const p = new ProcessorEngine(new CoerceProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
+    mem.engines.push(p);
+    mem.stream.append({ type: "demo/add", payload: { n: "2" } }); // a numeric STRING
+    mem.stream.append({ type: "demo/add", payload: { n: 3 } });
+    await settle();
+    // Normalized: 0 + 2 + 3 = 5. Without normalization, "2" would concat to "02" then "023".
+    expect((await p.snapshot()).state).toEqual({ sum: 5 });
+  });
 });
 
 // ── live state ── the holder's revision-chain contract, pinned at the unit level. The load-
