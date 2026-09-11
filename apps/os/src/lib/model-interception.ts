@@ -46,6 +46,7 @@ export type WorkersAiRequest = {
   body: Record<string, unknown>;
   options: CfAiRunOptions & {
     returnRawResponse: true;
+    gateway: { id: string; metadata: Record<string, string | number> };
   };
 };
 
@@ -64,7 +65,8 @@ export type ProjectAiInterceptorInput =
         };
       };
     }
-  | { source: "ai-run"; model: string; request: AiRequest };
+  | { source: "ai-run"; model: string; request: AiRequest }
+  | { source: "egress"; model: string; request: AiRequest };
 
 /** Replace only the provider call; response classification and decoding still run. */
 export type ProjectAiInterceptor = (

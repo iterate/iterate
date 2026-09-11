@@ -76,6 +76,12 @@ it.each([
         await runWorkersAiAttempt({
           model,
           agentPath: "/agents/parity",
+          metadata: {
+            environment: "preview_9",
+            projectId: "prj_host",
+            streamPath: "/agents/parity",
+            eventOffset: 0,
+          },
           messages: [{ role: "developer", content: "say hello" }],
           deadlineMs: 1000,
           onChunk: async (chunk) => {
@@ -83,7 +89,7 @@ it.each([
           },
           transport: {
             kind: billing,
-            gatewayId: "test",
+            gatewayId: "costs",
             openaiApiKey: "must-not-leak",
             responseCacheTtlSeconds: 60,
           },
@@ -100,7 +106,7 @@ it.each([
                 const { authorization, ...headers } = request.headers;
                 requests.push({
                   kind: "openai-http",
-                  gatewayId: "test",
+                  gatewayId: "costs",
                   endpoint: request.endpoint,
                   body: request.query,
                   headers,
@@ -679,4 +685,28 @@ it("gateway interception strips credentials and cannot replace real model calls"
     "BYOK transport unavailable",
   );
   expect(calls).toBe(1);
+});
+
+it("keeps the deadline active while draining a raw unified SSE Response", async () => {
+  let cancelled = false;
+  await expect(
+    runWorkersAiAttempt({
+      ai: {
+        run: async () =>
+          new Response(
+            new ReadableStream({
+              cancel() {
+                cancelled = true;
+              },
+            }),
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+      },
+      model: "@cf/test",
+      messages: [],
+      deadlineMs: 20,
+      onChunk: async () => {},
+    }),
+  ).rejects.toThrow("timed out");
+  expect(cancelled).toBe(true);
 });
