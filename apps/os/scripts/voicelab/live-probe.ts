@@ -72,6 +72,10 @@ export interface LiveProbeOptions {
    * does the provider's output cadence suffer when input arrives in large
    * appends? */
   micAppendMs?: number;
+  /** Feed the model's own output audio back into its input, delayed this
+   * many ms at half amplitude — a perfect acoustic echo with no echo
+   * cancellation anywhere. Does the model hear itself as the person? */
+  echoBackMs?: number;
   /** Responses mode: let the backend CHANGE the project (the default brief
    * keeps it read-only, for measurement runs against a real project). */
   allowWrites?: boolean;
@@ -299,8 +303,23 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
   let zeroDeltas = 0;
   /** Probe clock at every output delta, for the arrival cadence. */
   const deltaArrivalsMs: number[] = [];
+  let echoedBytes = 0;
   const noteAnswerAudio = (pcm: Buffer) => {
     deltaArrivalsMs.push(clock());
+    if (options.echoBackMs !== undefined && pcm.length > 0) {
+      /* Half amplitude: a speaker heard by its own microphone. */
+      const echo = Buffer.alloc(pcm.length);
+      for (let index = 0; index + 1 < pcm.length; index += 2) {
+        echo.writeInt16LE(Math.trunc(pcm.readInt16LE(index) / 2), index);
+      }
+      setTimeout(() => {
+        if (socket.readyState !== WebSocket.OPEN) return;
+        echoedBytes += echo.length;
+        socket.send(
+          JSON.stringify({ type: "session.input_audio.append", audio: echo.toString("base64") }),
+        );
+      }, options.echoBackMs);
+    }
     const now = clock();
     const bytes = pcm.length;
     outputDeltas += 1;
@@ -838,6 +857,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
       /* Inter-arrival gaps between consecutive 100 ms deltas: the jitter the
        * provider itself puts on the wire, before any platform hop. */
       arrivalGapsMs: gapStats(deltaArrivalsMs),
+      echoedBackMs: options.echoBackMs === undefined ? null : echoedBytes / ((rate * 2) / 1000),
       silentDeltas,
       zeroDeltas,
       speechMs: Math.round(answers.reduce((total, answer) => total + answer.audioMs, 0)),
