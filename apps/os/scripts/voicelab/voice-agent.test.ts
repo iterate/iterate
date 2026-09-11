@@ -181,7 +181,7 @@ class FakeLive {
 
 /* ================================================================ harness */
 
-function makeHarness() {
+function makeHarness(Processor: typeof VoiceAgentProcessor = VoiceAgentProcessor) {
   const sockets: FakeLive[] = [];
   const dialled: { url: string; headers: Record<string, string> }[] = [];
   /* `fetch` IS THE SEAM, because that is what `dialProviderSocket` uses. */
@@ -217,7 +217,7 @@ function makeHarness() {
   const harness = makeProcessorHarness<VoiceAgentContract, VoiceAgentProcessor>({
     path: "/agents/voice/test",
     createProcessor: (deps) =>
-      new VoiceAgentProcessor({
+      new Processor({
         ...deps,
         nowAtFacetMs: deps.now,
         buildCacheKey: "test-build",
@@ -659,6 +659,28 @@ describe("the speaker lane", () => {
     expect(speakerFrames(h)).toHaveLength(100);
   });
 
+  it("a burst of deltas starts ONE background sender, not one keepalive registration per frame", async () => {
+    /* Every `runInBackground` rides the processor keepalive, which re-arms
+     * its recovery record (a storage write) per registration. Ten of those a
+     * second put a write ahead of every frame — measured on preview as one
+     * frame reaching the device every ~1.5 s. */
+    let registrations = 0;
+    class CountingProcessor extends VoiceAgentProcessor {
+      protected override runInBackground(work: () => Promise<unknown>): void {
+        registrations += 1;
+        super.runInBackground(work);
+      }
+    }
+    const h = makeHarness(CountingProcessor);
+    await callIsLive(h);
+    registrations = 0;
+    h.provider.speech(10_000);
+    await h.settle();
+    expect(speakerFrames(h)).toHaveLength(100);
+    /* The sender, plus the mirror's own flush: nowhere near a hundred. */
+    expect(registrations).toBeLessThan(5);
+  });
+
   it("clears once at the start of a session and never again unprompted", async () => {
     const h = makeHarness();
     await callIsLive(h);
@@ -706,6 +728,35 @@ describe("the button takes the floor", () => {
     )!;
     /* AND THE NEXT REAL FRAME SAYS IT AGAIN. */
     expect(replacing.clearSpeakerBufferBeforeFrame).toBe(true);
+  });
+
+  it("after a press, a long answer with no mic frames at all keeps flowing and the call stays up", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    /* Turn one is barged by the button: the model yields (silence), then
+     * starts a long answer. A half-duplex device sends NOTHING while it
+     * listens — no frames, no keepalive — for longer than the idle deadline. */
+    h.provider.speech(2_000);
+    await h.settle();
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.silence(300);
+    await h.settle();
+    const deliveredAfterBarge = speakerMsDelivered(h);
+    for (let tick = 0; tick < 7; tick++) {
+      h.provider.speech(10_000);
+      h.provider.assistantSays(
+        ` part ${String(tick)}`,
+        tick * 10_000 + 3_000,
+        tick * 10_000 + 3_400,
+      );
+      await h.advanceTime(10_000);
+      await h.settle();
+    }
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+    expect(speakerMsDelivered(h)).toBe(deliveredAfterBarge + 70_000);
+    /* The metronome kept running: the rows closed on the timeline. */
+    expect(eventsOfType(h, "answer-transcript").length).toBeGreaterThan(0);
   });
 
   it("a press with nothing playing clears nothing", async () => {

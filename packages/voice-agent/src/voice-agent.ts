@@ -892,12 +892,22 @@ interface Dial {
   /** True once `session.started` arrived and audio may flow. */
   ready: boolean;
   /**
-   * The speaker frames' appends, chained in sequence order. The relay never
-   * waits on the chain; it exists so two frames handed to the stream a
-   * millisecond apart cannot land out of order, and so the marker follows
-   * the last frame of the answer it ends.
+   * Frames awaiting hand-over to the stream, oldest first — the delta's own
+   * base64, or an empty frame carrying the end marker. NUMBERED WHEN SENT,
+   * not when queued, so a press that drops queued dead air leaves no hole in
+   * the numbering. In the ordinary course this holds one frame for the
+   * duration of one append.
    */
-  speakerAppends: Promise<void>;
+  speakerOutbox: { pcm: string; lastFrameOfAnswer?: true }[];
+  /**
+   * ONE sender per dial, started when the outbox goes from empty to
+   * non-empty and gone when it drains. One keepalive registration per burst
+   * of frames: registering the keepalive per FRAME (ten a second) arms the
+   * recovery record and its alarm ten times a second, each a storage write
+   * ahead of the append — measured 2026-09-11 as one frame reaching the
+   * device every ~1.5 s while the provider sent ten.
+   */
+  sending: boolean;
   /** Facet clock at the last speaker frame handed over — the "this end is
    * busy" reading the idle deadline uses. */
   lastSpeakerFrameAtFacetMs: number;
@@ -973,7 +983,8 @@ const freshDial = (conversationId: string): Dial => ({
   dialId: crypto.randomUUID(),
   socket: null,
   ready: false,
-  speakerAppends: Promise.resolve(),
+  speakerOutbox: [],
+  sending: false,
   lastSpeakerFrameAtFacetMs: 0,
   lastDeviceSpeakerFrameSeq: 0,
   clearedThroughDeviceSpeakerFrameSeq: 0,
@@ -1923,7 +1934,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
   ): void {
     if (dial.face !== null) dial.face.audio(base64ToBytes(pcm), nowAtFacetMs);
     dial.lastSpeakerFrameAtFacetMs = nowAtFacetMs;
-    this.#appendSpeakerFrame(dial, { pcm }, append);
+    dial.speakerOutbox.push({ pcm });
+    this.#startSpeakerSender(dial, append);
   }
 
   /**
@@ -1939,7 +1951,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
     dial.answer = freshAnswer();
     dial.face?.answerAudioDone(nowAtFacetMs);
     dial.answerEndedAtFacetMs = nowAtFacetMs;
-    this.#appendSpeakerFrame(dial, { pcm: "", lastFrameOfAnswer: true }, append);
+    dial.speakerOutbox.push({ pcm: "", lastFrameOfAnswer: true });
+    this.#startSpeakerSender(dial, append);
     if (dial.hangUpReason !== null && dial.answerEndedAtFacetMs >= dial.hangUpArmedAtFacetMs) {
       /* The goodbye has been handed over whole; the device holds at most its
        * own small buffer. A press inside the allowance un-decides it. */
@@ -1965,39 +1978,47 @@ export class VoiceAgentProcessor extends StreamProcessor<
   }
 
   /**
-   * Mint the next sequence number and hand one frame to the stream, in
-   * order behind the frames before it. The number is minted HERE,
-   * synchronously, so a hole in the numbering means one thing; the append
-   * itself is chained, never awaited by the relay. `sentAtFacetMs` is
-   * stamped when the append is ISSUED, not when the frame was queued: it is
-   * the instruments' facet-side clock, and a chain running behind a slow
-   * stream must show up as late sends, not as a slow network.
+   * Hand the outbox to the stream, one frame after another, then exit.
+   *
+   * NOT A PACER: there is no schedule and no sleep — a frame goes the moment
+   * the one before it has landed, and the awaits are only what keeps the
+   * numbering and the stream order the same thing. The sequence number is
+   * minted here, at the send; the clear owed from a press or a fresh dial
+   * rides on the first real frame out; `sentAtFacetMs` is the instruments'
+   * facet-side clock, stamped when the append is issued so a sender running
+   * behind a slow stream shows up as late sends, not as a slow network. An
+   * append that fails is one ephemeral frame lost; the next carries on.
    */
-  #appendSpeakerFrame(
-    dial: Dial,
-    frame: { pcm: string; lastFrameOfAnswer?: true },
-    append: ProcessEventArgs<VoiceAgentContract>["append"],
-  ): void {
-    const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
-    dial.clearSpeakerBufferBeforeNextFrame = false;
-    const deviceSpeakerFrameSeq = ++dial.lastDeviceSpeakerFrameSeq;
-    dial.speakerAppends = dial.speakerAppends.then(() =>
-      append({
-        type: "events.iterate.com/voice-agent/spk-frame",
-        payload: {
-          conversationId: dial.conversationId,
-          deviceSpeakerFrameSeq,
-          pcm: frame.pcm,
-          ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
-          ...(frame.lastFrameOfAnswer && { lastFrameOfAnswer: true }),
-          sentAtFacetMs: this.deps.nowAtFacetMs(),
-        },
-      }).then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
-    this.runInBackground(() => dial.speakerAppends);
+  #startSpeakerSender(dial: Dial, append: ProcessEventArgs<VoiceAgentContract>["append"]): void {
+    if (dial.sending) return;
+    dial.sending = true;
+    this.runInBackground(async () => {
+      try {
+        while (this.#dial === dial) {
+          const frame = dial.speakerOutbox.shift();
+          if (frame === undefined) return;
+          const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
+          dial.clearSpeakerBufferBeforeNextFrame = false;
+          try {
+            await append({
+              type: "events.iterate.com/voice-agent/spk-frame",
+              payload: {
+                conversationId: dial.conversationId,
+                deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
+                pcm: frame.pcm,
+                ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
+                ...(frame.lastFrameOfAnswer && { lastFrameOfAnswer: true }),
+                sentAtFacetMs: this.deps.nowAtFacetMs(),
+              },
+            });
+          } catch {
+            /* Ephemeral: nothing recovers a lost frame, and nothing should. */
+          }
+        }
+      } finally {
+        dial.sending = false;
+      }
+    });
   }
 
   /* ------------------------------------------------------------ transcript */
@@ -2467,13 +2488,27 @@ export class VoiceAgentProcessor extends StreamProcessor<
     decidedAtFacetMs: number,
     append: ProcessEventArgs<VoiceAgentContract>["append"],
   ): void {
+    /* Frames of the dead answer still waiting here would play AFTER the
+     * clear; they go first. Numbered at the send, so dropping them leaves
+     * no hole. */
+    dial.speakerOutbox = [];
     if (dial.lastDeviceSpeakerFrameSeq <= dial.clearedThroughDeviceSpeakerFrameSeq) return;
-    /* The clear itself is a numbered frame: `clearSpeakerBufferBeforeNextFrame`
-     * makes #appendSpeakerFrame stamp it, then the flag is re-armed by the
-     * caller for the replacing answer's first real frame. */
-    dial.clearSpeakerBufferBeforeNextFrame = true;
-    this.#appendSpeakerFrame(dial, { pcm: "" }, append);
-    dial.clearedThroughDeviceSpeakerFrameSeq = dial.lastDeviceSpeakerFrameSeq;
+    /* Sent directly, not through the sender: the obituary path clears and
+     * then buries the dial in the same breath, and the clear must still go. */
+    const clearFrameSeq = ++dial.lastDeviceSpeakerFrameSeq;
+    dial.clearedThroughDeviceSpeakerFrameSeq = clearFrameSeq;
+    this.runInBackground(() =>
+      append({
+        type: "events.iterate.com/voice-agent/spk-frame",
+        payload: {
+          conversationId: dial.conversationId,
+          deviceSpeakerFrameSeq: clearFrameSeq,
+          pcm: "",
+          clearSpeakerBufferBeforeFrame: true,
+          sentAtFacetMs: decidedAtFacetMs,
+        },
+      }),
+    );
   }
 
   /**
