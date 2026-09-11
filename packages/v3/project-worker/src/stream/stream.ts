@@ -81,6 +81,7 @@ export type WaitForEventFilter = { type?: string; afterOffset?: number; timeoutM
  *  waiter surfaces as the transport error the caller already handles. */
 type WaitForEventWaiter = {
   type: string | undefined;
+  afterOffset: number;
   resolve: (event: StreamEvent) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -481,6 +482,7 @@ export class Stream {
     return new Promise<StreamEvent>((resolve, reject) => {
       const waiter: WaitForEventWaiter = {
         type,
+        afterOffset,
         resolve,
         reject,
         timer: setTimeout(() => {
@@ -498,13 +500,17 @@ export class Stream {
     });
   }
 
-  /** The type is a waiter's only filter: it registered after its scan reached the head, so every
-   *  fresh event is past the offset it waited from. */
+  /** A waiter matches on `type` AND `offset > afterOffset`. The default afterOffset is the head at
+   *  call time, so a default wait settles on the next event; but an explicit afterOffset ahead of
+   *  head (a caller waiting for the stream to REACH an offset), or one left behind by an ephemeral
+   *  offset rewind after eviction, must not be satisfied by an earlier fresh event — the filter's
+   *  documented contract (WaitForEventFilter). */
   #resolveWaitForEventWaiters(freshEvents: StreamEvent[]): void {
     for (const event of freshEvents) {
       if (this.#waitForEventWaiters.length === 0) return;
       for (const w of [...this.#waitForEventWaiters]) {
         if (w.type !== undefined && event.type !== w.type) continue;
+        if (event.offset <= w.afterOffset) continue;
         this.#waitForEventWaiters.splice(this.#waitForEventWaiters.indexOf(w), 1);
         clearTimeout(w.timer);
         w.resolve(event);

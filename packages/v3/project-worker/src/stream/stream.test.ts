@@ -122,6 +122,21 @@ test("waitForEvent: the default afterOffset means the NEXT occurrence — histor
   expect(got.offset).toBeGreaterThan(past.offset);
 });
 
+test("waitForEvent: an afterOffset AHEAD of head is not satisfied by an earlier fresh event", async () => {
+  const stream = bareStream();
+  stream.append({ type: "ping" }); // head is now a low offset
+  // The contract (WaitForEventFilter): only events with offset strictly greater than afterOffset
+  // match. A wait for an offset far ahead of head must NOT be resolved by a fresh event below it —
+  // it times out until an event past afterOffset actually lands.
+  const pending = stream.waitForEvent({ type: "ping", afterOffset: 1_000, timeoutMs: 150 });
+  stream.append({ type: "ping" }); // a fresh match, but its offset is well below 1000
+  const outcome = await pending.then(
+    (event) => ({ event }),
+    (error: unknown) => ({ error }),
+  );
+  expect("error" in outcome && errorCode(outcome.error)).toBe("WAIT_TIMEOUT");
+});
+
 test("waitForEvent: a timed-out wait writes nothing — construction made the tables and counted the incarnation; no row, no mark", async () => {
   const storage = nodeSqliteDurableObjectStorage();
   const stream = bareStream({ storage });
