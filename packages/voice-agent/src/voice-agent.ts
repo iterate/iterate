@@ -1923,7 +1923,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
   ): void {
     if (dial.face !== null) dial.face.audio(base64ToBytes(pcm), nowAtFacetMs);
     dial.lastSpeakerFrameAtFacetMs = nowAtFacetMs;
-    this.#appendSpeakerFrame(dial, { pcm, sentAtFacetMs: nowAtFacetMs }, append);
+    this.#appendSpeakerFrame(dial, { pcm }, append);
   }
 
   /**
@@ -1939,11 +1939,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     dial.answer = freshAnswer();
     dial.face?.answerAudioDone(nowAtFacetMs);
     dial.answerEndedAtFacetMs = nowAtFacetMs;
-    this.#appendSpeakerFrame(
-      dial,
-      { pcm: "", lastFrameOfAnswer: true, sentAtFacetMs: nowAtFacetMs },
-      append,
-    );
+    this.#appendSpeakerFrame(dial, { pcm: "", lastFrameOfAnswer: true }, append);
     if (dial.hangUpReason !== null && dial.answerEndedAtFacetMs >= dial.hangUpArmedAtFacetMs) {
       /* The goodbye has been handed over whole; the device holds at most its
        * own small buffer. A press inside the allowance un-decides it. */
@@ -1972,25 +1968,31 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * Mint the next sequence number and hand one frame to the stream, in
    * order behind the frames before it. The number is minted HERE,
    * synchronously, so a hole in the numbering means one thing; the append
-   * itself is chained, never awaited by the relay.
+   * itself is chained, never awaited by the relay. `sentAtFacetMs` is
+   * stamped when the append is ISSUED, not when the frame was queued: it is
+   * the instruments' facet-side clock, and a chain running behind a slow
+   * stream must show up as late sends, not as a slow network.
    */
   #appendSpeakerFrame(
     dial: Dial,
-    frame: { pcm: string; lastFrameOfAnswer?: true; sentAtFacetMs: number },
+    frame: { pcm: string; lastFrameOfAnswer?: true },
     append: ProcessEventArgs<VoiceAgentContract>["append"],
   ): void {
     const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
     dial.clearSpeakerBufferBeforeNextFrame = false;
-    const payload = {
-      conversationId: dial.conversationId,
-      deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
-      pcm: frame.pcm,
-      ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
-      ...(frame.lastFrameOfAnswer && { lastFrameOfAnswer: true }),
-      sentAtFacetMs: frame.sentAtFacetMs,
-    };
+    const deviceSpeakerFrameSeq = ++dial.lastDeviceSpeakerFrameSeq;
     dial.speakerAppends = dial.speakerAppends.then(() =>
-      append({ type: "events.iterate.com/voice-agent/spk-frame", payload }).then(
+      append({
+        type: "events.iterate.com/voice-agent/spk-frame",
+        payload: {
+          conversationId: dial.conversationId,
+          deviceSpeakerFrameSeq,
+          pcm: frame.pcm,
+          ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
+          ...(frame.lastFrameOfAnswer && { lastFrameOfAnswer: true }),
+          sentAtFacetMs: this.deps.nowAtFacetMs(),
+        },
+      }).then(
         () => undefined,
         () => undefined,
       ),
@@ -2470,7 +2472,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
      * makes #appendSpeakerFrame stamp it, then the flag is re-armed by the
      * caller for the replacing answer's first real frame. */
     dial.clearSpeakerBufferBeforeNextFrame = true;
-    this.#appendSpeakerFrame(dial, { pcm: "", sentAtFacetMs: decidedAtFacetMs }, append);
+    this.#appendSpeakerFrame(dial, { pcm: "" }, append);
     dial.clearedThroughDeviceSpeakerFrameSeq = dial.lastDeviceSpeakerFrameSeq;
   }
 
