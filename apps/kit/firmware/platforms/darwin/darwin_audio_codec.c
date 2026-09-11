@@ -256,4 +256,12 @@ void iterate_kit_darwin_audio_codec_metrics(
       iterate_kit_darwin_audio_output_tap_bytes(&darwin->output);
   metrics->render_tap_dropped_bytes =
       iterate_kit_darwin_audio_output_tap_dropped_bytes(&darwin->output);
+  {
+    const struct iterate_kit_darwin_audio_output_shortfalls shortfalls =
+        iterate_kit_darwin_audio_output_shortfalls(&darwin->output);
+    metrics->playback_shortfalls = shortfalls.count;
+    metrics->playback_shortfall_bytes = shortfalls.bytes;
+    metrics->playback_audible_shortfalls = shortfalls.audible_count;
+    metrics->playback_audible_shortfall_bytes = shortfalls.audible_bytes;
+  }
 }

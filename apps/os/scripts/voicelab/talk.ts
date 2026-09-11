@@ -20,7 +20,7 @@
 // The agent numbers every speaker frame within a conversation, so the report
 // can say whether a long call lost any of them. See --report at the bottom:
 // that is the proof, and it is arithmetic rather than opinion.
-import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -395,7 +395,6 @@ export async function talk(options: TalkOptions = {}) {
 
   /* The recordings are the evidence of a bad run, so they are linked even
    * when the CLI exits non-zero — that is when they matter most. */
-  const roomRecorder = options.pretendSpeaker === undefined ? startRoomRecorder(room) : undefined;
   let exit: unknown;
   try {
     runInherited(
@@ -418,6 +417,9 @@ export async function talk(options: TalkOptions = {}) {
         playback,
         "--mic-record",
         micRecord,
+        // The CLI records the room itself, after its audio units are up (see
+        // cli_main_start_room_recorder); it only has a speaker to hear when live.
+        ...(options.pretendSpeaker === undefined ? ["--room-wav", room] : []),
         "--report-json",
         reportJson,
       ],
@@ -435,38 +437,10 @@ export async function talk(options: TalkOptions = {}) {
   } catch (error) {
     exit = error;
   }
-  stopRoomRecorder(roomRecorder);
 
   if (fs.existsSync(reportJson)) reportSpeakerContinuity(reportJson);
   reportRecordings(runDir, micRecord, playback, room);
   if (exit !== undefined) throw exit;
-}
-
-/**
- * THE ROOM IS RECORDED BY ANOTHER PROCESS. The CLI's own capture runs through
- * Apple's voice-processing unit, which cancels the speaker out of it — that
- * is the point of it — and a second, plain capture opened by the same
- * process records only zeros while that unit is open (measured 2026-09-11).
- * sox, reading the default input from a process of its own, hears the room
- * as a person does: the speaker, the person, and the rest. It starts a
- * second or two before the CLI's audio units, so the file is that much
- * longer at the front; SIGINT makes sox close the WAV properly.
- */
-function startRoomRecorder(file: string): ChildProcess | undefined {
-  if (spawnSync("sox", ["--version"], { stdio: "ignore" }).status !== 0) return undefined;
-  return spawn("sox", ["-q", "-d", "-t", "wav", "-r", "16000", "-c", "1", "-b", "16", file], {
-    stdio: "ignore",
-  });
-}
-
-function stopRoomRecorder(recorder: ChildProcess | undefined): void {
-  if (recorder === undefined || recorder.pid === undefined || recorder.exitCode !== null) return;
-  recorder.kill("SIGINT");
-  /* The driver is synchronous; wait for sox to finish the header, five seconds at most. */
-  spawnSync("sh", [
-    "-c",
-    `for i in $(seq 50); do kill -0 ${recorder.pid} 2>/dev/null || exit 0; sleep 0.1; done`,
-  ]);
 }
 
 /**
@@ -478,15 +452,15 @@ function stopRoomRecorder(recorder: ChildProcess | undefined): void {
  *   A hole in playback is a hole in this file; the playout's own record
  *   could never show one, because concealment plays nothing.
  * - room: what a person in the room heard — the default input recorded by
- *   sox in a separate process (see startRoomRecorder), so the speaker is in
- *   it along with the person. This is the independent recording: downstream
+ *   sox, a child the CLI starts once its audio units are up (a recorder
+ *   started earlier sees the device change rate under it), so the speaker
+ *   is in it along with the person. This is the independent recording: downstream
  *   of everything, CoreAudio and the voice-processing unit included.
  *
  * Then the microphone and the speaker overlaid (mic left, speaker right, so
  * a hole in the answer sits next to what the room was doing) and a mono mix.
  * sox does the mixing when installed; without it the raw files are still
- * linked. Microphone and speaker start together, at the audio units' start;
- * the room file starts a second or two earlier, when the driver did.
+ * linked. All three start within a moment of the audio units' start.
  */
 function reportRecordings(runDir: string, micRecord: string, playback: string, room: string): void {
   const link = (file: string) => `file://${file}`;

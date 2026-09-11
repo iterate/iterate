@@ -175,6 +175,14 @@ void cli_conversation_finish_turn(struct cli_runtime *runtime, uint64_t now_ms)
   turn->completed_ms = now_ms;
   turn->failed = turn->frames_played == 0U;
   turn->frames_sent = runtime->voicelab.frames_sent - turn->frames_sent;
+  if (runtime->options.live_audio) {
+    struct iterate_kit_darwin_audio_codec_metrics audio;
+    iterate_kit_darwin_audio_codec_metrics(&runtime->audio_codec, &audio);
+    turn->frames_concealed =
+        audio.playback_audible_shortfall_bytes / ITERATE_KIT_VOICE_FRAME_BYTES -
+        turn->frames_concealed;
+    turn->underruns = audio.playback_audible_shortfalls - turn->underruns;
+  }
   if (turn->back_office && !turn->failed) {
     ++runtime->conversation.back_office_heard;
   }
@@ -402,6 +410,12 @@ static void cli_conversation_begin_report(
   iterate_kit_darwin_audio_codec_metrics(&runtime->audio_codec, &audio);
   runtime->turn_room_completed_start_bytes = audio.playback_completed_bytes;
   runtime->turn_room_submitted_bytes = 0U;
+  /* With a room, the turn's holes are the hardware's audible shortfalls
+   * (darwin_audio_output.h): the baseline now, the difference at the end. */
+  if (runtime->options.live_audio) {
+    turn->frames_concealed = audio.playback_audible_shortfall_bytes / ITERATE_KIT_VOICE_FRAME_BYTES;
+    turn->underruns = audio.playback_audible_shortfalls;
+  }
   runtime->conversation.current_turn = turn;
   if (back_office) ++runtime->conversation.back_office_sent;
 }

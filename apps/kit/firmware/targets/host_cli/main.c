@@ -4,6 +4,9 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <time.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,8 +46,6 @@ enum {
    * far end, but a wedged transport must not hold a person's terminal.
    */
   CLI_MAIN_HANGUP_GRACE_MS = 3000,
-  /* Peak (PCM16) above which a frame counts as audible when judging a dry spell. */
-  CLI_MAIN_AUDIBLE_PEAK = 300,
 };
 
 #define CLI_MAIN_CALL_END_REASON "host-cli"
@@ -82,6 +83,8 @@ static bool cli_main_init_transport(struct cli_runtime *runtime);
 
 /* Opens the authoritative WAV and optional CoreAudio mirror. */
 static bool cli_main_init_audio(struct cli_runtime *runtime);
+static void cli_main_start_room_recorder(struct cli_runtime *runtime);
+static void cli_main_stop_room_recorder(struct cli_runtime *runtime);
 
 /* Adapts the host WAV writer to a Darwin file sink (pretend speaker, render tap). */
 static bool cli_main_write_wav_sink(
@@ -159,7 +162,6 @@ static uint64_t cli_main_sink_now_ms(void *context);
 static enum iterate_kit_voice_playout_write cli_main_sink_write(
     void *context, const uint8_t *frame, size_t length);
 static bool cli_main_sink_conceal(void *context);
-static void cli_main_judge_dry_spell(struct cli_runtime *runtime, const uint8_t *frame);
 
 /* Advances the real-time playback clock by at most one frame. */
 static void cli_main_poll_playback(
@@ -674,6 +676,7 @@ static bool cli_main_init_audio(struct cli_runtime *runtime)
           (int)audio.voice_processing_error);
     }
   }
+  cli_main_start_room_recorder(runtime);
   runtime->audio_processor = iterate_kit_audio_processor_passthrough();
   if (iterate_kit_audio_processor_validate(&runtime->audio_processor) !=
       ITERATE_KIT_OK) {
@@ -687,6 +690,52 @@ static bool cli_main_write_wav_sink(
     void *context, const uint8_t *pcm, size_t length)
 {
   return cli_wav_sink_write(context, pcm, length) == CLI_WAV_OK;
+}
+
+extern char **environ;
+
+/*
+ * THE ROOM IS RECORDED BY ANOTHER PROCESS, STARTED AFTER THE AUDIO UNITS.
+ * A second capture opened by this process reads zeros while the
+ * voice-processing unit holds the device, and a recorder started BEFORE the
+ * unit opens sees the device change rate under it (a 90 s run came back as
+ * 163 s of the wrong pitch). So sox runs as a child of this process, from
+ * the default input, once the units are up; it inherits this process's
+ * microphone permission; SIGINT makes it close the WAV properly.
+ */
+static void cli_main_start_room_recorder(struct cli_runtime *runtime)
+{
+  assert(runtime != NULL);
+  if (runtime->options.room_wav == NULL) return;
+  {
+    char *const argv[] = {
+      "sox", "-q", "-d", "-t", "wav", "-r", "16000", "-c", "1", "-b", "16",
+      (char *)runtime->options.room_wav, NULL,
+    };
+    pid_t pid = 0;
+    const int spawned = posix_spawnp(&pid, "sox", NULL, NULL, argv, environ);
+    if (spawned != 0) {
+      cli_runtime_log("warn", "room WAV: could not start sox (%d); recording nothing", spawned);
+      return;
+    }
+    runtime->room_recorder_pid = pid;
+    cli_runtime_log("info", "room WAV: sox recording the default input into %s", runtime->options.room_wav);
+  }
+}
+
+static void cli_main_stop_room_recorder(struct cli_runtime *runtime)
+{
+  assert(runtime != NULL);
+  if (runtime->room_recorder_pid <= 0) return;
+  (void)kill(runtime->room_recorder_pid, SIGINT);
+  /* Give it up to five seconds to finish the header, then let go. */
+  for (int tick = 0; tick < 50; ++tick) {
+    int status = 0;
+    const struct timespec delay = {.tv_sec = 0, .tv_nsec = 100000000L};
+    if (waitpid(runtime->room_recorder_pid, &status, WNOHANG) != 0) break;
+    (void)nanosleep(&delay, NULL);
+  }
+  runtime->room_recorder_pid = 0;
 }
 
 static struct iterate_kit_darwin_audio_codec_metrics cli_main_audio_metrics(
@@ -811,6 +860,7 @@ static void cli_main_close_runtime(struct cli_runtime *runtime)
   cli_wav_source_close(&runtime->source);
   cli_wav_sink_close(&runtime->sink);
   cli_wav_sink_close(&runtime->mic_sink);
+  cli_main_stop_room_recorder(runtime);
   cli_wav_sink_close(&runtime->pretend_sink);
 }
 
@@ -921,8 +971,8 @@ static void cli_main_accept_speaker_frame(
     ++runtime->speaker_overflow_drops;
     return;
   }
-  /* With a room, an underrun is a judged hole (cli_main_judge_dry_spell);
-   * here the clock's word stands only for the file-clocked playout. */
+  /* With a room, holes are the hardware's audible shortfalls (see the
+   * darwin output); the clock's word stands only for the file-clocked playout. */
   if (iterate_kit_voice_playback_clock_audio_arrived(
           &runtime->playout.clock, cli_runtime_now_ms(NULL)) &&
       !runtime->options.live_audio && runtime->options.pretend_speaker == NULL) {
@@ -1029,8 +1079,6 @@ static void cli_main_on_control(
     cli_speaker_clear(&runtime->speaker);
     /* The hardware's queue too: up to 200 ms of the old answer sits there. */
     (void)iterate_kit_darwin_audio_codec_discard_playback(&runtime->audio_codec);
-    runtime->dry_run_frames = 0U;
-    runtime->last_played_peak = 0U;
     /* A new answer is a new timeline: the reprime forgets the old one. */
     iterate_kit_voice_playback_clock_reprime(&runtime->playout.clock);
     ++runtime->barge_in_flushes;
@@ -1042,9 +1090,6 @@ static void cli_main_on_control(
      */
     runtime->answer_done = true;
     iterate_kit_voice_playback_clock_answer_done(&runtime->playout.clock);
-    /* The tail before the marker is dry by design, not a hole. */
-    runtime->dry_run_frames = 0U;
-    runtime->last_played_peak = 0U;
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED) {
     cli_runtime_log("info", "call accepted");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
@@ -1265,7 +1310,6 @@ static enum iterate_kit_voice_playout_write cli_main_sink_write(
   if (!cli_main_write_playback(runtime, frame)) {
     return ITERATE_KIT_VOICE_PLAYOUT_WRITE_FAILED;
   }
-  cli_main_judge_dry_spell(runtime, frame);
   /*
    * The turn's own ledger, from audio the room actually took: what the
    * report calls occupancy and played, the progress the turn watchdog
@@ -1282,35 +1326,6 @@ static enum iterate_kit_voice_playout_write cli_main_sink_write(
     }
   }
   return ITERATE_KIT_VOICE_PLAYOUT_WRITE_OK;
-}
-
-/* See cli_runtime.h: dry frames pending judgement, decided by this frame's loudness. */
-static void cli_main_judge_dry_spell(struct cli_runtime *runtime, const uint8_t *frame)
-{
-  uint16_t peak = 0U;
-  assert(runtime != NULL && frame != NULL);
-  for (size_t index = 0U; index + 1U < ITERATE_KIT_VOICE_FRAME_BYTES; index += 2U) {
-    const int16_t sample = (int16_t)((uint16_t)frame[index] | ((uint16_t)frame[index + 1U] << 8));
-    const uint16_t magnitude = (uint16_t)(sample < 0 ? -(int32_t)sample : sample);
-    if (magnitude > peak) peak = magnitude;
-  }
-  if (runtime->dry_run_frames > 0U) {
-    /* Audible on BOTH sides: a cut through speech. A spell that lengthens
-     * the model's own pause on either side of it is not heard as a hole. */
-    if (runtime->last_played_peak >= CLI_MAIN_AUDIBLE_PEAK && peak >= CLI_MAIN_AUDIBLE_PEAK) {
-      ++runtime->holes;
-      runtime->hole_frames += runtime->dry_run_frames;
-      ++runtime->speaker_underruns;
-      if (runtime->conversation.current_turn != NULL) {
-        runtime->conversation.current_turn->frames_concealed += runtime->dry_run_frames;
-        ++runtime->conversation.current_turn->underruns;
-      }
-    } else {
-      runtime->quiet_dry_frames += runtime->dry_run_frames;
-    }
-    runtime->dry_run_frames = 0U;
-  }
-  runtime->last_played_peak = peak;
 }
 
 static bool cli_main_sink_conceal(void *context)
@@ -1447,8 +1462,6 @@ static void cli_main_feed_playback(struct cli_runtime *runtime)
   do {
     switch (iterate_kit_voice_playout_step(&runtime->playout, &ring, &sink)) {
     case ITERATE_KIT_VOICE_PLAYOUT_STARVED:
-      ++runtime->dry_run_frames;
-      return;
     case ITERATE_KIT_VOICE_PLAYOUT_PRIMING:
     case ITERATE_KIT_VOICE_PLAYOUT_ABANDONED:
     case ITERATE_KIT_VOICE_PLAYOUT_SETTLED:
@@ -1887,10 +1900,11 @@ static void cli_main_draw_screen(struct cli_runtime *runtime, uint64_t now_ms)
     .spk_received = runtime->voicelab.spk_frames_received,
     .spk_played = runtime->playout.stats.frames_played,
     .spk_ring_ms = cli_main_buffered_ms(runtime),
-    .spk_holes = runtime->holes,
-    .spk_hole_ms = runtime->hole_frames * (uint32_t)ITERATE_KIT_VOICE_FRAME_MS,
+    .spk_holes = audio.playback_audible_shortfalls,
+    .spk_hole_ms = audio.playback_audible_shortfall_bytes / 32U,
     .spk_dry_frames = runtime->playout.stats.conceal_frames,
-    .spk_underruns = runtime->speaker_underruns,
+    /* With a room, an underrun is an audible shortfall at the hardware; the clock's count is the file-clocked playout's. */
+    .spk_underruns = runtime->options.live_audio ? audio.playback_audible_shortfalls : runtime->speaker_underruns,
     .spk_dropped = runtime->speaker_room_drops + runtime->speaker_overflow_drops,
     .spk_starved = audio.playback_starved_buffers,
     .spk_catchup = runtime->playout.stats.catchup_frames,
@@ -2016,8 +2030,9 @@ static void cli_main_pulse(
       runtime->transport.control_sender.messages_sent,
       runtime->voicelab.frames_sent, runtime->voicelab.batches_on_connection,
       runtime->voicelab.spk_frames_received,
-      runtime->playout.stats.frames_played, runtime->holes, runtime->hole_frames,
-      runtime->playout.stats.conceal_frames, runtime->speaker_underruns,
+      runtime->playout.stats.frames_played, audio.playback_audible_shortfalls,
+      audio.playback_audible_shortfall_bytes / 640U, runtime->playout.stats.conceal_frames,
+      runtime->options.live_audio ? audio.playback_audible_shortfalls : runtime->speaker_underruns,
       cli_main_buffered_ms(runtime),
       /*
        * A live microphone that macOS refused looks exactly like a quiet room
@@ -2104,6 +2119,7 @@ static void cli_main_reexec_if_ready(
   iterate_kit_darwin_audio_codec_close(&runtime->audio_codec);
   cli_wav_sink_close(&runtime->sink);
   cli_wav_sink_close(&runtime->mic_sink);
+  cli_main_stop_room_recorder(runtime);
   cli_wav_sink_close(&runtime->pretend_sink);
   (void)iterate_kit_posix_itx_transport_stop(&runtime->transport);
   (void)execv(runtime->argv[0], runtime->argv);

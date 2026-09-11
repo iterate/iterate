@@ -280,8 +280,60 @@ static void a_discard_empties_the_ring_and_the_next_pull_is_silence(void)
   iterate_kit_darwin_audio_output_close(&output);
 }
 
+/*
+ * A HOLE IS A SHORTFALL AFTER SOMETHING AUDIBLE. Two loud frames go in and
+ * three pulls come out: the third comes up short right after speech, so it
+ * is an audible shortfall. Then silence goes in and runs out: that
+ * shortfall lengthens a pause, counted but not audible.
+ */
+static void a_shortfall_after_speech_is_audible_and_after_silence_is_not(void)
+{
+  uint8_t destination[ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES];
+  memset(&output, 0, sizeof(output));
+  assert(iterate_kit_darwin_audio_output_open_pulled(&output, NULL) ==
+         ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK);
+  iterate_kit_darwin_audio_output_set_expected(&output, true);
+  /* Loud: every sample 0x2000. The lead wants four frames before it plays. */
+  for (size_t index = 0U; index < 4U * ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES; index += 2U) {
+    pcm[index] = 0x00U;
+    pcm[index + 1U] = 0x20U;
+  }
+  assert(iterate_kit_darwin_audio_output_write(
+             &output, pcm, 4U * ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES) ==
+         ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK);
+  for (size_t index = 0U; index < 4U; ++index) {
+    assert(iterate_kit_darwin_audio_output_pull(&output, destination, sizeof(destination)) ==
+           ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES);
+  }
+  assert(iterate_kit_darwin_audio_output_pull(&output, destination, sizeof(destination)) == 0U);
+  {
+    const struct iterate_kit_darwin_audio_output_shortfalls after_speech =
+        iterate_kit_darwin_audio_output_shortfalls(&output);
+    assert(after_speech.count == 1U);
+    assert(after_speech.bytes == ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES);
+    assert(after_speech.audible_count == 1U);
+    assert(after_speech.audible_bytes == ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES);
+  }
+  memset(pcm, 0, 4U * ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES);
+  assert(iterate_kit_darwin_audio_output_write(
+             &output, pcm, 4U * ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES) ==
+         ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK);
+  for (size_t index = 0U; index < 4U; ++index) {
+    (void)iterate_kit_darwin_audio_output_pull(&output, destination, sizeof(destination));
+  }
+  assert(iterate_kit_darwin_audio_output_pull(&output, destination, sizeof(destination)) == 0U);
+  {
+    const struct iterate_kit_darwin_audio_output_shortfalls after_silence =
+        iterate_kit_darwin_audio_output_shortfalls(&output);
+    assert(after_silence.count == 2U);
+    assert(after_silence.audible_count == 1U);
+  }
+  iterate_kit_darwin_audio_output_close(&output);
+}
+
 int main(void)
 {
+  a_shortfall_after_speech_is_audible_and_after_silence_is_not();
   the_render_tap_records_silence_as_well_as_audio();
   a_full_tap_ring_keeps_the_timeline_length();
   the_pulled_ring_runs_further_ahead_than_the_queue();

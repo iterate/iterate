@@ -56,6 +56,8 @@ struct cli_options {
    * render tap (darwin_audio_output.h); otherwise the playout's own record.
    */
   const char *speaker_wav;
+  /** What a person in the room heard: sox recording the default input, started by this process. */
+  const char *room_wav;
   /**
    * Where to record what the microphone captured.
    *

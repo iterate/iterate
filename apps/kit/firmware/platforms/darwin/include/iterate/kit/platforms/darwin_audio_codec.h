@@ -66,6 +66,11 @@ struct iterate_kit_darwin_audio_codec_metrics {
   /** The render tap's bytes written, and bytes lost to a full tap ring. */
   uint32_t render_tap_bytes;
   uint32_t render_tap_dropped_bytes;
+  /** Pulls that came up short while audio was expected, and those right after audible audio. */
+  uint32_t playback_shortfalls;
+  uint32_t playback_shortfall_bytes;
+  uint32_t playback_audible_shortfalls;
+  uint32_t playback_audible_shortfall_bytes;
 };
 
 /**

@@ -44,6 +44,7 @@ enum cli_options_field {
   CLI_OPTIONS_FIELD_UTTERANCE_DIR,
   CLI_OPTIONS_FIELD_SPEAKER_WAV,
   CLI_OPTIONS_FIELD_MIC_RECORD,
+  CLI_OPTIONS_FIELD_ROOM_WAV,
   CLI_OPTIONS_FIELD_PRETEND_SPEAKER,
   CLI_OPTIONS_FIELD_REPORT_JSON,
   CLI_OPTIONS_FIELD_CONVERSE,
@@ -125,6 +126,8 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    "Nth turn (0 disables)\n"},
   {"--mic-record", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_MIC_RECORD, NULL,
    "  --mic-record FILE     Record what the microphone captured\n"},
+  {"--room-wav", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_ROOM_WAV, NULL,
+   "  --room-wav FILE       Record the room with sox (what a person heard)\n"},
   {"--pretend-speaker", CLI_OPTIONS_KIND_TEXT,
    CLI_OPTIONS_FIELD_PRETEND_SPEAKER, NULL,
    "  --pretend-speaker FILE  Run the live speaker path into FILE, not the "
@@ -352,6 +355,7 @@ static enum cli_options_status cli_options_apply(
     case CLI_OPTIONS_FIELD_UTTERANCE_DIR: out->utterance_dir = value; break;
     case CLI_OPTIONS_FIELD_SPEAKER_WAV: out->speaker_wav = value; break;
     case CLI_OPTIONS_FIELD_MIC_RECORD: out->mic_record = value; break;
+    case CLI_OPTIONS_FIELD_ROOM_WAV: out->room_wav = value; break;
     case CLI_OPTIONS_FIELD_PRETEND_SPEAKER:
       out->pretend_speaker = value;
       break;

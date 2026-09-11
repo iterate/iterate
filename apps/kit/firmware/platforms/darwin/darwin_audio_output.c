@@ -49,6 +49,9 @@ static uint32_t iterate_kit_darwin_audio_output_pending_payload_bytes(
 static void iterate_kit_darwin_audio_output_tap_record(
     struct iterate_kit_darwin_audio_output *out, const uint8_t *pcm, uint32_t length);
 static void iterate_kit_darwin_audio_output_tap_drain(struct iterate_kit_darwin_audio_output *out);
+static void iterate_kit_darwin_audio_output_note_shortfall(
+    struct iterate_kit_darwin_audio_output *out, const uint8_t *pcm, uint32_t taken,
+    uint32_t wanted, bool expected);
 
 const char *iterate_kit_darwin_audio_output_status_name(enum iterate_kit_darwin_audio_output_status status)
 {
@@ -82,6 +85,9 @@ static OSStatus iterate_kit_darwin_audio_output_prime_one(
   taken = iterate_kit_darwin_audio_output_take(
       out, (uint8_t *)buffer->mAudioData, (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES);
   iterate_kit_darwin_audio_output_classify_pull(out, taken, expected);
+  iterate_kit_darwin_audio_output_note_shortfall(
+      out, (const uint8_t *)buffer->mAudioData, taken,
+      (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES, expected);
   if (taken < (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES) {
     /*
      * Silence rather than a short buffer. A short buffer would make the queue
@@ -239,6 +245,7 @@ uint32_t iterate_kit_darwin_audio_output_pull(
   }
   taken = iterate_kit_darwin_audio_output_take(out, destination, length);
   iterate_kit_darwin_audio_output_classify_pull(out, taken, expected);
+  iterate_kit_darwin_audio_output_note_shortfall(out, destination, taken, length, expected);
   if (taken < length) {
     memset(destination + taken, 0, (size_t)length - taken);
     atomic_store_explicit(&out->pull_priming, true, memory_order_release);
@@ -460,6 +467,20 @@ uint32_t iterate_kit_darwin_audio_output_tap_dropped_bytes(
 {
   return out == NULL ? 0U : (uint32_t)atomic_load_explicit(
       &out->tap_dropped, memory_order_acquire);
+}
+
+struct iterate_kit_darwin_audio_output_shortfalls iterate_kit_darwin_audio_output_shortfalls(
+    const struct iterate_kit_darwin_audio_output *out)
+{
+  struct iterate_kit_darwin_audio_output_shortfalls result = {0};
+  if (out == NULL) return result;
+  result.count = (uint32_t)atomic_load_explicit(&out->shortfalls, memory_order_acquire);
+  result.bytes = (uint32_t)atomic_load_explicit(&out->shortfall_bytes, memory_order_acquire);
+  result.audible_count =
+      (uint32_t)atomic_load_explicit(&out->audible_shortfalls, memory_order_acquire);
+  result.audible_bytes =
+      (uint32_t)atomic_load_explicit(&out->audible_shortfall_bytes, memory_order_acquire);
+  return result;
 }
 
 int32_t iterate_kit_darwin_audio_output_platform_error(const struct iterate_kit_darwin_audio_output *out)
@@ -713,4 +734,32 @@ static void iterate_kit_darwin_audio_output_tap_drain(struct iterate_kit_darwin_
     read_index += chunk;
   }
   atomic_store_explicit(&out->tap_read, read_index, memory_order_release);
+}
+
+/* I/O thread. Peak above which the audio just taken counts as audible. */
+enum { ITERATE_KIT_DARWIN_AUDIO_OUTPUT_AUDIBLE_PEAK = 300 };
+
+static void iterate_kit_darwin_audio_output_note_shortfall(
+    struct iterate_kit_darwin_audio_output *out, const uint8_t *pcm, uint32_t taken,
+    uint32_t wanted, bool expected)
+{
+  assert(out != NULL && pcm != NULL);
+  if (taken < wanted && expected && !atomic_load_explicit(&out->draining, memory_order_relaxed)) {
+    (void)atomic_fetch_add_explicit(&out->shortfalls, 1U, memory_order_relaxed);
+    (void)atomic_fetch_add_explicit(&out->shortfall_bytes, wanted - taken, memory_order_relaxed);
+    if (out->last_taken_peak >= ITERATE_KIT_DARWIN_AUDIO_OUTPUT_AUDIBLE_PEAK) {
+      (void)atomic_fetch_add_explicit(&out->audible_shortfalls, 1U, memory_order_relaxed);
+      (void)atomic_fetch_add_explicit(
+          &out->audible_shortfall_bytes, wanted - taken, memory_order_relaxed);
+    }
+  }
+  if (taken >= 2U) {
+    uint16_t peak = 0U;
+    for (uint32_t index = 0U; index + 1U < taken; index += 2U) {
+      const int16_t sample = (int16_t)((uint16_t)pcm[index] | ((uint16_t)pcm[index + 1U] << 8));
+      const uint16_t magnitude = (uint16_t)(sample < 0 ? -(int32_t)sample : sample);
+      if (magnitude > peak) peak = magnitude;
+    }
+    out->last_taken_peak = peak;
+  }
 }

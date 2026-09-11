@@ -100,21 +100,8 @@ struct cli_runtime {
   uint8_t playout_frame[ITERATE_KIT_VOICE_FRAME_BYTES];
   /* When both speaker queues were last found empty; one dry step per frame period. */
   uint64_t last_dry_step_ms;
-  /*
-   * A DRY SPELL IS A HOLE ONLY IF SOMEONE COULD HEAR IT. The core counts
-   * every dry frame while an answer is open, but the facet forwards the
-   * model's own pauses as silence, so a frame late inside a pause is zeros
-   * either way — nobody hears that — and the last 700 ms before the end
-   * marker are dry by design. Dry frames are held here until the next
-   * played frame decides: audible audio on both sides makes them a hole
-   * (`hole_frames`, and the turn's concealed count); otherwise they were
-   * quiet (`quiet_dry_frames`). The marker forgets a pending spell.
-   */
-  uint32_t dry_run_frames;
-  uint16_t last_played_peak;
-  uint32_t holes;
-  uint32_t hole_frames;
-  uint32_t quiet_dry_frames;
+  /* sox, recording the room (see cli_main_start_room_recorder); 0 when there is none. */
+  pid_t room_recorder_pid;
   struct cli_wav_source source;
   struct cli_wav_sink sink;
   /* What the microphone captured; opened only when --mic-record was given. */

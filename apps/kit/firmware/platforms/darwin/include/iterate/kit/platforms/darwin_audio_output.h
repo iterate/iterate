@@ -243,6 +243,21 @@ struct iterate_kit_darwin_audio_output {
   atomic_uint_least32_t tap_read;
   atomic_uint_least32_t tap_dropped;
   atomic_uint_least32_t tap_bytes;
+  /*
+   * HOLES, COUNTED WHERE THEY HAPPEN. A pull that came up short while audio
+   * was expected padded zeros into the hardware's buffer: `shortfalls` and
+   * `shortfall_bytes` count all of them. Whether anyone heard it depends on
+   * what came before: zeros after speech are a cut, zeros after the model's
+   * own silence just lengthen a pause. `last_taken_peak` is the loudness of
+   * the last audio actually taken, and a shortfall after an audible chunk
+   * is an `audible_shortfall` (with its bytes). The software-side judgement
+   * this replaces counted 75 holes on a run whose render tap held 5.
+   */
+  atomic_uint_least32_t shortfalls;
+  atomic_uint_least32_t shortfall_bytes;
+  atomic_uint_least32_t audible_shortfalls;
+  atomic_uint_least32_t audible_shortfall_bytes;
+  uint16_t last_taken_peak;
 };
 
 /** Human-readable status name, for the one top-level log boundary. */
@@ -344,6 +359,15 @@ uint32_t iterate_kit_darwin_audio_output_pull_reprimes(const struct iterate_kit_
 /** Bytes the render tap recorded, and bytes it dropped for a full ring. */
 uint32_t iterate_kit_darwin_audio_output_tap_bytes(const struct iterate_kit_darwin_audio_output *out);
 uint32_t iterate_kit_darwin_audio_output_tap_dropped_bytes(
+    const struct iterate_kit_darwin_audio_output *out);
+/** Shortfalls while audio was expected: all, and those right after audible audio (see the struct). */
+struct iterate_kit_darwin_audio_output_shortfalls {
+  uint32_t count;
+  uint32_t bytes;
+  uint32_t audible_count;
+  uint32_t audible_bytes;
+};
+struct iterate_kit_darwin_audio_output_shortfalls iterate_kit_darwin_audio_output_shortfalls(
     const struct iterate_kit_darwin_audio_output *out);
 int32_t iterate_kit_darwin_audio_output_platform_error(const struct iterate_kit_darwin_audio_output *out);
 
