@@ -6,7 +6,7 @@
 
 import { newWebSocketRpcSession } from "capnweb";
 import { WebSocket as UndiciWebSocket } from "undici";
-import type { Session, SessionCredentials } from "../../src/session.ts";
+import type { SessionRpcTarget, SessionCredentials } from "../../src/session.ts";
 
 const baseUrl = (): string => {
   const u = process.env.WORKER_BASE_URL;
@@ -61,7 +61,7 @@ export function publicSession(token: string) {
   const url = new URL(workerUrl("/api"));
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const ws = new UndiciWebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
-  const api = newWebSocketRpcSession<Session>(ws as unknown as WebSocket);
+  const api = newWebSocketRpcSession<SessionRpcTarget>(ws as unknown as WebSocket);
   openSessions.push(api);
   openSockets.push(ws as unknown as WebSocket);
   return api;

@@ -2,13 +2,13 @@
 // the session and a context look like. Hand-written re-exports, full names, nothing generated — a
 // client is JUST capnweb (iterate-context.ts), so a typed proxy of these classes is the whole SDK.
 
-export type { IterateContext } from "./iterate-context.ts";
+export type { IterateContextRpcTarget } from "./iterate-context.ts";
 export type {
   ProjectIdOrSlug,
   SessionCredentials,
   SessionPrincipal,
   UnauthenticatedSession,
-  Session,
+  SessionRpcTarget,
 } from "./session.ts";
 export type { Principal, ProjectTokenClaims } from "./principal.ts";
 export type { BuiltInScope } from "./context/built-ins.ts";

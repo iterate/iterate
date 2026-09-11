@@ -2,7 +2,7 @@ import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import type { Env } from "../src/control-plane.ts";
-import type { Session } from "../src/session.ts";
+import type { SessionRpcTarget } from "../src/session.ts";
 import { directory } from "../src/directory.ts";
 import { appSession } from "../src/client/app-auth.ts";
 import { startIssuerSession } from "../src/issuer-session.ts";
@@ -29,7 +29,7 @@ async function connect(headers: Record<string, string>) {
   });
   expect(response.status, response.status === 101 ? "" : await response.text()).toBe(101);
   response.webSocket!.accept();
-  const api = newWebSocketRpcSession<Session>(response.webSocket! as unknown as WebSocket);
+  const api = newWebSocketRpcSession<SessionRpcTarget>(response.webSocket! as unknown as WebSocket);
   sessions.push(api);
   return api;
 }

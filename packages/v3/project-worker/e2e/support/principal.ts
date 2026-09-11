@@ -2,7 +2,7 @@
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- Bounded fixture calls; the returned public client uses WebSocket.
 import { newHttpBatchRpcSession } from "capnweb";
 import { authorizationCodeRequest } from "../../src/client/oauth.ts";
-import type { Session } from "../../src/session.ts";
+import type { SessionRpcTarget } from "../../src/session.ts";
 import { adminCredentials, publicSession, workerUrl } from "./client.ts";
 
 export async function oauthSession(project: string, user: { email: string }) {
@@ -30,7 +30,7 @@ export async function oauthSession(project: string, user: { email: string }) {
     resources: [workerUrl("/api")],
   });
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- The same consent capability the browser calls, with an issuer session.
-  using issuerApi = newHttpBatchRpcSession<Session>(new Request(workerUrl("/api"), { headers }));
+  using issuerApi = newHttpBatchRpcSession<SessionRpcTarget>(new Request(workerUrl("/api"), { headers }));
   const approved = await issuerApi.consent.approve({ query: flow.url.search, projects: [project] });
   if (!("redirectTo" in approved)) throw new Error(JSON.stringify(approved));
   const callback = new URL(approved.redirectTo);

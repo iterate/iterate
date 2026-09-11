@@ -1,6 +1,6 @@
 import { newWebSocketRpcSession } from "capnweb";
 import { redirect } from "@tanstack/react-router";
-import type { Session } from "../session.ts";
+import type { SessionRpcTarget } from "../session.ts";
 import { OAuthScopes } from "../oauth-scopes.ts";
 
 /** Create once per TanStack app. Call authenticate in a client-only route's
@@ -23,7 +23,7 @@ export function createIterateClient(options: { scopes?: string[] } = {}) {
     const url = new URL("/api", window.location.href);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = new WebSocket(url);
-    const api = newWebSocketRpcSession<Session>(socket);
+    const api = newWebSocketRpcSession<SessionRpcTarget>(socket);
     const dispose = () => {
       api[Symbol.dispose]();
       connecting = undefined;

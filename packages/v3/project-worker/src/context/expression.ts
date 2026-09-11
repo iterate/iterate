@@ -386,7 +386,7 @@ export async function callOn(value: unknown, receiver: unknown, args: unknown[])
 //
 // The library tier may import this module and the codec only (library.test.ts).
 
-/** The dispatch door every dotted miss collapses onto. `IterateContext` implements it directly (root
+/** The dispatch door every dotted miss collapses onto. `IterateContextRpcTarget` implements it directly (root
  *  `itx`); a mid-chain `InvokeHandle` implements it relative to itself (empty root). */
 type InvokeTarget = {
   invoke(itxExpression: ItxExpression): unknown;

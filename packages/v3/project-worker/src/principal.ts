@@ -159,7 +159,7 @@ const projectApiKeyHashKey = (projectId: string): string => `project-api-key:${p
  *  `project-api-key:<projectId>`, REPLACING the previous one: the previous key stops verifying at
  *  once where the rotation was made (KV's other locations follow within 60 s, its cache TTL). The
  *  key itself is returned ONCE and never stored, so a "reveal" IS a rotation
- *  (`IterateContext.rotateApiKey`). A project has no key until its first rotation. */
+ *  (`IterateContextRpcTarget.rotateApiKey`). A project has no key until its first rotation. */
 export async function rotateProjectApiKey(
   projectId: string,
   secretsKv: KVNamespace,

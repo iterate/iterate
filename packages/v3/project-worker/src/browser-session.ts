@@ -5,7 +5,7 @@ import { z } from "zod";
 import { authorizationCodeRequest } from "./client/oauth.ts";
 import { OAuthScopes } from "./oauth-scopes.ts";
 import { isLocalOrigin } from "./lib.ts";
-import type { Session } from "./session.ts";
+import type { SessionRpcTarget } from "./session.ts";
 
 const TokenResponse = z.object({
   token_type: z
@@ -138,7 +138,7 @@ export class BrowserSession extends DurableObject {
           if (!probe.ok)
             throw new Error(`Sign-out could not reach Iterate (${probe.status}). Try again.`);
           // eslint-disable-next-line iterate/no-capnweb-http-batch -- A bounded logout command returns no live capabilities.
-          using api = newHttpBatchRpcSession<Session>(
+          using api = newHttpBatchRpcSession<SessionRpcTarget>(
             new Request(data.resource, {
               headers: { Authorization: `Bearer ${token}` },
               signal: AbortSignal.timeout(10_000),

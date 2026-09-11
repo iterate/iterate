@@ -68,7 +68,7 @@ export { LiveState, type LiveStateSink } from "../stream/processor.ts";
 /** What the parent mints the class with — the whole identity. */
 export type StreamProcessorProps = { iterateContextName: string; name: string };
 
-/** The itx scope as `env.ITX.get()` hands it over: the pipelined `IterateContext` stub. */
+/** The itx scope as `env.ITX.get()` hands it over: the pipelined `IterateContextRpcTarget` stub. */
 type ItxScope = ReturnType<Service<ItxEntrypoint>["get"]>;
 
 export abstract class StreamProcessorDurableObject<
@@ -167,7 +167,7 @@ export abstract class StreamProcessorDurableObject<
 // makes a redelivery a no-op. `range` is the contiguous `(after, through]` window the batch proves.
 
 /** The itx scope handed to `processEvent`: `env.ITX.get()` for this batch — the genuine
- *  `IterateContext` RpcTarget, disposed after the batch so it does not pin the parent DO past the turn. */
+ *  `IterateContextRpcTarget` RpcTarget, disposed after the batch so it does not pin the parent DO past the turn. */
 export type ConfigWorkerItx = ReturnType<Service<ItxEntrypoint>["get"]>;
 
 /** One committed event handed to the config worker, with the batch's range and the batch's itx scope. */

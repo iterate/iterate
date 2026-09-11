@@ -7,7 +7,8 @@ import type { Consent } from "./consent.ts";
 import type { Grants } from "./grants.ts";
 import {
   DurableObjectNameCodec,
-  IterateContext,
+  GLOBAL_PROJECT_ID,
+  IterateContextRpcTarget,
   type IterateContextNamespace,
   type WaitUntil,
 } from "./iterate-context.ts";
@@ -63,7 +64,7 @@ export class UnauthenticatedSession extends RpcTarget {
     this.#sessionTeardown.disposeAll();
   }
 
-  async authenticate(input: unknown): Promise<Session> {
+  async authenticate(input: unknown): Promise<SessionRpcTarget> {
     const credentials = SessionCredentials.safeParse(input);
     if (!credentials.success)
       throw codedError("INVALID_CREDENTIALS", "The operator RPC door requires the admin secret.");
@@ -76,7 +77,7 @@ export class UnauthenticatedSession extends RpcTarget {
     const user =
       credentials.data.as && (await this.#input.directory.upsertUser(credentials.data.as.email));
     const principal = user ? { actor: user.id, email: user.email } : admin;
-    return new Session(this.#input, this.#sessionTeardown, {
+    return new SessionRpcTarget(this.#input, this.#sessionTeardown, {
       principal,
       reach: user ? { userId: user.id } : "every",
       projectDoors: this.#input,
@@ -95,7 +96,7 @@ type SessionAuthority = {
   scopes?: string[];
 };
 
-export class Session extends RpcTarget {
+export class SessionRpcTarget extends RpcTarget {
   readonly #sessionTeardown: SessionTeardown;
   readonly #projects: ProjectCollection;
   readonly #input: SessionInput;
@@ -175,6 +176,39 @@ export class Session extends RpcTarget {
   get projects(): ProjectCollection {
     return this.#projects;
   }
+
+  /** The signed-in human's own context in the deployment-global namespace — an ORDINARY
+   *  IterateContextRpcTarget at `(global, /users/<userId>)`, the exact surface a project context
+   *  has (`session.user` is `session.projects.get(...)` one namespace over). A getter, like
+   *  `projects`. Refused for the admin/project credentials — they name no human. Carries NO project
+   *  doors (a user context mints no project token, rotates no key). */
+  get user(): IterateContextRpcTarget {
+    const { principal } = this.#authority;
+    if (!principal.email)
+      throw codedError(
+        "FORBIDDEN",
+        "this credential identifies no user — the admin and project credentials name no `.user` context",
+      );
+    return this.#globalContext(`/users/${principal.actor}`);
+  }
+
+  /** A context in the deployment-global namespace (the control plane's own): an ordinary
+   *  IterateContextRpcTarget at `(GLOBAL_PROJECT_ID, path)`, carrying this session's principal and NO
+   *  project doors. Which global paths a caller may reach is the path-mask access policy — NOT YET
+   *  ENFORCED: for now any authenticated caller can reach any global path, and the naughty things
+   *  that lets them do are captured as failing tests (see the security spec), to be fixed later. */
+  #globalContext(path: string): IterateContextRpcTarget {
+    return new IterateContextRpcTarget(
+      this.#input.contextNamespace,
+      DurableObjectNameCodec.parse(
+        DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path }),
+      ),
+      this.#sessionTeardown,
+      this.#input.waitUntil,
+      this.#authority.principal,
+      null,
+    );
+  }
 }
 
 /** The project catalog: `list()`, `get(project)`, `create({ project })` — get and create vend the
@@ -216,7 +250,7 @@ class ProjectCollection extends RpcTarget {
    *  deployment's own org for the admin secret — and vend its root context. A bound session (a
    *  project token, the project secret) creates none: FORBIDDEN. A name ANY org already holds is
    *  refused, coded (PROJECT_NAME_TAKEN); the same org's again is idempotent. */
-  async create(input: { project: ProjectIdOrSlug; orgId?: string }): Promise<IterateContext> {
+  async create(input: { project: ProjectIdOrSlug; orgId?: string }): Promise<IterateContextRpcTarget> {
     const data = z.object({ project: z.string(), orgId: z.string().optional() }).parse(input);
     const project = await this.#input.directory.createProject(
       this.#reach,
@@ -229,7 +263,7 @@ class ProjectCollection extends RpcTarget {
   /** The project's root context ("/") — and, on it, the project's two session doors: `mintToken()`
    *  and `rotateApiKey()` (iterate-context.ts), gated by this very admission. A project only — a
    *  context name belongs to `cd`. Outside this session's reach is FORBIDDEN. */
-  async get(project: ProjectIdOrSlug): Promise<IterateContext> {
+  async get(project: ProjectIdOrSlug): Promise<IterateContextRpcTarget> {
     const address = DurableObjectNameCodec.parse(project);
     if (address.path !== "/")
       throw new Error(
@@ -243,9 +277,9 @@ class ProjectCollection extends RpcTarget {
     return this.#context(address.projectId);
   }
 
-  #context(projectId: string): IterateContext {
+  #context(projectId: string): IterateContextRpcTarget {
     this.#input.onProjectAccess?.(projectId);
-    return new IterateContext(
+    return new IterateContextRpcTarget(
       this.#input.contextNamespace,
       DurableObjectNameCodec.parse(projectId),
       this.#sessionTeardown,
@@ -257,7 +291,7 @@ class ProjectCollection extends RpcTarget {
 }
 
 // ── session teardown ── WHAT A SESSION MUST UNDO AT ITS END, as a leaf (no imports): the one-entry-per-key
-// register every IterateContext of a session shares, testable in the node lane.
+// register every IterateContextRpcTarget of a session shares, testable in the node lane.
 
 /** WHAT THIS SESSION MUST UNDO AT ITS END — ONE entry per key: a lend relay (the session's copy of
  *  a client stub plus its pager socket, held so neither is GC'd) and anything else scoped to the

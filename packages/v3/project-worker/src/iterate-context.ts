@@ -97,10 +97,10 @@ class SubscriptionHandle extends RpcTarget {
  *  prototype fallback at the bottom of this file is the runtime. So a reader of this file sees the
  *  whole surface, and `env.ITX.get().append(…)` typechecks in loaded code. `cd` is the edge's own
  *  (below) — it returns an EDGE context, not the built-in's handle. */
-export interface IterateContext extends Omit<BuiltInScope, "cd"> {}
+export interface IterateContextRpcTarget extends Omit<BuiltInScope, "cd"> {}
 
 /** The iterate context (`itx`) at one `{ projectId, path }`, as a client holds it. */
-export class IterateContext extends RpcTarget {
+export class IterateContextRpcTarget extends RpcTarget {
   readonly #contextNamespace: IterateContextNamespace;
   readonly #durableObjectAddress: DurableObjectAddress;
   readonly #sessionTeardown: SessionTeardown;
@@ -153,14 +153,14 @@ export class IterateContext extends RpcTarget {
    *  (`"agents/support"`, `"../inbox"`) resolves against this context's path — one resolver, shared
    *  with the built-in `itx.cd(...)` root. Returns an EDGE context, so `provide` on it lends in this
    *  same session. Pure addressing. */
-  cd(path: string): IterateContext {
+  cd(path: string): IterateContextRpcTarget {
     const durableObjectAddress = DurableObjectNameCodec.parse(
       DurableObjectNameCodec.stringify({
         projectId: this.#durableObjectAddress.projectId,
         path: resolveContextPath(this.#durableObjectAddress.path, path),
       }),
     );
-    return new IterateContext(
+    return new IterateContextRpcTarget(
       this.#contextNamespace,
       durableObjectAddress,
       this.#sessionTeardown,
@@ -398,7 +398,7 @@ export class IterateContext extends RpcTarget {
   }
 
   /** The SessionTeardown key for a lent stub. The teardown is SESSION-lived and shared by every
-   *  IterateContext the session hands out, while a stub key is only unique PER CONTEXT — so the key is
+   *  IterateContextRpcTarget the session hands out, while a stub key is only unique PER CONTEXT — so the key is
    *  the JSON pair, unambiguous whatever either half holds (a match may pin a string arg). */
   #sessionTeardownKey(rpcStubKey: string): string {
     return JSON.stringify([this.#durableObjectAddress.name, rpcStubKey]);
@@ -408,7 +408,7 @@ export class IterateContext extends RpcTarget {
 // THE NATURAL DOTTED SURFACE: an unknown segment (`itx.slack`, `itx.kv`, `itx.append`) reduces into
 // ONE `invoke(expression)` dispatch through the prototype hop (context/expression.ts says why a hop
 // and not a Proxy AROUND the instance), the declared methods above always winning.
-installPrototypeInvokeFallback(IterateContext, ["itx"]);
+installPrototypeInvokeFallback(IterateContextRpcTarget, ["itx"]);
 
 // ── durable object names ── the ONE place a context DO name is formatted and parsed
 // (mirrors apps/os domains/durable-object-names.ts, minimal: no query props, no global host
@@ -425,6 +425,14 @@ const DURABLE_OBJECT_HOST_SUFFIX = ".iterate";
 // collapses the isolation wall (prj_x + key "a:b" would address the same cell as project prj_x:a
 // + key "b"). Gate it at the ONE place every name is parsed.
 const PROJECT_ID = /^[A-Za-z0-9_-]+$/;
+
+/** The reserved projectId of the deployment-global namespace: the control plane's own contexts —
+ *  `/users/<id>`, `/organizations/<id>`, and `/projects/<id>` records — live here. A global context
+ *  is an ORDINARY context at this projectId: same codec, same built-ins, same surface as a project's
+ *  (`session.user` is exactly `session.projects.get(...)` one namespace over). Real projects are
+ *  addressed by their `prj_`-prefixed id, so a slug can never spell `global`; until project ids carry
+ *  that prefix the collision is a known gap, captured as a failing test, not a runtime check. */
+export const GLOBAL_PROJECT_ID = "global";
 
 /** A parsed DO address. `name` is its own canonical string form — parse once, carry both
  *  halves together (no separate re-stringify field at call sites). */
@@ -480,14 +488,14 @@ export const DurableObjectNameCodec = {
 // the DO through `env.ITERATE_CONTEXT`, this worker's own binding to its namespace.
 
 export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: string }> {
-  /** THE handoff: the genuine itx scope — the SAME `IterateContext` RpcTarget a capnweb client gets
+  /** THE handoff: the genuine itx scope — the SAME `IterateContextRpcTarget` RpcTarget a capnweb client gets
    *  from `projects.get(id)` (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget on
    *  workerd), so loaded code writes plain dotted access and mid-chain handles pipeline natively. A
    *  fresh SessionTeardown per call: this hop lends nothing session-long (a loaded worker's callbacks
    *  ride as Workers-RPC stubs through the call args, never the pager). Re-resolved per call — never
    *  a stub held across calls (the back-channel rule). */
-  get(): IterateContext {
-    return new IterateContext(
+  get(): IterateContextRpcTarget {
+    return new IterateContextRpcTarget(
       this.env.ITERATE_CONTEXT,
       DurableObjectNameCodec.parse(this.ctx.props.iterateContextName),
       new SessionTeardown(),

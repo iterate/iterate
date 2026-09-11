@@ -3,7 +3,7 @@
 import { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
 import { WebSocket as UndiciWebSocket } from "undici";
 import { expect, test } from "vitest";
-import type { Session } from "../src/session.ts";
+import type { SessionRpcTarget } from "../src/session.ts";
 import {
   adminCredentials,
   codeOf,
@@ -82,7 +82,7 @@ test("revoking a grant closes its live public socket and held capability within 
     onClose = resolve;
   });
   socket.addEventListener("close", onClose, { once: true });
-  using held = newWebSocketRpcSession<Session>(socket as unknown as WebSocket);
+  using held = newWebSocketRpcSession<SessionRpcTarget>(socket as unknown as WebSocket);
   using itx = await held.projects.get(project);
   expect((await itx.whoami()).projectId).toBe(project);
   await api.logout();
@@ -125,7 +125,7 @@ deployedOnly(
     await registerProject(projectId, member);
     const { issuerHeaders } = await oauthSession(projectId, member);
     // eslint-disable-next-line iterate/no-capnweb-http-batch -- A bounded token mint through the account capability.
-    using issuer = newHttpBatchRpcSession<Session>(
+    using issuer = newHttpBatchRpcSession<SessionRpcTarget>(
       new Request(workerUrl("/api"), { headers: issuerHeaders }),
     );
     const { token, expiresAt } = await issuer.grants.mint({
@@ -172,7 +172,7 @@ test("one-shot HTTP batch whoami at /api, an inline-source worker, and a dotted 
   const { token } = await oauthSession(ctx, member);
 
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- A public bearer also admits a bounded socketless batch.
-  using batch = newHttpBatchRpcSession<Session>(
+  using batch = newHttpBatchRpcSession<SessionRpcTarget>(
     new Request(workerUrl("/api"), {
       headers: { Authorization: `Bearer ${token}` },
     }),

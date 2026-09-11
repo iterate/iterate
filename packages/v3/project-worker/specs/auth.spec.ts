@@ -8,7 +8,7 @@ import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- Bounded fixture setup; browser actions use the app's real WebSocket.
 import { newHttpBatchRpcSession } from "capnweb";
 import { transformSync } from "esbuild";
-import type { Session, UnauthenticatedSession } from "../src/session.ts";
+import type { SessionRpcTarget, UnauthenticatedSession } from "../src/session.ts";
 import { authorizationCodeRequest } from "../src/client/oauth.ts";
 
 const claudeClient = "https://claude.ai/oauth/claude-code-client-metadata";
@@ -224,7 +224,7 @@ test("first Claude consent creates the organization and project in the SPA befor
     // The issuer grant and the Claude grant are the only two sessions created.
     const headers = await cookieHeaders(context, origin);
     // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory assertion after the UI flow.
-    using api = newHttpBatchRpcSession<Session>(new Request(`${origin}/api`, { headers }));
+    using api = newHttpBatchRpcSession<SessionRpcTarget>(new Request(`${origin}/api`, { headers }));
     const inventory = await api.grants.list();
     expect(inventory.items).toHaveLength(2);
     expect(inventory.items.filter((item) => item.current)).toHaveLength(1);

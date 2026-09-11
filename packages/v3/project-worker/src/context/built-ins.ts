@@ -69,7 +69,7 @@ export type SubscriptionListEntry = {
 /** THE built-in scope, as ONE interface — the clean-room's whole kernel surface; the library's verbs
  *  come in by `extends` (library.ts). The record is a PLAIN OBJECT of own-enumerable closures,
  *  not an RpcTarget class, on purpose: the resolver gates on `Object.hasOwn`, so a prototype-method
- *  class would leave every root unreachable. Exported for ONE reader: the edge `IterateContext`'s TYPE
+ *  class would leave every root unreachable. Exported for ONE reader: the edge `IterateContextRpcTarget`'s TYPE
  *  merges it in (iterate-context.ts), so what rides the dotted hop is typed where a client holds it. */
 export interface BuiltInScope extends LibraryRoots {
   /** THE RESERVED ROOT, typed: the physical spelling of every root below. Not a key of the record

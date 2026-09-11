@@ -88,7 +88,7 @@ export function createLiveStateStore<S>(): LiveStateStore<S> {
 // `door` thunk reads `{rev, state}` for the first paint and every gap heal. Transport lives here so
 // the store (client/live-state.ts) and the React hook stay pure.
 
-/** The slice of an itx session this needs — a capnweb `IterateContext` proxy satisfies it structurally:
+/** The slice of an itx session this needs — a capnweb `IterateContextRpcTarget` proxy satisfies it structurally:
  *  `subscribe` hands back a DISPOSABLE handle (disposing it removes the subscription server-side). */
 export type LiveStateItx = {
   subscribe(input: {

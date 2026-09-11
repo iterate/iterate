@@ -2,7 +2,7 @@ import { env, SELF } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { signIn, type Env } from "../src/control-plane.ts";
-import type { Session, UnauthenticatedSession } from "../src/session.ts";
+import type { SessionRpcTarget, UnauthenticatedSession } from "../src/session.ts";
 import { directory } from "../src/directory.ts";
 import { applyDirectorySchema, SRC_ECHO_APP } from "./support.ts";
 
@@ -169,7 +169,7 @@ test("unverified email login requires test mode and creates an ordinary user ses
   });
   expect(response.status).toBe(101);
   response.webSocket!.accept();
-  using api = newWebSocketRpcSession<Session>(response.webSocket! as unknown as WebSocket);
+  using api = newWebSocketRpcSession<SessionRpcTarget>(response.webSocket! as unknown as WebSocket);
   expect(await api.whoami()).toMatchObject({
     actor: expect.stringMatching(/^user_/),
     email: "test-login@directory.test",
