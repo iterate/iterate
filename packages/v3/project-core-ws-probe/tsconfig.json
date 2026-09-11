@@ -1,0 +1,19 @@
+{
+  "extends": "../project-core/tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023"],
+    "typeRoots": [
+      "../project-core/node_modules/@cloudflare",
+      "../project-core/node_modules/@types"
+    ],
+    "types": ["workers-types", "node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src", "e2e"]
+}

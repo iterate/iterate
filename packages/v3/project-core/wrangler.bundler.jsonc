@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "iterate-project-core-bundler-experiment-preview",
+  "main": "src/bundler.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "376ef7ed81b0573f93524de763666c15",
+  "workers_dev": false,
+  "preview_urls": false,
+  "kv_namespaces": [{ "binding": "BUILD_CACHE", "id": "296ab88a0f4b414baa33cd4c8e4881fe" }],
+  "version_metadata": { "binding": "VERSION" },
+  "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } },
+}

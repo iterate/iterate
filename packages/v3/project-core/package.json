@@ -1,0 +1,25 @@
+{
+  "name": "@iterate-experiments/project-core",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev -c wrangler.jsonc -c wrangler.bundler.jsonc",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test e2e/*.test.ts",
+    "size": "node scripts/size.ts"
+  },
+  "dependencies": {
+    "@cloudflare/worker-bundler": "0.2.1",
+    "@cloudflare/workers-oauth-provider": "0.10.3",
+    "capnweb": "npm:@iterate-com/capnweb@0.12.2",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "undici": "^7.16.0",
+    "@cloudflare/workers-types": "^5.20260831.1",
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "wrangler": "4.127.1"
+  }
+}

@@ -93,6 +93,7 @@ overrides:
   # rest of the graph) runs ahead on 0.12.0: arg-disposal-on-broken, exact binary serialization,
   # the batch-latency fix. The monorepo-wide pin above stays 0.10.0 until each consumer is verified.
   'project-worker>capnweb': npm:@iterate-com/capnweb@0.12.2
+  '@iterate-experiments/project-core>capnweb': npm:@iterate-com/capnweb@0.12.2
   '@iterate-experiments/project-v4>capnweb': npm:@iterate-com/capnweb@0.12.2
   # dummy-petshop's /capnweb door is the pet shop the clean-room's `itx.connectToCapnweb` connector is
   # proved against, so its server speaks the same 0.12 wire as that client.
@@ -109,6 +110,7 @@ overrides:
   '@iterate-com/notes>wrangler': 4.127.1
   # V4's canceled-upload -> WebSocket regression reproduces with the old local assets bridge.
   # The minimal assets harness passes with 4.129.0; full-suite diagnosis remains open in v4 docs.
+  '@iterate-experiments/project-core>wrangler': 4.127.1
   '@iterate-experiments/project-v4>wrangler': 4.129.0
   ws: 8.19.0
 

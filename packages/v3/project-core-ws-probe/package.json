@@ -1,0 +1,14 @@
+{
+  "name": "@iterate-experiments/project-core-ws-probe",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "capnweb": "npm:@iterate-com/capnweb@0.12.2"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "probe": "node e2e/probe.ts",
+    "pump": "node e2e/pump.ts",
+    "build-rpc": "node e2e/build-rpc.ts"
+  }
+}

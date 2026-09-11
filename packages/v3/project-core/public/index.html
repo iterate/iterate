@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Iterate / project core</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="/">iterate <i>/</i> project core</a>
+      <span id="connection" aria-live="polite">not connected</span>
+      <a href="/login" id="identity">Switch identity</a>
+    </header>
+    <main>
+      <section class="intro">
+        <p class="eyebrow">A small project operating substrate</p>
+        <h1>One log. Named contexts. Explicit authority.</h1>
+        <p>Walk the layers, then use the live append, replay and follow console below.</p>
+      </section>
+      <section class="tutorial" aria-label="Tutorial">
+        <div id="lessons"></div>
+      </section>
+      <section class="console" aria-labelledby="console-title">
+        <div class="section-heading">
+          <p class="eyebrow">Live console</p>
+          <h2 id="console-title">Append, replay, follow</h2>
+        </div>
+        <p class="hint">
+          This console exercises append, read, inspect and live follow. The network tests also
+          exercise repositories, builds, workers and fetch routing. Collaborative document apps
+          remain designs.
+        </p>
+        <div class="address">
+          <label>Project <input id="project" autocomplete="off" /></label>
+          <label>Context path <input id="path" value="/" autocomplete="off" /></label>
+          <button id="inspect" type="button">Inspect</button>
+          <button id="replay" type="button">Replay</button>
+          <button id="follow" type="button" aria-pressed="false">Follow</button>
+        </div>
+        <form id="append-form">
+          <div class="form-row">
+            <label
+              >Event type
+              <input id="event-type" value="note/added" required maxlength="256" /></label
+            ><label>Event id <input id="event-id" required maxlength="256" /></label>
+          </div>
+          <label
+            >JSON data
+            <textarea id="event-data" rows="5" spellcheck="false">
+{"text":"hello from the project console"}</textarea
+            >
+          </label>
+          <div class="form-row controls">
+            <label><input id="signed" type="checkbox" /> Add this browser's signature</label
+            ><button type="submit">Append event</button>
+          </div>
+        </form>
+        <pre id="status" aria-live="polite">Ready. Choose a project and append an event.</pre>
+        <ol id="events" aria-label="Events"></ol>
+      </section>
+    </main>
+    <footer>
+      project-core experiment · source: packages/v3/project-core · local proof, not production
+      readiness
+    </footer>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

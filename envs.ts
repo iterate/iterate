@@ -35,6 +35,9 @@ export const PRD_ACCOUNT_ID = "04b3b57291ef2626c6a8daa9d47065a7";
 /** The shared dev/preview Cloudflare account (iterate-preview-N and dev zones). */
 export const PREVIEW_AND_DEV_ACCOUNT_ID = "376ef7ed81b0573f93524de763666c15";
 
+/** Isolated project-core domain proof deployment (not an OS product environment). */
+export { projectCoreDomainPoc } from "./packages/v3/project-core/deployment.ts";
+
 /**
  * Placeholder for a Cloudflare resource that hasn't been created yet.
  * Deploy scripts refuse to ship it; `ensure-resources` replaces it.

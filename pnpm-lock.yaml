@@ -40,6 +40,7 @@ overrides:
   baseline-browser-mapping: ^2.9.14
   capnweb: npm:@iterate-com/capnweb@0.10.0
   project-worker>capnweb: npm:@iterate-com/capnweb@0.12.2
+  '@iterate-experiments/project-core>capnweb': npm:@iterate-com/capnweb@0.12.2
   '@iterate-experiments/project-v4>capnweb': npm:@iterate-com/capnweb@0.12.2
   '@iterate-com/dummy-petshop>capnweb': npm:@iterate-com/capnweb@0.12.2
   quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
@@ -47,6 +48,7 @@ overrides:
   wrangler: 4.107.0
   project-worker>wrangler: 4.127.1
   '@iterate-com/notes>wrangler': 4.127.1
+  '@iterate-experiments/project-core>wrangler': 4.127.1
   '@iterate-experiments/project-v4>wrangler': 4.129.0
   ws: 8.19.0
 
@@ -1754,6 +1756,45 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+
+  packages/v3/project-core:
+    dependencies:
+      '@cloudflare/worker-bundler':
+        specifier: 0.2.1
+        version: 0.2.1(patch_hash=f39a50f1ade4d1d29fc948f70eae8d247734e183cd09c2e1b08199ac532d287f)
+      '@cloudflare/workers-oauth-provider':
+        specifier: 0.10.3
+        version: 0.10.3
+      capnweb:
+        specifier: npm:@iterate-com/capnweb@0.12.2
+        version: '@iterate-com/capnweb@0.12.2'
+      zod:
+        specifier: 4.3.6
+        version: 4.3.6
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^5.20260831.1
+        version: 5.20260901.1
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.12.4
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      undici:
+        specifier: ^7.16.0
+        version: 7.29.0
+      wrangler:
+        specifier: 4.127.1
+        version: 4.127.1(@cloudflare/workers-types@5.20260901.1)
+
+  packages/v3/project-core-fetch: {}
+
+  packages/v3/project-core-ws-probe:
+    dependencies:
+      capnweb:
+        specifier: npm:@iterate-com/capnweb@0.10.0
+        version: '@iterate-com/capnweb@0.10.0'
 
   packages/v3/project-worker:
     dependencies:

@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "iterate-project-core-experiment-preview",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-01",
+  "account_id": "376ef7ed81b0573f93524de763666c15",
+  "workers_dev": true,
+  "vars": {
+    "PUBLIC_ORIGIN": "https://iterate-project-core-experiment-preview.iterate-dev-preview.workers.dev",
+    "PROJECT_HOSTNAME_BASE": "project-core.invalid",
+    "PROJECTS": {
+      "demo": "project-core-ingress-demo",
+      "my-project": "project-core-ingress-demo",
+      "docs--my-project": "project-core-ingress-exact",
+    },
+    "CUSTOM_HOSTNAMES": {
+      "customer.localhost": "project-core-ingress-demo",
+    },
+  },
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "c4ba23e6d2a44c6fad3f3c9d498457c1" }],
+  "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } },
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "version_metadata": { "binding": "VERSION" },
+  "services": [
+    { "binding": "BUNDLER", "service": "iterate-project-core-bundler-experiment-preview" },
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "CONTEXT", "class_name": "Context" }],
+  },
+  "exports": { "Context": { "type": "durable-object", "storage": "sqlite" } },
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
+  "limits": { "cpu_ms": 30000, "subrequests": 1000000 },
+}

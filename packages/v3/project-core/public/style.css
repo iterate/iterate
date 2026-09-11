@@ -1,0 +1,120 @@
+:root {
+  color-scheme: dark;
+  --ink: #eee7d6;
+  --muted: #aaa393;
+  --paper: #171816;
+  --panel: #20211d;
+  --line: #3d3d35;
+  --accent: #c9b78a;
+  --red: #e48772;
+  font: 15px/1.55 monospace;
+}
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+}
+:is(header, main, footer) {
+  width: min(100% - 32px, 900px);
+  margin: auto;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--line);
+}
+a {
+  color: var(--accent);
+}
+:is(p, label, footer, pre, #connection) {
+  color: var(--muted);
+}
+main {
+  padding: 44px 0;
+}
+h1 {
+  margin: 0;
+  font-size: clamp(30px, 6vw, 54px);
+}
+:is(.tutorial, .console) {
+  margin-top: 42px;
+  padding: 20px;
+  border: 1px solid var(--line);
+}
+:is(.address, .form-row) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+:is(button, input, textarea) {
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+button {
+  padding: 8px 10px;
+  background: var(--accent);
+  color: #1b1914;
+}
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.tutorial details + details {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+pre {
+  overflow: auto;
+  padding: 12px;
+  background: #151612;
+  white-space: pre-wrap;
+}
+:is(.address, .form-row) {
+  align-items: end;
+  margin: 14px 0;
+}
+:is(.address, .form-row) label {
+  flex: 1;
+  min-width: 0;
+}
+label {
+  display: grid;
+}
+input,
+textarea {
+  width: 100%;
+  padding: 8px;
+  background: #151612;
+  color: var(--ink);
+}
+.controls input {
+  width: auto;
+}
+#events {
+  padding: 0;
+  list-style: none;
+}
+#events li {
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+@media (max-width: 650px) {
+  :is(.address, .form-row) {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .address button {
+    width: 100%;
+  }
+}

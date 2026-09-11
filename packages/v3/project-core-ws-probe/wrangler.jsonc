@@ -1,0 +1,33 @@
+{
+  "$schema": "../../project-core/node_modules/wrangler/config-schema.json",
+  "name": "iterate-project-core-ws-probe-b6f58624",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-01",
+  "account_id": "376ef7ed81b0573f93524de763666c15",
+  "workers_dev": true,
+  "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } },
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "services": [
+    {
+      "binding": "OUTBOUND",
+      "service": "iterate-project-core-ws-probe-b6f58624",
+      "entrypoint": "Outbound",
+    },
+  ],
+  "version_metadata": { "binding": "VERSION" },
+  "durable_objects": {
+    "bindings": [{ "name": "PROBE", "class_name": "ProbeContext" }],
+  },
+  "exports": {
+    "BuildService": { "type": "worker" },
+    "BuildHost": { "type": "worker" },
+    "Loopback": { "type": "worker" },
+    "CapabilityHost": { "type": "worker" },
+    "FetcherHost": { "type": "worker" },
+    "ReentryHost": { "type": "worker" },
+    "StaticTarget": { "type": "worker" },
+    "FetchNext": { "type": "worker" },
+    "Destination": { "type": "worker" },
+    "ProbeContext": { "type": "durable-object", "storage": "sqlite" },
+  },
+}

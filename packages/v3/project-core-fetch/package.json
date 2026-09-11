@@ -1,0 +1,10 @@
+{
+  "name": "project-core-fetch-fork",
+  "private": true,
+  "type": "module",
+  "description": "Bounded fetch-first architectural fork for the Iterate project core",
+  "scripts": {
+    "e2e": "node e2e/fetch-core.e2e.mjs",
+    "typecheck": "tsc --allowJs --checkJs --noEmit --target es2022 --module nodenext --moduleResolution nodenext src/*.mjs e2e/*.mjs"
+  }
+}
