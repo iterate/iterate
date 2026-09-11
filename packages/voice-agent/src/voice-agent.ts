@@ -32,14 +32,13 @@
  *
  * So this cut deletes the realtime dialect AND the hand-built colleague hand-off
  * whole, and keeps what was never about the provider: the device contract,
- * the pacer, the flush watermark, the durable transcript, the idle deadline,
- * eviction recovery.
+ * the durable transcript, the idle deadline, eviction recovery.
  *
  * TWO SEQUENCES, AND THEY ARE NOT INTERCHANGEABLE:
  *
  *   `deviceMicFrameSeq`      device microphone -> facet -> provider. Minted by
  *                            the DEVICE; the facet never renumbers it.
- *   `deviceSpeakerFrameSeq`  facet -> device speaker. One per paced chunk.
+ *   `deviceSpeakerFrameSeq`  facet -> device speaker. One per forwarded chunk.
  *                            A flush names THIS one and no other.
  *
  * EVERY TIMESTAMP SAYS WHERE IT WAS TAKEN, in its name. FOUR CLOCKS, and a
@@ -68,15 +67,24 @@
  * end-of-answer event, and the clients that wait for one were never taught
  * to infer it from silence.
  *
- * THE SERVER PACES TO THE DEVICE'S BUFFER — still, though GPT-Live rarely
- * exercises it: the wire hands audio over at play rate, so the device's lead
- * is network jitter, not a burst. The pacer stays because a provider that
- * bursts is one release away and the pacer costs nothing when it idles; and
- * because idle SILENCE is dropped here rather than sent, so the downlink
- * carries speech and nothing else.
+ * THE FACET IS A RELAY, in the shape of OpenAI's own reference clients (their
+ * Node and Python WebSocket examples, the Twilio GPT-Live relay): a mic chunk
+ * goes to the provider the moment it arrives, whatever its length; a provider
+ * delta goes to the device the moment it arrives, verbatim. NOTHING IS PACED
+ * AND NOTHING IS HELD. The second cut's pacer existed for a provider that
+ * burst a whole answer ahead of time; GPT-Live delivers at exactly play rate
+ * (measured 2026-09-11: 558 deltas, median gap 100 ms, p90 103 ms), so the
+ * pacer never once engaged and its schedule only stood between a frame and
+ * the wire. Smoothing belongs where the docs put it — "your application
+ * handles capture, buffering, playback" — in the device's own playout
+ * buffer, sized to the network it sits on. Two things this relay still
+ * decides, because the devices need them and the provider offers neither:
+ * idle SILENCE is dropped (the downlink carries speech, not the zeros GPT-Live
+ * streams between answers), and `lastFrameOfAnswer` is inferred from the
+ * stream going quiet.
  *
  * THE SHAPE: REDUCED STATE is what survives an eviction; RUNTIME STATE is the
- * provider socket, the speaker queue, and the open transcript rows. TWO
+ * provider socket, the answer in flight, and the open transcript rows. TWO
  * SWITCHES — `reduce` folds, `processEvent` acts — and a third inside the
  * provider socket's message listener, whose comment says why it cannot be a
  * stream event like everything else.
@@ -138,24 +146,6 @@ const BACKEND = {
 } as const;
 
 /**
- * The most unplayed audio the device may be holding, in wire bytes.
- *
- * DERIVED FROM THE FIRMWARE, NOT CHOSEN. The ring is 320,000 bytes of PCM16 in
- * PSRAM (voice_device_profile.h), and the device skips frames once its backlog
- * passes ITERATE_KIT_VOICE_SPEAKER_HIGH_WATER_MS (9,000 ms) — a ceiling of
- * 288,000 bytes. 128,000 is four seconds, exactly forty frames, and 40% of the
- * ring. The remaining 60% pays for things no instrument on either side can
- * measure: hand-over-to-play lag, a slow playback clock, and a revived
- * incarnation bursting a budget on top of one the dead incarnation already
- * sent. OVERFLOWING IS SILENT — the device refuses whole frames at the door
- * and its loss counters stay innocent — which is why the margin is large.
- *
- * GPT-Live hands audio over at play rate, so this budget is never reached in
- * the ordinary course; it is the safety proof, not the schedule.
- */
-export const MAX_DEVICE_SPEAKER_BACKLOG_BYTES = 128_000;
-
-/**
  * The most audio one speaker frame may carry, in bytes.
  *
  * A CEILING, NOT A UNIT. The device appends bytes to a ring and neither end
@@ -166,16 +156,6 @@ export const MAX_DEVICE_SPEAKER_BACKLOG_BYTES = 128_000;
  * without a word. 3,200 is 100 ms — which is also exactly one GPT-Live delta.
  */
 export const MAX_SPEAKER_PAYLOAD_BYTES = 3_200;
-
-/**
- * How a provider delta LARGER than the ceiling is cut WITHOUT decoding it:
- * the largest multiple of 3 under the ceiling, sliced off the delta's own
- * base64. Every 4-character base64 group encodes 3 whole bytes, so an
- * interior slice of a group-aligned string is itself valid base64 and the
- * device decodes it with no help; 3,198 is even, so no sample is split.
- */
-const IDENTITY_SLICE_BYTES = Math.floor(MAX_SPEAKER_PAYLOAD_BYTES / 3) * 3;
-const IDENTITY_SLICE_B64_CHARS = (IDENTITY_SLICE_BYTES / 3) * 4;
 
 /** 16 kHz mono PCM16: two bytes per sample, sixteen samples per millisecond. */
 const PCM16_BYTES_PER_MS = 32;
@@ -289,6 +269,14 @@ const FUNCTION_OUTPUT_MAX_CHARS = 8_000;
  * still ends a silent call while somebody is standing there.
  */
 const HANG_UP_GOODBYE_GRACE_MS = 8_000;
+
+/**
+ * Once the goodbye's end marker has gone out, how long the device is given
+ * to play what it still holds before the call is ended. The relay hands
+ * frames over as they arrive, so the device holds at most its own small
+ * playout buffer (the firmware prefills 150 ms) plus one frame in flight.
+ */
+const GOODBYE_PLAYOUT_ALLOWANCE_MS = 500;
 
 /**
  * How much conversation the fold remembers, and so how much a fresh provider
@@ -637,7 +625,7 @@ export const VoiceAgentContract = defineProcessorContract({
    * break as ever. */
   version: "20.0.0",
   description:
-    "Runs a GPT-Live voice call in the stream's own Durable Object, one flush watermark deep.",
+    "Runs a GPT-Live voice call in the stream's own Durable Object, relaying audio both ways as it arrives.",
   stateSchema: VoiceState,
   events: {
     "events.iterate.com/voice-agent/created": {
@@ -778,7 +766,8 @@ export const VoiceAgentContract = defineProcessorContract({
      * below a watermark.
      */
     "events.iterate.com/voice-agent/spk-frame": {
-      description: "One paced chunk of the answer, numbered within the conversation.",
+      description:
+        "One chunk of the answer, forwarded as it arrived, numbered within the conversation.",
       ...EPH,
       payloadSchema: z.looseObject({
         conversationId: z.string(),
@@ -854,23 +843,13 @@ export type VoiceAgentContract = typeof VoiceAgentContract;
 interface Answer {
   /**
    *   "speaking"  the stream is carrying speech (or a pause shorter than
-   *               ANSWER_TAIL_SILENCE_MS inside it); deltas go to the queue.
-   *   "settled"   between answers: idle silence is dropped at the door.
+   *               ANSWER_TAIL_SILENCE_MS inside it); deltas go to the device.
+   *   "settled"   between answers: idle silence is dropped here.
    */
   phase: "speaking" | "settled";
-  /** How much of the answer was RECEIVED from the provider, in audio ms. */
-  receivedMs: number;
-  /** How much of it was actually HANDED TO THE DEVICE, in audio ms. */
-  sentMs: number;
   /** Silence received since the last speech in this answer, in audio ms —
    * the counter that ends it. */
   trailingSilenceMs: number;
-  /**
-   * The answer is over; say so once the queue is empty. Deliberately NOT
-   * "mark the frame that happens to be last": this is a question asked at
-   * the drain point, where the answer is always knowable.
-   */
-  endsWhenQueueDrains: boolean;
   /** Facet clock at this answer's first speech — 0 until one arrives. What
    * the button arm compares a press's `createdAt` against. */
   startedAtFacetMs: number;
@@ -879,10 +858,7 @@ interface Answer {
 /** The between-answers state: nothing playing, nothing owed. */
 const freshAnswer = (): Answer => ({
   phase: "settled",
-  receivedMs: 0,
-  sentMs: 0,
   trailingSilenceMs: 0,
-  endsWhenQueueDrains: false,
   startedAtFacetMs: 0,
 });
 
@@ -916,12 +892,15 @@ interface Dial {
   /** True once `session.started` arrived and audio may flow. */
   ready: boolean;
   /**
-   * Paced answer audio waiting for its turn on the wire, oldest first — as
-   * BASE64, the wire's own spelling, so the frame goes out verbatim. NOTHING
-   * IN HERE HAS A SEQUENCE NUMBER YET: a number is minted when a frame is
-   * HANDED TO THE STREAM, so a hole in the numbering means one thing.
+   * The speaker frames' appends, chained in sequence order. The relay never
+   * waits on the chain; it exists so two frames handed to the stream a
+   * millisecond apart cannot land out of order, and so the marker follows
+   * the last frame of the answer it ends.
    */
-  speakerQueue: string[];
+  speakerAppends: Promise<void>;
+  /** Facet clock at the last speaker frame handed over — the "this end is
+   * busy" reading the idle deadline uses. */
+  lastSpeakerFrameAtFacetMs: number;
   /** Last speaker-frame sequence number minted, for this call. */
   lastDeviceSpeakerFrameSeq: number;
   /** How far a clear has already been declared, so a repeated press is free. */
@@ -934,14 +913,6 @@ interface Dial {
    */
   clearSpeakerBufferBeforeNextFrame: boolean;
   /**
-   * When the device will run dry, on the facet clock. The only pacing state:
-   * heldBytes = max(0, deviceBufferEmptyAtFacetMs - now) * PCM16_BYTES_PER_MS.
-   * A deadline drains implicitly with the clock.
-   */
-  deviceBufferEmptyAtFacetMs: number;
-  /** One sender at a time — PER DIAL. */
-  sending: boolean;
-  /**
    * The button took the floor while the provider was mid-sentence. The
    * model has not heard the person yet (the press precedes the words), so
    * its speech keeps arriving for a beat; those deltas are dead — the
@@ -952,10 +923,11 @@ interface Dial {
   /** The face, when the certificate says something renders one; null costs nothing. */
   face: ReturnType<typeof createFace> | null;
   /**
-   * The backend decided the call is over; settle at the drain point, after
-   * the goodbye PLAYS. Runtime on purpose: evicted, the idle deadline backstops.
+   * The backend decided the call is over, with this reason; the call ends
+   * once the goodbye's end marker has gone out (or the grace runs out).
+   * Runtime on purpose: evicted, the idle deadline backstops.
    */
-  hangUpAfterAnswerDrains: string | null;
+  hangUpReason: string | null;
   /** Facet clock when the hang-up was decided — see HANG_UP_GOODBYE_GRACE_MS. */
   hangUpArmedAtFacetMs: number;
   /** Facet clock when the last answer's end marker went out; 0 before any. */
@@ -1001,15 +973,14 @@ const freshDial = (conversationId: string): Dial => ({
   dialId: crypto.randomUUID(),
   socket: null,
   ready: false,
-  speakerQueue: [],
+  speakerAppends: Promise.resolve(),
+  lastSpeakerFrameAtFacetMs: 0,
   lastDeviceSpeakerFrameSeq: 0,
   clearedThroughDeviceSpeakerFrameSeq: 0,
   clearSpeakerBufferBeforeNextFrame: true,
-  deviceBufferEmptyAtFacetMs: 0,
-  sending: false,
   suppressSpeechUntilSilence: false,
   face: null,
-  hangUpAfterAnswerDrains: null,
+  hangUpReason: null,
   hangUpArmedAtFacetMs: 0,
   answerEndedAtFacetMs: 0,
   capabilityHostReady: false,
@@ -1545,23 +1516,22 @@ export class VoiceAgentProcessor extends StreamProcessor<
       /*
        * IDLE SINCE THE LAST THING THAT HAPPENED, whichever end it happened
        * at. The durable stamp records only the DEVICE's input; a listener
-       * hearing out a long answer sends nothing, so finishing an answer
-       * counts too — `deviceBufferEmptyAtFacetMs` is when this end stopped.
-       * In-memory ON PURPOSE: after an eviction nothing was said, and the
-       * durable stamp alone still bites.
+       * hearing out a long answer sends nothing, so the answer's frames
+       * count too — `lastSpeakerFrameAtFacetMs` is when this end last
+       * spoke. In-memory ON PURPOSE: after an eviction nothing was said, and
+       * the durable stamp alone still bites.
        */
       const lastActivityAtFacetMs = Math.max(
         this.#lastDeviceInputAtStreamMsMirror,
-        dial.deviceBufferEmptyAtFacetMs,
+        dial.lastSpeakerFrameAtFacetMs,
       );
       if (nowAtFacetMs - lastActivityAtFacetMs < IDLE_TIMEOUT_MS) {
         this.runInBackground(idleTick);
         return;
       }
-      /* Still holding audio it has not handed over yet, or still running
-       * something the person asked for: not idle by any reading, whatever
-       * the clocks say. */
-      if (dial.speakerQueue.length > 0 || dial.openBackendCalls > 0) {
+      /* Still running something the person asked for: not idle by any
+       * reading, whatever the clocks say. */
+      if (dial.openBackendCalls > 0) {
         this.runInBackground(idleTick);
         return;
       }
@@ -1871,12 +1841,12 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * One 100 ms delta of the provider's CONTINUOUS output stream.
    *
    * THE STREAM NEVER STOPS, so "is the voice speaking" is read off the audio
-   * itself: a delta is speech or it is silence. Idle silence is dropped at
-   * the door — the device's ring being empty IS silence, and the downlink
-   * carries speech only. Speech opens an answer (a fresh Answer, the face
-   * told, the pacer started); silence inside an answer rides along up to
+   * itself: a delta is speech or it is silence. Idle silence is dropped here
+   * — the device's ring being empty IS silence, and the downlink carries
+   * speech only. Speech opens an answer (a fresh Answer, the face told) and
+   * goes straight to the device; silence inside an answer rides along up to
    * ANSWER_TAIL_SILENCE_MS so the natural pauses play; silence past that
-   * ends the answer, and the pacer marks `lastFrameOfAnswer` at the drain.
+   * ends the answer, and `lastFrameOfAnswer` follows the last frame out.
    */
   #onOutputAudio(
     dial: Dial,
@@ -1901,9 +1871,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (dial.answer.phase === "settled") {
       if (!speaking) return;
       /* THE ONSET: a new answer, replaced wholesale. */
-      dial.answer = freshAnswer();
-      dial.answer.phase = "speaking";
-      dial.answer.startedAtFacetMs = receivedAtFacetMs;
+      dial.answer = {
+        phase: "speaking",
+        trailingSilenceMs: 0,
+        startedAtFacetMs: receivedAtFacetMs,
+      };
       dial.face?.answerStarted();
     } else if (speaking) {
       dial.answer.trailingSilenceMs = 0;
@@ -1912,40 +1884,118 @@ export class VoiceAgentProcessor extends StreamProcessor<
       if (dial.answer.trailingSilenceMs >= ANSWER_TAIL_SILENCE_MS) {
         /* THE ANSWER IS OVER, and the device does have to be told: silence
          * on the wire is indistinguishable from a provider taking its time,
-         * so a client waiting for the end of a turn waits for ever. Asked at
-         * the DRAIN POINT so the marker cannot overtake the audio. */
-        dial.answer.phase = "settled";
-        dial.answer.endsWhenQueueDrains = true;
-        this.#sendSpeakerAudio(dial, append, runInBackground);
+         * so a client waiting for the end of a turn waits for ever. */
+        this.#endAnswer(dial, receivedAtFacetMs, append, runInBackground);
         return;
       }
     }
 
-    dial.answer.receivedMs += deltaMs;
-    /* The provider's 16 kHz bytes ARE the pipeline's bytes, so the answer
-     * stays base64 end to end. A delta that fits the device's ceiling goes
-     * out WHOLE — GPT-Live's 100 ms delta is exactly that ceiling, and
-     * slicing it at a group boundary would leave a two-byte tail frame
-     * behind every one. A longer delta is cut at group boundaries without
-     * decoding; anything unaligned (atob tolerates ragged base64 the device
-     * would play as noise) decodes and re-cuts. */
+    /* STRAIGHT THROUGH. The provider's 16 kHz bytes ARE the pipeline's
+     * bytes, so the delta goes out as the base64 it arrived as — GPT-Live's
+     * 100 ms delta is exactly the device's frame ceiling. A larger delta
+     * (no provider sends one today) is decoded and cut, because the device
+     * silently drops an oversize frame. */
     if (base64ByteLength(delta) <= MAX_SPEAKER_PAYLOAD_BYTES) {
-      dial.speakerQueue.push(delta);
-    } else if (delta.length % 4 === 0) {
-      for (let cut = 0; cut < delta.length; cut += IDENTITY_SLICE_B64_CHARS) {
-        dial.speakerQueue.push(delta.slice(cut, cut + IDENTITY_SLICE_B64_CHARS));
-      }
-    } else {
-      const pcm16 = base64ToBytes(delta);
-      for (let cut = 0; cut < pcm16.length; cut += MAX_SPEAKER_PAYLOAD_BYTES) {
-        dial.speakerQueue.push(
-          bytesToBase64(
-            pcm16.subarray(cut, Math.min(cut + MAX_SPEAKER_PAYLOAD_BYTES, pcm16.length)),
-          ),
-        );
-      }
+      this.#sendSpeakerFrame(dial, delta, receivedAtFacetMs, append);
+      return;
     }
-    this.#sendSpeakerAudio(dial, append, runInBackground);
+    const pcm16 = base64ToBytes(delta);
+    for (let cut = 0; cut < pcm16.length; cut += MAX_SPEAKER_PAYLOAD_BYTES) {
+      this.#sendSpeakerFrame(
+        dial,
+        bytesToBase64(pcm16.subarray(cut, Math.min(cut + MAX_SPEAKER_PAYLOAD_BYTES, pcm16.length))),
+        receivedAtFacetMs,
+        append,
+      );
+    }
+  }
+
+  /**
+   * One frame to the device, now, with the next sequence number. The face
+   * folds at hand-over time, on the frame the device is about to play; the
+   * clear owed from a press or a fresh dial rides on this frame too.
+   */
+  #sendSpeakerFrame(
+    dial: Dial,
+    pcm: string,
+    nowAtFacetMs: number,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+  ): void {
+    if (dial.face !== null) dial.face.audio(base64ToBytes(pcm), nowAtFacetMs);
+    dial.lastSpeakerFrameAtFacetMs = nowAtFacetMs;
+    this.#appendSpeakerFrame(dial, { pcm, sentAtFacetMs: nowAtFacetMs }, append);
+  }
+
+  /**
+   * The answer ended: the mouth closes, the marker goes out behind the last
+   * frame, and a hang-up armed before this answer ended is now settleable.
+   */
+  #endAnswer(
+    dial: Dial,
+    nowAtFacetMs: number,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+    runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
+  ): void {
+    dial.answer = freshAnswer();
+    dial.face?.answerAudioDone(nowAtFacetMs);
+    dial.answerEndedAtFacetMs = nowAtFacetMs;
+    this.#appendSpeakerFrame(
+      dial,
+      { pcm: "", lastFrameOfAnswer: true, sentAtFacetMs: nowAtFacetMs },
+      append,
+    );
+    if (dial.hangUpReason !== null && dial.answerEndedAtFacetMs >= dial.hangUpArmedAtFacetMs) {
+      /* The goodbye has been handed over whole; the device holds at most its
+       * own small buffer. A press inside the allowance un-decides it. */
+      runInBackground(async () => {
+        await this.deps.sleep(GOODBYE_PLAYOUT_ALLOWANCE_MS);
+        await this.#settleHangUp(dial, append);
+      });
+    }
+  }
+
+  /**
+   * End the call the backend asked to end — unless a press took it back or
+   * the dial is gone. Idempotent: the reason is consumed on the way out.
+   */
+  async #settleHangUp(
+    dial: Dial,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+  ): Promise<void> {
+    if (this.#dial !== dial || dial.hangUpReason === null) return;
+    const reason = dial.hangUpReason;
+    dial.hangUpReason = null;
+    await this.#requestEnd(dial.conversationId, "hang-up", reason, append);
+  }
+
+  /**
+   * Mint the next sequence number and hand one frame to the stream, in
+   * order behind the frames before it. The number is minted HERE,
+   * synchronously, so a hole in the numbering means one thing; the append
+   * itself is chained, never awaited by the relay.
+   */
+  #appendSpeakerFrame(
+    dial: Dial,
+    frame: { pcm: string; lastFrameOfAnswer?: true; sentAtFacetMs: number },
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+  ): void {
+    const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
+    dial.clearSpeakerBufferBeforeNextFrame = false;
+    const payload = {
+      conversationId: dial.conversationId,
+      deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
+      pcm: frame.pcm,
+      ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
+      ...(frame.lastFrameOfAnswer && { lastFrameOfAnswer: true }),
+      sentAtFacetMs: frame.sentAtFacetMs,
+    };
+    dial.speakerAppends = dial.speakerAppends.then(() =>
+      append({ type: "events.iterate.com/voice-agent/spk-frame", payload }).then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    this.runInBackground(() => dial.speakerAppends);
   }
 
   /* ------------------------------------------------------------ transcript */
@@ -2172,18 +2222,17 @@ export class VoiceAgentProcessor extends StreamProcessor<
           });
         } else if (tool !== undefined && tool.expression === undefined) {
           /* THE BASE CASE, NOT A REGISTRY: hanging up is one atomic append of
-           * conversation-end-requested, deferred to the drain point so the
-           * goodbye — spoken AFTER this call returns — gets PLAYED, not cut.
-           * See HANG_UP_GOODBYE_GRACE_MS for how the drain point knows. */
-          dial.hangUpAfterAnswerDrains = "the backend hung up";
+           * conversation-end-requested, deferred until the goodbye — spoken
+           * AFTER this call returns — has gone out whole (its end marker
+           * settles it, see #endAnswer), or the grace runs out with the
+           * voice saying nothing. A goodbye still being spoken when the
+           * grace fires is left to its own marker. */
+          dial.hangUpReason = "the backend hung up";
           dial.hangUpArmedAtFacetMs = this.deps.nowAtFacetMs();
-          /* Nothing may be playing, so nothing else would start the pacer
-           * that settles this: kick it once the grace is up, whatever the
-           * stream did meanwhile (a spoken goodbye settles it sooner). */
           runInBackground(async () => {
             await this.deps.sleep(HANG_UP_GOODBYE_GRACE_MS);
-            if (this.#dial !== dial) return;
-            this.#sendSpeakerAudio(dial, append, runInBackground);
+            if (this.#dial !== dial || dial.answer.phase === "speaking") return;
+            await this.#settleHangUp(dial, append);
           });
           work = Promise.resolve({ status: "hanging up once the goodbye finishes playing" });
         } else if (tool !== undefined) {
@@ -2378,43 +2427,28 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * measured — and it remembers what it said, so there is no cancel to send
    * and no memory to repair. What the press owes is the DEVICE: it holds a
    * beat of the answer, and "interrupted" must not sound like a beat more of
-   * it. The queue goes, the device is cleared, the deltas that arrive until
-   * the model yields are dropped, and taking the floor back un-decides a
-   * pending hang-up ("the user talked past the goodbye").
+   * it. The device is cleared, the deltas that arrive until the model
+   * yields are dropped, and taking the floor back un-decides a pending
+   * hang-up ("the user talked past the goodbye").
    */
   #bargeAnswer(
     dial: Dial,
     decidedAtFacetMs: number,
     append: ProcessEventArgs<VoiceAgentContract>["append"],
   ): void {
-    dial.hangUpAfterAnswerDrains = null;
+    dial.hangUpReason = null;
     dial.hangUpArmedAtFacetMs = 0;
-    if (dial.answer.phase !== "speaking" && dial.speakerQueue.length === 0) return;
+    if (dial.answer.phase !== "speaking") return;
     dial.face?.barge(decidedAtFacetMs);
     if (dial.turns.assistant !== null) dial.turns.assistant.interrupted = true;
-    this.#dropAnswerInFlight(dial, decidedAtFacetMs, append);
-    dial.answer.phase = "settled";
-    dial.answer.endsWhenQueueDrains = false;
-    dial.suppressSpeechUntilSilence = true;
-  }
-
-  /**
-   * Throw away the answer being spoken, here and on the device, right now.
-   * Every frame minted so far belongs to an answer nobody will hear. AND THE
-   * NEXT REAL FRAME SAYS IT AGAIN: the clear is one empty frame in a stream of frames
-   * that documents its own drops; the first frame of the replacing answer
-   * carries the clear too, so it cannot be lost without losing the
-   * replacement itself.
-   */
-  #dropAnswerInFlight(
-    dial: Dial,
-    decidedAtFacetMs: number,
-    append: ProcessEventArgs<VoiceAgentContract>["append"],
-  ): void {
-    dial.speakerQueue = [];
-    dial.deviceBufferEmptyAtFacetMs = 0;
+    /* AND THE NEXT REAL FRAME SAYS IT AGAIN: the clear is one empty frame
+     * in a stream of frames that documents its own drops; the first frame of
+     * the replacing answer carries the clear too, so it cannot be lost
+     * without losing the replacement itself. */
     this.#clearDeviceSpeaker(dial, decidedAtFacetMs, append);
     dial.clearSpeakerBufferBeforeNextFrame = true;
+    dial.answer = freshAnswer();
+    dial.suppressSpeechUntilSilence = true;
   }
 
   /**
@@ -2431,152 +2465,13 @@ export class VoiceAgentProcessor extends StreamProcessor<
     decidedAtFacetMs: number,
     append: ProcessEventArgs<VoiceAgentContract>["append"],
   ): void {
-    const clearedThroughDeviceSpeakerFrameSeq = dial.lastDeviceSpeakerFrameSeq;
-    if (clearedThroughDeviceSpeakerFrameSeq <= dial.clearedThroughDeviceSpeakerFrameSeq) return;
-    const clearFrameSeq = ++dial.lastDeviceSpeakerFrameSeq;
-    dial.clearedThroughDeviceSpeakerFrameSeq = clearFrameSeq;
-    this.runInBackground(() =>
-      append({
-        type: "events.iterate.com/voice-agent/spk-frame",
-        payload: {
-          conversationId: dial.conversationId,
-          deviceSpeakerFrameSeq: clearFrameSeq,
-          pcm: "",
-          clearSpeakerBufferBeforeFrame: true,
-          sentAtFacetMs: decidedAtFacetMs,
-        },
-      }),
-    );
-  }
-
-  /**
-   * Hand over one frame of audio per frame of audio's worth of time.
-   *
-   * THAT IS THE WHOLE RULE, and it is the only thing keeping the device's
-   * speaker buffer from overflowing: a sender that runs at play rate can
-   * never make the backlog grow. `deviceBufferEmptyAtFacetMs` is a schedule
-   * this processor invented and controls — a DEADLINE rather than a sleep
-   * between sends, because the append itself takes time. With GPT-Live the
-   * arrival IS play rate, so the loop mostly finds one frame and sends it.
-   *
-   * ONE LOOP, THREE JOBS, AND IT EXITS ONLY WHEN NONE REMAINS: drain, then
-   * the end marker, then a pending hang-up — looping back after every await
-   * so nothing lands during an await that the next iteration does not see.
-   */
-  #sendSpeakerAudio(
-    dial: Dial,
-    append: ProcessEventArgs<VoiceAgentContract>["append"],
-    runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
-  ): void {
-    if (dial.sending) return;
-    dial.sending = true;
-    runInBackground(async () => {
-      try {
-        for (;;) {
-          /* The dial this pacer belongs to is gone — a hang-up or a re-dial
-           * owns the wire now. */
-          if (this.#dial !== dial) return;
-          if (dial.speakerQueue.length > 0) {
-            const nowAtFacetMs = this.deps.nowAtFacetMs();
-            /* A DEADLINE IN THE PAST MEANS THE DEVICE RAN DRY WHILE WE WERE
-             * AWAY, and the backlog cannot be less than nothing. */
-            if (dial.deviceBufferEmptyAtFacetMs < nowAtFacetMs) {
-              dial.deviceBufferEmptyAtFacetMs = nowAtFacetMs;
-            }
-            /* PEEK, never shift: a clear arriving during the sleep below has
-             * to be able to filter this frame out of the queue. */
-            const frame = dial.speakerQueue[0]!;
-            const frameBytes = base64ByteLength(frame);
-            /* THE WHOLE SAFETY PROOF, IN ONE INEQUALITY. */
-            const overflowBytes =
-              (dial.deviceBufferEmptyAtFacetMs - nowAtFacetMs) * PCM16_BYTES_PER_MS +
-              frameBytes -
-              MAX_DEVICE_SPEAKER_BACKLOG_BYTES;
-            if (overflowBytes > 0) {
-              await this.deps.sleep(Math.ceil(overflowBytes / PCM16_BYTES_PER_MS));
-              continue;
-            }
-            dial.speakerQueue.shift();
-            dial.deviceBufferEmptyAtFacetMs += frameBytes / PCM16_BYTES_PER_MS;
-            dial.answer.sentMs += frameBytes / PCM16_BYTES_PER_MS;
-            /* THE FACE FOLDS AT SEND TIME, on the frame the device is about
-             * to play. The decode is the one the speaker path pays for a face, and
-             * only when a face is rendering. */
-            if (dial.face !== null) {
-              dial.face.audio(base64ToBytes(frame), nowAtFacetMs);
-            }
-            const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
-            dial.clearSpeakerBufferBeforeNextFrame = false;
-            await append({
-              type: "events.iterate.com/voice-agent/spk-frame",
-              payload: {
-                conversationId: dial.conversationId,
-                deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
-                pcm: frame,
-                ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
-                sentAtFacetMs: nowAtFacetMs,
-              },
-            });
-            continue;
-          }
-          /*
-           * THE QUEUE IS EMPTY, so if the answer has ended, the device now
-           * holds the whole of it and can be told so. Behind the drain rather
-           * than beside it: the marker cannot overtake audio it is about.
-           */
-          if (dial.answer.endsWhenQueueDrains) {
-            dial.answer.endsWhenQueueDrains = false;
-            /* The mouth closes WITH the marker, not at the provider's
-             * silence: SIL at ingest shut it before the speech finished. */
-            dial.face?.answerAudioDone(this.deps.nowAtFacetMs());
-            dial.answerEndedAtFacetMs = this.deps.nowAtFacetMs();
-            dial.lastDeviceSpeakerFrameSeq += 1;
-            const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
-            dial.clearSpeakerBufferBeforeNextFrame = false;
-            await append({
-              type: "events.iterate.com/voice-agent/spk-frame",
-              payload: {
-                conversationId: dial.conversationId,
-                deviceSpeakerFrameSeq: dial.lastDeviceSpeakerFrameSeq,
-                pcm: "",
-                ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
-                lastFrameOfAnswer: true,
-                sentAtFacetMs: this.deps.nowAtFacetMs(),
-              },
-            });
-            continue;
-          }
-          /* THE BACKEND HUNG UP, and the drain point is where that settles:
-           * the device holds the whole goodbye; the pacer's own deadline
-           * says when it finishes PLAYING. Sleep that off, re-check (a press
-           * during playout un-decides it), then one atomic append. Not
-           * settleable while the voice is still speaking, and not before the
-           * goodbye has been spoken at all — an answer must END after the
-           * hang-up was armed, or the grace must run out. */
-          if (
-            dial.hangUpAfterAnswerDrains !== null &&
-            dial.answer.phase !== "speaking" &&
-            ((dial.answerEndedAtFacetMs > 0 &&
-              dial.answerEndedAtFacetMs >= dial.hangUpArmedAtFacetMs) ||
-              this.deps.nowAtFacetMs() - dial.hangUpArmedAtFacetMs >= HANG_UP_GOODBYE_GRACE_MS)
-          ) {
-            await this.deps.sleep(
-              Math.max(0, dial.deviceBufferEmptyAtFacetMs - this.deps.nowAtFacetMs()),
-            );
-            if (this.#dial !== dial) return;
-            const reason = dial.hangUpAfterAnswerDrains;
-            if (reason !== null && dial.speakerQueue.length === 0) {
-              dial.hangUpAfterAnswerDrains = null;
-              await this.#requestEnd(dial.conversationId, "hang-up", reason, append);
-            }
-            continue;
-          }
-          return;
-        }
-      } finally {
-        dial.sending = false;
-      }
-    });
+    if (dial.lastDeviceSpeakerFrameSeq <= dial.clearedThroughDeviceSpeakerFrameSeq) return;
+    /* The clear itself is a numbered frame: `clearSpeakerBufferBeforeNextFrame`
+     * makes #appendSpeakerFrame stamp it, then the flag is re-armed by the
+     * caller for the replacing answer's first real frame. */
+    dial.clearSpeakerBufferBeforeNextFrame = true;
+    this.#appendSpeakerFrame(dial, { pcm: "", sentAtFacetMs: decidedAtFacetMs }, append);
+    dial.clearedThroughDeviceSpeakerFrameSeq = dial.lastDeviceSpeakerFrameSeq;
   }
 
   /**

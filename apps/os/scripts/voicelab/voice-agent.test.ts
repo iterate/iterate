@@ -17,7 +17,6 @@ import { makeProcessorHarness } from "iterate/processors/testing";
 import {
   dialProviderSocket,
   IDLE_TIMEOUT_MS,
-  MAX_DEVICE_SPEAKER_BACKLOG_BYTES,
   MAX_SPEAKER_PAYLOAD_BYTES,
   VoiceAgentContract,
   VoiceAgentProcessor,
@@ -31,7 +30,6 @@ import {
 const PCM16_BYTES_PER_MS = 32;
 /** One provider delta: 100 ms, which is also the device's frame ceiling. */
 const DELTA_MS = 100;
-const MAX_DEVICE_SPEAKER_BUFFER_MS = MAX_DEVICE_SPEAKER_BACKLOG_BYTES / PCM16_BYTES_PER_MS;
 
 function base64(bytes: Uint8Array): string {
   let binary = "";
@@ -313,7 +311,7 @@ async function callIsLive(h: Harness, configured: Record<string, unknown> = {}):
   return (started[0]!.payload as { conversationId: string }).conversationId;
 }
 
-/** Let the pacer and the tick chains run `ms` of the fake clock, in coarse steps. */
+/** Let the timers and the tick chains run `ms` of the fake clock, in coarse steps. */
 async function playOutEverything(h: Harness, ms: number): Promise<void> {
   await h.settle();
   for (let spent = 0; spent < ms; ) {
@@ -635,11 +633,11 @@ describe("the speaker lane", () => {
     expect(speakerMsDelivered(h)).toBeLessThanOrEqual(1_700);
   });
 
-  it("re-cuts a delta that is not group-aligned base64", async () => {
+  it("cuts a delta larger than the device's frame ceiling into frames it will accept", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    /* 4,000 bytes: over the ceiling, and a base64 length that is not a
-     * multiple of 4 once the padding is trimmed. */
+    /* 4,000 bytes: over the ceiling (no provider sends one today), with its
+     * base64 padding trimmed for good measure. */
     const oversized = speechDelta(125).replace(/=+$/, "");
     h.provider.push({ type: "session.output_audio.delta", delta: oversized });
     h.provider.silence(1_000);
@@ -650,27 +648,15 @@ describe("the speaker lane", () => {
     expect(speakerMsDelivered(h)).toBeGreaterThanOrEqual(124);
   });
 
-  it("never asks the device to hold more than the byte budget, even from a burst", async () => {
+  it("hands every delta to the device the moment it arrives — nothing is paced or held", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.provider.speech(90_000);
-    let elapsedMs = 0;
-    let worstOutstandingBytes = 0;
-    for (let tick = 0; tick < 60; tick++) {
-      await h.advanceTime(DELTA_MS);
-      await h.settle();
-      elapsedMs += DELTA_MS;
-      const outstandingBytes =
-        speakerMsDelivered(h) * PCM16_BYTES_PER_MS - elapsedMs * PCM16_BYTES_PER_MS;
-      worstOutstandingBytes = Math.max(worstOutstandingBytes, outstandingBytes);
-    }
-    expect(worstOutstandingBytes).toBeLessThanOrEqual(
-      MAX_DEVICE_SPEAKER_BACKLOG_BYTES + DELTA_MS * PCM16_BYTES_PER_MS,
-    );
-    expect(worstOutstandingBytes).toBeGreaterThan(MAX_DEVICE_SPEAKER_BACKLOG_BYTES / 2);
-    expect(speakerMsDelivered(h)).toBeLessThanOrEqual(
-      MAX_DEVICE_SPEAKER_BUFFER_MS + elapsedMs + DELTA_MS,
-    );
+    /* Ten seconds of speech in one go: all of it is on the stream before the
+     * clock moves at all. The device's own buffer is the only buffer. */
+    h.provider.speech(10_000);
+    await h.settle();
+    expect(speakerMsDelivered(h)).toBe(10_000);
+    expect(speakerFrames(h)).toHaveLength(100);
   });
 
   it("clears once at the start of a session and never again unprompted", async () => {
@@ -689,15 +675,13 @@ describe("the speaker lane", () => {
 /* ========================================================================== */
 
 describe("the button takes the floor", () => {
-  it("clears the device with a numbered frame, drops the queue, and mutes the model's last words", async () => {
+  it("clears the device with a numbered frame and mutes the model's last words", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    /* A ten-second answer arriving as a burst: four seconds reach the device,
-     * six sit in the queue. */
-    h.provider.speech(10_000);
+    h.provider.speech(2_000);
     await h.settle();
     const deliveredBefore = speakerMsDelivered(h);
-    expect(deliveredBefore).toBeLessThan(10_000);
+    expect(deliveredBefore).toBe(2_000);
 
     await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
     await h.settle();
@@ -709,13 +693,13 @@ describe("the button takes the floor", () => {
 
     /* The model has not heard the person yet; its next words are dead air. */
     h.provider.speech(500);
-    await playOutEverything(h, 2_000);
+    await h.settle();
     expect(speakerMsDelivered(h)).toBe(deliveredBefore);
     /* It yields (silence), then answers the person: that IS a new answer. */
     h.provider.silence(200);
     h.provider.speech(300);
     h.provider.silence(1_000);
-    await playOutEverything(h, 3_000);
+    await h.settle();
     expect(speakerMsDelivered(h)).toBeGreaterThan(deliveredBefore);
     const replacing = speakerFrames(h).find(
       (frame) => frame.pcm !== "" && frame.deviceSpeakerFrameSeq > clears[0]!.deviceSpeakerFrameSeq,
@@ -740,15 +724,16 @@ describe("the button takes the floor", () => {
     await h.stream.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
     /* The answer begins two virtual seconds after that stamp. */
     h.clock.now += 2_000;
-    h.provider.speech(8_000);
-    /* Driving playout is what delivers the stale press — mid-answer. */
+    h.provider.speech(3_000);
+    /* Driving the runner is what delivers the stale press — mid-answer. */
     await playOutEverything(h, 600);
     const deliveredBefore = speakerMsDelivered(h);
-    expect(deliveredBefore).toBeGreaterThan(0);
-    await playOutEverything(h, 1_000);
-    /* No barge: no bare clear frame, audio still moving. */
+    expect(deliveredBefore).toBe(3_000);
+    /* No barge: no bare clear frame, no suppression of what comes next. */
+    h.provider.speech(500);
+    await h.settle();
     expect(speakerClears(h)).toHaveLength(0);
-    expect(speakerMsDelivered(h)).toBeGreaterThan(deliveredBefore);
+    expect(speakerMsDelivered(h)).toBe(deliveredBefore + 500);
   });
 
   it("marks the interrupted answer's transcript as cancelled", async () => {
@@ -1200,10 +1185,13 @@ describe("ending a call", () => {
   it("does not end a call while it is still speaking, nor one the device keeps feeding", async () => {
     const speaking = makeHarness();
     await callIsLive(speaking);
-    speaking.provider.speech(180_000);
-    await speaking.settle();
-    await speaking.advanceTime(IDLE_TIMEOUT_MS + 10_000);
-    await speaking.settle();
+    /* A long answer arrives at play rate, ten seconds at a time, well past
+     * the idle deadline: the frames going out ARE the activity. */
+    for (let tick = 0; tick < 8; tick++) {
+      speaking.provider.speech(10_000);
+      await speaking.advanceTime(10_000);
+      await speaking.settle();
+    }
     expect(eventsOfType(speaking, "conversation-end-requested")).toHaveLength(0);
 
     const fed = makeHarness();
