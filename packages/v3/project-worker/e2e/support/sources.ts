@@ -4,7 +4,7 @@
 //   ...source: SOURCES.site...
 
 import type { WorkerSource } from "../../src/context/worker-loader.ts";
-import { PRESENCE_PROCESSOR_SOURCE } from "../../src/client/presence-processor-source.ts";
+import { PRESENCE_PROCESSOR_SOURCE } from "../../src/generated/presence-processor-source.ts";
 
 /** THE fixture sources, keyed by fixture NAME — each value is the worker's modules, handed over
  *  literally at every load site (`itx.workers.get({ source: SOURCES.probe })`, `facets.get(name, { source: … })`). */

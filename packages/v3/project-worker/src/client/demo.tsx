@@ -8,9 +8,8 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { newWebSocketRpcSession } from "capnweb";
-import { PRESENCE_PROCESSOR_SOURCE } from "./presence-processor-source.ts";
+import { PRESENCE_PROCESSOR_SOURCE } from "../generated/presence-processor-source.ts";
 import { useLiveState } from "./react.tsx";
-
 
 /** Dial /api with the console's login cookie (it rode the handshake; the visitor signed in at `/`)
  *  and open the visitor's own demo project — `demo-<email>`, created in their org on first visit. */
