@@ -173,11 +173,20 @@ test("itx-api.generated.ts resolves its exact vendor types from iterate's depend
       input.agentPath;
       return Response.json(input.request.body);
     };
+    const egress = (input: ProjectAiInterceptor.EgressInput): Response => {
+      input.request.body = { input: "outbound model input" };
+      // @ts-expect-error outbound requests do not promise typed agent messages
+      const messages: { content: string }[] = input.request.body.messages;
+      // @ts-expect-error only agent turns have an agent path
+      input.agentPath;
+      return Response.json(input.request.body);
+    };
     const intercept: ProjectAiInterceptor = (input: ProjectAiInterceptor.Input) => {
       if (input.source === "agent-turn") return agentTurn(input);
       // @ts-expect-error the discriminator excludes the agent-turn variant here
       agentTurn(input);
-      return aiRun(input);
+      if (input.source === "ai-run") return aiRun(input);
+      return egress(input);
     };
     export async function run(itx: Project): Promise<StreamEvent> {
       const interception = await itx.ai.intercept(intercept);

@@ -27,7 +27,24 @@ export type LiveStatePatch =
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
 /** Explicit codec negotiation keeps already-open clients valid across deploys. */
-export type LiveStateSubscriptionOptions = { patchVersion?: 2 };
+export type LiveStateSubscriptionOptions = { patchVersion?: 2 | 3 };
+
+/**
+ * Version 3 addresses existing object fields by their sorted baseline position;
+ * new fields use `+name`. Arrays use indices and an optional `#` length.
+ * Primitives replace directly, `[value]` replaces other values, `[length, text]`
+ * appends to a string, and `[]` deletes an object field. No dictionary survives
+ * an update: every address refers to the acknowledged baseline of that patch.
+ */
+export type CompactLiveStatePatch =
+  | string
+  | number
+  | boolean
+  | null
+  | []
+  | [unknown]
+  | [number, string]
+  | { [address: string]: CompactLiveStatePatch };
 
 /** A transient reader's position; a new engine incarnation always has a new epoch. */
 export type LiveStateCursor = { epoch: string; revision: number };
@@ -47,4 +64,18 @@ export type LiveStateRead<State> = { epoch: string; update: LiveUpdate<State> | 
  */
 export type LiveUpdate<State = unknown> =
   | { type: "snapshot"; revision: number; state: State }
-  | { type: "patch"; from: number; to: number; patch: LiveStatePatch };
+  | { type: "patch"; from: number; to: number; patch: LiveStatePatch }
+  | { s: [revision: number, state: State] }
+  | { p: [from: number, to: number, patch: CompactLiveStatePatch] };
+
+export function isLiveStateSnapshot<State>(
+  update: LiveUpdate<State>,
+): update is Extract<LiveUpdate<State>, { type: "snapshot" } | { s: unknown }> {
+  return "s" in update || ("type" in update && update.type === "snapshot");
+}
+
+export function liveStateRevision(update: LiveUpdate): number {
+  if ("s" in update) return update.s[0];
+  if ("p" in update) return update.p[1];
+  return update.type === "snapshot" ? update.revision : update.to;
+}

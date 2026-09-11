@@ -20,7 +20,7 @@ test("keeps submission pending between append response and server acknowledgemen
   vi.useFakeTimers();
   const host = document.createElement("div");
   const root = createRoot(host);
-  const committed = StreamEvent.parse({
+  let committed = StreamEvent.parse({
     path: "/agents/test",
     offset: 10,
     createdAt: new Date(0).toISOString(),
@@ -71,6 +71,25 @@ test("keeps submission pending between append response and server acknowledgemen
       await view.props!.message!.onSubmit();
     });
     expect(host.textContent).toBe("ready");
+    // A later agent-ahead/feed-behind interval must not re-open an acknowledged send.
+    await render(0);
+    expect(host.textContent).toBe("ready");
+    expect(view.props!.error).toBeUndefined();
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    expect(host.textContent).toBe("ready");
+    expect(view.props!.error).toBeUndefined();
+    // Retiring that send must not prematurely release a later submission.
+    committed = { ...committed, offset: 20 };
+    await act(async () => view.props!.message!.onValueChange({ content: "New message" }));
+    await act(async () => {
+      await view.props!.message!.onSubmit();
+    });
+    expect(host.textContent).toBe("pending");
+    await render(20);
+    expect(host.textContent).toBe("ready");
+    await render(0);
+    expect(host.textContent).toBe("ready");
+    expect(view.props!.error).toBeUndefined();
   } finally {
     await act(async () => root.unmount());
     vi.useRealTimers();

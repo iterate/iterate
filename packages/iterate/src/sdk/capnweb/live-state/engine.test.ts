@@ -51,36 +51,67 @@ describe("LiveState", () => {
     expect(engine.observed).toBe(false);
   });
 
-  it("bounds a slow sink to one outstanding call and coalesces its next update", async () => {
-    const engine = new LiveState({ n: 0 }, { debounceMs: 0 });
-    const store = createLiveStateStore<{ n: number }>();
-    const updates: LiveUpdate<{ n: number }>[] = [];
-    let acknowledge: () => void = () => {};
-    const handle = engine.subscribe(
+  it.each([2, 3] as const)(
+    "bounds a slow version %i sink and coalesces its next update",
+    async (patchVersion) => {
+      const engine = new LiveState({ n: 0 }, { debounceMs: 0 });
+      const store = createLiveStateStore<{ n: number }>();
+      const updates: LiveUpdate<{ n: number }>[] = [];
+      let acknowledge: () => void = () => {};
+      const handle = engine.subscribe(
+        (update) => {
+          updates.push(update);
+          store.apply(update, () => {
+            throw new Error("unexpected revision gap");
+          });
+          return new Promise<void>((resolve) => {
+            acknowledge = resolve;
+          });
+        },
+        { patchVersion },
+      );
+      for (let n = 1; n <= 100; n++) {
+        engine.assign({ n });
+        vi.advanceTimersByTime(0);
+      }
+      expect(updates).toHaveLength(1);
+      acknowledge();
+      await Promise.resolve();
+      expect(updates).toHaveLength(2);
+      expect(store.getState()).toEqual({ n: 100 });
+      acknowledge();
+      await Promise.resolve();
+      expect(vi.getTimerCount()).toBe(0);
+      handle.unsubscribe();
+    },
+  );
+
+  it("coalesces compact addresses and text appends from the slow subscriber's baseline", async () => {
+    const initial = { zebra: "z".repeat(100), removed: "old" };
+    const engine = new LiveState<Record<string, string>>(initial, { debounceMs: 0 });
+    const store = createLiveStateStore<Record<string, string>>();
+    const seed = Promise.withResolvers<void>();
+    let count = 0;
+    using subscription = engine.subscribe(
       (update) => {
-        updates.push(update);
         store.apply(update, () => {
-          throw new Error("unexpected revision gap");
+          throw new Error("Unexpected revision gap");
         });
-        return new Promise<void>((resolve) => {
-          acknowledge = resolve;
-        });
+        count++;
+        return count === 1 ? seed.promise : undefined;
       },
-      { patchVersion: 2 },
+      { patchVersion: 3 },
     );
     for (let n = 1; n <= 100; n++) {
-      engine.assign({ n });
+      engine.setState({ zebra: initial.zebra + "x".repeat(n), added: String(n) });
       vi.advanceTimersByTime(0);
     }
-    expect(updates).toHaveLength(1);
-    acknowledge();
+    expect(count).toBe(1);
+    seed.resolve();
     await Promise.resolve();
-    expect(updates).toHaveLength(2);
-    expect(store.getState()).toEqual({ n: 100 });
-    acknowledge();
-    await Promise.resolve();
-    expect(vi.getTimerCount()).toBe(0);
-    handle.unsubscribe();
+    expect(count).toBe(2);
+    expect(store.getState()).toEqual(engine.getState());
+    expect(subscription.ping()).toBe(true);
   });
 
   it("drops a sink that never acknowledges and releases its timer", () => {

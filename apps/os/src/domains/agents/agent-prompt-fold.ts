@@ -92,12 +92,27 @@ function reducePendingInputConsequences({
       };
     }
   }
+  if (
+    event.type === "events.iterate.com/capability-host/script-run-settled" &&
+    state.config.interpretResponses &&
+    state.activeScriptExecutions.some(
+      (execution) => execution.executionId === event.payload.executionId,
+    ) &&
+    (event.payload.settlement.status === "failed" || event.payload.settlement.result !== undefined)
+  ) {
+    return { ...pending, [`script-result:${event.payload.executionId}`]: event.offset };
+  }
   const source = event.source?.processor;
   if (source?.slug !== AgentProcessorContract.slug || source.stream.path !== event.path)
     return pending;
   let key: string | undefined;
   if (event.type === "events.iterate.com/capability-host/script-run-requested") {
     key = event.payload.executionId;
+  } else if (
+    event.type === "events.iterate.com/agents/context-added" &&
+    event.payload.actor?.type === "script"
+  ) {
+    key = `script-result:${event.payload.actor.executionId}`;
   } else if (
     event.type === "events.iterate.com/agents/context-added" &&
     event.payload.actor?.type === "integration" &&

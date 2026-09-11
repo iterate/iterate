@@ -72,52 +72,75 @@ describe("LiveStatePagers", () => {
     vi.useRealTimers();
   });
 
-  it("sends small patches, independently seeds joiners, and re-seeds surviving sockets after eviction", () => {
-    const watcher = fakeSocket(2);
-    const sockets = [watcher];
-    let state = { rows: [{ body: "a".repeat(64_000) }, { body: "tail" }] };
-    const hooks = { sockets, readState: () => state };
-    const { host } = socketsOver(hooks);
-    const mirror = createLiveStateStore<typeof state>();
-    const apply = (frame: string) => {
-      const page = parseLiveStatePage(frame);
-      if (!page || !("update" in page)) throw new Error("expected an update");
-      mirror.apply(page.update as LiveUpdate<typeof state>, () => {
-        throw new Error("revision gap");
+  it.each([2, 3])(
+    "sends version %i patches and re-seeds joiners and surviving sockets after eviction",
+    (version) => {
+      const watcher = fakeSocket(version);
+      const sockets = [watcher];
+      let state = { rows: [{ body: "a".repeat(64_000) }, { body: "tail" }] };
+      const hooks = { sockets, readState: () => state };
+      const { host } = socketsOver(hooks);
+      const mirror = createLiveStateStore<typeof state>();
+      const apply = (frame: string) => {
+        const page = parseLiveStatePage(frame);
+        if (!page || !("update" in page)) throw new Error("expected an update");
+        mirror.apply(page.update as LiveUpdate<typeof state>, () => {
+          throw new Error("revision gap");
+        });
+      };
+      host.scheduleFlush();
+      vi.runAllTimers();
+      apply(watcher.sent[0]!);
+      const first = mirror.getState()!;
+      state = { rows: [state.rows[0]!, { body: "tail appended" }] };
+      host.scheduleFlush();
+      vi.runAllTimers();
+      expect(watcher.sent[1]!.length).toBeLessThan(400);
+      apply(watcher.sent[1]!);
+      expect(mirror.getState()).toEqual(state);
+      expect(mirror.getState()!.rows[0]).toBe(first.rows[0]);
+
+      const joiner = fakeSocket(version);
+      sockets.push(joiner);
+      host.scheduleFlush();
+      vi.runAllTimers();
+      expect(watcher.sent).toHaveLength(2);
+      expect(parseLiveStatePage(joiner.sent[0])).toMatchObject({
+        update: version === 3 ? { s: [expect.any(Number), state] } : { type: "snapshot", state },
       });
-    };
-    host.scheduleFlush();
-    vi.runAllTimers();
-    apply(watcher.sent[0]!);
-    const first = mirror.getState()!;
-    state = { rows: [state.rows[0]!, { body: "tail appended" }] };
-    host.scheduleFlush();
-    vi.runAllTimers();
-    expect(watcher.sent[1]!.length).toBeLessThan(400);
-    apply(watcher.sent[1]!);
-    expect(mirror.getState()).toEqual(state);
-    expect(mirror.getState()!.rows[0]).toBe(first.rows[0]);
 
-    const joiner = fakeSocket(2);
-    sockets.push(joiner);
+      const restarted = socketsOver(hooks).host;
+      restarted.scheduleFlush();
+      vi.runAllTimers();
+      const fresh = parseLiveStatePage(watcher.sent[2]);
+      expect(fresh).toMatchObject({
+        update: version === 3 ? { s: [expect.any(Number), state] } : { type: "snapshot", state },
+      });
+      expect(fresh).not.toMatchObject({
+        epoch: (JSON.parse(watcher.sent[0]!) as { epoch: string }).epoch,
+      });
+      apply(watcher.sent[2]!);
+      expect(mirror.getState()).toEqual(state);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("serves all negotiated versions from one baseline during deployment skew", () => {
+    const sockets = [fakeSocket(1), fakeSocket(2), fakeSocket(3)];
+    let state = { text: "x".repeat(100) };
+    const { host } = socketsOver({ sockets, readState: () => state });
     host.scheduleFlush();
     vi.runAllTimers();
-    expect(watcher.sent).toHaveLength(2);
-    expect(parseLiveStatePage(joiner.sent[0])).toMatchObject({
-      update: { type: "snapshot", state },
-    });
-
-    const restarted = socketsOver(hooks).host;
-    restarted.scheduleFlush();
+    state = { text: state.text + " tail" };
+    host.scheduleFlush();
     vi.runAllTimers();
-    const fresh = parseLiveStatePage(watcher.sent[2]);
-    expect(fresh).toMatchObject({ update: { type: "snapshot", state } });
-    expect(fresh).not.toMatchObject({
-      epoch: (JSON.parse(watcher.sent[0]!) as { epoch: string }).epoch,
+    expect(parseLiveStatePage(sockets[0]!.sent[1])).toEqual({ state });
+    expect(parseLiveStatePage(sockets[1]!.sent[1])).toMatchObject({
+      update: { type: "patch", patch: { fields: { text: { set: state.text } } } },
     });
-    apply(watcher.sent[2]!);
-    expect(mirror.getState()).toEqual(state);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(parseLiveStatePage(sockets[2]!.sent[1])).toMatchObject({
+      update: { p: [1, 2, { 0: [100, " tail"] }] },
+    });
   });
 
   it("ignores requests without the lane header so hosts fall through", async () => {
@@ -314,6 +337,61 @@ function collectUpdates() {
 }
 
 describe("openRelayedLiveState", () => {
+  it("applies compact pages and closes a relay with an invalid append baseline", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const socket = fakeRelaySocket();
+      const relay = openRelayedLiveState<{ text: string }>({
+        dialPager: async () => ({ status: 101, webSocket: socket }),
+        readSnapshot: async () => ({ text: "" }),
+        pagerFailureDegrade: "reject",
+        label: "compact test",
+      });
+      const store = createLiveStateStore<{ text: string }>();
+      const pending = relay.subscribe(
+        (update) =>
+          store.apply(update, () => {
+            throw new Error("revision gap");
+          }),
+        { patchVersion: 3 },
+      );
+      await Promise.resolve();
+      socket.emitRaw(
+        JSON.stringify({
+          type: "update",
+          epoch: "first",
+          update: { s: [0, { text: "x".repeat(100) }] },
+        }),
+      );
+      using subscription = await pending;
+      socket.emitRaw(
+        JSON.stringify({
+          type: "update",
+          epoch: "first",
+          update: { p: [0, 1, { 0: [100, " tail"] }] },
+        }),
+      );
+      vi.advanceTimersByTime(100);
+      expect(store.getState()).toEqual({ text: "x".repeat(100) + " tail" });
+      socket.emitRaw(
+        JSON.stringify({
+          type: "update",
+          epoch: "first",
+          update: { p: [1, 2, { 0: [99, " invalid"] }] },
+        }),
+      );
+      expect(subscription.ping()).toBe(false);
+      expect(socket.closed).toContainEqual({
+        code: 1000,
+        reason: "Live-state append does not match its string baseline",
+      });
+      expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
   it("applies ordered patches and reports a revision gap as a dead subscription", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

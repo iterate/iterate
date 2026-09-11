@@ -400,20 +400,20 @@ export interface Ai {
    * Outputs are model-shaped: instantiate `run<T>` with the response shape you
    * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
    * `unknown`. The optional third argument is the binding's own options object
-   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
-   * to `env.AI.run`; its `gateway` wins over any constructor-provided one.
+   * — cache preferences are honored, but the host always owns the gateway
+   * ID and billing metadata. Callers cannot bypass company spending limits.
    * An `intercepted/*` model never reaches Cloudflare: the live interceptor installed
-   * with `intercept(handler)` supplies a provider response decoded in the same
-   * way as a real call (no handler installed → a loud error). */
+   * with `intercept(handler)` supplies a provider response which follows the
+   * same decoding as a real call (no handler installed → a loud error). */
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
   /** Install a live handler for `intercepted/*` models (last writer wins); returns a
    * release handle. For deterministic testing: an agent configured with
    * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your
    * handler — an in-memory function on YOUR side of the connection — instead
    * of a real provider. The handler receives
-   * `{ source: "agent-turn" | "ai-run", model, request }` with the prepared
-   * request and no provider credentials. Return a `Response` containing the provider’s
-   * JSON or SSE response; its body may be a `ReadableStream<Uint8Array>`. Live means session-bound, with the
+   * `{ source, model, request }`, including prepared body, safe headers and
+   * host-owned attribution. Return a `Response` with the provider's
+   * JSON or SSE response. The normal decoder handles it. Live means session-bound, with the
    * mount invariant: the interception lives exactly as long as your session
    * connection, and if the platform's half dies while your socket is open,
    * the socket closes (4901) — reconnect and intercept() again.
@@ -2577,10 +2577,12 @@ export type StreamProcessorWakeResponse = {
  */
 export type LiveUpdate<State = unknown> =
   | { type: "snapshot"; revision: number; state: State }
-  | { type: "patch"; from: number; to: number; patch: LiveStatePatch };
+  | { type: "patch"; from: number; to: number; patch: LiveStatePatch }
+  | { s: [revision: number, state: State] }
+  | { p: [from: number, to: number, patch: CompactLiveStatePatch] };
 
 /** Explicit codec negotiation keeps already-open clients valid across deploys. */
-export type LiveStateSubscriptionOptions = { patchVersion?: 2 };
+export type LiveStateSubscriptionOptions = { patchVersion?: 2 | 3 };
 
 /** Owned handle for one live-state subscription. */
 export type LiveStateSubscriptionHandle = Disposable & {
@@ -2602,8 +2604,8 @@ export type StreamIndexRow = {
 };
 
 /** The Workers AI binding's per-call options (`env.AI.run`'s third argument),
- * published structurally so itx callers can route a call through a specific
- * AI Gateway configuration — e.g. `{ gateway: { id: "default", skipCache: true } }`. */
+ * published structurally for cache preferences. The host replaces gateway id
+ * and metadata with its trusted AI Gateway metadata; caller values cannot change billing. */
 export type CfAiRunOptions = {
   gateway?: {
     id: string;
@@ -2636,8 +2638,11 @@ export declare namespace ProjectAiInterceptor {
   /** A direct AI call, whose body can contain any model's inputs. */
   export type AiRunInput = { source: "ai-run"; model: string; request: AiRequest };
 
+  /** An outbound AI request routed through the project's gateway. */
+  export type EgressInput = { source: "egress"; model: string; request: AiRequest };
+
   /** Discriminated input shared by every interceptor callback. */
-  export type Input = AgentTurnInput | AiRunInput;
+  export type Input = AgentTurnInput | AiRunInput | EgressInput;
 }
 
 /** Replace only the provider call; response classification and decoding still run. */
@@ -4840,6 +4845,23 @@ export type LiveStatePatch =
   | { array: { length: number; items: [number, LiveStatePatch][] } }
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
+/**
+ * Version 3 addresses existing object fields by their sorted baseline position;
+ * new fields use `+name`. Arrays use indices and an optional `#` length.
+ * Primitives replace directly, `[value]` replaces other values, `[length, text]`
+ * appends to a string, and `[]` deletes an object field. No dictionary survives
+ * an update: every address refers to the acknowledged baseline of that patch.
+ */
+export type CompactLiveStatePatch =
+  | string
+  | number
+  | boolean
+  | null
+  | []
+  | [unknown]
+  | [number, string]
+  | { [address: string]: CompactLiveStatePatch };
+
 /** The two concrete outbound APIs, after host policy and request preparation. No credentials. */
 export type AiRequest = OpenAiHttpRequest | WorkersAiRequest;
 
@@ -5650,6 +5672,7 @@ export type WorkersAiRequest = {
   body: Record<string, unknown>;
   options: CfAiRunOptions & {
     returnRawResponse: true;
+    gateway: { id: string; metadata: Record<string, string | number> };
   };
 };
 

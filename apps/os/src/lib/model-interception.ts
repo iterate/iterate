@@ -46,6 +46,7 @@ export type WorkersAiRequest = {
   body: Record<string, unknown>;
   options: CfAiRunOptions & {
     returnRawResponse: true;
+    gateway: { id: string; metadata: Record<string, string | number> };
   };
 };
 
@@ -69,8 +70,11 @@ export declare namespace ProjectAiInterceptor {
   /** A direct AI call, whose body can contain any model's inputs. */
   export type AiRunInput = { source: "ai-run"; model: string; request: AiRequest };
 
+  /** An outbound AI request routed through the project's gateway. */
+  export type EgressInput = { source: "egress"; model: string; request: AiRequest };
+
   /** Discriminated input shared by every interceptor callback. */
-  export type Input = AgentTurnInput | AiRunInput;
+  export type Input = AgentTurnInput | AiRunInput | EgressInput;
 }
 
 /** Replace only the provider call; response classification and decoding still run. */

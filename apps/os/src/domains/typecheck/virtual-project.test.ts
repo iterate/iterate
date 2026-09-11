@@ -34,6 +34,7 @@ test("mounts can use the interceptor callback and its namespaced input types", a
       handle(input: ProjectAiInterceptor.Input): void;
       turn(input: ProjectAiInterceptor.AgentTurnInput): void;
       run(input: ProjectAiInterceptor.AiRunInput): void;
+      egress(input: ProjectAiInterceptor.EgressInput): void;
     };`,
       typechecker,
     }),

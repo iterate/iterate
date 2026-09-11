@@ -30,10 +30,25 @@
  * deploy. Deploys refuse to ship UNPROVISIONED IDs.
  */
 
+/** Cloudflare account names, IDs, and shared credentials for account-wide tooling.
+ * dev/preview shares one account; use its preview credentials, not a preview slot. */
+export const cloudflareAccounts = {
+  prd: {
+    cloudflareAccountId: "04b3b57291ef2626c6a8daa9d47065a7",
+    dopplerProject: "_shared",
+    dopplerConfig: "prd",
+  },
+  "dev/preview": {
+    cloudflareAccountId: "376ef7ed81b0573f93524de763666c15",
+    dopplerProject: "_shared",
+    dopplerConfig: "preview",
+  },
+};
+
 /** The production Cloudflare account (iterate.com zones). */
-export const PRD_ACCOUNT_ID = "04b3b57291ef2626c6a8daa9d47065a7";
+export const PRD_ACCOUNT_ID = cloudflareAccounts.prd.cloudflareAccountId;
 /** The shared dev/preview Cloudflare account (iterate-preview-N and dev zones). */
-export const PREVIEW_AND_DEV_ACCOUNT_ID = "376ef7ed81b0573f93524de763666c15";
+export const PREVIEW_AND_DEV_ACCOUNT_ID = cloudflareAccounts["dev/preview"].cloudflareAccountId;
 
 /**
  * Placeholder for a Cloudflare resource that hasn't been created yet.

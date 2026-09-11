@@ -23,6 +23,11 @@ export const StreamContext = z.discriminatedUnion("kind", [
     principal: z.string().trim().min(1),
     admin: z.boolean(),
   }),
+  z.strictObject({
+    kind: z.literal("agent-turn"),
+    streamPath: z.string().trim().startsWith("/"),
+    eventOffset: z.number().int().nonnegative(),
+  }),
 ]);
 
 export type StreamContext = z.output<typeof StreamContext>;

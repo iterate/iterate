@@ -91,6 +91,7 @@ import { timedStep } from "./lib/step-timing.ts";
 import { buildCollectSecretUrl } from "./lib/collect-secret-link.ts";
 import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
+import { aiGatewayMetadata } from "./domains/agents/ai-gateway-metadata.ts";
 import { sendAiRequest, prepareWorkersAiRequest } from "./domains/agents/workers-ai-transport.ts";
 import {
   canonicalizeStreamPath,
@@ -3388,7 +3389,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
       auth: ItxAuth;
       ctx: CfExecutionContext;
       projectId: string;
-      gateway?: CfAiRunOptions["gateway"];
+      streamContext: StreamContext;
     },
   ) {
     super();
@@ -3407,14 +3408,29 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * Outputs are model-shaped: instantiate `run<T>` with the response shape you
    * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
    * `unknown`. The optional third argument is the binding's own options object
-   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
-   * to `env.AI.run`; its `gateway` wins over any constructor-provided one.
+   * — cache preferences are honored, but the host always owns the gateway
+   * ID and billing metadata. Callers cannot bypass company spending limits.
    * An `intercepted/*` model never reaches Cloudflare: the live interceptor installed
-   * with `intercept(handler)` supplies a provider response decoded in the same
-   * way as a real call (no handler installed → a loud error). */
+   * with `intercept(handler)` supplies a provider response which follows the
+   * same decoding as a real call (no handler installed → a loud error). */
   async run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T> {
-    const gateway = options?.gateway ?? this.props.gateway;
-    const callOptions = gateway ? { ...options, gateway } : options || {};
+    // Keep the provider response in this call's context; an extra DO RPC hop
+    // can disconnect streaming bodies after returning their headers.
+    const callOptions = options || {};
+    const streamContext = this.props.streamContext;
+    const config = parseConfig(env);
+    const metadata = aiGatewayMetadata({
+      projectId: this.props.projectId,
+      environment: config.environmentName,
+      context: streamContext,
+    });
+    const request = prepareWorkersAiRequest({
+      model,
+      gatewayId: config.cloudflareAiGateway.id,
+      metadata,
+      body,
+      options: callOptions,
+    });
     const response = await sendAiRequest(
       {
         ai: env.AI,
@@ -3422,7 +3438,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
         consultInterceptor: (request) =>
           projectStub(env.PROJECT, this.props.projectId).consultAiInterceptor(request),
       },
-      prepareWorkersAiRequest({ model, body, options: callOptions }),
+      request,
     );
     // run<T> is caller-instantiated: the chosen model determines the output shape.
     if (callOptions.returnRawResponse) return response as T;
@@ -3445,9 +3461,9 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your
    * handler — an in-memory function on YOUR side of the connection — instead
    * of a real provider. The handler receives
-   * `{ source: "agent-turn" | "ai-run", model, request }` with the prepared
-   * request and no provider credentials. Return a `Response` containing the provider’s
-   * JSON or SSE response; its body may be a `ReadableStream<Uint8Array>`. Live means session-bound, with the
+   * `{ source, model, request }`, including prepared body, safe headers and
+   * host-owned attribution. Return a `Response` with the provider's
+   * JSON or SSE response. The normal decoder handles it. Live means session-bound, with the
    * mount invariant: the interception lives exactly as long as your session
    * connection, and if the platform's half dies while your socket is open,
    * the socket closes (4901) — reconnect and intercept() again.
@@ -3665,7 +3681,14 @@ class CfVideosCapabilityRpcTarget extends IterateRpcTarget<"CfVideosCapability">
 
 /** Grouped first-party Cloudflare platform bindings under integrations.cf. */
 class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegrations"> {
-  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+  constructor(
+    readonly props: {
+      auth: ItxAuth;
+      ctx: CfExecutionContext;
+      projectId: string;
+      streamContext: StreamContext;
+    },
+  ) {
     super();
   }
 
@@ -3689,6 +3712,7 @@ class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegr
       auth: this.props.auth,
       ctx: this.props.ctx,
       projectId: this.props.projectId,
+      streamContext: this.props.streamContext,
     });
   }
 
@@ -3937,6 +3961,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       auth: this.props.auth,
       ctx: this.props.ctx,
       projectId: this.props.projectId,
+      streamContext: this.props.streamContext,
     });
   }
 
@@ -7434,6 +7459,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       auth: this.#props.auth,
       ctx: this.#props.ctx,
       projectId: this.#projectId,
+      streamContext: this.#streamContext,
     });
   }
 

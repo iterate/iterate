@@ -42,7 +42,7 @@ test("ai.run decodes JSON, preserves binary/SSE streams and raw responses, and r
     expect(call.request).toMatchObject({
       kind: "workers-ai",
       model: "test-model",
-      options: { returnRawResponse: true, gateway: { id: "test-gateway", skipCache: true } },
+      options: { returnRawResponse: true, gateway: { id: "default", skipCache: true } },
     });
     return new Response(call.request.body.body as any, call.request.body);
   });
