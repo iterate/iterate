@@ -6,7 +6,7 @@ const AiGatewayMetadataInput = z.object({
   projectId: z.string().min(1),
   context: StreamContext,
 });
-export type AiGatewayMetadataInput = z.infer<typeof AiGatewayMetadataInput>;
+type AiGatewayMetadataInput = z.infer<typeof AiGatewayMetadataInput>;
 
 /** Host identity only. JSON encoding omits absent context; zero remains a valid offset. */
 export function aiGatewayMetadata(input: AiGatewayMetadataInput) {
