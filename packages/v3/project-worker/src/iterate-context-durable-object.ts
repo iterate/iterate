@@ -630,8 +630,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       });
       // A removal may have deleted this facet while the load awaited: materializing now would
       // resurrect it as an orphan this actor never quiesces. Refuse; the caller's row is gone too.
-      if (!this.ctx.storage.kv.get(`facet:${name}`))
+      const desiredSpec = this.ctx.storage.kv.get(`facet:${name}`);
+      if (!desiredSpec)
         throw codedError("NO_FACET", `no facet "${name}" — deleted while its source loaded`);
+      // Or RECONFIGURED (not just deleted) while the load awaited — a newer spec/source was stored and
+      // may already be running. This stale load must not abort the newer facet and install old code:
+      // bail so the newer load stands. (`facet:<name>` is the desired spec; #facetStartupMemoFor wrote
+      // OURS before the await, so a mismatch means a newer configure landed meanwhile.)
+      if (JSON.stringify(desiredSpec) !== JSON.stringify(facetStartupMemo))
+        throw codedError("NO_FACET", `facet "${name}" was reconfigured while its source loaded`);
       // THE LOADED IDENTITY (`facet:<name>:loader-id`): when it moves — a source change, a deploy,
       // a workaround generation after a dead load (worker-loader.ts) — the facet restarts in place,
       // its storage surviving. The abort matters for the dead-load case too: workerd hands back the
