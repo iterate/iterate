@@ -934,9 +934,13 @@ interface Dial {
   userTranscript: string;
   /** Facet clock at the last user transcript fragment. */
   lastUserFragmentAtFacetMs: number | null;
-  /** Facet clock when device audio was last forwarded to the provider; the
-   * silence fill covers everything after it. */
-  lastMicAudioAtFacetMs: number;
+  /** How far, on the facet clock, the device's forwarded audio reaches:
+   * each forwarded chunk extends it by its own duration (from now, if it had
+   * fallen behind), so a burst of 500 ms sent in one append covers the next
+   * 500 ms and the silence fill starts only past it — filling INSIDE a
+   * burst chops the person's words with silence (measured: "count to sixty"
+   * reached the model as "count to six"). */
+  micAudioCoveredUntilFacetMs: number;
   /** Silence frames this dial has sent in the device's place. */
   silenceFillFrames: number;
   /** How much of `userTranscript` the backend has been given — carried by
@@ -977,7 +981,7 @@ const freshDial = (conversationId: string): Dial => ({
   lastProgressNoteAtFacetMs: null,
   userTranscript: "",
   lastUserFragmentAtFacetMs: null,
-  lastMicAudioAtFacetMs: 0,
+  micAudioCoveredUntilFacetMs: 0,
   silenceFillFrames: 0,
   forwardedUserChars: 0,
   timelineMs: 0,
@@ -1260,7 +1264,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
 
         const dial = this.#dial;
         if (dial !== null && dial.ready && dial.socket !== null) {
-          dial.lastMicAudioAtFacetMs = this.deps.nowAtFacetMs();
+          const nowAtFacetMs = this.deps.nowAtFacetMs();
+          dial.micAudioCoveredUntilFacetMs =
+            Math.max(dial.micAudioCoveredUntilFacetMs, nowAtFacetMs) +
+            base64ByteLength(micB64) / PCM16_BYTES_PER_MS;
           this.#sendMicAudio(dial.socket, micB64);
         } else if (this.#micQueue.length < MAX_HELD_MIC_FRAMES) {
           this.#micQueue.push(micB64);
@@ -1603,7 +1610,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         const callerSpoke = this.#micQueue.some((frame) => peakOfBase64Pcm16(frame) >= SPEECH_PEAK);
         for (const held of this.#micQueue) this.#sendMicAudio(dial.socket!, held);
         this.#micQueue = [];
-        dial.lastMicAudioAtFacetMs = receivedAtFacetMs;
+        dial.micAudioCoveredUntilFacetMs = receivedAtFacetMs;
         this.#startSilenceFill(dial, append);
         this.runInBackground(() =>
           append({
@@ -2084,9 +2091,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * provider's clock a few seconds into a long answer. Device audio
          * moves the stamp forward itself, so the fill covers only the gaps. */
         const nowAtFacetMs = this.deps.nowAtFacetMs();
-        let owedMs = nowAtFacetMs - dial.lastMicAudioAtFacetMs;
+        let owedMs = nowAtFacetMs - dial.micAudioCoveredUntilFacetMs;
         while (owedMs >= SILENCE_FILL_MS) {
-          dial.lastMicAudioAtFacetMs += SILENCE_FILL_MS;
+          dial.micAudioCoveredUntilFacetMs += SILENCE_FILL_MS;
           owedMs -= SILENCE_FILL_MS;
           this.#sendMicAudio(dial.socket, SILENCE_FILL_FRAME_B64);
           dial.silenceFillFrames += 1;

@@ -393,14 +393,24 @@ describe("opening a call", () => {
     const silence = Buffer.from(String(fills[0]!.audio), "base64");
     expect(silence).toHaveLength(SILENCE_FILL_MS * 32);
     expect(silence.every((byte) => byte === 0)).toBe(true);
-    /* Device audio suppresses the fill for its own window: one mic frame,
-     * then 60 ms, and nothing but that frame went out. */
+    /* Device audio covers its own DURATION, not its arrival: a burst of 25
+     * frames (500 ms) sent at once suppresses the fill for the next 500 ms —
+     * filling inside a burst chops the person's words with silence. */
     const before = h.provider.sentOfType("session.input_audio.append").length;
-    await h.append(micFrame(50));
-    await h.advanceTime(60);
-    await h.settle();
+    const burst = Array.from({ length: 25 }, (_, index) => micFrame(50 + index));
+    await h.append(...burst);
+    for (let step = 0; step < 4; step++) {
+      await h.advanceTime(SILENCE_FILL_MS);
+      await h.settle();
+    }
     const since = h.provider.sentOfType("session.input_audio.append").slice(before);
-    expect(since.map((append) => append.audio)).toEqual([micFrame(50).payload.pcm]);
+    expect(since.map((append) => append.audio)).toEqual(burst.map((frame) => frame.payload.pcm));
+    /* Past the burst's 500 ms the fill resumes. */
+    await h.advanceTime(SILENCE_FILL_MS * 2);
+    await h.settle();
+    expect(h.provider.sentOfType("session.input_audio.append").length).toBeGreaterThan(
+      before + burst.length,
+    );
   });
 
   it("drops an empty mic frame instead of forwarding it (the provider rejects empty audio)", async () => {
