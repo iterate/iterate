@@ -14,9 +14,43 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { expect, test } from "vitest";
+import type { LiveStateRead } from "iterate/sdk/capnweb";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { StreamDurableObject } from "./stream-durable-object.ts";
+
+test("a watched facet releases each native RPC read after applying its state", async () => {
+  const harness = await bootStreamWithAgentFacet();
+  let reads = 0;
+  let releases = 0;
+  harness.facet.stub.readLiveState = async () => {
+    reads += 1;
+    return {
+      epoch: "watched-facet",
+      update: reads === 1 ? { type: "snapshot", revision: 0, state: { status: "running" } } : null,
+      [Symbol.dispose]: () => {
+        releases += 1;
+      },
+    };
+  };
+  const socket = {
+    deserializeAttachment: () => 2,
+    send: () => {},
+    close: () => {},
+  } as unknown as WebSocket;
+  harness.context.ctx.getWebSockets = (tag) =>
+    tag === undefined || tag === "live-state-pager:agent" ? [socket] : [];
+  harness.context.ctx.getTags = () => ["live-state-pager:agent"];
+  new StreamDurableObject(harness.context.ctx, fakeEnv());
+  await harness.context.waitForInitialization();
+  await harness.context.settle();
+  try {
+    expect(reads).toBeGreaterThan(0);
+    expect(releases).toBe(reads);
+  } finally {
+    harness.context.close();
+  }
+});
 
 test("a nameless alarm wake recovers the stream address from its committed birth", async () => {
   const harness = await bootStreamWithAgentFacet();
@@ -136,6 +170,8 @@ async function bootStreamWithAgentFacet() {
     handleAlarmCalls: 0,
     stub: {
       configure: () => Promise.resolve(),
+      readLiveState: (): Promise<LiveStateRead<Record<string, unknown>> & Partial<Disposable>> =>
+        Promise.resolve({ epoch: "unused", update: null }),
       handleAlarm: () => {
         facet.handleAlarmCalls += 1;
         return facet.handleAlarmError === undefined
