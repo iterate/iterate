@@ -71,7 +71,20 @@ export function WorkspaceDocumentPage({
   const editorApiRef = useRef<CollabEditorApi | null>(null);
   const commentsRef = useRef<DocumentCommentsHandle | null>(null);
   const mobileCommentsRef = useRef<DocumentCommentsHandle | null>(null);
-  const focusMobileComposer = useRef(false);
+  // Set by a comment action; consumed once the comments component for the
+  // current layout is mounted (it is not while the agent pane shows), by the
+  // effect below or by the drawer's open auto-focus.
+  const pendingCommentFocus = useRef(false);
+  const focusPendingComment = useCallback(() => {
+    if (!pendingCommentFocus.current) return;
+    const target = narrow ? mobileCommentsRef.current : commentsRef.current;
+    if (target === null) return;
+    pendingCommentFocus.current = false;
+    target.focusDocumentComment();
+  }, [narrow]);
+  useEffect(() => {
+    focusPendingComment();
+  }, [focusPendingComment, agentOpen, commentsOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -171,7 +184,7 @@ export function WorkspaceDocumentPage({
     onSelectThread: (id: string | null) => {
       review.editor.onSelectThread(id);
       if (!id || !window.matchMedia("(max-width: 1023px)").matches) return;
-      focusMobileComposer.current = false;
+      pendingCommentFocus.current = false;
       setAgentOpen(false);
       setCommentsOpen(true);
     },
@@ -219,18 +232,17 @@ export function WorkspaceDocumentPage({
         }}
         canComment={Boolean(review.comments.onAction)}
         onComment={() => {
+          pendingCommentFocus.current = true;
           setAgentOpen(false);
-          if (window.matchMedia("(max-width: 1023px)").matches) {
-            if (commentsOpen) mobileCommentsRef.current?.focusDocumentComment();
-            else {
-              focusMobileComposer.current = true;
-              setCommentsOpen(true);
-            }
-          } else commentsRef.current?.focusDocumentComment();
+          if (narrow) setCommentsOpen(true);
+          // Nothing above re-renders when the comments are already showing,
+          // so focus now; otherwise the effect (or the drawer's open
+          // auto-focus) focuses once they mount.
+          if (!agentOpen && (!narrow || commentsOpen)) focusPendingComment();
         }}
         agentOpen={agentOpen}
         onToggleAgent={() => {
-          focusMobileComposer.current = false;
+          pendingCommentFocus.current = false;
           setAgentOpen((open) => !open);
         }}
         view={view}
@@ -298,7 +310,7 @@ export function WorkspaceDocumentPage({
             if (open) return;
             // Dismissing the drawer closes whatever it showed, so the next
             // Agent tap or comment action reopens it.
-            focusMobileComposer.current = false;
+            pendingCommentFocus.current = false;
             setAgentOpen(false);
             setCommentsOpen(false);
           }}
@@ -307,10 +319,9 @@ export function WorkspaceDocumentPage({
             className="h-[80svh]"
             aria-describedby={undefined}
             onOpenAutoFocus={(event) => {
-              if (!focusMobileComposer.current) return;
+              if (!pendingCommentFocus.current) return;
               event.preventDefault();
-              focusMobileComposer.current = false;
-              mobileCommentsRef.current?.focusDocumentComment();
+              focusPendingComment();
             }}
           >
             <DrawerTitle className="sr-only">{agentOpen ? "Agent" : "Comments"}</DrawerTitle>
