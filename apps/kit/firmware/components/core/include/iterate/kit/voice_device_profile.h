@@ -181,6 +181,18 @@ enum {
    * network's jitter has to be absorbed. If it causes issues, increase it.
    */
   ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES = 210 * 32 + 2880,
+  /*
+   * Below the prefill, a ring that has received NOTHING NEW for this long
+   * starts anyway. GPT-Live emits one 100 ms delta per 100 ms while the model
+   * speaks and the facet forwards each on arrival, so 150 ms without a new
+   * chunk means the answer has ended (its marker follows only after 700 ms of
+   * trailing silence) or the path stalled — either way nothing is coming that
+   * is worth waiting for, and waiting for a prefill that will not fill was how
+   * a 200 ms "Okay." sat silent until the marker. The normal case is
+   * unchanged: an answer that keeps arriving primes to the full 300 ms, and a
+   * ring that has already left priming is never re-gated by this.
+   */
+  ITERATE_KIT_VOICE_SPEAKER_PRIME_STALL_MS = 150,
   ITERATE_KIT_VOICE_SPEAKER_CONCEAL_LIMIT_MS = 400,
   /*
    * How far behind its own timeline playback may fall before a frame is

@@ -552,6 +552,9 @@ EXT_RAM_BSS_ATTR static struct {
   QueueHandle_t speaker_queue;
   atomic_uint speaker_generation;
   atomic_uint_fast64_t speaker_last_write_ms;
+  /** `now_ms` when the newest speaker chunk was admitted; the playout ring
+   * hands it to the clock's stall start (see PRIME_STALL_MS). */
+  atomic_uint_fast64_t speaker_last_arrival_ms;
   /*
    * The playback step's persistent state — the shared playout clock, its
    * counters and the last write — written only by the playback task. The
@@ -831,6 +834,8 @@ static void admit_speaker_frame(const uint8_t *pcm, size_t pcm_length) {
         &runtime.speaker_overflow_drops, 1U, memory_order_relaxed);
     return;
   }
+  atomic_store_explicit(
+      &runtime.speaker_last_arrival_ms, now_ms(NULL), memory_order_release);
   /*
    * Power the amplifier the moment audio ARRIVES, not when the first sample
    * is written. A class-D amp needs tens of milliseconds to settle, and
@@ -1433,10 +1438,17 @@ static enum iterate_kit_voice_playout_write playout_sink_write(
   return ITERATE_KIT_VOICE_PLAYOUT_WRITE_FAILED;
 }
 
+static uint64_t playout_ring_last_arrival_ms(void *context) {
+  (void)context;
+  return atomic_load_explicit(
+      &runtime.speaker_last_arrival_ms, memory_order_acquire);
+}
+
 static const struct iterate_kit_voice_playout_ring playout_ring = {
   .context = NULL,
   .queued_bytes = playout_ring_queued_bytes,
   .read = playout_ring_read,
+  .last_arrival_ms = playout_ring_last_arrival_ms,
 };
 
 static const struct iterate_kit_voice_playout_sink playout_sink = {

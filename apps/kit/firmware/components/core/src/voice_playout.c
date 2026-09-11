@@ -43,7 +43,10 @@ enum iterate_kit_voice_playout_outcome iterate_kit_voice_playout_step(
     return ITERATE_KIT_VOICE_PLAYOUT_PRIMING;
   }
   if (!iterate_kit_voice_playback_clock_ready(
-          &playout->clock, ring->queued_bytes(ring->context))) {
+          &playout->clock,
+          ring->queued_bytes(ring->context),
+          sink->now_ms(sink->context),
+          ring->last_arrival_ms == NULL ? 0U : ring->last_arrival_ms(ring->context))) {
     /* Not feeding: nothing is playing, so nothing is written. */
     ++playout->stats.waits_priming;
     return ITERATE_KIT_VOICE_PLAYOUT_PRIMING;

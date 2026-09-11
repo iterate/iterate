@@ -415,6 +415,30 @@ static void the_first_answer_plays_whole(void) {
  * ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS, because those two numbers are what
  * the failure is made of.
  */
+/*
+ * A SHORT ANSWER WITHOUT A MARKER PLAYS AFTER THE STALL WINDOW. One chunk,
+ * 100 ms, a third of the prefill and no `last`: nothing plays while the ring
+ * waits for company, then the stall window passes with nothing new and every
+ * frame plays — the board's admit path stamps arrivals for the clock.
+ */
+static void a_short_answer_without_a_marker_plays_after_the_stall(void) {
+  const uint32_t written_before = frames_written;
+  int pass;
+  iterate_kit_fake_esp_idf_advance_ms(5000U);
+  deliver_chunk(true, false, CHUNK_FRAMES);
+  /*
+   * A priming pass sleeps 5 ms of fake time, so `play_out()`'s 400 passes
+   * would run the stall window out by themselves; ten passes are 50 ms,
+   * inside it — and nothing plays.
+   */
+  for (pass = 0; pass < 10; ++pass) playback();
+  assert(frames_written == written_before);
+  iterate_kit_fake_esp_idf_advance_ms(
+      (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PRIME_STALL_MS);
+  play_out();
+  assert(frames_written == written_before + (uint32_t)CHUNK_FRAMES);
+}
+
 static void a_later_answer_plays_whole_too(void) {
   const uint32_t answer_one_number = board.last_admitted_answer;
   const uint32_t written_before = frames_written;
@@ -533,6 +557,7 @@ int main(void) {
   deliver_accepted();
 
   the_first_answer_plays_whole();
+  a_short_answer_without_a_marker_plays_after_the_stall();
   a_later_answer_plays_whole_too();
   a_live_answer_superseded_after_a_stall();
   audio_with_no_clear_at_all_still_plays();

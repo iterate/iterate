@@ -77,7 +77,9 @@ uint32_t iterate_kit_voice_playback_clock_lag_ms(
 
 bool iterate_kit_voice_playback_clock_ready(
     struct iterate_kit_voice_playback_clock *clock,
-    uint32_t queued_bytes) {
+    uint32_t queued_bytes,
+    uint64_t now_ms,
+    uint64_t last_arrival_ms) {
   if (clock == NULL) return false;
   /*
    * A FINISHED ANSWER IS ALWAYS READY, however little of it there is.
@@ -113,6 +115,20 @@ bool iterate_kit_voice_playback_clock_ready(
   }
   if (clock->priming &&
       queued_bytes < ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES) {
+    /*
+     * THE STALL START. Prefill asks "will more arrive in time?"; a source
+     * that emits a chunk every 100 ms and then goes quiet for
+     * ITERATE_KIT_VOICE_SPEAKER_PRIME_STALL_MS has answered no — the answer
+     * is over (its marker is still 700 ms of silence away) or the path
+     * stalled — so what is queued is played rather than held for a fill
+     * that is not coming. An EMPTY ring never starts: there is nothing to
+     * play and a stale stamp would only open the sink on silence.
+     */
+    if (queued_bytes > 0U && last_arrival_ms != 0U && now_ms > last_arrival_ms &&
+        now_ms - last_arrival_ms >= ITERATE_KIT_VOICE_SPEAKER_PRIME_STALL_MS) {
+      clock->priming = false;
+      return true;
+    }
     return false;
   }
   clock->priming = false;

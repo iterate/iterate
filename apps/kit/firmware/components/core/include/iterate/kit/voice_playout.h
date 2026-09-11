@@ -66,6 +66,12 @@ struct iterate_kit_voice_playout_ring {
   /** Removes at most one frame; may block for the ring's own dry wait. */
   enum iterate_kit_voice_playout_read (*read)(
       void *context, const uint8_t **frame, size_t *length);
+  /**
+   * The owner's clock reading (the sink's `now_ms` scale) when the newest
+   * chunk was queued, 0 if none yet. Feeds the clock's stall start below the
+   * prefill (ITERATE_KIT_VOICE_SPEAKER_PRIME_STALL_MS); NULL turns it off.
+   */
+  uint64_t (*last_arrival_ms)(void *context);
 };
 
 struct iterate_kit_voice_playout_sink {

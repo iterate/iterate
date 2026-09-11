@@ -119,9 +119,20 @@ uint32_t iterate_kit_voice_playback_clock_lag_ms(
     const struct iterate_kit_voice_playback_clock *clock, uint64_t now_ms);
 
 /** Whether the owner should remove a frame from the ring on this iteration. */
+/**
+ * Whether playback may take from the ring at `now_ms`. Priming ends when the
+ * ring holds the prefill, when the sender marked the answer complete, or when
+ * audio is queued below the prefill and `last_arrival_ms` — the owner's clock
+ * reading when the newest chunk was queued, 0 for none — is
+ * ITERATE_KIT_VOICE_SPEAKER_PRIME_STALL_MS old. Out of priming it stays out
+ * until a reprime or the empty ring settles; a hole mid-answer is concealed,
+ * never re-primed.
+ */
 bool iterate_kit_voice_playback_clock_ready(
     struct iterate_kit_voice_playback_clock *clock,
-    uint32_t queued_bytes);
+    uint32_t queued_bytes,
+    uint64_t now_ms,
+    uint64_t last_arrival_ms);
 
 /**
  * Decide a dry sink tick after playback has left priming.
