@@ -10,24 +10,31 @@ still to prove; `(later)` = deliberately deferred.
 
 ## Implementation status (2026-09-11)
 
-Shape first, insecure on purpose, security captured as expected-fails — per the explicit
-"get the shape in place and clean first, before we write thousands of lines threading permissions
-everywhere" direction. Landed (typecheck + full workers lane green, committed locally, not pushed):
+Shape first, insecure on purpose, security captured as expected-fails — per the explicit "get the
+shape in place and clean first, before we write thousands of lines threading permissions everywhere"
+direction. **All six increments landed as SHAPE** (typecheck + full workers lane green — 781 passed,
+22 expected-fail; committed locally, not pushed):
 
-- **Context hierarchy** — `Session`→`SessionRpcTarget`, `IterateContext`→`IterateContextRpcTarget`;
-  `GLOBAL_PROJECT_ID`; `session.user` vends a global context (same surface as a project's).
-- **`IterateRpcTarget`** — the one `/api` root with `authenticate(credentials)` (`from-server-cookie`
-  | `admin-secret`), served at `/api` and `/internal/rpc`; `UnauthenticatedSession` deleted.
-- **`session.organizations.get(id)`** — the org context catalog.
-- **Security spec** — `__workers-tests__/control-plane-contexts.test.ts`: passing shape tests + five
-  `test.fails` for the naughty things the path-mask must refuse (they pass while insecure, flip red
-  when enforcement lands).
+1. **Context hierarchy** — `Session`→`SessionRpcTarget`, `IterateContext`→`IterateContextRpcTarget`;
+   `GLOBAL_PROJECT_ID`; `session.user` vends a global context (same surface as a project's).
+2. **`IterateRpcTarget`** — the one `/api` root with `authenticate({ from-server-cookie | admin-secret })`,
+   served at `/api` and `/internal/rpc`; `UnauthenticatedSession` deleted.
+3. **Single `invoke(call, args, caller)` door** — `invoke`/`invokeAs` collapsed; the `Caller` is
+   CARRIED through every dispatch and sibling hop, but NOT enforced (nothing reads it to refuse yet).
+4. **`session.organizations.get(id)`** — the org context catalog.
+5. **Account contract + `AccountProcessor` + best-effort async auth fact** — the account-view reducer
+   (a kernel `StreamProcessor`, no D1) and the durable `authenticated` fact on `session.user`.
+6. **Security spec** — `__workers-tests__/control-plane-contexts.test.ts`: passing shape/account
+   tests + five `test.fails` for the naughty things the path-mask must refuse (pass while insecure,
+   flip red when enforcement lands).
 
-Deferred (the permission plumbing, by direction — captured, not built):
+Deferred — the ENFORCEMENT and heavy plumbing (by direction; the expected-fails are its spec):
 
-- **Single `invoke(call, args, caller)` door** (the `Caller` threading) — this IS the "threading
-  permissions through async handoffs"; do it when we enforce the path-mask.
-- **Privileged `ctx.exports` account facet + D1 + durable auth fact** — the facet/effect plumbing.
+- **Path-mask authorization** — the `authorize(caller, path)` that READS the carried `Caller` to
+  allow/refuse (the destination floor at `resolver.invoke` + the pager attach) plus the append
+  type-gate. This is the "threading permissions" to wire when we enforce.
+- **Privileged `ctx.exports` account facet + D1/OAuth** — for the token-workflow effects (Phase 2);
+  the foundation processor needs none.
 - **Full `/internal/rpc` deletion** — needs the OAuth-gate admission rework (admin via `/api`).
 
 ## Headline from the review
