@@ -55,11 +55,13 @@ const AsyncFunction = async function () {}.constructor as new (
 ) => (itx: unknown) => Promise<unknown>;
 
 export async function ask(options: AskOptions): Promise<void> {
-  const requests = JSON.parse(options.requests) as unknown;
+  /* JSON.parse returns `any`; typing the value as unknown forces the shape
+   * check below, after which the array is known to hold strings. */
+  const requests: unknown = JSON.parse(options.requests);
   if (!Array.isArray(requests) || requests.some((request) => typeof request !== "string")) {
     throw new Error("--requests must be a JSON array of strings");
   }
-  const spoken = requests as string[];
+  const spoken: string[] = requests.map((request) => String(request));
   /* A fresh stream per run: two runs a minute apart must never share one
    * (a shared stream's call is already live, and its session.started went
    * by before this run's listener was attached). */

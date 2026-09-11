@@ -932,6 +932,20 @@ describe("the backend", () => {
     );
   });
 
+  it("never holds hang_up: the goodbye must land inside the grace, whatever the person is saying", async () => {
+    const h = makeHarness();
+    await callIsLive(h, { tools: [{ name: "hang_up", description: "End the call." }] });
+    h.provider.userSays(" Okay bye, thanks for", 1_000, 2_000);
+    h.provider.delegationCreated();
+    h.provider.backendFunctionCall("call_bye", "hang_up", "{}");
+    await h.settle();
+    /* Straight through, no developer message, while the person is mid-word. */
+    const items = h.provider.sentOfType("response.item.create");
+    expect(items.map((message) => (message.item as { type: string }).type)).toEqual([
+      "function_call_output",
+    ]);
+  });
+
   it("a failing script answers the backend with the error, and an unknown function too", async () => {
     const h = makeHarness();
     h.projectRoot.current = {

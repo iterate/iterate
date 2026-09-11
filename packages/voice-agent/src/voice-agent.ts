@@ -2115,6 +2115,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
     runInBackground(async () => {
       let output: string;
       const tool = state.tools.find((candidate) => candidate.name === name);
+      /* hang_up ends the delegation: its result is what lets the voice say
+       * goodbye inside HANG_UP_GOODBYE_GRACE_MS, so it is never held for the
+       * rest of a request and nothing is forwarded with it. */
+      const holdForTheRestOfTheRequest = !(tool !== undefined && tool.expression === undefined);
       try {
         const timedOut = Symbol("backend function deadline");
         let work: Promise<unknown>;
@@ -2227,6 +2231,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
        */
       const heldFromFacetMs = this.deps.nowAtFacetMs();
       while (
+        holdForTheRestOfTheRequest &&
         dial.lastUserFragmentAtFacetMs !== null &&
         this.deps.nowAtFacetMs() - dial.lastUserFragmentAtFacetMs < USER_STILL_TALKING_MS &&
         this.deps.nowAtFacetMs() - heldFromFacetMs < FORWARD_HOLD_MAX_MS
@@ -2234,11 +2239,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
         await this.deps.sleep(250);
         if (this.#dial !== dial) return;
       }
-      const saidSince = dial.userTranscript
-        .slice(dial.forwardedUserChars)
-        .replace(/\s+/g, " ")
-        .trim();
-      dial.forwardedUserChars = dial.userTranscript.length;
+      const saidSince = holdForTheRestOfTheRequest
+        ? dial.userTranscript.slice(dial.forwardedUserChars).replace(/\s+/g, " ").trim()
+        : "";
+      if (holdForTheRestOfTheRequest) dial.forwardedUserChars = dial.userTranscript.length;
       if (saidSince !== "") {
         this.#sendControl(
           dial,
