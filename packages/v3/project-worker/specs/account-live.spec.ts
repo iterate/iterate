@@ -32,3 +32,23 @@ test("the account page renders live and a created token appears instantly", asyn
   await expect(page.getByTestId("token-count")).toHaveText("1");
   await expect(page.getByTestId("tokens")).toContainText("My live token");
 });
+
+test("the sessions page lists API tokens live — create shows a readable value, revoke removes it", async ({
+  page,
+}) => {
+  await page.goto("/sessions");
+  // The API-tokens list is useLiveState over session.user's account facet — it connects and goes live.
+  await expect(page.getByTestId("status")).toHaveText("live");
+  await expect(page.getByTestId("token-count")).toHaveText("0");
+
+  await page.getByRole("textbox", { name: "Token name" }).fill("CI robot");
+  await page.getByRole("button", { name: "Create token", exact: true }).click();
+  // Appears instantly, with its (readable, for now) value.
+  await expect(page.getByTestId("token-count")).toHaveText("1");
+  await expect(page.getByTestId("tokens")).toContainText("CI robot");
+  await expect(page.getByTestId("tokens")).toContainText("tok_");
+
+  // Revoke removes it the instant the delta streams back — no reload.
+  await page.getByRole("button", { name: "Revoke CI robot", exact: true }).click();
+  await expect(page.getByTestId("token-count")).toHaveText("0");
+});

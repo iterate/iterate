@@ -42,18 +42,35 @@ export function authenticatedEvent(fact: AuthenticationFact): StreamEventInput {
 // ── commands (client-submitted) ──
 
 /** A request to create a personal token — a client COMMAND (not a fact): the client may append it,
- *  and the processor records it in the view immediately. The real credential is minted by the
- *  token-workflow EFFECT (Phase 2); for now the view shows the requested token, which is enough to
- *  prove the live path — the same view later carries the minted value. */
-export type TokenCreateRequest = { requestId: string; name: string; requestedAt: number };
+ *  and the processor records it in the view immediately. INSECURE-FIRST: the token `value` is carried
+ *  and stored READABLE (a client-generated string for now — a real minting EFFECT that stores only a
+ *  hash follows with the security work). Enough to prove the live path: create it and it appears. */
+export type TokenCreateRequest = {
+  requestId: string;
+  name: string;
+  value: string;
+  requestedAt: number;
+};
 export function tokenCreateRequestedEvent(request: {
   requestId: string;
   name: string;
+  value: string;
 }): StreamEventInput {
   return {
     type: "events.iterate.com/account/token-create-requested",
     payload: { ...request, requestedAt: Date.now() } satisfies TokenCreateRequest,
     idempotencyKey: `token-create/${request.requestId}`,
+  };
+}
+
+/** Revoke a token — a client COMMAND. The processor drops it from the view immediately. (The real
+ *  credential invalidation is the same deferred EFFECT as minting; for now this is the live view.) */
+export type TokenRevoke = { requestId: string };
+export function tokenRevokedEvent(request: { requestId: string }): StreamEventInput {
+  return {
+    type: "events.iterate.com/account/token-revoked",
+    payload: request satisfies TokenRevoke,
+    idempotencyKey: `token-revoke/${request.requestId}`,
   };
 }
 
@@ -64,7 +81,14 @@ const AccountView = z.object({
     .array(z.object({ credential: z.string(), at: z.number(), operationId: z.string() }))
     .default([]),
   tokens: z
-    .array(z.object({ requestId: z.string(), name: z.string(), requestedAt: z.number() }))
+    .array(
+      z.object({
+        requestId: z.string(),
+        name: z.string(),
+        value: z.string().default(""),
+        requestedAt: z.number(),
+      }),
+    )
     .default([]),
 });
 /** The account view a client reads (through live state): the user's authentications and tokens. */
@@ -81,7 +105,8 @@ type AccountEvent =
   | (StreamEvent & {
       type: "events.iterate.com/account/token-create-requested";
       payload: TokenCreateRequest;
-    });
+    })
+  | (StreamEvent & { type: "events.iterate.com/account/token-revoked"; payload: TokenRevoke });
 
 /** Folds account facts and commands into the view. Pure — the kernel's `ProcessorEngine` drives it
  *  and projects it to live state, exactly as it does a project processor; `session.user` hosts it as
@@ -95,6 +120,7 @@ export class AccountProcessor extends StreamProcessor<AccountView, AccountEvent>
     consumes: [
       "events.iterate.com/account/authenticated",
       "events.iterate.com/account/token-create-requested",
+      "events.iterate.com/account/token-revoked",
     ],
     emits: [],
   });
@@ -123,9 +149,15 @@ export class AccountProcessor extends StreamProcessor<AccountView, AccountEvent>
           {
             requestId: event.payload.requestId,
             name: event.payload.name,
+            value: event.payload.value ?? "", // old events (pre-value) reduce to a blank value
             requestedAt: event.payload.requestedAt,
           },
         ],
+      };
+    if (event.type === "events.iterate.com/account/token-revoked")
+      return {
+        ...state,
+        tokens: state.tokens.filter((token) => token.requestId !== event.payload.requestId),
       };
     return undefined;
   }

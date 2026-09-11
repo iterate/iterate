@@ -23,6 +23,7 @@ export const Route = createFileRoute("/_auth/account")({
       consumes: [
         "events.iterate.com/account/authenticated",
         "events.iterate.com/account/token-create-requested",
+        "events.iterate.com/account/token-revoked",
       ],
     });
   },
@@ -48,7 +49,14 @@ function AccountLivePage() {
     try {
       await userItx.invoke([
         "itx",
-        ["append", tokenCreateRequestedEvent({ requestId: crypto.randomUUID(), name: requested })],
+        [
+          "append",
+          tokenCreateRequestedEvent({
+            requestId: crypto.randomUUID(),
+            name: requested,
+            value: `tok_${crypto.randomUUID().replace(/-/g, "")}`,
+          }),
+        ],
       ]);
     } catch (e) {
       setFailure(e instanceof Error ? e.message : String(e));

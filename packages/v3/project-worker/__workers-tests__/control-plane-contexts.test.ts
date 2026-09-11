@@ -8,7 +8,11 @@
 // passes; when enforcement lands the assertion passes, the expected-fail turns into a real failure,
 // and whoever wired the fix deletes the `.fails`. See docs/control-plane-context-resolved-design.md.
 import { beforeAll, describe, expect, test } from "vitest";
-import { AccountProcessor, tokenCreateRequestedEvent } from "../src/account/contract.ts";
+import {
+  AccountProcessor,
+  tokenCreateRequestedEvent,
+  tokenRevokedEvent,
+} from "../src/account/contract.ts";
 import { ACCOUNT_PROCESSOR_SOURCE } from "../src/generated/account-processor-source.ts";
 import { adminCredentials, applyDirectorySchema, openSession, until } from "./support.ts";
 
@@ -106,7 +110,7 @@ describe("account — foundation shape (passing)", () => {
     expect(fact.type).toBe("events.iterate.com/account/authenticated");
   });
 
-  test("session.user hosts the account processor: a token-create command appears in its live view", async () => {
+  test("session.user hosts the account processor: a token appears in its live view with a readable value, and revoke removes it", async () => {
     const s = await userSession("acct-live@sec.test");
     await s.user.processors.enable("account", {
       source: ACCOUNT_PROCESSOR_SOURCE,
@@ -114,22 +118,39 @@ describe("account — foundation shape (passing)", () => {
       consumes: [
         "events.iterate.com/account/authenticated",
         "events.iterate.com/account/token-create-requested",
+        "events.iterate.com/account/token-revoked",
       ],
     });
+    const readTokens = () =>
+      s.user.invoke("itx.facets.get('account').liveSnapshot()") as Promise<{
+        state?: { tokens: { requestId: string; name: string; value: string }[] };
+      }>;
     await s.user.invoke([
       "itx",
-      ["append", tokenCreateRequestedEvent({ requestId: "req-1", name: "CI token" })],
+      [
+        "append",
+        tokenCreateRequestedEvent({ requestId: "req-1", name: "CI token", value: "tok_ci" }),
+      ],
     ]);
     // The facet reduces the command into its live view — the exact snapshot `useLiveState`'s door reads.
-    const view = await until("account view has the token", async () => {
-      const snapshot = (await s.user.invoke("itx.facets.get('account').liveSnapshot()")) as {
-        state?: { tokens: { name: string }[] };
-      };
+    const created = await until("account view has the token", async () => {
+      const snapshot = await readTokens();
       return snapshot.state?.tokens.some((token) => token.name === "CI token")
         ? snapshot.state
         : undefined;
     });
-    expect(view.tokens.map((token) => token.name)).toContain("CI token");
+    // The token value is stored readable (insecure-first).
+    expect(created.tokens.find((token) => token.name === "CI token")?.value).toBe("tok_ci");
+
+    // Revoke is a single command; the token leaves the live view.
+    await s.user.invoke(["itx", ["append", tokenRevokedEvent({ requestId: "req-1" })]]);
+    const revoked = await until("account view drops the revoked token", async () => {
+      const snapshot = await readTokens();
+      return snapshot.state && !snapshot.state.tokens.some((token) => token.requestId === "req-1")
+        ? snapshot.state
+        : undefined;
+    });
+    expect(revoked.tokens.some((token) => token.requestId === "req-1")).toBe(false);
   });
 });
 

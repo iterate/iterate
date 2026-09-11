@@ -1,44 +1,83 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useItx } from "../-itx.tsx";
+import { useLiveState } from "../../client/react.tsx";
+import { ACCOUNT_PROCESSOR_SOURCE } from "../../generated/account-processor-source.ts";
+import {
+  tokenCreateRequestedEvent,
+  tokenRevokedEvent,
+  type AccountView,
+} from "../../account/contract.ts";
 
 export const Route = createFileRoute("/_auth/sessions")({
   validateSearch: (search: Record<string, unknown>) => ({
     cursor: typeof search.cursor === "string" ? search.cursor : undefined,
   }),
   loaderDeps: ({ search }) => ({ cursor: search.cursor }),
-  // RpcPromise is callable; normalize it to a native Promise for the router loader.
-  loader: async ({ deps, context }) => await context.api.grants.list(deps.cursor),
+  // Host the account processor (the live token view) alongside the grant list. RpcPromise is
+  // callable; normalize the grant list to a native Promise for the router loader.
+  loader: async ({ deps, context }) => {
+    await context.api.user.processors.enable("account", {
+      source: ACCOUNT_PROCESSOR_SOURCE,
+      className: "AccountDurableObject",
+      consumes: [
+        "events.iterate.com/account/authenticated",
+        "events.iterate.com/account/token-create-requested",
+        "events.iterate.com/account/token-revoked",
+      ],
+    });
+    return await context.api.grants.list(deps.cursor);
+  },
   component: SessionsPage,
 });
 
 function SessionsPage() {
-  const { items, cursor, projects, canMintToken } = Route.useLoaderData();
+  const { items, cursor } = Route.useLoaderData();
   const router = useRouter();
   const { api } = useItx();
   const search = Route.useSearch();
-  const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-  const mintToken = async (event: FormEvent<HTMLFormElement>) => {
+
+  // API tokens are LiveState — the account processor on session.user. Creating or revoking one is a
+  // single appended command; the list updates the instant the delta streams back, no reload.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a capnweb stub is an untyped proxy, as in the demo
+  const userItx = useMemo<any>(() => api.user, [api]);
+  const { value, status } = useLiveState<AccountView>(userItx, {
+    key: "account",
+    door: () => userItx.invoke("itx.facets.get('account').liveSnapshot()"),
+  });
+  const [tokenName, setTokenName] = useState("");
+  const createToken = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    setPending(true);
+    const name = tokenName.trim() || "Untitled token";
+    setTokenName("");
     setError(null);
-    setToken(null);
     try {
-      const answer = await api.grants.mint({
-        name: String(form.get("name") ?? ""),
-        projects: form.getAll("project").map(String),
-      });
-      setToken(answer.token);
-      await router.invalidate();
+      await userItx.invoke([
+        "itx",
+        [
+          "append",
+          tokenCreateRequestedEvent({
+            requestId: crypto.randomUUID(),
+            name,
+            // INSECURE-FIRST: a readable token value (a client-generated string for now).
+            value: `tok_${crypto.randomUUID().replace(/-/g, "")}`,
+          }),
+        ],
+      ]);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setPending(false);
     }
   };
+  const revokeToken = async (requestId: string) => {
+    setError(null);
+    try {
+      await userItx.invoke(["itx", ["append", tokenRevokedEvent({ requestId })]]);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
   return (
     <main>
       <p>
@@ -112,45 +151,41 @@ function SessionsPage() {
           </Link>
         )}
       </p>
-      <h2>Create an API token</h2>
-      <p>A token acts as you on the projects you select. It expires after 30 days.</p>
-      {canMintToken ? (
-        <form onSubmit={mintToken}>
-          <label>
-            Name <input name="name" required maxLength={100} placeholder="My script" />
-          </label>
-          <fieldset>
-            <legend>Projects</legend>
-            {projects.map((project) => (
-              <label key={project.id}>
-                <input type="checkbox" name="project" value={project.id} /> {project.id}
-              </label>
-            ))}
-          </fieldset>
-          <button type="submit" disabled={pending || !projects.length}>
-            {pending ? "Creating…" : "Create token"}
-          </button>
-        </form>
-      ) : (
-        <p>Token creation is available on HTTPS deployments.</p>
-      )}
-      {token && (
-        <div>
-          <p>Copy this token now. It will not be shown again.</p>
-          <textarea aria-label="New API token" readOnly value={token} rows={3} />
-          <button
-            type="button"
-            onClick={() => {
-              void navigator.clipboard.writeText(token).catch((caught) => setError(String(caught)));
-            }}
-          >
-            Copy token
-          </button>
-          <button type="button" onClick={() => setToken(null)}>
-            Done
-          </button>
-        </div>
-      )}
+
+      <h2>
+        API tokens (<span data-testid="token-count">{value?.tokens.length ?? 0}</span>)
+      </h2>
+      <p>
+        Live from <code>session.user</code> — created and revoked tokens appear instantly.{" "}
+        <span data-testid="status">{status}</span>
+      </p>
+      <form onSubmit={createToken}>
+        <label>
+          Name{" "}
+          <input
+            aria-label="Token name"
+            value={tokenName}
+            onChange={(event) => setTokenName(event.target.value)}
+            maxLength={100}
+            placeholder="My script"
+          />
+        </label>{" "}
+        <button type="submit">Create token</button>
+      </form>
+      <ul data-testid="tokens">
+        {(value?.tokens ?? []).map((token) => (
+          <li key={token.requestId}>
+            <strong>{token.name}</strong> <code>{token.value}</code>{" "}
+            <button
+              type="button"
+              aria-label={`Revoke ${token.name}`}
+              onClick={() => revokeToken(token.requestId)}
+            >
+              Revoke
+            </button>
+          </li>
+        ))}
+      </ul>
     </main>
   );
 }
