@@ -52,7 +52,7 @@ async function benchmark(chunkSize: number, patchVersion: 2 | 3) {
           throw new Error("Unexpected benchmark revision gap");
         });
         const current = store.getState()!.agent.live.steps[0]!.responseText;
-        if (current.length >= 32768 && sealedGroup === undefined) sealedGroup = current.groups[0];
+        if (current.length >= 32768 && !sealedGroup) sealedGroup = current.groups[0];
         if (current.length > 32768 && current.groups[0] !== sealedGroup)
           throw new Error("Sealed group replaced");
         applied.resolve();

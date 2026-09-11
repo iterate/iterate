@@ -54,14 +54,14 @@ export function compactPatch(previous: unknown, patch: LiveStatePatch): CompactL
     throw new Error("Live-state object patch requires an object baseline");
   const { indices } = addresses(previous);
   const fields: [string, CompactLiveStatePatch][] = [];
-  for (const [key, child] of Object.entries(patch.fields ?? {})) {
+  for (const [key, child] of Object.entries(patch.fields || {})) {
     const index = indices.get(key);
     fields.push([
       index === undefined ? `+${key}` : String(index),
       compactPatch(index === undefined ? undefined : previous[key], child),
     ]);
   }
-  for (const key of patch.drop ?? []) {
+  for (const key of patch.drop || []) {
     const index = indices.get(key);
     // An undefined field was already absent on the wire.
     if (index !== undefined) fields.push([String(index), []]);

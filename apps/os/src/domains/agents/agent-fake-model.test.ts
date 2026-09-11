@@ -191,12 +191,10 @@ function makeInterceptedModelHarness(
           gatewayId: "default",
           openaiApiKey: "must-not-leak",
         }),
-        ...(consultAiInterceptor === undefined
-          ? {}
-          : {
-              consultAiInterceptor: async (input) =>
-                interceptor.aiTextResponse((await consultAiInterceptor(input)) as any, input),
-            }),
+        ...(consultAiInterceptor && {
+          consultAiInterceptor: async (input) =>
+            interceptor.aiTextResponse((await consultAiInterceptor(input)) as any, input),
+        }),
       }),
     path: "/agents/test",
   });

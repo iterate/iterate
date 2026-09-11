@@ -63,8 +63,7 @@ function benchmark(size: number, chunkSize: number, patchVersion: 2 | 3) {
       state = link.mirror.getState()!;
       const currentText = state.steps.at(-1)!;
       if (!("text" in currentText)) throw new Error("Missing live text");
-      if (text.length >= 32768 && link.sealedGroup === undefined)
-        link.sealedGroup = currentText.text.groups[0];
+      if (text.length >= 32768 && !link.sealedGroup) link.sealedGroup = currentText.text.groups[0];
       if (text.length > 32768 && link.sealedGroup !== currentText.text.groups[0]) {
         throw new Error("Transport replaced a sealed text group");
       }
