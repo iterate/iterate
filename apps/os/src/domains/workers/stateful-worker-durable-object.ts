@@ -224,16 +224,19 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     { commitOid?: string; ok: true; target: unknown } | { failure: WorkerBuildFailure; ok: false }
   > {
     this.#assertRefMatchesName(ref);
-    const loaded = await this.#workerRunner.loadStatefulClass(ref, buildBudgetMs);
+    const loaded = await this.#workerRunner.prepareStatefulClass(ref, buildBudgetMs);
     if (!loaded.ok) return loaded;
-    const { klass, resolved } = loaded;
+    const { resolved } = loaded;
     const version = statefulWorkerVersion(ref, resolved.cacheKey);
     const previous = this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY);
     if (previous && previous !== version) {
       this.ctx.facets.abort(FACET_NAME, `stateful worker source changed for ${this.ctx.id.name}`);
     }
     if (previous !== version) this.ctx.storage.kv.put(VERSION_STORAGE_KEY, version);
-    const target = this.ctx.facets.get(FACET_NAME, () => ({ class: klass }));
+    // Loading an isolate on a warm request can replace the class beneath the
+    // live facet even when the build is unchanged. Let the runtime request a
+    // class only on startup, as in Cloudflare's Durable Object facets example.
+    const target = this.ctx.facets.get(FACET_NAME, () => ({ class: loaded.loadClass() }));
 
     // A facet cannot learn its own ref through ctx.facets.get(), so offer it
     // once before traffic. Plain DurableObject classes may omit this SDK door.
@@ -246,7 +249,8 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
         const cannotAcceptIdentity =
           isMissingInvokeCapabilityError(error) ||
           (error instanceof Error && error.message.includes('"__stashSelfRef" is not a method'));
-        if (cannotAcceptIdentity) this.#identityDelivered = identity;
+        if (!cannotAcceptIdentity) throw error;
+        this.#identityDelivered = identity;
       }
     }
 
