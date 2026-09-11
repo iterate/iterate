@@ -1111,6 +1111,42 @@ describe("contract payload validation", () => {
     expect((await p.snapshot()).state).toEqual({ sum: 5 });
   });
 
+  test("a malformed event is skipped for the EFFECT hook too, and never wedges the batch", async () => {
+    const contract = defineProcessorContract({
+      slug: "effect-skip",
+      version: "1",
+      description: "records the numbers its typed effect hook sees",
+      stateSchema: z.object({ seen: z.array(z.number()).default([]) }),
+      events: { "demo/x": { description: "x", payloadSchema: z.object({ n: z.number() }) } },
+      consumes: ["demo/x"],
+      emits: [],
+    });
+    const effects: number[] = [];
+    class P extends StreamProcessor<z.infer<typeof contract.stateSchema>> {
+      contract = contract;
+      reduce({ event, state }: ReduceArgs<z.infer<typeof contract.stateSchema>>) {
+        return { seen: [...state.seen, (event.payload as { n: number }).n] };
+      }
+      override processEvent({ event }: ProcessEventArgs<z.infer<typeof contract.stateSchema>>) {
+        // The hook is typed against ConsumedEvent's z.output — `n` is a number. A malformed event
+        // reaching here (n a string) would THROW and wedge the batch: checkpoints never advance and
+        // catch-up refails the same row. It must be skipped upstream.
+        if (event && typeof (event.payload as { n: unknown }).n !== "number")
+          throw new Error("a malformed event reached the typed effect hook");
+        if (event) effects.push((event.payload as { n: number }).n);
+      }
+    }
+    const mem = memoryStream();
+    const p = new ProcessorEngine(new P(), { stream: mem.stream, storage: memoryStorage() });
+    mem.engines.push(p);
+    mem.stream.append({ type: "demo/x", payload: { n: 1 } });
+    mem.stream.append({ type: "demo/x", payload: { n: "bad" } }); // malformed
+    mem.stream.append({ type: "demo/x", payload: { n: 2 } });
+    await settle();
+    expect(effects).toEqual([1, 2]); // the effect hook never saw the malformed event
+    expect((await p.snapshot()).state).toEqual({ seen: [1, 2] }); // and the batch advanced past it
+  });
+
   test("a version replay reproduces the live coercion, not the raw input", async () => {
     const mem = memoryStream();
     const storage = memoryStorage();

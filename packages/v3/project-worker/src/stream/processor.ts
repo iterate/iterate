@@ -407,11 +407,14 @@ export class ProcessorEngine<State> {
     let caughtUpDelivered = false;
     for (let i = 0; i < consumableEvents.length; i++) {
       const last = i === consumableEvents.length - 1;
-      state = await this.#reduceAndProcessEvent(consumableEvents[i], state, atHead && last);
-      if (atHead && last) caughtUpDelivered = true;
+      const r = await this.#reduceAndProcessEvent(consumableEvents[i], state, atHead && last);
+      state = r.state;
+      // A skipped (malformed) last event never delivered caught-up — the eventless pass below does.
+      if (atHead && last && r.processed) caughtUpDelivered = true;
     }
     // Rule 5: reached the head with no caught-up event → one eventless at-head pass.
-    if (atHead && !caughtUpDelivered) state = await this.#reduceAndProcessEvent(null, state, true);
+    if (atHead && !caughtUpDelivered)
+      state = (await this.#reduceAndProcessEvent(null, state, true)).state;
 
     // Rule 4: ONE persist per range, iff a DURABLE actually ADVANCED the cursor — `advanced`
     // excludes a stale re-push (a no-op write), `sawDurable` the ephemeral-only range (the flood
@@ -456,7 +459,10 @@ export class ProcessorEngine<State> {
    *  (a coercion applied live but not on replay would make a version bump rewrite state). A payload-less
    *  event validates as `{}` (the "empty defaults" convention the contract requires of its stateSchema);
    *  a contract with no `events` catalog (the kernel-generic processors) folds unvalidated, as before. */
-  #validateNormalizeAndReduce(event: StreamEvent, state: State): { state: State; event: StreamEvent } {
+  #validateNormalizeAndReduce(
+    event: StreamEvent,
+    state: State,
+  ): { state: State; event: StreamEvent; valid: boolean } {
     const parsed = this.#contract.payloadSchemaFor?.(event.type)?.safeParse(event.payload ?? {});
     if (parsed && !parsed.success) {
       reportIssue("processor.reduce.payload", parsed.error, {
@@ -464,30 +470,35 @@ export class ProcessorEngine<State> {
         offset: event.offset,
         type: event.type,
       });
-      return { state, event }; // malformed: not folded; the raw event still flows to the caller
+      return { state, event, valid: false }; // malformed: not folded, and the caller skips its effect
     }
     // Owned-event payloads are object schemas, so `z.output` is a record.
     const normalized = parsed
       ? { ...event, payload: parsed.data as Record<string, unknown> }
       : event;
-    return { state: this.#reduceOrKeep(normalized, state), event: normalized };
+    return { state: this.#reduceOrKeep(normalized, state), event: normalized, valid: true };
   }
 
   /** THE per-event primitive (rules 2–3) — the batch loop and the eventless at-head pass both come
    *  here: a GUARDED reduce, then `processEvent` with a FIFO blocker chain drained to a FIXED POINT.
-   *  Returns the next state; owns NO cursor / persist / waiter — the caller does. */
+   *  Returns the next state and whether the effect ran — a malformed payload for a KNOWN event is
+   *  SKIPPED for BOTH reduce and effect (the effect hook is typed against `ConsumedEvent`'s `z.output`,
+   *  so handing it garbage would throw and wedge the batch — checkpoints never advance, catch-up
+   *  refails the same row); `processed: false` lets the batch fall back to the eventless caught-up pass.
+   *  Owns NO cursor / persist / waiter — the caller does. */
   async #reduceAndProcessEvent(
     event: StreamEvent | null,
     state: State,
     caughtUp: boolean,
-  ): Promise<State> {
+  ): Promise<{ state: State; processed: boolean }> {
     const { slug, version, emits } = this.#contract;
     const previousState = state;
     if (event) {
-      // Validate + normalize + fold via the ONE shared path (so replay can't diverge). The reducer and
-      // the effect hook below both see the NORMALIZED event on the valid path; a malformed payload is
-      // not folded but the raw event still flows to processEvent, keeping the batch's caught-up signal.
+      // Validate + normalize + fold via the ONE shared path (so replay can't diverge). On the valid
+      // path the reducer AND the effect hook below both see the NORMALIZED event (schema `z.output`);
+      // a malformed payload is neither folded nor delivered to the (typed) effect hook.
       const reduced = this.#validateNormalizeAndReduce(event, state);
+      if (!reduced.valid) return { state: reduced.state, processed: false };
       state = reduced.state;
       event = reduced.event;
     }
@@ -530,7 +541,7 @@ export class ProcessorEngine<State> {
       awaited = blockers;
       await awaited;
     }
-    return state;
+    return { state, processed: true };
   }
 
   /** The checkpoint write, with the latch: a refusal stamped `retryable: false` can only repeat. */
