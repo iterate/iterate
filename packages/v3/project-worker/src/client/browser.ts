@@ -1,6 +1,6 @@
 import { newWebSocketRpcSession } from "capnweb";
 import { redirect } from "@tanstack/react-router";
-import type { SessionRpcTarget } from "../session.ts";
+import type { IterateRpcTarget } from "../session.ts";
 import { OAuthScopes } from "../oauth-scopes.ts";
 
 /** Create once per TanStack app. Call authenticate in a client-only route's
@@ -23,9 +23,12 @@ export function createIterateClient(options: { scopes?: string[] } = {}) {
     const url = new URL("/api", window.location.href);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = new WebSocket(url);
-    const api = newWebSocketRpcSession<SessionRpcTarget>(socket);
+    // The public root is the IterateRpcTarget; `authenticate({ from-server-cookie })` vends the
+    // session the OAuth gate already resolved. capnweb pipelines, so `api` is usable immediately.
+    const iterate = newWebSocketRpcSession<IterateRpcTarget>(socket);
+    const api = iterate.authenticate({ type: "from-server-cookie" });
     const dispose = () => {
-      api[Symbol.dispose]();
+      iterate[Symbol.dispose]();
       connecting = undefined;
     };
     socket.addEventListener(

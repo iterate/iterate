@@ -7,7 +7,7 @@ import { browserAuthorization } from "../src/browser-client.ts";
 import { appSession } from "../src/client/app-auth.ts";
 import { oauthHelpers } from "../src/oauth.ts";
 import type { Env } from "../src/control-plane.ts";
-import type { SessionRpcTarget } from "../src/session.ts";
+import type { IterateRpcTarget } from "../src/session.ts";
 import definitions from "../src/control-plane.sql?raw";
 
 const bindings = env as unknown as Env;
@@ -47,8 +47,11 @@ async function rpc(token: string) {
   });
   expect(response.status, await (response.status === 101 ? "" : response.text())).toBe(101);
   response.webSocket!.accept();
-  const root = newWebSocketRpcSession<SessionRpcTarget>(response.webSocket! as unknown as WebSocket);
-  sessions.push(root);
+  const transport = newWebSocketRpcSession<IterateRpcTarget>(
+    response.webSocket! as unknown as WebSocket,
+  );
+  sessions.push(transport);
+  const root = transport.authenticate({ type: "from-server-cookie" });
   return { root };
 }
 
@@ -432,8 +435,11 @@ test("console and project browsers use the same CIMD flow and independent grants
       });
       expect(response.status, response.status === 101 ? "" : await response.text()).toBe(101);
       response.webSocket!.accept();
-      const root = newWebSocketRpcSession<SessionRpcTarget>(response.webSocket! as unknown as WebSocket);
-      sessions.push(root);
+      const transport = newWebSocketRpcSession<IterateRpcTarget>(
+        response.webSocket! as unknown as WebSocket,
+      );
+      sessions.push(transport);
+      const root = transport.authenticate({ type: "from-server-cookie" });
       expect(await root.whoami()).toEqual({ actor: user.id, email: user.email });
       expect((await root.projects.list()).map((p: { id: string }) => p.id).sort()).toEqual(
         origin === ORIGIN ? ["browser-a", "browser-b"] : ["browser-a"],

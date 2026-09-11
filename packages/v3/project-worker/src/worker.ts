@@ -21,7 +21,7 @@ import { directory } from "./directory.ts";
 import { registerPipelinedRpcBrand } from "./context/expression.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
 import { DurableObjectNameCodec } from "./iterate-context.ts";
-import { UnauthenticatedSession, type SessionInput } from "./session.ts";
+import { IterateRpcTarget, SessionTeardown, type SessionInput } from "./session.ts";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "./principal.ts";
 import { authorizationForToken, recordGrantUse, cleanGrantActivity } from "./oauth.ts";
 
@@ -195,7 +195,10 @@ export default {
       // a CLI script or cron does one POST, no socket handshake. (Batch sessions cannot hold
       // live capabilities: a live provide needs the relay to outlive the response —
       // the relay's lend call simply fails there, which is the honest error.)
-      return newWorkersRpcResponse(request, new UnauthenticatedSession(sessionInput));
+      return newWorkersRpcResponse(
+        request,
+        new IterateRpcTarget(sessionInput, new SessionTeardown(), null),
+      );
     }
 
     const identityResponse = await identityDoor(request, env);

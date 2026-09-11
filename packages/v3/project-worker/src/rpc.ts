@@ -4,7 +4,7 @@ import { Consent } from "./consent.ts";
 import { Grants } from "./grants.ts";
 import { directory } from "./directory.ts";
 import { authorizationOf, recordGrantUse, type Authorization } from "./oauth.ts";
-import { SessionRpcTarget, SessionTeardown, type SessionInput } from "./session.ts";
+import { IterateRpcTarget, SessionTeardown, type SessionInput } from "./session.ts";
 import { appConfigOf } from "./app-config.ts";
 
 /** Cap’n Web always terminates at /api in the stateless edge. Its root is an
@@ -25,7 +25,9 @@ export async function rpcResponse(
     secretsKv: env.SECRETS_KV,
     onProjectAccess: (projectId) => projects.add(projectId),
   };
-  const root = new SessionRpcTarget(input, teardown, {
+  // The transport already carries a resolved authorization (the OAuth gate ran in api.ts); the root
+  // is the IterateRpcTarget, and `authenticate({ type: "from-server-cookie" })` vends the session for it.
+  const root = new IterateRpcTarget(input, teardown, {
     principal: auth.principal,
     reach: auth.reach,
     projectDoors: auth.grant ? null : input,

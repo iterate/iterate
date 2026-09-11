@@ -21,12 +21,18 @@ import { verifyAdminSecret, type Principal } from "./principal.ts";
  *  id IS its slug. */
 export type ProjectIdOrSlug = string;
 
-/** The operator gate accepts only the deployment administrator credential. */
-const SessionCredentials = z.object({
-  type: z.literal("admin-secret"),
-  secret: z.string(),
-  as: z.object({ email: z.email() }).optional(),
-});
+/** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser: the OAuth gate
+ *  already resolved the session from the request, so this only says "hand me that session".
+ *  `admin-secret` is the operator/CLI credential, verified in-band. (Project-secret/token variants
+ *  follow.) */
+const SessionCredentials = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("from-server-cookie") }),
+  z.object({
+    type: z.literal("admin-secret"),
+    secret: z.string(),
+    as: z.object({ email: z.email() }).optional(),
+  }),
+]);
 export type SessionCredentials = z.infer<typeof SessionCredentials>;
 
 /** The verified user or configured administrator acting through this session. */
@@ -50,24 +56,54 @@ export interface SessionInput {
   onProjectAccess?: (projectId: string) => void;
 }
 
-/** The internal operator gate. Its teardown owns every context it vends. */
-export class UnauthenticatedSession extends RpcTarget {
-  readonly #sessionTeardown = new SessionTeardown(); // held for the session so lent stubs + pager sockets aren't GC'd
+/** THE `/api` ROOT — the one thing a fresh capnweb connection holds. `authenticate(credentials)` is
+ *  its only real verb: it returns the `SessionRpcTarget` you reach `.user`/`.projects`/… through.
+ *  On the public transport the OAuth gate has already resolved the caller, so `authenticate({ type:
+ *  "from-server-cookie" })` hands back that session; the operator door carries no resolved session,
+ *  so `authenticate({ type: "admin-secret", secret })` verifies the deployment admin secret in-band.
+ *  Its teardown owns every context the session it vends hands out. */
+export class IterateRpcTarget extends RpcTarget {
   readonly #input: SessionInput;
+  readonly #sessionTeardown: SessionTeardown;
+  /** The authority the transport already resolved (public `/api`), or null (the operator door, which
+   *  authenticates in-band with the admin secret). */
+  readonly #resolved: SessionAuthority | null;
 
-  constructor(input: SessionInput) {
+  constructor(
+    input: SessionInput,
+    sessionTeardown: SessionTeardown,
+    resolved: SessionAuthority | null = null,
+  ) {
     super();
     this.#input = input;
+    this.#sessionTeardown = sessionTeardown;
+    this.#resolved = resolved;
   }
 
   [Symbol.dispose](): void {
     this.#sessionTeardown.disposeAll();
   }
 
+  /** Safe bootstrap data available before authenticating. */
+  serverInfo() {
+    return {
+      platformOrigin: this.#input.appConfig.platformOrigin,
+      projectHostnameBase: this.#input.appConfig.projectHostnameBase,
+    };
+  }
+
   async authenticate(input: unknown): Promise<SessionRpcTarget> {
     const credentials = SessionCredentials.safeParse(input);
     if (!credentials.success)
-      throw codedError("INVALID_CREDENTIALS", "The operator RPC door requires the admin secret.");
+      throw codedError(
+        "INVALID_CREDENTIALS",
+        "authenticate({ type }): 'from-server-cookie' (browser) or 'admin-secret' (operator).",
+      );
+    if (credentials.data.type === "from-server-cookie") {
+      if (!this.#resolved)
+        throw codedError("UNAUTHENTICATED", "this transport carries no session — sign in first.");
+      return new SessionRpcTarget(this.#input, this.#sessionTeardown, this.#resolved);
+    }
     const admin = await verifyAdminSecret(
       credentials.data.secret,
       this.#input.appConfig.adminApiSecret,

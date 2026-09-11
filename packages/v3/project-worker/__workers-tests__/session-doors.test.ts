@@ -1,7 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, expect, test } from "vitest";
-import type { UnauthenticatedSession } from "../src/session.ts";
+import type { IterateRpcTarget } from "../src/session.ts";
 import { signProjectToken, rotateProjectApiKey } from "../src/principal.ts";
 import type { Env } from "../src/control-plane.ts";
 import { applyDirectorySchema, SRC_ECHO_APP } from "./support.ts";
@@ -20,7 +20,7 @@ async function api() {
     headers: { Upgrade: "websocket" },
   });
   response.webSocket!.accept();
-  const root = newWebSocketRpcSession<UnauthenticatedSession>(
+  const root = newWebSocketRpcSession<IterateRpcTarget>(
     response.webSocket! as unknown as WebSocket,
   );
   sessions.push(root);
@@ -124,10 +124,12 @@ test("legacy project credentials never authenticate public resources or the oper
     ])
       expect((await call(url, { headers: { Authorization: `Bearer ${value}` } })).status).toBe(401);
   }
-  await expect(gate.authenticate({ type: "project-token", token })).rejects.toThrow(/admin secret/);
+  await expect(gate.authenticate({ type: "project-token", token })).rejects.toThrow(
+    /from-server-cookie|admin-secret/,
+  );
   await expect(
     gate.authenticate({ type: "project-secret", project: "retired-credentials", secret: key }),
-  ).rejects.toThrow(/admin secret/);
+  ).rejects.toThrow(/from-server-cookie|admin-secret/);
   const legacy = await call(
     `https://echo--retired-credentials.projects.test/.itx/session?token=${encodeURIComponent(token)}`,
   );

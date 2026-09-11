@@ -6,7 +6,7 @@
 
 import { newWebSocketRpcSession } from "capnweb";
 import { WebSocket as UndiciWebSocket } from "undici";
-import type { SessionRpcTarget, SessionCredentials } from "../../src/session.ts";
+import type { IterateRpcTarget, SessionCredentials } from "../../src/session.ts";
 
 const baseUrl = (): string => {
   const u = process.env.WORKER_BASE_URL;
@@ -24,7 +24,9 @@ const adminApiSecret = (): string => {
 /** THE lane's credentials (src/session.ts `SessionCredentials`): the admin secret — every project,
  *  `{ actor: "admin" }`; with `as`, that user's session (the projects of their orgs) — what a
  *  membership row authenticates with. */
-export const adminCredentials = (as?: { email: string }): SessionCredentials => ({
+export const adminCredentials = (
+  as?: { email: string },
+): Extract<SessionCredentials, { type: "admin-secret" }> => ({
   type: "admin-secret",
   secret: adminApiSecret(),
   ...(as && { as }),
@@ -47,7 +49,7 @@ const wsApi = (): string => {
 const openSessions: any[] = [];
 const openSockets: WebSocket[] = [];
 
-/** A raw capnweb session — an `UnauthenticatedSession` stub: `authenticate(adminCredentials())
+/** A raw capnweb session — an `IterateRpcTarget` stub: `authenticate(adminCredentials())
  *  .projects.get(ctx)` is the itx. For flows that need the session itself (its identity, its
  *  `[Symbol.dispose]`). */
 export function session(): any {
@@ -61,10 +63,10 @@ export function publicSession(token: string) {
   const url = new URL(workerUrl("/api"));
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const ws = new UndiciWebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
-  const api = newWebSocketRpcSession<SessionRpcTarget>(ws as unknown as WebSocket);
-  openSessions.push(api);
+  const transport = newWebSocketRpcSession<IterateRpcTarget>(ws as unknown as WebSocket);
+  openSessions.push(transport);
   openSockets.push(ws as unknown as WebSocket);
-  return api;
+  return transport.authenticate({ type: "from-server-cookie" });
 }
 
 /** A capnweb session whose underlying WebSocket WE hold — so a test can sever the transport

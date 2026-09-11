@@ -7,7 +7,7 @@ export type {
   ProjectIdOrSlug,
   SessionCredentials,
   SessionPrincipal,
-  UnauthenticatedSession,
+  IterateRpcTarget,
   SessionRpcTarget,
 } from "./session.ts";
 export type { Principal, ProjectTokenClaims } from "./principal.ts";

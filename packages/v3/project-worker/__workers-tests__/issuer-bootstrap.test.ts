@@ -2,7 +2,7 @@ import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import type { Env } from "../src/control-plane.ts";
-import type { SessionRpcTarget } from "../src/session.ts";
+import type { IterateRpcTarget } from "../src/session.ts";
 import { directory } from "../src/directory.ts";
 import { appSession } from "../src/client/app-auth.ts";
 import { startIssuerSession } from "../src/issuer-session.ts";
@@ -29,9 +29,11 @@ async function connect(headers: Record<string, string>) {
   });
   expect(response.status, response.status === 101 ? "" : await response.text()).toBe(101);
   response.webSocket!.accept();
-  const api = newWebSocketRpcSession<SessionRpcTarget>(response.webSocket! as unknown as WebSocket);
-  sessions.push(api);
-  return api;
+  const transport = newWebSocketRpcSession<IterateRpcTarget>(
+    response.webSocket! as unknown as WebSocket,
+  );
+  sessions.push(transport);
+  return transport.authenticate({ type: "from-server-cookie" });
 }
 
 test("first consent creates organization and project through the ordinary session, then grants only the chosen project", async () => {

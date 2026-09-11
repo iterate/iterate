@@ -2,7 +2,7 @@ import { env, SELF } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { signIn, type Env } from "../src/control-plane.ts";
-import type { SessionRpcTarget, UnauthenticatedSession } from "../src/session.ts";
+import type { IterateRpcTarget } from "../src/session.ts";
 import { directory } from "../src/directory.ts";
 import { applyDirectorySchema, SRC_ECHO_APP } from "./support.ts";
 
@@ -21,7 +21,7 @@ async function operator(email?: string) {
   });
   expect(response.status).toBe(101);
   response.webSocket!.accept();
-  const root = newWebSocketRpcSession<UnauthenticatedSession>(
+  const root = newWebSocketRpcSession<IterateRpcTarget>(
     response.webSocket! as unknown as WebSocket,
   );
   sessions.push(root);
@@ -121,10 +121,12 @@ test("operator RPC accepts only its administrator credential; issuer login uses 
     headers: { Upgrade: "websocket", cookie },
   });
   response.webSocket!.accept();
-  using api = newWebSocketRpcSession<UnauthenticatedSession>(
+  using api = newWebSocketRpcSession<IterateRpcTarget>(
     response.webSocket! as unknown as WebSocket,
   );
-  await expect(api.authenticate({ type: "from-server-cookie" })).rejects.toThrow(/admin secret/);
+  await expect(api.authenticate({ type: "from-server-cookie" })).rejects.toThrow(
+    /no session|sign in/,
+  );
   await expect(api.authenticate({ type: "admin-secret", secret: "wrong" })).rejects.toThrow(
     /did not match/,
   );
@@ -169,7 +171,10 @@ test("unverified email login requires test mode and creates an ordinary user ses
   });
   expect(response.status).toBe(101);
   response.webSocket!.accept();
-  using api = newWebSocketRpcSession<SessionRpcTarget>(response.webSocket! as unknown as WebSocket);
+  using apiTransport = newWebSocketRpcSession<IterateRpcTarget>(
+    response.webSocket! as unknown as WebSocket,
+  );
+  const api = apiTransport.authenticate({ type: "from-server-cookie" });
   expect(await api.whoami()).toMatchObject({
     actor: expect.stringMatching(/^user_/),
     email: "test-login@directory.test",

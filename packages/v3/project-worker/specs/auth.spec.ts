@@ -8,7 +8,7 @@ import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- Bounded fixture setup; browser actions use the app's real WebSocket.
 import { newHttpBatchRpcSession } from "capnweb";
 import { transformSync } from "esbuild";
-import type { SessionRpcTarget, UnauthenticatedSession } from "../src/session.ts";
+import type { IterateRpcTarget } from "../src/session.ts";
 import { authorizationCodeRequest } from "../src/client/oauth.ts";
 
 const claudeClient = "https://claude.ai/oauth/claude-code-client-metadata";
@@ -224,8 +224,8 @@ test("first Claude consent creates the organization and project in the SPA befor
     // The issuer grant and the Claude grant are the only two sessions created.
     const headers = await cookieHeaders(context, origin);
     // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory assertion after the UI flow.
-    using api = newHttpBatchRpcSession<SessionRpcTarget>(new Request(`${origin}/api`, { headers }));
-    const inventory = await api.grants.list();
+    using api = newHttpBatchRpcSession<IterateRpcTarget>(new Request(`${origin}/api`, { headers }));
+    const inventory = await api.authenticate({ type: "from-server-cookie" }).grants.list();
     expect(inventory.items).toHaveLength(2);
     expect(inventory.items.filter((item) => item.current)).toHaveLength(1);
     expect(errors).toEqual([]);
@@ -265,7 +265,7 @@ test("the same Notes app and dashboard work on their own origin and through a pr
   ).code;
   // Install the repository's actual config-worker source, preserving its auth.require gate.
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- One operator fixture installs the proxy; all app interactions are real browser RPC.
-  using operator = newHttpBatchRpcSession<UnauthenticatedSession>(`${origin}/internal/rpc`);
+  using operator = newHttpBatchRpcSession<IterateRpcTarget>(`${origin}/internal/rpc`);
   await operator
     .authenticate({ type: "admin-secret", secret: adminSecret(origin) })
     .projects.get(project)
