@@ -8,9 +8,9 @@
 // passes; when enforcement lands the assertion passes, the expected-fail turns into a real failure,
 // and whoever wired the fix deletes the `.fails`. See docs/control-plane-context-resolved-design.md.
 import { beforeAll, describe, expect, test } from "vitest";
-import { adminCredentials, applyDirectorySchema, openSession, until } from "./support.ts";
 import { AccountProcessor, tokenCreateRequestedEvent } from "../src/account/contract.ts";
 import { ACCOUNT_PROCESSOR_SOURCE } from "../src/generated/account-processor-source.ts";
+import { adminCredentials, applyDirectorySchema, openSession, until } from "./support.ts";
 
 beforeAll(applyDirectorySchema);
 
@@ -20,8 +20,6 @@ async function userSession(email: string): Promise<any> {
   const root = await openSession();
   return root.authenticate({ ...adminCredentials(), as: { email } });
 }
-
-const freshProject = (prefix: string) => `prj_${prefix}_${Date.now().toString(36)}`;
 
 /** Assert `thunk` is REFUSED. While the code is insecure it resolves, so this throws and the
  *  enclosing `test.fails` passes; once enforcement lands it rejects, the assertion passes, and the
@@ -72,7 +70,7 @@ describe("shape — a global context is an ordinary context (passing)", () => {
 
   test("a project context CANNOT reach the global namespace — cd keeps the projectId (construction)", async () => {
     const s = await userSession("proj-iso@sec.test");
-    using proj = await s.projects.create({ project: freshProject("iso") });
+    using proj = await s.projects.create({ project: `prj_iso_${Date.now().toString(36)}` });
     const who = (await proj.cd("/users/someone-else").whoami()) as { projectId: string };
     // The hop stays in the project's own namespace; it can never spell `global`.
     expect(who.projectId).not.toBe("global");
