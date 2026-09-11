@@ -68,9 +68,6 @@ patchedDependencies:
   '@codemirror/merge@6.12.2':
     hash: abd7a6151128bd71ee4e3b13e0acbcd8498e4c290990a300ad25687983b7d407
     path: patches/@codemirror__merge@6.12.2.patch
-  '@iterate-com/capnweb@0.10.0':
-    hash: 30c2496c4fe14a9a855b80bfbda2a1d3fc881c4b1f92873fcf5d16baa258d09e
-    path: patches/@iterate-com__capnweb@0.10.0.patch
   '@journeyapps/wa-sqlite@1.7.0':
     hash: 628f45a8b65f5811216d637fb5cc4584db8f69a125d1ae417c4e49bc38ebca83
     path: patches/@journeyapps__wa-sqlite@1.7.0.patch
@@ -425,7 +422,7 @@ importers:
         version: 6.0.2(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.0)(@babel/plugin-transform-runtime@7.29.7(@babel/core@7.29.0))(@babel/runtime@7.28.6)(rolldown@1.1.0)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(babel-plugin-react-compiler@1.0.0)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       capnweb:
         specifier: npm:@iterate-com/capnweb@0.10.0
-        version: '@iterate-com/capnweb@0.10.0(patch_hash=30c2496c4fe14a9a855b80bfbda2a1d3fc881c4b1f92873fcf5d16baa258d09e)'
+        version: '@iterate-com/capnweb@0.10.0'
       iterate:
         specifier: workspace:*
         version: link:../../packages/iterate
@@ -640,7 +637,7 @@ importers:
         version: 5.101.2(react@19.1.0)
       capnweb:
         specifier: npm:@iterate-com/capnweb@0.10.0
-        version: '@iterate-com/capnweb@0.10.0(patch_hash=30c2496c4fe14a9a855b80bfbda2a1d3fc881c4b1f92873fcf5d16baa258d09e)'
+        version: '@iterate-com/capnweb@0.10.0'
       codemirror:
         specifier: ^6.0.2
         version: 6.0.2
@@ -942,7 +939,7 @@ importers:
         version: 0.11.0(@babel/core@7.29.0)(@babel/plugin-transform-runtime@7.29.7(@babel/core@7.29.0))(@babel/runtime@7.28.6)(@cloudflare/codemode@0.3.4(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)))(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)))(zod@4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)))(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)))(react@19.2.7)(rolldown@1.1.0)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(zod@4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5))
       capnweb:
         specifier: npm:@iterate-com/capnweb@0.10.0
-        version: '@iterate-com/capnweb@0.10.0(patch_hash=30c2496c4fe14a9a855b80bfbda2a1d3fc881c4b1f92873fcf5d16baa258d09e)'
+        version: '@iterate-com/capnweb@0.10.0'
       captun:
         specifier: https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz
         version: https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0)
@@ -1247,7 +1244,7 @@ importers:
         version: 3.14.5(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       capnweb:
         specifier: npm:@iterate-com/capnweb@0.10.0
-        version: '@iterate-com/capnweb@0.10.0(patch_hash=30c2496c4fe14a9a855b80bfbda2a1d3fc881c4b1f92873fcf5d16baa258d09e)'
+        version: '@iterate-com/capnweb@0.10.0'
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -1314,7 +1311,7 @@ importers:
         version: 1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0))
       capnweb:
         specifier: npm:@iterate-com/capnweb@0.10.0
-        version: '@iterate-com/capnweb@0.10.0(patch_hash=30c2496c4fe14a9a855b80bfbda2a1d3fc881c4b1f92873fcf5d16baa258d09e)'
+        version: '@iterate-com/capnweb@0.10.0'
       iterate:
         specifier: workspace:*
         version: link:../../packages/iterate
@@ -1406,7 +1403,7 @@ importers:
         version: 1.1.0
       '@iterate-com/capnweb':
         specifier: ^0.10.0
-        version: 0.10.0(patch_hash=30c2496c4fe14a9a855b80bfbda2a1d3fc881c4b1f92873fcf5d16baa258d09e)
+        version: 0.10.0
       '@orpc/client':
         specifier: 1.13.14
         version: 1.13.14(@opentelemetry/api@1.9.0)
@@ -1799,7 +1796,7 @@ importers:
         version: 1.5.1
       capnweb:
         specifier: npm:@iterate-com/capnweb@0.10.0
-        version: '@iterate-com/capnweb@0.10.0(patch_hash=30c2496c4fe14a9a855b80bfbda2a1d3fc881c4b1f92873fcf5d16baa258d09e)'
+        version: '@iterate-com/capnweb@0.10.0'
       iterate:
         specifier: workspace:*
         version: link:../iterate
@@ -15181,7 +15178,7 @@ snapshots:
     dependencies:
       '@cloudflare/containers': 0.3.7
       aws4fetch: 1.0.20
-      capnweb: '@iterate-com/capnweb@0.10.0(patch_hash=30c2496c4fe14a9a855b80bfbda2a1d3fc881c4b1f92873fcf5d16baa258d09e)'
+      capnweb: '@iterate-com/capnweb@0.10.0'
       hono: 4.12.27
 
   '@cloudflare/shell@0.3.6(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)))(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)))(zod@4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5))':
@@ -16904,7 +16901,7 @@ snapshots:
 
   '@istanbuljs/schema@0.1.6': {}
 
-  '@iterate-com/capnweb@0.10.0(patch_hash=30c2496c4fe14a9a855b80bfbda2a1d3fc881c4b1f92873fcf5d16baa258d09e)': {}
+  '@iterate-com/capnweb@0.10.0': {}
 
   '@jest/create-cache-key-function@29.7.0':
     dependencies:
@@ -22297,7 +22294,7 @@ snapshots:
     dependencies:
       '@inquirer/prompts': 8.4.3(@types/node@25.6.0)
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      capnweb: '@iterate-com/capnweb@0.10.0(patch_hash=30c2496c4fe14a9a855b80bfbda2a1d3fc881c4b1f92873fcf5d16baa258d09e)'
+      capnweb: '@iterate-com/capnweb@0.10.0'
       trpc-cli: 0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5))
       zod: 4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)
     optionalDependencies:
@@ -22317,7 +22314,7 @@ snapshots:
     dependencies:
       '@inquirer/prompts': 8.4.3(@types/node@26.1.1)
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      capnweb: '@iterate-com/capnweb@0.10.0(patch_hash=30c2496c4fe14a9a855b80bfbda2a1d3fc881c4b1f92873fcf5d16baa258d09e)'
+      capnweb: '@iterate-com/capnweb@0.10.0'
       trpc-cli: 0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5))
       zod: 4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)
     optionalDependencies:
