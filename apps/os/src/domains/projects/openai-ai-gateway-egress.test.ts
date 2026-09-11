@@ -43,7 +43,7 @@ test("the shared company route streams in its caller and replaces forged billing
     config: {
       environmentName: "preview_9",
       openAiApiKey: { exposeSecret: () => "sk-company" },
-      cloudflareAiGateway: { id: "default", includeEventOffset: true },
+      cloudflareAiGateway: { id: "default" },
       cloudflare: { accountId: "account" },
     } as any,
     ai: {

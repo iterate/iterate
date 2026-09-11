@@ -570,9 +570,9 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
                   responseCacheTtlSeconds: gateway.responseCacheTtlSeconds,
                 },
           metadata: aiGatewayMetadata({
-            identity: { projectId, environment: config.environmentName },
+            projectId,
+            environment: config.environmentName,
             context: { kind: "agent-turn", streamPath: path, eventOffset },
-            includeEventOffset: gateway.includeEventOffset,
           }),
         };
       },

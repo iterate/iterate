@@ -61,9 +61,9 @@ export async function routeOpenAiViaGateway(input: {
       openaiApiKey: config.openAiApiKey.exposeSecret(),
     },
     metadata: aiGatewayMetadata({
-      identity: { projectId: input.projectId, environment: config.environmentName },
+      projectId: input.projectId,
+      environment: config.environmentName,
       context: streamContext,
-      includeEventOffset: config.cloudflareAiGateway.includeEventOffset,
     }),
     endpoint,
     body,

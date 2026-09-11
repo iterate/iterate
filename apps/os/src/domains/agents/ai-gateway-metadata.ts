@@ -2,25 +2,15 @@ import { z } from "zod";
 import { StreamContext } from "../projects/stream-context.ts";
 
 const AiGatewayMetadataInput = z.object({
-  identity: z.object({
-    environment: z.string().min(1),
-    projectId: z.string().min(1),
-  }),
-  context: z.union([
-    StreamContext,
-    z.object({
-      kind: z.literal("agent-turn"),
-      streamPath: z.string().startsWith("/"),
-      eventOffset: z.number().int().nonnegative(),
-    }),
-  ]),
-  includeEventOffset: z.boolean(),
+  environment: z.string().min(1),
+  projectId: z.string().min(1),
+  context: StreamContext,
 });
 export type AiGatewayMetadataInput = z.infer<typeof AiGatewayMetadataInput>;
 
 /** Host identity only. JSON encoding omits absent context; zero remains a valid offset. */
 export function aiGatewayMetadata(input: AiGatewayMetadataInput) {
-  const { identity, context, includeEventOffset } = AiGatewayMetadataInput.parse(input);
+  const { environment, projectId, context } = AiGatewayMetadataInput.parse(input);
   let streamPath: string | undefined;
   let eventOffset: number | undefined;
   switch (context.kind) {
@@ -39,9 +29,10 @@ export function aiGatewayMetadata(input: AiGatewayMetadataInput) {
       break;
   }
   return {
-    ...identity,
+    environment,
+    projectId,
     streamPath,
-    eventOffset: includeEventOffset ? eventOffset : undefined,
+    eventOffset,
   } satisfies Record<string, string | number | null | undefined>; // ai gateway metadata doesn't allow nested objects
 }
 
