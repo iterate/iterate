@@ -399,7 +399,10 @@ type ProcessorFacetStub = {
   getRuntimeState(args?: { name?: string }): Promise<ProcessorRuntimeState>;
   waitUntilProcessed(args: { offset: number; timeoutMs?: number; name?: string }): Promise<void>;
   liveState(): Promise<LiveStateRpc<Record<string, unknown>>>;
-  readLiveState(cursor?: LiveStateCursor): Promise<LiveStateRead<Record<string, unknown>>>;
+  readLiveState(args: {
+    streamId: string;
+    cursor?: LiveStateCursor;
+  }): Promise<LiveStateRead<Record<string, unknown>>>;
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   provideCapability(
     input: CapabilityProvidedPayload,
@@ -1093,17 +1096,26 @@ export class StreamDurableObject extends DurableObject<Env> {
       let cursor: LiveStateCursor | undefined;
       let chain: Promise<void> = Promise.resolve();
       const pull = async () => {
-        const { epoch, update } = await this.#callProcessorFacet(name, (facet) =>
-          facet.readLiveState(cursor),
-        );
-        if (!update) return;
-        if (epoch !== cursor?.epoch && update.type !== "snapshot") {
-          throw new Error("Facet live-state incarnation changed without a snapshot");
+        const streamId = this.#coreProcessorState.streamId;
+        if (streamId === undefined) {
+          throw new Error("stream identity is unavailable after stream creation");
         }
-        mirror.apply(update, () => {
-          throw new Error("Facet live-state revision gap");
-        });
-        cursor = { epoch, revision: update.type === "snapshot" ? update.revision : update.to };
+        const read = await this.#callProcessorFacet(name, (facet) =>
+          facet.readLiveState({ streamId, cursor }),
+        );
+        try {
+          const { epoch, update } = read;
+          if (!update) return;
+          if (epoch !== cursor?.epoch && update.type !== "snapshot") {
+            throw new Error("Facet live-state incarnation changed without a snapshot");
+          }
+          mirror.apply(update, () => {
+            throw new Error("Facet live-state revision gap");
+          });
+          cursor = { epoch, revision: update.type === "snapshot" ? update.revision : update.to };
+        } finally {
+          disposeAcknowledgedRpcResult(read, "facet-live-state");
+        }
       };
       const tag = liveStatePagerLaneTag(name);
       lane = new LiveStatePagers({
