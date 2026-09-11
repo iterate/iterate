@@ -4777,3 +4777,23 @@ tutorial's chapter 0), and kernel-vs-library namespacing (an open question in ch
   advertised and registers a client (201 + client_id). Deployed **e82d8c34**: the AS metadata carries
   `registration_endpoint: https://os.iterate2.com/oauth/register`, and a live DCR POST returns 201 with
   a client_id — the MCP Inspector connects.
+
+## 2026-09-11 — MCP: a single run(project?, script) tool, and DCR on prd
+
+- JONAS: enable DCR on the deployed server (the MCP Inspector requires it), and "make sure there is a
+  single run script tool on the MCP servers … run(project, script) or … run(script) if only one project."
+- DCR: `clientRegistrationEndpoint` was gated to a local http issuer; now always set, and `api.ts` no
+  longer 404s `/oauth/register` on https — CIMD stays the console's own path, DCR is published beside it
+  for standard MCP clients (Inspector, Claude). Live AS metadata carries `registration_endpoint`; a
+  DCR POST returns 201. (An Inspector that had cached the old no-DCR discovery needed its state cleared.)
+- THE ONE MCP TOOL: `whoami` and `list_projects` and `itx.invoke` are gone; `/mcp` exposes only
+  `run({ project?, script, args? })` — the text of `async (itx, ...args) => …` run through `itx.run`
+  in the project's root context under the bearer's principal. `project` is optional when the token
+  reaches exactly one project (`run(script)`), required for the admin secret, refused outside the grant.
+  Whatever the two dropped tools returned is a one-line script now (`run("async (itx) => itx.whoami()")`).
+  The workers/e2e/browser tests that used the old tools prove reach and denial through `run` (worker
+  loader runs in the workers lane); docs are down to the one tool.
+- DEPLOYED **08bfab83** (DCR was **e82d8c34**): `tools/list` returns only `run`; a live `run` with
+  `{ project: "demo-playground", script: "async (itx) => itx.whoami()" }` returns
+  `{"projectId":"demo-playground","path":"/"}` — no error. GATES: tsc ×3 · oxlint · workers lane
+  oauth+issuer-bootstrap 12/12.
