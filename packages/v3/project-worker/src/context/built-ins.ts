@@ -291,9 +291,16 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   /** Secrets are the PROJECT's: the value's key is project-scoped, so the catalog lives in ONE log —
    *  the root context's. Each `secrets` verb runs `here` on the root context, and on a child context
    *  runs as the same call on the root, over the DO hop. */
-  const rootContext = path === "/" ? null : deps.context("/");
+  // A child context runs every secrets verb as the SAME call on the ROOT (secrets are the project's —
+  // one catalog, in the root's log). Acquire the root context PER CALL: a stub cached across calls
+  // stays broken after a root DO failure (Cloudflare's DO error-handling requires re-acquiring). And
+  // forward `deps.caller()` so the durable change event keeps the child call's authenticated principal.
   const onRootContext = <T>(call: ItxExpressionStep, here: () => Promise<T>): Promise<T> =>
-    rootContext ? (rootContext.invoke(["itx", "builtins", "secrets", call]) as Promise<T>) : here();
+    path === "/"
+      ? here()
+      : (deps
+          .context("/")
+          .invoke(["itx", "builtins", "secrets", call], [], deps.caller()) as Promise<T>);
 
   // A secret mutation is append-THEN-KV, two awaits; a concurrent set and delete of the SAME name
   // could commit the log in one order while their KV writes land in the other, leaving egress a value
