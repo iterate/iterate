@@ -101,8 +101,8 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |-
-          pnpm --dir apps/os ai-gateway-budgets --env preview_1 --apply true
-          pnpm --dir apps/os ai-gateway-budgets --env prd --apply true
+          pnpm --dir apps/os ai-gateway-budgets --account dev/preview --apply true
+          pnpm --dir apps/os ai-gateway-budgets --account prd --apply true
       # apps/os deploy forces a real AUTH RPC cache miss, revokes and re-lists
       # the live Worker secret, repeats the probes against that new version,
       # and only then removes the matching Doppler source.

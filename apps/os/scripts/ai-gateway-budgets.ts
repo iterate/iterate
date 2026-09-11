@@ -4,19 +4,23 @@ import type {
   AIGatewayGetResponse,
   AIGatewayUpdateParams,
 } from "cloudflare/resources/ai-gateway/ai-gateway";
-import { envs } from "../../../envs.ts";
+import { cloudflareAccounts } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 
 /** Account-level rules, reconciled after the main production deployment. */
 export default async function budgets(options: {
-  env: string;
+  account: "prd" | "dev/preview";
   /** Print the diff only unless this is explicitly enabled. */
   apply: boolean;
   /** Exact previously reviewed dashboard rule IDs to replace during adoption. */
   replaceRuleIds: string[];
 }) {
-  const ctx = await resolveEnvContext({ envs, dopplerProject: "os", env: options.env });
-  const production = ctx.env.cloudflareAccountId === envs.prd.cloudflareAccountId;
+  const ctx = await resolveEnvContext({
+    envs: cloudflareAccounts,
+    dopplerProject: cloudflareAccounts[options.account].dopplerProject,
+    env: options.account,
+  });
+  const production = options.account === "prd";
   const gatewayId = "default";
   const rules = production ? productionRules() : nonProductionRules();
   const path = `/ai-gateway/gateways/${gatewayId}`;
@@ -28,6 +32,8 @@ export default async function budgets(options: {
   console.log(
     JSON.stringify(
       {
+        account: options.account,
+        accountId: ctx.env.cloudflareAccountId,
         gatewayId,
         before,
         after,

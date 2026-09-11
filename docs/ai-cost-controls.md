@@ -44,10 +44,20 @@ production workflow reconciles both accounts after a successful deployment on a
 push to main. Preview branches and manually dispatched deployments do not write
 these shared rules.
 
+Account names come from `cloudflareAccounts` in `envs.ts`:
+
+| Account       | Cloudflare account ID              | Doppler credentials |
+| ------------- | ---------------------------------- | ------------------- |
+| `prd`         | `04b3b57291ef2626c6a8daa9d47065a7` | `_shared/prd`       |
+| `dev/preview` | `376ef7ed81b0573f93524de763666c15` | `_shared/preview`   |
+
+The resolver checks that Doppler's account ID matches this map. No preview slot
+is selected or deployed by this command.
+
 Inspect the proposed change before applying it:
 
 ```sh
-pnpm --dir apps/os ai-gateway-budgets --env prd --apply false
+pnpm --dir apps/os ai-gateway-budgets --account prd --apply false
 ```
 
 Use `--apply true` to write the reviewed configuration. Unknown existing rule IDs

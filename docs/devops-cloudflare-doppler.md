@@ -26,12 +26,17 @@ secrets). Generated configs are gitignored — envs.ts is what you review.
 
 ## Environment selection is explicit
 
-Every script takes `--env <name>` and looks the environment up in envs.ts.
+Deployment scripts take `--env <name>` and looks the environment up in envs.ts.
 In CI, `DOPPLER_CONFIG` (from the surrounding `doppler run`) is accepted as a
 fallback for `deploy` — env names and Doppler config names coincide — and
 every invocation asserts the Doppler-supplied `CLOUDFLARE_ACCOUNT_ID` matches
 the envs.ts entry, so a wrong-config wrap fails loudly. Destructive scripts
 (`erase-data`) accept only the explicit flag.
+
+Account-wide tools such as `ai-gateway-budgets` instead take `--account prd` or
+`--account dev/preview`. The `cloudflareAccounts` map in `envs.ts` associates those
+exact names with account IDs and their `_shared` Doppler credential sources.
+They reuse the same account-ID validation without selecting a preview slot.
 
 ## Core Doppler model
 
