@@ -1,3 +1,4 @@
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { describe, expect, it, vi } from "vitest";
 import {
   adaptMessagesForModel,
@@ -5,6 +6,53 @@ import {
   maskCloudflareAiGatewayResponseCacheEntropy,
   runWorkersAiAttempt,
 } from "./workers-ai-transport.ts";
+
+createFailing(it, /attempt should report its timeout/)(
+  "reports the AI attempt timeout while provider stream cleanup is still pending",
+  async () => {
+    vi.useFakeTimers();
+    const firstChunk = Promise.withResolvers<void>();
+    const cleanup = Promise.withResolvers<void>();
+    let cancelled = false;
+    let failure: unknown;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"response":"test"}\n\n'));
+      },
+      cancel() {
+        cancelled = true;
+        return cleanup.promise;
+      },
+    });
+    const attempt = runWorkersAiAttempt({
+      ai: {
+        run: async () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
+      },
+      model: "test-model",
+      messages: [],
+      deadlineMs: 50,
+      onChunk: async () => {
+        firstChunk.resolve();
+      },
+    }).catch((error) => {
+      failure = error;
+    });
+
+    try {
+      await firstChunk.promise;
+      await vi.advanceTimersByTimeAsync(50);
+      expect(cancelled).toBe(true);
+      // Cancellation was requested, but reporting the deadline must not wait
+      // for the provider's cleanup promise. This assertion currently fails.
+      const note = "AI attempt should report its timeout before provider cleanup finishes";
+      expect(failure, note).toMatchObject({ message: expect.stringContaining("timed out") });
+    } finally {
+      cleanup.resolve();
+      await attempt;
+      vi.useRealTimers();
+    }
+  },
+);
 
 it.each([
   { providerModel: "openai/gpt-4.1-nano", billing: "byok" as const },
