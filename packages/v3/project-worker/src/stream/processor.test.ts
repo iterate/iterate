@@ -1008,6 +1008,51 @@ test("metadata present on only one side is a DIFFERENT event", () => {
   ).toBe(false);
 });
 
+// ── contract payload validation ── a contract declares a zod payloadSchema per owned event; the
+// engine validates a consumed event's payload against it before the reducer folds it, so a malformed
+// payload for a KNOWN event is skipped instead of corrupting reduced state (and thus the exported view).
+describe("contract payload validation", () => {
+  const contract = defineProcessorContract({
+    slug: "guarded-payload",
+    version: "1",
+    description: "folds a validated payload; skips a malformed one",
+    stateSchema: z.object({ last: z.number().default(0) }),
+    events: {
+      "demo/set": { description: "set last to n", payloadSchema: z.object({ n: z.number() }) },
+    },
+    consumes: ["demo/set"],
+    emits: [],
+  });
+  class GuardedProcessor extends StreamProcessor<z.infer<typeof contract.stateSchema>> {
+    contract = contract;
+    reduce({ event }: ReduceArgs<z.infer<typeof contract.stateSchema>>) {
+      // A reducer TRUSTS the contract's payload shape — the engine's payload validation is what makes
+      // this safe; without it a malformed `n` would land in state and violate the exported schema.
+      if (event.type === "demo/set") return { last: (event.payload as { n: number }).n };
+      return undefined;
+    }
+  }
+
+  test("a valid payload folds; a malformed one is skipped, leaving reduced state schema-valid", async () => {
+    const mem = memoryStream();
+    const p = new ProcessorEngine(new GuardedProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
+    mem.engines.push(p);
+    mem.stream.append({ type: "demo/set", payload: { n: 5 } });
+    await settle();
+    expect((await p.snapshot()).state).toEqual({ last: 5 });
+
+    mem.stream.append({ type: "demo/set", payload: { n: "not-a-number" } }); // malformed: n is a string
+    await settle();
+    // Skipped — reduced state keeps the last valid value and still parses against its own schema.
+    const { state } = await p.snapshot();
+    expect(state).toEqual({ last: 5 });
+    expect(contract.stateSchema.safeParse(state).success).toBe(true);
+  });
+});
+
 // ── live state ── the holder's revision-chain contract, pinned at the unit level. The load-
 // bearing property: EVERY base move advances the rev, so any client that missed an emission sees a
 // chain gap (mismatching `from`) and re-seeds — the swallowed-diff branch must never let a later

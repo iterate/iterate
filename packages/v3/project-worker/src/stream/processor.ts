@@ -50,6 +50,12 @@ export type ProcessorContract<State = unknown> = {
   emits: readonly string[];
   /** The schema-initial state ("{} with every field defaulted" for zod contracts). */
   initialState: () => State;
+  /** The zod payload schema for a consumed event type (owned or a dep's), or undefined if the type
+   *  is unknown or the contract declares no `events` catalog. The engine validates a consumed event's
+   *  payload against it before reducing (a malformed payload for a KNOWN event is skipped, never
+   *  folded). Present on `defineProcessorContract` contracts; a hand-built core contract omits it and
+   *  reduces unvalidated. */
+  payloadSchemaFor?: (type: string) => z.ZodType | undefined;
 };
 
 /** The stream a processor reduces. `read` answers durable rows plus the proof: `scannedThroughOffset`
@@ -431,6 +437,24 @@ export class ProcessorEngine<State> {
    *  event (malformed, or one an OLDER version accepted) must never wedge the processor: on a version
    *  replay it would fail the catch-up before the new checkpoint is written, every incarnation. */
   #reduceOrKeep(event: StreamEvent, state: State): State {
+    // Validate the payload against the contract's declared schema BEFORE folding: a malformed payload
+    // for a KNOWN event (a literal append with the wrong shape) must never land in reduced state —
+    // that state is what the exported view schema promises, and a live client parses it. A payload-less
+    // event validates as `{}` (the same "empty defaults" convention the contract requires of its
+    // stateSchema). A contract with no `events` catalog (the kernel-generic processors) has no schema
+    // here and reduces unvalidated, as before.
+    const payloadSchema = this.#contract.payloadSchemaFor?.(event.type);
+    if (payloadSchema) {
+      const parsed = payloadSchema.safeParse(event.payload ?? {});
+      if (!parsed.success) {
+        reportIssue("processor.reduce.payload", parsed.error, {
+          slug: this.#contract.slug,
+          offset: event.offset,
+          type: event.type,
+        });
+        return state;
+      }
+    }
     try {
       return this.processor.reduce({ event, state }) ?? state;
     } catch (error) {
@@ -968,6 +992,7 @@ export function defineProcessorContract<
     events,
     processorDeps,
     initialState: () => contract.stateSchema.parse({}) as z.output<StateSchema>,
+    payloadSchemaFor: (type: string) => resolve(type)?.payloadSchema,
     buildEvent: ((event: { type: string; payload?: unknown }) => {
       const definition = resolve(event.type);
       if (!definition)
