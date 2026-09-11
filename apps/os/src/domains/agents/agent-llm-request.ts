@@ -10,7 +10,6 @@
 // decides WHEN a normal request runs and calls `run()`/`abortInFlight()`.
 
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
-import { aiGatewayMetadata } from "./ai-gateway-metadata.ts";
 import type { AgentLlmCompletion } from "./agent-processor-contract.ts";
 import { appendUnlessLostIdempotencyRace, stringifyError, type AgentHost } from "./agent-host.ts";
 import {
@@ -438,17 +437,16 @@ export class AgentLlmRequest {
     if (ai === undefined) {
       throw new Error("Agent processor has no AI binding configured.");
     }
-    if (!this.#host.deps.getAiGatewayMetadataInput)
-      throw new Error("Agent host has no AI Gateway metadata provider");
-    const metadataInput = await this.#host.deps.getAiGatewayMetadataInput(input.eventOffset);
+    if (!this.#host.deps.getAiGatewayOptions)
+      throw new Error("Agent host has no AI Gateway options provider");
+    const gateway = await this.#host.deps.getAiGatewayOptions(input.eventOffset);
     const completion = await raceAbort(
       input.signal,
       runWorkersAiAttempt({
-        metadata: aiGatewayMetadata(metadataInput),
+        ...gateway,
         agentPath: this.#host.path,
         consultInterceptor: this.#host.deps.consultAiInterceptor,
         ai,
-        transport: this.#host.deps.cloudflareAiGatewayTransport?.(),
         deadlineMs: input.deadlineMs,
         // This chat-completions transport is text-only: file attachments use
         // just-in-time signed hint URLs, not OpenAI Files or provider file IDs.

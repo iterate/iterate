@@ -39,7 +39,7 @@ import { parseConfig } from "../config.ts";
 import { workerVersion, type Env } from "../env.ts";
 import { itxForScope, StreamRpcTarget } from "../rpc-targets.ts";
 import { readProjectById } from "../project-directory.ts";
-import { createAiGatewayIdentityReader } from "./agents/ai-gateway-metadata.ts";
+import { aiGatewayMetadata, createAiGatewayIdentityReader } from "./agents/ai-gateway-metadata.ts";
 import { facetProcessorFamilyForPath } from "./processor-facet-families.ts";
 import { projectStub } from "./projects/egress.ts";
 import type { CapabilityDescription } from "./itx/describe.ts";
@@ -550,11 +550,6 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       path,
       projectId,
       ai: this.env.AI,
-      getAiGatewayMetadataInput: async (eventOffset: number) => ({
-        identity: await readGatewayIdentity(),
-        context: { kind: "agent-turn" as const, streamPath: path, eventOffset },
-        includeEventOffset: parseConfig(this.env).cloudflareAiGateway.includeEventOffset,
-      }),
       // intercepted/* model turns are served by the project's live AI interceptor
       // (itx.ai.intercept); the slot lives on the Project DO so both egress
       // paths share one handler, and this hop only happens for intercepted/* models.
@@ -565,16 +560,25 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       // The OpenAI prompt_cache_key is per agent stream: repeated turns
       // grow a shared prefix, and a stable key routes them to the same
       // provider-side prompt-cache shard.
-      cloudflareAiGatewayTransport: () => {
-        const gateway = parseConfig(this.env).cloudflareAiGateway;
-        if (gateway.transport === "unified")
-          return { kind: "unified" as const, gatewayId: gateway.id };
+      getAiGatewayOptions: async (eventOffset: number) => {
+        const config = parseConfig(this.env);
+        const gateway = config.cloudflareAiGateway;
         return {
-          kind: "byok" as const,
-          gatewayId: gateway.id,
-          openaiApiKey: parseConfig(this.env).openAiApiKey.exposeSecret(),
-          openaiPromptCacheKey: `${projectId}:${path}`,
-          responseCacheTtlSeconds: gateway.responseCacheTtlSeconds,
+          transport:
+            gateway.transport === "unified"
+              ? { kind: "unified" as const, gatewayId: gateway.id }
+              : {
+                  kind: "byok" as const,
+                  gatewayId: gateway.id,
+                  openaiApiKey: config.openAiApiKey.exposeSecret(),
+                  openaiPromptCacheKey: `${projectId}:${path}`,
+                  responseCacheTtlSeconds: gateway.responseCacheTtlSeconds,
+                },
+          metadata: aiGatewayMetadata({
+            identity: await readGatewayIdentity(),
+            context: { kind: "agent-turn", streamPath: path, eventOffset },
+            includeEventOffset: gateway.includeEventOffset,
+          }),
         };
       },
       resolveModelFileUrl: (file: AgentFileAttachment) =>

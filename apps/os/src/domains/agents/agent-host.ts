@@ -10,7 +10,6 @@ import { isIdempotencyConflict } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
 import type { ConfigRepoFileMentionTarget } from "@iterate-com/shared/message";
 import type { ProjectAiInterceptorInput } from "../../lib/model-interception.ts";
-import type { AiGatewayMetadataInput } from "./ai-gateway-metadata.ts";
 import type { AgentMentionReadResult } from "./agent-mention-materialization.ts";
 import type {
   AgentFileAttachment,
@@ -19,7 +18,7 @@ import type {
 } from "./agent-processor-contract.ts";
 import type {
   WorkersAiBinding,
-  CloudflareAiGatewayTransport,
+  AiGatewayOptions,
   WorkersAiMessage,
 } from "./workers-ai-transport.ts";
 
@@ -41,11 +40,10 @@ export type AgentLlmTransport = (args: {
  * - `ai` is the Workers AI binding (`env.AI`) used for every LLM turn.
  *   Optional so a host without one fails requests with a recorded error
  *   instead of crashing at construction.
- * - `cloudflareAiGatewayTransport` resolves how attempts travel through the
- *   gateway (unified billing vs the BYOK lane — see
- *   CloudflareAiGatewayTransport). A function, not a value: it reads
- *   deployment config and the host's secrets, and a bad config must fail the
- *   ATTEMPT (recorded, retried) rather than DO construction.
+ * - `getAiGatewayOptions` resolves transport and request metadata together.
+ *   The host owns deployment config, credentials, and attribution. Resolution
+ *   happens per attempt so failures are recorded and retried rather than
+ *   preventing DO construction.
  * - `resolveModelFileUrl` remints a short-lived, immutable URL for a project
  *   file immediately before a model request. Production hosts provide it;
  *   bare tests without it retain the stored reference URL.
@@ -69,8 +67,7 @@ export type AgentLlmTransport = (args: {
  */
 export type AgentProcessorDeps = {
   ai?: WorkersAiBinding;
-  cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
-  getAiGatewayMetadataInput?: (eventOffset: number) => Promise<AiGatewayMetadataInput>;
+  getAiGatewayOptions?: (eventOffset: number) => Promise<AiGatewayOptions>;
   consultAiInterceptor?: (input: ProjectAiInterceptorInput) => Promise<unknown>;
   resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
   readRepoFile?: (

@@ -56,6 +56,12 @@ export type CloudflareAiGatewayTransport =
       responseCacheTtlSeconds?: number;
     };
 
+/** Host-resolved routing and attribution for one AI attempt. */
+export type AiGatewayOptions = {
+  transport: CloudflareAiGatewayTransport;
+  metadata: AiGatewayMetadata;
+};
+
 /** One provider-facing chat message. `containsFiles` is transport metadata,
  * not provider input: it forces cache bypass when the text carries temporary
  * project-file capability URLs. */

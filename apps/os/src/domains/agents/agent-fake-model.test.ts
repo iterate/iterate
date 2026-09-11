@@ -153,10 +153,15 @@ test("Gateway 429 responses exhaust ordinary retries without introducing a budge
             throw new Error("Interception must not dial a provider");
           },
         },
-        getAiGatewayMetadataInput: async (eventOffset) => ({
-          identity: { environment: "test", projectId: "prj_test", projectSlug: "test" },
-          context: { kind: "agent-turn", streamPath: "/agents/test", eventOffset },
-          includeEventOffset: true,
+        getAiGatewayOptions: async (eventOffset) => ({
+          transport: { kind: "unified" },
+          metadata: {
+            environment: "test",
+            projectId: "prj_test",
+            projectSlug: "test",
+            streamPath: "/agents/test",
+            eventOffset,
+          },
         }),
         consultAiInterceptor: async () => {
           calls++;
@@ -237,19 +242,19 @@ function makeInterceptedModelHarness(
             throw new Error("An intercepted model must never dial");
           },
         },
-        cloudflareAiGatewayTransport: () => ({
-          kind: "byok",
-          gatewayId: "default",
-          openaiApiKey: "must-not-leak",
-        }),
-        getAiGatewayMetadataInput: async (eventOffset) => ({
-          identity: {
+        getAiGatewayOptions: async () => ({
+          transport: {
+            kind: "byok",
+            gatewayId: "default",
+            openaiApiKey: "must-not-leak",
+          },
+          metadata: {
             environment: "test",
             projectId: "prj_test",
             projectSlug: "test",
+            streamPath: "/agents/test",
+            eventOffset: undefined,
           },
-          context: { kind: "agent-turn", streamPath: "/agents/test", eventOffset },
-          includeEventOffset: false,
         }),
         ...(consultAiInterceptor === undefined
           ? {}
