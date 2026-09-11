@@ -1,9 +1,6 @@
 import { z } from "zod";
 import type { ProjectAiInterceptorInput } from "../../lib/model-interception.ts";
-import {
-  aiGatewayMetadata,
-  type createAiGatewayIdentityReader,
-} from "../agents/ai-gateway-metadata.ts";
+import { aiGatewayMetadata } from "../agents/ai-gateway-metadata.ts";
 import type { Env } from "../../env.ts";
 import type { AppConfig } from "../../config.ts";
 import { sendAiRequest, prepareOpenAiRequest } from "../agents/workers-ai-transport.ts";
@@ -33,7 +30,7 @@ export async function routeOpenAiViaGateway(input: {
   request: Request;
   config: AppConfig;
   ai: Env["AI"];
-  readIdentity: ReturnType<typeof createAiGatewayIdentityReader>;
+  projectId: string;
   streamContext: StreamContext;
   consultInterceptor: ((request: ProjectAiInterceptorInput) => Promise<unknown>) | undefined;
 }): Promise<Response | null> {
@@ -64,7 +61,7 @@ export async function routeOpenAiViaGateway(input: {
       openaiApiKey: config.openAiApiKey.exposeSecret(),
     },
     metadata: aiGatewayMetadata({
-      identity: await input.readIdentity(),
+      identity: { projectId: input.projectId, environment: config.environmentName },
       context: streamContext,
       includeEventOffset: config.cloudflareAiGateway.includeEventOffset,
     }),

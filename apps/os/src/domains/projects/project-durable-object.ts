@@ -1,7 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import type { StreamEvent } from "iterate/processors";
-import { createAiGatewayIdentityReader } from "../agents/ai-gateway-metadata.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
@@ -57,11 +56,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  readonly #readGatewayIdentity = createAiGatewayIdentityReader({
-    environment: () => parseConfig(this.env).environmentName,
-    projectId: this.#name.projectId!,
-    directory: this.env.PROJECT_DIRECTORY,
-  });
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
   // Last time #egressRules paid a facade snapshot — bounds rules staleness to ~5s.
   #egressRulesFreshAt = 0;
@@ -728,7 +722,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         request,
         config: parseConfig(this.env),
         ai: this.env.AI,
-        readIdentity: this.#readGatewayIdentity,
+        projectId: this.#name.projectId!,
         consultInterceptor: (request) => this.consultAiInterceptor(request),
         streamContext,
       });
@@ -737,11 +731,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
     }
 
     return withWebSocketHandshakeHeaders(request, await fetch(request));
-  }
-
-  /** Host-owned identity for AI Gateway metadata; only plain data crosses this RPC boundary. */
-  readAiGatewayIdentity() {
-    return this.#readGatewayIdentity();
   }
 
   interceptEgress(handler: ProjectEgressInterceptor): ProjectEgressIntercept {

@@ -158,7 +158,6 @@ test("Gateway 429 responses exhaust ordinary retries without introducing a budge
           metadata: {
             environment: "test",
             projectId: "prj_test",
-            projectSlug: "test",
             streamPath: "/agents/test",
             eventOffset,
           },
@@ -251,7 +250,6 @@ function makeInterceptedModelHarness(
           metadata: {
             environment: "test",
             projectId: "prj_test",
-            projectSlug: "test",
             streamPath: "/agents/test",
             eventOffset: undefined,
           },

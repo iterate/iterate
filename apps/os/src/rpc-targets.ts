@@ -3420,7 +3420,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
     const streamContext = this.props.streamContext;
     const config = parseConfig(env);
     const metadata = aiGatewayMetadata({
-      identity: await projectStub(env.PROJECT, this.props.projectId).readAiGatewayIdentity(),
+      identity: { projectId: this.props.projectId, environment: config.environmentName },
       context: streamContext,
       includeEventOffset: config.cloudflareAiGateway.includeEventOffset,
     });

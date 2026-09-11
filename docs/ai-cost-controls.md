@@ -2,7 +2,8 @@
 
 Company-funded agent calls, direct `itx.ai.run`, and supported OpenAI JSON egress
 go through the host-selected Cloudflare AI Gateway. Host-owned metadata identifies
-the environment, project ID, project slug, stream path and optional event offset.
+the environment, project ID, stream path and optional event offset. Project identity
+comes from local host data; attribution does not read the project directory.
 For agents, the offset identifies the individual LLM request; for compaction it
 identifies the triggering usage report. Script calls use the script-request offset.
 Caller-supplied gateway IDs and metadata cannot replace this host-owned metadata.

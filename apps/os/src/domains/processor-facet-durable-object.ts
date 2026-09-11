@@ -39,7 +39,7 @@ import { parseConfig } from "../config.ts";
 import { workerVersion, type Env } from "../env.ts";
 import { itxForScope, StreamRpcTarget } from "../rpc-targets.ts";
 import { readProjectById } from "../project-directory.ts";
-import { aiGatewayMetadata, createAiGatewayIdentityReader } from "./agents/ai-gateway-metadata.ts";
+import { aiGatewayMetadata } from "./agents/ai-gateway-metadata.ts";
 import { facetProcessorFamilyForPath } from "./processor-facet-families.ts";
 import { projectStub } from "./projects/egress.ts";
 import type { CapabilityDescription } from "./itx/describe.ts";
@@ -538,11 +538,6 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         projectId,
       }),
     );
-    const readGatewayIdentity = createAiGatewayIdentityReader({
-      environment: () => parseConfig(this.env).environmentName,
-      projectId,
-      directory: this.env.PROJECT_DIRECTORY,
-    });
     // Constructor args shared by the classic and headless agent processors —
     // one stream, one deps recipe, two compositions.
     const agentArgs = {
@@ -575,7 +570,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
                   responseCacheTtlSeconds: gateway.responseCacheTtlSeconds,
                 },
           metadata: aiGatewayMetadata({
-            identity: await readGatewayIdentity(),
+            identity: { projectId, environment: config.environmentName },
             context: { kind: "agent-turn", streamPath: path, eventOffset },
             includeEventOffset: gateway.includeEventOffset,
           }),

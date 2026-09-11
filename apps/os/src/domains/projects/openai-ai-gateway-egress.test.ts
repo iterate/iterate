@@ -41,6 +41,7 @@ test("the shared company route streams in its caller and replaces forged billing
       }),
     }),
     config: {
+      environmentName: "preview_9",
       openAiApiKey: { exposeSecret: () => "sk-company" },
       cloudflareAiGateway: { id: "default", includeEventOffset: true },
       cloudflare: { accountId: "account" },
@@ -66,11 +67,7 @@ test("the shared company route streams in its caller and replaces forged billing
       },
     } as any,
     consultInterceptor: undefined,
-    readIdentity: async () => ({
-      environment: "preview_9",
-      projectId: "prj_host",
-      projectSlug: "host",
-    }),
+    projectId: "prj_host",
     streamContext: {
       kind: "script-execution",
       streamPath: "/agents/a",
@@ -88,7 +85,6 @@ test("the shared company route streams in its caller and replaces forged billing
         "cf-aig-metadata": JSON.stringify({
           environment: "preview_9",
           projectId: "prj_host",
-          projectSlug: "host",
           streamPath: "/agents/a",
           eventOffset: 0,
         }),

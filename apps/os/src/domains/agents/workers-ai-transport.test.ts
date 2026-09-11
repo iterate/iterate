@@ -79,7 +79,6 @@ it.each([
           metadata: {
             environment: "preview_9",
             projectId: "prj_host",
-            projectSlug: "host",
             streamPath: "/agents/parity",
             eventOffset: 0,
           },
