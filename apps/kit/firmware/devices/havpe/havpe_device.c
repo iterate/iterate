@@ -245,13 +245,11 @@ static const struct iterate_kit_board board = {
   .speaker = {
     .context = NULL,
     /*
-     * 100 is 0 dB here — the loudest setting that neither clips a full-scale
-     * sample nor feeds the provider this device's own voice. The clamp lives
-     * in the table: full 0, floor -126 half-dB steps.
+     * 100 is 0 dB: full-scale input does not clip the DAC gain stage.
+     * The table clamps gain between 0 and -126 half-dB steps.
      */
     .ceiling = 100,
   },
-  /* XMOS cancellation makes a continuously open microphone safe. */
   },
   .i2c = {.sda = 5, .scl = 6, .hz = 400000},
   .boot = boot, .boot_count = sizeof(boot) / sizeof(boot[0]),

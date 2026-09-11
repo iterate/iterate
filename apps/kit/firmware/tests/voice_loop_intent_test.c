@@ -59,6 +59,7 @@ static const struct iterate_kit_audio_codec_properties codec_properties = {
 static size_t capture_frames_pending;
 static int16_t capture_frame_value = 1000;
 static void (*capture_read_hook)(void);
+static void (*board_poll_hook)(void);
 
 static enum iterate_kit_status codec_read(
     void *context,
@@ -127,6 +128,11 @@ static void board_present(
 static void board_poll(void *context, struct iterate_kit_voice_intent *out) {
   const struct board *board = context;
   out->microphone_muted = board->microphone_muted;
+  if (board_poll_hook != NULL) {
+    void (*hook)(void) = board_poll_hook;
+    board_poll_hook = NULL;
+    hook();
+  }
 }
 
 /*
@@ -227,6 +233,10 @@ static void remote_call(const char *first, const char *second) {
 /* Model a wake/control edge arriving while codec read has not returned. */
 static void activate_during_codec_read(void) {
   remote_call("conversation", "start");
+}
+
+static void fill_outbox_during_board_poll(void) {
+  iterate_kit_fake_platform_fill_control_outbox();
 }
 
 /** Back to idle, and prove it, so the next scenario starts from nothing. */
@@ -534,6 +544,57 @@ static void same_pass_end_then_start_creates_a_new_activation(void) {
   quiescent();
 }
 
+/* An accepted A may end and restart B before A's terminal leaves the outbox. */
+static void accepted_call_end_then_start_creates_b_after_a_terminal(void) {
+  char activation_a[65];
+  size_t before;
+  quiescent();
+  before = iterate_kit_fake_platform_sent_count();
+  remote_call("conversation", "start");
+  step();
+  pump();
+  speak_frames(1U);
+  run_ms(50U);
+  (void)snprintf(activation_a, sizeof(activation_a), "%s", current_activation());
+  deliver_accepted_latest();
+  step();
+
+  remote_call("conversation", "end");
+  remote_call("conversation", "start");
+  step();
+  assert(board.last_view.wants_call);
+  speak_frames(1U);
+  run_ms(50U);
+  assert(strcmp(current_activation(), activation_a) != 0);
+  assert(sent_after_contains(before, "conversation-ended"));
+  assert(sent_after_contains(before, "\"pcm\":"));
+  quiescent();
+}
+
+/* A terminal waits for control-outbox capacity instead of killing the session. */
+static void terminal_waits_for_outbox_headroom(void) {
+  size_t before;
+  quiescent();
+  before = iterate_kit_fake_platform_sent_count();
+  remote_call("conversation", "start");
+  step();
+  pump();
+  speak_frames(1U);
+  run_ms(50U);
+  assert(sent_after_contains(before, "\"pcm\":"));
+
+  remote_call("conversation", "end");
+  board_poll_hook = fill_outbox_during_board_poll;
+  step();
+  assert(!sent_after_contains(before, "conversation-ended"));
+
+  iterate_kit_fake_platform_drain_control_outbox();
+  step();
+  assert(sent_after_contains(before, "conversation-ended"));
+  assert(!iterate_kit_fake_esp_idf_restart_requested());
+  quiescent();
+}
+
 /* A capability start cannot override an already asserted physical mute. */
 static void muted_remote_start_does_not_open_capture(void) {
   const size_t before = iterate_kit_fake_platform_sent_count();
@@ -775,6 +836,8 @@ int main(void) {
 
   pre_mount_speech_is_preserved_and_sent_immediately();
   same_pass_end_then_start_creates_a_new_activation();
+  accepted_call_end_then_start_creates_b_after_a_terminal();
+  terminal_waits_for_outbox_headroom();
   muted_remote_start_does_not_open_capture();
 
   ending_a_never_sends_its_tail_as_b();

@@ -65,6 +65,10 @@ const char *iterate_kit_fake_platform_sent(size_t index);
 const char *iterate_kit_fake_platform_find_sent(const char *needle);
 /** Make the next transport write fail before it accepts any bytes. */
 void iterate_kit_fake_platform_fail_next_send(void);
+/** Occupy every control-outbox slot until the next transport poll drains it. */
+void iterate_kit_fake_platform_fill_control_outbox(void);
+/** Drain the synthetic control backlog so the app may append again. */
+void iterate_kit_fake_platform_drain_control_outbox(void);
 
 /** Restarts the loop asked the transport for. */
 size_t iterate_kit_fake_platform_restarts_requested(void);

@@ -171,7 +171,7 @@ static void normalized_gestures_use_the_shared_grammar(void) {
   struct iterate_kit_session session = {0};
   struct iterate_kit_session_actions actions;
 
-  /* M5's physical side tap and injected tap both become a wake. */
+  /* Physical and injected presses share the same start action. */
   iterate_kit_board_apply_gestures(
       &session, &(struct iterate_kit_board_gestures){.pressed = true},
       &idle, &actions);
@@ -184,19 +184,7 @@ static void normalized_gestures_use_the_shared_grammar(void) {
       &actions);
   assert(actions.end_call);
 
-  /* HAVPE is fixed open-mic: a tap opens the call. */
-  session = (struct iterate_kit_session){0};
-  iterate_kit_board_apply_gestures(
-      &session, &(struct iterate_kit_board_gestures){.pressed = true},
-      &idle, &actions);
-  assert(actions.start_call && actions.wake_chime);
 
-  /* StackChan's side tap has the provider-VAD open-mic meaning. */
-  session = (struct iterate_kit_session){0};
-  iterate_kit_board_apply_gestures(
-      &session, &(struct iterate_kit_board_gestures){.pressed = true},
-      &idle, &actions);
-  assert(actions.start_call && actions.wake_chime);
 }
 
 static void down_edge_wakes_before_release(void) {

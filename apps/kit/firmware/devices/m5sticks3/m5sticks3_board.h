@@ -25,12 +25,12 @@ bool m5sticks3_board_init(void);
 /** Poll M5Unified's buttons; call from the app loop. */
 void m5sticks3_board_poll(void);
 
-/** One latched press of the side button (consumed on read). */
-bool m5sticks3_board_take_side_press(void);
+/** One latched, debounced press of either physical call button. */
+bool m5sticks3_board_take_call_press(void);
 
-/** Inject a side-button press into the same pending latch the poller fills
- * — one handler path for finger and capability alike. */
-void m5sticks3_board_inject_side_press(void);
+/** Inject a call-button press into the same pending latch the poller fills
+ * — one handler path for a physical press and a capability request alike. */
+void m5sticks3_board_inject_call_press(void);
 
 /* --- the 240x135 status screen -------------------------------------------- */
 

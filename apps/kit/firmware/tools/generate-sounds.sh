@@ -40,11 +40,9 @@ python3 tools/make-sounds.py "$WORK" chime_press=center_button_press.wav chime_e
 # Measured 2026-08-20: the full 1.37 s wake chime erased the opening words.
 # Keep the audible 0.4 s body with a 40 ms fade so the cut does not click.
 python3 tools/make-sounds.py "$WORK" chime_press=center_button_press.wav chime_ended=call_ended.wav --trim-wake > devices/stackchan/assets/sounds_generated.inc
-# M5's half-duplex fence prevents chime leakage into the microphone, so keep
-# the full ding. Feedback at x2.5 with saturation measured audible, not harsh.
+# Preserve M5's existing full-length chime and measured x2.5 feedback gain.
 python3 tools/make-sounds.py "$WORK" chime_press=center_button_press.wav chime_ended=call_ended.wav --gain 5/2 > devices/m5sticks3/assets/sounds_generated.inc
-# Waveshare's press-and-hold invites speech immediately, with no AEC: finish
-# the 0.4 s ding before dial completes. The same x2.5 gain lifts quiet feedback.
+# Waveshare uses the short 0.4 s chime and x2.5 feedback gain.
 python3 tools/make-sounds.py "$WORK" chime_press=center_button_press.wav chime_ended=call_ended.wav --trim-wake --gain 5/2 > devices/waveshare_s3_amoled/assets/sounds_generated.inc
 python3 tools/make-sounds.py "$WORK" chime_press=center_button_press.wav chime_ended=call_ended.wav > devices/satellite1/assets/sounds_generated.inc
 

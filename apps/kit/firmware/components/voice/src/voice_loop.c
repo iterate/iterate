@@ -1263,6 +1263,12 @@ static void end_local_activation(const char *reason, const char *status) {
   runtime.activation_live = false;
   runtime.view.wants_call = false;
   runtime.view.listening = false;
+  /* A queued terminal fences later microphone appends, so the old call must
+   * stop governing new local intent immediately. */
+  runtime.view.call_active = false;
+  runtime.voicelab.call_active = false;
+  runtime.voicelab.answer_open = false;
+  runtime.voicelab.last_presence_at_ms = 0U;
   runtime.opening_started_at_ms = 0U;
   runtime.opening_outcome = OPENING_IDLE;
   atomic_fetch_add_explicit(
@@ -1296,20 +1302,24 @@ static void end_authoritative_activation(const char *status) {
   runtime.view.status = status;
 }
 
-static void flush_pending_terminal(void) {
+static void flush_pending_terminal(size_t outbox_free) {
   enum capnweb_status status;
   const size_t slot = runtime.pending_terminal_head;
   if (runtime.pending_terminal_count == 0U) return;
+  /* A full outbox makes a Cap'n Web append session-fatal. Keep the terminal
+   * pending until its one control slot is available. */
+  if (outbox_free == 0U) return;
   status = iterate_kit_voicelab_end_activation(
       &runtime.voicelab,
       runtime.pending_terminals[slot].activation,
       runtime.pending_terminals[slot].reason);
   if (status != CAPNWEB_OK) return;
-  if (strcmp(runtime.pending_terminals[slot].activation, runtime.activation) == 0) {
-    runtime.voicelab.call_active = false;
-    runtime.voicelab.answer_open = false;
-    runtime.voicelab.last_presence_at_ms = 0U;
-  }
+  /* The pending terminal owns the old stream call. `runtime.activation` may
+   * already name a new local capture, which has not appended while terminals
+   * are pending. */
+  runtime.voicelab.call_active = false;
+  runtime.voicelab.answer_open = false;
+  runtime.voicelab.last_presence_at_ms = 0U;
   runtime.pending_terminal_head =
       (runtime.pending_terminal_head + 1U) % TERMINAL_PENDING_CAPACITY;
   --runtime.pending_terminal_count;
@@ -2925,14 +2935,18 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        */
       struct iterate_kit_spsc_ring_metrics outbox_metrics;
       iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
-      const size_t outbox_free =
+      size_t outbox_free =
           CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots;
       static struct mic_frame frame_storage[MIC_FRAMES_PER_APPEND];
       static int16_t pcm_storage[MIC_FRAMES_PER_APPEND][FRAME_SAMPLES];
       static bool call_active_shown;
 
       /* Terminals are ordered ahead of later activation audio. */
-      flush_pending_terminal();
+      flush_pending_terminal(outbox_free);
+      /* A terminal append consumes the same ring as mic frames. Refresh the
+       * headroom before deciding whether another producer may append. */
+      iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
+      outbox_free = CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots;
       const bool terminal_pending = runtime.pending_terminal_count != 0U;
 
       /*

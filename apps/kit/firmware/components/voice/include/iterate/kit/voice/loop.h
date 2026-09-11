@@ -175,7 +175,7 @@ struct iterate_kit_board_audio {
  *
  * Everything except `start` and `present` is optional; a NULL op is a board
  * saying it has no such hardware, and the loop skips it. That is why there is no
- * separate "has a face" or "is half duplex" flag: providing the op IS the claim,
+ * separate "has a face" flag: providing the op IS the claim,
  * and a flag that could disagree with the pointer beside it is a bug waiting to
  * be written.
  */

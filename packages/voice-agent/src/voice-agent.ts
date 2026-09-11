@@ -749,10 +749,8 @@ interface Dial {
   /** The answer in flight — replaced wholesale at the onset of speech. */
   answer: Answer;
   /**
-   * Backend functions this dial is still running. A person who asked for
-   * something slow waits in SILENCE — no frames from a push-to-talk client,
-   * nothing on the speaker — and the idle deadline must not read that as an
-   * abandoned call while the backend is mid-script.
+   * Backend functions still running on this dial. Quiet input/output while
+   * awaiting a slow function must not count as an abandoned conversation.
    */
   openBackendCalls: number;
   /** Backend function calls completed on this dial, for the progress notes. */

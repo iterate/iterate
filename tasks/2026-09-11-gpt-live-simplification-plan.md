@@ -166,8 +166,8 @@ Acceptance remains open until these are demonstrated:
 - [ ] Run focused behavior tests, all host tests and all five fresh ESP builds on the final source.
 - [ ] Complete required repository checks and review the final changes with Claude Fable 5.1 xhigh.
 - [ ] Deploy an isolated preview; verify coherent state, traces and failure classification.
-- [ ] Measure capture-to-first-append, provider-first-output and output-to-playout separately.
-- [ ] Prove HAVPE wake and digital audio flow with no speaker output from HAVPE or Mac.
+- [x] Measure capture-to-first-append, provider-first-output and output-to-playout separately.
+- [x] Prove HAVPE wake and digital audio flow with no speaker output from HAVPE or Mac.
 - [ ] Update PR #2624 and resolve CI/review feedback. No merge is requested.
 
 The no-sound constraint applies to every hardware transition, including OTA,

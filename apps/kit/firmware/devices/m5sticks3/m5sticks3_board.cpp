@@ -63,7 +63,7 @@ struct ui_model {
 };
 
 ui_model ui;
-bool side_press_pending;
+bool call_press_pending;
 
 const char *state_label(enum m5sticks3_ui_state state) {
   switch (state) {
@@ -300,8 +300,8 @@ void paint(void) {
   M5.Display.setCursor(4, 110);
   M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
   M5.Display.print(
-      ui.call_active ? "hold FRONT to talk / SIDE ends"
-                     : "press SIDE to start a call");
+      ui.call_active ? "press FRONT or SIDE to end"
+                     : "press FRONT or SIDE to start");
   M5.Display.endWrite();
 }
 
@@ -372,14 +372,17 @@ bool m5sticks3_board_init(void) {
 
 void m5sticks3_board_poll(void) {
   M5.update();
-  if (M5.BtnB.wasPressed()) side_press_pending = true;
+  /* M5Unified reports these only after its GPIO debounce has accepted the
+   * down edge. Either physical button enters the shared start/end grammar;
+   * no local hold or release policy remains. */
+  if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed()) call_press_pending = true;
 }
 
-void m5sticks3_board_inject_side_press(void) { side_press_pending = true; }
+void m5sticks3_board_inject_call_press(void) { call_press_pending = true; }
 
-bool m5sticks3_board_take_side_press(void) {
-  const bool pressed = side_press_pending;
-  side_press_pending = false;
+bool m5sticks3_board_take_call_press(void) {
+  const bool pressed = call_press_pending;
+  call_press_pending = false;
   return pressed;
 }
 

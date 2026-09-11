@@ -37,7 +37,7 @@ static enum capnweb_status button_press(
     void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
   (void)context;
   (void)call;
-  m5sticks3_board_inject_side_press();
+  m5sticks3_board_inject_call_press();
   return capnweb_reply_set_boolean(reply, true);
 }
 
@@ -105,10 +105,10 @@ static void present(
   m5sticks3_ui_tick();
 }
 
-/** Supply M5's distinct side-tap and front-hold as normalized input. */
+/** Supply either debounced physical M5 button as one session press. */
 static void read_gestures(struct iterate_kit_board_gestures *out) {
   m5sticks3_board_poll();
-  out->pressed |= m5sticks3_board_take_side_press();
+  out->pressed |= m5sticks3_board_take_call_press();
 }
 
 static void phase(void *context, enum iterate_kit_voice_phase phase_value) {

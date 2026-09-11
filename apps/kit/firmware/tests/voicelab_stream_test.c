@@ -492,7 +492,7 @@ static void downlink_flow(void) {
    *
    * The decode used to treat zero samples as a failure and return BEFORE
    * reading `last`, so the end of the answer was never announced: the owner
-   * never drained and never released its half-duplex fence, and the next
+   * never drained the finished answer, and the next
    * answer played into a queue still holding the previous one. Heard on a HA
    * Voice PE as speech that speeds up and then stops, two or three turns into
    * a conversation — the turn it bites depends on whether that answer's deltas

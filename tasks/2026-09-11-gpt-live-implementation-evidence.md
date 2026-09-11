@@ -16,6 +16,9 @@ completed checkpoints from work still in progress.
 | `eb5758bb8` | One board identity, fixed hardware gates, launch deletion, shared quiet-call presence |
 | `dfffa7fce` | Terminal recovery through processor alarms, quiet-call fix and mobile suppression |
 | `bafea50c4` | Nullable-check simplification and explicit wire validation boundary |
+| `e7994f649` | Continuous capture on every board/CLI, one-press controls, native M5 duplex and activation fixes |
+| `85d538152` | 200 ms playout prefill, meaningful gap classification and append-failure regression |
+| `611b66cce` | Node physical socket ownership, duplicate-handle lifetime and pre-ready callback fencing |
 
 The original branch and unrelated backend experiments remain on
 `backup/futurehomes-before-gpt-live-integration`. These checkpoints do not claim
@@ -55,8 +58,12 @@ Detailed investigation artifacts are local:
 | Implementation 3, Fable 5.1 xhigh | Fixed quiet-call presence, terminal deduplication, rejected call-start cleanup, required speaker activation, and eviction ending the interrupted call without replay. |
 | Implementation 4, Fable 5.1 xhigh | Fixed cancellation before acceptance, queued terminal delivery while unmounted, overflow teardown and stale queue-limit text. The M5 handoff was removed entirely. |
 | Implementation 5, Fable 5.1 xhigh | Fixed same-pass end/start, muted remote start and server-ended queued-audio races; focused regressions pass. Failed microphone appends now end the activation explicitly; its injected-failure regression and all 70 host tests pass. |
+| Implementation 6, Fable 5.1 xhigh | Confirmed pre-ready socket-close callbacks could race external reconnection; fixed callback ownership and tested discarded-attempt silence. |
 
-Full transcripts/results are in `/tmp/gpt-live-implementation-review-{1,2,3,4,5}/`.
+The Node package suite passed 38 files / 281 tests, including retained duplicate
+handles and failed initial upgrades.
+
+Full transcripts/results are in `/tmp/gpt-live-implementation-review-{1,2,3,4,5,6}/`.
 Reviews 4 and 5 used Fable for every main response; their usage metadata also
 records small incidental Haiku output (16 and 19 tokens respectively).
 Review recommendations are evidence to examine, not automatic requirements.
@@ -127,9 +134,13 @@ Artifacts: `/tmp/gpt-live-silent-host-proof-202609112240332-report.json` and
 A subsequent Cloudflare audit found `Network connection lost.` errors at socket
 teardown despite successful append/read RPCs. Trace
 `0730d75771d0504d376855b908835373` aligns with the host terminal at
-22:41:33 UTC; two read-only observers show the same pattern. This remains under
-investigation: clean stream state alone does not establish clean operational
-telemetry. Unrelated alarm errors for another project are recorded separately.
+22:41:33 UTC; two read-only observers show the same pattern. This was reproduced in the short-lived inspection CLI: it released RPC handles
+without waiting for physical WebSocket closure. Node now owns and normally closes the physical socket after its last handle;
+the CLI waits up to five seconds for the actual close event before its command
+runner exits. A production CLI read at 23:29:02–04 UTC completed normally;
+the scoped 23:28:50–23:29:20 telemetry query returned zero matching errors
+(`/tmp/havpe-cli-dispose-quiet-telemetry.json`). Unrelated alarm errors for another
+project are recorded separately.
 
 Earlier proof attempts exposed a stale host binary, an overlong callback key,
 unpopulated timing fields, and a legacy project automation that appended removed
@@ -142,7 +153,7 @@ old voice histories untouched.
 
 Direct artifacts: `/tmp/gpt-live-silent-fixture/README.md`,
 `direct-api-baseline.log`, and `direct-api-output.wav`. The HAVPE digital fixture
-remains to be performed. Digital injection cannot prove acoustic wake distance,
+completed below. Digital injection cannot prove acoustic wake distance,
 echo cancellation, audible quality or microphone-to-room behavior.
 
 ### File-only GPT-Live echo loop, 2026-09-11
@@ -162,7 +173,7 @@ The raw JSONL from the completed three-case run is
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `tasks/2026-09-11-gpt-live-proof/echo-loopback.ts` (current formatted script) | `6a88f8c238cdf21f54573f22199e1ada469d3a64a795553c07b7b5eb9594ca71` |
+| `tasks/2026-09-11-gpt-live-proof/echo-loopback.ts` (current formatted script) | `47207f62a7cc5f2bf0f5aa02515297d299783e1cd06ca0637f987a50800612f6` |
 | `tasks/2026-09-11-gpt-live-proof/echo-loopback.raw.jsonl` (initial three-case run) | `99b598b9618984f747cb05defb0c6c5a4fa5e32f42a0796ecd7cd4d7dfeab5d2` |
 | `tasks/2026-09-11-gpt-live-proof/echo-loopback-closed.raw.jsonl` (closure-corrected run) | `369d400fa0db7962ed98cb8ffa87a4ed7a088893c26c60bb0b9a8fc43e7d7dfeab5d2` |
 | `tasks/2026-09-11-gpt-live-proof/echo-loopback-mixed.raw.jsonl` (explicit mixed-input run) | `8f877524ce9584936f00f3351bd4ec3ddd2f2e33160714ae35edf5b56f0efd1b` |
@@ -216,3 +227,41 @@ The 100 ms candidate reduced packet-to-submission latency further but produced
 criterion even though older summary counters (`underruns` and `framesConcealed`)
 were zero. The report must classify those actual output gaps as failures. Keep
 200 ms; report: `/tmp/gpt-live-prefill-100ms-proof-202609112304581-report.json`.
+
+### HAVPE digital hardware proof
+
+The exact `85d538152` firmware ran on HAVPE through an app-only OTA, with the
+amplifier held in shutdown and every speaker write forced to zero. Real I2S
+capture continued; a finite PCM fixture replaced the samples handed to WakeNet
+and the capture mailbox. The source and binary hashes, sampled health, durable
+events and drained state are archived in
+[`havpe-silent-proof.json`](2026-09-11-gpt-live-proof/havpe-silent-proof.json).
+
+| Observation | First wake | Second wake |
+| --- | --- | --- |
+| Activation to first microphone append | 16 ms | 5 ms |
+| Provider opening | 2,094 ms | 838 ms |
+| Appends held while opening | 45 | 20 |
+| Listener request | Say the words violet lantern | say the words violet lantern |
+| Assistant answer | Violet lantern. | Violet lantern. |
+
+The first request finished before provider acceptance and survived intact.
+The third scheduled fixture arrived while call two remained open and also
+received the correct answer; this is two wake activations and three turns,
+not three independent wake trials. The microphone payloads are ephemeral,
+so their exact historical batch durations cannot be recovered from the stream.
+
+Both activations have exactly one terminal event. At 23:22:29 UTC the runtime
+was null, subscription lag was zero, and retry/error state was clear. Capture,
+codec, transport and actual playout fault counters were zero. `spkDrops:2`
+records the two normal answer-start queue clears; `spkSupersededMidplay`,
+overflow and starvation remained zero.
+
+The fixture was removed by installing an ordinary-name, real-microphone image
+with silent output still compiled in. At 23:24:53 UTC it was idle, processing
+WakeNet frames, with no fixture fields, null runtime, zero lag and no queue or
+transport errors. Its capture saturation counter was one at the first sample
+and remained one: one input sample exceeded the fixed x16 gain's PCM16 range
+before observation. Its physical cause was not measured. Neither this nor the
+digital fixture establishes acoustic gain, room echo or audible quality.
+Both temporary firmware tunnels were stopped.

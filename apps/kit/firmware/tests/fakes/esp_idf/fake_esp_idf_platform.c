@@ -9,6 +9,7 @@
 #include "iterate/kit/platforms/esp_idf_reset_reason.h"
 #include "iterate/kit/platforms/esp_idf_restart_note.h"
 #include "iterate/kit/platforms/esp_idf_system_update.h"
+#include "iterate/kit/spsc_ring.h"
 
 #include <stdio.h>
 #include <stdint.h>
@@ -98,6 +99,42 @@ size_t iterate_kit_fake_platform_restarts_requested(void) {
 
 void iterate_kit_fake_platform_fail_next_send(void) {
   platform.fail_next_send = true;
+}
+
+void iterate_kit_fake_platform_fill_control_outbox(void) {
+  struct iterate_kit_spsc_ring *ring;
+  void *slot;
+  size_t capacity;
+  if (platform.transport == NULL ||
+      platform.transport->options.control_outbox == NULL) {
+    return;
+  }
+  ring = platform.transport->options.control_outbox;
+  while (iterate_kit_spsc_ring_write_acquire(ring, &slot, &capacity) ==
+         ITERATE_KIT_OK) {
+    if (capacity != 0U) ((char *)slot)[0] = 'x';
+    if (iterate_kit_spsc_ring_write_publish(ring, capacity == 0U ? 0U : 1U) !=
+        ITERATE_KIT_OK) {
+      return;
+    }
+  }
+}
+
+void iterate_kit_fake_platform_drain_control_outbox(void) {
+  struct iterate_kit_spsc_ring *ring;
+  const void *slot;
+  size_t length;
+  if (platform.transport == NULL ||
+      platform.transport->options.control_outbox == NULL) {
+    return;
+  }
+  ring = platform.transport->options.control_outbox;
+  while (iterate_kit_spsc_ring_read_acquire(ring, &slot, &length) ==
+         ITERATE_KIT_OK) {
+    (void)slot;
+    (void)length;
+    if (iterate_kit_spsc_ring_read_release(ring) != ITERATE_KIT_OK) return;
+  }
 }
 
 /* --- provisioning --------------------------------------------------------- */
