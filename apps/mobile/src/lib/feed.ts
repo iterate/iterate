@@ -37,9 +37,9 @@ export type {
 export { groupActivityRounds } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 export type AgentFeed = {
-  /** Settled items in order, then queued user messages, then the live activity. */
+  /** Settled items, queued user messages, then the live activity and its messages. */
   items: AgentUiItem[];
-  /** The in-flight activity (streaming thinking/code), also last in `items`. */
+  /** The in-flight activity (streaming thinking/code), also present in `items`. */
   live: AgentUiActivity | null;
   /** The live activity's phase + this turn's agent-set status text. */
   liveStatus: AgentUiLiveStatus | null;
@@ -99,7 +99,14 @@ export function reduceFeed(agentPath: string, events: StreamEvent[]): AgentFeed 
       },
     };
   }
-  const items = [...settled, ...state.queuedUserMessages, ...(state.live ? [state.live] : [])];
+  // The reducer defers these messages to keep settled history grouped; show
+  // them now so a script can ask the user to act while it is still running.
+  const items = [
+    ...settled,
+    ...state.queuedUserMessages,
+    ...(state.live ? [state.live] : []),
+    ...state.deferredAssistantMessages,
+  ];
   return {
     items,
     live: state.live,

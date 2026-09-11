@@ -5,7 +5,7 @@ size: medium
 
 # Run selected sandbox HTTP requests through a connected phone
 
-Status: implemented and verified on preview. The browser spec opens the real notification and proves sandbox curl uses the browser's public IP. Native and web share registration; replay and cleanup pass. Physical iPhone/APNs verification remains manual. No PR is being opened.
+Status: implemented and verified, including review refinements. The browser spec drives a scripted agent, opens its notification, and inspects echoed headers from real sandbox curl. Foreground push suppression is deferred below; physical iPhone/APNs verification remains manual. No PR is being opened.
 
 ## Request and decisions
 
@@ -43,6 +43,22 @@ A running itx script can intercept sandbox HTTP(S), forward unmatched requests n
 - The client type now includes its existing dynamic `capabilities` mount, so the hosted example passes the actual script typechecker.
 - A deployed-only failure reduced to a hosted script returning a synthetic body from its own interceptor, then consuming that body via bare fetch. It occurred without a phone or test tunnel. The Project DO now owns the outgoing stream and keeps the RPC-body pipe alive through consumption, preserving streaming. The isolated repro and permanent binary regression pass after the fix. Red trace: `beeffa01eaef537df2bd5298a567d46f` on preview-2.
 - Test devices disable push delivery and use the in-app notification path. No APNs notification was sent and no physical handset/IP claim has been made. iOS production JS export builds with a cleared Metro cache.
+
+## Second review follow-up
+
+- [x] Try standard Request/Response, otherwise rename the byte-envelope method. *Installed React Native `whatwg-fetch` Response has no `.body`; a Cap'n Web serialization round trip fails with “Response body must be of type ReadableStream.” Renamed the method to `doFetch`; notification capability ID `fetch` still identifies the same feature.*
+- [x] Explain the timer and dual notification event names briefly. *One-line comments beside each; React Native lacks `AbortSignal.timeout`, and device streams receive direct requests plus forwarded project intents.*
+- [x] Keep the existing `.capabilities` mount. *The runtime API is unchanged.*
+- [x] Echo all headers and identify mobile forwarding. *The bridge adds `x-iterate-client: mobile`; the captun spec checks IP, user agent, and the sandbox's custom header.*
+- [x] Inline the scenario in a deterministic agent script. *The spec drives chat, sandbox curl, and the notification tap, waiting on natural progress messages with Middlewright.*
+- [x] Show progress messages while their script is running. *The new spec exposed that mobile hid the reducer's deferred assistant messages until settlement. `reduceFeed` now renders them beside the live activity; a regression proves immediate visibility and no duplicates after settlement.*
+- [ ] Suppress unnecessary phone-fetch pushes when the app is already foregrounded. *Explicitly deferred by the user: consider a foreground readiness acknowledgement and the existing notification delivery grace period without conflating readiness with a notification tap.*
+
+Review verification: the agent-driven sandbox spec passes in **52.8s**, and existing mobile approval (**46.4s**) and live-status (**37.0s**) specs pass, all without retries or timeout overrides. **255 mobile unit tests**, the deployed RPC replay/disconnect test, repository typechecks, lint, and formatting pass. The mobile feed regression failed before the visibility fix and passed afterward.
+
+Final agent proof: preview-2, unchanged OS version `2da2554b-b91d-4c13-a820-5089ec0ee20d`, project `prj_435018277f0844f198d44b54b7ecb447`, 21:10:17–21:11:11 UTC. Device request **14**, opened **20**, capability ready **23**; push settlement **17** is expected `device-unavailable`. Agent `/agents/sandbox-phone-fetch-3f7b159c`, execution `agent-output:59`: requested **62**, started **65**, progress messages **67/69/71/74/77**, succeeded **79**. No active script or pending input remains, and the mobile client disconnected after teardown.
+
+The untruncated trace query for `2388c77f2f2e3e968ed6a7d25e71f1df` over 21:10:17–21:11:15 UTC returns **814 spans, zero error outcomes**. `itx Agent.message` reports `ok` (call `log_82d01d5a5cdc4da4b4b1335481e60c7b`, 85ms); `dynamic_worker.run_script.call` lasts **17.481s** and has its native RPC parent. The durable success event follows that span's completion. Full browser/server/phone headers are attached to the Playwright report; no public IP is committed to the repository.
 
 ## Verification evidence — 2026-09-11
 

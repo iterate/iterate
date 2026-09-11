@@ -44,6 +44,43 @@ test("a full round reduces to user → activity → assistant", () => {
   ]);
 });
 
+test("a running script's progress messages are visible before it settles", () => {
+  const events = [
+    event(1, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
+    event(2, "events.iterate.com/agent/llm-request-requested", {}),
+    event(3, "events.iterate.com/agent/llm-request-settled", {
+      requestOffset: 2,
+      result: { status: "succeeded", text: "script" },
+    }),
+    event(4, "events.iterate.com/capability-host/script-run-requested", {
+      executionId: "phone-fetch",
+      code: "async (itx) => { /* notify, wait, fetch */ }",
+      expiresAt: Date.UTC(2026, 0, 1, 0, 1),
+    }),
+    event(5, "events.iterate.com/agents/web-message-sent", {
+      message: "Open Notifications to continue.",
+    }),
+  ];
+  const running = reduceFeed(PATH, events);
+  expect(running).toMatchObject({
+    working: true,
+    items: [
+      { kind: "user" },
+      { kind: "activity" },
+      { kind: "assistant", text: "Open Notifications to continue." },
+    ],
+  });
+  const finished = reduceFeed(PATH, [
+    ...events,
+    event(6, "events.iterate.com/capability-host/script-run-settled", {
+      executionId: "phone-fetch",
+      settlement: { status: "succeeded" },
+    }),
+  ]);
+  expect(finished).toMatchObject({ working: false, live: null });
+  expect(finished.items.map((item) => item.id)).toEqual(running.items.map((item) => item.id));
+});
+
 test("streaming response text lands on the live activity while working", () => {
   const feed = reduceFeed(PATH, [
     event(1, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),

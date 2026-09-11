@@ -269,7 +269,7 @@ testable from the phone alone. The runner shipped in PR #2059.
 4. Tap its push, or tap the request in the app's Notifications list. The waiting
    sandbox curl should print the endpoint's response and HTTP status.
 
-The app connects at `/clients/mobile/<deviceId>` and publishes `capabilities.fetch`
+The app connects at `/clients/mobile/<deviceId>` and publishes `capabilities.doFetch`
 on both native and web. The web build uses browser fetch with normal CORS rules;
 an endpoint must allow the app's origin for the browser to read its response.
 The shared itx session owns registration and republishes it on reconnect. Any
@@ -280,12 +280,14 @@ authorization token. `device/notification-opened` records the tap separately fro
 The script uses stream subscriptions with replay, never polling. A later disconnect
 is still a failed call, and expired notifications do not acknowledge readiness.
 
-Fetch accepts `{ url, method, headers: [name, value][], body: Uint8Array | null }`
-and returns `{ status, headers, body }`. It buffers bodies, rejects results over
+`doFetch` accepts `{ url, method, headers: [name, value][], body: Uint8Array | null }`
+and returns `{ status, headers, body }`. React Native's `Response` lacks the body
+stream Cap'n Web requires, so this is an explicit byte envelope. It buffers bodies, rejects results over
 8 MiB, and aborts network work after 30 seconds. Native fetch follows redirects,
 uses the native cookie behavior, and owns request framing. Decoded responses omit
 compression/framing headers. This is HTTP forwarding, not a TCP tunnel or browser
-session proxy. The target sees the phone's current Wi-Fi/cellular/VPN exit address.
+session proxy. The target sees the phone's current Wi-Fi/cellular/VPN exit address
+and the diagnostic header `x-iterate-client: mobile`.
 
 The example's interceptor lasts only while its script runs. It is project-wide
 and last-writer-wins. Unmatched requests call `next(request)`, retaining normal
@@ -293,10 +295,13 @@ approval and secret substitution; matched phone requests bypass that forwarding
 and receive no substituted project secrets. A Project Durable Object restart
 loses the live interceptor. Use this for an experiment, not a durable routing rule.
 
-`specs/mobile/sandbox-phone-fetch.spec.ts` runs the example against a real
-deployed sandbox, opens its notification in the mobile web UI, and checks the
-response against a public tunnel's detected browser IP. It observes the browser
-network response and checks that server egress has a different IP. Run it with:
+`specs/mobile/sandbox-phone-fetch.spec.ts` drives an agent with a deterministic
+codemode script against a real deployed sandbox. The script reports progress in
+chat, and the spec opens its notification in the mobile web UI. A captun endpoint
+echoes all headers: the spec checks the browser IP, user agent, client marker, and
+a header supplied by sandbox curl. An unmatched curl proves normal forwarding
+through `next` with a different IP. The full headers are attached to the test report.
+Run it with:
 
 ```sh
 doppler run --project os --config preview_2 -- pnpm spec --project=mobile specs/mobile/sandbox-phone-fetch.spec.ts
