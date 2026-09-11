@@ -79,3 +79,55 @@ pins it + a note here; API/abstraction/concept questions → research + note her
 - **Trim source-file prologue essays.** library.ts, iterate-context-durable-object.ts, stream/processor.ts
   open with long uppercase narration/roadmap prose. Keep the hard-won gotcha notes (RPC disposal,
   memory, hibernation); delete the repeated architecture/roadmap essays (move to docs). (codex #11)
+
+## Round 2 — type-safety pass + apps/os "neat tricks" mining
+
+### Done this round
+
+- **Type-safety: the project token is zod-parsed, not cast.** `verifyProjectToken` ran
+  `verifyClaims()`'s `unknown` through a hand-rolled `typeof` chain behind `as ProjectTokenClaims`.
+  `ProjectTokenClaims` is now a zod schema (`export const … = z.object(...)` + `z.infer` type) and the
+  verifier `safeParse`s — a security-sensitive path now validates like the rest of the code.
+  (owner "casts are a smell", src/principal.ts)
+- **mcp.ts single-use helpers inlined.** `objectSchema`/`textResult`/`failure` folded into the one
+  `run` tool; `JsonSchema` colocated beside `buildServer`. (owner "no single-use helpers")
+- **DO fetch-lane header casts documented.** Why-safe comments on the two edge→DO header casts
+  (`x-itx-expression`, `x-itx-principal`): edge-set + resolver-validated / loaded-code stripped.
+  (src/iterate-context-durable-object.ts)
+- **[bug] RPC import-table leak in subscription delivery — FIXED.** Every delivery lane (live-client
+  push, facet push, cursor lane) awaited `call([events, range])` only for the ack and dropped the
+  return — but a Workers-RPC/capnweb result pins the callee's export until disposed, so each delivered
+  batch leaked one import-table slot (and a live client's push runs on every commit). Fixed at the
+  single source — the `call` closure disposes its own ignored result; `call` narrowed to
+  `Promise<void>`. Verified: unit delivery/stream/budget 60 passed, workers push lanes 10 passed.
+  (apps/os-tricks #1 `disposeIgnoredRpcResult`, src/stream/subscription-delivery.ts)
+
+### apps/os tricks — triaged (subagent report, owner asked us to mine apps/os)
+
+Adopted:
+- **#1 dispose-ignored-RPC-result** — done above (the real leak). We keep the idiom INLINE (the
+  clean-room is standalone, no `iterate` dep; the guard+dispose is 3 lines and matches the existing
+  facet-invoke lane) rather than importing apps/os's helper.
+
+Deferred — worth doing, later round:
+- **`Redacted<T>` secret wrapper.** apps/os wraps secret strings in a branded box whose `toString`/
+  `toJSON` redact, so a secret can't be logged or serialized by accident. We handle secrets in
+  principal.ts (API keys, token secrets) and context/built-ins.ts (secret substitution); a `Redacted`
+  box would make "never log a secret" a type guarantee, not a discipline. Medium effort (wrap at the
+  boundaries). Aligns with the type-safety directive. LOG for a later round.
+- **truncate-json / infer-json-type for MCP run results.** apps/os trims oversized tool results and
+  annotates their shape so an agent isn't handed a 2 MB blob. The clean-room MCP `run` tool returns the
+  raw JSON round-trip; large results are handed through whole. Nice-to-have for agent ergonomics; not a
+  bug. LOG.
+- **Declarative processor test harness.** apps/os has a table-driven `{ events → expected state }`
+  harness for processors. Our processor tests are hand-written. Would tighten the account/presence
+  processor tests. Test-infra, LOG.
+- **wide-log (one structured event per unit of work).** apps/os emits one wide structured log per
+  request/delivery with all dimensions attached, vs our scattered `console.warn({...})`. Observability
+  win, bigger surface. LOG.
+
+Not adopting:
+- **`withOwnedRpcSession` / `retainCallback` as imported helpers.** The clean-room already owns its
+  session lifecycle inline (library.ts reopen/dispose) and its live callbacks via the delivery lane;
+  importing apps/os's versions would add a dependency and indirection for no new behavior. The one real
+  defect they'd have caught (the ignored-result leak) is fixed directly.
