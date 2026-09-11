@@ -2063,22 +2063,24 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * that knows the provider's spelling of "here is audio".
    */
   /**
-   * The silence fill: a self-rescheduling tick (like the idle countdown, so
-   * the keepalive's wedge detector never sees one endless task) that keeps
-   * the provider's input stream continuous while the device is quiet.
+   * The silence fill: ONE background loop per dial, not a tick chain. A tick
+   * chain re-registers with the runner's keepalive every 100 ms — a KV write
+   * and an alarm arm each time — which is the per-frame cost that stalled the
+   * relay once already (measured again with the chain: 52 underruns in a
+   * 9 s answer). One loop registers once; it ends with the dial.
    */
   #startSilenceFill(dial: Dial): void {
-    const tick = async (): Promise<void> => {
-      await this.deps.sleep(SILENCE_FILL_MS);
-      if (this.#dial !== dial || dial.socket === null || !dial.ready) return;
-      const nowAtFacetMs = this.deps.nowAtFacetMs();
-      if (nowAtFacetMs - dial.lastMicAudioAtFacetMs >= SILENCE_FILL_MS) {
-        dial.lastMicAudioAtFacetMs = nowAtFacetMs;
-        this.#sendMicAudio(dial.socket, SILENCE_FILL_FRAME_B64);
+    this.runInBackground(async () => {
+      while (this.#dial === dial && dial.socket !== null && dial.ready) {
+        await this.deps.sleep(SILENCE_FILL_MS);
+        if (this.#dial !== dial || dial.socket === null || !dial.ready) return;
+        const nowAtFacetMs = this.deps.nowAtFacetMs();
+        if (nowAtFacetMs - dial.lastMicAudioAtFacetMs >= SILENCE_FILL_MS) {
+          dial.lastMicAudioAtFacetMs = nowAtFacetMs;
+          this.#sendMicAudio(dial.socket, SILENCE_FILL_FRAME_B64);
+        }
       }
-      this.runInBackground(tick);
-    };
-    this.runInBackground(tick);
+    });
   }
 
   #sendMicAudio(socket: WebSocket, b64: string): void {
