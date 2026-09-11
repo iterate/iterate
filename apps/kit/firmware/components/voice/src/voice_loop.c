@@ -679,6 +679,18 @@ EXT_RAM_BSS_ATTR static struct {
    * iterate/kit/voice_playback_clock.h. */
   atomic_bool speaker_answer_done;
   /*
+   * Which speaker epoch (`speaker_generation`) the done flags belong to. A
+   * `drop` bumps the generation and asks the playback task to reprime; the
+   * `last` of the SAME answer can land before that reprime is applied — a
+   * short answer arrives whole between two playback passes — and a reprime
+   * that cleared every done flag it found then erased the new answer's end.
+   * The clock never learned the answer was complete, and an answer shorter
+   * than the prefill never played at all (found by voice_loop_answer_clock_test
+   * the day the prefill went from 150 to 300 ms). The reprime now clears only
+   * a flag from an OLDER epoch.
+   */
+  atomic_uint speaker_answer_done_generation;
+  /*
    * The SENDER said this answer is complete, latched until the speaker actually
    * drains it. `speaker_answer_done` is consumed by the playback clock the
    * moment it is seen, long before the buffer empties, so it cannot answer
@@ -1068,6 +1080,10 @@ static void on_control(
      * concealed frames and the metric could never reach zero.
      */
     atomic_store_explicit(
+        &runtime.speaker_answer_done_generation,
+        atomic_load_explicit(&runtime.speaker_generation, memory_order_acquire),
+        memory_order_release);
+    atomic_store_explicit(
         &runtime.speaker_answer_done, true, memory_order_release);
     atomic_store_explicit(
         &runtime.answer_declared_done, true, memory_order_release);
@@ -1182,10 +1198,20 @@ static bool playback_apply_reprime(
           &runtime.speaker_reprime, false, memory_order_acq_rel)) {
     return false;
   }
-  atomic_store_explicit(
-      &runtime.speaker_answer_done, false, memory_order_release);
-  atomic_store_explicit(
-      &runtime.answer_declared_done, false, memory_order_release);
+  /*
+   * The done flags go with the OLD answer only. A `last` that already
+   * arrived for the answer this reprime opens (same generation) is the new
+   * answer's end, and wiping it would leave a short answer priming forever —
+   * see `speaker_answer_done_generation`.
+   */
+  if (atomic_load_explicit(
+          &runtime.speaker_answer_done_generation, memory_order_acquire) !=
+      atomic_load_explicit(&runtime.speaker_generation, memory_order_acquire)) {
+    atomic_store_explicit(
+        &runtime.speaker_answer_done, false, memory_order_release);
+    atomic_store_explicit(
+        &runtime.answer_declared_done, false, memory_order_release);
+  }
   /*
    * abandon_speaker_audio() already disarmed and accounted for the hardware
    * flush before publishing speaker_reprime. This task owns only the portable

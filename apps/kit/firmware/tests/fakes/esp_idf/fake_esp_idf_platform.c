@@ -1,4 +1,5 @@
 #include "fake_esp_idf_platform.h"
+#include "iterate/kit/voice_device_profile.h"
 
 #include "fake_esp_idf.h"
 
@@ -25,7 +26,15 @@ enum {
    * like it stopped sending.
    */
   FAKE_SENT_CAPACITY = 96,
-  FAKE_MESSAGE_CAPACITY = 4096,
+  /*
+   * One recorded message holds what one real outbox slot holds
+   * (ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOT_CAPACITY, 8 KiB). It was 4096,
+   * sized for four 20 ms mic frames as four events; a wall-clock flush that
+   * caught up an 8-frame backlog as ONE event is ~7 KiB, and a recorder
+   * that refuses it fails the capnweb session for good — every later append
+   * in the scenario reads as "the device stopped sending".
+   */
+  FAKE_MESSAGE_CAPACITY = ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOT_CAPACITY,
 };
 
 static struct {
