@@ -19,6 +19,7 @@ completed checkpoints from work still in progress.
 | `e7994f649` | Continuous capture on every board/CLI, one-press controls, native M5 duplex and activation fixes |
 | `85d538152` | 200 ms playout prefill, meaningful gap classification and append-failure regression |
 | `611b66cce` | Node physical socket ownership, duplicate-handle lifetime and pre-ready callback fencing |
+| `382eb8817` | Terminal outbox/state fixes, M5 front-button mapping, CLI close wait and archived HAVPE proof |
 
 The original branch and unrelated backend experiments remain on
 `backup/futurehomes-before-gpt-live-integration`. These checkpoints do not claim
@@ -68,8 +69,13 @@ Reviews 4 and 5 used Fable for every main response; their usage metadata also
 records small incidental Haiku output (16 and 19 tokens respectively).
 Review recommendations are evidence to examine, not automatic requirements.
 
-## Verification so far
+## Verification
 
+- Final code `382eb8817` passed all 70 host tests and all five ESP-IDF 5.4.2
+  targets, with unchanged dependency locks. Logs:
+  `/tmp/gpt-live-final-build-*-85d.final.log`. The full repository test run,
+  typecheck, lint, format check and knip passed; logs:
+  `/tmp/gpt-live-last-{tests,typecheck,lint,format,knip}.log`.
 - The activation checkpoint passed all 72 then-current firmware host tests;
   backend activation behavior passed 53 tests and mobile voice-call passed 17.
 - Contract-23 backend behavior passed 51 tests after deleting obsolete cases.
@@ -265,3 +271,23 @@ and remained one: one input sample exceeded the fixed x16 gain's PCM16 range
 before observation. Its physical cause was not measured. Neither this nor the
 digital fixture establishes acoustic gain, room echo or audible quality.
 Both temporary firmware tunnels were stopped.
+
+The final installed silent real-microphone image is built from the exact tracked
+firmware tree at `382eb8817`, SHA-256
+`25ed0be271dc4f85aef132429f6e52376ce9fbdeba703ca2d78274f61860d8df`.
+Its 23:35:02 UTC sample was idle and ready with WakeNet loaded, 1,017 inference
+frames, zero overruns, null runtime and zero processor lag. Capture saturation
+again stood at one before the first observation and did not grow. The final
+firmware tunnel is stopped. The installed image deliberately remains silent;
+ordinary audible use requires a subsequent normal-output image.
+
+One read-only observer sample failed during the final OTA: its retained runtime
+callback crossed the reboot and closed with 1006. Trace
+`0a603107a5862eaa9aaa808bba853556` ties the failure to the old hosted
+`ProcessorFacet.snapshot` callback, followed by the observer disposing its RPC
+connection while sibling reads remained pending. The observer now settles all
+of its reads before disposal. This was a bounded diagnostic transition failure;
+subsequent final-image samples through 23:35:02 and telemetry through 23:35:35
+were clear. It is retained in the raw artifact rather than counted as a passing
+sample. Trace/source audit:
+`/tmp/havpe-final-382eb8817-telemetry-audit.md`.

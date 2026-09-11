@@ -163,9 +163,9 @@ Acceptance remains open until these are demonstrated:
 - [x] Verify model behavior under digital speaker echo and overlapping caller speech.
 - [x] Cover activation during an in-flight capture, mute, opening timeout and overflow.
 - [x] Finish provider/config/launch/turn deletions and update every consumer.
-- [ ] Run focused behavior tests, all host tests and all five fresh ESP builds on the final source.
-- [ ] Complete required repository checks and review the final changes with Claude Fable 5.1 xhigh.
-- [ ] Deploy an isolated preview; verify coherent state, traces and failure classification.
+- [x] Run focused behavior tests, all host tests and all five fresh ESP builds on the final source.
+- [x] Complete required repository checks and review the final changes with Claude Fable 5.1 xhigh.
+- [x] Deploy an isolated preview; verify coherent state, traces and failure classification.
 - [x] Measure capture-to-first-append, provider-first-output and output-to-playout separately.
 - [x] Prove HAVPE wake and digital audio flow with no speaker output from HAVPE or Mac.
 - [ ] Update PR #2624 and resolve CI/review feedback. No merge is requested.

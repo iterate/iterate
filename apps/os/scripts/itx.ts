@@ -80,12 +80,12 @@ export async function run(options: RunOptions) {
       process.exitCode = 1;
       return;
     }
+    // Exactly one JSON document on stdout — scripts and the e2e suite parse it.
+    // Emit it before disposal: a close timeout must not hide completed work.
+    process.stdout.write(`${JSON.stringify(result ?? null, null, 2)}\n`);
   } finally {
     await waitForItxClose(closed.promise);
   }
-
-  // Exactly one JSON document on stdout — scripts and the e2e suite parse it.
-  process.stdout.write(`${JSON.stringify(result ?? null, null, 2)}\n`);
 }
 
 async function waitForItxClose(closed: Promise<void>): Promise<void> {
