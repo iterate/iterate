@@ -1,7 +1,7 @@
 // library.ts — THE LIBRARY: the built-ins that could be userspace, ONE file the boundary test reads
 // whole. Five concepts:
 //   the library — `buildLibrary` (the memoized roots) + the rule, and the two refusal helpers
-//   run         — `itx.run(script, { args? })`: the text of `async (itx, ...args) => …` as a loaded worker's one call
+//   run         — `itx.run(script)`: the text of `async (itx) => …` as a loaded worker's one call
 //   capnweb     — `itx.connectToCapnweb(url)`: a remote capnweb API as a pipelinable handle
 //   mcp         — `itx.connectToMcp(url)`: an MCP client over Streamable HTTP
 //   openapi     — `itx.connectToOpenApi(spec)`: an OpenAPI 3 service as an RpcTarget of operationIds
@@ -50,19 +50,17 @@ import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/e
  *  into. Widen it HERE when a module needs more of itx — never by importing something else. */
 export type LibraryItx = Pick<BuiltInScope, "fetch" | "workers">;
 
-/** `itx.run`'s options: `args`, handed to the script after `itx`. */
-export type RunOptions = { args?: unknown[] };
-
 /** The library's roots, exactly as the built-ins record spreads them in: each verb closed over ONE
  *  `itx`. `BuiltInScope` (context/built-ins.ts) extends this, so the typed surface has them once. */
 export interface LibraryRoots {
-  /** A script — the text of `async (itx, ...args) => { … }` — run ONCE in a confined isolate as a
-   *  loaded worker's one call: the text is wrapped in a WorkerEntrypoint whose `run` hands the script
-   *  `env.ITX.get()` (this context, as `workers.get` hosts it) and `options.args`, and returns what
-   *  the script returns (over Workers RPC, so JSON-serializable). Sugar over
-   *  `itx.workers.get({ source }).run(...args)`: the same text is the same module, so the loader's
-   *  content hash reuses the warm isolate across calls. */
-  run(script: string, options?: RunOptions): Promise<unknown>;
+  /** A script — the text of `async (itx) => { … }` — run ONCE in a confined isolate as a loaded
+   *  worker's one call: the text is wrapped in a WorkerEntrypoint whose `run` hands the script
+   *  `env.ITX.get()` (this context, as `workers.get` hosts it) and returns what the script returns
+   *  (over Workers RPC, so JSON-serializable). Sugar over `itx.workers.get({ source }).run()`: the
+   *  same text is the same module, so the loader's content hash reuses the warm isolate across calls.
+   *  A script bakes in its own values — an agent writes it whole (an alternative to a tool call), so
+   *  `run` takes no arguments. */
+  run(script: string): Promise<unknown>;
   /** An MCP server over Streamable HTTP: `callTool(name, args)`, `listTools()`, and one method per
    *  tool whose name is a legal identifier. */
   connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnection>;
@@ -100,7 +98,7 @@ export function buildLibrary(itx: LibraryItx): {
   };
   return {
     roots: {
-      run: (script, options) => runScript(itx, script, options),
+      run: (script) => runScript(itx, script),
       connectToMcp: (url, options) =>
         memoized(["mcp", url, options], () => connectToMcp(itx, url, options)),
       connectToOpenApi: (specOrUrl, options) =>
@@ -125,13 +123,14 @@ export function buildLibrary(itx: LibraryItx): {
   };
 }
 
-// ── run ── `itx.run(script, { args? })`: a script as a loaded worker's one call. The script is the
-// text of a function taking `itx` first — `async (itx, a, b) => …` — spliced VERBATIM into the
-// template below (a caller's own code in its own confined isolate: the trusted-client doctrine), so a
-// text that is not one function expression fails at load, in the loader's words. The template is the
-// smallest WorkerEntrypoint that hosts it: `run(...args)` mints the itx scope for the call and
-// disposes it after, as the SDK's ConfigWorker does. The call rides `itx.workers.get(...).run(...)`
-// on the handle the library holds, so a rule on `itx.workers` applies to it like any other call.
+// ── run ── `itx.run(script)`: a script as a loaded worker's one call. The script is the text of a
+// function of one parameter — `async (itx) => …` — spliced VERBATIM into the template below (a
+// caller's own code in its own confined isolate: the trusted-client doctrine), so a text that is not
+// one function expression fails at load, in the loader's words. It takes no arguments: a script is an
+// agent's whole output (an alternative to a tool call), its values baked in. The template is the
+// smallest WorkerEntrypoint that hosts it: `run()` mints the itx scope for the call and disposes it
+// after, as the SDK's ConfigWorker does. The call rides `itx.workers.get(...).run()` on the handle
+// the library holds, so a rule on `itx.workers` applies to it like any other call.
 
 /** The module `run` loads: `script` spliced in as `const script = (…)`. Exported for the unit pin. */
 export function runScriptModule(script: string): { "cap.js": string } {
@@ -140,10 +139,10 @@ export function runScriptModule(script: string): { "cap.js": string } {
       'import { WorkerEntrypoint } from "cloudflare:workers";',
       `const script = (${script});`,
       "export default class extends WorkerEntrypoint {",
-      "  async run(...args) {",
+      "  async run() {",
       "    const itx = this.env.ITX.get();",
       "    try {",
-      "      return await script(itx, ...args);",
+      "      return await script(itx);",
       "    } finally {",
       "      itx[Symbol.dispose]?.();",
       "    }",
@@ -154,23 +153,17 @@ export function runScriptModule(script: string): { "cap.js": string } {
   };
 }
 
-export function runScript(
-  itx: LibraryItx,
-  script: string,
-  options: RunOptions = {},
-): Promise<unknown> {
+export function runScript(itx: LibraryItx, script: string): Promise<unknown> {
   if (typeof script !== "string" || !script.trim())
-    throw new Error(
-      "itx.run(script, { args? }): script is the text of a function, `async (itx, ...args) => { … }`",
-    );
+    throw new Error("itx.run(script): script is the text of a function, `async (itx) => { … }`");
   // TWO dotted calls, never one chain: the handle's dotted surface dispatches at the first call, and
   // in-process the record hands the worker's handle back as a VALUE (a genuine RpcTarget), so `run`
   // is its own dispatch on that value — exactly what a remote holder of the same handle would do.
   return (async () => {
     const worker = (await itx.workers.get({ source: runScriptModule(script) })) as unknown as {
-      run(...args: unknown[]): Promise<unknown>;
+      run(): Promise<unknown>;
     };
-    return worker.run(...(options.args ?? []));
+    return worker.run();
   })();
 }
 

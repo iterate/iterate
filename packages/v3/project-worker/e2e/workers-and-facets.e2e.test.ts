@@ -369,17 +369,18 @@ test("persistent stub: stash a live itx handle in DO storage, use the restored h
   expect(who2?.projectId).toBe(ctx); // second load replays again
 });
 
-// ── itx.run ── THE LIBRARY's sugar over workers.get: the text of `async (itx, ...args) => …` spliced
-// into the smallest WorkerEntrypoint (library.ts `runScriptModule`) and run as its one call.
-test("itx.run(script, { args? }): the script runs in a confined isolate with THIS context's itx, args go through, the return value comes back; an append inside is the project's (no principal); a text that is not a function is refused, and the next run is unaffected", async () => {
+// ── itx.run ── THE LIBRARY's sugar over workers.get: the text of `async (itx) => …` spliced into the
+// smallest WorkerEntrypoint (library.ts `runScriptModule`) and run as its one call. No arguments — a
+// script bakes its own values in (an agent's whole output, an alternative to a tool call).
+test("itx.run(script): the script runs in a confined isolate with THIS context's itx, the return value comes back; an append inside is the project's (no principal); a text that is not a function is refused, and the next run is unaffected", async () => {
   const itx = openItx(freshCtx("run"));
   const who = await itx.whoami();
 
   // the script's `itx` IS this context: whoami agrees
   expect(await itx.run("async (itx) => itx.whoami()")).toEqual(who);
-  // args, after itx; the return value, back over Workers RPC
-  expect(await itx.run("async (itx, a, b) => a + b", { args: [2, 3] })).toBe(5);
-  expect(await itx.run("(itx, ...rest) => rest.length")).toBe(0); // a plain arrow works too; no args = run()
+  // its values baked in; the return value comes back over Workers RPC
+  expect(await itx.run("async (itx) => 2 + 3")).toBe(5);
+  expect(await itx.run("(itx) => 'a plain arrow works too'")).toBe("a plain arrow works too");
 
   // an append from inside: the event lands on this context's log, attributed to no one — loaded
   // code speaks for the project, never for a person (ItxEntrypoint.get() mints a principal-less itx)

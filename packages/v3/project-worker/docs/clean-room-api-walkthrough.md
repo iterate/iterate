@@ -1477,8 +1477,8 @@ forms post there until the page hydrates) — `POST /login`,
 projects as checkboxes, all checked; approving grants the client the user on the checked ones
 (`props: { actor, email, projects }`; a user with nothing to choose from grants a `projects`-less
 grant that follows their membership).
-`/mcp` is the ONE MCP server for every project, ONE tool: `run({ project?, script, args? })` — the
-text of `async (itx, ...args) => …` run (`itx.run`) in THAT project's root context in-process under
+`/mcp` is the ONE MCP server for every project, ONE tool: `run({ project?, script })` — the
+text of `async (itx) => …` run (`itx.run`) in THAT project's root context in-process under
 the bearer's principal (the DO's `invokeAs`), `project` optional when the grant reaches exactly one,
 required for the admin secret, refused outside the grant (apps/os's `resolveToolProject`) and refused
 as a context name (the

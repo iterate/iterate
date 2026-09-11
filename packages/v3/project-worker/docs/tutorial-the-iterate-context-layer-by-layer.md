@@ -1596,12 +1596,13 @@ deployed only — the DO's egress cannot resolve a local host; the local twin di
 
 ### `itx.run`: a script as a loaded worker's one call
 
-The fourth library verb is the smallest: `itx.run(script, { args? })` takes the TEXT of a function
-whose first parameter is `itx` — `async (itx, ...args) => { … }` — and runs it once inside a confined
-isolate. It is sugar over `itx.workers.get`: the text is spliced verbatim into the smallest
-WorkerEntrypoint (`src/library.ts` `runScriptModule` — a default class whose `run(...args)` mints
-`env.ITX.get()`, calls the script with it and the args, and disposes the scope after), then
-`workers.get({ source }).run(...args)` is called through the handle the library holds, so a rule on
+The fourth library verb is the smallest: `itx.run(script)` takes the TEXT of a function of one
+parameter — `async (itx) => { … }` — and runs it once inside a confined isolate. It takes no
+arguments: a script is an agent's whole output (an alternative to a tool call), its values baked in.
+It is sugar over `itx.workers.get`: the text is spliced verbatim into the smallest WorkerEntrypoint
+(`src/library.ts` `runScriptModule` — a default class whose `run()` mints `env.ITX.get()`, calls the
+script with it, and disposes the scope after), then `workers.get({ source }).run()` is called through
+the handle the library holds, so a rule on
 `itx.workers` applies to it like any other call. The same text is the same module, and the loader's
 content hash reuses the warm isolate across calls. The script's `itx` is THIS context — but with no
 principal: loaded code speaks for the project, never for a person, so an append inside carries no
@@ -1610,7 +1611,7 @@ and does not poison the isolate id.
 
 ```ts
 expect(await itx.run("async (itx) => itx.whoami()")).toEqual(await itx.whoami());
-expect(await itx.run("async (itx, a, b) => a + b", { args: [2, 3] })).toBe(5);
+expect(await itx.run("async (itx) => 2 + 3")).toBe(5);
 await itx.run("async (itx) => { await itx.append({ type: 'run/hello', payload: { n: 1 } }); }");
 // e2e/workers-and-facets.e2e.test.ts
 ```
@@ -1688,8 +1689,8 @@ DO name and the host label are one name.
 client discovers the AS from `/.well-known/oauth-protected-resource/mcp`, registers (CIMD by URL, or
 DCR), and sends the user to `/authorize`; the consent page is the project selection — her projects
 as checkboxes, all checked — and approving mints a grant whose props name her and the checked
-projects. The token then reaches ONE tool: `run({ project?, script, args? })` — the text of
-`async (itx, ...args) => …` run (`itx.run`) in THAT project's root context, in-process, under her
+projects. The token then reaches ONE tool: `run({ project?, script })` — the text of
+`async (itx) => …` run (`itx.run`) in THAT project's root context, in-process, under her
 principal (`invokeAs`), so what it appends carries her; `project` is
 optional when the grant reaches exactly one, required for the admin secret (which reaches every
 project as a bearer, `resolveExternalToken`), refused outside the grant. A project's own secret is a

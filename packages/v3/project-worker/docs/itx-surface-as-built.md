@@ -255,7 +255,7 @@ own append, a lent stub's rule, a processor's row are all `itx.builtins.…`, so
 | `subscriptions`                                       | `.list() → SubscriptionListEntry[]` · `.get(name)` | core state ⋈ the loop's cursors                                   |
 | `processors`                                          | `.enable(name, { source, className, consumes? }) → { name }` — ONE `subscription-configured` event whose target is `itx.builtins.facets.get(name, spec).processEventBatch`; DURABLE, no handle · `.disable(name)` — ONE event `{ name, target: null }`; the DO deletes the facet the row hosted before the append returns · `.list()` — the subscriptions that host a facet. The third layer of the onion: `rpcStubs` → `subscriptions` → `processors`. | the stream (two appends) ⋈ `subscriptions.list()`                 |
 | `workers`                                             | `.get({ source, cacheKey?, className?, props? }) → InvokeHandle`, a stateless WorkerEntrypoint; any exported method                                                                                                                                                                                                                                                                                       | Worker Loader; the stateless twin of `facets.get`                 |
-| `run(script, { args? })`                              | THE LIBRARY: the text of `async (itx, ...args) => …` as a loaded worker's one call — spliced into the smallest WorkerEntrypoint (`run(...args)` hands it `env.ITX.get()` and disposes it after) and run through `itx.workers.get({ source }).run(...args)`; the same text is the same module, so the loader's content hash reuses the isolate | `src/library.ts`, over `itx.workers` only                        |
+| `run(script)`                                         | THE LIBRARY: the text of `async (itx) => …` as a loaded worker's one call — spliced into the smallest WorkerEntrypoint (`run(...args)` hands it `env.ITX.get()` and disposes it after) and run through `itx.workers.get({ source }).run(...args)`; the same text is the same module, so the loader's content hash reuses the isolate | `src/library.ts`, over `itx.workers` only                        |
 | `connectToMcp(url, { headers? })`                     | THE LIBRARY: an MCP server over Streamable HTTP → `McpConnection`: `.callTool(name, args)` `.listTools()` `.tools()` `.close()` + one method per tool                                                                                                                                                                                                                                                     | `src/library.ts`, over `itx.fetch` only                       |
 | `connectToOpenApi(specOrUrl, { baseUrl?, headers? })` | THE LIBRARY: an OpenAPI 3 service → `OpenApiConnection`: `.call(operationId, input)` `.operations()` + one method per `operationId` (one input object: path, query, header, body fields)                                                                                                                                                                                                                  | `src/library.ts`, over `itx.fetch` only                   |
 | `connectToCapnweb(url, { headers?, transport? })`     | THE LIBRARY: a remote capnweb API's main object as a pipelinable handle — a WebSocket session through egress, or `{ transport: "batch" }` = one POST per chain                                                                                                                                                                                                                                            | `src/library.ts`, over `itx.fetch` only                   |
@@ -616,8 +616,8 @@ projects as checkboxes, all checked; the grant's `props: { actor, email, project
 absent when there was nothing to choose from ⇒ every project of the user's orgs, per call; a
 request the provider refuses is sent back to the client with `error`, `error_description`, `state`
 and `iss` once its redirect URI validated, rendered here otherwise), and `/mcp` — THE ONE MCP SERVER
-for every project, ONE tool: `run({ project?, script, args? })` — the text of
-`async (itx, ...args) => …` run (`itx.run`) in THAT project's root context in-process under the
+for every project, ONE tool: `run({ project?, script })` — the text of
+`async (itx) => …` run (`itx.run`) in THAT project's root context in-process under the
 bearer's principal (`invokeAs`); `project` optional when the grant reaches exactly one, required
 for the admin secret, refused outside the grant (apps/os `resolveToolProject`) and refused as a
 context name (the expression reaches the project's other contexts through `itx.cd(path)`); an
@@ -906,7 +906,7 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
   DO — so loaded code and a sibling (`itx.cd(p).processors…`) reach them through the same door as a
   client, and the onion's three layers are three roots: `rpcStubs` → `subscriptions` → `processors`.
   The proxy-verb list (rule 6) is `cd`, `invoke`, `provide`, `subscribe`.
-- `itx.run(script, { args? })` joins THE LIBRARY: the text of `async (itx, ...args) => …` as a loaded
+- `itx.run(script)` joins THE LIBRARY: the text of `async (itx) => …` as a loaded
   worker's one call, sugar over `itx.workers.get({ source }).run(...args)` (`src/library.ts`,
   `runScriptModule` is the template). The library's `itx` widened to `fetch` + `workers`.
 

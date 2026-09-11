@@ -181,14 +181,15 @@ describe("the library", () => {
 // handle's dotted sugar, an explicit invoke, and a pipelined chain in one batch. The WebSocket
 // transport needs workerd's WebSocketPair and is proved in e2e.
 
-// ── run ── `itx.run(script, { args? })` over a fake `itx.workers.get`: the module the loader would get
-// (the script spliced verbatim, the smallest WorkerEntrypoint around it), the args handed through, the
-// same text ⇒ the same module (the loader's content hash reuses the isolate), a blank script refused.
+// ── run ── `itx.run(script)` over a fake `itx.workers.get`: the module the loader would get (the
+// script spliced verbatim, the smallest WorkerEntrypoint around it), run with NO arguments (a script
+// bakes its own values in), the same text ⇒ the same module (the loader's content hash reuses the
+// isolate), a blank script refused.
 
 describe("run", () => {
-  function host(): { itx: LibraryItx; loaded: unknown[]; ran: unknown[][] } {
+  function host(): { itx: LibraryItx; loaded: unknown[]; runs: () => number } {
     const loaded: unknown[] = [];
-    const ran: unknown[][] = [];
+    let ran = 0;
     const itx = {
       fetch: async () => new Response(null),
       workers: {
@@ -196,40 +197,35 @@ describe("run", () => {
           loaded.push(spec);
           return {
             run: async (...args: unknown[]) => {
-              ran.push(args);
-              return { ran: args };
+              ran += 1;
+              return { calledWith: args.length }; // run() is called with NO arguments
             },
           };
         },
       },
     } as unknown as LibraryItx;
-    return { itx, loaded, ran };
+    return { itx, loaded, runs: () => ran };
   }
 
   test("the module: the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it env.ITX.get() and disposes it", () => {
-    const module = runScriptModule("async (itx, a) => (await itx.whoami()).path + a");
+    const module = runScriptModule("async (itx) => (await itx.whoami()).path");
     expect(module["cap.js"]).toContain('import { WorkerEntrypoint } from "cloudflare:workers"');
     expect(module["cap.js"]).toContain(
-      "const script = (async (itx, a) => (await itx.whoami()).path + a);",
+      "const script = (async (itx) => (await itx.whoami()).path);",
     );
     expect(module["cap.js"]).toContain("export default class extends WorkerEntrypoint");
+    expect(module["cap.js"]).toContain("async run() {");
     expect(module["cap.js"]).toContain("const itx = this.env.ITX.get();");
-    expect(module["cap.js"]).toContain("return await script(itx, ...args);");
+    expect(module["cap.js"]).toContain("return await script(itx);");
     expect(module["cap.js"]).toContain("itx[Symbol.dispose]?.();");
   });
 
-  test("run(script, { args }) loads that module through itx.workers.get and calls run(...args); no args = run()", async () => {
-    const { itx, loaded, ran } = host();
+  test("run(script) loads that module through itx.workers.get and calls run() with no arguments", async () => {
+    const { itx, loaded, runs } = host();
     const { roots } = buildLibrary(itx);
-    await expect(roots.run("async (itx, a, b) => a + b", { args: [2, 3] })).resolves.toEqual({
-      ran: [2, 3],
-    });
-    await expect(roots.run("async (itx) => 1")).resolves.toEqual({ ran: [] });
-    expect(loaded).toEqual([
-      { source: runScriptModule("async (itx, a, b) => a + b") },
-      { source: runScriptModule("async (itx) => 1") },
-    ]);
-    expect(ran).toEqual([[2, 3], []]);
+    await expect(roots.run("async (itx) => 1")).resolves.toEqual({ calledWith: 0 });
+    expect(loaded).toEqual([{ source: runScriptModule("async (itx) => 1") }]);
+    expect(runs()).toBe(1);
   });
 
   test("the same text is the same module (byte-equal: the loader's content hash keys ONE isolate); a blank script is refused before any load", async () => {

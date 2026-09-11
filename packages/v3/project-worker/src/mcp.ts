@@ -79,7 +79,7 @@ function buildServer(env: Env, authorization: Authorization): McpServer {
     {
       title: "Run a script",
       description:
-        "Run a script in a project's context, under this token's principal — THE way to do work in a project over MCP. The script is the text of an async function whose first parameter is `itx`: `async (itx, ...args) => { ... }`. It is evaluated once in a confined worker with `itx` bound to the project (`itx.kv`, `itx.append`, `itx.readEvents`, `itx.connectToMcp`, `itx.workers.get`, …) and returns a JSON-serializable value. This is `itx.run`.",
+        "Run a script in a project's context, under this token's principal — THE way to do work in a project over MCP. The script is the text of an async function of one parameter, `itx`: `async (itx) => { ... }` — a coding agent's whole output, an alternative to a tool call, its values baked in (no arguments). It is evaluated once in a confined worker with `itx` bound to the project (`itx.kv`, `itx.append`, `itx.readEvents`, `itx.connectToMcp`, `itx.workers.get`, …) and returns a JSON-serializable value. This is `itx.run`.",
       inputSchema: objectSchema(
         {
           project: PROJECT_INPUT,
@@ -87,32 +87,25 @@ function buildServer(env: Env, authorization: Authorization): McpServer {
             type: "string",
             minLength: 1,
             description:
-              "The text of an async function taking `itx` first: `async (itx) => { const n = Number(await itx.kv.get('n')) || 0; await itx.kv.put('n', String(n + 1)); return n + 1; }`. Return a JSON-serializable value (undefined, functions and live handles do not cross the boundary).",
-          },
-          args: {
-            type: "array",
-            description: "Arguments passed to the script after `itx`, as plain JSON.",
+              "The text of an async function of one parameter, `itx`: `async (itx) => { const n = Number(await itx.kv.get('n')) || 0; await itx.kv.put('n', String(n + 1)); return n + 1; }`. It bakes in its own values (there are no arguments — write the whole script). Return a JSON-serializable value (undefined, functions and live handles do not cross the boundary).",
           },
         },
         ["script"],
       ),
     },
     async (raw: unknown) => {
-      const toolArguments = raw as { project?: string; script: string; args?: unknown[] };
+      const toolArguments = raw as { project?: string; script: string };
       try {
         const projectId = await projectOfToolCall(
           d1Directory,
           reach,
           toolArguments.project?.trim() ?? "",
         );
-        // `itx.run(script, { args })` at the project root, under this principal — the loaded script's
-        // own `env.ITX` is the project (principal-less: loaded code speaks for the project, library.ts).
+        // `itx.run(script)` at the project root, under this principal — the loaded script's own
+        // `env.ITX` is the project (principal-less: loaded code speaks for the project, library.ts).
         const value = await env.ITERATE_CONTEXT.getByName(
           DurableObjectNameCodec.stringify({ projectId, path: "/" }),
-        ).invokeAs(principal, [
-          "itx",
-          ["run", toolArguments.script, { args: toolArguments.args ?? [] }],
-        ]);
+        ).invokeAs(principal, ["itx", ["run", toolArguments.script]]);
         // THE JSON BOUNDARY: a round trip drops what JSON cannot carry and throws on what it refuses.
         const json = JSON.stringify(value) ?? "null";
         return {
