@@ -19,7 +19,7 @@ extern "C" {
  * to the caller rather than blocking Cap'n Web or silently losing an edge.
  *
  * A PRESS IS THE WHOLE REQUEST — it opens the call as well as the microphone,
- * exactly as `ptt-start` does on the stream. There was a `would_be_honoured`
+ * exactly as the first microphone frame does on the stream. There was a `would_be_honoured`
  * driver here that answered a second field, `latched`, because a press with no
  * call up was accepted and then never read: the turn machine gated every use of
  * the talk latch behind `wants_call`, so the caller had to know to call

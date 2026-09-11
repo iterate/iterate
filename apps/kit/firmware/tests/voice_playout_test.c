@@ -31,8 +31,6 @@ static struct {
   uint32_t tail;
   bool abandon_next;
   uint8_t out[FRAME_BYTES];
-  /** The sink clock's reading when the newest chunk was delivered; 0 = never. */
-  uint64_t last_arrival_ms;
 } ring_state;
 
 static void ring_deliver(uint32_t frames) {
@@ -71,16 +69,10 @@ static enum iterate_kit_voice_playout_read ring_read(
   return ITERATE_KIT_VOICE_PLAYOUT_READ_FRAME;
 }
 
-static uint64_t ring_last_arrival_ms(void *context) {
-  (void)context;
-  return ring_state.last_arrival_ms;
-}
-
 static const struct iterate_kit_voice_playout_ring ring = {
   .context = NULL,
   .queued_bytes = ring_queued_bytes,
   .read = ring_read,
-  .last_arrival_ms = ring_last_arrival_ms,
 };
 
 /* --- a sink that counts, with a clock it owns ------------------------------ */
@@ -147,12 +139,6 @@ static enum iterate_kit_voice_playout_outcome step(
   return iterate_kit_voice_playout_step(&playout, &ring, sink);
 }
 
-/** A chunk lands NOW: delivered and stamped the way an owner's admit path does. */
-static void deliver_now(uint32_t frames) {
-  ring_deliver(frames);
-  ring_state.last_arrival_ms = sink_state.now_ms;
-}
-
 /** One on-time tick: the step, then the frame period passes. */
 static enum iterate_kit_voice_playout_outcome tick(
     const struct iterate_kit_voice_playout_sink *sink) {
@@ -180,16 +166,16 @@ static void nothing_plays_before_prefill(void) {
  * late afterwards however long the silence.
  */
 /*
- * A SHORT ANSWER PLAYS AFTER THE STALL WINDOW WITHOUT A MARKER. 100 ms of
- * answer, a third of the prefill, and no `last`: the ring waits exactly the
- * stall window after its newest chunk, then plays every frame it holds.
+ * A SHORT ANSWER PLAYS AT THE PRIME WAIT, WITHOUT A MARKER. 100 ms of answer,
+ * a third of the prefill, and no `last`: the ring waits exactly as long as a
+ * long answer's prefill would have taken to fill, then plays every frame.
  */
-static void a_short_answer_plays_after_the_stall_window(void) {
+static void a_short_answer_plays_at_the_prime_wait(void) {
   uint32_t index;
   reset(1000U);
-  deliver_now(5U);
+  ring_deliver(5U);
   assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PRIMING);
-  sink_state.now_ms += ITERATE_KIT_VOICE_SPEAKER_PRIME_STALL_MS - 1U;
+  sink_state.now_ms = 1000U + ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS - 1U;
   assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PRIMING);
   sink_state.now_ms += 1U;
   for (index = 0U; index < 5U; ++index) {
@@ -200,24 +186,39 @@ static void a_short_answer_plays_after_the_stall_window(void) {
 }
 
 /*
- * A LONG ANSWER STILL PRIMES TO THE PREFILL. Chunks every 100 ms never leave
- * a stall-window gap, so nothing plays until the ring holds the full prefill.
+ * A JITTER GAP DURING PRIMING DOES NOT START PLAYBACK EARLY. A chunk, then
+ * 200 ms of nothing (a late frame on a jittery link), then the rest: the ring
+ * keeps priming through the gap and starts when the prefill is in.
+ */
+static void a_jitter_gap_during_priming_does_not_start_early(void) {
+  reset(1000U);
+  ring_deliver(5U);
+  assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PRIMING);
+  sink_state.now_ms = 1200U;
+  assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PRIMING);
+  assert(sink_state.written == 0U);
+  ring_deliver((uint32_t)PREFILL_FRAMES - 5U);
+  sink_state.now_ms = 1210U;
+  assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PLAYED);
+}
+
+/*
+ * A LONG ANSWER STILL PRIMES TO THE PREFILL. Chunks every 100 ms reach the
+ * prefill before the wait is up, so playback starts on bytes, as before.
  */
 static void an_arriving_answer_still_primes_to_the_prefill(void) {
   uint32_t delivered = 0U;
   reset(1000U);
-  /* Chunks of 100 ms, each landing before the stall window is up, while
-   * the ring stays strictly below the prefill. */
   while ((delivered + 5U) * (uint32_t)FRAME_BYTES <
          (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES) {
-    deliver_now(5U);
+    ring_deliver(5U);
     delivered += 5U;
     assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PRIMING);
     sink_state.now_ms += 100U;
     assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PRIMING);
   }
   /* The chunk that reaches the prefill starts playback at once. */
-  deliver_now((uint32_t)PREFILL_FRAMES - delivered);
+  ring_deliver((uint32_t)PREFILL_FRAMES - delivered);
   assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PLAYED);
   assert(playout.stats.waits_priming > 0U);
 }
@@ -401,7 +402,8 @@ static void the_stamp_is_taken_before_the_write(void) {
 
 int main(void) {
   nothing_plays_before_prefill();
-  a_short_answer_plays_after_the_stall_window();
+  a_short_answer_plays_at_the_prime_wait();
+  a_jitter_gap_during_priming_does_not_start_early();
   an_arriving_answer_still_primes_to_the_prefill();
   an_answer_plays_whole_then_settles();
   a_hole_mid_answer_is_concealed_only_by_a_sink_that_can();

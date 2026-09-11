@@ -182,17 +182,24 @@ enum {
    */
   ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES = 210 * 32 + 2880,
   /*
-   * Below the prefill, a ring that has received NOTHING NEW for this long
-   * starts anyway. GPT-Live emits one 100 ms delta per 100 ms while the model
-   * speaks and the facet forwards each on arrival, so 150 ms without a new
-   * chunk means the answer has ended (its marker follows only after 700 ms of
-   * trailing silence) or the path stalled — either way nothing is coming that
-   * is worth waiting for, and waiting for a prefill that will not fill was how
-   * a 200 ms "Okay." sat silent until the marker. The normal case is
-   * unchanged: an answer that keeps arriving primes to the full 300 ms, and a
-   * ring that has already left priming is never re-gated by this.
+   * PRIMING ALSO ENDS ON TIME: this long after audio first appeared in the
+   * ring, playback starts with whatever is there. Prefill asks "will more
+   * arrive in time?"; an answer shorter than the prefill never fills it, and
+   * its end marker follows only after 700 ms of trailing silence — so a
+   * 200 ms "Okay." once sat silent until the marker. The wait equals the
+   * prefill's own duration, so a short answer starts exactly when a long one
+   * would have, and never later.
+   *
+   * IT IS TIME SINCE THE FIRST CHUNK, NOT SINCE THE LAST. A "nothing new for
+   * 150 ms" rule was tried first (2026-09-11) and fired on ordinary jitter:
+   * client arrival gaps run p90 150–240 ms, so it started playback with
+   * 100–200 ms buffered and starved on the next late frame — Jonas's live
+   * run played 116 frames with 104 concealed, the holes clustered at each
+   * short answer's onset. One late frame cannot move this bound.
    */
-  ITERATE_KIT_VOICE_SPEAKER_PRIME_STALL_MS = 150,
+  ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS =
+      ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES /
+      (ITERATE_KIT_VOICE_FRAME_BYTES / ITERATE_KIT_VOICE_FRAME_MS),
   ITERATE_KIT_VOICE_SPEAKER_CONCEAL_LIMIT_MS = 400,
   /*
    * How far behind its own timeline playback may fall before a frame is
@@ -218,8 +225,23 @@ enum {
    * to a call recycle, transport restart, or process restart instead of a
    * permanently plausible-looking stuck session.
    */
+  /*
+   * The HOST CLI's local microphone gate still reads these two: how long its
+   * hold-to-talk mode drains a released button's queue, and how long a held
+   * button may run before the CLI lets go by itself. Nothing on a board and
+   * nothing on the wire uses them (push-to-talk left the wire 2026-09-11).
+   */
   ITERATE_KIT_VOICE_TURN_FLUSH_TIMEOUT_MS = 1500,
   ITERATE_KIT_VOICE_TURN_MAX_MS = 30000,
+  /*
+   * While a call is open the device says so every this-often with an
+   * ephemeral `keepalive` append, so the facet's idle deadline (sixty
+   * seconds without device input) does not take a person who holds the
+   * talk button rarely, or a quiet open-mic room whose frames the facet
+   * drops, for an abandoned call. Push-to-talk's turn markers used to be
+   * that proof of life; they left the wire on 2026-09-11.
+   */
+  ITERATE_KIT_VOICE_CALL_KEEPALIVE_MS = 20000,
   /* Bounds DNS, TCP, TLS, and HTTP upgrade as one reconnect attempt. */
   ITERATE_KIT_VOICE_CONNECTION_OPEN_TIMEOUT_MS = 10000,
   ITERATE_KIT_VOICE_CONTROL_POLL_MS = 25,

@@ -19,13 +19,15 @@
 
 enum {
   /*
-   * 96, raised from 32: a scenario that drains a 20-frame dial buffer sends
-   * five mic appends plus markers on top of the ~28 messages a mounted
-   * session has already recorded, and a recorder that silently refuses the
-   * overflow (CAPNWEB_E_TRANSPORT below) makes the loop under test look
-   * like it stopped sending.
+   * 1024, raised from 96 (from 32): the recorder refuses anything past its
+   * capacity with CAPNWEB_E_TRANSPORT, which fails the capnweb session for
+   * good and makes the loop under test look like it stopped sending. Since
+   * push-to-talk left the wire (2026-09-11) microphone frames flow the moment
+   * the stream is up, so a scenario that speaks into a dial records every
+   * flush, not a handful of turn markers — and eleven scenarios share one
+   * recorder. Eight megabytes of static in a host test binary is cheap.
    */
-  FAKE_SENT_CAPACITY = 96,
+  FAKE_SENT_CAPACITY = 1024,
   /*
    * One recorded message holds what one real outbox slot holds
    * (ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOT_CAPACITY, 8 KiB). It was 4096,

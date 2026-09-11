@@ -76,11 +76,21 @@ enum {
   ITERATE_KIT_VOICELAB_CHUNK_BYTES = 4800,
   ITERATE_KIT_VOICELAB_B64_CAPACITY = 6912,
   /*
-   * Recycle the live connection before the platform's ~1000-push
-   * per-connection delivery budget goes silent (measured; see
-   * apps/os/docs/stream-event-connections-and-subscriptions.md).
+   * ITERATE_KIT_VOICELAB_RECYCLE_AFTER_BATCHES = 600 was here: a PROACTIVE
+   * recycle of the live connection every 600 delivered batches, racing a
+   * ~1000-push per-connection delivery budget the platform once had. The
+   * budget is gone with the streams rebuild (#2395: no per-connection cap in
+   * apps/os/src/domains/streams/stream-event-sender.ts or
+   * stream-connection-relay.ts), and the recycle it justified had become a
+   * cost with no benefit: every stream append, the device's own mic flushes
+   * included, delivers a batch, so at ~40 batches/s an open-mic call
+   * recycled every ~15 s — a TLS round trip on the task that decodes
+   * speaker PCM, and a burst of duplicate frames each time. Removed
+   * 2026-09-11. Reconnects are FAILURE-DRIVEN only now: the downlink
+   * deadline in voice_loop.c and the transport restart still call
+   * iterate_kit_voicelab_recycle_connection(). Proof: a long unattended
+   * call reports connectionRecycles=0 with audio flowing to the end.
    */
-  ITERATE_KIT_VOICELAB_RECYCLE_AFTER_BATCHES = 600,
 };
 
 enum iterate_kit_voicelab_state {
@@ -235,8 +245,22 @@ struct iterate_kit_voicelab_options {
 /**
  * The device end of the voicelab stream protocol over ONE Cap'n Web session:
  * authenticate(project-secret) -> projects.get -> streams.get(path), then
- * high-frequency one-way `append` calls carrying ephemeral
- * `events.iterate.com/voice-agent/mic-frame` events (base64 PCM16).
+ * one-way `append` calls carrying ephemeral
+ * `events.iterate.com/voice-agent/mic-frame` events (base64 PCM16, one event
+ * per wall-clock flush, any even byte length).
+ *
+ * THE CLIENT CONTRACT IS THREE SENTENCES (2026-09-11). Send microphone audio
+ * up while the microphone is open — an open-mic board's follows the call, a
+ * hold-to-talk board's follows the button — and the FIRST frame is what opens
+ * the call: the facet mints it, holds what arrives while it dials, and
+ * GPT-Live's own voice activity decides the turns. Say `keepalive` every
+ * ~20 s while the call is open, so a released button is not an abandoned
+ * call. Play speaker frames in `deviceSpeakerFrameSeq` order, clear on
+ * `clearSpeakerBufferBeforeFrame`, and treat `lastFrameOfAnswer` as the end
+ * of an answer. Ending the call is the one thing the button says to the far
+ * side (`conversation-ended`). There is no `ptt-start`, no `ptt-end`, no
+ * button audit and no re-press: push-to-talk is a local microphone gate and
+ * the wire never hears about it.
  *
  * There WAS a low-rate pulled `voice-agent/ping` append here as an RTT and
  * health probe, answered by a `voice-agent/pong` the bridge appended back. It
@@ -329,12 +353,20 @@ struct iterate_kit_voicelab {
   uint32_t connection_generation;
   /*
    * A recycle is asynchronous: batches_on_connection only resets when the
-   * successor resolves. Without this flag needs_recycle() stayed true for
-   * the whole round trip and the caller's poll loop opened a new connection
-   * every iteration — 22 of them in one call, against a budget of one per
-   * 600 batches.
+   * successor resolves. Without this flag the (since removed) proactive
+   * needs_recycle() stayed true for the whole round trip and the caller's
+   * poll loop opened a new connection every iteration — 22 of them in one
+   * call. The failure-driven callers still rely on it.
    */
   bool recycle_pending;
+  /*
+   * An answer has begun on the speaker lane and its `last` has not arrived:
+   * the far side OWES this device frames. Set by a speaker chunk that carries
+   * audio, cleared by `last`, by an empty clear frame (a barge with nothing
+   * replacing it), and at every call boundary. This is what makes downlink
+   * silence evidence — see iterate_kit_voicelab_downlink_expected().
+   */
+  bool answer_open;
   /*
    * Which bridge owns the live call. Every bridge announces conversation-ended when
    * it dies, and they all share one conversationId — so a stale bridge shutting down
@@ -422,14 +454,12 @@ enum capnweb_status iterate_kit_voicelab_append_raw(
     size_t length);
 
 /**
- * Append a durable events.iterate.com/voice-agent/conversation-requested event
- * to this stream. The installed voice-agent guest processor opens the Grok
- * call; the project worker is not
- * involved. Nothing outside the platform holds the call open afterwards: no
- * laptop bridge, no second socket. One start in flight at a time;
- * `call_active` turns true when conversation-accepted arrives on the stream.
- * `greeting` may be NULL. Strings containing JSON control, quote, or backslash
- * characters are rejected rather than emitted as malformed events.
+ * Note that this device wants a call. NOTHING GOES ON THE WIRE: the call is
+ * opened by the first microphone frame the facet receives, so "starting" a
+ * call is letting frames flow. This only raises `call_pending`, so the
+ * owner's launch ladder can tell a dial in progress from an idle device;
+ * conversation-accepted clears it. `greeting` is accepted for source
+ * compatibility and ignored (greetings are the server's to decide).
  */
 enum capnweb_status iterate_kit_voicelab_start_call(
     struct iterate_kit_voicelab *voicelab, const char *greeting);
@@ -441,12 +471,6 @@ enum capnweb_status iterate_kit_voicelab_start_call(
  * confirms it. `reason` follows the same restricted JSON-string contract as
  * `greeting`; NULL becomes `hangup`.
  */
-/** Append the durable button audit: `button-pressed {control}`. Called from
- * the loop's ONE intent-resolution site, so a physical press and an injected
- * one are indistinguishable there — which is the requirement. */
-enum capnweb_status iterate_kit_voicelab_note_button(
-    struct iterate_kit_voicelab *voicelab, const char *control);
-
 enum capnweb_status iterate_kit_voicelab_end_call(
     struct iterate_kit_voicelab *voicelab, const char *reason);
 
@@ -459,30 +483,34 @@ enum capnweb_status iterate_kit_voicelab_end_call(
  */
 void iterate_kit_voicelab_forget_call(struct iterate_kit_voicelab *voicelab);
 
-/** The two edges of one push-to-talk turn. */
-enum iterate_kit_voicelab_turn {
-  /** Button down: cancel any answer in flight and start listening. */
-  ITERATE_KIT_VOICELAB_TURN_START = 0,
-  /** Button up: commit what was said and ask for the answer. */
-  ITERATE_KIT_VOICELAB_TURN_COMMIT,
-};
-
 /**
- * Mark a turn edge. With manual turn detection there is no VAD anywhere —
- * the device decides when speech starts and stops, and the bridge translates
- * these into the provider's commit/response controls. One-way: a lost edge is
- * recoverable by pressing again, and blocking the audio lane on an
- * acknowledgement would be worse.
+ * One ephemeral `keepalive` append: the call UI is alive. The facet's idle
+ * deadline counts device input, and a hold-to-talk board between presses (or
+ * an open-mic board whose silence the facet drops) sends none — see
+ * ITERATE_KIT_VOICE_CALL_KEEPALIVE_MS.
  */
-enum capnweb_status iterate_kit_voicelab_mark_turn(
-    struct iterate_kit_voicelab *voicelab,
-    enum iterate_kit_voicelab_turn turn);
+enum capnweb_status iterate_kit_voicelab_keepalive(
+    struct iterate_kit_voicelab *voicelab);
 
 /**
- * True when the live connection has taken enough delivery batches that the
- * platform's per-connection push budget is near. The owner should call
- * iterate_kit_voicelab_recycle_connection() from its poll loop (never from
- * inside a callback it wants to keep re-entrancy-free).
+ * Whether downlink silence means anything right now. GPT-Live's facet drops
+ * idle silence, so an accepted call with nothing owed is QUIET BY DESIGN —
+ * a person thinking, the model listening — and a deadline that fired on it
+ * recycled the connection every ten seconds of ordinary conversation (a TLS
+ * round trip on the task that decodes speaker PCM, measured 2026-09-11 as
+ * 18 recycles in a six-minute call). Traffic is expected only while a wanted
+ * call has not been accepted yet, or an answer has begun and not ended.
+ */
+bool iterate_kit_voicelab_downlink_expected(
+    const struct iterate_kit_voicelab *voicelab);
+
+/**
+ * ALWAYS FALSE since 2026-09-11. This asked whether the live connection had
+ * taken enough delivery batches that the platform's per-connection push
+ * budget was near; that budget is gone (see the note where
+ * ITERATE_KIT_VOICELAB_RECYCLE_AFTER_BATCHES was declared), so no batch count
+ * ever calls for a recycle. Kept as a function so the owners' poll loops need
+ * no change; reconnects are failure-driven only.
  */
 bool iterate_kit_voicelab_needs_recycle(
     const struct iterate_kit_voicelab *voicelab);

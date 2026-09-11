@@ -8,13 +8,13 @@ enum {
   BYTES_PER_MS = 32,
   ONE_CHUNK_BYTES = 100 * BYTES_PER_MS, /* the sender's 100 ms chunk */
   CATCHUP_MS = ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS,
-  STALL_MS = ITERATE_KIT_VOICE_SPEAKER_PRIME_STALL_MS,
+  PRIME_WAIT_MS = ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS,
 };
 
 /* Leaves priming the way an owner does: with the prefill in the ring. */
 static void leave_priming(struct iterate_kit_voice_playback_clock *clock) {
   assert(iterate_kit_voice_playback_clock_ready(
-      clock, ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES, 1000U, 1000U));
+      clock, ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES, 1000U));
 }
 
 /*
@@ -39,47 +39,69 @@ static void play_frame(
 static void opening_prefill_is_exact(void) {
   struct iterate_kit_voice_playback_clock clock;
   iterate_kit_voice_playback_clock_init(&clock);
-  /* The newest chunk has just landed, so nothing has stalled. */
   assert(!iterate_kit_voice_playback_clock_ready(
-      &clock, ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES - 1U, 1000U, 1000U));
+      &clock, ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES - 1U, 1000U));
   assert(iterate_kit_voice_playback_clock_ready(
-      &clock, ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES, 1000U, 1000U));
+      &clock, ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES, 1000U));
 }
 
 /*
  * A SHORT ANSWER DOES NOT WAIT FOR ITS MARKER. The sender emits a chunk every
  * 100 ms while the model speaks and marks the end only after 700 ms of
  * silence; an answer shorter than the prefill would otherwise sit in the ring
- * until that marker. Once nothing new has arrived for the stall window, what
- * is queued plays — and priming is over for good, however little is queued.
+ * until that marker. Priming ends PRIME_WAIT_MS after audio first appeared —
+ * exactly when a long answer's prefill would have filled — and then stays
+ * over, however little is queued.
  */
-static void a_stalled_ring_below_prefill_starts_after_the_window(void) {
+static void a_short_answer_starts_at_the_prime_wait(void) {
   struct iterate_kit_voice_playback_clock clock;
   iterate_kit_voice_playback_clock_init(&clock);
-  /* 100 ms queued, its chunk just landed: keep priming. */
+  /* 100 ms queued: the wait starts now. */
+  assert(!iterate_kit_voice_playback_clock_ready(&clock, ONE_CHUNK_BYTES, 1000U));
+  assert(clock.priming_since_ms == 1000U);
+  /* Another chunk 100 ms later: still below the prefill, still waiting. */
   assert(!iterate_kit_voice_playback_clock_ready(
-      &clock, ONE_CHUNK_BYTES, 1000U, 1000U));
-  /* Another chunk 100 ms later: the answer is still arriving, keep priming. */
+      &clock, 2U * ONE_CHUNK_BYTES, 1100U));
+  /* One millisecond short of the wait: not yet. */
   assert(!iterate_kit_voice_playback_clock_ready(
-      &clock, 2U * ONE_CHUNK_BYTES, 1100U, 1100U));
-  /* One millisecond short of the window: not yet. */
-  assert(!iterate_kit_voice_playback_clock_ready(
-      &clock, 2U * ONE_CHUNK_BYTES, 1100U + STALL_MS - 1U, 1100U));
-  /* The window is up with nothing new: play what is there. */
+      &clock, 2U * ONE_CHUNK_BYTES, 1000U + PRIME_WAIT_MS - 1U));
+  /* The wait is up: play what is there. */
   assert(iterate_kit_voice_playback_clock_ready(
-      &clock, 2U * ONE_CHUNK_BYTES, 1100U + STALL_MS, 1100U));
+      &clock, 2U * ONE_CHUNK_BYTES, 1000U + PRIME_WAIT_MS));
   assert(!clock.priming);
   /* Out of priming, a ring below the prefill is still ready. */
   assert(iterate_kit_voice_playback_clock_ready(
-      &clock, ONE_CHUNK_BYTES, 1100U + STALL_MS + FRAME_MS, 1100U));
+      &clock, ONE_CHUNK_BYTES, 1000U + PRIME_WAIT_MS + FRAME_MS));
 }
 
-/* Nothing queued is nothing to play: a stale stamp opens no sink. */
-static void an_empty_ring_never_starts_on_a_stall(void) {
+/*
+ * A JITTER GAP DURING PRIMING DOES NOT START PLAYBACK EARLY. Counted from the
+ * first chunk, a 200 ms silence after it changes nothing: the ring keeps
+ * collecting until the wait is up or the prefill is in.
+ */
+static void a_jitter_gap_during_priming_does_not_start_early(void) {
   struct iterate_kit_voice_playback_clock clock;
   iterate_kit_voice_playback_clock_init(&clock);
-  assert(!iterate_kit_voice_playback_clock_ready(&clock, 0U, 5000U, 1000U));
+  assert(!iterate_kit_voice_playback_clock_ready(&clock, ONE_CHUNK_BYTES, 1000U));
+  /* 200 ms with nothing new — a late frame, not an ended answer. */
+  assert(!iterate_kit_voice_playback_clock_ready(&clock, ONE_CHUNK_BYTES, 1200U));
   assert(clock.priming);
+  /* The late chunk lands; the prefill is reached, playback starts. */
+  assert(iterate_kit_voice_playback_clock_ready(
+      &clock, ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES, 1210U));
+}
+
+/* Nothing queued is nothing to play, however long the wait: the wait does
+ * not even begin until audio is there. */
+static void an_empty_ring_never_starts_on_time(void) {
+  struct iterate_kit_voice_playback_clock clock;
+  iterate_kit_voice_playback_clock_init(&clock);
+  assert(!iterate_kit_voice_playback_clock_ready(&clock, 0U, 1000U));
+  assert(!iterate_kit_voice_playback_clock_ready(&clock, 0U, 9000U));
+  assert(clock.priming && clock.priming_since_ms == 0U);
+  assert(!iterate_kit_voice_playback_clock_ready(&clock, ONE_CHUNK_BYTES, 9000U));
+  assert(iterate_kit_voice_playback_clock_ready(
+      &clock, ONE_CHUNK_BYTES, 9000U + PRIME_WAIT_MS));
 }
 
 /*
@@ -97,8 +119,7 @@ static void a_jitter_gap_after_priming_does_not_reprime(void) {
       ITERATE_KIT_VOICE_PLAYBACK_CONCEAL);
   assert(!clock.priming);
   /* A chunk lands 220 ms later, well below the prefill: plays now. */
-  assert(iterate_kit_voice_playback_clock_ready(
-      &clock, ONE_CHUNK_BYTES, 1220U, 1220U));
+  assert(iterate_kit_voice_playback_clock_ready(&clock, ONE_CHUNK_BYTES, 1220U));
 }
 
 /*
@@ -147,7 +168,7 @@ static void completed_answer_returns_to_priming_without_silence(void) {
   iterate_kit_voice_playback_clock_answer_done(&clock);
   assert(iterate_kit_voice_playback_clock_empty(&clock, 1000U) ==
       ITERATE_KIT_VOICE_PLAYBACK_WAIT);
-  assert(!iterate_kit_voice_playback_clock_ready(&clock, 0U, 1000U, 0U));
+  assert(!iterate_kit_voice_playback_clock_ready(&clock, 0U, 1000U));
 }
 
 /*
@@ -357,8 +378,9 @@ static void a_deep_queue_on_time_loses_nothing(void)
 
 int main(void) {
   opening_prefill_is_exact();
-  a_stalled_ring_below_prefill_starts_after_the_window();
-  an_empty_ring_never_starts_on_a_stall();
+  a_short_answer_starts_at_the_prime_wait();
+  a_jitter_gap_during_priming_does_not_start_early();
+  an_empty_ring_never_starts_on_time();
   a_jitter_gap_after_priming_does_not_reprime();
   concealment_never_costs_a_real_frame();
   completed_answer_returns_to_priming_without_silence();

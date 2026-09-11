@@ -416,25 +416,27 @@ static void the_first_answer_plays_whole(void) {
  * the failure is made of.
  */
 /*
- * A SHORT ANSWER WITHOUT A MARKER PLAYS AFTER THE STALL WINDOW. One chunk,
- * 100 ms, a third of the prefill and no `last`: nothing plays while the ring
- * waits for company, then the stall window passes with nothing new and every
- * frame plays — the board's admit path stamps arrivals for the clock.
+ * A SHORT ANSWER WITHOUT A MARKER PLAYS AT THE PRIME WAIT. One chunk, 100 ms,
+ * a third of the prefill and no `last`: nothing plays while the ring waits,
+ * a 200 ms gap changes nothing, and once the wait is up every frame plays.
  */
-static void a_short_answer_without_a_marker_plays_after_the_stall(void) {
+static void a_short_answer_without_a_marker_plays_at_the_prime_wait(void) {
   const uint32_t written_before = frames_written;
   int pass;
   iterate_kit_fake_esp_idf_advance_ms(5000U);
   deliver_chunk(true, false, CHUNK_FRAMES);
   /*
    * A priming pass sleeps 5 ms of fake time, so `play_out()`'s 400 passes
-   * would run the stall window out by themselves; ten passes are 50 ms,
-   * inside it — and nothing plays.
+   * would run the wait out by themselves; ten passes are 50 ms.
    */
   for (pass = 0; pass < 10; ++pass) playback();
   assert(frames_written == written_before);
+  /* A 200 ms gap during priming: still nothing. */
+  iterate_kit_fake_esp_idf_advance_ms(200U);
+  for (pass = 0; pass < 5; ++pass) playback();
+  assert(frames_written == written_before);
   iterate_kit_fake_esp_idf_advance_ms(
-      (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PRIME_STALL_MS);
+      (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS);
   play_out();
   assert(frames_written == written_before + (uint32_t)CHUNK_FRAMES);
 }
@@ -557,7 +559,7 @@ int main(void) {
   deliver_accepted();
 
   the_first_answer_plays_whole();
-  a_short_answer_without_a_marker_plays_after_the_stall();
+  a_short_answer_without_a_marker_plays_at_the_prime_wait();
   a_later_answer_plays_whole_too();
   a_live_answer_superseded_after_a_stall();
   audio_with_no_clear_at_all_still_plays();

@@ -349,6 +349,8 @@ static void handle_spk_frame(
    * prevent cannot happen — a ring has no phase, and consecutive PCM16 samples
    * written consecutively are the same waveform however they were cut.
    */
+  /* The lane owes more frames until `last`; an empty clear frame owes none. */
+  voicelab->answer_open = !last && chunk_length > 0U;
   if (chunk_length > 0U && voicelab->options.on_speaker != NULL) {
     ++voicelab->spk_frames_received;
     voicelab->options.on_speaker(
@@ -490,6 +492,7 @@ static enum capnweb_status batch_dispatch(
         }
       }
       voicelab->call_active = true;
+      voicelab->answer_open = false;
       voicelab->call_pending = false;
       /*
        * THE WATERMARK IS PER-CONVERSATION; THE TOTALS ARE PER-RUN.
@@ -548,6 +551,7 @@ static enum capnweb_status batch_dispatch(
       voicelab->live_bridge_id[0] = '\0';
       voicelab->live_conversation_id[0] = '\0';
       voicelab->call_active = false;
+  voicelab->answer_open = false;
       if (voicelab->options.on_control != NULL) {
         voicelab->options.on_control(
             voicelab->options.downlink_context,
@@ -613,24 +617,19 @@ static void connection_opened(
   voicelab->capnweb_status = CAPNWEB_OK;
 }
 
-bool iterate_kit_voicelab_needs_recycle(
+bool iterate_kit_voicelab_downlink_expected(
     const struct iterate_kit_voicelab *voicelab) {
-  return voicelab != NULL &&
-      !voicelab->recycle_pending &&
-      voicelab->state == ITERATE_KIT_VOICELAB_READY &&
-      voicelab->has_connection_capability &&
-      voicelab->batches_on_connection >=
-          ITERATE_KIT_VOICELAB_RECYCLE_AFTER_BATCHES;
+  if (voicelab == NULL) return false;
+  return !voicelab->call_active || voicelab->answer_open;
 }
 
-/*
- * openConnection with the constrained-consumer contract this device needs:
- * one exported callback capability, at most 2 events / 2600 event-bytes per
- * batch (one inbox slot's worth), and no per-batch core state. Serves both
- * the first open and every proactive recycle; the incumbent connection is
- * released only after its successor resolves (make-before-break, offset
- * dedupe handles the overlap).
- */
+bool iterate_kit_voicelab_needs_recycle(
+    const struct iterate_kit_voicelab *voicelab) {
+  /* No proactive recycle any more — see the header. */
+  (void)voicelab;
+  return false;
+}
+
 enum capnweb_status iterate_kit_voicelab_recycle_connection(
     struct iterate_kit_voicelab *voicelab) {
   static const char *const open_path[] = {"openConnection"};
@@ -1202,16 +1201,6 @@ enum capnweb_status iterate_kit_voicelab_append_raw(
       length);
 }
 
-static void start_call_completed(
-    void *context, const struct capnweb_result *result) {
-  struct iterate_kit_voicelab *voicelab = context;
-  voicelab->call_pending = false;
-  if (result->kind == CAPNWEB_RESULT_VALUE && result->status == CAPNWEB_OK) {
-    ++voicelab->call_starts;
-  } else {
-    ++voicelab->call_failures;
-  }
-}
 
 /* --- the face, pulled out of the processor's own runtime bag ------------- */
 
@@ -1330,14 +1319,14 @@ static bool json_literal_contents_are_safe(const char *value) {
  * wedges: the device asked for a call the server already had, nine times, and
  * every request went unanswered in silence.
  *
- * `ptt-start` is the whole request now. A device with no call gets one; a
- * device already on a call gets a fresh utterance. The client path still
- * rides along so the conversation can subscribe to this board's presence.
+ * THE MICROPHONE IS THE WHOLE REQUEST NOW. A device with no call opens one
+ * by sending audio, and a device already on a call is simply heard; this
+ * function only raises the local `call_pending` the launch ladder reads.
+ * The client path still rides along so the conversation can subscribe to
+ * this board's presence.
  */
 enum capnweb_status iterate_kit_voicelab_start_call(
     struct iterate_kit_voicelab *voicelab, const char *greeting) {
-  int length;
-  enum capnweb_status status;
   if (voicelab == NULL) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
@@ -1345,37 +1334,16 @@ enum capnweb_status iterate_kit_voicelab_start_call(
       voicelab->call_pending || !voicelab->has_stream_capability) {
     return CAPNWEB_E_STATE;
   }
-  /* Greetings are the server's to decide; accepted for source compatibility
-   * with the four device loops and deliberately not sent. */
+  /*
+   * NO EVENT. This appended a durable `ptt-start` — the call request, the
+   * one press a board owed — until 2026-09-11. The facet now mints the call
+   * from the first microphone frame and holds what arrives while it dials,
+   * so the request IS the audio; `call_pending` stays so the launch ladder
+   * can tell a dial in progress from an idle device.
+   */
   (void)greeting;
-  length = snprintf(
-      voicelab->args_buffer,
-      sizeof(voicelab->args_buffer),
-      /* DURABLE, deliberately: the opening press must survive the Durable
-       * Object reset that first touch of an idle stream provokes, so the
-       * rebuilt facet's catch-up can mint the call the reset swallowed. */
-      "[{\"type\":\"events.iterate.com/voice-agent/ptt-start\","
-      "\"payload\":{\"t\":%" PRIu64 "%s%s%s}}]",
-      voicelab->options.now_ms(voicelab->options.clock_context),
-      voicelab->options.client_path != NULL ? ",\"client\":\"" : "",
-      voicelab->options.client_path != NULL ? voicelab->options.client_path : "",
-      voicelab->options.client_path != NULL ? "\"" : "");
-  if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
-    return CAPNWEB_E_LIMIT;
-  }
-  status = capnweb_session_call_path(
-      voicelab->options.session,
-      voicelab->stream_capability,
-      append_path,
-      sizeof(append_path) / sizeof(append_path[0]),
-      voicelab->args_buffer,
-      (size_t)length,
-      start_call_completed,
-      voicelab);
-  if (status == CAPNWEB_OK) {
-    voicelab->call_pending = true;
-  }
-  return status;
+  voicelab->call_pending = true;
+  return CAPNWEB_OK;
 }
 
 void iterate_kit_voicelab_forget_call(struct iterate_kit_voicelab *voicelab) {
@@ -1383,6 +1351,7 @@ void iterate_kit_voicelab_forget_call(struct iterate_kit_voicelab *voicelab) {
     return;
   }
   voicelab->call_active = false;
+  voicelab->answer_open = false;
   voicelab->call_pending = false;
   voicelab->live_bridge_id[0] = '\0';
   voicelab->last_bridge_ms = 0U;
@@ -1391,22 +1360,18 @@ void iterate_kit_voicelab_forget_call(struct iterate_kit_voicelab *voicelab) {
   voicelab->spk_seq_last = -1;
 }
 
-enum capnweb_status iterate_kit_voicelab_note_button(
-    struct iterate_kit_voicelab *voicelab, const char *control) {
+
+enum capnweb_status iterate_kit_voicelab_keepalive(
+    struct iterate_kit_voicelab *voicelab) {
   int length;
   if (voicelab == NULL) return CAPNWEB_E_INVALID_ARGUMENT;
   if (voicelab->state != ITERATE_KIT_VOICELAB_READY) return CAPNWEB_E_STATE;
-  if (!json_literal_contents_are_safe(control)) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  /* DURABLE, deliberately: the audit's whole point is that somebody can
-   * read it later, and a server that wants to react subscribes to it. */
   length = snprintf(
       voicelab->args_buffer,
       sizeof(voicelab->args_buffer),
-      "[{\"type\":\"events.iterate.com/voice-agent/button-pressed\",\"payload\":{"
-      "\"control\":\"%s\"}}]",
-      control != NULL ? control : "press");
+      "[{\"type\":\"events.iterate.com/voice-agent/keepalive\",\"ephemeral\":true,"
+      "\"payload\":{\"t\":%" PRIu64 "}}]",
+      voicelab->options.now_ms(voicelab->options.clock_context));
   if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
     return CAPNWEB_E_LIMIT;
   }
@@ -1446,6 +1411,7 @@ enum capnweb_status iterate_kit_voicelab_end_call(
     return CAPNWEB_E_LIMIT;
   }
   voicelab->call_active = false;
+  voicelab->answer_open = false;
   return capnweb_session_call_oneway_path(
       voicelab->options.session,
       voicelab->stream_capability,
@@ -1455,48 +1421,6 @@ enum capnweb_status iterate_kit_voicelab_end_call(
       (size_t)length);
 }
 
-enum capnweb_status iterate_kit_voicelab_mark_turn(
-    struct iterate_kit_voicelab *voicelab,
-    enum iterate_kit_voicelab_turn turn) {
-  int length;
-  if (voicelab == NULL) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  if (voicelab->state != ITERATE_KIT_VOICELAB_READY) {
-    return CAPNWEB_E_STATE;
-  }
-  if (turn == ITERATE_KIT_VOICELAB_TURN_START) {
-    /* A new turn cancels whatever answer was mid-flight; its partial text
-     * must not prefix the next one. */
-  }
-  length = snprintf(
-      voicelab->args_buffer,
-      sizeof(voicelab->args_buffer),
-      /*
-       * THE PRESS IS THE VERB. A start/commit pair inside one `turn` event
-       * asked the reader to decode an action before it knew what happened;
-       * two named events say it outright, and `ptt-start` is also what opens
-       * a call — so a device that has never called before needs no separate
-       * request, and one already on a call needs no special case.
-       */
-      /* ptt-start durable (it can open a call and must outlive a DO reset);
-       * ptt-end stays ephemeral (losing it costs a turn, not a call). */
-      "[{\"type\":\"events.iterate.com/voice-agent/%s\"%s,"
-      "\"payload\":{\"t\":%" PRIu64 "}}]",
-      turn == ITERATE_KIT_VOICELAB_TURN_START ? "ptt-start" : "ptt-end",
-      turn == ITERATE_KIT_VOICELAB_TURN_START ? "" : ",\"ephemeral\":true",
-      voicelab->options.now_ms(voicelab->options.clock_context));
-  if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
-    return CAPNWEB_E_LIMIT;
-  }
-  return capnweb_session_call_oneway_path(
-      voicelab->options.session,
-      voicelab->stream_capability,
-      append_path,
-      1U,
-      voicelab->args_buffer,
-      (size_t)length);
-}
 
 enum capnweb_status iterate_kit_voicelab_close(
     struct iterate_kit_voicelab *voicelab) {

@@ -27,9 +27,9 @@
 #include "iterate/kit/voice_device_profile.h"
 
 #include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 static void test_assert(
     bool condition, const char *expression, const char *file, int line) {
@@ -334,6 +334,82 @@ static void deliver_accepted(void) {
   }
 }
 
+/** One speaker chunk for the accepted call: 30 bytes of PCM, optionally `last`. */
+/** The callback export of the NEWEST connection this device opened. */
+static long latest_callback_export_id(void) {
+  size_t index = iterate_kit_fake_platform_sent_count();
+  while (index-- > 0U) {
+    const char *sent = iterate_kit_fake_platform_sent(index);
+    const char *field = sent == NULL ? NULL : strstr(sent, "\"processEventBatch\":");
+    const char *marker = field == NULL ? NULL : strstr(field, "[\"export\",");
+    if (marker != NULL) return strtol(marker + strlen("[\"export\","), NULL, 10);
+  }
+  assert(!"no openConnection on the recorder");
+  return 0;
+}
+
+/*
+ * ONE OFFSET COUNTER FOR EVERY SYNTHETIC EVENT. The stream dedupes by offset,
+ * so a helper with its own numbering silently dropped its event once another
+ * helper had pushed the watermark past it — an hour of "the call is accepted
+ * and the device disagrees" before that showed up.
+ */
+static long next_event_offset = 200;
+
+static void deliver_spk_chunk(bool last) {
+  static char message[768];
+  struct iterate_kit_itx_connection *connection =
+      iterate_kit_fake_platform_connection();
+  const long export_id = latest_callback_export_id();
+  const long offset = next_event_offset++;
+  assert(connection != NULL);
+  (void)snprintf(
+      message,
+      sizeof(message),
+      "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
+      "{\"type\":\"events.iterate.com/voice-agent/spk-frame\","
+      "\"offset\":%ld,"
+      "\"payload\":{\"conversationId\":\"convdial\",\"deviceSpeakerFrameSeq\":%ld,%s"
+      "\"pcm\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}}"
+      "]],\"scannedThroughOffset\":%ld,\"state\":null}]]]",
+      export_id, offset, offset, last ? "\"lastFrameOfAnswer\":true," : "", offset);
+  deliver(connection, message);
+  {
+    char release[64];
+    (void)snprintf(
+        release, sizeof(release), "[\"release\",%lld,1]",
+        (long long)next_inbound_call_id++);
+    deliver(connection, release);
+  }
+}
+
+/** conversation-accepted for the NEWEST connection (deliver_accepted aims at the first). */
+static void deliver_accepted_latest(void) {
+  static char message[512];
+  struct iterate_kit_itx_connection *connection =
+      iterate_kit_fake_platform_connection();
+  const long export_id = latest_callback_export_id();
+  const long offset = next_event_offset++;
+  assert(connection != NULL);
+  (void)snprintf(
+      message,
+      sizeof(message),
+      "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
+      "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
+      "\"offset\":%ld,"
+      "\"payload\":{\"conversationId\":\"convdial\",\"handshakeTookMs\":2000}}"
+      "]],\"scannedThroughOffset\":%ld,\"state\":null}]]]",
+      export_id, offset, offset);
+  deliver(connection, message);
+  {
+    char release[64];
+    (void)snprintf(
+        release, sizeof(release), "[\"release\",%lld,1]",
+        (long long)next_inbound_call_id++);
+    deliver(connection, release);
+  }
+}
+
 /* --- the tests ------------------------------------------------------------ */
 
 /*
@@ -353,9 +429,10 @@ static void a_remote_press_raises_wants_call_with_no_button(void) {
 }
 
 /*
- * AND RELEASING TALK DOES NOT HANG UP. `ptt-end` commits a turn on the stream;
- * it does not end the conversation, and neither does this. A device that
- * dropped the call on every release would take one turn and stop.
+ * AND RELEASING TALK DOES NOT HANG UP. A release closes the microphone gate
+ * and says nothing to the far end; it does not end the conversation, and
+ * neither does this. A device that dropped the call on every release would
+ * take one turn and stop.
  */
 static void releasing_talk_keeps_the_call(void) {
   quiescent();
@@ -427,50 +504,47 @@ static void a_press_into_a_live_hop_asks_once(void) {
 }
 
 /*
- * SPEECH RELEASED INTO THE DIAL IS THE FIRST TURN, NOT NOTHING.
+ * SPEECH SPOKEN INTO THE DIAL FLOWS AT ONCE, AND NO TURN IS EVER MARKED.
  *
- * Press from sleep, say "count to forty", let go — and the call connects
- * seconds later. The words were captured from the moment the device started
- * listening, so the accepted call must carry them as its FIRST turn: drain
- * the queue, commit, get an answer. The old doctrine cleared the dial buffer
- * on a release the call had not caught up with yet, and a person who spoke
- * into the dial and let go got a call that opened onto silence. Reverting
- * the release-during-dial reversal in voice_loop.c fails the last three
- * assertions here.
+ * Press from sleep, say "count to forty", let go — the words go up as mic
+ * frames the moment the stream is up, call or no call: the first frame is
+ * what opens the call and the facet holds the rest while it dials (it did
+ * this device's holding for it; the device used to queue until accepted
+ * behind a durable `ptt-start`). Push-to-talk left the wire on 2026-09-11:
+ * no `ptt-start` on the press, no `ptt-end` on the release, nothing when the
+ * call connects — the button is a microphone gate and the far side's own
+ * voice activity decides the turn.
  */
-static void released_dial_speech_becomes_the_first_turn(void) {
-  size_t after_release;
+static void dial_speech_flows_at_once_and_no_turn_is_marked(void) {
+  size_t after_press;
   size_t after_accept;
   quiescent();
   /* Wait out the ladder, so the press below is a fresh dial. */
   run_ms(ITERATE_KIT_LAUNCH_PLACE_RETRY_MS + 500U);
 
   /* Press from sleep and speak into the dial: 400 ms of words. */
+  after_press = iterate_kit_fake_platform_sent_count();
   remote_call("pushToTalk", "start");
   step();
   speak_frames(20U);
+  run_ms(500U);
+  /* Already on the wire, with no call accepted yet. */
+  assert(sent_after_contains(after_press, "mic-frame"));
+  assert(!sent_after_contains(after_press, "ptt-start"));
 
-  /* Let go before anything answered. */
+  /* Let go before anything answered: nothing is said about it. */
   remote_call("pushToTalk", "stop");
   step();
-  after_release = iterate_kit_fake_platform_sent_count();
-
-  /* Seconds pass with no call: the words are HELD — not sent, not dropped,
-   * and above all not committed into a call that does not exist. */
   run_ms(2000U);
-  assert(!sent_after_contains(after_release, "mic-frame"));
-  assert(!sent_after_contains(after_release, "ptt-end"));
+  assert(!sent_after_contains(after_press, "ptt-end"));
 
-  /* The call connects late, with the button long since up. */
+  /* The call connects late, with the button long since up: still nothing. */
   after_accept = iterate_kit_fake_platform_sent_count();
-  deliver_accepted();
+  deliver_accepted_latest();
   run_ms(1000U);
-
-  /* The buffered words opened a turn, drained into the call, and the turn
-   * committed — the provider now owes an answer to what was said. */
-  assert(sent_after_contains(after_accept, "ptt-start"));
-  assert(sent_after_contains(after_accept, "mic-frame"));
-  assert(sent_after_contains(after_accept, "ptt-end"));
+  assert(!sent_after_contains(after_accept, "ptt-start"));
+  assert(!sent_after_contains(after_accept, "ptt-end"));
+  assert(!sent_after_contains(after_press, "button-pressed"));
 }
 
 /*
@@ -547,6 +621,71 @@ static void a_press_into_a_dead_hop_replaces_the_socket(void) {
   assert(iterate_kit_fake_platform_restarts_requested() == 1U);
 }
 
+/*
+ * AN ACCEPTED CALL WITH NOTHING OWED IS QUIET, NOT DEAD. GPT-Live's facet
+ * drops idle silence, so a person thinking and a model listening deliver no
+ * batch at all; the downlink deadline must not read that as a lost lane and
+ * recycle the connection (it did, every ten seconds, 2026-09-11).
+ */
+static void an_idle_accepted_call_is_not_recycled_for_silence(void) {
+  size_t after_accept;
+  /* The scenario before this one leaves the fake hop mute; a mute hop makes
+   * the press probes restart the transport, which also reopens connections. */
+  iterate_kit_fake_platform_set_hop_answers(true);
+  size_t after_answer;
+  quiescent();
+  run_ms(ITERATE_KIT_LAUNCH_PLACE_RETRY_MS + 500U);
+  after_accept = iterate_kit_fake_platform_sent_count();
+  remote_call("pushToTalk", "start");
+  /* A HOLD, not a tap: a tap is the end-call gesture. */
+  run_ms(1500U);
+  speak_frames(10U);
+  run_ms(200U);
+  remote_call("pushToTalk", "stop");
+  step();
+  deliver_accepted_latest();
+  run_ms(2000U);
+  /* The words went up (the first frame opens the call) and the call is live. */
+  assert(sent_after_contains(after_accept, "mic-frame"));
+  /* The answer came and finished: nothing more is owed. */
+  deliver_spk_chunk(false);
+  deliver_spk_chunk(true);
+  run_ms(1000U);
+  after_answer = iterate_kit_fake_platform_sent_count();
+  run_ms(ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS * 3U);
+  assert(!sent_after_contains(after_answer, "openConnection"));
+}
+
+/*
+ * A LANE THAT GOES SILENT MID-ANSWER IS DEAD. An answer began and its `last`
+ * never came: ten seconds of nothing owed-and-undelivered is the failure the
+ * deadline exists for, and the recycle still fires.
+ */
+static void a_lane_silent_mid_answer_is_recycled(void) {
+  size_t after_accept;
+  /* The scenario before this one leaves the fake hop mute; a mute hop makes
+   * the press probes restart the transport, which also reopens connections. */
+  iterate_kit_fake_platform_set_hop_answers(true);
+  size_t after_chunk;
+  quiescent();
+  run_ms(ITERATE_KIT_LAUNCH_PLACE_RETRY_MS + 500U);
+  after_accept = iterate_kit_fake_platform_sent_count();
+  remote_call("pushToTalk", "start");
+  /* A HOLD, not a tap: a tap is the end-call gesture. */
+  run_ms(1500U);
+  speak_frames(10U);
+  run_ms(200U);
+  remote_call("pushToTalk", "stop");
+  step();
+  deliver_accepted_latest();
+  run_ms(2000U);
+  assert(sent_after_contains(after_accept, "mic-frame"));
+  deliver_spk_chunk(false);
+  after_chunk = iterate_kit_fake_platform_sent_count();
+  run_ms(ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS + 2000U);
+  assert(sent_after_contains(after_chunk, "openConnection"));
+}
+
 int main(void) {
   boot();
   a_remote_press_raises_wants_call_with_no_button();
@@ -558,9 +697,11 @@ int main(void) {
   pump();
   a_press_into_a_live_hop_asks_once();
   pump();
-  released_dial_speech_becomes_the_first_turn();
+  dial_speech_flows_at_once_and_no_turn_is_marked();
   a_silent_dial_release_commits_no_turn();
   pump();
   a_press_into_a_dead_hop_replaces_the_socket();
+  an_idle_accepted_call_is_not_recycled_for_silence();
+  a_lane_silent_mid_answer_is_recycled();
   return 0;
 }

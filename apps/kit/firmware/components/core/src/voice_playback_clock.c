@@ -26,6 +26,7 @@ void iterate_kit_voice_playback_clock_reprime(
     struct iterate_kit_voice_playback_clock *clock) {
   if (clock == NULL) return;
   clock->priming = true;
+  clock->priming_since_ms = 0U;
   clock->answer_done = false;
   /*
    * AND THE ANSWER'S CLOCK GOES WITH ITS AUDIO.
@@ -78,8 +79,7 @@ uint32_t iterate_kit_voice_playback_clock_lag_ms(
 bool iterate_kit_voice_playback_clock_ready(
     struct iterate_kit_voice_playback_clock *clock,
     uint32_t queued_bytes,
-    uint64_t now_ms,
-    uint64_t last_arrival_ms) {
+    uint64_t now_ms) {
   if (clock == NULL) return false;
   /*
    * A FINISHED ANSWER IS ALWAYS READY, however little of it there is.
@@ -111,27 +111,29 @@ bool iterate_kit_voice_playback_clock_ready(
    */
   if (clock->priming && clock->answer_done) {
     clock->priming = false;
+    clock->priming_since_ms = 0U;
     return true;
   }
   if (clock->priming &&
       queued_bytes < ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES) {
     /*
-     * THE STALL START. Prefill asks "will more arrive in time?"; a source
-     * that emits a chunk every 100 ms and then goes quiet for
-     * ITERATE_KIT_VOICE_SPEAKER_PRIME_STALL_MS has answered no — the answer
-     * is over (its marker is still 700 ms of silence away) or the path
-     * stalled — so what is queued is played rather than held for a fill
-     * that is not coming. An EMPTY ring never starts: there is nothing to
-     * play and a stale stamp would only open the sink on silence.
+     * PRIMING ENDS ON TIME AS WELL AS ON BYTES. An answer shorter than the
+     * prefill never fills it and its end marker is 700 ms of silence away,
+     * so the wait is bounded by the prefill's own duration, counted from the
+     * moment audio first appeared in this priming. Counted from the FIRST
+     * chunk, not the newest: a rule keyed on "nothing new for 150 ms" fired
+     * on ordinary arrival jitter and started playback with too little
+     * buffered (see ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS). An EMPTY ring
+     * never starts: there is nothing to play.
      */
-    if (queued_bytes > 0U && last_arrival_ms != 0U && now_ms > last_arrival_ms &&
-        now_ms - last_arrival_ms >= ITERATE_KIT_VOICE_SPEAKER_PRIME_STALL_MS) {
-      clock->priming = false;
-      return true;
+    if (queued_bytes == 0U) return false;
+    if (clock->priming_since_ms == 0U) clock->priming_since_ms = now_ms;
+    if (now_ms - clock->priming_since_ms < ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS) {
+      return false;
     }
-    return false;
   }
   clock->priming = false;
+  clock->priming_since_ms = 0U;
   return true;
 }
 
@@ -145,6 +147,7 @@ iterate_kit_voice_playback_clock_empty(
            ITERATE_KIT_VOICE_SPEAKER_CONCEAL_LIMIT_MS)) {
     clock->answer_done = false;
     clock->priming = true;
+    clock->priming_since_ms = 0U;
     /*
      * SETTLED BACK TO PRIMING, WHICH IS THE DEVICE'S OWN PROOF THAT NO
      * ANSWER IS IN FLIGHT — and therefore that nothing is late.

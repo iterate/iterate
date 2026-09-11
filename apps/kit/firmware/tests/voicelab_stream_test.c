@@ -572,10 +572,10 @@ static void downlink_flow(void) {
     assert(occupied == 0U);
   }
 
-  /* Proactive recycle: successor opens under g2, incumbent released after. */
-  fixture.voicelab.batches_on_connection =
-      ITERATE_KIT_VOICELAB_RECYCLE_AFTER_BATCHES;
-  assert(iterate_kit_voicelab_needs_recycle(&fixture.voicelab));
+  /* A failure-driven reconnect (the downlink deadline's recovery): the
+   * successor opens under g2, the incumbent is released after. No batch
+   * count triggers this any more — see the note in voicelab_stream.h. */
+  fixture.voicelab.batches_on_connection = 600U;
   assert(
       iterate_kit_voicelab_recycle_connection(&fixture.voicelab) ==
       CAPNWEB_OK);
@@ -969,7 +969,6 @@ int main(void) {
   /* Call control is entirely stream-owned: a pulled append requests setup,
    * and hangup is a durable one-way append the bridge is subscribed to. */
   {
-    const char *start_message = NULL;
     const char *end_message = NULL;
     size_t index;
     assert(
@@ -977,44 +976,39 @@ int main(void) {
         CAPNWEB_E_INVALID_ARGUMENT);
     before = fixture.captured_count;
     /*
-     * A GREETING CANNOT REACH THE WIRE AT ALL NOW, which is a stronger
-     * guarantee than rejecting an unsafe one. This used to embed the caller's
-     * greeting in the JSON and therefore had to screen it for quotes; the
-     * press carries no greeting, so the injection it was screening for is not
-     * representable. Passing a hostile one must simply be harmless.
+     * STARTING A CALL PUTS NOTHING ON THE WIRE (2026-09-11). The call is
+     * opened by the first microphone frame the facet receives; this only
+     * raises `call_pending` for the owner's launch ladder. A hostile
+     * greeting is therefore not representable, let alone dangerous.
      */
     assert(
         iterate_kit_voicelab_start_call(&fixture.voicelab, "not \"json") ==
         CAPNWEB_OK);
     assert(fixture.voicelab.call_pending);
-    for (index = before; index < fixture.captured_count; ++index) {
-      if (strstr(fixture.captured[index], "ptt-start") != NULL) {
-        start_message = fixture.captured[index];
-      }
-    }
-    assert(start_message != NULL);
-    assert(strstr(start_message, "[\"append\"]") != NULL);
-    assert(
-        strstr(
-            start_message,
-            "\"type\":\"events.iterate.com/voice-agent/ptt-start\"") != NULL);
-    /* The press names no call, no turn mode and no greeting: all three are
-     * the server's, and a device asserting them was a second source of truth
-     * for state only the server holds. */
-    assert(strstr(start_message, "conversationId") == NULL);
-    assert(strstr(start_message, "greet") == NULL);
-    assert(strstr(start_message, "not \\\"json") == NULL);
+    assert(fixture.captured_count == before);
     /* One start in flight at a time. */
     assert(
         iterate_kit_voicelab_start_call(&fixture.voicelab, NULL) ==
         CAPNWEB_E_STATE);
-    receive(&fixture, "[\"resolve\",6,[{\"ok\":true}]]");
-    assert(!fixture.voicelab.call_pending);
-    assert(fixture.voicelab.call_starts == 1U);
-    /* The reply does not make the call live — the stream's conversation-accepted
-     * does, because the reply can be slow or lost and a call opened by
-     * anyone else counts just the same. */
+    /* Only the stream's conversation-accepted makes the call live. */
     assert(!fixture.voicelab.call_active);
+    iterate_kit_voicelab_forget_call(&fixture.voicelab);
+    assert(!fixture.voicelab.call_pending);
+
+    /* Proof of life for an open call: one ephemeral keepalive. */
+    before = fixture.captured_count;
+    assert(iterate_kit_voicelab_keepalive(&fixture.voicelab) == CAPNWEB_OK);
+    {
+      const char *keepalive_message = NULL;
+      for (index = before; index < fixture.captured_count; ++index) {
+        if (strstr(fixture.captured[index], "voice-agent/keepalive") != NULL) {
+          keepalive_message = fixture.captured[index];
+        }
+      }
+      assert(keepalive_message != NULL);
+      assert(strstr(keepalive_message, "\"ephemeral\":true") != NULL);
+      assert(strstr(keepalive_message, "conversationId") == NULL);
+    }
 
     before = fixture.captured_count;
     assert(
@@ -1033,28 +1027,6 @@ int main(void) {
      * nothing would record that the call was hung up. */
     assert(strstr(end_message, "ephemeral") == NULL);
 
-    /*
-     * THE TURN MODE IS NOT THE DEVICE'S TO DECLARE. A board used to announce
-     * "manual" or "vad" in its request and the server obeyed; the press is
-     * now identical either way, because the client segmenting with its own
-     * button IS manual turns and server VAD on top of that answers halfway
-     * through a sentence.
-     */
-    fixture.voicelab.options.turns = "vad";
-    before = fixture.captured_count;
-    start_message = NULL;
-    assert(
-        iterate_kit_voicelab_start_call(&fixture.voicelab, NULL) ==
-        CAPNWEB_OK);
-    for (index = before; index < fixture.captured_count; ++index) {
-      if (strstr(fixture.captured[index], "ptt-start") != NULL) {
-        start_message = fixture.captured[index];
-      }
-    }
-    assert(start_message != NULL);
-    assert(strstr(start_message, "turns") == NULL);
-    receive(&fixture, "[\"resolve\",8,[{\"ok\":true}]]");
-    assert(!fixture.voicelab.call_pending);
   }
 
   /* Raw diagnostics appends share the one-way lane. */
