@@ -374,16 +374,14 @@ export async function talk(options: TalkOptions = {}) {
         "--stream-path",
         setup.streamPath,
         ...driverArgs(options, minutes, options.openMic === true),
-        ...(options.pretendSpeaker === undefined
-          ? []
-          : ["--pretend-speaker", options.pretendSpeaker]),
+        ...(!options.pretendSpeaker ? [] : ["--pretend-speaker", options.pretendSpeaker]),
         "--speaker-wav",
         playback,
         "--mic-record",
         micRecord,
         // The CLI records the room itself, after its audio units are up (see
         // cli_main_start_room_recorder); it only has a speaker to hear when live.
-        ...(options.pretendSpeaker === undefined ? ["--room-wav", room] : []),
+        ...(!options.pretendSpeaker ? ["--room-wav", room] : []),
         "--report-json",
         reportJson,
       ],

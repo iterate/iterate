@@ -342,7 +342,7 @@ export async function device(options: DeviceOptions) {
               lastFrameOfAnswer?: boolean;
             };
             if (event.type === "events.iterate.com/voice-agent/answer-transcript")
-              spokenText += payload.text ?? "";
+              spokenText += payload.text || "";
             /* No response lifecycle on GPT-Live: the facet's end-of-answer
              * marker in the speaker frames is what says the voice finished. */
             if (

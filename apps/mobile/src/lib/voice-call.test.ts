@@ -359,7 +359,7 @@ function makeHarness(
     get openedWith() {
       return openedWith;
     },
-    deliver(event: { type: string; payload?: unknown }) {
+    deliver(event: { type: string; payload?: Record<string, unknown> }) {
       const activation = (
         appends.find((append) => append.type.endsWith("/mic-frame"))?.payload as
           | { activation?: string }
@@ -371,10 +371,7 @@ function makeHarness(
         event.type === "events.iterate.com/voice-agent/conversation-accepted" ||
         event.type === ENDED;
       const payload =
-        activationBound &&
-        typeof event.payload === "object" &&
-        event.payload !== null &&
-        !("activation" in event.payload)
+        activationBound && event.payload && !("activation" in event.payload)
           ? { ...event.payload, activation }
           : event.payload;
       processBatch!({ events: [{ ...event, payload }] });

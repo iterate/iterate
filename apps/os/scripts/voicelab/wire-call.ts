@@ -100,7 +100,7 @@ export async function openWireCall(
 
   const belongsToCall = (payload: Record<string, unknown>) =>
     payload.activation === activation ||
-    (watch.conversationId !== null && payload.conversationId === watch.conversationId);
+    (watch.conversationId && payload.conversationId === watch.conversationId);
   const text = (payload: Record<string, unknown>) =>
     typeof payload.text === "string" ? payload.text : "";
 
@@ -119,7 +119,11 @@ export async function openWireCall(
       "events.iterate.com/voice-agent/conversation-ended",
     ],
     processEventBatch: (batch: { events?: { type: string; payload?: unknown }[] }) => {
-      const events = batch.events ?? [];
+      const events = batch.events || [];
+      /* `spk-frame` is the selected event whose contract carries `pcm`.
+       * Stream batches are untyped at this boundary, so these small casts
+       * express only the field being measured; the runtime checks exclude a
+       * malformed payload rather than trusting it as parsed voice data. */
       const batchAudioFrames = events.filter(
         (event) =>
           event.type === "events.iterate.com/voice-agent/spk-frame" &&
@@ -303,7 +307,7 @@ export async function openWireCall(
         ],
         limit: 500,
       });
-      return (events ?? []).filter((event) => {
+      return (events || []).filter((event) => {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
         return payload.activation === activation || payload.conversationId === watch.conversationId;
       });

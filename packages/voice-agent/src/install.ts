@@ -244,8 +244,8 @@ export function withVoiceAgentSourceDependencies(packageJson: string): {
 } {
   const { manifest, dependencies } = parseManifest(packageJson);
   const { [VOICE_AGENT_PACKAGE_NAME]: published, ...rest } = dependencies;
-  const next = { ...rest, zod: dependencies.zod ?? VOICE_AGENT_ZOD_SPEC };
-  if (published === undefined && next.zod === dependencies.zod) {
+  const next = { ...rest, zod: dependencies.zod || VOICE_AGENT_ZOD_SPEC };
+  if (!published && next.zod === dependencies.zod) {
     return { content: packageJson, changed: false };
   }
   const content = JSON.stringify({ ...manifest, dependencies: next }, null, 2);
@@ -271,7 +271,7 @@ export async function installVoiceAgentFromSource(
       repo.readFile({ path: `${VOICE_AGENT_SOURCE_DIR}/${file}` }),
     ),
   ]);
-  if (manifest === null) {
+  if (!manifest) {
     throw new Error("The config repo has no package.json, so nothing can declare the voice agent.");
   }
   const dependency = withVoiceAgentSourceDependencies(manifest.content);
@@ -290,7 +290,7 @@ export async function installVoiceAgentFromSource(
     return { changed: false, commitOid: manifest.commitOid, spec, changedPaths: [] };
   }
   const commit = await repo.commitFiles({
-    message: options.message ?? "voice-agent: this checkout's source, built from the repo",
+    message: options.message || "voice-agent: this checkout's source, built from the repo",
     changes,
   });
   return {

@@ -903,8 +903,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         /* The id was minted INTO the event rather than here, so this is
          * deterministic under replay. The deadline starts here too: opening a
          * call IS the device saying something. */
-        if (state.call !== null || state.lastEndedActivation === event.payload.activation)
-          return state;
+        if (state.call || state.lastEndedActivation === event.payload.activation) return state;
         return {
           ...state,
           call: {
@@ -919,7 +918,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * durable as any event's, and folding the newest is what makes the
          * idle deadline outlive an eviction. `max` so a redelivered batch
          * cannot walk the deadline backwards. */
-        return state.call === null ||
+        return !state.call ||
           state.call.activation !== event.payload.activation ||
           committedAtStreamMs - state.call.lastDeviceInputAtStreamMs < IDLE_STAMP_STEP_MS
           ? state
@@ -935,7 +934,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
             };
 
       case "events.iterate.com/voice-agent/keepalive":
-        return state.call === null ||
+        return !state.call ||
           committedAtStreamMs - state.call.lastDeviceInputAtStreamMs < IDLE_STAMP_STEP_MS
           ? state
           : {
@@ -952,7 +951,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
       case "events.iterate.com/voice-agent/conversation-ended":
         /* Terminal at the decision. A late terminal event must never poison
          * a newer activation's one-element cancellation marker. */
-        if (state.call === null) return { ...state, lastEndedActivation: event.payload.activation };
+        if (!state.call) return { ...state, lastEndedActivation: event.payload.activation };
         return state.call.activation !== event.payload.activation
           ? state
           : { ...state, call: null, lastEndedActivation: event.payload.activation };
@@ -997,7 +996,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
 
     /* A provider session is volatile. Its durable record cannot revive it. */
     const owedCall = delivery.caughtUp ? state.call : null;
-    if (owedCall !== null && this.#dial?.activation !== owedCall.activation) {
+    if (owedCall && this.#dial?.activation !== owedCall.activation) {
       args.blockProcessorWhile(() =>
         this.#end(owedCall.activation, "the voice session was interrupted", append),
       );
@@ -1017,10 +1016,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
         /* Input only ever reaches the matching local activation. A client
          * output is ordered, so a mic from an ended activation must not
          * arrive after its successor has itself ended. */
-        if (state.call !== null && state.call.activation !== activation) return;
-        if (state.call === null && state.lastEndedActivation === activation) return;
-        if (state.call === null && this.#endingActivation === activation) return;
-        if (state.call === null && this.#callRequestedForActivation !== activation) {
+        if (state.call && state.call.activation !== activation) return;
+        if (!state.call && state.lastEndedActivation === activation) return;
+        if (!state.call && this.#endingActivation === activation) return;
+        if (!state.call && this.#callRequestedForActivation !== activation) {
           const conversationId = `conv_${crypto.randomUUID()}`;
           this.#callRequestedForActivation = activation;
           /* THE IDLE DEADLINE ARMS AT MINT: opening a call IS the device's
@@ -1053,7 +1052,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         }
 
         const dial = this.#dial;
-        if (dial !== null && dial.activation === activation && dial.ready && dial.socket !== null) {
+        if (dial && dial.activation === activation && dial.ready && dial.socket) {
           const nowAtFacetMs = this.deps.nowAtFacetMs();
           dial.micAudioCoveredUntilFacetMs =
             Math.max(dial.micAudioCoveredUntilFacetMs, nowAtFacetMs) +
@@ -1062,7 +1061,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         } else {
           const micBytes = base64ByteLength(micB64);
           const openingDial = dial?.activation === activation ? dial : null;
-          if (openingDial === null) return;
+          if (!openingDial) return;
           if (this.#micQueueBytes + micBytes <= MAX_HELD_MIC_BYTES) {
             this.#micQueue.push(micB64);
             this.#micQueueBytes += micBytes;
@@ -1091,7 +1090,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * cannot name. And the device is silenced NOW.
          */
         const dial = this.#dial;
-        if (dial !== null && dial.activation === event.payload.activation) {
+        if (dial && dial.activation === event.payload.activation) {
           this.#flushTurns(dial, append, true);
           this.#clearDeviceSpeaker(dial, this.deps.nowAtFacetMs(), append);
           this.#hangUp();
@@ -1619,7 +1618,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     nowAtFacetMs: number,
     append: ProcessEventArgs<VoiceAgentContract>["append"],
   ): void {
-    if (dial.face !== null) dial.face.audio(base64ToBytes(pcm), nowAtFacetMs);
+    dial.face?.audio(base64ToBytes(pcm), nowAtFacetMs);
     dial.lastSpeakerFrameAtFacetMs = nowAtFacetMs;
     dial.speakerOutbox.push({ pcm });
     this.#startSpeakerSender(dial, append);
@@ -1640,7 +1639,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     dial.answerEndedAtFacetMs = nowAtFacetMs;
     dial.speakerOutbox.push({ pcm: "", lastFrameOfAnswer: true });
     this.#startSpeakerSender(dial, append);
-    if (dial.hangUpReason !== null && dial.answerEndedAtFacetMs >= dial.hangUpArmedAtFacetMs) {
+    if (dial.hangUpReason && dial.answerEndedAtFacetMs >= dial.hangUpArmedAtFacetMs) {
       /* The goodbye has been handed over whole; the device holds at most its
        * own small buffer. */
       runInBackground(async () => {
@@ -1658,7 +1657,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     dial: Dial,
     append: ProcessEventArgs<VoiceAgentContract>["append"],
   ): Promise<void> {
-    if (this.#dial !== dial || dial.hangUpReason === null) return;
+    if (this.#dial !== dial || !dial.hangUpReason) return;
     const reason = dial.hangUpReason;
     dial.hangUpReason = null;
     await this.#end(dial.activation, reason, append);
@@ -1686,7 +1685,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
       try {
         while (this.#dial === dial) {
           const frame = dial.speakerOutbox.shift();
-          if (frame === undefined) {
+          if (!frame) {
             /* ONE REGISTRATION PER DIAL, NOT PER DELTA. An append finishes in
              * a millisecond and the next delta comes a hundred later, so a
              * sender that let go when the outbox drained re-registered for
@@ -1792,9 +1791,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
     runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
   ): void {
     runInBackground(async () => {
-      while (this.#dial === dial && dial.socket !== null && dial.ready) {
+      while (this.#dial === dial && dial.socket && dial.ready) {
         await this.deps.sleep(SILENCE_FILL_MS);
-        if (this.#dial !== dial || dial.socket === null || !dial.ready) return;
+        if (this.#dial !== dial || !dial.socket || !dial.ready) return;
         /* PACED TO THE WALL CLOCK, never to the loop: a sleep that wakes
          * late still owes the provider every millisecond since the device
          * was last heard, so as many whole frames as are owed go out — an
@@ -1909,7 +1908,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
       /* hang_up ends the delegation: its result is what lets the voice say
        * goodbye inside HANG_UP_GOODBYE_GRACE_MS, so it is never held for the
        * rest of a request and nothing is forwarded with it. */
-      const holdForTheRestOfTheRequest = tool === undefined;
+      const holdForTheRestOfTheRequest = !tool;
       try {
         const timedOut = Symbol("backend function deadline");
         let work: Promise<unknown>;
@@ -1942,7 +1941,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
             }
             return (await typed.capabilityHost.runScript(code)).result;
           });
-        } else if (tool !== undefined) {
+        } else if (tool) {
           /* THE BASE CASE, NOT A REGISTRY: hanging up is one atomic append of
            * conversation-ended, deferred until the goodbye — spoken
            * AFTER this call returns — has gone out whole (its end marker

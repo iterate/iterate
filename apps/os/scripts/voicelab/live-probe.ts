@@ -240,7 +240,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
             type: "responses",
             responses: {
               model: "gpt-6-astra",
-              instructions: backendInstructions(exec !== null, options.allowWrites === true),
+              instructions: backendInstructions(Boolean(exec), options.allowWrites === true),
               reasoning: { effort: "low" },
               service_tier: "priority",
               tools: exec === null ? [] : [EXEC_TYPESCRIPT_TOOL],
@@ -431,11 +431,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
           firstTranscriptAfterMs: null,
         };
         delegations.set(info.id, record);
-        if (
-          options.say2AfterDelegationMs !== undefined &&
-          utterance2 !== null &&
-          !secondRequestSpoken
-        ) {
+        if (options.say2AfterDelegationMs !== undefined && utterance2 && !secondRequestSpoken) {
           secondRequestSpoken = true;
           void (async () => {
             await sleep(options.say2AfterDelegationMs!);
@@ -470,7 +466,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
           record.backendText += String(inner.delta ?? "");
           return;
         }
-        if (record !== null && !innerType.endsWith(".delta")) {
+        if (record && !innerType.endsWith(".delta")) {
           record.lifecycle.push(`${String(clock())}ms ${innerType}`);
         }
         if (innerType === "response.output_item.done") {
@@ -487,7 +483,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
             void runFunctionCall(callId, name, args, record);
             return;
           }
-          if (item.type === "message" && record !== null) {
+          if (item.type === "message" && record) {
             record.finalTextDoneAtMs = clock();
             log(`← backend final text complete (${delegationId})`);
           }
@@ -495,7 +491,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
         if (innerType === "response.completed" || innerType === "response.done") {
           /* Every function round ends in a completed; the LAST one is the
            * backend's final text, so this is overwritten each time. */
-          if (record !== null) {
+          if (record) {
             record.completedAtMs = clock();
             record.firstCompletedAtMs ??= record.completedAtMs;
           }
@@ -605,7 +601,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
       tookMs,
     });
     pendingCalls.delete(callId);
-    if (options.forwardTranscript === true && record !== null) {
+    if (options.forwardTranscript && record) {
       const userFragments = fragments.filter((f) => f.speaker === "user");
       const unsent = userFragments.slice(record.forwardedUserFragments);
       record.forwardedUserFragments = userFragments.length;
@@ -784,7 +780,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
       if (!(await waitFor(() => answers.length > before, 45_000))) {
         errors.push("no answer within 45s of utterance 2 after unmute");
       }
-    } else if (utterance2 !== null && options.say2AfterDelegationMs !== undefined) {
+    } else if (utterance2 && options.say2AfterDelegationMs !== undefined) {
       /* The second request is spoken from the delegation arm; just give the
        * whole exchange time to play out. */
       await waitFor(() => delegations.size >= 2, 60_000);
@@ -1002,11 +998,11 @@ async function execRunner(options: LiveProbeOptions): Promise<(code: string) => 
   if (!options.project) throw new Error("--exec needs --project");
   await ensureProjectExists({
     project: options.project,
-    ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+    baseUrl: options.baseUrl,
   });
   const itx = await connectProject({
     project: options.project,
-    ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+    baseUrl: options.baseUrl,
   });
   return async (code: string) => {
     try {

@@ -31,7 +31,7 @@ export async function ask(options: AskOptions): Promise<void> {
   }
   const requests = parsed as string[];
   const streamPath =
-    options.streamPath ??
+    options.streamPath ||
     `/agents/voice/ask-${new Date().toISOString().replace(/\D/g, "").slice(2, 14)}-${Math.random()
       .toString(36)
       .slice(2, 6)}`;
@@ -41,7 +41,7 @@ export async function ask(options: AskOptions): Promise<void> {
   if (options.setup === true) {
     await talk({
       project: options.project,
-      ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+      baseUrl: options.baseUrl,
       streamPath,
       setupOnly: true,
       auto: true,
@@ -128,7 +128,7 @@ export async function ask(options: AskOptions): Promise<void> {
   await call.stop();
   await sleep(2_000);
 
-  if (options.verify !== undefined) {
+  if (options.verify) {
     using itx = await connectProject(options);
     try {
       const result = await new AsyncFunction("itx", options.verify)(itx);

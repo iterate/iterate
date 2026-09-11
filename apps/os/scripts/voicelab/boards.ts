@@ -213,9 +213,9 @@ export async function boards(options: BoardsOptions) {
               continue;
             }
             if (event.type === "events.iterate.com/voice-agent/answer-transcript")
-              saidBack += payload.text ?? "";
+              saidBack += payload.text || "";
             if (event.type === "events.iterate.com/voice-agent/utterance-transcript")
-              heardUs += payload.text ?? "";
+              heardUs += payload.text || "";
           }
         },
       });

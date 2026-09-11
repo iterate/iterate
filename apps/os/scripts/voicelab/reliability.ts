@@ -139,14 +139,14 @@ export async function reliability(options: ReliabilityOptions) {
           };
           if (
             event.type === "events.iterate.com/voice-agent/call-started" &&
-            typeof payload.conversationId === "string"
+            payload.conversationId
           ) {
             conversationId = payload.conversationId;
             continue;
           }
           if (
-            conversationId !== null &&
-            typeof payload.conversationId === "string" &&
+            conversationId &&
+            payload.conversationId &&
             payload.conversationId !== conversationId
           ) {
             continue;
@@ -159,7 +159,7 @@ export async function reliability(options: ReliabilityOptions) {
             event.type === "events.iterate.com/voice-agent/utterance-transcript" ||
             event.type === "events.iterate.com/voice-agent/answer-transcript"
           ) {
-            transcript += payload.text ?? "";
+            transcript += payload.text || "";
           }
           /* GPT-Live has no response lifecycle; the facet's end-of-answer
            * marker in the speaker frames is the "answered" edge. */
