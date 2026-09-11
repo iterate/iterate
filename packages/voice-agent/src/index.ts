@@ -31,7 +31,6 @@ export {
 // voice-agent.ts re-exports; this entry carries only what a caller needs to
 // enable and reach it.
 export type {
-  ItxExpressionStepInput,
   SetupVoiceAgentOptions,
   SetupVoiceAgentResult,
   VoiceAgentHealth,

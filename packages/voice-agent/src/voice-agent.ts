@@ -451,8 +451,14 @@ const EXEC_TYPESCRIPT_FUNCTION = {
  * queue without limit. The NEWEST frames are refused once it is full, not the
  * oldest: the start of what somebody said is what makes the rest of it
  * intelligible.
+ *
+ * 60 covers a slow handshake with margin — measured handshakes run 1-2 s
+ * (`handshakeTookMs` 2051 on 2026-09-11), and frames arrive every 50 ms from
+ * the board / 64 ms from the phone, so 60 frames is 3-3.8 s. Past that the
+ * dial has failed, and replaying stale speech into GPT-Live is worse than
+ * dropping it.
  */
-const MAX_HELD_MIC_FRAMES = 500;
+const MAX_HELD_MIC_FRAMES = 60;
 
 /* ========================================================================== */
 /* AUDIO                                                                      */
@@ -515,40 +521,21 @@ function peakOfBase64Pcm16(base64: string): number {
 /* ========================================================================== */
 
 /**
- * One step of an itx expression — the platform's persisted-capability shape
- * (apps/os/src/itx/expression.ts): a string is a property read, [method,
- * ...args] is a call. The SDK exports the TYPE (ItxExpressionStep) but not
- * the schema, so the contract mirrors it, reserved-name guard included.
- */
-const ItxExpressionStep = z
-  .union([z.string(), z.tuple([z.string()], z.unknown())])
-  .refine(
-    (step) =>
-      !["__proto__", "constructor", "prototype"].includes(
-        typeof step === "string" ? step : step[0],
-      ),
-    { message: "itx expressions cannot use reserved property names" },
-  );
-
-/**
  * One tool the backend model may call, as data on the birth certificate.
  *
- * `expression` is a walk from the PROJECT ROOT to a function; the model's
- * parsed arguments object is that function's single argument. Persisting an
- * expression persists the NAME of a capability, never its authority — every
- * call re-derives authority from a fresh project session. A tool with NO
- * expression is a name this agent already knows how to be: `hang_up` is the
- * only one — one atomic append of conversation-end-requested, no itx.
+ * A certificate tool is a name this agent already knows how to be: `hang_up`
+ * is the only one — one atomic append of conversation-end-requested, no itx.
+ * Anything a project wants done goes through `exec_typescript`, which reaches
+ * the same capabilities with types and without a persisted walk.
  */
 const VoiceTool = z
   .strictObject({
     name: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
     description: z.string(),
     parameters: z.looseObject({}).optional(),
-    expression: z.array(ItxExpressionStep).min(1).optional(),
   })
-  .refine((tool) => tool.expression !== undefined || tool.name === "hang_up", {
-    message: 'a tool with no expression must be a name this agent knows; today that is "hang_up"',
+  .refine((tool) => tool.name === "hang_up", {
+    message: 'a certificate tool must be a name this agent knows; today that is "hang_up"',
   });
 
 /** Backend overrides — see VoiceBackendInput in setup-options.ts. */
@@ -641,7 +628,12 @@ export const VoiceAgentContract = defineProcessorContract({
    * one — is "unmute the microphone while held", a fact about the client
    * that never reaches this stream. With no press there is no barge and no
    * interrupted answer, so `answer-transcript` loses `cancelled`. Clean
-   * break as ever. */
+   * break as ever.
+   *
+   * Also in 21.0.0 (unreleased, so no second major): a certificate tool
+   * loses `expression`. The backend's `exec_typescript` reaches the same
+   * capabilities with types, so the persisted itx walk bought a second tool
+   * kind and an untyped Reflect walk for nothing. */
   version: "21.0.0",
   description:
     "Runs a GPT-Live voice call in the stream's own Durable Object, relaying audio both ways as it arrives.",
@@ -1616,9 +1608,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
         /* Usable. Everything the handshake made us hold goes now. */
         dial.ready = true;
         const heldMicFrames = this.#micQueue.length;
-        /* Read before the flush empties the hold: did the person speak while
-         * the dial was in flight? A quiet room's frames are silence. */
-        const callerSpoke = this.#micQueue.some((frame) => peakOfBase64Pcm16(frame) >= SPEECH_PEAK);
         for (const held of this.#micQueue) this.#sendMicAudio(dial.socket!, held);
         this.#micQueue = [];
         dial.micAudioCoveredUntilFacetMs = receivedAtFacetMs;
@@ -1637,13 +1626,12 @@ export class VoiceAgentProcessor extends StreamProcessor<
           }),
         );
         /*
-         * THE PICKUP GREETING. Only when nobody has spoken yet: a caller
-         * already mid-sentence came to talk, not to be welcomed over. The
-         * frame that opened the call is always held through the dial, so
-         * "spoke" is read off that audio. The provider's own recipe — one
-         * instructions append asking it to speak first.
+         * THE PICKUP GREETING. One instructions append — the provider's own
+         * recipe. The held capture went out just above, so a caller who was
+         * already mid-sentence is heard first and the model decides for
+         * itself whether greeting over them makes sense.
          */
-        if (state.greeting && !callerSpoke) {
+        if (state.greeting) {
           this.#sendControl(
             dial,
             {
@@ -1651,8 +1639,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
               event_id: `greeting_${dial.dialId}`,
               delegation_id: null,
               content:
-                "The call just connected and the person is listening. Greet them now — say hi " +
-                "first, in a few words, then wait for them to speak.",
+                "The call just connected and the person is listening. If they have not started " +
+                "talking already, greet them now — say hi first, in a few words, then wait.",
             },
             append,
           );
@@ -2178,8 +2166,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
   /**
    * Run one function the backend called, off the frame path, and ALWAYS
    * answer it: a function call is a debt, and silence is the one forbidden
-   * result. `exec_typescript` runs on the project's own capability host; a
-   * certificate tool walks its itx expression; `hang_up` is the base case.
+   * result. `exec_typescript` runs on the project's own capability host and
+   * `hang_up` is the base case; there is no third kind.
    * The output goes back as a Responses item and the response is continued —
    * the documented two-step, which the provider does not do on its own.
    */
@@ -2208,7 +2196,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
       /* hang_up ends the delegation: its result is what lets the voice say
        * goodbye inside HANG_UP_GOODBYE_GRACE_MS, so it is never held for the
        * rest of a request and nothing is forwarded with it. */
-      const holdForTheRestOfTheRequest = !(tool !== undefined && tool.expression === undefined);
+      const holdForTheRestOfTheRequest = tool === undefined;
       try {
         const timedOut = Symbol("backend function deadline");
         let work: Promise<unknown>;
@@ -2241,7 +2229,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
             }
             return (await typed.capabilityHost.runScript(code)).result;
           });
-        } else if (tool !== undefined && tool.expression === undefined) {
+        } else if (tool !== undefined) {
           /* THE BASE CASE, NOT A REGISTRY: hanging up is one atomic append of
            * conversation-end-requested, deferred until the goodbye — spoken
            * AFTER this call returns — has gone out whole (its end marker
@@ -2256,37 +2244,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
             await this.#settleHangUp(dial, append);
           });
           work = Promise.resolve({ status: "hanging up once the goodbye finishes playing" });
-        } else if (tool !== undefined) {
-          const expression = tool.expression!;
-          work = this.deps.withProject(async (project) => {
-            /* The platform's own walk (apps/os/src/itx/expression.ts):
-             * reads pipeline, calls invoke. The expression walks an untyped
-             * capability tree, so each step's target is asserted as an
-             * object and the final value checked to be a function — a wrong
-             * step throws here and the backend hears it. */
-            let receiver: unknown;
-            let value: unknown = project;
-            for (const step of expression) {
-              const target = (await value) as object;
-              if (typeof step === "string") {
-                receiver = target;
-                value = Reflect.get(target, step);
-              } else {
-                const [method, ...bound] = step;
-                receiver = undefined;
-                value = Reflect.apply(
-                  Reflect.get(target, method) as (...args: unknown[]) => unknown,
-                  target,
-                  bound,
-                );
-              }
-            }
-            const fn = await value;
-            if (typeof fn !== "function") {
-              throw new Error(`the "${tool.name}" expression did not end at a function`);
-            }
-            return (await Reflect.apply(fn, receiver, [modelArgs])) as unknown;
-          });
         } else {
           work = Promise.reject(new Error(`no such function: ${name}`));
         }

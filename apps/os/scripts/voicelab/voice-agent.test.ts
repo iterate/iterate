@@ -293,14 +293,6 @@ function micFrame(deviceMicFrameSeq: number) {
   };
 }
 
-/** A mic frame with a person in it: 20 ms of speech rather than silence. */
-function speechMicFrame(deviceMicFrameSeq: number) {
-  return {
-    ...micFrame(deviceMicFrameSeq),
-    payload: { ...micFrame(deviceMicFrameSeq).payload, pcm: speechDelta(20) },
-  };
-}
-
 const SEAM = "https://fake.provider.test/v1/live/sessions";
 
 /**
@@ -511,15 +503,7 @@ describe("opening a call", () => {
       providerModel: "gpt-live-2",
       providerVoice: "vesper",
       backend: { model: "gpt-5.6-terra", reasoningEffort: "none", serviceTier: "default" },
-      tools: [
-        { name: "hang_up", description: "End the call." },
-        {
-          name: "nod",
-          description: "Nod the head.",
-          parameters: { type: "object", properties: { times: { type: "number" } } },
-          expression: ["clients", ["get", "/clients/stackchan"], "capabilities", "nod"],
-        },
-      ],
+      tools: [{ name: "hang_up", description: "End the call." }],
     });
     const session = h.provider.startedWith;
     expect(session.model).toBe("gpt-live-2");
@@ -529,12 +513,10 @@ describe("opening a call", () => {
     expect(responses.reasoning).toEqual({ effort: "none" });
     expect(responses.service_tier).toBe("default");
     const tools = responses.tools as { name: string; parameters?: unknown }[];
-    expect(tools.map((tool) => tool.name)).toEqual(["exec_typescript", "hang_up", "nod"]);
-    expect(tools[2]!.parameters).toEqual({
-      type: "object",
-      properties: { times: { type: "number" } },
-    });
-    expect(String(responses.instructions)).toContain("nod: Nod the head.");
+    expect(tools.map((tool) => tool.name)).toEqual(["exec_typescript", "hang_up"]);
+    /* A tool with no parameters of its own gets an empty schema. */
+    expect(tools[1]!.parameters).toEqual({ type: "object", properties: {} });
+    expect(String(responses.instructions)).toContain("hang_up: End the call.");
   });
 
   it("seeds the session with the fold's transcript as typed history", async () => {
@@ -563,13 +545,12 @@ describe("opening a call", () => {
     expect(String(h.provider.startedWith.instructions)).not.toContain("Count to three.");
   });
 
-  it("greets on pickup with an instructions append — unless the caller already spoke", async () => {
+  it("greets on pickup with an instructions append, and only when the certificate asked", async () => {
     const greeted = makeHarness();
     await greeted.append({
       type: "events.iterate.com/voice-agent/configured",
       payload: { providerBaseUrl: SEAM, greeting: true },
     });
-    /* A quiet room's frames open the call: silence, nobody spoke yet. */
     await greeted.append(micFrame(1));
     await greeted.settle();
     greeted.provider.start();
@@ -577,20 +558,20 @@ describe("opening a call", () => {
     const appended = greeted.provider.sentOfType("session.instructions.append");
     expect(appended).toHaveLength(1);
     expect(appended[0]!.delegation_id).toBeNull();
-    expect(String(appended[0]!.content)).toContain("Greet them now");
+    expect(String(appended[0]!.content)).toContain("greet them now");
 
-    /* A caller already mid-sentence — speech in the frames held during the
-     * dial — came to talk, not to be welcomed over. */
-    const talkedFirst = makeHarness();
-    await talkedFirst.append({
+    /* No greeting on the certificate, nothing appended — the open-mic rooms
+     * did not ask to be welcomed. */
+    const quiet = makeHarness();
+    await quiet.append({
       type: "events.iterate.com/voice-agent/configured",
-      payload: { providerBaseUrl: SEAM, greeting: true },
+      payload: { providerBaseUrl: SEAM },
     });
-    await talkedFirst.append(speechMicFrame(1));
-    await talkedFirst.settle();
-    talkedFirst.provider.start();
-    await talkedFirst.settle();
-    expect(talkedFirst.provider.sentOfType("session.instructions.append")).toHaveLength(0);
+    await quiet.append(micFrame(1));
+    await quiet.settle();
+    quiet.provider.start();
+    await quiet.settle();
+    expect(quiet.provider.sentOfType("session.instructions.append")).toHaveLength(0);
   });
 
   it("ends the call when the handshake never completes", async () => {
@@ -1017,39 +998,6 @@ describe("the backend", () => {
     expect(outputs.find((item) => item.call_id === "call_x")!.output).toContain("no commits yet");
     expect(outputs.find((item) => item.call_id === "call_y")!.output).toContain("no such function");
     expect(h.provider.sentOfType("response.create")).toHaveLength(2);
-  });
-
-  it("walks a certificate tool's expression with the backend's arguments", async () => {
-    const h = makeHarness();
-    const nods: unknown[] = [];
-    h.projectRoot.current = {
-      ...(h.projectRoot.current as object),
-      clients: {
-        get: (path: string) => ({
-          capabilities: {
-            nod: async (args: unknown) => {
-              nods.push([path, args]);
-              return { nodded: true };
-            },
-          },
-        }),
-      },
-    };
-    await callIsLive(h, {
-      tools: [
-        {
-          name: "nod",
-          description: "Nod the head.",
-          parameters: { type: "object", properties: { times: { type: "number" } } },
-          expression: ["clients", ["get", "/clients/stackchan"], "capabilities", "nod"],
-        },
-      ],
-    });
-    h.provider.backendFunctionCall("call_nod", "nod", '{"times":2}');
-    await h.settle();
-    expect(nods).toEqual([["/clients/stackchan", { times: 2 }]]);
-    const result = h.provider.sentOfType("response.item.create")[0]!.item as { output: string };
-    expect(result.output).toBe(JSON.stringify({ nodded: true }));
   });
 
   it("hang_up ends the call only after the goodbye — spoken AFTER the call — finishes playing", async () => {

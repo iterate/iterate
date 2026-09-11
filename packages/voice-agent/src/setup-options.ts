@@ -9,22 +9,11 @@
  */
 
 /**
- * One step of an itx expression — the platform's persisted-capability shape
- * (apps/os/src/itx/expression.ts): a string is a property read,
- * [method, ...args] is a call. The agent's contract validates the same
- * shape with a reserved-name guard.
- */
-export type ItxExpressionStepInput = string | [method: string, ...args: unknown[]];
-
-/**
  * One tool the backend model may call, as data on the birth certificate.
  *
- * `expression` is a walk from the PROJECT ROOT to a function; the model's
- * parsed arguments object is that function's single argument. Persisting an
- * expression persists the NAME of a capability, never its authority — every
- * call re-derives authority from a fresh project session. A tool with NO
- * expression is a name the agent already knows how to be: `hang_up` is the
- * only one.
+ * A certificate tool is a name the agent already knows how to be: `hang_up`
+ * is the only one. Everything else a project wants done goes through the
+ * backend's `exec_typescript` against this project's capability host.
  *
  * The voice model itself has no tools — GPT-Live delegates — so every tool
  * here reaches the BACKEND model, which calls it in a second or two.
@@ -37,7 +26,6 @@ export interface VoiceToolInput {
   /** JSON Schema for the arguments, handed to the provider verbatim.
    * Absent means a no-argument tool. */
   parameters?: Record<string, unknown>;
-  expression?: ItxExpressionStepInput[];
 }
 
 /**
@@ -75,7 +63,11 @@ export interface SetupVoiceAgentOptions {
   instructions?: string;
   /** Classify the answer into mouth shapes for a face-rendering client. */
   visemes?: boolean;
-  /** Speak first when a call connects (contract 17.0.0). */
+  /**
+   * Ask the voice to speak first when a call connects. It is one instructions
+   * append at `session.started`; the model hears the capture held through the
+   * dial and decides for itself whether to greet over somebody mid-sentence.
+   */
   greeting?: boolean;
   /** Backend overrides — see {@link VoiceBackendInput}. */
   backend?: VoiceBackendInput;

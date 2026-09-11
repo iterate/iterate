@@ -50,9 +50,8 @@ const MAX_INFLIGHT_MIC_APPENDS = 8;
 /**
  * One 20 ms frame of digital silence at 16 kHz mono PCM16 (640 zero bytes),
  * as the wire's base64. The MINT: a call opens when the facet hears a
- * microphone, so this frame goes out the moment the connection is up — the
- * provider then dials during the ring and can greet at pickup — and again
- * on every ring tick until pickup, because ephemeral delivery may drop one.
+ * microphone, so this frame goes out once, the moment the connection is up
+ * — the provider then dials during the ring and can greet at pickup.
  */
 const SILENT_MIC_FRAME_B64 = `${"A".repeat(852)}AA==`;
 
@@ -198,7 +197,6 @@ export async function startVoiceCall(deps: {
   let spkFramesHeard = 0;
   let spkMsHeard = 0;
   let ringTimer: ReturnType<typeof setInterval> | null = null;
-  let mintTimer: ReturnType<typeof setInterval> | null = null;
   let noAnswerTimer: ReturnType<typeof setTimeout> | null = null;
   let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   const startedAtMs = deps.now();
@@ -206,8 +204,6 @@ export async function startVoiceCall(deps: {
   const stopRinging = () => {
     if (ringTimer !== null) clearInterval(ringTimer);
     ringTimer = null;
-    if (mintTimer !== null) clearInterval(mintTimer);
-    mintTimer = null;
     if (noAnswerTimer !== null) clearTimeout(noAnswerTimer);
     noAnswerTimer = null;
   };
@@ -355,14 +351,9 @@ export async function startVoiceCall(deps: {
    * call, so with `greeting` on the certificate the provider dials during
    * the ring and says hi at pickup — the ring keeps sounding until
    * conversation-accepted (the actual pickup), where the live caption takes
-   * over. Repeated every ring tick until then: the frame is ephemeral and
-   * a delivery may drop it.
+   * over. ONCE: a new call mints again, a lost mint does not.
    */
   appendMicFrame(SILENT_MIC_FRAME_B64);
-  mintTimer = setInterval(() => {
-    if (accepted) return;
-    appendMicFrame(SILENT_MIC_FRAME_B64);
-  }, 3_000);
   /* A mint nobody consumes must not ring forever: no pickup in time ends
    * the call with a caption a person can act on. Seen live when a preview
    * backend recycled under the app — fresh project, no facet, eternal

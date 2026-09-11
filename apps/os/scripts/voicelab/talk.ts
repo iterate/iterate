@@ -177,10 +177,10 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   visemes?: boolean;
   /**
    * Extra tools for the birth certificate, as a JSON array of
-   * `{name, description, parameters?, expression}` entries — appended after
-   * the `--hang-up` base tool. Each `expression` is the itx walk the fold
-   * validates and the tool runner applies, e.g.
-   * `["clients",["get","/clients/stackchan"],"capabilities","face","set"]`.
+   * `{name, description, parameters?}` entries — appended after the
+   * `--hang-up` base tool. The certificate accepts only names the agent
+   * knows how to be (today: `hang_up`); everything else the backend does
+   * through `exec_typescript`.
    */
   tools?: string;
 }
@@ -333,7 +333,6 @@ export async function talk(options: TalkOptions = {}) {
                 name: string;
                 description: string;
                 parameters?: Record<string, unknown>;
-                expression?: (string | [string, ...unknown[]])[];
               }[])),
         ];
         return tools.length > 0 ? { tools } : {};
