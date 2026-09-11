@@ -231,6 +231,13 @@ export const IDLE_TIMEOUT_MS = 60_000;
 const USER_STILL_TALKING_MS = 1_500;
 /** The longest a tool result waits for the person to finish. */
 const FORWARD_HOLD_MAX_MS = 15_000;
+/**
+ * Progress notes reach the voice at most this often. The voice turns each
+ * note into a filler ("Still checking.") however it is told not to — three
+ * in ten seconds on one duplex run — so a fast backend's steps are folded
+ * into one note per gap; the latest note is what "how is it going?" needs.
+ */
+const PROGRESS_NOTE_MIN_GAP_MS = 4_000;
 
 /**
  * The idle stamp advances in steps of this, not per frame. Folding every mic
@@ -966,6 +973,8 @@ interface Dial {
   openBackendCalls: number;
   /** Backend function calls completed on this dial, for the progress notes. */
   backendSteps: number;
+  /** Facet clock at the last progress note sent to the voice. */
+  lastProgressNoteAtFacetMs: number | null;
   /** Every user transcript fragment of this dial, in order. */
   userTranscript: string;
   /** Facet clock at the last user transcript fragment. */
@@ -1007,6 +1016,7 @@ const freshDial = (conversationId: string): Dial => ({
   answer: freshAnswer(),
   openBackendCalls: 0,
   backendSteps: 0,
+  lastProgressNoteAtFacetMs: null,
   userTranscript: "",
   lastUserFragmentAtFacetMs: null,
   forwardedUserChars: 0,
@@ -2277,20 +2287,29 @@ export class VoiceAgentProcessor extends StreamProcessor<
        * (the Responses delegation refuses its id here).
        */
       dial.backendSteps += 1;
-      this.#sendControl(
-        dial,
-        {
-          type: "session.thinking.append",
-          event_id: `progress_${callId}`,
-          delegation_id: null,
-          content:
-            `Backend progress note, for your own awareness only — do not read it out. ` +
-            `Step ${String(dial.backendSteps)}: ran ${name}` +
-            `(${rawArguments.replace(/\s+/g, " ").slice(0, 160)}) → ` +
-            `${output.replace(/\s+/g, " ").slice(0, 240)}`,
-        },
-        append,
-      );
+      const nowForNoteMs = this.deps.nowAtFacetMs();
+      if (
+        dial.lastProgressNoteAtFacetMs === null ||
+        nowForNoteMs - dial.lastProgressNoteAtFacetMs >= PROGRESS_NOTE_MIN_GAP_MS
+      ) {
+        dial.lastProgressNoteAtFacetMs = nowForNoteMs;
+        this.#sendControl(
+          dial,
+          {
+            type: "session.thinking.append",
+            event_id: `progress_${callId}`,
+            delegation_id: null,
+            /* Status only, never the output: a docs snippet in a note came
+             * back out of the voice as a question to the person. */
+            content:
+              `Backend progress note, for your own awareness only — do not read it out. ` +
+              `Step ${String(dial.backendSteps)}: ran ${name}` +
+              `(${rawArguments.replace(/\s+/g, " ").slice(0, 160)}) → ` +
+              `${output.startsWith('{"error"') ? "error" : "ok"}`,
+          },
+          append,
+        );
+      }
       this.#sendControl(
         dial,
         {

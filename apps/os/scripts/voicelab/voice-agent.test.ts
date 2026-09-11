@@ -865,7 +865,7 @@ describe("the backend", () => {
     expect(order.indexOf("response.item.create")).toBeLessThan(order.indexOf("response.create"));
   });
 
-  it("tells the voice what the backend did, one progress note per completed step", async () => {
+  it("tells the voice what the backend did: a progress note per step, at most one every few seconds", async () => {
     const h = makeHarness();
     await callIsLive(h);
     h.provider.backendFunctionCall(
@@ -874,6 +874,11 @@ describe("the backend", () => {
       JSON.stringify({ code: "async (itx) => itx.repo.listFiles()" }),
     );
     await h.settle();
+    /* A step right behind the first is folded: no second note yet. */
+    h.provider.backendFunctionCall("call_1b", "exec_typescript", '{"code":"async (itx) => 1"}');
+    await h.settle();
+    expect(h.provider.sentOfType("session.thinking.append")).toHaveLength(1);
+    await h.advanceTime(5_000);
     h.provider.backendFunctionCall("call_2", "exec_typescript", '{"code":"async (itx) => 2"}');
     await h.settle();
     const notes = h.provider.sentOfType("session.thinking.append");
@@ -883,8 +888,10 @@ describe("the backend", () => {
     expect(notes[0]!.delegation_id).toBeNull();
     expect(String(notes[0]!.content)).toContain("Step 1: ran exec_typescript");
     expect(String(notes[0]!.content)).toContain("do not read it out");
-    expect(String(notes[0]!.content)).toContain(JSON.stringify({ files: 3 }));
-    expect(String(notes[1]!.content)).toContain("Step 2");
+    /* Status only: the script's output never rides in a note. */
+    expect(String(notes[0]!.content)).toContain("→ ok");
+    expect(String(notes[0]!.content)).not.toContain(JSON.stringify({ files: 3 }));
+    expect(String(notes[1]!.content)).toContain("Step 3");
     /* The note lands before the result that continues the response. */
     const order = h.provider.sent.map((message) => message.type);
     expect(order.indexOf("session.thinking.append")).toBeLessThan(
