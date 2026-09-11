@@ -39,6 +39,10 @@ static const char *cli_conversation_select(struct cli_conversation *conversation
 static enum cli_conversation_status cli_conversation_start_turn(
     struct cli_runtime *runtime, uint64_t now_ms);
 
+/* A real or deterministic pretend speaker supplies Darwin's audible-gap evidence. */
+static bool cli_conversation_uses_codec_playback(
+    const struct cli_runtime *runtime);
+
 /* Commits the source once capture and queued frames have both ended. */
 static void cli_conversation_finish_sending(
     struct cli_runtime *runtime, uint64_t now_ms);
@@ -165,14 +169,8 @@ void cli_conversation_finish_turn(
   const bool latency_available =
       cli_report_has_speech_end_to_first_packet(turn) &&
       cli_report_has_speech_end_to_first_played(turn);
-  /*
-   * A silent fixture can reach and drain the local speaker without a
-   * speech-end endpoint. That makes latency unavailable, not the completed
-   * audio path a failure. The report emits null for those two measurements.
-   */
-  turn->failed = !played_out || turn->frames_played == 0U;
   turn->frames_sent = runtime->voicelab.frames_sent - turn->frames_sent;
-  if (runtime->options.live_audio) {
+  if (cli_conversation_uses_codec_playback(runtime)) {
     struct iterate_kit_darwin_audio_codec_metrics audio;
     iterate_kit_darwin_audio_codec_metrics(&runtime->audio_codec, &audio);
     turn->frames_concealed =
@@ -180,6 +178,13 @@ void cli_conversation_finish_turn(
         turn->frames_concealed;
     turn->underruns = audio.playback_audible_shortfalls - turn->underruns;
   }
+  /*
+   * A silent fixture can reach and drain the local speaker without a
+   * speech-end endpoint. That makes latency unavailable, not the completed
+   * audio path a failure. Darwin only promotes a dry pull after later payload
+   * proves it was an audible gap, so either resulting counter is a failure.
+   */
+  turn->failed = cli_report_turn_failed(turn, played_out);
   cli_runtime_log(
       turn->failed ? "error" : "info",
       "turn=%zu complete=%s completion=%s firstAudioMs=%" PRIu64
@@ -351,11 +356,19 @@ static void cli_conversation_begin_report(
   runtime->turn_room_submitted_bytes = 0U;
   /* With a room, the turn's holes are the hardware's audible shortfalls
    * (darwin_audio_output.h): the baseline now, the difference at the end. */
-  if (runtime->options.live_audio) {
-    turn->frames_concealed = audio.playback_audible_shortfall_bytes / ITERATE_KIT_VOICE_FRAME_BYTES;
+  if (cli_conversation_uses_codec_playback(runtime)) {
+    turn->frames_concealed = audio.playback_audible_shortfall_bytes /
+        ITERATE_KIT_VOICE_FRAME_BYTES;
     turn->underruns = audio.playback_audible_shortfalls;
   }
   runtime->conversation.current_turn = turn;
+}
+
+static bool cli_conversation_uses_codec_playback(
+    const struct cli_runtime *runtime)
+{
+  assert(runtime != NULL);
+  return runtime->options.live_audio || runtime->options.pretend_speaker != NULL;
 }
 
 static void cli_conversation_finish_run(

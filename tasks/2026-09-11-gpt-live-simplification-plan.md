@@ -74,7 +74,7 @@ framework, durable audio journal, provider hierarchy, or replay protocol.
 | First device append | Immediately when stream and headroom permit | Never wait for a full batch or provider acceptance |
 | Normal partial append | At most 50 ms between flushes | Low latency without 50 individual stream appends per second |
 | Catch-up append | At most eight 20 ms frames | Existing transport headroom limits backlog drainage |
-| Speaker priming | Existing 300 ms starting value | Lower only with paired latency and underrun evidence |
+| Speaker priming | 200 ms including 90 ms DMA lead | 200 ms passed seven turns; 100 ms produced 12 starved output buffers |
 
 There are two connection waits, so there are two held-input queues: one local
 and one while OpenAI opens. Each has a byte/time bound and one owner. Full queues

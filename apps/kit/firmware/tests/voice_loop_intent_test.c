@@ -550,6 +550,19 @@ static void muted_remote_start_does_not_open_capture(void) {
   step();
 }
 
+/* A rejected local append ends the activation with an explicit classification. */
+static void failed_microphone_append_ends_the_activation(void) {
+  quiescent();
+  remote_call("conversation", "start");
+  step();
+  pump();
+  speak_frames(1U);
+  iterate_kit_fake_platform_fail_next_send();
+  run_ms(50U);
+  assert(!board.last_view.wants_call);
+  assert(strcmp(board.last_view.status, "microphone append failed") == 0);
+}
+
 /*
  * Wake detection reaches the app after audio has already crossed the codec.
  * The first, middle and following frames must therefore survive the mount
@@ -772,5 +785,6 @@ int main(void) {
   a_lane_silent_mid_answer_is_recycled();
   activation_during_codec_read_keeps_idle_pre_roll();
   an_unaccepted_activation_times_out_once();
+  failed_microphone_append_ends_the_activation();
   return 0;
 }

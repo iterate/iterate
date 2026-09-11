@@ -199,22 +199,7 @@ enum {
   SPEAKER_BUFFER_BYTES = ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES,
   /* Whole-frame queueing makes replacement atomic at frame boundaries. */
   SPEAKER_QUEUE_DEPTH = SPEAKER_BUFFER_BYTES / FRAME_BYTES,
-  /*
-   * Playback will not start, or resume after starving, until this much audio
-   * is queued. Without it the first frame starts the speaker with zero margin
-   * and the DMA's 90 ms is the only tolerance the whole path has.
-   */
-  /*
-   * 300ms before playback starts. The bridge bursts 600ms at the opening of
-   * every response, so this is reached as fast as the wire allows and costs
-   * almost nothing in latency — while doubling the cushion that a network
-   * hiccup has to exhaust before anything is audible.
-   */
-  /*
-   * Net of the DMA ring: the first 2880 bytes of any prefill go into the
-   * hardware, not into jitter cushion, so the old "300ms" was really 210.
-   * 300ms of true cushion plus one ring.
-   */
+  /* Shared measured opening budget; capacity above is not a playback delay. */
   SPEAKER_PREFILL_BYTES = ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES,
   /*
    * Recovering from a starve does NOT re-buy the full opening prefill. It
@@ -499,21 +484,12 @@ EXT_RAM_BSS_ATTR static struct {
   /* The answer's playout timeline — when it began, how much has played, the
    * worst lag — is `playout.clock`'s, shared with the host CLI; see
    * iterate/kit/voice_playback_clock.h. */
-  /*
-   * Which speaker epoch (`speaker_generation`) the done flags belong to. A
-   * `drop` bumps the generation and asks the playback task to reprime; the
-   * `last` of the SAME answer can land before that reprime is applied — a
-   * short answer arrives whole between two playback passes — and a reprime
-   * that cleared every done flag it found then erased the new answer's end.
-   * The clock never learned the answer was complete, and an answer shorter
-   * than the prefill never played at all (found by voice_loop_answer_clock_test
-   * the day the prefill went from 150 to 300 ms). The reprime now clears only
-   * a flag from an OLDER epoch.
-   */
+  /* One atomic epoch notification: reprime cannot erase a newer short answer
+   * terminal. UINT32_MAX means no pending terminal. */
   atomic_uint speaker_answer_done_generation;
   /*
    * The SENDER said this answer is complete, latched until the speaker actually
-   * drains it. `speaker_answer_done` is consumed by the playback clock the
+   * drains it. `speaker_answer_done_generation` is consumed by the playback clock the
    * moment it is seen, long before the buffer empties, so it cannot answer
    * "has this answer finished being heard?" — and that question is the whole
    * difference between an answer that ended and an answer that was cut off.

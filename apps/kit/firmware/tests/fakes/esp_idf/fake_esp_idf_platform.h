@@ -63,6 +63,8 @@ size_t iterate_kit_fake_platform_sent_count(void);
 const char *iterate_kit_fake_platform_sent(size_t index);
 /** The first sent message containing `needle`, or NULL. */
 const char *iterate_kit_fake_platform_find_sent(const char *needle);
+/** Make the next transport write fail before it accepts any bytes. */
+void iterate_kit_fake_platform_fail_next_send(void);
 
 /** Restarts the loop asked the transport for. */
 size_t iterate_kit_fake_platform_restarts_requested(void);

@@ -36,6 +36,14 @@ static void play_frame(
  * real prefill.  Starting one byte early recreates the zero-margin opening
  * that made every answer starve at its first network hiccup.
  */
+/* The measured budget starts on the second 100 ms provider delta. */
+static void two_provider_deltas_start_playback(void) {
+  struct iterate_kit_voice_playback_clock clock;
+  iterate_kit_voice_playback_clock_init(&clock);
+  assert(!iterate_kit_voice_playback_clock_ready(&clock, ONE_CHUNK_BYTES, 1000U));
+  assert(iterate_kit_voice_playback_clock_ready(&clock, 2U * ONE_CHUNK_BYTES, 1100U));
+}
+
 static void opening_prefill_is_exact(void) {
   struct iterate_kit_voice_playback_clock clock;
   iterate_kit_voice_playback_clock_init(&clock);
@@ -59,15 +67,12 @@ static void a_short_answer_starts_at_the_prime_wait(void) {
   /* 100 ms queued: the wait starts now. */
   assert(!iterate_kit_voice_playback_clock_ready(&clock, ONE_CHUNK_BYTES, 1000U));
   assert(clock.priming_since_ms == 1000U);
-  /* Another chunk 100 ms later: still below the prefill, still waiting. */
-  assert(!iterate_kit_voice_playback_clock_ready(
-      &clock, 2U * ONE_CHUNK_BYTES, 1100U));
   /* One millisecond short of the wait: not yet. */
   assert(!iterate_kit_voice_playback_clock_ready(
-      &clock, 2U * ONE_CHUNK_BYTES, 1000U + PRIME_WAIT_MS - 1U));
+      &clock, ONE_CHUNK_BYTES, 1000U + PRIME_WAIT_MS - 1U));
   /* The wait is up: play what is there. */
   assert(iterate_kit_voice_playback_clock_ready(
-      &clock, 2U * ONE_CHUNK_BYTES, 1000U + PRIME_WAIT_MS));
+      &clock, ONE_CHUNK_BYTES, 1000U + PRIME_WAIT_MS));
   assert(!clock.priming);
   /* Out of priming, a ring below the prefill is still ready. */
   assert(iterate_kit_voice_playback_clock_ready(
@@ -76,19 +81,19 @@ static void a_short_answer_starts_at_the_prime_wait(void) {
 
 /*
  * A JITTER GAP DURING PRIMING DOES NOT START PLAYBACK EARLY. Counted from the
- * first chunk, a 200 ms silence after it changes nothing: the ring keeps
+ * first chunk, a 150 ms silence after it changes nothing: the ring keeps
  * collecting until the wait is up or the prefill is in.
  */
 static void a_jitter_gap_during_priming_does_not_start_early(void) {
   struct iterate_kit_voice_playback_clock clock;
   iterate_kit_voice_playback_clock_init(&clock);
   assert(!iterate_kit_voice_playback_clock_ready(&clock, ONE_CHUNK_BYTES, 1000U));
-  /* 200 ms with nothing new — a late frame, not an ended answer. */
-  assert(!iterate_kit_voice_playback_clock_ready(&clock, ONE_CHUNK_BYTES, 1200U));
+  /* 150 ms with nothing new — a late frame, not an ended answer. */
+  assert(!iterate_kit_voice_playback_clock_ready(&clock, ONE_CHUNK_BYTES, 1150U));
   assert(clock.priming);
   /* The late chunk lands; the prefill is reached, playback starts. */
   assert(iterate_kit_voice_playback_clock_ready(
-      &clock, ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES, 1210U));
+      &clock, ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES, 1160U));
 }
 
 /* Nothing queued is nothing to play, however long the wait: the wait does
@@ -108,7 +113,7 @@ static void an_empty_ring_never_starts_on_time(void) {
  * A HOLE MID-ANSWER IS CONCEALED, NOT RE-PRIMED. Once the opening prefill is
  * spent, a 200 ms jitter gap leaves the ring dry for a beat; the clock
  * conceals and the next frame plays at once — it does not go back to
- * collecting 300 ms.
+ * collecting another prefill.
  */
 static void a_jitter_gap_after_priming_does_not_reprime(void) {
   struct iterate_kit_voice_playback_clock clock;
@@ -399,6 +404,7 @@ static void a_starve_older_than_a_second_is_not_an_underrun(void)
 
 int main(void) {
   opening_prefill_is_exact();
+  two_provider_deltas_start_playback();
   a_starve_older_than_a_second_is_not_an_underrun();
   a_short_answer_starts_at_the_prime_wait();
   a_jitter_gap_during_priming_does_not_start_early();

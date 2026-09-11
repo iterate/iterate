@@ -47,6 +47,7 @@ static struct {
   size_t sent_lengths[FAKE_SENT_CAPACITY];
   size_t sent_count;
   bool message_open;
+  bool fail_next_send;
   size_t restarts_requested;
   uint32_t pongs;
   uint32_t frames_received;
@@ -93,6 +94,10 @@ const char *iterate_kit_fake_platform_find_sent(const char *needle) {
 
 size_t iterate_kit_fake_platform_restarts_requested(void) {
   return platform.restarts_requested;
+}
+
+void iterate_kit_fake_platform_fail_next_send(void) {
+  platform.fail_next_send = true;
 }
 
 /* --- provisioning --------------------------------------------------------- */
@@ -195,6 +200,10 @@ enum capnweb_status iterate_kit_esp_idf_itx_transport_send_text(
     size_t length) {
   size_t *used;
   (void)context;
+  if (platform.fail_next_send) {
+    platform.fail_next_send = false;
+    return CAPNWEB_E_TRANSPORT;
+  }
   if (platform.sent_count >= FAKE_SENT_CAPACITY) return CAPNWEB_E_TRANSPORT;
   if (kind == CAPNWEB_TEXT_BEGIN) {
     platform.message_open = true;

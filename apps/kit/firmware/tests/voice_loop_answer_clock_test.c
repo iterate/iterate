@@ -441,8 +441,8 @@ static void the_first_answer_plays_whole(void) {
  */
 /*
  * A SHORT ANSWER WITHOUT A MARKER PLAYS AT THE PRIME WAIT. One chunk, 100 ms,
- * a third of the prefill and no `last`: nothing plays while the ring waits,
- * a 200 ms gap changes nothing, and once the wait is up every frame plays.
+ * half the prefill and no `last`: nothing plays while the ring waits,
+ * a 100 ms gap changes nothing, and once the wait is up every frame plays.
  */
 static void a_short_answer_without_a_marker_plays_at_the_prime_wait(void) {
   const uint32_t written_before = frames_written;
@@ -455,8 +455,8 @@ static void a_short_answer_without_a_marker_plays_at_the_prime_wait(void) {
    */
   for (pass = 0; pass < 10; ++pass) playback();
   assert(frames_written == written_before);
-  /* A 200 ms gap during priming: still nothing. */
-  iterate_kit_fake_esp_idf_advance_ms(200U);
+  /* A 100 ms gap plus earlier poll time is still below the deadline. */
+  iterate_kit_fake_esp_idf_advance_ms(100U);
   for (pass = 0; pass < 5; ++pass) playback();
   assert(frames_written == written_before);
   iterate_kit_fake_esp_idf_advance_ms(
@@ -477,7 +477,7 @@ static void a_short_answer_with_a_marker_plays_at_the_prime_wait_too(void) {
   deliver_chunk(true, true, CHUNK_FRAMES);
   for (pass = 0; pass < 10; ++pass) playback();
   assert(frames_written == written_before);
-  iterate_kit_fake_esp_idf_advance_ms(200U);
+  iterate_kit_fake_esp_idf_advance_ms(100U);
   for (pass = 0; pass < 5; ++pass) playback();
   assert(frames_written == written_before);
   iterate_kit_fake_esp_idf_advance_ms(
@@ -529,9 +529,7 @@ static void a_live_answer_superseded_after_a_stall(void) {
   playback();
 
   /*
-   * An answer arrives and only part of it is played. Two chunks are 200 ms,
-   * less than the prefill, so it starts at the prime wait: one pass to stamp
-   * when audio first appeared, then the wait, then a frame a pass.
+   * An answer arrives and only part of it is played before replacement.
    */
   deliver_answer();
   playback();

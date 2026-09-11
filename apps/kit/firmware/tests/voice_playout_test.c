@@ -167,7 +167,7 @@ static void nothing_plays_before_prefill(void) {
  */
 /*
  * A SHORT ANSWER PLAYS AT THE PRIME WAIT, WITHOUT A MARKER. 100 ms of answer,
- * a third of the prefill, and no `last`: the ring waits exactly as long as a
+ * half the prefill, and no `last`: the ring waits exactly as long as a
  * long answer's prefill would have taken to fill, then plays every frame.
  */
 static void a_short_answer_plays_at_the_prime_wait(void) {
@@ -187,18 +187,18 @@ static void a_short_answer_plays_at_the_prime_wait(void) {
 
 /*
  * A JITTER GAP DURING PRIMING DOES NOT START PLAYBACK EARLY. A chunk, then
- * 200 ms of nothing (a late frame on a jittery link), then the rest: the ring
+ * 150 ms of nothing (a late frame on a jittery link), then the rest: the ring
  * keeps priming through the gap and starts when the prefill is in.
  */
 static void a_jitter_gap_during_priming_does_not_start_early(void) {
   reset(1000U);
   ring_deliver(5U);
   assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PRIMING);
-  sink_state.now_ms = 1200U;
+  sink_state.now_ms = 1150U;
   assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PRIMING);
   assert(sink_state.written == 0U);
   ring_deliver((uint32_t)PREFILL_FRAMES - 5U);
-  sink_state.now_ms = 1210U;
+  sink_state.now_ms = 1160U;
   assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PLAYED);
 }
 

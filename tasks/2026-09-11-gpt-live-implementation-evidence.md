@@ -54,7 +54,7 @@ Detailed investigation artifacts are local:
 | Implementation 2, requested Fable, actual Fable then Opus fallback | Removed the duplicate READY-only microphone gate and app-task FIFO reset. Rejected its claim that OTA rollback into ordinary firmware satisfied the no-sound constraint. |
 | Implementation 3, Fable 5.1 xhigh | Fixed quiet-call presence, terminal deduplication, rejected call-start cleanup, required speaker activation, and eviction ending the interrupted call without replay. |
 | Implementation 4, Fable 5.1 xhigh | Fixed cancellation before acceptance, queued terminal delivery while unmounted, overflow teardown and stale queue-limit text. The M5 handoff was removed entirely. |
-| Implementation 5, Fable 5.1 xhigh | Fixed same-pass end/start, muted remote start and server-ended queued-audio races; focused regressions pass. Failed microphone appends now end the activation explicitly; its injected-failure regression is next. |
+| Implementation 5, Fable 5.1 xhigh | Fixed same-pass end/start, muted remote start and server-ended queued-audio races; focused regressions pass. Failed microphone appends now end the activation explicitly; its injected-failure regression and all 70 host tests pass. |
 
 Full transcripts/results are in `/tmp/gpt-live-implementation-review-{1,2,3,4,5}/`.
 Reviews 4 and 5 used Fable for every main response; their usage metadata also
@@ -210,3 +210,9 @@ Report: `/tmp/gpt-live-prefill-200ms-proof-202609112300308-report.json`.
 Postcall state: `/tmp/gpt-live-prefill-200ms-postcall.json`, with null runtime,
 zero subscription lag and no stream error. This is file-output timing evidence;
 actual hardware DMA and room acoustics still need separate qualification.
+
+The 100 ms candidate reduced packet-to-submission latency further but produced
+**12 confirmed starved output buffers** over seven turns. It fails the continuity
+criterion even though older summary counters (`underruns` and `framesConcealed`)
+were zero. The report must classify those actual output gaps as failures. Keep
+200 ms; report: `/tmp/gpt-live-prefill-100ms-proof-202609112304581-report.json`.
