@@ -417,6 +417,53 @@ export async function talk(options: TalkOptions = {}) {
   );
 
   reportSpeakerContinuity(reportJson);
+  reportRecordings(runDir, micRecord, playback);
+}
+
+/**
+ * The run's audio, as links: what the microphone heard, what the speaker was
+ * handed, and the two overlaid — a stereo file with the microphone on the
+ * left and the speaker on the right (so a hole in the answer sits next to
+ * what the room was doing at that moment), plus a mono mix for a quick
+ * listen. sox does the mixing when it is installed; without it the two raw
+ * recordings are still linked. The speaker track is a true timeline only if
+ * the driver wrote one (silence for every idle interval); a compacted
+ * recording overlays wrongly, and the duration line makes that visible.
+ */
+function reportRecordings(runDir: string, micRecord: string, playback: string): void {
+  const link = (file: string) => `file://${file}`;
+  const durationSeconds = (file: string): string => {
+    if (!fs.existsSync(file)) return "missing";
+    const header = Buffer.alloc(44);
+    const fd = fs.openSync(file, "r");
+    try {
+      fs.readSync(fd, header, 0, 44, 0);
+    } finally {
+      fs.closeSync(fd);
+    }
+    /* Canonical 44-byte PCM WAV header: byte rate at 28, data size at 40. */
+    const byteRate = header.readUInt32LE(28);
+    const dataBytes = fs.statSync(file).size - 44;
+    return byteRate > 0 ? (dataBytes / byteRate).toFixed(1) : "?";
+  };
+  console.log(`\n  RECORDINGS`);
+  console.log(`    microphone   ${link(micRecord)}  (${durationSeconds(micRecord)} s)`);
+  console.log(`    speaker      ${link(playback)}  (${durationSeconds(playback)} s)`);
+  if (!fs.existsSync(micRecord) || !fs.existsSync(playback)) return;
+  const sox = spawnSync("sox", ["--version"], { stdio: "ignore" });
+  if (sox.status !== 0) {
+    console.log(`    (install sox for the overlaid and mixed versions)`);
+    return;
+  }
+  const overlay = path.join(runDir, "overlay-mic-left-speaker-right.wav");
+  const mix = path.join(runDir, "mix.wav");
+  /* -M merges channels (mic → left, speaker → right); -m sums them. Both
+   * pad the shorter input with silence to the longer one's length. */
+  const merged = spawnSync("sox", ["-M", micRecord, playback, overlay], { stdio: "ignore" });
+  const mixed = spawnSync("sox", ["-m", micRecord, playback, mix], { stdio: "ignore" });
+  if (merged.status === 0)
+    console.log(`    overlaid     ${link(overlay)}  (mic left, speaker right)`);
+  if (mixed.status === 0) console.log(`    mixed        ${link(mix)}`);
 }
 
 /**
