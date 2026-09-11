@@ -99,7 +99,7 @@ export function adaptMessagesForModel(
  */
 export async function runWorkersAiAttempt(input: {
   ai: WorkersAiBinding;
-  consultInterceptor?: (request: modelInterception.ProjectAiInterceptorInput) => Promise<unknown>;
+  consultInterceptor?: (request: modelInterception.ProjectAiInterceptor.Input) => Promise<unknown>;
   agentPath?: string;
   deadlineMs: number;
   messages: WorkersAiMessage[];
@@ -494,7 +494,7 @@ export async function sendAiRequest(
     ai: WorkersAiBinding;
     source: { source: "agent-turn"; agentPath: string } | { source: "ai-run" };
     consultInterceptor:
-      | ((request: modelInterception.ProjectAiInterceptorInput) => Promise<unknown>)
+      | ((request: modelInterception.ProjectAiInterceptor.Input) => Promise<unknown>)
       | undefined;
   },
   prepared: PreparedAiRequest,
@@ -509,7 +509,7 @@ export async function sendAiRequest(
       ...host.source,
       model: sourceModel,
       request,
-    } as modelInterception.ProjectAiInterceptorInput;
+    } as modelInterception.ProjectAiInterceptor.Input;
     const response = await host.consultInterceptor(intercepted);
     if (!(response instanceof Response)) throw new Error("AI interceptor must return a Response");
     if (response.bodyUsed || response.body?.locked)

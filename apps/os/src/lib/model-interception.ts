@@ -50,25 +50,32 @@ export type WorkersAiRequest = {
 };
 
 /** Original model name and the complete credential-free request that would be dispatched. */
-export type ProjectAiInterceptorInput =
-  | {
-      source: "agent-turn";
-      agentPath: string;
-      model: string;
-      request: AiRequest & {
-        body: {
-          messages: {
-            role: "system" | "developer" | "user" | "assistant";
-            content: string;
-          }[];
-        };
+export declare namespace ProjectAiInterceptor {
+  /** An agent turn, with the messages prepared for its model. */
+  export type AgentTurnInput = {
+    source: "agent-turn";
+    agentPath: string;
+    model: string;
+    request: AiRequest & {
+      body: {
+        messages: {
+          role: "system" | "developer" | "user" | "assistant";
+          content: string;
+        }[];
       };
-    }
-  | { source: "ai-run"; model: string; request: AiRequest };
+    };
+  };
+
+  /** A direct AI call, whose body can contain any model's inputs. */
+  export type AiRunInput = { source: "ai-run"; model: string; request: AiRequest };
+
+  /** Discriminated input shared by every interceptor callback. */
+  export type Input = AgentTurnInput | AiRunInput;
+}
 
 /** Replace only the provider call; response classification and decoding still run. */
 export type ProjectAiInterceptor = (
-  input: ProjectAiInterceptorInput,
+  input: ProjectAiInterceptor.Input,
 ) => Response | Promise<Response>;
 
 /** Disposable handle for one live AI interception. */

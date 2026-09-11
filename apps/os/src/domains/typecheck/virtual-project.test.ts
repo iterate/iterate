@@ -26,6 +26,28 @@ import {
 let typechecker: Typechecker;
 let fetchedUrls: string[] = [];
 
+test("mounts can use the interceptor callback and its namespaced input types", async () => {
+  expect(
+    await checkCapabilityTypes({
+      types: `export type Interception = {
+      install(handler: ProjectAiInterceptor): void;
+      handle(input: ProjectAiInterceptor.Input): void;
+      turn(input: ProjectAiInterceptor.AgentTurnInput): void;
+      run(input: ProjectAiInterceptor.AiRunInput): void;
+    };`,
+      typechecker,
+    }),
+  ).toEqual([]);
+  expect(
+    await checkCapabilityTypes({
+      types: "export type Invalid = ProjectAiInterceptor.AgentTurnInput['missing'];",
+      typechecker,
+    }),
+  ).toEqual([
+    expect.stringContaining("Property 'missing' does not exist on type 'AgentTurnInput'"),
+  ]);
+});
+
 beforeAll(async () => {
   const compiler = await createCompiler();
   typechecker = {

@@ -9,7 +9,7 @@
 import { isIdempotencyConflict } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
 import type { ConfigRepoFileMentionTarget } from "@iterate-com/shared/message";
-import type { ProjectAiInterceptorInput } from "../../lib/model-interception.ts";
+import type { ProjectAiInterceptor } from "../../lib/model-interception.ts";
 import type { AgentLlmCompletion } from "./agent-processor-contract.ts";
 import type { AgentFileAttachment, AgentProcessorContract } from "./agent-processor-contract.ts";
 import type { AgentMentionReadResult } from "./agent-mention-materialization.ts";
@@ -66,7 +66,7 @@ export type AgentLlmTransport = (args: {
 export type AgentProcessorDeps = {
   ai?: WorkersAiBinding;
   cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
-  consultAiInterceptor?: (input: ProjectAiInterceptorInput) => Promise<unknown>;
+  consultAiInterceptor?: (input: ProjectAiInterceptor.Input) => Promise<unknown>;
   resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
   readRepoFile?: (
     target: ConfigRepoFileMentionTarget,
