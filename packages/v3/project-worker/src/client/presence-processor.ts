@@ -10,31 +10,44 @@
 // emits the delta itself (the reduce never touches it). Proves reduced ⊕ runtime through ONE
 // projection + ONE revision chain (specs/live-state-demo.spec, live-state-chains-client-side.e2e).
 import {
+  type ConsumedEvent,
   defineProcessorContract,
   type ProcessEventArgs,
+  type ProcessorState,
   type ReduceArgs,
   StreamProcessor,
   StreamProcessorDurableObject,
-  type StreamEvent,
   z,
 } from "../sdk/index.ts";
 
 const PresenceView = z.object({ ticks: z.number().default(0) });
 type PresenceView = z.infer<typeof PresenceView>;
 
-/** The events the processor consumes — 'tick' is reduced into `ticks`, 'poke' drives the runtime
- *  field only (declared here so `reduce`/`processEvent` narrow `event.type` with no cast). */
-type PresenceEvent = (StreamEvent & { type: "tick" }) | (StreamEvent & { type: "poke" });
+// 'tick' is a durable event reduced into `ticks`; 'poke' is ephemeral and drives a runtime field only
+// (`processEvent`, never reduced). Both carry no payload. The reduce/processEvent event union is
+// derived from this contract's `consumes` — no hand-kept union.
+const PresenceContract = defineProcessorContract({
+  slug: "presence",
+  version: "1.0.0",
+  description: "Reduced tick count beside a runtime lastPokeMs the reduce never sees.",
+  stateSchema: PresenceView,
+  events: {
+    tick: { description: "A durable tick; increments the reduced count.", payloadSchema: z.object({}) },
+    poke: {
+      description: "An ephemeral poke; bumps the runtime lastPokeMs, never reduced.",
+      payloadSchema: z.object({}),
+      ephemeral: true,
+    },
+  },
+  consumes: ["tick", "poke"],
+  emits: [],
+});
 
-class PresenceProcessor extends StreamProcessor<PresenceView, PresenceEvent> {
-  readonly contract = defineProcessorContract({
-    slug: "presence",
-    version: "1.0.0",
-    description: "Reduced tick count beside a runtime lastPokeMs the reduce never sees.",
-    stateSchema: PresenceView,
-    consumes: ["tick", "poke"],
-    emits: [],
-  });
+class PresenceProcessor extends StreamProcessor<
+  ProcessorState<typeof PresenceContract>,
+  ConsumedEvent<typeof PresenceContract>
+> {
+  readonly contract = PresenceContract;
 
   /** RUNTIME state: a field, not reduced — reset to 0 on eviction, never re-reduced. */
   #lastPokeMs = 0;
@@ -42,13 +55,15 @@ class PresenceProcessor extends StreamProcessor<PresenceView, PresenceEvent> {
   override reduce({
     event,
     state,
-  }: ReduceArgs<PresenceView, PresenceEvent>): PresenceView | undefined {
+  }: ReduceArgs<PresenceView, ConsumedEvent<typeof PresenceContract>>): PresenceView | undefined {
     if (event.type === "tick") return { ...state, ticks: state.ticks + 1 };
     // 'poke' is deliberately NOT reduced — it drives a runtime field, not durable truth.
     return undefined;
   }
 
-  override processEvent({ event }: ProcessEventArgs<PresenceView, PresenceEvent>): undefined {
+  override processEvent({
+    event,
+  }: ProcessEventArgs<PresenceView, ConsumedEvent<typeof PresenceContract>>): undefined {
     // No publish call: the engine re-projects after every batch and emits the delta itself.
     if (event?.type === "poke") this.#lastPokeMs = Date.now();
   }

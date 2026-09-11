@@ -831,24 +831,145 @@ export class LiveState<S> {
   }
 }
 
-// ── processor contract ── the zod CONTRACT helper. zod is ~310 KB of runtime the edge/DO script
-// never needs (the core contract is hand-built, stream/core-processor.ts): only this helper reaches
-// it, so esbuild tree-shakes zod off the worker script (zod ships `sideEffects: false`, and the
-// script measured the same size with and without this section) — it rides the SDK bundle alone.
-// Mirrors apps/os (`packages/iterate/src/processors/schemas.ts`) so processors port both ways.
+// ── processor contract ── the zod CONTRACT helper (apps/os `defineProcessorContract`, focused). zod
+// is ~310 KB of runtime the edge/DO script never needs (the core contract is hand-built,
+// stream/core-processor.ts): only this helper reaches it, so esbuild tree-shakes zod off the worker
+// script (zod ships `sideEffects: false`) — it rides the SDK bundle alone. A contract declares its
+// identity, reduced-state schema, the events it OWNS (`events`, keyed by the durable type string,
+// each with a zod payload schema — so the type strings and payload shapes are visible right here),
+// the events it `consumes`/`emits`, and optional `processorDeps` (other contracts whose events it may
+// consume without owning). The reduce's event union and the state type are DERIVED from the contract
+// (`ConsumedEvent` / `ProcessorState`) — no hand-kept discriminated union to drift.
 
-export function defineProcessorContract<StateSchema extends z.ZodType>(contract: {
+/** One owned event: its description and the zod schema for its payload. `ephemeral: true` marks a
+ *  non-durable event (delivered only when its type is named in `consumes`). */
+export type EventDefinition = { description: string; payloadSchema: z.ZodType; ephemeral?: true };
+/** A durable event type string → its definition. */
+export type EventCatalog = Record<string, EventDefinition>;
+
+/** A `processorDeps` entry's own event catalog. */
+type DepCatalog<Dep> = Dep extends { events: infer Events extends EventCatalog } ? Events : never;
+/** Every event type string a `processorDeps` tuple contributes. */
+type DepEventType<Deps extends readonly unknown[]> = Deps[number] extends infer Dep
+  ? Dep extends unknown
+    ? keyof DepCatalog<Dep> & string
+    : never
+  : never;
+/** The definition owning `Type` — local events win, then each dep. */
+type DefinitionForType<
+  Events extends EventCatalog,
+  Deps extends readonly unknown[],
+  Type extends string,
+> = Type extends keyof Events
+  ? Events[Type]
+  : Deps[number] extends infer Dep
+    ? Dep extends unknown
+      ? Type extends keyof DepCatalog<Dep>
+        ? DepCatalog<Dep>[Type]
+        : never
+      : never
+    : never;
+
+/** The committed event for one resolved type: `StreamEvent` narrowed to its `{ type, payload }`. */
+type EventForType<
+  Events extends EventCatalog,
+  Deps extends readonly unknown[],
+  Type extends string,
+> = Type extends unknown
+  ? DefinitionForType<Events, Deps, Type> extends { payloadSchema: infer Schema extends z.ZodType }
+    ? StreamEvent & { type: Type; payload: z.output<Schema> }
+    : never
+  : never;
+
+/** The reduce union for a `consumes` tuple — `"*"` alone means any `StreamEvent`. */
+type EventForTypes<
+  Events extends EventCatalog,
+  Deps extends readonly unknown[],
+  Types extends readonly string[],
+> = "*" extends Types[number] ? StreamEvent : EventForType<Events, Deps, Types[number]>;
+
+/** A contract's `processorDeps` tuple, defaulting to empty. */
+type DepsOf<Contract> = Contract extends { processorDeps: infer Deps extends readonly unknown[] }
+  ? Deps
+  : readonly [];
+
+/** A contract's reduced-state type, inferred from its `stateSchema`. */
+export type ProcessorState<Contract> = Contract extends {
+  stateSchema: infer Schema extends z.ZodType;
+}
+  ? z.output<Schema>
+  : never;
+
+/** The committed-event union a contract's `consumes` list can deliver to `reduce`/`processEvent`. */
+export type ConsumedEvent<Contract> = Contract extends {
+  events: infer Events extends EventCatalog;
+  consumes: infer Consumes extends readonly string[];
+}
+  ? EventForTypes<Events, DepsOf<Contract>, Consumes>
+  : never;
+
+/** Every event type string resolvable from local `events` plus `processorDeps`. */
+type ResolvedType<Events extends EventCatalog, Deps extends readonly unknown[]> =
+  | (keyof Events & string)
+  | DepEventType<Deps>;
+
+/** `contract.buildEvent({ type, payload, … })`: validate the payload against the resolved event's
+ *  schema and return the input. The type string stays visible at the call site; unresolved types and
+ *  bad payloads throw. Owned or dep events only. */
+type BuildEvent<Events extends EventCatalog, Deps extends readonly unknown[]> = <
+  const Event extends { type: ResolvedType<Events, Deps> } & Omit<StreamEventInput, "type">,
+>(
+  event: Event,
+) => Event;
+
+/** What `defineProcessorContract` returns: the base the engine reads, plus the events catalog, the
+ *  resolved deps and the typed `buildEvent`. */
+export type DefinedProcessorContract<
+  StateSchema extends z.ZodType,
+  Events extends EventCatalog,
+  Consumes extends readonly string[],
+  Deps extends readonly unknown[],
+> = ProcessorContract<z.output<StateSchema>> & {
+  stateSchema: StateSchema;
+  events: Events;
+  // The literal consumes tuple is preserved (not widened to string[]) so `ConsumedEvent` can map each
+  // consumed type to its event; the base ProcessorContract only needs `readonly string[]`.
+  consumes: Consumes;
+  processorDeps: Deps;
+  buildEvent: BuildEvent<Events, Deps>;
+};
+
+export function defineProcessorContract<
+  const StateSchema extends z.ZodType,
+  const Events extends EventCatalog = Record<string, never>,
+  const Consumes extends readonly string[] = readonly string[],
+  const Deps extends readonly { events: EventCatalog }[] = readonly [],
+>(contract: {
   slug: string;
   version: string;
   description: string;
   /** Must parse `{}` — the initial state is `stateSchema.parse({})` (all fields defaulted). */
   stateSchema: StateSchema;
-  consumes: readonly string[];
+  /** The events this contract OWNS, keyed by durable type string. Omit for a kernel-generic
+   *  processor that types its own reduce through the `Event` param instead of an events catalog. */
+  events?: Events;
+  /** Other processors' contracts whose events this one may `consumes`/`emits` without owning. */
+  processorDeps?: Deps;
+  consumes: Consumes;
   emits: readonly string[];
-}): ProcessorContract<z.infer<StateSchema>> & { stateSchema: StateSchema } {
-  const initial = contract.stateSchema.safeParse({});
-  if (!initial.success)
+}): DefinedProcessorContract<StateSchema, Events, Consumes, Deps> {
+  if (!contract.stateSchema.safeParse({}).success)
     throw new Error(`contract "${contract.slug}": stateSchema must parse {} (default every field)`);
+  const events = (contract.events ?? {}) as Events;
+  const processorDeps = (contract.processorDeps ?? []) as Deps;
+  // One owner per event type: a local event may not shadow a dep's event.
+  for (const dep of processorDeps as readonly { events: EventCatalog }[])
+    for (const type of Object.keys(dep.events))
+      if (type in events)
+        throw new Error(`contract "${contract.slug}": event "${type}" is already owned by a dep`);
+  const resolve = (type: string): EventDefinition | undefined =>
+    events[type] ??
+    (processorDeps as readonly { events: EventCatalog }[]).map((dep) => dep.events[type]).find(Boolean);
   return {
     slug: contract.slug,
     version: contract.version,
@@ -856,6 +977,14 @@ export function defineProcessorContract<StateSchema extends z.ZodType>(contract:
     consumes: contract.consumes,
     emits: contract.emits,
     stateSchema: contract.stateSchema,
-    initialState: () => contract.stateSchema.parse({}) as z.infer<StateSchema>,
+    events,
+    processorDeps,
+    initialState: () => contract.stateSchema.parse({}) as z.output<StateSchema>,
+    buildEvent: ((event: { type: string; payload?: unknown }) => {
+      const definition = resolve(event.type);
+      if (!definition)
+        throw new Error(`contract "${contract.slug}": cannot build unresolved event "${event.type}"`);
+      return { ...event, payload: definition.payloadSchema.parse(event.payload) };
+    }) as BuildEvent<Events, Deps>,
   };
 }
