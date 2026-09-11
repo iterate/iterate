@@ -147,10 +147,12 @@ test("a hop count the platform never wrote (an app spelling `NaN` to defeat the 
   expect(response.text).toContain('"NaN"');
 });
 
-test("deleted routes fall through to the control plane's 404 — /expression, /call, /ws and /cap answer Not found, a WebSocket upgrade to /ws gets no 101", async () => {
-  // A project host is the one HTTP way into a project: the old /expression, /call, /ws and /cap
-  // routes on the platform host are gone and land on the in-process control plane's catch-all (a
-  // plain 404 — never a 500), and an upgrade attempt at /ws is refused (no 101).
+test("the old RPC routes are GONE — /expression, /call, /ws and /cap are no capnweb endpoint: the platform host's browser-auth gate sends an unauthenticated GET to /.auth/login (302), never an itx result; a /ws upgrade gets no 101", async () => {
+  // A project host is the one HTTP way into a project. The old /expression, /call, /ws and /cap
+  // routes on the platform host no longer exist as RPC doors — every non-issuer path there is behind
+  // the browser-auth gate (src/sdk/auth.ts `auth.require`), so an unauthenticated GET is redirected to
+  // /.auth/login. What matters for this pin: none is a capnweb/itx endpoint any more, and none upgrades.
+  // (`redirect: "manual"` — a plain `fetch` would FOLLOW the 302 to the login page and see its 200.)
   for (const path of [
     "/expression?context=prj_x&itx=itx.whoami",
     "/expression/rpc/v1?context=prj_x&itx=itx.site",
@@ -158,9 +160,9 @@ test("deleted routes fall through to the control plane's 404 — /expression, /c
     "/ws",
     "/cap?context=prj_x&cap=itx.whoami",
   ]) {
-    const res = await fetch(workerUrl(path));
-    expect(res.status, path).toBe(404);
-    expect(await res.text()).toContain("Not found");
+    const res = await fetch(workerUrl(path), { redirect: "manual" });
+    expect(res.status, path).toBe(302);
+    expect(res.headers.get("location"), path).toMatch(/^\/\.auth\/login\?next=/);
   }
   const outcome = await new Promise<string>((resolve) => {
     const ws = new WebSocket(workerUrl("/ws").replace(/^http/, "ws"));

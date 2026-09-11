@@ -151,7 +151,7 @@ test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT cl
   const itx = await worker.itx(ctx); // connection A: setup, the flood, and observation
   // Connection B — THE VICTIM: its own client socket, because the callback stub it lent lives in
   // that socket's relay session; the socket's death must become the stub's death.
-  const wsB = stallableWebSocket(`ws://${worker.url.host}/api`);
+  const wsB = stallableWebSocket(`ws://${worker.url.host}/internal/rpc`);
   const sessionB: any = newWebSocketRpcSession(wsB as any);
   const victim = sessionB
     .authenticate({ type: "admin-secret", secret: E2E_ADMIN_API_SECRET })
