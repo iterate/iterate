@@ -512,6 +512,9 @@ class McpJsonRpcClient {
   /** The in-flight handshake, shared while it runs so concurrent requests await ONE — and never post
    *  before the session id is established. Cleared on failure so the next request retries it. */
   #handshake: Promise<McpServerInfo> | null = null;
+  /** Bumped by `close()`. A handshake captures it at the start and, on completing, refuses to revive a
+   *  client closed meanwhile — it DELETEs the session it just established instead of leaking it. */
+  #generation = 0;
   constructor(itx: LibraryItx, url: string, headers: Record<string, string>) {
     this.#itx = itx;
     this.#url = url;
@@ -528,12 +531,22 @@ class McpJsonRpcClient {
     return this.#handshake;
   }
   async #runHandshake(): Promise<McpServerInfo> {
+    const generation = this.#generation;
     const serverInfo = (await this.#send("initialize", {
       protocolVersion: MCP_PROTOCOL_VERSION,
       capabilities: {},
       clientInfo: CLIENT_INFO,
     })) as McpServerInfo;
     await this.notify("notifications/initialized");
+    if (generation !== this.#generation) {
+      // close() ran while this handshake was in flight: do NOT revive the client. DELETE the session
+      // this handshake just established (#post set #sessionId from the initialize response) so the
+      // server does not keep an orphaned session close() could not know to delete.
+      const orphaned = this.#sessionId;
+      this.#sessionId = null;
+      if (orphaned !== null) await this.#deleteSession(orphaned);
+      throw new Error("MCP client was closed during its handshake");
+    }
     this.#closed = false; // only now — session id set, initialized sent — is the client usable
     return serverInfo;
   }
@@ -558,10 +571,16 @@ class McpJsonRpcClient {
   async close(): Promise<void> {
     this.#closed = true;
     this.#handshake = null; // a re-open must run a fresh handshake, not reuse this session's
-    if (this.#sessionId === null) return;
-    const headers = new Headers(this.#headers);
-    headers.set("mcp-session-id", this.#sessionId);
+    this.#generation += 1; // invalidate a handshake in flight — it must not revive this client
+    const sessionId = this.#sessionId;
     this.#sessionId = null;
+    if (sessionId !== null) await this.#deleteSession(sessionId);
+  }
+  /** DELETE one server session (best-effort) — close()'s own, and the one a handshake that lost the
+   *  close race established. */
+  async #deleteSession(sessionId: string): Promise<void> {
+    const headers = new Headers(this.#headers);
+    headers.set("mcp-session-id", sessionId);
     await this.#itx
       .fetch(new Request(this.#url, { method: "DELETE", headers }))
       .then((r) => r.body?.cancel())

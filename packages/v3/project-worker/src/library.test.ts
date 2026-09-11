@@ -160,6 +160,53 @@ describe("the library", () => {
       expect(initializeCount).toBe(2); // one for connect, one shared re-handshake — never a third
     });
 
+    test("closing DURING a re-handshake deletes the new session and does not revive the client", async () => {
+      let sessions = 0;
+      const deletes: string[] = [];
+      let releaseHandshake: (() => void) | undefined;
+      const itx = {
+        fetch: async (request: Request) => {
+          if (request.method === "DELETE") {
+            deletes.push(request.headers.get("mcp-session-id") ?? "?");
+            return new Response(null, { status: 204 });
+          }
+          const body = JSON.parse(await request.text()) as { id?: number; method: string };
+          if (body.method === "notifications/initialized")
+            return new Response(null, { status: 202 });
+          if (body.method === "initialize") {
+            const id = `s-${++sessions}`;
+            if (sessions > 1) await new Promise<void>((r) => (releaseHandshake = r)); // park the re-handshake
+            return json(
+              { jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "f" } } },
+              { headers: { "mcp-session-id": id } },
+            );
+          }
+          const result =
+            body.method === "tools/list"
+              ? { tools: [{ name: "echo" }] }
+              : { content: [{ type: "text", text: '"ok"' }] };
+          return json({ jsonrpc: "2.0", id: body.id, result });
+        },
+      } as unknown as LibraryItx;
+      const { roots, releaseConnections } = buildLibrary(itx);
+      const conn = await roots.connectToMcp("https://mcp.example/"); // establishes s-1
+      releaseConnections();
+      await new Promise((r) => setTimeout(r, 10)); // closes s-1 (DELETE s-1)
+
+      const inflight = conn.callTool("echo", {}).then(
+        () => "ok",
+        (e: unknown) => (e instanceof Error ? e.message : String(e)),
+      );
+      await new Promise((r) => setTimeout(r, 10)); // the re-handshake (s-2) is parked
+      await conn.close(); // close AGAIN while the handshake is in flight — bumps the generation
+      releaseHandshake?.(); // now let the parked handshake complete
+      const outcome = await inflight;
+
+      expect(outcome).toMatch(/closed during its handshake/); // the call did not silently succeed
+      expect(deletes).toContain("s-1");
+      expect(deletes).toContain("s-2"); // the session the losing handshake established was NOT leaked
+    });
+
     test("releaseConnections closes a WebSocket capnweb connection LOCALLY — `close` is the connection's own member, never the dotted proxy's remote call", async () => {
       // What egress's 101 would carry: a WebSocket-shaped object capnweb's session can drive.
       const closed: [number | undefined, string | undefined][] = [];
