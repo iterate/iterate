@@ -139,8 +139,9 @@ void cli_screen_draw(
       state->mic_captured, state->mic_held, state->mic_sent, state->mic_lost);
   cli_screen_line(
       frame, sizeof(frame), &length,
-      "  spk   received %-6u played %-5u conceal %-4u under %-4u drop %-4u starve %-4u skip %-4u ring %ums",
-      state->spk_received, state->spk_played, state->spk_conceal,
+      "  spk   received %-6u played %-5u holes %u (%ums) dry %-4u under %-4u drop %-4u starve %-4u skip %-4u ring %ums",
+      state->spk_received, state->spk_played, state->spk_holes,
+      state->spk_hole_ms, state->spk_dry_frames,
       state->spk_underruns, state->spk_dropped, state->spk_starved,
       state->spk_catchup, state->spk_ring_ms);
   if (state->turn_release_to_commit_ms != 0U ||

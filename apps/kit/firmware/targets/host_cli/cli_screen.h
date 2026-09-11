@@ -95,7 +95,11 @@ struct cli_screen_state {
   uint32_t spk_received;
   uint32_t spk_played;
   uint32_t spk_ring_ms;
-  uint32_t spk_conceal;
+  /** Dry spells with audible audio on a side: what a listener heard as a gap, and their length. */
+  uint32_t spk_holes;
+  uint32_t spk_hole_ms;
+  /** Every dry frame while an answer was open, holes and the model's own pauses alike. */
+  uint32_t spk_dry_frames;
   uint32_t spk_underruns;
   /*
    * Frames the room never got because the speaker ring was full.

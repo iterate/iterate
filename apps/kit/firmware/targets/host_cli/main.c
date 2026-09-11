@@ -43,6 +43,8 @@ enum {
    * far end, but a wedged transport must not hold a person's terminal.
    */
   CLI_MAIN_HANGUP_GRACE_MS = 3000,
+  /* Peak (PCM16) above which a frame counts as audible when judging a dry spell. */
+  CLI_MAIN_AUDIBLE_PEAK = 300,
 };
 
 #define CLI_MAIN_CALL_END_REASON "host-cli"
@@ -157,6 +159,7 @@ static uint64_t cli_main_sink_now_ms(void *context);
 static enum iterate_kit_voice_playout_write cli_main_sink_write(
     void *context, const uint8_t *frame, size_t length);
 static bool cli_main_sink_conceal(void *context);
+static void cli_main_judge_dry_spell(struct cli_runtime *runtime, const uint8_t *frame);
 
 /* Advances the real-time playback clock by at most one frame. */
 static void cli_main_poll_playback(
@@ -918,8 +921,11 @@ static void cli_main_accept_speaker_frame(
     ++runtime->speaker_overflow_drops;
     return;
   }
+  /* With a room, an underrun is a judged hole (cli_main_judge_dry_spell);
+   * here the clock's word stands only for the file-clocked playout. */
   if (iterate_kit_voice_playback_clock_audio_arrived(
-          &runtime->playout.clock, cli_runtime_now_ms(NULL))) {
+          &runtime->playout.clock, cli_runtime_now_ms(NULL)) &&
+      !runtime->options.live_audio && runtime->options.pretend_speaker == NULL) {
     ++runtime->speaker_underruns;
     if (runtime->conversation.current_turn != NULL) {
       ++runtime->conversation.current_turn->underruns;
@@ -1023,6 +1029,8 @@ static void cli_main_on_control(
     cli_speaker_clear(&runtime->speaker);
     /* The hardware's queue too: up to 200 ms of the old answer sits there. */
     (void)iterate_kit_darwin_audio_codec_discard_playback(&runtime->audio_codec);
+    runtime->dry_run_frames = 0U;
+    runtime->last_played_peak = 0U;
     /* A new answer is a new timeline: the reprime forgets the old one. */
     iterate_kit_voice_playback_clock_reprime(&runtime->playout.clock);
     ++runtime->barge_in_flushes;
@@ -1034,6 +1042,9 @@ static void cli_main_on_control(
      */
     runtime->answer_done = true;
     iterate_kit_voice_playback_clock_answer_done(&runtime->playout.clock);
+    /* The tail before the marker is dry by design, not a hole. */
+    runtime->dry_run_frames = 0U;
+    runtime->last_played_peak = 0U;
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED) {
     cli_runtime_log("info", "call accepted");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
@@ -1254,6 +1265,7 @@ static enum iterate_kit_voice_playout_write cli_main_sink_write(
   if (!cli_main_write_playback(runtime, frame)) {
     return ITERATE_KIT_VOICE_PLAYOUT_WRITE_FAILED;
   }
+  cli_main_judge_dry_spell(runtime, frame);
   /*
    * The turn's own ledger, from audio the room actually took: what the
    * report calls occupancy and played, the progress the turn watchdog
@@ -1270,6 +1282,35 @@ static enum iterate_kit_voice_playout_write cli_main_sink_write(
     }
   }
   return ITERATE_KIT_VOICE_PLAYOUT_WRITE_OK;
+}
+
+/* See cli_runtime.h: dry frames pending judgement, decided by this frame's loudness. */
+static void cli_main_judge_dry_spell(struct cli_runtime *runtime, const uint8_t *frame)
+{
+  uint16_t peak = 0U;
+  assert(runtime != NULL && frame != NULL);
+  for (size_t index = 0U; index + 1U < ITERATE_KIT_VOICE_FRAME_BYTES; index += 2U) {
+    const int16_t sample = (int16_t)((uint16_t)frame[index] | ((uint16_t)frame[index + 1U] << 8));
+    const uint16_t magnitude = (uint16_t)(sample < 0 ? -(int32_t)sample : sample);
+    if (magnitude > peak) peak = magnitude;
+  }
+  if (runtime->dry_run_frames > 0U) {
+    /* Audible on BOTH sides: a cut through speech. A spell that lengthens
+     * the model's own pause on either side of it is not heard as a hole. */
+    if (runtime->last_played_peak >= CLI_MAIN_AUDIBLE_PEAK && peak >= CLI_MAIN_AUDIBLE_PEAK) {
+      ++runtime->holes;
+      runtime->hole_frames += runtime->dry_run_frames;
+      ++runtime->speaker_underruns;
+      if (runtime->conversation.current_turn != NULL) {
+        runtime->conversation.current_turn->frames_concealed += runtime->dry_run_frames;
+        ++runtime->conversation.current_turn->underruns;
+      }
+    } else {
+      runtime->quiet_dry_frames += runtime->dry_run_frames;
+    }
+    runtime->dry_run_frames = 0U;
+  }
+  runtime->last_played_peak = peak;
 }
 
 static bool cli_main_sink_conceal(void *context)
@@ -1405,9 +1446,11 @@ static void cli_main_feed_playback(struct cli_runtime *runtime)
   uint32_t fed = 0U;
   do {
     switch (iterate_kit_voice_playout_step(&runtime->playout, &ring, &sink)) {
+    case ITERATE_KIT_VOICE_PLAYOUT_STARVED:
+      ++runtime->dry_run_frames;
+      return;
     case ITERATE_KIT_VOICE_PLAYOUT_PRIMING:
     case ITERATE_KIT_VOICE_PLAYOUT_ABANDONED:
-    case ITERATE_KIT_VOICE_PLAYOUT_STARVED:
     case ITERATE_KIT_VOICE_PLAYOUT_SETTLED:
       return;
     case ITERATE_KIT_VOICE_PLAYOUT_SKIPPED:
@@ -1844,7 +1887,9 @@ static void cli_main_draw_screen(struct cli_runtime *runtime, uint64_t now_ms)
     .spk_received = runtime->voicelab.spk_frames_received,
     .spk_played = runtime->playout.stats.frames_played,
     .spk_ring_ms = cli_main_buffered_ms(runtime),
-    .spk_conceal = runtime->playout.stats.conceal_frames,
+    .spk_holes = runtime->holes,
+    .spk_hole_ms = runtime->hole_frames * (uint32_t)ITERATE_KIT_VOICE_FRAME_MS,
+    .spk_dry_frames = runtime->playout.stats.conceal_frames,
     .spk_underruns = runtime->speaker_underruns,
     .spk_dropped = runtime->speaker_room_drops + runtime->speaker_overflow_drops,
     .spk_starved = audio.playback_starved_buffers,
@@ -1962,7 +2007,7 @@ static void cli_main_pulse(
   cli_runtime_log(
       "info",
       "pulse loops=%u outbox=%u/%u sent=%u frames=%u batches=%u rx=%u "
-      "submitted=%u conceal=%u under=%u ringMs=%u convUnder=%u "
+      "submitted=%u holes=%u holeFrames=%u dry=%u under=%u ringMs=%u convUnder=%u "
       "convRefused=%u micIn=%u micLost=%u roomDrop=%u roomStarve=%u "
       "roomPlayed=%u roomMs=%u roomErr=%" PRId32 " micErr=%" PRId32
       " seqGaps=%u/%u",
@@ -1971,8 +2016,9 @@ static void cli_main_pulse(
       runtime->transport.control_sender.messages_sent,
       runtime->voicelab.frames_sent, runtime->voicelab.batches_on_connection,
       runtime->voicelab.spk_frames_received,
-      runtime->playout.stats.frames_played, runtime->playout.stats.conceal_frames,
-      runtime->speaker_underruns, cli_main_buffered_ms(runtime),
+      runtime->playout.stats.frames_played, runtime->holes, runtime->hole_frames,
+      runtime->playout.stats.conceal_frames, runtime->speaker_underruns,
+      cli_main_buffered_ms(runtime),
       /*
        * A live microphone that macOS refused looks exactly like a quiet room
        * until micIn stays at zero through a turn, so it is on the one line
