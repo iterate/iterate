@@ -123,6 +123,7 @@ export async function ask(options: AskOptions): Promise<void> {
       answers: watch.answersEnded,
       transcript: watch.outputTranscript.length,
       input: watch.inputTranscript.length,
+      progressNotes: watch.providerEventCounts["client.session.thinking.append"] ?? 0,
     };
     console.log(`\n  ▶ "${request}"`);
     const startedAt = call.clock();
@@ -156,7 +157,11 @@ export async function ask(options: AskOptions): Promise<void> {
     const said = watch.outputTranscript.slice(before.transcript).trim();
     const delegated = watch.delegations.length > before.delegations;
     results.push({ request, delegated, functionCalls, said, tookMs: call.clock() - startedAt });
-    console.log(`    delegated: ${String(delegated)}${settled ? "" : "  (timed out waiting)"}`);
+    const progressNotes =
+      (watch.providerEventCounts["client.session.thinking.append"] ?? 0) - before.progressNotes;
+    console.log(
+      `    delegated: ${String(delegated)}; progress notes to the voice: ${String(progressNotes)}${settled ? "" : "  (timed out waiting)"}`,
+    );
     for (const line of functionCalls) console.log(`    ${line}`);
     console.log(`    said: ${said.slice(0, 600)}`);
   }

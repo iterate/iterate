@@ -228,9 +228,9 @@ export const IDLE_TIMEOUT_MS = 60_000;
  * the backend with it. Input transcription lags real time by ~250 ms and
  * arrives in fragments; a gap this long is a finished sentence.
  */
-export const USER_STILL_TALKING_MS = 1_500;
+const USER_STILL_TALKING_MS = 1_500;
 /** The longest a tool result waits for the person to finish. */
-export const FORWARD_HOLD_MAX_MS = 15_000;
+const FORWARD_HOLD_MAX_MS = 15_000;
 
 /**
  * The idle stamp advances in steps of this, not per frame. Folding every mic
