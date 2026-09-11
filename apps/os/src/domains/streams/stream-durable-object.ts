@@ -1114,7 +1114,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           });
           cursor = { epoch, revision: update.type === "snapshot" ? update.revision : update.to };
         } finally {
-          disposeIgnoredRpcResult(read);
+          disposeAcknowledgedRpcResult(read, "facet-live-state");
         }
       };
       const tag = liveStatePagerLaneTag(name);
