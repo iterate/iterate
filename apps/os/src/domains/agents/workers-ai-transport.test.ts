@@ -25,13 +25,6 @@ createFailing(it, /attempt should report its timeout/)(
       },
     });
     const attempt = runWorkersAiAttempt({
-      metadata: {
-        environment: "test",
-        projectId: "project",
-        projectSlug: "project",
-        streamPath: undefined,
-        eventOffset: undefined,
-      },
       ai: {
         run: async () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
       },
@@ -162,13 +155,6 @@ it.each(["plain object", "consumed body", "locked body"])(
     try {
       await expect(
         runWorkersAiAttempt({
-          metadata: {
-            environment: "test",
-            projectId: "project",
-            projectSlug: "project",
-            streamPath: undefined,
-            eventOffset: undefined,
-          },
           model: "intercepted/test-model",
           messages: [{ role: "user", content: "test-prompt" }],
           deadlineMs: 1000,
@@ -222,13 +208,6 @@ describe("runWorkersAiAttempt", () => {
     let requestBody: unknown;
 
     await runWorkersAiAttempt({
-      metadata: {
-        environment: "test",
-        projectId: "prj_test",
-        projectSlug: "test",
-        streamPath: "/agents/test",
-        eventOffset: undefined,
-      },
       ai: {
         run: async (_model, body) => {
           requestBody = body;
@@ -263,13 +242,6 @@ describe("runWorkersAiAttempt", () => {
 
     await expect(
       runWorkersAiAttempt({
-        metadata: {
-          environment: "test",
-          projectId: "prj_test",
-          projectSlug: "test",
-          streamPath: "/agents/test",
-          eventOffset: undefined,
-        },
         ai: {
           run: async () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
         },
@@ -303,13 +275,6 @@ describe("runWorkersAiAttempt", () => {
 
     await expect(
       runWorkersAiAttempt({
-        metadata: {
-          environment: "test",
-          projectId: "prj_test",
-          projectSlug: "test",
-          streamPath: "/agents/test",
-          eventOffset: undefined,
-        },
         ai: {
           run: async () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
         },
@@ -326,13 +291,6 @@ describe("runWorkersAiAttempt", () => {
   it("caps the dial itself, not just the drain", async () => {
     await expect(
       runWorkersAiAttempt({
-        metadata: {
-          environment: "test",
-          projectId: "prj_test",
-          projectSlug: "test",
-          streamPath: "/agents/test",
-          eventOffset: undefined,
-        },
         ai: { run: () => new Promise(() => {}) },
         deadlineMs: 50,
         messages: [{ role: "user", content: "hi" }],
@@ -352,13 +310,6 @@ describe("runWorkersAiAttempt", () => {
     };
     for (const model of [DEFAULT_AGENT_MODEL, "@cf/test/non-openai-model"]) {
       await runWorkersAiAttempt({
-        metadata: {
-          environment: "test",
-          projectId: "prj_test",
-          projectSlug: "test",
-          streamPath: "/agents/test",
-          eventOffset: undefined,
-        },
         ai,
         deadlineMs: 1_000,
         messages: [{ role: "user", content: "hi" }],
@@ -396,13 +347,6 @@ describe("runWorkersAiAttempt", () => {
     });
 
     const completion = await runWorkersAiAttempt({
-      metadata: {
-        environment: "test",
-        projectId: "prj_test",
-        projectSlug: "test",
-        streamPath: "/agents/test",
-        eventOffset: undefined,
-      },
       ai: {
         run: async () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
       },
@@ -473,13 +417,6 @@ describe("the BYOK gateway lane", () => {
         }),
     );
     const completion = await runWorkersAiAttempt({
-      metadata: {
-        environment: "test",
-        projectId: "prj_test",
-        projectSlug: "test",
-        streamPath: "/agents/test",
-        eventOffset: undefined,
-      },
       ai: fake.ai,
       deadlineMs: 1_000,
       messages: [
@@ -506,7 +443,7 @@ describe("the BYOK gateway lane", () => {
     expect(request.headers["cf-aig-collect-log-payload"]).toBe("true");
     expect(request.headers["cf-aig-cache-ttl"]).toBe("600");
     expect(request.headers["cf-aig-cache-key"]).toBe(
-      cloudflareAiGatewayResponseCacheKey(request.query),
+      await cloudflareAiGatewayResponseCacheKey(request.query),
     );
     expect(request.query).toMatchObject({
       model: "gpt-5.6-terra",
@@ -529,13 +466,6 @@ describe("the BYOK gateway lane", () => {
       () => new Response(sseBody(okFrames), { headers: { "content-type": "text/event-stream" } }),
     );
     const completion = await runWorkersAiAttempt({
-      metadata: {
-        environment: "test",
-        projectId: "prj_test",
-        projectSlug: "test",
-        streamPath: "/agents/test",
-        eventOffset: undefined,
-      },
       ai: fake.ai,
       deadlineMs: 1_000,
       messages: [{ role: "user", content: "hi" }],
@@ -558,13 +488,6 @@ describe("the BYOK gateway lane", () => {
       () => new Response(sseBody(okFrames), { headers: { "content-type": "text/event-stream" } }),
     );
     await runWorkersAiAttempt({
-      metadata: {
-        environment: "test",
-        projectId: "prj_test",
-        projectSlug: "test",
-        streamPath: "/agents/test",
-        eventOffset: undefined,
-      },
       ai: fake.ai,
       deadlineMs: 1_000,
       messages: [
@@ -598,13 +521,6 @@ describe("the BYOK gateway lane", () => {
   it("falls back to unified billing for non-OpenAI models", async () => {
     let unifiedDialed = false;
     const completion = await runWorkersAiAttempt({
-      metadata: {
-        environment: "test",
-        projectId: "prj_test",
-        projectSlug: "test",
-        streamPath: "/agents/test",
-        eventOffset: undefined,
-      },
       ai: {
         run: async (_model, body) => {
           expect(body).not.toHaveProperty("prompt_cache_key");
@@ -634,13 +550,6 @@ describe("the BYOK gateway lane", () => {
     const fake = byokAi(() => new Response('{"error":"nope"}', { status: 401 }));
     await expect(
       runWorkersAiAttempt({
-        metadata: {
-          environment: "test",
-          projectId: "prj_test",
-          projectSlug: "test",
-          streamPath: "/agents/test",
-          eventOffset: undefined,
-        },
         ai: fake.ai,
         deadlineMs: 1_000,
         messages: [{ role: "user", content: "hi" }],
@@ -653,19 +562,6 @@ describe("the BYOK gateway lane", () => {
 });
 
 describe("cloudflareAiGatewayResponseCacheKey", () => {
-  it("preserves the Web Crypto SHA-256 cache key", async () => {
-    const body = { messages: [{ role: "user", content: "Hello 🌍 /agents/test" }] };
-    const masked = maskCloudflareAiGatewayResponseCacheEntropy(JSON.stringify(body));
-    const digest = await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(`cloudflare-ai-gateway-response-cache-v5:${masked}`),
-    );
-    const previousKey = Array.from(new Uint8Array(digest), (byte) =>
-      byte.toString(16).padStart(2, "0"),
-    ).join("");
-    expect(cloudflareAiGatewayResponseCacheKey(body)).toBe(previousKey);
-  });
-
   it("masks minted identity so two fixtures' identical conversations share a key", async () => {
     const bodyFor = (projectId: string, agentPath: string) => ({
       model: "gpt-5.5",
@@ -679,10 +575,10 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
       prompt_cache_key: `${projectId}:${agentPath}`,
       stream: true,
     });
-    const keyA = cloudflareAiGatewayResponseCacheKey(
+    const keyA = await cloudflareAiGatewayResponseCacheKey(
       bodyFor("prj_0123456789abcdef0123456789abcdef", "/agents/cache-probe"),
     );
-    const keyB = cloudflareAiGatewayResponseCacheKey(
+    const keyB = await cloudflareAiGatewayResponseCacheKey(
       bodyFor("prj_fedcba9876543210fedcba9876543210", "/agents/cache-probe"),
     );
     expect(keyA).toBe(keyB);
@@ -694,8 +590,8 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
       messages: [{ role: "user", content }],
       stream: true,
     });
-    const keyA = cloudflareAiGatewayResponseCacheKey(bodyFor("What is 2+2?"));
-    const keyB = cloudflareAiGatewayResponseCacheKey(bodyFor("What is 3+3?"));
+    const keyA = await cloudflareAiGatewayResponseCacheKey(bodyFor("What is 2+2?"));
+    const keyB = await cloudflareAiGatewayResponseCacheKey(bodyFor("What is 3+3?"));
     expect(keyA).not.toBe(keyB);
   });
 
@@ -763,13 +659,6 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
 it("gateway interception strips credentials and cannot replace real model calls", async () => {
   let calls = 0;
   const input = {
-    metadata: {
-      environment: "test",
-      projectId: "project",
-      projectSlug: "project",
-      streamPath: undefined,
-      eventOffset: undefined,
-    },
     deadlineMs: 1000,
     messages: [{ role: "user" as const, content: "Hi" }],
     onChunk: async () => {},
@@ -803,13 +692,6 @@ it("keeps the deadline active while draining a raw unified SSE Response", async 
   let cancelled = false;
   await expect(
     runWorkersAiAttempt({
-      metadata: {
-        environment: "test",
-        projectId: "project",
-        projectSlug: "project",
-        streamPath: undefined,
-        eventOffset: undefined,
-      },
       ai: {
         run: async () =>
           new Response(

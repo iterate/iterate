@@ -7,7 +7,7 @@ import type {
 import { envs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 
-/** Account-level ownership: never called by a normal Worker deployment. */
+/** Account-level rules, reconciled after the main production deployment. */
 export default async function budgets(options: {
   env: string;
   /** Print the diff only unless this is explicitly enabled. */

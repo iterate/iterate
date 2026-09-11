@@ -7,9 +7,11 @@ For agents, the offset identifies the individual LLM request; for compaction it
 identifies the triggering usage report. Script calls use the script-request offset.
 Caller-supplied gateway IDs and metadata cannot replace this host-owned metadata.
 
-OpenAI customer credentials retain their own billing. Company credentials
-(including copies stored as project secrets) use the Gateway; unsupported company
-transports fail closed. This does not add voice/audio support.
+Existing OpenAI egress behavior is unchanged: supported JSON calls without an
+explicit project-secret reference use the platform key, even if an Authorization
+header supplies another key. Explicit project secrets keep their existing Secret DO
+path. Unsupported requests fall through to normal egress. Correcting credential
+ownership is separate work; this does not add voice/audio support.
 
 The request preparation and dispatch contract is described in
 [intercepted models](intercepted-models.md). Interception replaces the final provider
@@ -37,8 +39,10 @@ in production ($10/day in the development account), $10/day per environment/proj
 and $3/hour per environment/project/stream. These are rolling Gateway windows;
 they are separate from any future Iterate budget model.
 
-Preview deployments share the development account. A separate workflow owns rule
-reconciliation rather than each Worker deployment writing account-level settings.
+Preview deployments share the development account. The existing Auth + OS
+production workflow reconciles both accounts after a successful deployment on a
+push to main. Preview branches and manually dispatched deployments do not write
+these shared rules.
 
 Inspect the proposed change before applying it:
 
@@ -48,8 +52,7 @@ pnpm --dir apps/os ai-gateway-budgets --env prd --apply false
 
 Use `--apply true` to write the reviewed configuration. Unknown existing rule IDs
 must be explicitly adopted through `replaceRuleIds`; no-op runs avoid resetting
-spending counters. The workflow reconciles both accounts when rule files change
-on main or when manually dispatched.
+spending counters. Use the CLI for a deliberate manual reconciliation.
 
 This reduced implementation has not been deployed or applied to either account.
 A preview proof of routing, attribution, response streaming and refusals remains

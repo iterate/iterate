@@ -1,7 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
-  openAiCredentialOwner,
-  routeCompanyOpenAi,
+  routeOpenAiViaGateway,
   isOpenAiPublicApiRequest,
   openAiGatewayBindingEndpoint,
 } from "./openai-ai-gateway-egress.ts";
@@ -29,24 +28,9 @@ describe("openAiGatewayBindingEndpoint", () => {
   });
 });
 
-test("credential ownership preserves customer keys and recognizes company key copies", () => {
-  const owner = (headers: Record<string, string>) =>
-    openAiCredentialOwner(
-      new Request("https://api.openai.com/v1/responses", { headers }),
-      "sk-company",
-    );
-  expect(owner({ authorization: "Bearer sk-customer" })).toBe("customer");
-  expect(owner({ authorization: "Bearer sk-company" })).toBe("iterate");
-  expect(owner({ authorization: "Bearer iterate-platform" })).toBe("iterate");
-  expect(owner({ "sec-websocket-protocol": "realtime,openai-insecure-api-key.sk-company" })).toBe(
-    "iterate",
-  );
-  expect(owner({})).toBe("iterate");
-});
-
 test("the shared company route streams in its caller and replaces forged billing metadata", async () => {
   const calls: unknown[] = [];
-  const response = await routeCompanyOpenAi({
+  const response = await routeOpenAiViaGateway({
     request: new Request("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { authorization: "Bearer sk-company", "cf-aig-metadata": '{"projectId":"forged"}' },

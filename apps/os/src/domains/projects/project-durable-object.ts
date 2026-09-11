@@ -41,8 +41,8 @@ import {
   type HeldRequest,
   type HumanApprovalRequestedPayload,
 } from "./egress-approvals.ts";
-import { isOpenAiPublicApiRequest, routeCompanyOpenAi } from "./openai-ai-gateway-egress.ts";
-import { takeStreamContext, withStreamContext, type StreamContext } from "./stream-context.ts";
+import { isOpenAiPublicApiRequest, routeOpenAiViaGateway } from "./openai-ai-gateway-egress.ts";
+import { takeStreamContext, type StreamContext } from "./stream-context.ts";
 import {
   ProjectProcessorContract,
   type ProjectProcessorState,
@@ -715,7 +715,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
           projectId: this.#name.projectId,
           path: secretPaths[0]!,
         }),
-      ).fetch(withStreamContext(request, streamContext));
+      ).fetch(request);
       return withWebSocketHandshakeHeaders(request, response);
     }
 
@@ -724,7 +724,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // including if a WebSocket client falls back to an HTTP POST, so credential
     // provenance and the secret audit cannot silently change between transports.
     if (isOpenAiPublicApiRequest(request)) {
-      const routed = await routeCompanyOpenAi({
+      const routed = await routeOpenAiViaGateway({
         request,
         config: parseConfig(this.env),
         ai: this.env.AI,

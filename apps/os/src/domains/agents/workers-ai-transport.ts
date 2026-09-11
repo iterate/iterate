@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { CfAiRunOptions } from "../itx/cf-capabilities.ts";
 import * as modelInterception from "../../lib/model-interception.ts";
@@ -102,7 +101,7 @@ export function adaptMessagesForModel(
  */
 export async function runWorkersAiAttempt(input: {
   ai: WorkersAiBinding;
-  metadata: AiGatewayMetadata;
+  metadata?: AiGatewayMetadata;
   consultInterceptor?: (request: modelInterception.ProjectAiInterceptorInput) => Promise<unknown>;
   agentPath?: string;
   deadlineMs: number;
@@ -126,7 +125,7 @@ export async function runWorkersAiAttempt(input: {
     };
     const prepared =
       route.kind === "openai-http"
-        ? prepareOpenAiRequest({
+        ? await prepareOpenAiRequest({
             model: route.model,
             transport: route.transport,
             metadata: input.metadata,
@@ -152,7 +151,7 @@ export async function runWorkersAiAttempt(input: {
           ai: input.ai,
           source: {
             source: "agent-turn",
-            agentPath: input.agentPath || input.metadata.streamPath || "/",
+            agentPath: input.agentPath || input.metadata?.streamPath || "/",
           },
           consultInterceptor: input.consultInterceptor,
         },
@@ -435,15 +434,15 @@ type PreparedAiRequest = { sourceModel: string } & (
 );
 
 /** Complete OpenAI-native request preparation, including cache policy. */
-export function prepareOpenAiRequest(input: {
+export async function prepareOpenAiRequest(input: {
   model: string;
   transport: Extract<CloudflareAiGatewayTransport, { kind: "byok" }>;
-  metadata: AiGatewayMetadata;
+  metadata?: AiGatewayMetadata;
   endpoint: string;
   body: Record<string, unknown>;
   headers: Headers;
   cache: { ttlSeconds: number } | null;
-}): PreparedAiRequest {
+}): Promise<PreparedAiRequest> {
   const { transport, model } = input;
   const body = {
     ...input.body,
@@ -454,7 +453,7 @@ export function prepareOpenAiRequest(input: {
   const cacheHeaders: Record<string, string> = input.cache
     ? {
         "cf-aig-cache-ttl": String(input.cache.ttlSeconds),
-        "cf-aig-cache-key": cloudflareAiGatewayResponseCacheKey(body),
+        "cf-aig-cache-key": await cloudflareAiGatewayResponseCacheKey(body),
       }
     : { "cf-aig-skip-cache": "true" };
   return {
@@ -469,7 +468,7 @@ export function prepareOpenAiRequest(input: {
         [...input.headers].filter(([name]) => name.startsWith("openai-") || name === "accept"),
       ),
       "content-type": "application/json",
-      "cf-aig-metadata": JSON.stringify(input.metadata),
+      ...(input.metadata && { "cf-aig-metadata": JSON.stringify(input.metadata) }),
       "cf-aig-collect-log": "true",
       "cf-aig-collect-log-payload": "true",
       ...cacheHeaders,
@@ -481,14 +480,14 @@ export function prepareOpenAiRequest(input: {
 export function prepareWorkersAiRequest(input: {
   model: string;
   gatewayId: string;
-  metadata: AiGatewayMetadata;
+  metadata?: AiGatewayMetadata;
   body: unknown;
   options: CfAiRunOptions;
 }): PreparedAiRequest {
   const model = input.model.replace(/^intercepted\//, "");
   const payload = z.record(z.string(), z.unknown()).parse(input.body);
   const metadata = Object.fromEntries(
-    Object.entries(input.metadata).filter(
+    Object.entries(input.metadata || {}).filter(
       (entry): entry is [string, string | number] => entry[1] !== undefined,
     ),
   );
@@ -588,11 +587,13 @@ const CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION = "cloudflare-ai-gateway-
  * Everything not masked — prompts, message text, model, sampling params —
  * stays in the hash, so any prompt change invalidates naturally.
  */
-export function cloudflareAiGatewayResponseCacheKey(body: unknown): string {
+export async function cloudflareAiGatewayResponseCacheKey(body: unknown): Promise<string> {
   const masked = maskCloudflareAiGatewayResponseCacheEntropy(JSON.stringify(body));
-  return createHash("sha256")
-    .update(`${CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION}:${masked}`)
-    .digest("hex");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION}:${masked}`),
+  );
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /** The masking half of the cache key, separated for tests. Masks: project ids,

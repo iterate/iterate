@@ -5,30 +5,9 @@ import {
   type createAiGatewayIdentityReader,
 } from "../agents/ai-gateway-metadata.ts";
 import type { Env } from "../../env.ts";
-/** Company-funded JSON requests use AI Gateway. Customer credentials retain
- * their provider billing; an unsupported company transport must fail closed. */
-
 import type { AppConfig } from "../../config.ts";
 import { sendAiRequest, prepareOpenAiRequest } from "../agents/workers-ai-transport.ts";
 import type { StreamContext } from "./stream-context.ts";
-
-/** The host compares actual credentials, never a caller's billing-owner header.
- * The literal iterate-platform opts into the company credential without copying it.
- * Recognize copies in WebSocket subprotocols/URLs as well as Authorization. */
-export function openAiCredentialOwner(
-  request: Request,
-  companyKey: string,
-): "iterate" | "customer" {
-  if (
-    companyKey.length > 0 &&
-    (request.url.includes(companyKey) ||
-      [...request.headers.values()].some((value) => value.includes(companyKey)))
-  )
-    return "iterate";
-  const authorization = request.headers.get("authorization");
-  if (!authorization && !request.headers.has("sec-websocket-protocol")) return "iterate";
-  return authorization === "Bearer iterate-platform" ? "iterate" : "customer";
-}
 
 /** True when the request targets OpenAI's public API host (http or https). */
 export function isOpenAiPublicApiRequest(request: Request): boolean {
@@ -50,7 +29,7 @@ export function openAiGatewayBindingEndpoint(openAiUrl: string): string {
 
 /** Route in the calling fetch context: returning a response through an extra
  * cross-DO RPC hop can disconnect its body after headers have arrived. */
-export async function routeCompanyOpenAi(input: {
+export async function routeOpenAiViaGateway(input: {
   request: Request;
   config: AppConfig;
   ai: Env["AI"];
@@ -59,41 +38,25 @@ export async function routeCompanyOpenAi(input: {
   consultInterceptor: ((request: ProjectAiInterceptorInput) => Promise<unknown>) | undefined;
 }): Promise<Response | null> {
   const { request, config, streamContext } = input;
-  if (openAiCredentialOwner(request, config.openAiApiKey.exposeSecret()) === "customer")
-    return null;
-  const unsupported = () =>
-    Response.json(
-      {
-        error: {
-          code: "company_ai_transport_unsupported",
-          message:
-            "Company-funded OpenAI calls require the configured JSON AI Gateway transport. This transport is unsupported; no direct provider request was sent.",
-        },
-      },
-      { status: 400 },
-    );
-  if (
-    (request.method !== "POST" && request.method !== "PUT") ||
-    request.headers.get("upgrade")?.toLowerCase() === "websocket"
-  )
-    return unsupported();
-  if (!config.cloudflare.accountId)
-    throw new Error("Company AI Gateway has no account configuration");
+  // Preserve existing egress eligibility and credential substitution. Explicit
+  // project secrets are handled by the Secret DO before reaching this route.
+  if (request.method !== "POST" && request.method !== "PUT") return null;
+  if (!config.cloudflare.accountId || !input.ai?.gateway) return null;
   const endpoint = openAiGatewayBindingEndpoint(request.url);
-  if (endpoint.replace(/\?.*$/, "").length === 0) return unsupported();
+  if (endpoint.replace(/\?.*$/, "").length === 0) return null;
 
   let body: Record<string, unknown>;
   try {
     body = z.record(z.string(), z.unknown()).parse(await request.clone().json());
   } catch {
-    return unsupported();
+    return null;
   }
 
   const parsedModel = z.string().min(1).safeParse(body.model);
-  if (!parsedModel.success) return unsupported();
+  if (!parsedModel.success) return null;
   const model = parsedModel.data;
   const gateway = config.cloudflareAiGateway;
-  const prepared = prepareOpenAiRequest({
+  const prepared = await prepareOpenAiRequest({
     model,
     transport: {
       kind: "byok",

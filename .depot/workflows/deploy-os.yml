@@ -94,6 +94,15 @@ jobs:
           set -euo pipefail
           export PLATFORM_DEPLOY_HEAD_SHA="$(git rev-parse HEAD)"
           doppler run -- pnpm run-script deploy 2>&1 | tee /tmp/deploy-os.log
+      # Only main pushes own these account-wide settings. Preview branches and
+      # manual deployments of other refs must not overwrite the shared rules.
+      - name: Reconcile AI Gateway budgets
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |-
+          pnpm --dir apps/os ai-gateway-budgets --env preview_1 --apply true
+          pnpm --dir apps/os ai-gateway-budgets --env prd --apply true
       # apps/os deploy forces a real AUTH RPC cache miss, revokes and re-lists
       # the live Worker secret, repeats the probes against that new version,
       # and only then removes the matching Doppler source.

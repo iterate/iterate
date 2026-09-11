@@ -2932,14 +2932,7 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
     });
   }
 
-  constructor(
-    readonly props: {
-      auth: ItxAuth;
-      projectId: string;
-      scopePath: string;
-      streamContext: StreamContext;
-    },
-  ) {
+  constructor(readonly props: { auth: ItxAuth; projectId: string; scopePath: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -2950,7 +2943,6 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
       auth: this.props.auth,
       path: normalizeSecretPath(path),
       projectId: this.props.projectId,
-      streamContext: this.props.streamContext,
     });
   }
 
@@ -3062,14 +3054,7 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     });
   }
 
-  constructor(
-    readonly props: {
-      auth: ItxAuth;
-      path: string;
-      projectId: string;
-      streamContext: StreamContext;
-    },
-  ) {
+  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -3087,9 +3072,7 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   /** Egress fetch with this secret's placeholders substituted server-side —
    * the standard fetch signature: a Request, or a URL plus optional init. */
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    return this.durableObjectStub.fetch(
-      withStreamContext(new Request(input, init), this.props.streamContext),
-    );
+    return this.durableObjectStub.fetch(new Request(input, init));
   }
 
   /** Admin-only recovery read of the current encrypted cell. */
@@ -7720,7 +7703,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       // The scope path makes collectFromUser's links notify the calling
       // agent when the user submits; non-agent scopes mint plain links.
       scopePath: this.#capabilityHost.path,
-      streamContext: this.#streamContext,
     });
   }
 
