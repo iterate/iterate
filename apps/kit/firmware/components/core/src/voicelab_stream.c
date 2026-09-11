@@ -263,32 +263,6 @@ static void handle_spk_frame(
   }
 
   /*
-   * COUNTED BEFORE THE AUDIO IS TOUCHED, so a chunk that fails to decode is
-   * still counted as having ARRIVED. Continuity is a question about the
-   * delivery lane; whether the bytes were good is a separate counter, and
-   * folding the two would let a decode failure masquerade as a lost frame.
-   */
-  {
-    struct capnweb_value seq_value;
-    int64_t seq = 0;
-    if (capnweb_value_object_get(payload, "deviceSpeakerFrameSeq", &seq_value) &&
-        capnweb_value_get_int64(&seq_value, &seq)) {
-      if (voicelab->spk_seq_last >= 0) {
-        if (seq > voicelab->spk_seq_last + 1) {
-          ++voicelab->spk_seq_gaps;
-          voicelab->spk_seq_missing +=
-              (uint32_t)(seq - voicelab->spk_seq_last - 1);
-        } else if (seq <= voicelab->spk_seq_last) {
-          ++voicelab->spk_seq_regressions;
-        }
-      }
-      /* Only ever forwards: a regression must not rewind the watermark, or the
-       * frames after it would each be counted as a gap in turn. */
-      if (seq > voicelab->spk_seq_last) voicelab->spk_seq_last = seq;
-    }
-  }
-
-  /*
    * `drop` FIRST, AND BEFORE ANYTHING CAN GO WRONG WITH THE AUDIO.
    *
    * The device does not decide turns; it does what the server's frames say.
@@ -494,17 +468,6 @@ static enum capnweb_status batch_dispatch(
       voicelab->call_active = true;
       voicelab->answer_open = false;
       voicelab->call_pending = false;
-      /*
-       * THE WATERMARK IS PER-CONVERSATION; THE TOTALS ARE PER-RUN.
-       *
-       * Sequence numbers restart at zero with each call, so carrying the
-       * watermark across one would score every new call's first frame as a
-       * regression and the rest as a fresh gap. The gap and regression TOTALS
-       * deliberately survive: the question a long session is asking is how
-       * much audio it lost in all, not how much it lost since the last time
-       * somebody pressed the button.
-       */
-      voicelab->spk_seq_last = -1;
       if (voicelab->options.on_control != NULL) {
         voicelab->options.on_control(
             voicelab->options.downlink_context,
@@ -977,9 +940,6 @@ enum capnweb_status iterate_kit_voicelab_start(
     (void)iterate_kit_voicelab_close(voicelab);
   }
   memset(voicelab, 0, sizeof(*voicelab));
-  /* -1 rather than the memset's 0, because 0 is a legal first sequence number
-   * and "none seen yet" has to be a value no frame can carry. */
-  voicelab->spk_seq_last = -1;
   if (!valid_options(options)) {
     voicelab->state = ITERATE_KIT_VOICELAB_FAILED;
     voicelab->failure = ITERATE_KIT_VOICELAB_FAILURE_INVALID_OPTIONS;
@@ -1035,7 +995,7 @@ enum capnweb_status iterate_kit_voicelab_start(
 
 enum capnweb_status iterate_kit_voicelab_append_frames(
     struct iterate_kit_voicelab *voicelab,
-    const uint8_t *const *frames,
+    const uint8_t *pcm,
     size_t frame_count,
     size_t frame_length,
     uint32_t sequence,
@@ -1043,10 +1003,9 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
   int written;
   size_t offset;
   size_t encoded_length;
-  size_t index;
   enum capnweb_status status;
   if (voicelab == NULL ||
-      frames == NULL ||
+      pcm == NULL ||
       frame_count == 0U ||
       frame_count > ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND ||
       frame_length == 0U ||
@@ -1055,11 +1014,6 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
   }
   if (voicelab->state != ITERATE_KIT_VOICELAB_READY) {
     return CAPNWEB_E_STATE;
-  }
-  for (index = 0U; index < frame_count; ++index) {
-    if (frames[index] == NULL) {
-      return CAPNWEB_E_INVALID_ARGUMENT;
-    }
   }
   offset = 0U;
   voicelab->args_buffer[offset++] = '[';
@@ -1095,69 +1049,36 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
   }
   offset += (size_t)written;
   /*
-   * Straight from the capture buffers — no staging copy — with the base64
-   * groups CARRIED across frame boundaries: 640 is not a multiple of 3, so
-   * encoding each frame on its own would leave a broken group at every seam.
-   * Whole groups go out as they complete; the 1–2 bytes left at a frame's end
-   * ride into the next frame's first group.
+   * ONE ENCODE OVER THE WHOLE FLUSH. 640 is not a multiple of 3, so encoding
+   * frame by frame would leave a broken base64 group at every seam — but the
+   * frames of a flush are one continuous run of capture and the caller hands
+   * them over contiguous, so there are no seams to straddle.
    */
   {
-    uint8_t carry[3];
-    size_t carry_count = 0U;
     const size_t body_capacity =
         sizeof(voicelab->args_buffer) - sizeof("\"}}]") - 4U;
-    for (index = 0U; index < frame_count; ++index) {
-      const uint8_t *frame = frames[index];
-      size_t position = 0U;
-      while (carry_count > 0U && carry_count < 3U && position < frame_length) {
-        carry[carry_count++] = frame[position++];
-      }
-      if (carry_count == 3U) {
-        if (offset + 4U > body_capacity) {
-          ++voicelab->frame_send_failures;
-          return CAPNWEB_E_LIMIT;
-        }
-        offset += base64_encode(carry, 3U, voicelab->args_buffer + offset, 4U);
-        carry_count = 0U;
-      }
-      {
-        const size_t whole = ((frame_length - position) / 3U) * 3U;
-        if (whole > 0U) {
-          encoded_length = base64_encode(
-              frame + position,
-              whole,
-              voicelab->args_buffer + offset,
-              body_capacity > offset ? body_capacity - offset : 0U);
-          if (encoded_length == 0U) {
-            /* The args buffer could not hold this flush — count it, or the
-             * microphone goes quiet with every counter reading zero. */
-            ++voicelab->frame_send_failures;
-            return CAPNWEB_E_LIMIT;
-          }
-          offset += encoded_length;
-          position += whole;
-        }
-      }
-      while (position < frame_length) {
-        carry[carry_count++] = frame[position++];
-      }
+    size_t padding;
+    encoded_length = base64_encode(
+        pcm,
+        frame_count * frame_length,
+        voicelab->args_buffer + offset,
+        body_capacity > offset ? body_capacity - offset : 0U);
+    if (encoded_length == 0U) {
+      /* The args buffer could not hold this flush — count it, or the
+       * microphone goes quiet with every counter reading zero. */
+      ++voicelab->frame_send_failures;
+      return CAPNWEB_E_LIMIT;
     }
-    if (carry_count > 0U) {
-      /* The tail group, PADDED: GPT-Live's decoder rejects unpadded base64
-       * ("illegal base64 data at input byte 852" — a Mac talk run heard
-       * nothing back until the facet learned to pad). */
-      if (offset + 4U > body_capacity) {
-        ++voicelab->frame_send_failures;
-        return CAPNWEB_E_LIMIT;
-      }
-      encoded_length =
-          base64_encode(carry, carry_count, voicelab->args_buffer + offset, 4U);
-      offset += encoded_length;
-      while (encoded_length < 4U) {
-        voicelab->args_buffer[offset++] = '=';
-        ++encoded_length;
-      }
+    offset += encoded_length;
+    /* PADDED: GPT-Live's decoder rejects unpadded base64 ("illegal base64
+     * data at input byte 852" — a Mac talk run heard nothing back until the
+     * facet learned to pad). */
+    padding = (4U - (encoded_length % 4U)) % 4U;
+    if (offset + padding > body_capacity) {
+      ++voicelab->frame_send_failures;
+      return CAPNWEB_E_LIMIT;
     }
+    while (padding-- > 0U) voicelab->args_buffer[offset++] = '=';
   }
   if (offset + 4U >= sizeof(voicelab->args_buffer)) {
     ++voicelab->frame_send_failures;
@@ -1355,9 +1276,6 @@ void iterate_kit_voicelab_forget_call(struct iterate_kit_voicelab *voicelab) {
   voicelab->call_pending = false;
   voicelab->live_bridge_id[0] = '\0';
   voicelab->last_bridge_ms = 0U;
-  /* Forgotten along with the call it belonged to — see the note where
-   * conversation-accepted resets it. */
-  voicelab->spk_seq_last = -1;
 }
 
 

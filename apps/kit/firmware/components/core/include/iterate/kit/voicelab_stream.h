@@ -255,7 +255,7 @@ struct iterate_kit_voicelab_options {
  * the call: the facet mints it, holds what arrives while it dials, and
  * GPT-Live's own voice activity decides the turns. Say `keepalive` every
  * ~20 s while the call is open, so a released button is not an abandoned
- * call. Play speaker frames in `deviceSpeakerFrameSeq` order, clear on
+ * call. Play speaker frames in arrival order, clear on
  * `clearSpeakerBufferBeforeFrame`, and treat `lastFrameOfAnswer` as the end
  * of an answer. Ending the call is the one thing the button says to the far
  * side (`conversation-ended`). There is no `ptt-start`, no `ptt-end`, no
@@ -387,34 +387,6 @@ struct iterate_kit_voicelab {
   uint32_t batches_on_connection;
   uint32_t spk_frames_received;
   uint32_t spk_decode_failures;
-  /*
-   * SEQUENCE CONTINUITY, and it is the only way to prove a long call lost
-   * nothing.
-   *
-   * `spk-frame` is an ephemeral event, so it is never persisted and no amount
-   * of reading the stream afterwards can say how many frames there were. The
-   * device is the only witness. The second voice agent numbers every chunk
-   * within a conversation for exactly this reason, so a hole in the numbering
-   * is a lost chunk — which is a different fact from "the answer was short",
-   * and until now the two were indistinguishable from outside.
-   *
-   * The first agent sends no sequence number at all, and these stay untouched
-   * when it is the one talking: absent is not zero.
-   */
-  int64_t spk_seq_last;
-  /* Gaps as EVENTS, so one hole of forty frames is one gap. */
-  uint32_t spk_seq_gaps;
-  /* And as frames, because a run of ten one-frame gaps is not one big one. */
-  uint32_t spk_seq_missing;
-  /*
-   * A number at or below the last one seen: a duplicate, or a reordering.
-   *
-   * Expected to be zero and worth counting BECAUSE of that. The offset dedupe
-   * at the top of `batch_dispatch` already drops redelivered events, so a
-   * regression here means something the dedupe cannot see — the sender
-   * renumbering mid-call, or two senders on one stream.
-   */
-  uint32_t spk_seq_regressions;
   int64_t last_event_offset;
   char args_buffer[ITERATE_KIT_VOICELAB_ARGS_CAPACITY];
   char b64_buffer[ITERATE_KIT_VOICELAB_B64_CAPACITY];
@@ -435,10 +407,15 @@ enum capnweb_status iterate_kit_voicelab_start(
  * one atomic multi-event append — divides the outbound message rate (each
  * push costs an outbox slot and a TLS write, and outbox exhaustion is
  * session-fatal in this peer). Sequences run from `sequence` upward.
+ *
+ * `pcm` is ONE contiguous run of `frame_count * frame_length` bytes: the
+ * frames of a flush are one continuous stretch of capture, so the body is one
+ * base64 encode with no seams for a group to straddle. A caller whose queue
+ * wraps stages the run itself.
  */
 enum capnweb_status iterate_kit_voicelab_append_frames(
     struct iterate_kit_voicelab *voicelab,
-    const uint8_t *const *frames,
+    const uint8_t *pcm,
     size_t frame_count,
     size_t frame_length,
     uint32_t sequence,

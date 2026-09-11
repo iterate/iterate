@@ -441,6 +441,27 @@ static void a_short_answer_without_a_marker_plays_at_the_prime_wait(void) {
   assert(frames_written == written_before + (uint32_t)CHUNK_FRAMES);
 }
 
+/*
+ * AND A MARKED ONE PLAYS AT EXACTLY THE SAME TIME. The marker used to end
+ * priming on the spot; it no longer does, because the sender only sends it
+ * after 700 ms of tail silence and the prime wait has long since fired.
+ */
+static void a_short_answer_with_a_marker_plays_at_the_prime_wait_too(void) {
+  const uint32_t written_before = frames_written;
+  int pass;
+  iterate_kit_fake_esp_idf_advance_ms(5000U);
+  deliver_chunk(true, true, CHUNK_FRAMES);
+  for (pass = 0; pass < 10; ++pass) playback();
+  assert(frames_written == written_before);
+  iterate_kit_fake_esp_idf_advance_ms(200U);
+  for (pass = 0; pass < 5; ++pass) playback();
+  assert(frames_written == written_before);
+  iterate_kit_fake_esp_idf_advance_ms(
+      (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS);
+  play_out();
+  assert(frames_written == written_before + (uint32_t)CHUNK_FRAMES);
+}
+
 static void a_later_answer_plays_whole_too(void) {
   const uint32_t answer_one_number = board.last_admitted_answer;
   const uint32_t written_before = frames_written;
@@ -483,8 +504,15 @@ static void a_live_answer_superseded_after_a_stall(void) {
   iterate_kit_fake_esp_idf_advance_ms(5000U);
   playback();
 
-  /* An answer arrives and only part of it is played. */
+  /*
+   * An answer arrives and only part of it is played. Two chunks are 200 ms,
+   * less than the prefill, so it starts at the prime wait: one pass to stamp
+   * when audio first appeared, then the wait, then a frame a pass.
+   */
   deliver_answer();
+  playback();
+  iterate_kit_fake_esp_idf_advance_ms(
+      (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS);
   for (pass = 0; pass < 5; ++pass) playback();
   assert(frames_written > written_before);
   assert(frames_written < written_before + (uint32_t)ANSWER_FRAMES);
@@ -560,6 +588,7 @@ int main(void) {
 
   the_first_answer_plays_whole();
   a_short_answer_without_a_marker_plays_at_the_prime_wait();
+  a_short_answer_with_a_marker_plays_at_the_prime_wait_too();
   a_later_answer_plays_whole_too();
   a_live_answer_superseded_after_a_stall();
   audio_with_no_clear_at_all_still_plays();

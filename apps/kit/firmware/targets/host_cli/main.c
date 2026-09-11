@@ -46,6 +46,8 @@ enum {
    * far end, but a wedged transport must not hold a person's terminal.
    */
   CLI_MAIN_HANGUP_GRACE_MS = 3000,
+  /* Frames one feed pass may hand the room before returning to the loop. */
+  CLI_MAIN_FEED_MAX_FRAMES = 64,
 };
 
 #define CLI_MAIN_CALL_END_REASON "host-cli"
@@ -139,15 +141,11 @@ static bool cli_main_record_frame(
 static void cli_main_record_mic_frame(
     struct cli_runtime *runtime, const uint8_t *pcm);
 
-/* Records the silence the modelled converter emitted for want of a frame. */
-static void cli_main_record_converter_silence(
-    struct cli_runtime *runtime, uint32_t frames);
-
-/* Records one frame and hands it to the modelled converter. */
+/* Records one frame and writes it to the speaker. */
 static bool cli_main_write_playback(
     struct cli_runtime *runtime, const uint8_t *pcm);
 
-/* Feeds the converter until it stops asking; unpaced, exactly one frame. */
+/* Feeds the room until it stops asking; with no room, exactly one frame. */
 static void cli_main_feed_playback(struct cli_runtime *runtime);
 
 /* Completes an answered or overdue turn before consuming another frame. */
@@ -179,9 +177,6 @@ static void cli_main_capture_recorded_frame(struct cli_runtime *runtime);
 /* Runs capture through the selected DSP and then admits its clean output. */
 static void cli_main_accept_capture_frame(
     struct cli_runtime *runtime, const int16_t *capture);
-
-/* Configures the modelled converter; the CLI's speaker is unpaced. */
-static bool cli_main_init_converter(struct cli_runtime *runtime);
 
 /* Arms the session deadline and, for --push-to-talk, takes the terminal. */
 static bool cli_main_init_keyboard(struct cli_runtime *runtime);
@@ -223,11 +218,7 @@ static void cli_main_poll_microphone(
 static void cli_main_start_talk(
     struct cli_runtime *runtime, uint64_t now_ms, size_t outbox_free);
 
-/* Commits a talk turn after queued capture drains or its flush deadline passes. */
-static void cli_main_finish_talk(
-    struct cli_runtime *runtime, uint64_t now_ms);
-
-/* Reconciles desired push-to-talk state with the mounted runtime. */
+/* Reconciles the microphone gate with the mounted runtime. */
 static void cli_main_reconcile_talk(
     struct cli_runtime *runtime, uint64_t now_ms, size_t outbox_free);
 
@@ -290,8 +281,7 @@ static void cli_main_run_loop(struct cli_runtime *runtime);
  * nowhere else, so every stamp in the process demonstrably comes from the
  * same place. The `cli_runtime_now_ms(void *context)` seam survives because
  * it is called with a NULL context from nine places; the deterministic tests
- * do not go through it — they hand their subjects time directly, the way
- * tests/cli_paced_sink_test.c drives cli_paced_sink_advance.
+ * do not go through it — they hand their subjects time directly.
  */
 static uint64_t host_monotonic_us(void)
 {
@@ -609,7 +599,6 @@ static bool cli_main_init_audio(struct cli_runtime *runtime)
         "error", "cannot open microphone WAV: %s", runtime->options.mic_record);
     return false;
   }
-  if (!cli_main_init_converter(runtime)) return false;
   /*
    * The pretend speaker is the SAME converter, pulled by this loop instead of
    * by CoreAudio's thread. Everything downstream — the ring, the starvation
@@ -745,19 +734,6 @@ static struct iterate_kit_darwin_audio_codec_metrics cli_main_audio_metrics(
   assert(runtime != NULL);
   iterate_kit_darwin_audio_codec_metrics(&runtime->audio_codec, &metrics);
   return metrics;
-}
-
-static bool cli_main_init_converter(struct cli_runtime *runtime)
-{
-  assert(runtime != NULL);
-  /*
-   * Unpaced: the CLI's speaker accepts every frame instantly, as it always
-   * has. The paced converter model survives in cli_paced_sink because the
-   * deterministic playback-loop tests drive it directly.
-   */
-  const struct cli_paced_sink_config config = {0};
-  return cli_paced_sink_configure(&runtime->paced_sink, &config) ==
-      CLI_PACED_SINK_OK;
 }
 
 static bool cli_main_init_keyboard(struct cli_runtime *runtime)
@@ -1097,7 +1073,6 @@ static void cli_main_on_control(
     runtime->answer_done = true;
     ++runtime->calls_lost;
     runtime->talking = false;
-    runtime->flushing_turn = false;
     (void)cli_main_request_talk(
         runtime, false, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
     if (runtime->options.open_mic && !runtime->hanging_up) {
@@ -1176,38 +1151,11 @@ static void cli_main_record_mic_frame(
   ++runtime->mic_write_failures;
 }
 
-static void cli_main_record_converter_silence(
-    struct cli_runtime *runtime, uint32_t frames)
-{
-  assert(runtime != NULL);
-  /*
-   * An underrun is silence a listener HEARD. Leaving it out of the recording
-   * is how a run that dropped a fifth of a second of a call produces a WAV
-   * that is simply a fifth of a second shorter and sounds perfect — a file
-   * has no timestamps, so nothing downstream can notice the difference.
-   *
-   * The count is bounded by the converter model, which resyncs rather than
-   * replaying an unbounded schedule, so this cannot become an unbounded write.
-   *
-   * The count itself stays in the converter model rather than being folded
-   * into speaker_underruns, which already means something else: that the ring
-   * was dry when more speech arrived. One is a fact about this rig's
-   * scheduler, the other about the downlink, and a single number would answer
-   * neither question.
-   */
-  static const uint8_t silence[ITERATE_KIT_VOICE_FRAME_BYTES] = {0};
-  for (uint32_t index = 0U; index < frames; ++index) {
-    (void)cli_main_record_frame(runtime, silence);
-  }
-}
-
 static bool cli_main_write_playback(
     struct cli_runtime *runtime, const uint8_t *pcm)
 {
   assert(runtime != NULL && pcm != NULL);
-  if (!cli_main_record_frame(runtime, pcm)) return false;
-  (void)cli_paced_sink_offer(&runtime->paced_sink);
-  return true;
+  return cli_main_record_frame(runtime, pcm);
 }
 
 static void cli_main_finish_answer_if_ready(
@@ -1263,13 +1211,6 @@ static void cli_main_finish_answer_if_ready(
   }
 }
 
-static uint32_t cli_main_ring_queued_bytes(void *context)
-{
-  const struct cli_runtime *runtime = context;
-  assert(runtime != NULL);
-  return (uint32_t)runtime->speaker.used;
-}
-
 /* Milliseconds of answer not yet played: the software ring plus the hardware's queue. */
 static uint32_t cli_main_buffered_ms(const struct cli_runtime *runtime)
 {
@@ -1277,6 +1218,21 @@ static uint32_t cli_main_buffered_ms(const struct cli_runtime *runtime)
   return cli_speaker_queued_ms(&runtime->speaker) +
       cli_main_audio_metrics(runtime).playback_queued_bytes /
           (uint32_t)(ITERATE_KIT_VOICE_FRAME_BYTES / ITERATE_KIT_VOICE_FRAME_MS);
+}
+
+/*
+ * THE DEPTH THE CLOCK ASKS ABOUT IS THE WHOLE PIPE, both queues, because the
+ * feeder keeps the software ring near-empty by design — everything it gets is
+ * handed to the hardware at once. Reading only the ring reported a margin of
+ * ~0 ms on every run and put the catch-up guard's `queued >= 500 ms` out of
+ * reach. One source of truth: cli_main_buffered_ms.
+ */
+static uint32_t cli_main_ring_queued_bytes(void *context)
+{
+  const struct cli_runtime *runtime = context;
+  assert(runtime != NULL);
+  return cli_main_buffered_ms(runtime) *
+      (uint32_t)(ITERATE_KIT_VOICE_FRAME_BYTES / ITERATE_KIT_VOICE_FRAME_MS);
 }
 
 static enum iterate_kit_voice_playout_read cli_main_ring_read(
@@ -1344,14 +1300,6 @@ static void cli_main_poll_playback(
     struct cli_runtime *runtime, uint64_t now_ms)
 {
   assert(runtime != NULL);
-  /*
-   * The converter's clock moves whether or not anybody feeds it, so it is
-   * advanced before the software deadline is even consulted. Unpaced this is
-   * a no-op and everything below is exactly what it was.
-   */
-  cli_main_record_converter_silence(
-      runtime,
-      cli_paced_sink_advance(&runtime->paced_sink, cli_runtime_now_us()));
   if (runtime->options.live_audio ||
       runtime->options.pretend_speaker != NULL) {
     /*
@@ -1425,17 +1373,14 @@ static void cli_main_feed_playback(struct cli_runtime *runtime)
     runtime->last_dry_step_ms = now_ms;
   }
   /*
-   * The first frame is unconditional, which is what this loop did before a
-   * converter was modelled. The continuation is a converter still asking:
-   * either the deterministic paced sink has a free slot, or the real
-   * hardware-facing output has less than its descriptor lead buffered. An
-   * unpaced output asks neither, so the default path remains exactly one
-   * frame per due tick.
+   * The first frame is unconditional. The continuation is the room still
+   * asking: the hardware-facing output has less than its descriptor lead
+   * buffered. With no room pulling, the loop runs exactly once per due tick.
    *
    * The explicit bound is not belt and braces. A frame the playback clock
-   * DISCARDS never reaches the converter and so never fills a slot, and
-   * without a count a discard policy would drain the whole thirty-second ring
-   * in one iteration while the converter went on asking.
+   * DISCARDS never reaches the room and so never fills its lead, and without
+   * a count a discard policy would drain the whole thirty-second ring in one
+   * iteration while the room went on asking.
    */
   const struct iterate_kit_voice_playout_ring ring = {
     .context = runtime,
@@ -1473,10 +1418,9 @@ static void cli_main_feed_playback(struct cli_runtime *runtime)
       break;
     }
     ++fed;
-  } while (fed < CLI_PACED_SINK_MAX_DEPTH_FRAMES &&
-           (cli_paced_sink_ready(&runtime->paced_sink) ||
-            (room_pulls &&
-             cli_main_audio_metrics(runtime).playback_queued_bytes < room_lead_bytes)));
+  } while (fed < CLI_MAIN_FEED_MAX_FRAMES && room_pulls &&
+           cli_main_audio_metrics(runtime).playback_queued_bytes <
+               room_lead_bytes);
 }
 
 static void cli_main_capture_frame(struct cli_runtime *runtime, bool keep)
@@ -1523,14 +1467,12 @@ static void cli_main_capture_live_frame(struct cli_runtime *runtime, bool keep)
     }
     assert(sample_count == ITERATE_KIT_VOICE_FRAME_SAMPLES);
     /*
-     * READ ALWAYS, KEEP SOMETIMES — and the flush is the case that proves the
-     * two must be separate. Nothing is KEPT once the turn is flushing: the
-     * frames already queued are what the person said, and adding more would
-     * hold the commit open until its timeout. But this used to return BEFORE
-     * the read, so a flush stopped draining the ring as well as stopping
-     * capture, and the backlog it left was charged to the next turn.
+     * READ ALWAYS, KEEP SOMETIMES — and a closed gate is the case that proves
+     * the two must be separate. This used to return BEFORE the read, so a
+     * closed gate stopped draining the ring as well as stopping capture, and
+     * the backlog it left was charged to the next turn.
      */
-    if (!keep || runtime->flushing_turn) continue;
+    if (!keep) continue;
     cli_main_accept_capture_frame(runtime, capture);
   }
 }
@@ -1579,12 +1521,11 @@ static void cli_main_send_microphone(struct cli_runtime *runtime, uint64_t now_m
   const size_t queued = cli_microphone_queued(&runtime->microphone);
   /*
    * A partial batch is sent once no more frames are coming: the recording ran
-   * out, or the turn is flushing because the talk button came up. Without the
-   * flush case a live microphone would strand up to three frames — the last
-   * syllable of the sentence — until the flush timeout threw them away.
+   * out, or the gate closed. Without that a live microphone would strand the
+   * last syllable of the sentence in the queue until the next turn cleared it.
    */
   if (queued < ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND &&
-      !runtime->source_finished && !runtime->flushing_turn) return;
+      !runtime->source_finished && runtime->talking) return;
   if (queued == 0U) return;
   struct iterate_kit_spsc_ring_metrics outbox = {0};
   iterate_kit_spsc_ring_metrics(&runtime->control_outbox, &outbox);
@@ -1594,21 +1535,28 @@ static void cli_main_send_microphone(struct cli_runtime *runtime, uint64_t now_m
   const size_t frame_count = queued < ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND
       ? queued
       : ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND;
-  const uint8_t *frames[ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND] = {0};
+  /* The append takes one contiguous run; this ring wraps, so stage it. */
+  static uint8_t flush[ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND *
+                       ITERATE_KIT_VOICE_FRAME_BYTES];
   for (size_t index = 0U; index < frame_count; ++index) {
     const size_t slot = (runtime->microphone.read + index) %
         ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH;
-    frames[index] = runtime->microphone.frames[slot];
+    memcpy(
+        flush + index * ITERATE_KIT_VOICE_FRAME_BYTES,
+        runtime->microphone.frames[slot], ITERATE_KIT_VOICE_FRAME_BYTES);
   }
   const enum capnweb_status status = iterate_kit_voicelab_append_frames(
-      &runtime->voicelab, frames, frame_count,
+      &runtime->voicelab, flush, frame_count,
       ITERATE_KIT_VOICE_FRAME_BYTES, runtime->frame_sequence, now_ms);
   if (status != CAPNWEB_OK) return;
   runtime->frame_sequence += (uint32_t)frame_count;
   runtime->microphone.read = (runtime->microphone.read + frame_count) %
       ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH;
   runtime->microphone.used -= frame_count;
-  runtime->flush_frames_left = (uint32_t)runtime->microphone.used;
+  /* The gate is shut and the tail is on the wire: the turn is complete. */
+  if (!runtime->talking && runtime->microphone.used == 0U) {
+    runtime->turn_committed_ms = now_ms;
+  }
 }
 
 static void cli_main_poll_microphone(
@@ -1640,10 +1588,13 @@ static void cli_main_poll_microphone(
    * the cursor at the live edge, so a press begins with the present.
    */
   cli_main_capture_frame(runtime, runtime->talking);
-  if (!runtime->talking) {
-    ++runtime->mic_frames_gated;
-    return;
-  }
+  if (!runtime->talking) ++runtime->mic_frames_gated;
+  /*
+   * THE GATE STOPS NEW AUDIO JOINING THE QUEUE; WHAT IS ALREADY IN IT STILL
+   * GOES OUT — the board's rule, in the same words (voice_loop.c: `talking ||
+   * queued > 0`). A release is not a commit any more, so the tail of the
+   * sentence is simply the last frames to be sent.
+   */
   cli_main_send_microphone(runtime, now_ms);
 }
 
@@ -1679,32 +1630,16 @@ static void cli_main_start_talk(
     runtime->source_finished = false;
   }
   runtime->talking = true;
-  runtime->flushing_turn = false;
   runtime->turn_started_ms = now_ms;
   runtime->frame_sequence = 0U;
+  /* Anything the previous gate could not get out is lost here, and counted:
+   * a queue the uplink never drained is the one case that reaches this. */
+  runtime->mic_frames_dropped += (uint32_t)runtime->microphone.used;
   cli_microphone_clear(&runtime->microphone);
   cli_speaker_clear(&runtime->speaker);
   (void)iterate_kit_darwin_audio_codec_discard_playback(&runtime->audio_codec);
   iterate_kit_voice_playback_clock_reprime(&runtime->playout.clock);
   /* No turn marker: push-to-talk is a local microphone gate (2026-09-11). */
-}
-
-static void cli_main_finish_talk(
-    struct cli_runtime *runtime, uint64_t now_ms)
-{
-  assert(runtime != NULL);
-  if (!runtime->flushing_turn) return;
-  if (runtime->microphone.used != 0U && now_ms < runtime->flush_deadline_ms) {
-    return;
-  }
-  if (runtime->microphone.used != 0U) {
-    runtime->mic_frames_dropped += (uint32_t)runtime->microphone.used;
-    cli_microphone_clear(&runtime->microphone);
-  }
-  runtime->talking = false;
-  runtime->flushing_turn = false;
-  /* No commit marker either: GPT-Live's own voice activity ends the turn. */
-  runtime->turn_committed_ms = now_ms;
 }
 
 static void cli_main_reconcile_talk(
@@ -1727,21 +1662,20 @@ static void cli_main_reconcile_talk(
   const bool link_lost =
       runtime->transport.state == ITERATE_KIT_POSIX_ITX_FAILED ||
       runtime->transport.state == ITERATE_KIT_POSIX_ITX_STOPPED;
-  if (runtime->talking && !runtime->flushing_turn && link_lost) {
-    runtime->talking = false;
-    runtime->flushing_turn = false;
-  }
+  if (runtime->talking && link_lost) runtime->talking = false;
   cli_main_start_talk(runtime, now_ms, outbox_free);
-  if (!runtime->wants_talk && runtime->talking && !runtime->flushing_turn) {
-    runtime->flushing_turn = true;
+  /*
+   * THE GATE SHUTS THE MOMENT THE BUTTON COMES UP. No commit goes out — the
+   * far side's voice activity ends the turn — so there is nothing to hold
+   * open and no flush deadline to wait out; the queued tail drains on the
+   * next polls and stamps `turn_committed_ms` when the last of it is sent.
+   */
+  if (!runtime->wants_talk && runtime->talking) {
+    runtime->talking = false;
     runtime->turn_released_ms = now_ms;
     runtime->turn_committed_ms = 0U;
     runtime->turn_answer_seen_ms = 0U;
-    runtime->flush_frames_left = (uint32_t)runtime->microphone.used;
-    runtime->flush_deadline_ms =
-        now_ms + ITERATE_KIT_VOICE_TURN_FLUSH_TIMEOUT_MS;
   }
-  cli_main_finish_talk(runtime, now_ms);
 }
 
 static void cli_main_reconcile_call(
@@ -1892,7 +1826,8 @@ static void cli_main_draw_screen(struct cli_runtime *runtime, uint64_t now_ms)
         iterate_kit_posix_itx_transport_state_name(runtime->transport.state),
     .space_held = runtime->wants_talk,
     .talking = runtime->talking,
-    .flushing = runtime->flushing_turn,
+    /* The gate is shut but the queued tail has not finished going out. */
+    .flushing = !runtime->talking && runtime->microphone.used != 0U,
     .mic_captured = audio.capture_frames,
     .mic_held = (uint32_t)cli_microphone_queued(&runtime->microphone),
     .mic_sent = runtime->voicelab.frames_sent,
@@ -2021,10 +1956,9 @@ static void cli_main_pulse(
   cli_runtime_log(
       "info",
       "pulse loops=%u outbox=%u/%u sent=%u frames=%u batches=%u rx=%u "
-      "submitted=%u holes=%u holeFrames=%u dry=%u under=%u ringMs=%u convUnder=%u "
-      "convRefused=%u micIn=%u micLost=%u roomDrop=%u roomStarve=%u "
-      "roomPlayed=%u roomMs=%u roomErr=%" PRId32 " micErr=%" PRId32
-      " seqGaps=%u/%u",
+      "submitted=%u holes=%u holeFrames=%u dry=%u under=%u ringMs=%u "
+      "micIn=%u micLost=%u roomDrop=%u roomStarve=%u "
+      "roomPlayed=%u roomMs=%u roomErr=%" PRId32 " micErr=%" PRId32,
       runtime->loop_count, outbox->current_slots,
       ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS,
       runtime->transport.control_sender.messages_sent,
@@ -2039,7 +1973,6 @@ static void cli_main_pulse(
        * until micIn stays at zero through a turn, so it is on the one line
        * anybody watching a session will already be reading.
        */
-      runtime->paced_sink.underrun_frames, runtime->paced_sink.refused_frames,
       audio.capture_frames, audio.capture_frames_dropped,
       /*
        * The room, as distinct from the recording. roomDrop is audio the
@@ -2053,18 +1986,7 @@ static void cli_main_pulse(
       audio.playback_queued_bytes /
           (ITERATE_KIT_VOICE_FRAME_BYTES / ITERATE_KIT_VOICE_FRAME_MS),
       audio.playback_platform_error,
-      audio.capture_platform_error,
-      /*
-       * HOLES IN THE ANSWER, which no other counter on this line can see.
-       *
-       * Everything above measures a chunk that arrived. These count the ones
-       * that did not: the second voice agent numbers every speaker chunk
-       * within a call, so a break in the numbering is audio that was sent and
-       * never landed. Printed as gaps/frames because one hole of forty is a
-       * different failure from forty holes of one, and the first agent — which
-       * sends no numbers — leaves both at zero.
-       */
-      runtime->voicelab.spk_seq_gaps, runtime->voicelab.spk_seq_missing);
+      audio.capture_platform_error);
 }
 
 static void cli_main_poll_ready(
@@ -2247,7 +2169,7 @@ static void cli_main_enforce_talk_deadline(
    * the design — and cutting its stream at thirty seconds would end capture
    * for the rest of the process, since nothing re-requests it. */
   if (runtime->options.open_mic) return;
-  if (!runtime->talking || runtime->flushing_turn ||
+  if (!runtime->talking ||
       iterate_kit_voice_elapsed_ms(now_ms, runtime->turn_started_ms) <=
           ITERATE_KIT_VOICE_TURN_MAX_MS) return;
   (void)cli_main_request_talk(

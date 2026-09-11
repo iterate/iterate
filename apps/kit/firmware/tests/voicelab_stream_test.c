@@ -654,24 +654,20 @@ static void mount_with_downlink(struct fixture *fixture, int *next_id) {
  * here can stand in for it.
  */
 /*
- * THE SECOND VOICE AGENT'S DIALECT, and the counters that make a long call
- * provable.
+ * THE SECOND VOICE AGENT'S DIALECT.
  *
- * Two agents now speak this contract. They differ in exactly one payload:
+ * Two agents speak this contract. They differ in exactly one payload:
  * `drop: true` became `clearSpeakerBufferBeforeFrame: true` riding on a
- * NUMBERED frame, and every chunk carries `deviceSpeakerFrameSeq`. The rename
- * is not cosmetic — `drop` named no audio, so a late one discarded the answer
- * that had already replaced the one it was about — but the numbering is what
- * this test is really for: `spk-frame` is ephemeral and never persisted, so
- * the device is the only witness that can say whether the answer arrived
- * whole. A hole in the numbering is a lost chunk, and until it was counted,
- * "the answer was short" and "the answer was cut" looked identical.
+ * numbered frame, and `last` became `lastFrameOfAnswer`. The rename is not
+ * cosmetic — `drop` named no audio, so a late one discarded the answer that
+ * had already replaced the one it was about.
  *
  * One binary understands both dialects on purpose. The two agents are meant to
  * be run side by side and compared, and an instrument that changes between the
- * two measurements measures itself.
+ * two measurements measures itself. The numbering itself is carried and
+ * ignored: nothing on the device ever acted on it.
  */
-static void speaker_sequence_continuity(void) {
+static void the_second_agents_dialect(void) {
   static struct fixture fixture;
   fixture_init(&fixture);
   {
@@ -695,14 +691,10 @@ static void speaker_sequence_continuity(void) {
   receive(&fixture, "[\"resolve\",3,[\"export\",-12]]");
   receive(&fixture, "[\"resolve\",4,[\"export\",-13]]");
 
-  /* Nothing seen yet, and that is a different state from "frame zero seen". */
-  assert(fixture.voicelab.spk_seq_last == -1);
-
   speech_started_count = 0;
   spoken_frames = 0U;
 
-  /* Contiguous from zero: no gaps, no regressions, watermark follows. The
-   * acceptance leads the audio in one batch, as it does on the wire — the
+  /* The acceptance leads the audio in one batch, as it does on the wire — the
    * delivery lane refuses frames for a call the device is not on. */
   {
     static char message[16384];
@@ -722,52 +714,10 @@ static void speaker_sequence_continuity(void) {
       &fixture, 2, 101, "\"deviceSpeakerFrameSeq\":1,", frames_b64(1U, 0x41));
   push_spk(
       &fixture, 3, 102, "\"deviceSpeakerFrameSeq\":2,", frames_b64(1U, 0x42));
-  assert(fixture.voicelab.spk_seq_last == 2);
-  assert(fixture.voicelab.spk_seq_gaps == 0U);
-  assert(fixture.voicelab.spk_seq_missing == 0U);
-  assert(fixture.voicelab.spk_seq_regressions == 0U);
   assert(spoken_frames == 3U);
 
-  /*
-   * A HOLE: 3, 4 and 5 never arrived. ONE gap event, THREE missing frames —
-   * the two are counted separately because one hole of forty is a different
-   * failure from forty holes of one, and a single total cannot tell them
-   * apart.
-   */
-  push_spk(
-      &fixture, 4, 103, "\"deviceSpeakerFrameSeq\":6,", frames_b64(1U, 0x43));
-  assert(fixture.voicelab.spk_seq_gaps == 1U);
-  assert(fixture.voicelab.spk_seq_missing == 3U);
-  assert(fixture.voicelab.spk_seq_last == 6);
-
-  /*
-   * A NUMBER ALREADY SEEN. The offset dedupe at the top of the dispatch drops
-   * REDELIVERED events, so this is something it cannot see — a sender
-   * renumbering mid-call, or two senders on one stream — which is exactly why
-   * it is worth a counter of its own rather than being folded into gaps.
-   */
-  push_spk(
-      &fixture, 5, 104, "\"deviceSpeakerFrameSeq\":4,", frames_b64(1U, 0x44));
-  assert(fixture.voicelab.spk_seq_regressions == 1U);
-  /* And the watermark did NOT rewind: if it had, every frame after this one
-   * would be scored as a fresh gap in turn and one glitch would report as a
-   * ruined call. */
-  assert(fixture.voicelab.spk_seq_last == 6);
-  push_spk(
-      &fixture, 6, 105, "\"deviceSpeakerFrameSeq\":7,", frames_b64(1U, 0x45));
-  assert(fixture.voicelab.spk_seq_gaps == 1U);
-
-  /*
-   * THE FIRST AGENT SENDS NO NUMBER AT ALL, and absent is not zero. A frame
-   * with no `deviceSpeakerFrameSeq` must leave every one of these untouched,
-   * or running the two tracks side by side would report the older one as
-   * having lost its entire answer.
-   */
-  push_spk(&fixture, 7, 106, "", frames_b64(1U, 0x46));
-  assert(fixture.voicelab.spk_seq_last == 7);
-  assert(fixture.voicelab.spk_seq_gaps == 1U);
-  assert(fixture.voicelab.spk_seq_missing == 3U);
-  assert(fixture.voicelab.spk_seq_regressions == 1U);
+  /* The first agent sends no number at all, and its frames play the same. */
+  push_spk(&fixture, 4, 103, "", frames_b64(1U, 0x46));
 
   /*
    * AND THE NEW NAME FOR THE END OF AN ANSWER, on its own empty frame.
@@ -782,22 +732,21 @@ static void speaker_sequence_continuity(void) {
   order_length = 0U;
   push_spk(
       &fixture,
-      8,
-      107,
+      5,
+      104,
       "\"deviceSpeakerFrameSeq\":8,\"lastFrameOfAnswer\":true,",
       "");
   assert(response_done_count == 1);
   assert(spoken_frames == 0U);
   assert(fixture.voicelab.spk_decode_failures == 0U);
-  assert(fixture.voicelab.spk_seq_last == 8);
 
   /* And when it does ride audio, the edge follows the frame — 'f' then 'l' —
    * so the owner never marks an answer drained with audio still queued. */
   order_length = 0U;
   push_spk(
       &fixture,
-      9,
-      108,
+      6,
+      105,
       "\"deviceSpeakerFrameSeq\":9,\"lastFrameOfAnswer\":true,",
       frames_b64(1U, 0x4a));
   assert(response_done_count == 2);
@@ -805,15 +754,15 @@ static void speaker_sequence_continuity(void) {
   assert(memcmp(order_log, "fl", 2U) == 0);
 
   /* The first agent's `last` still means what it always did. */
-  push_spk(&fixture, 10, 109, "\"last\":true,", "");
+  push_spk(&fixture, 7, 106, "\"last\":true,", "");
   assert(response_done_count == 3);
 
   /* A chunk of any length is audio, and reaches the speaker whole. */
   spoken_bytes = 0U;
   push_spk(
       &fixture,
-      11,
-      112,
+      8,
+      107,
       "\"deviceSpeakerFrameSeq\":10,",
       pcm_b64(ITERATE_KIT_VOICELAB_FRAME_BYTES + 64U, 0x34));
   assert(fixture.voicelab.spk_decode_failures == 0U);
@@ -823,8 +772,8 @@ static void speaker_sequence_continuity(void) {
   assert(speech_started_count == 0);
   push_spk(
       &fixture,
-      12,
-      113,
+      9,
+      108,
       "\"deviceSpeakerFrameSeq\":11,\"clearSpeakerBufferBeforeFrame\":true,",
       frames_b64(1U, 0x47));
   assert(speech_started_count == 1);
@@ -842,44 +791,15 @@ static void speaker_sequence_continuity(void) {
   spoken_frames = 0U;
   push_spk(
       &fixture,
-      13,
-      114,
+      10,
+      109,
       "\"deviceSpeakerFrameSeq\":12,\"clearSpeakerBufferBeforeFrame\":true,",
       "");
   assert(speech_started_count == 2);
   assert(spoken_frames == 0U);
-  /* A numbered clear still counts as arrived: it is a frame in the sequence,
-   * and skipping it here would make the NEXT frame look like a gap. */
-  assert(fixture.voicelab.spk_seq_last == 12);
-  assert(fixture.voicelab.spk_seq_gaps == 1U);
   /* Nothing in this run failed to DECODE, which is all the counter means now
    * that an unaligned chunk is ordinary audio rather than a violation. */
   assert(fixture.voicelab.spk_decode_failures == 0U);
-
-  /*
-   * A NEW CALL RESTARTS THE NUMBERING, so the watermark is per-conversation
-   * while the totals are per-run. Carrying the watermark across a call would
-   * score the next call's frame 0 as a regression and everything after it as a
-   * gap; resetting the TOTALS would answer the wrong question, which is how
-   * much audio the whole session lost.
-   */
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
-      "\"offset\":115,\"payload\":{\"bridgeId\":\"b1\"}}"
-      "]],\"scannedThroughOffset\":115,\"state\":null}]]]");
-  receive(&fixture, "[\"release\",14,1]");
-  assert(fixture.voicelab.call_active);
-  assert(fixture.voicelab.spk_seq_last == -1);
-  assert(fixture.voicelab.spk_seq_gaps == 1U);
-  assert(fixture.voicelab.spk_seq_missing == 3U);
-
-  push_spk(
-      &fixture, 15, 116, "\"deviceSpeakerFrameSeq\":0,", frames_b64(1U, 0x48));
-  assert(fixture.voicelab.spk_seq_regressions == 1U); /* unchanged */
-  assert(fixture.voicelab.spk_seq_gaps == 1U);
-  assert(fixture.voicelab.spk_seq_last == 0);
 
   (void)iterate_kit_voicelab_close(&fixture.voicelab);
 }
@@ -914,7 +834,9 @@ int main(void) {
   static struct fixture fixture;
   /* "ABCD" + 0x00 0x01: exercises multi-chunk + 2-byte-tail base64. */
   static const uint8_t pcm[6] = {0x41U, 0x42U, 0x43U, 0x44U, 0x00U, 0x01U};
-  static const uint8_t *const pcm_frames[] = {pcm};
+  /* Two 4-byte frames: every base64 group straddles the seam between them. */
+  static const uint8_t seam[8] = {
+    0x41U, 0x42U, 0x43U, 0x44U, 0x45U, 0x46U, 0x47U, 0x48U};
   size_t before;
 
   remounting_releases_the_previous_mount();
@@ -928,13 +850,15 @@ int main(void) {
   assert(
       iterate_kit_voicelab_append_frames(
           &fixture.voicelab,
-          pcm_frames,
+          pcm,
           1U,
           sizeof(pcm),
           7U,
           1234U) == CAPNWEB_OK);
   assert(fixture.captured_count == before + 2U);
   assert(strstr(fixture.captured[before], "\"seq\":7,\"t\":1234") != NULL);
+  /* THE BODY, BYTE FOR BYTE. One encode over the whole flush. */
+  assert(strstr(fixture.captured[before], "\"pcm\":\"QUJDRAAB\"") != NULL);
   /* "p": the uplink is PCM16. It was "u" and the transcode is gone — see the
    * note where the encoder used to be for what that cost and might cost
    * again. */
@@ -944,10 +868,20 @@ int main(void) {
   assert(fixture.voicelab.frames_sent == 1U);
   assert(fixture.voicelab.frame_send_failures == 0U);
 
+  /*
+   * A MULTI-FRAME FLUSH IS ONE CONTINUOUS BODY, PADDED. Eight bytes is not a
+   * whole number of base64 groups and 4 is not a multiple of 3, so a frame
+   * encoded on its own would leave a broken group at the seam.
+   */
+  before = fixture.captured_count;
+  assert(
+      iterate_kit_voicelab_append_frames(
+          &fixture.voicelab, seam, 2U, 4U, 9U, 1244U) == CAPNWEB_OK);
+  assert(strstr(fixture.captured[before], "\"pcm\":\"QUJDREVGR0g=\"") != NULL);
+
   /* A full 640-byte frame fits the args buffer and one outbox slot. */
   {
     static uint8_t full_frame[ITERATE_KIT_VOICELAB_FRAME_BYTES];
-    static const uint8_t *full_frames[] = {full_frame};
     size_t index;
     for (index = 0U; index < sizeof(full_frame); ++index) {
       full_frame[index] = (uint8_t)(index & 0xffU);
@@ -956,7 +890,7 @@ int main(void) {
     assert(
         iterate_kit_voicelab_append_frames(
             &fixture.voicelab,
-            full_frames,
+            full_frame,
             1U,
             sizeof(full_frame),
             8U,
@@ -1043,7 +977,7 @@ int main(void) {
   assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_CLOSED);
 
   downlink_flow();
-  speaker_sequence_continuity();
+  the_second_agents_dialect();
 
   printf("voicelab stream test passed\n");
   return 0;

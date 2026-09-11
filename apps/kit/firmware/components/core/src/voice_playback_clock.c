@@ -82,38 +82,11 @@ bool iterate_kit_voice_playback_clock_ready(
     uint64_t now_ms) {
   if (clock == NULL) return false;
   /*
-   * A FINISHED ANSWER IS ALWAYS READY, however little of it there is.
-   *
-   * Prefill answers "will more arrive in time?", and once the sender has
-   * said the answer is complete the question is settled: nothing more is
-   * coming, so waiting for a threshold that can never be reached is waiting
-   * forever. Without this, every answer SHORTER than the prefill was never
-   * played at all — "Yes, I can hear you clearly" is under a second, and the
-   * larger the prefill the more of the conversation disappears. That failure
-   * is silent at both ends: the model believes it spoke, and the listener
-   * hears nothing.
+   * A SHORT ANSWER NEEDS NO MARKER. The end marker used to end priming early,
+   * so an answer shorter than the prefill would play; the prime wait below
+   * covers it — and it arrives sooner, because the marker trails the audio by
+   * the sender's 700 ms tail silence.
    */
-  /*
-   * A finished answer short-circuits the PREFILL WAIT, and nothing else.
-   *
-   * Written as an unconditional `if (answer_done) return true`, this became a
-   * latch: `answer_done` stays set until the dry-tick path clears it, that
-   * path is only reached once a frame has been taken, and a caller that skips
-   * its idle branch because ready() said true never takes one. The speaker
-   * task then span on an empty buffer for the rest of the session - played
-   * and concealed both frozen while frames arrived, no counter moving,
-   * because neither the play path nor the conceal path was ever reached.
-   *
-   * Measured: 0 of 5 journeys, recovering completely on a restart, after the
-   * first answer completed. Scoped to `priming` it does what it was added
-   * for - an answer shorter than the prefill still plays - and stops being a
-   * latch, because once priming is false the flag is irrelevant anyway.
-   */
-  if (clock->priming && clock->answer_done) {
-    clock->priming = false;
-    clock->priming_since_ms = 0U;
-    return true;
-  }
   if (clock->priming &&
       queued_bytes < ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES) {
     /*

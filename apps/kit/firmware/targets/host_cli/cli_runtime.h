@@ -43,7 +43,6 @@
 #include "cli_keyboard.h"
 #include "cli_microphone.h"
 #include "cli_options.h"
-#include "cli_paced_sink.h"
 #include "cli_screen.h"
 #include "cli_speaker.h"
 #include "cli_wav.h"
@@ -126,8 +125,6 @@ struct cli_runtime {
    */
   uint64_t api_connected_at_ms;
   uint64_t call_established_at_ms;
-  /* Models the converter's clock; unpaced by default. See cli_paced_sink.h. */
-  struct cli_paced_sink paced_sink;
   struct cli_conversation conversation;
   /** Wall-clock end of an interactive session; 0 means no limit was asked. */
   uint64_t finish_at_ms;
@@ -135,15 +132,18 @@ struct cli_runtime {
   bool hanging_up;
   uint64_t hangup_deadline_ms;
   bool wants_talk;
+  /**
+   * MAY MICROPHONE FRAMES GO ON THE WIRE — the board's rule, same words
+   * (components/voice/src/voice_loop.c). It gates only what JOINS the queue:
+   * capture keeps draining, and frames already queued still go out, because a
+   * release is no longer a commit (push-to-talk left the wire 2026-09-11).
+   */
   bool talking;
-  bool flushing_turn;
   bool answer_done;
   bool restart_requested;
   uint64_t restart_requested_at_ms;
   bool stop_requested;
   bool source_finished;
-  uint32_t flush_frames_left;
-  uint64_t flush_deadline_ms;
   uint64_t turn_started_ms;
   /*
    * THE ONE THING NOBODY COULD SEE: where the wait after a key comes up goes.

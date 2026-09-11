@@ -46,16 +46,13 @@ static struct {
   size_t sent_lengths[FAKE_SENT_CAPACITY];
   size_t sent_count;
   bool message_open;
-  size_t probes_requested;
   size_t restarts_requested;
-  bool hop_answers;
   uint32_t pongs;
   char restart_note[128];
 } platform;
 
 void iterate_kit_fake_platform_reset(void) {
   memset(&platform, 0, sizeof(platform));
-  platform.hop_answers = true;
 }
 
 struct iterate_kit_itx_connection *iterate_kit_fake_platform_connection(void) {
@@ -92,16 +89,8 @@ const char *iterate_kit_fake_platform_find_sent(const char *needle) {
   return NULL;
 }
 
-size_t iterate_kit_fake_platform_probes_requested(void) {
-  return platform.probes_requested;
-}
-
 size_t iterate_kit_fake_platform_restarts_requested(void) {
   return platform.restarts_requested;
-}
-
-void iterate_kit_fake_platform_set_hop_answers(bool answers) {
-  platform.hop_answers = answers;
 }
 
 /* --- provisioning --------------------------------------------------------- */
@@ -257,20 +246,6 @@ void iterate_kit_esp_idf_itx_transport_request_restart(
     struct iterate_kit_esp_idf_itx_transport *transport) {
   if (transport == NULL) return;
   ++platform.restarts_requested;
-}
-
-/*
- * THE HOP, ANSWERING OR NOT. On hardware the PING is queued for the network
- * task and the PONG arrives some milliseconds later; here the answer is
- * immediate, because what the press probe is watching is the COUNT and not the
- * timing of the reply. A hop set not to answer is exactly the half-open socket
- * the probe exists for.
- */
-void iterate_kit_esp_idf_itx_transport_request_probe(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
-  if (transport == NULL) return;
-  ++platform.probes_requested;
-  if (platform.hop_answers) ++platform.pongs;
 }
 
 enum iterate_kit_status iterate_kit_esp_idf_itx_transport_stop(

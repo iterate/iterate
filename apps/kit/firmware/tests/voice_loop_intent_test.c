@@ -267,11 +267,6 @@ static void pump(void) {
   }
 }
 
-/** Everything the device sent from now on is somebody else's problem. */
-static void ignore_pending_replies(void) {
-  answered = iterate_kit_fake_platform_sent_count();
-}
-
 static void run_ms(uint32_t milliseconds) {
   uint32_t elapsed;
   for (elapsed = 0U; elapsed < milliseconds; elapsed += 50U) step();
@@ -477,33 +472,6 @@ static void nothing_physical_was_involved(void) {
 }
 
 /*
- * A PRESS ASKS THE HOP WHETHER IT IS STILL THERE, AND ONE ANSWER IS ENOUGH.
- *
- * These two need a MOUNTED device, because arming happens where the call is
- * placed and that is behind the loop's whole ready gate. Everything above needs
- * only a session, which is why the mount is paid for here and not in boot().
- */
-static void a_press_into_a_live_hop_asks_once(void) {
-  const size_t probes = iterate_kit_fake_platform_probes_requested();
-  iterate_kit_fake_platform_set_hop_answers(true);
-  quiescent();
-
-  remote_call("pushToTalk", "start");
-  step();
-  /* The press placed a call, and the call asked. */
-  assert(iterate_kit_fake_platform_probes_requested() == probes + 1U);
-
-  /*
-   * AND THEN NOTHING HAPPENS, which is the assertion. A hop that answers is
-   * asked once; a second probe or a replaced socket here would mean the device
-   * tears down healthy sessions, which is worse than the bug this fixes.
-   */
-  run_ms(4000U);
-  assert(iterate_kit_fake_platform_probes_requested() == probes + 1U);
-  assert(iterate_kit_fake_platform_restarts_requested() == 0U);
-}
-
-/*
  * SPEECH SPOKEN INTO THE DIAL FLOWS AT ONCE, AND NO TURN IS EVER MARKED.
  *
  * Press from sleep, say "count to forty", let go — the words go up as mic
@@ -580,48 +548,6 @@ static void a_silent_dial_release_commits_no_turn(void) {
 }
 
 /*
- * A PRESS INTO A HALF-OPEN SOCKET IS ANSWERED IN ~3 s, NOT 10.
- *
- * The hop stops answering: TCP still accepts every byte, the transport stays
- * READY, and the call request the press sent is gone into nothing. Before this
- * probe existed, the first thing to notice was DOWNLINK_SILENCE_MS ten seconds
- * later. Two probes, then the socket is replaced — one miss is a dropped
- * packet, and the second is what makes it evidence.
- */
-static void a_press_into_a_dead_hop_replaces_the_socket(void) {
-  size_t probes;
-  quiescent();
-  /*
-   * WAIT OUT THE LADDER. Placing a call arms PLACE_RETRY_MS, so a second press
-   * inside that window is deliberately not a second call — and the probe rides
-   * the call, not the press. Virtual time, so this costs nothing.
-   */
-  run_ms(ITERATE_KIT_LAUNCH_PLACE_RETRY_MS + 500U);
-  /*
-   * Stop answering the device's calls as well as its probes: a socket that has
-   * stopped carrying PONGs has stopped carrying replies too, and leaving the
-   * application lane alive would test a hop that does not exist.
-   */
-  ignore_pending_replies();
-  iterate_kit_fake_platform_set_hop_answers(false);
-  probes = iterate_kit_fake_platform_probes_requested();
-
-  remote_call("pushToTalk", "start");
-  step();
-  assert(iterate_kit_fake_platform_probes_requested() == probes + 1U);
-  assert(iterate_kit_fake_platform_restarts_requested() == 0U);
-
-  /* One unanswered probe is a dropped packet, so it asks again rather than act. */
-  run_ms(1700U);
-  assert(iterate_kit_fake_platform_probes_requested() == probes + 2U);
-  assert(iterate_kit_fake_platform_restarts_requested() == 0U);
-
-  /* Two in a row is a dead socket, and only a new socket fixes one. */
-  run_ms(1700U);
-  assert(iterate_kit_fake_platform_restarts_requested() == 1U);
-}
-
-/*
  * AN ACCEPTED CALL WITH NOTHING OWED IS QUIET, NOT DEAD. GPT-Live's facet
  * drops idle silence, so a person thinking and a model listening deliver no
  * batch at all; the downlink deadline must not read that as a lost lane and
@@ -629,9 +555,6 @@ static void a_press_into_a_dead_hop_replaces_the_socket(void) {
  */
 static void an_idle_accepted_call_is_not_recycled_for_silence(void) {
   size_t after_accept;
-  /* The scenario before this one leaves the fake hop mute; a mute hop makes
-   * the press probes restart the transport, which also reopens connections. */
-  iterate_kit_fake_platform_set_hop_answers(true);
   size_t after_answer;
   quiescent();
   run_ms(ITERATE_KIT_LAUNCH_PLACE_RETRY_MS + 500U);
@@ -663,9 +586,6 @@ static void an_idle_accepted_call_is_not_recycled_for_silence(void) {
  */
 static void a_lane_silent_mid_answer_is_recycled(void) {
   size_t after_accept;
-  /* The scenario before this one leaves the fake hop mute; a mute hop makes
-   * the press probes restart the transport, which also reopens connections. */
-  iterate_kit_fake_platform_set_hop_answers(true);
   size_t after_chunk;
   quiescent();
   run_ms(ITERATE_KIT_LAUNCH_PLACE_RETRY_MS + 500U);
@@ -695,12 +615,9 @@ int main(void) {
 
   /* From here on the device is mounted, so the launch ladder can run. */
   pump();
-  a_press_into_a_live_hop_asks_once();
-  pump();
   dial_speech_flows_at_once_and_no_turn_is_marked();
   a_silent_dial_release_commits_no_turn();
   pump();
-  a_press_into_a_dead_hop_replaces_the_socket();
   an_idle_accepted_call_is_not_recycled_for_silence();
   a_lane_silent_mid_answer_is_recycled();
   return 0;

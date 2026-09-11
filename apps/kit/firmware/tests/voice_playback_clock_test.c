@@ -376,8 +376,30 @@ static void a_deep_queue_on_time_loses_nothing(void)
   assert(clock.lag_max_ms == 0U);
 }
 
+/*
+ * A STARVE GOES STALE. Both owners promote a hole to an underrun only when
+ * audio resumes within a second of it; a gap between turns proves nothing
+ * about the answer that ended, and counting it made the metric read one
+ * underrun per answer.
+ */
+static void a_starve_older_than_a_second_is_not_an_underrun(void)
+{
+  struct iterate_kit_voice_playback_clock clock;
+  iterate_kit_voice_playback_clock_init(&clock);
+  leave_priming(&clock);
+  assert(iterate_kit_voice_playback_clock_empty(&clock, 1000U) ==
+      ITERATE_KIT_VOICE_PLAYBACK_CONCEAL);
+  assert(!iterate_kit_voice_playback_clock_audio_arrived(&clock, 2000U));
+  /* And the stamp is spent: the same arrival cannot be charged twice. */
+  assert(iterate_kit_voice_playback_clock_empty(&clock, 2000U) ==
+      ITERATE_KIT_VOICE_PLAYBACK_CONCEAL);
+  assert(iterate_kit_voice_playback_clock_audio_arrived(&clock, 2500U));
+  assert(!iterate_kit_voice_playback_clock_audio_arrived(&clock, 2500U));
+}
+
 int main(void) {
   opening_prefill_is_exact();
+  a_starve_older_than_a_second_is_not_an_underrun();
   a_short_answer_starts_at_the_prime_wait();
   a_jitter_gap_during_priming_does_not_start_early();
   an_empty_ring_never_starts_on_time();

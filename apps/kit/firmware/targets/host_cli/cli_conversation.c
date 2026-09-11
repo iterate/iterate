@@ -222,9 +222,6 @@ enum cli_conversation_status cli_conversation_write_report(
     .speaker_platform_error = audio.playback_platform_error,
     .microphone_platform_error = audio.capture_platform_error,
     .spk_frames_received = runtime->voicelab.spk_frames_received,
-    .spk_seq_gaps = runtime->voicelab.spk_seq_gaps,
-    .spk_seq_missing = runtime->voicelab.spk_seq_missing,
-    .spk_seq_regressions = runtime->voicelab.spk_seq_regressions,
     .spk_decode_failures = runtime->voicelab.spk_decode_failures,
   };
   const enum cli_report_status status = cli_report_write(

@@ -176,11 +176,6 @@ if(APPLE)
     ../targets/host_cli/cli_options.c
     cli_options_test.c)
   iterate_kit_add_cli_test(
-    iterate-kit-cli-paced-sink-test
-    ../targets/host_cli/cli_paced_sink.c
-    ../targets/host_cli/cli_speaker.c
-    cli_paced_sink_test.c)
-  iterate_kit_add_cli_test(
     iterate-kit-cli-screen-test
     ../targets/host_cli/cli_screen.c
     cli_screen_test.c)

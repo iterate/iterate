@@ -287,14 +287,6 @@ enum {
    */
   DOWNLINK_SILENCE_MS = ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS,
   /*
-   * The press's own liveness question, and the only one on this device that is
-   * asked by an EVENT rather than by a clock. Ten seconds of nothing after a
-   * press was the worst failure left here; three is what the arithmetic below
-   * costs. See ITERATE_KIT_VOICE_PRESS_PROBE_MS for why the evidence is a PONG.
-   */
-  PRESS_PROBE_MS = ITERATE_KIT_VOICE_PRESS_PROBE_MS,
-  PRESS_PROBE_ATTEMPTS = ITERATE_KIT_VOICE_PRESS_PROBE_ATTEMPTS,
-  /*
    * Last resort. The transport can be READY, the socket open, and nothing
    * whatsoever moving: a half-open TCP connection looks perfectly healthy
    * from this end. If no probe has completed for this long, no amount of
@@ -609,33 +601,11 @@ EXT_RAM_BSS_ATTR static struct {
    * after it, meaning the answer was still in progress.
    */
   uint32_t speaker_underruns;
-  atomic_uint_fast64_t starve_at_ms;
   uint32_t speaker_bad_frames;
   /* Connections replaced because nothing was being delivered on them. */
   uint32_t downlink_recycles;
   /* How many of those in a row have not yet produced a batch. */
   uint32_t downlink_recycles_running;
-  /*
-   * THE PRESS PROBE: is this socket still connected to anything?
-   *
-   * Armed when a call is placed and disarmed by the PONG. `sent_ms` is zero
-   * when nothing is outstanding, which is every moment of an idle board's life
-   * — see ITERATE_KIT_VOICE_PRESS_PROBE_MS for why an idle probe would be the
-   * wrong thing entirely.
-   */
-  uint64_t press_probe_sent_ms;
-  uint32_t press_probe_pongs_before;
-  /* The PONG count as of this pass, sampled by the liveness block so the
-   * launch below can take a baseline without a second metrics snapshot. */
-  uint32_t pongs_seen;
-  uint8_t press_probe_attempt;
-  /* Probes sent, probes that no PONG answered, and the last measured round
-   * trip. The last one is the instrument that turns the 1500 ms budget into a
-   * number somebody can check. */
-  uint32_t press_probes;
-  uint32_t press_probe_misses;
-  uint32_t press_probe_ms;
-  uint32_t press_probe_restarts;
   /* Diagnostics for a frozen device: see the pulse in the app loop. */
   uint32_t loop_count;
   uint64_t last_pulse_ms;
@@ -826,16 +796,12 @@ static void admit_speaker_frame(const uint8_t *pcm, size_t pcm_length) {
   runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_SPEAKING;
   /*
    * Audio arriving within a second of a starve means the answer was still
-   * going: the pipe genuinely ran dry mid-speech, and that is audible.
+   * going: the pipe genuinely ran dry mid-speech, and that is audible. The
+   * rule is the clock's, shared with the host CLI.
    */
-  {
-    const uint64_t starved_at = atomic_exchange_explicit(
-        &runtime.starve_at_ms, 0U, memory_order_acq_rel);
-    const uint64_t now = now_ms(NULL);
-    if (starved_at != 0U &&
-        iterate_kit_voice_elapsed_ms(now, starved_at) < 1000U) {
-      ++runtime.speaker_underruns;
-    }
+  if (iterate_kit_voice_playback_clock_audio_arrived(
+          &runtime.playout.clock, now_ms(NULL))) {
+    ++runtime.speaker_underruns;
   }
   frame.generation = atomic_load_explicit(
       &runtime.speaker_generation, memory_order_acquire);
@@ -1487,11 +1453,9 @@ void iterate_kit_voice_loop_playback_step(void) {
     /*
      * A hole mid-answer. The step counted it (`spkSoftDryTicks`: how often
      * the source could not keep up; it no longer costs the listener anything)
-     * and this stamp lets the admit path promote it to an underrun if audio
-     * resumes within a second — a hole in an answer that was still going.
+     * and the clock stamped it, so the admit path promotes it to an underrun
+     * if audio resumes within a second — a hole in an answer still going.
      */
-    atomic_store_explicit(
-        &runtime.starve_at_ms, now_ms(NULL), memory_order_release);
     return;
   case ITERATE_KIT_VOICE_PLAYOUT_SETTLED:
     /*
@@ -2181,16 +2145,9 @@ static size_t health_json(char *out, size_t capacity) {
      * The old classifier's `spkIgnoredCall`/`spkIgnoredStale`/`spkIgnoredDup`
      * are gone with the classifier: the sender paces the answer and no frame
      * carries a call or an answer any more, so there is nothing for the
-     * device to refuse. Numbering, though, RETURNED with
-     * `deviceSpeakerFrameSeq` — the flush that names a sequence number needs
-     * one — and the stream layer counts its holes. Published here because a
-     * lost-chunk question asked over RPC had no witness: a whole evening's
-     * barge diagnosis (2026-08-20) stalled on exactly that.
+     * device to refuse.
      */
     {"spkDecodeFailures", runtime.voicelab.spk_decode_failures},
-    {"spkSeqGaps", runtime.voicelab.spk_seq_gaps},
-    {"spkSeqMissing", runtime.voicelab.spk_seq_missing},
-    {"spkSeqRegressions", runtime.voicelab.spk_seq_regressions},
     {"spkDiscarded",
      atomic_load_explicit(
          &runtime.speaker_discarded_frames, memory_order_relaxed)},
@@ -2241,21 +2198,6 @@ static size_t health_json(char *out, size_t capacity) {
          : (uint32_t)iterate_kit_voice_elapsed_ms(
                now, runtime.voicelab.last_bridge_ms)},
     {"downlinkRecycles", runtime.downlink_recycles},
-    /*
-     * THE PRESS PROBE, AS AN INSTRUMENT RATHER THAN A BELIEF.
-     *
-     * `pressProbeMs` is the last PONG round trip measured after a press, and it
-     * is the only evidence anybody has for what that costs on this hardware —
-     * the 1500 ms budget it is checked against was a guess. `pressProbeMisses`
-     * counts probes no PONG answered (a lossy access point moves this without
-     * anything being wrong); `pressProbeRestarts` counts sockets replaced
-     * because two in a row went unanswered, and that one should stay at zero
-     * unless a socket really did die.
-     */
-    {"pressProbes", runtime.press_probes},
-    {"pressProbeMs", runtime.press_probe_ms},
-    {"pressProbeMisses", runtime.press_probe_misses},
-    {"pressProbeRestarts", runtime.press_probe_restarts},
     {"batchAgeMs",
      runtime.voicelab.last_batch_ms == 0U
          ? 0U
@@ -2774,30 +2716,6 @@ bool iterate_kit_voice_loop_init(
 }
 
 /*
- * ASK THE HOP, BECAUSE A PRESS JUST MADE THE ANSWER WORTH KNOWING.
- *
- * Queues one WebSocket PING and records the PONG count to beat. Called when a
- * call is placed and, once, again if the first went unanswered — see
- * ITERATE_KIT_VOICE_PRESS_PROBE_MS for why the answer is a PONG rather than a
- * delivered batch, and why a single missed one is not evidence.
- *
- * Takes the pong baseline from a metrics snapshot the caller already has, so
- * arming costs one control frame and no extra sampling.
- */
-static void arm_press_probe(uint64_t now, uint32_t pongs_now) {
-  runtime.press_probe_sent_ms = now;
-  runtime.press_probe_pongs_before = pongs_now;
-  ++runtime.press_probe_attempt;
-  ++runtime.press_probes;
-  iterate_kit_esp_idf_itx_transport_request_probe(&transport);
-}
-
-static void disarm_press_probe(void) {
-  runtime.press_probe_sent_ms = 0U;
-  runtime.press_probe_attempt = 0U;
-}
-
-/*
  * ONE PASS OF THE DEVICE.
  *
  * `now_ms` is a parameter rather than a call, because a step that is handed
@@ -3063,69 +2981,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       if (liveness.websocket_pongs_received != last_pong_count) {
         last_pong_count = liveness.websocket_pongs_received;
         last_liveness_ms = now;
-      }
-      runtime.pongs_seen = liveness.websocket_pongs_received;
-      /*
-       * THE PRESS'S OWN QUESTION, ANSWERED ON THE PRESS'S OWN CLOCK.
-       *
-       * The watchdog above waits seven minutes, deliberately, because on an
-       * idle board a dead hop costs nothing. This one waits three seconds,
-       * because a press just went out and a press is the one moment a dead hop
-       * is the difference between a device and a brick. It exists at all
-       * because the append the press sends CANNOT report its own failure: a
-       * one-way write into a half-open socket is accepted by TCP, reports
-       * success, and is noticed by nothing until DOWNLINK_SILENCE_MS ten
-       * seconds later.
-       *
-       * It shares this block only because the PONG count is already sampled
-       * here; the two deadlines are unrelated and must not be merged.
-       *
-       * Disarmed the moment the transport stops being READY — the socket is
-       * already being replaced, and a PONG from a connection that no longer
-       * exists is never coming.
-       */
-      if (runtime.press_probe_sent_ms != 0U) {
-        if (transport.state != ITERATE_KIT_ESP_IDF_ITX_READY) {
-          disarm_press_probe();
-        } else if (liveness.websocket_pongs_received !=
-                   runtime.press_probe_pongs_before) {
-          /*
-           * ALIVE — and now measured. `pressProbeMs` is the only evidence
-           * anybody has for what a PONG round trip actually costs on these
-           * boards, which is what the 1500 ms budget was guessed against.
-           */
-          runtime.press_probe_ms = (uint32_t)iterate_kit_voice_elapsed_ms(
-              now, runtime.press_probe_sent_ms);
-          disarm_press_probe();
-        } else if (iterate_kit_voice_elapsed_ms(
-                       now, runtime.press_probe_sent_ms) > PRESS_PROBE_MS) {
-          ++runtime.press_probe_misses;
-          if (runtime.press_probe_attempt < PRESS_PROBE_ATTEMPTS) {
-            /* One missed PONG is a dropped packet. Ask again before acting. */
-            ESP_LOGW(
-                tag,
-                "no pong %ums after a press — asking once more",
-                (unsigned int)PRESS_PROBE_MS);
-            arm_press_probe(now, liveness.websocket_pongs_received);
-          } else {
-            /*
-             * TWO IN A ROW IS A DEAD SOCKET, and the only remedy for a dead
-             * socket is a new one: recycling the stream connection would send
-             * its round trip down the same silent pipe. Forget the call first
-             * — it was requested into nothing, and believing in it would stop
-             * the intent from placing a real one on the replacement session.
-             */
-            ESP_LOGE(
-                tag,
-                "hop did not answer %u probes after a press — replacing the "
-                "socket",
-                (unsigned int)PRESS_PROBE_ATTEMPTS);
-            ++runtime.press_probe_restarts;
-            disarm_press_probe();
-            iterate_kit_voicelab_forget_call(&runtime.voicelab);
-            iterate_kit_esp_idf_itx_transport_request_restart(&transport);
-          }
-        }
       }
       /*
        * A TRANSPORT THAT IS NEVER READY MUST NOT DISABLE THE RESTART.
@@ -3538,17 +3393,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
                     &runtime.voicelab, runtime.facts->greeting);
             if (runtime.last_start_status == CAPNWEB_OK) {
               runtime.view.status = ("starting call");
-              /*
-               * AND ASK THE HOP, because the request above cannot report its
-               * own delivery. It is a Cap'n Web call whose reply arrives only
-               * if the far side is still there, and into a half-open socket it
-               * simply never returns — accepted by TCP, READY transport, ten
-               * seconds of silence before anything notices. The probe is armed
-               * HERE and nowhere else: a press is the only event on this device
-               * that makes a stale socket expensive, and an idle board must
-               * stay silent or the Durable Object behind it never hibernates.
-               */
-              arm_press_probe(now, runtime.pongs_seen);
             } else {
               ++runtime.start_call_failures;
             }
@@ -3744,17 +3588,16 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
            * moment of outbox backpressure delays the speech a beat instead of
            * dropping it — the mic queue is the right place to absorb this.
            */
-          const uint8_t *frame_pointers[MIC_FRAMES_PER_APPEND];
           size_t index;
           mic_flushed_at = now;
           for (index = 0U; index < take; ++index) {
             (void)xQueueReceive(runtime.mic_queue, &frame_storage[index], 0);
-            frame_pointers[index] =
-                (const uint8_t *)frame_storage[index].samples;
           }
+          /* `struct mic_frame` is exactly its samples, so the popped run is
+           * one contiguous stretch of PCM. */
           (void)iterate_kit_voicelab_append_frames(
               &runtime.voicelab,
-              frame_pointers,
+              (const uint8_t *)frame_storage[0].samples,
               take,
               sizeof(frame_storage[0].samples),
               runtime.frame_sequence,

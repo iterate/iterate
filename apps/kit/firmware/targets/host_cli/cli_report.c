@@ -244,8 +244,7 @@ static enum cli_report_status cli_report_write_body(
       "\"microphonePlatformError\":%" PRId32 ","
       "\"colleagueQuestionsAsked\":%u,"
       "\"colleagueQuestionsAnswered\":%u,"
-      "\"spkFramesReceived\":%u,\"spkSeqGaps\":%u,"
-      "\"spkSeqMissing\":%u,\"spkSeqRegressions\":%u,"
+      "\"spkFramesReceived\":%u,"
       "\"spkDecodeFailures\":%u}\n}\n",
       report->count, cli_report_failure_count(report),
       summary->session_restarts, summary->transport_restarts,
@@ -255,8 +254,7 @@ static enum cli_report_status cli_report_write_body(
       summary->room_starved_buffers, summary->speaker_platform_error,
       summary->microphone_platform_error,
       summary->back_office_sent, summary->back_office_heard,
-      summary->spk_frames_received, summary->spk_seq_gaps,
-      summary->spk_seq_missing, summary->spk_seq_regressions,
+      summary->spk_frames_received,
       summary->spk_decode_failures);
   return CLI_REPORT_OK;
 }

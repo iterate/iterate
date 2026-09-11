@@ -64,18 +64,8 @@ const char *iterate_kit_fake_platform_sent(size_t index);
 /** The first sent message containing `needle`, or NULL. */
 const char *iterate_kit_fake_platform_find_sent(const char *needle);
 
-/** Probes and restarts the loop asked the transport for. */
-size_t iterate_kit_fake_platform_probes_requested(void);
+/** Restarts the loop asked the transport for. */
 size_t iterate_kit_fake_platform_restarts_requested(void);
-
-/**
- * Answer the next PONG, or stop answering them.
- *
- * The press probe's whole question is whether `websocket_pongs_received` moves.
- * A fake hop that always answered could not fail, and one that never answered
- * could not succeed, so the test says which hop it is testing.
- */
-void iterate_kit_fake_platform_set_hop_answers(bool answers);
 
 #ifdef __cplusplus
 }
