@@ -74,6 +74,7 @@ test("first Claude consent creates the organization and project in the SPA befor
   const resource = process.env.MCP_BASE_URL || `${origin}/mcp`;
   const email = `consent-${stamp()}@example.com`;
   const project = `consent-${stamp()}`;
+  const otherProject = `unselected-${stamp()}`;
   let receiveCallback!: (url: URL) => void;
   const callback = new Promise<URL>((resolve) => {
     receiveCallback = resolve;
@@ -132,11 +133,57 @@ test("first Claude consent creates the organization and project in the SPA befor
     });
     await choice.waitFor();
     expect(await choice.isChecked()).toBe(true);
-    expect(
-      await page
-        .getByRole("checkbox", { name: "All my current and future projects", exact: true })
-        .isChecked(),
-    ).toBe(false);
+    const future = page.getByRole("checkbox", {
+      name: "All my current and future projects",
+      exact: true,
+    });
+    expect(await future.isChecked()).toBe(false);
+    await choice.uncheck();
+    expect(await page.getByRole("button", { name: "Approve", exact: true }).isDisabled()).toBe(
+      true,
+    );
+    // Refreshing the directory during onboarding must preserve the user's choices.
+    await page.locator("summary").filter({ hasText: "Create a project or organization" }).click();
+    await page
+      .getByRole("textbox", { name: "Organization name", exact: true })
+      .fill("Second studio");
+    await page.getByRole("button", { name: "Create organization", exact: true }).click();
+    await page.getByRole("textbox", { name: "Project name", exact: true }).fill(otherProject);
+    await page.getByRole("button", { name: "Create project", exact: true }).click();
+    const otherChoice = page.getByRole("checkbox", {
+      name: `${otherProject} in Second studio`,
+      exact: true,
+    });
+    await otherChoice.waitFor();
+    expect(await otherChoice.isChecked()).toBe(true);
+    expect(await choice.isChecked()).toBe(false);
+    await page.getByRole("region", { name: "First consent studio", exact: true }).waitFor();
+    await page.getByRole("region", { name: "Second studio", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Clear", exact: true }).click();
+    await page
+      .getByRole("status")
+      .filter({ hasText: /^0 selected$/ })
+      .waitFor();
+    expect(await page.getByRole("button", { name: "Approve", exact: true }).isDisabled()).toBe(
+      true,
+    );
+    await page.getByRole("button", { name: "Select all", exact: true }).click();
+    await page
+      .getByRole("status")
+      .filter({ hasText: /^2 selected$/ })
+      .waitFor();
+    await otherChoice.uncheck();
+    await future.check();
+    expect(await choice.isChecked()).toBe(true);
+    expect(await otherChoice.isChecked()).toBe(true);
+    expect(await otherChoice.isDisabled()).toBe(true);
+    await future.uncheck();
+    expect(await choice.isChecked()).toBe(true);
+    expect(await otherChoice.isChecked()).toBe(false);
+    await page
+      .getByRole("status")
+      .filter({ hasText: /^1 selected$/ })
+      .waitFor();
     expect(new URL(page.url()).search).toBe(flow.url.search);
     expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(1);
     await page.screenshot({ path: test.info().outputPath("first-consent.png"), fullPage: true });
@@ -166,8 +213,9 @@ test("first Claude consent creates the organization and project in the SPA befor
     const projects = await mcp(resource, tokens.access_token, "list_projects");
     expect(projects.result.isError).toBe(false);
     expect(projects.result.content[0].text).toContain(project);
+    expect(projects.result.content[0].text).not.toContain(otherProject);
     const denied = await mcp(resource, tokens.access_token, "itx.invoke", {
-      project: "outside-consent",
+      project: otherProject,
       expression: "itx.kv.get('x')",
     });
     expect(denied.result.isError).toBe(true);

@@ -15,7 +15,7 @@ import {
   type GrantProps,
 } from "./oauth.ts";
 
-type ConsentView =
+export type ConsentView =
   | {
       kind: "consent";
       query: string;
