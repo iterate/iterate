@@ -38,17 +38,14 @@ export function chatVoiceStreamPath(chatPath: string): string {
  * button and sends audio only while it is held; GPT-Live takes the turns
  * itself either way, so the certificate carries no posture. The same
  * hang_up tool talk.ts arms — called by the backend model when the person
- * says goodbye — is one of the three ways a call ends (tap, hang_up, 60s
+ * says goodbye — is one of the ways a call ends (tap, hang_up, 60s
  * idle).
  */
 export const MOBILE_VOICE_SETUP = {
   instructions:
-    "You are Iterate, on a phone call with a colleague who knows you well. Casual, " +
+    "You are Iterate, on a phone call with someone who knows you well. Casual, " +
     "direct, brief — never customer-service polish. Greet in a couple of words ('hey', " +
     "'hi again'), answer in plain short sentences, acknowledge in two or three words.",
-  /** The phone rings, so the other end picks up (facet 17.0.0): the model
-   * greets first — "hi again" on a stream with history, via the recap. */
-  greeting: true,
   tools: [
     {
       name: "hang_up",
@@ -67,10 +64,9 @@ export function voiceSetupConfig(): Record<string, unknown> {
 }
 
 /** Bump to force one re-setup on every device after changing the setup
- * semantics in a way the config hash alone would not capture. v8: the
- * certificate no longer names a colleague (GPT-Live's facet delegates to
- * its own backend); an installed one with the stale key is re-asserted. */
-const SETUP_MARKER_VERSION = 8;
+ * semantics in a way the config hash alone would not capture. v9 removes
+ * the frontend greeting request: GPT-Live starts by listening. */
+const SETUP_MARKER_VERSION = 9;
 
 /** FNV-1a over the exact payload we would send — pure, no crypto import, and
  * two devices/app-versions agree iff they would send identical setups. */

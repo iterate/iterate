@@ -7,7 +7,7 @@
 // spoke, and nothing came out", which is the only test that matters.
 //
 // One attempt is: restart the device, wait for it to come back, press call,
-// wait for the call to be LIVE, hold the button to unmute, release, and then require
+// wait for the call to be LIVE, speak into its open microphone, and then require
 // that AUDIO WAS PLAYED — bytes written to the speaker, not a transcript
 // event. A transcript proves the model answered; only the speaker counter
 // proves the person heard it.
@@ -26,7 +26,7 @@ import {
 export interface ReliabilityOptions extends VoicelabConnectOptions {
   /** How many full journeys to run. */
   attempts?: number;
-  /** Seconds to hold the talk button. */
+  /** Seconds to hold the local microphone gate open before judging the answer. */
   seconds?: number;
   /** Capability the device mounts itself under (itx.kit.<name>). */
   name?: string;
@@ -115,29 +115,51 @@ export async function reliability(options: ReliabilityOptions) {
   let callLiveAt = 0;
   let answeredAt = 0;
   let transcript = "";
+  let conversationId: string | null = null;
   const openWatch = (generation: number) =>
     stream.openConnection({
       connectionKey: `reliability-${Date.now()}-g${generation}`,
       eventTypes: [
-        "events.iterate.com/voice-agent/grok-event",
         "events.iterate.com/voice-agent/spk-frame",
+        "events.iterate.com/voice-agent/call-started",
         "events.iterate.com/voice-agent/conversation-accepted",
+        "events.iterate.com/voice-agent/utterance-transcript",
+        "events.iterate.com/voice-agent/answer-transcript",
+        "events.iterate.com/voice-agent/session-configured",
+        "events.iterate.com/voice-agent/provider-error",
+        "events.iterate.com/voice-agent/provider-disconnected",
+        "events.iterate.com/voice-agent/conversation-ended",
       ],
       processEventBatch: (batch: { events: { type: string; payload?: unknown }[] }) => {
         for (const event of batch.events) {
+          const payload = (event.payload ?? {}) as {
+            conversationId?: string;
+            text?: string;
+            lastFrameOfAnswer?: boolean;
+          };
+          if (
+            event.type === "events.iterate.com/voice-agent/call-started" &&
+            typeof payload.conversationId === "string"
+          ) {
+            conversationId = payload.conversationId;
+            continue;
+          }
+          if (
+            conversationId !== null &&
+            typeof payload.conversationId === "string" &&
+            payload.conversationId !== conversationId
+          ) {
+            continue;
+          }
           if (event.type === "events.iterate.com/voice-agent/conversation-accepted") {
             callLiveAt = Date.now();
             continue;
           }
-          /* Stream payloads arrive as untyped JSON; the assertion names the
-           * three optional fields this instrument reads, each guarded. */
-          const payload = (event.payload ?? {}) as {
-            type?: string;
-            delta?: string;
-            lastFrameOfAnswer?: boolean;
-          };
-          if (payload.type === "session.output_transcript.delta") {
-            transcript += payload.delta ?? "";
+          if (
+            event.type === "events.iterate.com/voice-agent/utterance-transcript" ||
+            event.type === "events.iterate.com/voice-agent/answer-transcript"
+          ) {
+            transcript += payload.text ?? "";
           }
           /* GPT-Live has no response lifecycle; the facet's end-of-answer
            * marker in the speaker frames is the "answered" edge. */
@@ -152,7 +174,7 @@ export async function reliability(options: ReliabilityOptions) {
     });
 
   interface DeviceCapability {
-    conversation: { start(): Promise<boolean>; hangUp(): Promise<boolean> };
+    conversation: { start(): Promise<boolean>; end(): Promise<boolean> };
     pushToTalk: { start(): Promise<boolean>; stop(): Promise<boolean> };
     restart(): Promise<boolean>;
     health(): Promise<Record<string, unknown>>;
@@ -175,6 +197,7 @@ export async function reliability(options: ReliabilityOptions) {
     transcript = "";
     callLiveAt = 0;
     answeredAt = 0;
+    conversationId = null;
 
     const fail = (step: string, why: string) => {
       failedAt = step;
@@ -251,7 +274,7 @@ export async function reliability(options: ReliabilityOptions) {
       {
         const at = Date.now();
         callLiveAt = 0;
-        await withTimeout("hangUp", () => device().conversation.hangUp()).catch(() => {});
+        await withTimeout("end", () => device().conversation.end()).catch(() => {});
         await sleep(1500);
         step("pressing call");
         await withTimeout("press call", () => device().conversation.start());
@@ -264,19 +287,18 @@ export async function reliability(options: ReliabilityOptions) {
         console.error(`  · call live in ${(ms.callLive / 1000).toFixed(1)}s`);
       }
 
-      // 3. Hold the button, speak into it (silence, but the mic path is real),
-      //    release. This is the path text turns never touch.
+      // 3. Open the local microphone gate. This is hardware capture control,
+      //    not a provider turn boundary.
       const beforeSpeaking = (await withTimeout("health", () => device().health())) as Record<
         string,
         number
       >;
       {
         const at = Date.now();
-        step("holding talk");
-        await withTimeout("hold talk", () => device().pushToTalk.start());
+        step("capturing");
+        await withTimeout("open microphone", () => device().pushToTalk.start());
         await sleep(holdSeconds * 1000);
-        step("releasing talk");
-        await withTimeout("release talk", () => device().pushToTalk.stop());
+        await withTimeout("close microphone", () => device().pushToTalk.stop());
         ms.turn = Date.now() - at;
       }
 

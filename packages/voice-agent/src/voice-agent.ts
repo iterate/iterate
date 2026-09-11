@@ -220,11 +220,9 @@ export const SILENCE_FILL_MS = 100;
 const MAX_SILENCE_FILL_CATCH_UP_MS = 1_000;
 /**
  * How often a background loop waiting for work re-checks that its dial is
- * still the live one, and how long the mirror flush lingers for the next
- * event before releasing its registration. See #startSpeakerSender.
+ * still the live one. See #startSpeakerSender.
  */
 const BACKGROUND_LOOP_TICK_MS = 1_000;
-const MIRROR_FLUSH_LINGER_MS = 30_000;
 const SILENCE_FILL_FRAME_B64 = bytesToBase64(new Uint8Array(SILENCE_FILL_MS * 32));
 
 /**
@@ -266,7 +264,7 @@ const IDLE_TICK_MS = 5_000;
  * ready is SILENT FOREVER: mic frames keep the idle stamp fresh, so the
  * sixty-second backstop can never fire. Measured handshakes run ~0.5-1 s.
  */
-const HANDSHAKE_DEADLINE_MS = 15_000;
+const OPENING_DEADLINE_MS = 15_000;
 
 /**
  * A backend function that hangs must still be answered: the backend model
@@ -308,8 +306,6 @@ const GOODBYE_PLAYOUT_ALLOWANCE_MS = 500;
  * the transcript so far and the next device frame opens it, the same way an
  * eviction is recovered; only a provider that keeps dropping ends the call.
  */
-const PROVIDER_CLOSES_BEFORE_GIVING_UP = 3;
-const PROVIDER_CLOSES_WINDOW_MS = 120_000;
 
 /**
  * How much conversation the fold remembers, and so how much a fresh provider
@@ -459,15 +455,15 @@ const EXEC_TYPESCRIPT_FUNCTION = {
 /**
  * How much decoded microphone audio may be held while the provider completes
  * its handshake. The wire accepts any even PCM byte length, so a frame count
- * cannot bound memory or stale speech. Five seconds matches the opening
- * capture budget on the clients and keeps a measured two-second handshake
- * margin without silently truncating a request.
+ * cannot bound memory or stale speech. Twenty-one seconds covers the
+ * clients' twenty-second opening capture budget without silently truncating
+ * a request.
  *
  * Overflow ends this opening once with a durable reason. Keeping the prefix
  * while silently discarding its ending would tell the model a different
  * request, so the next activation is the only honest recovery.
  */
-const MAX_HELD_MIC_BYTES = 16_000 * 2 * 5;
+const MAX_HELD_MIC_BYTES = 16_000 * 2 * 21;
 
 /* ========================================================================== */
 /* AUDIO                                                                      */
@@ -565,11 +561,6 @@ const Activation = z.string().min(1).max(64);
  * Reduced state that depends on a buffer no restart can replay is a lie.
  */
 const VoiceState = z.object({
-  /** Dial this instead of api.openai.com. A test hook; carries no credential. */
-  providerBaseUrl: z.string().nullable().default(null),
-  /** Model and voice overrides; null takes the package's defaults. */
-  providerModel: z.string().nullable().default(null),
-  providerVoice: z.string().nullable().default(null),
   /** The voice's persona. Empty means the delegation policy alone. */
   instructions: z.string().default(""),
   /**
@@ -578,13 +569,6 @@ const VoiceState = z.object({
    * Certificate data because it is a fact about the CLIENT.
    */
   visemes: z.boolean().default(false),
-  /**
-   * Greet on pickup: when the handshake completes, the voice speaks FIRST.
-   * Made for push-to-talk clients whose ringing UX promises somebody on the
-   * other end; off by default because the boards' open-mic rooms did not ask
-   * to be greeted.
-   */
-  greeting: z.boolean().default(false),
   /** Backend overrides; an empty object is the package's defaults. */
   backend: VoiceBackend.default({}),
   /** Tools the backend may call — see {@link VoiceTool}. */
@@ -592,8 +576,7 @@ const VoiceState = z.object({
   /**
    * The rolling recap: the newest finished turns, in words, both sides.
    * Folded from the durable transcript events and seeded as history into
-   * every fresh provider session, so a re-dial resumes the conversation
-   * instead of greeting the listener as a stranger.
+   * every fresh provider session, so a re-dial resumes the conversation.
    */
   transcript: z
     .array(z.strictObject({ role: z.enum(["listener", "assistant"]), text: z.string() }))
@@ -622,10 +605,6 @@ export const VoiceAgentContract = defineProcessorContract({
    * the live subscription is named for it, and the device speaks these event
    * names already. */
   slug: "voice-agent",
-  /* 3.0.0 … 19.0.0: the second cut's history — the flush watermark, the
-   * provider abstraction, tools, the split certificate, turn_detection, the
-   * face, the colleague (per stream, statuses, notes as events), the durable
-   * transcript, greeting, colleaguePath. Read `git log` for the essays. */
   /* 20.0.0: GPT-Live, and only GPT-Live, delegating to one hosted backend.
    * `provider`, `clientTakesTurns`, `turnDetection`, `colleague` and
    * `colleaguePath` leave the certificate (there is one provider; it takes
@@ -650,7 +629,9 @@ export const VoiceAgentContract = defineProcessorContract({
   /* 22.0.0: each local call has an opaque activation identity. It fences
    * delayed input and cancellation exactly, including cancellation before a
    * server conversation has been accepted. */
-  version: "22.0.0",
+  /* 23.0.0: GPT-Live-1 at its one production endpoint and voice is fixed.
+   * The raw provider event mirror and pickup greeting are gone. */
+  version: "23.0.0",
   description:
     "Runs a GPT-Live voice call in the stream's own Durable Object, relaying audio both ways as it arrives.",
   stateSchema: VoiceState,
@@ -668,13 +649,9 @@ export const VoiceAgentContract = defineProcessorContract({
         "differs. Loose: a key from an older certificate (`clientTakesTurns`, `provider`, " +
         "`colleague`) is ignored rather than refused, so a project worker that re-appends " +
         "last month's shape keeps working.",
-      payloadSchema: z.looseObject({
-        providerBaseUrl: z.string().optional(),
-        providerModel: z.string().optional(),
-        providerVoice: z.string().optional(),
+      payloadSchema: z.strictObject({
         instructions: z.string().optional(),
         visemes: z.boolean().optional(),
-        greeting: z.boolean().optional(),
         backend: VoiceBackend.optional(),
         tools: z.array(VoiceTool).optional(),
       }),
@@ -694,8 +671,8 @@ export const VoiceAgentContract = defineProcessorContract({
     },
     "events.iterate.com/voice-agent/mic-frame": {
       description:
-        "One capture chunk, of any length, numbered by the device that captured it. The first " +
-        "one on a quiet stream opens a call.",
+        "One capture chunk. A client writes mic and terminal events from one ordered local sender; " +
+        "the first frame on a quiet stream opens its activation.",
       ...EPH,
       payloadSchema: z.looseObject({
         activation: Activation,
@@ -729,9 +706,7 @@ export const VoiceAgentContract = defineProcessorContract({
       payloadSchema: z.looseObject({ conversationId: z.string(), message: z.string() }),
     },
     "events.iterate.com/voice-agent/provider-disconnected": {
-      description:
-        "The provider's session or socket closed under a live call; the next device frame " +
-        "re-dials, seeded with the transcript so far.",
+      description: "The provider's session or socket closed under a live call.",
       payloadSchema: z.looseObject({ conversationId: z.string(), reason: z.string() }),
     },
 
@@ -762,7 +737,7 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/session-configured": {
       description:
         "The whole briefing one provider session was started with — instructions (bounded), " +
-        "the backend model, its tools, whether it was asked to greet — recorded so the " +
+        "the backend model, and its tools — recorded so the " +
         "stream shows how the voice was initialized instead of that being invisible " +
         "session state.",
       payloadSchema: z.looseObject({
@@ -772,7 +747,6 @@ export const VoiceAgentContract = defineProcessorContract({
         instructions: z.string(),
         backendModel: z.string(),
         tools: z.array(z.string()),
-        greeting: z.boolean(),
       }),
     },
 
@@ -800,18 +774,6 @@ export const VoiceAgentContract = defineProcessorContract({
         lastFrameOfAnswer: z.boolean().optional(),
         /** Facet clock, at the moment this frame was handed to the stream. */
         sentAtFacetMs: z.number(),
-      }),
-    },
-    "events.iterate.com/voice-agent/grok-event": {
-      description:
-        "The provider's own events for instruments — verbatim, except an audio delta's bytes " +
-        "become `deltaBytes`, and the facet's own client commands as `client.<type>`. The " +
-        "event keeps its historical name: every instrument reads it by this string.",
-      ...EPH,
-      payloadSchema: z.looseObject({
-        conversationId: z.string(),
-        /** Facet clock, at the moment the socket message was parsed. */
-        receivedAtFacetMs: z.number(),
       }),
     },
   },
@@ -842,7 +804,6 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/backend-reply",
     "events.iterate.com/voice-agent/session-configured",
     "events.iterate.com/voice-agent/spk-frame",
-    "events.iterate.com/voice-agent/grok-event",
   ],
 });
 export type VoiceAgentContract = typeof VoiceAgentContract;
@@ -1030,7 +991,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     buildCacheKey: string;
     /** The only way this processor waits, injected so tests use a fake clock. */
     sleep(ms: number): Promise<void>;
-    dialProvider(baseUrl: string | null): Promise<WebSocket | null>;
+    dialProvider(): Promise<WebSocket | null>;
     /**
      * Open a fresh project itx session, use it, dispose it. Stubs from
      * `env.ITX.get()` must not outlive the invocation that dialed them, so
@@ -1060,7 +1021,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * start filling before one exists: a revived incarnation holds frames from
    * deliveries that arrive before the caught-up pass re-dials.
    */
-  #micQueue: { activation: string; pcm: string }[] = [];
+  #micQueue: string[] = [];
   /** Decoded PCM bytes in #micQueue; the provider accepts variable payloads. */
   #micQueueBytes = 0;
   /** The opening already failed for a full held-audio budget. */
@@ -1078,8 +1039,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * deliveries and has no way to read the fold.
    */
   #lastDeviceInputAtStreamMsMirror = 0;
-  /** When the provider closed under a live call, newest last; see #providerClosed. */
-  #providerClosesAtFacetMs: number[] = [];
   /** The activation whose terminal event is still travelling through the log. */
   #endingActivation: string | null = null;
   /**
@@ -1088,13 +1047,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * whatever accumulated while the previous append RPC was in flight
    * coalesces naturally — GPT-Live emits ten audio deltas a second forever.
    */
-  #mirrorQueue: {
-    payload: Record<string, unknown> & { conversationId: string; receivedAtFacetMs: number };
-    append: ProcessEventArgs<VoiceAgentContract>["append"];
-  }[] = [];
-  #mirrorFlushing = false;
-  #mirrorWake: (() => void) | null = null;
-
   /* ------------------------------------------------------------------ fold */
 
   reduce({ state, event }: ReduceArgs<VoiceAgentContract>) {
@@ -1111,12 +1063,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * leave last week's tools armed. */
         return {
           ...state,
-          providerBaseUrl: event.payload.providerBaseUrl ?? null,
-          providerModel: event.payload.providerModel ?? null,
-          providerVoice: event.payload.providerVoice ?? null,
           instructions: event.payload.instructions ?? "",
           visemes: event.payload.visemes ?? false,
-          greeting: event.payload.greeting ?? false,
           backend: event.payload.backend ?? {},
           tools: event.payload.tools ?? [],
         };
@@ -1280,7 +1228,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           if (openingDial === null) return;
           if (this.#heldMicOverflowForActivation === activation) return;
           if (this.#micQueueBytes + micBytes <= MAX_HELD_MIC_BYTES) {
-            this.#micQueue.push({ activation, pcm: micB64 });
+            this.#micQueue.push(micB64);
             this.#micQueueBytes += micBytes;
             return;
           }
@@ -1346,6 +1294,22 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (state.visemes) dial.face = createFace();
     this.#dial = dial;
     const dialStartedAtFacetMs = this.deps.nowAtFacetMs();
+    this.runInBackground(async () => {
+      await this.deps.sleep(OPENING_DEADLINE_MS);
+      if (this.#dial !== dial || dial.ready) return;
+      this.#dial = null;
+      try {
+        dial.socket?.close();
+      } catch {
+        /* Already gone. */
+      }
+      await this.#end(
+        activation,
+        "handshake-timeout",
+        `the provider did not become ready within ${OPENING_DEADLINE_MS}ms`,
+        append,
+      );
+    });
     runInBackground(async () => {
       /* A dial can REJECT (DNS, TLS), not just refuse — and an uncaught
        * throw here was measured as sixty seconds of dead air. A throw IS a
@@ -1353,12 +1317,13 @@ export class VoiceAgentProcessor extends StreamProcessor<
       let socket: WebSocket | null = null;
       let failure = "the provider refused the connection";
       try {
-        socket = await this.deps.dialProvider(state.providerBaseUrl);
+        socket = await this.deps.dialProvider();
       } catch (error) {
         failure = `the provider dial failed: ${String(error).slice(0, 200)}`;
       }
       if (socket === null) {
-        if (this.#dial === dial) this.#dial = null;
+        if (this.#dial !== dial) return;
+        this.#dial = null;
         await this.#end(activation, "dial-failed", failure, append);
         return;
       }
@@ -1375,36 +1340,12 @@ export class VoiceAgentProcessor extends StreamProcessor<
       dial.socket = socket;
 
       /*
-       * THE HANDSHAKE GETS A DEADLINE, because the idle backstop cannot see
-       * this wedge: an open-mic board's frames keep the idle stamp fresh
-       * while the un-ready dial holds them. Nulling #dial first fences the
-       * close listener out; the obituary says what actually happened.
-       */
-      this.runInBackground(async () => {
-        await this.deps.sleep(HANDSHAKE_DEADLINE_MS);
-        if (this.#dial !== dial || dial.ready) return;
-        this.#dial = null;
-        try {
-          socket.close();
-        } catch {
-          /* Already gone. */
-        }
-        await this.#end(
-          activation,
-          "handshake-timeout",
-          `the provider handshake did not complete within ${HANDSHAKE_DEADLINE_MS}ms`,
-          append,
-        );
-      });
-
-      /*
        * THE THIRD SWITCH, AND WHY IT IS NOT A STREAM EVENT. Everything else
        * in this file reaches `processEvent` by being appended. The provider's
        * messages do not, and the reason is measured rather than stylistic:
        * ephemeral delivery coalesces, delivering in clumps seconds late.
        * Routing an audio delta through it would put a full stream round trip
-       * in front of every word. The provider's timeline is still appended
-       * for instruments — just not waited for.
+       * in front of every word.
        */
       socket.addEventListener("message", (message: MessageEvent) => {
         /*
@@ -1423,7 +1364,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
         }
         const type = String(live.type ?? "");
         const receivedAtFacetMs = this.deps.nowAtFacetMs();
-        this.#forwardProviderEvent(dial, live, type, receivedAtFacetMs, append);
         this.#onLiveEvent(
           dial,
           live,
@@ -1448,9 +1388,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           conversationId,
           activation,
           `the provider's socket closed (${String(event.code)}${event.reason ? ` ${event.reason}` : ""})`,
-          state,
           append,
-          runInBackground,
         );
       });
 
@@ -1587,7 +1525,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
           instructions: instructions.slice(0, 8_000),
           backendModel,
           tools: backendTools.map((tool) => tool.name),
-          greeting: state.greeting,
         },
       }),
     );
@@ -1596,12 +1533,12 @@ export class VoiceAgentProcessor extends StreamProcessor<
         type: "session.start",
         event_id: `start_${dial.dialId}`,
         session: {
-          model: state.providerModel ?? LIVE.model,
+          model: LIVE.model,
           instructions,
           ...(input.length > 0 && { input }),
           audio: {
             format: { type: "audio/pcm", rate: LIVE.rate },
-            output: { voice: state.providerVoice ?? LIVE.voice },
+            output: { voice: LIVE.voice },
           },
           delegation,
         },
@@ -1626,9 +1563,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         /* Usable. Everything the handshake made us hold goes now. */
         dial.ready = true;
         const heldMicFrames = this.#micQueue.length;
-        for (const held of this.#micQueue) {
-          if (held.activation === dial.activation) this.#sendMicAudio(dial.socket!, held.pcm);
-        }
+        for (const held of this.#micQueue) this.#sendMicAudio(dial.socket!, held);
         this.#micQueue = [];
         this.#micQueueBytes = 0;
         dial.micAudioCoveredUntilFacetMs = receivedAtFacetMs;
@@ -1647,26 +1582,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
             },
           }),
         );
-        /*
-         * THE PICKUP GREETING. One instructions append — the provider's own
-         * recipe. The held capture went out just above, so a caller who was
-         * already mid-sentence is heard first and the model decides for
-         * itself whether greeting over them makes sense.
-         */
-        if (state.greeting) {
-          this.#sendControl(
-            dial,
-            {
-              type: "session.instructions.append",
-              event_id: `greeting_${dial.dialId}`,
-              delegation_id: null,
-              content:
-                "The call just connected and the person is listening. If they have not started " +
-                "talking already, greet them now — say hi first, in a few words, then wait.",
-            },
-            append,
-          );
-        }
         return;
       }
 
@@ -1781,9 +1696,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           conversationId,
           dial.activation,
           `the provider closed the session (${String(live.reason ?? "unknown")})`,
-          state,
           append,
-          runInBackground,
         );
         return;
       }
@@ -2046,87 +1959,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
     );
   }
 
-  /* ---------------------------------------------------------- the mirror */
-
-  /**
-   * The provider's timeline, for instruments — WITHOUT the audio in it. The
-   * delta rides as its LENGTH: the shape of the answer stays visible and the
-   * bytes go once, on `spk-frame`. GPT-Live emits an audio delta every 100 ms
-   * for the life of the call, so the mirror would otherwise carry the whole
-   * output stream twice.
-   */
-  #forwardProviderEvent(
-    dial: Dial,
-    live: Record<string, unknown>,
-    type: string,
-    receivedAtFacetMs: number,
-    append: ProcessEventArgs<VoiceAgentContract>["append"],
-  ): void {
-    if (type === "session.output_audio.delta") {
-      const { delta, ...rest } = live;
-      this.#appendMirror(
-        {
-          ...rest,
-          deltaBytes: base64ByteLength(typeof delta === "string" ? delta : ""),
-          conversationId: dial.conversationId,
-          receivedAtFacetMs,
-        },
-        append,
-      );
-    } else {
-      this.#appendMirror(
-        { ...live, conversationId: dial.conversationId, receivedAtFacetMs },
-        append,
-      );
-    }
-  }
-
-  /** Put one payload in the mirror — see `#mirrorQueue`. */
-  #appendMirror(
-    payload: Record<string, unknown> & { conversationId: string; receivedAtFacetMs: number },
-    append: ProcessEventArgs<VoiceAgentContract>["append"],
-  ): void {
-    this.#mirrorQueue.push({ payload, append });
-    if (this.#mirrorFlushing) {
-      this.#mirrorWake?.();
-      return;
-    }
-    this.#mirrorFlushing = true;
-    this.runInBackground(async () => {
-      try {
-        for (;;) {
-          while (this.#mirrorQueue.length > 0) {
-            const batch = this.#mirrorQueue;
-            this.#mirrorQueue = [];
-            await batch[0]!.append(
-              ...batch.map(({ payload }) => ({
-                type: "events.iterate.com/voice-agent/grok-event" as const,
-                payload,
-              })),
-            );
-          }
-          /* Same as the speaker sender: the mirror sees an event per delta,
-           * and a flush that let go after each was a registration per delta.
-           * It lingers a while for the next one, then lets go. */
-          const idleFromMs = this.deps.nowAtFacetMs();
-          await this.#waitForWork((wake) => {
-            this.#mirrorWake = wake;
-          }, MIRROR_FLUSH_LINGER_MS);
-          this.#mirrorWake = null;
-          if (
-            this.#mirrorQueue.length === 0 &&
-            this.deps.nowAtFacetMs() - idleFromMs >= MIRROR_FLUSH_LINGER_MS
-          ) {
-            return;
-          }
-        }
-      } finally {
-        this.#mirrorFlushing = false;
-        this.#mirrorWake = null;
-      }
-    });
-  }
-
   #startSilenceFill(dial: Dial, append: ProcessEventArgs<VoiceAgentContract>["append"]): void {
     this.runInBackground(async () => {
       while (this.#dial === dial && dial.socket !== null && dial.ready) {
@@ -2154,19 +1986,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
           owedMs -= SILENCE_FILL_MS;
           this.#sendMicAudio(dial.socket, SILENCE_FILL_FRAME_B64);
           dial.silenceFillFrames += 1;
-          /* Visible on the mirror once every few seconds of fill, so an
-           * instrument can tell a fill that runs from one that does not. */
-          if (dial.silenceFillFrames % 50 === 0) {
-            this.#appendMirror(
-              {
-                type: "client.silence-fill",
-                frames: dial.silenceFillFrames,
-                conversationId: dial.conversationId,
-                receivedAtFacetMs: nowAtFacetMs,
-              },
-              append,
-            );
-          }
         }
       }
     });
@@ -2183,21 +2002,15 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * itself and never with a different reason's.
    */
   /*
-   * The provider went away under a call the log still says is open. Recorded
-   * durably with its reason; the call stays open and re-dials immediately,
-   * seeded with the transcript. That also recovers a caller who has finished
-   * speaking and therefore has no next microphone frame to trigger recovery.
-   * A hang-up in progress (end requested) or a call already over is left to
-   * its own ending. Three closes inside two minutes is a provider that will
-   * not hold a session, and then the call ends with the reason on the log.
+   * A provider close interrupts an uncertain session. Record it, then end
+   * this activation rather than replaying audio or backend actions into a
+   * fresh session.
    */
   #providerClosed(
     conversationId: string,
     activation: string,
     reason: string,
-    state: ProcessEventArgs<VoiceAgentContract>["state"],
     append: ProcessEventArgs<VoiceAgentContract>["append"],
-    runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
   ): void {
     /* The dial's state snapshot predates its own call-started fold, so the
      * call's standing is read from this instance: an end already requested
@@ -2205,30 +2018,12 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (this.#endingActivation === activation) {
       return;
     }
-    const nowAtFacetMs = this.deps.nowAtFacetMs();
-    this.#providerClosesAtFacetMs = [
-      ...this.#providerClosesAtFacetMs.filter(
-        (at) => nowAtFacetMs - at < PROVIDER_CLOSES_WINDOW_MS,
-      ),
-      nowAtFacetMs,
-    ];
-    const gaveUp = this.#providerClosesAtFacetMs.length >= PROVIDER_CLOSES_BEFORE_GIVING_UP;
-    if (!gaveUp) {
-      this.#openProviderConnection(conversationId, activation, state, append, runInBackground);
-    }
     this.runInBackground(async () => {
+      await this.#end(activation, "socket-closed", reason, append);
       await append({
         type: "events.iterate.com/voice-agent/provider-disconnected",
         payload: { conversationId, reason },
       });
-      if (gaveUp) {
-        await this.#end(
-          activation,
-          "socket-closed",
-          `${reason}; the provider closed ${String(PROVIDER_CLOSES_BEFORE_GIVING_UP)} times in two minutes`,
-          append,
-        );
-      }
     });
   }
 
@@ -2382,24 +2177,20 @@ export class VoiceAgentProcessor extends StreamProcessor<
         : "";
       if (holdForTheRestOfTheRequest) dial.forwardedUserChars = dial.userTranscript.length;
       if (saidSince !== "") {
-        this.#sendControl(
-          dial,
-          {
-            type: "response.item.create",
-            event_id: `heard_${callId}`,
-            item: {
-              type: "message",
-              role: "developer",
-              content: [
-                {
-                  type: "input_text",
-                  text: `The person has said more since this delegation was raised: "${saidSince}"`,
-                },
-              ],
-            },
+        this.#sendControl(dial, {
+          type: "response.item.create",
+          event_id: `heard_${callId}`,
+          item: {
+            type: "message",
+            role: "developer",
+            content: [
+              {
+                type: "input_text",
+                text: `The person has said more since this delegation was raised: "${saidSince}"`,
+              },
+            ],
           },
-          append,
-        );
+        });
       }
       /*
        * THE VOICE HEARS THE BACKEND WORK, one line per step. The backend's
@@ -2417,59 +2208,34 @@ export class VoiceAgentProcessor extends StreamProcessor<
         nowForNoteMs - dial.lastProgressNoteAtFacetMs >= PROGRESS_NOTE_MIN_GAP_MS
       ) {
         dial.lastProgressNoteAtFacetMs = nowForNoteMs;
-        this.#sendControl(
-          dial,
-          {
-            type: "session.thinking.append",
-            event_id: `progress_${callId}`,
-            delegation_id: null,
-            /* Status only, never the output: a docs snippet in a note came
-             * back out of the voice as a question to the person. */
-            content:
-              `Backend progress note, for your own awareness only — do not read it out. ` +
-              `Step ${String(dial.backendSteps)}: ran ${name}` +
-              `(${rawArguments.replace(/\s+/g, " ").slice(0, 160)}) → ` +
-              `${output.startsWith('{"error"') ? "error" : "ok"}`,
-          },
-          append,
-        );
+        this.#sendControl(dial, {
+          type: "session.thinking.append",
+          event_id: `progress_${callId}`,
+          delegation_id: null,
+          /* Status only, never the output: a docs snippet in a note came
+           * back out of the voice as a question to the person. */
+          content:
+            `Backend progress note, for your own awareness only — do not read it out. ` +
+            `Step ${String(dial.backendSteps)}: ran ${name}` +
+            `(${rawArguments.replace(/\s+/g, " ").slice(0, 160)}) → ` +
+            `${output.startsWith('{"error"') ? "error" : "ok"}`,
+        });
       }
-      this.#sendControl(
-        dial,
-        {
-          type: "response.item.create",
-          event_id: `result_${callId}`,
-          item: { type: "function_call_output", call_id: callId, output },
-        },
-        append,
-      );
-      this.#sendControl(dial, { type: "response.create", event_id: `continue_${callId}` }, append);
+      this.#sendControl(dial, {
+        type: "response.item.create",
+        event_id: `result_${callId}`,
+        item: { type: "function_call_output", call_id: callId, output },
+      });
+      this.#sendControl(dial, { type: "response.create", event_id: `continue_${callId}` });
     });
   }
 
   /**
-   * Send one client command AND record it in the mirror as
-   * `client.<type>` — the mirror is the wire's flight recorder, and a recorder
-   * that hears only one direction cannot explain a silence.
+   * Send one client command to the provider.
    */
-  #sendControl(
-    dial: Dial,
-    message: Record<string, unknown>,
-    append: ProcessEventArgs<VoiceAgentContract>["append"],
-  ): void {
+  #sendControl(dial: Dial, message: Record<string, unknown>): void {
     if (dial.socket === null) return;
     dial.socket.send(JSON.stringify(message));
-    const { item, ...rest } = message;
-    this.#appendMirror(
-      {
-        ...rest,
-        type: `client.${String(message.type)}`,
-        ...(item === undefined ? {} : { itemSummary: JSON.stringify(item).slice(0, 300) }),
-        conversationId: dial.conversationId,
-        receivedAtFacetMs: this.deps.nowAtFacetMs(),
-      },
-      append,
-    );
   }
 
   /**
@@ -2553,26 +2319,14 @@ export class VoiceAgentProcessor extends StreamProcessor<
 /* ========================================================================== */
 
 /**
- * The credential follows the HOST, never a flag: a test hook pointing at a
- * fake gets no secret at all. THE ONE COPY of the host→secret rule — the
- * dial spends it and setup's gate demands it, so the two cannot disagree.
- */
-function secretForHost(hostname: string): string | null {
-  if (hostname === "api.openai.com") return OPENAI_SECRET;
-  return null;
-}
-
-/**
  * Open the provider's WebSocket. No query parameters — the model rides
  * `session.start` — and the bearer is the platform's `getSecret` grammar,
  * substituted at egress so the key never enters this isolate.
  */
-export async function dialProviderSocket(baseUrl: string | null): Promise<WebSocket | null> {
-  const target = new URL(baseUrl ?? LIVE.url);
-  const headers: Record<string, string> = { Upgrade: "websocket" };
-  const secret = secretForHost(target.hostname);
-  if (secret !== null) headers.Authorization = `Bearer getSecret("${secret}")`;
-  const response = await fetch(target.toString(), { headers });
+export async function dialProviderSocket(): Promise<WebSocket | null> {
+  const response = await fetch(LIVE.url, {
+    headers: { Upgrade: "websocket", Authorization: `Bearer getSecret("${OPENAI_SECRET}")` },
+  });
   /* `?? null` rather than `=== null`: a runtime with no WebSockets in it has no
    * such property at all, and `undefined === null` is false — which turned a
    * provider refusal into a TypeError on the next line. */
@@ -2638,13 +2392,8 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint implem
     }
 
     const project = await this.itx;
-    /* Demand exactly the secret the dial will spend — the one host→credential
-     * rule in secretForHost. A providerBaseUrl hook resolves to no secret and
-     * gets no gate. */
-    const dialTarget = new URL(options.providerBaseUrl ?? LIVE.url);
-    const secretPath = secretForHost(dialTarget.hostname);
-    if (secretPath !== null) {
-      const providerSecret = project.secrets.get(secretPath);
+    {
+      const providerSecret = project.secrets.get(OPENAI_SECRET);
       let secretReady = false;
       try {
         const description = await providerSecret.__describe();
@@ -2658,8 +2407,8 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint implem
       }
       if (!secretReady) {
         throw new Error(
-          `voice-agent setup requires secret "${secretPath}" with material. Create it with ` +
-            `await itx.secrets.get("${secretPath}").create({ egress: { urls: ["${dialTarget.origin}"] }, ` +
+          `voice-agent setup requires secret "${OPENAI_SECRET}" with material. Create it with ` +
+            `await itx.secrets.get("${OPENAI_SECRET}").create({ egress: { urls: ["${new URL(LIVE.url).origin}"] }, ` +
             `material: "<API key>" }); then rerun. This agent never creates or copies credentials.`,
         );
       }
@@ -2770,7 +2519,7 @@ export class VoiceAgentFacet extends StreamProcessorFacet {
       /* Safe as a bare setTimeout BECAUSE of where it is awaited: every wait
        * here happens inside a `runInBackground` closure the keepalive holds. */
       sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
-      dialProvider: (baseUrl) => dialProviderSocket(baseUrl),
+      dialProvider: dialProviderSocket,
       withProject: async <T>(fn: (project: unknown) => Promise<T>): Promise<T> => {
         const project = await this.env.ITX.get();
         try {

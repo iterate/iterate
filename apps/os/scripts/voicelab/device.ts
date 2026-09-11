@@ -328,21 +328,21 @@ export async function device(options: DeviceOptions) {
       const connection = await stream.openConnection({
         connectionKey: `journey-${Date.now()}`,
         eventTypes: [
-          "events.iterate.com/voice-agent/grok-event",
           "events.iterate.com/voice-agent/spk-frame",
+          "events.iterate.com/voice-agent/answer-transcript",
+          "events.iterate.com/voice-agent/provider-error",
+          "events.iterate.com/voice-agent/provider-disconnected",
         ],
         processEventBatch: (batch: { events: { type: string; payload?: unknown }[] }) => {
           for (const event of batch.events) {
             /* Stream payloads arrive as untyped JSON; the assertion names the
              * three optional fields this instrument reads, each guarded. */
             const payload = (event.payload ?? {}) as {
-              type?: string;
-              delta?: string;
+              text?: string;
               lastFrameOfAnswer?: boolean;
             };
-            if (payload.type === "session.output_transcript.delta") {
-              spokenText += payload.delta ?? "";
-            }
+            if (event.type === "events.iterate.com/voice-agent/answer-transcript")
+              spokenText += payload.text ?? "";
             /* No response lifecycle on GPT-Live: the facet's end-of-answer
              * marker in the speaker frames is what says the voice finished. */
             if (

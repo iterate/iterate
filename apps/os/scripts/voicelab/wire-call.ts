@@ -1,98 +1,56 @@
-// One open-mic call driven from the wire, shared by the probes that need
-// one: `duplex` (the platform proof) and `ask` (the task battery).
-//
-// EXTRACTED, NOT DESIGNED. The realtime-paced microphone loop and the
-// listener that reads speaker frames and mirrored provider events back were
-// the same ~120 lines in two files; a helper module, deliberately NOT
-// exported from ./index.ts — cli.ts turns index.ts exports into commands, and
-// this is an instrument, not a command.
-//
-// THE DRIVER IS THE DUMBEST POSSIBLE CLIENT: it appends 20 ms microphone
-// frames at realtime pace for the whole call (silence when it has nothing to
-// say — what an open microphone in a quiet room IS), and splices utterances
-// in without breaking the cadence. Everything it knows about the call it read
-// off the stream.
+// A small synthetic client for the GPT-Live voice stream. It owns one local
+// activation and observes only the public call contract.
 import { type VoicelabConnectOptions } from "./connect.ts";
 import { deliveredMsOf, FRAME_BYTES, FRAME_MS, openStream, sleep } from "./probe-audio.ts";
 
-/** What an open microphone in a quiet room is: 20 ms of silence, forever. */
 const SILENCE_FRAME = Buffer.alloc(FRAME_BYTES).toString("base64");
 
-/** One delegation the voice raised, as the mirror showed it. */
-export interface WireDelegation {
-  id: string;
-  target: string;
-  /** Call clock. */
-  createdAtMs: number;
-  /** Call clock when the backend's final `message` item completed — the end
-   * of this delegation's work; null while it is still working. */
-  finalTextDoneAtMs: number | null;
-  /** The backend's final text, as streamed. */
-  finalText: string;
-  functionCalls: number;
-  /** The user transcript that had arrived when the delegation was raised —
-   * how much of the request the backend could have been given. */
-  inputTranscriptAtCreation: string;
+export interface TimedText {
+  atMs: number;
+  text: string;
 }
 
-/** Everything the listener collected off the wire, updated live. */
 export interface WireWatch {
+  activation: string;
+  conversationId: string | null;
+  callStartedAtMs: number | null;
+  sessionConfiguredAtMs: number | null;
+  conversationAcceptedAtMs: number | null;
+  handshakeTookMs: number | null;
+  heldMicFrames: number | null;
   spkFrames: number;
   answersEnded: number;
   answerDeliveredMs: number;
   lastAudioFrameAtMs: number | null;
   clearsSeen: number;
-  delegations: WireDelegation[];
-  /** `→ name(args)` for each backend function call, `← {output}` for each answer. */
-  backendCalls: string[];
-  backendFunctionCalls: number;
-  inputTranscript: string;
-  outputTranscript: string;
-  /** Call clock of every assistant transcript fragment, in arrival order. */
-  assistantFragmentArrivals: number[];
-  /** Call clock of every user transcript fragment, in arrival order. */
-  userFragmentArrivals: number[];
-  /** Raw provider events by type, for anything a probe wants to count. */
-  providerEventCounts: Record<string, number>;
-  /** Call clock at every audio-carrying speaker frame, with its length and
-   * how many audio frames shared its delivery batch — the cadence the device
-   * actually sees. */
+  utterances: TimedText[];
+  answers: TimedText[];
+  backendReplies: TimedText[];
+  providerErrors: TimedText[];
+  providerDisconnects: TimedText[];
+  ended: TimedText[];
   spkArrivals: {
     atMs: number;
     payloadMs: number;
     batchAudioFrames: number;
-    /** The facet's clock when it sent the frame (`sentAtFacetMs`). */
     sentAtFacetMs: number | null;
-    /** Which answer the frame belongs to: how many end markers preceded it. */
     answerIndex: number;
   }[];
-  /** Facet clock at every audio-carrying provider delta, off the mirror
-   * (`receivedAtFacetMs`): the provider→facet cadence. */
-  providerDeltaReceivedAtFacetMs: number[];
-  /** Round-trip time of each microphone append, driver clock: network plus
-   * the stream Durable Object's synchronous append work for that batch. */
   micAppendLatenciesMs: number[];
 }
 
 export interface WireCall {
   readonly streamPath: string;
   readonly watch: WireWatch;
-  /** Milliseconds since the call opened. */
   clock(): number;
-  /** Splice an utterance into the microphone stream; resolves when its last frame went out. */
   speak(frames: string[]): Promise<void>;
   micFramesSent(): number;
-  /** Poll `predicate` every 100 ms until true or `timeoutMs`; returns its final value. */
   waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean>;
-  /** True once no audible speaker frame has arrived for `quietMs`. */
   quietFor(quietMs: number): boolean;
-  /** Stop the microphone and close the live connection. */
-  stop(): Promise<void>;
-  /** The durable voice events since the call opened, read back from the stream. */
+  stop(reason?: string): Promise<void>;
   durableEvents(): Promise<{ type: string; createdAt: string; payload?: unknown }[]>;
 }
 
-/** The stream handle's read surface the verdicts need. */
 interface VoiceStreamReads {
   getEvents(input: {
     afterOffset: number;
@@ -104,153 +62,142 @@ interface VoiceStreamReads {
 export async function openWireCall(
   options: VoicelabConnectOptions & {
     streamPath: string;
-    /** Microphone frames per append (20 ms each); 25 = one append every 500 ms.
-     * A board sends ~8; smaller batches load the facet more evenly. */
     micBatchFrames?: number;
-    /** Frames joined into ONE mic event (default 1): the same audio as fewer,
-     * longer events — is the facet's cost per event or per byte? */
     micEventFrames?: number;
-    /** A half-duplex client: send nothing at all between utterances (no
-     * silence frames), the way a released button or the C driver's converse
-     * mode behaves. */
     micOffBetweenUtterances?: boolean;
-    /** Extra ephemeral events of a type NO processor consumes, added to every
-     * mic append: the stream's own per-event cost, isolated from the facet's. */
     noiseEventsPerAppend?: number;
-    /** Extra `keepalive` events per mic append: consumed by the facet's runner
-     * (parse, reduce, processEvent) but never forwarded to the provider — the
-     * runner's per-event cost without the WebSocket send. */
     keepaliveEventsPerAppend?: number;
   },
 ): Promise<WireCall> {
-  const micBatchFrames = options.micBatchFrames ?? 25;
-  const micEventFrames = Math.max(1, options.micEventFrames ?? 1);
+  const micBatchFrames = options.micBatchFrames ?? 3;
+  const micEventFrames = Math.max(1, options.micEventFrames ?? micBatchFrames);
   const stream = await openStream(options);
   const startedAtMs = Date.now();
   const clock = () => Date.now() - startedAtMs;
+  const activation = crypto.randomUUID();
   const watch: WireWatch = {
+    activation,
+    conversationId: null,
+    callStartedAtMs: null,
+    sessionConfiguredAtMs: null,
+    conversationAcceptedAtMs: null,
+    handshakeTookMs: null,
+    heldMicFrames: null,
     spkFrames: 0,
     answersEnded: 0,
     answerDeliveredMs: 0,
     lastAudioFrameAtMs: null,
     clearsSeen: 0,
-    delegations: [],
-    backendCalls: [],
-    backendFunctionCalls: 0,
-    inputTranscript: "",
-    outputTranscript: "",
-    assistantFragmentArrivals: [],
-    userFragmentArrivals: [],
-    providerEventCounts: {},
+    utterances: [],
+    answers: [],
+    backendReplies: [],
+    providerErrors: [],
+    providerDisconnects: [],
+    ended: [],
     spkArrivals: [],
-    providerDeltaReceivedAtFacetMs: [],
     micAppendLatenciesMs: [],
   };
 
+  const belongsToCall = (payload: Record<string, unknown>) =>
+    payload.activation === activation ||
+    (watch.conversationId !== null && payload.conversationId === watch.conversationId);
+  const text = (payload: Record<string, unknown>) =>
+    typeof payload.text === "string" ? payload.text : "";
+
   const connection = await stream.openConnection({
-    connectionKey: `wire-call-${Date.now()}`,
+    connectionKey: `wire-call-${activation}`,
     eventTypes: [
       "events.iterate.com/voice-agent/spk-frame",
-      "events.iterate.com/voice-agent/grok-event",
+      "events.iterate.com/voice-agent/call-started",
+      "events.iterate.com/voice-agent/conversation-accepted",
+      "events.iterate.com/voice-agent/session-configured",
+      "events.iterate.com/voice-agent/utterance-transcript",
+      "events.iterate.com/voice-agent/answer-transcript",
+      "events.iterate.com/voice-agent/backend-reply",
+      "events.iterate.com/voice-agent/provider-error",
+      "events.iterate.com/voice-agent/provider-disconnected",
+      "events.iterate.com/voice-agent/conversation-ended",
     ],
     processEventBatch: (batch: { events?: { type: string; payload?: unknown }[] }) => {
-      const batchAudioFrames = (batch.events ?? []).filter(
+      const events = batch.events ?? [];
+      const batchAudioFrames = events.filter(
         (event) =>
           event.type === "events.iterate.com/voice-agent/spk-frame" &&
           typeof (event.payload as { pcm?: unknown } | undefined)?.pcm === "string" &&
           (event.payload as { pcm: string }).pcm !== "",
       ).length;
-      for (const event of batch.events ?? []) {
-        /* Stream payloads arrive as untyped JSON; the assertion only names
-         * the record shape, and every field read below is checked by type. */
+      for (const event of events) {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
-        if (event.type === "events.iterate.com/voice-agent/spk-frame") {
-          watch.spkFrames += 1;
-          const pcm = typeof payload.pcm === "string" ? payload.pcm : "";
-          if (payload.clearSpeakerBufferBeforeFrame === true && pcm === "") watch.clearsSeen += 1;
-          if (payload.lastFrameOfAnswer === true) watch.answersEnded += 1;
-          if (pcm !== "") {
-            watch.answerDeliveredMs += deliveredMsOf(pcm);
-            watch.lastAudioFrameAtMs = clock();
-            watch.spkArrivals.push({
-              atMs: clock(),
-              payloadMs: deliveredMsOf(pcm),
-              batchAudioFrames,
-              sentAtFacetMs:
-                typeof payload.sentAtFacetMs === "number" ? payload.sentAtFacetMs : null,
-              answerIndex: watch.answersEnded,
-            });
-          }
+        if (event.type === "events.iterate.com/voice-agent/call-started") {
+          if (payload.activation !== activation || typeof payload.conversationId !== "string")
+            continue;
+          watch.conversationId = payload.conversationId;
+          watch.callStartedAtMs = clock();
           continue;
         }
-        const type = String(payload.type ?? "");
-        watch.providerEventCounts[type] = (watch.providerEventCounts[type] ?? 0) + 1;
-        if (
-          type === "session.output_audio.delta" &&
-          typeof payload.deltaBytes === "number" &&
-          payload.deltaBytes > 0 &&
-          typeof payload.receivedAtFacetMs === "number"
-        ) {
-          watch.providerDeltaReceivedAtFacetMs.push(payload.receivedAtFacetMs);
+        if (!belongsToCall(payload)) continue;
+        if (event.type === "events.iterate.com/voice-agent/conversation-accepted") {
+          watch.conversationAcceptedAtMs = clock();
+          watch.handshakeTookMs =
+            typeof payload.handshakeTookMs === "number" ? payload.handshakeTookMs : null;
+          watch.heldMicFrames =
+            typeof payload.heldMicFrames === "number" ? payload.heldMicFrames : null;
+          continue;
         }
-        if (type === "session.delegation.created") {
-          /* The provider's delegation object, per its schema; a differently
-           * shaped one reads as an unknown target. */
-          const info = payload.delegation as { id?: string; target?: string } | undefined;
-          watch.delegations.push({
-            id: String(info?.id ?? ""),
-            target: String(info?.target ?? ""),
-            createdAtMs: clock(),
-            finalTextDoneAtMs: null,
-            finalText: "",
-            functionCalls: 0,
-            inputTranscriptAtCreation: watch.inputTranscript,
+        if (event.type === "events.iterate.com/voice-agent/session-configured") {
+          watch.sessionConfiguredAtMs = clock();
+          continue;
+        }
+        if (event.type === "events.iterate.com/voice-agent/utterance-transcript") {
+          watch.utterances.push({ atMs: clock(), text: text(payload) });
+          continue;
+        }
+        if (event.type === "events.iterate.com/voice-agent/answer-transcript") {
+          watch.answers.push({ atMs: clock(), text: text(payload) });
+          continue;
+        }
+        if (event.type === "events.iterate.com/voice-agent/backend-reply") {
+          watch.backendReplies.push({ atMs: clock(), text: text(payload) });
+          continue;
+        }
+        if (event.type === "events.iterate.com/voice-agent/provider-error") {
+          watch.providerErrors.push({
+            atMs: clock(),
+            text: text(payload) || String(payload.message ?? ""),
           });
+          continue;
         }
-        if (type === "response.event") {
-          /* The nested Responses event, per the provider's schema; the
-           * optional fields are all this instrument reads, each guarded. */
-          const inner = (payload.event ?? {}) as {
-            type?: string;
-            delta?: string;
-            item?: { type?: string; name?: string; arguments?: string };
-          };
-          const delegation = watch.delegations.find((d) => d.id === payload.delegation_id);
-          if (inner.type === "response.output_text.delta" && delegation !== undefined) {
-            delegation.finalText += String(inner.delta ?? "");
-          }
-          if (inner.type === "response.output_item.done" && inner.item?.type === "function_call") {
-            watch.backendFunctionCalls += 1;
-            if (delegation !== undefined) delegation.functionCalls += 1;
-            watch.backendCalls.push(
-              `→ ${String(inner.item.name)}(${String(inner.item.arguments ?? "").slice(0, 240)})`,
-            );
-          }
-          if (
-            inner.type === "response.output_item.done" &&
-            inner.item?.type === "message" &&
-            delegation !== undefined
-          ) {
-            delegation.finalTextDoneAtMs = clock();
-          }
+        if (event.type === "events.iterate.com/voice-agent/provider-disconnected") {
+          watch.providerDisconnects.push({
+            atMs: clock(),
+            text: text(payload) || String(payload.reason ?? ""),
+          });
+          continue;
         }
-        if (type === "client.response.item.create") {
-          watch.backendCalls.push(`← ${String(payload.itemSummary ?? "").slice(0, 300)}`);
+        if (event.type === "events.iterate.com/voice-agent/conversation-ended") {
+          watch.ended.push({ atMs: clock(), text: String(payload.reason ?? "") });
+          continue;
         }
-        if (type === "session.output_transcript.delta") {
-          watch.outputTranscript += String(payload.delta ?? "");
-          watch.assistantFragmentArrivals.push(clock());
-        }
-        if (type === "session.input_transcript.delta") {
-          watch.inputTranscript += String(payload.delta ?? "");
-          watch.userFragmentArrivals.push(clock());
-        }
+        if (event.type !== "events.iterate.com/voice-agent/spk-frame") continue;
+        watch.spkFrames += 1;
+        const pcm = typeof payload.pcm === "string" ? payload.pcm : "";
+        if (payload.clearSpeakerBufferBeforeFrame === true && pcm === "") watch.clearsSeen += 1;
+        if (payload.lastFrameOfAnswer === true) watch.answersEnded += 1;
+        if (pcm === "") continue;
+        watch.answerDeliveredMs += deliveredMsOf(pcm);
+        watch.lastAudioFrameAtMs = clock();
+        watch.spkArrivals.push({
+          atMs: clock(),
+          payloadMs: deliveredMsOf(pcm),
+          batchAudioFrames,
+          sentAtFacetMs: typeof payload.sentAtFacetMs === "number" ? payload.sentAtFacetMs : null,
+          answerIndex: watch.answersEnded,
+        });
       }
     },
   });
 
-  /* THE MICROPHONE NEVER STOPS: one loop, `micBatchFrames` frames per append. */
-  let pending: string[] = [];
+  let pending: Array<string | symbol> = [];
   let micFramesSent = 0;
   let stopMic = false;
   const micLoop = (async () => {
@@ -261,35 +208,25 @@ export async function openWireCall(
       const wait = due - Date.now();
       if (wait > 0) await sleep(wait);
       if (options.micOffBetweenUtterances === true && pending.length === 0 && sequence > 0) {
-        /* Nothing to say and a half-duplex client: no frame at all (the very
-         * first batch still goes out — one silent frame is what mints the
-         * call). The sequence still advances so a later frame's number
-         * reflects the time that passed. */
         sequence += micBatchFrames;
         continue;
       }
       const events = [];
-      const frames: string[] = [];
-      for (let index = 0; index < micBatchFrames; index++) {
-        /* The empty string is speak()'s end marker, never audio: it leaves
-         * the queue here and silence goes out in its place. */
-        const next = pending.shift();
-        frames.push(next === undefined || next === "" ? SILENCE_FRAME : next);
-      }
-      for (let index = 0; index < frames.length; index += micEventFrames) {
-        const group = frames.slice(index, index + micEventFrames);
-        /* Base64 of concatenated PCM is not the concatenation of the base64
-         * (640 bytes is not a multiple of 3), so join the bytes. */
+      for (let index = 0; index < micBatchFrames; index += micEventFrames) {
+        const count = Math.min(micEventFrames, micBatchFrames - index);
+        const frames = Array.from({ length: count }, () => {
+          const frame = pending.shift();
+          return typeof frame === "string" && frame !== "" ? frame : SILENCE_FRAME;
+        });
         const pcm =
-          group.length === 1
-            ? group[0]!
-            : Buffer.concat(group.map((frame) => Buffer.from(frame, "base64"))).toString("base64");
+          frames.length === 1
+            ? frames[0]!
+            : Buffer.concat(frames.map((frame) => Buffer.from(frame, "base64"))).toString("base64");
         events.push({
           type: "events.iterate.com/voice-agent/mic-frame" as const,
           ephemeral: true as const,
-          payload: { deviceMicFrameSeq: sequence, pcm },
+          payload: { activation, pcm },
         });
-        sequence += group.length;
       }
       for (let index = 0; index < (options.keepaliveEventsPerAppend ?? 0); index++) {
         events.push({
@@ -302,9 +239,10 @@ export async function openWireCall(
         events.push({
           type: "events.iterate.com/voicelab/noise" as const,
           ephemeral: true as const,
-          payload: { deviceMicFrameSeq: -1 - index, pcm: SILENCE_FRAME },
+          payload: { pcm: SILENCE_FRAME },
         });
       }
+      sequence += micBatchFrames;
       micFramesSent += micBatchFrames;
       const appendStartedAtMs = Date.now();
       void stream
@@ -326,12 +264,8 @@ export async function openWireCall(
     clock,
     speak: (frames) =>
       new Promise<void>((resolve) => {
-        pending = pending.concat(frames);
-        /* An empty marker frame never leaves (the loop sends silence in its
-         * place) and its disappearance from the queue is "the last real
-         * frame went out". */
-        const marker = "";
-        pending.push(marker);
+        const marker = Symbol("utterance-end");
+        pending.push(...frames, marker);
         const check = setInterval(() => {
           if (!pending.includes(marker)) {
             clearInterval(check);
@@ -343,30 +277,36 @@ export async function openWireCall(
     waitFor,
     quietFor: (quietMs) =>
       watch.lastAudioFrameAtMs !== null && clock() - watch.lastAudioFrameAtMs > quietMs,
-    stop: async () => {
+    stop: async (reason = "script-complete") => {
       stopMic = true;
       await micLoop;
+      await stream.append({
+        type: "events.iterate.com/voice-agent/conversation-ended" as const,
+        payload: { activation, reason },
+      });
       connection.close();
     },
     durableEvents: async () => {
-      /* The stream handle is typed to the append surface the probes share
-       * (probe-audio.ts); its read surface is asserted here to exactly the
-       * one call made — a wrong assertion fails loudly at the RPC boundary. */
       const readable = stream as unknown as VoiceStreamReads;
       const events = await readable.getEvents({
         afterOffset: 0,
         eventTypes: [
+          "events.iterate.com/voice-agent/call-started",
           "events.iterate.com/voice-agent/conversation-accepted",
           "events.iterate.com/voice-agent/session-configured",
           "events.iterate.com/voice-agent/utterance-transcript",
           "events.iterate.com/voice-agent/answer-transcript",
           "events.iterate.com/voice-agent/backend-reply",
-          "events.iterate.com/voice-agent/conversation-end-requested",
+          "events.iterate.com/voice-agent/provider-error",
+          "events.iterate.com/voice-agent/provider-disconnected",
           "events.iterate.com/voice-agent/conversation-ended",
         ],
         limit: 500,
       });
-      return (events ?? []).filter((event) => Date.parse(event.createdAt) >= startedAtMs - 5_000);
+      return (events ?? []).filter((event) => {
+        const payload = (event.payload ?? {}) as Record<string, unknown>;
+        return payload.activation === activation || payload.conversationId === watch.conversationId;
+      });
     },
   };
 }

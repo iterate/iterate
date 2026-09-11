@@ -50,10 +50,11 @@ test("the marker is stable for one stream and distinct across streams and config
   );
 });
 
-test("a chat's voice line derives from its path; the certificate names no colleague", () => {
+test("a chat's voice line derives from its path without legacy routing settings", () => {
   expect(chatVoiceStreamPath("/agents/mobile/1756422")).toBe("/agents/voice/chat/mobile/1756422");
   expect("colleaguePath" in voiceSetupConfig()).toBe(false);
   expect("clientTakesTurns" in voiceSetupConfig()).toBe(false);
+  expect("greeting" in voiceSetupConfig()).toBe(false);
 });
 
 test("a matching marker skips setup entirely", async () => {
@@ -86,7 +87,6 @@ test("a missing marker runs setup with the full config, then records the marker"
   expect(calls).toHaveLength(1);
   expect(calls[0]).toMatchObject({
     streamPath: "/agents/voice/chat/mobile/device-1",
-    greeting: true,
     instructions: MOBILE_VOICE_SETUP.instructions,
   });
   expect(calls[0].tools.map((tool: any) => tool.name)).toEqual(["hang_up"]);

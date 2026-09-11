@@ -58,7 +58,7 @@ import { discardRpcResult, withRpcResult } from "./rpc-ownership.ts";
  * slug is something you can recognise in a prompt.
  *
  * `iterate` because voice belongs on the project people already live in, not
- * in a lab annex: a bare run should land where its colleague notes, its
+ * in a lab annex: a bare run should land where its notes, its
  * tools and its transcripts are part of the same working world. A missing
  * slug is created on first run (ensureProjectExists), so the default works
  * on a fresh environment too.
@@ -126,8 +126,6 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   converse?: number;
   /** PCM16 mono 16 kHz WAVs the unattended driver speaks. Required by --converse. */
   utteranceDir?: string;
-  /** Force a backend consultation every Nth utterance. */
-  colleagueEvery?: number;
   /**
    * Play into this file instead of this Mac's speaker.
    *
@@ -139,22 +137,6 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   pretendSpeaker?: string;
   /** What the model is told it is. Defaults to a short assistant prompt. */
   instructions?: string;
-  /** Dial this instead of api.openai.com. Carries no credential. */
-  providerBaseUrl?: string;
-  /** Model and voice overrides; gpt-live-1 and marin by default. */
-  providerModel?: string;
-  providerVoice?: string;
-  /**
-   * The backend model the voice delegates to (GPT-Live's Responses
-   * delegation) — `gpt-6-astra` on the fast tier at low effort unless you
-   * say otherwise. It gets exec_typescript against the project and the
-   * certificate's tools (hang_up included).
-   */
-  backendModel?: string;
-  /** Reasoning effort for --backend-model (`low` is a good voice default). */
-  backendEffort?: string;
-  /** Service tier for --backend-model; `priority` is OpenAI's Fast mode. */
-  backendServiceTier?: string;
   /** Install the subscription under a fresh key even if an identical one exists. */
   reinstall?: boolean;
   /**
@@ -253,11 +235,8 @@ export async function talk(options: TalkOptions = {}) {
       : `the repo already carries this checkout's voice agent (${install.commitOid.slice(0, 8)})`,
   );
 
-  /* The secret the dial will spend — setup's gate demands the same one
-   * (secretForHost), and a baseUrl hook needs none at all. */
-  if (options.providerBaseUrl === undefined) {
-    console.log(`openai secret ${await ensureOpenaiSecret(itx)}`);
-  }
+  /* The GPT-Live dial spends this project secret. */
+  console.log(`openai secret ${await ensureOpenaiSecret(itx)}`);
 
   using voiceAgent = itx.workers.get(
     voiceAgentEntrypointRef,
@@ -285,7 +264,7 @@ export async function talk(options: TalkOptions = {}) {
    * measured on prd (2026-08-26 evening): three commits behind while the
    * stateless entrypoint rebuilt every run, so setup wrote the new
    * contract's delivery filter and the live facet installed the previous
-   * revision's colleague subscription. Killing the incarnation is the
+   * revision's stale subscription. Killing the incarnation is the
    * upgrade: the next dispatch boots the build this run just committed.
    */
   if (install.changed) {
@@ -305,15 +284,6 @@ export async function talk(options: TalkOptions = {}) {
       streamPath,
       instructions: options.instructions ?? DEFAULT_INSTRUCTIONS,
       ...(options.visemes === true && { visemes: true }),
-      ...(options.backendModel !== undefined && {
-        backend: {
-          model: options.backendModel,
-          ...(options.backendEffort !== undefined && { reasoningEffort: options.backendEffort }),
-          ...(options.backendServiceTier !== undefined && {
-            serviceTier: options.backendServiceTier,
-          }),
-        },
-      }),
       ...(() => {
         const tools = [
           ...(options.hangUp !== false
@@ -337,11 +307,6 @@ export async function talk(options: TalkOptions = {}) {
         ];
         return tools.length > 0 ? { tools } : {};
       })(),
-      ...(options.providerModel === undefined ? {} : { providerModel: options.providerModel }),
-      ...(options.providerVoice === undefined ? {} : { providerVoice: options.providerVoice }),
-      ...(options.providerBaseUrl === undefined
-        ? {}
-        : { providerBaseUrl: options.providerBaseUrl }),
       ...(options.reinstall === undefined ? {} : { reinstall: options.reinstall }),
     }),
     ({ streamPath: resultPath, warmMs }) => ({ streamPath: resultPath, warmMs }),
@@ -592,7 +557,7 @@ async function waitForVoiceAgent(
 }
 
 /**
- * Make sure the project can reach the provider, using the key from the
+ * Make sure the project can reach OpenAI, using the key from the
  * Doppler config this command is already running inside.
  *
  * The config-repo worker deliberately never creates a credential — it only
@@ -604,11 +569,11 @@ async function waitForVoiceAgent(
  *
  * Existing material is LEFT ALONE. Material is write-only and not
  * comparable, so a "create" over a live secret cannot check whether it
- * matches; silently rotating the provider key of a running project because
+ * matches; silently rotating the OpenAI key of a running project because
  * somebody ran a voice command would be a genuinely bad surprise.
  */
 export async function ensureOpenaiSecret(itx: unknown): Promise<string> {
-  return await ensureProviderSecret(itx, {
+  return await ensureOpenaiProjectSecret(itx, {
     path: "/secrets/openai",
     envNames: ["OPENAI_API_KEY", "APP_CONFIG_OPENAI_API_KEY"],
     egress: ["https://api.openai.com"],
@@ -616,20 +581,22 @@ export async function ensureOpenaiSecret(itx: unknown): Promise<string> {
 }
 
 /** The subset of the secret capability this command uses. */
-interface ProviderSecret {
+interface OpenaiProjectSecret {
   __describe(): Promise<{ created?: boolean; hasMaterial?: boolean }>;
   create(input: { egress: { urls: string[] }; material: string }): Promise<unknown>;
   update(input: { material: string }): Promise<unknown>;
 }
 
-async function ensureProviderSecret(
+async function ensureOpenaiProjectSecret(
   itx: unknown,
   args: { path: string; envNames: string[]; egress: string[] },
 ): Promise<string> {
   /* The project handle arrives untyped (the generated client type lives in
    * apps/os); the assertion spells exactly the one member this command uses,
    * so a wrong assertion fails loudly at the RPC boundary. */
-  const secret = (itx as { secrets: { get(path: string): ProviderSecret } }).secrets.get(args.path);
+  const secret = (itx as { secrets: { get(path: string): OpenaiProjectSecret } }).secrets.get(
+    args.path,
+  );
   try {
     const described = await withRpcResult(secret.__describe(), ({ created, hasMaterial }) => ({
       created,
@@ -726,9 +693,6 @@ export function driverArgs(
     "--utterance-dir",
     options.utteranceDir,
   ];
-  if (options.colleagueEvery !== undefined) {
-    args.push("--colleague-every", String(options.colleagueEvery));
-  }
   return args;
 }
 

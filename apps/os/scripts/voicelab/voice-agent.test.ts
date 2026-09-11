@@ -223,7 +223,7 @@ function makeHarness(Processor: typeof VoiceAgentProcessor = VoiceAgentProcessor
         ...deps,
         nowAtFacetMs: deps.now,
         buildCacheKey: "test-build",
-        dialProvider: (baseUrl) => dialProviderSocket(baseUrl),
+        dialProvider: dialProviderSocket,
         withProject: (fn) => fn(projectRoot.current),
       }),
   });
@@ -276,11 +276,6 @@ function speakerMsDelivered(h: Harness): number {
   );
 }
 
-/** The mirror lane's payloads, oldest first. */
-function mirrored(h: Harness) {
-  return eventsOfType(h, "grok-event").map((event) => event.payload as Record<string, unknown>);
-}
-
 /* ----------------------------------------------------------- write helpers */
 
 function micFrame(deviceMicFrameSeq: number, activation = ACTIVATION) {
@@ -295,8 +290,6 @@ function micFrame(deviceMicFrameSeq: number, activation = ACTIVATION) {
   };
 }
 
-const SEAM = "https://fake.provider.test/v1/live/sessions";
-
 /**
  * Get to "a live call with a started session", which almost every test needs
  * and none of them is about.
@@ -304,7 +297,7 @@ const SEAM = "https://fake.provider.test/v1/live/sessions";
 async function callIsLive(h: Harness, configured: Record<string, unknown> = {}): Promise<string> {
   await h.append({
     type: "events.iterate.com/voice-agent/configured",
-    payload: { providerBaseUrl: SEAM, ...configured },
+    payload: configured,
   });
   await h.append(micFrame(1));
   await h.settle();
@@ -407,13 +400,13 @@ describe("opening a call", () => {
     );
   });
 
-  it("ends rather than truncating microphone audio beyond the five-second opening budget", async () => {
+  it("ends rather than truncating microphone audio beyond the opening budget", async () => {
     const h = makeHarness();
     await h.append({
       type: "events.iterate.com/voice-agent/configured",
-      payload: { providerBaseUrl: SEAM },
+      payload: {},
     });
-    const held = Array.from({ length: 5 }, (_, index) => ({
+    const held = Array.from({ length: 21 }, (_, index) => ({
       ...micFrame(index + 1),
       payload: { ...micFrame(index + 1).payload, pcm: speechDelta(1_000, index) },
     }));
@@ -427,7 +420,7 @@ describe("opening a call", () => {
     const overflowing = makeHarness();
     await overflowing.append({
       type: "events.iterate.com/voice-agent/configured",
-      payload: { providerBaseUrl: SEAM },
+      payload: {},
     });
     await overflowing.append(...held, micFrame(99));
     await overflowing.settle();
@@ -455,7 +448,7 @@ describe("opening a call", () => {
     const h = makeHarness();
     await h.append({
       type: "events.iterate.com/voice-agent/configured",
-      payload: { providerBaseUrl: SEAM, instructions: "You are Iterate on a small speaker." },
+      payload: { instructions: "You are Iterate on a small speaker." },
     });
     const empty = { ...micFrame(1), payload: { ...micFrame(1).payload, pcm: "" } };
     await h.append(empty);
@@ -476,7 +469,7 @@ describe("opening a call", () => {
     const h = makeHarness();
     await h.append({
       type: "events.iterate.com/voice-agent/configured",
-      payload: { providerBaseUrl: SEAM, instructions: "You are Iterate on a small speaker." },
+      payload: { instructions: "You are Iterate on a small speaker." },
     });
     await h.append(micFrame(1), micFrame(2), micFrame(3));
     await h.settle();
@@ -543,17 +536,15 @@ describe("opening a call", () => {
     expect(later).toEqual(["session.input_audio.append", "session.input_audio.append"]);
   });
 
-  it("certificate overrides ride session.start: model, voice, backend, tools", async () => {
+  it("certificate overrides reach the backend delegation and tools", async () => {
     const h = makeHarness();
     await callIsLive(h, {
-      providerModel: "gpt-live-2",
-      providerVoice: "vesper",
       backend: { model: "gpt-5.6-terra", reasoningEffort: "none", serviceTier: "default" },
       tools: [{ name: "hang_up", description: "End the call." }],
     });
     const session = h.provider.startedWith;
-    expect(session.model).toBe("gpt-live-2");
-    expect((session.audio as { output: { voice: string } }).output.voice).toBe("vesper");
+    expect(session.model).toBe("gpt-live-1");
+    expect((session.audio as { output: { voice: string } }).output.voice).toBe("marin");
     const responses = (session.delegation as { responses: Record<string, unknown> }).responses;
     expect(responses.model).toBe("gpt-5.6-terra");
     expect(responses.reasoning).toEqual({ effort: "none" });
@@ -569,7 +560,7 @@ describe("opening a call", () => {
     const h = makeHarness();
     await h.append({
       type: "events.iterate.com/voice-agent/configured",
-      payload: { providerBaseUrl: SEAM },
+      payload: {},
     });
     await h.append(
       {
@@ -591,40 +582,11 @@ describe("opening a call", () => {
     expect(String(h.provider.startedWith.instructions)).not.toContain("Count to three.");
   });
 
-  it("greets on pickup with an instructions append, and only when the certificate asked", async () => {
-    const greeted = makeHarness();
-    await greeted.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: { providerBaseUrl: SEAM, greeting: true },
-    });
-    await greeted.append(micFrame(1));
-    await greeted.settle();
-    greeted.provider.start();
-    await greeted.settle();
-    const appended = greeted.provider.sentOfType("session.instructions.append");
-    expect(appended).toHaveLength(1);
-    expect(appended[0]!.delegation_id).toBeNull();
-    expect(String(appended[0]!.content)).toContain("greet them now");
-
-    /* No greeting on the certificate, nothing appended — the open-mic rooms
-     * did not ask to be welcomed. */
-    const quiet = makeHarness();
-    await quiet.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: { providerBaseUrl: SEAM },
-    });
-    await quiet.append(micFrame(1));
-    await quiet.settle();
-    quiet.provider.start();
-    await quiet.settle();
-    expect(quiet.provider.sentOfType("session.instructions.append")).toHaveLength(0);
-  });
-
   it("ends the call when the handshake never completes", async () => {
     const h = makeHarness();
     await h.append({
       type: "events.iterate.com/voice-agent/configured",
-      payload: { providerBaseUrl: SEAM },
+      payload: {},
     });
     await h.append(micFrame(1));
     await h.settle();
@@ -632,7 +594,7 @@ describe("opening a call", () => {
     await h.settle();
     const ended = eventsOfType(h, "conversation-ended");
     expect(ended).toHaveLength(1);
-    expect((ended[0]!.payload as { reason: string }).reason).toContain("handshake");
+    expect((ended[0]!.payload as { reason: string }).reason).toContain("did not become ready");
     expect(h.provider.closed).toBe(true);
   });
 });
@@ -640,12 +602,10 @@ describe("opening a call", () => {
 describe("the dial", () => {
   it("carries no model in the URL and the credential only to OpenAI", async () => {
     const h = makeHarness();
-    await dialProviderSocket(null);
-    await dialProviderSocket(SEAM);
+    await dialProviderSocket();
     expect(h.dialled[0]!.url).toBe("https://api.openai.com/v1/live/sessions");
     expect(h.dialled[0]!.url).not.toContain("model=");
     expect(h.dialled[0]!.headers.Authorization).toBe('Bearer getSecret("/secrets/openai")');
-    expect(h.dialled[1]!.headers.Authorization).toBeUndefined();
     expect(h.sockets[0]!.accepted).toBe(true);
     expect(h.sockets[0]!.binaryType).toBe("arraybuffer");
   });
@@ -1158,6 +1118,34 @@ describe("ending a call", () => {
     expect(h.state().call).toBeNull();
   });
 
+  it("does not append a late dial failure for A after B has replaced it", async () => {
+    const h = makeHarness();
+    let resolveFirstDial: ((response: Response) => void) | null = null;
+    let dials = 0;
+    vi.stubGlobal("fetch", () => {
+      dials += 1;
+      if (dials === 1) {
+        return new Promise<Response>((resolve) => {
+          resolveFirstDial = resolve;
+        });
+      }
+      return new Promise<Response>(() => {});
+    });
+    await h.append(micFrame(1));
+    await h.settle();
+    await h.append({
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { activation: ACTIVATION, reason: "button" },
+    });
+    await h.settle();
+    await h.append(micFrame(2, "test-activation-b"));
+    await h.settle();
+    resolveFirstDial!({ webSocket: { close: () => {} } } as unknown as Response);
+    await h.settle();
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    expect(h.state().call).toMatchObject({ activation: "test-activation-b" });
+  });
+
   it("a device-appended obituary silences the speaker, closes the session and frees the dial NOW", async () => {
     const h = makeHarness();
     const conversationId = await callIsLive(h);
@@ -1290,46 +1278,22 @@ describe("ending a call", () => {
     expect(eventsOfType(fed, "conversation-ended")).toHaveLength(0);
   });
 
-  it("re-dials immediately when the provider closes under a quiet live call", async () => {
-    /* OpenAI's socket dropped 2:51 into a live call with no session.closed
-     * first (2026-09-11); ending the conversation for it cut a sentence in
-     * half. The drop is recorded and the existing call re-dials without
-     * waiting for a caller who has already finished speaking. */
+  it("ends an interrupted provider session rather than replaying it", async () => {
     const closed = makeHarness();
     await callIsLive(closed);
-    const firstSocket = closed.provider;
     closed.provider.push({ type: "session.closed", reason: "expired", usage: { seconds: 9 } });
     await closed.settle();
-    expect(eventsOfType(closed, "conversation-ended")).toHaveLength(0);
     const recorded = eventsOfType(closed, "provider-disconnected");
     expect(recorded).toHaveLength(1);
     expect((recorded[0]!.payload as { reason: string }).reason).toContain("expired");
-    expect(closed.provider).not.toBe(firstSocket);
-    expect(closed.provider.sentOfType("session.start")).toHaveLength(1);
-    expect(eventsOfType(closed, "conversation-ended")).toHaveLength(0);
+    expect(eventsOfType(closed, "conversation-ended")).toHaveLength(1);
 
     const dropped = makeHarness();
     await callIsLive(dropped);
     dropped.provider.close();
     await dropped.settle();
-    expect(eventsOfType(dropped, "conversation-ended")).toHaveLength(0);
+    expect(eventsOfType(dropped, "conversation-ended")).toHaveLength(1);
     expect(eventsOfType(dropped, "provider-disconnected")).toHaveLength(1);
-    expect(dropped.provider.sentOfType("session.start")).toHaveLength(1);
-  });
-
-  it("gives up on a provider that closes three times in two minutes", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    for (let drop = 0; drop < 3; drop++) {
-      h.provider.close();
-      await h.settle();
-      if (drop < 2) {
-        expect(h.provider.sentOfType("session.start")).toHaveLength(1);
-      }
-    }
-    const ended = eventsOfType(h, "conversation-ended");
-    expect(ended).toHaveLength(1);
-    expect((ended[0]!.payload as { reason: string }).reason).toContain("3 times");
   });
 
   it("does not revive an ended call when its abandoned provider closes or the facet restarts", async () => {
@@ -1443,27 +1407,5 @@ describe("eviction", () => {
     await h.settle();
     await answer(h, 200);
     expect(speakerMsDelivered(h)).toBeGreaterThan(0);
-  });
-});
-
-/* ========================================================================== */
-/* THE MIRROR                                                                 */
-/* ========================================================================== */
-
-describe("the mirror lane", () => {
-  it("replaces an audio delta's bytes with their length and records client commands", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    h.provider.speech(100);
-    h.provider.push({ type: "session.usage.updated", usage: { seconds: 3 } });
-    h.provider.backendFunctionCall("call_m", "exec_typescript", '{"code":"async (itx) => 1"}');
-    await h.settle();
-    const lane = mirrored(h);
-    const delta = lane.find((payload) => payload.type === "session.output_audio.delta")!;
-    expect(delta.delta).toBeUndefined();
-    expect(delta.deltaBytes).toBe(MAX_SPEAKER_PAYLOAD_BYTES);
-    expect(lane.some((payload) => payload.type === "session.usage.updated")).toBe(true);
-    expect(lane.some((payload) => payload.type === "client.response.item.create")).toBe(true);
-    expect(lane.some((payload) => payload.type === "client.response.create")).toBe(true);
   });
 });

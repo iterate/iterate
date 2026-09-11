@@ -48,27 +48,11 @@ export interface VoiceBackendInput {
 export interface SetupVoiceAgentOptions {
   /** The conversation stream. A fresh /agents/voice/* path is generated when omitted. */
   streamPath?: string;
-  /**
-   * Dial THIS instead of api.openai.com, for a deterministic test.
-   *
-   * NO CREDENTIAL FOLLOWS IT — see `secretForHost` in voice-agent.ts: a host
-   * that is not OpenAI's gets no Authorization header and no setup gate.
-   */
-  providerBaseUrl?: string;
-  /** Model and voice overrides; `gpt-live-1` and `marin` by default. */
-  providerModel?: string;
-  providerVoice?: string;
   /** What the voice is told it is — persona and tone. The delegation
    * policy is appended by the agent; keep this short. */
   instructions?: string;
   /** Classify the answer into mouth shapes for a face-rendering client. */
   visemes?: boolean;
-  /**
-   * Ask the voice to speak first when a call connects. It is one instructions
-   * append at `session.started`; the model hears the capture held through the
-   * dial and decides for itself whether to greet over somebody mid-sentence.
-   */
-  greeting?: boolean;
   /** Backend overrides — see {@link VoiceBackendInput}. */
   backend?: VoiceBackendInput;
   /** Tools the backend may call — see {@link VoiceToolInput}. */

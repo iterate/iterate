@@ -190,14 +190,16 @@ export async function boards(options: BoardsOptions) {
       const connection = await itx.streams.get(streamPath).openConnection({
         connectionKey: `boards-${board.name}-${askedAt}`,
         eventTypes: [
-          "events.iterate.com/voice-agent/grok-event",
           "events.iterate.com/voice-agent/spk-frame",
+          "events.iterate.com/voice-agent/utterance-transcript",
+          "events.iterate.com/voice-agent/answer-transcript",
+          "events.iterate.com/voice-agent/provider-error",
+          "events.iterate.com/voice-agent/provider-disconnected",
         ],
         processEventBatch: (batch: { events?: { type: string; payload?: unknown }[] }) => {
           for (const event of batch.events ?? []) {
             const payload = (event.payload ?? {}) as {
-              type?: string;
-              delta?: string;
+              text?: string;
               lastFrameOfAnswer?: boolean;
             };
             /* One count per answer the voice finished — GPT-Live has no
@@ -210,21 +212,17 @@ export async function boards(options: BoardsOptions) {
               responsesCreated += 1;
               continue;
             }
-            /* The mirror carries the provider's transcript fragments for
-             * both speakers; the user's arrive as one stream of deltas. */
-            if (payload.type === "session.output_transcript.delta") {
-              saidBack += payload.delta ?? "";
-            }
-            if (payload.type === "session.input_transcript.delta") {
-              heardUs += payload.delta ?? "";
-            }
+            if (event.type === "events.iterate.com/voice-agent/answer-transcript")
+              saidBack += payload.text ?? "";
+            if (event.type === "events.iterate.com/voice-agent/utterance-transcript")
+              heardUs += payload.text ?? "";
           }
         },
       });
 
       try {
-        /* Let the greeting finish rather than talking over it: an interrupted
-         * greeting is a different test, and a flakier one. */
+        /* Let the call settle before speaking: interruption is a different
+         * test, and a flakier one. */
         await sleep(4000);
         if (board.pushToTalk) await kit.pushToTalk.start();
         await run("say", ["-r", "170", prompt]);
