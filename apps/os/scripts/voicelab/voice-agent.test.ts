@@ -20,6 +20,7 @@ import {
   MAX_SPEAKER_PAYLOAD_BYTES,
   VoiceAgentContract,
   VoiceAgentProcessor,
+  SILENCE_FILL_MS,
 } from "../../../../packages/voice-agent/src/voice-agent.ts";
 
 /* ========================================================================== */
@@ -375,6 +376,28 @@ describe("opening a call", () => {
     const appends = h.provider.sentOfType("session.input_audio.append");
     expect(appends.at(-1)!.audio).toBe(micFrame(7).payload.pcm);
     expect(Buffer.from(String(appends.at(-1)!.audio), "base64")).toHaveLength(640);
+  });
+
+  it("keeps the provider's input stream continuous: silence fills every 100 ms the device is quiet", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    const sentAtStart = h.provider.sentOfType("session.input_audio.append").length;
+    /* A released button: nothing from the device for a second. */
+    await h.advanceTime(1_000);
+    await h.settle();
+    const fills = h.provider.sentOfType("session.input_audio.append").slice(sentAtStart);
+    expect(fills.length).toBeGreaterThanOrEqual(9);
+    const silence = Buffer.from(String(fills[0]!.audio), "base64");
+    expect(silence).toHaveLength(SILENCE_FILL_MS * 32);
+    expect(silence.every((byte) => byte === 0)).toBe(true);
+    /* Device audio suppresses the fill for its own window: one mic frame,
+     * then 60 ms, and nothing but that frame went out. */
+    const before = h.provider.sentOfType("session.input_audio.append").length;
+    await h.append(micFrame(50));
+    await h.advanceTime(60);
+    await h.settle();
+    const since = h.provider.sentOfType("session.input_audio.append").slice(before);
+    expect(since.map((append) => append.audio)).toEqual([micFrame(50).payload.pcm]);
   });
 
   it("drops an empty mic frame instead of forwarding it (the provider rejects empty audio)", async () => {

@@ -198,6 +198,21 @@ const TURN_GAP_MS = 1_200;
 export const IDLE_TIMEOUT_MS = 60_000;
 
 /**
+ * The provider hears silence when the device sends nothing. GPT-Live's
+ * session timeline is driven by INPUT audio ("keep input audio running,
+ * including silence" — its docs), and a client that goes quiet between
+ * utterances (a released button, the C driver's converse mode) starved it:
+ * measured on preview-7 (2026-09-11) the answer to "count to sixty" died
+ * after "Okay. one two" when the client sent nothing, and ran to sixty when
+ * it sent silence frames. So the facet fills the gaps itself: whenever no
+ * device audio has been forwarded for this long, one frame of digital
+ * silence of this length goes to the provider instead. A device that streams
+ * continuously never triggers it.
+ */
+export const SILENCE_FILL_MS = 100;
+const SILENCE_FILL_FRAME_B64 = bytesToBase64(new Uint8Array(SILENCE_FILL_MS * 32));
+
+/**
  * A person whose last transcript fragment is younger than this is still
  * talking. GPT-Live raises a delegation at the first pause, mid-request, and
  * the backend then works from the first clause alone (measured 2026-09-11:
@@ -919,6 +934,9 @@ interface Dial {
   userTranscript: string;
   /** Facet clock at the last user transcript fragment. */
   lastUserFragmentAtFacetMs: number | null;
+  /** Facet clock when device audio was last forwarded to the provider; the
+   * silence fill covers everything after it. */
+  lastMicAudioAtFacetMs: number;
   /** How much of `userTranscript` the backend has been given — carried by
    * the delegation itself at creation, forwarded with tool results after. */
   forwardedUserChars: number;
@@ -957,6 +975,7 @@ const freshDial = (conversationId: string): Dial => ({
   lastProgressNoteAtFacetMs: null,
   userTranscript: "",
   lastUserFragmentAtFacetMs: null,
+  lastMicAudioAtFacetMs: 0,
   forwardedUserChars: 0,
   timelineMs: 0,
   turns: { user: null, assistant: null },
@@ -1238,6 +1257,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
 
         const dial = this.#dial;
         if (dial !== null && dial.ready && dial.socket !== null) {
+          dial.lastMicAudioAtFacetMs = this.deps.nowAtFacetMs();
           this.#sendMicAudio(dial.socket, micB64);
         } else if (this.#micQueue.length < MAX_HELD_MIC_FRAMES) {
           this.#micQueue.push(micB64);
@@ -1580,6 +1600,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
         const callerSpoke = this.#micQueue.some((frame) => peakOfBase64Pcm16(frame) >= SPEECH_PEAK);
         for (const held of this.#micQueue) this.#sendMicAudio(dial.socket!, held);
         this.#micQueue = [];
+        dial.lastMicAudioAtFacetMs = receivedAtFacetMs;
+        this.#startSilenceFill(dial);
         this.runInBackground(() =>
           append({
             type: "events.iterate.com/voice-agent/conversation-accepted",
@@ -2040,6 +2062,25 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * (measured 2026-09-11, a Mac talk run heard nothing back). The ONE site
    * that knows the provider's spelling of "here is audio".
    */
+  /**
+   * The silence fill: a self-rescheduling tick (like the idle countdown, so
+   * the keepalive's wedge detector never sees one endless task) that keeps
+   * the provider's input stream continuous while the device is quiet.
+   */
+  #startSilenceFill(dial: Dial): void {
+    const tick = async (): Promise<void> => {
+      await this.deps.sleep(SILENCE_FILL_MS);
+      if (this.#dial !== dial || dial.socket === null || !dial.ready) return;
+      const nowAtFacetMs = this.deps.nowAtFacetMs();
+      if (nowAtFacetMs - dial.lastMicAudioAtFacetMs >= SILENCE_FILL_MS) {
+        dial.lastMicAudioAtFacetMs = nowAtFacetMs;
+        this.#sendMicAudio(dial.socket, SILENCE_FILL_FRAME_B64);
+      }
+      this.runInBackground(tick);
+    };
+    this.runInBackground(tick);
+  }
+
   #sendMicAudio(socket: WebSocket, b64: string): void {
     const padded = b64.length % 4 === 0 ? b64 : b64 + "=".repeat(4 - (b64.length % 4));
     socket.send(JSON.stringify({ type: "session.input_audio.append", audio: padded }));
