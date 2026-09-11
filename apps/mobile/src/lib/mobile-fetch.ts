@@ -20,14 +20,15 @@ export type MobileFetchResponse = {
   body: Uint8Array | null;
 };
 
-/** A buffered HTTP bridge; the final network request runs on the phone. */
+/** A buffered HTTP bridge; the final network request runs on the connected client. */
 export class MobileFetchCapabilities extends RpcTarget {
   #fetch: typeof fetch;
   #isForeground: () => boolean;
 
-  constructor(nativeFetch: typeof fetch, isForeground: () => boolean) {
+  constructor(clientFetch: typeof fetch, isForeground: () => boolean) {
     super();
-    this.#fetch = nativeFetch;
+    // Browser fetch requires its global receiver, not this RPC target as `this`.
+    this.#fetch = clientFetch.bind(globalThis);
     this.#isForeground = isForeground;
   }
 
@@ -39,7 +40,7 @@ export class MobileFetchCapabilities extends RpcTarget {
     const timer = setTimeout(() => abort.abort(), 30_000);
     try {
       const headers = new Headers(request.headers);
-      // The native HTTP stack owns framing for the newly constructed request.
+      // The client's HTTP stack owns framing for the newly constructed request.
       for (const name of ["host", "connection", "content-length", "transfer-encoding"])
         headers.delete(name);
       const response = await this.#fetch(request.url, {
@@ -70,8 +71,8 @@ export class MobileFetchCapabilities extends RpcTarget {
 
 /** Published with the mount so agent scripts can discover the bridge's byte contract. */
 export const MOBILE_FETCH_TYPES = `export interface MobileCapabilities {
-  /** HTTP(S) from the foreground phone. Buffered bodies up to 8 MiB; 30s timeout.
-   * Redirects stay on the phone; native cookie and redirect behavior applies. */
+  /** HTTP(S) from the foreground client. Buffered bodies up to 8 MiB; 30s timeout.
+   * Redirects stay on the client; its cookie and CORS rules apply. */
   fetch(request: {
     url: string;
     method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";

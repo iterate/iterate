@@ -5,7 +5,7 @@ size: medium
 
 # Run selected sandbox HTTP requests through a connected phone
 
-Status: implemented and verified on preview, including real sandbox curl, replay, and cleanup. The phone bridge, separate readiness event, example, prompt, and normal-forwarding API are ready for review. Physical iPhone/APNs verification remains manual. No PR is being opened.
+Status: implemented and verified on preview. The browser spec opens the real notification and proves sandbox curl uses the browser's public IP. Native and web share registration; replay and cleanup pass. Physical iPhone/APNs verification remains manual. No PR is being opened.
 
 ## Request and decisions
 
@@ -31,7 +31,7 @@ A running itx script can intercept sandbox HTTP(S), forward unmatched requests n
 - [x] Forward an intercepted request with `next`, proving it neither recurses nor bypasses denial/secret handling. *Project DO continuation; hosted-script test passes locally and on preview.*
 - [x] Register the phone fetch target with stable identity and reconnect/disposal ownership. *Shared session projectConnection factory; mobile fetch mount at `/clients/mobile/<deviceId>`.*
 - [x] Notify, open, register, and acknowledge readiness through existing device streams with a separate event. *Notification acknowledgement module, push tap and in-app row share the flow.*
-- [x] Demonstrate an event-driven script that waits and returns client-fetched bytes to sandbox curl; unmatched requests use `next`. *`sandbox-phone-fetch` catalogue example; real preview sandbox returned HTTP 422 through the test client.*
+- [x] Demonstrate an event-driven script that waits and returns client-fetched bytes to sandbox curl; unmatched requests use `next`. *`sandbox-phone-fetch` catalogue example; the browser spec opens its notification and returns the browser's detected public IP to a real preview sandbox.*
 - [x] Test readiness ordering, early acknowledgement replay, disconnected clients, and HTTP byte/status preservation. *Mobile unit tests and the deployed two-session replay test cover these outcomes.*
 - [x] Update prompt, documentation, and generated public types. *Prompt stays within its existing budget; mobile README explains the experiment and limitations.*
 - [x] Run appropriate tests, repository checks, and deployed-preview verification with coherent operation outcomes. *Full unit suite and static checks pass; final preview run passes all 13 egress/phone tests, with the trace and state audit below.*
@@ -53,3 +53,16 @@ A running itx script can intercept sandbox HTTP(S), forward unmatched requests n
 - Device stream: request **14**, push settlement **17** (`device-unavailable`, expected because the test disables pushes), opened **18**, capability ready **22**. No pending notification remains.
 - Script `25a77f13-c058-4ba2-bd26-8c6f74746d53`: root requested **56**, started **61**, settled **75** with success, curl exit 0, and `fetched by the test phone\nHTTP 422\n`. The capability-host snapshot has no pending script executions. Client presence is disconnected after cleanup; the test also proves released interception forwards without calling the phone again.
 - Successful call `log_0c93a19cf66d4e34be8e9edc493ad94a`, trace `bb9572f4234ffcbe97370ff103ae1254`: both the wide log and `CapabilityHost.runScript` span report `ok`. The span lasts 16.844s and has its WebSocket GET parent. Untruncated time-partitioned queries return **3,004 spans, zero error outcomes** for 17:08–17:09 UTC.
+
+## Review follow-up — 2026-09-11
+
+- [x] Enable the same fetch registration and notification acknowledgement on web. *Removed both platform exclusions. The browser spec also caught an unbound global fetch call; the bridge now preserves its global receiver. Browser CORS still applies.*
+- [x] Replace the Node-driven sandbox case with a readable mobile browser spec. *`specs/mobile/sandbox-phone-fetch.spec.ts` uses a public captun IP echo, compares browser and server egress, opens the in-app notification, observes the browser request, and checks the real sandbox's curl output. The separate OS test retains replay, bytes/status, and disconnected-client coverage.*
+- [x] Clarify the existing live capability API. *`projects.connect(projectId, { capabilities, ... })` already registered live capabilities. The `Clients.get` change exposes the existing dynamic mount to the script typechecker; it adds no registration mechanism.*
+- [x] Verify clean connection teardown. *The first successful browser run exposed a pre-existing `connectItxReady` ownership leak: awaiting a scoped RPC promise discarded its parent-session wrapper. Retain that wrapper when returning the resolved stub, and dispose on failed authentication. A real WebSocket regression first timed out, then passed; authentication failures are never retried.*
+
+Follow-up checks: **254 mobile unit tests**, **7 SDK connection/ownership tests**, full repository typechecks, lint, knip, and formatting pass. Both the new browser spec (**35.7s**) and existing mobile notifications spec pass without retries; the deployed OS replay test also passes. The browser test first failed on the native-only guard, then exposed the fetch receiver issue before passing.
+
+Final browser proof: preview-2, OS version `2da2554b-b91d-4c13-a820-5089ec0ee20d`, project `prj_4d7a2e6777574b42bd6c08a3489aeeab`, 17:35:56–17:36:32 UTC. Device request **15**, opened **20**, capability ready **23**; push settlement **18** is the expected `device-unavailable` because push is disabled for the spec. Script `936eab0f-8b41-436f-b832-65b16dfb6eac` requested **67**, started **71**, settled **77** with curl exit 0 and HTTP 200. No pending script or notification remains; the client is disconnected after teardown.
+
+Call `log_3593ab4ffaf843d98e28e682bfdaeb2c`, trace `10c77f8f63df715423279f6d921a584c`: script span **11.486s**, wide log and parent WebSocket GET all report `ok`. The complete query for 17:35–17:37 UTC returns **1,300 events, zero error outcomes**, including normal socket shutdown after the ownership fix.

@@ -269,7 +269,9 @@ testable from the phone alone. The runner shipped in PR #2059.
 4. Tap its push, or tap the request in the app's Notifications list. The waiting
    sandbox curl should print the endpoint's response and HTTP status.
 
-The app connects at `/clients/mobile/<deviceId>` and publishes `capabilities.fetch`.
+The app connects at `/clients/mobile/<deviceId>` and publishes `capabilities.fetch`
+on both native and web. The web build uses browser fetch with normal CORS rules;
+an endpoint must allow the app's origin for the browser to read its response.
 The shared itx session owns registration and republishes it on reconnect. Any
 project script can call it while this phone has the project connected and is
 foregrounded; the notification is a way to wake a waiting script, not a per-call
@@ -291,10 +293,18 @@ approval and secret substitution; matched phone requests bypass that forwarding
 and receive no substituted project secrets. A Project Durable Object restart
 loses the live interceptor. Use this for an experiment, not a durable routing rule.
 
-The focused OS e2e test drives the example through a deployed sandbox and the
-same fetch/acknowledgement code in a Node client. It disables push delivery on
-the test device and opens its in-app request. APNs delivery, native backgrounding,
-and the handset's actual exit IP still need the physical-phone check above.
+`specs/mobile/sandbox-phone-fetch.spec.ts` runs the example against a real
+deployed sandbox, opens its notification in the mobile web UI, and checks the
+response against a public tunnel's detected browser IP. It observes the browser
+network response and checks that server egress has a different IP. Run it with:
+
+```sh
+doppler run --project os --config preview_2 -- pnpm spec --project=mobile specs/mobile/sandbox-phone-fetch.spec.ts
+```
+
+The focused OS e2e test separately covers early acknowledgement replay and
+disconnected clients. Both tests disable push delivery on the test device.
+APNs delivery and native backgrounding still need the physical-phone check above.
 
 ## Verification
 

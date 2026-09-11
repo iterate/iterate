@@ -281,6 +281,9 @@ function NotificationRow({
           {row.status.label}
         </Text>
       </Pressable>
+      {acknowledge.isPending ? (
+        <ActivityIndicator accessibilityLabel="Connecting this phone" color={colors.textMuted} />
+      ) : null}
       {phoneFetch ? (
         <Text style={styles.body}>
           {acknowledge.isPending
@@ -292,7 +295,11 @@ function NotificationRow({
                 : "Tap to use this phone."}
         </Text>
       ) : null}
-      {acknowledge.isError ? <Text style={styles.error}>{acknowledge.error.message}</Text> : null}
+      {acknowledge.isError ? (
+        <Text data-type="error" style={styles.error}>
+          {acknowledge.error.message}
+        </Text>
+      ) : null}
       {expanded && row.approvalRequestEventOffset !== null ? (
         <ApprovalNotificationDetail
           baseUrl={baseUrl}

@@ -11,7 +11,7 @@ import {
   retryFailedIterateSession,
   type SessionStub,
 } from "iterate/sdk/itx/react";
-import { AppState, Platform } from "react-native";
+import { AppState } from "react-native";
 import { getAccessToken } from "./auth.ts";
 import { getMobileDeviceId } from "./device-identity.ts";
 import { MobileFetchCapabilities, MOBILE_FETCH_TYPES } from "./mobile-fetch.ts";
@@ -36,7 +36,6 @@ export async function acknowledgeMobileNotification(input: {
   requestOffset: number;
   notificationDate: number;
 }) {
-  if (Platform.OS === "web") throw new Error("Open this notification in the native Iterate app.");
   const session = await getItxSession(input.baseUrl);
   const project = session.projects.get(input.projectId);
   try {
@@ -68,17 +67,12 @@ async function configure(baseUrl: string): Promise<void> {
   configureIterateSession({
     baseUrl,
     projectConnection: (session, projectId) =>
-      Platform.OS === "web"
-        ? session.projects.get(projectId)
-        : session.projects.connect(projectId, {
-            path: `/clients/mobile/${deviceId}`,
-            description: "Foreground phone HTTP fetch using this device's network connection.",
-            capabilities: new MobileFetchCapabilities(
-              fetch,
-              () => AppState.currentState === "active",
-            ),
-            types: MOBILE_FETCH_TYPES,
-          }),
+      session.projects.connect(projectId, {
+        path: `/clients/mobile/${deviceId}`,
+        description: "Foreground client HTTP fetch using this device's network connection.",
+        capabilities: new MobileFetchCapabilities(fetch, () => AppState.currentState === "active"),
+        types: MOBILE_FETCH_TYPES,
+      }),
     credentials: async ({ forceRefresh }) => ({
       type: "bearer",
       token: await getAccessToken(baseUrl, { forceRefresh }),
