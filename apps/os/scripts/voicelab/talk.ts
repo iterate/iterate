@@ -31,7 +31,8 @@ import type { DynamicWorkerCapability } from "iterate/sdk";
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 
 import {
-  installVoiceAgent,
+  installVoiceAgentFromSource,
+  VOICE_AGENT_SOURCE_FILES,
   voiceAgentEntrypointRef,
   voiceAgentFacetRef,
   type VoiceAgentRpc,
@@ -235,11 +236,21 @@ export async function talk(options: TalkOptions = {}) {
    * one. Present is enough: a spec somebody pinned on purpose stays as it
    * is (`voicelab deploy` is the upgrade path), and a repo that already
    * declares the package is left untouched. */
-  const install = await installVoiceAgent(voiceAgentConfigRepo(itx), { existing: "keep" });
+  /* FROM THIS CHECKOUT, NOT FROM A PUBLISHED PACKAGE. The agent is userspace
+   * code and the config repo is its deployment unit, so the checkout's own
+   * copy of the facet's source goes into the repo and the platform builds
+   * it from there on the next call — no OS deploy, no package publish, no
+   * preview pin (which rewrites every published-package spec to the
+   * deployed commit; see installVoiceAgentFromSource). An edit to
+   * packages/voice-agent is live on the next `talk`. */
+  const install = await installVoiceAgentFromSource(
+    voiceAgentConfigRepo(itx),
+    readVoiceAgentSource(),
+  );
   console.log(
     install.changed
-      ? `the repo now names ${install.spec} (${install.commitOid.slice(0, 8)}: ${install.changedPaths.join(", ")})`
-      : `the repo already names ${install.spec} (${install.commitOid.slice(0, 8)})`,
+      ? `the repo now carries this checkout's voice agent (${install.commitOid.slice(0, 8)}: ${install.changedPaths.join(", ")})`
+      : `the repo already carries this checkout's voice agent (${install.commitOid.slice(0, 8)})`,
   );
 
   /* The secret the dial will spend — setup's gate demands the same one
@@ -746,6 +757,15 @@ export function driverArgs(
     args.push("--colleague-every", String(options.colleagueEvery));
   }
   return args;
+}
+
+/** This checkout's copy of the facet's source, keyed as the installer wants it. */
+function readVoiceAgentSource(): Record<(typeof VOICE_AGENT_SOURCE_FILES)[number], string> {
+  const here = fileURLToPath(new URL(".", import.meta.url));
+  const src = path.resolve(here, "../../../../packages/voice-agent/src");
+  return Object.fromEntries(
+    VOICE_AGENT_SOURCE_FILES.map((file) => [file, fs.readFileSync(path.join(src, file), "utf8")]),
+  ) as Record<(typeof VOICE_AGENT_SOURCE_FILES)[number], string>;
 }
 
 /** Incrementally build the host CLI from the current source tree. */
