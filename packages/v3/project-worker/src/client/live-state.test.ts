@@ -31,6 +31,7 @@ function harness() {
     door: () => new Promise<Seed>((resolve) => doorReads.push(resolve)),
     doorReads,
     deliverDelta: (delta: LiveStateDelta) => deliver([{ payload: delta }], {}),
+    deliverRaw: (payload: unknown) => deliver([{ payload }], {}),
   };
 }
 
@@ -109,4 +110,30 @@ test("an abort while the FIRST seed is still pending (a component unmounting) re
   unmounted.abort();
   await expect(connecting).rejects.toThrow(/aborted/); // the signal's own reason (a DOMException)
   expect(disposals).toBe(1);
+});
+
+test("a malformed delta (a non-numeric rev) heals through the door instead of poisoning the held rev", async () => {
+  const h = harness();
+  const connecting = connectLiveState(h.itx, { key: "k", door: h.door });
+  await settle();
+  h.doorReads[0]({ rev: 5, state: { n: 5 } });
+  const connection = await connecting;
+  expect(connection.store.rev()).toBe(5);
+
+  // A frame whose `to` is a numeric STRING would, if applied, become the held rev — then every later
+  // valid frame reads as "behind" (dropped) and the client wedges forever. It must be rejected at the
+  // boundary and healed through the door, exactly like a revision gap.
+  h.deliverRaw({ key: "k", from: 5, to: "9999999999999999999", patch: [{ op: "replace", path: "/n", value: 9 }] });
+  await settle();
+  expect(connection.store.rev()).toBe(5); // NOT poisoned by the bogus rev
+  expect(h.doorReads).toHaveLength(2); // healed via the door
+
+  // After the heal, a well-formed frame still applies normally — the client is not wedged.
+  h.doorReads[1]({ rev: 5, state: { n: 5 } });
+  await settle();
+  h.deliverDelta({ key: "k", from: 5, to: 6, patch: [{ op: "replace", path: "/n", value: 6 }] });
+  await settle();
+  expect(connection.store.rev()).toBe(6);
+  expect(connection.store.get()).toEqual({ n: 6 });
+  await connection.dispose();
 });

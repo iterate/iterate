@@ -3,6 +3,7 @@
 //   live state store  — `createLiveStateStore`: the pure reduce — seed through the door, apply each delta, heal on a gap
 //   live state client — `connectLiveState`: wire an itx session's `subscribe` + a seed door to the store
 
+import { z } from "zod";
 import { applyPatch, type PatchOp } from "../lib.ts";
 
 // ── live state store ── THE CLIENT HALF of live state, for browsers and node test clients.
@@ -24,6 +25,25 @@ import { applyPatch, type PatchOp } from "../lib.ts";
  *  ephemeral event, delivered raw to the subscriber. */
 /** `patch: null` = the change was too large to send — the rev moved, re-seed through the door. */
 export type LiveStateDelta = { key: string; from: number; to: number; patch: PatchOp[] | null };
+
+/** The delta as it arrives over the wire — PARSED, never cast: `from`/`to` MUST be real numbers (a
+ *  non-numeric rev would poison the held revision and silently wedge every later frame), and each
+ *  patch op is a known RFC-6902-subset shape. A frame that fails this heals through the seed door
+ *  rather than being applied — the same recovery the store already runs on a revision gap. */
+const LiveStateDeltaMessage: z.ZodType<LiveStateDelta> = z.object({
+  key: z.string(),
+  from: z.number(),
+  to: z.number(),
+  patch: z
+    .array(
+      z.union([
+        z.object({ op: z.literal("add"), path: z.string(), value: z.unknown() }),
+        z.object({ op: z.literal("replace"), path: z.string(), value: z.unknown() }),
+        z.object({ op: z.literal("remove"), path: z.string() }),
+      ]),
+    )
+    .nullable(),
+});
 
 /** What the producer's seed door returns: the current revision paired with the current value. */
 export type LiveStateSeed<S> = { rev: number; state: S };
@@ -165,10 +185,17 @@ export async function connectLiveState<S>(
     target: (events: unknown[]) => {
       if (disposed) return;
       for (const e of events) {
-        const delta = JSON.parse(
-          JSON.stringify((e as { payload: unknown }).payload),
-        ) as LiveStateDelta;
-        if (delta.key === opts.key) store.apply(delta, reseed);
+        // capnweb hands each event as a live proxy value — deep-copy to a plain object, then PARSE
+        // the frame (never cast network data). A malformed frame heals via the door instead of
+        // poisoning the held rev or throwing out of this callback.
+        const parsed = LiveStateDeltaMessage.safeParse(
+          JSON.parse(JSON.stringify((e as { payload: unknown }).payload)),
+        );
+        if (!parsed.success) {
+          reseed();
+          continue;
+        }
+        if (parsed.data.key === opts.key) store.apply(parsed.data, reseed);
       }
     },
   });
