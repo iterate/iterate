@@ -1044,6 +1044,38 @@ test("set() chains rev exactly and emits the diff a client can apply", async () 
   expect(live.snapshot()).toEqual({ rev: epoch + 2, state: { n: 2 } });
 });
 
+test("cross-hop ordering: each delta append is issued only after the previous one settles", async () => {
+  // The ORDERING path's guarantee (a cross-hop sink mints a fresh capability per call, so appends can
+  // race on the wire): deltas ride ONE chain, append(N+1) issued only once append(N) has settled — so
+  // mint order is the delivery order. This locks that serialization: with a fast-path that cleared an
+  // in-flight flag before the queue drained, a later delta could fork a parallel chain and overtake an
+  // earlier one (commit order 1, 3, 2).
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0)); // drain the microtask queue
+  const issued: number[] = [];
+  const resolvers: Array<() => void> = [];
+  const sink = {
+    append(event: { payload?: Record<string, unknown> }) {
+      issued.push((event.payload as { to: number }).to);
+      return new Promise<void>((resolve) => resolvers.push(resolve));
+    },
+  };
+  const live = new LiveState(sink, "k", { n: 0 });
+  const base = live.snapshot().rev;
+  live.set({ n: 1 });
+  live.set({ n: 2 });
+  live.set({ n: 3 });
+  await flush();
+  expect(issued).toEqual([base + 1]); // only the first append is out; the rest wait for it to settle
+  resolvers[0]!();
+  await flush();
+  expect(issued).toEqual([base + 1, base + 2]);
+  resolvers[1]!();
+  await flush();
+  expect(issued).toEqual([base + 1, base + 2, base + 3]);
+  resolvers[2]!();
+  await live.deltasSettled();
+});
+
 test("the SAME object set again is a no-op — no diff computed, no delta, the rev untouched", () => {
   const sink = collectingSink();
   const initial = { n: 1, big: Array.from({ length: 1000 }, (_, i) => ({ i })) };

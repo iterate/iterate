@@ -726,7 +726,6 @@ export class LiveState<S> {
    *  chain idle) is issued synchronously; only when an append is already in flight does the next
    *  queue behind it. Nobody waits on this. */
   #liveStateDeltaAppendChain: Promise<unknown> = Promise.resolve();
-  #liveStateDeltaAppendInFlight = false;
   /** Whether to order delta appends across turns (above). TRUE by default, so a mini-app holder gets
    *  it without opting in. FALSE for the core reduce, whose sink is the stream's OWN synchronous
    *  `append` (same isolate, no reorder possible): there the delta must land densely inside the
@@ -804,24 +803,13 @@ export class LiveState<S> {
       }
       return;
     }
-    if (this.#liveStateDeltaAppendInFlight) {
-      // A rapid cross-hop pair: queue behind the in-flight append, in mint order.
-      this.#liveStateDeltaAppendChain = this.#liveStateDeltaAppendChain
-        .then(emitDelta)
-        .catch(() => {});
-      return;
-    }
-    // The chain is idle: emit SYNCHRONOUSLY; the flag tracks a cross-hop sink's pending promise.
-    this.#liveStateDeltaAppendInFlight = true;
-    this.#liveStateDeltaAppendChain = (() => {
-      try {
-        return Promise.resolve(emitDelta()).catch(() => {});
-      } catch {
-        return Promise.resolve(); // a synchronously-throwing sink: the gap, contained
-      }
-    })().finally(() => {
-      this.#liveStateDeltaAppendInFlight = false;
-    });
+    // The ORDERING path (a cross-hop sink mints a FRESH capability per call, so two deltas can race
+    // on the wire): every delta rides ONE chain, each emitted only after the previous append settles,
+    // so mint order IS the delivery order. No in-flight flag + synchronous fast path — clearing the
+    // flag in the first append's `finally` while a later delta was still queued let a newer delta see
+    // "idle", fork a parallel chain, and overtake the queued one (commit order 1, 3, 2). The chain's
+    // own `.catch` contains a dropped delta (a sync throw or a rejection): a gap the client heals.
+    this.#liveStateDeltaAppendChain = this.#liveStateDeltaAppendChain.then(emitDelta).catch(() => {});
   }
 
   /** Every delta minted so far has reached the sink (or failed into the chain gap) — the test seam
