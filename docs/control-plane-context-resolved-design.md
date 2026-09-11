@@ -8,6 +8,28 @@ compatibility**. All four reviews agree the architecture is viable; the security
 contract below is the revised, review-hardened version. `(verify)` = proven or
 still to prove; `(later)` = deliberately deferred.
 
+## Implementation status (2026-09-11)
+
+Shape first, insecure on purpose, security captured as expected-fails — per the explicit
+"get the shape in place and clean first, before we write thousands of lines threading permissions
+everywhere" direction. Landed (typecheck + full workers lane green, committed locally, not pushed):
+
+- **Context hierarchy** — `Session`→`SessionRpcTarget`, `IterateContext`→`IterateContextRpcTarget`;
+  `GLOBAL_PROJECT_ID`; `session.user` vends a global context (same surface as a project's).
+- **`IterateRpcTarget`** — the one `/api` root with `authenticate(credentials)` (`from-server-cookie`
+  | `admin-secret`), served at `/api` and `/internal/rpc`; `UnauthenticatedSession` deleted.
+- **`session.organizations.get(id)`** — the org context catalog.
+- **Security spec** — `__workers-tests__/control-plane-contexts.test.ts`: passing shape tests + five
+  `test.fails` for the naughty things the path-mask must refuse (they pass while insecure, flip red
+  when enforcement lands).
+
+Deferred (the permission plumbing, by direction — captured, not built):
+
+- **Single `invoke(call, args, caller)` door** (the `Caller` threading) — this IS the "threading
+  permissions through async handoffs"; do it when we enforce the path-mask.
+- **Privileged `ctx.exports` account facet + D1 + durable auth fact** — the facet/effect plumbing.
+- **Full `/internal/rpc` deletion** — needs the OAuth-gate admission rework (admin via `/api`).
+
 ## Headline from the review
 
 The architecture (shared global namespace, one dispatch spine, privileged
