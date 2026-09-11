@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Code2Icon, FileTextIcon, MessageSquarePlusIcon, PenLineIcon } from "lucide-react";
+import { BotIcon, Code2Icon, FileTextIcon, MessageSquarePlusIcon, PenLineIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { authorLabel } from "@iterate-com/workspace-documents/collab";
@@ -15,6 +15,8 @@ export function DocumentToolbar({
   onReconnect,
   canComment,
   onComment,
+  agentOpen,
+  onToggleAgent,
   view,
   onViewChange,
   actions,
@@ -26,6 +28,9 @@ export function DocumentToolbar({
   onReconnect: () => void;
   canComment: boolean;
   onComment: () => void;
+  /** Whether the workspace's agent feed is the open side pane. */
+  agentOpen: boolean;
+  onToggleAgent: () => void;
   view: "rich" | "source";
   onViewChange: (value: "rich" | "source") => void;
   actions?: ReactNode;
@@ -74,6 +79,18 @@ export function DocumentToolbar({
             onClick={onComment}
           >
             <MessageSquarePlusIcon aria-hidden className="size-3.5" />
+          </Button>
+        </WithTooltip>
+        <WithTooltip label={agentOpen ? "Show comments" : "Talk to the workspace's agent"}>
+          <Button
+            size="sm"
+            variant={agentOpen ? "default" : "outline"}
+            className="h-8 w-8 px-0"
+            aria-label="Agent"
+            aria-pressed={agentOpen}
+            onClick={onToggleAgent}
+          >
+            <BotIcon aria-hidden className="size-3.5" />
           </Button>
         </WithTooltip>
         <ShareButton />

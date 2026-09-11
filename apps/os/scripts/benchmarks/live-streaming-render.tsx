@@ -4,8 +4,8 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
 import type { AgentUiActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import { AgentLiveActivity } from "../../src/components/agent-feed.tsx";
-import { StreamingCodeBlock } from "../../src/components/streaming-text.tsx";
+import { AgentLiveActivity } from "@iterate-com/ui/components/agent-feed/agent-live-activity";
+import { StreamingCodeBlock } from "@iterate-com/ui/components/agent-feed/streaming-text";
 
 // Stable across every update; this measurement never toggles the activity.
 // oxlint-disable-next-line iterate/no-single-use-helpers -- the benchmark deliberately measures a stable callback prop, including React memoization.

@@ -1,6 +1,8 @@
 import { useMemo } from "react";
 import { Link } from "@tanstack/react-router";
 import { useLiveState } from "iterate/sdk/itx/react";
+import { deriveAgentDisplayState } from "@iterate-com/shared/agent-events";
+import { useTickingNowMs } from "@iterate-com/ui/hooks/use-ticking-now-ms";
 import { NewAgentComposer } from "~/components/new-agent-composer.tsx";
 import {
   AGENT_DISPLAY_STATE_PRESENTATION,
@@ -8,9 +10,8 @@ import {
 } from "~/components/agents/agent-presentation.ts";
 import { agentTitle } from "~/components/agents/agent-tree.ts";
 import { selectRecentlyActiveAgents } from "~/components/agents/recent-agents.ts";
-import { deriveAgentDisplayState, type AgentRecord } from "~/domains/agents/agent-presence.ts";
+import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
-import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 const CLOCK_TICK_MS = 15_000;
 

@@ -4,8 +4,8 @@ import type { FileChangeSummary } from "@iterate-com/workspace-documents/change-
 /**
  * One task card, parsed from a markdown file under tasks/ in a repo mounted
  * in the workspace, the config repo by default (frontmatter
- * `state`/`labels`/`agent` plus title and body). `path` is the repo-relative
- * file path and doubles as the card id.
+ * `state`/`labels` plus title and body). `path` is the repo-relative file
+ * path and doubles as the card id.
  */
 export type TaskCard = {
   path: string;
@@ -13,8 +13,7 @@ export type TaskCard = {
   /** Canonical column: "todo" | "in-progress" | "in-review" | "done" (or a custom literal). */
   state: string;
   labels: string[];
-  agent: string | null;
-  /** Durable attribution: "Name <email>", or a /stream path (linked). */
+  /** Durable attribution: "Name <email>", or the /agents/ path of the agent that wrote it. */
   createdBy: string | null;
   /** Full markdown source of the file (frontmatter included) for the detail editor. */
   source: string;

@@ -2,7 +2,7 @@ import { lazy, Suspense, useState } from "react";
 import { DocumentPreview } from "@iterate-com/ui/components/document-preview";
 import { DocumentComments } from "@iterate-com/ui/components/document-comments";
 import { useDocumentReview } from "@iterate-com/workspace-documents/review";
-import { BotIcon, RotateCcwIcon, Trash2Icon } from "lucide-react";
+import { RotateCcwIcon, Trash2Icon } from "lucide-react";
 import { Input } from "@iterate-com/ui/components/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@iterate-com/ui/components/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
@@ -28,7 +28,6 @@ import {
 import { stateLabel, type BoardTask } from "../lib/board-model.ts";
 import type { TaskChangeStatus } from "../state.ts";
 import type { BoardAddress } from "../lib/board-shared.ts";
-import { projectSlug } from "../lib/project-label.ts";
 import { TaskStateIcon } from "./board.tsx";
 import { TagPicker } from "./tag-picker.tsx";
 
@@ -55,7 +54,6 @@ export function WorkspaceTaskSheet({
   editorApiRef,
   commentIdentity,
   onApplyTransform,
-  onAssignAgent,
   onLiveContent,
   onChangeState,
   onChangeLabels,
@@ -83,8 +81,6 @@ export function WorkspaceTaskSheet({
   commentIdentity: import("@iterate-com/workspace-documents/types").CommentIdentity | null;
   /** Apply a transform to the current local document through the live editor. */
   onApplyTransform: (transform: (source: string) => string) => boolean;
-  /** Assign the task to an agent (commits the mount). */
-  onAssignAgent?: () => Promise<void>;
   onLiveContent: (path: string, content: string) => void;
   onChangeState: (state: string) => void;
   onChangeLabels: (labels: string[]) => void;
@@ -113,7 +109,6 @@ export function WorkspaceTaskSheet({
             editorApiRef={editorApiRef}
             commentIdentity={commentIdentity}
             onApplyTransform={onApplyTransform}
-            onAssignAgent={onAssignAgent}
             onLiveContent={onLiveContent}
             onChangeState={onChangeState}
             onChangeLabels={onChangeLabels}
@@ -140,7 +135,6 @@ function SheetBody({
   editorApiRef,
   commentIdentity,
   onApplyTransform,
-  onAssignAgent,
   onLiveContent,
   onChangeState,
   onChangeLabels,
@@ -168,8 +162,6 @@ function SheetBody({
   commentIdentity: import("@iterate-com/workspace-documents/types").CommentIdentity | null;
   /** Apply a transform to the current local document through the live editor. */
   onApplyTransform: (transform: (source: string) => string) => boolean;
-  /** Assign the task to an agent (commits the mount). */
-  onAssignAgent?: () => Promise<void>;
   onLiveContent: (path: string, content: string) => void;
   onChangeState: (state: string) => void;
   onChangeLabels: (labels: string[]) => void;
@@ -179,7 +171,6 @@ function SheetBody({
   onRequestClose: () => void;
 }) {
   const [status, setStatus] = useState("connecting…");
-  const [assigning, setAssigning] = useState(false);
   const review = useDocumentReview({
     source: liveSource?.() ?? task.source,
     identity: commentIdentity,
@@ -216,22 +207,6 @@ function SheetBody({
           <TagPicker value={task.labels} options={allTags} onChange={onChangeLabels} />
           <div className="ml-auto flex items-center gap-1">
             <span className="font-mono text-[11px] text-muted-foreground">{status}</span>
-            {task.agent === null && onAssignAgent !== undefined && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-muted-foreground"
-                title="Assign an agent (sets in-progress, commits, and briefs it)"
-                disabled={assigning}
-                onClick={() => {
-                  setAssigning(true);
-                  void onAssignAgent().finally(() => setAssigning(false));
-                }}
-              >
-                <BotIcon aria-hidden className="size-3.5" />
-                {assigning ? "Assigning…" : "Assign agent"}
-              </Button>
-            )}
             {changeStatus === undefined ? null : (
               <Button
                 variant="ghost"
@@ -377,32 +352,9 @@ function TaskSheetHeader({
       {task.createdBy !== null && (
         <p className="text-xs text-muted-foreground">
           created by{" "}
-          {task.createdBy.startsWith("/") ? (
-            // A /-prefixed creator is a STREAM PATH (an agent) — link it.
-            <a
-              className="font-mono underline underline-offset-2 hover:text-foreground"
-              href={`https://os.iterate.com/projects/${projectSlug()}/agents/streams${task.createdBy}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {task.createdBy}
-            </a>
-          ) : (
-            task.createdBy
-          )}
-        </p>
-      )}
-      {task.agent !== null && (
-        <p className="text-xs text-muted-foreground">
-          assigned to{" "}
-          <a
-            className="font-mono underline underline-offset-2 hover:text-foreground"
-            href={`https://os.iterate.com/projects/${projectSlug()}/agents/streams${task.agent}`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            {task.agent}
-          </a>
+          <span className={task.createdBy.startsWith("/") ? "font-mono" : undefined}>
+            {task.createdBy}
+          </span>
         </p>
       )}
     </SheetHeader>

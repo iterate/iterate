@@ -1,24 +1,15 @@
 import { z } from "zod";
 import { defineProcessorContract } from "iterate/processors";
 import {
-  AgentUiItemSchema,
   AgentUiStateSchema,
   initialAgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { FeedItemPublication } from "@iterate-com/ui/components/events/feed-publication";
 import {
   AgentProcessorContract,
   AgentRuntimeTransition,
 } from "../agents/agent-processor-contract.ts";
 import { CoreProcessorContract } from "./core-processor-contract.ts";
-
-/** Complete immutable revision. Position is retained when a late fact corrects the item. */
-export const FeedItemPublication = z.strictObject({
-  item: AgentUiItemSchema,
-  firstOffset: z.number().int().nonnegative(),
-  ordinal: z.number().int().nonnegative(),
-  revisionOffset: z.number().int().nonnegative(),
-});
-export type FeedItemPublication = z.infer<typeof FeedItemPublication>;
 
 const FeedLiveStateBase = z.strictObject({
   /** Source lifetime whose publication offsets the browser must mirror; null until its checkpoint loads. */

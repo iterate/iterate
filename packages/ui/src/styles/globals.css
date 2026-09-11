@@ -142,3 +142,29 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ⌘K stream rows flash when their stream is touched: the row remounts (keyed
+   by lastActivityAt) and this one-shot fade plays. An animation, not a
+   transition, so hover/selection color changes stay instant. */
+@keyframes stream-flash {
+  from {
+    background-color: rgb(250 204 21 / 0.35);
+  }
+}
+
+/* Streamed-token reveal (TokenRevealText in components/agent-feed): `both`
+   keeps a token invisible until its animation-delay elapses, so a window's
+   tokens fan in across the ~150ms between coalesced chunk events. */
+@keyframes token-in {
+  from {
+    opacity: 0;
+  }
+}
+.animate-token-in {
+  animation: token-in 120ms both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-token-in {
+    animation: none;
+  }
+}

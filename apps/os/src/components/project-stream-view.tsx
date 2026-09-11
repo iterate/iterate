@@ -13,6 +13,7 @@ import { useAuthClient } from "@iterate-com/auth/client";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
 import {
+  isAgentRuntimeVisiblyActive,
   isAgentUiActivityWorking,
   type AgentUiLlmStep,
   type AgentUiRuntimeTransition,
@@ -20,6 +21,7 @@ import {
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { connectItx, connectIterateSession, reportTransportSuspicion } from "iterate/sdk/itx/react";
 import { useLiveState } from "iterate/sdk/capnweb/react";
+import { QueuedMessagesPanel } from "@iterate-com/ui/components/agent-feed/agent-live-activity";
 import type { Stream } from "../itx-api.generated.ts";
 import type { FeedLiveState } from "~/domains/streams/feed-contract.ts";
 import { FeedPreviewNotice } from "~/components/feed-preview-notice.tsx";
@@ -28,7 +30,6 @@ import { useEventSynchronizedLiveState } from "~/domains/streams/client-librarie
 import { useBrowserStreamStore } from "~/domains/streams/client-libraries/browser/hooks/use-browser-stream-store.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { asBrowserStreamClient } from "~/domains/streams/client-libraries/browser/stream-transport.ts";
-import { QueuedMessagesPanel } from "~/components/agent-feed.tsx";
 import { DeferredSurface } from "~/components/deferred-surface.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
 import { RawEventInspectorContent } from "~/components/raw-event-inspector-panel.tsx";
@@ -206,7 +207,16 @@ function BrowserDatabaseProjectStreamView({
   const agentRuntimeTransition = suppliedAgentRuntimeTransition ?? presentedFeed?.runtimeChange;
   const agentRuntime = agentRuntimeTransition?.runtime;
 
-  const runningLlmRequestId = agentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestOffset;
+  // An omitted preview (the server dropped the presentation for size) hides
+  // the live steps, not the runtime: an LLM request in flight stays
+  // interruptible, identified by the runtime observation's offset — the id
+  // only scopes an interrupt error to its turn.
+  const previewOmitted = presentedFeed?.previewStatus === "omitted";
+  const runningLlmRequestId =
+    agentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestOffset ??
+    (previewOmitted && (agentRuntime?.llmRequests.started ?? 0) > 0
+      ? agentRuntimeTransition?.sinceOffset
+      : undefined);
   const interrupt = useAgentInterrupt({
     onInterrupt: messageComposer?.onInterrupt,
     runningLlmRequestId,
@@ -225,7 +235,9 @@ function BrowserDatabaseProjectStreamView({
   });
 
   // Busy = work is actively running, independent of chat-message timing.
-  const agentBusy = isAgentUiActivityWorking(agentUiState?.live ?? null, agentRuntime);
+  const agentBusy =
+    isAgentUiActivityWorking(agentUiState?.live ?? null, agentRuntime) ||
+    (previewOmitted && isAgentRuntimeVisiblyActive(agentRuntime));
   const presence = agentUiState?.presence ?? [];
   const agentPauseControl = useAgentPauseControl({
     database: store.streamDatabase,

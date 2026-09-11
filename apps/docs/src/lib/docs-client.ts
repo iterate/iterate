@@ -23,7 +23,13 @@ import { refreshProjectSession, type RefreshOutcome } from "./project-session.ts
  *    of starting another, which would retire the fresh session in turn.
  */
 
-function dialDocsApi() {
+/**
+ * One fresh socket to the vessel, authenticated by the project cookie the
+ * browser already holds. The shared client below owns the app's ONE
+ * session; a live-state subscription that must survive the shared session's
+ * redials owns a second one through this same dial.
+ */
+export function dialDocsApi() {
   const url = new URL("/api", window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const session = newWebSocketRpcSession<DocsApi>(url.toString());

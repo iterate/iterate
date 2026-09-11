@@ -1,5 +1,5 @@
 import type { AgentUiTokenUsage } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import { formatTokens } from "~/lib/feed-format.ts";
+import { formatTokens } from "@iterate-com/ui/components/events/feed-format";
 
 /**
  * Derive agent context-fullness + lifetime token totals from the reduced

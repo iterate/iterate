@@ -4,13 +4,14 @@ import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
-import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { formatDateTime, formatSeconds } from "~/lib/feed-format.ts";
+import { formatDateTime, formatSeconds } from "@iterate-com/ui/components/events/feed-format";
 import {
   MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS,
   oversizedScriptResultPreview,
-} from "~/lib/script-result-preview.ts";
+} from "@iterate-com/ui/components/agent-feed/script-result-preview";
+import { useTickingNowMs } from "@iterate-com/ui/hooks/use-ticking-now-ms";
+import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
+import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import {
   replayScriptExecution,
   SCRIPT_EXECUTION_COMPLETED_EVENT_TYPE,
@@ -18,7 +19,6 @@ import {
   SCRIPT_EXECUTION_REQUESTED_EVENT_TYPE,
   type ScriptExecutionReplay,
 } from "~/lib/script-execution-replay.ts";
-import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 /**
  * Script trace sheet content: the exact submitted source and its durable outcome,

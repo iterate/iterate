@@ -1,5 +1,6 @@
+import { deriveAgentDisplayState } from "@iterate-com/shared/agent-events";
 import { buildAgentPathForest, type AgentPathTreeNode } from "./agent-path-tree.ts";
-import { deriveAgentDisplayState, type AgentRecord } from "~/domains/agents/agent-presence.ts";
+import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 import { flattenTreeRows, type TreeRow } from "~/lib/tree-rows.ts";
 
 export type AgentTreeNode = Omit<AgentPathTreeNode, "agent" | "children"> & {

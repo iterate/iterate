@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { formatFileSize } from "~/lib/feed-format.ts";
+import { formatFileSize } from "@iterate-com/ui/components/events/feed-format";
 
 export const MAX_MESSAGE_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 

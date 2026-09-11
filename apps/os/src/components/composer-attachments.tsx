@@ -1,6 +1,6 @@
 import { XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import { formatFileSize } from "~/lib/feed-format.ts";
+import { formatFileSize } from "@iterate-com/ui/components/events/feed-format";
 import type {
   AttachmentEntry,
   ComposerAttachments,

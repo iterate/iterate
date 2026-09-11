@@ -33,7 +33,7 @@ export type {
   AgentUiStreamWakeItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 // Round grouping lives with the reducer so the os web feed groups the same
-// way (apps/os/src/components/agent-feed.tsx renders the same rounds).
+// way (packages/ui/src/components/agent-feed/agent-feed-item.tsx renders the same rounds).
 export { groupActivityRounds } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 export type AgentFeed = {

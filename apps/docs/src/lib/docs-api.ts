@@ -1,3 +1,4 @@
+import type { Agent } from "iterate/client";
 import type { ProjectCredential } from "@iterate-com/workspace-documents/server";
 import type { WorkspaceSurface } from "@iterate-com/workspace-documents/types";
 
@@ -52,22 +53,19 @@ export interface DocsProject {
   /** Every workspace of the project (the platform catalog), newest first. */
   workspaces(): Promise<WorkspaceListEntry[]>;
   /**
-   * CREATE a workspace at /workspaces/<name> — the one deliberate exception
-   * to the plain-`get` posture, and the only method here that creates
-   * anything. Every project repo is mounted in it by derivation.
+   * CREATE a workspace at its `/agents/…` path — the one deliberate
+   * exception to the plain-`get` posture, and the only method here that
+   * creates anything. Every project repo is mounted in it by derivation.
    */
-  createWorkspace(input: { name: string }): Promise<{ workspacePath: string }>;
+  createWorkspace(input: { path: string }): Promise<{ workspacePath: string }>;
   /**
-   * Assign an agent to one task, the apps/os way: sets `state: in-progress`
-   * + the `agent:` frontmatter, commits the mount so the assignment is
-   * durable, births the agent if needed, and sends it the kickoff brief.
-   * `path` is repo-relative under `repoPath`.
+   * The agent that shares a workspace's path: the platform's own `Agent`
+   * handle, forwarded verbatim (plain `get`, never creates — the feed pane
+   * births it through `create()` when its processor has no birth
+   * certificate). Everything an agent can do rides this stub: `stream`
+   * reads and connections, `message`, `append`.
    */
-  assignAgent(input: {
-    workspacePath: string;
-    repoPath: string;
-    path: string;
-  }): Promise<{ agentPath: string }>;
+  agent(workspacePath: string): Promise<Agent>;
 }
 
 /**

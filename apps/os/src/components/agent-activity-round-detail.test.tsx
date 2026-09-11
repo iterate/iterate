@@ -2,7 +2,8 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, test } from "vitest";
-import { AgentActivityRounds } from "./agent-activity-rounds.tsx";
+import { AgentActivityRounds } from "@iterate-com/ui/components/agent-feed/agent-activity-rounds";
+import { AgentRenderedRoundResult } from "./agent-activity-round-detail.tsx";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { stringifyScriptResult, truncateScriptResult } from "~/lib/script-result-render.ts";
 
@@ -144,7 +145,16 @@ async function renderRounds(database: StreamBrowserDatabase | undefined, code: a
   document.body.appendChild(host);
   const root = createRoot(host);
   await act(async () => {
-    root.render(<AgentActivityRounds rounds={[{ llm: null, code }]} database={database} />);
+    root.render(
+      <AgentActivityRounds
+        rounds={[{ llm: null, code }]}
+        roundResult={
+          database == null
+            ? undefined
+            : (code) => <AgentRenderedRoundResult code={code} database={database} />
+        }
+      />,
+    );
   });
   return {
     host,

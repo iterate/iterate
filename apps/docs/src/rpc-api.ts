@@ -1,4 +1,5 @@
 import { RpcTarget } from "capnweb";
+import type { Agent } from "iterate/client";
 import {
   ProjectDial,
   projectCredentialAddress,
@@ -13,16 +14,6 @@ import type {
 } from "@iterate-com/workspace-documents/types";
 import { requireDocumentPath, requireWorkspacePath } from "./config-bridge.ts";
 import type { AppEnv } from "./env.ts";
-import { normalizeRepoPath } from "./lib/board-shared.ts";
-import { workspacePathForName } from "./lib/workspace-names.ts";
-import {
-  parseTaskCard,
-  setTaskCardAgent,
-  setTaskCardState,
-  taskAgentPath,
-  taskAssignmentInstructions,
-  taskColumnState,
-} from "./tasks-model.ts";
 import type {
   DocsApi,
   DocsProject,
@@ -45,25 +36,18 @@ const AUTH_COOKIE = "iterate-project-auth";
  * from, so a cast-free spelling does not exist.
  */
 type PlatformProject = {
-  agents: { get(path: string): PlatformAgent };
+  agents: { get(path: string): Agent };
   repos: { list(): Promise<{ path: string }[]> };
   streams: {
     get(path: string): {
       getEvents(args: object): Promise<unknown[]>;
-      subscribe(args: object): Promise<unknown>;
+      openConnection(args: object): Promise<{ ping(): boolean | Promise<boolean>; close(): void }>;
     };
   };
   workspaces: {
     get(path: string): WorkspaceSurface & { create(input: object): Promise<unknown> };
     list(): Promise<{ createdAt: string; path: string }[]>;
   };
-};
-
-/** The agent surface the task assignment touches. */
-type PlatformAgent = {
-  create(): Promise<unknown>;
-  message(text: string): Promise<unknown>;
-  processor: { snapshot(): Promise<{ state?: { birthCertificate?: unknown } }> };
 };
 
 /** Reconnect-aware access to one workspace's platform handle. */
@@ -176,56 +160,26 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
-  async createWorkspace(input: { name: string }): Promise<{ workspacePath: string }> {
-    const workspacePath = workspacePathForName(input.name);
-    if (workspacePath === null) {
-      throw new Error(`not a workspace name: ${JSON.stringify(input.name)}`);
-    }
+  async createWorkspace(input: { path: string }): Promise<{ workspacePath: string }> {
+    const workspacePath = requireWorkspacePath(input.path);
     // Birth stays explicit (this is the app's ONE create call). Mounts are
     // not create's business: every project repo is derived onto its own
-    // /repos/** path.
-    await this.#withPlatform((project) =>
-      project.workspaces.get(requireWorkspacePath(workspacePath)).create({}),
-    );
+    // /repos/** path. The platform's agent-path rule (lowercase segments
+    // under /agents/) is the only naming rule, applied when the feed pane
+    // births the agent on the same stream.
+    await this.#withPlatform((project) => project.workspaces.get(workspacePath).create({}));
     return { workspacePath };
   }
 
   /**
-   * Assign an agent to one task, the apps/os way: frontmatter first
-   * (`state: in-progress` + `agent:`, visible to every collaborator through
-   * the live workspace), then ONE commit so a born agent always finds its
-   * durable assignment at HEAD, then birth-if-needed and the kickoff brief.
+   * The agent sharing this workspace's path, forwarded as the platform's own
+   * handle: Cap'n Web exports the stub it received from OS to the browser
+   * and proxies every call through this vessel. Plain get — birth is the
+   * caller's explicit `create()`.
    */
-  async assignAgent(input: {
-    workspacePath: string;
-    repoPath: string;
-    path: string;
-  }): Promise<{ agentPath: string }> {
-    const workspacePath = requireWorkspacePath(input.workspacePath);
-    const repoPath = normalizeRepoPath(input.repoPath);
-    if (repoPath === null) throw new Error("bad repo path");
-    const filePath = `${repoPath}/${input.path.replace(/^\/+/, "")}`;
-    const source = await this.#withPlatform((project) =>
-      project.workspaces.get(workspacePath).readFile(filePath),
-    );
-    if (source === null) throw new Error(`${input.path} does not exist in this workspace`);
-    const card = parseTaskCard(input.path, source);
-    if (card.agent !== null) return { agentPath: card.agent };
-    const agentPath = taskAgentPath(repoPath, input.path);
-    const staged =
-      taskColumnState(card.state) === "in-progress"
-        ? source
-        : setTaskCardState(source, "in-progress");
-    const content = setTaskCardAgent(staged, agentPath);
-    await this.#withPlatform(async (project) => {
-      const workspace = project.workspaces.get(workspacePath);
-      await workspace.writeFile(filePath, content);
-      await workspace.git.commit({ message: `Assign task: ${card.title}`, scope: repoPath });
-    });
-    await this.#withPlatform((project) =>
-      briefAgent(project.agents.get(agentPath), taskAssignmentInstructions(repoPath, input.path)),
-    );
-    return { agentPath };
+  agent(workspacePath: string): Promise<Agent> {
+    const path = requireWorkspacePath(workspacePath);
+    return this.#withPlatform(async (project) => project.agents.get(path));
   }
 
   /** Release the downstream OS session when Cap'n Web drops this project capability. */
@@ -323,23 +277,23 @@ class WorkspaceApi extends RpcTarget implements DocsWorkspace {
 
   /**
    * Live event feed: durable history after `afterOffset`, then every new
-   * commit, PUSHED over the retained callback — the platform's ephemeral
-   * subscription composed end-to-end (browser stub → vessel → stream DO).
-   * Returns the platform's subscription handle (unsubscribe()-able); the
-   * assertion restates that handle's two members, which the capnweb-mapped
-   * return type does not spell.
+   * commit, PUSHED over the retained callback — the platform's session
+   * connection composed end-to-end (browser stub → vessel → stream DO).
+   * The platform's connection handle is `close()`-able; this restates it in
+   * the two members the browser's connection loop drives.
    */
   async subscribeEvents(
     processEventBatch: (batch: { events: WorkspaceStreamEvent[] }) => unknown,
     afterOffset = 0,
   ): Promise<{ ping?(): Promise<boolean> | boolean; unsubscribe(): void }> {
-    return this.#dial.withProject(
-      async (project) =>
-        (await (project as unknown as PlatformProject).streams.get(this.#path).subscribe({
-          processEventBatch,
-          replayAfterOffset: afterOffset,
-        })) as { ping?(): Promise<boolean> | boolean; unsubscribe(): void },
-    );
+    return this.#dial.withProject(async (project) => {
+      // The dialed stub is the full project capability tree at runtime; the
+      // generated Project type omits `streams` (see PlatformProject above).
+      const connection = await (project as unknown as PlatformProject).streams
+        .get(this.#path)
+        .openConnection({ processEventBatch, replayAfterOffset: afterOffset });
+      return { ping: () => connection.ping(), unsubscribe: () => connection.close() };
+    });
   }
 }
 
@@ -413,13 +367,6 @@ class WorkspaceCollabApi extends RpcTarget implements WorkspaceCollabSurface {
   boardPresent(clientId: string, name: string | null) {
     return this.#run((workspace) => workspace.collab.boardPresent(clientId, name));
   }
-}
-
-/** Birth the agent if it has never been born, then send it the brief. */
-async function briefAgent(agent: PlatformAgent, brief: string): Promise<void> {
-  const snapshot = await agent.processor.snapshot();
-  if ((snapshot.state?.birthCertificate ?? null) === null) await agent.create();
-  await agent.message(brief);
 }
 
 /** Relative document paths join onto /workspace; absolute paths are used verbatim. */

@@ -1,4 +1,5 @@
 import {
+  deriveAgentDisplayState,
   isAgentRuntimeZero,
   ZERO_AGENT_RUNTIME,
   type AgentRuntime,
@@ -12,7 +13,7 @@ import type {
   AgentFileAttachment,
   AgentRuntimeTransition,
 } from "../agents/agent-processor-contract.ts";
-import { applyAgentSummaryUpdate, deriveAgentDisplayState } from "../agents/agent-presence.ts";
+import { applyAgentSummaryUpdate } from "../agents/agent-presence.ts";
 import { readRecord, readString, webhookAckIsFresh } from "./utils.ts";
 import {
   SlackAgentProcessorContract,

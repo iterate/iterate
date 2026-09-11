@@ -65,6 +65,11 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     match: "demo recording — run locally with DEMO_RECORDING=1",
     note: "env-gated: a demo RECORDING, never a CI test (drives a preview slot's project)",
   },
+  {
+    file: "specs/workspace-agent-feed-walkthrough.spec.ts",
+    match: "demo recording — run locally with DEMO_RECORDING=1",
+    note: "env-gated: a demo RECORDING, never a CI test (a real model turn on a preview slot's project)",
+  },
   // -- Grandfathered parked markers (predate the convention, 2026-07-15).
   // Do NOT add entries here — date new parked markers instead. This list
   // only shrinks.

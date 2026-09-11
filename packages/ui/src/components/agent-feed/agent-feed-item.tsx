@@ -1,6 +1,4 @@
-import { memo, useCallback, useState } from "react";
-import { Link } from "@tanstack/react-router";
-import type { AgentRuntime } from "@iterate-com/shared/agent-events";
+import { memo, type ReactNode } from "react";
 import { decodeMessageMentions } from "@iterate-com/shared/message";
 import {
   BanIcon,
@@ -17,16 +15,16 @@ import {
 import {
   formatAgentUiActivitySummary,
   groupActivityRounds,
-  isAgentUiActivityWorking,
   formatAgentUiDuration,
   summarizeAgentUiActivity,
   type AgentUiActivity,
+  type AgentUiCodeStep,
   type AgentUiFileAttachment,
   type AgentUiItem,
+  type AgentUiLlmStep,
   type AgentUiMessageItem,
   type AgentUiMessageVia,
   type AgentUiMentionResolution,
-  type AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import {
   Message,
@@ -35,41 +33,36 @@ import {
 } from "@iterate-com/ui/components/ai-elements/message";
 import { Button } from "@iterate-com/ui/components/button";
 import { Badge } from "@iterate-com/ui/components/badge";
-import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { StreamingText, StreamingCodeBlock, StreamingCursor } from "./streaming-text.tsx";
-import { deriveAgentDisplayState } from "~/domains/agents/agent-presence.ts";
-import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import {
   formatDateTime,
   formatDateTimeAttribute,
-  formatElapsedSeconds,
   formatFileSize,
-  liveActivityLabel,
-  looksLikeCode,
-} from "~/lib/feed-format.ts";
-import { AgentActivityRoundRow, AgentActivityRounds } from "~/components/agent-activity-rounds.tsx";
-import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
-import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
+} from "@iterate-com/ui/components/events/feed-format";
+import { AgentActivityRounds } from "./agent-activity-rounds.tsx";
 
 // The clean agent chat rows: user and assistant messages plus archived
-// activity rows ("Ran code 2× · 3 requests · 7.4 s"), and the live in-flight
-// activity tail. The rows are `agent.*` feed_items from server publications; the virtualized list that windows over them lives in
-// stream-feed-view.tsx — this file owns only how each item renders.
+// activity rows ("Ran code 2× · 3 requests · 7.4 s"). The rows are `agent.*`
+// feed_items from server publications; the live in-flight activity tail is
+// agent-live-activity.tsx, and the virtualized list that windows over them
+// lives in the app (apps/os/src/components/stream-feed-view.tsx) — this file
+// owns only how each settled item renders.
 
 // Memoized: the feed re-renders on every 16ms live-streaming tick, and settled
 // rows (markdown, highlighted code) must not re-render along with it. Item
 // objects keep their identity between ticks — the row map is only rebuilt when
-// the underlying SQLite snapshot actually changes.
+// the underlying SQLite snapshot actually changes. The render props must be
+// identity-stable too (memoize them in the app), or the memo is defeated.
 export const AgentFeedItemRow = memo(function AgentFeedItemRow({
   item,
   toggledIds,
   onToggle,
   onInspectLlmRequest,
   onInspectScriptExecution,
-  projectSlug,
-  database,
+  renderStreamLink,
+  roundResult,
+  roundMeta,
 }: {
   item: AgentUiItem;
   toggledIds: ReadonlySet<string>;
@@ -78,9 +71,17 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
   onInspectLlmRequest?: (llmRequestOffset: number) => void;
   /** Opens the script execution inspector at this execution id (code steps only). */
   onInspectScriptExecution?: (executionId: string) => void;
-  projectSlug?: string;
-  /** The raw-event mirror; when present, a round's Meta tab replays its exact prompt. */
-  database?: StreamBrowserDatabase;
+  /**
+   * Wraps a child stream's label in the app's link to that stream path (the
+   * OS uses its TanStack `Link` with className "min-w-0 truncate font-mono
+   * text-foreground/80 underline-offset-4 hover:text-foreground
+   * hover:underline"); absent, the label renders as plain text.
+   */
+  renderStreamLink?: (path: string, children: ReactNode) => ReactNode;
+  /** A round's Result tab body when the app can show the agent's own view of the settlement; see {@link AgentActivityRounds}. */
+  roundResult?: (code: AgentUiCodeStep) => ReactNode;
+  /** A round's Meta tab body when the app can replay its exact prompt; see {@link AgentActivityRounds}. */
+  roundMeta?: (llm: AgentUiLlmStep, code: AgentUiCodeStep) => ReactNode;
 }) {
   if (item.kind === "stream-woken") {
     return <StreamWakeRow item={item} />;
@@ -91,7 +92,7 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
   }
 
   if (item.kind === "child-stream-created") {
-    return <ChildStreamCreatedRow item={item} projectSlug={projectSlug} />;
+    return <ChildStreamCreatedRow item={item} renderStreamLink={renderStreamLink} />;
   }
 
   if (item.kind === "stream-paused" || item.kind === "stream-resumed") {
@@ -154,7 +155,8 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
         onToggle={onToggle}
         onInspectLlmRequest={onInspectLlmRequest}
         onInspectScriptExecution={onInspectScriptExecution}
-        database={database}
+        roundResult={roundResult}
+        roundMeta={roundMeta}
       />
     );
   }
@@ -162,17 +164,16 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
   return null;
 });
 
-function ChildStreamCreatedRow({
+/** The "Created child stream …" divider row; the app supplies the link to the child. */
+export function ChildStreamCreatedRow({
   item,
-  projectSlug,
+  renderStreamLink,
 }: {
   item: Extract<AgentUiItem, { kind: "child-stream-created" }>;
-  projectSlug?: string;
+  renderStreamLink?: (path: string, children: ReactNode) => ReactNode;
 }) {
   const dateTime = formatDateTimeAttribute(item.timestampMs);
   const streamLabel = compactStreamPath(item.childPath);
-  const linkOptions =
-    projectSlug == null ? null : linkOptionsForStreamPath(projectSlug, item.childPath);
 
   return (
     <div
@@ -183,15 +184,10 @@ function ChildStreamCreatedRow({
       <div className="h-px min-w-8 flex-1 bg-border/70" />
       <GitBranchIcon className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden="true" />
       <span className="shrink-0">Created child stream</span>
-      {linkOptions == null ? (
+      {renderStreamLink == null ? (
         <span className="min-w-0 truncate font-mono text-foreground/70">{streamLabel}</span>
       ) : (
-        <Link
-          {...linkOptions}
-          className="min-w-0 truncate font-mono text-foreground/80 underline-offset-4 hover:text-foreground hover:underline"
-        >
-          {streamLabel}
-        </Link>
+        renderStreamLink(item.childPath, streamLabel)
       )}
       <time className="sr-only" dateTime={dateTime}>
         {formatDateTime(item.timestampMs)}
@@ -201,7 +197,8 @@ function ChildStreamCreatedRow({
   );
 }
 
-function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-woken" }> }) {
+/** The purple "stream durable object woke" divider row. */
+export function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-woken" }> }) {
   const dateTime = formatDateTimeAttribute(item.timestampMs);
 
   return (
@@ -246,7 +243,8 @@ function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-wo
   );
 }
 
-function ProcessorRevivedRow({
+/** The amber "processor revived" divider row. */
+export function ProcessorRevivedRow({
   item,
 }: {
   item: Extract<AgentUiItem, { kind: "processor-revived" }>;
@@ -296,7 +294,8 @@ function ProcessorRevivedRow({
   );
 }
 
-function StreamPauseRow({
+/** The "stream paused" / "stream resumed" pill divider row. */
+export function StreamPauseRow({
   item,
 }: {
   item: Extract<AgentUiItem, { kind: "stream-paused" | "stream-resumed" }>;
@@ -331,20 +330,23 @@ function StreamPauseRow({
 // Settled activity: the quiet "Ran code 2× · 3 requests · 7.4 s" row
 // ---------------------------------------------------------------------------
 
-function AgentActivityRow({
+/** One settled activity: the quiet stats row and, when expanded, its rounds rail. */
+export function AgentActivityRow({
   activity,
   expanded,
   onToggle,
   onInspectLlmRequest,
   onInspectScriptExecution,
-  database,
+  roundResult,
+  roundMeta,
 }: {
   activity: AgentUiActivity;
   expanded: boolean;
   onToggle: (id: string) => void;
   onInspectLlmRequest?: (llmRequestOffset: number) => void;
   onInspectScriptExecution?: (executionId: string) => void;
-  database?: StreamBrowserDatabase;
+  roundResult?: (code: AgentUiCodeStep) => ReactNode;
+  roundMeta?: (llm: AgentUiLlmStep, code: AgentUiCodeStep) => ReactNode;
 }) {
   const summary = summarizeAgentUiActivity(activity);
   const failed = summary.outcome === "failed";
@@ -405,7 +407,8 @@ function AgentActivityRow({
               into each round's Meta tab instead of spending a feed row. */}
           <AgentActivityRounds
             rounds={groupActivityRounds(activity.steps)}
-            database={database}
+            roundResult={roundResult}
+            roundMeta={roundMeta}
             onInspectLlmRequest={onInspectLlmRequest}
             onInspectScriptExecution={onInspectScriptExecution}
           />
@@ -415,82 +418,8 @@ function AgentActivityRow({
   );
 }
 
-/**
- * Messages queued for after the running turn, rendered as PART OF THE
- * COMPOSER: the queue is input that hasn't reached the agent yet, so it
- * belongs with the input surface, not in the feed's history. The stack is a
- * rounded card tucked behind the composer pill (the pill overlaps its bottom
- * edge). On phones it collapses to the newest message — each new queued
- * message pushes the previous one out of view — with a "+N more" toggle;
- * wider viewports show the whole (scroll-capped) stack.
- */
-export function QueuedMessagesPanel({
-  messages,
-  isInterrupting,
-  onInterrupt,
-}: {
-  messages: AgentUiMessageItem[];
-  isInterrupting: boolean;
-  onInterrupt?: () => Promise<void> | void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  if (messages.length === 0) return null;
-  const hiddenCount = messages.length - 1;
-  return (
-    <div
-      className="-mb-4 rounded-t-3xl border border-b-0 bg-muted/40 px-3 pb-6 pt-1.5"
-      data-testid="queued-messages-panel"
-    >
-      <div className="flex items-center gap-2 px-1.5 py-1">
-        <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
-          Queued for the next agent turn
-        </span>
-        {hiddenCount > 0 ? (
-          <button
-            type="button"
-            onClick={() => setExpanded((value) => !value)}
-            className="shrink-0 font-mono text-[11px] text-muted-foreground underline-offset-2 hover:underline sm:hidden"
-          >
-            {expanded ? "collapse" : `+${hiddenCount} more`}
-          </button>
-        ) : null}
-        {onInterrupt == null ? null : (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => void onInterrupt()}
-            disabled={isInterrupting}
-            className="ml-auto h-6 shrink-0 gap-1 px-2 text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800 dark:text-red-300 dark:hover:bg-red-950/30"
-          >
-            {isInterrupting ? (
-              <Spinner className="size-3" />
-            ) : (
-              <BanIcon className="size-3 text-current" />
-            )}
-            Interrupt & send now
-          </Button>
-        )}
-      </div>
-      <div className="flex max-h-40 flex-col gap-1 overflow-y-auto">
-        {messages.map((message, index) => (
-          <div
-            key={message.id}
-            className={cn(
-              "rounded-xl border bg-background/80 px-3 py-1.5 text-sm",
-              // The mobile push-out: only the newest message stays pinned to
-              // the composer while collapsed.
-              !expanded && index < messages.length - 1 && "hidden sm:block",
-            )}
-          >
-            <UserMessageBody item={message} />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
+/** A user message's body: via label, mention pills or markdown text, attachments. */
+export function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
   const decodedMessage =
     item.mentions === undefined ? null : decodeMessageMentions(item.text, item.mentions);
   return (
@@ -566,7 +495,13 @@ function mentionResolutionWarning(resolution: AgentUiMentionResolution | undefin
 }
 
 /** Small "slack · U0123ABC" marker on messages from external chat integrations. */
-function MessageViaLabel({ via, className }: { via: AgentUiMessageVia; className?: string }) {
+export function MessageViaLabel({
+  via,
+  className,
+}: {
+  via: AgentUiMessageVia;
+  className?: string;
+}) {
   return (
     <div className={cn("font-mono text-[11px] leading-none", className)}>
       {via.service}
@@ -575,7 +510,8 @@ function MessageViaLabel({ via, className }: { via: AgentUiMessageVia; className
   );
 }
 
-function MessageAttachments({
+/** A message's file attachments, stacked below its text. */
+export function MessageAttachments({
   files,
   hasText,
 }: {
@@ -592,7 +528,8 @@ function MessageAttachments({
   );
 }
 
-function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
+/** One attachment: an inline image, or a filename + size chip for everything else. */
+export function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
   if (file.contentType.startsWith("image/")) {
     return (
       <a href={file.url} target="_blank" rel="noreferrer" className="block max-w-full">
@@ -620,285 +557,11 @@ function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
 }
 
 // ---------------------------------------------------------------------------
-// The live element: accumulated activity followed by the current timed phase.
+// Formatting (number/time formatters live in ../events/feed-format.ts)
 // ---------------------------------------------------------------------------
 
-/**
- * The virtual list's trailing item whenever work is in flight. Receives the
- * live reduced state on every chunk: finished steps collapse upward into quiet
- * rows while current requests or scripts keep the busy indicator visible.
- */
-export function AgentLiveActivity({
-  live,
-  runtime,
-  toggledIds,
-  onToggle,
-  onInspectLlmRequest,
-  onInspectScriptExecution,
-  database,
-}: {
-  live: AgentUiActivity;
-  runtime: AgentRuntime;
-  toggledIds: ReadonlySet<string>;
-  onToggle: (id: string) => void;
-  onInspectLlmRequest?: (llmRequestOffset: number) => void;
-  onInspectScriptExecution?: (executionId: string) => void;
-  database?: StreamBrowserDatabase;
-}) {
-  const runningSteps = live.steps.filter((step) => step.status === "running");
-  const liveStep = runningSteps.at(-1);
-  const doneSteps = live.steps.filter((step) => step.status === "done");
-  const doneSummary = summarizeAgentUiActivity(live, doneSteps);
-  const working = isAgentUiActivityWorking(live, runtime);
-  const activityToggleId = `live-activity:${live.id}`;
-  const activityExpanded = toggledIds.has(activityToggleId);
-  const toggleActivity = useCallback(
-    () => onToggle(activityToggleId),
-    [activityToggleId, onToggle],
-  );
-  const showStepRail =
-    activityExpanded &&
-    (doneSteps.length > 0 ||
-      runningSteps.some((step) => step.kind === "code" || liveStepHasVisibleContent(step)));
-
-  const runtimeDisplayState = deriveAgentDisplayState(runtime);
-  const runtimeWorkKind =
-    runtimeDisplayState === "running_code"
-      ? "code"
-      : runtimeDisplayState === "waiting_for_model"
-        ? "llm"
-        : runtimeDisplayState === "queued"
-          ? "queued"
-          : null;
-  const currentWorkKind = runtimeWorkKind ?? liveStep?.kind ?? null;
-  const currentStep =
-    currentWorkKind === "code" || currentWorkKind === "llm"
-      ? runningSteps.findLast((step) => step.kind === currentWorkKind)
-      : liveStep;
-  const currentLabel =
-    currentWorkKind === "code"
-      ? "Running code"
-      : currentWorkKind === "llm"
-        ? currentStep?.kind === "llm"
-          ? liveActivityLabel([currentStep])
-          : "Waiting for a response"
-        : currentWorkKind === "queued"
-          ? "Queued"
-          : liveActivityLabel(currentStep == null ? [] : [currentStep]);
-  const currentStartedAtMs = currentStep?.startedAtMs ?? live.startedAtMs;
-  const inspectCurrentWork =
-    currentStep?.kind === "llm"
-      ? onInspectLlmRequest == null
-        ? undefined
-        : () => onInspectLlmRequest(currentStep.llmRequestOffset)
-      : currentStep?.kind === "code"
-        ? onInspectScriptExecution == null
-          ? undefined
-          : () => onInspectScriptExecution(currentStep.executionId)
-        : undefined;
-
-  if (!working) {
-    return (
-      <AgentActivityRow
-        activity={live}
-        expanded={toggledIds.has(live.id)}
-        onToggle={onToggle}
-        onInspectLlmRequest={onInspectLlmRequest}
-        onInspectScriptExecution={onInspectScriptExecution}
-        database={database}
-      />
-    );
-  }
-
-  return (
-    <div className="flex flex-col py-0.5">
-      {doneSteps.length > 0 ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-expanded={activityExpanded}
-          title="Agent activity so far — click to see details"
-          onClick={toggleActivity}
-          className="-ml-2.5 self-start font-mono text-xs font-normal text-muted-foreground"
-          data-testid="agent-live-summary"
-        >
-          {doneSummary.codeCount > 0 ? (
-            <CodeIcon className="size-3 shrink-0 text-muted-foreground/60" aria-hidden="true" />
-          ) : (
-            <span className="shrink-0 text-[11px] leading-none text-muted-foreground/60">✦</span>
-          )}
-          <span>
-            {formatAgentUiActivitySummary(live, {
-              summary: doneSummary,
-              interruptedPartialHint: "click to see partial response",
-            })}
-          </span>
-          <ChevronRightIcon
-            className={cn(
-              "size-2.5 text-muted-foreground/50 transition-transform",
-              activityExpanded && "rotate-90",
-            )}
-            aria-hidden="true"
-          />
-        </Button>
-      ) : null}
-      {showStepRail ? (
-        <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-1 border-l-2 border-muted py-1 pl-4">
-          {/* Rounds, like the settled rail — except the round whose llm step is
-              still streaming (no code step, so no tab bar yet): its
-              thinking/response text streams in place, exactly as before. */}
-          {groupActivityRounds(live.steps).map((round, index) =>
-            round.code == null && round.llm != null && round.llm.status === "running" ? (
-              round.llm === liveStep && liveStepHasVisibleContent(round.llm) ? (
-                <LiveStepStream key={round.llm.id} step={round.llm} />
-              ) : null
-            ) : (
-              <AgentActivityRoundRow
-                key={round.code?.id ?? round.llm?.id ?? index}
-                round={round}
-                index={index}
-                database={database}
-                onInspectLlmRequest={onInspectLlmRequest}
-                onInspectScriptExecution={onInspectScriptExecution}
-              />
-            ),
-          )}
-        </div>
-      ) : null}
-      <AgentLiveStatus
-        label={currentLabel}
-        startedAtMs={currentStartedAtMs}
-        deadlineMs={currentStep?.kind === "code" ? currentStep.expiresAtMs : null}
-        onInspect={inspectCurrentWork}
-      />
-    </div>
-  );
-}
-
-/** The only subtree subscribed to the 100ms clock; grouped rows stay stable. */
-function AgentLiveStatus({
-  label,
-  startedAtMs,
-  deadlineMs,
-  onInspect,
-}: {
-  label: string;
-  startedAtMs: number | null;
-  deadlineMs: number | null;
-  onInspect: (() => void) | undefined;
-}) {
-  const phaseClock = useLivePhaseClock(startedAtMs, deadlineMs, true);
-  const phaseLabel = phaseClock.deadlineExceeded ? "Code deadline exceeded" : label;
-  const statusWithElapsed = `${phaseLabel}${phaseClock.elapsedLabel == null ? "" : ` ${phaseClock.elapsedLabel}`}`;
-
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      disabled={onInspect == null}
-      onClick={onInspect}
-      title={
-        phaseClock.deadlineExceeded
-          ? "The script has no durable settlement after its absolute deadline"
-          : onInspect == null
-            ? undefined
-            : "Open the current operation's trace"
-      }
-      className={cn(
-        "-ml-2.5 h-7 self-start px-2.5 text-primary disabled:opacity-100",
-        phaseClock.deadlineExceeded && "text-destructive",
-      )}
-      data-testid="agent-live-status"
-    >
-      {phaseClock.deadlineExceeded ? (
-        <CircleAlertIcon className="size-3 shrink-0 text-destructive" />
-      ) : (
-        <Spinner className="size-3 shrink-0 text-primary" />
-      )}
-      <span
-        className={cn(
-          "text-sm font-medium tabular-nums text-primary",
-          phaseClock.deadlineExceeded && "text-destructive",
-        )}
-      >
-        {statusWithElapsed}
-      </span>
-      {onInspect == null ? null : (
-        <ChevronRightIcon
-          className={cn(
-            "size-2.5 text-primary/60",
-            phaseClock.deadlineExceeded && "text-destructive/60",
-          )}
-          aria-hidden="true"
-        />
-      )}
-    </Button>
-  );
-}
-
-function liveStepHasVisibleContent(step: AgentUiStep) {
-  if (step.kind === "code") return step.code !== "";
-  return step.thinkingText.length > 0 || step.responseText.length > 0;
-}
-
-/**
- * Live CLI-style elapsed counter (`0.9s`) for the current agent phase. Ticks
- * every 100ms so reasoning, response waits, and code runs all count upward.
- * A script clock stops at its authoritative absolute deadline and flips to an
- * explicit failure state even if the durable completion is delayed.
- * Clock is a useSyncExternalStore subscription (react-doctor happy path),
- * not a useState+setInterval effect loop.
- */
-function useLivePhaseClock(
-  startedAtMs: number | null,
-  deadlineMs: number | null,
-  enabled: boolean,
-): { deadlineExceeded: boolean; elapsedLabel: string | null } {
-  const nowMs = useTickingNowMs(100, enabled && startedAtMs != null, deadlineMs);
-  if (startedAtMs == null) return { deadlineExceeded: false, elapsedLabel: null };
-  const deadlineExceeded = deadlineMs != null && nowMs >= deadlineMs;
-  return {
-    deadlineExceeded,
-    elapsedLabel: formatElapsedSeconds(
-      (deadlineExceeded && deadlineMs != null ? deadlineMs : nowMs) - startedAtMs,
-    ),
-  };
-}
-
-function LiveStepStream({ step }: { step: AgentUiStep }) {
-  if (step.kind === "code") {
-    return (
-      <div className="flex flex-col gap-1.5 py-1">
-        {step.code === "" ? null : <StreamingCodeBlock code={step.code} />}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-1.5 py-1">
-      {step.thinkingText.length === 0 ? null : (
-        <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm italic leading-relaxed text-muted-foreground">
-          <StreamingText text={step.thinkingText} />
-          {step.responseText.length === 0 ? <StreamingCursor /> : null}
-        </div>
-      )}
-      {step.responseText.length === 0 ? null : looksLikeCode(step.responseText) ? (
-        <StreamingCodeBlock code={step.responseText} />
-      ) : (
-        <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm leading-relaxed">
-          <StreamingText text={step.responseText} animate />
-          <StreamingCursor />
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Formatting (number/time formatters live in ~/lib/feed-format.ts)
-// ---------------------------------------------------------------------------
-
-function compactStreamPath(path: string): string {
+/** A stream path shortened to its last three segments once it passes 64 characters. */
+export function compactStreamPath(path: string): string {
   if (path.length <= 64) return path;
   const segments = path.split("/").filter(Boolean);
   if (segments.length <= 3) return path;

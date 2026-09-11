@@ -1,20 +1,19 @@
 /**
  * Pure task-file model, ported from the iterate monorepo's repo-ide task
  * board (apps/os). Tasks are Markdown files below any directory segment named
- * `tasks`, with YAML frontmatter carrying `state` / `labels` / `agent`. This
- * module is text-in, text-out only — no storage, no network, no UI.
+ * `tasks`, with YAML frontmatter carrying `state` / `labels`. This module is
+ * text-in, text-out only — no storage, no network, no UI.
  */
 import { parseDocument, type Document } from "yaml";
 import { readReview } from "iterate/document-review";
 import { BOARD_COLUMNS, type TaskCard } from "./state.ts";
-import { DOCUMENT_REVIEW_INSTRUCTIONS } from "./lib/document-review-instructions.ts";
 
 const DEFAULT_TASK_STATE = BOARD_COLUMNS[0];
 const MAX_TASK_FILENAME_SLUG_LENGTH = 64;
 
 /** Markdown files below any directory segment named `tasks` are task cards. */
 export function isTaskFilePath(path: string): boolean {
-  const segments = pathSegments(path);
+  const segments = path.split("/").filter(Boolean);
   return /\.(?:md|markdown)$/i.test(segments.at(-1) ?? "") && segments.includes("tasks");
 }
 
@@ -37,7 +36,6 @@ export function parseTaskCard(path: string, source: string): TaskCard {
       title: firstHeadingTitle(readReview(source).projection.markdown) ?? path,
       state: normalizeTaskState(undefined),
       labels: [],
-      agent: null,
       createdBy: null,
       source,
       frontmatterError: true,
@@ -51,7 +49,6 @@ export function parseTaskCard(path: string, source: string): TaskCard {
     title: stringValue(metadata.title) ?? firstHeadingTitle(review.projection.markdown) ?? path,
     state: normalizeTaskState(stringValue(metadata.state)),
     labels: uniqueStrings([...stringArray(metadata.tags), ...stringArray(metadata.labels)]),
-    agent: stringValue(metadata.agent) ?? null,
     createdBy: stringValue(metadata["created-by"]) ?? null,
     source,
     frontmatterError: false,
@@ -67,13 +64,6 @@ export function setTaskCardState(source: string, state: string): string {
   });
 }
 
-/** Record the assigned agent in frontmatter, preserving everything else. */
-export function setTaskCardAgent(source: string, agentPath: string): string {
-  return updateFrontmatter(source, (document) => {
-    document.set("agent", agentPath);
-  });
-}
-
 /** Replace the task's tags. Writes the canonical `tags` key (migrating any
  * legacy `labels` key away); empty clears both. */
 export function setTaskCardLabels(source: string, labels: readonly string[]): string {
@@ -82,25 +72,6 @@ export function setTaskCardLabels(source: string, labels: readonly string[]): st
     if (labels.length === 0) document.delete("tags");
     else document.set("tags", [...labels]);
   });
-}
-
-/** The conventional agent path for a task — apps/os's repoTaskAgentPath. */
-export function taskAgentPath(repoPath: string, taskPath: string): string {
-  const repoSlug = slugify(pathSegments(repoPath).at(-1) ?? "repo", 48) || "repo";
-  const taskSlug = slugify(taskPath.replace(/\.(?:md|markdown)$/i, ""), 120) || "task";
-  return `/agents/repos/${repoSlug}/tasks/${taskSlug}`;
-}
-
-/** The kickoff brief a freshly assigned agent receives — apps/os's wording. */
-export function taskAssignmentInstructions(repoPath: string, taskPath: string): string {
-  return [
-    `Work on the repo task at ${taskPath} in ${repoPath}.`,
-    "First, verify that the task frontmatter state is `in-progress`; set and commit it before doing any other work if it is not.",
-    "Read the task Markdown before starting and treat it as the durable source of truth.",
-    "Keep that task file current as you work. Commit implementation changes and task updates to the same repo.",
-    DOCUMENT_REVIEW_INSTRUCTIONS,
-    "Keep a lightweight work log as document comments. When the work is ready for human review, summarize the result in a document comment and set the task frontmatter state to `in-review`.",
-  ].join("\n\n");
 }
 
 /**
@@ -235,10 +206,6 @@ function updateFrontmatter(content: string, update: (document: Document) => void
   if (yaml === "" || yaml === "{}") return frontmatter.body;
   const body = frontmatter.exists ? frontmatter.body : `\n${content}`;
   return `---\n${yaml}\n---\n${body}`;
-}
-
-function pathSegments(path: string): string[] {
-  return path.split("/").filter(Boolean);
 }
 
 function stringValue(value: unknown): string | undefined {

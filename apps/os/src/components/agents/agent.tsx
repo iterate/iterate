@@ -7,6 +7,13 @@ import { Input } from "@iterate-com/ui/components/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { cn } from "@iterate-com/ui/lib/utils";
+import {
+  deriveAgentDisplayState,
+  deriveAgentRuntimeDisplayState,
+  type AgentDisplayState,
+} from "@iterate-com/shared/agent-events";
+import { formatElapsedSeconds } from "@iterate-com/ui/components/events/feed-format";
+import { useTickingNowMs } from "@iterate-com/ui/hooks/use-ticking-now-ms";
 import { agentCommandValue } from "../command-palette-model.ts";
 import {
   AGENT_DISPLAY_STATE_PRESENTATION,
@@ -23,16 +30,8 @@ import {
   type AgentTreeNode,
 } from "./agent-tree.ts";
 import type { AgentRuntimeTransition } from "~/domains/agents/agent-processor-contract.ts";
-import {
-  deriveAgentDisplayState,
-  deriveAgentRuntimeDisplayState,
-  type AgentBinding,
-  type AgentDisplayState,
-  type AgentRecord,
-} from "~/domains/agents/agent-presence.ts";
-import { formatElapsedSeconds } from "~/lib/feed-format.ts";
+import type { AgentBinding, AgentRecord } from "~/domains/agents/agent-presence.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
-import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 const LIVE_RUNTIME_TICK_MS = 100;
 

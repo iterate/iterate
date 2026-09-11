@@ -1,7 +1,7 @@
 import { Bot, Github, Mail, Send, Slack, type LucideIcon } from "lucide-react";
-import type { AgentRuntime } from "@iterate-com/shared/agent-events";
+import type { AgentDisplayState, AgentRuntime } from "@iterate-com/shared/agent-events";
 import { agentNodeDisplayState, agentTitle, type AgentTreeNode } from "./agent-tree.ts";
-import type { AgentBinding, AgentDisplayState } from "~/domains/agents/agent-presence.ts";
+import type { AgentBinding } from "~/domains/agents/agent-presence.ts";
 
 /**
  * The dot encodes attention priority, not the full state taxonomy: green =

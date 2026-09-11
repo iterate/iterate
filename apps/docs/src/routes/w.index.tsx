@@ -56,7 +56,7 @@ function BoardLensPage() {
     );
   }
   // No workspace addressed: /w is the tasks view's HOME, not an error.
-  if (!search.workspace.startsWith("/workspaces/") && !search.workspace.startsWith("/agents/")) {
+  if (!search.workspace.startsWith("/agents/")) {
     return <BoardHome />;
   }
   return (

@@ -4,7 +4,7 @@ import type {
   AgentUiCodeStep,
   AgentUiLlmStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import { formatClockTime } from "~/lib/feed-format.ts";
+import { formatClockTime } from "../events/feed-format.ts";
 
 /**
  * A script result as display YAML (the round Result tabs on os and mobile
@@ -26,7 +26,7 @@ export function resultYaml(value: unknown) {
 
 /**
  * The round Meta tab's YAML document: the round's stats and the replayed
- * prompt (see ~/components/agent-activity-rounds.tsx). Deliberately the SAME
+ * prompt (see ./agent-activity-rounds.tsx). Deliberately the SAME
  * shape as mobile's metaYaml (apps/mobile/src/components/activity-card.tsx) —
  * if you change either, ask whether the other surface should follow. Emitted
  * through the `yaml` package rather than hand-rolled string building: prompt

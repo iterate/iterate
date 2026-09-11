@@ -1,5 +1,6 @@
 import { ZERO_AGENT_RUNTIME, type AgentRuntime } from "@iterate-com/shared/agent-events";
-import { deriveAgentDisplayState, type AgentRecord } from "~/domains/agents/agent-presence.ts";
+import { deriveAgentDisplayState } from "@iterate-com/shared/agent-events";
+import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 
 /** Descendant wait reasons summarized for inferred container rows. */
 export type AgentWaitingAggregate = {

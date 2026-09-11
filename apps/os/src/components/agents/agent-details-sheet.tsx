@@ -7,6 +7,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
+import { useTickingNowMs } from "@iterate-com/ui/hooks/use-ticking-now-ms";
 import { AgentDetailCard, AgentListRow } from "./agent.tsx";
 import { updateAgentSummary } from "./agent-summary.ts";
 import {
@@ -21,7 +22,6 @@ import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { toggledSet } from "~/lib/tree-rows.ts";
 import { useStreamViewPanels } from "~/lib/stream-view-search.ts";
-import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 const CLOCK_TICK_MS = 15_000;
 const VISIBLE_CHILD_LIMIT = 20;
