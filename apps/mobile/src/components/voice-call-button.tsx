@@ -5,11 +5,13 @@
 // point — and the floating mic + sheet here float over the call's own chat
 // (the root layout's VoiceCallBanner covers every other screen).
 //
-// PUSH-TO-TALK: hold the big mic to speak (ptt-start / mic frames /
-// ptt-end), release to let the model answer; the level bar throbs with
-// LOCAL mic level — VU feedback only, never a turn control. The sheet also
-// carries the live transcript (both sides + backend notes/statuses) off
-// the stream's durable events; tap outside to minimise.
+// HOLD TO TALK is a LOCAL microphone gate and nothing more: mic frames flow
+// while the big mic is held and stop when it is released; the wire carries
+// no press or release (GPT-Live is full duplex and yields by itself when
+// the person speaks). The level bar throbs with LOCAL mic level — VU
+// feedback only, never a turn control. The sheet also carries the live
+// transcript (both sides + backend notes/statuses) off the stream's durable
+// events; tap outside to minimise.
 //
 // State lives in the query cache (the composer's precedent — no
 // useState/useEffect); the live call handle and the pulse Animated.Value are

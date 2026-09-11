@@ -70,9 +70,10 @@ test("calling a chat: speak, be answered, and the conversation lands on the chat
     now: () => Date.now(),
   });
 
-  /* Push-to-talk: hold, speak the whole utterance (the FIRST press is the
-   * mint — the facet holds mic frames through the provider handshake and
-   * commits the held turn on release), release. */
+  /* Hold to talk is a local microphone gate: hold, speak the whole
+   * utterance, release. The call was minted by the silent frame at start;
+   * the facet holds mic frames through the provider handshake, and GPT-Live
+   * answers when the person stops. */
   call.setTalking(true);
   await audio.speakUtterance();
   call.setTalking(false);

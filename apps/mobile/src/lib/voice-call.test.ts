@@ -12,17 +12,20 @@ import {
 const SPK = "events.iterate.com/voice-agent/spk-frame";
 const ENDED = "events.iterate.com/voice-agent/conversation-ended";
 
-test("push-to-talk: the mint press dials at call start; holds gate the mic; release commits", async () => {
+test("the mint is one silent mic frame at call start; holding gates the mic locally; no press or release rides the wire", async () => {
   const h = makeHarness();
   const call = await startVoiceCall(h.deps);
-  /* The mint press went out at start (the greeting needs the dial before
-   * any hold) — but captured frames still go nowhere until a hold. */
+  /* The mint went out at start (the greeting needs the dial before any
+   * hold): one ephemeral frame of digital silence — and captured frames
+   * still go nowhere until a hold. */
   expect(h.appends).toHaveLength(1);
   expect(h.appends[0]).toMatchObject({
-    type: "events.iterate.com/voice-agent/ptt-start",
-    payload: { t: 0 },
+    type: "events.iterate.com/voice-agent/mic-frame",
+    ephemeral: true,
+    payload: { deviceMicFrameSeq: 1 },
   });
-  expect(h.appends[0]!.ephemeral).toBeUndefined();
+  const mint = h.appends[0]!.payload as { pcm: string };
+  expect(mint.pcm).toBe(`${"A".repeat(852)}AA==`);
   h.captureFrame("AAAA", 0.4);
   await settle();
   expect(h.appends).toHaveLength(1);
@@ -34,24 +37,21 @@ test("push-to-talk: the mint press dials at call start; holds gate the mic; rele
   call.setTalking(false);
   await settle();
 
+  /* Held frames go out as mic frames and NOTHING ELSE: no push, no release
+   * — the facet never hears about the button. The press emptied the local
+   * playback queue (the model's held beat) and the release zeroed the bar. */
+  const types = h.appends.map((a) => a.type);
+  expect(types).toEqual([
+    "events.iterate.com/voice-agent/mic-frame",
+    "events.iterate.com/voice-agent/mic-frame",
+    "events.iterate.com/voice-agent/mic-frame",
+  ]);
   expect(h.appends[1]).toMatchObject({
-    type: "events.iterate.com/voice-agent/ptt-start",
-    payload: {},
-  });
-  /* The press is DURABLE like the mint; the release is not. */
-  expect(h.appends[1]!.ephemeral).toBeUndefined();
-  const micFrames = h.appends.filter((a) => a.type.endsWith("mic-frame"));
-  expect(micFrames).toHaveLength(2);
-  expect(micFrames[0]).toMatchObject({
     ephemeral: true,
-    payload: { pcm: "BBBB", deviceMicFrameSeq: 1 },
+    payload: { pcm: "BBBB", deviceMicFrameSeq: 2 },
   });
-  expect(micFrames[1]!.payload).toMatchObject({ deviceMicFrameSeq: 2 });
-  expect(h.appends.at(-1)).toMatchObject({
-    type: "events.iterate.com/voice-agent/ptt-end",
-    ephemeral: true,
-  });
-  /* Held frames metered, release zeroes the bar. */
+  expect(h.appends[2]!.payload).toMatchObject({ pcm: "CCCC", deviceMicFrameSeq: 3 });
+  expect(h.audioLog).toContain("clear");
   expect(h.levels).toEqual([0, 0.5, 0.6, 0]);
 });
 
@@ -299,7 +299,7 @@ test("transcriptItems: both sides, notes, deduped statuses, empties skipped", ()
       payload: { text: "" },
     },
     /* Machinery events are not conversation. */
-    { type: "events.iterate.com/voice-agent/ptt-start", offset: 9, payload: {} },
+    { type: "events.iterate.com/voice-agent/keepalive", offset: 9, payload: {} },
   ]);
   expect(items).toEqual([
     { key: "e1", kind: "you", text: "what's the weather?" },
