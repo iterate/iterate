@@ -253,6 +253,7 @@ export function foldAgentSummaryUpdated({
 }
 
 type AgentRuntimeSource = {
+  pendingInputConsequences?: Readonly<Record<string, number>>;
   activeScriptExecutions: readonly unknown[];
   contextItems: readonly { kind: string; payload?: { role: string } }[];
   openRequest: null | { requestedAtOffset: number };
@@ -260,7 +261,15 @@ type AgentRuntimeSource = {
 };
 
 export function deriveAgentRuntime(state: AgentRuntimeSource): AgentRuntimeRecord {
-  const pending = state.pendingLlmRequestTrigger === null ? 0 : 1;
+  // A settled script's result still owes model input. Keep that follow-up
+  // visible while it is materialized, without scheduling before the input exists.
+  const pending =
+    state.pendingLlmRequestTrigger !== null ||
+    Object.keys(state.pendingInputConsequences ?? {}).some((key) =>
+      key.startsWith("script-result:"),
+    )
+      ? 1
+      : 0;
   // Key-agnostic (the kernel knows no section key by name): a pending
   // trigger counts as runnable once ANY system-role section exists. Purely
   // a presentation facet; the turn loop itself no longer gates on it (every

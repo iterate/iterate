@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import {
   routeOpenAiViaGateway,
   isOpenAiPublicApiRequest,
@@ -130,3 +131,45 @@ test("JSON requests without a model still use the platform Gateway route", async
   ]);
   expect((calls[0] as any).query).toEqual(body);
 });
+
+createFailing(test, /customer authorization should not be replaced with the platform key/)(
+  "preserves a customer's OpenAI key instead of billing Iterate",
+  async () => {
+    const calls: any[] = [];
+    await routeOpenAiViaGateway({
+      request: new Request("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { authorization: "Bearer sk-customer-real" },
+        body: JSON.stringify({ model: "test-model" }),
+      }),
+      config: {
+        environmentName: "preview_9",
+        openAiApiKey: { exposeSecret: () => "sk-platform" },
+        cloudflareAiGateway: { id: "default" },
+        cloudflare: { accountId: "account" },
+      } as any,
+      ai: {
+        gateway: () => ({
+          run(input: unknown) {
+            calls.push(input);
+            return Response.json({});
+          },
+        }),
+      } as any,
+      consultInterceptor: undefined,
+      projectId: "proj_test",
+      streamContext: { kind: "scope", scopePath: "/" },
+    });
+    expect(calls).toHaveLength(1);
+    const headers = calls[0].headers;
+    expect(JSON.parse(headers["cf-aig-metadata"]!)).toEqual({
+      environment: "preview_9",
+      projectId: "proj_test",
+      streamPath: "/",
+    });
+    expect(
+      headers,
+      "customer authorization should not be replaced with the platform key",
+    ).toMatchObject({ authorization: "Bearer sk-customer-real" });
+  },
+);

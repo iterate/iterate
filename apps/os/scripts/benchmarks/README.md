@@ -4,7 +4,15 @@ Run the transport benchmark from the repository root:
 
 ```sh
 pnpm --dir apps/os exec tsx scripts/benchmarks/live-state.ts
+pnpm --dir apps/os exec tsx scripts/benchmarks/live-state-wire.ts
 ```
+
+The first compares codecs 2 and 3 across three JSON boundaries, with 16, 48,
+128 and 1,024 byte appends. The second measures complete, uncompressed Cap'n Web
+callback messages over a real local WebSocket. Both verify final text and sealed
+group identity. Wire timings include socket scheduling; use the first for
+synchronous CPU. The `compact-live-state-*.json` results were recorded on
+11 September 2026 with Node 26.5.0 on an Apple M4 Max.
 
 For browser rendering, start the OS dev server to supply the generated app
 CSS. Build the actual component with React's production profiling renderer:

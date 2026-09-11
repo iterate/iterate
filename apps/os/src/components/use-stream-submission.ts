@@ -8,7 +8,11 @@ export function useStreamSubmission(acknowledgedThroughOffset = Infinity) {
   const [overdueOffset, setOverdueOffset] = useState(0);
   const awaitingAcknowledgement = submittedOffset > acknowledgedThroughOffset;
   useEffect(() => {
-    if (!awaitingAcknowledgement) return;
+    if (!awaitingAcknowledgement) {
+      // Acknowledged sends are finished. Later feed delays cannot re-open them.
+      if (submittedOffset) setSubmittedOffset(0);
+      return;
+    }
     // A saved input can outlive a halted processor. End the spinner with an
     // explicit explanation; never append the message again automatically.
     const timer = setTimeout(() => setOverdueOffset(submittedOffset), 30_000);

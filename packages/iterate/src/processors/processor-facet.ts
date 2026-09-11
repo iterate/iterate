@@ -334,7 +334,7 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
    * Cold or replaced processors hydrate from durable progress. Warm reads use
    * committed local state: polling must not call back into the parent stream
    * for every processor while it is delivering events to this facet. */
-  async readLiveState(args: { streamId: string; cursor?: LiveStateCursor }) {
+  async readLiveState(args: { streamId: string; cursor?: LiveStateCursor; patchVersion?: 2 | 3 }) {
     const { registry } = this.#requireHost();
     if (
       registry.names.some((name) => {
@@ -346,7 +346,8 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
     } else {
       registry.refreshLive();
     }
-    return registry.live.readSince(args.cursor);
+    // An omitted version keeps warm parents on the pre-deploy wire format.
+    return registry.live.readSince(args.cursor, { patchVersion: args.patchVersion });
   }
 
   /** Direct subscriptions retain their callbacks across the Workers RPC hop. */

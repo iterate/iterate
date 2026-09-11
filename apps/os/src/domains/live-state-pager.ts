@@ -25,7 +25,10 @@
 import { z } from "zod";
 import {
   createLiveStateStore,
+  isLiveStateSnapshot,
+  liveStateRevision,
   LiveState,
+  type CompactLiveStatePatch,
   type LiveStateCursor,
   type LiveStatePatch,
   type LiveStateSubscription,
@@ -120,13 +123,30 @@ const Patch: z.ZodType<LiveStatePatch> = z.lazy(() =>
   ]),
 );
 
+const CompactPatch: z.ZodType<CompactLiveStatePatch> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.tuple([]),
+    z.tuple([z.unknown()]),
+    z.tuple([z.number().int().nonnegative(), z.string()]),
+    z.record(z.string(), CompactPatch),
+  ]),
+);
+
 const LiveStatePage = z.union([
   // Existing relays keep their full-state protocol until their socket closes.
   z.object({ type: z.literal("state"), state: z.unknown() }),
   z.object({
     type: z.literal("update"),
     epoch: z.string(),
-    update: z.discriminatedUnion("type", [
+    update: z.union([
+      z.object({ s: z.tuple([z.number().int().nonnegative(), z.unknown()]) }),
+      z.object({
+        p: z.tuple([z.number().int().nonnegative(), z.number().int().nonnegative(), CompactPatch]),
+      }),
       z.object({
         type: z.literal("snapshot"),
         revision: z.number().int().nonnegative(),
@@ -212,9 +232,8 @@ export class LiveStatePagers {
     }
     const pair = new WebSocketPair();
     this.#hooks.acceptWebSocket(pair[1], [LIVE_STATE_PAGER_TAG]);
-    pair[1].serializeAttachment(
-      request.headers.get(LIVE_STATE_PAGER_HEADER) === "watch-v2" ? 2 : 1,
-    );
+    const codec = request.headers.get(LIVE_STATE_PAGER_HEADER);
+    pair[1].serializeAttachment(codec === "watch-v3" ? 3 : codec === "watch-v2" ? 2 : 1);
     this.#hooks.waitUntil(
       Promise.resolve()
         .then(() => this.#hooks.refresh())
@@ -340,27 +359,36 @@ export class LiveStatePagers {
       // unknown here because hosts have unrelated domain shapes.
       this.#wire.setState(state as object);
       const read = this.#wire.readSince(this.#cursor);
+      const compactRead = this.#wire.readSince(this.#cursor, { patchVersion: 3 });
       this.#cursor = read.update
         ? {
             epoch: read.epoch,
-            revision: read.update.type === "snapshot" ? read.update.revision : read.update.to,
+            revision: liveStateRevision(read.update),
           }
         : this.#cursor;
-      let snapshot: string | undefined;
-      let patch: string | undefined;
+      const snapshots = new Map<number, string>();
+      const patches = new Map<number, string>();
       let legacy: string | undefined;
       for (const ws of sockets) {
         let page: string;
-        if (ws.deserializeAttachment() !== 2) {
+        const version: unknown = ws.deserializeAttachment();
+        if (version !== 2 && version !== 3) {
           legacy ??= JSON.stringify({ type: "state", state });
           page = legacy;
         } else if (!this.#seeded.has(ws)) {
-          snapshot ??= JSON.stringify({ type: "update", ...this.#wire.readSince() });
-          page = snapshot;
+          page =
+            snapshots.get(version) ??
+            JSON.stringify({
+              type: "update",
+              ...this.#wire.readSince(undefined, { patchVersion: version }),
+            });
+          snapshots.set(version, page);
         } else {
           if (!read.update) continue;
-          patch ??= JSON.stringify({ type: "update", ...read });
-          page = patch;
+          page =
+            patches.get(version) ??
+            JSON.stringify({ type: "update", ...(version === 3 ? compactRead : read) });
+          patches.set(version, page);
         }
         try {
           ws.send(page);
@@ -397,7 +425,7 @@ export async function dialLiveStatePager(
       ? LIVE_STATE_PAGER_URL
       : `${LIVE_STATE_PAGER_URL}lane/${encodeURIComponent(options.lane)}`;
   return await stub.fetch(url, {
-    headers: { Upgrade: "websocket", [LIVE_STATE_PAGER_HEADER]: "watch-v2" },
+    headers: { Upgrade: "websocket", [LIVE_STATE_PAGER_HEADER]: "watch-v3" },
   });
 }
 
@@ -509,7 +537,7 @@ export function openRelayedLiveState<State extends object>(input: {
                 // Legacy host during deployment skew; its domain owns state.
                 engine.setState(page.state as State);
               } else {
-                if (page.epoch !== epoch && page.update.type !== "snapshot") {
+                if (page.epoch !== epoch && !isLiveStateSnapshot(page.update)) {
                   throw new Error("incarnation changed without snapshot");
                 }
                 // The protocol validates the envelope; the typed host owns

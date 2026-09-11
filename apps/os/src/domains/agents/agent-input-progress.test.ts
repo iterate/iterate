@@ -119,3 +119,77 @@ test("slash input hands off to its exact script request; disabled interpretation
       .pendingInputConsequences,
   ).toEqual({});
 });
+
+test.each([
+  { status: "succeeded", result: ["89", "97"] },
+  { status: "succeeded", result: null },
+  {
+    status: "failed",
+    error: "typecheck rejected",
+    phase: "typecheck",
+    failureKind: "typecheck",
+    executionMayHaveOccurred: false,
+    cancellation: "not-applicable",
+  },
+])("a script settlement stays queued until its feedback is consumed: %j", (settlement) => {
+  const state = AgentProcessorContract.stateSchema.parse({
+    contextItems: [
+      { kind: "section", key: "system", offset: 1, payload: { role: "system", content: "Help" } },
+    ],
+    activeScriptExecutions: [
+      { executionId: "agent-output:10", requestedAt: new Date(10).toISOString() },
+    ],
+  });
+  const settled = fold(
+    20,
+    "events.iterate.com/capability-host/script-run-settled",
+    { executionId: "agent-output:10", settlement },
+    state,
+  );
+  expect(settled.runtimeChange?.runtime).toMatchObject({
+    runningScripts: 0,
+    triggers: { pending: 1, runnable: 1 },
+  });
+  expect(settled.pendingLlmRequestTrigger).toBeNull(); // Feedback must enter the prompt before scheduling.
+  const feedback = {
+    role: "developer",
+    content: "Script result",
+    actor: { type: "script", executionId: "agent-output:10" },
+    llmRequestPolicy: { behaviour: "after-current-request" },
+  };
+  expect(fold(21, context, feedback, settled).pendingInputConsequences).toEqual(
+    settled.pendingInputConsequences,
+  );
+  expect(fold(21, context, feedback, settled, 19).pendingInputConsequences).toEqual(
+    settled.pendingInputConsequences,
+  );
+  const ready = fold(22, context, feedback, settled, 20);
+  expect(ready.pendingInputConsequences).toEqual({});
+  expect(ready.runtimeChange?.runtime.triggers).toEqual({ pending: 1, runnable: 1 });
+  expect(ready.pendingLlmRequestTrigger?.offset).toBe(22);
+});
+
+test.each([
+  { interpretResponses: true, executionId: "agent-output:10", result: undefined },
+  { interpretResponses: false, executionId: "agent-output:10", result: "ignored" },
+  { interpretResponses: true, executionId: "external-script", result: "ignored" },
+])("only interpreted, agent-owned results owe follow-up input: %j", (input) => {
+  const state = AgentProcessorContract.stateSchema.parse({
+    config: { interpretResponses: input.interpretResponses },
+    activeScriptExecutions: [
+      { executionId: "agent-output:10", requestedAt: new Date(10).toISOString() },
+    ],
+  });
+  const settled = fold(
+    20,
+    "events.iterate.com/capability-host/script-run-settled",
+    {
+      executionId: input.executionId,
+      settlement: { status: "succeeded", result: input.result },
+    },
+    state,
+  );
+  expect(settled.pendingInputConsequences).toEqual({});
+  expect(settled.pendingLlmRequestTrigger).toBeNull();
+  expect(settled.runtimeChange?.runtime.triggers.pending ?? 0).toBe(0);
+});

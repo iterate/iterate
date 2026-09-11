@@ -20,8 +20,9 @@ import {
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { connectItx, connectIterateSession, reportTransportSuspicion } from "iterate/sdk/itx/react";
 import { useLiveState } from "iterate/sdk/capnweb/react";
-import type { Stream } from "../itx-api.generated.ts";
+import type { Agent, Stream } from "../itx-api.generated.ts";
 import type { FeedLiveState } from "~/domains/streams/feed-contract.ts";
+import { presentAgentProgress } from "~/components/agent-progress.ts";
 import { FeedPreviewNotice } from "~/components/feed-preview-notice.tsx";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import { useEventSynchronizedLiveState } from "~/domains/streams/client-libraries/browser/hooks/use-event-synchronized-live-state.ts";
@@ -60,12 +61,8 @@ import type { BrowserStreamSubscriberUser } from "~/domains/streams/client-libra
 type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
 
 type ProjectStreamViewProps = {
-  /**
-   * Runtime supplied by a parent which already listens to the selected agent's
-   * live state. `undefined` lets this generic stream view open its own listener;
-   * `null` means the parent has no transition yet.
-   */
-  agentRuntimeTransition?: AgentUiRuntimeTransition | null;
+  /** A domain agent supplies acknowledgement state, scoped to the current stream lifetime. */
+  agentSource?: () => Agent | Promise<Agent>;
   autoFocusMessageComposer?: boolean;
   /** Domain identity shown directly below the generic stream header. */
   contextHeader?: ReactNode;
@@ -161,7 +158,7 @@ function FullPanelProjectStreamView({
 }
 
 function BrowserDatabaseProjectStreamView({
-  agentRuntimeTransition: suppliedAgentRuntimeTransition,
+  agentSource,
   autoFocusMessageComposer = false,
   defaultComposerMode,
   emptyLabel = "No events in this stream yet.",
@@ -178,6 +175,7 @@ function BrowserDatabaseProjectStreamView({
 }: ProjectStreamViewProps) {
   const subscriberUser = useStreamSubscriberUser();
   const streamData = useProjectStreamData({
+    agentSource,
     projectId,
     resetStreamSourceTransport,
     subscriberUser,
@@ -203,8 +201,7 @@ function BrowserDatabaseProjectStreamView({
     void store.nudge();
   }, [store]);
 
-  const agentRuntimeTransition = suppliedAgentRuntimeTransition ?? presentedFeed?.runtimeChange;
-  const agentRuntime = agentRuntimeTransition?.runtime;
+  const agentRuntime = streamData.agentRuntime;
 
   const runningLlmRequestId = agentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestOffset;
   const interrupt = useAgentInterrupt({
@@ -276,7 +273,14 @@ function BrowserDatabaseProjectStreamView({
           autoFocusMessage={autoFocusMessageComposer}
           defaultComposerMode={defaultComposerMode}
           interrupt={interrupt}
-          messageComposer={messageComposer}
+          messageComposer={
+            messageComposer && {
+              ...messageComposer,
+              acknowledgedThroughOffset:
+                streamData.inputAcknowledgedThroughOffset ??
+                messageComposer.acknowledgedThroughOffset,
+            }
+          }
           onNudgeDeliveries={nudgeDeliveries}
           presence={presence}
           store={store}
@@ -475,6 +479,7 @@ function useStreamSubscriberUser() {
 
 /** Owns the server live snapshot and local event mirror, including their publication barrier. */
 function useProjectStreamData({
+  agentSource,
   projectId,
   resetStreamSourceTransport,
   streamSource,
@@ -482,7 +487,7 @@ function useProjectStreamData({
   streamPath,
 }: Pick<
   ProjectStreamViewProps,
-  "projectId" | "resetStreamSourceTransport" | "streamSource" | "streamPath"
+  "agentSource" | "projectId" | "resetStreamSourceTransport" | "streamSource" | "streamPath"
 > & { subscriberUser?: BrowserStreamSubscriberUser }) {
   const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
   // The browser stream database receives events over the ONE shared session socket — the same connection
@@ -561,7 +566,14 @@ function useProjectStreamData({
     [streamPath, browserStore.snapshot.clearVersion],
     { makeConnection: makeFeedConnection },
   );
+  const agentLiveState = useLiveState(
+    (agent: Agent) => agent.liveState,
+    (state) => state,
+    [streamPath, browserStore.snapshot.clearVersion],
+    agentSource ? { makeConnection: agentSource } : { root: undefined, enabled: false },
+  ).value;
   const presentedFeed = useEventSynchronizedLiveState(store.streamDatabase, feed.value);
+  const progress = presentAgentProgress(presentedFeed?.runtimeChange, agentLiveState);
   // Readers need actual shared history, not merely a pending writer election.
   // Both roles wait for the current live snapshot's publications to reach SQLite.
   const streamTransportReady =
@@ -573,6 +585,10 @@ function useProjectStreamData({
     resolvedStreamSource,
     ...browserStore,
     eventCount,
+    inputAcknowledgedThroughOffset: agentSource
+      ? progress.inputAcknowledgedThroughOffset
+      : undefined,
+    agentRuntime: progress.agentRuntime,
     feed,
     presentedFeed,
     streamTransportReady,

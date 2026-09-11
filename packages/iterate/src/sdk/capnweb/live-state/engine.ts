@@ -5,6 +5,7 @@ import {
   type RetainedCallback,
 } from "./retain.ts";
 import { diff } from "./diff.ts";
+import { compactPatch } from "./compact.ts";
 import type {
   LiveStateCursor,
   LiveStateRead,
@@ -24,7 +25,7 @@ const DEFAULT_DEBOUNCE_MS = 100;
 const ACK_TIMEOUT_MS = 10_000;
 
 type Subscriber<State> = {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   state: State;
   revision: number;
   busy: boolean;
@@ -56,6 +57,7 @@ export class LiveState<State extends object> {
   #revision = 0;
   readonly #epoch = crypto.randomUUID();
   #lastUpdate: Extract<LiveUpdate<State>, { type: "patch" }> | undefined;
+  #lastCompactUpdate: Extract<LiveUpdate<State>, { p: unknown }> | undefined;
   readonly #subscribers = new Map<RetainedCallback<LiveUpdate<State>>, Subscriber<State>>();
   readonly #debounceMs: number;
   #flushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -73,19 +75,28 @@ export class LiveState<State extends object> {
 
   /** One retained delta bounds history while a single parent can pull incrementally.
    * A late reader or a new incarnation receives an explicit snapshot instead. */
-  readSince(cursor?: LiveStateCursor): LiveStateRead<State> {
+  readSince(
+    cursor?: LiveStateCursor,
+    options: LiveStateSubscriptionOptions = {},
+  ): LiveStateRead<State> {
     if (this.#flushTimer !== undefined) clearTimeout(this.#flushTimer);
     this.#flushTimer = undefined;
     this.#flush();
     if (cursor?.epoch === this.#epoch) {
       if (cursor.revision === this.#revision) return { epoch: this.#epoch, update: null };
       if (cursor.revision === this.#lastUpdate?.from) {
-        return { epoch: this.#epoch, update: this.#lastUpdate };
+        return {
+          epoch: this.#epoch,
+          update: options.patchVersion === 3 ? this.#lastCompactUpdate! : this.#lastUpdate,
+        };
       }
     }
     return {
       epoch: this.#epoch,
-      update: { type: "snapshot", revision: this.#revision, state: this.#broadcast },
+      update:
+        options.patchVersion === 3
+          ? { s: [this.#revision, this.#broadcast] }
+          : { type: "snapshot", revision: this.#revision, state: this.#broadcast },
     };
   }
 
@@ -126,7 +137,12 @@ export class LiveState<State extends object> {
     retained.onRpcBroken?.(() => this.#drop(retained));
     // The initial snapshot is the first paint — delivered now, never debounced.
     // A synchronously-throwing sink is dropped here and never becomes live.
-    this.#deliver(retained, { type: "snapshot", revision: this.#revision, state: this.#broadcast });
+    this.#deliver(
+      retained,
+      options.patchVersion === 3
+        ? { s: [this.#revision, this.#broadcast] }
+        : { type: "snapshot", revision: this.#revision, state: this.#broadcast },
+    );
 
     return {
       ping: () => this.#subscribers.has(retained),
@@ -151,6 +167,7 @@ export class LiveState<State extends object> {
     this.#broadcast = this.#current;
     const update = { type: "patch", from, to, patch } satisfies LiveUpdate<State>;
     this.#lastUpdate = update;
+    this.#lastCompactUpdate = { p: [from, to, compactPatch(previous, patch)] };
     for (const subscriber of this.#subscribers.keys()) {
       this.#sendLatest(subscriber);
     }
@@ -160,6 +177,17 @@ export class LiveState<State extends object> {
   #sendLatest(subscriber: RetainedCallback<LiveUpdate<State>>): void {
     const held = this.#subscribers.get(subscriber);
     if (!held || held.busy || held.revision === this.#revision) return;
+    if (held.version === 3) {
+      if (held.revision === this.#lastUpdate?.from) {
+        this.#deliver(subscriber, this.#lastCompactUpdate!);
+      } else {
+        const patch = diff(held.state, this.#broadcast);
+        this.#deliver(subscriber, {
+          p: [held.revision, this.#revision, patch ? compactPatch(held.state, patch) : {}],
+        });
+      }
+      return;
+    }
     const patch =
       held.version === 2 && held.revision === this.#lastUpdate?.from
         ? this.#lastUpdate.patch

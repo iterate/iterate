@@ -2577,10 +2577,12 @@ export type StreamProcessorWakeResponse = {
  */
 export type LiveUpdate<State = unknown> =
   | { type: "snapshot"; revision: number; state: State }
-  | { type: "patch"; from: number; to: number; patch: LiveStatePatch };
+  | { type: "patch"; from: number; to: number; patch: LiveStatePatch }
+  | { s: [revision: number, state: State] }
+  | { p: [from: number, to: number, patch: CompactLiveStatePatch] };
 
 /** Explicit codec negotiation keeps already-open clients valid across deploys. */
-export type LiveStateSubscriptionOptions = { patchVersion?: 2 };
+export type LiveStateSubscriptionOptions = { patchVersion?: 2 | 3 };
 
 /** Owned handle for one live-state subscription. */
 export type LiveStateSubscriptionHandle = Disposable & {
@@ -4815,6 +4817,23 @@ export type LiveStatePatch =
   | { set: unknown }
   | { array: { length: number; items: [number, LiveStatePatch][] } }
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
+
+/**
+ * Version 3 addresses existing object fields by their sorted baseline position;
+ * new fields use `+name`. Arrays use indices and an optional `#` length.
+ * Primitives replace directly, `[value]` replaces other values, `[length, text]`
+ * appends to a string, and `[]` deletes an object field. No dictionary survives
+ * an update: every address refers to the acknowledged baseline of that patch.
+ */
+export type CompactLiveStatePatch =
+  | string
+  | number
+  | boolean
+  | null
+  | []
+  | [unknown]
+  | [number, string]
+  | { [address: string]: CompactLiveStatePatch };
 
 /** Original model name and the complete credential-free request that would be dispatched. */
 export type ProjectAiInterceptorInput =
