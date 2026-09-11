@@ -93,3 +93,40 @@ test("the shared company route streams in its caller and replaces forged billing
     },
   ]);
 });
+
+test("JSON requests without a model still use the platform Gateway route", async () => {
+  const calls: unknown[] = [];
+  const body = { input: "test-input-123" };
+  const response = await routeOpenAiViaGateway({
+    request: new Request("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer placeholder" },
+      body: JSON.stringify(body),
+    }),
+    config: {
+      environmentName: "preview_9",
+      openAiApiKey: { exposeSecret: () => "sk-company" },
+      cloudflareAiGateway: { id: "default" },
+      cloudflare: { accountId: "account" },
+    } as any,
+    ai: {
+      gateway: () => ({
+        run(input: unknown) {
+          calls.push(input);
+          return Response.json(
+            { error: "provider decides whether a model is required" },
+            { status: 400 },
+          );
+        },
+      }),
+    } as any,
+    consultInterceptor: undefined,
+    projectId: "prj_host",
+    streamContext: { kind: "scope", scopePath: "/" },
+  });
+  expect(response).toMatchObject({ status: 400 });
+  expect(calls).toMatchObject([
+    { provider: "openai", endpoint: "responses", headers: { authorization: "Bearer sk-company" } },
+  ]);
+  expect((calls[0] as any).query).toEqual(body);
+});

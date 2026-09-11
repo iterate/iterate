@@ -153,7 +153,7 @@ test("Gateway 429 responses exhaust ordinary retries without introducing a budge
             throw new Error("Interception must not dial a provider");
           },
         },
-        getAiGatewayOptions: async (eventOffset) => ({
+        getAiGatewayOptions: (eventOffset) => ({
           transport: { kind: "unified" },
           metadata: {
             environment: "test",
@@ -241,7 +241,7 @@ function makeInterceptedModelHarness(
             throw new Error("An intercepted model must never dial");
           },
         },
-        getAiGatewayOptions: async () => ({
+        getAiGatewayOptions: () => ({
           transport: {
             kind: "byok",
             gatewayId: "default",

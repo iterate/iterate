@@ -434,14 +434,13 @@ function resolveAiRoute(model: string, transport: CloudflareAiGatewayTransport) 
   };
 }
 
-type PreparedAiRequest = { sourceModel: string } & (
-  | (modelInterception.OpenAiHttpRequest & { credential: string })
-  | (modelInterception.WorkersAiRequest & { credential: null })
-);
+type PreparedAiRequest =
+  | (modelInterception.OpenAiHttpRequest & { sourceModel?: string; credential: string })
+  | (modelInterception.WorkersAiRequest & { sourceModel: string; credential: null });
 
 /** Complete OpenAI-native request preparation, including cache policy. */
 export async function prepareOpenAiRequest(input: {
-  model: string;
+  model?: string;
   transport: Extract<CloudflareAiGatewayTransport, { kind: "byok" }>;
   metadata?: AiGatewayMetadata;
   endpoint: string;
@@ -453,7 +452,7 @@ export async function prepareOpenAiRequest(input: {
   const body = {
     ...input.body,
     ...openAiStreamingUsage(input.endpoint, input.body),
-    model: model.replace(/^intercepted\//, "").replace(/^openai\//, ""),
+    ...(model && { model: model.replace(/^intercepted\//, "").replace(/^openai\//, "") }),
     ...(transport.openaiPromptCacheKey && { prompt_cache_key: transport.openaiPromptCacheKey }),
   };
   const cacheHeaders: Record<string, string> = input.cache
@@ -529,7 +528,7 @@ export async function sendAiRequest(
   prepared: PreparedAiRequest,
 ): Promise<Response> {
   const { sourceModel, credential: _credential, ...request } = prepared;
-  if (modelInterception.isInterceptedModel(sourceModel)) {
+  if (sourceModel && modelInterception.isInterceptedModel(sourceModel)) {
     if (!host.consultInterceptor) throw modelInterception.noAiInterceptorError(sourceModel);
     // The only agent-turn caller is runWorkersAiAttempt, which builds body.messages
     // with adaptMessagesForModel. Shared preparation erases that shape because

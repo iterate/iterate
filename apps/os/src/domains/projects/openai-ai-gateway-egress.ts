@@ -49,9 +49,7 @@ export async function routeOpenAiViaGateway(input: {
     return null;
   }
 
-  const parsedModel = z.string().min(1).safeParse(body.model);
-  if (!parsedModel.success) return null;
-  const model = parsedModel.data;
+  const model = z.string().safeParse(body.model).data;
   const gateway = config.cloudflareAiGateway;
   const prepared = await prepareOpenAiRequest({
     model,

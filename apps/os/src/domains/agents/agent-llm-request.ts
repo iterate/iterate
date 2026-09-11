@@ -437,7 +437,7 @@ export class AgentLlmRequest {
     if (ai === undefined) {
       throw new Error("Agent processor has no AI binding configured.");
     }
-    const gatewayOptions = await this.#host.deps.getAiGatewayOptions?.(input.eventOffset);
+    const gatewayOptions = this.#host.deps.getAiGatewayOptions?.(input.eventOffset);
     const completion = await raceAbort(
       input.signal,
       runWorkersAiAttempt({

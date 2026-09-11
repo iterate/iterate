@@ -67,7 +67,7 @@ export type AgentLlmTransport = (args: {
  */
 export type AgentProcessorDeps = {
   ai?: WorkersAiBinding;
-  getAiGatewayOptions?: (eventOffset: number) => Promise<AiGatewayOptions>;
+  getAiGatewayOptions?: (eventOffset: number) => AiGatewayOptions;
   consultAiInterceptor?: (input: ProjectAiInterceptorInput) => Promise<unknown>;
   resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
   readRepoFile?: (

@@ -555,7 +555,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       // The OpenAI prompt_cache_key is per agent stream: repeated turns
       // grow a shared prefix, and a stable key routes them to the same
       // provider-side prompt-cache shard.
-      getAiGatewayOptions: async (eventOffset: number) => {
+      getAiGatewayOptions: (eventOffset: number) => {
         const config = parseConfig(this.env);
         const gateway = config.cloudflareAiGateway;
         return {

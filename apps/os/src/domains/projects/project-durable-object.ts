@@ -727,7 +727,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
         streamContext,
       });
       if (routed !== null) return routed;
-      // Only customer-funded calls reach the direct provider.
     }
 
     return withWebSocketHandshakeHeaders(request, await fetch(request));
