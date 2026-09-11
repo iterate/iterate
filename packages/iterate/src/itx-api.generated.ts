@@ -4628,7 +4628,10 @@ export type ProjectAiInterceptorInput =
       model: string;
       request: AiRequest & {
         body: {
-          messages: { role: "system" | "developer" | "user" | "assistant"; content: string }[];
+          messages: {
+            role: "system" | "developer" | "user" | "assistant";
+            content: string;
+          }[];
         };
       };
     }
