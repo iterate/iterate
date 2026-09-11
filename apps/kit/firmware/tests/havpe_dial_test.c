@@ -1,4 +1,4 @@
-#include "havpe_modes.h"
+#include "havpe_dial.h"
 
 #include <assert.h>
 #include <stddef.h>

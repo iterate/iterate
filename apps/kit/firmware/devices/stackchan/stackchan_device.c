@@ -3,9 +3,8 @@
  *
  * The program it runs is components/voice/src/voice_loop.c, and it is the same
  * program the other three run. What is left here is the hardware: a face on a
- * 320x240 panel, a touch screen that opens the provider menu, a PMIC side
- * button that speaks the session grammar (stackchan_modes.c — wake with a
- * chime, every end says "call ended"), a head on two servos, a camera, and —
+ * 320x240 panel, a touch screen and PMIC side button that speak the session
+ * grammar, a head on two servos, a camera, and —
  * the one structural novelty — a SOFTWARE echo canceller with three
  * different frame sizes behind it.
  *
@@ -43,8 +42,6 @@
 #include "iterate/kit/conversation_overlay.h"
 #include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/platforms/board.h"
-#include "iterate/kit/platforms/provider_mode_nvs.h"
-#include "iterate/kit/provider_mode.h"
 #include "iterate/kit/voice_device_profile.h"
 
 #include "stackchan_audio.h"
@@ -52,10 +49,9 @@
 #include "stackchan_body.h"
 #include "stackchan_camera.h"
 #include "stackchan_image.h"
-#include "stackchan_modes.h"
 #include "stackchan_processor.h"
 
-/* The baked chimes and provider announcements; see tools/generate-sounds.sh. */
+/* The baked wake and end chimes; see tools/generate-sounds.sh. */
 #include "assets/sounds_generated.inc"
 
 static const char tag[] = "iterate-stackchan";
@@ -85,59 +81,6 @@ static struct iterate_kit_rgb8 body_shown[ITERATE_KIT_STACKCHAN_LED_COUNT];
 static bool body_shown_valid;
 static uint64_t last_body_write_ms;
 static uint64_t last_present_ms;
-
-/** Provider choice, menu and PMIC-button session. Call facts come from
- * iterate_kit_board_view; the 20 Hz display throttle only gates rendering.
- */
-static struct {
-  struct stackchan_menu menu;
-  uint8_t mode;
-} mode_state;
-
-/*
- * The chosen provider survives a power cycle. This board brings its codec up
- * BEFORE the radio, so it initialises NVS before its silent boot restore.
- */
-static const struct iterate_kit_provider_mode_options mode_options = {
-    .default_mode = STACKCHAN_MODE_OPENAI,
-    .mode_count = STACKCHAN_MODE_COUNT,
-};
-static const struct iterate_kit_provider_mode_nvs mode_nvs = {
-    .namespace_name = "stackchan",
-    .key = "mode",
-    .initialize_flash_on_load = true,
-};
-static struct iterate_kit_provider_mode_store mode_store;
-
-/* Both modes are server-VAD full duplex behind this board's canceller, so
- * unlike HAVPE only the stream path moves with the selection. */
-static void configure_mode(void *context, uint8_t mode) {
-  (void)context;
-  iterate_kit_voice_loop_set_stream_path(stackchan_mode_stream_path(mode));
-}
-
-static void announce_mode(void *context, uint8_t mode) {
-  (void)context;
-  stackchan_audio_play_sound(mode_sounds[mode].pcm, mode_sounds[mode].bytes);
-}
-
-/* `settled=false` restores silently; a menu pick announces even when it
- * chooses the current mode, and persists only an actual change. */
-static void adopt_mode(uint8_t mode, bool settled) {
-  const enum iterate_kit_provider_mode_adoption result =
-      iterate_kit_provider_mode_adopt(
-          &mode_options,
-          &mode_store,
-          &mode_state.mode,
-          mode,
-          settled,
-          configure_mode,
-          announce_mode,
-          NULL);
-  if (result == ITERATE_KIT_PROVIDER_MODE_ADOPTION_PERSISTENCE_FAILED) {
-    ESP_LOGW(tag, "provider mode applied but could not be persisted");
-  }
-}
 
 /*
  * THE HEAD GESTURES, stepped from `poll` on the app task: a gesture is a
@@ -208,10 +151,6 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
   /* The mouth animates audio the hardware actually played. */
   stackchan_audio_set_playout_observer(
       iterate_kit_stackchan_avatar_observe_playout, NULL);
-  /* The silent boot restore: dial whichever provider NVS remembers. */
-  mode_store = iterate_kit_provider_mode_nvs_store(&mode_nvs);
-  mode_state.mode = iterate_kit_provider_mode_load(&mode_options, &mode_store);
-  adopt_mode(mode_state.mode, false);
   out->codec = stackchan_audio_codec();
   out->processor = stackchan_processor();
   return true;
@@ -310,37 +249,19 @@ static void present(
   }
 }
 
-/** Supply the PMIC side-button call tap; face taps remain menu-only below. */
+/** Either physical call control supplies the same open-mic session tap. */
 static void read_gestures(struct iterate_kit_board_gestures *out) {
+  bool ignored_left_half;
   out->tap |= iterate_kit_stackchan_avatar_take_side_button_tap();
+  out->tap |= iterate_kit_stackchan_avatar_take_face_tap(&ignored_left_half);
 }
 
 /** Poll StackChan-only presentation controls after the shared call grammar. */
 static void poll(void *context, struct iterate_kit_voice_intent *out) {
-  const struct iterate_kit_voice_view *view = iterate_kit_board_view();
   const uint64_t now = (uint64_t)(esp_timer_get_time() / 1000);
   (void)context;
   (void)out;
   head_gesture_step(now);
-  {
-    bool left = false;
-    const bool tap = iterate_kit_stackchan_avatar_take_face_tap(&left);
-    const struct stackchan_menu_poll menu_poll = {
-      .tap = tap,
-      .tap_left_half = left,
-      .call_in_play = view->call_active || view->wants_call,
-      .now_ms = now,
-    };
-    uint8_t pick = STACKCHAN_MENU_NO_PICK;
-    const bool visible =
-        stackchan_menu_step(&mode_state.menu, &menu_poll, &pick);
-    if (pick != STACKCHAN_MENU_NO_PICK) adopt_mode(pick, true);
-    if (visible) {
-      iterate_kit_stackchan_avatar_show_menu(mode_state.mode);
-    } else {
-      iterate_kit_stackchan_avatar_hide_menu();
-    }
-  }
 }
 
 /* The rail remains on for the boot: the software canceller's reference
@@ -830,11 +751,9 @@ static const struct iterate_kit_board board = {
   .conversation_id = "scdev",
   .instructions =
       "StackChan: a small desk robot with a face, a moving head and a camera. "
-      "Its SIDE BUTTON starts and ends the call — with a chime on wake and a "
-      "spoken \"call ended\" on every end — and its microphone stays OPEN "
+      "Its face or side button starts and ends the call — with a chime on wake "
+      "and a spoken \"call ended\" on every end — and its microphone stays OPEN "
       "throughout: it cancels its own speaker, so it can be interrupted. "
-      "Tapping its face opens a two-cell provider menu (Grok left, OpenAI "
-      "right); the choice is announced and survives reboots. "
       "conversation.start() and conversation.end() begin and end a call. "
       "health() returns this device's full diagnostics — start there when it "
       "seems unwell. "

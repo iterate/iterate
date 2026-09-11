@@ -60,6 +60,7 @@ static const struct iterate_kit_audio_codec_properties codec_properties = {
  * wants; see speak_frames.
  */
 static size_t capture_frames_pending;
+static int16_t capture_frame_value = 1000;
 
 static enum iterate_kit_status codec_read(
     void *context,
@@ -75,7 +76,10 @@ static enum iterate_kit_status codec_read(
     return ITERATE_KIT_UNAVAILABLE;
   }
   --capture_frames_pending;
-  for (index = 0U; index < capacity_samples; ++index) capture[index] = 1000;
+  for (index = 0U; index < capacity_samples; ++index) {
+    capture[index] = capture_frame_value;
+  }
+  ++capture_frame_value;
   *sample_count = capacity_samples;
   return ITERATE_KIT_OK;
 }
@@ -289,6 +293,68 @@ static bool sent_after_contains(size_t from, const char *needle) {
   return false;
 }
 
+static const char *current_activation(void) {
+  static char activation[65];
+  for (size_t index = iterate_kit_fake_platform_sent_count(); index-- > 0U;) {
+    const char *message = iterate_kit_fake_platform_sent(index);
+    const char *field = message == NULL ? NULL : strstr(message, "\"activation\":\"");
+    if (field != NULL) {
+      field += strlen("\"activation\":\"");
+      size_t length = strcspn(field, "\"");
+      assert(length < sizeof(activation));
+      memcpy(activation, field, length);
+      activation[length] = '\0';
+      return activation;
+    }
+  }
+  return "ignored-activation";
+}
+
+static int base64_value(char value) {
+  if (value >= 'A' && value <= 'Z') return value - 'A';
+  if (value >= 'a' && value <= 'z') return value - 'a' + 26;
+  if (value >= '0' && value <= '9') return value - '0' + 52;
+  if (value == '+') return 62;
+  if (value == '/') return 63;
+  return -1;
+}
+
+/* Collect the PCM from every microphone event without trusting batch shape. */
+static size_t collect_sent_microphone(
+    size_t from, uint8_t *destination, size_t capacity) {
+  size_t written = 0U;
+  for (size_t index = from; index < iterate_kit_fake_platform_sent_count(); ++index) {
+    const char *message = iterate_kit_fake_platform_sent(index);
+    const char *pcm = message == NULL ? NULL : strstr(message, "\"pcm\":\"");
+    if (pcm == NULL) continue;
+    pcm += strlen("\"pcm\":\"");
+    while (pcm[0] != '\0' && pcm[0] != '"') {
+      const int a = base64_value(pcm[0]);
+      const int b = base64_value(pcm[1]);
+      const int c = pcm[2] == '=' ? 0 : base64_value(pcm[2]);
+      const int d = pcm[3] == '=' ? 0 : base64_value(pcm[3]);
+      assert(a >= 0 && b >= 0 && c >= 0 && d >= 0);
+      assert(written + 1U <= capacity);
+      destination[written++] = (uint8_t)((a << 2) | (b >> 4));
+      if (pcm[2] != '=') {
+        assert(written + 1U <= capacity);
+        destination[written++] = (uint8_t)((b << 4) | (c >> 2));
+      }
+      if (pcm[3] != '=') {
+        assert(written + 1U <= capacity);
+        destination[written++] = (uint8_t)((c << 6) | d);
+      }
+      pcm += 4;
+    }
+  }
+  return written;
+}
+
+static int16_t collected_sample(const uint8_t *pcm, size_t frame) {
+  const size_t offset = frame * ITERATE_KIT_VOICE_FRAME_BYTES;
+  return (int16_t)((uint16_t)pcm[offset] | ((uint16_t)pcm[offset + 1U] << 8));
+}
+
 /*
  * Deliver the call's acceptance, exactly as the stream delivers it — through
  * the `processEventBatch` callback the loop itself exported, whose id is read
@@ -316,9 +382,9 @@ static void deliver_accepted(void) {
       "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
       "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
       "\"offset\":100,"
-      "\"payload\":{\"conversationId\":\"convdial\",\"handshakeTookMs\":2000}}"
+      "\"payload\":{\"activation\":\"%s\",\"conversationId\":\"convdial\",\"handshakeTookMs\":2000}}"
       "]],\"scannedThroughOffset\":100,\"state\":null}]]]",
-      export_id);
+      export_id, current_activation());
   deliver(connection, message);
   {
     char release[64];
@@ -364,10 +430,11 @@ static void deliver_spk_chunk(bool last) {
       "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
       "{\"type\":\"events.iterate.com/voice-agent/spk-frame\","
       "\"offset\":%ld,"
-      "\"payload\":{\"conversationId\":\"convdial\",\"deviceSpeakerFrameSeq\":%ld,%s"
+      "\"payload\":{\"activation\":\"%s\",\"conversationId\":\"convdial\",\"deviceSpeakerFrameSeq\":%ld,%s"
       "\"pcm\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}}"
       "]],\"scannedThroughOffset\":%ld,\"state\":null}]]]",
-      export_id, offset, offset, last ? "\"lastFrameOfAnswer\":true," : "", offset);
+      export_id, offset, current_activation(), offset,
+      last ? "\"lastFrameOfAnswer\":true," : "", offset);
   deliver(connection, message);
   {
     char release[64];
@@ -392,9 +459,9 @@ static void deliver_accepted_latest(void) {
       "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
       "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
       "\"offset\":%ld,"
-      "\"payload\":{\"conversationId\":\"convdial\",\"handshakeTookMs\":2000}}"
+      "\"payload\":{\"activation\":\"%s\",\"conversationId\":\"convdial\",\"handshakeTookMs\":2000}}"
       "]],\"scannedThroughOffset\":%ld,\"state\":null}]]]",
-      export_id, offset, offset);
+      export_id, offset, current_activation(), offset);
   deliver(connection, message);
   {
     char release[64];
@@ -472,6 +539,36 @@ static void nothing_physical_was_involved(void) {
 }
 
 /*
+ * Wake detection reaches the app after audio has already crossed the codec.
+ * The first, middle and release-tail frames must therefore survive the mount
+ * and reach the stream in chronological order, even though no call was ready
+ * while they were captured.
+ */
+static void pre_mount_speech_is_preserved_and_sent_immediately(void) {
+  uint8_t pcm[6U * ITERATE_KIT_VOICE_FRAME_BYTES];
+  const size_t before = iterate_kit_fake_platform_sent_count();
+  quiescent();
+  capture_frame_value = 1000;
+
+  remote_call("pushToTalk", "start");
+  step();
+  speak_frames(1U); /* prefix */
+  speak_frames(4U); /* middle */
+  speak_frames(1U); /* tail */
+  remote_call("pushToTalk", "stop");
+  step();
+
+  assert(!sent_after_contains(before, "mic-frame"));
+  pump();
+  run_ms(50U);
+  assert(sent_after_contains(before, "mic-frame"));
+  assert(collect_sent_microphone(before, pcm, sizeof(pcm)) == sizeof(pcm));
+  assert(collected_sample(pcm, 0U) == 1000);
+  assert(collected_sample(pcm, 3U) == 1003);
+  assert(collected_sample(pcm, 5U) == 1005);
+}
+
+/*
  * SPEECH SPOKEN INTO THE DIAL FLOWS AT ONCE, AND NO TURN IS EVER MARKED.
  *
  * Press from sleep, say "count to forty", let go — the words go up as mic
@@ -486,6 +583,7 @@ static void nothing_physical_was_involved(void) {
 static void dial_speech_flows_at_once_and_no_turn_is_marked(void) {
   size_t after_press;
   size_t after_accept;
+  char activation[65];
   quiescent();
   /* Wait out the ladder, so the press below is a fresh dial. */
   run_ms(ITERATE_KIT_LAUNCH_PLACE_RETRY_MS + 500U);
@@ -498,6 +596,7 @@ static void dial_speech_flows_at_once_and_no_turn_is_marked(void) {
   run_ms(500U);
   /* Already on the wire, with no call accepted yet. */
   assert(sent_after_contains(after_press, "mic-frame"));
+  (void)snprintf(activation, sizeof(activation), "%s", current_activation());
   assert(!sent_after_contains(after_press, "ptt-start"));
 
   /* Let go before anything answered: nothing is said about it. */
@@ -513,6 +612,16 @@ static void dial_speech_flows_at_once_and_no_turn_is_marked(void) {
   assert(!sent_after_contains(after_accept, "ptt-start"));
   assert(!sent_after_contains(after_accept, "ptt-end"));
   assert(!sent_after_contains(after_press, "button-pressed"));
+
+  /* Releasing and pressing again is another utterance in the same call, not
+   * a new backend activation. */
+  remote_call("pushToTalk", "start");
+  step();
+  speak_frames(1U);
+  run_ms(50U);
+  assert(strcmp(current_activation(), activation) == 0);
+  remote_call("pushToTalk", "stop");
+  step();
 }
 
 /*
@@ -545,6 +654,30 @@ static void a_silent_dial_release_commits_no_turn(void) {
   /* No turn opened on the empty queue: no commit, no mic audio. */
   assert(!sent_after_contains(after_accept, "ptt-end"));
   assert(!sent_after_contains(after_accept, "mic-frame"));
+}
+
+/* Ending A fences its queued tail before B gets a fresh activation. */
+static void ending_a_never_sends_its_tail_as_b(void) {
+  char activation_a[65];
+  size_t after_end;
+  quiescent();
+  remote_call("pushToTalk", "start");
+  step();
+  speak_frames(3U);
+  run_ms(50U);
+  (void)snprintf(activation_a, sizeof(activation_a), "%s", current_activation());
+
+  remote_call("conversation", "end");
+  step();
+  after_end = iterate_kit_fake_platform_sent_count();
+  run_ms(100U);
+  assert(!sent_after_contains(after_end, "mic-frame"));
+
+  remote_call("pushToTalk", "start");
+  step();
+  speak_frames(1U);
+  run_ms(50U);
+  assert(strcmp(current_activation(), activation_a) != 0);
 }
 
 /*
@@ -613,10 +746,10 @@ int main(void) {
   conversation_control_opens_and_ends_a_call();
   nothing_physical_was_involved();
 
-  /* From here on the device is mounted, so the launch ladder can run. */
-  pump();
+  pre_mount_speech_is_preserved_and_sent_immediately();
   dial_speech_flows_at_once_and_no_turn_is_marked();
   a_silent_dial_release_commits_no_turn();
+  ending_a_never_sends_its_tail_as_b();
   pump();
   an_idle_accepted_call_is_not_recycled_for_silence();
   a_lane_silent_mid_answer_is_recycled();

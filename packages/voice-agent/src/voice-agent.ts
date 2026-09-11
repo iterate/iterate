@@ -261,13 +261,6 @@ const IDLE_STAMP_STEP_MS = 5_000;
 const IDLE_TICK_MS = 5_000;
 
 /**
- * How long after a dial failure before anything may dial again. Without it,
- * a provider outage against an open-mic board is unbounded churn at the
- * board's fifty frames a second.
- */
-const DIAL_RETRY_COOLDOWN_MS = 5_000;
-
-/**
  * How long the provider gets from socket adoption to `session.started`.
  * Nothing else bounds this gap, and an open-mic call that never becomes
  * ready is SILENT FOREVER: mic frames keep the idle stamp fresh, so the
@@ -540,7 +533,7 @@ function peakOfBase64Pcm16(base64: string): number {
  * One tool the backend model may call, as data on the birth certificate.
  *
  * A certificate tool is a name this agent already knows how to be: `hang_up`
- * is the only one — one atomic append of conversation-end-requested, no itx.
+ * is the only one — one atomic terminal append, no itx.
  * Anything a project wants done goes through `exec_typescript`, which reaches
  * the same capabilities with types and without a persisted walk.
  */
@@ -561,6 +554,9 @@ const VoiceBackend = z.strictObject({
   serviceTier: z.string().optional(),
   instructions: z.string().optional(),
 });
+
+/** A client-local call identity; opaque to the backend and durable fold. */
+const Activation = z.string().min(1).max(64);
 
 /**
  * Everything that outlives the Durable Object holding the socket.
@@ -602,17 +598,18 @@ const VoiceState = z.object({
   transcript: z
     .array(z.strictObject({ role: z.enum(["listener", "assistant"]), text: z.string() }))
     .default([]),
+  /** The most recently cancelled activation when there is no live call. */
+  lastEndedActivation: Activation.nullable().default(null),
   call: z
     .object({
       conversationId: z.string(),
+      activation: Activation,
       /**
        * When the Stream DO committed the device's most recent input — a mic
        * frame or a button edge. THE DEVICE'S INPUT, not "the last thing
        * anybody said": the agent's own speech leaves no durable event.
        */
       lastDeviceInputAtStreamMs: z.number(),
-      /** Decided, not yet done: nothing re-dials a call with this set. */
-      endRequested: z.strictObject({ reason: z.string() }).nullable(),
     })
     .nullable()
     .default(null),
@@ -650,7 +647,10 @@ export const VoiceAgentContract = defineProcessorContract({
    * loses `expression`. The backend's `exec_typescript` reaches the same
    * capabilities with types, so the persisted itx walk bought a second tool
    * kind and an untyped Reflect walk for nothing. */
-  version: "21.0.0",
+  /* 22.0.0: each local call has an opaque activation identity. It fences
+   * delayed input and cancellation exactly, including cancellation before a
+   * server conversation has been accepted. */
+  version: "22.0.0",
   description:
     "Runs a GPT-Live voice call in the stream's own Durable Object, relaying audio both ways as it arrives.",
   stateSchema: VoiceState,
@@ -698,17 +698,20 @@ export const VoiceAgentContract = defineProcessorContract({
         "one on a quiet stream opens a call.",
       ...EPH,
       payloadSchema: z.looseObject({
+        activation: Activation,
         /** 16 kHz mono PCM16, base64. The only encoding these frames carry. */
         pcm: z.string(),
       }),
     },
     "events.iterate.com/voice-agent/call-started": {
-      description: "The server opened a call and what it is called.",
-      payloadSchema: z.looseObject({ conversationId: z.string() }),
+      description:
+        "The server opened a client activation and assigned its authoritative conversation id.",
+      payloadSchema: z.looseObject({ activation: Activation, conversationId: z.string() }),
     },
     "events.iterate.com/voice-agent/conversation-accepted": {
       description: "The provider started the session; the call is live.",
       payloadSchema: z.looseObject({
+        activation: Activation,
         conversationId: z.string(),
         /** Facet clock: dial to usable, the number a cold call is judged on. */
         handshakeTookMs: z.number(),
@@ -716,13 +719,10 @@ export const VoiceAgentContract = defineProcessorContract({
         heldMicFrames: z.number(),
       }),
     },
-    "events.iterate.com/voice-agent/conversation-end-requested": {
-      description: "Somebody has decided this call is over, and why.",
-      payloadSchema: z.looseObject({ conversationId: z.string(), reason: z.string() }),
-    },
     "events.iterate.com/voice-agent/conversation-ended": {
-      description: "The call is over.",
-      payloadSchema: z.looseObject({ conversationId: z.string(), reason: z.string() }),
+      description:
+        "The local activation is over. A client may append this before the server assigns a conversation id.",
+      payloadSchema: z.looseObject({ activation: Activation, reason: z.string() }),
     },
     "events.iterate.com/voice-agent/provider-error": {
       description: "The provider reported an error, verbatim.",
@@ -766,6 +766,7 @@ export const VoiceAgentContract = defineProcessorContract({
         "stream shows how the voice was initialized instead of that being invisible " +
         "session state.",
       payloadSchema: z.looseObject({
+        activation: Activation,
         conversationId: z.string(),
         provider: z.string(),
         instructions: z.string(),
@@ -818,7 +819,6 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/created",
     "events.iterate.com/voice-agent/configured",
     "events.iterate.com/voice-agent/call-started",
-    "events.iterate.com/voice-agent/conversation-end-requested",
     "events.iterate.com/voice-agent/conversation-ended",
     /* Consumed so the fold sees its own appends and the recap survives an
      * eviction — processEvent has no arm for them on purpose. */
@@ -834,7 +834,6 @@ export const VoiceAgentContract = defineProcessorContract({
   emits: [
     "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/conversation-accepted",
-    "events.iterate.com/voice-agent/conversation-end-requested",
     "events.iterate.com/voice-agent/conversation-ended",
     "events.iterate.com/voice-agent/provider-error",
     "events.iterate.com/voice-agent/provider-disconnected",
@@ -888,6 +887,8 @@ interface TurnBuffer {
 interface Dial {
   /** The call this dial serves. A re-dial of the same call is a NEW Dial. */
   readonly conversationId: string;
+  /** The local activation this server call belongs to. */
+  readonly activation: string;
   /** This dial's own identity, for keys that must not collide with the
    * previous dial of the SAME call — a timestamp is not enough on a virtual
    * clock. */
@@ -984,8 +985,9 @@ interface Dial {
 }
 
 /** A dial just decided: no socket yet, nothing sent, a clear owed first. */
-const freshDial = (conversationId: string): Dial => ({
+const freshDial = (conversationId: string, activation: string): Dial => ({
   conversationId,
+  activation,
   dialId: crypto.randomUUID(),
   socket: null,
   ready: false,
@@ -1058,34 +1060,28 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * start filling before one exists: a revived incarnation holds frames from
    * deliveries that arrive before the caught-up pass re-dials.
    */
-  #micQueue: string[] = [];
+  #micQueue: { activation: string; pcm: string }[] = [];
   /** Decoded PCM bytes in #micQueue; the provider accepts variable payloads. */
   #micQueueBytes = 0;
   /** The opening already failed for a full held-audio budget. */
-  #heldMicOverflowFor: string | null = null;
+  #heldMicOverflowForActivation: string | null = null;
   /**
    * A call has been ASKED for, and the log has not caught up yet. A board
    * streams microphone frames continuously, so the window between asking
    * and the fold showing a call is never empty — without this every frame in
    * it minted its own conversation.
    */
-  #callRequested = false;
-  /** When this incarnation last saw a conversation end, for the mint
-   * cooldown: the frames a device drained in a call's final ~100 ms arrive
-   * BEHIND the obituary and must not mint the call's successor. */
-  #conversationEndedAtMs: number | null = null;
+  #callRequestedForActivation: string | null = null;
   /**
    * The fold's `lastDeviceInputAtStreamMs`, refreshed on every delivery. A
    * MIRROR, never a second source of truth: the idle loop runs between
    * deliveries and has no way to read the fold.
    */
   #lastDeviceInputAtStreamMsMirror = 0;
-  /** When the last dial FAILED, for the retry cooldown. */
-  #lastDialFailedAtFacetMs = 0;
   /** When the provider closed under a live call, newest last; see #providerClosed. */
   #providerClosesAtFacetMs: number[] = [];
-  /** The call an end has been requested for — the reducer's word reaches a dial's callbacks late. */
-  #endRequestedFor: string | null = null;
+  /** The activation whose terminal event is still travelling through the log. */
+  #endingActivation: string | null = null;
   /**
    * The mirror's outbox, drained by ONE background flush at a time. The
    * drain swaps this queue out whole and sends it as ONE variadic append, so
@@ -1129,12 +1125,14 @@ export class VoiceAgentProcessor extends StreamProcessor<
         /* The id was minted INTO the event rather than here, so this is
          * deterministic under replay. The deadline starts here too: opening a
          * call IS the device saying something. */
+        if (state.call !== null || state.lastEndedActivation === event.payload.activation)
+          return state;
         return {
           ...state,
           call: {
             conversationId: event.payload.conversationId,
+            activation: event.payload.activation,
             lastDeviceInputAtStreamMs: committedAtStreamMs,
-            endRequested: null,
           },
         };
 
@@ -1145,6 +1143,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * idle deadline outlive an eviction. `max` so a redelivered batch
          * cannot walk the deadline backwards. */
         return state.call === null ||
+          state.call.activation !== event.payload.activation ||
           committedAtStreamMs - state.call.lastDeviceInputAtStreamMs < IDLE_STAMP_STEP_MS
           ? state
           : {
@@ -1158,17 +1157,13 @@ export class VoiceAgentProcessor extends StreamProcessor<
               },
             };
 
-      case "events.iterate.com/voice-agent/conversation-end-requested":
-        /* Decided, not done. The call stays open in the fold until the obituary
-         * lands; what changes is that nothing will re-dial it. */
-        return state.call === null || state.call.conversationId !== event.payload.conversationId
-          ? state
-          : { ...state, call: { ...state.call, endRequested: { reason: event.payload.reason } } };
-
       case "events.iterate.com/voice-agent/conversation-ended":
-        return state.call === null || state.call.conversationId !== event.payload.conversationId
+        /* Terminal at the decision. A late terminal event must never poison
+         * a newer activation's one-element cancellation marker. */
+        if (state.call === null) return { ...state, lastEndedActivation: event.payload.activation };
+        return state.call.activation !== event.payload.activation
           ? state
-          : { ...state, call: null };
+          : { ...state, call: null, lastEndedActivation: event.payload.activation };
 
       case "events.iterate.com/voice-agent/utterance-transcript": {
         if (event.payload.text === "") return state;
@@ -1202,10 +1197,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
   processEvent(args: ProcessEventArgs<VoiceAgentContract>): undefined {
     const { state, event, delivery, append, runInBackground } = args;
 
-    /* The log has caught up with whichever append we were remembering for it;
-     * both memories exist only to cover the gap, so both end here. */
+    /* The log has caught up with an opening append we were remembering. */
     if (state.call !== null) {
-      this.#callRequested = false;
+      this.#callRequestedForActivation = null;
       this.#lastDeviceInputAtStreamMsMirror = state.call.lastDeviceInputAtStreamMs;
     }
 
@@ -1214,27 +1208,14 @@ export class VoiceAgentProcessor extends StreamProcessor<
      * caught-up delivery is how a revived incarnation learns it owes a call.
      */
     const owedCall = delivery.caughtUp ? state.call : null;
-    /*
-     * AN OBITUARY NOBODY WROTE IS A CALL NOBODY CAN END. Re-running it here
-     * retries a refused or interrupted obituary — idempotent by key.
-     */
-    if (owedCall !== null && owedCall.endRequested !== null) {
-      const { conversationId, endRequested } = owedCall;
-      /* The last words of the call — usually the goodbye that decided it —
-       * are still an open row; #hangUp fences the close listener out, so
-       * this is the one chance to land them durably. */
-      if (this.#dial !== null) this.#flushTurns(this.#dial, append, true);
-      this.#hangUp();
-      args.blockProcessorWhile(() =>
-        append({
-          type: "events.iterate.com/voice-agent/conversation-ended",
-          idempotencyKey: this.idempotencyKey(`ended:${conversationId}`),
-          payload: { conversationId, reason: endRequested.reason },
-        }),
+    if (owedCall !== null) {
+      this.#openProviderConnection(
+        owedCall.conversationId,
+        owedCall.activation,
+        state,
+        append,
+        runInBackground,
       );
-    }
-    if (owedCall !== null && owedCall.endRequested === null) {
-      this.#openProviderConnection(owedCall.conversationId, state, append, runInBackground);
     }
 
     if (event === null) return;
@@ -1244,31 +1225,19 @@ export class VoiceAgentProcessor extends StreamProcessor<
         /* NOT DECODED HERE, on purpose. The frame stays the device's own
          * base64 string all the way to the wire. */
         const micB64 = event.payload.pcm;
+        const activation = event.payload.activation;
         /* An empty frame is a client bug, not audio: the provider rejects
          * "audio/pcm audio must not be empty" and it can open no call. */
         if (micB64 === "") return;
-        /* A buried call takes no further input. A NULL call passes — the
-         * mint below is what handles the null. */
-        if (state.call?.endRequested != null) return;
-        if (state.call === null && !this.#callRequested) {
-          /*
-           * A CALL IS OPENED BY SOMEBODY TALKING, not by anybody asking for
-           * one: the first frame on a quiet stream mints it. Frames are
-           * ephemeral, so a frame from another era cannot be replayed into
-           * an empty room.
-           *
-           * AND NOT THE LAST CALL'S DYING BREATH. A device drains its mic
-           * queue for ~100 ms after the far end hangs up; those frames land
-           * on a null call and minted its successor within 171 ms.
-           */
-          if (
-            this.#conversationEndedAtMs !== null &&
-            this.deps.nowAtFacetMs() - this.#conversationEndedAtMs < 1500
-          ) {
-            return;
-          }
+        /* Input only ever reaches the matching local activation. A client
+         * output is ordered, so a mic from an ended activation must not
+         * arrive after its successor has itself ended. */
+        if (state.call !== null && state.call.activation !== activation) return;
+        if (state.call === null && state.lastEndedActivation === activation) return;
+        if (state.call === null && this.#endingActivation === activation) return;
+        if (state.call === null && this.#callRequestedForActivation !== activation) {
           const conversationId = `conv_${crypto.randomUUID()}`;
-          this.#callRequested = true;
+          this.#callRequestedForActivation = activation;
           /* THE IDLE DEADLINE ARMS AT MINT: opening a call IS the device's
            * initial input. `max` so a mint can never walk a fresher stamp back. */
           this.#lastDeviceInputAtStreamMsMirror = Math.max(
@@ -1276,15 +1245,17 @@ export class VoiceAgentProcessor extends StreamProcessor<
             this.deps.nowAtFacetMs(),
           );
           /* The one append the whole call hangs off: if it silently fails,
-           * #callRequested can never clear. The cursor waits the one write;
+           * The opening marker can never clear. The cursor waits the one write;
            * a refusal un-asks. */
           args.blockProcessorWhile(() =>
             append({
               type: "events.iterate.com/voice-agent/call-started",
-              idempotencyKey: this.idempotencyKey(`call:${conversationId}`),
-              payload: { conversationId },
+              idempotencyKey: this.idempotencyKey(`call:${activation}`),
+              payload: { activation, conversationId },
             }).catch(() => {
-              this.#callRequested = false;
+              if (this.#callRequestedForActivation === activation) {
+                this.#callRequestedForActivation = null;
+              }
             }),
           );
           /*
@@ -1293,11 +1264,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
            * first word — measured at 7.4 seconds. And NO return: the frame
            * that opened the call falls through to the hold site below.
            */
-          this.#openProviderConnection(conversationId, state, append, runInBackground);
+          this.#openProviderConnection(conversationId, activation, state, append, runInBackground);
         }
 
         const dial = this.#dial;
-        if (dial !== null && dial.ready && dial.socket !== null) {
+        if (dial !== null && dial.activation === activation && dial.ready && dial.socket !== null) {
           const nowAtFacetMs = this.deps.nowAtFacetMs();
           dial.micAudioCoveredUntilFacetMs =
             Math.max(dial.micAudioCoveredUntilFacetMs, nowAtFacetMs) +
@@ -1305,20 +1276,20 @@ export class VoiceAgentProcessor extends StreamProcessor<
           this.#sendMicAudio(dial.socket, micB64);
         } else {
           const micBytes = base64ByteLength(micB64);
-          const openingConversationId = dial?.conversationId;
-          if (openingConversationId === undefined) return;
-          if (this.#heldMicOverflowFor === openingConversationId) return;
+          const openingDial = dial?.activation === activation ? dial : null;
+          if (openingDial === null) return;
+          if (this.#heldMicOverflowForActivation === activation) return;
           if (this.#micQueueBytes + micBytes <= MAX_HELD_MIC_BYTES) {
-            this.#micQueue.push(micB64);
+            this.#micQueue.push({ activation, pcm: micB64 });
             this.#micQueueBytes += micBytes;
             return;
           }
           this.#micQueue = [];
           this.#micQueueBytes = 0;
-          this.#heldMicOverflowFor = openingConversationId;
+          this.#heldMicOverflowForActivation = activation;
           this.runInBackground(() =>
-            this.#requestEnd(
-              openingConversationId,
+            this.#end(
+              activation,
               "held-mic-overflow",
               `the provider did not become ready before ${MAX_HELD_MIC_BYTES / 32}ms of microphone audio accumulated`,
               append,
@@ -1327,11 +1298,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
         }
         return;
       }
-
-      /* There is NO conversation-end-requested arm. reduce folds the decision
-       * before delivery reaches this switch, so the caught-up pass above has
-       * already hung up and written the obituary on the very delivery that
-       * carried the event. */
 
       case "events.iterate.com/voice-agent/conversation-ended": {
         /*
@@ -1343,9 +1309,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * The fence is the DIAL's own conversation, which a stale obituary
          * cannot name. And the device is silenced NOW.
          */
-        this.#conversationEndedAtMs = this.deps.nowAtFacetMs();
         const dial = this.#dial;
-        if (dial !== null && dial.conversationId === event.payload.conversationId) {
+        if (dial !== null && dial.activation === event.payload.activation) {
           this.#flushTurns(dial, append, true);
           this.#clearDeviceSpeaker(dial, this.deps.nowAtFacetMs(), append);
           this.#hangUp();
@@ -1369,17 +1334,15 @@ export class VoiceAgentProcessor extends StreamProcessor<
    */
   #openProviderConnection(
     conversationId: string,
+    activation: string,
     state: ProcessEventArgs<VoiceAgentContract>["state"],
     append: ProcessEventArgs<VoiceAgentContract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
   ): void {
     if (this.#dial !== null) return;
-    /* The one choke point both callers share, so a dead provider cannot be
-     * re-dialled at frame cadence. */
-    if (this.deps.nowAtFacetMs() - this.#lastDialFailedAtFacetMs < DIAL_RETRY_COOLDOWN_MS) return;
     /* CREATED BEFORE THE AWAITED DIAL, so a second caller finds `#dial`
      * taken and the mic path queues for the whole handshake. */
-    const dial = freshDial(conversationId);
+    const dial = freshDial(conversationId, activation);
     if (state.visemes) dial.face = createFace();
     this.#dial = dial;
     const dialStartedAtFacetMs = this.deps.nowAtFacetMs();
@@ -1395,9 +1358,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
         failure = `the provider dial failed: ${String(error).slice(0, 200)}`;
       }
       if (socket === null) {
-        this.#lastDialFailedAtFacetMs = this.deps.nowAtFacetMs();
         if (this.#dial === dial) this.#dial = null;
-        await this.#requestEnd(conversationId, "dial-failed", failure, append);
+        await this.#end(activation, "dial-failed", failure, append);
         return;
       }
       if (this.#dial !== dial) {
@@ -1427,8 +1389,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
         } catch {
           /* Already gone. */
         }
-        await this.#requestEnd(
-          conversationId,
+        await this.#end(
+          activation,
           "handshake-timeout",
           `the provider handshake did not complete within ${HANDSHAKE_DEADLINE_MS}ms`,
           append,
@@ -1484,7 +1446,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         this.#flushTurns(dial, append, true);
         this.#providerClosed(
           conversationId,
-          dialStartedAtFacetMs,
+          activation,
           `the provider's socket closed (${String(event.code)}${event.reason ? ` ${event.reason}` : ""})`,
           state,
           append,
@@ -1535,8 +1497,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
         this.runInBackground(idleTick);
         return;
       }
-      await this.#requestEnd(
-        conversationId,
+      await this.#end(
+        activation,
         "idle",
         `no input from the device for ${IDLE_TIMEOUT_MS / 1000}s`,
         append,
@@ -1619,6 +1581,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         type: "events.iterate.com/voice-agent/session-configured",
         idempotencyKey: this.idempotencyKey(`session-configured:${dial.dialId}`),
         payload: {
+          activation: dial.activation,
           conversationId: dial.conversationId,
           provider: "gpt-live",
           instructions: instructions.slice(0, 8_000),
@@ -1663,7 +1626,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
         /* Usable. Everything the handshake made us hold goes now. */
         dial.ready = true;
         const heldMicFrames = this.#micQueue.length;
-        for (const held of this.#micQueue) this.#sendMicAudio(dial.socket!, held);
+        for (const held of this.#micQueue) {
+          if (held.activation === dial.activation) this.#sendMicAudio(dial.socket!, held.pcm);
+        }
         this.#micQueue = [];
         this.#micQueueBytes = 0;
         dial.micAudioCoveredUntilFacetMs = receivedAtFacetMs;
@@ -1675,6 +1640,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
              * eviction handshakes a second time and its numbers are its own. */
             idempotencyKey: this.idempotencyKey(`accepted:${conversationId}:${dial.dialId}`),
             payload: {
+              activation: dial.activation,
               conversationId,
               handshakeTookMs: receivedAtFacetMs - dialStartedAtFacetMs,
               heldMicFrames,
@@ -1813,7 +1779,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         if (this.#dial === dial) this.#dial = null;
         this.#providerClosed(
           conversationId,
-          dialStartedAtFacetMs,
+          dial.activation,
           `the provider closed the session (${String(live.reason ?? "unknown")})`,
           state,
           append,
@@ -1955,7 +1921,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (this.#dial !== dial || dial.hangUpReason === null) return;
     const reason = dial.hangUpReason;
     dial.hangUpReason = null;
-    await this.#requestEnd(dial.conversationId, "hang-up", reason, append);
+    await this.#end(dial.activation, "hang-up", reason, append);
   }
 
   /**
@@ -2003,6 +1969,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
             await append({
               type: "events.iterate.com/voice-agent/spk-frame",
               payload: {
+                activation: dial.activation,
                 conversationId: dial.conversationId,
                 deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
                 pcm: frame.pcm,
@@ -2174,8 +2141,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
         const nowAtFacetMs = this.deps.nowAtFacetMs();
         let owedMs = nowAtFacetMs - dial.micAudioCoveredUntilFacetMs;
         if (owedMs > MAX_SILENCE_FILL_CATCH_UP_MS) {
-          await this.#requestEnd(
-            dial.conversationId,
+          await this.#end(
+            dial.activation,
             "input-clock-stalled",
             `the provider input clock fell ${owedMs}ms behind`,
             append,
@@ -2226,7 +2193,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
    */
   #providerClosed(
     conversationId: string,
-    dialStartedAtFacetMs: number,
+    activation: string,
     reason: string,
     state: ProcessEventArgs<VoiceAgentContract>["state"],
     append: ProcessEventArgs<VoiceAgentContract>["append"],
@@ -2235,10 +2202,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     /* The dial's state snapshot predates its own call-started fold, so the
      * call's standing is read from this instance: an end already requested
      * for it, or a conversation ended since the dial began, is not ours. */
-    if (
-      this.#endRequestedFor === conversationId ||
-      (this.#conversationEndedAtMs !== null && this.#conversationEndedAtMs >= dialStartedAtFacetMs)
-    ) {
+    if (this.#endingActivation === activation) {
       return;
     }
     const nowAtFacetMs = this.deps.nowAtFacetMs();
@@ -2250,7 +2214,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     ];
     const gaveUp = this.#providerClosesAtFacetMs.length >= PROVIDER_CLOSES_BEFORE_GIVING_UP;
     if (!gaveUp) {
-      this.#openProviderConnection(conversationId, state, append, runInBackground);
+      this.#openProviderConnection(conversationId, activation, state, append, runInBackground);
     }
     this.runInBackground(async () => {
       await append({
@@ -2258,8 +2222,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
         payload: { conversationId, reason },
       });
       if (gaveUp) {
-        await this.#requestEnd(
-          conversationId,
+        await this.#end(
+          activation,
           "socket-closed",
           `${reason}; the provider closed ${String(PROVIDER_CLOSES_BEFORE_GIVING_UP)} times in two minutes`,
           append,
@@ -2268,8 +2232,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
     });
   }
 
-  async #requestEnd(
-    conversationId: string,
+  async #end(
+    activation: string,
     keyClass:
       | "dial-failed"
       | "handshake-timeout"
@@ -2281,11 +2245,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
     reason: string,
     append: ProcessEventArgs<VoiceAgentContract>["append"],
   ): Promise<void> {
-    this.#endRequestedFor = conversationId;
+    this.#endingActivation = activation;
     await append({
-      type: "events.iterate.com/voice-agent/conversation-end-requested",
-      idempotencyKey: this.idempotencyKey(`${keyClass}:${conversationId}`),
-      payload: { conversationId, reason },
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      idempotencyKey: this.idempotencyKey(`${keyClass}:${activation}`),
+      payload: { activation, reason },
     });
   }
 
@@ -2359,7 +2323,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           });
         } else if (tool !== undefined) {
           /* THE BASE CASE, NOT A REGISTRY: hanging up is one atomic append of
-           * conversation-end-requested, deferred until the goodbye — spoken
+           * conversation-ended, deferred until the goodbye — spoken
            * AFTER this call returns — has gone out whole (its end marker
            * settles it, see #endAnswer), or the grace runs out with the
            * voice saying nothing. A goodbye still being spoken when the
@@ -2547,6 +2511,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
       append({
         type: "events.iterate.com/voice-agent/spk-frame",
         payload: {
+          activation: dial.activation,
           conversationId: dial.conversationId,
           deviceSpeakerFrameSeq: clearFrameSeq,
           pcm: "",

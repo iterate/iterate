@@ -309,6 +309,37 @@ static const char *frames_b64(size_t frames) {
 static long long next_offset = 100;
 static long long next_release_id = 1;
 
+static const char *test_activation(void) {
+  static char activation[33];
+  uint32_t state = 2000000U ^ 0x9e3779b9U;
+  uint32_t words[4];
+  for (size_t index = 0U; index < 4U; ++index) {
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    words[index] = state;
+  }
+  (void)snprintf(activation, sizeof(activation), "%08x%08x%08x%08x",
+      words[0], words[1], words[2], words[3]);
+  return activation;
+}
+
+static void start_local_call(void) {
+  char message[256];
+  struct iterate_kit_itx_connection *connection =
+      iterate_kit_fake_platform_connection();
+  assert(connection != NULL);
+  (void)snprintf(message, sizeof(message),
+      "[\"push\",[\"pipeline\",0,[\"conversation\",\"start\"],[[]]]]" );
+  assert(iterate_kit_itx_connection_receive_text(
+      connection, message, strlen(message)) == CAPNWEB_OK);
+  assert(iterate_kit_itx_connection_receive_text(
+      connection, "[\"release\",1,1]", strlen("[\"release\",1,1]")) == CAPNWEB_OK);
+  next_release_id = 2;
+  iterate_kit_fake_esp_idf_set_now_us(2000000);
+  step();
+}
+
 /** Deliver one `spk-frame` chunk, exactly as the stream delivers one. */
 static void deliver_chunk(bool drop, bool last, size_t frames) {
   static char message[16384];
@@ -322,10 +353,11 @@ static void deliver_chunk(bool drop, bool last, size_t frames) {
       sizeof(message),
       "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
       "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":%lld,"
-      "\"payload\":{%s%s\"pcm\":\"%s\"}}"
+      "\"payload\":{\"activation\":\"%s\",%s%s\"pcm\":\"%s\"}}"
       "]],\"scannedThroughOffset\":%lld,\"state\":null}]]]",
       callback_export_id(),
       offset,
+      test_activation(),
       drop ? "\"drop\":true," : "",
       last ? "\"last\":true," : "",
       frames_b64(frames),
@@ -361,10 +393,11 @@ static void deliver_accepted(void) {
       "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
       "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
       "\"offset\":%lld,"
-      "\"payload\":{\"conversationId\":\"convtest\",\"handshakeTookMs\":1}}"
+      "\"payload\":{\"activation\":\"%s\",\"conversationId\":\"convtest\",\"handshakeTookMs\":1}}"
       "]],\"scannedThroughOffset\":%lld,\"state\":null}]]]",
       callback_export_id(),
       offset,
+      test_activation(),
       offset);
   assert(
       iterate_kit_itx_connection_receive_text(
@@ -583,6 +616,7 @@ int main(void) {
   assert(board.started);
   iterate_kit_fake_platform_connect();
   pump();
+  start_local_call();
   /* The call this whole file's audio belongs to; see deliver_accepted. */
   deliver_accepted();
 

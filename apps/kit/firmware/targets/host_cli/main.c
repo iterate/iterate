@@ -58,6 +58,13 @@ enum {
 static struct cli_runtime cli_main_runtime;
 static volatile sig_atomic_t cli_main_interrupted = 0;
 
+static void cli_main_begin_activation(struct cli_runtime *runtime) {
+  (void)snprintf(
+      runtime->activation, sizeof(runtime->activation),
+      "%08" PRIx32 "%08" PRIx32 "%08" PRIx32 "%08" PRIx32,
+      arc4random(), arc4random(), arc4random(), arc4random());
+}
+
 /* Records SIGINT or SIGTERM for the cooperative owner to observe. */
 static void cli_main_signal_handler(int signal_number);
 
@@ -906,6 +913,7 @@ static void cli_main_start_voicelab(struct cli_runtime *runtime)
     .project_api_key = runtime->configuration.project_api_key,
     .stream_path = runtime->options.stream_path,
     .conversation_id = runtime->options.name,
+    .activation = runtime->activation,
     .now_ms = cli_runtime_now_ms,
     .on_speaker = cli_main_on_speaker,
     .on_control = cli_main_on_control,
@@ -1072,6 +1080,7 @@ static void cli_main_on_control(
     runtime->answer_done = true;
     ++runtime->calls_lost;
     runtime->talking = false;
+    runtime->activation_active = false;
     (void)cli_main_request_talk(
         runtime, false, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
     if (runtime->options.open_mic && !runtime->hanging_up) {
@@ -1539,7 +1548,7 @@ static void cli_main_send_microphone(struct cli_runtime *runtime, uint64_t now_m
   }
   const enum capnweb_status status = iterate_kit_voicelab_append_frames(
       &runtime->voicelab, flush, frame_count,
-      ITERATE_KIT_VOICE_FRAME_BYTES, runtime->frame_sequence, now_ms);
+      ITERATE_KIT_VOICE_FRAME_BYTES, runtime->activation);
   if (status != CAPNWEB_OK) return;
   runtime->mic_flushed_at_ms = now_ms;
   runtime->frame_sequence += (uint32_t)frame_count;
@@ -1623,13 +1632,14 @@ static void cli_main_start_talk(
     runtime->source_finished = false;
   }
   runtime->talking = true;
+  if (!runtime->activation_active) {
+    cli_main_begin_activation(runtime);
+    runtime->activation_active = true;
+  }
   runtime->turn_started_ms = now_ms;
-  runtime->frame_sequence = 0U;
+  /* A reconnect resumes the same activation FIFO; do not renumber or clear it. */
+  if (runtime->microphone.used == 0U) runtime->frame_sequence = 0U;
   runtime->mic_flushed_at_ms = 0U;
-  /* Anything the previous gate could not get out is lost here, and counted:
-   * a queue the uplink never drained is the one case that reaches this. */
-  runtime->mic_frames_dropped += (uint32_t)runtime->microphone.used;
-  cli_microphone_clear(&runtime->microphone);
   cli_speaker_clear(&runtime->speaker);
   (void)iterate_kit_darwin_audio_codec_discard_playback(&runtime->audio_codec);
   iterate_kit_voice_playback_clock_reprime(&runtime->playout.clock);
@@ -1648,15 +1658,10 @@ static void cli_main_reconcile_talk(
    * on the very next pass, before a single frame was captured. A turn should
    * survive the wait; the hold queue is what it waits in.
    *
-   * A transport that has actually FAILED is different: nothing is coming and
-   * the supervisor is about to restart it, so holding speech for it would be
-   * holding it for nobody. Runaway turns are already bounded elsewhere by
-   * ITERATE_KIT_VOICE_TURN_MAX_MS.
+   * A transport that has actually failed still does not erase the activation:
+   * the supervisor remounts and the bounded FIFO drains oldest-first when the
+   * stream returns. Only an explicit hang-up may discard captured speech.
    */
-  const bool link_lost =
-      runtime->transport.state == ITERATE_KIT_POSIX_ITX_FAILED ||
-      runtime->transport.state == ITERATE_KIT_POSIX_ITX_STOPPED;
-  if (runtime->talking && link_lost) runtime->talking = false;
   cli_main_start_talk(runtime, now_ms, outbox_free);
   /*
    * THE GATE SHUTS THE MOMENT THE BUTTON COMES UP. No commit goes out — the

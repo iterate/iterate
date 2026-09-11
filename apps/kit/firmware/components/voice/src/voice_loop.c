@@ -49,6 +49,9 @@
 #include "esp_system.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
+#ifdef ESP_PLATFORM
+#include "esp_random.h"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
@@ -187,6 +190,8 @@ enum {
    */
   FRAME_BYTES = ITERATE_KIT_VOICE_FRAME_BYTES,
   MIC_QUEUE_DEPTH = ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH,
+  /* Covers WakeNet plus board-poll handoff without retaining idle room audio. */
+  MIC_PRE_ROLL_FRAMES = 25,
   MIC_FRAMES_PER_APPEND = ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND,
   CALL_KEEPALIVE_MS = ITERATE_KIT_VOICE_CALL_KEEPALIVE_MS,
   /*
@@ -609,22 +614,20 @@ EXT_RAM_BSS_ATTR static struct {
   /* Diagnostics for a frozen device: see the pulse in the app loop. */
   uint32_t loop_count;
   uint64_t last_pulse_ms;
+  uint64_t mic_flushed_at_ms;
   bool talking;
-  /*
-   * Speech spoken INTO THE DIAL is captured, not thrown away. From the
-   * press that wants a call until the call is active, capture queues into
-   * mic_queue (5.12 s deep) and the drain holds it back; the accepted call
-   * then carries it. Without this, everything said between the wake press
-   * and CALL_ACCEPTED — two to four seconds warm, twenty cold — was
-   * discarded at the capture gate, and a person who pressed and spoke got
-   * an answer to nothing. The host CLI never showed it only because its
-   * dial is warm in about a second.
-   */
-  /** The unwritten button audit, latest wins; see the resolution site. */
-  /* A push-to-talk dial buffered speech; the OPENING turn must not reset
-   * the queue that holds it. SURVIVES a release during the dial — the
-   * accepted call drains and commits it as the first turn. Consumed at
-   * turn start, cleared with the call. */
+  /* The app opens/closes capture; only the capture task mutates these queues. */
+  atomic_bool capture_open;
+  atomic_bool capture_muted;
+  atomic_bool capture_discard_requested;
+  atomic_uint capture_generation;
+  uint32_t capture_generation_inflight;
+  atomic_bool capture_activation_overflow;
+  atomic_uint capture_activation_overflows;
+  char activation[33];
+  struct mic_frame mic_pre_roll[MIC_PRE_ROLL_FRAMES];
+  size_t mic_pre_roll_next;
+  size_t mic_pre_roll_count;
   /*
    * A call that vanished WITHOUT its obituary holds the relaunch ladder
    * until this deadline, because the obituary may simply not have arrived
@@ -1536,6 +1539,64 @@ static enum iterate_kit_status bridge_reset_processor(void *context) {
   return iterate_kit_audio_processor_reset(&runtime.processor);
 }
 
+/* Capture owns both the rolling wake history and the activation FIFO. */
+static void capture_reset_audio(void) {
+  (void)xQueueReset(runtime.mic_queue);
+  runtime.mic_pre_roll_next = 0U;
+  runtime.mic_pre_roll_count = 0U;
+}
+
+static void capture_remember(const int16_t *samples) {
+  memcpy(
+      runtime.mic_pre_roll[runtime.mic_pre_roll_next].samples, samples,
+      sizeof(runtime.mic_pre_roll[0].samples));
+  runtime.mic_pre_roll_next =
+      (runtime.mic_pre_roll_next + 1U) % MIC_PRE_ROLL_FRAMES;
+  if (runtime.mic_pre_roll_count < MIC_PRE_ROLL_FRAMES) {
+    ++runtime.mic_pre_roll_count;
+  }
+}
+
+static bool capture_open_activation(void) {
+  const size_t first =
+      (runtime.mic_pre_roll_next + MIC_PRE_ROLL_FRAMES -
+       runtime.mic_pre_roll_count) % MIC_PRE_ROLL_FRAMES;
+  for (size_t index = 0U; index < runtime.mic_pre_roll_count; ++index) {
+    const size_t slot = (first + index) % MIC_PRE_ROLL_FRAMES;
+    if (xQueueSend(runtime.mic_queue, &runtime.mic_pre_roll[slot], 0) != pdTRUE) {
+      return false;
+    }
+  }
+  runtime.mic_pre_roll_count = 0U;
+  return true;
+}
+
+static uint32_t activation_random(void) {
+#ifdef ESP_PLATFORM
+  return esp_random();
+#else
+  static uint32_t state;
+  if (state == 0U) state = (uint32_t)esp_timer_get_time() ^ 0x9e3779b9U;
+  state ^= state << 13;
+  state ^= state >> 17;
+  state ^= state << 5;
+  return state;
+#endif
+}
+
+static void begin_activation(void) {
+  const uint32_t first = activation_random();
+  const uint32_t second = activation_random();
+  const uint32_t third = activation_random();
+  const uint32_t fourth = activation_random();
+  atomic_fetch_add_explicit(
+      &runtime.capture_generation, 1U, memory_order_acq_rel);
+  (void)snprintf(
+      runtime.activation, sizeof(runtime.activation), "%08" PRIx32 "%08" PRIx32
+      "%08" PRIx32 "%08" PRIx32,
+      first, second, third, fourth);
+}
+
 /*
  * ONE COMPLETE WIRE FRAME, and everything that is true once per wire frame.
  *
@@ -1558,6 +1619,11 @@ static enum iterate_kit_status bridge_copy_egress(
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   ++runtime.mic_frames_captured;
+  if (runtime.capture_generation_inflight !=
+      atomic_load_explicit(&runtime.capture_generation, memory_order_acquire)) {
+    capture_reset_audio();
+    return ITERATE_KIT_OK;
+  }
   /*
    * HOW LOUD THE ROOM IS, ONCE PER FRAME.
    *
@@ -1598,8 +1664,27 @@ static enum iterate_kit_status bridge_copy_egress(
    * measurement that would show a real uplink fault was buried in room noise
    * nobody wanted.
    */
-  if (!runtime.talking) {
+  if (atomic_exchange_explicit(
+          &runtime.capture_discard_requested, false, memory_order_acq_rel)) {
+    capture_reset_audio();
+    /* A new local activation may have followed end before this task ran. */
+    if (!atomic_load_explicit(&runtime.capture_open, memory_order_acquire)) {
+      return ITERATE_KIT_OK;
+    }
+  }
+  if (!atomic_load_explicit(&runtime.capture_open, memory_order_acquire)) {
+    if (atomic_load_explicit(&runtime.capture_muted, memory_order_acquire)) {
+      return ITERATE_KIT_OK;
+    }
+    capture_remember(samples);
     ++runtime.mic_frames_idle;
+    return ITERATE_KIT_OK;
+  }
+  if (!capture_open_activation()) {
+    atomic_store_explicit(
+        &runtime.capture_activation_overflow, true, memory_order_release);
+    atomic_fetch_add_explicit(
+        &runtime.capture_activation_overflows, 1U, memory_order_relaxed);
     return ITERATE_KIT_OK;
   }
   /*
@@ -1607,32 +1692,13 @@ static enum iterate_kit_status bridge_copy_egress(
    * exactly FRAME_SAMPLES of PCM16 and xQueueSend copies, so a staging frame
    * here would be one memcpy and 640 bytes of .bss to say the same thing.
    */
-  if (xQueueSend(runtime.mic_queue, samples, 0) != pdTRUE) {
-    /*
-     * FULL, and which end to sacrifice depends on what the queue is doing.
-     *
-     * DIALLING: keep the OLDEST. The queue is the dial buffer, nothing
-     * leaves it until the call is accepted, and the start of what somebody
-     * said is what makes the rest of it intelligible — the same rule the
-     * far end applies to its own held-frame cap. Latest-wins here was
-     * measured on a real press: a 7.5 s cold dial against 5.12 s of queue
-     * evicted the person's whole opening sentence and delivered the room
-     * noise that followed it (/agents/voice/stackchan, conversation-accepted
-     * handshakeTookMs 7489, 2026-08-20).
-     *
-     * IN A CALL: freshest wins — discard the OLDEST frame, keep this one.
-     * Stale speech after a network hiccup is worse than a gap, and it is
-     * the only way a backlog can never delay what the customer says next.
-     */
-    if (runtime.voicelab.state != ITERATE_KIT_VOICELAB_READY) {
-      /* Still mounting: the queue is the dial buffer, keep the oldest. */
-      ++runtime.mic_frames_dropped;
-      return ITERATE_KIT_OK;
-    }
-    struct mic_frame discarded;
-    (void)xQueueReceive(runtime.mic_queue, &discarded, 0);
-    (void)xQueueSend(runtime.mic_queue, samples, 0);
-    ++runtime.mic_frames_dropped;
+  if (xQueueSend(runtime.mic_queue, samples, 0) == pdTRUE) return ITERATE_KIT_OK;
+  {
+    /* Five seconds is the declared bound: fail the activation, never trim it. */
+    atomic_store_explicit(
+        &runtime.capture_activation_overflow, true, memory_order_release);
+    atomic_fetch_add_explicit(
+        &runtime.capture_activation_overflows, 1U, memory_order_relaxed);
   }
   return ITERATE_KIT_OK;
 }
@@ -1648,6 +1714,8 @@ void iterate_kit_voice_loop_capture_step(void) {
   static int16_t activity_chunk[FRAME_SAMPLES];
   struct iterate_kit_voice_capture_meta meta;
   size_t sample_count = 0U;
+  runtime.capture_generation_inflight = atomic_load_explicit(
+      &runtime.capture_generation, memory_order_acquire);
   const size_t chunk_samples = runtime.facts->capture_chunk_samples;
   /*
    * A reference plane exactly when the codec advertises one — the seam's own
@@ -2801,8 +2869,28 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
      * two controls in one pass is already a person mashing, and the append
      * below needs a READY session the press may predate.
      */
+    if (runtime.intent.microphone_muted &&
+        !atomic_exchange_explicit(
+            &runtime.capture_muted, true, memory_order_acq_rel)) {
+      runtime.view.wants_call = false;
+      runtime.talking = false;
+      atomic_fetch_add_explicit(
+          &runtime.capture_generation, 1U, memory_order_acq_rel);
+      atomic_store_explicit(
+          &runtime.capture_open, false, memory_order_release);
+      atomic_store_explicit(
+          &runtime.capture_discard_requested, true, memory_order_release);
+    } else if (!runtime.intent.microphone_muted) {
+      atomic_store_explicit(&runtime.capture_muted, false, memory_order_release);
+    }
     if (runtime.intent.end_call) {
       runtime.view.wants_call = false;
+      atomic_fetch_add_explicit(
+          &runtime.capture_generation, 1U, memory_order_acq_rel);
+      atomic_store_explicit(
+          &runtime.capture_open, false, memory_order_release);
+      atomic_store_explicit(
+          &runtime.capture_discard_requested, true, memory_order_release);
       /*
        * THE TAIL DIES WITH THE PRESS. The far end's conversation-ended will
        * also abandon, but that is a round trip away, and the ring holds
@@ -2812,7 +2900,8 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       (void)abandon_speaker_audio();
       ESP_LOGI(tag, "control: ending call");
     }
-    if (runtime.intent.start_call && !runtime.voicelab.call_active) {
+    if (runtime.intent.start_call && !runtime.intent.microphone_muted &&
+        !runtime.voicelab.call_active) {
       runtime.view.wants_call = true;
       ESP_LOGI(tag, "control: starting call");
     }
@@ -2840,10 +2929,63 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
          * Placed after the explicit start/end above so that within one pass
          * the specific instruction wins over this implicit one.
          */
-        if (talk_down) runtime.view.wants_call = true;
+        if (talk_down && !runtime.intent.microphone_muted) {
+          runtime.view.wants_call = true;
+        }
         ESP_LOGI(
             tag, "talk %s",
             talk_down ? "down (talking)" : "up (commit)");
+      }
+    }
+
+    /*
+     * Capture starts at the local intent edge, before any mount or call
+     * state exists. The capture task observes this atomic gate and moves its
+     * own rolling wake history into the activation FIFO exactly once.
+     */
+    {
+      static bool activation_wanted;
+      const bool wants_talk =
+          !runtime.intent.microphone_muted &&
+          (turn_policy == ITERATE_KIT_VOICE_TURNS_SERVER_VAD
+          ? (runtime.voicelab.call_active || runtime.view.wants_call)
+          : (runtime.view.wants_call &&
+             (runtime.intent.talk_held || runtime.remote_talk)));
+      if (runtime.view.wants_call && !activation_wanted) begin_activation();
+      activation_wanted = runtime.view.wants_call;
+      runtime.view.talk_held = wants_talk;
+      if (atomic_exchange_explicit(
+              &runtime.capture_activation_overflow, false,
+              memory_order_acq_rel)) {
+        runtime.view.wants_call = false;
+        runtime.talking = false;
+        atomic_store_explicit(
+            &runtime.capture_open, false, memory_order_release);
+        atomic_store_explicit(
+            &runtime.capture_discard_requested, true, memory_order_release);
+        runtime.view.status = "opening speech exceeded 5s";
+        ESP_LOGE(tag, "activation microphone FIFO overflow");
+      } else if (runtime.talking != wants_talk) {
+        runtime.talking = wants_talk;
+        runtime.view.talk_held = wants_talk;
+        runtime.view.listening = wants_talk;
+        if (wants_talk) {
+          atomic_store_explicit(
+              &runtime.capture_open, true, memory_order_release);
+          (void)abandon_speaker_audio();
+          runtime.mic_flushed_at_ms = 0U;
+          runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_LISTENING;
+          runtime.view.status = "listening";
+          if (turn_policy == ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK) {
+            board_fence(true);
+          }
+        } else {
+          atomic_store_explicit(
+              &runtime.capture_open, false, memory_order_release);
+          board_fence(false);
+          runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
+          runtime.view.status = runtime.facts->talk_hint;
+        }
       }
     }
 
@@ -3087,6 +3229,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         .stream_path = stream_path,
         .client_path = runtime.facts->client_path,
         .conversation_id = runtime.facts->conversation_id,
+        .activation = runtime.activation,
         .now_ms = now_ms,
         .clock_context = NULL,
         .on_speaker = on_speaker_pcm,
@@ -3118,7 +3261,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       if (started == CAPNWEB_OK) {
         runtime.voicelab_generation = runtime.connection.generation;
         runtime.frame_sequence = 0U;
-        (void)xQueueReset(runtime.mic_queue); /* drop pre-session stale audio */
         /*
          * NOTHING TO FORGET ABOUT THE SENDER ANY MORE.
          *
@@ -3154,8 +3296,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
          */
         runtime.view.status = ("");
       } else if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_FAILED) {
-        /* A dead session takes the call with it; the button starts over. */
-        runtime.view.wants_call = (false);
+        /* A retry keeps the local activation and its FIFO intact. */
         runtime.view.call_active = (false);
         runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_CONNECTING;
         runtime.view.status = (iterate_kit_voicelab_failure_name(runtime.voicelab.failure));
@@ -3186,7 +3327,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       const size_t outbox_free =
           CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots;
       static struct mic_frame frame_storage[MIC_FRAMES_PER_APPEND];
-      static uint64_t mic_flushed_at;
+      static int16_t pcm_storage[MIC_FRAMES_PER_APPEND][FRAME_SAMPLES];
       static struct iterate_kit_launch launch;
       static uint64_t call_pending_since;
       static bool call_active_shown;
@@ -3500,7 +3641,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
           (void)abandon_speaker_audio();
           (void)xQueueReset(runtime.mic_queue); /* pre-press room noise */
           runtime.frame_sequence = 0U;
-          mic_flushed_at = 0U;
+          runtime.mic_flushed_at_ms = 0U;
           runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_LISTENING;
           runtime.view.status = ("listening");
           if (turn_policy == ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK) board_fence(true);
@@ -3528,6 +3669,8 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       /* The microphone is only on the wire while the talk button is down. */
       {
         const size_t queued = uxQueueMessagesWaiting(runtime.mic_queue);
+        const bool discarding = atomic_load_explicit(
+            &runtime.capture_discard_requested, memory_order_acquire);
         /*
          * A MICROPHONE THAT CANNOT DRAIN INTO A LIVE CALL IS A DEAD LANE,
          * and the device is the only one who can tell: the appends are
@@ -3574,8 +3717,9 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
          * `ptt-start` that placed the call; both left with push-to-talk.) A
          * released button drains what it had queued, then sends nothing.
          */
-        const size_t take = iterate_kit_microphone_flush_frames(
-            queued, runtime.talking, mic_flushed_at, now);
+        size_t take = iterate_kit_microphone_flush_frames(
+            discarding ? 0U : queued, runtime.talking,
+            runtime.mic_flushed_at_ms, now);
         if (take != 0U &&
             runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
             outbox_free >= (size_t)MIC_OUTBOX_RESERVE) {
@@ -3587,18 +3731,18 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
           size_t index;
           for (index = 0U; index < take; ++index) {
             (void)xQueueReceive(runtime.mic_queue, &frame_storage[index], 0);
+            memcpy(pcm_storage[index], frame_storage[index].samples,
+                   sizeof(pcm_storage[index]));
           }
           /* `struct mic_frame` is exactly its samples, so the popped run is
            * one contiguous stretch of PCM. */
           if (iterate_kit_voicelab_append_frames(
               &runtime.voicelab,
-              (const uint8_t *)frame_storage[0].samples,
+              (const uint8_t *)pcm_storage,
               take,
               sizeof(frame_storage[0].samples),
-              runtime.frame_sequence,
-              now) == CAPNWEB_OK) {
-            runtime.frame_sequence += (uint32_t)take;
-            mic_flushed_at = now;
+              runtime.activation) == CAPNWEB_OK) {
+            runtime.mic_flushed_at_ms = now;
           }
         }
       }

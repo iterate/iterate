@@ -1,7 +1,6 @@
 idf_component_register(
   SRCS
     configuration.c
-    provider_mode_nvs.c
     reset_reason.c
     restart_note.c
     itx_transport.c

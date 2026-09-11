@@ -78,14 +78,7 @@ iterate_kit_add_core_test(iterate-kit-device-events-test device_events_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-connection-test itx_connection_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-mount-test itx_mount_test.c)
 iterate_kit_add_core_test(iterate-kit-microphone-flush-test microphone_flush_test.c)
-iterate_kit_add_core_test(iterate-kit-provider-mode-test provider_mode_test.c)
 
-# NVS stays platform-bound; exercise its adapter against the narrow host fake.
-iterate_kit_add_test(
-  iterate-kit-provider-mode-nvs-test provider_mode_nvs_test.c
-  ../platforms/iterate_esp_idf/provider_mode_nvs.c
-  INCLUDES fakes/esp_idf ../platforms/iterate_esp_idf/include
-  LINK iterate-kit-core)
 iterate_kit_add_core_test(iterate-kit-retry-gate-test retry_gate_test.c)
 # The one session grammar all four boards drive: both postures, the tap-end
 # grace, hold-is-the-wake, the single end-chime edge, and ENDING absorbing
@@ -266,22 +259,9 @@ iterate_kit_add_test(iterate-kit-havpe-hardware-config-aec-override-test
 iterate_kit_add_test(iterate-kit-pcm-format-test pcm_format_test.c
   LINK iterate-kit-audio)
 
-# The dial: mode table (a wire contract with four provisioned streams), the
-# polled quadrature decoder, and the spin-then-settle wheel policy. What the
-# centre button MEANS is the shared session grammar's test above.
-iterate_kit_add_havpe_pure_test(iterate-kit-havpe-modes-test
-  havpe_modes_test.c ../devices/havpe/havpe_modes.c)
-
-# StackChan's menu: the two-stream mode table (a wire contract like the
-# HAVPE's) and the face-tap provider menu. What the side button MEANS is the
-# shared session grammar's test above.
-function(iterate_kit_add_stackchan_pure_test NAME)
-  iterate_kit_add_test(${NAME} ${ARGN}
-    INCLUDES ../devices/stackchan ../components/core/include)
-endfunction()
-
-iterate_kit_add_stackchan_pure_test(iterate-kit-stackchan-modes-test
-  stackchan_modes_test.c ../devices/stackchan/stackchan_modes.c)
+# The HAVPE dial is a pure resolution-2 quadrature decoder.
+iterate_kit_add_havpe_pure_test(iterate-kit-havpe-dial-test
+  havpe_dial_test.c ../devices/havpe/havpe_dial.c)
 
 # StackChan's adopted pure DSP primitives (components/audio): the AEC cadence
 # bridge, reference scaler, uplink selector, and near high-pass, each with the
@@ -301,9 +281,10 @@ iterate_kit_add_audio_test(
 
 # The capture reserve is StackChan's ISR-side raw ring; pure C outside
 # ESP_PLATFORM, built from the device sources like the HAVPE modules.
-iterate_kit_add_stackchan_pure_test(
+iterate_kit_add_test(
   iterate-kit-core-s3-capture-reserve-test core_s3_capture_reserve_test.c
-  ../devices/stackchan/core_s3_capture_reserve.c)
+  ../devices/stackchan/core_s3_capture_reserve.c
+  INCLUDES ../devices/stackchan ../components/core/include)
 
 iterate_kit_add_test(iterate-kit-voice-view-lights-test voice_view_lights_test.c
   STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)

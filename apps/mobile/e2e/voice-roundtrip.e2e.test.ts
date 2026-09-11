@@ -65,7 +65,6 @@ test("calling a chat: speak, be answered, and the conversation lands on the chat
       }),
     onStatus: (status) => statuses.push(status),
     onLevel: () => {},
-    now: () => Date.now(),
   });
 
   /* Hold to talk is a local microphone gate: hold, speak the whole

@@ -134,6 +134,8 @@ struct iterate_kit_voice_intent {
   /** A level: the talk control is down right now, in a state where the
    * grammar says holding means talking. Push-to-talk boards. */
   bool talk_held;
+  /** A level: hardware mute is engaged; capture continues for AEC only. */
+  bool microphone_muted;
 };
 
 /** Which fact about the current answer this note carries. */

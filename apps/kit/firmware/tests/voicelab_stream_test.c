@@ -36,6 +36,8 @@ static void test_assert(
 #define assert(expression) \
   test_assert((expression), #expression, __FILE__, __LINE__)
 
+#define TEST_ACTIVATION "0123456789abcdef0123456789abcdef"
+
 struct fixture {
   struct capnweb_session session;
   struct capnweb_pending_call pending_calls[CALL_CAPACITY];
@@ -173,6 +175,7 @@ static void start_and_mount(struct fixture *fixture) {
     .project_api_key = "itxk_secret-never-log",
     .stream_path = "/voice-agent/dev-test",
     .conversation_id = "wsdev",
+    .activation = TEST_ACTIVATION,
     .now_ms = fixture_now_ms,
     .clock_context = fixture,
     .on_face = record_face,
@@ -293,7 +296,7 @@ static void push_spk(
       message, sizeof(message),
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
       "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":%lld,"
-      "\"payload\":{%s\"pcm\":\"%s\"}}"
+      "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",%s\"pcm\":\"%s\"}}"
       "]],\"scannedThroughOffset\":%lld,\"state\":null}]]]",
       (long long)offset, flags, pcm_b64, (long long)offset);
   receive(fixture, message);
@@ -359,6 +362,7 @@ static void downlink_flow(void) {
       .project_api_key = "itxk_secret-never-log",
       .stream_path = "/voice-agent/dev-test",
       .conversation_id = "wsdev",
+      .activation = TEST_ACTIVATION,
       .now_ms = fixture_now_ms,
       .clock_context = &fixture,
       .on_speaker = record_speaker,
@@ -402,7 +406,8 @@ static void downlink_flow(void) {
             "\"eventTypes\":[["
             "\"events.iterate.com/voice-agent/spk-frame\","
             "\"events.iterate.com/voice-agent/conversation-ended\","
-            "\"events.iterate.com/voice-agent/conversation-accepted\"]]") !=
+            "\"events.iterate.com/voice-agent/conversation-accepted\","
+            "\"events.iterate.com/voice-agent/call-started\"]]") !=
         NULL);
     assert(strstr(open_message, "\"maxDeliveryEvents\":16") != NULL);
     assert(strstr(open_message, "\"maxDeliveryBytes\":13000") != NULL);
@@ -430,11 +435,11 @@ static void downlink_flow(void) {
         "[\"push\",[\"pipeline\",-1,[],[{\"projectId\":\"prj_test\","
         "\"path\":\"/voice-agent/dev-test\",\"streamId\":\"sid\",\"events\":[["
         "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
-        "\"offset\":39,\"payload\":{\"conversationId\":\"wsdev\"}},"
+        "\"offset\":39,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"conversationId\":\"wsdev\"}},"
         "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":40,"
-        "\"payload\":{\"pcm\":\"%s\"}},"
+        "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"pcm\":\"%s\"}},"
         "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":41,"
-        "\"payload\":{\"drop\":true,\"pcm\":\"%s\"}}"
+        "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"drop\":true,\"pcm\":\"%s\"}}"
         "]],\"scannedAfterOffset\":38,\"scannedThroughOffset\":41,"
         "\"streamMaxOffset\":41,\"state\":null}]]]",
         frames_b64(1U, 0x41), frames_b64(1U, 0x45));
@@ -552,7 +557,7 @@ static void downlink_flow(void) {
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
       "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\",\"offset\":50,"
-      "\"payload\":{\"conversationId\":\"wsdev\",\"bridge\":\"worker\"}}"
+      "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"conversationId\":\"wsdev\",\"bridge\":\"worker\"}}"
       "]],\"scannedThroughOffset\":50,\"state\":null}]]]");
   receive(&fixture, "[\"release\",6,1]");
   assert(fixture.voicelab.call_active);
@@ -572,9 +577,9 @@ static void downlink_flow(void) {
         message, sizeof(message),
         "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
         "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":40,"
-        "\"payload\":{\"pcm\":\"%s\"}},"
+        "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"pcm\":\"%s\"}},"
         "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":43,"
-        "\"payload\":{\"last\":true,\"pcm\":\"%s\"}}"
+        "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"last\":true,\"pcm\":\"%s\"}}"
         "]],\"scannedThroughOffset\":43,\"state\":null}]]]",
         frames_b64(1U, 0x41), frames_b64(1U, 0x49));
     receive(&fixture, message);
@@ -691,6 +696,7 @@ static void mount_with_downlink(struct fixture *fixture, int *next_id) {
     .project_api_key = "itxk_secret-never-log",
     .stream_path = "/voice-agent/dev-test",
     .conversation_id = "wsdev",
+    .activation = TEST_ACTIVATION,
     .now_ms = fixture_now_ms,
     .clock_context = fixture,
     .on_speaker = record_speaker,
@@ -753,6 +759,7 @@ static void the_second_agents_dialect(void) {
       .project_api_key = "itxk_secret-never-log",
       .stream_path = "/voice-agent/dev-test",
       .conversation_id = "wsdev",
+      .activation = TEST_ACTIVATION,
       .now_ms = fixture_now_ms,
       .clock_context = &fixture,
       .on_speaker = record_speaker,
@@ -778,9 +785,9 @@ static void the_second_agents_dialect(void) {
         message, sizeof(message),
         "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
         "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
-        "\"offset\":99,\"payload\":{\"conversationId\":\"wsdev\"}},"
+        "\"offset\":99,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"conversationId\":\"wsdev\"}},"
         "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":100,"
-        "\"payload\":{\"deviceSpeakerFrameSeq\":0,\"pcm\":\"%s\"}}"
+        "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"deviceSpeakerFrameSeq\":0,\"pcm\":\"%s\"}}"
         "]],\"scannedThroughOffset\":100,\"state\":null}]]]",
         frames_b64(1U, 0x40));
     receive(&fixture, message);
@@ -928,11 +935,10 @@ int main(void) {
           &fixture.voicelab,
           pcm,
           1U,
-          sizeof(pcm),
-          7U,
-          1234U) == CAPNWEB_OK);
+          sizeof(pcm), "0123456789abcdef0123456789abcdef") == CAPNWEB_OK);
   assert(fixture.captured_count == before + 2U);
-  assert(strstr(fixture.captured[before], "\"seq\":7,\"t\":1234") != NULL);
+  assert(strstr(fixture.captured[before],
+      "\"activation\":\"0123456789abcdef0123456789abcdef\"") != NULL);
   /* THE BODY, BYTE FOR BYTE. One encode over the whole flush. */
   assert(strstr(fixture.captured[before], "\"pcm\":\"QUJDRAAB\"") != NULL);
   /* "p": the uplink is PCM16. It was "u" and the transcode is gone — see the
@@ -952,7 +958,8 @@ int main(void) {
   before = fixture.captured_count;
   assert(
       iterate_kit_voicelab_append_frames(
-          &fixture.voicelab, seam, 2U, 4U, 9U, 1244U) == CAPNWEB_OK);
+          &fixture.voicelab, seam, 2U, 4U,
+          "0123456789abcdef0123456789abcdef") == CAPNWEB_OK);
   assert(strstr(fixture.captured[before], "\"pcm\":\"QUJDREVGR0g=\"") != NULL);
 
   /* A full 640-byte frame fits the args buffer and one outbox slot. */
@@ -968,9 +975,7 @@ int main(void) {
             &fixture.voicelab,
             full_frame,
             1U,
-            sizeof(full_frame),
-            8U,
-            1254U) == CAPNWEB_OK);
+            sizeof(full_frame), "0123456789abcdef0123456789abcdef") == CAPNWEB_OK);
     assert(fixture.captured_count == before + 2U);
     assert(
         fixture.captured_lengths[before] < MESSAGE_CAPACITY);
@@ -1031,7 +1036,8 @@ int main(void) {
       }
     }
     assert(end_message != NULL);
-    assert(strstr(end_message, "\"conversationId\":\"wsdev\"") != NULL);
+    assert(strstr(end_message,
+        "\"activation\":\"0123456789abcdef0123456789abcdef\"") != NULL);
     assert(strstr(end_message, "\"reason\":\"button\"") != NULL);
     /* Durable: no ephemeral marker, or the bridge would still see it but
      * nothing would record that the call was hung up. */

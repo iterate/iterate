@@ -16,6 +16,34 @@ static bool nonempty(const char *value) {
   return value != NULL && value[0] != '\0';
 }
 
+static bool valid_activation(const char *value) {
+  size_t length = 0U;
+  if (!nonempty(value)) return false;
+  while (value[length] != '\0') {
+    const char c = value[length];
+    if (length >= 64U ||
+        !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+          (c >= 'A' && c <= 'Z') || c == '-' || c == '_')) {
+      return false;
+    }
+    ++length;
+  }
+  return true;
+}
+
+static bool payload_matches_activation(
+    const struct iterate_kit_voicelab *voicelab,
+    const struct capnweb_value *payload) {
+  struct capnweb_value value;
+  char activation[65];
+  size_t length = 0U;
+  return valid_activation(voicelab->options.activation) &&
+      capnweb_value_object_get(payload, "activation", &value) &&
+      capnweb_value_copy_string(
+          &value, activation, sizeof(activation), &length) == CAPNWEB_OK &&
+      strcmp(activation, voicelab->options.activation) == 0;
+}
+
 static bool valid_options(
     const struct iterate_kit_voicelab_options *options) {
   return options != NULL &&
@@ -408,6 +436,17 @@ static enum capnweb_status batch_dispatch(
         !capnweb_value_object_get(&event, "payload", &payload)) {
       continue;
     }
+    if ((capnweb_value_string_equals(
+             &type_value, "events.iterate.com/voice-agent/call-started") ||
+         capnweb_value_string_equals(
+             &type_value, "events.iterate.com/voice-agent/conversation-accepted") ||
+         capnweb_value_string_equals(
+             &type_value, "events.iterate.com/voice-agent/conversation-ended") ||
+         capnweb_value_string_equals(
+             &type_value, "events.iterate.com/voice-agent/spk-frame")) &&
+        !payload_matches_activation(voicelab, &payload)) {
+      continue;
+    }
     /*
      * Every event here was appended BY THE BRIDGE, so any of them is proof
      * that the far end of the call is still running. Stamping it once, here,
@@ -441,18 +480,6 @@ static enum capnweb_status batch_dispatch(
        * just the same.
        */
       {
-        struct capnweb_value bridge_value;
-        size_t length = 0U;
-        voicelab->live_bridge_id[0] = '\0';
-        if (capnweb_value_object_get(&payload, "bridgeId", &bridge_value)) {
-          (void)capnweb_value_copy_string(
-              &bridge_value,
-              voicelab->live_bridge_id,
-              sizeof(voicelab->live_bridge_id),
-              &length);
-        }
-      }
-      {
         struct capnweb_value conversation_value;
         size_t length = 0U;
         voicelab->live_conversation_id[0] = '\0';
@@ -476,41 +503,6 @@ static enum capnweb_status batch_dispatch(
     } else if (capnweb_value_string_equals(
                    &type_value,
                    "events.iterate.com/voice-agent/conversation-ended")) {
-      /* Only the bridge serving this call may end it. */
-      struct capnweb_value bridge_value;
-      char ended_by[sizeof(voicelab->live_bridge_id)] = {0};
-      size_t length = 0U;
-      if (voicelab->live_bridge_id[0] != '\0' &&
-          capnweb_value_object_get(&payload, "bridgeId", &bridge_value) &&
-          capnweb_value_copy_string(
-              &bridge_value, ended_by, sizeof(ended_by), &length) ==
-              CAPNWEB_OK &&
-          strcmp(ended_by, voicelab->live_bridge_id) != 0) {
-        continue; /* a stale bridge shutting down; not our call */
-      }
-      /*
-       * AND ONLY THIS CONVERSATION'S OBITUARY COUNTS. Consecutive calls on
-       * one stream share a bridge, so the bridge guard alone let the
-       * previous call's late obituary kill the call a person had JUST
-       * opened — accepted at 14:41:09.576, dead at .647, and the device
-       * then announced an end it never asked for.
-       */
-      {
-        struct capnweb_value conversation_value;
-        char ended_conversation[sizeof(voicelab->live_conversation_id)] = {0};
-        size_t ended_length = 0U;
-        if (voicelab->live_conversation_id[0] != '\0' &&
-            capnweb_value_object_get(
-                &payload, "conversationId", &conversation_value) &&
-            capnweb_value_copy_string(
-                &conversation_value,
-                ended_conversation,
-                sizeof(ended_conversation),
-                &ended_length) == CAPNWEB_OK &&
-            strcmp(ended_conversation, voicelab->live_conversation_id) != 0) {
-          continue; /* an earlier conversation's obituary; not our call */
-        }
-      }
       voicelab->live_bridge_id[0] = '\0';
       voicelab->live_conversation_id[0] = '\0';
       voicelab->call_active = false;
@@ -596,7 +588,7 @@ bool iterate_kit_voicelab_needs_recycle(
 enum capnweb_status iterate_kit_voicelab_recycle_connection(
     struct iterate_kit_voicelab *voicelab) {
   static const char *const open_path[] = {"openConnection"};
-  struct capnweb_expression event_type_items[3];
+  struct capnweb_expression event_type_items[4];
   struct capnweb_expression event_types;
   struct capnweb_expression connection_key;
   struct capnweb_expression max_events;
@@ -662,9 +654,16 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
       sizeof("events.iterate.com/voice-agent/conversation-accepted") - 1U,
     }},
   };
+  event_type_items[3] = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {
+      "events.iterate.com/voice-agent/call-started",
+      sizeof("events.iterate.com/voice-agent/call-started") - 1U,
+    }},
+  };
   event_types = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_ARRAY,
-    {.array = {event_type_items, 3U}},
+    {.array = {event_type_items, 4U}},
   };
   connection_key = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
@@ -998,14 +997,14 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
     const uint8_t *pcm,
     size_t frame_count,
     size_t frame_length,
-    uint32_t sequence,
-    uint64_t captured_at_ms) {
+    const char *activation) {
   int written;
   size_t offset;
   size_t encoded_length;
   enum capnweb_status status;
   if (voicelab == NULL ||
       pcm == NULL ||
+      !valid_activation(activation) ||
       frame_count == 0U ||
       frame_count > ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND ||
       frame_length == 0U ||
@@ -1035,13 +1034,8 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
        * a fact only the server holds.
        */
       "{\"type\":\"events.iterate.com/voice-agent/mic-frame\",\"ephemeral\":true,"
-      "\"payload\":{\"seq\":%" PRIu32
-      /* No codec field. It said "p" for PCM16 while the servers still had a
-       * mu-law arm to avoid; with that arm gone it was a constant nobody
-       * read, sent fifty times a second. */
-      ",\"t\":%" PRIu64 ",\"pcm\":\"",
-      sequence,
-      captured_at_ms);
+      "\"payload\":{\"activation\":\"%s\",\"pcm\":\"",
+      activation);
   if (written < 0 ||
       (size_t)written >= sizeof(voicelab->args_buffer) - offset) {
     ++voicelab->frame_send_failures;
@@ -1308,6 +1302,9 @@ enum capnweb_status iterate_kit_voicelab_end_call(
   if (voicelab == NULL) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
+  if (!valid_activation(voicelab->options.activation)) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
+  }
   if (voicelab->state != ITERATE_KIT_VOICELAB_READY) {
     return CAPNWEB_E_STATE;
   }
@@ -1318,12 +1315,8 @@ enum capnweb_status iterate_kit_voicelab_end_call(
       voicelab->args_buffer,
       sizeof(voicelab->args_buffer),
       "[{\"type\":\"events.iterate.com/voice-agent/conversation-ended\",\"payload\":{"
-      "\"conversationId\":\"%s\",\"reason\":\"%s\"}}]",
-      /* The conversation actually being ended, not the compiled-in default:
-       * an end named "scdev" is unattributable in the stream record. */
-      voicelab->live_conversation_id[0] != '\0'
-          ? voicelab->live_conversation_id
-          : voicelab->options.conversation_id,
+      "\"activation\":\"%s\",\"reason\":\"%s\"}}]",
+      voicelab->options.activation,
       reason != NULL ? reason : "hangup");
   if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
     return CAPNWEB_E_LIMIT;

@@ -7,7 +7,6 @@ idf_component_register(
     stackchan_body.c
     stackchan_camera.c
     stackchan_image.c
-    stackchan_modes.c
     core_s3_capture_reserve.c
   PRIV_INCLUDE_DIRS .
   REQUIRES

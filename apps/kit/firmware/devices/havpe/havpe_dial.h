@@ -1,5 +1,5 @@
-#ifndef ITERATE_KIT_HAVPE_MODES_H
-#define ITERATE_KIT_HAVPE_MODES_H
+#ifndef ITERATE_KIT_HAVPE_DIAL_H
+#define ITERATE_KIT_HAVPE_DIAL_H
 
 #include <stdbool.h>
 #include <stdint.h>

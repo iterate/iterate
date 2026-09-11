@@ -3,7 +3,7 @@
 
 Sources are the Apache-2.0 Home Assistant Voice PE press chime and OpenAI
 marin announcements. tools/generate-sounds.sh supplies each board's measured
-wake trim and gain. Names starting with mode_ also populate mode_sounds.
+wake trim and gain.
 """
 import argparse
 from fractions import Fraction
@@ -63,13 +63,6 @@ def main():
         print(f"static const uint8_t sound_{cname}[] = {{")
         for i in range(0, len(pcm), 24):
             print("  " + ",".join(str(b) for b in pcm[i:i+24]) + ",")
-        print("};")
-    modes = [cname for cname, _ in names if cname.startswith("mode_")]
-    if modes:
-        print("struct sound { const uint8_t *pcm; uint32_t bytes; };")
-        print(f"static const struct sound mode_sounds[{len(modes)}] = {{")
-        for cname in modes:
-            print(f"  {{ sound_{cname}, sizeof(sound_{cname}) }},")
         print("};")
 
 

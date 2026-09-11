@@ -22,7 +22,7 @@ test("the mint is one silent mic frame at call start; holding gates the mic loca
   expect(h.appends[0]).toMatchObject({
     type: "events.iterate.com/voice-agent/mic-frame",
     ephemeral: true,
-    payload: { deviceMicFrameSeq: 1 },
+    payload: { activation: expect.any(String) },
   });
   const mint = h.appends[0]!.payload as { pcm: string };
   expect(mint.pcm).toBe(`${"A".repeat(852)}AA==`);
@@ -48,9 +48,9 @@ test("the mint is one silent mic frame at call start; holding gates the mic loca
   ]);
   expect(h.appends[1]).toMatchObject({
     ephemeral: true,
-    payload: { pcm: "BBBB", deviceMicFrameSeq: 2 },
+    payload: { pcm: "BBBB", activation: expect.any(String) },
   });
-  expect(h.appends[2]!.payload).toMatchObject({ pcm: "CCCC", deviceMicFrameSeq: 3 });
+  expect(h.appends[2]!.payload).toMatchObject({ pcm: "CCCC", activation: expect.any(String) });
   expect(h.audioLog).toContain("clear");
   expect(h.levels).toEqual([0, 0.5, 0.6, 0]);
 });
@@ -70,6 +70,21 @@ test("the spk-frame buffer policy: clear before frame, then play", async () => {
     payload: { pcm: "REVG", deviceSpeakerFrameSeq: 2, clearSpeakerBufferBeforeFrame: true },
   });
   expect(h.audioLog).toEqual(["start", "play:QUJD", "clear", "play:REVG"]);
+});
+
+test("activation-bound downlink for another call never reaches this speaker or UI", async () => {
+  const h = makeHarness();
+  await startVoiceCall(h.deps);
+  h.deliver({
+    type: SPK,
+    payload: { activation: "another-activation", pcm: "QUJD", deviceSpeakerFrameSeq: 1 },
+  });
+  h.deliver({
+    type: "events.iterate.com/voice-agent/conversation-accepted",
+    payload: { activation: "another-activation", conversationId: "conv_other" },
+  });
+  expect(h.audioLog).toEqual(["start"]);
+  expect(h.statuses.at(-1)).toMatchObject({ phase: "connecting", caption: "ringing…" });
 });
 
 test("lifecycle and the backend's replies share the caption; ended stops audio and closes", async () => {
@@ -126,7 +141,7 @@ test("a backend reply during ringing captions but does not fake a pickup", async
   expect(h.statuses.at(-1)!.caption).toMatch(/^no answer/);
 });
 
-test("another call's stale obituary does not end this one", async () => {
+test("another activation's stale obituary does not end this call", async () => {
   const h = makeHarness();
   await startVoiceCall(h.deps);
   h.deliver({
@@ -137,18 +152,29 @@ test("another call's stale obituary does not end this one", async () => {
     type: "events.iterate.com/voice-agent/conversation-accepted",
     payload: { conversationId: "conv_x", handshakeTookMs: 900, heldMicFrames: 0 },
   });
-  h.deliver({ type: ENDED, payload: { conversationId: "conv_other", reason: "idle" } });
+  h.deliver({
+    type: ENDED,
+    payload: { activation: "another-activation", reason: "idle" },
+  });
   expect(h.statuses.at(-1)!.phase).toBe("live");
+});
+
+test("teardown clears queued playback and ignores a racing speaker frame", async () => {
+  const h = makeHarness();
+  const call = await startVoiceCall(h.deps);
+  h.deliver({ type: SPK, payload: { pcm: "QUJD", deviceSpeakerFrameSeq: 1 } });
+  await call.hangUp();
+  const afterEnd = h.audioLog.length;
+  h.deliver({ type: SPK, payload: { pcm: "REVG", deviceSpeakerFrameSeq: 2 } });
+  expect(h.audioLog.slice(afterEnd)).toEqual([]);
+  expect(h.audioLog).toContain("clear");
 });
 
 test("hang up ends locally FIRST, then appends the obituary — a wedged socket cannot eat the button", async () => {
   const h = makeHarness({ stallObituary: true });
   const call = await startVoiceCall(h.deps);
-  h.deliver({
-    type: "events.iterate.com/voice-agent/call-started",
-    payload: { conversationId: "conv_9" },
-  });
-  /* Do not await: the stalled obituary must not delay the local end. */
+  /* Do not await: an activation can end before the provider accepts it, and
+   * a stalled terminal append must not delay the local end. */
   void call.hangUp();
   await settle();
   expect(h.statuses.at(-1)!.caption).toMatch(/^call ended · heard/);
@@ -156,7 +182,7 @@ test("hang up ends locally FIRST, then appends the obituary — a wedged socket 
   expect(h.audioLog.at(-1)).toBe("stop");
   expect(h.appends.at(-1)).toMatchObject({
     type: ENDED,
-    payload: { conversationId: "conv_9", reason: "hang-up button" },
+    payload: { activation: expect.any(String), reason: "hang-up button" },
   });
 });
 
@@ -317,7 +343,24 @@ function makeHarness(
       return openedWith;
     },
     deliver(event: { type: string; payload?: unknown }) {
-      processBatch!({ events: [event] });
+      const activation = (
+        appends.find((append) => append.type.endsWith("/mic-frame"))?.payload as
+          | { activation?: string }
+          | undefined
+      )?.activation;
+      const activationBound =
+        event.type === SPK ||
+        event.type === "events.iterate.com/voice-agent/call-started" ||
+        event.type === "events.iterate.com/voice-agent/conversation-accepted" ||
+        event.type === ENDED;
+      const payload =
+        activationBound &&
+        typeof event.payload === "object" &&
+        event.payload !== null &&
+        !("activation" in event.payload)
+          ? { ...event.payload, activation }
+          : event.payload;
+      processBatch!({ events: [{ ...event, payload }] });
       harness.closed = closed;
     },
     captureFrame(pcmBase64: string, level: number) {
@@ -361,7 +404,6 @@ function makeHarness(
       ensureSetup: async () => {},
       onStatus: (status: VoiceCallStatus) => statuses.push(status),
       onLevel: (level: number) => levels.push(level),
-      now: () => 1000,
     },
   };
   return harness;

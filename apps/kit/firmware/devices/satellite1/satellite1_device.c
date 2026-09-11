@@ -94,19 +94,19 @@ static void iterate_kit_satellite1_present(
 }
 
 /** Read only trustworthy GPIO_IN_A at the shared 25 ms control cadence.
- * A failed read releases both debouncers immediately, clears mute and counts
- * the failure. Only bits 0/2/3 are used; GPIO0 owns the action-button grammar.
+ * A failed read releases both debouncers and fails closed until a valid
+ * mute reading arrives; the failure remains counted. Only bits 0/2/3 are used; GPIO0 owns the action-button grammar.
  */
 static void iterate_kit_satellite1_poll(void *context, struct iterate_kit_voice_intent *out) {
   (void)context;
-  (void)out;
   uint8_t status[4];
   if (!iterate_kit_xmos_spi_read_status(&xmos, status)) {
     if (side_button_read_failures < UINT32_MAX) ++side_button_read_failures;
     volume_up = (struct iterate_kit_button){0};
     volume_down = (struct iterate_kit_button){0};
     if (microphone_muted) iterate_kit_led_ring_borrow(NULL, 0);
-    microphone_muted = false;
+    microphone_muted = true;
+    out->microphone_muted = true;
     return;
   }
   const uint8_t pressed = (uint8_t)~status[1];
@@ -120,6 +120,7 @@ static void iterate_kit_satellite1_poll(void *context, struct iterate_kit_voice_
   const bool muted = (status[1] & 8U) != 0U;
   if (microphone_muted != muted) iterate_kit_led_ring_borrow(NULL, 0);
   microphone_muted = muted;
+  out->microphone_muted = muted;
   const int step = (int)iterate_kit_button_take_press(&volume_up) -
       (int)iterate_kit_button_take_press(&volume_down);
   if (step == 0) return;

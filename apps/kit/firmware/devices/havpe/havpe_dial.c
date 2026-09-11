@@ -1,9 +1,4 @@
-/*
- * The dial's mode table and wheel arithmetic. Pure — see havpe_modes.h. The
- * session grammar the centre button speaks is the shared machine in
- * components/core (iterate/kit/session_grammar.h).
- */
-#include "havpe_modes.h"
+#include "havpe_dial.h"
 
 #include <stddef.h>
 

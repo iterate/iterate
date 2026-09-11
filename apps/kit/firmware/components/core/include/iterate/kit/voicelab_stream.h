@@ -217,6 +217,8 @@ struct iterate_kit_voicelab_options {
   const char *client_path;
   /** Short call identity stamped into every frame payload. */
   const char *conversation_id;
+  /** Client-owned, RAM-only activation for the local microphone edge. */
+  const char *activation;
   /**
    * Who segments turns, as the worker's voice-agent understands it:
    * "manual" (NULL defaults here) for push-to-talk boards that commit
@@ -418,8 +420,7 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
     const uint8_t *pcm,
     size_t frame_count,
     size_t frame_length,
-    uint32_t sequence,
-    uint64_t captured_at_ms);
+    const char *activation);
 
 /**
  * One-way append of a caller-built JSON array of stream event inputs

@@ -11,8 +11,8 @@ hardware facts and nothing else.** Everything a person can see or hear —
 what the lights mean, when the face sleeps, what "connecting" looks like, how
 a turn ends — is decided once, in `components/core`, for every board at once.
 
-Read the task file `tasks/2026-09-09-board-table-and-satellite1.md` before any large change.
-It measures the duplication these instructions try not to add to.
+Read `apps/kit/firmware/README.md` for the current ownership and onboarding path.
+GPT-Live-1 is the only voice model; a new board adds hardware, never a provider mode.
 
 ---
 
@@ -28,9 +28,8 @@ It measures the duplication these instructions try not to add to.
 | When the face sleeps                | `iterate_kit_face_awake`                   | nothing                                  |
 | Playout identity / interrupt policy | `iterate_kit_playout_*`                    | nothing                                  |
 | PCM wire framing and base64         | `voicelab_stream.c`                        | nothing                                  |
-| Microphone batches and turn edges   | `voice_uplink.c`                           | queue operations, capture fence, view    |
+| Microphone flush timing             | `microphone_flush.h`                       | native queue and hardware capture fence  |
 | Physical call grammar and chimes    | `board.c` + `session_grammar.c`            | normalized `read_gestures`, sound output |
-| Provider-mode adoption/persistence  | `provider_mode.c` + `provider_mode_nvs.c`  | namespace, defaults, apply and announce  |
 
 If you find yourself writing a second answer to any row above, stop: the
 answer belongs in `components/core` and the other boards want it too.
@@ -40,7 +39,7 @@ answer belongs in `components/core` and the other boards want it too.
 Since 2026-09-09 a board is `struct iterate_kit_board` (header:
 `platforms/iterate_esp_idf/components/board/include/iterate/kit/platforms/board.h`)
 handed to `iterate_kit_board_run()`. Read `devices/satellite1/satellite1_device.c`
-first: it is the smallest complete board (229 lines) and the FutureProofHomes
+first: it is a complete table board and the FutureProofHomes
 Satellite1 talks through it. Then `devices/havpe/havpe_device.c` for a board
 with a dial and XMOS pipeline taps.
 
@@ -105,7 +104,7 @@ A board using the existing components creates four source/config files:
 1. `devices/<board>/<board>_device.c`: the hardware table, any board-only
    operations, and `app_main()` calling `iterate_kit_board_run(&board)`.
    Include `assets/sounds_generated.inc`; its static symbols are
-   `sound_chime_press`, `sound_chime_ended`, and, when supplied, `mode_sounds`.
+   `sound_chime_press` and `sound_chime_ended`.
 2. `devices/<board>/CMakeLists.txt`: register that source and the components
    it directly requires. There is no device entry header or sound-file guard.
 3. `targets/<board>/CMakeLists.txt`: set
@@ -129,14 +128,12 @@ capnweb, board owns led_strip, board_wake_word owns its esp-sr pin, and the
 device owns its directly required managed drivers. Let ESP-IDF regenerate
 `dependencies.lock` during the target build.
 
-After a consolidation changes target defaults or partition names, do one clean
-configuration generation before trusting a build: preserve any local
-`targets/<board>/sdkconfig`, remove or rename that ignored generated file, then
-run `idf.py reconfigure` (or build) so it is recreated from the current
-defaults. An old generated `sdkconfig` otherwise keeps its old partition-table
-selection even though `sdkconfig.defaults` changed.
+After defaults or partitions change, generate a fresh configuration with
+`idf.py -B /tmp/<board>-build -D SDKCONFIG=/tmp/<board>.sdkconfig build`.
+Use the CMake `-D` argument: an environment-only `SDKCONFIG` assignment is ignored.
+This preserves local generated files while proving the committed defaults.
 
-Omit the shared greeting, 320-sample processing/capture frames, and 4096-byte
+Omit the shared 320-sample processing/capture frames and 4096-byte
 capture stack: board.c fills these before the loop validates them. A zero
 speaker dry wait becomes two thirds of the TX ring when `audio` is present;
 keep explicit measured waits for board-owned audio. StackChan's 256/128
@@ -154,10 +151,9 @@ board declares it through `facts.turns`; the old codec property that claimed
 it was deleted because nobody checked it):
 
 - **Cancellation exists** (StackChan's esp-sr, HA Voice PE's XMOS) →
-  **open mic**, `.turns = "vad"`, no turn machine. The microphone rides the
+  **open mic**. The microphone rides the
   open call and the provider segments turns.
-- **No cancellation** (M5StickS3, Waveshare) → **push-to-talk**, and the turn
-  machine with it.
+- **No cancellation** (M5StickS3, Waveshare) → a **local hold-to-talk gate**. It is a hardware constraint, not provider turn control.
 
 Getting this backwards is not cosmetic. The HA Voice PE shipped with hardware
 AEC _and_ push-to-talk: a tap opened a call, the ring showed a call with

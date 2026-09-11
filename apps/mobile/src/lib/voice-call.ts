@@ -186,20 +186,17 @@ export async function startVoiceCall(deps: {
    * the app with the call up — ends the call under you (observed live,
    * 2026-08-29 evening). Injectable so tests need not wait 20 seconds. */
   keepaliveIntervalMs?: number;
-  now(): number;
 }): Promise<VoiceCallHandle> {
   let ended = false;
   let accepted = false;
-  let conversationId: string | null = null;
   let connection: unknown;
   let inflightMicAppends = 0;
-  let deviceMicFrameSeq = 0;
   let spkFramesHeard = 0;
   let spkMsHeard = 0;
   let ringTimer: ReturnType<typeof setInterval> | null = null;
   let noAnswerTimer: ReturnType<typeof setTimeout> | null = null;
   let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
-  const startedAtMs = deps.now();
+  const activation = crypto.randomUUID();
 
   const stopRinging = () => {
     if (ringTimer !== null) clearInterval(ringTimer);
@@ -211,6 +208,7 @@ export async function startVoiceCall(deps: {
   const finish = (caption: string) => {
     if (ended) return;
     ended = true;
+    deps.audio.clearPlayback();
     stopRinging();
     if (keepaliveTimer !== null) clearInterval(keepaliveTimer);
     keepaliveTimer = null;
@@ -242,9 +240,8 @@ export async function startVoiceCall(deps: {
         type: EVENT.micFrame,
         ephemeral: true,
         payload: {
+          activation,
           pcm: pcmBase64,
-          deviceMicFrameSeq: ++deviceMicFrameSeq,
-          capturedAtDeviceMs: deps.now() - startedAtMs,
         },
       })
       .catch(() => {
@@ -297,9 +294,19 @@ export async function startVoiceCall(deps: {
     ],
     processEventBatch: (batch) => {
       for (const event of batch.events ?? []) {
+        if (ended) continue;
         /* Same cast-then-narrow as captionForEvent: unvalidated wire JSON,
          * typeof-checked per field where it is read. */
         const payload = (event.payload ?? {}) as Record<string, unknown>;
+        if (
+          (event.type === EVENT.spkFrame ||
+            event.type === EVENT.callStarted ||
+            event.type === EVENT.conversationAccepted ||
+            event.type === EVENT.conversationEnded) &&
+          payload.activation !== activation
+        ) {
+          continue;
+        }
         if (event.type === EVENT.spkFrame) {
           /* The three-line buffer policy, lines one and two. Line three
            * (lastFrameOfAnswer) exists for half-duplex clients releasing a
@@ -313,9 +320,6 @@ export async function startVoiceCall(deps: {
           }
           continue;
         }
-        if (event.type === EVENT.callStarted && typeof payload.conversationId === "string") {
-          conversationId = payload.conversationId;
-        }
         if (event.type === EVENT.conversationAccepted && !ended) {
           /* Picked up: stop ringing mid-burst (never into the call) and
            * hand the caption to the live state. */
@@ -326,12 +330,7 @@ export async function startVoiceCall(deps: {
           continue;
         }
         if (event.type === EVENT.conversationEnded) {
-          /* Ours or unattributed — a fresh connection past the head only
-           * sees this call's lifecycle, but the id check keeps a racing
-           * stale obituary from ending the wrong call. */
-          if (conversationId === null || payload.conversationId === conversationId) {
-            finish(captionForEvent(event.type, payload) ?? "call ended");
-          }
+          finish(captionForEvent(event.type, payload) ?? "call ended");
           continue;
         }
         const caption = captionForEvent(event.type, payload);
@@ -371,7 +370,7 @@ export async function startVoiceCall(deps: {
       .append({
         type: EVENT.keepalive,
         ephemeral: true,
-        payload: { t: deps.now() - startedAtMs },
+        payload: {},
       })
       .catch(() => {
         /* The connection's own failure surfaces carry this. */
@@ -394,22 +393,19 @@ export async function startVoiceCall(deps: {
     },
     hangUp: async () => {
       if (ended) return;
-      const buriedConversationId = conversationId;
       /* END LOCALLY FIRST. The obituary rides a socket that may be wedged —
        * awaiting it before updating the UI turned the hang-up button into a
        * no-op on the first on-device session. */
       finish("call ended");
-      if (buriedConversationId !== null) {
-        await deps.stream
-          .append({
-            type: EVENT.conversationEnded,
-            payload: { conversationId: buriedConversationId, reason: "hang-up button" },
-          })
-          .catch(() => {
-            /* Ending locally still ended locally; the idle deadline is the
-             * server's backstop for a lost obituary. */
-          });
-      }
+      await deps.stream
+        .append({
+          type: EVENT.conversationEnded,
+          payload: { activation, reason: "hang-up button" },
+        })
+        .catch(() => {
+          /* Ending locally still ended locally; the idle deadline is the
+           * server's backstop for a lost obituary. */
+        });
     },
   };
 }

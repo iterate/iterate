@@ -206,11 +206,31 @@ static void normalized_gestures_use_the_shared_grammar(void) {
   assert(actions.start_call && actions.wake_chime);
 }
 
+static void down_edge_wakes_before_release(void) {
+  struct iterate_kit_session session = {0};
+  struct iterate_kit_session_actions actions;
+  const struct iterate_kit_gpio_button button = {
+    .gpio = 0, .active_low = true, .tap_wakes = true, .tap_ends = true,
+  };
+  const struct iterate_kit_voice_view idle = {0};
+  iterate_kit_board_apply_gestures(
+      &session, &(struct iterate_kit_board_gestures){.pressed = true}, &button,
+      ITERATE_KIT_VOICE_TURNS_SERVER_VAD, &idle, 30U, &actions);
+  assert(actions.start_call && actions.wake_chime);
+  /* The same down-edge during a call does not accidentally end it. */
+  const struct iterate_kit_voice_view active = {.wants_call = true, .call_active = true};
+  iterate_kit_board_apply_gestures(
+      &session, &(struct iterate_kit_board_gestures){.pressed = true}, &button,
+      ITERATE_KIT_VOICE_TURNS_SERVER_VAD, &active, 2000U, &actions);
+  assert(!actions.start_call && !actions.end_call);
+}
+
 int main(void) {
   volume_table();
   i2s_table();
   boot_table();
   iterate_kit_board_defaults_table();
   normalized_gestures_use_the_shared_grammar();
+  down_edge_wakes_before_release();
   return 0;
 }

@@ -98,7 +98,8 @@ void iterate_kit_board_apply_gestures(
     uint64_t now_ms,
     struct iterate_kit_session_actions *actions) {
   const struct iterate_kit_session_poll poll = {
-    .tap = gestures->tap,
+    .tap = gestures->tap || (gestures->pressed && button->tap_wakes &&
+        !view->wants_call && !view->call_active),
     .held = gestures->held,
     .end_hold = gestures->end_hold,
     .end_press = gestures->end_press,
@@ -151,6 +152,7 @@ static struct iterate_kit_session session;
 static struct iterate_kit_session_actions actions;
 static struct iterate_kit_voice_view view;
 static enum iterate_kit_voice_turns turns;
+static bool microphone_muted;
 static uint8_t volume_percent;
 
 static void wait_ms(uint16_t ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
@@ -265,17 +267,6 @@ static enum iterate_kit_status set_volume(void *context, uint8_t percent, uint8_
   return iterate_kit_board_set_volume(percent, applied);
 }
 void iterate_kit_board_inject_tap(void) { iterate_kit_button_inject_tap(&button); }
-void iterate_kit_board_set_turns(enum iterate_kit_voice_turns value) {
-  turns = value;
-#ifdef CONFIG_ITERATE_KIT_WAKE_WORD
-  /* A dial can change posture after this pass's presentation. Invalidate a
-   * queued idle detection immediately; a PTT tap cannot start a call. */
-  if (value == ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK) iterate_kit_wake_word_set_enabled(false);
-#endif
-  iterate_kit_voice_loop_set_turns(value);
-}
-const struct iterate_kit_session_actions *iterate_kit_board_button_actions(void) { return &actions; }
-
 /** Finish wake-word startup on the app task, before accepting any detections.
  * Wake-word injection requires the shared GPIO button classifier.
  */
@@ -345,11 +336,13 @@ static void present(void *context, const struct iterate_kit_voice_view *value) {
   view = *value;
 #ifdef CONFIG_ITERATE_KIT_WAKE_WORD
   if (board->wake_word != NULL) iterate_kit_wake_word_set_enabled(
-      turns == ITERATE_KIT_VOICE_TURNS_SERVER_VAD && !view.call_active && !view.wants_call);
+      !microphone_muted && turns == ITERATE_KIT_VOICE_TURNS_SERVER_VAD &&
+      !view.call_active && !view.wants_call);
 #endif
   if (board->ring.pixels != 0U) {
     struct iterate_kit_conversation_visual_state lights;
     iterate_kit_voice_view_lights(value, &lights);
+    lights.microphone_muted = microphone_muted;
     (void)iterate_kit_led_ring_present(&lights, esp_timer_get_time());
   }
   if (board->status_led_gpio >= 0) (void)gpio_set_level(board->status_led_gpio, value->link_ready);
@@ -369,15 +362,19 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   (void)context;
   const uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
   struct iterate_kit_board_gestures gestures = {0};
+  *out = (struct iterate_kit_voice_intent){0};
+  if (board->extra != NULL && board->extra->poll != NULL) board->extra->poll(NULL, out);
+  microphone_muted = out->microphone_muted;
 #ifdef CONFIG_ITERATE_KIT_WAKE_WORD
   /* Worker detections reach the same synthetic-tap queue as capabilities. */
-  if (board->wake_word != NULL && turns == ITERATE_KIT_VOICE_TURNS_SERVER_VAD &&
-      !view.call_active && !view.wants_call &&
+  if (!microphone_muted && board->wake_word != NULL &&
+      turns == ITERATE_KIT_VOICE_TURNS_SERVER_VAD && !view.call_active && !view.wants_call &&
       iterate_kit_wake_word_take_detection()) iterate_kit_board_inject_tap();
 #endif
   if (board->button.gpio >= 0) {
     const bool pressed = (gpio_get_level(board->button.gpio) == 0) == board->button.active_low;
     iterate_kit_button_update(&button, pressed, now_ms);
+    gestures.pressed = iterate_kit_button_take_press(&button);
     gestures.held = iterate_kit_button_held(&button);
     gestures.end_hold = iterate_kit_button_take_end_hold(&button);
   }
@@ -388,14 +385,14 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   iterate_kit_board_apply_gestures(
       &session, &gestures, &board->button, turns, &view, now_ms, &actions);
   *out = (struct iterate_kit_voice_intent){
-    .start_call = actions.start_call,
-    .end_call = actions.end_call,
-    .talk_held = actions.talk_held,
+    .start_call = !microphone_muted && actions.start_call,
+    .end_call = microphone_muted ? (view.call_active || view.wants_call) : actions.end_call,
+    .talk_held = !microphone_muted && actions.talk_held,
+    .microphone_muted = microphone_muted,
   };
   /* End before wake: replacement playback leaves the newer intent audible. */
-  if (actions.end_chime) play_sound(board->sounds.ended, board->sounds.ended_bytes);
-  if (actions.wake_chime) play_sound(board->sounds.wake, board->sounds.wake_bytes);
-  if (board->extra != NULL && board->extra->poll != NULL) board->extra->poll(NULL, out);
+  if (!microphone_muted && actions.end_chime) play_sound(board->sounds.ended, board->sounds.ended_bytes);
+  if (!microphone_muted && actions.wake_chime) play_sound(board->sounds.wake, board->sounds.wake_bytes);
 }
 
 static void phase(void *context, enum iterate_kit_voice_phase value) {

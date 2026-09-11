@@ -34,6 +34,7 @@ struct iterate_kit_gpio_button { int8_t gpio; bool active_low; bool tap_wakes; b
  * board.c with these fields before the grammar runs once per app-loop pass.
  */
 struct iterate_kit_board_gestures {
+  bool pressed; /* Debounced down-edge, for immediate wake. */
   bool tap;
   bool held;
   bool end_hold;
@@ -131,15 +132,6 @@ void iterate_kit_board_apply_gestures(
     const struct iterate_kit_voice_view *view,
     uint64_t now_ms,
     struct iterate_kit_session_actions *actions);
-/** Change the table button and loop posture together. HAVPE's dial changes
- * streams at runtime; a static facts.turns cannot describe its adopted mode.
- */
-void iterate_kit_board_set_turns(enum iterate_kit_voice_turns turns);
-/** This poll's grammar actions, for HAVPE's mode-reminder overlay. The table
- * has already rendered chimes and intents; extra must not render them twice.
- */
-const struct iterate_kit_session_actions *iterate_kit_board_button_actions(void);
-
 #ifdef ESP_PLATFORM
 #include "driver/i2c_master.h"
 /** Use a bus extra->start already opened (Waveshare's BSP display owns I2C0).

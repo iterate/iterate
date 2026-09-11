@@ -30,23 +30,16 @@ tts() { # tts <text> <out.wav>  — marin, 16 kHz mono PCM16
 
 cp devices/havpe/assets/center_button_press.wav "$WORK/center_button_press.wav"
 
-# The HAVPE's four dial modes and the shared end-of-call announcement.
+# Shared end-of-call announcement.
 tts "Call ended." "$WORK/call_ended.wav"
-tts "Grok. Push to talk." "$WORK/mode1.wav"
-tts "Grok. Open mic." "$WORK/mode2.wav"
-tts "OpenAI. Push to talk." "$WORK/mode3.wav"
-tts "OpenAI. Open mic." "$WORK/mode4.wav"
-# The StackChan's two provider announcements.
-tts "Grok." "$WORK/stackchan_grok.wav"
-tts "OpenAI." "$WORK/stackchan_openai.wav"
 
 for board in devices/*/; do mkdir -p "${board}assets"; done
 
-python3 tools/make-sounds.py "$WORK" chime_press=center_button_press.wav chime_ended=call_ended.wav mode_grok_ptt=mode1.wav mode_grok_vad=mode2.wav mode_openai_ptt=mode3.wav mode_openai_vad=mode4.wav > devices/havpe/assets/sounds_generated.inc
+python3 tools/make-sounds.py "$WORK" chime_press=center_button_press.wav chime_ended=call_ended.wav > devices/havpe/assets/sounds_generated.inc
 # StackChan's VOIP canceller destroys near speech during far-end activity.
 # Measured 2026-08-20: the full 1.37 s wake chime erased the opening words.
 # Keep the audible 0.4 s body with a 40 ms fade so the cut does not click.
-python3 tools/make-sounds.py "$WORK" chime_press=center_button_press.wav chime_ended=call_ended.wav mode_grok=stackchan_grok.wav mode_openai=stackchan_openai.wav --trim-wake > devices/stackchan/assets/sounds_generated.inc
+python3 tools/make-sounds.py "$WORK" chime_press=center_button_press.wav chime_ended=call_ended.wav --trim-wake > devices/stackchan/assets/sounds_generated.inc
 # M5's half-duplex fence prevents chime leakage into the microphone, so keep
 # the full ding. Feedback at x2.5 with saturation measured audible, not harsh.
 python3 tools/make-sounds.py "$WORK" chime_press=center_button_press.wav chime_ended=call_ended.wav --gain 5/2 > devices/m5sticks3/assets/sounds_generated.inc

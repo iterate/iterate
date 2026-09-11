@@ -88,6 +88,9 @@ struct cli_runtime {
   enum iterate_kit_voicelab_state announced_voicelab;
   enum iterate_kit_voicelab_failure announced_failure;
   uint32_t frame_sequence;
+  /** RAM-only id for the current local microphone activation. */
+  char activation[33];
+  bool activation_active;
   struct cli_microphone microphone;
   struct cli_speaker speaker;
   /*

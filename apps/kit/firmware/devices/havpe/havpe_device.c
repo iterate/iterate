@@ -4,6 +4,8 @@
  */
 #include <stdio.h>
 
+#include "driver/gpio.h"
+
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/capabilities/arguments.h"
@@ -136,7 +138,7 @@ static void present(
 /** The HAVPE dial is always a volume control. */
 static void poll(void *context, struct iterate_kit_voice_intent *out) {
   (void)context;
-  (void)out;
+  out->microphone_muted = gpio_get_level(3) != 0;
   const int steps = havpe_ui_take_dial();
   if (steps != 0) (void)iterate_kit_board_nudge_volume(steps * DIAL_VOLUME_STEP_PERCENT);
 }

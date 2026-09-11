@@ -3,7 +3,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "havpe_modes.h"
+#include "havpe_dial.h"
 #include "iterate/kit/conversation_lights.h"
 #include "iterate/kit/conversation_overlay.h"
 #include "iterate/kit/platforms/led_ring.h"
@@ -36,6 +36,18 @@ static struct {
 } dial;
 
 bool havpe_ui_init(void) {
+  /* Official HAVPE hardware_mute_switch: GPIO3 high means muted. */
+  const gpio_config_t mute_config = {
+    .pin_bit_mask = 1ULL << 3,
+    .mode = GPIO_MODE_INPUT,
+    .pull_up_en = GPIO_PULLUP_DISABLE,
+    .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    .intr_type = GPIO_INTR_DISABLE,
+  };
+  if (gpio_config(&mute_config) != ESP_OK) {
+    ESP_LOGE(tag, "mute switch configuration failed");
+    return false;
+  }
   {
     /* Internal pull-ups, harmless if the board provides its own: a floating
      * quadrature pin reads as an endlessly spinning dial. */

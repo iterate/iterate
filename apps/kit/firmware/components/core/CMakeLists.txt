@@ -10,7 +10,6 @@ set(ITERATE_KIT_CORE_SOURCES
   src/itx_mount.c
   src/itx_outbox_sender.c
   src/peer.c
-  src/provider_mode.c
   src/retry_gate.c
   src/session_grammar.c
   src/spsc_ring.c

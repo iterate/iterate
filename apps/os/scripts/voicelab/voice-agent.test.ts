@@ -31,6 +31,7 @@ import {
 const PCM16_BYTES_PER_MS = 32;
 /** One provider delta: 100 ms, which is also the device's frame ceiling. */
 const DELTA_MS = 100;
+const ACTIVATION = "test-activation-a";
 
 function base64(bytes: Uint8Array): string {
   let binary = "";
@@ -282,10 +283,11 @@ function mirrored(h: Harness) {
 
 /* ----------------------------------------------------------- write helpers */
 
-function micFrame(deviceMicFrameSeq: number) {
+function micFrame(deviceMicFrameSeq: number, activation = ACTIVATION) {
   return {
     type: "events.iterate.com/voice-agent/mic-frame" as const,
     payload: {
+      activation,
       deviceMicFrameSeq,
       pcm: base64(new Uint8Array(20 * PCM16_BYTES_PER_MS)),
       capturedAtDeviceMs: deviceMicFrameSeq * 20,
@@ -429,11 +431,11 @@ describe("opening a call", () => {
     });
     await overflowing.append(...held, micFrame(99));
     await overflowing.settle();
-    const endings = eventsOfType(overflowing, "conversation-end-requested");
+    const endings = eventsOfType(overflowing, "conversation-ended");
     expect(endings).toHaveLength(1);
     expect((endings[0]!.payload as { reason: string }).reason).toContain("microphone audio");
     await overflowing.append(micFrame(100));
-    expect(eventsOfType(overflowing, "conversation-end-requested")).toHaveLength(1);
+    expect(eventsOfType(overflowing, "conversation-ended")).toHaveLength(1);
   });
 
   it("ends a call whose silence clock cannot catch up without a burst", async () => {
@@ -444,7 +446,7 @@ describe("opening a call", () => {
     await h.advanceTime(SILENCE_FILL_MS * 11);
     await h.settle();
     expect(h.provider.sentOfType("session.input_audio.append")).toHaveLength(sentBefore);
-    const endings = eventsOfType(h, "conversation-end-requested");
+    const endings = eventsOfType(h, "conversation-ended");
     expect(endings).toHaveLength(1);
     expect((endings[0]!.payload as { reason: string }).reason).toContain("input clock");
   });
@@ -628,9 +630,9 @@ describe("opening a call", () => {
     await h.settle();
     await playOutEverything(h, 20_000);
     await h.settle();
-    const requested = eventsOfType(h, "conversation-end-requested");
-    expect(requested).toHaveLength(1);
-    expect((requested[0]!.payload as { reason: string }).reason).toContain("handshake");
+    const ended = eventsOfType(h, "conversation-ended");
+    expect(ended).toHaveLength(1);
+    expect((ended[0]!.payload as { reason: string }).reason).toContain("handshake");
     expect(h.provider.closed).toBe(true);
   });
 });
@@ -654,9 +656,9 @@ describe("the dial", () => {
     await h.append({ type: "events.iterate.com/voice-agent/created", payload: {} });
     await h.append(micFrame(1));
     await h.settle();
-    const requested = eventsOfType(h, "conversation-end-requested");
-    expect(requested).toHaveLength(1);
-    expect((requested[0]!.payload as { reason: string }).reason).toContain("refused");
+    const ended = eventsOfType(h, "conversation-ended");
+    expect(ended).toHaveLength(1);
+    expect((ended[0]!.payload as { reason: string }).reason).toContain("refused");
   });
 });
 
@@ -816,7 +818,7 @@ describe("a quiet listener", () => {
       await playOutEverything(h, 10_000);
       await h.settle();
     }
-    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
     expect(speakerMsDelivered(h)).toBe(70_000);
     /* The metronome kept running: the rows closed on the timeline. */
     expect(eventsOfType(h, "answer-transcript").length).toBeGreaterThan(0);
@@ -888,7 +890,7 @@ describe("the transcript", () => {
     expect(eventsOfType(h, "utterance-transcript")).toHaveLength(0);
     await h.append({
       type: "events.iterate.com/voice-agent/conversation-ended",
-      payload: { conversationId, reason: "button" },
+      payload: { activation: ACTIVATION, reason: "button" },
     });
     await h.settle();
     expect(eventsOfType(h, "utterance-transcript")).toHaveLength(1);
@@ -1052,18 +1054,17 @@ describe("the backend", () => {
     await h.settle();
     await h.advanceTime(1_000);
     await h.settle();
-    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
     h.provider.speech(1_500);
     h.provider.assistantSays(" Bye for now.", 1_000, 2_400);
     await playOutEverything(h, 1_000);
     /* Mid-goodbye: still not over. */
-    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
     h.provider.silence(1_000);
     await playOutEverything(h, 4_000);
-    const requested = eventsOfType(h, "conversation-end-requested");
-    expect(requested).toHaveLength(1);
-    expect((requested[0]!.payload as { reason: string }).reason).toContain("hung up");
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    const ended = eventsOfType(h, "conversation-ended");
+    expect(ended).toHaveLength(1);
+    expect((ended[0]!.payload as { reason: string }).reason).toContain("hung up");
     /* And the goodbye is on the record: the end path closed the open row
      * before the dial went. */
     expect(
@@ -1078,10 +1079,9 @@ describe("the backend", () => {
     await h.settle();
     await playOutEverything(h, 5_000);
     await h.settle();
-    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
     await playOutEverything(h, 4_000);
     await h.settle();
-    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(1);
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
   });
 
@@ -1093,8 +1093,8 @@ describe("the backend", () => {
     await h.settle();
     expect(eventsOfType(h, "answer-transcript")).toHaveLength(0);
     await h.append({
-      type: "events.iterate.com/voice-agent/conversation-end-requested",
-      payload: { conversationId, reason: "test" },
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { activation: ACTIVATION, reason: "test" },
     });
     await h.settle();
     const answers = eventsOfType(h, "answer-transcript");
@@ -1118,6 +1118,46 @@ describe("the backend", () => {
 /* ========================================================================== */
 
 describe("ending a call", () => {
+  it("ends A and accepts B's opening capture before A's terminal delivery settles", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    await h.append(
+      {
+        type: "events.iterate.com/voice-agent/conversation-ended",
+        payload: { activation: ACTIVATION, reason: "button" },
+      },
+      micFrame(2, "test-activation-b"),
+      micFrame(3, "test-activation-b"),
+    );
+    await h.settle();
+    expect(eventsOfType(h, "call-started")).toHaveLength(2);
+    h.provider.start();
+    await h.settle();
+    expect(h.provider.sentOfType("session.input_audio.append").map((event) => event.audio)).toEqual(
+      [micFrame(2, "test-activation-b").payload.pcm, micFrame(3, "test-activation-b").payload.pcm],
+    );
+  });
+
+  it("does not resurrect cancelled A when its delayed call-started record arrives", async () => {
+    const h = makeHarness();
+    await h.append({ type: "events.iterate.com/voice-agent/created", payload: {} });
+    await h.append({
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { activation: ACTIVATION, reason: "button" },
+    });
+    await h.settle();
+    await h.append({
+      type: "events.iterate.com/voice-agent/call-started",
+      payload: { activation: ACTIVATION, conversationId: "conv_late_a" },
+    });
+    await h.settle();
+    const calls = eventsOfType(h, "call-started").map(
+      (event) => event.payload as { activation: string; conversationId: string },
+    );
+    expect(calls.map((call) => call.activation)).toEqual([ACTIVATION]);
+    expect(h.state().call).toBeNull();
+  });
+
   it("a device-appended obituary silences the speaker, closes the session and frees the dial NOW", async () => {
     const h = makeHarness();
     const conversationId = await callIsLive(h);
@@ -1125,7 +1165,7 @@ describe("ending a call", () => {
     await h.settle();
     await h.append({
       type: "events.iterate.com/voice-agent/conversation-ended",
-      payload: { conversationId, reason: "button" },
+      payload: { activation: ACTIVATION, reason: "button" },
     });
     await h.settle();
     expect(speakerClears(h)).toHaveLength(1);
@@ -1134,7 +1174,7 @@ describe("ending a call", () => {
     /* The next frame, past the dying-breath guard, mints a fresh call on a
      * fresh socket. */
     await playOutEverything(h, 2_000);
-    await h.append(micFrame(20));
+    await h.append(micFrame(20, "test-activation-b"));
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(2);
     expect(h.sockets).toHaveLength(2);
@@ -1145,7 +1185,7 @@ describe("ending a call", () => {
     const conversationId = await callIsLive(h);
     await h.append({
       type: "events.iterate.com/voice-agent/conversation-ended",
-      payload: { conversationId, reason: "button" },
+      payload: { activation: ACTIVATION, reason: "button" },
     });
     await h.settle();
     /* The device drains its mic queue for ~100 ms after the far end hangs
@@ -1154,7 +1194,7 @@ describe("ending a call", () => {
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(1);
     await playOutEverything(h, 2_000);
-    await h.append(micFrame(22));
+    await h.append(micFrame(22, "test-activation-b"));
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(2);
   });
@@ -1164,7 +1204,7 @@ describe("ending a call", () => {
     await callIsLive(h);
     await h.append({
       type: "events.iterate.com/voice-agent/conversation-ended",
-      payload: { conversationId: "conv_somebody_else", reason: "button" },
+      payload: { activation: "somebody-else", reason: "button" },
     });
     await h.settle();
     expect(h.provider.closed).toBe(false);
@@ -1176,10 +1216,9 @@ describe("ending a call", () => {
     await callIsLive(h);
     await playOutEverything(h, IDLE_TIMEOUT_MS + 10_000);
     await h.settle();
-    const requested = eventsOfType(h, "conversation-end-requested");
-    expect(requested).toHaveLength(1);
-    expect((requested[0]!.payload as { reason: string }).reason).toContain("no input");
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    const ended = eventsOfType(h, "conversation-ended");
+    expect(ended).toHaveLength(1);
+    expect((ended[0]!.payload as { reason: string }).reason).toContain("no input");
     expect(h.state().call).toBeNull();
     expect(h.provider.sentOfType("session.close")).toHaveLength(1);
   });
@@ -1194,7 +1233,7 @@ describe("ending a call", () => {
     await playOutEverything(h, IDLE_TIMEOUT_MS + 10_000);
     await h.settle();
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
-    await h.append(micFrame(2));
+    await h.append(micFrame(2, "test-activation-b"));
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(2);
   });
@@ -1217,14 +1256,14 @@ describe("ending a call", () => {
     /* The person waits in silence past the deadline; the script is the activity. */
     await playOutEverything(h, IDLE_TIMEOUT_MS - 5_000);
     await h.settle();
-    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
     finish!();
     await h.settle();
     expect(h.provider.sentOfType("response.item.create")).toHaveLength(1);
     /* And once the backend is done and nothing else happens, the deadline bites. */
     await playOutEverything(h, IDLE_TIMEOUT_MS + 10_000);
     await h.settle();
-    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(1);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
   });
 
   it("does not end a call while it is still speaking, nor one the device keeps feeding", async () => {
@@ -1237,16 +1276,18 @@ describe("ending a call", () => {
       await playOutEverything(speaking, 10_000);
       await speaking.settle();
     }
-    expect(eventsOfType(speaking, "conversation-end-requested")).toHaveLength(0);
+    expect(eventsOfType(speaking, "conversation-ended")).toHaveLength(0);
 
     const fed = makeHarness();
     await callIsLive(fed);
     for (let tick = 0; tick < 8; tick++) {
-      await playOutEverything(fed, 10_000);
+      /* Advance on the input clock's normal cadence: a ten-second fake-clock
+       * jump is itself the classified stalled-clock terminal outcome. */
+      await playOutEverything(fed, 1_000);
       await fed.append({ type: "events.iterate.com/voice-agent/keepalive", payload: {} });
       await fed.settle();
     }
-    expect(eventsOfType(fed, "conversation-end-requested")).toHaveLength(0);
+    expect(eventsOfType(fed, "conversation-ended")).toHaveLength(0);
   });
 
   it("re-dials immediately when the provider closes under a quiet live call", async () => {
@@ -1259,7 +1300,7 @@ describe("ending a call", () => {
     const firstSocket = closed.provider;
     closed.provider.push({ type: "session.closed", reason: "expired", usage: { seconds: 9 } });
     await closed.settle();
-    expect(eventsOfType(closed, "conversation-end-requested")).toHaveLength(0);
+    expect(eventsOfType(closed, "conversation-ended")).toHaveLength(0);
     const recorded = eventsOfType(closed, "provider-disconnected");
     expect(recorded).toHaveLength(1);
     expect((recorded[0]!.payload as { reason: string }).reason).toContain("expired");
@@ -1271,7 +1312,7 @@ describe("ending a call", () => {
     await callIsLive(dropped);
     dropped.provider.close();
     await dropped.settle();
-    expect(eventsOfType(dropped, "conversation-end-requested")).toHaveLength(0);
+    expect(eventsOfType(dropped, "conversation-ended")).toHaveLength(0);
     expect(eventsOfType(dropped, "provider-disconnected")).toHaveLength(1);
     expect(dropped.provider.sentOfType("session.start")).toHaveLength(1);
   });
@@ -1286,11 +1327,9 @@ describe("ending a call", () => {
         expect(h.provider.sentOfType("session.start")).toHaveLength(1);
       }
     }
-    const requested = eventsOfType(h, "conversation-end-requested");
-    expect(requested).toHaveLength(1);
-    expect((requested[0]!.payload as { reason: string }).reason).toContain("3 times");
-    await h.settle();
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    const ended = eventsOfType(h, "conversation-ended");
+    expect(ended).toHaveLength(1);
+    expect((ended[0]!.payload as { reason: string }).reason).toContain("3 times");
   });
 
   it("does not revive an ended call when its abandoned provider closes or the facet restarts", async () => {
@@ -1298,8 +1337,8 @@ describe("ending a call", () => {
     const conversationId = await callIsLive(h);
     const abandoned = h.provider;
     await h.append({
-      type: "events.iterate.com/voice-agent/conversation-end-requested",
-      payload: { conversationId, reason: "button" },
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { activation: ACTIVATION, reason: "button" },
     });
     abandoned.close();
     await h.settle();
@@ -1307,7 +1346,7 @@ describe("ending a call", () => {
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
 
     h.crash();
-    await h.append(micFrame(99));
+    await h.append(micFrame(99, "test-activation-b"));
     await h.settle();
     const calls = eventsOfType(h, "call-started").map(
       (event) => (event.payload as { conversationId: string }).conversationId,
@@ -1359,8 +1398,8 @@ describe("eviction", () => {
     const h = makeHarness();
     const conversationId = await callIsLive(h);
     await h.append({
-      type: "events.iterate.com/voice-agent/conversation-end-requested",
-      payload: { conversationId, reason: "test" },
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { activation: ACTIVATION, reason: "test" },
     });
     await h.settle();
     await evict(h);
@@ -1377,8 +1416,8 @@ describe("eviction", () => {
     const conversationId = await callIsLive(h);
     const abandoned = h.provider;
     await h.append({
-      type: "events.iterate.com/voice-agent/conversation-end-requested",
-      payload: { conversationId, reason: "done" },
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { activation: ACTIVATION, reason: "done" },
     });
     await h.settle();
     const micSentBefore = abandoned.sentOfType("session.input_audio.append").length;

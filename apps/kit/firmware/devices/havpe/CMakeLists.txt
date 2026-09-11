@@ -1,7 +1,7 @@
 idf_component_register(
   SRCS
     havpe_device.c
-    havpe_modes.c
+    havpe_dial.c
     havpe_ui.c
   PRIV_INCLUDE_DIRS .
   REQUIRES
@@ -19,7 +19,6 @@ idf_component_register(
     esp_driver_i2c
     esp_driver_gpio
     mbedtls
-    nvs_flash
     espressif__led_strip)
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Werror)

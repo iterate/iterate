@@ -252,12 +252,6 @@ struct stackchan_avatar_owner {
   volatile uint32_t last_face_tap_left;
   volatile uint32_t last_touch_x;
   /*
-   * Zero hides the provider menu; otherwise highlighted cell + 1. A
-   * latest-only atomic slot like the avatar request: the menu is state the
-   * device owns, and the render task only ever needs the newest one.
-   */
-  volatile uint32_t menu_highlight_plus_one;
-  /*
    * THE IMAGE OVERLAY, following the menu's latest-state pattern. The staging
    * surface is a second 160x120 host-order RGB565 frame in PSRAM, written by
    * the fetch task only while no deadline is active; while the deadline is in
@@ -404,106 +398,6 @@ static void swap_rgb565_bytes_for_panel(void) {
   }
 }
 
-/*
- * THE PROVIDER MENU, drawn over the face for the moment it is open.
- *
- * Two cells, left and right — the same halves the touch hit-test uses, one
- * comparison on either side, so the drawing and the picking cannot
- * disagree. The labels come from a nine-glyph 5x7 alphabet: exactly the
- * letters GROK and OPENAI spend, because a menu with two words does not
- * need a font, it needs those two words.
- */
-enum {
-  MENU_CELL_TOP = 34U,
-  MENU_CELL_BOTTOM = 86U,
-  MENU_CELL_INSET = 2U,     /* from the panel edge and from the midline */
-  MENU_GLYPH_SCALE = 2U,    /* 5x7 source glyphs, so 20x28 on the panel */
-};
-
-/* Rows top-down, bit 4 = leftmost column. */
-static const uint8_t menu_glyphs[9][7] = {
-  /* G */ {0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0e},
-  /* R */ {0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11},
-  /* O */ {0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e},
-  /* K */ {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11},
-  /* P */ {0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10},
-  /* E */ {0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f},
-  /* N */ {0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11},
-  /* A */ {0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11},
-  /* I */ {0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e},
-};
-
-enum { MENU_G, MENU_R, MENU_O, MENU_K, MENU_P, MENU_E, MENU_N, MENU_A, MENU_I };
-static const uint8_t menu_word_grok[] = {MENU_G, MENU_R, MENU_O, MENU_K};
-static const uint8_t menu_word_openai[] = {
-  MENU_O, MENU_P, MENU_E, MENU_N, MENU_A, MENU_I};
-
-static void menu_fill_rect(
-    uint32_t left, uint32_t top, uint32_t right, uint32_t bottom,
-    uint16_t colour) {
-  for (uint32_t y = top; y < bottom && y < FACE_RENDER_HEIGHT; ++y) {
-    uint16_t *row = owner.framebuffer + (size_t)y * FACE_RENDER_WIDTH;
-    for (uint32_t x = left; x < right && x < FACE_RENDER_WIDTH; ++x) {
-      row[x] = colour;
-    }
-  }
-}
-
-static void menu_draw_word(
-    const uint8_t *word, size_t length, uint32_t centre_x, uint32_t centre_y,
-    uint16_t colour) {
-  const uint32_t advance = 5U * MENU_GLYPH_SCALE + MENU_GLYPH_SCALE;
-  const uint32_t width = (uint32_t)length * advance - MENU_GLYPH_SCALE;
-  uint32_t pen_x = centre_x - width / 2U;
-  const uint32_t pen_y = centre_y - (7U * MENU_GLYPH_SCALE) / 2U;
-  for (size_t index = 0U; index < length; ++index) {
-    const uint8_t *rows = menu_glyphs[word[index]];
-    for (uint32_t gy = 0U; gy < 7U; ++gy) {
-      for (uint32_t gx = 0U; gx < 5U; ++gx) {
-        if ((rows[gy] & (0x10U >> gx)) == 0U) continue;
-        menu_fill_rect(
-            pen_x + gx * MENU_GLYPH_SCALE,
-            pen_y + gy * MENU_GLYPH_SCALE,
-            pen_x + (gx + 1U) * MENU_GLYPH_SCALE,
-            pen_y + (gy + 1U) * MENU_GLYPH_SCALE,
-            colour);
-      }
-    }
-    pen_x += advance;
-  }
-}
-
-/* Analyzer task only, before the byte swap: host-order RGB565. */
-static void menu_draw_overlay(uint8_t highlighted) {
-  const uint32_t midline = FACE_RENDER_WIDTH / 2U;
-  for (uint8_t cell = 0U; cell < 2U; ++cell) {
-    const uint32_t left =
-        cell == 0U ? MENU_CELL_INSET : midline + MENU_CELL_INSET;
-    const uint32_t right =
-        cell == 0U ? midline - MENU_CELL_INSET
-                   : FACE_RENDER_WIDTH - MENU_CELL_INSET;
-    const bool bright = cell == highlighted;
-    /* Border first, fill inside it: 1 source pixel = 2 panel pixels. */
-    menu_fill_rect(
-        left, MENU_CELL_TOP, right, MENU_CELL_BOTTOM,
-        bright ? 0xffffU : 0x8410U);
-    menu_fill_rect(
-        left + 1U, MENU_CELL_TOP + 1U, right - 1U, MENU_CELL_BOTTOM - 1U,
-        bright ? 0x2104U : 0x18e3U);
-    if (cell == 0U) {
-      menu_draw_word(
-          menu_word_grok, sizeof(menu_word_grok),
-          (left + right) / 2U, (MENU_CELL_TOP + MENU_CELL_BOTTOM) / 2U,
-          bright ? 0xffffU : 0x8410U);
-    } else {
-      menu_draw_word(
-          menu_word_openai, sizeof(menu_word_openai),
-          (left + right) / 2U, (MENU_CELL_TOP + MENU_CELL_BOTTOM) / 2U,
-          bright ? 0xffffU : 0x8410U);
-    }
-  }
-}
-
 /* Analyzer task only (prepare_avatar_frame_under_lock), so no lock. */
 static bool face_dozing_now(void) {
   static struct iterate_kit_face_wake wake;
@@ -591,11 +485,6 @@ static bool prepare_avatar_frame_under_lock(
         return false;
       }
     }
-  }
-  {
-    const uint32_t menu = __atomic_load_n(
-        &owner.menu_highlight_plus_one, __ATOMIC_ACQUIRE);
-    if (menu != 0U) menu_draw_overlay((uint8_t)(menu - 1U));
   }
   swap_rgb565_bytes_for_panel();
   *render_cpu_us = saturating_elapsed_us(now_us_wide(), started_at_us);
@@ -1230,17 +1119,6 @@ void iterate_kit_stackchan_avatar_inject_face_tap(uint16_t x) {
       (uint32_t)x < (uint32_t)(BSP_LCD_H_RES / 2U) ? 1U : 0U,
       __ATOMIC_RELEASE);
   iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.pending_face_taps);
-}
-
-void iterate_kit_stackchan_avatar_show_menu(uint8_t highlighted) {
-  __atomic_store_n(
-      &owner.menu_highlight_plus_one,
-      (uint32_t)highlighted + 1U,
-      __ATOMIC_RELEASE);
-}
-
-void iterate_kit_stackchan_avatar_hide_menu(void) {
-  __atomic_store_n(&owner.menu_highlight_plus_one, 0U, __ATOMIC_RELEASE);
 }
 
 bool IRAM_ATTR iterate_kit_stackchan_avatar_observe_playout(

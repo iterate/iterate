@@ -122,7 +122,6 @@ export async function startChatCall(
          * for the JS driver. */
         Animated.timing(pulse, { toValue: level, duration: 90, useNativeDriver: false }).start();
       },
-      now: () => Date.now(),
     });
   } catch (error) {
     activeCall = null;
