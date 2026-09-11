@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import { createLiveStateStore } from "./live-state/store.ts";
+import { isLiveStateSnapshot } from "./live-state/protocol.ts";
 import type { LiveStateRpc, LiveStateSubscriptionHandle } from "./live-state/types.ts";
 
 export type CapnWebRoot = object &
@@ -259,9 +260,10 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
   // oxlint-disable-next-line react-hooks/exhaustive-deps -- this memo is intentionally keyed; deps complete the caller's logical-node identity
   const store = useMemo(() => createLiveStateStore<State>(), [scope, ...deps]);
   // oxlint-disable-next-line react-hooks/exhaustive-deps -- store is the logical subscription identity; its replacement must reset the retry budget
-  const subscribeRetries = useMemo(() => ({ count: 0 }), [store]);
+  const subscribeRetries = useMemo(() => ({ count: 0, resyncs: 0 }), [store]);
   const refresh = useCallback(() => {
     subscribeRetries.count = 0;
+    subscribeRetries.resyncs = 0;
     setEpoch((current) => current + 1);
   }, [subscribeRetries]);
   const [subscriptionState, setSubscriptionState] = useState<{
@@ -316,9 +318,20 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
         const pending = liveRef.current(root as Root).subscribe(
           (update) => {
             if (disposed || stale) return;
-            store.apply(update, refresh);
+            try {
+              store.apply(update, () => {
+                throw new Error("Live-state revision gap");
+              });
+              if (!isLiveStateSnapshot(update)) subscribeRetries.resyncs = 0;
+            } catch (error) {
+              // A successful subscribe alone cannot reset this budget: a host
+              // could repeatedly seed a valid snapshot followed by a bad patch.
+              const shouldResync = subscribeRetries.resyncs < MAX_SUBSCRIBE_RETRIES;
+              if (shouldResync) subscribeRetries.resyncs += 1;
+              report(error, shouldResync);
+            }
           },
-          { patchVersion: 2 },
+          { patchVersion: 3 },
         );
         timeout = setTimeout(
           () =>

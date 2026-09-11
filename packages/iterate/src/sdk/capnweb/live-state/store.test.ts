@@ -2,6 +2,22 @@ import { describe, expect, it, vi } from "vitest";
 import { createLiveStateStore } from "./store.ts";
 
 describe("createLiveStateStore", () => {
+  it("accepts both codecs, reseeds a compact revision gap, and preserves state after a malformed patch", () => {
+    const store = createLiveStateStore<{ text: string }>();
+    const resync = vi.fn();
+    store.apply({ type: "snapshot", revision: 0, state: { text: "initial" } }, resync);
+    store.apply({ p: [0, 1, { 0: [7, " text"] }] }, resync);
+    expect(store.getState()).toEqual({ text: "initial text" });
+    const previous = store.getState();
+    expect(() => store.apply({ p: [1, 2, { 0: [99, " corrupt"] }] }, resync)).toThrow("baseline");
+    expect(store.getState()).toBe(previous);
+    store.apply({ p: [2, 3, { 0: "missed" }] }, resync);
+    expect(resync).toHaveBeenCalledOnce();
+    expect(store.getState()).toBe(previous);
+    store.apply({ s: [0, { text: "reconnected" }] }, resync);
+    store.apply({ p: [0, 1, { 0: [11, " correctly"] }] }, resync);
+    expect(store.getState()).toEqual({ text: "reconnected correctly" });
+  });
   it("holds nothing until the first snapshot, then folds patches", () => {
     const store = createLiveStateStore<{ n: number }>();
     const resync = vi.fn();

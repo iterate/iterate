@@ -40,6 +40,11 @@ function makeRoot() {
       sink({ revision: 0, state: { name }, type: "snapshot" });
     },
     root,
+    emit(update: LiveUpdate<State>) {
+      const sink = sinks.at(-1);
+      if (!sink) throw new Error("live-state subscription is not ready");
+      sink(update);
+    },
     unsubscribe,
   };
 }
@@ -208,5 +213,35 @@ test("bounds terminal retries per logical subscription", async () => {
 
   await act(async () => vi.advanceTimersByTimeAsync(60_000));
   expect(subscribe).toHaveBeenCalledTimes(6);
+  await act(async () => reactRoot.unmount());
+});
+
+test("bounds corrupt compact-patch recovery even when each new subscription succeeds", async () => {
+  vi.useFakeTimers();
+  const connection = makeRoot();
+  const subscribe = vi.spyOn(connection.root.liveState, "subscribe");
+  function Harness() {
+    const { status, value, error } = useLiveState(
+      (root: typeof connection.root) => root.liveState,
+      (state) => state.name,
+      [],
+      { root: connection.root },
+    );
+    return createElement("output", { "data-status": status, "data-error": error }, value);
+  }
+  const container = document.body.appendChild(document.createElement("div"));
+  const reactRoot = createRoot(container);
+  await act(async () => reactRoot.render(createElement(Harness)));
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await act(async () => connection.emit({ s: [0, { name: "valid" }] }));
+    await act(async () => connection.emit({ p: [0, 1, { 0: [99, " invalid"] }] }));
+    expect(container.querySelector("output")?.textContent).toBe("valid");
+    expect(container.querySelector("output")?.getAttribute("data-status")).toBe("error");
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+  }
+  expect(subscribe).toHaveBeenCalledTimes(3);
+  expect(container.querySelector("output")?.getAttribute("data-error")).toContain("baseline");
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
+  expect(subscribe).toHaveBeenCalledTimes(3);
   await act(async () => reactRoot.unmount());
 });

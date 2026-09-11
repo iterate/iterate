@@ -346,7 +346,7 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
     } else {
       registry.refreshLive();
     }
-    return registry.live.readSince(args.cursor);
+    return registry.live.readSince(args.cursor, { patchVersion: 3 });
   }
 
   /** Direct subscriptions retain their callbacks across the Workers RPC hop. */

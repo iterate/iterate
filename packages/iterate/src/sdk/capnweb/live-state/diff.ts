@@ -128,7 +128,7 @@ export function applyPatch<State>(prev: State, patch: LiveStatePatch): State {
  * their own enumerable keys, so per-key diffing would misread them (see the
  * `diff` docstring) — they are leaves, replaced wholesale.
  */
-function isPlainObject(value: unknown): value is Record<string, unknown> {
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null) return false;
   const proto: unknown = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;

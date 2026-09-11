@@ -3,7 +3,12 @@
  * No network latency is included; bytes and synchronous CPU are the measurements. */
 import { appendText, sliceText } from "@iterate-com/shared/chunked-text";
 import { createJsonByteLength } from "@iterate-com/shared/json-byte-length";
-import { createLiveStateStore, LiveState, type LiveStateCursor } from "iterate/sdk/capnweb";
+import {
+  createLiveStateStore,
+  LiveState,
+  liveStateRevision,
+  type LiveStateCursor,
+} from "iterate/sdk/capnweb";
 
 const fixedSteps = Array.from({ length: 12 }, (_, index) => ({
   id: `code-${index}`,
@@ -14,7 +19,7 @@ const snapshot = (text: ReturnType<typeof appendText>) => ({
   steps: [...fixedSteps, { id: "llm", kind: "llm", text }],
 });
 
-function benchmark(size: number, chunkSize: number) {
+function benchmark(size: number, chunkSize: number, patchVersion: 2 | 3) {
   let text = appendText("", "");
   const links: {
     engine: LiveState<ReturnType<typeof snapshot>>;
@@ -40,7 +45,7 @@ function benchmark(size: number, chunkSize: number) {
     byteLength(state);
     for (const link of links) {
       link.engine.setState(state);
-      const read = link.engine.readSince(link.cursor);
+      const read = link.engine.readSince(link.cursor, { patchVersion });
       const encoded = JSON.stringify(read);
       link.bytes += encoder.encode(encoded).byteLength;
       link.frames += 1;
@@ -53,12 +58,13 @@ function benchmark(size: number, chunkSize: number) {
       });
       link.cursor = {
         epoch: decoded.epoch,
-        revision: decoded.update.type === "snapshot" ? decoded.update.revision : decoded.update.to,
+        revision: liveStateRevision(decoded.update),
       };
       state = link.mirror.getState()!;
       const currentText = state.steps.at(-1)!;
       if (!("text" in currentText)) throw new Error("Missing live text");
-      if (text.length === 32768) link.sealedGroup = currentText.text.groups[0];
+      if (text.length >= 32768 && link.sealedGroup === undefined)
+        link.sealedGroup = currentText.text.groups[0];
       if (text.length > 32768 && link.sealedGroup !== currentText.text.groups[0]) {
         throw new Error("Transport replaced a sealed text group");
       }
@@ -72,6 +78,7 @@ function benchmark(size: number, chunkSize: number) {
   return {
     size,
     chunkSize,
+    patchVersion,
     durationMs,
     links: links.map(({ bytes, frames }) => ({ bytes, frames })),
   };
@@ -79,7 +86,10 @@ function benchmark(size: number, chunkSize: number) {
 
 console.log(
   JSON.stringify(
-    [65536, 1048576, 4194304].map((size) => benchmark(size, 1024)),
+    ([2, 3] as const).flatMap((version) => [
+      ...[16, 48, 128, 1024].map((chunkSize) => benchmark(65536, chunkSize, version)),
+      ...[1048576, 4194304].map((size) => benchmark(size, 1024, version)),
+    ]),
     null,
     2,
   ),

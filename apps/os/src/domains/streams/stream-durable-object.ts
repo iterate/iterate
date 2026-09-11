@@ -23,6 +23,8 @@ import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
 import { StreamRuntimeMetrics } from "iterate/processors";
 import {
   createLiveStateStore,
+  isLiveStateSnapshot,
+  liveStateRevision,
   disposeIgnoredRpcResult,
   LiveState,
   LiveStateRpcTarget,
@@ -1106,13 +1108,13 @@ export class StreamDurableObject extends DurableObject<Env> {
         try {
           const { epoch, update } = read;
           if (!update) return;
-          if (epoch !== cursor?.epoch && update.type !== "snapshot") {
+          if (epoch !== cursor?.epoch && !isLiveStateSnapshot(update)) {
             throw new Error("Facet live-state incarnation changed without a snapshot");
           }
           mirror.apply(update, () => {
             throw new Error("Facet live-state revision gap");
           });
-          cursor = { epoch, revision: update.type === "snapshot" ? update.revision : update.to };
+          cursor = { epoch, revision: liveStateRevision(update) };
         } finally {
           disposeAcknowledgedRpcResult(read, "facet-live-state");
         }
