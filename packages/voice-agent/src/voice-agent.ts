@@ -299,6 +299,16 @@ const HANG_UP_GOODBYE_GRACE_MS = 8_000;
  * playout buffer (the firmware prefills 150 ms) plus one frame in flight.
  */
 const GOODBYE_PLAYOUT_ALLOWANCE_MS = 500;
+/**
+ * A PROVIDER DROP IS A RE-DIAL, NOT A HANG-UP. OpenAI's socket closed under a
+ * live three-minute call with no `session.closed` first (2026-09-11, 2:51 in),
+ * and the facet ended the conversation for it — the device saw "call ended
+ * by the bridge" in the middle of a sentence. A fresh session is seeded with
+ * the transcript so far and the next device frame opens it, the same way an
+ * eviction is recovered; only a provider that keeps dropping ends the call.
+ */
+const PROVIDER_CLOSES_BEFORE_GIVING_UP = 3;
+const PROVIDER_CLOSES_WINDOW_MS = 120_000;
 
 /**
  * How much conversation the fold remembers, and so how much a fresh provider
@@ -712,6 +722,12 @@ export const VoiceAgentContract = defineProcessorContract({
       description: "The provider reported an error, verbatim.",
       payloadSchema: z.looseObject({ conversationId: z.string(), message: z.string() }),
     },
+    "events.iterate.com/voice-agent/provider-disconnected": {
+      description:
+        "The provider's session or socket closed under a live call; the next device frame " +
+        "re-dials, seeded with the transcript so far.",
+      payloadSchema: z.looseObject({ conversationId: z.string(), reason: z.string() }),
+    },
 
     /*
      * THE DURABLE TRANSCRIPT — what was actually said, in words, one event
@@ -815,6 +831,7 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/conversation-end-requested",
     "events.iterate.com/voice-agent/conversation-ended",
     "events.iterate.com/voice-agent/provider-error",
+    "events.iterate.com/voice-agent/provider-disconnected",
     "events.iterate.com/voice-agent/utterance-transcript",
     "events.iterate.com/voice-agent/answer-transcript",
     "events.iterate.com/voice-agent/backend-reply",
@@ -1055,6 +1072,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
   #lastDeviceInputAtStreamMsMirror = 0;
   /** When the last dial FAILED, for the retry cooldown. */
   #lastDialFailedAtFacetMs = 0;
+  /** When the provider closed under a live call, newest last; see #providerClosed. */
+  #providerClosesAtFacetMs: number[] = [];
+  /** The call an end has been requested for — the reducer's word reaches a dial's callbacks late. */
+  #endRequestedFor: string | null = null;
   /**
    * The mirror's outbox, drained by ONE background flush at a time. The
    * drain swaps this queue out whole and sends it as ONE variadic append, so
@@ -1428,12 +1449,15 @@ export class VoiceAgentProcessor extends StreamProcessor<
         this.#flushTurns(dial, append, false);
       });
 
-      socket.addEventListener("close", () => {
+      socket.addEventListener("close", (event: CloseEvent) => {
         if (this.#dial !== dial) return;
         this.#dial = null;
         this.#flushTurns(dial, append, true);
-        this.runInBackground(() =>
-          this.#requestEnd(conversationId, "socket-closed", "the provider's socket closed", append),
+        this.#providerClosed(
+          conversationId,
+          dialStartedAtFacetMs,
+          `the provider's socket closed (${String(event.code)}${event.reason ? ` ${event.reason}` : ""})`,
+          append,
         );
       });
 
@@ -1750,16 +1774,16 @@ export class VoiceAgentProcessor extends StreamProcessor<
 
       case "session.closed": {
         /* The provider finalized the session — expired, a safety filter, a
-         * lost upstream. The socket close that follows shares the key class,
-         * so whichever lands first writes the reason. */
+         * lost upstream. The socket close follows; the dial is dropped here
+         * so that close is a stranger's, and the call re-dials on the next
+         * device frame (see #providerClosed). */
         this.#flushTurns(dial, append, true);
-        this.runInBackground(() =>
-          this.#requestEnd(
-            conversationId,
-            "socket-closed",
-            `the provider closed the session (${String(live.reason ?? "unknown")})`,
-            append,
-          ),
+        if (this.#dial === dial) this.#dial = null;
+        this.#providerClosed(
+          conversationId,
+          dialStartedAtFacetMs,
+          `the provider closed the session (${String(live.reason ?? "unknown")})`,
+          append,
         );
         return;
       }
@@ -2148,12 +2172,60 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * over. The key class scopes the dedupe: a retried decision collides with
    * itself and never with a different reason's.
    */
+  /*
+   * The provider went away under a call the log still says is open. Recorded
+   * durably with its reason; the call stays open, so the next device frame's
+   * caught-up pass re-dials (the eviction path), seeded with the transcript.
+   * A hang-up in progress (end requested) or a call already over is left to
+   * its own ending. Three closes inside two minutes is a provider that will
+   * not hold a session, and then the call ends with the reason on the log.
+   */
+  #providerClosed(
+    conversationId: string,
+    dialStartedAtFacetMs: number,
+    reason: string,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+  ): void {
+    /* The dial's state snapshot predates its own call-started fold, so the
+     * call's standing is read from this instance: an end already requested
+     * for it, or a conversation ended since the dial began, is not ours. */
+    if (
+      this.#endRequestedFor === conversationId ||
+      (this.#conversationEndedAtMs !== null && this.#conversationEndedAtMs >= dialStartedAtFacetMs)
+    ) {
+      return;
+    }
+    const nowAtFacetMs = this.deps.nowAtFacetMs();
+    this.#providerClosesAtFacetMs = [
+      ...this.#providerClosesAtFacetMs.filter(
+        (at) => nowAtFacetMs - at < PROVIDER_CLOSES_WINDOW_MS,
+      ),
+      nowAtFacetMs,
+    ];
+    const gaveUp = this.#providerClosesAtFacetMs.length >= PROVIDER_CLOSES_BEFORE_GIVING_UP;
+    this.runInBackground(async () => {
+      await append({
+        type: "events.iterate.com/voice-agent/provider-disconnected",
+        payload: { conversationId, reason },
+      });
+      if (gaveUp) {
+        await this.#requestEnd(
+          conversationId,
+          "socket-closed",
+          `${reason}; the provider closed ${String(PROVIDER_CLOSES_BEFORE_GIVING_UP)} times in two minutes`,
+          append,
+        );
+      }
+    });
+  }
+
   async #requestEnd(
     conversationId: string,
     keyClass: "dial-failed" | "handshake-timeout" | "socket-closed" | "idle" | "hang-up",
     reason: string,
     append: ProcessEventArgs<VoiceAgentContract>["append"],
   ): Promise<void> {
+    this.#endRequestedFor = conversationId;
     await append({
       type: "events.iterate.com/voice-agent/conversation-end-requested",
       idempotencyKey: this.idempotencyKey(`${keyClass}:${conversationId}`),

@@ -1205,22 +1205,53 @@ describe("ending a call", () => {
     expect(eventsOfType(fed, "conversation-end-requested")).toHaveLength(0);
   });
 
-  it("asks to end when the provider closes the session or the socket", async () => {
+  it("re-dials when the provider closes the session or the socket under a live call", async () => {
+    /* OpenAI's socket dropped 2:51 into a live call with no session.closed
+     * first (2026-09-11); ending the conversation for it cut a sentence in
+     * half. The drop is recorded and the next device frame re-dials. */
     const closed = makeHarness();
     await callIsLive(closed);
+    const firstSocket = closed.provider;
     closed.provider.push({ type: "session.closed", reason: "expired", usage: { seconds: 9 } });
     await closed.settle();
-    let requested = eventsOfType(closed, "conversation-end-requested");
-    expect(requested).toHaveLength(1);
-    expect((requested[0]!.payload as { reason: string }).reason).toContain("expired");
+    expect(eventsOfType(closed, "conversation-end-requested")).toHaveLength(0);
+    const recorded = eventsOfType(closed, "provider-disconnected");
+    expect(recorded).toHaveLength(1);
+    expect((recorded[0]!.payload as { reason: string }).reason).toContain("expired");
+    await closed.append(micFrame(1));
+    await closed.settle();
+    expect(closed.provider).not.toBe(firstSocket);
+    expect(closed.provider.sentOfType("session.start")).toHaveLength(1);
+    expect(eventsOfType(closed, "conversation-ended")).toHaveLength(0);
 
     const dropped = makeHarness();
     await callIsLive(dropped);
     dropped.provider.close();
     await dropped.settle();
-    requested = eventsOfType(dropped, "conversation-end-requested");
+    expect(eventsOfType(dropped, "conversation-end-requested")).toHaveLength(0);
+    expect(eventsOfType(dropped, "provider-disconnected")).toHaveLength(1);
+    await dropped.append(micFrame(1));
+    await dropped.settle();
+    expect(dropped.provider.sentOfType("session.start")).toHaveLength(1);
+  });
+
+  it("gives up on a provider that closes three times in two minutes", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    for (let drop = 0; drop < 3; drop++) {
+      h.provider.close();
+      await h.settle();
+      if (drop < 2) {
+        await h.append(micFrame(10 + drop));
+        await h.settle();
+        expect(h.provider.sentOfType("session.start")).toHaveLength(1);
+      }
+    }
+    const requested = eventsOfType(h, "conversation-end-requested");
     expect(requested).toHaveLength(1);
-    expect(eventsOfType(dropped, "conversation-ended")).toHaveLength(1);
+    expect((requested[0]!.payload as { reason: string }).reason).toContain("3 times");
+    await h.settle();
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
   });
 
   it("writes the provider's error where somebody can read it", async () => {
