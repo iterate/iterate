@@ -1688,9 +1688,9 @@ DO name and the host label are one name.
 client discovers the AS from `/.well-known/oauth-protected-resource/mcp`, registers (CIMD by URL, or
 DCR), and sends the user to `/authorize`; the consent page is the project selection — her projects
 as checkboxes, all checked — and approving mints a grant whose props name her and the checked
-projects. The token then reaches three tools: `whoami`, `list_projects` and
-`itx.invoke({ project?, expression, args? })` — the expression evaluated through THAT project's root
-context, in-process, under her principal (`invokeAs`), so what it appends carries her; `project` is
+projects. The token then reaches ONE tool: `run({ project?, script, args? })` — the text of
+`async (itx, ...args) => …` run (`itx.run`) in THAT project's root context, in-process, under her
+principal (`invokeAs`), so what it appends carries her; `project` is
 optional when the grant reaches exactly one, required for the admin secret (which reaches every
 project as a bearer, `resolveExternalToken`), refused outside the grant. A project's own secret is a
 bearer too — it names its project with `?project=<id>` on the `/mcp` URL — and acts as `project:<id>`. MCP is not a parallel capability
@@ -1698,8 +1698,8 @@ API: a tool call reaches what an expression reaches, for any project the grant n
 
 ```ts
 const { accessToken } = await grantFlow(env, adaCookie, { resource: `${ORIGIN}/mcp`, choose: (ids) => ids.filter((id) => id !== "oa-three") });
-expect(tools.map((t) => t.name)).toEqual(["whoami", "list_projects", "create_project", "itx.invoke"]);
-expect((await invoke({ project: "oa-one", expression: "itx.whoami()" })).result).toEqual({ projectId: "oa-one", path: "/" });
+expect(tools.map((t) => t.name)).toEqual(["run"]);
+expect((await run({ project: "oa-one", script: "async (itx) => itx.whoami()" })).result).toEqual({ projectId: "oa-one", path: "/" });
 expect(appended.result[0].source.principal).toEqual({ actor: "user_oauth-ada@example.com", email: "oauth-ada@example.com" });
 expect((await invoke({ project: "oa-three", expression: "itx.whoami()" })).text).toContain("outside this token's grant");
 expect((await invoke({ expression: "itx.whoami()" })).text).toMatch(/pass project — this token reaches oa-one, oa-two/);

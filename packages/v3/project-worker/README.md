@@ -26,9 +26,10 @@ mints the key, `.mintToken()` a project token).
 
 An MCP client connects to `https://<worker>/mcp` through the same login: the OAuth 2.1 AS is the
 worker itself (`/authorize`, `/oauth/token`, `/oauth/register`, `/.well-known/*`), the consent page
-picks the projects the token may reach, and the tools are `whoami`, `list_projects` and
-`itx.invoke({ project?, expression, args? })` — one expression, evaluated through that project's
-context under the caller's principal (a project is created on the console or over `/api`). The
+picks the projects the token may reach, and it exposes ONE tool, `run({ project?, script, args? })`
+— the text of `async (itx, ...args) => …` evaluated in that project's context under the caller's
+principal (`run(script)` when the token reaches exactly one project). Whatever a caller might read —
+who it is, which projects — is a one-line script; a project is created on the console or over `/api`. The
 admin secret and a project's own secret (`/mcp?project=<id>`) are bearers on `/mcp` too.
 
 ## Read next

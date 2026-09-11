@@ -208,15 +208,17 @@ test("first Claude consent creates the organization and project in the SPA befor
     });
     expect(exchange.status, await exchange.clone().text()).toBe(200);
     const tokens = (await exchange.json()) as { access_token: string };
-    const identity = await mcp(resource, tokens.access_token, "whoami");
-    expect(JSON.parse(identity.result.content[0].text)).toMatchObject({ email });
-    const projects = await mcp(resource, tokens.access_token, "list_projects");
-    expect(projects.result.isError).toBe(false);
-    expect(projects.result.content[0].text).toContain(project);
-    expect(projects.result.content[0].text).not.toContain(otherProject);
-    const denied = await mcp(resource, tokens.access_token, "itx.invoke", {
+    // The one MCP tool is `run`: the Claude grant reaches the CONSENTED project (a run there succeeds
+    // and itx.whoami() names it) and no other (a run in the unselected project is refused).
+    const reached = await mcp(resource, tokens.access_token, "run", {
+      project,
+      script: "async (itx) => itx.whoami()",
+    });
+    expect(reached.result.isError).toBe(false);
+    expect(reached.result.content[0].text).toContain(project);
+    const denied = await mcp(resource, tokens.access_token, "run", {
       project: otherProject,
-      expression: "itx.kv.get('x')",
+      script: "async (itx) => itx.whoami()",
     });
     expect(denied.result.isError).toBe(true);
     // The issuer grant and the Claude grant are the only two sessions created.

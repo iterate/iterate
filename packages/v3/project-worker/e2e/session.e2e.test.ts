@@ -148,12 +148,13 @@ deployedOnly(
         jsonrpc: "2.0",
         id: 1,
         method: "tools/call",
-        params: { name: "list_projects", arguments: {} },
+        // the one MCP tool is `run`; this token reaches exactly one project, so `run(script)` omits it
+        params: { name: "run", arguments: { script: "async (itx) => itx.whoami()" } },
       }),
     });
     const body = await response.text();
     expect(response.status, body).toBe(200);
-    expect(body).toContain(projectId);
+    expect(body).toContain(projectId); // itx.whoami() names the project the token reaches
     await api.logout();
     const ended = await fetch(mcp, { headers: { Authorization: `Bearer ${token}` } });
     expect(ended.status).toBe(401);

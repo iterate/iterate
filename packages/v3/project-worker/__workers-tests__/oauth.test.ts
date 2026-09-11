@@ -187,11 +187,18 @@ test("discovery advertises CIMD AND DCR: the registration endpoint is published 
 test("the configured header bearer is the same administrator at both protocols", async () => {
   const { root } = await rpc(adminSecret);
   expect(await root.whoami()).toEqual({ actor: "admin" });
-  expect(JSON.parse((await tool(adminSecret, "whoami")).body.result.content[0].text)).toEqual({
-    actor: "admin",
-  });
+  expect(
+    JSON.parse(
+      (
+        await tool(adminSecret, "run", {
+          project: "admin-probe",
+          script: "async (itx) => itx.whoami()",
+        })
+      ).body.result.content[0].text,
+    ),
+  ).toEqual({ projectId: "admin-probe", path: "/" });
   expect((await call("/api", { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
-  expect((await tool("wrong", "whoami")).status).toBe(401);
+  expect((await tool("wrong", "run", { project: "x", script: "async () => 1" })).status).toBe(401);
 });
 
 test("one provider grant can cover MCP and Cap'n Web while retaining membership and its project ceiling", async () => {
@@ -204,15 +211,15 @@ test("one provider grant can cover MCP and Cap'n Web while retaining membership 
   await expect(root.projects.get("oauth-b")).rejects.toThrow(/outside/);
   const context = root.projects.get("oauth-a");
   await expect(context.mintToken()).rejects.toThrow(/FORBIDDEN|delegation|token/i);
-  expect((await tool(token, "whoami")).status).toBe(200);
+  expect((await tool(token, "run", { script: "async () => 1" })).status).toBe(200);
   const org = (await directory(bindings.DB).getProject("oauth-a"))!.orgId;
   await bindings.DB.prepare("DELETE FROM org_members WHERE user_id = ? AND org_id = ?")
     .bind(flow.user.id, org)
     .run();
   expect(await root.projects.list()).toEqual([]);
   expect(
-    (await tool(token, "itx.invoke", { project: "oauth-a", expression: "itx.kv.get('x')" })).body
-      .result.isError,
+    (await tool(token, "run", { project: "oauth-a", script: "async (itx) => itx.kv.get('x')" }))
+      .body.result.isError,
   ).toBe(true);
   await bindings.DB.prepare("INSERT INTO org_members (user_id, org_id) VALUES (?, ?)")
     .bind(flow.user.id, org)
@@ -266,7 +273,9 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   )
     .bind(userId, grantId, Date.now())
     .run();
-  expect((await tool(renewed.access_token, "whoami")).status).toBe(401);
+  expect(
+    (await tool(renewed.access_token, "run", { project: "x", script: "async () => 1" })).status,
+  ).toBe(401);
   expect(
     (
       await call("/oauth/token", {
@@ -462,10 +471,12 @@ test("console and project browsers use the same CIMD flow and independent grants
     expect(storedPersonal!.expiresAt * 1000 - Date.now()).toBeGreaterThan(29 * 24 * 3600_000);
     // The provider rounds TTLs to seconds; the displayed deadline must agree with its actual token.
     expect(Math.abs(storedPersonal!.expiresAt * 1000 - personal.expiresAt)).toBeLessThan(2000);
-    expect(JSON.parse((await tool(personal.token, "whoami")).body.result.content[0].text)).toEqual({
-      actor: user.id,
-      email: user.email,
-    });
+    expect(
+      JSON.parse(
+        (await tool(personal.token, "run", { script: "async (itx) => itx.whoami()" })).body.result
+          .content[0].text,
+      ),
+    ).toEqual({ projectId: "browser-a", path: "/" });
     const { root: personalApi } = await rpc(personal.token);
     expect((await personalApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
       "browser-a",
@@ -499,7 +510,9 @@ test("console and project browsers use the same CIMD flow and independent grants
         .first(),
     ).toBeNull();
     await consoleLogin.root.grants.end(personalId!);
-    expect((await tool(personal.token, "whoami")).status).toBe(401);
+    expect(
+      (await tool(personal.token, "run", { project: "browser-a", script: "async () => 1" })).status,
+    ).toBe(401);
     const cookieRequest = new Request(`${ORIGIN}/`, { headers: { cookie: consoleLogin.cookie } });
     const heldSession = appSession(bindings.BROWSER_SESSION, cookieRequest)!;
     const bearerBefore = await heldSession.bearer();

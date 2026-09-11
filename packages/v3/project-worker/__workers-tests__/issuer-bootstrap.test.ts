@@ -105,24 +105,30 @@ test("first consent creates organization and project through the ordinary sessio
   expect(exchange.status, await exchange.clone().text()).toBe(200);
   const tokens = await exchange.json<{ access_token: string }>();
   expect(tokens.access_token.split(":")[0]).toBe(user.id);
-  const mcp = await SELF.fetch(`${origin}/mcp`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${tokens.access_token}`,
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: { name: "list_projects", arguments: {} },
-    }),
-  });
-  expect(mcp.status).toBe(200);
-  const body = await mcp.text();
-  expect(body).toContain("first-consent-project");
-  expect(body).not.toContain("unselected-consent-project");
+  // The one MCP tool is `run`. The grant reaches the CONSENTED project and no other, proven at the
+  // tool: a run in `first-consent-project` succeeds (itx.whoami() names it); a run in the project the
+  // consent did NOT select is refused before it evaluates ("outside this token's grant").
+  const runTool = (project: string) =>
+    SELF.fetch(`${origin}/mcp`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokens.access_token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "run", arguments: { project, script: "async (itx) => itx.whoami()" } },
+      }),
+    });
+  const selected = await runTool("first-consent-project");
+  expect(selected.status).toBe(200);
+  const selectedBody = await selected.text();
+  expect(selectedBody).toContain("first-consent-project");
+  const unselectedBody = await (await runTool("unselected-consent-project")).text();
+  expect(unselectedBody).toContain("outside this token");
   expect((await api.grants.list()).items).toHaveLength(2);
   await api.logout();
   // These calls land before the 30s live lease refresh: issuance still reads D1 now.

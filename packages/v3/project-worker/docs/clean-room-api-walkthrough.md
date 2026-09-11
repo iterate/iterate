@@ -138,7 +138,7 @@ packages/v3/project-worker/
                                  doors (POST /login /logout /projects /authorize as forms), the Start server
                                  entry as the provider's default handler, the D1 directory (users → orgs →
                                  projects; a project's id IS its slug), /mcp — the ONE MCP server for every
-                                 project (whoami, list_projects, itx.invoke); control-plane.sql is the schema
+                                 project (ONE tool: run(project?, script)); control-plane.sql is the schema
     iterate-context.ts           IterateContext, the client-facing RpcTarget: a PROXY in front of the DO —
                                  cd · invoke · provide · subscribe · mintToken · rotateApiKey;
                                  RewriteRuleHandle / SubscriptionHandle (disposable); the DO-name codec
@@ -1477,11 +1477,11 @@ forms post there until the page hydrates) — `POST /login`,
 projects as checkboxes, all checked; approving grants the client the user on the checked ones
 (`props: { actor, email, projects }`; a user with nothing to choose from grants a `projects`-less
 grant that follows their membership).
-`/mcp` is the ONE MCP server for every project, three tools: `whoami` (the props), `list_projects`
-(what the bearer reaches), and `itx.invoke({ project?, expression, args? })` — the expression
-evaluated through THAT project's root context in-process under the bearer's principal (the DO's
-`invokeAs`), `project` optional when the grant reaches exactly one, required for the admin secret,
-refused outside the grant (apps/os's `resolveToolProject`) and refused as a context name (the
+`/mcp` is the ONE MCP server for every project, ONE tool: `run({ project?, script, args? })` — the
+text of `async (itx, ...args) => …` run (`itx.run`) in THAT project's root context in-process under
+the bearer's principal (the DO's `invokeAs`), `project` optional when the grant reaches exactly one,
+required for the admin secret, refused outside the grant (apps/os's `resolveToolProject`) and refused
+as a context name (the
 expression `cd`s); an expression error is an `isError` result led by its code. No tool creates a
 project: a project is created on the console or over `/api` (`projects.create`). Two more bearers
 ride the provider's `resolveExternalToken`: the admin secret (`{ actor: "admin" }`, every project)

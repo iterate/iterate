@@ -5,15 +5,11 @@ import { directory, type Directory, type Reach } from "./directory.ts";
 import { DurableObjectNameCodec } from "./iterate-context.ts";
 import { errorCode } from "./lib.ts";
 import type { Authorization } from "./oauth.ts";
-import {
-  normalizedItxExpression,
-  type ItxExpression,
-  type ItxExpressionInput,
-} from "./context/expression.ts";
 
-// MCP uses the same verified authorization as Cap’n Web. Its three tools expose
-// identity, reachable projects and context invocation under that principal.
-// Project creation belongs to the public Session's directory capabilities.
+// MCP uses the same verified authorization as Cap’n Web. It exposes ONE tool, `run`: a script
+// evaluated in a project's context under that principal (itx.run) — `run(script)` when the token
+// reaches exactly one project, `run(project, script)` otherwise. Everything a caller might read
+// (who am I, which projects) is a one-line script; project creation is the public Session's.
 
 /** The project a tool call runs in (apps/os `resolveToolProject`): `project`, when named, is a
  *  project — a context name is refused, as `projects.get` refuses it (session.ts): the expression
@@ -43,24 +39,6 @@ async function projectOfToolCall(
       ? `pass project — this token reaches ${reachable.join(", ")}`
       : "this token reaches no project",
   );
-}
-
-/** The tool's expression as ONE expression for `invokeAs`: either codec half normalized (a string
- *  parsed, an array shape-checked — refused in the parser's words), rooted at `itx`, with `args`
- *  appended to its terminal call — a terminal NAME becomes that call: `itx.kv.get` + `["k"]` is
- *  `itx.kv.get("k")`. */
-function itxExpressionWithArgs(input: ItxExpressionInput, args: unknown[]): ItxExpression {
-  const expression = normalizedItxExpression(input);
-  const [root, ...steps] = expression;
-  if (root !== "itx")
-    throw new Error(`an itx expression is rooted at itx, not ${JSON.stringify(root)}`);
-  const last = steps.at(-1);
-  if (args.length === 0 || last === undefined) return expression;
-  return [
-    "itx",
-    ...steps.slice(0, -1),
-    typeof last === "string" ? [last, ...args] : [...last, ...args],
-  ];
 }
 
 const validator = new CfWorkerJsonSchemaValidator();
@@ -97,81 +75,45 @@ function buildServer(env: Env, authorization: Authorization): McpServer {
   const mcpServer = new McpServer({ name: "control-plane", version: "0.1.0" });
 
   mcpServer.registerTool(
-    "whoami",
+    "run",
     {
-      description: "The verified user or configured administrator making this request.",
-      inputSchema: objectSchema({}),
-    },
-    async () => textResult(JSON.stringify(principal, null, 2)),
-  );
-
-  mcpServer.registerTool(
-    "list_projects",
-    {
-      description: "List the projects this token reaches (the admin secret: every project).",
-      inputSchema: objectSchema({}),
-    },
-    async () => {
-      const projects = await d1Directory.reachableProjects(reach);
-      return textResult(
-        projects.length
-          ? projects
-              .map(
-                (project) =>
-                  `${project.id}  (org ${project.orgId}${project.role ? `, ${project.role}` : ""})`,
-              )
-              .join("\n")
-          : "(none yet)",
-      );
-    },
-  );
-
-  mcpServer.registerTool(
-    "itx.invoke",
-    {
-      title: "Invoke itx",
+      title: "Run a script",
       description:
-        "Evaluate one itx expression in a project's context, exactly as itx evaluates it (through the project's rewrite rules), under this token's principal: a dotted string such as itx.kv.get('k'), or its parsed form; args are appended to the terminal call. Returns the result as JSON.",
+        "Run a script in a project's context, under this token's principal — THE way to do work in a project over MCP. The script is the text of an async function whose first parameter is `itx`: `async (itx, ...args) => { ... }`. It is evaluated once in a confined worker with `itx` bound to the project (`itx.kv`, `itx.append`, `itx.readEvents`, `itx.connectToMcp`, `itx.workers.get`, …) and returns a JSON-serializable value. This is `itx.run`.",
       inputSchema: objectSchema(
         {
           project: PROJECT_INPUT,
-          expression: {
+          script: {
+            type: "string",
+            minLength: 1,
             description:
-              'An itx expression: a dotted string such as itx.kv.get(\'k\') or itx.append({ type: \'note\' }) (call args are JSON5), or its parsed form ["itx","kv",["get","k"]] for anything large.',
-            anyOf: [
-              { type: "string", minLength: 1 },
-              { type: "array", minItems: 1 },
-            ],
+              "The text of an async function taking `itx` first: `async (itx) => { const n = Number(await itx.kv.get('n')) || 0; await itx.kv.put('n', String(n + 1)); return n + 1; }`. Return a JSON-serializable value (undefined, functions and live handles do not cross the boundary).",
           },
           args: {
             type: "array",
-            description:
-              "Appended to the expression's terminal call (a terminal name becomes that call) — an argument that is awkward to spell inline rides here as plain JSON.",
+            description: "Arguments passed to the script after `itx`, as plain JSON.",
           },
         },
-        ["expression"],
+        ["script"],
       ),
     },
     async (raw: unknown) => {
-      const toolArguments = raw as {
-        project?: string;
-        expression: ItxExpressionInput;
-        args?: unknown[];
-      };
+      const toolArguments = raw as { project?: string; script: string; args?: unknown[] };
       try {
         const projectId = await projectOfToolCall(
           d1Directory,
           reach,
           toolArguments.project?.trim() ?? "",
         );
+        // `itx.run(script, { args })` at the project root, under this principal — the loaded script's
+        // own `env.ITX` is the project (principal-less: loaded code speaks for the project, library.ts).
         const value = await env.ITERATE_CONTEXT.getByName(
           DurableObjectNameCodec.stringify({ projectId, path: "/" }),
-        ).invokeAs(
-          principal,
-          itxExpressionWithArgs(toolArguments.expression, toolArguments.args ?? []),
-        );
-        // THE JSON BOUNDARY: a round trip drops what JSON cannot carry (undefined members, a
-        // function-valued handle's members) and throws on what it refuses (a cycle, a BigInt).
+        ).invokeAs(principal, [
+          "itx",
+          ["run", toolArguments.script, { args: toolArguments.args ?? [] }],
+        ]);
+        // THE JSON BOUNDARY: a round trip drops what JSON cannot carry and throws on what it refuses.
         const json = JSON.stringify(value) ?? "null";
         return {
           content: [{ type: "text" as const, text: json }],

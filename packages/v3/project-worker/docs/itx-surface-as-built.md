@@ -616,9 +616,8 @@ projects as checkboxes, all checked; the grant's `props: { actor, email, project
 absent when there was nothing to choose from ⇒ every project of the user's orgs, per call; a
 request the provider refuses is sent back to the client with `error`, `error_description`, `state`
 and `iss` once its redirect URI validated, rendered here otherwise), and `/mcp` — THE ONE MCP SERVER
-for every project, three tools: `whoami` (the props), `list_projects` (what the bearer reaches),
-`itx.invoke({ project?, expression, args? })` — the expression, in either codec half with `args`
-appended to its terminal call, evaluated through THAT project's root context in-process under the
+for every project, ONE tool: `run({ project?, script, args? })` — the text of
+`async (itx, ...args) => …` run (`itx.run`) in THAT project's root context in-process under the
 bearer's principal (`invokeAs`); `project` optional when the grant reaches exactly one, required
 for the admin secret, refused outside the grant (apps/os `resolveToolProject`) and refused as a
 context name (the expression reaches the project's other contexts through `itx.cd(path)`); an
