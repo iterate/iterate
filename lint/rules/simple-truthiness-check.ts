@@ -14,11 +14,32 @@ import type { Expression, Node } from "estree";
 import { getTypeAwareLintService, type TypeAwareLintFileService } from "../oxlint-type-aware.ts";
 import { grandfatherRule } from "../grandfather-rule.ts";
 
+/**
+ * Aim for falsy ≈ nil. Missing, undefined, null and empty strings should rarely
+ * encode different product states; even NaN often means "nothing useful".
+ * Don't spread conditional objects everywhere to appease a receiver that cares
+ * about {} versus { foo: undefined }. Fix that receiver; write { foo: input.foo }.
+ * Trust our types: a present foo?: Whatever[] is an array. Validate unknown input
+ * at the boundary, not at every use. Pick the simplest correct truthiness check.
+ * A string default should cover "" too: use ||, avoid blank labels in the UI.
+ * Zero and false can matter. Keep those checks; explain real protocol exceptions.
+ * No autofix: deciding whether a distinction matters still needs a human.
+ */
 export const simpleTruthinessCheckRule = grandfatherRule({
   allowedUpTo: new Date("2026-09-11T00:00:00Z"),
   meta: {
     type: "suggestion",
     schema: [],
+    messages: {
+      directProperty:
+        "Write the property directly instead of conditionally omitting the same value. Fix receiving APIs that needlessly distinguish missing from undefined; explain real protocol exceptions.",
+      truthiness:
+        "Trust the declared string/object type and use a truthiness check. Null, undefined and empty strings should rarely mean different things; explain real protocol exceptions.",
+      fallback:
+        "Use {{operator}} for a string/object fallback so empty strings also get the default. An empty label should not bypass a useful default.",
+      array:
+        "This value is already an array when present. Trust its type and use a truthiness check; validate unknown inputs at the boundary.",
+    },
     docs: {
       description:
         "Prefer direct optional properties and trust types with simple truthiness checks.",
@@ -118,8 +139,7 @@ export const simpleTruthinessCheckRule = grandfatherRule({
         }
         context.report({
           node,
-          message:
-            "Trust the declared string/object type and use a truthiness check; prefer treating null, undefined and empty strings as absent. Explain any protocol that needs the distinction.",
+          messageId: "truthiness",
         });
       },
       LogicalExpression(node) {
@@ -128,7 +148,8 @@ export const simpleTruthinessCheckRule = grandfatherRule({
         if (!type || !isTruthyType(type)) return;
         context.report({
           node,
-          message: "Use || for a string/object fallback so empty strings also get the default.",
+          messageId: "fallback",
+          data: { operator: "||" },
         });
       },
       AssignmentExpression(node) {
@@ -137,7 +158,8 @@ export const simpleTruthinessCheckRule = grandfatherRule({
         if (!type || !isTruthyType(type)) return;
         context.report({
           node,
-          message: "Use ||= for a string/object fallback so empty strings also get the default.",
+          messageId: "fallback",
+          data: { operator: "||=" },
         });
       },
       CallExpression(node) {
@@ -158,8 +180,7 @@ export const simpleTruthinessCheckRule = grandfatherRule({
         if (!type || !isArrayOrNil(type)) return;
         context.report({
           node,
-          message:
-            "This value is already an array when present. Trust its type and use a truthiness check.",
+          messageId: "array",
         });
       },
       "ObjectExpression > SpreadElement"(node) {
@@ -204,8 +225,7 @@ export const simpleTruthinessCheckRule = grandfatherRule({
         spreadGuards.add(guard);
         context.report({
           node,
-          message:
-            "Write the property directly instead of conditionally omitting the same value. If omission has meaning, fix the receiving API or explain the protocol exception.",
+          messageId: "directProperty",
         });
       },
     };

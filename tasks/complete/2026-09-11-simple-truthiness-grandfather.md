@@ -1,12 +1,12 @@
 ---
-status: in-progress
+status: complete
 size: medium
 ---
 
 # Prefer simple truthiness in new code
 
 The closed reference PR is [#2491](https://github.com/iterate/iterate/pull/2491).
-The rule and 13 recent fixes are implemented. Local lint, typecheck, formatting, knip, and repository tests pass; PR CI and review remain.
+The rule and 13 recent fixes are complete. Full local checks and CI, including preview deployment/e2e, passed. Human review is addressed; the monitor covers checks rerun for the diagnostic-only follow-up.
 
 ## Request and decisions
 
@@ -19,8 +19,8 @@ and treat empty strings as absent when choosing a fallback. Use the existing
 - [x] Flag null/undefined comparisons and `??` for known string/object/array values; flag redundant `Array.isArray` on typed arrays. _Native TypeScript types distinguish trusted references from numbers, booleans, and unknown inputs._
 - [x] Preserve meaningful number/boolean checks and actual unknown-input validation. Document narrow exceptions for external protocols where absence has meaning. _Negative cases cover real type discrimination and shadowed globals; adjacent rule docs explain protocol exceptions._
 - [x] Apply the grandfather cutoff, inspect the resulting violations, and fix the recent sites with the simplest correct code. _Midnight September 11 yields 13 sites across nine files, rather than 405 with September 8._
-- [ ] Run lint tests, typecheck, lint, format, knip, and repository tests; address CI/review feedback.
-- [x] Keep a draft PR updated and register it with the global PR monitor. _[#2632](https://github.com/iterate/iterate/pull/2632) registered through September 12, 21:00 UTC._
+- [x] Run lint tests, typecheck, lint, format, knip, and repository tests; address CI/review feedback. _Full CI, including preview deployment/e2e, passed at `a4f245d7c`; all 56 lint tests, typecheck, and lint also pass for the message-only review follow-up._
+- [x] Keep a draft PR updated and register it with the global PR monitor. _[#2632](https://github.com/iterate/iterate/pull/2632) registered through September 12, 19:39 UTC._
 
 ## Assumptions
 
@@ -38,3 +38,7 @@ legacy sweep from #2491 will be imported. The existing logical-and-spread rule s
 - September 8 caught 405 violations, so the rollout moved to midnight September 11 to honor the requested small diff: 13 recent sites. The scope choice was raised in chat.
 
 - Local validation: full typecheck, lint, knip, formatting, and monorepo tests pass (OS: 3,129 passed, 20 expected failures, one existing skip). Eight new rule tests cover real oxlint, unsaved buffers, and dated Git history.
+
+- Human review: added the terse design rationale beside the rule and centralized every diagnostic under `meta.messages`; visitors use `messageId` and fallback operator data. Detection is unchanged.
+
+- CI completion: all required checks and preview deployment/e2e passed at `a4f245d7c`. Task moved to complete; the global monitor retains follow-up coverage for later commits and comments.
