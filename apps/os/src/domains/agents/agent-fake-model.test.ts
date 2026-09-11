@@ -33,6 +33,7 @@ test("an intercepted/* turn is served by the interceptor: prompt in, text out, u
       model: "intercepted/main",
       request: {
         kind: "workers-ai",
+        options: { gateway: { metadata: { projectId: "prj_test" } } },
       },
     },
   ]);
@@ -140,6 +141,60 @@ test("callLlm outranks the interceptor: a scripted transport takes intercepted/*
   ]);
 });
 
+test("Gateway 429 responses exhaust ordinary retries without introducing a budget pause", async () => {
+  let calls = 0;
+  const h = makeProcessorHarness<AgentProcessorContract>({
+    path: "/agents/test",
+    createProcessor: (deps) =>
+      new AgentProcessor({
+        ...deps,
+        ai: {
+          run: async () => {
+            throw new Error("Interception must not dial a provider");
+          },
+        },
+        getAiGatewayOptions: (eventOffset) => ({
+          transport: { kind: "unified" },
+          metadata: {
+            environment: "test",
+            projectId: "prj_test",
+            streamPath: "/agents/test",
+            eventOffset,
+          },
+        }),
+        consultAiInterceptor: async () => {
+          calls++;
+          return Response.json(
+            {
+              name: "AiGatewayError",
+              internalCode: 2041,
+              message: "Spend limit exceeded",
+            },
+            { status: 429 },
+          );
+        },
+      }),
+  });
+  await h.play(
+    ["append", ...newFakeAgentEvents("intercepted/test"), userMessage("Hello")],
+    ["advanceTime", 600_000],
+  );
+  expect(calls).toBe(3);
+  expect(h.events(SETTLED)).toHaveLength(3);
+  for (const event of h.events(SETTLED)) {
+    expect(event).toMatchObject({
+      payload: { result: { status: "failed", errorMessage: expect.stringContaining("429") } },
+    });
+  }
+  expect(h.state()).toMatchObject({
+    paused: null,
+    openRequest: null,
+    pendingLlmRequestTrigger: null,
+  });
+  await h.play(["advanceTime", 600_000]);
+  expect(calls).toBe(3);
+});
+
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
@@ -186,10 +241,18 @@ function makeInterceptedModelHarness(
             throw new Error("An intercepted model must never dial");
           },
         },
-        cloudflareAiGatewayTransport: () => ({
-          kind: "byok",
-          gatewayId: "default",
-          openaiApiKey: "must-not-leak",
+        getAiGatewayOptions: () => ({
+          transport: {
+            kind: "byok",
+            gatewayId: "default",
+            openaiApiKey: "must-not-leak",
+          },
+          metadata: {
+            environment: "test",
+            projectId: "prj_test",
+            streamPath: "/agents/test",
+            eventOffset: undefined,
+          },
         }),
         ...(consultAiInterceptor && {
           consultAiInterceptor: async (input) =>

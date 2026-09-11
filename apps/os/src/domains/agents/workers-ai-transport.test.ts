@@ -5,7 +5,37 @@ import {
   cloudflareAiGatewayResponseCacheKey,
   maskCloudflareAiGatewayResponseCacheEntropy,
   runWorkersAiAttempt,
+  prepareOpenAiRequest,
 } from "./workers-ai-transport.ts";
+
+it.each([
+  { override: undefined, expected: "caller-key" },
+  { override: "", expected: "caller-key" },
+  { override: "agent-key", expected: "agent-key" },
+])(
+  "uses prompt cache key $expected with transport override '$override'",
+  async ({ override, expected }) => {
+    const prepared = await prepareOpenAiRequest({
+      transport: {
+        kind: "byok",
+        gatewayId: "test",
+        openaiApiKey: "test-key",
+        openaiPromptCacheKey: override,
+      },
+      endpoint: "chat/completions",
+      body: { model: "caller-model", prompt_cache_key: "caller-key", stream: true },
+      headers: new Headers(),
+      cache: null,
+    });
+    expect(prepared).toMatchObject({
+      body: {
+        model: "caller-model",
+        prompt_cache_key: expected,
+        stream_options: { include_usage: true },
+      },
+    });
+  },
+);
 
 createFailing(it, /attempt should report its timeout/)(
   "reports the AI attempt timeout while provider stream cleanup is still pending",
@@ -76,6 +106,12 @@ it.each([
         await runWorkersAiAttempt({
           model,
           agentPath: "/agents/parity",
+          metadata: {
+            environment: "preview_9",
+            projectId: "prj_host",
+            streamPath: "/agents/parity",
+            eventOffset: 0,
+          },
           messages: [{ role: "developer", content: "say hello" }],
           deadlineMs: 1000,
           onChunk: async (chunk) => {
@@ -83,7 +119,7 @@ it.each([
           },
           transport: {
             kind: billing,
-            gatewayId: "test",
+            gatewayId: "costs",
             openaiApiKey: "must-not-leak",
             responseCacheTtlSeconds: 60,
           },
@@ -100,7 +136,7 @@ it.each([
                 const { authorization, ...headers } = request.headers;
                 requests.push({
                   kind: "openai-http",
-                  gatewayId: "test",
+                  gatewayId: "costs",
                   endpoint: request.endpoint,
                   body: request.query,
                   headers,
@@ -679,4 +715,28 @@ it("gateway interception strips credentials and cannot replace real model calls"
     "BYOK transport unavailable",
   );
   expect(calls).toBe(1);
+});
+
+it("keeps the deadline active while draining a raw unified SSE Response", async () => {
+  let cancelled = false;
+  await expect(
+    runWorkersAiAttempt({
+      ai: {
+        run: async () =>
+          new Response(
+            new ReadableStream({
+              cancel() {
+                cancelled = true;
+              },
+            }),
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+      },
+      model: "@cf/test",
+      messages: [],
+      deadlineMs: 20,
+      onChunk: async () => {},
+    }),
+  ).rejects.toThrow("timed out");
+  expect(cancelled).toBe(true);
 });

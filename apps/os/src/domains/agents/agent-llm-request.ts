@@ -215,6 +215,7 @@ export class AgentLlmRequest {
         const events = await this.readConsumedEvents();
         const body = buildAgentLlmRequestBody({ events, llmRequestOffset: requestOffset });
         const completion = await this.attempt({
+          eventOffset: requestOffset,
           model: open.model,
           messages: await prepareAgentLlmMessages(
             body.messages,
@@ -417,6 +418,7 @@ export class AgentLlmRequest {
    * void with `onChunk` gated on the same signal.
    */
   async attempt(input: {
+    eventOffset: number;
     model: string;
     messages: WorkersAiMessage[];
     signal: AbortSignal;
@@ -435,13 +437,14 @@ export class AgentLlmRequest {
     if (ai === undefined) {
       throw new Error("Agent processor has no AI binding configured.");
     }
+    const gatewayOptions = this.#host.deps.getAiGatewayOptions?.(input.eventOffset);
     const completion = await raceAbort(
       input.signal,
       runWorkersAiAttempt({
+        ...gatewayOptions,
         agentPath: this.#host.path,
         consultInterceptor: this.#host.deps.consultAiInterceptor,
         ai,
-        transport: this.#host.deps.cloudflareAiGatewayTransport?.(),
         deadlineMs: input.deadlineMs,
         // This chat-completions transport is text-only: file attachments use
         // just-in-time signed hint URLs, not OpenAI Files or provider file IDs.
@@ -514,6 +517,7 @@ export class AgentLlmRequest {
       // a later configuration event may already have selected another model,
       // but switching here would forfeit that cache.
       const summary = await this.attempt({
+        eventOffset: triggerOffset,
         model,
         messages: await prepareAgentLlmMessages(
           buildAgentCompactionRequestBody({ events, llmRequestOffset }).messages,

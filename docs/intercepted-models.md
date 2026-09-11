@@ -50,13 +50,14 @@ await agent.ask({ message: "hello" });
 await interception.release(); // or let `using` dispose it
 ```
 
-Handlers receive `source` (`agent-turn` or `ai-run`), the original
+Handlers receive `source` (`agent-turn`, `ai-run`, or `egress`), the original
 `model`, and a completed `request` with one of two shapes:
 
 - `kind: "openai-http"`: gateway ID, endpoint, body, and headers.
 - `kind: "workers-ai"`: model, body, and binding options.
 
-Agent calls also carry `agentPath`. Credentials are excluded from both shapes.
+Agent calls also carry `agentPath`. Gateway-routed OpenAI HTTP calls use `egress`.
+Requests include host-owned Gateway metadata; credentials are excluded from both shapes.
 The sender does not change the prepared body or choose a provider from the model name.
 
 Return a `Response`, synchronously or from a promise. Use `Response.json(value)`

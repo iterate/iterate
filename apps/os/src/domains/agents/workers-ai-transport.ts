@@ -1,7 +1,9 @@
 import { z } from "zod";
 import type { CfAiRunOptions } from "../itx/cf-capabilities.ts";
 import * as modelInterception from "../../lib/model-interception.ts";
+
 import type { AgentLlmCompletion, AgentLlmUsage } from "./agent-processor-contract.ts";
+import type { AiGatewayMetadata } from "./ai-gateway-metadata.ts";
 
 // =============================================================================
 // Workers AI transport: how one LLM attempt talks to `env.AI`.
@@ -43,7 +45,7 @@ export type CloudflareAiGatewayBinding = {
  *   synthetic (e2e/preview), never prd.
  */
 export type CloudflareAiGatewayTransport =
-  | { kind: "unified" }
+  | { kind: "unified"; gatewayId?: string }
   | {
       kind: "byok";
       gatewayId: string;
@@ -53,6 +55,12 @@ export type CloudflareAiGatewayTransport =
       openaiPromptCacheKey?: string;
       responseCacheTtlSeconds?: number;
     };
+
+/** Host-resolved routing and attribution for one AI attempt. */
+export type AiGatewayOptions = {
+  transport: CloudflareAiGatewayTransport;
+  metadata: AiGatewayMetadata;
+};
 
 /** One provider-facing chat message. `containsFiles` is transport metadata,
  * not provider input: it forces cache bypass when the text carries temporary
@@ -99,6 +107,7 @@ export function adaptMessagesForModel(
  */
 export async function runWorkersAiAttempt(input: {
   ai: WorkersAiBinding;
+  metadata?: AiGatewayMetadata;
   consultInterceptor?: (request: modelInterception.ProjectAiInterceptorInput) => Promise<unknown>;
   agentPath?: string;
   deadlineMs: number;
@@ -125,6 +134,7 @@ export async function runWorkersAiAttempt(input: {
         ? await prepareOpenAiRequest({
             model: route.model,
             transport: route.transport,
+            metadata: input.metadata,
             endpoint: "chat/completions",
             body,
             headers: new Headers(),
@@ -136,6 +146,8 @@ export async function runWorkersAiAttempt(input: {
           })
         : prepareWorkersAiRequest({
             model: route.model,
+            gatewayId: route.gatewayId,
+            metadata: input.metadata,
             body,
             options: {},
           });
@@ -145,7 +157,7 @@ export async function runWorkersAiAttempt(input: {
           ai: input.ai,
           source: {
             source: "agent-turn",
-            agentPath: input.agentPath || "/",
+            agentPath: input.agentPath || input.metadata?.streamPath || "/",
           },
           consultInterceptor: input.consultInterceptor,
         },
@@ -417,18 +429,19 @@ function resolveAiRoute(model: string, transport: CloudflareAiGatewayTransport) 
     kind: "workers-ai" as const,
     model,
     providerModel,
+    gatewayId: transport.gatewayId || "default",
   };
 }
 
-type PreparedAiRequest = { sourceModel: string } & (
-  | (modelInterception.OpenAiHttpRequest & { credential: string })
-  | (modelInterception.WorkersAiRequest & { credential: null })
-);
+type PreparedAiRequest =
+  | (modelInterception.OpenAiHttpRequest & { sourceModel?: string; credential: string })
+  | (modelInterception.WorkersAiRequest & { sourceModel: string; credential: null });
 
 /** Complete OpenAI-native request preparation, including cache policy. */
-async function prepareOpenAiRequest(input: {
-  model: string;
+export async function prepareOpenAiRequest(input: {
+  model?: string;
   transport: Extract<CloudflareAiGatewayTransport, { kind: "byok" }>;
+  metadata?: AiGatewayMetadata;
   endpoint: string;
   body: Record<string, unknown>;
   headers: Headers;
@@ -437,8 +450,9 @@ async function prepareOpenAiRequest(input: {
   const { transport, model } = input;
   const body = {
     ...input.body,
-    model: model.replace(/^intercepted\//, "").replace(/^openai\//, ""),
-    prompt_cache_key: transport.openaiPromptCacheKey,
+    ...openAiStreamingUsage(input.endpoint, input.body),
+    ...(model && { model: model.replace(/^intercepted\//, "").replace(/^openai\//, "") }),
+    prompt_cache_key: transport.openaiPromptCacheKey || input.body.prompt_cache_key,
   };
   const cacheHeaders: Record<string, string> = input.cache
     ? {
@@ -458,6 +472,7 @@ async function prepareOpenAiRequest(input: {
         [...input.headers].filter(([name]) => name.startsWith("openai-") || name === "accept"),
       ),
       "content-type": "application/json",
+      ...(input.metadata && { "cf-aig-metadata": JSON.stringify(input.metadata) }),
       "cf-aig-collect-log": "true",
       "cf-aig-collect-log-payload": "true",
       ...cacheHeaders,
@@ -468,20 +483,30 @@ async function prepareOpenAiRequest(input: {
 /** Complete Workers AI binding input. No HTTP endpoint, headers, or OpenAI credential. */
 export function prepareWorkersAiRequest(input: {
   model: string;
+  gatewayId: string;
+  metadata?: AiGatewayMetadata;
   body: unknown;
   options: CfAiRunOptions;
 }): PreparedAiRequest {
   const model = input.model.replace(/^intercepted\//, "");
   const payload = z.record(z.string(), z.unknown()).parse(input.body);
+  const metadata = Object.fromEntries(
+    Object.entries(input.metadata || {}).filter(
+      (entry): entry is [string, string | number] => entry[1] !== undefined,
+    ),
+  );
   return {
     kind: "workers-ai",
     sourceModel: input.model,
     credential: null,
     model,
-    body: payload,
+    body: model.startsWith("openai/")
+      ? { ...payload, ...openAiStreamingUsage("chat/completions", payload) }
+      : payload,
     options: {
       ...input.options,
       returnRawResponse: true,
+      gateway: { ...input.options.gateway, id: input.gatewayId, metadata },
     },
   };
 }
@@ -491,7 +516,10 @@ export function prepareWorkersAiRequest(input: {
 export async function sendAiRequest(
   host: {
     ai: WorkersAiBinding;
-    source: { source: "agent-turn"; agentPath: string } | { source: "ai-run" };
+    source:
+      | { source: "agent-turn"; agentPath: string }
+      | { source: "ai-run" }
+      | { source: "egress" };
     consultInterceptor:
       | ((request: modelInterception.ProjectAiInterceptorInput) => Promise<unknown>)
       | undefined;
@@ -499,11 +527,11 @@ export async function sendAiRequest(
   prepared: PreparedAiRequest,
 ): Promise<Response> {
   const { sourceModel, credential: _credential, ...request } = prepared;
-  if (modelInterception.isInterceptedModel(sourceModel)) {
+  if (sourceModel && modelInterception.isInterceptedModel(sourceModel)) {
     if (!host.consultInterceptor) throw modelInterception.noAiInterceptorError(sourceModel);
     // The only agent-turn caller is runWorkersAiAttempt, which builds body.messages
     // with adaptMessagesForModel. Shared preparation erases that shape because
-    // ai-run also accepts arbitrary model inputs; restore the source/body correlation.
+    // ai-run and egress also accept arbitrary model inputs; restore the source/body correlation.
     const intercepted = {
       ...host.source,
       model: sourceModel,
@@ -534,6 +562,18 @@ export async function sendAiRequest(
       return response;
     }
   }
+}
+
+function openAiStreamingUsage(endpoint: string, body: Record<string, unknown>) {
+  const path = endpoint.split("?")[0];
+  if (path !== "chat/completions" && path !== "completions") return {};
+  if (body.stream !== true) return {};
+  return {
+    stream_options: {
+      ...z.record(z.string(), z.unknown()).parse(body.stream_options || {}),
+      include_usage: true,
+    },
+  };
 }
 
 /** Bump to invalidate every cached response at once (prompt-format overhauls,

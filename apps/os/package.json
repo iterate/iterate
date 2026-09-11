@@ -29,7 +29,8 @@
     "e2e": "vitest --config e2e/vitest.config.ts",
     "example:workspace-itx-preview": "tsx ./e2e/workspace-itx-preview-example.ts",
     "auth:sync-clients": "tsx ./scripts/sync-auth-clients.ts",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "ai-gateway-budgets": "tsx ./scripts/ai-gateway-budgets.ts"
   },
   "dependencies": {
     "@cloudflare/containers": "0.3.7",
@@ -119,6 +120,7 @@
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260624.1",
     "@vitejs/plugin-react": "^6.0.1",
+    "cloudflare": "7.1.0",
     "esbuild": "^0.27.4",
     "jose": "^6.2.1",
     "jsdom": "27.4.0",

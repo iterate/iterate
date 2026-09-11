@@ -39,6 +39,7 @@ import { parseConfig } from "../config.ts";
 import { workerVersion, type Env } from "../env.ts";
 import { itxForScope, StreamRpcTarget } from "../rpc-targets.ts";
 import { readProjectById } from "../project-directory.ts";
+import { aiGatewayMetadata } from "./agents/ai-gateway-metadata.ts";
 import { facetProcessorFamilyForPath } from "./processor-facet-families.ts";
 import { projectStub } from "./projects/egress.ts";
 import type { CapabilityDescription } from "./itx/describe.ts";
@@ -554,15 +555,25 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       // The OpenAI prompt_cache_key is per agent stream: repeated turns
       // grow a shared prefix, and a stable key routes them to the same
       // provider-side prompt-cache shard.
-      cloudflareAiGatewayTransport: () => {
-        const gateway = parseConfig(this.env).cloudflareAiGateway;
-        if (gateway.transport === "unified") return { kind: "unified" as const };
+      getAiGatewayOptions: (eventOffset: number) => {
+        const config = parseConfig(this.env);
+        const gateway = config.cloudflareAiGateway;
         return {
-          kind: "byok" as const,
-          gatewayId: gateway.id,
-          openaiApiKey: parseConfig(this.env).openAiApiKey.exposeSecret(),
-          openaiPromptCacheKey: `${projectId}:${path}`,
-          responseCacheTtlSeconds: gateway.responseCacheTtlSeconds,
+          transport:
+            gateway.transport === "unified"
+              ? { kind: "unified" as const, gatewayId: gateway.id }
+              : {
+                  kind: "byok" as const,
+                  gatewayId: gateway.id,
+                  openaiApiKey: config.openAiApiKey.exposeSecret(),
+                  openaiPromptCacheKey: `${projectId}:${path}`,
+                  responseCacheTtlSeconds: gateway.responseCacheTtlSeconds,
+                },
+          metadata: aiGatewayMetadata({
+            projectId,
+            environment: config.environmentName,
+            context: { kind: "agent-turn", streamPath: path, eventOffset },
+          }),
         };
       },
       resolveModelFileUrl: (file: AgentFileAttachment) =>

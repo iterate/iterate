@@ -6,7 +6,7 @@ size: medium
 # Prefer simple truthiness in new code
 
 The closed reference PR is [#2491](https://github.com/iterate/iterate/pull/2491).
-The rule and 13 recent fixes are complete. Full local checks and CI, including preview deployment/e2e, passed. Human review is addressed; the monitor covers checks rerun for the diagnostic-only follow-up.
+The rule and recent fixes are complete. Human review is addressed. Main is merged with its caller-supplied OpenAI cache keys preserved; final CI is rerunning before the requested merge.
 
 ## Request and decisions
 
@@ -42,3 +42,5 @@ legacy sweep from #2491 will be imported. The existing logical-and-spread rule s
 - Human review: added the terse design rationale beside the rule and centralized every diagnostic under `meta.messages`; visitors use `messageId` and fallback operator data. Detection is unchanged.
 
 - CI completion: all required checks and preview deployment/e2e passed at `a4f245d7c`. Task moved to complete; the global monitor retains follow-up coverage for later commits and comments.
+
+- Main merge: preserve streaming usage and caller-supplied prompt cache keys; three regression cases cover missing, empty, and explicit overrides. The new lint rule also caught one newly merged optional egress-rule check, now `if (!rule)`. Full repository tests pass (OS: 3,130 passed, 20 expected failures, one existing skip); the final transport suite also passes with the added empty-string case.
