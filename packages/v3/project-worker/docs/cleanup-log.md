@@ -175,3 +175,43 @@ in-memory repro. Every one was re-verified HERE by reading the code (not taken o
   NOTE: this covers CONTRACT (app) events. Core-owned CONTROL events (subscription-configured, etc.) go
   through the hand-built core reduce, which has no events catalog — that validation (the round-1 deferred
   "malformed core control events commit as no-ops") is still open and wants discriminated schemas.
+
+## Round 3 — codex astra round 3: five NEW findings, all fixed
+
+Codex round 3 (gpt-6-astra, xhigh) over the round-1+2 state found five NEW bugs (nothing
+already logged). Each re-verified here, then fixed with a test where deterministic:
+
+- **[bug] #3 reducer got z.input, not z.output.** Round-2 validation gated but folded the RAW
+  event, discarding a schema transform (`z.coerce.number()`: "2" + 3 → "023"). Now the NORMALIZED
+  event (payload = parsed.data) reaches both the reducer and the effect hook; a malformed payload is
+  still not folded but the raw event flows to processEvent so batch caught-up signalling is intact.
+  Coercion test added. (processor.ts)
+- **[bug] #5 buildEvent lied about its return type** (promised the input type, returned the
+  schema-transformed payload). buildEvent had ZERO call sites (events are written literally), so it
+  was DELETED along with its orphaned BuildEvent/ResolvedType/DepEventType types — payload validation
+  now lives at reduce (payloadSchemaFor). (processor.ts)
+- **[bug] #4 the live-state client cast network frames** `as LiveStateDelta`; a non-numeric `to`
+  poisoned the held rev and silently wedged every later frame. Now zod-parsed at the boundary; a
+  malformed frame HEALS through the seed door (the store's existing gap recovery). Failing-mode test
+  added. This is version-skew robustness, not malicious-client defense. (client/live-state.ts)
+- **[bug] #1 deleted secrets could reappear** (P1). set/delete each do append-THEN-KV as two awaits,
+  unserialized on the root DO; a concurrent pair could land the KV writes opposite to the log order,
+  leaving egress a value the catalog says is gone. Serialized per name on the root DO (the chain lives
+  in #builtIns, one per DO instance). FOLLOW-UP: an eviction BETWEEN a delete's append and its KV
+  delete can still strand a value — a durable reconciliation sweep on startup (walk catalog-deleted
+  secrets, ensure KV deleted) is the deeper fix; deferred. (context/built-ins.ts)
+- **[bug] #2 an older facet load could clobber a newer one.** A stale load's post-load check only
+  confirmed the facet still existed; a reconfigure during the load then had its newer code aborted and
+  replaced by the older. Now the post-load check compares the desired spec (facet:<name>) to what was
+  loaded and bails if it moved. (iterate-context-durable-object.ts)
+
+### RPC-result-not-disposed warnings (owner asked to avoid them)
+- FIXED the DETERMINISTIC one: the logout batch left `api.authenticate(...)`'s SessionRpcTarget stub
+  undisposed — now `using session = api.authenticate(...)` (browser-session.ts). Was 1/1 in the
+  workers lane; gone after.
+- A RESIDUAL warning appears INTERMITTENTLY in the FULL workers lane (0 in some runs, 1 in others) and
+  is NOT attributable to a production code path: it is GC-timed and surfaces during teardown of the
+  tests that deliberately hang/cancel workers (uncontrolled-degradation) — a DO destroyed mid-RPC
+  cannot dispose the peer's in-flight result. `uncontrolled-degradation` ALONE is clean; it only shows
+  under the full run's teardown interleaving. Treated as a harness teardown artifact, not a leak in a
+  path production exercises. Revisit if it ever turns deterministic.
