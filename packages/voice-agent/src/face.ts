@@ -22,7 +22,7 @@
  * at the same stamp is forwarded to the avatar zero times. That shape holds,
  * whatever the transport becomes.
  */
-import { createVisemeTracker, firmwareVisemes, type VisemeChangeEvent } from "./viseme.ts";
+import { createVisemeTracker, type VisemeChangeEvent } from "./viseme.ts";
 
 /**
  * THE FACE IS A VALUE, NOT A STREAM: the newest mouth shape only, replaced
