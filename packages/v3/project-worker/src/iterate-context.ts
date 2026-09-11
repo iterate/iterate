@@ -152,12 +152,10 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  with the built-in `itx.cd(...)` root. Returns an EDGE context, so `provide` on it lends in this
    *  same session. Pure addressing. */
   cd(path: string): IterateContextRpcTarget {
-    const durableObjectAddress = DurableObjectNameCodec.parse(
-      DurableObjectNameCodec.stringify({
-        projectId: this.#durableObjectAddress.projectId,
-        path: resolveContextPath(this.#durableObjectAddress.path, path),
-      }),
-    );
+    const durableObjectAddress = DurableObjectNameCodec.address({
+      projectId: this.#durableObjectAddress.projectId,
+      path: resolveContextPath(this.#durableObjectAddress.path, path),
+    });
     return new IterateContextRpcTarget(
       this.#contextNamespace,
       durableObjectAddress,
@@ -457,23 +455,28 @@ export const DurableObjectNameCodec = {
   stringify({ projectId, path }: { projectId: string; path: string }): string {
     return `${projectId}${DURABLE_OBJECT_HOST_SUFFIX}${resolveContextPath("/", path)}`;
   },
+  /** The canonical, validated address `{ projectId, path, name }` for a context, built from parts a
+   *  caller already holds — path canonicalized, projectId validated, the DO `name` carried. The
+   *  DIRECT form of `parse(stringify({ projectId, path }))`, with no string to round-trip through. */
+  address({ projectId, path }: { projectId: string; path: string }): DurableObjectAddress {
+    if (!PROJECT_ID.test(projectId))
+      throw codedError(
+        "INVALID_CONTEXT",
+        `invalid projectId ${JSON.stringify(projectId)}: only [A-Za-z0-9_-] (a ":" would breach the kv/secret isolation wall)`,
+      );
+    const parts = { projectId, path: resolveContextPath("/", path) };
+    return { ...parts, name: DurableObjectNameCodec.stringify(parts) };
+  },
   /** Parses a Durable Object name. A bare name (no `.iterate`) is that project's root — what
    *  `projects.get("prj_x")` hands in. */
   parse(name: string): DurableObjectAddress {
     const i = name.indexOf(DURABLE_OBJECT_HOST_SUFFIX);
-    const parts =
-      i === -1
-        ? { projectId: name, path: "/" }
-        : {
-            projectId: name.slice(0, i),
-            path: resolveContextPath("/", name.slice(i + DURABLE_OBJECT_HOST_SUFFIX.length)),
-          };
-    if (!PROJECT_ID.test(parts.projectId))
-      throw codedError(
-        "INVALID_CONTEXT",
-        `invalid projectId ${JSON.stringify(parts.projectId)}: only [A-Za-z0-9_-] (a ":" would breach the kv/secret isolation wall)`,
-      );
-    return { ...parts, name: DurableObjectNameCodec.stringify(parts) };
+    return i === -1
+      ? DurableObjectNameCodec.address({ projectId: name, path: "/" })
+      : DurableObjectNameCodec.address({
+          projectId: name.slice(0, i),
+          path: name.slice(i + DURABLE_OBJECT_HOST_SUFFIX.length),
+        });
   },
 };
 

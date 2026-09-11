@@ -271,9 +271,7 @@ export class SessionRpcTarget extends RpcTarget {
   #globalContext(path: string): IterateContextRpcTarget {
     return new IterateContextRpcTarget(
       this.#input.contextNamespace,
-      DurableObjectNameCodec.parse(
-        DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path }),
-      ),
+      DurableObjectNameCodec.address({ projectId: GLOBAL_PROJECT_ID, path }),
       this.#sessionTeardown,
       this.#input.waitUntil,
       this.#authority.principal,
