@@ -1784,6 +1784,9 @@ void iterate_kit_esp_idf_itx_transport_metrics(
     iterate_kit_esp_idf_websocket_connection_metrics(
         &transport->websocket, &websocket);
     metrics->websocket_pongs_received = websocket.pongs_received;
+    metrics->websocket_frames_received = websocket.frames_received;
+    metrics->last_websocket_close_status_code =
+        websocket.last_peer_close_status_code;
   }
   /*
    * spsc_ring_init() already constrains slot_count below UINT32_MAX / 2. The

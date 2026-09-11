@@ -183,6 +183,11 @@ uint32_t waveshare_avatar_dropped_samples(void);
 /** Analysis windows the engine has completed since boot. */
 uint32_t waveshare_avatar_frames_analysed(void);
 
+/** Actual descriptor debt used to align the face with physical playout.
+ * The audio owner retains this ISR observation, not a second starvation ledger.
+ */
+int32_t waveshare_audio_dma_owed_ms(void);
+
 #ifdef __cplusplus
 }
 #endif

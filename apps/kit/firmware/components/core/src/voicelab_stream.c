@@ -348,9 +348,9 @@ static void handle_spk_frame(
 /*
  * `handle_viseme` and `handle_grok_event` were here.
  *
- * The face is no longer an event: it is reduced state in the facet's runtime
- * bag, published through `liveState`, and the `viseme` type is deleted from
- * the contract. `grok-event` carried exactly two facts this device acted on,
+ * The face is no longer an event: it is reduced processor runtime state in
+ * the facet's runtime bag, read by a direct RPC poll, and the `viseme` type
+ * is deleted from the contract. `grok-event` carried exactly two facts this device acted on,
  * `speech_started` and `response.done`, and both now ride the `spk-frame` that
  * they are about — see the two notes in `handle_spk_frame` for why that is not
  * merely tidier but removes an ordering question neither lane could answer.

@@ -1,4 +1,5 @@
 set(ITERATE_KIT_CORE_SOURCES
+  src/button.c
   src/configuration.c
   src/conversation_launch.c
   src/conversation_lights.c
@@ -9,6 +10,7 @@ set(ITERATE_KIT_CORE_SOURCES
   src/itx_mount.c
   src/itx_outbox_sender.c
   src/peer.c
+  src/provider_mode.c
   src/retry_gate.c
   src/session_grammar.c
   src/spsc_ring.c
@@ -20,7 +22,8 @@ set(ITERATE_KIT_CORE_SOURCES
   src/websocket_frame_writer.c
   src/websocket_rx.c
   src/websocket_text.c
-  src/websocket_tx.c)
+  src/websocket_tx.c
+  src/xmos_control.c)
 
 if(COMMAND idf_component_register)
   idf_component_register(

@@ -5,22 +5,23 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "iterate/kit/audio_codec.h"
+#include "iterate/kit/platforms/board.h"
+#include "iterate/kit/voice_playout.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/**
- * Applies 0-100 of this board's SAFE range to the ES8311 DAC.
- *
- * 100 is -18 dB, not 0 dB: the ceiling is a brownout limit, not a taste, and
- * this scale is stretched to fit inside it so the knob has usable travel. See
- * the note at the setter for the tone that tripped the detector.
+/** C table for the playback controller; capture shares these pins but its
+ * lifetime belongs to M5.Mic and the half-duplex fence, never duplex start.
  */
-enum iterate_kit_status m5sticks3_audio_set_volume(
-    uint8_t percent, uint8_t *applied);
-uint8_t m5sticks3_audio_volume(void);
+extern const struct iterate_kit_i2s_codec_facts m5sticks3_audio_facts;
+/** ES8311 DAC reset/clock/power script; replayed after every Mic.end. */
+extern const struct iterate_kit_register_script m5sticks3_audio_script;
+/** Bind M5Unified's native I2C writer and mute the PMIC amplifier before
+ * board.c runs the register script. Called after M5 board identity checks.
+ */
+bool m5sticks3_audio_prepare(void);
 
 enum {
   M5STICKS3_AUDIO_SAMPLE_RATE_HZ = 16000,
@@ -39,7 +40,7 @@ enum {
  * this adapter owns I2S0, the codec's playback registers, and the M5PM1
  * amplifier latch.
  *
- * Must be called after m5sticks3_board_init(): M5Unified's board bring-up is
+ * Called by board.open_codec after the BEFORE_I2S script. M5 board bring-up is
  * what muxes the M5PM1 amplifier GPIO and probes the internal I2C bus.
  */
 bool m5sticks3_audio_init(void);
@@ -103,54 +104,8 @@ bool m5sticks3_audio_mode_switching(void);
  */
 void m5sticks3_audio_amplifier(bool on);
 
-/** Complete capture frames replaced before the portable task could read them. */
-uint32_t m5sticks3_audio_capture_overruns(void);
-
-/** Microphone starts/records that failed after hardware ownership began. */
-uint32_t m5sticks3_audio_capture_driver_failures(void);
-
-/** I2S writes or mode switches that failed after admission through the seam. */
-uint32_t m5sticks3_audio_playback_driver_failures(void);
-
 /** Half-duplex fence crossings, for the health surface. */
 uint32_t m5sticks3_audio_mode_switches(void);
-
-/**
- * Count starvation only while an answer is being fed. Between answers the
- * DAC correctly clocks zeros; counting that measures silence, not a fault.
- */
-void m5sticks3_audio_watch(bool active);
-
-/**
- * The source has run dry because the answer is over: stall time from here is
- * the normal end-of-answer drain, not a defect.
- */
-void m5sticks3_audio_draining(void);
-
-/**
- * An intentional flush just discarded queued audio. The hardware ring may
- * still hold up to one ring of audio it will never be credited for, so the
- * empty-deadline must not assume an empty ring.
- */
-void m5sticks3_audio_note_flush(void);
-
-/**
- * Reserve credit for `ms` of audio ABOUT to be written, before the blocking
- * write. Lateness is measured here against an absolute audio-empty deadline:
- * every reservation pushes the deadline out by exactly the audio written, and
- * a write arriving after the deadline passed is starvation the listener heard.
- */
-void m5sticks3_audio_reserve_write(uint32_t ms);
-
-/** Undo a reservation whose write did not happen. */
-void m5sticks3_audio_rollback_write(uint32_t ms);
-
-/** Milliseconds the DAC spent with an empty ring while being fed. */
-uint32_t m5sticks3_audio_starved_ms(void);
-
-/** How many separate times that happened. */
-uint32_t m5sticks3_audio_starve_events(void);
-
 
 #ifdef __cplusplus
 }

@@ -1,4 +1,5 @@
 #include "core_s3_capture_reserve.h"
+#include "iterate/kit/atomic.h"
 
 #include <limits.h>
 #include <string.h>
@@ -9,50 +10,6 @@
 #else
 #define ITERATE_KIT_CORE_S3_ISR_ATTR
 #endif
-
-/*
- * These counters may be written in interrupt context and read by diagnostics
- * while the device runs for days. A wrapping fault counter would manufacture
- * apparent recovery, so update to UINT32_MAX with a bounded lock-free CAS.
- * Contention is limited to another increment/snapshot; no loop depends on a
- * network, task, or hardware event.
- */
-static void atomic_saturating_increment(
-    volatile uint32_t *value) {
-  uint32_t current =
-      __atomic_load_n(value, __ATOMIC_RELAXED);
-  while (current != UINT32_MAX &&
-         !__atomic_compare_exchange_n(
-             value,
-             &current,
-             current + 1U,
-             false,
-             __ATOMIC_RELAXED,
-             __ATOMIC_RELAXED)) {
-  }
-}
-
-static void atomic_saturating_add(
-    volatile uint32_t *value,
-    uint32_t amount) {
-  uint32_t current =
-      __atomic_load_n(value, __ATOMIC_RELAXED);
-  while (current != UINT32_MAX) {
-    const uint32_t next =
-        amount > UINT32_MAX - current
-        ? UINT32_MAX
-        : current + amount;
-    if (__atomic_compare_exchange_n(
-            value,
-            &current,
-            next,
-            false,
-            __ATOMIC_RELAXED,
-            __ATOMIC_RELAXED)) {
-      return;
-    }
-  }
-}
 
 /*
  * Metrics with exactly one ISR writer use ordinary saturating arithmetic. The
@@ -112,7 +69,7 @@ static uint32_t discard_queued(
    */
   __atomic_store_n(
       &reserve->read_count, write_count, __ATOMIC_RELEASE);
-  atomic_saturating_add(
+  iterate_kit_atomic_saturating_add_relaxed_u32(
       &reserve->consumer_chunks_discarded, discarded);
   return discarded;
 }
@@ -218,7 +175,7 @@ iterate_kit_core_s3_capture_reserve_take(
 
   if (take_poison(reserve)) {
     (void)discard_queued(reserve);
-    atomic_saturating_increment(&reserve->epoch_resets);
+    iterate_kit_atomic_saturating_increment_relaxed_u32(&reserve->epoch_resets);
     return ITERATE_KIT_CORE_S3_CAPTURE_TAKE_RESET_EPOCH;
   }
 
@@ -244,14 +201,14 @@ iterate_kit_core_s3_capture_reserve_take(
      * Count it as discarded, clear every still-queued predecessor of the loss,
      * and make RESET_EPOCH the only observable result of this call.
      */
-    atomic_saturating_increment(
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
         &reserve->consumer_chunks_discarded);
     (void)discard_queued(reserve);
-    atomic_saturating_increment(&reserve->epoch_resets);
+    iterate_kit_atomic_saturating_increment_relaxed_u32(&reserve->epoch_resets);
     return ITERATE_KIT_CORE_S3_CAPTURE_TAKE_RESET_EPOCH;
   }
 
-  atomic_saturating_increment(&reserve->chunks_delivered);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&reserve->chunks_delivered);
   return ITERATE_KIT_CORE_S3_CAPTURE_TAKE_CHUNK;
 }
 
@@ -260,7 +217,7 @@ void iterate_kit_core_s3_capture_reserve_note_discontinuity(
   if (reserve == NULL || !reserve->initialized) {
     return;
   }
-  atomic_saturating_increment(
+  iterate_kit_atomic_saturating_increment_relaxed_u32(
       &reserve->external_discontinuities);
   poison(reserve);
 }

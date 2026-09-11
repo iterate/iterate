@@ -47,8 +47,10 @@
 
 namespace {
 
+/** App-task display snapshot and paint throttle. */
 struct ui_model {
   enum m5sticks3_ui_state state;
+  struct iterate_kit_voice_view view;
   char status[64];
   bool call_active;
   bool link_ready;
@@ -59,7 +61,7 @@ struct ui_model {
   bool api_ready;
   bool stream_ready;
   bool call_requested;
-  /* Unrecoverable start-up fault; see m5sticks3_ui_set_fault. */
+  /* Unrecoverable start-up fault; latched by m5sticks3_ui_present. */
   bool fault;
   bool dirty;
   int64_t last_paint_us;
@@ -163,15 +165,8 @@ bool face_init(void) {
 /* The same semantic snapshot every surface in this product renders from. */
 iterate_kit_conversation_visual_state face_status(void) {
   iterate_kit_conversation_visual_state status = {};
-  status.network = ui.link_ready ? ITERATE_KIT_NETWORK_CONNECTED
-                                 : ITERATE_KIT_NETWORK_CONNECTING;
-  status.reach =
-      iterate_kit_reach_from(ui.api_ready, ui.stream_ready, ui.call_active);
-  status.conversation_active = ui.call_active;
-  status.media_ready = ui.link_ready;
-  status.media_failed = ui.fault;
-  status.microphone_listening = ui.state == M5STICKS3_UI_LISTENING;
-  status.speaker_peak = ui.state == M5STICKS3_UI_SPEAKING ? 4096U : 0U;
+  ui.view.fault = ui.fault;
+  iterate_kit_voice_view_lights(&ui.view, &status);
   return status;
 }
 
@@ -409,47 +404,24 @@ bool m5sticks3_board_take_side_press(void) {
   return pressed;
 }
 
-void m5sticks3_ui_set_state(enum m5sticks3_ui_state state) {
-  if (ui.state == state) return;
+void m5sticks3_ui_present(const struct iterate_kit_voice_view *view) {
+  ui.view = *view;
+  const auto state = static_cast<enum m5sticks3_ui_state>(view->screen);
+  const char *status = view->status == nullptr ? "" : view->status;
+  if (ui.state != state ||
+      strncmp(ui.status, status, sizeof(ui.status)) != 0 ||
+      ui.call_active != view->call_active ||
+      ui.link_ready != view->link_ready ||
+      ui.api_ready != view->api_ready ||
+      ui.stream_ready != view->stream_ready ||
+      (!ui.fault && view->fault)) ui.dirty = true;
   ui.state = state;
-  ui.dirty = true;
-}
-
-void m5sticks3_ui_set_status(const char *status) {
-  if (status == nullptr) status = "";
-  if (strncmp(ui.status, status, sizeof(ui.status)) == 0) return;
   (void)snprintf(ui.status, sizeof(ui.status), "%s", status);
-  ui.dirty = true;
-}
-
-void m5sticks3_ui_set_call_active(bool active) {
-  if (ui.call_active == active) return;
-  ui.call_active = active;
-  ui.dirty = true;
-}
-
-void m5sticks3_ui_set_fault(void) {
-  if (ui.fault) return;
-  ui.fault = true;
-  ui.dirty = true;
-}
-
-void m5sticks3_ui_set_link_ready(bool ready) {
-  if (ui.link_ready == ready) return;
-  ui.link_ready = ready;
-  ui.dirty = true;
-}
-
-void m5sticks3_ui_set_api_ready(bool ready) {
-  if (ui.api_ready == ready) return;
-  ui.api_ready = ready;
-  ui.dirty = true;
-}
-
-void m5sticks3_ui_set_stream_ready(bool ready) {
-  if (ui.stream_ready == ready) return;
-  ui.stream_ready = ready;
-  ui.dirty = true;
+  ui.call_active = view->call_active;
+  ui.link_ready = view->link_ready;
+  ui.api_ready = view->api_ready;
+  ui.stream_ready = view->stream_ready;
+  ui.fault = ui.fault || view->fault;
 }
 
 uint32_t m5sticks3_board_face_frames(void) { return face.rendered; }

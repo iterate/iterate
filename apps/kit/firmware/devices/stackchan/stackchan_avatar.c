@@ -1,3 +1,4 @@
+#include "iterate/kit/atomic.h"
 #include "stackchan_avatar.h"
 
 #include "iterate/kit/avatar/face_animator.h"
@@ -300,52 +301,6 @@ static uint64_t now_us_wide(void) {
   return now <= 0 ? 0U : (uint64_t)now;
 }
 
-static void atomic_saturating_increment(volatile uint32_t *value) {
-  uint32_t current = __atomic_load_n(value, __ATOMIC_RELAXED);
-  while (current != UINT32_MAX &&
-         !__atomic_compare_exchange_n(
-             value,
-             &current,
-             current + 1U,
-             false,
-             __ATOMIC_RELAXED,
-             __ATOMIC_RELAXED)) {
-  }
-}
-
-static void atomic_saturating_add(
-    volatile uint32_t *value, uint32_t amount) {
-  uint32_t current = __atomic_load_n(value, __ATOMIC_RELAXED);
-  while (current != UINT32_MAX) {
-    const uint32_t next = amount > UINT32_MAX - current
-        ? UINT32_MAX
-        : current + amount;
-    if (__atomic_compare_exchange_n(
-            value,
-            &current,
-            next,
-            false,
-            __ATOMIC_RELAXED,
-            __ATOMIC_RELAXED)) {
-      return;
-    }
-  }
-}
-
-static void atomic_note_maximum(
-    volatile uint32_t *maximum, uint32_t candidate) {
-  uint32_t current = __atomic_load_n(maximum, __ATOMIC_RELAXED);
-  while (candidate > current &&
-         !__atomic_compare_exchange_n(
-             maximum,
-             &current,
-             candidate,
-             false,
-             __ATOMIC_RELAXED,
-             __ATOMIC_RELAXED)) {
-  }
-}
-
 /*
  * There is exactly one I2S-ISR writer for these counters. A compare/exchange
  * loop would add an unbounded retry shape to the callback for no ownership
@@ -400,7 +355,7 @@ static bool draw_region_and_wait(
       (int)(y + height),
       pixels);
   if (status != ESP_OK) {
-    atomic_saturating_increment(
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
         &owner.metrics.display_transfer_failures);
     __atomic_store_n(&owner.display_active, 0U, __ATOMIC_RELEASE);
     return false;
@@ -415,7 +370,7 @@ static bool draw_region_and_wait(
      * the visual sidecar is the bounded failure policy; audio remains live and
      * diagnostics retain the exact incident.
      */
-    atomic_saturating_increment(
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
         &owner.metrics.display_transfer_timeouts);
     __atomic_store_n(&owner.display_active, 0U, __ATOMIC_RELEASE);
     return false;
@@ -423,12 +378,12 @@ static bool draw_region_and_wait(
 
   const uint32_t transfer_us = saturating_elapsed_us(
       now_us_wide(), started_at_us);
-  atomic_saturating_increment(&owner.metrics.display_transfers);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.display_transfers);
   __atomic_store_n(
       &owner.metrics.last_display_transfer_us,
       transfer_us,
       __ATOMIC_RELAXED);
-  atomic_note_maximum(
+  iterate_kit_atomic_update_max_relaxed_u32(
       &owner.metrics.maximum_display_transfer_us, transfer_us);
   return true;
 }
@@ -573,7 +528,7 @@ static bool prepare_avatar_frame_under_lock(
   if (face_animator_snapshot(&owner.animator, &candidate)) {
     owner.latest_pose = candidate;
   } else {
-    atomic_saturating_increment(&owner.metrics.snapshot_races);
+    iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.snapshot_races);
   }
 
   /*
@@ -600,7 +555,7 @@ static bool prepare_avatar_frame_under_lock(
         now_us_wide() < __atomic_load_n(
             &owner.image_visible_through_us, __ATOMIC_ACQUIRE);
     if (owner.image_was_visible && !image_visible) {
-      atomic_saturating_increment(&owner.image_shows_completed);
+      iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.image_shows_completed);
     }
     owner.image_was_visible = image_visible;
     if (image_visible) {
@@ -619,7 +574,7 @@ static bool prepare_avatar_frame_under_lock(
               owner.latest_pose.playout_samples,
               owner.framebuffer,
               FACE_RENDER_PIXEL_COUNT)) {
-        atomic_saturating_increment(&owner.metrics.render_failures);
+        iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
         return false;
       }
       if (dozing && !face_doze_apply_overlay(
@@ -632,7 +587,7 @@ static bool prepare_avatar_frame_under_lock(
          * replacing the last coherent display when buffer geometry and
          * renderer assumptions diverge.
          */
-        atomic_saturating_increment(&owner.metrics.render_failures);
+        iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
         return false;
       }
     }
@@ -665,7 +620,7 @@ static bool transfer_avatar_frame(
             source_rows,
             owner.scaled_strip,
             STACKCHAN_AVATAR_SCALE_STRIP_PIXEL_COUNT)) {
-      atomic_saturating_increment(&owner.metrics.render_failures);
+      iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
       return false;
     }
     render_cpu_us += saturating_elapsed_us(
@@ -677,7 +632,7 @@ static bool transfer_avatar_frame(
             STACKCHAN_AVATAR_SCALED_WIDTH,
             source_rows * STACKCHAN_AVATAR_SCALE,
             owner.scaled_strip)) {
-      atomic_saturating_increment(&owner.metrics.render_failures);
+      iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
       return false;
     }
   }
@@ -686,17 +641,17 @@ static bool transfer_avatar_frame(
       : (uint32_t)render_cpu_us;
   __atomic_store_n(
       &owner.metrics.last_render_us, render_us, __ATOMIC_RELAXED);
-  atomic_note_maximum(&owner.metrics.maximum_render_us, render_us);
+  iterate_kit_atomic_update_max_relaxed_u32(&owner.metrics.maximum_render_us, render_us);
   if (render_key->controls.mouth_open != 0U) {
     /*
      * Count only a mouth-open frame whose LCD transfer completed. Analyzer
      * state alone cannot prove the talking pose reached the panel, while a
      * pre-transfer increment would turn a timed-out DMA into false evidence.
      */
-    atomic_saturating_increment(
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
         &owner.metrics.mouth_open_rendered_frames);
   }
-  atomic_saturating_increment(&owner.metrics.rendered_frames);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.rendered_frames);
   return true;
 }
 
@@ -742,7 +697,7 @@ static void analyze_frame(
        * counted, never replayed: replaying them would make the mouth tell an
        * old story after the speaker has already moved on.
        */
-      atomic_saturating_add(
+      iterate_kit_atomic_saturating_add_relaxed_u32(
           &owner.metrics.analyzer_sequence_gaps, distance - 1U);
     }
   }
@@ -774,7 +729,7 @@ static void analyze_frame(
         frame->completed_at_us + STACKCHAN_SPEAKER_STATUS_HANGOVER_US,
         __ATOMIC_RELEASE);
   }
-  atomic_saturating_increment(&owner.metrics.analyzer_frames);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.analyzer_frames);
 
   const uint64_t finished_at_us = now_us_wide();
   const uint32_t handoff_delay_us = saturating_elapsed_us(
@@ -785,11 +740,11 @@ static void analyze_frame(
       &owner.metrics.last_handoff_delay_us,
       handoff_delay_us,
       __ATOMIC_RELAXED);
-  atomic_note_maximum(
+  iterate_kit_atomic_update_max_relaxed_u32(
       &owner.metrics.maximum_handoff_delay_us, handoff_delay_us);
   __atomic_store_n(
       &owner.metrics.last_analyzer_us, analyzer_us, __ATOMIC_RELAXED);
-  atomic_note_maximum(&owner.metrics.maximum_analyzer_us, analyzer_us);
+  iterate_kit_atomic_update_max_relaxed_u32(&owner.metrics.maximum_analyzer_us, analyzer_us);
 }
 
 static bool select_avatar_index(size_t requested_index) {
@@ -800,7 +755,7 @@ static bool select_avatar_index(size_t requested_index) {
    * rendering or can wait behind LCD DMA.
    */
   if (!face_avatar_registry_select(&owner.registry, requested_index)) {
-    atomic_saturating_increment(&owner.metrics.render_failures);
+    iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
     __atomic_store_n(&owner.display_active, 0U, __ATOMIC_RELEASE);
     ESP_LOGE(
         TAG,
@@ -822,7 +777,7 @@ static void sample_physical_controls(void) {
       BSP_POWER_BUTTON_EVENT_NONE;
   esp_err_t status;
 
-  atomic_saturating_increment(&owner.metrics.touch_samples);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.touch_samples);
   status = esp_lcd_touch_read_data(owner.touch);
   if (status == ESP_OK) {
     status = esp_lcd_touch_get_data(
@@ -834,7 +789,7 @@ static void sample_physical_controls(void) {
      * last coherent level; feeding false into the edge detector would turn a
      * transient bus fault into an unintended tap.
      */
-    atomic_saturating_increment(&owner.metrics.touch_read_failures);
+    iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.touch_read_failures);
   } else {
     /*
      * The finger's place is only reported while it is DOWN, so the half a
@@ -848,7 +803,7 @@ static void sample_physical_controls(void) {
     }
     if (iterate_kit_touch_tap_update(
             &owner.touch_tap, touch_point_count != 0U)) {
-      atomic_saturating_increment(&owner.metrics.touch_taps);
+      iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.touch_taps);
       __atomic_store_n(
           &owner.last_face_tap_left,
           __atomic_load_n(&owner.last_touch_x, __ATOMIC_RELAXED) <
@@ -856,14 +811,14 @@ static void sample_physical_controls(void) {
               ? 1U
               : 0U,
           __ATOMIC_RELEASE);
-      atomic_saturating_increment(&owner.pending_face_taps);
+      iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.pending_face_taps);
     }
   }
 
-  atomic_saturating_increment(&owner.metrics.face_button_samples);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.face_button_samples);
   status = bsp_power_button_take_events(&power_events);
   if (status != ESP_OK) {
-    atomic_saturating_increment(
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
         &owner.metrics.face_button_read_failures);
   } else if (!owner.face_button_baseline_established) {
     /*
@@ -876,7 +831,7 @@ static void sample_physical_controls(void) {
      */
     owner.face_button_baseline_established = true;
     if (power_events != BSP_POWER_BUTTON_EVENT_NONE) {
-      atomic_saturating_increment(
+      iterate_kit_atomic_saturating_increment_relaxed_u32(
           &owner.metrics.face_button_boot_events_discarded);
       ESP_LOGI(
           TAG,
@@ -890,16 +845,16 @@ static void sample_physical_controls(void) {
      * Face changes moved to the far end's set_face tool; the button that
      * used to cycle sprites opens conversations instead.
      */
-    atomic_saturating_increment(
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
         &owner.metrics.face_button_short_clicks);
-    atomic_saturating_increment(&owner.pending_side_button_taps);
+    iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.pending_side_button_taps);
   } else if (power_events != BSP_POWER_BUTTON_EVENT_NONE) {
     /*
      * AXP2101 owns the long-hold hard-power policy. Recording the event but
      * taking no application action prevents a power-off gesture from also
      * changing face immediately before the rail disappears.
      */
-    atomic_saturating_increment(
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
         &owner.metrics.face_button_long_or_ambiguous_events);
   }
 }
@@ -917,7 +872,7 @@ static void input_task_main(void *context) {
           &owner.metrics.last_input_sample_interval_us,
           interval_us,
           __ATOMIC_RELAXED);
-      atomic_note_maximum(
+      iterate_kit_atomic_update_max_relaxed_u32(
           &owner.metrics.maximum_input_sample_interval_us, interval_us);
     }
     previous_sample_at_us = sampled_at_us;
@@ -1221,12 +1176,12 @@ esp_err_t iterate_kit_stackchan_avatar_request_status(
   }
 
   if (uxQueueMessagesWaiting(owner.status_mailbox) != 0U) {
-    atomic_saturating_increment(&owner.metrics.status_overwrites);
+    iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.status_overwrites);
   }
   if (xQueueOverwrite(owner.status_mailbox, status) != pdPASS) {
     return ESP_FAIL;
   }
-  atomic_saturating_increment(&owner.metrics.status_updates);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.status_updates);
   return ESP_OK;
 }
 
@@ -1265,7 +1220,7 @@ bool iterate_kit_stackchan_avatar_take_side_button_tap(void) {
  * sampler fills, so everything downstream — the session grammar, the menu,
  * the audit — cannot tell a capability from a finger. That is the point. */
 void iterate_kit_stackchan_avatar_inject_side_button(void) {
-  atomic_saturating_increment(&owner.pending_side_button_taps);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.pending_side_button_taps);
 }
 
 void iterate_kit_stackchan_avatar_inject_face_tap(uint16_t x) {
@@ -1274,7 +1229,7 @@ void iterate_kit_stackchan_avatar_inject_face_tap(uint16_t x) {
       &owner.last_face_tap_left,
       (uint32_t)x < (uint32_t)(BSP_LCD_H_RES / 2U) ? 1U : 0U,
       __ATOMIC_RELEASE);
-  atomic_saturating_increment(&owner.pending_face_taps);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.pending_face_taps);
 }
 
 void iterate_kit_stackchan_avatar_show_menu(uint8_t highlighted) {

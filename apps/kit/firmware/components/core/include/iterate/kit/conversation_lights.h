@@ -77,6 +77,8 @@ struct iterate_kit_conversation_visual_state {
   bool conversation_active;
   bool media_ready;
   bool media_failed;
+  /** Hardware microphone rail is cut: steady dim red, except during a fault. */
+  bool microphone_muted;
   /**
    * The microphone is open and what it hears is being kept.
    *

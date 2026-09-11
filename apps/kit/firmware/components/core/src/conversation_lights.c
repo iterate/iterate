@@ -189,6 +189,13 @@ void iterate_kit_conversation_lights_render(
       sizeof(*pixels) * ITERATE_KIT_CONVERSATION_LIGHT_COUNT);
   if (state == NULL) return;
 
+  if (state->microphone_muted && !state->media_failed) {
+    for (uint8_t index = 0U; index < ITERATE_KIT_CONVERSATION_LIGHT_COUNT; ++index) {
+      pixels[index] = (struct iterate_kit_rgb8){8U, 0U, 0U};
+    }
+    return;
+  }
+
   if (state->restart_armed) {
     /* Whole-output magenta intentionally supersedes the sector grammar. */
     for (uint8_t index = 0U;

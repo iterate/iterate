@@ -1,0 +1,12 @@
+config ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT
+    bool "Suppress physical speaker output for board diagnostics"
+    default n
+    help
+        A diagnostic-only build switch. It keeps a table board's amplifier
+        disabled and replaces every local or streamed PCM write with silence
+        at the shared hardware boundary. I2S TX remains clocked so boards
+        whose microphone DSP needs a continuous playback reference still run
+        normally. Health exposes attempted and zero-written sample counters.
+
+        This is deliberately compile-time only. Production firmware must not
+        silently lose playout through a runtime mode or provider setting.

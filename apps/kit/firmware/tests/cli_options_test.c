@@ -123,6 +123,18 @@ static void a_person_and_a_driver_cannot_both_take_the_turns(void)
   assert(parse(&options, problem, argv, 6) == CLI_OPTIONS_ERR_INCOMPATIBLE);
 }
 
+static void a_driver_can_keep_an_open_microphone_for_server_vad(void)
+{
+  struct cli_options options;
+  char problem[128];
+  char *argv[] = {
+    (char *)"cli", (char *)"--open-mic", (char *)"--converse",
+    (char *)"5", (char *)"--utterance-dir", (char *)"/tmp"};
+
+  assert(parse(&options, problem, argv, 6) == CLI_OPTIONS_OK);
+  assert(options.open_mic && options.converse_minutes == 5.0);
+}
+
 /*
  * An interactive session's limit is its own field. Folded into --converse it
  * would start the unattended driver, which needs utterances nobody supplied,
@@ -147,15 +159,13 @@ static void an_interactive_limit_is_not_the_conversation_driver(void)
 }
 
 /* Numbers are checked, so a typo cannot become a silent zero-minute run. */
-static void numbers_must_be_numbers(void)
+static void minutes_must_be_numbers(void)
 {
   struct cli_options options;
   char problem[128];
   char *bad_minutes[] = {(char *)"cli", (char *)"--converse", (char *)"ten"};
   char *zero_minutes[] = {(char *)"cli", (char *)"--converse", (char *)"0"};
   char *trailing[] = {(char *)"cli", (char *)"--converse", (char *)"10m"};
-  char *bad_count[] = {
-    (char *)"cli", (char *)"--colleague-every", (char *)"-1"};
 
   assert(parse(&options, problem, bad_minutes, 3) ==
          CLI_OPTIONS_ERR_NOT_A_NUMBER);
@@ -163,8 +173,17 @@ static void numbers_must_be_numbers(void)
          CLI_OPTIONS_ERR_NOT_A_NUMBER);
   assert(parse(&options, problem, trailing, 3) ==
          CLI_OPTIONS_ERR_NOT_A_NUMBER);
-  assert(parse(&options, problem, bad_count, 3) ==
-         CLI_OPTIONS_ERR_NOT_A_NUMBER);
+}
+
+/* The old cross-provider conversation driver is gone with its flag. */
+static void colleague_forcing_is_not_a_cli_mode(void)
+{
+  struct cli_options options;
+  char problem[128];
+  char *argv[] = {(char *)"cli", (char *)"--colleague-every", (char *)"1"};
+
+  assert(parse(&options, problem, argv, 3) == CLI_OPTIONS_ERR_UNKNOWN);
+  assert(strcmp(problem, "--colleague-every") == 0);
 }
 
 /* --insecure must never be reachable by accident. */
@@ -218,8 +237,10 @@ int main(void)
   the_environment_fills_only_what_the_flags_left();
   conversing_without_utterances_is_refused();
   a_person_and_a_driver_cannot_both_take_the_turns();
+  a_driver_can_keep_an_open_microphone_for_server_vad();
   an_interactive_limit_is_not_the_conversation_driver();
-  numbers_must_be_numbers();
+  minutes_must_be_numbers();
+  colleague_forcing_is_not_a_cli_mode();
   certificate_checking_is_on_unless_asked_otherwise();
   help_is_reported_rather_than_taken();
   null_arguments_are_refused();

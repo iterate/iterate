@@ -3,370 +3,95 @@
 
 #include <stdint.h>
 
-/*
- * THE MEASUREMENT PROFILE SHARED BY THE PHYSICAL AND HOST VOICE TARGETS.
- *
- * These are resource limits and supervision deadlines, not convenient
- * defaults.  A host run with a deeper queue or a more patient watchdog would
- * exercise a different system and could make an ESP32 failure disappear.  A
- * target may adapt only a physical seam (for example, an I2S DMA lead that
- * macOS does not have); such a difference belongs under an explicitly named
- * override at the adapter, never in a second copy of this table.
- *
- * Audio is 16 kHz mono PCM16.  At 32 bytes/ms the byte and millisecond
- * budgets below are exact, rather than estimates based on a wall clock.
- */
+/* Shared transport budgets for PCM16 mono at 16 kHz (32 bytes/ms).
+ * Device DMA, codec timing and AEC calibration belong to the board. */
 enum {
-  /*
-   * Cap'n Web arenas are hard failure bounds: pending/export/import exhaustion
-   * ends a session, token exhaustion rejects a legitimate nested provider
-   * event, and output is only used for the tiny expressions emitted here.
-   */
+
+  /* Bounded Cap’n Web arenas; exhaustion is a session failure. */
   ITERATE_KIT_VOICE_PENDING_CALL_CAPACITY = 16,
   ITERATE_KIT_VOICE_EXPORT_CAPACITY = 4,
   ITERATE_KIT_VOICE_IMPORT_CAPACITY = 16,
   ITERATE_KIT_VOICE_TOKEN_CAPACITY = 1024,
   ITERATE_KIT_VOICE_OUTPUT_CAPACITY = 128,
 
-  /*
-   * A 16 KiB inbox slot admits a 12-frame delivery batch. Sixty-four slots
-   * cover measured TCP clumping plus concurrent durable calls. The 64-slot
-   * outbox absorbs the microphone's finite speech burst, while its 40-slot
-   * reserve prevents unacknowledged audio from starving mandatory replies.
-   */
+  /* Leave 2 KiB in an outbox slot for the RPC envelope. */
+  ITERATE_KIT_VOICE_HEALTH_CAPACITY = 6144,
+
+  /* Reserve outbox space so microphone traffic cannot starve RPC replies. */
   ITERATE_KIT_VOICE_CONTROL_INBOX_SLOT_CAPACITY = 16384,
   ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOT_CAPACITY = 8192,
   ITERATE_KIT_VOICE_CONTROL_INBOX_SLOTS = 64,
   ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS = 64,
   ITERATE_KIT_VOICE_MIC_OUTBOX_RESERVE = 40,
-  /* Physical, remote, and system talk edges share this fixed owner queue. */
+
   ITERATE_KIT_VOICE_DEVICE_EVENT_CAPACITY = 8,
   ITERATE_KIT_VOICE_DEVICE_EVENT_POLL_BUDGET = 8,
 
-  /*
-   * Twenty milliseconds is the provider/device wire frame, and four frames per
-   * independent append gives the sender catch-up margin without assigning
-   * ordering to RPC completion.
-   */
+  /* Capture grain; GPT-Live itself accepts arbitrary even PCM byte lengths. */
   ITERATE_KIT_VOICE_FRAME_MS = 20,
   ITERATE_KIT_VOICE_FRAME_SAMPLES = 320,
   ITERATE_KIT_VOICE_FRAME_BYTES = 640,
   ITERATE_KIT_VOICE_SAMPLE_RATE_HZ =
       ITERATE_KIT_VOICE_FRAME_SAMPLES * 1000 / ITERATE_KIT_VOICE_FRAME_MS,
-  /*
-   * FIVE SECONDS OF SPEECH THE LINK CANNOT YET CARRY. It was 32 frames — 640
-   * ms — and the number was chosen for a different job.
-   *
-   * This queue is latest-wins, and while a call is up it never fills: capture
-   * produces 50 frames a second and the sender is polled once per captured
-   * frame and takes four, so it drains at four times the rate it fills. The
-   * ONLY thing that makes it grow is a link that will not accept an append —
-   * which is precisely the seconds between a person starting to speak and the
-   * transport coming up.
-   *
-   * Measured, cold start: the prompt invited speech at t=622 ms and the
-   * transport did not reach READY until t=8297 ms. A press at t=3105 and a
-   * release at t=5289 fell entirely inside that window, and at 640 ms of hold
-   * every word of it was displaced by the next word. The person said a
-   * sentence and the agent received the last syllable, or nothing.
-   *
-   * 256 frames covers that connect with margin, costs 164 KB — SPIRAM on the
-   * board, nothing on a host — and changes NOTHING during a call, because
-   * during a call the queue is empty. Sizing it to the connect rather than to
-   * the jitter is the whole point: jitter was never what overflowed it.
-   *
-   * It does NOT size the platform capture ring any more; see
-   * ITERATE_KIT_DARWIN_AUDIO_INPUT_RING_FRAMES for why those are now two
-   * numbers.
-   */
-  ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH = 256,
-  /*
-   * FOUR, and the argument for twelve is written down because it is a good
-   * argument that loses to a measurement.
-   *
-   * Every append costs two WebSocket messages against a socket that sustains
-   * roughly 25-50 a second, so four frames per append (25 messages/s) sits on
-   * the floor of that ceiling while twelve would sit comfortably under it.
-   * The constant's own documentation said twelve. Both were true and it still
-   * broke the device.
-   *
-   * Measured at twelve: fifteen turns answered, then the uplink stopped dead
-   * — frames=0 for the rest of a 26-minute soak while the downlink stayed
-   * perfect at rx=7721 played=7721. Twelve frames is 240 ms of speech against
-   * a 32-frame (640 ms) queue, and the catch-up rule only calls the sender
-   * "behind" at twice the batch, which is 480 ms: three quarters of the whole
-   * queue. A turn that never accumulates 480 ms never triggers catch-up, and
-   * a queue that fills meanwhile drops its oldest frames forever.
-   *
-   * Fixing that properly means sizing the queue and the catch-up threshold
-   * together with the batch, not raising one of the three. Until somebody
-   * does that with a measurement in hand, this stays where it was proven.
-   */
+
+  /* Preserve up to five seconds of opening speech while mounting. */
+  ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH = 5000 / ITERATE_KIT_VOICE_FRAME_MS,
+
+  /* Eight is the catch-up cap; normal partial batches flush every 50 ms. */
   ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND = 8,
-  /*
-   * THE UPLINK FLUSHES BY THE CLOCK, NOT BY COUNT (2026-09-11). Whatever the
-   * microphone has captured goes out once this many milliseconds have passed
-   * since the last flush, as ONE mic-frame event carrying the accumulated
-   * PCM — the facet forwards any even byte length to the provider verbatim,
-   * and GPT-Live says "chunk boundaries are arbitrary: preserve a continuous,
-   * ordered stream". Fifty is Jonas's number: the model hears speech 50 ms
-   * after capture instead of 80 (four frames) or 160 (eight), and each append
-   * is a smaller lump for the stream's single thread to digest — measured on
-   * preview-7, smaller inbound appends left the provider's returning frames
-   * less delayed (p90 113–131 ms at 60 ms appends vs 126–185 at 160 ms).
-   *
-   * THE COST IS MESSAGE RATE: a flush every 50 ms is 20 appends/s, 40
-   * WebSocket messages/s against the ~25–50/s the taskless control socket
-   * sustains on a board (see the note above). If a board's uplink goes quiet
-   * again, raise this first. The frame cap above (8 = 160 ms) is what a
-   * flush sends when the outbox was short for a while, never the target.
-   */
+
   ITERATE_KIT_VOICE_MIC_FLUSH_MS = 50,
 
-  /*
-   * The speaker ring is jitter, not an answer store. Playback starts after
-   * the prefill below (300 ms including the 90 ms I2S DMA lead), conceals at
-   * most 400 ms, and sheds one frame per 50 above 1200 ms so catch-up is
-   * audible only as bounded latency recovery rather than pitch distortion.
-   */
-  /*
-   * TEN SECONDS: A CUSHION AGAIN, because the sender paces once more.
-   *
-   * It was thirty, and the comment here argued the case honestly: the server
-   * of the day shipped a whole answer as fast as the wire took it, so the ring
-   * "is not a cushion any more — it IS the answer, and it has to hold the
-   * longest one anybody will ask for". That was a true description of a wrong
-   * arrangement. A microcontroller had become the buffer for a server that
-   * would not wait, and the catch-up, high-water and lag-skip machinery around
-   * it was all compensation for the same missing wait.
-   *
-   * The buffer now lives on the server, where memory is free and a unit test
-   * can watch it, and the server releases at playback rate with a bounded
-   * budget: voice-agent2's MAX_DEVICE_SPEAKER_BACKLOG_BYTES, 128,000 bytes —
-   * four seconds. Ten seconds is that budget plus six of margin for jitter,
-   * and 320 KiB rather than 960 KiB of PSRAM.
-   *
-   * DO NOT SHRINK THIS BELOW THE SENDER'S BUDGET, and read the budget from
-   * voice-agent2.ts rather than from here — this comment is a copy and copies
-   * go stale. It described v1's `leadMs: 3_000` for a while after v2 stopped
-   * having a `leadMs` at all. The failure is silent from
-   * here: a frame refused at the door was never a frame that went missing, so
-   * the loss counters stay small and innocent while the listener loses whole
-   * seconds. That is how the 1.5 s version hid 2080 discarded frames — 41
-   * seconds of speech — across two minutes of ordinary conversation.
-   */
+
+  /* Ten seconds of bounded incoming jitter; this is capacity, not a delay. */
   ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES = 320000,
-  /*
-   * 210 ms of cushion, plus one hardware ring (2880 bytes, 90 ms): 300 ms
-   * before the first word of every answer. BACK UP FROM 150 (2026-09-11).
-   *
-   * The 150 ms below was right for gpt-realtime, which shipped an answer
-   * faster than it plays: the facet held four seconds of it and the frames
-   * behind the first were already in flight when it landed, so this cushion
-   * bought nothing and the holes of that era were never starvation.
-   *
-   * GPT-Live is the opposite source. It emits exactly one 100 ms delta per
-   * 100 ms, the facet forwards each the instant it arrives, and the device's
-   * only lead against jitter is whatever this prefill holds. Measured at the
-   * client end on preview-7 (voicelab duplex, three-clock report): frame
-   * arrival gaps p50 ~100 ms, p90 150–240 ms, p99 300–400 ms — the Durable
-   * Object adds ~50–130 ms p90 to the provider's frames and Cloudflare→client
-   * adds +50–110 ms p90 on top. At 150 ms one frame in seven found the ring
-   * dry: a Mac talk run played 17 s of answer with 557 concealed frames, 54
-   * underruns and 64 gaps of digital zero (10–527 ms). 300 ms covers p99.
-   *
-   * Still paid on every answer (the first frame REPLACEs and reprimes the
-   * clock), and still the ONLY buffer in the path by design: the facet holds
-   * nothing back ("play as soon as humanly possible"), so this is where the
-   * network's jitter has to be absorbed. If it causes issues, increase it.
-   */
+
+  /* 210 ms plus 90 ms DMA lead. Current transport p99 gaps reach 300–400 ms;
+   * reduce only with paired latency and starvation measurements. */
   ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES = 210 * 32 + 2880,
-  /*
-   * PRIMING ALSO ENDS ON TIME: this long after audio first appeared in the
-   * ring, playback starts with whatever is there. Prefill asks "will more
-   * arrive in time?"; an answer shorter than the prefill never fills it, and
-   * its end marker follows only after 700 ms of trailing silence — so a
-   * 200 ms "Okay." once sat silent until the marker. The wait equals the
-   * prefill's own duration, so a short answer starts exactly when a long one
-   * would have, and never later.
-   *
-   * IT IS TIME SINCE THE FIRST CHUNK, NOT SINCE THE LAST. A "nothing new for
-   * 150 ms" rule was tried first (2026-09-11) and fired on ordinary jitter:
-   * client arrival gaps run p90 150–240 ms, so it started playback with
-   * 100–200 ms buffered and starved on the next late frame — Jonas's live
-   * run played 116 frames with 104 concealed, the holes clustered at each
-   * short answer's onset. One late frame cannot move this bound.
-   */
+
+  /* Short answers start at the same deadline without waiting for an end marker. */
   ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS =
       ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES /
       (ITERATE_KIT_VOICE_FRAME_BYTES / ITERATE_KIT_VOICE_FRAME_MS),
   ITERATE_KIT_VOICE_SPEAKER_CONCEAL_LIMIT_MS = 400,
-  /*
-   * How far behind its own timeline playback may fall before a frame is
-   * dropped to recover.
-   *
-   * THE SIGNAL, AND WHY IT IS NOT QUEUE DEPTH. Frame N of an answer belongs
-   * 20N ms after the first one played; the gap between that and the wall
-   * clock is lag. It grows only when playback stalls, never when the sender
-   * runs ahead — which is exactly the distinction depth cannot make, and the
-   * reason the depth trigger had to be set so high it never fired.
-   *
-   * Measured on hardware with no trigger at all: playback drifted 2772 ms
-   * behind its own timeline in three turns. Half a second is past the point
-   * where a listener hears a reply as slow, and far short of the ~1.5 s where
-   * they would notice a single 20 ms frame missing.
-   */
+
   ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS = 500,
   ITERATE_KIT_VOICE_SPEAKER_IDLE_POWERDOWN_MS = 1500,
 
-  /*
-   * These deadlines bound every recovery path. They are intentionally longer
-   * than ordinary RTT/jitter but finite: failures remain classified and lead
-   * to a call recycle, transport restart, or process restart instead of a
-   * permanently plausible-looking stuck session.
-   */
-  /*
-   * How long a held button may run before the CLI lets go by itself, and how
-   * long an answer may make no progress before its turn is abandoned.
-   */
+
   ITERATE_KIT_VOICE_TURN_MAX_MS = 30000,
-  /*
-   * While a call is open the device says so every this-often with an
-   * ephemeral `keepalive` append, so the facet's idle deadline (sixty
-   * seconds without device input) does not take a person who holds the
-   * talk button rarely, or a quiet open-mic room whose frames the facet
-   * drops, for an abandoned call. Push-to-talk's turn markers used to be
-   * that proof of life; they left the wire on 2026-09-11.
-   */
+
+  /* Device presence is separate from the backend’s continuous input clock. */
   ITERATE_KIT_VOICE_CALL_KEEPALIVE_MS = 20000,
-  /* Bounds DNS, TCP, TLS, and HTTP upgrade as one reconnect attempt. */
+
   ITERATE_KIT_VOICE_CONNECTION_OPEN_TIMEOUT_MS = 10000,
   ITERATE_KIT_VOICE_CONTROL_POLL_MS = 25,
   ITERATE_KIT_VOICE_STATS_INTERVAL_MS = 5000,
-  /*
-   * How often a board with a mouth asks the processor what that mouth is
-   * doing — and ONLY while its speaker queue is non-empty, which is what
-   * keeps an idle board silent on the wire. A face rendered at 10 Hz looks
-   * fine and the classifier's output is sparser than that.
-   */
+
+  /* Poll reduced face state only while answer audio is queued. */
   ITERATE_KIT_VOICE_FACE_POLL_MS = 100,
   ITERATE_KIT_VOICE_UNHEALTHY_RESTART_MS = 120000,
-  /*
-   * `PING_INTERVAL_MS`, `PING_TIMEOUT_MS` and `BRIDGE_SILENCE_MS` were here.
-   * All three served an application-level ping/pong that has been deleted: a
-   * WebSocket carries its own PING/PONG and the transport already answers it,
-   * and the platform exposes a connection-layer probe that returns t0/t1/t2.
-   * The bridge-silence deadline went with them because the pong was its only
-   * evidence during a silent call — without it, the watchdog would have
-   * dropped every call in which nobody spoke for twenty seconds.
-   *
-   * What is left is the deadline on the lane that has no other proof.
-   */
+
+  /* Only count silence while call acceptance or answer audio is owed. */
   ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS = 10000,
-  /*
-   * How long the WebSocket hop must be quiet BOTH ways before this device
-   * sends its own PING.
-   *
-   * 120 s, AND THE COST IS REAL RATHER THAN FREE. It was 15 s, which is the
-   * interval a liveness probe wants. It is not the interval a HIBERNATING
-   * Durable Object can survive: nothing on the platform side calls
-   * `setWebSocketAutoResponse`, so a control-frame PING is not answered by the
-   * runtime — it wakes the object that owns the socket. Four boards probing
-   * every fifteen seconds is four objects that never sleep, forever, whether
-   * or not anybody is in the room.
-   *
-   * WHAT IS TRADED: a half-open socket now goes unnoticed for up to two
-   * minutes of idleness instead of fifteen seconds. That is accepted because
-   * the cost of a stale socket while nobody is talking is zero, and the cost
-   * of never hibernating is paid continuously. It is NOT accepted for the
-   * moment that matters — see below.
-   *
-   * THESE TWO MOVE TOGETHER, which is why the one below moved with it.
-   */
-  /*
-   * A liveness PROBE for a hop silent both ways this long — deliberately
-   * NOT a keepalive racing anybody's idle policy. A client's standing job
-   * is to BE CONNECTED and available: the socket is how the server reaches
-   * this device (server-triggered conversations, pushes), so it exists
-   * whether or not anyone is pressing anything — only the voice PROVIDER is
-   * dialed on demand. Sockets still die (isolate churn, deploys; measured
-   * 2026-08-18: no idle policy anywhere, pings prevent nothing), and a
-   * half-open one looks healthy from here. The probe exists to DETECT that,
-   * so the transport's reconnect loop runs NOW — not at the next use, and
-   * not after minutes of capture are spoken into a corpse.
-   */
+
+
+  /* Long idle probe permits DO hibernation; any inbound frame proves liveness. */
   ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS = 120000,
-  /*
-   * Last resort: no PONG for this long on a READY transport and the chip
-   * restarts, because a half-open TCP connection looks perfectly healthy from
-   * this end and no in-process recovery has worked.
-   *
-   * 420 s, RAISED FROM 180 BECAUSE THE PROBE ABOVE SLOWED DOWN. At a 15 s
-   * probe, 180 s was eleven chances to be answered; at a 120 s probe it is
-   * ONE, and the arithmetic is not close — a probe goes out at 120 s, and if
-   * that single PONG is lost the restart fires at 180 s, sixty seconds before
-   * the next probe is even sent. One dropped packet on an idle board would
-   * reboot it, and a lossy access point would reboot it repeatedly.
-   *
-   * 420 gives three probes (120, 240, 360) and a minute of slack, so a
-   * restart means three consecutive losses rather than one. The cost is that
-   * a genuinely dead hop on an IDLE board is now carried for up to seven
-   * minutes — which costs nothing, because the board is idle. A press into a
-   * dead socket is noticed by DOWNLINK_SILENCE_MS.
-   */
+
   ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS = 420000,
-  /*
-   * Re-mounting a voicelab that failed under a healthy connection.
-   *
-   * A BACKOFF THAT ONLY EVER GROWS IS NOT A BACKOFF, it is a ceiling the
-   * device reaches once and never leaves. All four boards deferred this gate
-   * on every remount attempt and never reset it, so five transient failures
-   * anywhere in a boot — an access-point blip during the first minute is
-   * enough — left the board taking 30s to notice a failed mount for the rest
-   * of its life, long after everything had recovered. Both transport gates
-   * already reset themselves on a healthy connection; these four did not.
-   *
-   * Live here rather than as four copies of 2000/30000 so the reset rule and
-   * the numbers it applies to cannot drift apart per board, and so the host
-   * test pins the same budget the devices use.
-   */
+
+  /* Failed remounts use bounded backoff, reset after a successful mount. */
   ITERATE_KIT_VOICE_REMOUNT_RETRY_MS = 2000,
   ITERATE_KIT_VOICE_REMOUNT_RETRY_MAX_MS = 30000,
-  /*
-   * THE IDLE REMOUNT CONSTANT WAS HERE (180s). It restarted the whole
-   * transport after any three quiet minutes, because the platform once
-   * dropped mounts silently and this clock was the only recovery. It was
-   * also the fleet's dominant Durable Object churn — one incarnation per
-   * board per cycle. Deleted 2026-08-20 to measure how long a mount actually
-   * lives without it; if the silent drop still exists, the fix is a
-   * re-registration that does not drop the socket, not a metronome.
-   */
+
 };
 
-/**
- * How long ago `since` was, on the same monotonic clock as `now`.
- *
- * WHY THIS EXISTS RATHER THAN `now - since`. Every deadline in this runtime
- * is a supervision rule: no bridge event for 20s means the call is gone, no
- * batch for 10s means the delivery lane is dead. Written as a bare
- * subtraction on unsigned time they are all armed with the same landmine —
- * a stamp one millisecond in the FUTURE underflows to 18446744073709551615,
- * which exceeds every deadline there is.
- *
- * That is not hypothetical, and it does not need a clock that goes backwards.
- * A loop samples `now` once at the top and checks its deadlines at the
- * bottom; in between it polls the network, and an arriving batch stamps its
- * own, later, reading. One millisecond of ordinary progress inside a single
- * iteration was enough: measured on a healthy session with a 78ms round
- * trip, the call was declared gone and restarted, over and over, forty-two
- * times in three minutes.
- *
- * So a stamp from the future reads as "just now", which is the only sane
- * meaning it can have.
- */
+/* A clock reset cannot manufacture elapsed time. */
 static inline uint64_t iterate_kit_voice_elapsed_ms(
     uint64_t now, uint64_t since) {
   return since > now ? 0U : now - since;
 }
 
-#endif /* ITERATE_KIT_VOICE_DEVICE_PROFILE_H */
+#endif

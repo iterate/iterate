@@ -31,8 +31,6 @@ enum cli_options_kind {
   CLI_OPTIONS_KIND_SWITCH,
   /** Positive number of minutes. */
   CLI_OPTIONS_KIND_MINUTES,
-  /** Non-negative count. */
-  CLI_OPTIONS_KIND_COUNT,
 };
 
 /** Which field a flag writes. Named so the table stays readable. */
@@ -49,7 +47,6 @@ enum cli_options_field {
   CLI_OPTIONS_FIELD_REPORT_JSON,
   CLI_OPTIONS_FIELD_CONVERSE,
   CLI_OPTIONS_FIELD_MINUTES,
-  CLI_OPTIONS_FIELD_BACK_OFFICE_EVERY,
   CLI_OPTIONS_FIELD_LIVE_AUDIO,
   CLI_OPTIONS_FIELD_LIVE_MIC,
   CLI_OPTIONS_FIELD_PUSH_TO_TALK,
@@ -120,10 +117,6 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    NULL,
    "  --utterance-dir DIR   Directory of PCM16 mono 16 kHz WAVs for "
    "--converse\n"},
-  {"--colleague-every", CLI_OPTIONS_KIND_COUNT,
-   CLI_OPTIONS_FIELD_BACK_OFFICE_EVERY, NULL,
-   "  --colleague-every N   Use the colleague-forcing utterance every "
-   "Nth turn (0 disables)\n"},
   {"--mic-record", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_MIC_RECORD, NULL,
    "  --mic-record FILE     Record what the microphone captured\n"},
   {"--room-wav", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_ROOM_WAV, NULL,
@@ -176,10 +169,6 @@ static enum cli_options_status cli_options_parse_flags(
 /* Parses a positive count of minutes. Fails with ERR_NOT_A_NUMBER. */
 static enum cli_options_status cli_options_read_minutes(
     const char *text, double *out_minutes);
-
-/* Parses a non-negative count. Fails with ERR_NOT_A_NUMBER. */
-static enum cli_options_status cli_options_read_count(
-    const char *text, uint32_t *out_count);
 
 /* Fills anything still unset from the environment, then from defaults. */
 static void cli_options_fill(struct cli_options *out);
@@ -364,8 +353,6 @@ static enum cli_options_status cli_options_apply(
       return cli_options_read_minutes(value, &out->converse_minutes);
     case CLI_OPTIONS_FIELD_MINUTES:
       return cli_options_read_minutes(value, &out->minutes);
-    case CLI_OPTIONS_FIELD_BACK_OFFICE_EVERY:
-      return cli_options_read_count(value, &out->back_office_every);
     case CLI_OPTIONS_FIELD_LIVE_AUDIO: out->live_audio = true; break;
     case CLI_OPTIONS_FIELD_LIVE_MIC: out->live_mic = true; break;
     case CLI_OPTIONS_FIELD_PUSH_TO_TALK: out->push_to_talk = true; break;
@@ -389,20 +376,6 @@ static enum cli_options_status cli_options_read_minutes(
     return CLI_OPTIONS_ERR_NOT_A_NUMBER;
   }
   *out_minutes = minutes;
-  return CLI_OPTIONS_OK;
-}
-
-static enum cli_options_status cli_options_read_count(
-    const char *text, uint32_t *out_count)
-{
-  assert(out_count != NULL);
-  if (text == NULL) return CLI_OPTIONS_ERR_NOT_A_NUMBER;
-  char *end = NULL;
-  const unsigned long value = strtoul(text, &end, 10);
-  if (end == text || end == NULL || *end != '\0' || value > UINT32_MAX) {
-    return CLI_OPTIONS_ERR_NOT_A_NUMBER;
-  }
-  *out_count = (uint32_t)value;
   return CLI_OPTIONS_OK;
 }
 
@@ -520,17 +493,13 @@ static enum cli_options_status cli_options_check_combinations(
    * neither of them had. Picking one silently is worse than refusing: the
    * operator would spend the session wondering why their key does nothing.
    */
-  /* Three turn-taking postures, one microphone: a button, a schedule, or the
-   * server's VAD over a continuous stream. Any two together would fight over
-   * when capture starts and stops, so all pairs refuse. */
+  /* A button and a scheduler would each end the other's turn. The scheduler
+   * may deliberately feed an open microphone: its fixtures provide speech,
+   * then its continuous zero PCM lets server VAD observe the same end-of-turn
+   * silence as a board. */
   if (out->open_mic && out->push_to_talk) {
     cli_options_note(
         problem, problem_bytes, "--open-mic cannot run with --push-to-talk");
-    return CLI_OPTIONS_ERR_INCOMPATIBLE;
-  }
-  if (out->open_mic && out->converse_minutes > 0.0) {
-    cli_options_note(
-        problem, problem_bytes, "--open-mic cannot run with --converse");
     return CLI_OPTIONS_ERR_INCOMPATIBLE;
   }
   if (out->push_to_talk && out->converse_minutes > 0.0) {

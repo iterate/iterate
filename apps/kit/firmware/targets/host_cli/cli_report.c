@@ -26,6 +26,10 @@ static uint64_t cli_report_metric_received(const struct cli_report_turn *t);
 static uint64_t cli_report_metric_played(const struct cli_report_turn *t);
 static uint64_t cli_report_metric_concealed(const struct cli_report_turn *t);
 static uint64_t cli_report_metric_underruns(const struct cli_report_turn *t);
+static uint64_t cli_report_metric_speech_end_to_first_packet(
+    const struct cli_report_turn *t);
+static uint64_t cli_report_metric_speech_end_to_first_played(
+    const struct cli_report_turn *t);
 static uint64_t cli_report_metric_occupancy_min(
     const struct cli_report_turn *t);
 static uint64_t cli_report_metric_occupancy_p10(
@@ -51,6 +55,8 @@ static const struct {
   {"framesPlayed", cli_report_metric_played},
   {"framesConcealed", cli_report_metric_concealed},
   {"underruns", cli_report_metric_underruns},
+  {"speechEndToFirstPacketMs", cli_report_metric_speech_end_to_first_packet},
+  {"speechEndToFirstNonquietSpeakerMs", cli_report_metric_speech_end_to_first_played},
   {"ringOccupancyMinMs", cli_report_metric_occupancy_min},
   {"ringOccupancyP10Ms", cli_report_metric_occupancy_p10},
   {"ringOccupancyMaxMs", cli_report_metric_occupancy_max},
@@ -115,7 +121,6 @@ void cli_report_reset(struct cli_report *report)
 struct cli_report_turn *cli_report_begin_turn(
     struct cli_report *report,
     const char *utterance,
-    bool back_office,
     uint64_t now)
 {
   if (report == NULL) return NULL;
@@ -126,7 +131,6 @@ struct cli_report_turn *cli_report_begin_turn(
   struct cli_report_turn *turn = &report->turns[report->count++];
   memset(turn, 0, sizeof(*turn));
   turn->started_ms = now;
-  turn->back_office = back_office;
   /* UINT32_MAX is "no observation yet", so the first one always wins. */
   turn->occupancy_min_ms = UINT32_MAX;
   if (utterance != NULL) {
@@ -198,6 +202,24 @@ uint64_t cli_report_time_to_answer_ms(const struct cli_report_turn *turn)
   return turn->completed_ms - turn->committed_ms;
 }
 
+uint64_t cli_report_speech_end_to_first_packet_ms(const struct cli_report_turn *turn)
+{
+  if (turn == NULL || turn->last_nonquiet_input_ms == 0U ||
+      turn->first_speaker_packet_ms <= turn->last_nonquiet_input_ms) {
+    return 0U;
+  }
+  return turn->first_speaker_packet_ms - turn->last_nonquiet_input_ms;
+}
+
+uint64_t cli_report_speech_end_to_first_played_ms(const struct cli_report_turn *turn)
+{
+  if (turn == NULL || turn->last_nonquiet_input_ms == 0U ||
+      turn->first_nonquiet_speaker_played_ms <= turn->last_nonquiet_input_ms) {
+    return 0U;
+  }
+  return turn->first_nonquiet_speaker_played_ms - turn->last_nonquiet_input_ms;
+}
+
 enum cli_report_status cli_report_write(
     const struct cli_report *report,
     const struct cli_report_summary *summary,
@@ -235,17 +257,16 @@ static enum cli_report_status cli_report_write_body(
   if (status != CLI_REPORT_OK) return status;
   (void)fprintf(
       file,
-      "},\n  \"summary\":{\"turns\":%zu,\"failedTurns\":%zu,"
+      "},\n  \"summary\":{\"speakerBoundary\":\"%s\",\"turns\":%zu,\"failedTurns\":%zu,"
       "\"sessionRestarts\":%u,\"transportRestarts\":%u,"
       "\"connectionRecycles\":%u,\"callsLost\":%u,"
       "\"deadlineCancelledTurns\":%u,"
       "\"roomCompletedBytes\":%u,\"roomDroppedBytes\":%u,"
       "\"roomStarvedBuffers\":%u,\"speakerPlatformError\":%" PRId32 ","
       "\"microphonePlatformError\":%" PRId32 ","
-      "\"colleagueQuestionsAsked\":%u,"
-      "\"colleagueQuestionsAnswered\":%u,"
       "\"spkFramesReceived\":%u,"
       "\"spkDecodeFailures\":%u}\n}\n",
+      summary->speaker_boundary == NULL ? "timeline" : summary->speaker_boundary,
       report->count, cli_report_failure_count(report),
       summary->session_restarts, summary->transport_restarts,
       summary->connection_recycles, summary->calls_lost,
@@ -253,7 +274,6 @@ static enum cli_report_status cli_report_write_body(
       summary->room_completed_bytes, summary->room_dropped_bytes,
       summary->room_starved_buffers, summary->speaker_platform_error,
       summary->microphone_platform_error,
-      summary->back_office_sent, summary->back_office_heard,
       summary->spk_frames_received,
       summary->spk_decode_failures);
   return CLI_REPORT_OK;
@@ -314,14 +334,23 @@ static enum cli_report_status cli_report_write_turn(
   if (status != CLI_REPORT_OK) return status;
   (void)fprintf(
       file,
-      ",\"colleague\":%s,\"failure\":%s,\"timeToFirstAudioMs\":%" PRIu64
+      ",\"failure\":%s,\"completion\":\"%s\",\"timeToFirstAudioMs\":%" PRIu64
       ",\"timeToAnswerCompleteMs\":%" PRIu64
+      ",\"speechEndToFirstPacketMs\":%" PRIu64
+      ",\"speechEndToFirstNonquietSpeakerMs\":%" PRIu64
+      ",\"speakerQueuedAtFirstPacketFrames\":%u"
+      ",\"speakerQueuedAtFirstNonquietPlayedFrames\":%u"
       ",\"framesSent\":%u,\"framesReceived\":%u,\"framesPlayed\":%u,"
       "\"framesConcealed\":%u,\"underruns\":%u,"
       "\"ringOccupancyMs\":{\"min\":%u,\"p10\":%u,\"max\":%u}}%s\n",
-      turn->back_office ? "true" : "false", turn->failed ? "true" : "false",
+      turn->failed ? "true" : "false",
+      turn->watchdog_stalled ? "watchdog-stalled" : "drained",
       cli_report_time_to_first_audio_ms(turn),
-      cli_report_time_to_answer_ms(turn), turn->frames_sent,
+      cli_report_time_to_answer_ms(turn),
+      cli_report_speech_end_to_first_packet_ms(turn),
+      cli_report_speech_end_to_first_played_ms(turn),
+      turn->speaker_queued_at_first_packet_frames,
+      turn->speaker_queued_at_first_played_frames, turn->frames_sent,
       turn->frames_received, turn->frames_played, turn->frames_concealed,
       turn->underruns,
       turn->occupancy_samples == 0U ? 0U : turn->occupancy_min_ms,
@@ -413,6 +442,18 @@ static uint64_t cli_report_metric_concealed(const struct cli_report_turn *t)
 static uint64_t cli_report_metric_underruns(const struct cli_report_turn *t)
 {
   return t->underruns;
+}
+
+static uint64_t cli_report_metric_speech_end_to_first_packet(
+    const struct cli_report_turn *t)
+{
+  return cli_report_speech_end_to_first_packet_ms(t);
+}
+
+static uint64_t cli_report_metric_speech_end_to_first_played(
+    const struct cli_report_turn *t)
+{
+  return cli_report_speech_end_to_first_played_ms(t);
 }
 
 static uint64_t cli_report_metric_occupancy_min(const struct cli_report_turn *t)

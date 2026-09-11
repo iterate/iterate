@@ -87,6 +87,7 @@ static bool clock_slug(char *out, size_t capacity);
 static uint32_t abandon_speaker_audio(void);
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/itx_connection.h"
+#include "iterate/kit/microphone_flush.h"
 #include "iterate/kit/peer.h"
 #include "iterate/kit/platforms/esp_idf_configuration.h"
 #include "iterate/kit/platforms/esp_idf_itx_transport.h"
@@ -187,7 +188,6 @@ enum {
   FRAME_BYTES = ITERATE_KIT_VOICE_FRAME_BYTES,
   MIC_QUEUE_DEPTH = ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH,
   MIC_FRAMES_PER_APPEND = ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND,
-  MIC_FLUSH_MS = ITERATE_KIT_VOICE_MIC_FLUSH_MS,
   CALL_KEEPALIVE_MS = ITERATE_KIT_VOICE_CALL_KEEPALIVE_MS,
   /*
    * The speaker buffer holds JITTER, never an answer. A 1 MiB (32 s) buffer
@@ -3500,6 +3500,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
           (void)abandon_speaker_audio();
           (void)xQueueReset(runtime.mic_queue); /* pre-press room noise */
           runtime.frame_sequence = 0U;
+          mic_flushed_at = 0U;
           runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_LISTENING;
           runtime.view.status = ("listening");
           if (turn_policy == ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK) board_fence(true);
@@ -3566,9 +3567,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
          * thread had to digest at once. A backlog (the outbox was short, the
          * cap is MIC_FRAMES_PER_APPEND frames per event) sends at once.
          */
-        const bool behind = queued >= (size_t)MIC_FRAMES_PER_APPEND;
-        const bool due = mic_flushed_at == 0U ||
-            iterate_kit_voice_elapsed_ms(now, mic_flushed_at) >= MIC_FLUSH_MS;
         /*
          * FRAMES FLOW AS SOON AS THE STREAM IS UP, call or no call: the first
          * frame is what opens the call, and the facet holds the rest while
@@ -3576,33 +3574,32 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
          * `ptt-start` that placed the call; both left with push-to-talk.) A
          * released button drains what it had queued, then sends nothing.
          */
-        if ((runtime.talking || queued > 0U) &&
+        const size_t take = iterate_kit_microphone_flush_frames(
+            queued, runtime.talking, mic_flushed_at, now);
+        if (take != 0U &&
             runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
-            (behind || due) &&
-            queued >= 1U && outbox_free >= (size_t)MIC_OUTBOX_RESERVE) {
-          const size_t take = queued < (size_t)MIC_FRAMES_PER_APPEND
-              ? queued
-              : (size_t)MIC_FRAMES_PER_APPEND;
+            outbox_free >= (size_t)MIC_OUTBOX_RESERVE) {
           /*
            * The stamp only advances on a flush that was actually sent, so a
            * moment of outbox backpressure delays the speech a beat instead of
            * dropping it — the mic queue is the right place to absorb this.
            */
           size_t index;
-          mic_flushed_at = now;
           for (index = 0U; index < take; ++index) {
             (void)xQueueReceive(runtime.mic_queue, &frame_storage[index], 0);
           }
           /* `struct mic_frame` is exactly its samples, so the popped run is
            * one contiguous stretch of PCM. */
-          (void)iterate_kit_voicelab_append_frames(
+          if (iterate_kit_voicelab_append_frames(
               &runtime.voicelab,
               (const uint8_t *)frame_storage[0].samples,
               take,
               sizeof(frame_storage[0].samples),
               runtime.frame_sequence,
-              now);
-          runtime.frame_sequence += (uint32_t)take;
+              now) == CAPNWEB_OK) {
+            runtime.frame_sequence += (uint32_t)take;
+            mic_flushed_at = now;
+          }
         }
       }
       /*
@@ -3752,4 +3749,25 @@ void iterate_kit_voice_loop_set_stream_path(const char *path) {
 
 void iterate_kit_voice_loop_set_turns(enum iterate_kit_voice_turns turns) {
   turn_policy = turns;
+}
+
+void iterate_kit_voice_view_lights(
+    const struct iterate_kit_voice_view *view,
+    struct iterate_kit_conversation_visual_state *out) {
+  *out = (struct iterate_kit_conversation_visual_state){
+    .network = view->link_ready ? ITERATE_KIT_NETWORK_CONNECTED
+                                : ITERATE_KIT_NETWORK_CONNECTING,
+    .reach = iterate_kit_reach_from(
+        view->api_ready, view->stream_ready, view->call_active),
+    .conversation_active = view->call_active,
+    .media_ready = view->link_ready,
+    .media_failed = view->fault,
+    .microphone_listening =
+        view->screen == ITERATE_KIT_VOICE_SCREEN_LISTENING,
+    .microphone_peak = view->microphone_peak,
+    .speaker_peak = view->screen == ITERATE_KIT_VOICE_SCREEN_SPEAKING
+        ? 4096U
+        : 0U,
+  };
+  if (view->wants_call && !view->call_active) out->media_ready = false;
 }

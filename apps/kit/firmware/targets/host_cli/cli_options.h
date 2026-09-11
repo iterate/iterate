@@ -89,8 +89,6 @@ struct cli_options {
    * site that has to ask which kind of run this is.
    */
   double minutes;
-  /** Every Nth utterance forces a back-office consultation; 0 disables. */
-  uint32_t back_office_every;
   bool live_audio;
   /** Captures from this machine's default input device instead of a WAV. */
   bool live_mic;

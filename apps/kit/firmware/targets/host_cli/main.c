@@ -17,6 +17,7 @@
 #include "cli_capabilities.h"
 #include "cli_conversation.h"
 #include "cli_runtime.h"
+#include "iterate/kit/microphone_flush.h"
 #include "iterate/kit/voice_device_profile.h"
 
 enum {
@@ -439,8 +440,7 @@ static void cli_main_explain_options(
              strcmp(problem, "--converse") == 0) {
     (void)fprintf(stderr, "--converse must be a positive number\n");
   } else if (status == CLI_OPTIONS_ERR_NOT_A_NUMBER) {
-    (void)fprintf(
-        stderr, "--colleague-every must be a nonnegative integer\n");
+    (void)fprintf(stderr, "%s must be a number\n", problem);
   } else if (status == CLI_OPTIONS_ERR_INCOMPATIBLE) {
     /*
      * Print what the parser actually found. This used to print a fixed
@@ -778,7 +778,6 @@ static bool cli_main_init_input(struct cli_runtime *runtime)
     const struct cli_conversation_options options = {
       .directory = runtime->options.utterance_dir,
       .minutes = runtime->options.converse_minutes,
-      .back_office_every = runtime->options.back_office_every,
       .now_ms = runtime->started_ms,
     };
     const enum cli_conversation_status status = cli_conversation_init(
@@ -1203,7 +1202,7 @@ static void cli_main_finish_answer_if_ready(
   if (!played_out && !overdue) return;
   runtime->answer_done = false;
   runtime->turn_progress_ms = 0U;
-  cli_conversation_finish_turn(runtime, now_ms);
+  cli_conversation_finish_turn(runtime, now_ms, played_out);
   if (runtime->conversation.state == CLI_CONVERSATION_WAIT_ANSWER) {
     runtime->conversation.state = CLI_CONVERSATION_GAP;
     runtime->conversation.next_action_at_ms =
@@ -1519,22 +1518,15 @@ static void cli_main_send_microphone(struct cli_runtime *runtime, uint64_t now_m
 {
   assert(runtime != NULL);
   const size_t queued = cli_microphone_queued(&runtime->microphone);
-  /*
-   * A partial batch is sent once no more frames are coming: the recording ran
-   * out, or the gate closed. Without that a live microphone would strand the
-   * last syllable of the sentence in the queue until the next turn cleared it.
-   */
-  if (queued < ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND &&
-      !runtime->source_finished && runtime->talking) return;
-  if (queued == 0U) return;
+  const size_t frame_count = iterate_kit_microphone_flush_frames(
+      queued, runtime->talking && !runtime->source_finished,
+      runtime->mic_flushed_at_ms, now_ms);
+  if (frame_count == 0U) return;
   struct iterate_kit_spsc_ring_metrics outbox = {0};
   iterate_kit_spsc_ring_metrics(&runtime->control_outbox, &outbox);
   const size_t free_slots = ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS -
       outbox.current_slots;
   if (free_slots < ITERATE_KIT_VOICE_MIC_OUTBOX_RESERVE) return;
-  const size_t frame_count = queued < ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND
-      ? queued
-      : ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND;
   /* The append takes one contiguous run; this ring wraps, so stage it. */
   static uint8_t flush[ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND *
                        ITERATE_KIT_VOICE_FRAME_BYTES];
@@ -1549,6 +1541,7 @@ static void cli_main_send_microphone(struct cli_runtime *runtime, uint64_t now_m
       &runtime->voicelab, flush, frame_count,
       ITERATE_KIT_VOICE_FRAME_BYTES, runtime->frame_sequence, now_ms);
   if (status != CAPNWEB_OK) return;
+  runtime->mic_flushed_at_ms = now_ms;
   runtime->frame_sequence += (uint32_t)frame_count;
   runtime->microphone.read = (runtime->microphone.read + frame_count) %
       ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH;
@@ -1632,6 +1625,7 @@ static void cli_main_start_talk(
   runtime->talking = true;
   runtime->turn_started_ms = now_ms;
   runtime->frame_sequence = 0U;
+  runtime->mic_flushed_at_ms = 0U;
   /* Anything the previous gate could not get out is lost here, and counted:
    * a queue the uplink never drained is the one case that reaches this. */
   runtime->mic_frames_dropped += (uint32_t)runtime->microphone.used;

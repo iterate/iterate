@@ -51,6 +51,30 @@ struct fixture {
   struct iterate_kit_voicelab voicelab;
 };
 
+struct observed_face {
+  uint32_t answer;
+  uint32_t offset_samples;
+  uint8_t viseme;
+  uint8_t confidence;
+  size_t count;
+};
+
+static struct observed_face observed_face;
+
+static void record_face(
+    void *context,
+    uint32_t answer,
+    uint32_t offset_samples,
+    uint8_t viseme,
+    uint8_t confidence) {
+  (void)context;
+  observed_face.answer = answer;
+  observed_face.offset_samples = offset_samples;
+  observed_face.viseme = viseme;
+  observed_face.confidence = confidence;
+  ++observed_face.count;
+}
+
 static enum capnweb_status capture_fragment(
     void *context,
     enum capnweb_text_fragment_kind kind,
@@ -151,6 +175,7 @@ static void start_and_mount(struct fixture *fixture) {
     .conversation_id = "wsdev",
     .now_ms = fixture_now_ms,
     .clock_context = fixture,
+    .on_face = record_face,
   };
   assert(
       iterate_kit_voicelab_start(&fixture->voicelab, &options) ==
@@ -369,7 +394,7 @@ static void downlink_flow(void) {
      * THREE, down from six. `pong` went with the ping that earned it;
      * `grok-event` carried two facts that now ride `spk-frame` as `drop` and
      * `last`; `viseme` is deleted from the contract because the face is
-     * reduced state published through `liveState`.
+     * reduced processor runtime state read by a direct RPC poll.
      */
     assert(
         strstr(
@@ -588,6 +613,57 @@ static void downlink_flow(void) {
   assert(fixture.voicelab.batches_on_connection < 2U);
   assert(!fixture.voicelab.has_previous_connection_capability);
 
+  assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
+}
+
+static void face_runtime_state_is_polled_and_deduped(void) {
+  static struct fixture fixture;
+  size_t before;
+
+  fixture_init(&fixture);
+  memset(&observed_face, 0, sizeof(observed_face));
+  start_and_mount(&fixture);
+
+  before = fixture.captured_count;
+  assert(iterate_kit_voicelab_poll_face(&fixture.voicelab) == CAPNWEB_OK);
+  assert(strstr(fixture.captured[before], "getProcessorRuntimeState") != NULL);
+  assert(strstr(fixture.captured[before], "watch-v3") == NULL);
+  assert(fixture.voicelab.face_poll_pending);
+  receive(
+      &fixture,
+      "[\"resolve\",4,{\"runtime\":{\"face\":{\"answer\":7,\"playoutSamples\":1600,\"viseme\":9,\"confidence\":200,\"at\":100}}}]");
+  assert(!fixture.voicelab.face_poll_pending);
+  assert(observed_face.count == 1U);
+  assert(observed_face.answer == 7U);
+  assert(observed_face.offset_samples == 1600U);
+  assert(observed_face.viseme == 9U);
+  assert(observed_face.confidence == 200U);
+
+  /* A reduced value is returned again until it changes; `at` makes it one fact. */
+  assert(iterate_kit_voicelab_poll_face(&fixture.voicelab) == CAPNWEB_OK);
+  receive(
+      &fixture,
+      "[\"resolve\",5,{\"runtime\":{\"face\":{\"answer\":7,\"playoutSamples\":1600,\"viseme\":9,\"confidence\":200,\"at\":100}}}]");
+  assert(observed_face.count == 1U);
+
+  /* A malformed shape is harmless and does not poison the next valid value. */
+  assert(iterate_kit_voicelab_poll_face(&fixture.voicelab) == CAPNWEB_OK);
+  receive(
+      &fixture,
+      "[\"resolve\",6,{\"runtime\":{\"face\":{\"answer\":7,\"playoutSamples\":1700,\"viseme\":99,\"at\":101}}}]");
+  assert(observed_face.count == 1U);
+
+  assert(iterate_kit_voicelab_poll_face(&fixture.voicelab) == CAPNWEB_OK);
+  receive(
+      &fixture,
+      "[\"resolve\",7,{\"runtime\":{\"face\":{\"answer\":7,\"playoutSamples\":1700,\"viseme\":14,\"at\":101}}}]");
+  assert(observed_face.count == 2U);
+  assert(observed_face.offset_samples == 1700U);
+  assert(observed_face.viseme == 14U);
+  assert(observed_face.confidence == 0U);
+  assert(fixture.voicelab.face_polls == 4U);
+  assert(fixture.voicelab.face_updates == 2U);
+  assert(fixture.voicelab.last_face_at_ms == 101U);
   assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
 }
 
@@ -977,6 +1053,7 @@ int main(void) {
   assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_CLOSED);
 
   downlink_flow();
+  face_runtime_state_is_polled_and_deduped();
   the_second_agents_dialect();
 
   printf("voicelab stream test passed\n");

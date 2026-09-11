@@ -17,15 +17,15 @@ void iterate_kit_fake_esp_log(
     const char *level, const char *tag, const char *format, ...)
     __attribute__((format(printf, 3, 4)));
 
-#define ESP_LOGE(tag, format, ...) \
-  iterate_kit_fake_esp_log("E", (tag), format, ##__VA_ARGS__)
-#define ESP_LOGW(tag, format, ...) \
-  iterate_kit_fake_esp_log("W", (tag), format, ##__VA_ARGS__)
-#define ESP_LOGI(tag, format, ...) \
-  iterate_kit_fake_esp_log("I", (tag), format, ##__VA_ARGS__)
-#define ESP_LOGD(tag, format, ...) \
-  iterate_kit_fake_esp_log("D", (tag), format, ##__VA_ARGS__)
-#define ESP_LOGV(tag, format, ...) \
-  iterate_kit_fake_esp_log("V", (tag), format, ##__VA_ARGS__)
+#define ESP_LOGE(tag, ...) \
+  iterate_kit_fake_esp_log("E", (tag), __VA_ARGS__)
+#define ESP_LOGW(tag, ...) \
+  iterate_kit_fake_esp_log("W", (tag), __VA_ARGS__)
+#define ESP_LOGI(tag, ...) \
+  iterate_kit_fake_esp_log("I", (tag), __VA_ARGS__)
+#define ESP_LOGD(tag, ...) \
+  iterate_kit_fake_esp_log("D", (tag), __VA_ARGS__)
+#define ESP_LOGV(tag, ...) \
+  iterate_kit_fake_esp_log("V", (tag), __VA_ARGS__)
 
 #endif

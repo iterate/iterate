@@ -174,6 +174,8 @@ struct cli_runtime {
   /** Bytes this scripted turn successfully submitted to the room boundary. */
   uint32_t turn_room_submitted_bytes;
   uint64_t next_mic_at_ms;
+  /** Last successful microphone append; 0 sends the first frame immediately. */
+  uint64_t mic_flushed_at_ms;
   uint64_t next_playback_at_ms;
   uint64_t next_stats_at_ms;
   uint64_t unhealthy_since_ms;
