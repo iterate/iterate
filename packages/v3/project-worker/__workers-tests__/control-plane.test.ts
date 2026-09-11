@@ -1,8 +1,8 @@
 import { env, SELF } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import type { Env } from "../src/control-plane.ts";
-import type { UnauthenticatedSession } from "../src/session.ts";
+import { signIn, type Env } from "../src/control-plane.ts";
+import type { Session, UnauthenticatedSession } from "../src/session.ts";
 import { directory } from "../src/directory.ts";
 import { applyDirectorySchema, SRC_ECHO_APP } from "./support.ts";
 
@@ -148,6 +148,32 @@ test("operator RPC accepts only its administrator credential; issuer login uses 
       })
     ).status,
   ).toBe(403);
+});
+
+test("unverified email login requires test mode and creates an ordinary user session", async () => {
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
+    SELF.fetch(new Request(input, init)),
+  );
+  const bindings = env as unknown as Env;
+  const request = new Request(`${origin}/login`, { method: "POST" });
+  const input = { email: "Test-Login@directory.test", next: "/sessions" };
+  await expect(signIn(bindings, request, input)).rejects.toThrow(/Sign in with Google/);
+  const login = await signIn({ ...bindings, APP_CONFIG_TEST_EMAIL_LOGIN: "true" }, request, input);
+  expect(login.location).toBe("/sessions");
+  const response = await SELF.fetch(`${origin}/api`, {
+    headers: {
+      Upgrade: "websocket",
+      Origin: origin,
+      Cookie: login.setCookie.split(";")[0]!,
+    },
+  });
+  expect(response.status).toBe(101);
+  response.webSocket!.accept();
+  using api = newWebSocketRpcSession<Session>(response.webSocket! as unknown as WebSocket);
+  expect(await api.whoami()).toMatchObject({
+    actor: expect.stringMatching(/^user_/),
+    email: "test-login@directory.test",
+  });
 });
 
 test("project ingress strips forged internal authority and never exposes platform credentials", async () => {

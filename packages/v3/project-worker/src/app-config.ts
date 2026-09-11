@@ -7,6 +7,8 @@
 // property of the code and lives beside its consumer. A var nothing reads does not exist; an
 // `APP_CONFIG_*` var this file does not name is refused, so a typo can never configure nothing silently.
 
+import { isLocalOrigin } from "./lib.ts";
+
 const APP_CONFIG_VARS = [
   "APP_CONFIG_ENVIRONMENT_NAME",
   "APP_CONFIG_PROJECT_HOSTNAME_BASE",
@@ -19,6 +21,7 @@ const APP_CONFIG_VARS = [
   "APP_CONFIG_MCP_ORIGIN",
   "APP_CONFIG_GOOGLE_CLIENT_ID",
   "APP_CONFIG_GOOGLE_CLIENT_SECRET",
+  "APP_CONFIG_TEST_EMAIL_LOGIN",
 ] as const;
 /** One of the `APP_CONFIG_*` vars — the only names `parseAppConfig` reads. */
 type AppConfigVarName = (typeof APP_CONFIG_VARS)[number];
@@ -30,6 +33,8 @@ export interface AppConfig {
   readonly platformOrigin: string;
   readonly googleClientId: string;
   readonly googleClientSecret: string;
+  /** Assume any entered email, without verification. Local development or explicit test deployments only. */
+  readonly testEmailLogin: boolean;
   readonly mcpOrigin: string;
   /** Which deployment this is, as a word a human reads at `/version`: "poc" (the deployment), "test"
    *  (the workers lane), "e2e" (the e2e lane). Required. */
@@ -109,10 +114,14 @@ export function parseAppConfig(vars: object, deployId = "unversioned"): AppConfi
   const googleClientSecret = read("APP_CONFIG_GOOGLE_CLIENT_SECRET");
   if (Boolean(googleClientId) !== Boolean(googleClientSecret))
     throw new Error("Google client ID and secret must be configured together.");
+  const testEmailLogin = read("APP_CONFIG_TEST_EMAIL_LOGIN");
+  if (!["", "false", "true"].includes(testEmailLogin))
+    throw new Error("APP_CONFIG_TEST_EMAIL_LOGIN: expected true or false");
   return {
     platformOrigin,
     googleClientId,
     googleClientSecret,
+    testEmailLogin: isLocalOrigin(platformOrigin) || testEmailLogin === "true",
     mcpOrigin,
     environmentName,
     projectHostnameBase: read("APP_CONFIG_PROJECT_HOSTNAME_BASE"),

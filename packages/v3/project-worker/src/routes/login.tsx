@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { browserAuthorization } from "../browser-client.ts";
 import { appConfigOf } from "../app-config.ts";
-import { isLocalOrigin, sameOriginPath } from "../lib.ts";
+import { sameOriginPath } from "../lib.ts";
 import { consoleContext } from "./-console-context.ts";
 
 const loginOptions = createServerFn({ method: "GET" })
@@ -13,7 +13,7 @@ const loginOptions = createServerFn({ method: "GET" })
     const session = await browserAuthorization(context.env, context.request, context.ctx);
     return {
       session: session && { email: session.principal.email },
-      local: isLocalOrigin(config.platformOrigin),
+      testEmailLogin: config.testEmailLogin,
       google: Boolean(config.googleClientId && config.googleClientSecret),
       next: sameOriginPath(data, config.platformOrigin),
     };
@@ -29,7 +29,7 @@ export const Route = createFileRoute("/login")({
 });
 
 function LoginPage() {
-  const { session, local, google, next } = Route.useLoaderData();
+  const { session, testEmailLogin, google, next } = Route.useLoaderData();
   return (
     <main>
       <h1>Sign in</h1>
@@ -50,12 +50,7 @@ function LoginPage() {
         </>
       ) : (
         <>
-          {google && (
-            <p>
-              <a href={`/.auth/identity?next=${encodeURIComponent(next)}`}>Continue with Google</a>
-            </p>
-          )}
-          {local && (
+          {testEmailLogin && (
             <form method="post" action="/login">
               <input type="hidden" name="next" value={next} />
               <label>
@@ -63,10 +58,15 @@ function LoginPage() {
                 <input type="email" name="email" placeholder="you@example.com" required />
               </label>
               <button type="submit">Continue</button>
-              <p className="muted">Local development sign-in.</p>
+              <p className="muted">Test sign-in: use any email. No verification.</p>
             </form>
           )}
-          {!local && !google && <p>Sign-in is not configured for this deployment.</p>}
+          {google && (
+            <p>
+              <a href={`/.auth/identity?next=${encodeURIComponent(next)}`}>Continue with Google</a>
+            </p>
+          )}
+          {!testEmailLogin && !google && <p>Sign-in is not configured for this deployment.</p>}
         </>
       )}
     </main>

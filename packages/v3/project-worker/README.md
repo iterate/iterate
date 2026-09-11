@@ -53,6 +53,7 @@ plain vars in the test lanes:
 | `APP_CONFIG_ADMIN_API_SECRET`                                       | yes      | the admin secret: `authenticate({ type: "admin-secret" })`, the lanes' admin bearer (secret) |
 | `APP_CONFIG_PROJECT_TOKEN_SECRET`                                   | yes      | signs operator-only project credentials (secret)                                             |
 | `APP_CONFIG_PROJECT_HOSTNAME_BASE`                                  | no       | the base project hosts hang under; blank ⇒ no project-host ingress                           |
+| `APP_CONFIG_TEST_EMAIL_LOGIN`                                       | no       | `true` permits unverified email sign-in; disabled remotely by default                        |
 | `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`, `APP_CONFIG_ARTIFACTS_NAMESPACE` | no       | `itx.repos`' git remotes                                                                     |
 
 ## The console
@@ -64,7 +65,12 @@ component and loader are also used verbatim by the independently hosted Notes ap
 Google login proves identity to our issuer. Its callback establishes one ordinary, revocable
 issuer grant through the same `BrowserSession` used by other apps. There is no separate
 identity cookie. The explicit `/login` page has a small server function for safe login options;
-the local/admin `POST /login` fixture establishes that same issuer session.
+the test/admin `POST /login` path establishes that same issuer session.
+
+For the isolated `os.iterate2.com` deployment, `testEmailLogin: true` in `envs.ts`
+enables the email form at [Sign in](https://os.iterate2.com/login). Enter any email
+to assume that user immediately, without verification. Localhost also offers this
+form. Other deployments require Google unless they explicitly enable test login.
 
 Only that issuer grant receives `session.consent`. The `/authorize` SPA can create an
 organization and project through `session.createOrg` and `session.projects.create`, then

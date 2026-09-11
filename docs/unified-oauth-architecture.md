@@ -28,7 +28,10 @@ API credentials. After checking state, PKCE, nonce, signature, stable subject an
 verified email, the callback runs `startIssuerSession`: ordinary app-session
 begin, server-approved code, ordinary public token exchange. Its grant has
 `kind: issuer`; it is the issuer's sole browser identity and appears in the same
-session inventory. The local/admin fixture calls the same verified-login tail.
+session inventory. The test/admin login path calls the same session-creation tail.
+Email-only login is available on localhost and explicitly enabled test deployments
+(`APP_CONFIG_TEST_EMAIL_LOGIN=true`); it assumes the entered identity without
+verification. This is enabled on the isolated `os.iterate2.com` deployment.
 
 A signed ten-minute Google flow cookie is temporary correlation state, not a
 signed-in identity. A separate stateless identity cookie no longer exists.

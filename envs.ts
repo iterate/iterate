@@ -573,6 +573,8 @@ export interface ProjectWorkerEnv {
   mcpBaseUrl: string;
   projectHostnameBase: string;
   artifactsNamespace: string;
+  /** Unverified email sign-in for this isolated test deployment. Never enable for real user data. */
+  testEmailLogin?: boolean;
   resources: { directoryDbId: string; oauthKvId: string; secretsKvId: string; itxKvId: string };
 }
 export const projectWorkerEnvs: Record<string, ProjectWorkerEnv> = {
@@ -584,6 +586,7 @@ export const projectWorkerEnvs: Record<string, ProjectWorkerEnv> = {
     mcpBaseUrl: "https://mcp.iterate2.com",
     projectHostnameBase: "iterate2.app",
     artifactsNamespace: "project-worker-prd-repos",
+    testEmailLogin: true,
     resources: {
       directoryDbId: "be6a3789-726a-4786-8b50-ef150c583b4e",
       oauthKvId: "a1a12d1cf1c342f8a389e5bf9dc5b760",

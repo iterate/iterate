@@ -2,7 +2,7 @@
 import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import type { ServerEntry } from "@tanstack/react-start/server-entry";
 import { startIssuerSession } from "./issuer-session.ts";
-import { codedError, errorCode, isSameOriginBrowserRequest, isLocalOrigin } from "./lib.ts";
+import { codedError, errorCode, isSameOriginBrowserRequest } from "./lib.ts";
 import { directory } from "./directory.ts";
 import { appConfigOf } from "./app-config.ts";
 import { verifyAdminSecret } from "./principal.ts";
@@ -33,8 +33,8 @@ export interface Handler {
 /** Request-local context for issuer login and consent server functions. */
 export type ConsoleRequestContext = { env: Env; ctx: ExecutionContext; request: Request };
 
-/** Local login fixture, or explicit administrator impersonation for automated
- * acceptance tests. Deployed visitors prove identity through Google. */
+/** Email-only sign-in for explicitly enabled test deployments and localhost,
+ * or the administrator fixture. Other deployments require verified Google identity. */
 export async function signIn(
   env: Env,
   request: Request,
@@ -43,7 +43,7 @@ export async function signIn(
   const config = appConfigOf(env);
   const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
   if (
-    !isLocalOrigin(config.platformOrigin) &&
+    !config.testEmailLogin &&
     !(bearer && (await verifyAdminSecret(bearer, config.adminApiSecret)))
   )
     throw codedError("UNAUTHENTICATED", "Sign in with Google.");

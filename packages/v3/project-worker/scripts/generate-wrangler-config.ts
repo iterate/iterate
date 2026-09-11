@@ -56,6 +56,7 @@ export function writeWranglerConfig() {
           vars: {
             APP_CONFIG_ENVIRONMENT_NAME: name,
             APP_CONFIG_PLATFORM_ORIGIN: env.baseUrl,
+            APP_CONFIG_TEST_EMAIL_LOGIN: String(env.testEmailLogin ?? false),
             APP_CONFIG_MCP_ORIGIN: env.mcpBaseUrl,
             APP_CONFIG_PROJECT_HOSTNAME_BASE: env.projectHostnameBase,
             APP_CONFIG_ARTIFACTS_ACCOUNT_ID: env.cloudflareAccountId,

@@ -1,5 +1,5 @@
 // Browser acceptance for the current OAuth contract. Google identity proof is
-// covered separately; deployed runs use the explicit administrator login fixture.
+// covered separately; TEST_EMAIL_LOGIN=true exercises the visible test sign-in form.
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -21,7 +21,7 @@ const adminSecret = (origin: string) => {
 };
 
 async function signIn(page: Page, origin: string, email: string, next = "/") {
-  if (isLocal(origin)) {
+  if (isLocal(origin) || process.env.TEST_EMAIL_LOGIN === "true") {
     await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     return;

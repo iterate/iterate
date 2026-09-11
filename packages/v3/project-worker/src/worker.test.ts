@@ -34,6 +34,7 @@ const MINIMAL_CONFIG = {
   platformOrigin: "https://control.test",
   googleClientId: "",
   googleClientSecret: "",
+  testEmailLogin: false,
   mcpOrigin: "",
   environmentName: "poc",
   projectHostnameBase: "",
@@ -47,6 +48,22 @@ const MINIMAL_CONFIG = {
 
 describe("parseAppConfig", () => {
   const rows: { vars: Record<string, unknown>; becomes?: unknown; throws?: RegExp }[] = [
+    {
+      vars: { ...MINIMAL, APP_CONFIG_TEST_EMAIL_LOGIN: "true" },
+      becomes: { ...MINIMAL_CONFIG, testEmailLogin: true },
+    },
+    {
+      vars: { ...MINIMAL, APP_CONFIG_TEST_EMAIL_LOGIN: "false" },
+      becomes: MINIMAL_CONFIG,
+    },
+    {
+      vars: { ...MINIMAL, APP_CONFIG_TEST_EMAIL_LOGIN: "yes" },
+      throws: /^APP_CONFIG_TEST_EMAIL_LOGIN: expected true or false$/,
+    },
+    {
+      vars: { ...MINIMAL, APP_CONFIG_PLATFORM_ORIGIN: "http://localhost:8788" },
+      becomes: { ...MINIMAL_CONFIG, platformOrigin: "http://localhost:8788", testEmailLogin: true },
+    },
     // parses, and trims
     {
       vars: {

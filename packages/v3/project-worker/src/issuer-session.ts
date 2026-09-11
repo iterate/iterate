@@ -4,7 +4,7 @@ import { startAppSession } from "./client/app-auth.ts";
 import { oauthAddresses, oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
 import { sameOriginPath } from "./lib.ts";
 
-/** Only verified Google login and the privileged login fixture call this tail.
+/** Verified Google login and explicitly enabled test/administrator login call this tail.
  * Its grant is the issuer's sole browser identity: ordinary storage, public token
  * exchange, admission, expiry and revocation. No separate identity cookie. */
 export async function startIssuerSession(env: Env, user: User, next: string) {
