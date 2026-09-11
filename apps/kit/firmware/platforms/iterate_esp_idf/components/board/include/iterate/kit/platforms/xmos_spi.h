@@ -20,6 +20,15 @@ struct iterate_kit_xmos_spi {
   gpio_num_t cs_gpio;
 };
 
+/** Open SPI2 (mode 3, 8 MHz, DMA disabled) and poll a nonzero XMOS version.
+ * The caller supplies a zero-initialized handle and version storage. NULL
+ * means success; otherwise the returned string names the failed startup stage.
+ * Retain handles on failure: board startup parks and never retries this open.
+ */
+const char *iterate_kit_xmos_spi_open(struct iterate_kit_xmos_spi *handle,
+    int mosi, int miso, int sclk, gpio_num_t cs,
+    struct iterate_kit_xmos_version *version, uint8_t attempts, uint16_t interval_ms);
+
 /** Send a framed command; BUSY gets at most three retries, one tick apart,
  * on EACH half. For read commands, len must equal reply_len (1..253), payload
  * contains request dummy bytes; wait one tick and clock reply_len+3 zeros.

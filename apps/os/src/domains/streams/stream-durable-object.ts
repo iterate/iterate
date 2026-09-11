@@ -1,4 +1,4 @@
-import { DurableObject, RpcTarget } from "cloudflare:workers";
+import { DurableObject, RpcTarget, tracing } from "cloudflare:workers";
 import { z } from "zod";
 import type {
   ProcessorRuntimeState,
@@ -55,7 +55,11 @@ import {
   parseLiveStatePagerLaneTag,
 } from "../live-state-pager.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
-import { DynamicWorkerRunner, isWorkerRpcCloneVersionError } from "../workers/worker-runner.ts";
+import {
+  DynamicWorkerRunner,
+  isWorkerRpcCloneVersionError,
+  isWorkerRpcTooManySubrequestsError,
+} from "../workers/worker-runner.ts";
 import { isWorkerBuildInProgressError } from "../workers/worker-loader.ts";
 import { isWorkerBuildFailedError, WorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { RepoNotSeededError } from "../repos/utils.ts";
@@ -258,9 +262,24 @@ export class StreamDeliveryAlarmBoundary {
     return this.#scheduledWorkPending;
   }
 
-  scheduleOrRun(work: () => Promise<unknown>): void {
+  scheduleOrRun(work: () => Promise<unknown>, diagnostic?: { subscriptionName: string }): void {
     if (this.#inAlarmTurn) {
-      this.#hooks.waitUntil(settleStreamCoreBackgroundWork(work));
+      const settled =
+        diagnostic === undefined
+          ? settleStreamCoreBackgroundWork(work)
+          : tracing.enterSpan("stream.repro.alarm_wait_until", async (span) => {
+              span.setAttribute("iterate.stream.subscription_name", diagnostic.subscriptionName);
+              return await settleStreamCoreBackgroundWork(() =>
+                tracing.enterSpan("stream.repro.source_owned_closure", async (closureSpan) => {
+                  closureSpan.setAttribute(
+                    "iterate.stream.subscription_name",
+                    diagnostic.subscriptionName,
+                  );
+                  return await work();
+                }),
+              );
+            });
+      this.#hooks.waitUntil(settled);
       return;
     }
     // setAlarm is itself an output-gated storage write. Issue it directly in
@@ -498,7 +517,18 @@ function createSubscriptionReceiverCalls(deps: {
     },
 
     async deliverToItx(expression: ItxExpression, batch: StreamDeliveryBatch) {
-      await evaluateItxDelivery(expression, batch);
+      if (!batch.path.startsWith("/repros/")) {
+        await evaluateItxDelivery(expression, batch);
+        return;
+      }
+      await tracing.enterSpan("stream.repro.source_owned_receiver", async (span) => {
+        span.setAttribute("iterate.stream.subscription_name", batch.name);
+        span.setAttribute("iterate.stream.receiver_action", "itx-call");
+        span.setAttribute("iterate.stream.event_count", batch.events.length);
+        span.setAttribute("iterate.stream.first_offset", batch.events[0]?.offset ?? -1);
+        span.setAttribute("iterate.stream.last_offset", batch.events.at(-1)?.offset ?? -1);
+        await evaluateItxDelivery(expression, batch);
+      });
     },
 
     async copyToStream(path: string, batch: StreamDeliveryBatch) {
@@ -573,6 +603,25 @@ const FACET_ALARM_KV_KEY = "facetAlarmAtMs";
  * aborts the stale facet before it is re-created against the new class —
  * mirroring StatefulWorkerDurableObject's source-change abort. */
 const FACET_SOURCE_VERSION_KV_PREFIX = "facetSourceVersion:";
+
+/** A resource-exhausted facet can only be replaced by replacing its parent
+ * incarnation. This record is deliberately below the stream fold: it survives
+ * that replacement and bounds the number of replacements a broken facet can
+ * cause before turning into visible terminal evidence. */
+const FACET_RESOURCE_RECOVERY_KV_PREFIX = "facetResourceRecovery:";
+const FACET_RESOURCE_RECOVERY_MAX_ATTEMPTS = 3;
+type FacetResourceRecoveryRecord = {
+  attempts: number;
+  deploymentVersion: string;
+  nonce: string;
+  reason: "too-many-subrequests";
+  requestedAtMs: number;
+  source: "facet-call" | "hosted-delivery";
+  cursorChangedAtOffset?: number;
+  /** The failed delivery boundary, retained as diagnostic evidence. */
+  failureBoundaryOffset?: number;
+  terminal?: true;
+};
 
 /** Bounded extra delay before retrying a facet's failed alarm replay. */
 const FACET_ALARM_RETRY_DELAY_MS = 1_000;
@@ -1009,7 +1058,11 @@ export class StreamDurableObject extends DurableObject<Env> {
         }
         this.#alarmArmer.clearWhenQuiet();
       },
-      runDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
+      runDurable: (work, diagnostic) =>
+        this.#deliveryAlarmBoundary.scheduleOrRun(
+          work,
+          this.#coreProcessorState.path?.startsWith("/repros/") === true ? diagnostic : undefined,
+        ),
       keepAlive: (promise) => this.#runInBackground(() => promise),
       subscriberPagerConnectionKeys: () => this.#subscriberPagers.connectionKeys(),
       onSessionsIdleClosed: (connectionKeys) =>
@@ -1017,6 +1070,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       facetWorkArmedAtMs: () => this.#readFacetAlarmAtMs(),
       pageDormantSubscribers: (justCommitted) =>
         this.#subscriberPagers.pageDormant(justCommitted.map((entry) => entry.event)),
+      onHostedDeliveryError: (name, error, expectedDelivery, failureBoundaryOffset) =>
+        this.#onHostedFacetDeliveryError(name, error, expectedDelivery, failureBoundaryOffset),
     },
   });
   /** The client-given Stream Subscriber Pager; its attachment is the durable state. */
@@ -1151,6 +1206,14 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #finishInitialization(): void {
     this.#liveState = new LiveState(this.#readRuntimeState());
+
+    // A resource-exhausted userspace facet cannot be replaced inside this
+    // parent (ctx.facets.abort only retires the child). The prior incarnation
+    // recorded the replacement before aborting itself. This is its durable,
+    // idempotent evidence that the replacement actually happened; it also
+    // gives ordinary source reconciliation a fresh event to redrive from the
+    // unchanged cursor.
+    this.#appendFacetResourceRecoveryRevived();
 
     // Re-create keyed facet lanes for watcher sockets that hibernated across
     // an eviction: their hibernation tags name the lane, and a lane object
@@ -1342,6 +1405,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     try {
       return await invoke(await this.#dialProcessorFacet(name));
     } catch (error) {
+      if (isWorkerRpcTooManySubrequestsError(error)) {
+        await this.#restartParentForFacetResourceExhaustion(name, error, "facet-call");
+      }
       if (!isWorkerRpcCloneVersionError(error)) throw error;
       console.warn("stream facet clone-version skew; retiring the isolate and rebuilding", {
         name,
@@ -1356,6 +1422,189 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** Set only by clone-skew recovery; consumed by every later userspace facet
    * load in this incarnation so none of them return to the stale identity. */
   #facetRecoveryNonce: string | undefined;
+  /** One recovery flush/abort is owned per facet in this parent. Retained
+   * callbacks can report the same broken leg more than once before abort
+   * terminates execution; they must join, never increment the budget twice. */
+  readonly #facetResourceRecoveryTasks = new Map<string, Promise<void>>();
+
+  #facetResourceRecoveryKey(name: string): string {
+    return `${FACET_RESOURCE_RECOVERY_KV_PREFIX}${name}`;
+  }
+
+  #readFacetResourceRecovery(name: string): FacetResourceRecoveryRecord | undefined {
+    return this.ctx.storage.kv.get<FacetResourceRecoveryRecord>(
+      this.#facetResourceRecoveryKey(name),
+    );
+  }
+
+  #restartParentForFacetResourceExhaustion(
+    name: string,
+    error: unknown,
+    source: FacetResourceRecoveryRecord["source"],
+    expectedDelivery?: ExpectedHostedDeliveryState,
+    failureBoundaryOffset?: number,
+  ): Promise<void> {
+    const existing = this.#facetResourceRecoveryTasks.get(name);
+    if (existing !== undefined) return existing;
+    const task = this.#flushFacetResourceRecoveryAndAbort(
+      name,
+      error,
+      source,
+      expectedDelivery,
+      failureBoundaryOffset,
+    );
+    this.#facetResourceRecoveryTasks.set(name, task);
+    void task.then(
+      () => this.#facetResourceRecoveryTasks.delete(name),
+      () => this.#facetResourceRecoveryTasks.delete(name),
+    );
+    return task;
+  }
+
+  async #flushFacetResourceRecoveryAndAbort(
+    name: string,
+    error: unknown,
+    source: FacetResourceRecoveryRecord["source"],
+    expectedDelivery?: ExpectedHostedDeliveryState,
+    failureBoundaryOffset?: number,
+  ): Promise<void> {
+    const receiver = this.#requireHostedProcessorSubscription(name);
+    if (receiver.action !== "facet-processor" || receiver.source.kind !== "userspace") return;
+
+    const previous = this.#readFacetResourceRecovery(name);
+    const deploymentVersion = workerVersion(this.env);
+    if (previous?.deploymentVersion === deploymentVersion && previous.terminal === true) return;
+    const attempts = previous?.deploymentVersion === deploymentVersion ? previous.attempts + 1 : 1;
+    const record: FacetResourceRecoveryRecord = {
+      attempts,
+      deploymentVersion,
+      nonce: crypto.randomUUID(),
+      reason: "too-many-subrequests",
+      requestedAtMs: Date.now(),
+      source,
+      failureBoundaryOffset:
+        failureBoundaryOffset ??
+        (source === "facet-call" ? this.#coreProcessorState.maxOffset : undefined),
+      ...(expectedDelivery === undefined
+        ? {}
+        : {
+            cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
+          }),
+    };
+    this.ctx.storage.kv.put(this.#facetResourceRecoveryKey(name), record);
+
+    if (attempts > FACET_RESOURCE_RECOVERY_MAX_ATTEMPTS) {
+      record.terminal = true;
+      this.ctx.storage.kv.put(this.#facetResourceRecoveryKey(name), record);
+      this.#append({ authority: "core-event" }, [
+        {
+          type: "events.iterate.com/stream/error-occurred",
+          idempotencyKey: internalStreamId(
+            "facet-resource-exhaustion-terminal",
+            name,
+            deploymentVersion,
+          ),
+          payload: {
+            message:
+              `userspace facet ${name} caused ${FACET_RESOURCE_RECOVERY_MAX_ATTEMPTS} ` +
+              `automatic parent replacements after native subrequest exhaustion on deployment ` +
+              `${deploymentVersion}; ` +
+              "automatic parent reincarnation is stopped until its source or deployment changes.",
+          },
+        },
+      ]);
+      console.error("stream userspace facet resource recovery reached terminal budget", {
+        name,
+        attempts,
+        error,
+      });
+      return;
+    }
+
+    // The marker and native wake are written before abort. The output gate
+    // makes either write failure fail this invocation rather than reporting a
+    // successful recovery with no future parent. Do not retry in this parent:
+    // workerd retains its facet for the parent's entire incarnation.
+    this.#alarmArmer.armNoLaterThan(Date.now());
+    // ctx.abort synchronously shuts the actor cache and cancels any pending
+    // storage operation. Flush the marker AND native wake before it runs;
+    // without this await the recovered parent has no durable handoff.
+    await this.ctx.storage.sync();
+    console.warn("stream userspace facet exhausted native subrequest budget; restarting parent", {
+      name,
+      attempts,
+      recoveryNonce: record.nonce,
+      source,
+      error,
+    });
+    this.ctx.abort();
+  }
+
+  #appendFacetResourceRecoveryRevived(): void {
+    for (const [name, entry] of Object.entries(
+      this.#coreProcessorState.subscriptions.outbound.byName,
+    )) {
+      const receiver = entry.configuration.receiver;
+      if (receiver.action !== "facet-processor" || receiver.source.kind !== "userspace") continue;
+      const recovery = this.#readFacetResourceRecovery(name);
+      if (
+        recovery === undefined ||
+        recovery.terminal === true ||
+        recovery.deploymentVersion !== workerVersion(this.env)
+      ) {
+        continue;
+      }
+      this.#append({ authority: "core-event" }, [
+        {
+          type: "events.iterate.com/stream/processor-revived",
+          idempotencyKey: internalStreamId("facet-resource-revived", name, recovery.nonce),
+          payload: {
+            processorSlug: name,
+            revivals: recovery.attempts,
+            version: recovery.deploymentVersion,
+            reason: recovery.reason,
+            recoveryNonce: recovery.nonce,
+            parentRestart: true,
+            source: recovery.source,
+            ...(recovery.cursorChangedAtOffset === undefined
+              ? {}
+              : { cursorChangedAtOffset: recovery.cursorChangedAtOffset }),
+            ...(recovery.failureBoundaryOffset === undefined
+              ? {}
+              : { failureBoundaryOffset: recovery.failureBoundaryOffset }),
+          },
+        },
+      ]);
+    }
+  }
+
+  #onHostedFacetDeliveryError(
+    name: string,
+    error: unknown,
+    expectedDelivery: ExpectedHostedDeliveryState,
+    failureBoundaryOffset?: number,
+  ): boolean {
+    const receiver = this.#requireHostedProcessorSubscription(name);
+    const eligible = receiver.action === "facet-processor" && receiver.source.kind === "userspace";
+    if (!eligible || !isWorkerRpcTooManySubrequestsError(error)) return false;
+    const existing = this.#readFacetResourceRecovery(name);
+    if (existing?.deploymentVersion === workerVersion(this.env) && existing.terminal === true) {
+      // The durable terminal fact is already visible. Let normal sender
+      // failure policy close/back off this live callback; suppressing it here
+      // would strand the connection forever.
+      return false;
+    }
+    this.ctx.waitUntil(
+      this.#restartParentForFacetResourceExhaustion(
+        name,
+        error,
+        "hosted-delivery",
+        expectedDelivery,
+        failureBoundaryOffset,
+      ),
+    );
+    return true;
+  }
 
   async #dialProcessorFacet(name: string): Promise<ProcessorFacetStub> {
     const receiver = this.#requireHostedProcessorSubscription(name);
@@ -1418,6 +1667,11 @@ export class StreamDurableObject extends DurableObject<Env> {
       console.info("stream facet source changed; aborting", { name, previous, version });
       this.ctx.facets.abort(name, `facet source changed for ${name}`);
       this.#configuredProcessorFacets.delete(name);
+      // A changed userspace source is the explicit antidote boundary for a
+      // terminal resource-recovery episode, just as a new worker version is
+      // for ProcessorKeepalive. Do not make healthy wakes or runtime reads
+      // reset this record; only new source or a new deployment can.
+      this.ctx.storage.kv.delete(this.#facetResourceRecoveryKey(name));
     }
     if (previous !== version) this.ctx.storage.kv.put(versionKey, version);
   }
@@ -2160,6 +2414,23 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #append(
+    options: {
+      authority: "public" | "core-event" | "copy";
+    },
+    eventInputs: readonly StreamEventInput[],
+  ): StreamEvent[] {
+    const probeId = reproProbeId(this.name.path, eventInputs);
+    if (probeId === undefined) return this.#appendUntraced(options, eventInputs);
+    return tracing.enterSpan("stream.repro.append", (span) => {
+      span.setAttribute("iterate.repro.probe_id", probeId);
+      span.setAttribute("iterate.stream.path", this.name.path);
+      span.setAttribute("iterate.repro.ephemeral", true);
+      span.setAttribute("iterate.repro.event_count", 1);
+      return this.#appendUntraced(options, eventInputs);
+    });
+  }
+
+  #appendUntraced(
     options: {
       authority: "public" | "core-event" | "copy";
     },
@@ -3339,6 +3610,24 @@ export class StreamDurableObject extends DurableObject<Env> {
 const StreamAppendInput = StreamEventInputSchema.safeExtend({
   offset: z.number().int().nonnegative().optional(),
 }).strict();
+
+const ReproProbePayload = z.object({
+  probeId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/),
+});
+
+/**
+ * The append-latency repro needs a server-side trace join, without changing
+ * ordinary stream inputs or their validation.  This only recognizes its own
+ * one-event, ephemeral shape after a stream has opted into the `/repros/`
+ * namespace; every other append follows the normal path uninstrumented.
+ */
+function reproProbeId(path: string, eventInputs: readonly StreamEventInput[]): string | undefined {
+  if (!path.startsWith("/repros/") || eventInputs.length !== 1) return undefined;
+  const event = eventInputs[0];
+  if (event?.ephemeral !== true) return undefined;
+  const parsed = ReproProbePayload.safeParse(event.payload);
+  return parsed.success ? parsed.data.probeId : undefined;
+}
 
 function parseStreamDurableObjectName(name: string | undefined) {
   if (!name) {

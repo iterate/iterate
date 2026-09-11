@@ -396,7 +396,7 @@ type StreamEventSenderHooks = {
    * DO schedules an immediate alarm when called from an append and runs the
    * closure only when delivery is already running inside that alarm turn.
    */
-  runDurable(work: () => Promise<unknown>): void;
+  runDurable(work: () => Promise<unknown>, diagnostic?: { subscriptionName: string }): void;
   /** Keep the Durable Object alive through background delivery work. */
   keepAlive(promise: Promise<unknown>): void;
   /**
@@ -436,6 +436,13 @@ type StreamEventSenderHooks = {
    * append (or the relay's liveness probe), never by the repair alarm.
    */
   pageDormantSubscribers(justCommitted: SizedStreamEvent[]): void;
+  /** A hosted callback failed for this batch. */
+  onHostedDeliveryError?(
+    name: string,
+    error: unknown,
+    expectedDelivery: ExpectedHostedDeliveryState,
+    failureBoundaryOffset: number,
+  ): boolean;
 };
 
 export class StreamEventSender {
@@ -490,6 +497,13 @@ export class StreamEventSender {
         hostedDeliveryStillMatches: (name, expectedDelivery) =>
           this.#deliveryStillMatches(name, expectedDelivery),
         onHostedDeliveryFailure: (name, error) => this.#onDeliveryFailure(name, error),
+        onHostedDeliveryError: (name, error, expectedDelivery, failureBoundaryOffset) =>
+          this.#hooks.onHostedDeliveryError?.(
+            name,
+            error,
+            expectedDelivery,
+            failureBoundaryOffset,
+          ) ?? false,
         sendDueSubscriptions: () => this.sendDue(),
         reconcileAlarm: () => this.reconcileAlarmAfterSettlement(),
       },
@@ -884,7 +898,7 @@ export class StreamEventSender {
    * and ITX receivers receive batches; webhooks receive one event at a time.
    */
   #sendPendingSourceOwnedEvents(name: string): void {
-    this.#hooks.runDurable(async () => {
+    const work = async () => {
       if (this.#sourceOwnedSendsInFlight.has(name)) return;
       this.#sourceOwnedSendsInFlight.add(name);
       let activeDeliveryState: ExpectedDeliveryState | undefined;
@@ -1196,7 +1210,8 @@ export class StreamEventSender {
         this.#sourceOwnedSendsInFlight.delete(name);
         this.reconcileAlarmAfterSettlement();
       }
-    });
+    };
+    this.#hooks.runDurable(work, { subscriptionName: name });
   }
 
   /**
@@ -1878,6 +1893,7 @@ type StreamConnectionsHooks = Pick<
   | "subscriberPagerConnectionKeys"
   | "onSessionsIdleClosed"
   | "facetWorkArmedAtMs"
+  | "onHostedDeliveryError"
 > & {
   readBatch(afterOffset: number, beforeOffset: number, limit: number): SizedStreamEvent[];
   hostedDeliveryStillMatches(
@@ -2069,6 +2085,7 @@ export class StreamConnections {
     error: unknown,
     expectedDelivery: ExpectedHostedDeliveryState,
     source: "delivery" | "rpc-broken" = "delivery",
+    failureBoundaryOffset?: number,
   ): void {
     const connection = this.#connections.get(connectionKey);
     if (
@@ -2076,6 +2093,16 @@ export class StreamConnections {
       connection.expectedHostedDelivery?.connectionGeneration !==
         expectedDelivery.connectionGeneration ||
       !this.#hooks.hostedDeliveryStillMatches(connectionKey, expectedDelivery)
+    ) {
+      return;
+    }
+    if (
+      this.#hooks.onHostedDeliveryError?.(
+        connectionKey,
+        error,
+        expectedDelivery,
+        failureBoundaryOffset ?? connection.deliveredThroughOffset,
+      ) === true
     ) {
       return;
     }
@@ -2705,7 +2732,13 @@ export class StreamConnections {
                   connection.isLive() &&
                   this.#connections.get(connectionKey) === connection
                 ) {
-                  this.onHostedDeliveryError(connectionKey, parsed.error, expectedDelivery);
+                  this.onHostedDeliveryError(
+                    connectionKey,
+                    parsed.error,
+                    expectedDelivery,
+                    "delivery",
+                    deliveredThroughOffset,
+                  );
                 }
                 this.#hooks.runtimeChanged();
               },

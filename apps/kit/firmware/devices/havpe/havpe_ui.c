@@ -2,7 +2,6 @@
 
 #include "driver/gpio.h"
 #include "esp_log.h"
-#include <string.h>
 #include "esp_timer.h"
 #include "havpe_modes.h"
 #include "iterate/kit/conversation_lights.h"
@@ -108,7 +107,7 @@ void havpe_ui_show_mode(uint8_t value) {
   iterate_kit_led_ring_borrow(pixels, OVERLAY_HOLD_US / 1000);
 }
 
-static char last_status[64];
+static const char *last_status;
 
 /** Sample the dial every app pass, log changed status, and renew the idle
  * quadrant only after iterate_kit_led_ring_borrowed releases timed gestures.
@@ -123,8 +122,10 @@ void havpe_ui_present(const struct iterate_kit_voice_view *view) {
    * step's first boot printed it 5,749 times in 75 s) buries every other
    * line and costs the app task a UART write per pass. */
   if (view->status != NULL && view->status[0] != '\0' &&
-      strncmp(view->status, last_status, sizeof(last_status)) != 0) {
-    strlcpy(last_status, view->status, sizeof(last_status));
+      view->status != last_status) {
+    /* Voice-view status has static storage. Comparing its identity also
+     * handles hints longer than the former 64-byte snapshot. */
+    last_status = view->status;
     ESP_LOGI(tag, "status: %s", view->status);
   }
   if (iterate_kit_led_ring_borrowed()) return;

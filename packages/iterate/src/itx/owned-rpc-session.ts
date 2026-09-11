@@ -13,22 +13,34 @@ type DisposableLike = {
 };
 
 export function withOwnedRpcSession<T extends object>(stub: T, ...owned: DisposableLike[]): T {
-  let disposed = false;
-  return new Proxy(stub, {
-    get(target, key, receiver) {
-      if (key === Symbol.dispose) {
-        return () => {
-          if (disposed) return;
-          disposed = true;
-          disposeAll(target as DisposableLike, ...owned);
-        };
-      }
-      if (key === "dup") {
-        return () => withOwnedRpcSession(dup(target as DisposableLike), ...owned.map(dup));
-      }
-      return Reflect.get(target, key, receiver);
-    },
-  });
+  let liveWrappers = 1;
+
+  const makeWrapper = (target: DisposableLike): T => {
+    let disposed = false;
+    return new Proxy(target as T, {
+      get(target, key, receiver) {
+        if (key === Symbol.dispose) {
+          return () => {
+            if (disposed) return;
+            disposed = true;
+            const releaseParents = --liveWrappers === 0;
+            disposeAll(target as DisposableLike, ...(releaseParents ? owned : []));
+          };
+        }
+        if (key === "dup") {
+          return () => {
+            if (disposed) throw new Error("Cannot dup a disposed scoped RPC stub");
+            const duplicate = dup(target as DisposableLike);
+            liveWrappers += 1;
+            return makeWrapper(duplicate);
+          };
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+  };
+
+  return makeWrapper(stub as DisposableLike);
 }
 
 function dup(disposable: DisposableLike): DisposableLike {
@@ -39,13 +51,14 @@ function dup(disposable: DisposableLike): DisposableLike {
 }
 
 function disposeAll(...disposables: DisposableLike[]): void {
-  let firstError: unknown;
+  const errors: unknown[] = [];
   for (const disposable of disposables) {
     try {
       disposable[Symbol.dispose]?.();
     } catch (error) {
-      firstError ??= error;
+      errors.push(error);
     }
   }
-  if (firstError !== undefined) throw firstError;
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, "Failed to dispose RPC resources");
 }

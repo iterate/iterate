@@ -85,9 +85,9 @@ class FakeProvider {
     this.sent.push(JSON.parse(raw) as Record<string, unknown>);
   }
 
-  close(): void {
+  close(code = 1006, reason = "connection lost"): void {
     this.closed = true;
-    for (const listener of this.#listeners.get("close") ?? []) listener({});
+    for (const listener of this.#listeners.get("close") ?? []) listener({ code, reason });
   }
 
   /* ------------------------------------------------- the provider's voice */
@@ -3092,14 +3092,183 @@ describe("ending a call", () => {
     expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
   });
 
-  it("asks to end when the provider hangs up", async () => {
+  it("holds caught-up microphone delivery behind the close obligation until it folds", async () => {
+    const h = makeHarness();
+    const conversationId = await callIsLive(h);
+    let releaseCloseAppend: (() => void) | undefined;
+    h.stream.holdAppend = (events) => {
+      if (events[0]?.type !== "events.iterate.com/voice-agent/provider-connection-closed") {
+        return undefined;
+      }
+      return new Promise<void>((resolve) => {
+        releaseCloseAppend = resolve;
+      });
+    };
+    const closed = h.provider;
+    closed.close(1011, "upstream reset");
+    await h.settle();
+
+    /* The close append has not committed. The caught-up pass sees the old
+     * state and must respect the reservation instead of opening a rival dial. */
+    await h.append(micFrame(2));
+    await h.settle();
+    expect(h.sockets).toHaveLength(1);
+
+    h.stream.holdAppend = undefined;
+    releaseCloseAppend?.();
+    await h.settle();
+    expect(h.sockets).toHaveLength(2);
+    expect(h.state().call?.conversationId).toBe(conversationId);
+    expect(h.state().call?.providerReconnectAttempts).toBe(1);
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+
+    const closes = eventsOfType(h, "provider-connection-closed");
+    expect(closes).toHaveLength(1);
+    expect(closes[0]!.payload).toMatchObject({
+      conversationId,
+      provider: "grok",
+      closeCode: 1011,
+      closeReason: "upstream reset",
+      reconnectAttempt: 1,
+    });
+  });
+
+  it("acts on a close record committed before its append RPC answers", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.provider.close();
+    const append = h.stream.append.bind(h.stream);
+    let releaseAppendResponse: (() => void) | undefined;
+    h.stream.append = async (...events) => {
+      const result = await append(...events);
+      if (events[0]?.type !== "events.iterate.com/voice-agent/provider-connection-closed") {
+        return result;
+      }
+      await new Promise<void>((resolve) => {
+        releaseAppendResponse = resolve;
+      });
+      return result;
+    };
+
+    h.provider.close(1011, "response delayed after commit");
     await h.settle();
-    const requested = eventsOfType(h, "conversation-end-requested");
-    expect(requested).toHaveLength(1);
-    expect((requested[0]!.payload as { reason: string }).reason).toContain("socket closed");
+    /* The row is already durable and delivered while its RPC is still
+     * unresolved. It must clear the pending marker and open exactly one
+     * replacement, rather than block on an idempotent reappend of itself. */
+    expect(h.sockets).toHaveLength(2);
+
+    releaseAppendResponse?.();
+    await h.settle();
+    expect(h.sockets).toHaveLength(2);
+  });
+
+  it("refreshes a replacement dial's close budget after a pending close commits in a new incarnation", async () => {
+    const h = makeHarness();
+    const conversationId = await callIsLive(h);
+    let releaseCloseAppend: (() => void) | undefined;
+    h.stream.holdAppend = (events) => {
+      if (events[0]?.type !== "events.iterate.com/voice-agent/provider-connection-closed") {
+        return undefined;
+      }
+      return new Promise<void>((resolve) => {
+        releaseCloseAppend = resolve;
+      });
+    };
+    h.provider.close(1011, "first reset");
+    await h.settle();
+
+    h.crash();
+    await h.append(micFrame(2));
+    await h.settle();
+    expect(h.sockets).toHaveLength(2);
+
+    h.stream.holdAppend = undefined;
+    releaseCloseAppend?.();
+    await h.settle();
+    expect(h.state().call?.providerReconnectAttempts).toBe(1);
+
+    h.provider.close(1011, "second reset");
+    await h.settle();
+    const closes = eventsOfType(h, "provider-connection-closed");
+    expect(closes).toHaveLength(2);
+    expect(closes[1]!.payload).toMatchObject({
+      conversationId,
+      reconnectAttempt: null,
+    });
+    expect(h.state().call).toBeNull();
+    expect(h.sockets).toHaveLength(2);
+  });
+
+  it("ends after the durable provider reconnect budget is exhausted", async () => {
+    const h = makeHarness();
+    const conversationId = await callIsLive(h);
+    h.provider.close(1011, "first reset");
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+
+    h.provider.close(1011, "second reset");
+    await h.append(micFrame(2));
+    await h.settle();
+    const closes = eventsOfType(h, "provider-connection-closed");
+    expect(closes).toHaveLength(2);
+    expect(closes[1]!.payload).toMatchObject({ conversationId, reconnectAttempt: null });
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    expect(h.state().call).toBeNull();
+    expect(h.sockets).toHaveLength(2);
+  });
+
+  it("NACKs consecutive rejected close records without opening another dial, then recovers once", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    h.stream.failAppendsOfType = "events.iterate.com/voice-agent/provider-connection-closed";
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    h.provider.close(1011, "stream unavailable");
+    await h.settle();
+    expect(h.sockets).toHaveLength(1);
+    expect(logged).toHaveBeenCalledWith(
+      "stream processor background work failed",
+      expect.any(Error),
+    );
+
+    await expect(h.append(micFrame(2))).rejects.toThrow("injected append failure");
+    await expect(h.append(micFrame(3))).rejects.toThrow("injected append failure");
+    expect(h.sockets).toHaveLength(1);
+
+    h.stream.failAppendsOfType = undefined;
+    await h.append(micFrame(4));
+    await h.settle();
+    expect(h.sockets).toHaveLength(2);
+    expect(eventsOfType(h, "provider-connection-closed")).toHaveLength(1);
+    expect(h.state().call).not.toBeNull();
+  });
+
+  it("NACKs a rejected terminal close record instead of opening a third dial", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    h.provider.close(1011, "first reset");
+    await h.settle();
+    await h.append(micFrame(2));
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+
+    h.stream.failAppendsOfType = "events.iterate.com/voice-agent/provider-connection-closed";
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    h.provider.close(1011, "terminal append rejected");
+    await h.settle();
+    expect(h.sockets).toHaveLength(2);
+    expect(logged).toHaveBeenCalledWith(
+      "stream processor background work failed",
+      expect.any(Error),
+    );
+    await expect(h.append(micFrame(3))).rejects.toThrow("injected append failure");
+    expect(h.sockets).toHaveLength(2);
+
+    h.stream.failAppendsOfType = undefined;
+    await h.append(micFrame(4));
+    await h.settle();
+    expect(h.state().call).toBeNull();
+    expect(h.sockets).toHaveLength(2);
   });
 
   it("closes the provider socket when the call ends", async () => {

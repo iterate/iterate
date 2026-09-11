@@ -165,6 +165,7 @@ export async function connectItxReady(
 > {
   const retryOptions = options.retryInitialConnection;
   const delayMs = retryOptions === undefined ? 0 : initialRetryDelay(retryOptions.delayMs);
+  let connectedSocket: WebSocket | undefined;
 
   for (const attempt of [1, 2] as const) {
     const startedAt = new Date();
@@ -172,7 +173,8 @@ export async function connectItxReady(
     const socket = createItxSocket(input);
     try {
       await waitForOpen(socket);
-      return createItxConnection(input, socket);
+      connectedSocket = socket;
+      break;
     } catch (error) {
       if (attempt !== 1 || retryOptions === undefined) throw asError(error);
       await retryOptions.onRetry?.({
@@ -187,7 +189,11 @@ export async function connectItxReady(
     }
   }
 
-  throw new Error("unreachable: initial itx connection retry exhausted");
+  if (connectedSocket === undefined)
+    throw new Error("unreachable: initial itx connection retry exhausted");
+  // Authentication and capability traversal occur after the retry boundary:
+  // replaying either could repeat a caller-visible RPC operation.
+  return await createItxReadyConnection(input, connectedSocket);
 }
 
 function createItxSocket(
@@ -237,6 +243,66 @@ function createItxConnection(
   // serialization-friendly Agent surface.
   const agent = project.agents.get(input.agentPath) as RpcSessionStub<Agent>;
   return withOwnedRpcSession(agent, project, root, session);
+}
+
+/**
+ * Resolve the requested capability before attaching its ownership wrapper.
+ *
+ * `connectItx()` deliberately returns pipelined Cap'n Web promises. This
+ * async variant cannot return such a wrapped promise: native Promise
+ * resolution assimilates its `then` member and hands callers the raw resolved
+ * stub, silently dropping the wrapper that disposes the parent session.
+ */
+async function createItxReadyConnection(
+  input:
+    | ConnectAgentItxInput
+    | ConnectItxAuthenticatedInput
+    | ConnectItxBaseInput
+    | ConnectProjectItxInput,
+  socket: WebSocket,
+): Promise<
+  CapnRpcStub<Agent> | CapnRpcStub<Project> | CapnRpcStub<Session> | CapnRpcStub<UnauthenticatedOs>
+> {
+  const session = newWebSocketRpcSession<UnauthenticatedOs>(
+    socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
+  );
+  if (!("auth" in input)) return session;
+
+  const root = session.authenticate(input.auth) as CapnRpcStub<Session>;
+  const target = "projectId" in input ? root.projects.get(input.projectId) : root;
+  const finalTarget =
+    "agentPath" in input ? (target as CapnRpcStub<Project>).agents.get(input.agentPath) : target;
+  try {
+    // Await only the leaf: Cap'n Web pipelines auth → project → agent while
+    // preserving the parent promises we must dispose with the final stub.
+    const resolved = (await finalTarget) as unknown as
+      | CapnRpcStub<Agent>
+      | CapnRpcStub<Project>
+      | CapnRpcStub<Session>;
+    if (!("projectId" in input)) return withOwnedRpcSession(resolved, session);
+    if (!("agentPath" in input)) return withOwnedRpcSession(resolved, root, session);
+    return withOwnedRpcSession(resolved, target as CapnRpcStub<Project>, root, session);
+  } catch (error) {
+    rethrowAfterDisposing(error, finalTarget, target, root, session);
+  }
+}
+
+function rethrowAfterDisposing(error: unknown, ...disposables: Array<Partial<Disposable>>): never {
+  const cleanupErrors: unknown[] = [];
+  for (const disposable of new Set(disposables)) {
+    try {
+      disposable[Symbol.dispose]?.();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+  }
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(
+      [error, ...cleanupErrors],
+      "itx connection failed and cleanup also failed",
+    );
+  }
+  throw error;
 }
 
 function waitForOpen(socket: WebSocket): Promise<void> {

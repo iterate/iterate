@@ -19,14 +19,10 @@
  */
 #include <stdio.h>
 
-#include "esp_timer.h"
-
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/platforms/board.h"
 #include "iterate/kit/capabilities/arguments.h"
-#include "iterate/kit/devices/m5sticks3.h"
-#include "iterate/kit/session_grammar.h"
 #include "iterate/kit/voice/loop.h"
 #include "iterate/kit/voice_device_profile.h"
 
@@ -39,10 +35,7 @@
  * .rodata. Included here because the COMPOSITION decides what a gesture
  * sounds like; the audio driver only knows how to play PCM it is handed.
  */
-#include "assets/m5sticks3_sounds_generated.inc"
-
-/** The shared grammar driven by this board's distinct button inputs. */
-static struct iterate_kit_session session;
+#include "assets/sounds_generated.inc"
 
 /*
  * `face.set({face})` — the same catalogue the CoreS3 wears, on the small
@@ -124,51 +117,11 @@ static void present(
   m5sticks3_ui_tick();
 }
 
-/** Classify board inputs against the last view held by board.c. */
-static void poll(void *context, struct iterate_kit_voice_intent *out) {
-  const struct iterate_kit_voice_view *view = iterate_kit_board_view();
-  (void)context;
+/** Supply M5's distinct side-tap and front-hold as normalized input. */
+static void read_gestures(struct iterate_kit_board_gestures *out) {
   m5sticks3_board_poll();
-  /*
-   * THE BUTTONS MEAN WHAT THE SESSION SAYS THEY MEAN — the shared grammar
-   * in iterate/kit/session_grammar.h, push-to-talk posture. The side button
-   * is the call control, its own button rather than the talk hold, so a
-   * bare press WAKES from idle (`tap_wakes`) and ends the session it is in;
-   * the front button is the talk hold, and holding it from idle is a wake
-   * too. The grammar's chime edges render through the baked sounds — the
-   * wake chime and "call ended" — except where the half-duplex fence makes
-   * a render physically impossible: a wake by front-hold hands the pins to
-   * the microphone in the same breath, so play_sound drops that chime and
-   * the hold stays chime-less. What the machine fixes over the old raw
-   * toggle: a press or a front-hold during the teardown no longer reopens
-   * the call it just ended (ENDING absorbs both), and a session the far end
-   * hangs up stays ended under a still-held button.
-   */
-  struct iterate_kit_session_actions actions;
-  const struct iterate_kit_session_poll gestures = {
-    .tap = m5sticks3_board_take_side_press(),
-    .held = m5sticks3_board_talk_held(),
-    .wants_call = view->wants_call,
-    .call_active = view->call_active,
-    .push_to_talk = true,
-    .tap_wakes = true,
-    .tap_ends = true,
-    .now_ms = (uint64_t)(esp_timer_get_time() / 1000),
-  };
-  iterate_kit_session_step(&session, &gestures, &actions);
-  out->start_call = actions.start_call;
-  out->end_call = actions.end_call;
-  out->talk_held = actions.talk_held;
-  /* End before wake: play_sound replaces, so if one poll carries both
-   * edges the newer intent — the wake — is the one heard. */
-  if (actions.end_chime) {
-    m5sticks3_audio_play_sound(
-        m5sticks3_sound_chime_ended, sizeof(m5sticks3_sound_chime_ended));
-  }
-  if (actions.wake_chime) {
-    m5sticks3_audio_play_sound(
-        m5sticks3_sound_chime_press, sizeof(m5sticks3_sound_chime_press));
-  }
+  out->tap |= m5sticks3_board_take_side_press();
+  out->held |= m5sticks3_board_talk_held();
 }
 
 static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
@@ -214,19 +167,10 @@ static size_t health(void *context, char *out, size_t capacity) {
 static const struct iterate_kit_board_ops ops = {
   .start = start,
   .present = present,
-  .poll = poll,
   .phase = phase,
-  .capture_meta = NULL,
   /* Providing this pair is how this board declares itself half duplex. */
   .capture_fence = capture_fence,
   .playout_fenced_out = playout_fenced_out,
-  /*
-   * The mouth is fed by the AUDIO layer, not from here: the playback task
-   * hands each mono frame it wrote to the board's envelope animator, so the
-   * face animates audio the hardware actually accepted.
-   */
-  .observe_playout = NULL,
-  .observe_answer = NULL,
   .modules = modules,
   .health = health,
 };
@@ -269,7 +213,6 @@ static const struct iterate_kit_board board = {
   .stream_path = "/agents/voice/m5stick-s3",
   .client_path = "/clients/m5stick-s3",
   .conversation_id = "stickdev",
-  .greeting = "Hi, I am your Iterate device. What can I do for you?",
   .instructions =
       "M5StickS3: a small voice endpoint with a text status screen. "
       "The front button is push-to-talk; the side button starts and ends a "
@@ -317,11 +260,6 @@ static const struct iterate_kit_board board = {
    * step can sit before the ring genuinely empties.
    */
   .speaker_dry_wait_ms = 80,
-  .processing_frame_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
-  /* This codec hands over one whole 20 ms frame per read, so the bridge's
-   * three cadences are all 320 and it degenerates to a pass-through. */
-  .capture_chunk_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
-  .capture_stack_bytes = 4096,
   .turns = ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK,
   .radio_before_codec = false,
   },
@@ -332,13 +270,17 @@ static const struct iterate_kit_board board = {
     .register_count = 1, .full_code = 0x9b, .floor_code = 0},
   .ring = {.gpio = -1, .power_gpio = -1},
   .status_led_gpio = -1,
-  .button = {.gpio = -1}, /* M5's debounced side press and front hold are distinct. */
-  .sounds = {.wake = m5sticks3_sound_chime_press, .wake_bytes = sizeof(m5sticks3_sound_chime_press),
-    .ended = m5sticks3_sound_chime_ended, .ended_bytes = sizeof(m5sticks3_sound_chime_ended)},
+  .button = {.gpio = -1, .tap_wakes = true, .tap_ends = true},
+  .read_gestures = read_gestures,
+  .sounds = {.wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),
+    .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended)},
+  /* Its sound path observes the half-duplex fence before touching shared pins. */
+  .play_sound = m5sticks3_audio_play_sound,
   .open_codec = m5sticks3_audio_init,
   .extra = &ops,
 };
 
-void iterate_kit_m5sticks3_run(void) {
+/** ESP-IDF entry point: run this board through the shared voice loop. */
+void app_main(void) {
   iterate_kit_board_run(&board);
 }

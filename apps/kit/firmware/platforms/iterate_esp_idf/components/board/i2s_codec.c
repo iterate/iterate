@@ -24,6 +24,17 @@ struct iterate_kit_i2s_codec_frame {
 static QueueHandle_t capture_mailbox;
 static QueueHandle_t playback_mailbox;
 static atomic_bool capture_consumer_started;
+/*
+ * Table boards deliberately start I2S before `open_codec()`: Satellite1 needs
+ * the XMOS clocks while its TAS2780 calibrates, and the other board scripts
+ * also require their normal, timeout-bounded chip startup interval. DMA data
+ * overwritten before the first capture transfer or complete playback-ring
+ * refill is therefore calibration traffic, never promised capture or playout.
+ * Keep it visible separately from an overwrite after runtime audio starts.
+ */
+static DRAM_ATTR atomic_bool runtime_capture_queue_overflow_tracking;
+static DRAM_ATTR atomic_bool runtime_playback_queue_overflow_tracking;
+static uint16_t playback_ring_ms;
 static uint32_t capture_overruns;
 static uint32_t capture_driver_failures;
 static uint32_t playback_driver_failures;
@@ -217,6 +228,8 @@ static void capture_hardware_task(void *argument) {
       vTaskDelay(1U);
       continue;
     }
+    atomic_store_explicit(
+        &runtime_capture_queue_overflow_tracking, true, memory_order_release);
 #ifdef CONFIG_ITERATE_KIT_WAKE_WORD
     if (iterate_kit_wake_word_enabled()) iterate_kit_wake_word_feed(frame.samples, frame.sample_count);
 #endif
@@ -236,9 +249,43 @@ static bool idle_silence_wanted;
 
 static void playback_hardware_task(void *argument) {
   static struct iterate_kit_i2s_codec_frame frame;
-  static struct iterate_kit_i2s_codec_frame idle_silence;
-  static bool idle_silence_started;
+  static const struct iterate_kit_i2s_codec_frame idle_silence = {
+      .sample_count = 320U,
+  };
   (void)argument;
+  /*
+   * I2S ran while the codec calibrated, so every descriptor may be free when
+   * this task first runs. The ordinary idle pass waits 20 ms and writes one
+   * 20 ms frame, which leaves a 60 ms Satellite1 ring partly empty long
+   * enough for one more TX queue overwrite. Refill the entire known ring now
+   * before waiting for mailbox work. Gated boards intentionally do not keep
+   * their TX ring full while the amplifier is off.
+  */
+  if (idle_silence_wanted) {
+    while (playback_ready != NULL && !playback_ready(hardware_context)) {
+      vTaskDelay(1U);
+    }
+    uint32_t primed_ms = 0U;
+    while (primed_ms < playback_ring_ms) {
+      if (before_write != NULL) before_write(hardware_context);
+      const enum iterate_kit_status status = hardware_write(
+          hardware_context, idle_silence.samples, idle_silence.sample_count);
+      if (status != ITERATE_KIT_OK) {
+        if (status != ITERATE_KIT_UNAVAILABLE) {
+          portENTER_CRITICAL(&codec_lock);
+          ++playback_driver_failures;
+          portEXIT_CRITICAL(&codec_lock);
+        }
+        break;
+      }
+      primed_ms += 20U;
+    }
+    /* A failed initial write is itself observable below; do not keep later
+     * queue overwrites in the calibration class after that failure. */
+    atomic_store_explicit(
+        &runtime_playback_queue_overflow_tracking,
+        true, memory_order_release);
+  }
   for (;;) {
     if (playback_ready != NULL && !playback_ready(hardware_context)) {
       vTaskDelay(1U);
@@ -298,16 +345,17 @@ static void playback_hardware_task(void *argument) {
        */
       /* Only where TX must never stop (a DSP reads its AEC reference off it,
        * i.e. no gated amplifier). A board that gates its amp between answers
-       * (M5, Waveshare) has nothing listening to the ring while idle, and the
+       * (Waveshare) has nothing listening to the ring while idle, and the
        * hovering-full ring would only add one ring of latency to every chime. */
       if (!idle_silence_wanted) continue;
-      if (!idle_silence_started) {
-        memset(idle_silence.samples, 0, sizeof(idle_silence.samples));
-        idle_silence.sample_count = 320;
-        idle_silence_started = true;
-      }
       if (before_write != NULL) before_write(hardware_context);
-      (void)hardware_write(hardware_context, idle_silence.samples, idle_silence.sample_count);
+      const enum iterate_kit_status status = hardware_write(
+          hardware_context, idle_silence.samples, idle_silence.sample_count);
+      if (status != ITERATE_KIT_OK && status != ITERATE_KIT_UNAVAILABLE) {
+        portENTER_CRITICAL(&codec_lock);
+        ++playback_driver_failures;
+        portEXIT_CRITICAL(&codec_lock);
+      }
       continue;
     }
     if (before_write != NULL) before_write(hardware_context);
@@ -320,8 +368,13 @@ static void playback_hardware_task(void *argument) {
       iterate_kit_starvation_ledger_rollback_write(&ledger, frame_ms);
       if (status != ITERATE_KIT_UNAVAILABLE) ++playback_driver_failures;
       portEXIT_CRITICAL(&codec_lock);
-    } else if (playback_observed != NULL) {
-      playback_observed(hardware_context, frame.samples, frame.sample_count, sound != NULL);
+    } else {
+      atomic_store_explicit(
+          &runtime_playback_queue_overflow_tracking,
+          true, memory_order_release);
+      if (playback_observed != NULL) {
+        playback_observed(hardware_context, frame.samples, frame.sample_count, sound != NULL);
+      }
     }
   }
 }
@@ -338,6 +391,11 @@ bool iterate_kit_i2s_codec_start_over(
   hardware_read = read;
   hardware_write = write;
   hardware_context = context;
+  playback_ring_ms = ring_ms;
+  atomic_store_explicit(
+      &runtime_capture_queue_overflow_tracking, false, memory_order_release);
+  atomic_store_explicit(
+      &runtime_playback_queue_overflow_tracking, false, memory_order_release);
   iterate_kit_i2s_codec_init_ledger(ring_ms);
   capture_mailbox = xQueueCreate(1U, sizeof(struct iterate_kit_i2s_codec_frame));
   playback_mailbox = xQueueCreate(1U, sizeof(struct iterate_kit_i2s_codec_frame));
@@ -389,6 +447,8 @@ static bool table_started;
 static bool playback_overflows_observed;
 static volatile uint32_t capture_queue_overflows;
 static volatile uint32_t playback_queue_overflows;
+static volatile uint32_t capture_warmup_overwritten_buffers;
+static volatile uint32_t playback_warmup_overwritten_buffers;
 static uint32_t capture_gain_clipped;
 static uint32_t mic_raw_peak;
 static uint32_t mic_clean_peak;
@@ -404,7 +464,14 @@ static bool IRAM_ATTR note_playback_queue_overflow(
   (void)handle;
   (void)event;
   (void)context;
-  ++playback_queue_overflows;
+  if (atomic_load_explicit(
+          &runtime_playback_queue_overflow_tracking, memory_order_acquire)) {
+    (void)__atomic_fetch_add(
+        &playback_queue_overflows, 1U, __ATOMIC_RELAXED);
+  } else {
+    (void)__atomic_fetch_add(
+        &playback_warmup_overwritten_buffers, 1U, __ATOMIC_RELAXED);
+  }
   return false;
 }
 
@@ -413,7 +480,14 @@ static bool IRAM_ATTR note_capture_queue_overflow(
   (void)handle;
   (void)event;
   (void)context;
-  ++capture_queue_overflows;
+  if (atomic_load_explicit(
+          &runtime_capture_queue_overflow_tracking, memory_order_acquire)) {
+    (void)__atomic_fetch_add(
+        &capture_queue_overflows, 1U, __ATOMIC_RELAXED);
+  } else {
+    (void)__atomic_fetch_add(
+        &capture_warmup_overwritten_buffers, 1U, __ATOMIC_RELAXED);
+  }
   return false;
 }
 
@@ -533,31 +607,18 @@ static enum iterate_kit_status read_channels(void *context, int16_t *samples, si
     return ITERATE_KIT_IO_ERROR;
   }
   size_t extracted = 0U;
+  struct iterate_kit_pcm_capture_metrics capture_metrics;
   if (iterate_kit_pcm_extract_capture(&channel_facts.capture_shape, words, frames,
-          samples, raw, count, &extracted) != ITERATE_KIT_OK || extracted != count) return ITERATE_KIT_IO_ERROR;
-  uint32_t raw_peak = 0U;
-  uint32_t clean_peak = 0U;
-  uint32_t clipped = 0U;
-  for (size_t i = 0; i < count; ++i) {
-    const uint32_t clean = (uint32_t)(samples[i] < 0 ? -(int32_t)samples[i] : samples[i]);
-    if (clean > clean_peak) clean_peak = clean;
-    if (channel_facts.capture_shape.diagnostic_slot >= 0) {
-      const uint32_t original = (uint32_t)(raw[i] < 0 ? -(int32_t)raw[i] : raw[i]);
-      if (original > raw_peak) raw_peak = original;
-    }
-    const int32_t amplified = (int32_t)samples[i] * channel_facts.capture_gain;
-    if (amplified > INT16_MAX) { samples[i] = INT16_MAX; ++clipped; }
-    else if (amplified < INT16_MIN) { samples[i] = INT16_MIN; ++clipped; }
-    else samples[i] = (int16_t)amplified;
-  }
+          channel_facts.capture_gain, samples, raw, count, &extracted,
+          &capture_metrics) != ITERATE_KIT_OK || extracted != count) return ITERATE_KIT_IO_ERROR;
   const bool playing = iterate_kit_i2s_codec_speaker_is_playing();
   portENTER_CRITICAL(&codec_lock);
-  mic_raw_peak = raw_peak;
-  mic_clean_peak = clean_peak;
-  capture_gain_clipped += clipped;
+  mic_raw_peak = capture_metrics.diagnostic_peak;
+  mic_clean_peak = capture_metrics.processed_peak;
+  capture_gain_clipped += capture_metrics.processed_clipped;
   if (playing) {
-    if (raw_peak > echo_raw_peak) echo_raw_peak = raw_peak;
-    if (clean_peak > echo_clean_peak) echo_clean_peak = clean_peak;
+    if (capture_metrics.diagnostic_peak > echo_raw_peak) echo_raw_peak = capture_metrics.diagnostic_peak;
+    if (capture_metrics.processed_peak > echo_clean_peak) echo_clean_peak = capture_metrics.processed_peak;
   }
   portEXIT_CRITICAL(&codec_lock);
   return ITERATE_KIT_OK;
@@ -675,9 +736,16 @@ void iterate_kit_i2s_codec_reset_echo_peaks(void) {
 static size_t channel_health(char *out, size_t capacity, size_t used) {
   if (used == 0U || !playback_overflows_observed) return used;
   portENTER_CRITICAL(&codec_lock);
+  /* Own-read codecs share TX only; the remaining facts belong to table RX. */
   const struct iterate_kit_health_field fields[] = {
-    {"playbackQueueOverflows", playback_queue_overflows},
-    {"captureQueueOverflows", capture_queue_overflows},
+    {"playbackQueueOverflows", __atomic_load_n(
+        &playback_queue_overflows, __ATOMIC_RELAXED)},
+    {"playbackWarmupOverwrittenBuffers", __atomic_load_n(
+        &playback_warmup_overwritten_buffers, __ATOMIC_RELAXED)},
+    {"captureQueueOverflows", __atomic_load_n(
+        &capture_queue_overflows, __ATOMIC_RELAXED)},
+    {"captureWarmupOverwrittenBuffers", __atomic_load_n(
+        &capture_warmup_overwritten_buffers, __ATOMIC_RELAXED)},
     {"captureGainClipped", capture_gain_clipped},
     {"micRawPeak", mic_raw_peak},
     {"micCleanPeak", mic_clean_peak},
@@ -685,7 +753,8 @@ static size_t channel_health(char *out, size_t capacity, size_t used) {
     {"echoCleanPeak", echo_clean_peak},
   };
   portEXIT_CRITICAL(&codec_lock);
-  const size_t count = table_started ? sizeof(fields) / sizeof(fields[0]) : 1U;
-  const size_t added = iterate_kit_health_append_fields(out + used, capacity - used, fields, count);
+  const size_t count = table_started ? sizeof(fields) / sizeof(fields[0]) : 2U;
+  const size_t added = iterate_kit_health_append_fields(
+      out + used, capacity - used, fields, count);
   return added == 0U ? 0U : used + added;
 }

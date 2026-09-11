@@ -2,7 +2,6 @@
  * config/common/{core_board,speaker,led_ring,buttons}.yaml (MIT).
  * GPIO4 is only ever LOW: HIGH resets XMOS and selects its boot flash.
  */
-#include "iterate/kit/devices/satellite1.h"
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -16,11 +15,11 @@
 #include "iterate/kit/platforms/tas2780.h"
 #include "iterate/kit/platforms/xmos_spi.h"
 
-#include "assets/satellite1_sounds_generated.inc"
+#include "assets/sounds_generated.inc"
 
 /* Startup, poll, volume RPC and health all run serially on the app task.
  * No hardware task accesses either control bus or these chip states. */
-static struct iterate_kit_xmos_spi xmos = {.cs_gpio = GPIO_NUM_10};
+static struct iterate_kit_xmos_spi xmos;
 static struct iterate_kit_xmos_version xmos_version;
 static struct iterate_kit_tas2780 amp;
 static i2c_master_dev_handle_t line_out;
@@ -28,41 +27,20 @@ static struct iterate_kit_button volume_up, volume_down;
 static bool microphone_muted;
 static uint32_t side_button_read_failures;
 
+/* DVC 80 (-40 dB): the measured full-duplex ceiling for the onboard speaker.
+ * Apply the same calibrated level at startup and through volume controls. */
+enum { ITERATE_KIT_SATELLITE1_SPEAKER_CEILING = 60 };
+
 /** Gate XMOS before hardware tasks can block on its slave clocks, then bring
  * up both chips. board.c has already enabled I2S with TX silence preloaded;
  * TAS2780 activation can now use BCLK for its SAR supply measurements.
  */
 static bool iterate_kit_satellite1_open_codec(void) {
-  const gpio_config_t cs = {
-    .pin_bit_mask = UINT64_C(1) << GPIO_NUM_10,
-    .mode = GPIO_MODE_OUTPUT,
-    .pull_up_en = GPIO_PULLUP_DISABLE,
-    .pull_down_en = GPIO_PULLDOWN_DISABLE,
-    .intr_type = GPIO_INTR_DISABLE,
-  };
-  const spi_bus_config_t bus = {
-    .mosi_io_num = 11, .miso_io_num = 13, .sclk_io_num = 12,
-    .quadwp_io_num = -1, .quadhd_io_num = -1,
-    .max_transfer_sz = 256,
-  };
-  const spi_device_interface_config_t device = {
-    .clock_speed_hz = 8000000, .mode = 3, .spics_io_num = -1,
-    .queue_size = 1, /* flags = 0: MSB first, full duplex; driver owns CS. */
-  };
-  const char *stage = "SPI CS";
-  bool bus_open = false;
   i2c_master_dev_handle_t amp_device = NULL;
-  if (gpio_set_level(GPIO_NUM_10, 1) != ESP_OK ||
-      gpio_config(&cs) != ESP_OK) goto failed;
-  stage = "SPI bus";
-  /* Every transaction here is at most 8 bytes; with DMA on, the driver copies
-   * each stack buffer into internal DMA memory it mallocs per transaction,
-   * twice per 25 ms poll, on a board that reserves that memory for Wi-Fi. */
-  if (spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_DISABLED) != ESP_OK) goto failed;
-  bus_open = true;
-  if (spi_bus_add_device(SPI2_HOST, &device, &xmos.device) != ESP_OK) goto failed;
-  stage = "XMOS version";
-  if (!iterate_kit_xmos_spi_read_version(&xmos, &xmos_version, 6, 250)) goto failed;
+  uint8_t applied;
+  const char *stage = iterate_kit_xmos_spi_open(
+      &xmos, 11, 13, 12, GPIO_NUM_10, &xmos_version, 6, 250);
+  if (stage != NULL) goto failed;
   ESP_LOGI("satellite1", "XMOS %u.%u.%u", xmos_version.major,
       xmos_version.minor, xmos_version.patch);
   stage = "I2C devices";
@@ -70,6 +48,9 @@ static bool iterate_kit_satellite1_open_codec(void) {
       iterate_kit_board_i2c_device(0x4D, &line_out) != ESP_OK) goto failed;
   stage = "TAS2780 init";
   if (!iterate_kit_tas2780_init(&amp, amp_device)) goto failed;
+  stage = "TAS2780 volume";
+  if (!iterate_kit_tas2780_set_volume(
+      &amp, ITERATE_KIT_SATELLITE1_SPEAKER_CEILING, &applied)) goto failed;
   stage = "PCM5122 init";
   if (!iterate_kit_pcm5122_init(line_out)) goto failed;
   stage = "TAS2780 activate";
@@ -84,19 +65,6 @@ failed:
     ESP_LOGE("satellite1", "TAS2780 shutdown failed");
   if (line_out != NULL && !iterate_kit_pcm5122_mute(line_out, true))
     ESP_LOGE("satellite1", "PCM5122 mute failed");
-  if (line_out != NULL && i2c_master_bus_rm_device(line_out) != ESP_OK)
-    ESP_LOGE("satellite1", "PCM5122 detach failed");
-  if (amp_device != NULL && i2c_master_bus_rm_device(amp_device) != ESP_OK)
-    ESP_LOGE("satellite1", "TAS2780 detach failed");
-  if (xmos.device != NULL && spi_bus_remove_device(xmos.device) != ESP_OK)
-    ESP_LOGE("satellite1", "SPI detach failed");
-  if (bus_open && spi_bus_free(SPI2_HOST) != ESP_OK)
-    ESP_LOGE("satellite1", "SPI bus release failed");
-  line_out = NULL;
-  amp_device = NULL;
-  amp.device = NULL;
-  amp.initialized = false;
-  xmos.device = NULL;
   return false;
 }
 
@@ -204,19 +172,11 @@ static const struct iterate_kit_i2s_codec_facts audio = {
   },
   .dma_frames = 480, .dma_descriptors = 6,
   .playback_shape = {32, 2, 0, -1, 3},
-  /* MEASURED 2026-09-09 on XMOS 1.0.3: slot 0 carries the microphone
-   * (micRawPeak 891 on room noise) and slot 1 is SILENT (peak 2), whatever
-   * the source comments say about which tap is which. The uplink is slot 0.
-   * There is NO raw microphone tap on this bus, so no diagnostic plane: with
-   * slot 1 declared as one, the echo oracle read +45 dB (a dead plane against
-   * the AGC'd uplink) and would have sent the next reader chasing a phantom.
-   * On this board the self-trigger detector is the transcript of a long
-   * answer, not the oracle. Slot 0 is the AGC'd tap, and the HA Voice
-   * PE's essay (board/codecs/aic3204.c) measured a x16 make-up gain AFTER an
-   * AGC as the thing that fed the provider its own echo; so start at unity
-   * and let the bench raise it. */
-  .capture_shape = {32, 2, 0, -1, 3},
-  .capture_gain = 1,
+  /* v1.0.3 DOUT1 carries AGC in slot 0 and AEC+IC+NS in slot 1.
+   * Use the noise-suppressed output with fixed gain and the calibrated speaker.
+   * Neither slot is a raw microphone plane. */
+  .capture_shape = {32, 2, 1, -1, 3},
+  .capture_gain = 32,
   .amplifier_gpio = -1,
 };
 
@@ -224,23 +184,23 @@ static const struct iterate_kit_board board = {
   .facts = {
     .stream_path = "/agents/voice/satellite1", .client_path = "/clients/satellite1",
     .conversation_id = "sat1dev",
-    .greeting = "Hi, I am your Iterate device. What can I do for you?",
     .instructions =
         "FutureProofHomes Satellite1 voice endpoint with XMOS hardware echo cancellation. "
         "conversation.start() and conversation.end() begin and end an open-mic call. "
         "button.press() taps the action button: wake while idle, end while in a call. "
+        "Saying Jarvis while idle also wakes it with a chime, then you can speak freely. "
         "speaker.setVolume({percent}) and speaker.volume() answer {percent,ceiling}. "
         "health() returns diagnostics including XMOS version, amplifier supply and faults, "
-        "and micMuted, the hardware microphone rail cut. Both echo taps are post-AEC; "
-        "echoRawPeak is the AGC tap, not a raw microphone reference.",
+        "and micMuted, the hardware microphone rail cut. "
+        "There is no raw microphone tap: micRawPeak and echoRawPeak are unavailable (zero).",
     .peer_description =
         "{\"instructions\":\"Satellite1 voice endpoint. The LED ring is its local feedback. "
-        "Tap action to start or end a call; speak freely during the call. Vol+ and Vol- "
+        "Tap action to start or end a call, or say Jarvis while idle to wake it with "
+        "a chime; speak freely during the call. Vol+ and Vol- "
         "change speaker volume. Hardware mute cuts the microphone rail.\",\"children\":{}}",
     .talk_hint = "speak whenever you like",
     .call_hint = "connection lost — press the action button to call",
-    .speaker = {.ceiling = 100}, .speaker_dry_wait_ms = 40,
-    .processing_frame_samples = 320, .capture_chunk_samples = 320, .capture_stack_bytes = 4096,
+    .speaker = {.ceiling = ITERATE_KIT_SATELLITE1_SPEAKER_CEILING},
     .turns = ITERATE_KIT_VOICE_TURNS_SERVER_VAD, .radio_before_codec = true,
   },
   .i2c = {.sda = 5, .scl = 6, .hz = 400000},
@@ -254,14 +214,15 @@ static const struct iterate_kit_board board = {
   .button = {.gpio = 0, .active_low = true, .tap_wakes = true, .tap_ends = true},
   .wake_word = "jarvis",
   .sounds = {
-    .wake = satellite1_sound_chime_press, .wake_bytes = sizeof(satellite1_sound_chime_press),
-    .ended = satellite1_sound_chime_ended, .ended_bytes = sizeof(satellite1_sound_chime_ended),
+    .wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),
+    .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended),
   },
   .open_codec = iterate_kit_satellite1_open_codec,
   .set_volume = iterate_kit_satellite1_set_volume,
   .extra = &satellite1_extra,
 };
 
-void iterate_kit_satellite1_run(void) {
+/** ESP-IDF entry point: run this board through the shared voice loop. */
+void app_main(void) {
   iterate_kit_board_run(&board);
 }

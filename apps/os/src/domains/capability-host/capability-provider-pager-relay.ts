@@ -17,11 +17,16 @@ import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
 import { dialHibernatablePager, parseHibernatablePage } from "../hibernatable-pager.ts";
 import { assertCapabilityPath } from "./capability-path.ts";
-import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
+import {
+  detachDisposablePlainRpcResult,
+  retainLiveCapabilityProvider,
+  type LiveCapability,
+} from "./live-capability.ts";
 import {
   CAPABILITY_PROVIDER_PAGER_HEADER,
   type CapabilityProviderInvoker,
 } from "./capability-provider-pager.ts";
+import { capabilityOfflineError } from "./capability-unserved.ts";
 import type {
   CapabilityProvidedPayload,
   ProvideCapabilityInput,
@@ -39,10 +44,54 @@ type CapabilityProviderPagerProvision = {
 
 type MountedProvider = {
   activeLeg?: Disposable;
+  pagerGeneration: PagerGeneration;
+  providerBroken: ProviderBroken;
   path: string[];
   providedAtOffset: number;
   provider: LiveCapability;
 };
+
+type ProviderBroken = {
+  broken: boolean;
+  listeners: Set<() => void>;
+  markBroken(): void;
+};
+
+function createProviderBroken(): ProviderBroken {
+  return {
+    broken: false,
+    listeners: new Set(),
+    markBroken() {
+      if (this.broken) return;
+      this.broken = true;
+      for (const resolve of this.listeners) resolve();
+      this.listeners.clear();
+    },
+  };
+}
+
+/** One physical Pager connection and its irreversible far-side close state. */
+type PagerGeneration = {
+  closed: boolean;
+  /** One callback per in-flight invocation, removed at its settlement. */
+  closedListeners: Set<() => void>;
+  markClosed(): void;
+  pager: WebSocket;
+};
+
+function createPagerGeneration(pager: WebSocket): PagerGeneration {
+  return {
+    closed: false,
+    closedListeners: new Set(),
+    markClosed() {
+      if (this.closed) return;
+      this.closed = true;
+      for (const resolve of this.closedListeners) resolve();
+      this.closedListeners.clear();
+    },
+    pager,
+  };
+}
 
 const CapabilityProviderPage = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("activate"), providedAtOffset: z.number().int().nonnegative() }),
@@ -52,15 +101,75 @@ const CapabilityProviderPage = z.discriminatedUnion("type", [
 
 /** One short RPC leg from this relay's retained provider into the active DO. */
 class CapabilityProviderInvokerRpcTarget extends RpcTarget implements CapabilityProviderInvoker {
+  readonly #pagerGeneration: PagerGeneration;
+  readonly #path: string[];
   readonly #provider: LiveCapability;
+  readonly #providerBroken: ProviderBroken;
 
-  constructor(provider: LiveCapability) {
+  constructor(input: {
+    pagerGeneration: PagerGeneration;
+    path: string[];
+    provider: LiveCapability;
+    providerBroken: ProviderBroken;
+  }) {
     super();
-    this.#provider = provider;
+    this.#pagerGeneration = input.pagerGeneration;
+    this.#path = input.path;
+    this.#provider = input.provider;
+    this.#providerBroken = input.providerBroken;
   }
 
-  invoke(path: string[], args: unknown[]): unknown {
-    return this.#provider.invoke(path, args);
+  async invoke(path: string[], args: unknown[]): Promise<unknown> {
+    // Settle on the first observable outcome. Looking at a mutable `closed`
+    // flag after a provider rejection would rewrite an application error if a
+    // Pager close happened in the same turn after that error was already
+    // queued. A close that wins this race is the specific transport fact the
+    // unavailable contract represents.
+    if (this.#pagerGeneration.closed || this.#providerBroken.broken)
+      throw capabilityOfflineError(this.#path);
+    const pagerClosed = this.#waitForClose(this.#pagerGeneration);
+    const providerBroken = this.#waitForClose(this.#providerBroken);
+    let providerCall: Promise<unknown>;
+    try {
+      // Preserve a synchronous provider exception as an operation outcome,
+      // rather than letting a later close rewrite it as offline.
+      providerCall = Promise.resolve(this.#provider.invoke(path, args));
+    } catch (error) {
+      providerCall = Promise.reject(error);
+    }
+    try {
+      const result = await Promise.race([
+        providerCall,
+        pagerClosed.promise.then(() => {
+          throw capabilityOfflineError(this.#path);
+        }),
+        providerBroken.promise.then(() => {
+          throw capabilityOfflineError(this.#path);
+        }),
+      ]);
+      return detachDisposablePlainRpcResult(result);
+    } finally {
+      pagerClosed.dispose();
+      providerBroken.dispose();
+    }
+  }
+
+  #waitForClose(source: Pick<PagerGeneration, "closed" | "closedListeners"> | ProviderBroken): {
+    dispose(): void;
+    promise: Promise<void>;
+  } {
+    const closed = "closed" in source ? source.closed : source.broken;
+    const listeners = "closedListeners" in source ? source.closedListeners : source.listeners;
+    if (closed) return { dispose() {}, promise: Promise.resolve() };
+    let resolve!: () => void;
+    const promise = new Promise<void>((next) => {
+      resolve = next;
+    });
+    listeners.add(resolve);
+    return {
+      dispose: () => listeners.delete(resolve),
+      promise,
+    };
   }
 }
 
@@ -92,6 +201,7 @@ export class CapabilityProviderPagerRelay {
   #connectedAtOffset: number | undefined;
   #operationTail = Promise.resolve();
   #pager: WebSocket | undefined;
+  #pagerGeneration: PagerGeneration | undefined;
 
   constructor(input: {
     env: Env;
@@ -146,7 +256,18 @@ export class CapabilityProviderPagerRelay {
         types: input.types,
       };
       const provision = await this.#durableObject.provideCapability(record);
-      const mounted = { ...provision, provider } satisfies MountedProvider;
+      const pagerGeneration = this.#pagerGeneration;
+      if (pagerGeneration === undefined || pagerGeneration.closed) {
+        throw new Error("Capability Provider Pager closed before capability provision completed");
+      }
+      const providerBroken = createProviderBroken();
+      provider.onRpcBroken(() => providerBroken.markBroken());
+      const mounted = {
+        ...provision,
+        pagerGeneration,
+        provider,
+        providerBroken,
+      } satisfies MountedProvider;
       this.#mounts.set(provision.providedAtOffset, mounted);
       return this.#provisionHandle(mounted);
     } catch (error) {
@@ -168,6 +289,7 @@ export class CapabilityProviderPagerRelay {
       url: "https://capability-provider-pager.internal/",
     });
     this.#pager = pager;
+    this.#pagerGeneration = createPagerGeneration(pager);
     pager.addEventListener("message", (event) => this.#enqueuePage(pager, event.data));
     pager.addEventListener("close", () => this.#enqueuePagerClosed(pager));
     pager.addEventListener("error", () => this.#enqueuePagerClosed(pager));
@@ -181,7 +303,10 @@ export class CapabilityProviderPagerRelay {
       this.#connectedAtOffset = connectedAtOffset;
       return connectedAtOffset;
     } catch (error) {
-      if (this.#pager === pager) this.#pager = undefined;
+      if (this.#pager === pager) {
+        this.#pager = undefined;
+        this.#pagerGeneration = undefined;
+      }
       try {
         pager.close(1011, "Capability Provider Pager connection failed");
       } catch {
@@ -222,12 +347,18 @@ export class CapabilityProviderPagerRelay {
   }
 
   #enqueuePagerClosed(pager: WebSocket): void {
+    const pagerGeneration = this.#pagerGeneration;
+    // Deliberate closes clear both references before close(), so this is the
+    // far side of the exact physical Pager retained by active invoker legs.
+    if (this.#pager !== pager || pagerGeneration?.pager !== pager) return;
+    pagerGeneration.markClosed();
     const task = this.#enqueue(() => {
       // Every deliberate close (#retireMount's last-mount close, #ensurePager's
       // failed-dial close) nulls #pager BEFORE closing, so reaching this body
       // means the FAR side hung up on live mounts.
       if (this.#pager !== pager) return;
       this.#pager = undefined;
+      this.#pagerGeneration = undefined;
       this.#connectedAtOffset = undefined;
       const hadMounts = this.#mounts.size > 0;
       for (const providedAtOffset of [...this.#mounts.keys()]) {
@@ -262,10 +393,15 @@ export class CapabilityProviderPagerRelay {
     }
 
     const connectedAtOffset = this.#connectedAtOffset;
-    if (connectedAtOffset === undefined) return;
+    if (connectedAtOffset === undefined || mounted.pagerGeneration.closed) return;
     const activeLeg = await this.#durableObject.activateLiveCapability({
       connectedAtOffset,
-      invoker: new CapabilityProviderInvokerRpcTarget(mounted.provider),
+      invoker: new CapabilityProviderInvokerRpcTarget({
+        pagerGeneration: mounted.pagerGeneration,
+        path: mounted.path,
+        provider: mounted.provider,
+        providerBroken: mounted.providerBroken,
+      }),
       providedAtOffset: mounted.providedAtOffset,
     });
     // No leg means this Page lost a pending-activation race and is stale.
@@ -306,6 +442,7 @@ export class CapabilityProviderPagerRelay {
     const pager = this.#pager;
     if (this.#mounts.size > 0 || pager === undefined) return;
     this.#pager = undefined;
+    this.#pagerGeneration = undefined;
     this.#connectedAtOffset = undefined;
     try {
       pager.close(1000, "no live capability mounts");

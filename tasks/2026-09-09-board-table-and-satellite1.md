@@ -271,8 +271,10 @@ Phase 3, the Satellite1:
     in `conversation_lights` (dim red, breathing off). Satellite1 sets it
     from the XMOS status register. ≈ +40 core, host test row.
 20. Bench, in this order: `health()` over the stream; XMOS version in
-    health; `echoRawPeak` vs `echoCleanPeak` with `voicelab aec`;
-    `voicelab boards --only satellite1`; then `voicelab latency`.
+    health; inspect `echoRawPeak` versus `echoCleanPeak` where the board has
+    a real raw tap; then run `voicelab boards --only satellite1` and inspect
+    `health()` again. The procedure uses no `voicelab aec` or `voicelab
+    latency` command.
 
 ## The Satellite1 as a table
 
@@ -304,19 +306,18 @@ static const struct iterate_kit_i2s_codec_facts audio = {
   .capture = { /* same bus */ },
   .dma_frames = 480, .dma_descriptors = 6,        /* 3840 B / 10 ms, 60 ms ring: havpe's TX geometry */
   .playback_shape = {.bits = 32, .slots = 2, .ratio = 3},
-  /* XMOS emits each 16 kHz sample three times. MEASURED 2026-09-09 on XMOS 1.0.3:
-   * slot 0 carries the microphone, slot 1 is SILENT (whatever the source comments say).
-   * Uplink = slot 0 at unity gain (it is the AGC'd tap; x16 after an AGC is the HAVPE
-   * essay's self-trigger); slot 1 stays the diagnostic plane. */
-  .capture_shape = {.bits = 32, .slots = 2, .uplink_slot = 0, .diagnostic_slot = 1, .ratio = 3},
-  .capture_gain = 1,
+  /* XMOS v1.0.3 emits each 16 kHz sample three times. Slot 0 is AGC; slot 1
+   * is AEC+IC+NS. Neither is raw. Current calibration uses NS slot 1 at x32,
+   * coupled to the TAS2780 60% volume ceiling. */
+  .capture_shape = {.bits = 32, .slots = 2, .uplink_slot = 1, .diagnostic_slot = -1, .ratio = 3},
+  .capture_gain = 32,
   .amplifier_gpio = -1,                           /* TAS2780 is I2C, and TX never stops: it is the AEC reference */
 };
 
 static const struct iterate_kit_board board = {
   .facts = { .stream_path = "/agents/voice/satellite1", .client_path = "/clients/satellite1",
              .conversation_id = "sat1dev", /* greeting, instructions, peer_description, hints as havpe */
-             .speaker = {.ceiling = 100}, .speaker_dry_wait_ms = 40,
+             .speaker = {.ceiling = 60}, .speaker_dry_wait_ms = 40,
              .processing_frame_samples = 320, .capture_chunk_samples = 320, .capture_stack_bytes = 4096,
              .turns = ITERATE_KIT_VOICE_TURNS_SERVER_VAD, .radio_before_codec = true },
   .i2c = {.sda = 5, .scl = 6, .hz = 400000},
@@ -361,118 +362,302 @@ Not in v1: FUSB302B USB-PD (20 V for amp mode 2; port from PD_Micro, MIT,
 when wanted), the XMOS flasher (ship with the vendor image, gate on version),
 LD2450 radar, AHT20, LTR-303, jack auto-switch.
 
-## Open bench decisions
+## Measured results and remaining acceptance
 
-- ~~Which XMOS tap is the uplink~~ DECIDED by measurement: slot 0 (the only
-  live one) at unity gain. A voice agent must be set up on the board's stream
-  before the first call (`pnpm cli voicelab talk --project <slug> --setup-only
-  --stream-path /agents/voice/<board>`); a bare `agents.create()` births a chat
-  agent, not a voice agent.
-- GPIO16 MCLK: all audits say leave the pad unused on a slave; nobody has
-  scoped it. Verify on first flash.
-- The Voice PE capture DMA geometry: 320×5 today vs the shared 480×6. Keep
-  two geometries in the table only if the bench shows a difference.
+The consolidation is complete enough to assess as a board-table design. The
+source measurements taken during the work were: `devices/` changed from 14,713
+to 10,943 lines including the 313-line Satellite1; shared code added 3,958
+lines; the fleet's net change was +188. Per board the source counts changed
+from 3,460 to 1,004 (HAVPE), 2,979 to 2,077 (Waveshare), 2,040 to 1,545 (M5),
+and 6,234 to 6,004 (StackChan). These replace the earlier estimates and are
+historical measurements, not a claim about the current worktree.
 
-## Numbers (estimates)
+Settled root `typecheck`, `lint`, `knip`, and full `pnpm test` pass
+(`/tmp/futurehomes-final-*.log`), as do all five final release builds and 72 C
+tests (`/tmp/futurehomes-*-release-build.log`). The preceding prime firmware was
+cable-flashed to both boards with the WakeNet history fix (destroy and recreate the model rather than call
+`clean()`); each completed three call cycles with no reset, stable heap, and
+wake frames resuming after a call. See
+`/tmp/futurehomes-havpe-reset-cycles.json` and
+`/tmp/futurehomes-satellite1-reset-cycles.json`. HAVPE's 5 ms status-log spam
+is fixed, its status pointer remained stable, and its final flash completed.
 
-| | before | after |
-|---|---|---|
-| havpe | 3,460 | ~600 |
-| waveshare_s3_amoled | 2,979 | ~1,650 |
-| m5sticks3 | 2,040 | ~1,200 |
-| stackchan | 6,234 | ~5,400 |
-| boards total | 14,713 | ~8,850 |
-| shared added (board.h/.c ~600, i2s_codec ~520, led_ring ~130, button ~110, pcm_format ~170, xmos_control ~140, ledger ~110, health ~30, tests ~300) | | ~+1,700 (~450 moved) |
-| fleet net | | ≈ −4,400 |
-| Satellite1 | (copy: ~3,000) | ~300 board + ~90 target + ~400 shared chip code |
+The health-room regression is fixed by raising the health cap from 2,816 to
+6,144; the greater-than-4 KiB regression passes. All five health-room builds
+and 72 host tests pass, and both boards are flashed with it.
 
-## Instruction fixes that fell out
+The final host suite (72 tests), all five IDF builds, and the Satellite1
+volume-60 rebuild passed. The latest actual CLI final three-turn proof passed
+(`/tmp/futurehomes-cli-final-talk.log`). Earlier release instrumentation also
+recorded 1,818–1,840 ms completion drain, 852–896 ms first audio, 27 received
+packets, and zero sequence gaps, drops, starvation, recycle, or failure.
+Its final-tail fix pads only after `answer_done` and drains; a partial answer
+now fails durably as `watchdog-stalled`. A Release/NDEBUG side-effect review
+and full Release build passed.
 
-- `.agents/skills/adding-a-kit-device-or-sprite/SKILL.md` points at
-  `apps/kit/docs/2026-08-06-stream-stack-review.md`, which is not in the tree,
-  and describes `capture_is_echo_cancelled` / `capture_clock_is_hardware_owned`
-  properties that were deleted. Rewrite Part 1 around the table once step 13
-  lands.
+Production OS `e68dcae4-a8da-44ea-a204-826b05169fd1` deployed at 06:23 via
+the safe integration of `4f7ccc` and the prior v4 work; all rollout smokes
+passed (`/tmp/futurehomes-production-final-rollout-authorized.log`). Local
+voice artifact config commit `20a70476` (SHA prefix `a1b9c3b`) is installed;
+both parent streams were explicitly restarted and their open-mic setup is
+healthy (`/tmp/futurehomes-production-{satellite1,havpe}-{parent-restart,setup}.log`).
 
-## Bench plan (goal set 2026-09-09 ~16:45)
+The exact new-board recipe is four files and 264 lines: device C (229), device
+CMake (6), target CMake (8), and defaults (21), excluding generated assets and
+lockfiles.
 
-Both connected boards must run the consolidated firmware against the prd
-project `templestein` (`prj_7d0fb56f09a54a298e3ddfb106c1fb9a`), which the
-HAVPE is already provisioned onto and connected to (`/clients/home-assistant-voice-preview-edition`,
-stream `/agents/voice/home-assistant-voice-preview-edition`). Its config repo
-runs the packaged `@iterate-com/voice-agent` from `main`; open-mic is the
-stream default (`clientTakesTurns` false), so a fresh
-`/agents/voice/satellite1` stream needs no backend change. Stock-firmware
-HAVPE health baseline captured before any reflash.
+The tuning audit preserves HAVPE's pre-table `8f019cc43` topology from
+`devices/havpe/havpe_audio.c`: separate XMOS-clocked slave I2S controllers,
+TX 48 kHz Q31 480×6, RX 16 kHz Q31 320×5, processed/raw slots 0/1, x16 gain,
+40 ms speaker dry wait, preload and continuous idle TX reference. VNR remains
+health-only; there is no ESP-side AGC or loudness gate. Satellite's NS slot 1,
+gain 32-before-PCM16, no raw diagnostic tap, and TAS2780 cap 60 are intentional
+hardware tuning. Source equality cannot prove AEC or acoustic latency: release
+needs repeated board evidence with counters, transcription, and no far-only
+turns/self-barge; actual speaker-start timing needs board-clock or external
+acoustic measurement.
 
-Order, each gate before the next:
+HAVPE final release is flashed and passed: barge call-up in 3.753 s with the
+full story prompt, interruption partly recognized in Japanese, `pineapple`,
+one supersession, and playout generation 4/4; AEC delivered an exact full
+prompt with one created/done over 3,064 frames (61.28 s), 3,059 continuously
+(61.18 s), zero self-barge/starvation/runtime errors, same session/call, and
+idle return; quiet ran 46.175 s, then completed the full `banana` prompt,
+answer, and idle return (`/tmp/futurehomes-havpe-release-{barge,aec,quiet}.json`).
+The health-room repeat AEC passed 3,499 frames (69.98 s), 3,491 continuous
+(69.82 s), one created/done, zero self-barge/starvation/runtime errors, and
+idle return (`/tmp/futurehomes-havpe-healthroom-repeat-aec.json`).
 
-1. HAVPE first (the known board): flash HEAD's havpe target, keep its
-   ITERKIT1 blob (plain `idf.py flash` leaves 0x510000 alone), watch the
-   console for the boot, then `health()` over the stream must show
-   `transport ready`, `voicelab ready`, `gateOpen`, `codecCaptureFailures 0`,
-   `spkStarvedMs 0`, `xmosVersion` 1.3.1, and the same `rpcExports` as the
-   baseline. Then `doppler run --config prd -- pnpm cli voicelab boards --project templestein --only havpe`
-   through the Mac speaker: verbatim transcript, answer played, no starvation.
-2. AEC on the HAVPE, the part that has been hard: the oracle is
-   `echoRawPeak` vs `echoCleanPeak` in `health()` (raw mic tap vs cancelled
-   tap, accumulated only while the speaker runs). Read it after a `boards`
-   run: healthy is ≥ 9 dB of separation (2026-08-11 measured −9.9 dB warm,
-   collapsing to −0.4 dB when TX underran between answers). If it collapses,
-   the suspects in order: TX ring not preloaded/auto-clearing (check
-   `playbackQueueOverflows` climbing while idle), the uplink stage (NS with
-   x16, `aec.setStage` flips it live), and the 2.5 s AIC3204 soft-start. The
-   barge test: speak over the answer; `bargeIns` must move and the transcript
-   must be the interruption, not the assistant's own words.
-3. Satellite1: provision with the HAVPE's blob (same SSID/project/key,
-   `make-config-image.py` with `--offset-for satellite1`), flash, console
-   boot, ring white-then-settled, `health()` with `xmosMajor/Minor/Patch`
-   non-zero, `ampPowerMode` 0 on Mac USB (5 V) or 2 on the 30 W brick, then
-   `voicelab boards --project templestein --only satellite1`. Its oracle
-   compares slot 0 (AGC) against slot 1 (NS) since no raw tap reaches the
-   ESP; both taps are post-AEC, so the number measures the AGC, and the real
-   AEC proof is the transcript under the barge test. Uplink starts on slot 1
-   at x16; if the provider's VAD self-triggers on the assistant's echo, try
-   slot 0 at x1.
-4. CLI still works: `pnpm cli voicelab talk` (the Mac as a client) against
-   templestein, and `pnpm cli itx run --context templestein` health reads.
-5. Review rounds: `claude -p --model fable --effort max` with the diffs on
-   disk and the brief on stdin, at least once after each phase lands and once
-   on the whole; act on every finding ranked "would break a board".
-6. Stretch, wake word: esp-sr ships WakeNet models in the component StackChan
-   already depends on (`espressif/esp-sr` 2.4.7, `model/wakenet_model/`):
-   English candidates `wn9_hiesp` ("Hi ESP"), `wn9_alexa`, `wn9_jarvis_tts`
-   ("Jarvis"), 292 KB each, loaded from a `model` partition or embedded.
-   The stock Satellite1 uses ESPHome's `micro_wake_word` TFLite models
-   ("Hey Jarvis", "Okay Nabu"), which esp-sr cannot run; use WakeNet
-   `wn9_jarvis_tts` so "Jarvis" stays the word. Feed it the AEC'd 16 kHz
-   uplink; on detect: play the press chime through the shared sound slot,
-   `iterate_kit_button_inject_tap` so the shared grammar starts the call
-   exactly as a press would, ring shows the listening state. No backend
-   change: the call is a normal open-mic call.
+Satellite1's NS channel is real; the old silence conclusion was a room-noise
+measurement error. Gain 16 missed prefixes. At NS slot 1 gain 64, volume 70
+and then 65 both failed strict repeated barge transcription (the 65 run heard
+`bimetal`), although the model answered `pineapple`; neither is acceptance.
+At volume 60 (TAS DVC 80, −40 dB), two independent wake-and-barge runs passed
+the full prompt, `So, say the word pineapple instead`, supersession, and a new
+played `pineapple` answer (`/tmp/futurehomes-satellite1-volume60-{barge,repeat-barge}.json`).
+That is not final acceptance: the later NS-slot-1 gain-64 long run failed at
+62 s with a late self-transcript, two responses, and supersession despite zero
+starvation and runtime DMA (`/tmp/futurehomes-satellite1-final60-aec.json`).
 
-## Outcome so far (2026-09-09 evening)
+The latest Satellite firmware returns to NS slot 1 at gain 32 with output cap
+60 (TAS DVC 80, −40 dB), after fixing Q31 gain before PCM16 conversion; the old
+path discarded low bits. Raw/pregain health is retained. Its barge proof heard
+and answered `pineapple` with one supersession
+(`/tmp/futurehomes-satellite1-precision32-barge.json`), but the full
+interruption ASR was partly garbled in Japanese, so this is not a perfect
+transcription claim. Its AEC proof passed 3,249 played frames (64.98 s), 3,233
+continuous (64.66 s), one created/done, two audio-done, zero tools/errors, all
+runtime-failure deltas zero, the same session/call, and return to idle
+(`/tmp/futurehomes-satellite1-precision32-aec.json`). The prompt ASR missed
+`Tell me a`; the documented keyword criterion passed, but this is not a
+full-prompt claim. Runtime DMA is zero and warmup is 8/8. Final release barge
+passed: 2.978 s call-up, full story prompt, `So say the word pineapple instead`,
+one supersession, and playout generation 4/4
+(`/tmp/futurehomes-satellite1-release-barge.json`). Release AEC completed with
+2,974 frames (59.48 s), 2,971 continuous (59.42 s), and zero self-barge,
+starvation, or runtime failures (`/tmp/futurehomes-satellite1-release-aec.json`).
+Its health-room-ready quiet proof passed 45.107 s, then a full `banana` prompt,
+answer, and idle return (`/tmp/futurehomes-satellite1-healthroom-ready-quiet.json`).
+The post-rollout repeat AEC passed 3,089 frames (61.78 s), 3,058 continuous
+(61.16 s), zero self-barge/starvation/runtime failure, same call/session and
+idle return (`/tmp/futurehomes-satellite1-postrollout-repeat-aec.json`). The
+latest barge pass is recorded in
+`/tmp/futurehomes-satellite1-postrollout-barge.json`.
 
-- Steps 1–19 and 21 landed (twenty commits on `futurehomes`, each build-verified on
-  every target); fleet source 10,020 → ~9,000 lines with the Satellite1 added.
-- HA Voice PE on the table firmware: `voicelab boards` PASS with a verbatim
-  transcript, barge answered; AEC on tap 3 measured −25 dB on long answers
-  (taps 1 and 4 falsified again); idle TX overflows 95/s → 0, dial 15 s → 3.5 s.
-- Satellite1 on the table firmware: first boot clean, `voicelab boards` PASS
-  (verbatim, barge answered) at unity gain on slot 0, long answer with no
-  self-trigger. Three measured fixes: mute polarity, mic slot, stream posture.
-- CLI: boards / device --name / transcript / itx run all work on templestein.
-- Wake word: model partition + WakeNet "Jarvis" build; first flash boot-looped
-  on esp-sr `model_clean` before the first detect (guarded). PROVEN hands-free
-  on the HA Voice PE: "Jarvis" from the Mac → detection → chime → call up in
-  2.1 s → spoken prompt transcribed verbatim → answered. 6.9 ms per 32 ms
-  chunk, 0 overruns.
-- Fable reviews: round 1 (Phases 0–1 + chips) and round 2 (table + boards +
-  Satellite1) applied; round 3 (whole branch) in progress.
-- Open: the Satellite1 stopped answering on USB after a failed flash (the
-  hour-one GPIO0 strap fault; needs an unplug, a tap on the right button, a
-  replug) and still has to take the wake-word build; the wake-word bench on
-  the HAVPE; round 2's consolidation list (#10) as the last codex chunk.
+HAVPE’s actual CoreAudio three-turn speaker timing was 2,160/1,960/1,980 ms
+(median 1,980 ms), with eight total short turns and zero self-barge
+(`/tmp/futurehomes-havpe-acoustic-latency.json` plus waveform PNG). The valid
+Satellite post-rollout acoustic probe produced five audible replies, but the
+overall probe failed because the fifth transcript arrived late; the probe now
+waits for it (`/tmp/futurehomes-satellite1-postrollout-acoustic.json` and PNG).
+Its nine-turn acoustic soak measured 1,820–2,080 ms (median 1,960 ms) and
+recorded 300 seconds of CoreAudio without clock drop
+(`/tmp/futurehomes-satellite1-soak-acoustic.json` and PNG). The broader
+12-turn soak yielded nine good replies with zero self-barge, starvation, or
+runtime failure on one session, but the actual call closed after about 60 s.
+The durable reason was `Grok's socket closed` at 06:37:50.479 even though the
+provider was OpenAI (`/tmp/futurehomes-satellite1-soak-latency.json` and
+`/tmp/futurehomes-satellite1-soak-ended-events-small.log`).
+This is not a passed long soak. The provider-close path subsequently gained
+durable close recording and one bounded reconnect per call in voice-agent v20;
+the exact two-close preview proof passes and v20 is installed on both streams.
+
+The matched-latency evidence is still incomplete and is not a pass. The Mac C
+ten-minute run completed 102 turns: speech end to first packet was p50 1,593
+ms, p90 1,984 ms, max 5,943 ms. Its non-quiet run was p50 1,653 ms, p90 2,053
+ms, max 16,559 ms, with 189 starved-buffer events and nine underruns in the
+room path despite zero wire gaps and no reconnect. HAVPE's first ten-minute
+run failed at turn 20 after 19 clean turns, on the same connection, with one
+sequence gap/regression and one superseded response; actual acoustic delay of
+13,020 ms was confirmed. After correcting the direct Node runner to send
+continuous zero PCM while awaiting a reply, two ten-minute runs completed:
+160 turns at median/max 1,428/1,689 ms, and 173 turns with the later HAVPE
+session snapshot at 1,381/1,798 ms. Last-third median increases were 114 and
+136 ms. These are received non-quiet PCM endpoints, without physical playback.
+The matched raw Node run using Satellite's DTO production session snapshot
+(SHA `e4f72dc…c97`) completed 169 turns: received non-quiet p50 1,377.5 ms,
+p90 1,523.4 ms, p99 1,966 ms, max 1,988.9 ms, and +89.8 ms first-to-last-third
+drift (`/tmp/futurehomes-direct-openai-satellite-dto-matched-10m.jsonl`). It
+is also not a physical-playback measure.
+
+The second HAVPE run stopped at an expected delivery callback batch-budget
+renewal, which the probe now distinguishes from a WebSocket replacement. It
+then falsely rebooted under a PONG-only watchdog despite inbound frames.
+Deterministic regression tests reproduce the watchdog and suppressed-keepalive
+bugs; both fixes pass, all five targets build, and HAVPE survives more than
+twelve unpolled idle minutes with seven PONGs. A third HAVPE run on that
+firmware still had a 10,110 ms acoustic stall and an actual WebSocket loss
+after 37 turns. Cloudflare recorded a 1006 close followed by a Durable Object
+storage reset; the initiating cause remains unproven. Detailed evidence and
+benchmark budgets are in the [VoiceLab README](../apps/os/scripts/voicelab/README.md#matched-latency-benchmark).
+
+Satellite's 59-turn run is discarded for AEC and acoustic evidence because the
+non-target HAVPE woke. In the new isolated attempt at 2026-09-10T09:06:58.588,
+a prompt received no VAD or response for 45 s; room level was unchanged, with
+651 native appends, zero errors, a read-only trace proof, and no reset. Two
+subsequent three-turn runs passed with a PCM tap: 1,100 frames over 22 s, three
+VAD pairs, peak 2,333, and estimated board-send-to-tap median/max 92.5/465.5
+ms. This is not ten-minute acceptance. The subsequent isolated Satellite ten-minute run
+completed 96 correct turns over one WebSocket and provider session, each with
+one VAD pair, response, and audio-done, and zero runtime faults
+(`/tmp/futurehomes-satellite1-dto-prd-10m.json`). It nevertheless fails the
+latency budget: turn 3's playback bound was 9,197 ms and turn 41's was 3,211
+ms; first-/last-third medians were 1,838/1,825 ms (−13 ms). HAVPE was parked
+for the whole run, then restored to normal RUN health
+(`/tmp/futurehomes-havpe-dto-prd-restored-ready2.json`). The room clock was
+valid to 10.34 ms with zero drops. Known-waveform regressions now cover quiet
+responses, noise alone, a short click preceding the reply, and actual late
+audio. The corrected analyzer reports 94 of 96 turns at median 1,870 ms and
+first-to-last-third change +30 ms; turns 38 and 82 remain unmeasurable at the
+highest threshold. Per-turn threshold sensitivity is retained, and acoustic
+acceptance remains incomplete. Reviewed failures are 9,200 ms at turn 3 and
+3,230 ms at turn 41 (`/tmp/futurehomes-satellite1-dto-prd-acoustic-confirmed.json`).
+
+The established backend recovery fixes are deployed to production from the
+current-base integration checkout. Further latency experiments are isolated
+to preview 6. A twelve-call preview reproduction showed a plain DTO RPC leak:
+both inner and outer layers retained an object until session cleanup, while a
+primitive control released per call. The shared helper's native-object path is
+now green for 100/100 calls (activation 29–48 ms; invocation 36–57 ms) on
+preview `85151b9c`; nested callable functionality is 8/8 green, but its native
+lifetime until session cleanup remains explicitly unresolved. The proven DTO
+fix deployed to production as `dfe1177a-157c-4039-878b-c656cff30330`; standard
+deploy and smokes pass (`/tmp/futurehomes-dto-prd-deploy.log`). Temporary
+`/repros` diagnostics were stripped from production only. Full OS
+route/schema/template/typecheck validation and 23 focused tests pass. The
+production native guard is now 100/100 Satellite `health()` calls at
+09:18:24.508–09:18:34.980, with activation 47–108 ms and invocation 56–143 ms
+released per call before two seconds of idle cleanup
+(`/tmp/production-satellite1-health-100-proof.json`,
+`/tmp/100-activateLiveCapability.json`, and
+`/tmp/100-invokeLiveCapability.json`).
+
+The ten-minute minimal backend probes do not support a strong mutation-only
+attribution: read-vs-append measured read max 465 ms and ephemeral max 2,417
+ms; empty-append-vs-ephemeral measured empty max 1,812 ms and ephemeral max
+502 ms, with zero subscriptions and all 60,000 events settled. The exact
+correlated 30,000-event ten-minute probe also had zero errors and 1,601 ms max;
+its worst tagged event had native body 0 ms, native wall 80 ms, and CPU 0.
+Missing parent-call propagation prevents an upstream exact join, so the next
+preview probe adds the same probe ID to the ingress span. No storage
+optimization was implemented.
+
+The correlated append run had 22,150 successful paired appends before a `1006`
+at 09:57:36.059Z. Its owning root `GET /api` request exceeded the 32,000 ms CPU
+limit at 09:57:35.554Z (445,429 ms wall), 505 ms earlier, which explains that
+peer close (`/tmp/futurehomes-correlated-close-full.json`). The earlier
+defaults connection has the same CPU-limit shape
+(`/tmp/futurehomes-defaults-close-discover.json`). This does not explain the
+HAVPE capability-pager close: its socket turn was 47 ms / 0 CPU, with a
+separate later retryable dispose error and storage reset
+(`/tmp/futurehomes-havpe-close-root-audit.json`).
+
+A candidate is now deploying to preview: move `/api` WebSocket Cap'n Web
+handling into one `ItxSessionDurableObject` per connection, accept it normally,
+and forward from the root. Its deployment log is
+`/tmp/futurehomes-itx-session-do-preview-deploy.log`. There is no green
+long-run proof. This candidate neither explains nor resolves the audio-latency
+stalls or the HAVPE pager close; original acceptance remains unmet. All five
+Fable max reviews completed; the fifth is
+`/tmp/futurehomes-fable-review-5.log`. Final settled validation and repeated
+hardware acceptance remain required.
+
+The final acceptance path no longer uses `getEventPage()` after a
+`MAX_SAFE_INTEGER` limit-one read: it derives `streamMaxOffset` and opens a
+replay cursor. Cursor state is only processed/scanned-through, never the head;
+refreshes run every 10 s with at most three retries and a 60 s deadline.
+Preview 6 controlled-fault exact-once and poison-terminal (three restarts)
+proofs pass. An autonomous alarm proof shows revival at 05:34:55.047, 22.027 s
+before the observer at 05:35:17.074, after 63 s with no source-call wait and
+exactly one effect (`/tmp/facet-alarm-proof-observer.json`). Native quota was
+not reproduced: a local CLI 10,050-fanout attempt ended without a result and
+is not evidence.
+
+Satellite1's XMOS was not reflashed: read-only readback confirmed the vendor
+fixed-delay v1.0.3 image at
+`/tmp/futurehomes-satellite1-xmos-installed.bin` (MD5
+`5f5788ecb240082f61acd36f247ea3b2`; SHA-256
+`7e3a5d97ca3e90df953c0b2ef575b5d5dcb89c5d84a59e621a3bc7cf2cfd0d52`). A
+temporary ESP application held GPIO4 to reset XMOS and switch the ESP SPI bus
+to direct access to XMOS's external boot flash for diagnostic readback only.
+It released GPIO4 low and restored the normal ESP firmware; no XMOS flash was
+performed. A cold-DSP readback re-confirmed the same known image
+(`/tmp/futurehomes-satellite1-agc60-cold-dsp-readback.log`).
+
+Both vendor reviews are complete and corrected:
+[DSP review](2026-09-10-satellite1-vendor-dsp-review.md) and
+[board review](2026-09-10-satellite1-vendor-board-review.md). Their main
+recommendations are already adopted; no XMOS upgrade is indicated. Smaller DMA
+and DC-filter changes remain measurement-gated candidates.
+
+The remaining release acceptance is deliberately ordered:
+
+1. For a board stream, install the correct voice agent with `voicelab talk
+   --setup-only`; include `--open-mic` for an open-mic board. Preserve the
+   existing board custom tools and stream configuration; setup-only must not
+   blindly overwrite them. The command refuses an accidental posture change.
+   Only pass `--flip-turn-posture` when intentionally migrating an existing
+   stream; do not manually append a configured event.
+2. Cable-flash a wake-word target with `idf.py flash`, including
+   `srmodels.bin`, then inspect `health()` for model load, frame movement,
+   detection, bounded worker time, and a coherent failure state. OTA cannot
+   install the model partition. An OTA/release path therefore needs an
+   explicitly verified model-partition strategy before it can carry a
+   wake-word image.
+3. Run `voicelab boards --only <name>` against each connected board and read
+   `health()` before and after it. Confirm a transcript, played response,
+   no unexplained capture/playback failures, and the board's measured signal
+   path. Satellite1's NS slot 1 is a live uplink plane; it still has no raw
+   ESP tap, so `echoRawPeak` is not an AEC oracle.
+4. Isolate an AEC or wake-word bench acoustically. Put every non-target MCU in
+   downloader mode before saying the wake word, using its MAC-resolved port:
+   `esptool --port "$(tools/port-for-mac.sh <ROM-MAC>)" --before usb-reset
+   --after no-reset read-mem 0x6000403c`; restore it with `--before no-reset
+   --after hard-reset read-mem 0x6000403c`. Otherwise another board can hear
+   the word and invalidate the result.
+5. Satellite1's flashed volume-60 startup cap is verified: a request for 100
+   returns 60. The latest common warmup accounting activates separate TX/RX
+   flags only after their first successful hardware transfer; Satellite1 boot
+   reports runtime TX/RX 0, flat warmup 10/8, and all other fault/drop/starve
+   counters 0, including after a failed ASR
+   (`/tmp/futurehomes-satellite1-{calibrated-boot,verified-barge}.json`).
+   Final acceptance requires repeated full-length AEC runs with no
+   self-interruption, plus a primary measurement from speech end to actual
+   speaker start. The safe production rollout is complete. Keep acceptance
+   open for Satellite’s call-lifecycle diagnosis and repeated long soak,
+   post-rollout latency evidence, HAVPE’s post-rollout quiet proof, and final
+   telemetry review. The latest CLI three-turn physical proof is complete.
+6. Compare latency under matched server-VAD conditions for three persistent
+   ten-minute clients: a direct Node script on this Mac, the Mac C CLI, and an
+   ESP32 board. For every turn, record speech end → first audio *received* and
+   speech end → first audio *actually played* as separate measures. Demonstrate
+   comparable results rather than assuming the observed 1.5–2 s is acceptable,
+   and inspect time-bucketed results for drift; do not claim a drift guarantee
+   until that long-run evidence exists.
+
+The supported verification commands are `voicelab device`, `voicelab boards`,
+`voicelab talk`, and `voicelab transcript`; the earlier `voicelab aec` and
+`voicelab latency` steps were not CLI commands and are removed from this plan.
 
 ## Design round 2: "adding a new ESP32 device should be easy" (2026-09-09, evening)
 
@@ -491,3 +676,39 @@ Four independent designs, each under a different constraint, against the six rea
 - **B is the right shape for the six axes and waits for a bench.** Ops structs with a context rhyme with `iterate_kit_audio_codec` and `iterate_kit_board_ops`, which is this codebase's idiom, and one gesture struct with one grammar removes the four grammar copies. But its codec seam re-plumbs the shared hardware tasks and StackChan's TDM path, which cannot be proven without the M5StickS3, the Waveshare and the StackChan connected; the three review rounds so far caught regressions on exactly those boards. Take it up in a chunk when they are on the desk, input and output seams first (no audio path), codec seam last.
 - **A is rejected**: a fixed list of kinds with one implementation per value (TDM_MASTER, ES7210_AW88298_BSP, two ES8311 values) is the framework the doctrine forbids, and it trades compile-time typing for boot-time validation of tagged rows. Its one durable insight, posture derived from facts instead of restated per board, lands in its smallest form as D's board.c defaults.
 - **C is rejected**: profiles are spec-objects layered over the table (profile → table → ops), three headers repeating ten fields, and C's own numbers say the sixth board is a wash. Its `core/mode.c` observation (HAVPE and StackChan carry the same NVS/adopt code) is real and goes with B's chunk.
+
+
+## 2026-09-11 — shared frontend client controls
+
+Jonas approved implementing all three frontend structural opportunities and
+explicitly allowed a large refactor while the backend is revamped separately.
+
+- Both the ESP app task and macOS CLI now run the portable `voice_uplink`
+  controller for turn admission, mic batches, release snapshots, tail flushing,
+  and bounded failure handling. The CLI's adapter owns source preparation and
+  reporting; the ESP adapter owns capture-fence/view updates and atomic capture
+  permission. Platform transports retain their different concurrency ownership.
+- Board input callbacks now return normalized gestures. `board.c` alone applies
+  session grammar, copies intent, and orders end/wake chimes. Board-specific
+  dial/menu behavior and dedicated audio paths remain with the devices.
+- HAVPE and StackChan use common provider-mode validation, adoption, and NVS
+  persistence with their existing defaults and namespaces. Persistence failure
+  is reported without leaving live mode configuration partially applied.
+
+The shared uplink also closes behavior gaps exposed by the extraction: open-mic
+CLI sessions no longer emit PTT markers; failed audio/marker publication is
+terminal and observable; release flushing is capped to the queued-frame snapshot; and a held button cannot continuously reopen turns after its limit.
+Host controller tests cover these cases plus buffered speech, empty dials,
+backpressure, and commit bounds. CLI adapter and existing ESP-loop tests exercise
+the actual platform integrations. This is a source/build change; these refactored
+images have not been flashed, and no backend deployment is part of this work.
+
+Validation completed: 77/77 host tests pass with sanitizers, including the new
+uplink and provider-mode tests and the existing ESP voice-loop integration
+tests. All five ESP-IDF targets build: HAVPE, Satellite1, M5StickS3, StackChan,
+and Waveshare S3 AMOLED. Final source review verified both chime assets in every
+board table and consumption of coincident hardware/injected taps. `git diff
+--check` passes. Build logs and binary hashes are in
+`/tmp/futurehomes-client-refactor-*.log` and
+`/tmp/futurehomes-client-refactor-firmware-artifacts.json`. Changes remain local
+and uncommitted; no firmware flash, backend deployment, push, or PR was performed.

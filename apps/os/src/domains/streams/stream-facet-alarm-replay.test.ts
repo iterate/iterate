@@ -13,10 +13,25 @@
 // (same shape as guarantees-not-given.test.ts) with a scripted facet.
 
 import { DatabaseSync } from "node:sqlite";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { Env } from "../../env.ts";
+import { recordedSpans, resetRecordedSpans } from "../../test/cloudflare-workers-shim.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { StreamDurableObject } from "./stream-durable-object.ts";
+
+const userspace = vi.hoisted(() => ({
+  loadStatefulClass: vi.fn(),
+}));
+
+vi.mock("../workers/worker-runner.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../workers/worker-runner.ts")>();
+  return {
+    ...actual,
+    DynamicWorkerRunner: class {
+      loadStatefulClass = userspace.loadStatefulClass;
+    },
+  };
+});
 
 test("a failed facet alarm replay rejects the alarm invocation and re-merges the bounded retry desire", async () => {
   const harness = await bootStreamWithAgentFacet();
@@ -32,6 +47,7 @@ test("a failed facet alarm replay rejects the alarm invocation and re-merges the
     /facet alarm replay failed for agent; failing the alarm invocation keeps the platform's alarm retry owed/,
   );
   expect(harness.facet.handleAlarmCalls).toBe(1);
+  expect(harness.context.abortCalls()).toBe(0);
 
   // The bounded self-retry stays armed too (the fast path when the write
   // survives): the shared facet slot holds a future desire and the native
@@ -43,6 +59,40 @@ test("a failed facet alarm replay rejects the alarm invocation and re-merges the
   // nearer alarm after the merge; the merged desire's native write is what
   // matters.
   expect(harness.context.alarms).toContain(merged);
+
+  await harness.context.settle();
+  harness.context.close();
+});
+
+test("the latency repro stamps only its one validated ephemeral probe", async () => {
+  const harness = await bootStreamWithAgentFacet({ path: "/repros/append-correlation" });
+  resetRecordedSpans();
+
+  harness.stream.append({
+    type: "events.iterate.com/repro/ephemeral-frame",
+    ephemeral: true,
+    payload: { fixed: "frame", probeId: "run-123:p:7" },
+  });
+
+  expect(recordedSpans).toEqual([
+    {
+      name: "stream.repro.append",
+      attributes: {
+        "iterate.repro.probe_id": "run-123:p:7",
+        "iterate.stream.path": "/repros/append-correlation",
+        "iterate.repro.ephemeral": true,
+        "iterate.repro.event_count": 1,
+      },
+    },
+  ]);
+
+  resetRecordedSpans();
+  harness.stream.append({
+    type: "events.iterate.com/repro/ephemeral-frame",
+    ephemeral: true,
+    payload: { fixed: "frame", probeId: "not a bounded probe ID" },
+  });
+  expect(recordedSpans).toEqual([]);
 
   await harness.context.settle();
   harness.context.close();
@@ -109,6 +159,128 @@ test("a not-yet-due facet desire re-arms without replaying and the alarm resolve
   harness.context.close();
 });
 
+test("a parent replacement reports one durable resource-recovery revival without error telemetry", async () => {
+  const harness = await bootStreamWithAgentFacet({ source: "userspace" });
+  harness.context.values.set("facetResourceRecovery:agent", {
+    attempts: 1,
+    deploymentVersion: "unversioned",
+    nonce: "recovery-1",
+    reason: "too-many-subrequests",
+    requestedAtMs: Date.now(),
+    source: "hosted-delivery",
+    cursorChangedAtOffset: 7,
+  });
+
+  // This is the fresh parent incarnation after ctx.abort(). Reusing the
+  // durable storage is intentional: the marker is the handoff across the
+  // replacement, while stream offsets and the failed delivery cursor remain
+  // untouched below it.
+  const restarted = new StreamDurableObject(harness.context.ctx, fakeEnv());
+  await harness.context.waitForInitialization();
+  const revived = restarted.getEvents({
+    eventTypes: ["events.iterate.com/stream/processor-revived"],
+  });
+  expect(revived).toHaveLength(1);
+  expect(revived[0]!.payload).toMatchObject({
+    processorSlug: "agent",
+    reason: "too-many-subrequests",
+    recoveryNonce: "recovery-1",
+    parentRestart: true,
+    cursorChangedAtOffset: 7,
+  });
+  expect(
+    restarted.getEvents({ eventTypes: ["events.iterate.com/stream/error-occurred"] }),
+  ).toHaveLength(0);
+
+  // A second eviction before delivery completes must not duplicate the
+  // expected diagnostic: its nonce is the durable idempotency boundary.
+  new StreamDurableObject(harness.context.ctx, fakeEnv());
+  await harness.context.waitForInitialization();
+  expect(
+    restarted.getEvents({ eventTypes: ["events.iterate.com/stream/processor-revived"] }),
+  ).toHaveLength(1);
+
+  await harness.context.settle();
+  harness.context.close();
+});
+
+test("a userspace facet's native quota error marks, arms, and aborts the parent", async () => {
+  userspace.loadStatefulClass.mockResolvedValue({
+    klass: class {},
+    ok: true,
+    resolved: { cacheKey: "quota-test" },
+  });
+  const harness = await bootStreamWithAgentFacet({ source: "userspace" });
+  harness.facet.handleAlarmError = new Error("Too many subrequests");
+  const failureBoundaryOffset = harness.stream.getMaxOffset();
+
+  // Retry fires fan out even without a facet alarm desire. That exercises the
+  // real parent -> userspace facet call path without inventing a response
+  // silence watchdog.
+  await expect(
+    harness.stream.alarm({ isRetry: true, retryCount: 1 } as AlarmInvocationInfo),
+  ).rejects.toThrow(/facet alarm replay failed for agent/);
+
+  expect(harness.context.abortCalls()).toBe(1);
+  expect(harness.context.syncsBeforeAbort()).toHaveLength(1);
+  expect(harness.context.syncsBeforeAbort()[0]).toBeGreaterThan(0);
+  expect(harness.context.alarms).toContainEqual(expect.any(Number));
+  expect(harness.context.values.get("facetResourceRecovery:agent")).toMatchObject({
+    attempts: 1,
+    reason: "too-many-subrequests",
+    source: "facet-call",
+    failureBoundaryOffset,
+  });
+  await harness.context.settle();
+  harness.context.close();
+});
+
+test("the exact native quota text from a builtin facet keeps its ordinary alarm failure path", async () => {
+  const harness = await bootStreamWithAgentFacet();
+  harness.facet.handleAlarmError = new Error("Too many subrequests");
+
+  await expect(
+    harness.stream.alarm({ isRetry: true, retryCount: 1 } as AlarmInvocationInfo),
+  ).rejects.toThrow(/facet alarm replay failed for agent/);
+  expect(harness.context.abortCalls()).toBe(0);
+  expect(harness.context.values.get("facetResourceRecovery:agent")).toBeUndefined();
+  await harness.context.settle();
+  harness.context.close();
+});
+
+test("a userspace quota episode stops after three parent replacements and records a terminal error", async () => {
+  userspace.loadStatefulClass.mockResolvedValue({
+    klass: class {},
+    ok: true,
+    resolved: { cacheKey: "quota-test" },
+  });
+  const harness = await bootStreamWithAgentFacet({ source: "userspace" });
+  harness.facet.handleAlarmError = new Error("Too many subrequests");
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await expect(
+      harness.stream.alarm({ isRetry: true, retryCount: attempt } as AlarmInvocationInfo),
+    ).rejects.toThrow(/facet alarm replay failed for agent/);
+  }
+  expect(harness.context.abortCalls()).toBe(3);
+
+  // The fourth exact failure is terminal: no fourth parent replacement and
+  // one durable error fact instead of an unbounded reset loop.
+  await expect(
+    harness.stream.alarm({ isRetry: true, retryCount: 4 } as AlarmInvocationInfo),
+  ).rejects.toThrow(/facet alarm replay failed for agent/);
+  expect(harness.context.abortCalls()).toBe(3);
+  expect(
+    harness.stream.getEvents({ eventTypes: ["events.iterate.com/stream/error-occurred"] }),
+  ).toHaveLength(1);
+  expect(harness.context.values.get("facetResourceRecovery:agent")).toMatchObject({
+    attempts: 4,
+    terminal: true,
+  });
+  await harness.context.settle();
+  harness.context.close();
+});
+
 // -----------------------------------------------------------------------------
 // Harness: the real StreamDurableObject over an in-memory DurableObjectState
 // fake, with ctx.facets serving one scripted facet stub. Storage shape follows
@@ -118,7 +290,9 @@ test("a not-yet-due facet desire re-arms without replaying and the alarm resolve
 const PROJECT_ID = "prj_facet_alarm_replay";
 const AGENT_PATH = "/agents/onboarding";
 
-async function bootStreamWithAgentFacet() {
+async function bootStreamWithAgentFacet(
+  options: { path?: string; source?: "builtin" | "userspace" } = {},
+) {
   const facet = {
     handleAlarmError: undefined as Error | undefined,
     handleAlarmCalls: 0,
@@ -136,7 +310,7 @@ async function bootStreamWithAgentFacet() {
     },
   };
   const context = durableObjectContext(
-    DurableObjectNameCodec.stringify({ projectId: PROJECT_ID, path: AGENT_PATH }),
+    DurableObjectNameCodec.stringify({ projectId: PROJECT_ID, path: options.path ?? AGENT_PATH }),
     facet.stub,
   );
   const stream = new StreamDurableObject(context.ctx, fakeEnv());
@@ -146,10 +320,30 @@ async function bootStreamWithAgentFacet() {
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       name: "agent",
-      receiver: { action: "facet-processor", source: { kind: "builtin" } },
+      receiver:
+        options.source === "userspace"
+          ? {
+              action: "facet-processor",
+              source: {
+                kind: "userspace",
+                worker: {
+                  className: "TestFacet",
+                  durableWorkerKey: "test-facet",
+                  path: AGENT_PATH,
+                  source: {
+                    createWorker: {
+                      entryPoint: "facet.js",
+                      files: { type: "repo", repoPath: "/repos/config" },
+                    },
+                  },
+                  type: "stateful",
+                },
+              },
+            }
+          : { action: "facet-processor", source: { kind: "builtin" } },
     },
   });
-  await context.settle();
+  if (options.source !== "userspace") await context.settle();
   return { context, facet, stream };
 }
 
@@ -176,6 +370,9 @@ function durableObjectContext(name: string, facetStub: object) {
   const backgroundWork: Promise<unknown>[] = [];
   const alarms: number[] = [];
   let latestInitialization: Promise<unknown> | undefined;
+  let abortCalls = 0;
+  let syncCalls = 0;
+  const syncsBeforeAbort: number[] = [];
   const storage = {
     sql: wrapSqlStorage(db),
     kv: {
@@ -198,6 +395,7 @@ function durableObjectContext(name: string, facetStub: object) {
       return Promise.resolve();
     },
     sync(): Promise<void> {
+      syncCalls += 1;
       return Promise.resolve();
     },
     transactionSync<T>(callback: () => T): T {
@@ -226,12 +424,17 @@ function durableObjectContext(name: string, facetStub: object) {
       return work;
     },
     abort(): never {
+      abortCalls += 1;
+      syncsBeforeAbort.push(syncCalls);
       throw new Error("test Durable Object aborted");
     },
   } as unknown as DurableObjectState;
 
   return {
     alarms,
+    abortCalls: () => abortCalls,
+    syncsBeforeAbort: () => syncsBeforeAbort,
+    values,
     close: () => db.close(),
     ctx,
     async waitForInitialization(): Promise<void> {

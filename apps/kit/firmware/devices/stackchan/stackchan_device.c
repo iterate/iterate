@@ -35,18 +35,16 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "nvs.h"
-#include "nvs_flash.h"
 
 #include "iterate/kit/capabilities/arguments.h"
 #include "iterate/kit/capabilities/camera.h"
 #include "iterate/kit/capabilities/servos.h"
 #include "iterate/kit/conversation_lights.h"
 #include "iterate/kit/conversation_overlay.h"
-#include "iterate/kit/devices/stackchan.h"
-#include "iterate/kit/session_grammar.h"
 #include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/platforms/board.h"
+#include "iterate/kit/platforms/provider_mode_nvs.h"
+#include "iterate/kit/provider_mode.h"
 #include "iterate/kit/voice_device_profile.h"
 
 #include "stackchan_audio.h"
@@ -57,8 +55,8 @@
 #include "stackchan_modes.h"
 #include "stackchan_processor.h"
 
-/* The baked chimes and provider announcements; see assets/make-sounds.py. */
-#include "assets/stackchan_sounds_generated.inc"
+/* The baked chimes and provider announcements; see tools/generate-sounds.sh. */
+#include "assets/sounds_generated.inc"
 
 static const char tag[] = "iterate-stackchan";
 
@@ -93,60 +91,52 @@ static uint64_t last_present_ms;
  */
 static struct {
   struct stackchan_menu menu;
-  struct iterate_kit_session session;
   uint8_t mode;
 } mode_state;
 
 /*
  * The chosen provider survives a power cycle. This board brings its codec up
- * BEFORE the radio, so unlike the HAVPE it cannot lean on the transport
- * having mounted NVS already — load_mode initialises the store itself, which
- * is idempotent and free when the transport does it again later.
+ * BEFORE the radio, so it initialises NVS before its silent boot restore.
  */
-#define STACKCHAN_NVS_NAMESPACE "stackchan"
-#define STACKCHAN_NVS_MODE_KEY "mode"
+static const struct iterate_kit_provider_mode_options mode_options = {
+    .default_mode = STACKCHAN_MODE_OPENAI,
+    .mode_count = STACKCHAN_MODE_COUNT,
+};
+static const struct iterate_kit_provider_mode_nvs mode_nvs = {
+    .namespace_name = "stackchan",
+    .key = "mode",
+    .initialize_flash_on_load = true,
+};
+static struct iterate_kit_provider_mode_store mode_store;
 
-static uint8_t load_mode(void) {
-  nvs_handle_t handle;
-  uint8_t stored = STACKCHAN_MODE_OPENAI;
-  (void)nvs_flash_init();
-  if (nvs_open(STACKCHAN_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) {
-    return STACKCHAN_MODE_OPENAI;
-  }
-  if (nvs_get_u8(handle, STACKCHAN_NVS_MODE_KEY, &stored) != ESP_OK ||
-      stored >= STACKCHAN_MODE_COUNT) {
-    stored = STACKCHAN_MODE_OPENAI;
-  }
-  nvs_close(handle);
-  return stored;
-}
-
-static void store_mode(uint8_t mode) {
-  nvs_handle_t handle;
-  if (nvs_open(STACKCHAN_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
-    return;
-  }
-  if (nvs_set_u8(handle, STACKCHAN_NVS_MODE_KEY, mode) == ESP_OK) {
-    (void)nvs_commit(handle);
-  }
-  nvs_close(handle);
-}
-
-/*
- * Point the loop at the mode's stream. `settled=false` is the silent boot
- * restore; `settled=true` is a menu pick, which persists only a CHANGE and
- * always announces — the person asked which provider this is, and the
- * announcement is the answer. No turn policy moves here: both of this
- * board's modes are server-VAD full duplex behind its own canceller.
- */
-static void adopt_mode(uint8_t mode, bool settled) {
+/* Both modes are server-VAD full duplex behind this board's canceller, so
+ * unlike HAVPE only the stream path moves with the selection. */
+static void configure_mode(void *context, uint8_t mode) {
+  (void)context;
   iterate_kit_voice_loop_set_stream_path(stackchan_mode_stream_path(mode));
-  if (settled) {
-    if (mode != mode_state.mode) store_mode(mode);
-    stackchan_audio_play_sound(
-        stackchan_mode_sounds[mode].pcm, stackchan_mode_sounds[mode].bytes);
+}
+
+static void announce_mode(void *context, uint8_t mode) {
+  (void)context;
+  stackchan_audio_play_sound(mode_sounds[mode].pcm, mode_sounds[mode].bytes);
+}
+
+/* `settled=false` restores silently; a menu pick announces even when it
+ * chooses the current mode, and persists only an actual change. */
+static void adopt_mode(uint8_t mode, bool settled) {
+  const enum iterate_kit_provider_mode_adoption result =
+      iterate_kit_provider_mode_adopt(
+          &mode_options,
+          &mode_store,
+          &mode_state.mode,
+          mode,
+          settled,
+          configure_mode,
+          announce_mode,
+          NULL);
+  if (result == ITERATE_KIT_PROVIDER_MODE_ADOPTION_PERSISTENCE_FAILED) {
+    ESP_LOGW(tag, "provider mode applied but could not be persisted");
   }
-  mode_state.mode = mode;
 }
 
 /*
@@ -219,7 +209,9 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
   stackchan_audio_set_playout_observer(
       iterate_kit_stackchan_avatar_observe_playout, NULL);
   /* The silent boot restore: dial whichever provider NVS remembers. */
-  adopt_mode(load_mode(), false);
+  mode_store = iterate_kit_provider_mode_nvs_store(&mode_nvs);
+  mode_state.mode = iterate_kit_provider_mode_load(&mode_options, &mode_store);
+  adopt_mode(mode_state.mode, false);
   out->codec = stackchan_audio_codec();
   out->processor = stackchan_processor();
   return true;
@@ -318,47 +310,18 @@ static void present(
   }
 }
 
-/** Classify board inputs against the last view held by board.c. */
+/** Supply the PMIC side-button call tap; face taps remain menu-only below. */
+static void read_gestures(struct iterate_kit_board_gestures *out) {
+  out->tap |= iterate_kit_stackchan_avatar_take_side_button_tap();
+}
+
+/** Poll StackChan-only presentation controls after the shared call grammar. */
 static void poll(void *context, struct iterate_kit_voice_intent *out) {
   const struct iterate_kit_voice_view *view = iterate_kit_board_view();
   const uint64_t now = (uint64_t)(esp_timer_get_time() / 1000);
   (void)context;
+  (void)out;
   head_gesture_step(now);
-  /*
-   * THE SIDE BUTTON IS THE CALL, THE FACE IS THE MENU. The PMIC button
-   * speaks the shared session grammar — wake with a chime, tap again to
-   * end (after the open-mic grace: the reflexive press right behind a wake
-   * means nothing), and every end path says "call ended" through the
-   * machine's one exit edge. A tap on the glass opens the provider menu
-   * instead of toggling the call, which is the swap this board asked for:
-   * conversations on the button people can feel, choices on the screen
-   * people can read. Open-mic posture, and no hold anywhere: the PMIC owns
-   * the long press as hardware power-off, so a press is only ever a tap.
-   */
-  {
-    const struct iterate_kit_session_poll session_poll = {
-      .tap = iterate_kit_stackchan_avatar_take_side_button_tap(),
-      .wants_call = view->wants_call,
-      .call_active = view->call_active,
-      .push_to_talk = false,
-      .tap_ends = true,
-      .now_ms = now,
-    };
-    struct iterate_kit_session_actions actions;
-    iterate_kit_session_step(&mode_state.session, &session_poll, &actions);
-    /* End before wake: play_sound replaces rather than mixes, so if one
-     * poll carries both edges the newer intent wins. */
-    if (actions.end_chime) {
-      stackchan_audio_play_sound(
-          stackchan_sound_chime_ended, sizeof(stackchan_sound_chime_ended));
-    }
-    if (actions.wake_chime) {
-      stackchan_audio_play_sound(
-          stackchan_sound_chime_press, sizeof(stackchan_sound_chime_press));
-    }
-    out->start_call = actions.start_call;
-    out->end_call = actions.end_call;
-  }
   {
     bool left = false;
     const bool tap = iterate_kit_stackchan_avatar_take_face_tap(&left);
@@ -854,20 +817,8 @@ static const struct iterate_kit_board_ops ops = {
   .start = start,
   .present = present,
   .poll = poll,
-  .phase = NULL,
   /* The only board that can answer this, and the reason the bridge exists. */
   .capture_meta = capture_meta,
-  /* Full duplex behind its own canceller: no fence, nothing to wait for. */
-  .capture_fence = NULL,
-  .playout_fenced_out = NULL,
-  /*
-   * The mouth is fed by the AUDIO DRIVER, not from here: the observer is
-   * installed in `start` so the analyser sees samples the hardware accepted,
-   * on the task that accepted them. `observe_playout` would be the same tap
-   * one hop later.
-   */
-  .observe_playout = NULL,
-  .observe_answer = NULL,
   .modules = modules,
   .health = health,
 };
@@ -877,7 +828,6 @@ static const struct iterate_kit_board board = {
   .stream_path = "/agents/voice/stackchan-2",
   .client_path = "/clients/stackchan",
   .conversation_id = "scdev",
-  .greeting = "Hi, I am your Iterate device. What can I do for you?",
   .instructions =
       "StackChan: a small desk robot with a face, a moving head and a camera. "
       "Its SIDE BUTTON starts and ends the call — with a chime on wake and a "
@@ -979,11 +929,16 @@ static const struct iterate_kit_board board = {
   .audio = NULL, /* Four-slot TDM and esp-sr remain board-owned. */
   .ring = {.gpio = -1, .power_gpio = -1},
   .status_led_gpio = -1,
-  .button = {.gpio = -1}, /* Touch, side button and mode menu own the grammar. */
+  .button = {.gpio = -1, .tap_ends = true},
+  .read_gestures = read_gestures,
+  .sounds = {.wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),
+    .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended)},
+  .play_sound = stackchan_audio_play_sound,
   .set_volume = stackchan_audio_set_volume,
   .extra = &ops,
 };
 
-void iterate_kit_stackchan_run(void) {
+/** ESP-IDF entry point: run this board through the shared voice loop. */
+void app_main(void) {
   iterate_kit_board_run(&board);
 }

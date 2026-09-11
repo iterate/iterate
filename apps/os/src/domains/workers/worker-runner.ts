@@ -31,6 +31,7 @@ export type DynamicWorkerTraceRole = "project_config" | "run_script" | "schedule
 
 const WORKERS_RPC_CLONE_VERSION_ERROR =
   "Unable to deserialize cloned data due to invalid or unsupported version.";
+const WORKERS_RPC_TOO_MANY_SUBREQUESTS_ERROR = "Too many subrequests";
 
 /**
  * How many times a replayable stateless request is dispatched through a
@@ -48,6 +49,12 @@ const CLONE_VERSION_MAX_ATTEMPTS = 4;
  * shared isolate (a recovery nonce) and retrying is the correct response. */
 export function isWorkerRpcCloneVersionError(error: unknown): boolean {
   return error instanceof Error && error.message.includes(WORKERS_RPC_CLONE_VERSION_ERROR);
+}
+
+/** The exact native resource exhaustion seen from a retained userspace-facet
+ * callback. Other worker failures retain their ordinary failure paths. */
+export function isWorkerRpcTooManySubrequestsError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes(WORKERS_RPC_TOO_MANY_SUBREQUESTS_ERROR);
 }
 
 // Recovery nonce for the shared-scope lanes in this parent isolate. Undefined

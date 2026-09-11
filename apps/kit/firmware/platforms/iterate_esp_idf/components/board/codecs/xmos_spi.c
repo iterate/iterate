@@ -4,6 +4,45 @@
 #include "freertos/task.h"
 #include <string.h>
 
+/** Open the Satellite1-proven SPI2 transport, then poll a nonzero version.
+ * Return the failed stage so the board retains its exact startup diagnostic.
+ */
+const char *iterate_kit_xmos_spi_open(struct iterate_kit_xmos_spi *handle,
+    int mosi, int miso, int sclk, gpio_num_t cs,
+    struct iterate_kit_xmos_version *version, uint8_t attempts, uint16_t interval_ms) {
+  handle->cs_gpio = cs;
+  const gpio_config_t cs_config = {
+    .pin_bit_mask = UINT64_C(1) << cs,
+    .mode = GPIO_MODE_OUTPUT,
+    .pull_up_en = GPIO_PULLUP_DISABLE,
+    .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    .intr_type = GPIO_INTR_DISABLE,
+  };
+  const spi_bus_config_t bus = {
+    .mosi_io_num = mosi, .miso_io_num = miso, .sclk_io_num = sclk,
+    .quadwp_io_num = -1, .quadhd_io_num = -1,
+    .max_transfer_sz = 256,
+  };
+  const spi_device_interface_config_t device = {
+    .clock_speed_hz = 8000000, .mode = 3, .spics_io_num = -1,
+    .queue_size = 1, /* flags = 0: MSB first, full duplex; driver owns CS. */
+  };
+  const char *stage = "SPI CS";
+  if (gpio_set_level(cs, 1) != ESP_OK ||
+      gpio_config(&cs_config) != ESP_OK) goto failed;
+  stage = "SPI bus";
+  /* Every transaction here is at most 8 bytes; with DMA on, the driver copies
+   * each stack buffer into internal DMA memory it mallocs per transaction,
+   * twice per 25 ms poll, on a board that reserves that memory for Wi-Fi. */
+  if (spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_DISABLED) != ESP_OK) goto failed;
+  if (spi_bus_add_device(SPI2_HOST, &device, &handle->device) != ESP_OK) goto failed;
+  stage = "XMOS version";
+  if (!iterate_kit_xmos_spi_read_version(handle, version, attempts, interval_ms)) goto failed;
+  return NULL;
+failed:
+  return stage;
+}
+
 static bool iterate_kit_xmos_spi_exchange(struct iterate_kit_xmos_spi *handle,
     const uint8_t *tx, uint8_t *rx, size_t length) {
   if (handle == NULL || handle->device == NULL || !GPIO_IS_VALID_OUTPUT_GPIO(handle->cs_gpio)) return false;

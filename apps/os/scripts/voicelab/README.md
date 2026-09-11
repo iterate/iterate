@@ -116,6 +116,189 @@ pnpm cli voicelab bench --project prj_… --seconds 120 --rate 50
 Every command prints a JSON summary with nearest-rank percentiles; `client`
 and `direct` share a summary shape so overhead subtracts cleanly.
 
+## Matched latency benchmark
+
+Use this when comparing the direct Node floor, the Mac C client, and a board.
+The three runs must use the same OpenAI provider-session snapshot, the same
+16 kHz fixture/utterance, 500 ms server VAD, and one fresh connection that
+stays open for the full ten minutes. Do not compare a newly configured stream
+with a reused one.
+
+Before any spoken wake word, park every non-target MCU in its bootloader using
+its MAC-resolved port and retain the confirmation. Another board can wake and
+answer the same prompts even while its own probe is idle. Restore those boards
+after the isolated run. A valid recording clock alone does not prove acoustic
+isolation; any overlapping board call invalidates the room and AEC evidence.
+
+```bash
+# terminal A: one room recording for the board run; it validates its own clock
+uv run --with sounddevice --with numpy python record-room.py \
+  --out /tmp/room.wav --seconds 660
+
+# direct Node floor: the captured fixture + provider-session snapshot
+pnpm cli voicelab direct --provider openai \
+  --fixture <fixture.wav> --session-snapshot <session.json> \
+  --duration-ms 600000 --gap-ms 500 --output-path /tmp/direct.jsonl
+
+# Mac C client: reuse the exact stream configuration; do not reconfigure it
+pnpm cli voicelab talk --project <slug> --stream-path <stream> \
+  --reuse-config --open-mic --converse 10 --utterance-dir <fixture-dir>
+
+# ESP32 board: persistent ten-minute stream proof and observer evidence
+pnpm cli voicelab latency-board --project <slug> --board <board> \
+  --minutes 10 --gap-ms 500 --out /tmp/board.json
+
+# acoustic endpoint: use only a room recording whose clock/drop validation passed
+uv run --with numpy --with matplotlib python analyze-room.py \
+  --wav /tmp/room.wav --probe /tmp/board.json --out /tmp/acoustic
+
+# known-waveform checks: quiet reply, noise alone, short click, late reply
+uv run --with numpy --with matplotlib python analyze-room.test.py
+```
+
+Report two endpoints for every turn: speech-end → first audio packet received,
+and speech-end → first audible sample actually played. `latency-board` health
+sampling is an upper bound, not the acoustic endpoint. Compare the first and
+last thirds of each persistent run for drift; a short run or a reconnect cannot
+establish that latency stays flat over time. These commands describe the method,
+not a passing benchmark result.
+
+The board probe defaults to a 3,000 ms response budget and 250 ms maximum
+increase in the last-third median. It completes functionally sound late turns
+to retain drift evidence, then fails the run if any turn misses its budget.
+The acoustic analyzer also requires every turn to be measurable, the room
+clock to be valid, and the board probe to pass. A delivery callback refresh
+after the configured batch budget is recorded separately; a WebSocket
+replacement, board reboot, or unexpected callback refresh fails continuity.
+Each turn must have exactly one VAD start, one VAD stop, one input transcript,
+and the correct answer. The transcript's prompt-keyword match is recorded
+separately: an ASR word mismatch is not classified as self-interruption.
+An incorrect answer still fails the run, but does not stop otherwise valid
+latency measurements before the ten-minute drift window completes.
+
+Acoustic thresholds use each turn's median pre-prompt RMS plus one, two, and
+three times `max(50, pre-prompt p95 RMS - median RMS)`. The onset must begin
+50 ms of continuous above-threshold activity; its first bin is the reported
+time. The artifact retains all three measurements, including their sensitivity
+to the threshold. Known-waveform regressions reject a 30 ms noise click that
+previously moved the reported onset 200 ms early, while preserving the onset
+of a quiet response and failing an actual four-second response.
+
+### Current findings — acceptance remains open
+
+The Mac C ten-minute run completed 102 turns. Its first-packet latency was
+p50 1,593 ms, p90 1,984 ms, and max 5,943 ms. In the same run, first non-quiet
+audio played measured p50 1,653 ms, p90 2,053 ms, and max 16,559 ms; the room path reported 189
+starved-buffer events and nine underruns, despite zero wire gaps and no
+reconnect. During the worst turn, the speaker ring was empty when the first
+packet arrived, and that packet contained silence. These results do not
+establish a local playout fault; backend append stalls overlapped the delay.
+The run fails latency acceptance.
+Its first- and last-third medians were nearly identical: first packet increased
+by 7 ms and first non-quiet playback decreased by 7 ms. The large tails remain
+failures despite that stable median.
+
+HAVPE's first ten-minute run failed at turn 20 after 19 clean turns: it kept
+the same connection, but recorded one sequence gap/regression and a superseded
+response. An actual acoustic delay of 13,020 ms was confirmed. The direct Node
+runner was corrected to continuously send zero PCM while waiting for a reply;
+its completed ten-minute run then delivered 160 turns over one connection,
+with p50 1,428 ms, p90 1,543 ms, and max 1,689 ms to first non-quiet received
+audio. The last-third median was 114 ms above the first third. This endpoint
+does not include physical speaker playback.
+
+The next HAVPE run captured provider receipt and audio-boundary timestamps.
+It reached 52 turns before the probe rejected a delivery callback refresh.
+That refresh was subsequently verified as the expected batch-budget renewal,
+with the same WebSocket, board uptime, and provider session. The board then
+rebooted under the PONG-only watchdog despite inbound traffic. Its 49
+measurable acoustic turns had a 1,970 ms median and 3,080 ms maximum; three
+weak replies were unmeasurable, so this run still fails acceptance.
+
+The watchdog fix renews liveness on complete inbound frames and sends periodic
+PINGs during inbound silence, even if microphone transmission continues.
+Deterministic tests reproduce both old failures and pass with the fix. All
+five firmware targets build, and the flashed HAVPE survived over twelve
+minutes of unpolled idle time with seven PONGs and no reboot.
+
+With that firmware, a third HAVPE run recorded a 10,110 ms acoustic stall and
+then lost its WebSocket after 37 turns. Cloudflare recorded an abnormal close
+and a subsequent Durable Object storage reset; the initiating cause remains
+unproven. A second direct Node run, using that HAVPE session snapshot, completed
+173 turns in ten minutes: median 1,381 ms, maximum 1,798 ms, and a 136 ms
+increase between first- and last-third medians. The matched raw Node run with
+Satellite's DTO production session snapshot (SHA `e4f72dc…c97`) completed 169
+turns: received non-quiet p50 1,377.5 ms, p90 1,523.4 ms, p99 1,966 ms, max
+1,988.9 ms, and +89.8 ms first-to-last-third drift
+(`/tmp/futurehomes-direct-openai-satellite-dto-matched-10m.jsonl`). Neither is
+a physical-playback measure. Backend latency and disconnect acceptance remain
+open. Backend changes require a minimal failing reproduction of the observed
+symptom before promotion.
+
+A Satellite run was discarded from acoustic/AEC acceptance after serial logs
+proved the non-target HAVPE also woke and answered. Satellite's own observer
+recorded a 9,099 ms playback bound during that run, so it remains useful as
+transport evidence. The isolated ten-minute run must be repeated.
+
+In the new isolated attempt at 2026-09-10T09:06:58.588, a prompt received no
+VAD or response for 45 s. Room level was unchanged, with 651 native appends,
+zero errors, read-only trace proof, and no reset. Two subsequent three-turn
+runs passed with PCM tap evidence: 1,100 frames across 22 s, three VAD pairs,
+peak 2,333, and estimated board-send-to-tap median/max 92.5/465.5 ms. This is
+not ten-minute acceptance. The subsequent isolated Satellite ten-minute run completed
+96 correct turns over one WebSocket and provider session, with one VAD pair,
+response, and audio-done each and zero runtime faults
+(`/tmp/futurehomes-satellite1-dto-prd-10m.json`). It fails latency acceptance:
+turn 3's playback bound was 9,197 ms and turn 41's 3,211 ms; first-/last-third
+medians were 1,838/1,825 ms (−13 ms). HAVPE was parked throughout and then
+restored to normal RUN health (`/tmp/futurehomes-havpe-dto-prd-restored-ready2.json`).
+The room clock was valid to 10.34 ms with zero drops. After the known-waveform
+measurement fixes, the analyzer reports 94 of 96 turns, median 1,870 ms and
+first-to-last-third change +30 ms. Turns 38 and 82 remain unmeasurable at the
+highest threshold. This is incomplete acoustic acceptance; each threshold
+sweep remains available for inspection. The reviewed failures remain 9,200 ms
+at turn 3 and 3,230 ms at turn 41
+(`/tmp/futurehomes-satellite1-dto-prd-acoustic-confirmed.json` and `.png`).
+
+A plain DTO RPC leak retained objects in both inner and outer layers until
+session cleanup; a primitive control released per call. The shared helper's
+native-object path is 100/100 green on preview `85151b9c` (activation 29–48
+ms; invocation 36–57 ms). Nested callable functionality is 8/8 green, while
+native lifetime through session cleanup remains unresolved. The DTO fix deployed
+to production as `dfe1177a-157c-4039-878b-c656cff30330`; standard deploy and
+smokes pass. Temporary `/repros` diagnostics were stripped from production
+only; full route/schema/template/typecheck validation and 23 focused tests
+pass. The production native guard is now 100/100 Satellite `health()` calls at
+09:18:24.508–09:18:34.980, activation 47–108 ms and invocation 56–143 ms,
+released per call before two seconds of idle cleanup
+(`/tmp/production-satellite1-health-100-proof.json`,
+`/tmp/100-activateLiveCapability.json`,
+`/tmp/100-invokeLiveCapability.json`). The current minimal backend probes
+falsify a strong mutation-only attribution: read vs append reached max
+465/2,417 ms and empty append vs ephemeral 1,812/502 ms, with zero
+subscriptions and all 60,000 events settled. The exact correlated 30,000-event
+ten-minute probe had zero errors and max 1,601 ms; its worst tagged event had
+native body 0 ms, native wall 80 ms, and CPU 0. Missing parent-call propagation
+prevents an upstream exact join; the next preview probe adds the probe ID to
+the ingress span. No storage optimization has been implemented.
+
+The correlated append run had 22,150 successful paired appends before a `1006`
+at 09:57:36.059Z. Its owning root `GET /api` request exceeded the 32,000 ms CPU
+limit at 09:57:35.554Z (445,429 ms wall), 505 ms earlier, which explains that
+peer close (`/tmp/futurehomes-correlated-close-full.json`). The earlier
+defaults connection has the same CPU-limit shape
+(`/tmp/futurehomes-defaults-close-discover.json`). This does not explain the
+HAVPE capability-pager close: its socket turn was 47 ms / 0 CPU, with a
+separate later retryable dispose error and storage reset
+(`/tmp/futurehomes-havpe-close-root-audit.json`).
+
+A candidate is now deploying to preview: move `/api` WebSocket Cap'n Web
+handling into one `ItxSessionDurableObject` per connection, accept it normally,
+and forward from the root. Its deployment log is
+`/tmp/futurehomes-itx-session-do-preview-deploy.log`. There is no green
+long-run proof. This candidate neither explains nor resolves the audio-latency
+stalls or the HAVPE pager close; original acceptance remains unmet.
+
 ## Ending a conversation
 
 A conversation is a **session**, not a press and not an answer: one provider
@@ -170,9 +353,10 @@ doppler run --config prd -- pnpm cli voicelab device --project <slug> --name hav
 `voice-agent/dev-stats` to the call's stream every five seconds whether anyone
 was listening or not, which kept four stream Durable Objects awake around the
 clock to publish counters nobody was reading. Nothing on a device is pushed on
-a timer now. `health()` is pure and does not renew the liveness lease, so poll
-it at turn boundaries — a poll loop rebuilds the wakeup cost the heartbeat was
-deleted for.
+a timer now. Poll `health()` at turn boundaries for ordinary checks: a poll
+loop rebuilds the wakeup cost the heartbeat was deleted for. Its returned
+WebSocket traffic also proves transport liveness, so an idle keepalive test
+must leave the device unpolled for the interval it is testing.
 
 `soak`, `stress` and `sessions` — three endurance harnesses that sampled that
 heartbeat — went with it. They were bridge-era: each subscribed to

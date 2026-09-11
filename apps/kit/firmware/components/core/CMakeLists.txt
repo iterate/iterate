@@ -10,12 +10,14 @@ set(ITERATE_KIT_CORE_SOURCES
   src/itx_mount.c
   src/itx_outbox_sender.c
   src/peer.c
+  src/provider_mode.c
   src/retry_gate.c
   src/session_grammar.c
   src/spsc_ring.c
   src/touch_tap.c
   src/voice_playback_clock.c
   src/voice_playout.c
+  src/voice_uplink.c
   src/voicelab_stream.c
   src/websocket_frame_reader.c
   src/websocket_frame_writer.c

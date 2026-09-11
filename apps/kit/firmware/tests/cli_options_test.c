@@ -123,6 +123,18 @@ static void a_person_and_a_driver_cannot_both_take_the_turns(void)
   assert(parse(&options, problem, argv, 6) == CLI_OPTIONS_ERR_INCOMPATIBLE);
 }
 
+static void a_driver_can_keep_an_open_microphone_for_server_vad(void)
+{
+  struct cli_options options;
+  char problem[128];
+  char *argv[] = {
+    (char *)"cli", (char *)"--open-mic", (char *)"--converse",
+    (char *)"5", (char *)"--utterance-dir", (char *)"/tmp"};
+
+  assert(parse(&options, problem, argv, 6) == CLI_OPTIONS_OK);
+  assert(options.open_mic && options.converse_minutes == 5.0);
+}
+
 /*
  * An interactive session's limit is its own field. Folded into --converse it
  * would start the unattended driver, which needs utterances nobody supplied,
@@ -218,6 +230,7 @@ int main(void)
   the_environment_fills_only_what_the_flags_left();
   conversing_without_utterances_is_refused();
   a_person_and_a_driver_cannot_both_take_the_turns();
+  a_driver_can_keep_an_open_microphone_for_server_vad();
   an_interactive_limit_is_not_the_conversation_driver();
   numbers_must_be_numbers();
   certificate_checking_is_on_unless_asked_otherwise();

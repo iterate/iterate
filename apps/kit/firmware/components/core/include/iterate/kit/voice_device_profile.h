@@ -27,6 +27,14 @@ enum {
   ITERATE_KIT_VOICE_IMPORT_CAPACITY = 16,
   ITERATE_KIT_VOICE_TOKEN_CAPACITY = 1024,
   ITERATE_KIT_VOICE_OUTPUT_CAPACITY = 128,
+  /*
+   * A health response is borrowed by Cap'n Web then serialized into one
+   * control-outbox slot (8192 bytes below). Leave two KiB for that envelope
+   * and any protocol growth; the remaining six KiB accommodates the shared
+   * document, table counters, and every current board's extra fields at
+   * UINT32_MAX without making health itself an unbounded allocation.
+   */
+  ITERATE_KIT_VOICE_HEALTH_CAPACITY = 6144,
 
   /*
    * A 16 KiB inbox slot admits a 12-frame delivery batch. Sixty-four slots
@@ -105,58 +113,16 @@ enum {
   ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND = 4,
 
   /*
-   * The speaker ring is 1.5 s of jitter, not an answer store. Playback starts
-   * after 390 ms (300 ms acoustic lead plus the 90 ms I2S DMA lead), conceals
-   * at most 400 ms, and sheds one frame per 50 above 1200 ms so catch-up is
-   * audible only as bounded latency recovery rather than pitch distortion.
-   */
-  /*
-   * TEN SECONDS: A CUSHION AGAIN, because the sender paces once more.
-   *
-   * It was thirty, and the comment here argued the case honestly: the server
-   * of the day shipped a whole answer as fast as the wire took it, so the ring
-   * "is not a cushion any more — it IS the answer, and it has to hold the
-   * longest one anybody will ask for". That was a true description of a wrong
-   * arrangement. A microcontroller had become the buffer for a server that
-   * would not wait, and the catch-up, high-water and lag-skip machinery around
-   * it was all compensation for the same missing wait.
-   *
-   * The buffer now lives on the server, where memory is free and a unit test
-   * can watch it, and the server releases at playback rate with a bounded
-   * budget: voice-agent2's MAX_DEVICE_SPEAKER_BACKLOG_BYTES, 128,000 bytes —
-   * four seconds. Ten seconds is that budget plus six of margin for jitter,
-   * and 320 KiB rather than 960 KiB of PSRAM.
-   *
-   * DO NOT SHRINK THIS BELOW THE SENDER'S BUDGET, and read the budget from
-   * voice-agent2.ts rather than from here — this comment is a copy and copies
-   * go stale. It described v1's `leadMs: 3_000` for a while after v2 stopped
-   * having a `leadMs` at all. The failure is silent from
-   * here: a frame refused at the door was never a frame that went missing, so
-   * the loss counters stay small and innocent while the listener loses whole
-   * seconds. That is how the 1.5 s version hid 2080 discarded frames — 41
-   * seconds of speech — across two minutes of ordinary conversation.
+   * Ten seconds of PCM16 mono at 16 kHz. The server paces audio within
+   * MAX_DEVICE_SPEAKER_BACKLOG_BYTES in packages/voice-agent/src/voice-agent.ts;
+   * this buffer must exceed that budget with room for delivery jitter.
+   * Overflow is counted separately from missing wire frames.
    */
   ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES = 320000,
   /*
-   * 60 ms of cushion, plus one hardware ring. DOWN FROM 300.
-   *
-   * Raised to 1000 ms once on the theory that a bigger cushion would stop the
-   * holes. It did not: measured on the CLI, concealment went 1.06% -> 1.24%,
-   * slightly WORSE, because the holes were never starvation. The real causes
-   * were a ring too small to hold an answer and a debt mechanism deleting
-   * frames, both since fixed. 300 was the retreat from that, and it was still
-   * sized for a danger that no longer exists.
-   *
-   * THIS IS PAID ON EVERY ANSWER, not once per call: the first frame of an
-   * answer always REPLACEs, which reprimes the clock. At 300 ms it was 390 ms
-   * of silence before every first word — four times the entire measured cost
-   * of the server round trip it sits behind (48 ms up, 46 ms down).
-   *
-   * And it buys nothing the sender is not already buying. The facet's pacer
-   * hands over its whole budget — four seconds of audio — as fast as it can
-   * append the instant an answer begins, so the frames behind the first one
-   * are already in flight when it lands. Two cushions for one hazard, and only
-   * this one costs the listener.
+   * Opening prefill: 60 ms plus a 2880-byte (90 ms) hardware-ring allowance.
+   * This threshold is paid on every answer, so changes require measured
+   * speech-end to actual-playback latency as well as starvation evidence.
    */
   ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES = 60 * 32 + 2880,
   ITERATE_KIT_VOICE_SPEAKER_CONCEAL_LIMIT_MS = 400,
@@ -199,17 +165,12 @@ enum {
   ITERATE_KIT_VOICE_FACE_POLL_MS = 100,
   ITERATE_KIT_VOICE_UNHEALTHY_RESTART_MS = 120000,
   /*
-   * `PING_INTERVAL_MS`, `PING_TIMEOUT_MS` and `BRIDGE_SILENCE_MS` were here.
-   * All three served an application-level ping/pong that has been deleted: a
-   * WebSocket carries its own PING/PONG and the transport already answers it,
-   * and the platform exposes a connection-layer probe that returns t0/t1/t2.
-   * The bridge-silence deadline went with them because the pong was its only
-   * evidence during a silent call — without it, the watchdog would have
-   * dropped every call in which nobody spoke for twenty seconds.
-   *
-   * What is left is the deadline on the lane that has no other proof.
+   * `PING_INTERVAL_MS`, `PING_TIMEOUT_MS`, `BRIDGE_SILENCE_MS`, and the
+   * downlink-silence deadline were here. None can distinguish a dead bridge
+   * from a healthy, quiet server-VAD call: a settled provider owes no batches
+   * while the room is silent. Transport recovery instead has explicit bounds
+   * on the press path below and on connection open.
    */
-  ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS = 10000,
   /*
    * How long the WebSocket hop must be quiet BOTH ways before this device
    * sends its own PING.
@@ -235,7 +196,7 @@ enum {
    * THESE TWO MOVE TOGETHER, which is why the one below moved with it.
    */
   /*
-   * A liveness PROBE for a hop silent both ways this long — deliberately
+   * A liveness PROBE after the peer has been silent this long — deliberately
    * NOT a keepalive racing anybody's idle policy. A client's standing job
    * is to BE CONNECTED and available: the socket is how the server reaches
    * this device (server-triggered conversations, pushes), so it exists
@@ -248,9 +209,10 @@ enum {
    */
   ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS = 120000,
   /*
-   * Last resort: no PONG for this long on a READY transport and the chip
-   * restarts, because a half-open TCP connection looks perfectly healthy from
-   * this end and no in-process recovery has worked.
+   * Last resort: no complete inbound WebSocket frame or PONG for this long on
+   * a READY transport and the chip restarts. A half-open TCP connection can
+   * keep accepting microphone bytes locally, so outbound traffic is not a
+   * lease and no in-process recovery has worked.
    *
    * 420 s, RAISED FROM 180 BECAUSE THE PROBE ABOVE SLOWED DOWN. At a 15 s
    * probe, 180 s was eleven chances to be answered; at a 120 s probe it is
@@ -271,9 +233,8 @@ enum {
    *
    * The failure this exists for: a one-way append into a half-open socket is
    * accepted by TCP and reports success. The socket looks open, the transport
-   * stays READY, and the first thing that notices is DOWNLINK_SILENCE_MS ten
-   * seconds later — ten seconds in which a person has pressed to talk and
-   * nothing whatsoever has happened. That is the worst failure left on these
+   * stays READY, while the device cannot otherwise distinguish it from a live
+   * idle hop. That is the failure the press path must classify promptly.
    * boards and it is entirely on the press path.
    *
    * SO THE PRESS ASKS. Placing a call queues a WebSocket PING and watches

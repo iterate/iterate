@@ -529,6 +529,7 @@ iterate_kit_esp_idf_websocket_connection_open(
    */
   connection->last_inbound_us = esp_timer_get_time();
   connection->last_outbound_us = connection->last_inbound_us;
+  connection->last_probe_us = connection->last_inbound_us;
   return ITERATE_KIT_OK;
 }
 
@@ -624,6 +625,8 @@ iterate_kit_esp_idf_websocket_connection_receive(
    * not evidence of anything.
    */
   connection->last_inbound_us = esp_timer_get_time();
+  iterate_kit_atomic_saturating_increment_relaxed_u32(
+      &connection->frames_received);
   if (classification == ITERATE_KIT_WEBSOCKET_RX_DROPPED) {
     iterate_kit_atomic_saturating_increment_relaxed_u32(
         &connection->receive_dropped);
@@ -696,6 +699,11 @@ iterate_kit_esp_idf_websocket_connection_receive(
           ? ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_PEER_CLOSE
           : ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_PROTOCOL_FAILURE;
     }
+    __atomic_store_n(
+        &connection->last_peer_close_status_code,
+        iterate_kit_websocket_close_status_code(
+            classified.bytes, classified.byte_count),
+        __ATOMIC_RELEASE);
     connection->peer_close_pending = true;
     /*
      * Stop admitting data as soon as CLOSE is parsed, while allowing the
@@ -748,6 +756,7 @@ iterate_kit_esp_idf_websocket_connection_probe(
     return ITERATE_KIT_BACKPRESSURE;
   }
   connection->last_outbound_us = esp_timer_get_time();
+  connection->last_probe_us = connection->last_outbound_us;
   return ITERATE_KIT_OK;
 }
 
@@ -768,9 +777,10 @@ iterate_kit_esp_idf_websocket_connection_service_control(
    * makes it visible, and the PONG it earns is the only evidence a liveness
    * watchdog can key on that still moves on a perfectly IDLE board.
    *
-   * Only when the hop is quiet BOTH ways: a connection carrying audio proves
-   * itself continuously, and probing it would spend a control frame to learn
-   * what the last data frame already said.
+   * Only when the peer has been quiet. Outbound microphone audio proves only
+   * that lwIP accepted bytes; it cannot distinguish a dead peer from a live
+   * one. A PING after an inbound-silent interval keeps that one-way failure
+   * bounded even while a person speaks continuously.
    *
    * Queued, never written here, for the same reason the reply PONG is: a data
    * frame may already be partially on the wire, and the bounded slot coalesces
@@ -781,19 +791,10 @@ iterate_kit_esp_idf_websocket_connection_service_control(
     const int64_t now_us = esp_timer_get_time();
     const int64_t quiet_us =
         (int64_t)ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS * 1000;
-    if (connection->last_inbound_us != 0 &&
-        connection->last_outbound_us != 0 &&
-        now_us - connection->last_inbound_us > quiet_us &&
-        now_us - connection->last_outbound_us > quiet_us) {
-      if (iterate_kit_websocket_tx_queue_control(
-              &connection->tx,
-              ITERATE_KIT_WEBSOCKET_PING,
-              NULL,
-              0U) == ITERATE_KIT_OK) {
-        /* Stamped as outbound so one quiet period yields one probe. */
-        connection->last_outbound_us = now_us;
-      }
-    }
+    (void)iterate_kit_esp_idf_websocket_queue_keepalive(
+        connection,
+        now_us,
+        quiet_us);
   }
   return iterate_kit_websocket_tx_poll_control(
       &connection->tx);
@@ -852,6 +853,9 @@ void iterate_kit_esp_idf_websocket_connection_metrics(
   metrics->receive_chunks =
       iterate_kit_atomic_load_relaxed_u32(
           &connection->receive_chunks);
+  metrics->frames_received =
+      iterate_kit_atomic_load_relaxed_u32(
+          &connection->frames_received);
   metrics->receive_dropped =
       iterate_kit_atomic_load_relaxed_u32(
           &connection->receive_dropped);
@@ -864,6 +868,8 @@ void iterate_kit_esp_idf_websocket_connection_metrics(
   metrics->control_backpressure =
       iterate_kit_atomic_load_relaxed_u32(
           &connection->control_backpressure);
+  metrics->last_peer_close_status_code = __atomic_load_n(
+      &connection->last_peer_close_status_code, __ATOMIC_ACQUIRE);
   metrics->transport_failure_incidents =
       iterate_kit_atomic_load_relaxed_u32(
           &connection->transport_failure_incidents);

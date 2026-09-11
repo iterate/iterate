@@ -22,6 +22,17 @@ export function capabilityOfflineError(path: string[]): Error {
   return new Error(capabilityOfflineMessage(path));
 }
 
+/**
+ * Whether an error (including one that crossed Workers RPC) names a provider
+ * that was known to be offline. The wording is minted only by
+ * capabilityOfflineError(), so consumers can model a lost live provider
+ * without treating arbitrary transport errors as expected.
+ */
+export function isCapabilityOfflineError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /^capability "[^"]+" is offline$/.test(message);
+}
+
 /** Whether an error (possibly relayed over RPC) says the capability at `path` is unserved. */
 export function isCapabilityUnservedError(error: unknown, path: string[]): boolean {
   const message = error instanceof Error ? error.message : String(error);

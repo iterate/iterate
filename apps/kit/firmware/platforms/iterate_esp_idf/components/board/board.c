@@ -54,6 +54,11 @@ bool iterate_kit_i2s_codec_valid(const struct iterate_kit_i2s_codec_facts *facts
       facts->amplifier_gpio < -1 || facts->amplifier_gpio >= GPIO_NUM_MAX) return false;
   const i2s_std_gpio_config_t *tx = &facts->playback.gpio_cfg;
   const i2s_std_gpio_config_t *rx = &facts->capture.gpio_cfg;
+  /* Slave buses may receive external MCLK, but must not drive it into the
+   * external master. IDF selects input only with I2S_CLK_SRC_EXTERNAL. */
+  if (facts->role == I2S_ROLE_SLAVE &&
+      ((tx->mclk != I2S_GPIO_UNUSED && facts->playback.clk_cfg.clk_src != I2S_CLK_SRC_EXTERNAL) ||
+       (rx->mclk != I2S_GPIO_UNUSED && facts->capture.clk_cfg.clk_src != I2S_CLK_SRC_EXTERNAL))) return false;
   if (tx->dout < 0 || rx->din < 0 || tx->dout == rx->din) return false;
   if (duplex) {
     return tx->bclk == rx->bclk && tx->ws == rx->ws && tx->mclk == rx->mclk &&
@@ -82,6 +87,53 @@ bool iterate_kit_i2s_codec_valid(const struct iterate_kit_i2s_codec_facts *facts
   return true;
 }
 
+
+/** Translate one board-independent input snapshot into session actions. */
+void iterate_kit_board_apply_gestures(
+    struct iterate_kit_session *session,
+    const struct iterate_kit_board_gestures *gestures,
+    const struct iterate_kit_gpio_button *button,
+    enum iterate_kit_voice_turns turns,
+    const struct iterate_kit_voice_view *view,
+    uint64_t now_ms,
+    struct iterate_kit_session_actions *actions) {
+  const struct iterate_kit_session_poll poll = {
+    .tap = gestures->tap,
+    .held = gestures->held,
+    .end_hold = gestures->end_hold,
+    .end_press = gestures->end_press,
+    .wants_call = view->wants_call,
+    .call_active = view->call_active,
+    .push_to_talk = turns == ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK,
+    .tap_wakes = button->tap_wakes,
+    .tap_ends = button->tap_ends,
+    .now_ms = now_ms,
+  };
+  iterate_kit_session_step(session, &poll, actions);
+}
+
+/** Fill omitted loop facts before voice_loop validates processor/capture cadence. */
+struct iterate_kit_board_facts iterate_kit_board_defaults(
+    const struct iterate_kit_board *board) {
+  struct iterate_kit_board_facts facts = board->facts;
+  if (facts.greeting == NULL)
+    facts.greeting = "Hi, I am your Iterate device. What can I do for you?";
+  if (facts.processing_frame_samples == 0U)
+    facts.processing_frame_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES;
+  if (facts.capture_chunk_samples == 0U)
+    facts.capture_chunk_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES;
+  if (facts.capture_stack_bytes == 0U) facts.capture_stack_bytes = 4096U;
+  if (facts.speaker_dry_wait_ms == 0U && board->audio != NULL &&
+      board->audio->playback.clk_cfg.sample_rate_hz != 0U) {
+    /* Two thirds waits for a late frame; the last third still bounds the
+     * playback step before the TX ring empties. Invalid clocks fail at start. */
+    const uint64_t ring_ms = (uint64_t)board->audio->dma_frames *
+        board->audio->dma_descriptors * 1000U /
+        board->audio->playback.clk_cfg.sample_rate_hz;
+    facts.speaker_dry_wait_ms = (uint32_t)(ring_ms * 2U / 3U);
+  }
+  return facts;
+}
 
 #ifdef ESP_PLATFORM
 #include "driver/gpio.h"
@@ -215,12 +267,17 @@ static enum iterate_kit_status set_volume(void *context, uint8_t percent, uint8_
 void iterate_kit_board_inject_tap(void) { iterate_kit_button_inject_tap(&button); }
 void iterate_kit_board_set_turns(enum iterate_kit_voice_turns value) {
   turns = value;
+#ifdef CONFIG_ITERATE_KIT_WAKE_WORD
+  /* A dial can change posture after this pass's presentation. Invalidate a
+   * queued idle detection immediately; a PTT tap cannot start a call. */
+  if (value == ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK) iterate_kit_wake_word_set_enabled(false);
+#endif
   iterate_kit_voice_loop_set_turns(value);
 }
 const struct iterate_kit_session_actions *iterate_kit_board_button_actions(void) { return &actions; }
 
 /** Finish wake-word startup on the app task, before accepting any detections.
- * Boards with an extra-owned button classifier must wire that classifier first.
+ * Wake-word injection requires the shared GPIO button classifier.
  */
 static bool iterate_kit_board_finish_wake_word(void) {
   if (board->wake_word == NULL) return true;
@@ -287,7 +344,8 @@ static void present(void *context, const struct iterate_kit_voice_view *value) {
   (void)context;
   view = *value;
 #ifdef CONFIG_ITERATE_KIT_WAKE_WORD
-  if (board->wake_word != NULL) iterate_kit_wake_word_set_enabled(!view.call_active && !view.wants_call);
+  if (board->wake_word != NULL) iterate_kit_wake_word_set_enabled(
+      turns == ITERATE_KIT_VOICE_TURNS_SERVER_VAD && !view.call_active && !view.wants_call);
 #endif
   if (board->ring.pixels != 0U) {
     struct iterate_kit_conversation_visual_state lights;
@@ -298,37 +356,45 @@ static void present(void *context, const struct iterate_kit_voice_view *value) {
   if (board->extra != NULL && board->extra->present != NULL) board->extra->present(NULL, value);
 }
 
+static void play_sound(const uint8_t *pcm, uint32_t bytes) {
+  if (pcm == NULL || bytes == 0U) return;
+  if (board->play_sound != NULL) {
+    board->play_sound(pcm, bytes);
+  } else {
+    iterate_kit_i2s_codec_play_sound(pcm, bytes);
+  }
+}
+
 static void poll(void *context, struct iterate_kit_voice_intent *out) {
   (void)context;
-  *out = (struct iterate_kit_voice_intent){0};
+  const uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
+  struct iterate_kit_board_gestures gestures = {0};
 #ifdef CONFIG_ITERATE_KIT_WAKE_WORD
-  /* Worker detections reach the classifier only on this app task. Recheck
-   * both mirrors: a queued idle detection must never become a hang-up tap.
-   * The existing actions.wake_chime below plays the shared sound exactly once.
-   */
-  if (board->wake_word != NULL && !view.call_active && !view.wants_call &&
+  /* Worker detections reach the same synthetic-tap queue as capabilities. */
+  if (board->wake_word != NULL && turns == ITERATE_KIT_VOICE_TURNS_SERVER_VAD &&
+      !view.call_active && !view.wants_call &&
       iterate_kit_wake_word_take_detection()) iterate_kit_board_inject_tap();
 #endif
   if (board->button.gpio >= 0) {
-    const uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
     const bool pressed = (gpio_get_level(board->button.gpio) == 0) == board->button.active_low;
     iterate_kit_button_update(&button, pressed, now_ms);
-    const struct iterate_kit_session_poll gestures = {
-      .tap = iterate_kit_button_take_tap(&button),
-      .held = iterate_kit_button_held(&button),
-      .end_hold = iterate_kit_button_take_end_hold(&button),
-      .wants_call = view.wants_call, .call_active = view.call_active,
-      .push_to_talk = turns == ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK,
-      .tap_wakes = board->button.tap_wakes, .tap_ends = board->button.tap_ends,
-      .now_ms = now_ms,
-    };
-    iterate_kit_session_step(&session, &gestures, &actions);
-    out->start_call = actions.start_call;
-    out->end_call = actions.end_call;
-    out->talk_held = actions.talk_held;
-    if (actions.end_chime) iterate_kit_i2s_codec_play_sound(board->sounds.ended, board->sounds.ended_bytes);
-    if (actions.wake_chime) iterate_kit_i2s_codec_play_sound(board->sounds.wake, board->sounds.wake_bytes);
+    gestures.held = iterate_kit_button_held(&button);
+    gestures.end_hold = iterate_kit_button_take_end_hold(&button);
   }
+  if (board->read_gestures != NULL) board->read_gestures(&gestures);
+  /* Consume the queued tap even when hardware supplied one in this pass. */
+  const bool button_tap = iterate_kit_button_take_tap(&button);
+  gestures.tap = gestures.tap || button_tap;
+  iterate_kit_board_apply_gestures(
+      &session, &gestures, &board->button, turns, &view, now_ms, &actions);
+  *out = (struct iterate_kit_voice_intent){
+    .start_call = actions.start_call,
+    .end_call = actions.end_call,
+    .talk_held = actions.talk_held,
+  };
+  /* End before wake: replacement playback leaves the newer intent audible. */
+  if (actions.end_chime) play_sound(board->sounds.ended, board->sounds.ended_bytes);
+  if (actions.wake_chime) play_sound(board->sounds.wake, board->sounds.wake_bytes);
   if (board->extra != NULL && board->extra->poll != NULL) board->extra->poll(NULL, out);
 }
 
@@ -385,7 +451,7 @@ void iterate_kit_board_run(const struct iterate_kit_board *value) {
   board = value;
   turns = board->facts.turns;
   volume_percent = board->facts.speaker.ceiling;
-  struct iterate_kit_board_facts facts = board->facts;
+  struct iterate_kit_board_facts facts = iterate_kit_board_defaults(board);
   facts.speaker.set_volume = set_volume;
   facts.speaker.volume = volume;
   facts.speaker.context = NULL;

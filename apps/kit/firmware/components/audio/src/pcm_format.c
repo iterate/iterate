@@ -164,14 +164,47 @@ static int16_t q31_word_to_pcm16(int32_t word) {
   return (int16_t)signed_upper;
 }
 
+static uint32_t pcm16_magnitude(int16_t sample) {
+  return sample < 0 ? (uint32_t)(-(int32_t)sample) : (uint32_t)sample;
+}
+
+static int16_t scale_pcm16(int16_t sample, uint8_t gain, uint32_t *clipped) {
+  const int64_t scaled = (int64_t)sample * gain;
+  if (scaled > INT16_MAX) {
+    ++*clipped;
+    return INT16_MAX;
+  }
+  if (scaled < INT16_MIN) {
+    ++*clipped;
+    return INT16_MIN;
+  }
+  return (int16_t)scaled;
+}
+
+static int16_t q31_word_to_scaled_pcm16(
+    int32_t word, uint8_t gain, uint32_t *clipped) {
+  const int64_t scaled = (int64_t)word * gain;
+  if (scaled > INT32_MAX) {
+    ++*clipped;
+    return INT16_MAX;
+  }
+  if (scaled < INT32_MIN) {
+    ++*clipped;
+    return INT16_MIN;
+  }
+  return q31_word_to_pcm16((int32_t)scaled);
+}
+
 enum iterate_kit_status iterate_kit_pcm_extract_capture(
     const struct iterate_kit_pcm_shape *shape,
     const void *source_interleaved,
     size_t source_frames,
+    uint8_t processed_gain,
     int16_t *processed_destination,
     int16_t *non_aec_destination,
     size_t destination_capacity_frames,
-    size_t *destination_frames_written) {
+    size_t *destination_frames_written,
+    struct iterate_kit_pcm_capture_metrics *metrics) {
   if (destination_frames_written == NULL) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
@@ -183,7 +216,7 @@ enum iterate_kit_status iterate_kit_pcm_extract_capture(
       (shape->ratio != 1U && shape->ratio != 3U) ||
       source_interleaved == NULL || source_frames == 0U ||
       source_frames % shape->ratio != 0U ||
-      source_frames > SIZE_MAX / shape->slots ||
+      source_frames > SIZE_MAX / shape->slots || processed_gain == 0U ||
       processed_destination == NULL ||
       (shape->diagnostic_slot >= 0 && non_aec_destination == NULL)) {
     return ITERATE_KIT_INVALID_ARGUMENT;
@@ -193,24 +226,50 @@ enum iterate_kit_status iterate_kit_pcm_extract_capture(
     return ITERATE_KIT_LIMIT;
   }
 
+  struct iterate_kit_pcm_capture_metrics observed = {0};
+
   for (size_t frame = 0U; frame < output_frames; ++frame) {
     const size_t offset = frame * shape->ratio * shape->slots;
     if (shape->bits == 32U) {
       const int32_t *words = source_interleaved;
-      processed_destination[frame] =
+      const int16_t processed =
           q31_word_to_pcm16(words[offset + shape->uplink_slot]);
+      const uint32_t processed_peak = pcm16_magnitude(processed);
+      if (processed_peak > observed.processed_peak) {
+        observed.processed_peak = processed_peak;
+      }
+      processed_destination[frame] = q31_word_to_scaled_pcm16(
+          words[offset + shape->uplink_slot], processed_gain,
+          &observed.processed_clipped);
       if (shape->diagnostic_slot >= 0) {
-        non_aec_destination[frame] =
+        const int16_t diagnostic =
             q31_word_to_pcm16(words[offset + (uint8_t)shape->diagnostic_slot]);
+        non_aec_destination[frame] = diagnostic;
+        const uint32_t diagnostic_peak = pcm16_magnitude(diagnostic);
+        if (diagnostic_peak > observed.diagnostic_peak) {
+          observed.diagnostic_peak = diagnostic_peak;
+        }
       }
     } else {
       const int16_t *words = source_interleaved;
-      processed_destination[frame] = words[offset + shape->uplink_slot];
+      const int16_t processed = words[offset + shape->uplink_slot];
+      const uint32_t processed_peak = pcm16_magnitude(processed);
+      if (processed_peak > observed.processed_peak) {
+        observed.processed_peak = processed_peak;
+      }
+      processed_destination[frame] = scale_pcm16(
+          processed, processed_gain, &observed.processed_clipped);
       if (shape->diagnostic_slot >= 0) {
-        non_aec_destination[frame] = words[offset + (uint8_t)shape->diagnostic_slot];
+        const int16_t diagnostic = words[offset + (uint8_t)shape->diagnostic_slot];
+        non_aec_destination[frame] = diagnostic;
+        const uint32_t diagnostic_peak = pcm16_magnitude(diagnostic);
+        if (diagnostic_peak > observed.diagnostic_peak) {
+          observed.diagnostic_peak = diagnostic_peak;
+        }
       }
     }
   }
   *destination_frames_written = output_frames;
+  if (metrics != NULL) *metrics = observed;
   return ITERATE_KIT_OK;
 }

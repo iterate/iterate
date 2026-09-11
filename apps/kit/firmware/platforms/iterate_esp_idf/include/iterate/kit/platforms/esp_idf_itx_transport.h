@@ -204,7 +204,7 @@ struct iterate_kit_esp_idf_itx_transport_metrics {
   int32_t last_websocket_handshake_status_code;
   int32_t last_websocket_close_status_code;
   /*
-   * WEBSOCKET PONGs RECEIVED — hop liveness, and nothing else.
+   * WEBSOCKET PONGs RECEIVED — idle-hop liveness, and nothing else.
    *
    * The far end parsed one of this device's PING frames in order. It is NOT
    * evidence that any application message was delivered, acknowledged or
@@ -213,6 +213,11 @@ struct iterate_kit_esp_idf_itx_transport_metrics {
    * board, which is exactly the case every inbound application signal misses.
    */
   uint32_t websocket_pongs_received;
+  /**
+   * Complete WebSocket frames received from the current peer. Together with
+   * PONGs this is hop liveness only, never application delivery credit.
+   */
+  uint32_t websocket_frames_received;
   uint32_t control_inbox_capacity_slots;
   uint32_t control_outbox_capacity_slots;
   struct iterate_kit_spsc_ring_metrics control_inbox;

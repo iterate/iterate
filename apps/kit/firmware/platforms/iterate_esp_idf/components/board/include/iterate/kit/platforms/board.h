@@ -25,8 +25,20 @@ struct iterate_kit_volume_register {
   int16_t floor_code;
 };
 
-/** The one GPIO button the shared grammar reads. gpio -1: extra->poll runs the grammar instead. */
+/** The call-control posture. gpio -1 means a board callback supplies gestures. */
 struct iterate_kit_gpio_button { int8_t gpio; bool active_low; bool tap_wakes; bool tap_ends; };
+
+/** Physical input, normalized before the shared session grammar sees it.
+ * A board reports only edges and levels: it does not decide call lifecycle,
+ * copy voice intents, or render chimes. GPIO and synthetic taps are merged by
+ * board.c with these fields before the grammar runs once per app-loop pass.
+ */
+struct iterate_kit_board_gestures {
+  bool tap;
+  bool held;
+  bool end_hold;
+  bool end_press;
+};
 
 /** Flash-resident 16 kHz PCM16LE chimes; NULL = silent. */
 struct iterate_kit_board_sounds { const uint8_t *wake; uint32_t wake_bytes; const uint8_t *ended; uint32_t ended_bytes; };
@@ -36,10 +48,10 @@ struct iterate_kit_board_sounds { const uint8_t *wake; uint32_t wake_bytes; cons
  * open_codec (version gates, SAR-ADC power modes, read-modify-writes), set_volume
  * (chips with no register to write), and extra (a face, servos, a camera, a fence,
  * a dial, side buttons). board.c runs its own half of each op first, then extra's:
- * extra->start before the codec; extra->present after the ring; extra->poll after the
- * table button (it may OR into the intent, or own the grammar when button.gpio is -1);
- * extra->health is appended; button.gpio >= 0 mounts button.press first, then
- * extra->modules appends the board-only capabilities.
+ * extra->start before the codec; extra->present after the ring; board.c reads
+ * GPIO and read_gestures, applies the grammar and chimes, then extra->poll handles
+ * board-only UI. extra->health is appended; button.gpio >= 0 mounts button.press
+ * first, then extra->modules appends the board-only capabilities.
  */
 struct iterate_kit_board {
   struct iterate_kit_board_facts facts;    /* .speaker.set_volume/.volume filled by board.c */
@@ -51,7 +63,11 @@ struct iterate_kit_board {
   struct iterate_kit_led_ring ring;
   int8_t status_led_gpio;                            /* mirrors view->link_ready */
   struct iterate_kit_gpio_button button;
+  /** Optional non-GPIO controls, called on the app task to fill gestures. */
+  void (*read_gestures)(struct iterate_kit_board_gestures *out);
   struct iterate_kit_board_sounds sounds;
+  /** Optional hardware sound path. NULL uses the shared I2S codec. */
+  void (*play_sound)(const uint8_t *pcm, uint32_t bytes);
   const char *wake_word;                 /**< NULL disables; "jarvis" uses WakeNet. */
   bool (*open_codec)(void);                          /* after I2S enable, before the first sample */
   enum iterate_kit_status (*set_volume)(uint8_t percent, uint8_t *applied);
@@ -64,6 +80,12 @@ struct iterate_kit_board {
  * extra->phase follows the shared ledger; other optional ops pass through.
  */
 void iterate_kit_board_run(const struct iterate_kit_board *board);
+
+/** Copy loop facts with omitted greeting, frame sizes and capture stack filled.
+ * A zero dry wait becomes two thirds of the table's TX ring when audio supplies
+ * a nonzero clock. Explicit values win; the board table is never modified.
+ */
+struct iterate_kit_board_facts iterate_kit_board_defaults(const struct iterate_kit_board *board);
 
 /** Clamp to ceiling (at most 100), map linearly using signed arithmetic, and
  * report the requested clamped percent, not a lossy register round-trip.
@@ -97,8 +119,18 @@ const struct iterate_kit_voice_view *iterate_kit_board_view(void);
  * when extra supplies one, otherwise the table's full-scale initial setting.
  */
 uint8_t iterate_kit_board_volume(void);
-/** Queue a synthetic tap in the same classifier as the table GPIO button. */
+/** Queue a synthetic tap in the same classifier as every physical control. */
 void iterate_kit_board_inject_tap(void);
+/** Apply the shared grammar to normalized input. Exposed for focused host
+ * tests; board.c is the only firmware caller. */
+void iterate_kit_board_apply_gestures(
+    struct iterate_kit_session *session,
+    const struct iterate_kit_board_gestures *gestures,
+    const struct iterate_kit_gpio_button *button,
+    enum iterate_kit_voice_turns turns,
+    const struct iterate_kit_voice_view *view,
+    uint64_t now_ms,
+    struct iterate_kit_session_actions *actions);
 /** Change the table button and loop posture together. HAVPE's dial changes
  * streams at runtime; a static facts.turns cannot describe its adopted mode.
  */

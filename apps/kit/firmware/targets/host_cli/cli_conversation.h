@@ -82,8 +82,12 @@ enum cli_conversation_status cli_conversation_init(
 /** Advance the unattended state machine once without blocking. */
 void cli_conversation_poll(struct cli_runtime *runtime, uint64_t now_ms);
 
-/** Close the active turn from its observed playback facts. */
-void cli_conversation_finish_turn(struct cli_runtime *runtime, uint64_t now_ms);
+/**
+ * Close the active turn. `played_out` distinguishes normal room completion
+ * from a watchdog ending an answer that stopped making progress.
+ */
+void cli_conversation_finish_turn(
+    struct cli_runtime *runtime, uint64_t now_ms, bool played_out);
 
 /** Write the final bounded report. */
 enum cli_conversation_status cli_conversation_write_report(

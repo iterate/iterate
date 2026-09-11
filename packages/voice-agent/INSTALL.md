@@ -94,5 +94,5 @@ steps 1 and 2 for you; `--prune-legacy` does the cleanup in step 2.
 
 A repo that says `@main` runs whatever build the platform pinned; nothing to
 do. To pin, change the spec. Either way a warm facet keeps the bundle it
-booted with until it is restarted; `voicelab talk` restarts it after a
-changed install.
+booted with until it is restarted; restart its parent conversation stream
+(and `voicelab talk` does that after a changed install).

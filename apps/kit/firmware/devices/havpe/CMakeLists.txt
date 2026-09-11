@@ -1,15 +1,8 @@
-if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/assets/havpe_sounds_generated.inc")
-  message(FATAL_ERROR
-    "assets/havpe_sounds_generated.inc is generated, not committed - run "
-    "apps/kit/firmware/tools/generate-sounds.sh (needs OPENAI_API_KEY)")
-endif()
-
 idf_component_register(
   SRCS
     havpe_device.c
     havpe_modes.c
     havpe_ui.c
-  INCLUDE_DIRS include
   PRIV_INCLUDE_DIRS .
   REQUIRES
     board

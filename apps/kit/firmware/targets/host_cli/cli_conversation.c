@@ -13,6 +13,9 @@
 
 enum {
   CLI_CONVERSATION_MS_PER_MINUTE = 60000,
+  /* Match the interactive hang-up grace: leave only after the server has had
+   * a bounded chance to acknowledge the owned call's end. */
+  CLI_CONVERSATION_HANGUP_GRACE_MS = 3000,
 };
 
 #define CLI_CONVERSATION_WAV_SUFFIX ".wav"
@@ -63,7 +66,7 @@ static void cli_conversation_begin_report(
 
 /* Ends the complete unattended run at its configured deadline. */
 static void cli_conversation_finish_run(
-    struct cli_runtime *runtime);
+    struct cli_runtime *runtime, uint64_t now_ms);
 
 /* Counts failed turns for the human-readable shutdown summary. */
 static size_t cli_conversation_failure_count(
@@ -131,7 +134,7 @@ void cli_conversation_poll(struct cli_runtime *runtime, uint64_t now_ms)
   if (conversation->state == CLI_CONVERSATION_DISABLED ||
       conversation->state == CLI_CONVERSATION_FINISHED) return;
   if (now_ms >= conversation->finish_at_ms) {
-    cli_conversation_finish_run(runtime);
+    cli_conversation_finish_run(runtime, now_ms);
     return;
   }
   switch (conversation->state) {
@@ -168,26 +171,32 @@ void cli_conversation_poll(struct cli_runtime *runtime, uint64_t now_ms)
   }
 }
 
-void cli_conversation_finish_turn(struct cli_runtime *runtime, uint64_t now_ms)
+void cli_conversation_finish_turn(
+    struct cli_runtime *runtime, uint64_t now_ms, bool played_out)
 {
   if (runtime == NULL || runtime->conversation.current_turn == NULL) return;
   struct cli_report_turn *turn = runtime->conversation.current_turn;
   turn->completed_ms = now_ms;
-  turn->failed = turn->frames_played == 0U;
+  turn->watchdog_stalled = !played_out;
+  const bool latency_missing =
+      cli_report_speech_end_to_first_packet_ms(turn) == 0U ||
+      cli_report_speech_end_to_first_played_ms(turn) == 0U;
+  turn->failed = !played_out || turn->frames_played == 0U || latency_missing;
   turn->frames_sent = runtime->voicelab.frames_sent - turn->frames_sent;
   if (turn->back_office && !turn->failed) {
     ++runtime->conversation.back_office_heard;
   }
   cli_runtime_log(
       turn->failed ? "error" : "info",
-      "turn=%zu complete=%s firstAudioMs=%" PRIu64
+      "turn=%zu complete=%s completion=%s firstAudioMs=%" PRIu64
       " answerMs=%" PRIu64 " sent=%u received=%u played=%u conceal=%u"
-      " underruns=%u",
+      " underruns=%u latencyEndpoints=%s",
       runtime->conversation.report.count, turn->failed ? "failure" : "ok",
+      turn->watchdog_stalled ? "watchdog-stalled" : "drained",
       cli_report_time_to_first_audio_ms(turn),
       cli_report_time_to_answer_ms(turn), turn->frames_sent,
       turn->frames_received, turn->frames_played, turn->frames_concealed,
-      turn->underruns);
+      turn->underruns, latency_missing ? "missing" : "ok");
   runtime->conversation.current_turn = NULL;
 }
 
@@ -200,9 +209,12 @@ enum cli_conversation_status cli_conversation_write_report(
   struct iterate_kit_darwin_audio_codec_metrics audio;
   iterate_kit_darwin_audio_codec_metrics(&runtime->audio_codec, &audio);
   const struct cli_report_summary summary = {
+    .speaker_boundary = runtime->options.pretend_speaker != NULL
+        ? "pretend"
+        : runtime->options.live_audio ? "real" : "timeline",
     .session_restarts = runtime->session_restarts,
     .transport_restarts = runtime->transport_restarts,
-    .connection_recycles = runtime->downlink_recycles,
+    .connection_recycles = runtime->connection_recycles,
     .calls_lost = runtime->calls_lost,
     .back_office_sent = runtime->conversation.back_office_sent,
     .back_office_heard = runtime->conversation.back_office_heard,
@@ -230,7 +242,7 @@ enum cli_conversation_status cli_conversation_write_report(
       "roomCompleted=%u roomDropped=%u roomStarved=%u roomError=%" PRId32
       " micError=%" PRId32 " report=%s playback=%s\n",
       runtime->conversation.report.count, failures, runtime->session_restarts,
-      runtime->transport_restarts, runtime->downlink_recycles,
+      runtime->transport_restarts, runtime->connection_recycles,
       runtime->calls_lost, runtime->conversation.deadline_cancelled_turns,
       runtime->conversation.back_office_heard,
       runtime->conversation.back_office_sent,
@@ -367,6 +379,11 @@ static void cli_conversation_finish_sending(
   assert(runtime != NULL);
   if (!runtime->source_finished ||
       cli_microphone_queued(&runtime->microphone) != 0U) return;
+  if (runtime->options.open_mic) {
+    /* Keep zero PCM flowing: server VAD, rather than a PTT commit, ends this turn. */
+    runtime->conversation.state = CLI_CONVERSATION_WAIT_ANSWER;
+    return;
+  }
   if (cli_device_controls_request_talk(
           &runtime->device_controls,
           false,
@@ -407,7 +424,7 @@ static void cli_conversation_begin_report(
 }
 
 static void cli_conversation_finish_run(
-    struct cli_runtime *runtime)
+    struct cli_runtime *runtime, uint64_t now_ms)
 {
   assert(runtime != NULL);
   if (cli_device_controls_request_talk(
@@ -433,7 +450,15 @@ static void cli_conversation_finish_run(
     cli_runtime_log("info", "turn cancelled: configured run deadline");
   }
   runtime->conversation.state = CLI_CONVERSATION_FINISHED;
-  runtime->stop_requested = true;
+  /* Releasing the microphone only ends local capture. The facet owns the
+   * provider call, and reusing this stream before its obituary lets a later
+   * client append speech into an already-active call without an acceptance
+   * event of its own. Follow the same bounded end/acknowledgement protocol as
+   * an interactive q, so each unattended run leaves an owned stream idle. */
+  runtime->hanging_up = true;
+  runtime->hangup_acknowledged = false;
+  runtime->hangup_deadline_ms = now_ms + CLI_CONVERSATION_HANGUP_GRACE_MS;
+  cli_runtime_log("info", "unattended run ending: waiting for call end acknowledgement");
 }
 
 static size_t cli_conversation_failure_count(

@@ -19,6 +19,7 @@
 //   doppler run --config prd -- pnpm cli voicelab boards --project voice-test --only stackchan
 import { execFile } from "node:child_process";
 import fs from "node:fs";
+import process from "node:process";
 import { promisify } from "node:util";
 import {
   type VoicelabConnectOptions,
@@ -62,28 +63,12 @@ export interface BoardsOptions extends VoicelabConnectOptions {
   wakeWord?: string;
 }
 
-/** One board, as this harness has to drive it. */
-interface Board {
-  /** The capability name it mounts itself under: `itx.kit.<name>`. */
-  name: string;
-  label: string;
-  /**
-   * Whether the microphone has to be held open around the prompt.
-   *
-   * The two boards with echo cancellation — StackChan in software, the HA
-   * Voice PE in its XMOS DSP — run open-mic on the provider's server VAD.
-   * The two without it are push-to-talk, and speaking at one of those
-   * without holding the button proves nothing.
-   */
-  pushToTalk: boolean;
-}
-
-const BOARDS: readonly Board[] = [
-  { label: "StackChan CoreS3", name: "stackchan", pushToTalk: false },
-  { label: "M5StickS3", name: "m5stick-s3", pushToTalk: true },
-  { label: "HA Voice PE", name: "home-assistant-voice-preview-edition", pushToTalk: false },
-  { label: "FutureProofHomes Satellite1", name: "satellite1", pushToTalk: false },
-  { label: "Waveshare AMOLED", name: "waveshare", pushToTalk: true },
+const BOARDS = [
+  "stackchan",
+  "m5stick-s3",
+  "home-assistant-voice-preview-edition",
+  "satellite1",
+  "waveshare",
 ];
 
 /** What one board's attempt produced. Written out whole, pass or fail. */
@@ -94,18 +79,187 @@ interface BoardResult {
   streamPath?: string;
   /** Second-utterance evidence, present only when --barge ran. */
   barge?: {
-    /** Speaker writes seen at the moment the interruption was spoken. */
-    spokeOverPlaybackAt: number;
+    /** Playback was live when the second utterance began. */
+    speakerPlayingAtInterruption: boolean;
+    /** Speaker writes observed during the short window before the interruption. */
+    freshSpeakerWritesBeforeInterruption: number;
     /** Answers the device abandoned mid-play, which is what stopping IS. */
     superseded: number;
-    /** A second answer started after the interruption. */
-    answeredAgain: boolean;
+    /** The provider transcribed the interruption through the board microphone. */
+    interruptionHeard: boolean;
+    /** A provider response was created after the interruption and has an id. */
+    newResponseStarted: boolean;
+    /** The post-interruption response's own transcript contains the requested word. */
+    answerMentionsPineapple: boolean;
+    /** Fresh answer audio reached the speaker after the interruption. */
+    playbackRestarted: boolean;
+    /** A new answer, containing the requested word, played after the interruption. */
+    interruptionAnswered: boolean;
+    /** Baselines and deltas that make the second-turn conclusion auditable. */
+    responseCreatedCountBefore: number;
+    responseCreatedCountAfter: number;
+    postInterruptionResponseId?: string;
+    speakerWritesBefore: number;
+    speakerWritesAfter: number;
+    freshSpeakerWritesAfterInterruption: number;
+    answerStartsBefore: number;
+    answerStartsAfter: number;
+    freshAnswerStartsAfterInterruption: number;
+    speakerFramesPlayedBefore: number;
+    speakerFramesPlayedAfter: number;
+    freshSpeakerFramesPlayedAfterInterruption: number;
+    speakerGenerationBefore: number;
+    speakerGenerationAfter: number;
+    lastPlayedSpeakerGenerationAfter: number;
     verdict: string;
   };
   deviceHeard?: string;
   deviceSaid?: string;
   before?: Record<string, unknown>;
   after?: Record<string, unknown>;
+  preEndHealth?: Record<string, unknown>;
+  finalHealth?: Record<string, unknown>;
+}
+
+/** The health contract makes an unavailable or malformed metric a failed proof. */
+function healthCounter(health: Record<string, unknown>, name: string): number {
+  const value = health[name];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`health() must report ${name} as a non-negative integer`);
+  }
+  return value;
+}
+
+function healthFlag(health: Record<string, unknown>, name: string): boolean {
+  const value = health[name];
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0) return false;
+  throw new Error(`health() must report ${name} as a boolean or 0/1 flag`);
+}
+
+interface ProofHealth {
+  framesSent: number;
+  spkWrites: number;
+  spkAnswerStarts: number;
+  speakerPlaying: boolean;
+  wakeWordDetections?: number;
+}
+
+function proofHealth(health: Record<string, unknown>, requireWakeWord: boolean): ProofHealth {
+  return {
+    framesSent: healthCounter(health, "framesSent"),
+    spkWrites: healthCounter(health, "spkWrites"),
+    spkAnswerStarts: healthCounter(health, "spkAnswerStarts"),
+    speakerPlaying: healthFlag(health, "speakerPlaying"),
+    ...(requireWakeWord && { wakeWordDetections: healthCounter(health, "wakeWordDetections") }),
+  };
+}
+
+function promptWasTranscribed(prompt: string, transcript: string): boolean {
+  const promptWords = [...new Set(prompt.toLowerCase().match(/[a-z0-9]+/g) ?? [])];
+  const transcriptWords = new Set(transcript.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+  const matchedWords = promptWords.filter((word) => transcriptWords.has(word)).length;
+  const requiredWords =
+    promptWords.length < 3 ? promptWords.length : Math.ceil(promptWords.length * 0.8);
+  return matchedWords >= requiredWords;
+}
+
+function requireProofText(value: string, name: string): string {
+  const text = value.trim();
+  if (!/[a-z0-9]/i.test(text)) {
+    throw new Error(`${name} must contain at least one letter or number`);
+  }
+  return text;
+}
+
+function appendFailure(record: BoardResult, reason: string) {
+  record.verdict = record.verdict === "PASS" ? `FAIL: ${reason}` : `${record.verdict}; ${reason}`;
+}
+
+/** End every proof in a verifiably idle, still-running device state. */
+async function endAndVerifyCall(
+  kit: BoardCapability,
+  record: BoardResult,
+  before: Record<string, unknown> | undefined,
+  pushToTalk: boolean | undefined,
+): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  let preEnd: Record<string, unknown> | undefined;
+  let preEndError: unknown;
+  try {
+    preEnd = await healthWithRetry(kit, 20, deadline);
+    record.preEndHealth = preEnd;
+  } catch (error) {
+    preEndError = error;
+  }
+  let endError: unknown;
+  try {
+    await kit.conversation.end();
+  } catch (error) {
+    // A call can have ended on its own; only the observed idle state can make
+    // that expected. Keep the RPC error as evidence until the state proves it.
+    endError = error;
+  }
+
+  let minimumUptime = 0;
+  let beforeWakeFrames: number | undefined;
+  try {
+    const beforeUptime = before === undefined ? 0 : healthCounter(before, "uptimeMs");
+    const preEndUptime = preEnd === undefined ? 0 : healthCounter(preEnd, "uptimeMs");
+    minimumUptime = Math.max(beforeUptime, preEndUptime);
+    const wakeModel =
+      preEnd?.wakeWordModel === undefined ? 0 : healthCounter(preEnd, "wakeWordModel");
+    if (wakeModel === 1 && !pushToTalk && preEnd !== undefined) {
+      beforeWakeFrames = healthCounter(preEnd, "wakeWordFrames");
+    }
+  } catch (error) {
+    preEndError ??= error;
+  }
+  let last: Record<string, unknown> | undefined;
+  let stateError: string | undefined;
+
+  for (let attempt = 0; attempt < 30 && Date.now() < deadline; attempt++) {
+    try {
+      const health = await healthWithRetry(kit, 20, deadline);
+      last = health;
+      record.finalHealth = health;
+      const idle =
+        !healthFlag(health, "callActive") &&
+        !healthFlag(health, "callPending") &&
+        !healthFlag(health, "wantsCall");
+      const uptimeMonotonic = healthCounter(health, "uptimeMs") >= minimumUptime;
+      const wakeResumed =
+        beforeWakeFrames === undefined ||
+        healthCounter(health, "wakeWordFrames") > beforeWakeFrames;
+      if (preEndError === undefined && idle && uptimeMonotonic && wakeResumed) {
+        if (endError !== undefined) {
+          record.finalHealth = { ...health, endError: String(endError) };
+          if (!/already (?:ended|gone|inactive)|no active call/i.test(String(endError))) {
+            appendFailure(record, `hangup RPC failed despite idle health: ${String(endError)}`);
+          }
+        }
+        return;
+      }
+      stateError = [
+        !idle && "device did not become idle",
+        preEndError !== undefined && `could not read pre-end health: ${String(preEndError)}`,
+        !uptimeMonotonic && "device restarted during hangup",
+        !wakeResumed && "wake-word processing did not resume",
+      ]
+        .filter(Boolean)
+        .join(", ");
+    } catch (error) {
+      stateError = `could not read final health: ${String(error)}`;
+    }
+    await sleep(Math.min(500, Math.max(0, deadline - Date.now())));
+  }
+
+  const evidence = last === undefined ? "no final health" : JSON.stringify(last);
+  const endDetail = endError === undefined ? "" : `; end() failed: ${String(endError)}`;
+  appendFailure(
+    record,
+    `hangup failed: ${stateError ?? "idle deadline elapsed"}${endDetail}; final=${evidence}`,
+  );
 }
 
 /**
@@ -119,58 +273,176 @@ interface BoardResult {
 async function healthWithRetry(
   kit: { health(): Promise<Record<string, unknown>> },
   attempts = 20,
+  deadline = Number.POSITIVE_INFINITY,
 ): Promise<Record<string, unknown>> {
   let last: unknown;
-  for (let attempt = 0; attempt < attempts; attempt++) {
+  for (let attempt = 0; attempt < attempts && Date.now() < deadline; attempt++) {
     try {
       return await kit.health();
     } catch (error) {
       last = error;
-      await sleep(1500);
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
+      await sleep(Math.min(1500, remainingMs));
     }
   }
-  throw last;
+  throw last ?? new Error("health() retry deadline elapsed");
 }
 
-export async function boards(options: BoardsOptions) {
-  const prompt = options.prompt ?? "Hello there. Please reply with the single word banana.";
-  const expect = (options.expect ?? "banana").toLowerCase();
-  /* Accept the short names people type (`havpe`) as well as the registered
-   * client name: the alias table in connect.ts is the one place that knows
-   * both, and "no board named havpe" read as an unplugged device for a whole
-   * bench run. */
-  const onlyPath = options.only === undefined ? undefined : deviceClientPath(options.only);
-  const chosen = onlyPath
-    ? BOARDS.filter((board) => deviceClientPath(board.name) === onlyPath)
-    : BOARDS;
-  if (chosen.length === 0) {
-    throw new Error(
-      `no board named ${options.only}; known: ${BOARDS.map((b) => b.name).join(", ")}`,
-    );
+/** Wait until the call's greeting has both played and remained quiet for two seconds. */
+async function waitForGreetingToSettle(
+  kit: { health(): Promise<Record<string, unknown>> },
+  requireWakeWord: boolean,
+  greetingRequired: boolean,
+): Promise<ProofHealth> {
+  const deadline = Date.now() + 60_000;
+  let previous = proofHealth(await healthWithRetry(kit, 20, deadline), requireWakeWord);
+  let greetingObserved = !greetingRequired || previous.speakerPlaying || previous.spkWrites > 0;
+  let quietSamples = 0;
+
+  for (let attempt = 0; attempt < 120 && Date.now() < deadline; attempt++) {
+    await sleep(Math.min(500, deadline - Date.now()));
+    const current = proofHealth(await healthWithRetry(kit, 20, deadline), requireWakeWord);
+    const speakerWriteProgressed = current.spkWrites > previous.spkWrites;
+    if (current.speakerPlaying || speakerWriteProgressed) {
+      greetingObserved = true;
+      quietSamples = 0;
+    } else if (greetingObserved) {
+      quietSamples += 1;
+      if (quietSamples === 4) return current;
+    }
+    previous = current;
   }
+
+  throw new Error(
+    greetingObserved
+      ? "greeting playback did not remain quiet before the prompt"
+      : "configured greeting playback was never observed before the prompt",
+  );
+}
+
+interface BoardCapability {
+  health(): Promise<Record<string, unknown>>;
+  conversation: {
+    start(): Promise<void>;
+    end(): Promise<void>;
+  };
+  pushToTalk: {
+    start(): Promise<void>;
+    stop(): Promise<void>;
+  };
+}
+
+/** Prove the selected boards through their microphones and speakers. */
+export async function boards(options: BoardsOptions) {
+  const prompt = requireProofText(
+    options.prompt ??
+      (options.barge
+        ? "Tell a detailed story for at least thirty seconds about a banana. Keep speaking until asked to stop."
+        : "Hello there. Please reply with the single word banana."),
+    "prompt",
+  );
+  const expect = requireProofText(options.expect ?? "banana", "expect").toLowerCase();
+  // deviceClientPath resolves aliases and arbitrary --only names alike.
+  const chosen = options.only ? [options.only] : BOARDS;
   const results: Record<string, BoardResult> = {};
 
   for (const board of chosen) {
-    const record: BoardResult = { label: board.label, verdict: "FAIL: did not run" };
-    results[board.name] = record;
-    console.error(`\n=== ${board.label} (${deviceClientPath(board.name)}) ===`);
+    const record: BoardResult = { label: board, verdict: "FAIL: did not run" };
+    results[board] = record;
+    console.error(`\n=== ${board} (${deviceClientPath(board)}) ===`);
     /* One connection per board: a socket that died proving the last board must
      * not be reported as this board's fault. */
     using itx = await connectProject(options);
-    const kit = deviceCapability<any>(itx, board.name);
-    if (!kit) {
-      record.verdict = `FAIL: nothing mounted at kit.${board.name}`;
-      console.error(`  ${record.verdict}`);
-      continue;
-    }
+    const kit = deviceCapability<BoardCapability>(itx, board);
+    let beforeForHangup: Record<string, unknown> | undefined;
+    let pushToTalkForHangup: boolean | undefined;
+    let connection: { close(): void | Promise<void> } | undefined;
 
     try {
       const before = await healthWithRetry(kit);
+      beforeForHangup = before;
+      const beforeProof = proofHealth(before, options.wakeWord !== undefined);
+      const pushToTalk = before.pushToTalk;
+      if (typeof pushToTalk !== "boolean") {
+        throw new Error("health() must report pushToTalk as a boolean");
+      }
+      pushToTalkForHangup = pushToTalk;
+      if (healthFlag(before, "callActive")) {
+        throw new Error("call was already active before this proof began");
+      }
       record.before = {
-        framesSent: before.framesSent,
-        spkWrites: before.spkWrites,
+        ...beforeProof,
+        callActive: before.callActive,
+        spkFrames: before.spkFrames,
+        spkPlayed: before.spkPlayed,
+        spkSupersededMidplay: before.spkSupersededMidplay,
+        wakeWordDetections: before.wakeWordDetections,
         uptimeMs: before.uptimeMs,
       };
+
+      /* Subscribe before asking for the call: session-configured is the
+       * current call's contract, and a late subscription cannot safely infer
+       * whether silence is a missing greeting or the configured behaviour. */
+      const streamPath = String(before.conversation ?? "");
+      record.streamPath = streamPath;
+      let heardUs = "";
+      let saidBack = "";
+      let responsesCreated = 0;
+      const responseIdsCreated: string[] = [];
+      const transcriptByResponseId = new Map<string, string>();
+      let greetingConfigured: boolean | undefined;
+      connection = await itx.streams.get(streamPath).openConnection({
+        connectionKey: `boards-${board}-${Date.now()}`,
+        eventTypes: [
+          "events.iterate.com/voice-agent/grok-event",
+          "events.iterate.com/voice-agent/session-configured",
+        ],
+        processEventBatch: (batch: { events?: { type?: string; payload?: unknown }[] }) => {
+          for (const event of batch.events ?? []) {
+            const payload = (event.payload ?? {}) as {
+              event?: {
+                type?: string;
+                delta?: string;
+                transcript?: string;
+                greeting?: unknown;
+                response_id?: string;
+                response?: { id?: string };
+              };
+              type?: string;
+              delta?: string;
+              transcript?: string;
+              greeting?: unknown;
+              response_id?: string;
+              response?: { id?: string };
+            };
+            const inner = payload.event ?? payload;
+            if (event.type === "events.iterate.com/voice-agent/session-configured") {
+              if (typeof payload.greeting !== "boolean") {
+                throw new Error("session-configured must report greeting as a boolean");
+              }
+              greetingConfigured = payload.greeting;
+            }
+            if (inner?.type === "response.created") {
+              responsesCreated += 1;
+              if (typeof inner.response?.id === "string")
+                responseIdsCreated.push(inner.response.id);
+            }
+            if (inner?.type === "response.output_audio_transcript.delta") {
+              saidBack += inner.delta ?? "";
+              if (typeof inner.response_id === "string" && typeof inner.delta === "string") {
+                transcriptByResponseId.set(
+                  inner.response_id,
+                  (transcriptByResponseId.get(inner.response_id) ?? "") + inner.delta,
+                );
+              }
+            }
+            if (inner?.type?.endsWith("input_audio_transcription.completed")) {
+              heardUs += (heardUs === "" ? "" : "\n") + (inner.transcript ?? "");
+            }
+          }
+        },
+      });
 
       const askedAt = Date.now();
       if (options.wakeWord) {
@@ -181,8 +453,20 @@ export async function boards(options: BoardsOptions) {
       }
 
       let callActiveMs: number | null = null;
+      let wakeWordDetected = options.wakeWord === undefined;
+      let callActiveBeforeWakeWord = false;
+      const wakeWordDetectionsBefore = beforeProof.wakeWordDetections;
       for (let attempt = 0; attempt < 60; attempt++) {
-        if ((await healthWithRetry(kit)).callActive) {
+        const health = await healthWithRetry(kit);
+        if (options.wakeWord) {
+          if (wakeWordDetectionsBefore === undefined) {
+            throw new Error("wake-word proof has no wakeWordDetections baseline");
+          }
+          wakeWordDetected = healthCounter(health, "wakeWordDetections") > wakeWordDetectionsBefore;
+        }
+        const callActive = healthFlag(health, "callActive");
+        if (callActive && !wakeWordDetected) callActiveBeforeWakeWord = true;
+        if (callActive && wakeWordDetected && !callActiveBeforeWakeWord) {
           callActiveMs = Date.now() - askedAt;
           break;
         }
@@ -191,109 +475,100 @@ export async function boards(options: BoardsOptions) {
       record.callActiveMs = callActiveMs;
       console.error(`  call active after ${callActiveMs} ms`);
       if (callActiveMs === null) {
-        record.verdict = "FAIL: call never became active";
+        record.verdict = options.wakeWord
+          ? "FAIL: wake-word detection did not precede a new active call"
+          : "FAIL: call never became active";
+        await connection.close();
+        connection = undefined;
         continue;
       }
 
-      /*
-       * WATCH BEFORE SPEAKING. The provider's events are ephemeral — they
-       * reach connections that already existed when they were appended and
-       * nobody else — so a transcript read afterwards is always empty, which
-       * reads as a device that said nothing rather than an instrument opened
-       * too late. The device says which conversation it is on, so there is no
-       * guessing which stream to open.
-       */
-      const streamPath = String((await healthWithRetry(kit)).conversation ?? "");
-      record.streamPath = streamPath;
-      let heardUs = "";
-      let saidBack = "";
-      let responsesCreated = 0;
-      const connection = await itx.streams.get(streamPath).openConnection({
-        connectionKey: `boards-${board.name}-${askedAt}`,
-        eventTypes: ["events.iterate.com/voice-agent/grok-event"],
-        processEventBatch: (batch: { events?: { payload?: unknown }[] }) => {
-          for (const event of batch.events ?? []) {
-            /* v2 mirrors provider events FLAT on the payload; the bridge era
-             * nested them under `.event`. Read both so this instrument keeps
-             * working across the tracks. */
-            const payload = (event.payload ?? {}) as {
-              event?: { type?: string; delta?: string; transcript?: string };
-              type?: string;
-              delta?: string;
-              transcript?: string;
-            };
-            const inner = payload.event ?? payload;
-            /* One count per answer the model began — the barge check below
-             * reads it, because a new response is the one edge the barge's
-             * own clear frame cannot fake. */
-            if (inner?.type === "response.created") responsesCreated += 1;
-            if (inner?.type === "response.output_audio_transcript.delta") {
-              saidBack += inner.delta ?? "";
-            }
-            /* The provider streams the user's transcription TWICE — every
-             * delta, then the completed whole. Summing both wrote every
-             * utterance into the evidence twice; the completed event alone
-             * is each utterance exactly once, one line per turn. */
-            if (inner?.type?.endsWith("input_audio_transcription.completed")) {
-              heardUs += (heardUs === "" ? "" : "\n") + (inner.transcript ?? "");
-            }
-          }
-        },
-      });
+      const configuredDeadline = Date.now() + 15_000;
+      while (greetingConfigured === undefined && Date.now() < configuredDeadline) {
+        await sleep(Math.min(500, configuredDeadline - Date.now()));
+      }
+      if (greetingConfigured === undefined) {
+        await connection.close();
+        connection = undefined;
+        throw new Error("current call never emitted session-configured");
+      }
 
       try {
-        /* Let the greeting finish rather than talking over it: an interrupted
-         * greeting is a different test, and a flakier one. */
-        await sleep(4000);
-        if (board.pushToTalk) await kit.pushToTalk.start();
+        /* A new call resets `spkWrites`; its old idle value is not evidence
+         * against this prompt. Wait for this call's greeting to settle, then
+         * snapshot immediately before the words this proof is about. */
+        const promptBefore = await waitForGreetingToSettle(
+          kit,
+          options.wakeWord !== undefined,
+          greetingConfigured,
+        );
+        record.before = { ...record.before, promptBefore };
+        // Greeting/provider events belong to call setup, never to this prompt.
+        heardUs = "";
+        saidBack = "";
+        responsesCreated = 0;
+        responseIdsCreated.length = 0;
+        transcriptByResponseId.clear();
+        if (pushToTalk) await kit.pushToTalk.start();
         await run("say", ["-r", "170", prompt]);
-        if (board.pushToTalk) await kit.pushToTalk.stop();
+        if (pushToTalk) await kit.pushToTalk.stop();
 
-        let answered = false;
+        let audioMoved = false;
+        let speakerPlayed = false;
+        let promptTranscribed = false;
+        let answerTranscribed = false;
         for (let attempt = 0; attempt < 40; attempt++) {
           const health = await healthWithRetry(kit);
+          const current = proofHealth(health, options.wakeWord !== undefined);
           record.after = {
             batches: health.batches,
-            framesSent: health.framesSent,
+            ...current,
             micCaptured: health.micCaptured,
             micDropped: health.micDropped,
-            spkAnswerStarts: health.spkAnswerStarts,
+            spkFrames: health.spkFrames,
+            spkPlayed: health.spkPlayed,
+            spkSupersededMidplay: health.spkSupersededMidplay,
             spkStarvedMs: health.spkStarvedMs,
-            spkWrites: health.spkWrites,
+            framesSentDelta: current.framesSent - promptBefore.framesSent,
+            spkWritesDelta: current.spkWrites - promptBefore.spkWrites,
+            spkAnswerStartsDelta: current.spkAnswerStarts - promptBefore.spkAnswerStarts,
           };
-          if (Number(health.spkWrites) > 0 && Number(health.framesSent) > 0) {
-            answered = true;
+          audioMoved =
+            current.framesSent > promptBefore.framesSent &&
+            current.spkWrites > promptBefore.spkWrites &&
+            current.spkAnswerStarts > promptBefore.spkAnswerStarts;
+          speakerPlayed ||= current.speakerPlaying;
+          promptTranscribed ||= promptWasTranscribed(prompt, heardUs);
+          answerTranscribed ||= saidBack.toLowerCase().includes(expect);
+          /* The stream's transcriptions arrive behind playback. Do not call a
+           * passing physical exchange a failure just because one requested
+           * transcript has not reached this already-open collector yet. In a
+           * barge proof this still stops at the first qualifying evidence; it
+           * never waits for the long first answer to finish. */
+          if (audioMoved && speakerPlayed && promptTranscribed && answerTranscribed) {
             break;
           }
-          await sleep(1000);
-        }
-        console.error(`  ${JSON.stringify(record.after)}`);
-        /* The transcription lane lags the audio it describes: the answer
-         * starts a second or two before the provider finishes transcribing
-         * the question that provoked it. Reading the evidence the instant
-         * audio moves reads as a device that heard nothing. */
-        for (let grace = 0; grace < 8 && heardUs.length === 0; grace++) {
           await sleep(500);
         }
+        console.error(`  ${JSON.stringify(record.after)}`);
         record.deviceHeard = heardUs.trim();
         record.deviceSaid = saidBack.trim();
-        const matched =
-          heardUs.toLowerCase().includes(expect) || saidBack.toLowerCase().includes(expect);
+        promptTranscribed ||= promptWasTranscribed(prompt, heardUs);
+        answerTranscribed ||= saidBack.toLowerCase().includes(expect);
         /*
          * "audio only" is deliberately not a pass. Frames moving in both
          * directions proves the lanes are alive; it does not prove the device
          * understood anything, and those are different claims.
          */
-        record.verdict = answered
-          ? matched
+        record.verdict =
+          audioMoved && speakerPlayed && promptTranscribed && answerTranscribed
             ? "PASS"
-            : "PASS (audio moved, no word match)"
-          : "FAIL: no answer reached the speaker";
+            : "FAIL: incomplete physical evidence";
         console.error(`  heard: ${JSON.stringify(record.deviceHeard)}`);
         console.error(`  said:  ${JSON.stringify(record.deviceSaid)}`);
         console.error(`  ${record.verdict}  stream=${streamPath}`);
 
-        if (options.barge === true && answered) {
+        if (options.barge === true && record.verdict === "PASS") {
           /*
            * THE SECOND TURN, spoken deliberately EARLY.
            *
@@ -304,110 +579,201 @@ export async function boards(options: BoardsOptions) {
            * was actually in flight — an interruption of silence proves
            * nothing and must not be allowed to look like a pass.
            */
-          const during = await healthWithRetry(kit);
-          const startsBefore = Number(during.spkAnswerStarts ?? 0);
-          const supersededBefore = Number(during.spkSupersededMidplay ?? 0);
-          const writesBefore = Number(during.spkWrites ?? 0);
-          const saidBefore = saidBack.length;
-          const heardBefore = heardUs.length;
-          const responsesBefore = responsesCreated;
+          const playbackBeforeWindow = await healthWithRetry(kit);
+          await sleep(500);
+          const playbackAtInterruption = await healthWithRetry(kit);
+          const duringProof = proofHealth(playbackAtInterruption, options.wakeWord !== undefined);
+          const freshSpeakerWrites =
+            duringProof.spkWrites -
+            proofHealth(playbackBeforeWindow, options.wakeWord !== undefined).spkWrites;
+          if (!duringProof.speakerPlaying || freshSpeakerWrites <= 0) {
+            record.barge = {
+              speakerPlayingAtInterruption: duringProof.speakerPlaying,
+              freshSpeakerWritesBeforeInterruption: freshSpeakerWrites,
+              superseded: 0,
+              newResponseStarted: false,
+              answerMentionsPineapple: false,
+              playbackRestarted: false,
+              interruptionHeard: false,
+              interruptionAnswered: false,
+              responseCreatedCountBefore: responsesCreated,
+              responseCreatedCountAfter: responsesCreated,
+              speakerWritesBefore: duringProof.spkWrites,
+              speakerWritesAfter: duringProof.spkWrites,
+              freshSpeakerWritesAfterInterruption: 0,
+              answerStartsBefore: duringProof.spkAnswerStarts,
+              answerStartsAfter: duringProof.spkAnswerStarts,
+              freshAnswerStartsAfterInterruption: 0,
+              speakerFramesPlayedBefore: healthCounter(playbackAtInterruption, "spkPlayed"),
+              speakerFramesPlayedAfter: healthCounter(playbackAtInterruption, "spkPlayed"),
+              freshSpeakerFramesPlayedAfterInterruption: 0,
+              speakerGenerationBefore: healthCounter(
+                playbackAtInterruption,
+                "spkSpeakerGeneration",
+              ),
+              speakerGenerationAfter: healthCounter(playbackAtInterruption, "spkSpeakerGeneration"),
+              lastPlayedSpeakerGenerationAfter: healthCounter(
+                playbackAtInterruption,
+                "spkLastPlayedGeneration",
+              ),
+              verdict: "FAIL: no fresh speaker write during the interruption window",
+            };
+            record.verdict = "FAIL: barge proof had no active playback to interrupt";
+          } else {
+            const startsBefore = duringProof.spkAnswerStarts;
+            const writesBefore = duringProof.spkWrites;
+            const playedBefore = healthCounter(playbackAtInterruption, "spkPlayed");
+            const speakerGenerationBefore = healthCounter(
+              playbackAtInterruption,
+              "spkSpeakerGeneration",
+            );
+            const supersededBefore = healthCounter(playbackAtInterruption, "spkSupersededMidplay");
+            const responsesBefore = responsesCreated;
+            const responseIdsBefore = new Set(responseIdsCreated);
+            const heardBefore = heardUs.length;
 
-          if (board.pushToTalk) await kit.pushToTalk.start();
-          await run("say", ["-r", "170", "Stop. Say the word pineapple instead."]);
-          if (board.pushToTalk) await kit.pushToTalk.stop();
+            if (pushToTalk) await kit.pushToTalk.start();
+            await run("say", ["-r", "170", "Stop. Say the word pineapple instead."]);
+            if (pushToTalk) await kit.pushToTalk.stop();
 
-          /*
-           * A REAL SECOND ANSWER, not the barge's own echo. The interruption
-           * itself sends an empty clear frame, and the firmware counts every
-           * clear-marked frame as an answer start (voice_loop.c increments
-           * answers_started in the flush funnel) — so a single
-           * spkAnswerStarts increment is this harness reacting to its own
-           * barge, and hanging up on it cut the call before the second
-           * answer ever played. A real answer means the model spoke again:
-           * a NEW response whose transcript grew, or — on a stream with no
-           * transcription — a second answer start past the barge's own
-           * clear, with new audio frames behind it.
-           */
-          let answeredAgain = false;
-          let superseded = 0;
-          for (let attempt = 0; attempt < 30; attempt++) {
-            const health = await healthWithRetry(kit);
-            superseded = Number(health.spkSupersededMidplay ?? 0) - supersededBefore;
-            const starts = Number(health.spkAnswerStarts ?? 0);
-            const writes = Number(health.spkWrites ?? 0);
-            const spokeAgain = responsesCreated > responsesBefore && saidBack.length > saidBefore;
-            const playedAgain = starts >= startsBefore + 2 && writes > writesBefore;
-            if (spokeAgain || playedAgain) {
-              answeredAgain = true;
-              break;
+            /* A response id is the attribution boundary. Character offsets cannot
+             * distinguish a late delta from the barged answer from a delta of the
+             * reply we asked for; provider response ids can. */
+            let interruptionAnswered = false;
+            let interruptionHeard = false;
+            let newResponseStarted = false;
+            let answerMentionsPineapple = false;
+            let playbackRestarted = false;
+            let superseded = 0;
+            let responseId: string | undefined;
+            let latest = playbackAtInterruption;
+            for (let attempt = 0; attempt < 30; attempt++) {
+              const health = await healthWithRetry(kit);
+              const current = proofHealth(health, options.wakeWord !== undefined);
+              latest = health;
+              superseded = healthCounter(health, "spkSupersededMidplay") - supersededBefore;
+              responseId ??= responseIdsCreated.find((id) => !responseIdsBefore.has(id));
+              newResponseStarted ||= responseId !== undefined;
+              interruptionHeard ||= heardUs.slice(heardBefore).toLowerCase().includes("pineapple");
+              answerMentionsPineapple ||=
+                responseId !== undefined &&
+                (transcriptByResponseId.get(responseId) ?? "").toLowerCase().includes("pineapple");
+              /* A one-word reply can play fully between one-second polls. The
+               * board preserves the generation of the last frame its codec
+               * accepted, so a stale old-tail frame cannot count as this reply. */
+              playbackRestarted ||=
+                current.spkAnswerStarts > startsBefore &&
+                current.spkWrites > writesBefore &&
+                healthCounter(health, "spkSpeakerGeneration") > speakerGenerationBefore &&
+                healthCounter(health, "spkLastPlayedGeneration") ===
+                  healthCounter(health, "spkSpeakerGeneration");
+              if (
+                newResponseStarted &&
+                interruptionHeard &&
+                answerMentionsPineapple &&
+                playbackRestarted
+              ) {
+                break;
+              }
+              await sleep(1000);
             }
-            await sleep(1000);
+            /*
+             * HOLD THE HANG-UP for the evidence still in flight: the barge
+             * utterance's own transcription completes seconds after its
+             * commit, and the second answer's transcript is still streaming.
+             */
+            for (let grace = 0; grace < 10 && heardUs.length <= heardBefore; grace++) {
+              await sleep(1000);
+            }
+            responseId ??= responseIdsCreated.find((id) => !responseIdsBefore.has(id));
+            newResponseStarted ||= responseId !== undefined;
+            interruptionHeard ||= heardUs.slice(heardBefore).toLowerCase().includes("pineapple");
+            answerMentionsPineapple ||=
+              responseId !== undefined &&
+              (transcriptByResponseId.get(responseId) ?? "").toLowerCase().includes("pineapple");
+            interruptionAnswered =
+              newResponseStarted &&
+              interruptionHeard &&
+              answerMentionsPineapple &&
+              playbackRestarted;
+            /*
+             * Two separate claims, kept separate. "It heard me while it was
+             * talking" is the barge-in; "it then said something new" is the
+             * second turn. A board that stops but never answers again is a
+             * different defect from one that answers without ever stopping.
+             *
+             * THERE WERE THREE COLUMNS AND ONLY TWO CLAIMS. `bargeIns` stood
+             * beside `superseded` and reported what `answeredAgain` already did:
+             * the firmware incremented it on the `drop` that STARTS an answer, so
+             * it moved once per reply whether or not anything was interrupted.
+             * The counter is gone from the device; what is left here is the
+             * honest pair — audio was thrown away mid-play, and a new answer
+             * arrived.
+             */
+            const noticed = superseded > 0;
+            record.barge = {
+              speakerPlayingAtInterruption: duringProof.speakerPlaying,
+              freshSpeakerWritesBeforeInterruption: freshSpeakerWrites,
+              superseded,
+              newResponseStarted,
+              answerMentionsPineapple,
+              playbackRestarted,
+              interruptionHeard,
+              interruptionAnswered,
+              responseCreatedCountBefore: responsesBefore,
+              responseCreatedCountAfter: responsesCreated,
+              ...(responseId !== undefined && { postInterruptionResponseId: responseId }),
+              speakerWritesBefore: writesBefore,
+              speakerWritesAfter: healthCounter(latest, "spkWrites"),
+              freshSpeakerWritesAfterInterruption:
+                healthCounter(latest, "spkWrites") - writesBefore,
+              answerStartsBefore: startsBefore,
+              answerStartsAfter: healthCounter(latest, "spkAnswerStarts"),
+              freshAnswerStartsAfterInterruption:
+                healthCounter(latest, "spkAnswerStarts") - startsBefore,
+              speakerFramesPlayedBefore: playedBefore,
+              speakerFramesPlayedAfter: healthCounter(latest, "spkPlayed"),
+              freshSpeakerFramesPlayedAfterInterruption:
+                healthCounter(latest, "spkPlayed") - playedBefore,
+              speakerGenerationBefore,
+              speakerGenerationAfter: healthCounter(latest, "spkSpeakerGeneration"),
+              lastPlayedSpeakerGenerationAfter: healthCounter(latest, "spkLastPlayedGeneration"),
+              verdict:
+                noticed && interruptionAnswered
+                  ? "PASS"
+                  : interruptionAnswered
+                    ? "FAIL: a new answer played but the device logged no interruption"
+                    : noticed
+                      ? "FAIL: stopped for the interruption but did not prove a new answer"
+                      : "FAIL: talked straight through the interruption",
+            };
+            if (record.barge.verdict !== "PASS") record.verdict = `FAIL: ${record.barge.verdict}`;
+            console.error(
+              `  barge: superseded+${String(superseded)} ` +
+                `heard=${String(interruptionHeard)} answered=${String(interruptionAnswered)} — ${record.barge.verdict}`,
+            );
+            /* Both refreshed: the collector ran through the barge window, so
+             * the evidence carries the barge utterance and the second answer,
+             * not a snapshot from before either existed. */
+            record.deviceHeard = heardUs.trim();
+            record.deviceSaid = saidBack.trim();
           }
-          /*
-           * HOLD THE HANG-UP for the evidence still in flight: the barge
-           * utterance's own transcription completes seconds after its
-           * commit, and the second answer's transcript is still streaming.
-           * The connection is open through this wait on purpose —
-           * deviceHeard used to be frozen before the barge was even spoken,
-           * so the barge utterance could never appear in the evidence.
-           */
-          for (let grace = 0; grace < 10 && heardUs.length <= heardBefore; grace++) {
-            await sleep(1000);
-          }
-          /*
-           * Two separate claims, kept separate. "It heard me while it was
-           * talking" is the barge-in; "it then said something new" is the
-           * second turn. A board that stops but never answers again is a
-           * different defect from one that answers without ever stopping.
-           *
-           * THERE WERE THREE COLUMNS AND ONLY TWO CLAIMS. `bargeIns` stood
-           * beside `superseded` and reported what `answeredAgain` already did:
-           * the firmware incremented it on the `drop` that STARTS an answer, so
-           * it moved once per reply whether or not anything was interrupted.
-           * The counter is gone from the device; what is left here is the
-           * honest pair — audio was thrown away mid-play, and a new answer
-           * arrived.
-           */
-          const noticed = superseded > 0;
-          record.barge = {
-            spokeOverPlaybackAt: Number(during.spkWrites ?? 0),
-            superseded,
-            answeredAgain,
-            verdict:
-              noticed && answeredAgain
-                ? "PASS"
-                : answeredAgain
-                  ? "PASS (answered again, but the device logged no interruption)"
-                  : noticed
-                    ? "FAIL: stopped for the interruption and never answered it"
-                    : "FAIL: talked straight through the interruption",
-          };
-          console.error(
-            `  barge: superseded+${String(superseded)} ` +
-              `answeredAgain=${String(answeredAgain)} — ${record.barge.verdict}`,
-          );
-          /* Both refreshed: the collector ran through the barge window, so
-           * the evidence carries the barge utterance and the second answer,
-           * not a snapshot from before either existed. */
-          record.deviceHeard = heardUs.trim();
-          record.deviceSaid = saidBack.trim();
         }
       } finally {
-        connection.close();
+        await connection.close();
+        connection = undefined;
       }
     } catch (error) {
       record.verdict = `FAIL: ${String(error).slice(0, 200)}`;
       console.error(`  ${record.verdict}`);
     } finally {
-      try {
-        await kit.conversation.end();
-      } catch {
-        /* Ending a call that is already gone is not a failure of this proof. */
-      }
+      if (connection !== undefined) await connection.close();
+      await endAndVerifyCall(kit, record, beforeForHangup, pushToTalkForHangup);
     }
   }
 
   if (options.out) fs.writeFileSync(options.out, JSON.stringify(results, null, 2));
   console.log(JSON.stringify(results, null, 2));
+  if (Object.values(results).some((result) => result.verdict !== "PASS")) process.exitCode = 1;
   return results;
 }

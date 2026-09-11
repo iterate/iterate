@@ -220,17 +220,25 @@ static void pump(void) {
     struct iterate_kit_itx_connection *connection =
         iterate_kit_fake_platform_connection();
     bool answered_any = false;
+    bool stream_head = false;
     while (answered < iterate_kit_fake_platform_sent_count()) {
       const char *message = iterate_kit_fake_platform_sent(answered);
       const char *pull = strstr(message, "[\"pull\",");
+      if (strstr(message, "getEventPage") != NULL) stream_head = true;
       ++answered;
       if (pull == NULL) continue;
       {
         char reply[128];
         const long id = strtol(pull + strlen("[\"pull\","), NULL, 10);
-        (void)snprintf(
-            reply, sizeof(reply), "[\"resolve\",%ld,[\"export\",%ld]]", id,
-            -(id + 10));
+        if (stream_head) {
+          (void)snprintf(
+              reply, sizeof(reply), "[\"resolve\",%ld,{\"streamMaxOffset\":0}]", id);
+          stream_head = false;
+        } else {
+          (void)snprintf(
+              reply, sizeof(reply), "[\"resolve\",%ld,[\"export\",%ld]]", id,
+              -(id + 10));
+        }
         assert(
             iterate_kit_itx_connection_receive_text(
                 connection, reply, strlen(reply)) == CAPNWEB_OK);
@@ -382,6 +390,41 @@ static void deliver_answer(void) {
   deliver_chunk(false, true, CHUNK_FRAMES);
 }
 
+/** Ask for the call through the public capability, as the board proof does. */
+static void start_conversation(void) {
+  static const char request[] =
+      "[\"push\",[\"pipeline\",0,[\"conversation\",\"start\"],[[]]]]";
+  char release[64];
+  struct iterate_kit_itx_connection *connection =
+      iterate_kit_fake_platform_connection();
+  assert(connection != NULL);
+  assert(
+      iterate_kit_itx_connection_receive_text(
+          connection, request, sizeof(request) - 1U) == CAPNWEB_OK);
+  (void)snprintf(
+      release, sizeof(release), "[\"release\",%lld,1]", next_release_id++);
+  assert(
+      iterate_kit_itx_connection_receive_text(
+          connection, release, strlen(release)) == CAPNWEB_OK);
+}
+
+static size_t sent_with(const char *needle) {
+  size_t count = 0U;
+  size_t index;
+  for (index = 0U; index < iterate_kit_fake_platform_sent_count(); ++index) {
+    if (strstr(iterate_kit_fake_platform_sent(index), needle) != NULL) ++count;
+  }
+  return count;
+}
+
+static void run_quiet_ms(uint32_t milliseconds) {
+  uint32_t elapsed;
+  for (elapsed = 0U; elapsed < milliseconds; elapsed += 50U) {
+    iterate_kit_fake_esp_idf_advance_ms(50U);
+    step();
+  }
+}
+
 /* --- the tests ------------------------------------------------------------ */
 
 /*
@@ -390,6 +433,26 @@ static void deliver_answer(void) {
  * is zero, so nothing is skipped. Asserted so the scenario below is a
  * comparison rather than an isolated number.
  */
+/*
+ * An open-mic call remains active after a complete answer. Server VAD owes no
+ * batch while the room is quiet, so three full former watchdog periods must
+ * neither re-open the delivery callback nor restart the hop. Pumping after
+ * each period makes a regression complete its asynchronous recycle; a test
+ * that merely observed the first request would not catch the repeating storm.
+ */
+static void a_quiet_active_call_does_not_recycle(void) {
+  const size_t connections_before = sent_with("openConnection");
+  const size_t restarts_before = iterate_kit_fake_platform_restarts_requested();
+  int period;
+
+  for (period = 0; period < 3; ++period) {
+    run_quiet_ms(10500U);
+    pump();
+    assert(sent_with("openConnection") == connections_before);
+    assert(iterate_kit_fake_platform_restarts_requested() == restarts_before);
+  }
+}
+
 static void the_first_answer_plays_whole(void) {
   deliver_answer();
   play_out();
@@ -529,10 +592,14 @@ int main(void) {
   assert(board.started);
   iterate_kit_fake_platform_connect();
   pump();
+  start_conversation();
+  step();
+  pump();
   /* The call this whole file's audio belongs to; see deliver_accepted. */
   deliver_accepted();
 
   the_first_answer_plays_whole();
+  a_quiet_active_call_does_not_recycle();
   a_later_answer_plays_whole_too();
   a_live_answer_superseded_after_a_stall();
   audio_with_no_clear_at_all_still_plays();

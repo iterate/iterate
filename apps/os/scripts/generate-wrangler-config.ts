@@ -90,6 +90,9 @@ export const OPTIONAL_SECRETS = [
 export const RETIRED_AUTH_SERVICE_TOKEN = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 export const RETIRED_WORKER_SECRETS = [
   RETIRED_AUTH_SERVICE_TOKEN,
+  // CLI/MCP credential, never a Worker AppConfig binding. It may stay in
+  // Doppler for those tools, but any old Worker copy must be removed.
+  "APP_CONFIG_CLOUDFLARE__ANALYTICS_API_TOKEN",
   "APP_CONFIG_GEMINI_API_KEY",
   // Replaced by APP_CONFIG_ITERATE_REPO_PKG_REF (name-agnostic pkg.pr.new
   // ref pinning, src/pkg-pr-new.ts). Only preview slots ever carried it, and
@@ -180,6 +183,7 @@ const SANDBOX_SSH_AUTHORIZED_KEYS: { name: string; public_key: string }[] = [
 
 const DO_CLASSES = {
   DEVICE: "DeviceDurableObject",
+  ITX_SESSION: "ItxSessionDurableObject",
   PROJECT: "ProjectDurableObject",
   REPO: "RepoDurableObject",
   SCHEDULER: "SchedulerDurableObject",

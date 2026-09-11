@@ -9,6 +9,7 @@ add_executable(iterate-kit-cli
   cli_report.c
   cli_screen.c
   cli_speaker.c
+  cli_uplink.c
   cli_wav.c
   main.c)
 

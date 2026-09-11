@@ -77,6 +77,14 @@ iterate_kit_add_core_test(
 iterate_kit_add_core_test(iterate-kit-device-events-test device_events_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-connection-test itx_connection_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-mount-test itx_mount_test.c)
+iterate_kit_add_core_test(iterate-kit-provider-mode-test provider_mode_test.c)
+
+# NVS stays platform-bound; exercise its adapter against the narrow host fake.
+iterate_kit_add_test(
+  iterate-kit-provider-mode-nvs-test provider_mode_nvs_test.c
+  ../platforms/iterate_esp_idf/provider_mode_nvs.c
+  INCLUDES fakes/esp_idf ../platforms/iterate_esp_idf/include
+  LINK iterate-kit-core)
 iterate_kit_add_core_test(iterate-kit-retry-gate-test retry_gate_test.c)
 # The one session grammar all four boards drive: both postures, the tap-end
 # grace, hold-is-the-wake, the single end-chime edge, and ENDING absorbing
@@ -90,12 +98,20 @@ iterate_kit_add_core_test(
 # THE STEP BOTH TARGETS RUN, against a ring that is an array and a sink that
 # counts: every branch the board's and the CLI's playback share, asserted once.
 iterate_kit_add_core_test(iterate-kit-voice-playout-test voice_playout_test.c)
+iterate_kit_add_core_test(iterate-kit-voice-uplink-test voice_uplink_test.c)
 iterate_kit_add_core_test(iterate-kit-voicelab-stream-test voicelab_stream_test.c)
 iterate_kit_add_core_test(
   iterate-kit-websocket-frame-writer-test websocket_frame_writer_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-rx-test websocket_rx_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-text-test websocket_text_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-tx-test websocket_tx_test.c)
+
+# The ESP WebSocket keepalive decision itself is host-pure: this tests the
+# exact PING queue policy without recreating ESP-TLS or a radio.
+iterate_kit_add_test(
+  iterate-kit-esp-websocket-keepalive-test websocket_keepalive_test.c
+  INCLUDES fakes/esp_idf ../platforms/iterate_esp_idf/include
+  LINK iterate-kit-core)
 
 # THE SHARED LOOP, ON A LAPTOP. Four boards run components/voice and nothing
 # outside a flash had ever compiled it, so the mapping from a press to an
@@ -175,6 +191,14 @@ if(APPLE)
 
   iterate_kit_add_test(iterate-kit-cli-device-controls-test
     ../targets/host_cli/cli_device_controls.c cli_device_controls_test.c
+    STD 11 INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli"
+    OPTIONS -Wconversion -Wshadow
+    LINK iterate-kit-capabilities iterate-kit-darwin)
+
+  iterate_kit_add_test(iterate-kit-cli-uplink-test
+    cli_uplink_test.c ../targets/host_cli/cli_uplink.c
+    ../targets/host_cli/cli_microphone.c ../targets/host_cli/cli_speaker.c
+    ../targets/host_cli/cli_wav.c
     STD 11 INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli"
     OPTIONS -Wconversion -Wshadow
     LINK iterate-kit-capabilities iterate-kit-darwin)

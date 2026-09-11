@@ -283,16 +283,15 @@ export async function reliability(options: ReliabilityOptions) {
         ms.answer = Date.now() - at;
         if (spokeBytes <= 0) {
           /*
-           * "Answered but silent" has two completely different causes and the
-           * device can tell them apart: a delivery lane that stopped existing
-           * (batchAgeMs large, and a recycle it did or did not manage) versus
-           * audio that arrived and was not played. Ask before giving up, or
-           * the report says the same words for both.
+           * "Answered but silent" has two different causes: the delivery
+           * lane may have stopped producing batches, or audio may have arrived
+           * and not played. Ask before giving up, or the report says the same
+           * words for both.
            */
           const why = (await withTimeout("health", () => device().health(), 8000).catch(
             () => ({}),
           )) as Record<string, number>;
-          const lane = `batchAgeMs=${why.batchAgeMs} batches=${why.batches} conn=${why.connGeneration} recycles=${why.downlinkRecycles} spkFrames=${why.spkFrames} conceal=${why.spkConceal}`;
+          const lane = `batchAgeMs=${why.batchAgeMs} batches=${why.batches} conn=${why.connGeneration} spkFrames=${why.spkFrames} conceal=${why.spkConceal}`;
           fail(
             "audio",
             answeredAt > 0

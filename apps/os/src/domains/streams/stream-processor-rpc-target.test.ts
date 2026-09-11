@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { StreamEvent } from "iterate/processors";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
 import {
   ProcessorRelayRpcTarget,
@@ -8,9 +8,64 @@ import {
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
 import { streamDeliveryAuthContext } from "../../auth.ts";
+import { recordedSpans, resetRecordedSpans } from "../../test/cloudflare-workers-shim.ts";
 import { unconfiguredSubscriptionError } from "./utils.ts";
 
 describe("StreamRpcTarget", () => {
+  it("adds the ingress latency span only for one validated /repros/ ephemeral probe", async () => {
+    const committed = {
+      createdAt: new Date(0).toISOString(),
+      offset: 1,
+      path: "/repros/append-correlation",
+      payload: { fixed: "frame", probeId: "run-123:p:7" },
+      type: "events.iterate.com/repro/ephemeral-frame",
+    } satisfies StreamEvent;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
+        return { append: async () => [committed] } as never;
+      }
+    }
+    const streamAt = (path: string) =>
+      new TestStreamRpcTarget({
+        auth: { assertCanAccessProject: vi.fn() } as never,
+        path,
+        projectId: "prj_test",
+      });
+    const stream = streamAt("/repros/append-correlation");
+    const probe = {
+      type: committed.type,
+      ephemeral: true,
+      payload: committed.payload,
+    } satisfies StreamEventInput;
+
+    resetRecordedSpans();
+    await stream.append(probe);
+    expect(recordedSpans).toEqual([
+      {
+        name: "stream.repro.ingress_append",
+        attributes: {
+          "iterate.repro.probe_id": "run-123:p:7",
+          "iterate.stream.path": "/repros/append-correlation",
+          "iterate.repro.ephemeral": true,
+        },
+      },
+    ]);
+
+    const expectNoSpan = async (target: StreamRpcTarget, ...inputs: StreamEventInput[]) => {
+      resetRecordedSpans();
+      await target.append(...inputs);
+      expect(recordedSpans).toEqual([]);
+    };
+    await expectNoSpan(streamAt("/events"), probe);
+    await expectNoSpan(stream, probe, probe);
+    await expectNoSpan(stream, { type: probe.type, payload: probe.payload });
+    await expectNoSpan(stream, {
+      type: probe.type,
+      ephemeral: true,
+      payload: { fixed: "frame", probeId: "bad probe ID" },
+    });
+  });
+
   it("serves liveState from the socket-fed relay engine, never the DO's liveState property", async () => {
     const runtimeState = {
       coreProcessorState: { maxOffset: 4 },

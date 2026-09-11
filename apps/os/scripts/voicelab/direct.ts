@@ -11,9 +11,12 @@ import process from "node:process";
 import { MicSource, PlayoutBuffer, percentiles, BYTES_PER_SEC } from "./audio.ts";
 import { GrokClient } from "./grok.ts";
 import { createImpairment, parseImpairSpec } from "./impair.ts";
+import { directOpenai, type DirectOpenAiOptions } from "./direct-openai.ts";
 
 /** Options for `pnpm cli voicelab direct`. */
 export interface DirectOptions {
+  /** `grok` retains the original direct harness; `openai` uses the captured Satellite1 comparator. */
+  provider?: "grok" | "openai";
   /** Synthesize this utterance with macOS `say` and use it as the mic. */
   say?: string;
   /** Raw 16kHz mono PCM16 file to use as the mic. */
@@ -38,6 +41,16 @@ export interface DirectOptions {
   impair?: string;
   /** WebSocket endpoint override — point at a proxy speaking the Grok realtime protocol. */
   url?: string;
+  /** Processed Satellite1 16 kHz mono fixture for `--provider openai`. */
+  fixture?: DirectOpenAiOptions["fixture"];
+  /** Captured effective provider session for `--provider openai`. */
+  sessionSnapshot?: DirectOpenAiOptions["sessionSnapshot"];
+  /** JSONL destination for `--provider openai`. */
+  outputPath?: DirectOpenAiOptions["outputPath"];
+  /** Sustained run duration for `--provider openai`; no reconnect occurs. */
+  durationMs?: DirectOpenAiOptions["durationMs"];
+  /** Inter-turn silence duration for `--provider openai`. */
+  gapMs?: DirectOpenAiOptions["gapMs"];
 }
 
 /** Silence between one answer ending and the next utterance starting. */
@@ -71,6 +84,16 @@ interface Turn {
 }
 
 export async function direct(options: DirectOptions = {}) {
+  if (options.provider === "openai") {
+    return directOpenai({
+      fixture: options.fixture,
+      sessionSnapshot: options.sessionSnapshot,
+      outputPath: options.outputPath,
+      turns: options.turns,
+      durationMs: options.durationMs,
+      gapMs: options.gapMs,
+    });
+  }
   const apiKey = process.env.XAI_API_KEY?.trim() ?? "";
   if (!apiKey && !options.url) throw new Error("XAI_API_KEY is required (or pass --url).");
   const turnsTarget = options.turns ?? (options.mic ? 0 : options.say2 ? 2 : 1);

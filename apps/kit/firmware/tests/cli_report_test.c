@@ -40,6 +40,23 @@ static void a_turn_that_never_committed_reports_no_duration(void)
   assert(cli_report_time_to_answer_ms(turn) == 3000U);
 }
 
+static void speech_end_latency_requires_ordered_real_endpoints(void)
+{
+  cli_report_reset(&report);
+  struct cli_report_turn *turn =
+      cli_report_begin_turn(&report, "count.wav", false, 0U);
+  assert(turn != NULL);
+  turn->last_nonquiet_input_ms = 1000U;
+  assert(cli_report_speech_end_to_first_packet_ms(turn) == 0U);
+  assert(cli_report_speech_end_to_first_played_ms(turn) == 0U);
+  turn->first_speaker_packet_ms = 1250U;
+  turn->first_nonquiet_speaker_played_ms = 1320U;
+  assert(cli_report_speech_end_to_first_packet_ms(turn) == 250U);
+  assert(cli_report_speech_end_to_first_played_ms(turn) == 320U);
+  turn->first_speaker_packet_ms = 999U;
+  assert(cli_report_speech_end_to_first_packet_ms(turn) == 0U);
+}
+
 /*
  * Occupancy is bucketed, and the buckets have to be affordable. One per
  * millisecond of a 30-second ring is 120 KiB a turn and half a gigabyte for
@@ -101,10 +118,17 @@ static void one_bad_turn_survives_into_the_summary(void)
     turn->committed_ms = 100U;
     turn->first_audio_ms = 300U;
     turn->completed_ms = 2000U;
+    turn->last_nonquiet_input_ms = 80U;
+    turn->first_speaker_packet_ms = 200U;
+    turn->first_nonquiet_speaker_played_ms = 300U;
     turn->frames_played = 100U;
   }
   report.turns[17].failed = true;
   report.turns[17].frames_played = 0U;
+  /* Partial playback still fails when the turn ended at its watchdog. */
+  report.turns[18].failed = true;
+  report.turns[18].watchdog_stalled = true;
+  report.turns[18].frames_played = 12U;
 
   const struct cli_report_summary summary = {
     .session_restarts = 1U,
@@ -128,7 +152,8 @@ static void one_bad_turn_survives_into_the_summary(void)
   const size_t length = fread(body, 1U, sizeof(body) - 1U, file);
   body[length] = '\0';
   (void)fclose(file);
-  assert(strstr(body, "\"failedTurns\":1") != NULL);
+  assert(strstr(body, "\"failedTurns\":2") != NULL);
+  assert(strstr(body, "\"failure\":true,\"completion\":\"watchdog-stalled\"") != NULL);
   assert(strstr(body, "\"deadlineCancelledTurns\":1") != NULL);
   assert(strstr(body, "\"colleague\":") != NULL);
   assert(strstr(body, "\"colleagueQuestionsAsked\":13") != NULL);
@@ -137,6 +162,9 @@ static void one_bad_turn_survives_into_the_summary(void)
   assert(strstr(body, "\"roomStarvedBuffers\":2") != NULL);
   assert(strstr(body, "\"speakerPlatformError\":-50") != NULL);
   assert(strstr(body, "\"microphonePlatformError\":0") != NULL);
+  assert(strstr(body, "\"speakerBoundary\":\"timeline\"") != NULL);
+  assert(strstr(body, "\"speechEndToFirstPacketMs\":120") != NULL);
+  assert(strstr(body, "\"speechEndToFirstNonquietSpeakerMs\":220") != NULL);
   assert(strstr(body, "\"framesPlayed\":") != NULL);
   assert(strstr(body, "\"ringOccupancyP10Ms\":") != NULL);
   /* The minimum across turns is the failed one: a spread cannot hide it. */
@@ -181,6 +209,7 @@ static void null_arguments_are_refused(void)
 int main(void)
 {
   a_turn_that_never_committed_reports_no_duration();
+  speech_end_latency_requires_ordered_real_endpoints();
   the_occupancy_histogram_is_small_enough_to_keep();
   occupancy_percentiles_track_the_observations();
   turns_past_the_limit_are_counted_not_forgotten();

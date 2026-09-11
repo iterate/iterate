@@ -84,6 +84,34 @@ static void queued_milliseconds_match_empty_one_frame_and_full(void)
          TEST_FULL_FRAMES * ITERATE_KIT_VOICE_FRAME_MS);
 }
 
+/*
+ * Voice-agent PCM chunks need not end on the 20 ms playout boundary. Before
+ * response.done, that tail must wait for more audio; once done arrives it must
+ * be emitted with silence to finish the answer instead of stranding the turn
+ * until its watchdog fires.
+ */
+static void final_short_playout_chunk_waits_then_pads_with_silence(void)
+{
+  const size_t tail_bytes = TEST_FRAME_BYTES - 64U;
+  cli_speaker_clear(&speaker);
+  memset(input, TEST_EXISTING_BYTE, tail_bytes);
+  memset(output, TEST_REJECTED_BYTE, TEST_FRAME_BYTES);
+  assert(cli_speaker_write(&speaker, input, tail_bytes) == CLI_SPEAKER_OK);
+  assert(cli_speaker_read_playout(
+             &speaker, output, TEST_FRAME_BYTES, false) ==
+         CLI_SPEAKER_ERR_EMPTY);
+  assert(speaker.used == tail_bytes);
+  assert(cli_speaker_read_playout(
+             &speaker, output, TEST_FRAME_BYTES, true) == CLI_SPEAKER_OK);
+  assert(speaker.used == 0U);
+  for (size_t index = 0U; index < tail_bytes; ++index) {
+    assert(output[index] == TEST_EXISTING_BYTE);
+  }
+  for (size_t index = tail_bytes; index < TEST_FRAME_BYTES; ++index) {
+    assert(output[index] == 0U);
+  }
+}
+
 /* Every public boundary refuses unusable storage instead of corrupting it. */
 static void unusable_arguments_are_refused(void)
 {
@@ -99,6 +127,7 @@ int main(void)
   playback_stays_ordered_when_both_cursors_wrap();
   a_frame_that_does_not_fit_is_refused_without_splicing();
   queued_milliseconds_match_empty_one_frame_and_full();
+  final_short_playout_chunk_waits_then_pads_with_silence();
   unusable_arguments_are_refused();
   return 0;
 }

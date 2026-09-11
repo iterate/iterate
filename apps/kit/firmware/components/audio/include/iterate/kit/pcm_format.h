@@ -36,6 +36,15 @@ struct iterate_kit_pcm_shape {
   uint8_t ratio;
 };
 
+/** Facts observed while extracting one capture buffer. Peaks are taken before
+ * the fixed uplink gain, so they remain an honest view of the selected XMOS
+ * plane. The diagnostic plane is never scaled. */
+struct iterate_kit_pcm_capture_metrics {
+  uint32_t processed_peak;
+  uint32_t diagnostic_peak;
+  uint32_t processed_clipped;
+};
+
 /** Bytes occupied by wire frames (not 16 kHz samples), or 0 for an invalid
  * shape, zero frames, or overflow. DMA descriptors count wire frames; one
  * portable frame occupies bytes_for_frames(shape, 320 * shape->ratio).
@@ -112,15 +121,23 @@ enum iterate_kit_status iterate_kit_pcm_expand_playback_shape(
  * channel zero. Only channel zero is eligible for the uplink; channel one is
  * diagnostic data and must remain local. Both source words are Q31-aligned
  * little-endian signed samples supplied by ESP-IDF's 32-bit stereo I2S read.
+ *
+ * `processed_gain` is a nonzero fixed multiplier for the selected uplink
+ * plane. Q31 capture applies it before conversion to PCM16, retaining quiet
+ * low-order bits which would otherwise be discarded first. `metrics` is
+ * optional and records pre-gain plane peaks plus exactly one clip per
+ * saturated output sample.
  */
 enum iterate_kit_status iterate_kit_pcm_extract_capture(
     const struct iterate_kit_pcm_shape *shape,
     const void *source_interleaved,
     size_t source_frames,
+    uint8_t processed_gain,
     int16_t *processed_destination,
     int16_t *non_aec_destination,
     size_t destination_capacity_frames,
-    size_t *destination_frames_written);
+    size_t *destination_frames_written,
+    struct iterate_kit_pcm_capture_metrics *metrics);
 
 #ifdef __cplusplus
 }

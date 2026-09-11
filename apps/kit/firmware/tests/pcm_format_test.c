@@ -143,7 +143,7 @@ static void extracts_processed_and_non_aec_capture_channels(void) {
     size_t written = 0U;
     assert(iterate_kit_pcm_extract_capture(
         &cases[i].shape, cases[i].input, cases[i].frames,
-        processed, diagnostic, 3U, &written) == ITERATE_KIT_OK);
+        1U, processed, diagnostic, 3U, &written, NULL) == ITERATE_KIT_OK);
     assert(written == cases[i].becomes_count);
     for (size_t j = 0; j < written; ++j) {
       assert(processed[j] == cases[i].processed[j]);
@@ -175,13 +175,71 @@ static void validates_shapes_and_extracts_pcm16(void) {
     int16_t output[3] = {123, 123, 123};
     size_t written = 99;
     assert(iterate_kit_pcm_extract_capture(&cases[i].shape, input,
-        cases[i].frames, output, NULL, cases[i].capacity, &written) ==
+        cases[i].frames, 1U, output, NULL, cases[i].capacity, &written, NULL) ==
         cases[i].becomes_status);
     assert(written == cases[i].becomes_count);
     for (size_t j = 0; j < 3; ++j) {
       assert(output[j] == (j < written ? cases[i].becomes[j] : 123));
     }
   }
+}
+
+/*
+ * Satellite1's processed XMOS plane can use only low Q31 bits. Scaling the
+ * already-truncated PCM16 value turns those consonants into zero; scaling the
+ * Q31 word first retains them. The raw tap remains a pre-gain observation,
+ * and a saturated selected sample increments exactly once.
+ */
+static void capture_gain_preserves_q31_precision_before_pcm16(void) {
+  const struct iterate_kit_pcm_shape shape = {32, 2, 0, 1, 1};
+  const int32_t input[] = {
+      2048, 0x12340000,
+      -2048, -65536,
+      0x7fff0000, 0x56780000,
+      INT32_MIN, INT32_MIN,
+  };
+  int16_t processed[4] = {0};
+  int16_t diagnostic[4] = {0};
+  struct iterate_kit_pcm_capture_metrics metrics;
+  size_t written = 0U;
+
+  assert(iterate_kit_pcm_extract_capture(
+      &shape, input, 4U, 64U, processed, diagnostic, 4U, &written,
+      &metrics) == ITERATE_KIT_OK);
+  assert(written == 4U);
+  assert(processed[0] == 2);
+  assert(processed[1] == -2);
+  assert(processed[2] == INT16_MAX);
+  assert(processed[3] == INT16_MIN);
+  assert(diagnostic[0] == 0x1234);
+  assert(diagnostic[1] == -1);
+  assert(diagnostic[2] == 0x5678);
+  assert(diagnostic[3] == INT16_MIN);
+  assert(metrics.processed_peak == 32768U);
+  assert(metrics.diagnostic_peak == 32768U);
+  assert(metrics.processed_clipped == 2U);
+}
+
+/* Unity gain remains the prior bit-exact Q31 conversion, including its
+ * defined floor behavior for negative values. */
+static void capture_gain_one_preserves_q31_conversion(void) {
+  const struct iterate_kit_pcm_shape shape = {32, 1, 0, -1, 1};
+  const int32_t input[] = {0x1234ffff, -1, INT32_MIN, INT32_MAX};
+  const int16_t expected[] = {0x1234, -1, INT16_MIN, INT16_MAX};
+  int16_t processed[4] = {0};
+  struct iterate_kit_pcm_capture_metrics metrics;
+  size_t written = 0U;
+
+  assert(iterate_kit_pcm_extract_capture(
+      &shape, input, 4U, 1U, processed, NULL, 4U, &written,
+      &metrics) == ITERATE_KIT_OK);
+  assert(written == 4U);
+  for (size_t index = 0U; index < written; ++index) {
+    assert(processed[index] == expected[index]);
+  }
+  assert(metrics.processed_peak == 32768U);
+  assert(metrics.diagnostic_peak == 0U);
+  assert(metrics.processed_clipped == 0U);
 }
 
 /** Literal DMA sizes include HAVPE's two geometries and M5's stereo ring. */
@@ -249,5 +307,7 @@ int main(void) {
   preserves_interpolation_across_lane_edges();
   extracts_processed_and_non_aec_capture_channels();
   validates_shapes_and_extracts_pcm16();
+  capture_gain_preserves_q31_precision_before_pcm16();
+  capture_gain_one_preserves_q31_conversion();
   return 0;
 }

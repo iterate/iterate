@@ -32,7 +32,6 @@ import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import {
   installVoiceAgent,
   voiceAgentEntrypointRef,
-  voiceAgentFacetRef,
   type VoiceAgentRpc,
 } from "@iterate-com/voice-agent";
 import {
@@ -42,6 +41,8 @@ import {
   type VoicelabConnectOptions,
 } from "./connect.ts";
 import { voiceAgentConfigRepo } from "./deploy.ts";
+import { restartStreamHostedVoiceFacet } from "./facet-restart.ts";
+import { localVoiceAgentArtifactHash } from "./local-voice-agent-source.ts";
 import { discardRpcResult, withRpcResult } from "./rpc-ownership.ts";
 
 /*
@@ -118,6 +119,13 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   /** Install and report the server side, then stop without starting audio. */
   setupOnly?: boolean;
   /**
+   * Attach the C client to an already configured stream without changing its
+   * agent, provider session, instructions, tools, or turn-detection settings.
+   * Requires an explicit `--stream-path` so a benchmark cannot reuse a stream
+   * chosen by a prompt or generated default.
+   */
+  reuseConfig?: boolean;
+  /**
    * Accept every prompt's default without asking: the default project and a
    * fresh timestamped stream. The two prompts exist so a run can rejoin a
    * conversation by name; when the answer is always enter-enter, this is the
@@ -164,17 +172,10 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
    */
   hangUp?: boolean;
   /**
-   * Hold the microphone open for the whole call and let Grok find the turns.
-   *
-   * OFF BY DEFAULT, BECAUSE THIS CLI IS NOT AN OPEN-MIC CLIENT. It sends audio
-   * only while a turn is in progress — the space bar in attended mode, one
-   * utterance at a time in unattended mode — and then stops. Server VAD needs
-   * the silence AFTER speech to decide the turn ended, so on a stream that
-   * simply stops it hears `speech_started` and then waits for ever. Measured:
-   * Grok took the audio, detected the speech, and never once answered.
-   *
-   * The boards ARE open-mic and this is the path they take, so it is worth
-   * being able to exercise from here — with a driver that keeps sending.
+   * Hold the microphone open for the whole call and let the provider find
+   * turns. Defaults to push-to-talk. The unattended open-mic driver sends
+   * continuous silence between utterances and while awaiting the response,
+   * matching the boards and allowing server VAD to detect speech end.
    */
   openMic?: boolean;
   /**
@@ -238,6 +239,22 @@ type VoiceAgentSetup = Pick<VoiceAgentRpc, "health" | "setupVoiceAgent">;
 const HEALTH_TIMEOUT_MS = 15_000;
 const HEALTH_RETRY_MS = 1_000;
 
+/** Refuse ambiguity or mutation on a run that must preserve a board stream. */
+export function assertReuseConfigOptions(
+  options: Pick<TalkOptions, "reuseConfig" | "streamPath" | "flipTurnPosture" | "setupOnly">,
+): void {
+  if (options.reuseConfig !== true) return;
+  if (options.streamPath === undefined) {
+    throw new Error("--reuse-config requires an explicit --stream-path");
+  }
+  if (options.flipTurnPosture === true) {
+    throw new Error("--reuse-config is read-only and cannot use --flip-turn-posture");
+  }
+  if (options.setupOnly === true) {
+    throw new Error("--reuse-config cannot be combined with --setup-only");
+  }
+}
+
 export async function talk(options: TalkOptions = {}) {
   const defaultProject = process.env.ITERATE_PROJECT?.trim() || DEFAULT_PROJECT;
   const project =
@@ -252,49 +269,10 @@ export async function talk(options: TalkOptions = {}) {
   /* Resolved before any network call: a missing checkout should fail in a
    * second, not after setting up a conversation nobody can join. */
   const kitDir = options.setupOnly === true ? null : resolveKitDir(options.kitDir);
+  assertReuseConfigOptions(options);
 
-  const connection = { baseUrl: options.baseUrl, project };
-  const baseUrl = resolveVoicelabBaseUrl(connection);
-  /* First run on a fresh environment: the default slug is a project that
-   * does not exist yet, and a bare `talk` provisions its own home. */
-  await ensureProjectExists(connection);
-  using itx = await connectProject(connection);
-
-  /* Declare the guest BEFORE calling into it: `setupVoiceAgent` lives inside
-   * @iterate-com/voice-agent, so package.json has to name the package before
-   * there is anything to call — a talk command that only ran setup would
-   * work on a project somebody had already set up and fail against a fresh
-   * one. Present is enough: a spec somebody pinned on purpose stays as it
-   * is (`voicelab deploy` is the upgrade path), and a repo that already
-   * declares the package is left untouched. */
-  const install = await installVoiceAgent(voiceAgentConfigRepo(itx), { existing: "keep" });
-  console.log(
-    install.changed
-      ? `the repo now names ${install.spec} (${install.commitOid.slice(0, 8)}: ${install.changedPaths.join(", ")})`
-      : `the repo already names ${install.spec} (${install.commitOid.slice(0, 8)})`,
-  );
-
-  /* Only the secret the chosen provider's dial will spend — setup's gate is
-   * per-provider (secretForHost), and a baseUrl seam needs none at all. */
-  if (options.providerBaseUrl === undefined) {
-    console.log(
-      options.provider === "grok"
-        ? `xai secret ${await ensureXaiSecret(itx)}`
-        : `openai secret ${await ensureOpenaiSecret(itx)}`,
-    );
-  }
-
-  using voiceAgent = itx.workers.get(
-    voiceAgentEntrypointRef,
-  ) as unknown as DynamicWorkerCapability<VoiceAgentSetup>;
-  const health = await waitForVoiceAgent(voiceAgent);
-  console.log(`voice-agent healthy for ${health.projectId}`);
-
-  /*
-   * Asked for, not invented. A generated UUID makes every run a conversation
-   * nobody can find again; a name you chose is one you can point setup, the
-   * agent and a later look at the stream all at.
-   */
+  /* A reuse run must name the existing stream before it opens any project
+   * resource. A normal run may still prompt or mint its familiar default. */
   const streamPath =
     options.streamPath ??
     (options.auto === true
@@ -303,92 +281,131 @@ export async function talk(options: TalkOptions = {}) {
   if (!streamPath.startsWith("/")) {
     throw new Error(`stream path must be absolute; received ${JSON.stringify(streamPath)}`);
   }
-  /*
-   * A CHANGED INSTALL MUST REACH THE RUNNING FACET. The facet is a STATEFUL
-   * durable worker: it keeps the bundle it booted with for as long as it
-   * stays warm, and back-to-back voicelab runs keep it warm indefinitely —
-   * measured on prd (2026-08-26 evening): three commits behind while the
-   * stateless entrypoint rebuilt every run, so setup wrote the new
-   * contract's delivery filter and the live facet installed the previous
-   * revision's colleague subscription. Killing the incarnation is the
-   * upgrade: the next dispatch boots the build this run just committed.
-   */
-  if (install.changed) {
-    /* kill() is the platform's RPC on every stateful dynamic worker handle;
-     * the generated capability type carries only the guest's own exported
-     * methods, so the platform verb has to be asserted on. */
-    using facetWorker = itx.workers.get(voiceAgentFacetRef(streamPath)) as unknown as {
-      kill(): Promise<void>;
-    } & Disposable;
-    /* The abort takes the killing RPC down with the incarnation — "kill
-     * requested" IS the success signal, so the rejection is swallowed. */
-    await facetWorker.kill().catch(() => {});
-    console.log(`restarted voice-agent facet worker for the new build`);
-  }
+
+  const connection = { baseUrl: options.baseUrl, project };
+  const baseUrl = resolveVoicelabBaseUrl(connection);
+  /* First run on a fresh environment: the default slug is a project that
+   * does not exist yet, and a bare `talk` provisions its own home. */
+  if (options.reuseConfig !== true) await ensureProjectExists(connection);
+  using itx = await connectProject(connection);
   await refuseSilentPostureFlip(itx, streamPath, {
     intendedClientTakesTurns: options.openMic !== true,
     flipTurnPosture: options.flipTurnPosture === true,
+    requireConfigured: options.reuseConfig === true,
   });
-  const setup = await withRpcResult(
-    voiceAgent.setupVoiceAgent({
-      streamPath,
-      instructions: options.instructions ?? DEFAULT_INSTRUCTIONS,
-      /*
-       * THIS CLI SEGMENTS ITS OWN TURNS, in both of its modes.
-       *
-       * Attended, a person holds the space bar. Unattended, the driver plays
-       * one utterance and stops. Either way the audio ENDS rather than going
-       * quiet, and server VAD cannot tell a finished sentence from a stalled
-       * connection without hearing the silence that follows it. `--open-mic`
-       * exists to exercise the boards' path deliberately; it is not the
-       * default because on this client it produces a call that hears you and
-       * never replies.
-       */
-      clientTakesTurns: options.openMic !== true,
-      ...(options.visemes === true && { visemes: true }),
-      colleague: options.colleague !== false,
-      ...(options.turnDetection !== undefined && {
-        turnDetection: JSON.parse(options.turnDetection) as Record<string, unknown> & {
-          type: string;
-        },
-      }),
-      ...(() => {
-        const tools = [
-          ...(options.hangUp !== false
-            ? [
-                {
-                  name: "hang_up",
-                  description:
-                    "End this call when the user says goodbye or the conversation is " +
-                    "clearly over. Say a short goodbye BEFORE calling this; the call " +
-                    "ends after you finish speaking.",
-                },
-              ]
-            : []),
-          ...(options.tools === undefined
-            ? []
-            : (JSON.parse(options.tools) as {
-                name: string;
-                description: string;
-                parameters?: Record<string, unknown>;
-                expression?: (string | [string, ...unknown[]])[];
-              }[])),
-        ];
-        return tools.length > 0 ? { tools } : {};
-      })(),
-      ...(options.provider === undefined ? {} : { provider: options.provider }),
-      ...(options.providerModel === undefined ? {} : { providerModel: options.providerModel }),
-      ...(options.providerVoice === undefined ? {} : { providerVoice: options.providerVoice }),
-      ...(options.providerBaseUrl === undefined
-        ? {}
-        : { providerBaseUrl: options.providerBaseUrl }),
-      ...(options.reinstall === undefined ? {} : { reinstall: options.reinstall }),
-    }),
-    ({ streamPath: resultPath, warmMs }) => ({ streamPath: resultPath, warmMs }),
-  );
+  let configuredStreamPath = streamPath;
+  if (options.reuseConfig === true) {
+    console.log(`reusing configured stream ${streamPath}; setup is skipped`);
+  } else {
+    /* Declare the guest BEFORE calling into it: `setupVoiceAgent` lives inside
+     * @iterate-com/voice-agent, so package.json has to name the package before
+     * there is anything to call — a talk command that only ran setup would
+     * work on a project somebody had already set up and fail against a fresh
+     * one. Present is enough: a spec somebody pinned on purpose stays as it
+     * is (`voicelab deploy` is the upgrade path), and a repo that already
+     * declares the package is left untouched. */
+    const repo = voiceAgentConfigRepo(itx);
+    const localArtifact = localVoiceAgentArtifactHash(
+      (await repo.readFile({ path: "voice-agent.ts" }))?.content ?? null,
+    );
+    const install =
+      localArtifact === null ? await installVoiceAgent(repo, { existing: "keep" }) : null;
+    console.log(
+      install === null
+        ? `the repo uses local voice-agent source artifact sha256 ${localArtifact}`
+        : install.changed
+          ? `the repo now names ${install.spec} (${install.commitOid.slice(0, 8)}: ${install.changedPaths.join(", ")})`
+          : `the repo already names ${install.spec} (${install.commitOid.slice(0, 8)})`,
+    );
 
-  console.log(`stream ${setup.streamPath}`);
-  console.log(`  warm          processor acknowledged in ${setup.warmMs}ms`);
+    /* Only the secret the chosen provider's dial will spend — setup's gate is
+     * per-provider (secretForHost), and a baseUrl seam needs none at all. */
+    if (options.providerBaseUrl === undefined) {
+      console.log(
+        options.provider === "grok"
+          ? `xai secret ${await ensureXaiSecret(itx)}`
+          : `openai secret ${await ensureOpenaiSecret(itx)}`,
+      );
+    }
+
+    using voiceAgent = itx.workers.get(
+      voiceAgentEntrypointRef,
+    ) as unknown as DynamicWorkerCapability<VoiceAgentSetup>;
+    const health = await waitForVoiceAgent(voiceAgent);
+    console.log(`voice-agent healthy for ${health.projectId}`);
+
+    /*
+     * A CHANGED INSTALL MUST REACH THE RUNNING FACET. The facet is a STATEFUL
+     * durable worker: it keeps the bundle it booted with for as long as it
+     * stays warm, and back-to-back voicelab runs keep it warm indefinitely —
+     * measured on prd (2026-08-26 evening): three commits behind while the
+     * stateless entrypoint rebuilt every run, so setup wrote the new
+     * contract's delivery filter and the live facet installed the previous
+     * revision's colleague subscription. Killing the incarnation is the
+     * upgrade: the next dispatch boots the build this run just committed.
+     */
+    if (install?.changed) {
+      await restartStreamHostedVoiceFacet(itx, streamPath);
+      console.log(`restarted the stream hosting the voice-agent facet for the new build`);
+    }
+    const setup = await withRpcResult(
+      voiceAgent.setupVoiceAgent({
+        streamPath,
+        instructions: options.instructions ?? DEFAULT_INSTRUCTIONS,
+        /*
+         * The default client owns its turns: a person releases SPACE, or the
+         * unattended driver commits when its fixture drains. `--open-mic`
+         * deliberately changes to the board posture. Its unattended driver
+         * keeps sending zero PCM after every fixture, so the configured server
+         * VAD observes the speech-to-silence boundary and commits the turn.
+         */
+        clientTakesTurns: options.openMic !== true,
+        ...(options.visemes === true && { visemes: true }),
+        colleague: options.colleague !== false,
+        ...(options.turnDetection !== undefined && {
+          turnDetection: JSON.parse(options.turnDetection) as Record<string, unknown> & {
+            type: string;
+          },
+        }),
+        ...(() => {
+          const tools = [
+            ...(options.hangUp !== false
+              ? [
+                  {
+                    name: "hang_up",
+                    description:
+                      "End this call when the user says goodbye or the conversation is " +
+                      "clearly over. Say a short goodbye BEFORE calling this; the call " +
+                      "ends after you finish speaking.",
+                  },
+                ]
+              : []),
+            ...(options.tools === undefined
+              ? []
+              : (JSON.parse(options.tools) as {
+                  name: string;
+                  description: string;
+                  parameters?: Record<string, unknown>;
+                  expression?: (string | [string, ...unknown[]])[];
+                }[])),
+          ];
+          return tools.length > 0 ? { tools } : {};
+        })(),
+        ...(options.provider === undefined ? {} : { provider: options.provider }),
+        ...(options.providerModel === undefined ? {} : { providerModel: options.providerModel }),
+        ...(options.providerVoice === undefined ? {} : { providerVoice: options.providerVoice }),
+        ...(options.providerBaseUrl === undefined
+          ? {}
+          : { providerBaseUrl: options.providerBaseUrl }),
+        ...(options.reinstall === undefined ? {} : { reinstall: options.reinstall }),
+      }),
+      ({ streamPath: resultPath, warmMs }) => ({ streamPath: resultPath, warmMs }),
+    );
+
+    configuredStreamPath = setup.streamPath;
+    console.log(`stream ${configuredStreamPath}`);
+    console.log(`  warm          processor acknowledged in ${setup.warmMs}ms`);
+  }
   if (kitDir === null) return;
 
   using ingressSecret = itx.secrets.get("/secrets/project-api-key");
@@ -412,7 +429,7 @@ export async function talk(options: TalkOptions = {}) {
    * both directions plus the metrics, so "listen to it" and "read the numbers"
    * are both just a path.
    */
-  const runDir = path.join(voicelabRunsDir(), `${stamp}-${path.basename(setup.streamPath)}`);
+  const runDir = path.join(voicelabRunsDir(), `${stamp}-${path.basename(configuredStreamPath)}`);
   fs.mkdirSync(runDir, { recursive: true });
   const playback = path.join(runDir, "speaker.wav");
   const micRecord = path.join(runDir, "mic.wav");
@@ -442,7 +459,7 @@ export async function talk(options: TalkOptions = {}) {
       "--name",
       `mac${stamp}`,
       "--stream-path",
-      setup.streamPath,
+      configuredStreamPath,
       ...driverArgs(options, minutes, options.openMic === true),
       ...(options.pretendSpeaker === undefined
         ? []
@@ -556,7 +573,11 @@ interface ConfiguredEventLike {
 export async function refuseSilentPostureFlip(
   itx: unknown,
   streamPath: string,
-  args: { intendedClientTakesTurns: boolean; flipTurnPosture: boolean },
+  args: {
+    intendedClientTakesTurns: boolean;
+    flipTurnPosture: boolean;
+    requireConfigured?: boolean;
+  },
 ): Promise<void> {
   const streams = (
     itx as {
@@ -593,7 +614,14 @@ export async function refuseSilentPostureFlip(
   } finally {
     disposeIgnoredRpcResult(stream);
   }
-  if (latest === null) return; /* fresh stream: nothing to preserve */
+  if (latest === null) {
+    if (args.requireConfigured) {
+      throw new Error(
+        `--reuse-config requires an existing voice-agent configuration at ${streamPath}`,
+      );
+    }
+    return;
+  }
   const current = latest.payload?.clientTakesTurns ?? false;
   if (current === args.intendedClientTakesTurns) return;
   if (args.flipTurnPosture) {
@@ -745,11 +773,11 @@ export function resolveKitDir(explicit?: string): string {
 }
 
 /**
- * Who takes the turns: a person at the terminal, or the unattended driver.
+ * Who supplies the utterances: a person at the terminal, or the unattended driver.
  *
- * These two cannot both run — they would each end the other's turn and the
- * report would describe a conversation neither of them had — so choosing one
- * is a branch rather than a set of flags that happen not to collide.
+ * Server VAD remains an independent posture. The unattended driver can keep
+ * it open and supplies zero PCM between fixtures, so its speech-end boundary
+ * is the board boundary rather than a synthetic client commit.
  */
 export function driverArgs(
   options: TalkOptions,
@@ -780,6 +808,7 @@ export function driverArgs(
     String(options.converse),
     "--utterance-dir",
     options.utteranceDir,
+    ...(openMic ? ["--open-mic"] : []),
   ];
   if (options.colleagueEvery !== undefined) {
     args.push("--colleague-every", String(options.colleagueEvery));

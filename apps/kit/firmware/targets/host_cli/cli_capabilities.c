@@ -241,7 +241,7 @@ static void cli_capabilities_write_health_start(
       runtime->voicelab.call_active ? "true" : "false",
       runtime->voicelab.call_pending ? "true" : "false",
       runtime->hanging_up ? "true" : "false",
-      runtime->talking ? "true" : "false", gate ? "true" : "false",
+      iterate_kit_voice_uplink_active(&runtime->uplink) ? "true" : "false", gate ? "true" : "false",
       runtime->stats_sequence++, cli_runtime_now_ms(NULL),
       runtime->voicelab.frames_sent, runtime->voicelab.frame_send_failures,
       runtime->mic_frames_captured, mic_dropped, runtime->mic_frames_gated,
@@ -270,7 +270,7 @@ static void cli_capabilities_write_health_audio(
       "\"spkBadFrames\":%u,"
       "\"spkDecodeFailures\":%u,\"bargeIns\":%u,\"batches\":%u,"
       "\"connGeneration\":%u,"
-      "\"bridgeAgeMs\":%u,\"downlinkRecycles\":%u,\"batchAgeMs\":%u,"
+      "\"bridgeAgeMs\":%u,\"connectionRecycles\":%u,\"batchAgeMs\":%u,"
       "\"uptimeMs\":%" PRIu64,
       runtime->speaker_underruns, runtime->playout.stats.conceal_frames,
       runtime->playout.stats.catchup_frames,
@@ -279,7 +279,7 @@ static void cli_capabilities_write_health_audio(
       runtime->voicelab.spk_decode_failures, runtime->barge_in_flushes,
       runtime->voicelab.batches_on_connection,
       runtime->voicelab.connection_generation, bridge_age,
-      runtime->downlink_recycles, batch_age,
+      runtime->connection_recycles, batch_age,
       iterate_kit_voice_elapsed_ms(now_ms, runtime->started_ms));
 }
 

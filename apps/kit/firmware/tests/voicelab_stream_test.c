@@ -17,7 +17,7 @@ enum {
   TOKEN_CAPACITY = 256,
   CALL_CAPACITY = 8,
   OUTPUT_CAPACITY = 64,
-  CAPTURE_CAPACITY = 32,
+  CAPTURE_CAPACITY = 64,
   MESSAGE_CAPACITY = 2048,
 };
 
@@ -347,6 +347,13 @@ static void downlink_flow(void) {
   receive(&fixture, "[\"resolve\",1,[\"export\",-10]]");
   receive(&fixture, "[\"resolve\",2,[\"export\",-11]]");
   receive(&fixture, "[\"resolve\",3,[\"export\",-12]]");
+  assert(strstr(
+             fixture.captured[fixture.captured_count - 2U],
+             "\"afterOffset\":9007199254740991") != NULL);
+  assert(strstr(
+             fixture.captured[fixture.captured_count - 2U],
+             "\"limit\":1") != NULL);
+  receive(&fixture, "[\"resolve\",4,{\"streamMaxOffset\":38,\"events\":[[]]}]");
   assert(
       fixture.voicelab.state == ITERATE_KIT_VOICELAB_OPENING_CONNECTION);
 
@@ -383,10 +390,13 @@ static void downlink_flow(void) {
     assert(strstr(open_message, "\"maxDeliveryBytes\":13000") != NULL);
     assert(strstr(open_message, "\"state\":false") != NULL);
     assert(strstr(open_message, "\"processEventBatch\":[\"export\",-1]") != NULL);
+    assert(strstr(open_message, "\"replayAfterOffset\":38") != NULL);
   }
-  receive(&fixture, "[\"resolve\",4,[\"export\",-13]]");
+  /* No callback has arrived yet; the separate head read seeded the baseline. */
+  receive(&fixture, "[\"resolve\",5,[\"export\",-13]]");
   assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_READY);
   assert(fixture.voicelab.has_connection_capability);
+  assert(fixture.voicelab.resume_after_offset == 38);
 
   /* The platform invokes the exported callback exactly like the live wire:
    * a push with an EMPTY path, followed by a release of the result import
@@ -582,12 +592,60 @@ static void downlink_flow(void) {
   {
     const char *second_open = fixture.captured[fixture.captured_count - 2U];
     assert(strstr(second_open, "\"connectionKey\":\"wsdev-cb-g2\"") != NULL);
+    /* The successor resumes after the cursor delivered by g1, including an
+     * accepted call that arrived before its callback was lost. */
+    assert(strstr(second_open, "\"replayAfterOffset\":50") != NULL);
   }
-  receive(&fixture, "[\"resolve\",5,[\"export\",-14]]");
+  receive(&fixture, "[\"resolve\",6,[\"export\",-14]]");
   assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_READY);
   assert(fixture.voicelab.batches_on_connection < 2U);
   assert(!fixture.voicelab.has_previous_connection_capability);
 
+  assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
+}
+
+/* The failure we saw in production: open succeeds at head 38, the server
+ * accepts at 39, but the original callback receives zero batches. A launch
+ * refresh must resume from 38 and deliver that durable acceptance. */
+static void missed_acceptance_replays_after_refresh(void) {
+  static struct fixture fixture;
+  const struct iterate_kit_voicelab_options options = {
+    .session = &fixture.session,
+    .project_id = "prj_test",
+    .project_api_key = "itxk_secret-never-log",
+    .stream_path = "/voice-agent/dev-test",
+    .conversation_id = "wsdev",
+    .now_ms = fixture_now_ms,
+    .clock_context = &fixture,
+    .on_speaker = record_speaker,
+    .on_control = record_control,
+  };
+  fixture_init(&fixture);
+  assert(iterate_kit_voicelab_start(&fixture.voicelab, &options) == CAPNWEB_OK);
+  receive(&fixture, "[\"resolve\",1,[\"export\",-10]]");
+  receive(&fixture, "[\"resolve\",2,[\"export\",-11]]");
+  receive(&fixture, "[\"resolve\",3,[\"export\",-12]]");
+  receive(
+      &fixture,
+      "[\"resolve\",4,{\"streamMaxOffset\":38,\"events\":[[]]}]");
+  receive(&fixture, "[\"resolve\",5,[\"export\",-13]]");
+  assert(fixture.voicelab.batches_on_connection == 0U);
+  assert(fixture.voicelab.resume_after_offset == 38);
+
+  assert(iterate_kit_voicelab_recycle_connection(&fixture.voicelab) == CAPNWEB_OK);
+  assert(strstr(
+             fixture.captured[fixture.captured_count - 2U],
+             "\"replayAfterOffset\":38") != NULL);
+  receive(&fixture, "[\"resolve\",6,[\"export\",-14]]");
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
+      "\"offset\":39,\"payload\":{\"conversationId\":\"wsdev\"}}"
+      "]],\"scannedThroughOffset\":39,\"streamMaxOffset\":39,\"state\":null}]]]");
+  receive(&fixture, "[\"release\",1,1]");
+  assert(fixture.voicelab.call_active);
+  assert(fixture.voicelab.resume_after_offset == 39);
   assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
 }
 
@@ -621,17 +679,27 @@ static void mount_with_downlink(struct fixture *fixture, int *next_id) {
     .on_control = record_control,
     .downlink_context = NULL,
   };
-  char message[64];
+  char message[128];
   int index;
 
   assert(iterate_kit_voicelab_start(&fixture->voicelab, &options) == CAPNWEB_OK);
-  for (index = 0; index < 4; ++index) {
+  for (index = 0; index < 3; ++index) {
     (void)snprintf(
         message, sizeof(message), "[\"resolve\",%d,[\"export\",-%d]]",
         *next_id, 10 + *next_id);
     receive(fixture, message);
     (*next_id)++;
   }
+  (void)snprintf(
+      message, sizeof(message),
+      "[\"resolve\",%d,{\"streamMaxOffset\":0,\"events\":[[]]}]", *next_id);
+  receive(fixture, message);
+  (*next_id)++;
+  (void)snprintf(
+      message, sizeof(message), "[\"resolve\",%d,[\"export\",-%d]]",
+      *next_id, 10 + *next_id);
+  receive(fixture, message);
+  (*next_id)++;
   assert(fixture->voicelab.state == ITERATE_KIT_VOICELAB_READY);
 }
 
@@ -693,7 +761,8 @@ static void speaker_sequence_continuity(void) {
   receive(&fixture, "[\"resolve\",1,[\"export\",-10]]");
   receive(&fixture, "[\"resolve\",2,[\"export\",-11]]");
   receive(&fixture, "[\"resolve\",3,[\"export\",-12]]");
-  receive(&fixture, "[\"resolve\",4,[\"export\",-13]]");
+  receive(&fixture, "[\"resolve\",4,{\"streamMaxOffset\":0,\"events\":[[]]}]");
+  receive(&fixture, "[\"resolve\",5,[\"export\",-13]]");
 
   /* Nothing seen yet, and that is a different state from "frame zero seen". */
   assert(fixture.voicelab.spk_seq_last == -1);
@@ -897,15 +966,15 @@ static void remounting_releases_the_previous_mount(void) {
 
   /*
    * The connection stub of the first mount, named exactly. `mount_with_downlink`
-   * answers the fourth call — openConnection — with export -(10 + id), and the
-   * ids start at 1, so the first mount's connection is -14. A re-mount that
+   * answers the fifth call — after the stream-head read — with export -(10 +
+   * id), and the ids start at 1, so the first mount's connection is -15. A re-mount that
    * forgets it never sends this, and the platform goes on holding the callback
    * that reference keeps alive.
    */
   before = fixture.captured_count;
   mount_with_downlink(&fixture, &next_id);
   for (index = before; index < fixture.captured_count; ++index) {
-    if (strstr(fixture.captured[index], "[\"release\",-14") != NULL) releases++;
+    if (strstr(fixture.captured[index], "[\"release\",-15") != NULL) releases++;
   }
   assert(releases > 0U);
 }
@@ -1071,6 +1140,7 @@ int main(void) {
   assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_CLOSED);
 
   downlink_flow();
+  missed_acceptance_replays_after_refresh();
   speaker_sequence_continuity();
 
   printf("voicelab stream test passed\n");

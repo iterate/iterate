@@ -64,6 +64,7 @@ const LIVE_TYPES = [
   "events.iterate.com/voice-agent/colleague-status",
   "events.iterate.com/voice-agent/colleague-note",
   "events.iterate.com/voice-agent/provider-error",
+  "events.iterate.com/voice-agent/provider-connection-closed",
 ];
 
 export async function tap(options: TapOptions): Promise<void> {

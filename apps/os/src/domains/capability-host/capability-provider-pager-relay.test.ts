@@ -212,6 +212,307 @@ describe("CapabilityProviderPagerRelay", () => {
     expect(onPagerLost).not.toHaveBeenCalled();
   });
 
+  it("marks only a call interrupted by its own closed Pager as capability-offline", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    let invoker: { invoke(path: string[], args: unknown[]): Promise<unknown> } | undefined;
+    const durableObject = makeDurableObject({
+      activateLiveCapability: vi.fn(async (input) => {
+        invoker = input.invoker as typeof invoker;
+        return { [Symbol.dispose]: vi.fn() };
+      }),
+    });
+    const background: Promise<unknown>[] = [];
+    const relay = relayOver(durableObject, (promise) => background.push(promise));
+    const interrupted = Promise.withResolvers<unknown>();
+    const mounted = await relay.provide({
+      capability: { echo: () => interrupted.promise },
+      path: ["device"],
+      type: "live",
+    });
+    pager.page({ type: "activate", providedAtOffset: mounted.providedAtOffset });
+    await vi.waitFor(() => expect(invoker).toBeDefined());
+
+    const invocation = invoker!.invoke(["echo"], []);
+    pager.disconnect();
+    interrupted.reject(new Error("remote WebSocket terminated"));
+
+    await expect(invocation).rejects.toThrow('capability "device" is offline');
+    await Promise.all(background);
+  });
+
+  it("preserves an application error while the Pager generation remains live", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    let invoker: { invoke(path: string[], args: unknown[]): Promise<unknown> } | undefined;
+    const durableObject = makeDurableObject({
+      activateLiveCapability: vi.fn(async (input) => {
+        invoker = input.invoker as typeof invoker;
+        return { [Symbol.dispose]: vi.fn() };
+      }),
+    });
+    const background: Promise<unknown>[] = [];
+    const relay = relayOver(durableObject, (promise) => background.push(promise));
+    const mounted = await relay.provide({
+      capability: { echo: () => Promise.reject(new Error("application failure")) },
+      path: ["device"],
+      type: "live",
+    });
+    pager.page({ type: "activate", providedAtOffset: mounted.providedAtOffset });
+    await vi.waitFor(() => expect(invoker).toBeDefined());
+
+    await expect(invoker!.invoke(["echo"], [])).rejects.toThrow("application failure");
+    await Promise.all(background);
+  });
+
+  it("preserves a provider error that settles before a same-turn Pager close", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    let invoker: { invoke(path: string[], args: unknown[]): Promise<unknown> } | undefined;
+    const durableObject = makeDurableObject({
+      activateLiveCapability: vi.fn(async (input) => {
+        invoker = input.invoker as typeof invoker;
+        return { [Symbol.dispose]: vi.fn() };
+      }),
+    });
+    const background: Promise<unknown>[] = [];
+    const relay = relayOver(durableObject, (promise) => background.push(promise));
+    const providerResult = Promise.withResolvers<unknown>();
+    const mounted = await relay.provide({
+      capability: { echo: () => providerResult.promise },
+      path: ["device"],
+      type: "live",
+    });
+    pager.page({ type: "activate", providedAtOffset: mounted.providedAtOffset });
+    await vi.waitFor(() => expect(invoker).toBeDefined());
+
+    const invocation = invoker!.invoke(["echo"], []);
+    const assertion = expect(invocation).rejects.toThrow("application failure");
+    // Let the provider's rejection cross the retained-capability adapter
+    // before closing the Pager. That first outcome remains an application
+    // fact, even if the transport falls away immediately afterwards.
+    providerResult.reject(new Error("application failure"));
+    await Promise.resolve();
+    await Promise.resolve();
+    pager.disconnect();
+
+    await assertion;
+    await Promise.all(background);
+  });
+
+  it("maps a later call offline after completed calls", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    let invoker: { invoke(path: string[], args: unknown[]): Promise<unknown> } | undefined;
+    const durableObject = makeDurableObject({
+      activateLiveCapability: vi.fn(async (input) => {
+        invoker = input.invoker as typeof invoker;
+        return { [Symbol.dispose]: vi.fn() };
+      }),
+    });
+    const background: Promise<unknown>[] = [];
+    const relay = relayOver(durableObject, (promise) => background.push(promise));
+    const echo = vi.fn((value: number) => value);
+    const mounted = await relay.provide({ capability: { echo }, path: ["device"], type: "live" });
+    pager.page({ type: "activate", providedAtOffset: mounted.providedAtOffset });
+    await vi.waitFor(() => expect(invoker).toBeDefined());
+
+    await expect(invoker!.invoke(["echo"], [1])).resolves.toBe(1);
+    await expect(invoker!.invoke(["echo"], [2])).resolves.toBe(2);
+    pager.disconnect();
+    await expect(invoker!.invoke(["echo"], [3])).rejects.toThrow('capability "device" is offline');
+    expect(echo).toHaveBeenCalledTimes(2);
+    await Promise.all(background);
+  });
+
+  it("preserves a synchronous provider throw before the Pager closes", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    let invoker: { invoke(path: string[], args: unknown[]): Promise<unknown> } | undefined;
+    const durableObject = makeDurableObject({
+      activateLiveCapability: vi.fn(async (input) => {
+        invoker = input.invoker as typeof invoker;
+        return { [Symbol.dispose]: vi.fn() };
+      }),
+    });
+    const relay = relayOver(durableObject);
+    const mounted = await relay.provide({
+      capability: {
+        echo() {
+          throw new Error("synchronous application failure");
+        },
+      },
+      path: ["device"],
+      type: "live",
+    });
+    pager.page({ type: "activate", providedAtOffset: mounted.providedAtOffset });
+    await vi.waitFor(() => expect(invoker).toBeDefined());
+
+    await expect(invoker!.invoke(["echo"], [])).rejects.toThrow("synchronous application failure");
+  });
+
+  it("releases a disposable plain provider result before forwarding it", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    let invoker: { invoke(path: string[], args: unknown[]): Promise<unknown> } | undefined;
+    const durableObject = makeDurableObject({
+      activateLiveCapability: vi.fn(async (input) => {
+        invoker = input.invoker as typeof invoker;
+        return { [Symbol.dispose]: vi.fn() };
+      }),
+    });
+    const relay = relayOver(durableObject);
+    const dispose = vi.fn();
+    const mounted = await relay.provide({
+      capability: { health: () => ({ ok: true, [Symbol.dispose]: dispose }) },
+      path: ["device"],
+      type: "live",
+    });
+    pager.page({ type: "activate", providedAtOffset: mounted.providedAtOffset });
+    await vi.waitFor(() => expect(invoker).toBeDefined());
+
+    await expect(invoker!.invoke(["health"], [])).resolves.toEqual({ ok: true });
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a successful plain result when release throws", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    let invoker: { invoke(path: string[], args: unknown[]): Promise<unknown> } | undefined;
+    const durableObject = makeDurableObject({
+      activateLiveCapability: vi.fn(async (input) => {
+        invoker = input.invoker as typeof invoker;
+        return { [Symbol.dispose]: vi.fn() };
+      }),
+    });
+    const relay = relayOver(durableObject);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const mounted = await relay.provide({
+      capability: {
+        health: () => ({
+          ok: true,
+          [Symbol.dispose]: () => {
+            throw new Error("release failed");
+          },
+        }),
+      },
+      path: ["device"],
+      type: "live",
+    });
+    pager.page({ type: "activate", providedAtOffset: mounted.providedAtOffset });
+    await vi.waitFor(() => expect(invoker).toBeDefined());
+
+    await expect(invoker!.invoke(["health"], [])).resolves.toEqual({ ok: true });
+    expect(warn).toHaveBeenCalledWith(
+      "live provider plain-data result disposal failed",
+      expect.objectContaining({ error: expect.any(Error) }),
+    );
+    warn.mockRestore();
+  });
+
+  it("forwards null, undefined, and primitive provider results unchanged", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    let invoker: { invoke(path: string[], args: unknown[]): Promise<unknown> } | undefined;
+    const durableObject = makeDurableObject({
+      activateLiveCapability: vi.fn(async (input) => {
+        invoker = input.invoker as typeof invoker;
+        return { [Symbol.dispose]: vi.fn() };
+      }),
+    });
+    const relay = relayOver(durableObject);
+    const mounted = await relay.provide({
+      capability: { nil: () => null, absent: () => undefined, number: () => 42 },
+      path: ["device"],
+      type: "live",
+    });
+    pager.page({ type: "activate", providedAtOffset: mounted.providedAtOffset });
+    await vi.waitFor(() => expect(invoker).toBeDefined());
+
+    await expect(invoker!.invoke(["nil"], [])).resolves.toBeNull();
+    await expect(invoker!.invoke(["absent"], [])).resolves.toBeUndefined();
+    await expect(invoker!.invoke(["number"], [])).resolves.toBe(42);
+  });
+
+  it("keeps a plain result with a nested capability caller-owned", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    let invoker: { invoke(path: string[], args: unknown[]): Promise<unknown> } | undefined;
+    const durableObject = makeDurableObject({
+      activateLiveCapability: vi.fn(async (input) => {
+        invoker = input.invoker as typeof invoker;
+        return { [Symbol.dispose]: vi.fn() };
+      }),
+    });
+    const relay = relayOver(durableObject);
+    const resultDispose = vi.fn();
+    const nestedDispose = vi.fn();
+    const result = { nested: { [Symbol.dispose]: nestedDispose }, [Symbol.dispose]: resultDispose };
+    const mounted = await relay.provide({
+      capability: { getNested: () => result },
+      path: ["device"],
+      type: "live",
+    });
+    pager.page({ type: "activate", providedAtOffset: mounted.providedAtOffset });
+    await vi.waitFor(() => expect(invoker).toBeDefined());
+
+    await expect(invoker!.invoke(["getNested"], [])).resolves.toBe(result);
+    expect(resultDispose).not.toHaveBeenCalled();
+    expect(nestedDispose).not.toHaveBeenCalled();
+  });
+
+  it("keeps a function-bearing result caller-owned", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    let invoker: { invoke(path: string[], args: unknown[]): Promise<unknown> } | undefined;
+    const durableObject = makeDurableObject({
+      activateLiveCapability: vi.fn(async (input) => {
+        invoker = input.invoker as typeof invoker;
+        return { [Symbol.dispose]: vi.fn() };
+      }),
+    });
+    const relay = relayOver(durableObject);
+    const dispose = vi.fn();
+    const callback = Object.assign(() => "still usable", { [Symbol.dispose]: dispose });
+    const result = { callback, [Symbol.dispose]: dispose };
+    const mounted = await relay.provide({
+      capability: { getCallback: () => result },
+      path: ["device"],
+      type: "live",
+    });
+    pager.page({ type: "activate", providedAtOffset: mounted.providedAtOffset });
+    await vi.waitFor(() => expect(invoker).toBeDefined());
+
+    await expect(invoker!.invoke(["getCallback"], [])).resolves.toBe(result);
+    expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it("keeps a cyclic plain result caller-owned", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    let invoker: { invoke(path: string[], args: unknown[]): Promise<unknown> } | undefined;
+    const durableObject = makeDurableObject({
+      activateLiveCapability: vi.fn(async (input) => {
+        invoker = input.invoker as typeof invoker;
+        return { [Symbol.dispose]: vi.fn() };
+      }),
+    });
+    const relay = relayOver(durableObject);
+    const dispose = vi.fn();
+    const result: { self?: unknown; [Symbol.dispose]: () => void } = { [Symbol.dispose]: dispose };
+    result.self = result;
+    const mounted = await relay.provide({
+      capability: { getCycle: () => result },
+      path: ["device"],
+      type: "live",
+    });
+    pager.page({ type: "activate", providedAtOffset: mounted.providedAtOffset });
+    await vi.waitFor(() => expect(invoker).toBeDefined());
+
+    await expect(invoker!.invoke(["getCycle"], [])).resolves.toBe(result);
+    expect(dispose).not.toHaveBeenCalled();
+  });
+
   it("rolls back only the mount whose activation fails", async () => {
     const pager = new FakePager();
     dialPager.mockResolvedValue(pager);

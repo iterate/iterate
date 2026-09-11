@@ -86,6 +86,10 @@ export interface Env {
   DEVICE: DurableObjectNamespace<
     import("./domains/devices/device-durable-object.ts").DeviceDurableObject
   >;
+  /** One live Cap'n Web session per API WebSocket connection. */
+  ITX_SESSION: DurableObjectNamespace<
+    import("./domains/itx/itx-session-durable-object.ts").ItxSessionDurableObject
+  >;
   PROJECT: DurableObjectNamespace<
     import("./domains/projects/project-durable-object.ts").ProjectDurableObject
   >;

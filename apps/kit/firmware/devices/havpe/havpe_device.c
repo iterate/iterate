@@ -6,19 +6,18 @@
 #include <stdio.h>
 
 #include "esp_timer.h"
-#include "nvs.h"
 
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/capabilities/arguments.h"
-#include "iterate/kit/devices/havpe.h"
-#include "iterate/kit/session_grammar.h"
 #include "iterate/kit/voice/loop.h"
 #include "iterate/kit/voice_device_profile.h"
 
 #include "iterate/kit/platforms/board.h"
 #include "iterate/kit/platforms/aic3204.h"
 #include "iterate/kit/platforms/xmos_i2c.h"
+#include "iterate/kit/platforms/provider_mode_nvs.h"
+#include "iterate/kit/provider_mode.h"
 #include "esp_log.h"
 #include "havpe_modes.h"
 #include "havpe_ui.h"
@@ -30,7 +29,7 @@
  * decides what a gesture sounds like; the audio driver only knows how to
  * play PCM it is handed.
  */
-#include "assets/havpe_sounds_generated.inc"
+#include "assets/sounds_generated.inc"
 
 static const char tag[] = "havpe";
 static i2c_master_dev_handle_t xmos_device;
@@ -139,58 +138,56 @@ static struct {
  * The one durable byte this board keeps: which mode the dial last settled
  * on. NVS rather than the provisioning partition because the mode is the
  * USER'S state, not the fleet's — reflashing a config must not reset a
- * person's chosen assistant. The namespace is initialised by the transport
- * (which this board starts before its codec), so both helpers may assume a
- * mounted NVS and fail soft to the factory default when anything refuses.
+ * person's chosen assistant. The transport has already initialised NVS by
+ * the time this board starts, so restores need no local initialisation.
  */
-static const char mode_nvs_namespace[] = "havpe";
-static const char mode_nvs_key[] = "mode";
+static const struct iterate_kit_provider_mode_options mode_options = {
+    .default_mode = HAVPE_MODE_OPENAI_OPEN_MIC,
+    .mode_count = HAVPE_MODE_COUNT,
+};
+static const struct iterate_kit_provider_mode_nvs mode_nvs = {
+    .namespace_name = "havpe",
+    .key = "mode",
+    .initialize_flash_on_load = false,
+};
+static struct iterate_kit_provider_mode_store mode_store;
 
-static uint8_t load_mode(void) {
-  nvs_handle_t handle;
-  uint8_t mode = HAVPE_MODE_OPENAI_OPEN_MIC;
-  if (nvs_open(mode_nvs_namespace, NVS_READONLY, &handle) == ESP_OK) {
-    uint8_t stored = 0U;
-    if (nvs_get_u8(handle, mode_nvs_key, &stored) == ESP_OK &&
-        stored < HAVPE_MODE_COUNT) {
-      mode = stored;
-    }
-    nvs_close(handle);
-  }
-  return mode;
-}
-
-static void store_mode(uint8_t mode) {
-  nvs_handle_t handle;
-  if (nvs_open(mode_nvs_namespace, NVS_READWRITE, &handle) != ESP_OK) return;
-  (void)nvs_set_u8(handle, mode_nvs_key, mode);
-  (void)nvs_commit(handle);
-  nvs_close(handle);
-}
-
-/*
- * Make `mode` the board's effective mode: point the loop at its stream,
- * match the microphone posture to what that stream's far end expects, and —
- * for a settle rather than the boot restore — say its name out loud and
- * remember it. Path and posture move TOGETHER, always, which is the whole
- * reason the pair lives in one function: the mode table guarantees they
- * agree and this is the only caller of either setter.
- */
-static void adopt_mode(uint8_t mode, bool settled) {
+/* Path and turn posture form one mode contract: never move one without the
+ * other, or the device and stream disagree about who closes a turn. */
+static void configure_mode(void *context, uint8_t mode) {
+  (void)context;
   iterate_kit_voice_loop_set_stream_path(havpe_mode_stream_path(mode));
   iterate_kit_board_set_turns(
       havpe_mode_push_to_talk(mode)
           ? ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK
           : ITERATE_KIT_VOICE_TURNS_SERVER_VAD);
-  if (settled) {
-    if (mode != mode_state.mode) store_mode(mode);
-    iterate_kit_i2s_codec_play_sound(
-        havpe_mode_sounds[mode].pcm, havpe_mode_sounds[mode].bytes);
+}
+
+static void announce_mode(void *context, uint8_t mode) {
+  (void)context;
+  iterate_kit_i2s_codec_play_sound(mode_sounds[mode].pcm, mode_sounds[mode].bytes);
+}
+
+/* A restore is silent; a settled dial choice always announces and writes only
+ * a change. The shared result keeps a failed NVS commit observable. */
+static void adopt_mode(uint8_t mode, bool settled) {
+  const enum iterate_kit_provider_mode_adoption result =
+      iterate_kit_provider_mode_adopt(
+          &mode_options,
+          &mode_store,
+          &mode_state.mode,
+          mode,
+          settled,
+          configure_mode,
+          announce_mode,
+          NULL);
+  if (result == ITERATE_KIT_PROVIDER_MODE_ADOPTION_PERSISTENCE_FAILED) {
+    ESP_LOGW(tag, "provider mode applied but could not be persisted");
   }
-  mode_state.mode = mode;
+  if (result == ITERATE_KIT_PROVIDER_MODE_ADOPTION_INVALID) return;
   /* The idle ring's dim quadrant follows the adopted mode, so which posture
    * the next press takes is glanceable before the press. */
-  havpe_ui_set_mode(mode);
+  havpe_ui_set_mode(mode_state.mode);
 }
 
 static bool start(void *context, struct iterate_kit_board_audio *out) {
@@ -204,7 +201,8 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
    * re-point away from. No announcement: a reboot keeping your setting is
    * not news.
    */
-  mode_state.mode = load_mode();
+  mode_store = iterate_kit_provider_mode_nvs_store(&mode_nvs);
+  mode_state.mode = iterate_kit_provider_mode_load(&mode_options, &mode_store);
   havpe_mode_wheel_init(&mode_state.wheel, mode_state.mode);
   adopt_mode(mode_state.mode, false);
   (void)out;
@@ -218,7 +216,7 @@ static void present(
   havpe_ui_present(view);
 }
 
-/** Classify board inputs against the last view held by board.c. */
+/** Run HAVPE-only dial and reminder feedback after board.c applies input grammar. */
 static void poll(void *context, struct iterate_kit_voice_intent *out) {
   const struct iterate_kit_voice_view *view = iterate_kit_board_view();
   (void)context;
@@ -357,16 +355,6 @@ static const struct iterate_kit_board_ops ops = {
   .start = start,
   .present = present,
   .poll = poll,
-  .phase = NULL,
-  /* No bridge metadata: this codec hands over whole wire frames, so the loop
-   * synthesises the timeline. See `capture_chunk_samples`. */
-  .capture_meta = NULL,
-  /* Full duplex in silicon: no fence, and nothing to wait for. */
-  .capture_fence = NULL,
-  .playout_fenced_out = NULL,
-  /* No face and no mouth track; the ring's speaking cue is the view's. */
-  .observe_playout = NULL,
-  .observe_answer = NULL,
   .modules = modules,
   .health = health,
 };
@@ -387,11 +375,12 @@ static const struct iterate_kit_board board = {
   .stream_path = "/agents/voice/home-assistant-voice-preview-edition",
   .client_path = "/clients/home-assistant-voice-preview-edition",
   .conversation_id = "havpedev",
-  .greeting = "Hi, I am your Iterate device. What can I do for you?",
   .instructions =
       "Home Assistant Voice Preview Edition: a voice endpoint with no screen — "
       "a twelve-LED ring is its only local feedback. A press on the centre "
-      "button WAKES it into a call (chime); a tap during the call ends it, and "
+      "button WAKES it into a call (chime); saying Jarvis also wakes it in an "
+      "open-mic mode. Wake-word detection is disabled in push-to-talk modes. "
+      "A tap during the call ends it, and "
       "an ended call — hang-up, tap, or idle timeout — says 'call ended' and "
       "leaves it silent, sending no microphone audio, until the next press. "
       "The rotary dial "
@@ -424,7 +413,9 @@ static const struct iterate_kit_board board = {
   .peer_description =
       "{\"instructions\":\"Home Assistant Voice PE voice endpoint. It has no "
       "screen: its LED ring is the only local feedback. A press on the centre "
-      "button wakes it into a call; a tap during the call ends it, and an "
+      "button wakes it into a call; saying Jarvis also wakes it with a chime "
+      "in an open-mic mode. Wake-word detection is disabled in push-to-talk modes. "
+      "A tap during the call ends it, and an "
       "ended call leaves it silent until the next press. "
       "conversation.start() / conversation.end() begin and end a call. "
       "aec.setStage({channel,stage}) moves an XMOS output tap — stage 0 is the "
@@ -462,18 +453,6 @@ static const struct iterate_kit_board board = {
      */
     .ceiling = 100,
   },
-  /*
-   * Two thirds of the 60 ms I2S TX DMA ring (6 descriptors x 480 frames at
-   * 48 kHz), so a late frame is absorbed by the hardware cushion rather than
-   * concealed, while the remaining third still bounds how long the playback
-   * step can sit before the ring genuinely empties.
-   */
-  .speaker_dry_wait_ms = 40,
-  .processing_frame_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
-  /* This codec hands over one whole 20 ms frame per read, so the bridge's
-   * three cadences are all 320 and it degenerates to a pass-through. */
-  .capture_chunk_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
-  .capture_stack_bytes = 4096,
   /*
    * The provider's, because the XMOS makes it safe. Requesting the manual
    * default here produced an accepted call and a deaf assistant.
@@ -522,12 +501,13 @@ static const struct iterate_kit_board board = {
   .status_led_gpio = -1,
   .button = {.gpio = 0, .active_low = true, .tap_wakes = false, .tap_ends = true},
   .wake_word = "jarvis",
-  .sounds = {.wake = havpe_sound_chime_press, .wake_bytes = sizeof(havpe_sound_chime_press),
-    .ended = havpe_sound_chime_ended, .ended_bytes = sizeof(havpe_sound_chime_ended)},
+  .sounds = {.wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),
+    .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended)},
   .open_codec = open_codec,
   .extra = &ops,
 };
 
-void iterate_kit_havpe_run(void) {
+/** ESP-IDF entry point: run this board through the shared voice loop. */
+void app_main(void) {
   iterate_kit_board_run(&board);
 }

@@ -219,6 +219,67 @@ test("an abruptly terminated client transport still durably disconnects its live
   }
 });
 
+test("an abruptly terminated provider makes an in-flight client capability call unavailable", async () => {
+  const marker = crypto.randomUUID();
+  using observerSession = withItxSession();
+  using observerItx = observerSession.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = await observerItx.projects.get(`clients-abrupt-call-${marker}`).create({});
+  const { projectId } = await project.__describe();
+
+  const socket = new WebSocket(buildUrl({ path: "/api", protocol: "ws" }), {
+    handshakeTimeout: 15_000,
+    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+    using providerSession = newWebSocketRpcSession<UnauthenticatedOs>(
+      socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
+    );
+    using providerItx = providerSession.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+    const invocationStarted = Promise.withResolvers<void>();
+    const neverCompletes = new Promise<never>(() => undefined);
+    using _providerProject = await providerItx.projects.connect(projectId, {
+      path: "/clients/abrupt-call",
+      description: "Abruptly disconnected in-flight e2e client",
+      capabilities: {
+        hold: async () => {
+          invocationStarted.resolve();
+          return await neverCompletes;
+        },
+      },
+    });
+
+    const connected = await settleClient(
+      project,
+      "/clients/abrupt-call",
+      (client) => client.connected,
+    );
+    expect(connected).toMatchObject({ path: "/clients/abrupt-call", connected: true });
+
+    using host = project.clients.get("/clients/abrupt-call");
+    // @ts-expect-error - dynamic client capability member
+    const inFlight = host.capabilities.hold();
+    await invocationStarted.promise;
+
+    const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    socket.terminate();
+    await closed;
+
+    await expect(inFlight).rejects.toThrow('capability "capabilities" is offline');
+  } finally {
+    if (socket.readyState < WebSocket.CLOSING) socket.terminate();
+  }
+});
+
 /** Settle loop over the clients catalog until `accept` passes (or timeout). */
 async function settleClient(
   project: { clients: { list(): Promise<{ path: string; connected: boolean }[]> } },

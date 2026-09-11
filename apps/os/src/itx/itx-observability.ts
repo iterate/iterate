@@ -1,6 +1,7 @@
 import { tracing } from "cloudflare:workers";
 import type { RpcSessionOptions } from "capnweb";
 import { ItxAuthenticationError } from "../auth.ts";
+import { isCapabilityOfflineError } from "../domains/capability-host/capability-unserved.ts";
 import { isStreamUnavailableError } from "../domains/streams/stream-unavailable.ts";
 import { runWideLog, wideLogger } from "../observability/wide-log.ts";
 
@@ -72,7 +73,7 @@ function itxErrorOutcome(error: unknown): ItxErrorOutcome {
     // (deploy rollover, eviction, overload, or operator kill), not an
     // application/server defect. Keep it observable without polluting the
     // error signal that release gates audit.
-    if (isStreamUnavailableError(error)) return "unavailable";
+    if (isStreamUnavailableError(error) || isCapabilityOfflineError(error)) return "unavailable";
     if (typeof error === "object" && error !== null) {
       const inheritedOutcome: unknown = Reflect.get(error, itxOutcome);
       if (inheritedOutcome === "client_error" || inheritedOutcome === "unavailable") {

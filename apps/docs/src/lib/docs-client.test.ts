@@ -1,3 +1,4 @@
+import { newMessagePortRpcSession, RpcTarget } from "capnweb";
 import { describe, expect, test, vi } from "vitest";
 import { createDocsClient, isSessionTransportError } from "./docs-client.ts";
 import type { RefreshOutcome } from "./project-session.ts";
@@ -69,6 +70,57 @@ describe("createDocsClient", () => {
     expect(result).toBe("ok on 2");
     expect(dial).toHaveBeenCalledTimes(2);
     expect(disposed).toEqual([1]);
+  });
+
+  test("releases the real Cap'n Web project stub before replacing its session", async () => {
+    let released = 0;
+    const sessions: Array<{ [Symbol.dispose](): void }> = [];
+    const servers: Array<{ [Symbol.dispose](): void }> = [];
+    let generation = 0;
+    const dial = () => {
+      const channel = new MessageChannel();
+      class Project extends RpcTarget {
+        ping(): string {
+          return "ok";
+        }
+
+        [Symbol.dispose](): void {
+          released++;
+        }
+      }
+      class Root extends RpcTarget {
+        authenticate(): Project {
+          return new Project();
+        }
+      }
+      const server = newMessagePortRpcSession(channel.port1, new Root());
+      const session = newMessagePortRpcSession<{ authenticate(): { ping(): Promise<string> } }>(
+        channel.port2,
+      );
+      servers.push(server);
+      sessions.push(session);
+      return { project: session.authenticate(), session, generation: ++generation };
+    };
+    const client = createDocsClient({
+      dial: () => {
+        const { generation: _generation, ...connection } = dial();
+        return connection;
+      },
+      refresh: async () => ({ outcome: "unavailable" as const }),
+      signInAgain: () => undefined,
+    });
+
+    await expect(
+      client.withDocsProject(async (project) => {
+        const session = await project.ping();
+        if (session === "ok" && generation === 1) throw transportFailure();
+        return session;
+      }),
+    ).resolves.toBe("ok");
+
+    await vi.waitFor(() => expect(released).toBe(1));
+    for (const session of sessions) session[Symbol.dispose]();
+    for (const server of servers) server[Symbol.dispose]();
   });
 
   test("concurrent callers share one re-dial", async () => {

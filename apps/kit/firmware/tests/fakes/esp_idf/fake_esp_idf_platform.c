@@ -10,6 +10,7 @@
 #include "iterate/kit/platforms/esp_idf_system_update.h"
 
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 
 /*
@@ -25,7 +26,8 @@ enum {
    * like it stopped sending.
    */
   FAKE_SENT_CAPACITY = 96,
-  FAKE_MESSAGE_CAPACITY = 4096,
+  /* A real reply occupies one 8192-byte control-outbox slot. */
+  FAKE_MESSAGE_CAPACITY = 8192,
 };
 
 static struct {
@@ -39,6 +41,7 @@ static struct {
   size_t restarts_requested;
   bool hop_answers;
   uint32_t pongs;
+  uint32_t frames_received;
   char restart_note[128];
 } platform;
 
@@ -91,6 +94,10 @@ size_t iterate_kit_fake_platform_restarts_requested(void) {
 
 void iterate_kit_fake_platform_set_hop_answers(bool answers) {
   platform.hop_answers = answers;
+}
+
+void iterate_kit_fake_platform_receive_hop_frame(void) {
+  if (platform.frames_received != UINT32_MAX) ++platform.frames_received;
 }
 
 /* --- provisioning --------------------------------------------------------- */
@@ -277,6 +284,7 @@ void iterate_kit_esp_idf_itx_transport_metrics(
   memset(metrics, 0, sizeof(*metrics));
   if (transport == NULL) return;
   metrics->websocket_pongs_received = platform.pongs;
+  metrics->websocket_frames_received = platform.frames_received;
   metrics->ready_socket_generation = transport->ready_socket_generation;
   metrics->control_inbox_capacity_slots = 1U;
   metrics->control_outbox_capacity_slots = 1U;

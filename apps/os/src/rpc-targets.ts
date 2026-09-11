@@ -27,7 +27,8 @@
  *   shortcuts onto it); `itx.capabilityHosts.get(path)` addresses any other
  *   scope's host, including the project root at `"/"`.
  */
-import { RpcTarget } from "cloudflare:workers";
+import { RpcTarget, tracing } from "cloudflare:workers";
+import { z } from "zod";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
 import type {
@@ -63,6 +64,7 @@ import type {
 import { decodeMessageMentions, type Message } from "@iterate-com/shared/message";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
+import { detachDisposablePlainRpcResult } from "./domains/capability-host/live-capability.ts";
 import { closeItxSessionTransport } from "./session-transport.ts";
 import {
   isStreamDeliveryAuth,
@@ -599,6 +601,23 @@ function retryLoggedIdempotentOperation<Result>(input: {
  * allowing in-process domains and focused tests to use the exact stub. */
 export const STREAM_DURABLE_OBJECT_STUB = Symbol("stream-durable-object-stub");
 
+const ReproIngressAppendPayload = z.object({
+  probeId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/),
+});
+
+/**
+ * The preview append-latency repro carries a probe ID in one deliberately
+ * narrow ephemeral input. Keep this recognition local to the ingress target:
+ * ordinary stream traffic must neither gain a span nor expose its payload.
+ */
+function reproIngressAppendProbeId(path: string, events: readonly StreamEventInput[]) {
+  if (!path.startsWith("/repros/") || events.length !== 1) return undefined;
+  const event = events[0];
+  if (event?.ephemeral !== true) return undefined;
+  const parsed = ReproIngressAppendPayload.safeParse(event.payload);
+  return parsed.success ? parsed.data.probeId : undefined;
+}
+
 /**
  * Durable event stream capability.
  *
@@ -689,6 +708,21 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // so a read cannot inherit the surrounding wake connection's lifetime.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    const probeId = reproIngressAppendProbeId(this.props.path, events);
+    if (probeId !== undefined) {
+      return await tracing.enterSpan("stream.repro.ingress_append", async (span) => {
+        // This outer ITX target is the last server-side handler before the
+        // Stream DO stub call. Its elapsed duration covers any request queue,
+        // network, native runtime, and returned result; do not infer a clock
+        // subtraction against the DO span, which may run elsewhere.
+        span.setAttribute("iterate.repro.probe_id", probeId);
+        span.setAttribute("iterate.stream.path", this.props.path);
+        span.setAttribute("iterate.repro.ephemeral", true);
+        return await this.#appendRetrying(events, () =>
+          Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].append(...events)),
+        );
+      });
+    }
     return await this.#appendRetrying(events, () =>
       Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].append(...events)),
     );
@@ -6334,7 +6368,8 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
   async invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown> {
     const { args = [], path } = call;
-    return await (await this.#facade()).invokeCapability({ args, path });
+    const result = await (await this.#facade()).invokeCapability({ args, path });
+    return detachDisposablePlainRpcResult(result);
   }
 
   /** Includes `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */

@@ -125,10 +125,14 @@ struct iterate_kit_esp_idf_websocket_connection_metrics {
   uint32_t raw_write_failures;
   uint32_t receive_calls;
   uint32_t receive_chunks;
+  /** Complete WebSocket frames parsed from the peer, including controls. */
+  uint32_t frames_received;
   uint32_t receive_dropped;
   uint32_t pings_received;
   uint32_t pongs_received;
   uint32_t control_backpressure;
+  /** Last peer-supplied RFC 6455 CLOSE code; zero means no code was supplied. */
+  int32_t last_peer_close_status_code;
   /*
    * ESP-IDF keeps socket, ESP-TLS, and TLS-stack causes in a mutable error
    * handle which is destroyed with the transport. Retain the exact tuple at
@@ -181,21 +185,22 @@ struct iterate_kit_esp_idf_websocket_connection {
   uint32_t raw_write_failures;
   uint32_t receive_calls;
   uint32_t receive_chunks;
+  uint32_t frames_received;
   uint32_t receive_dropped;
   uint32_t pings_received;
   uint32_t pongs_received;
   /*
-   * WHEN THE HOP LAST CARRIED A BYTE, EACH WAY.
+   * WHEN THE HOP LAST CARRIED A BYTE, AND WHEN WE LAST ASKED.
    *
-   * A keepalive is only informative when the socket is otherwise silent: a
-   * connection carrying audio proves itself continuously, and probing it would
-   * spend a control frame to learn what the last data frame already said. Both
-   * directions must be quiet, because a hop that is only receiving is still a
-   * hop that works.
+   * Inbound frames prove the peer can still reach us. Outbound data is tracked
+   * for diagnostics, but is never liveness evidence: a dead peer can leave
+   * local TCP accepting microphone bytes indefinitely.
    */
   int64_t last_inbound_us;
   int64_t last_outbound_us;
+  int64_t last_probe_us;
   uint32_t control_backpressure;
+  int32_t last_peer_close_status_code;
   uint32_t transport_failure_incidents;
   uint32_t last_failure_operation;
   int32_t last_raw_result;
@@ -210,6 +215,34 @@ struct iterate_kit_esp_idf_websocket_connection {
   bool peer_close_pending;
   bool initialized;
 };
+
+/*
+ * Queue one periodic liveness PING when the peer has been silent for the
+ * supplied interval. `last_probe_us` is independent of outbound traffic:
+ * local TCP acceptance does not prove that the peer is alive. Keeping this
+ * small decision beside the connection shape lets the host test exercise the
+ * exact queueing policy without emulating ESP-TLS.
+ */
+static inline bool iterate_kit_esp_idf_websocket_queue_keepalive(
+    struct iterate_kit_esp_idf_websocket_connection *connection,
+    int64_t now_us,
+    int64_t interval_us) {
+  if (connection == NULL || interval_us <= 0 ||
+      connection->last_inbound_us == 0 ||
+      now_us - connection->last_inbound_us <= interval_us ||
+      now_us - connection->last_probe_us <= interval_us) {
+    return false;
+  }
+  if (iterate_kit_websocket_tx_queue_control(
+          &connection->tx,
+          ITERATE_KIT_WEBSOCKET_PING,
+          NULL,
+          0U) != ITERATE_KIT_OK) {
+    return false;
+  }
+  connection->last_probe_us = now_us;
+  return true;
+}
 
 /**
  * Parses immutable connection metadata and binds caller-owned workspaces.
@@ -280,8 +313,8 @@ iterate_kit_esp_idf_websocket_connection_send(
  * pass, and the PONG it earns arrives as a receive CONTROL result and moves
  * `pongs_received`. That counter is the whole answer, and the caller watches it.
  *
- * Stamped outbound so a probe also postpones the idle keepalive: having just
- * asked, there is nothing for the 120 s clock to add.
+ * Stamped as a probe so having just asked postpones the next periodic probe;
+ * ordinary outbound traffic never changes that clock.
  */
 enum iterate_kit_status
 iterate_kit_esp_idf_websocket_connection_probe(

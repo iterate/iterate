@@ -3,7 +3,13 @@ import process from "node:process";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
-import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
+import {
+  createBuiltInPrompts,
+  createCli,
+  FailedToExitError,
+  isAgent,
+  yamlTableConsoleLogger,
+} from "trpc-cli";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 
 export * as configRepo from "./reset-config-repo.ts";
@@ -115,11 +121,31 @@ if (isMainModule(import.meta.url)) {
     ...import.meta,
     name: "@iterate-com/os",
     jsonInput: "auto",
-  }).run({
-    argv: args,
-    logger: yamlTableConsoleLogger,
-    prompts: isAgent() ? undefined : createBuiltInPrompts(),
-  });
+  })
+    .run({
+      argv: args,
+      logger: yamlTableConsoleLogger,
+      prompts: isAgent() ? undefined : createBuiltInPrompts(),
+      /* trpc-cli normally calls process.exit() after every procedure. That
+       * would kill a just-disposed Cap'n Web socket before its close handshake
+       * reaches the Worker. Record the requested status and let Node drain the
+       * socket instead. trpc-cli then throws its documented FailedToExitError;
+       * recognize that control-flow signal below without rendering it as a CLI
+       * failure. */
+      process: {
+        exit: (code) => {
+          process.exitCode = code === 0 ? (process.exitCode ?? 0) : code;
+          // trpc-cli continues immediately by throwing FailedToExitError.
+          // Its type models real process.exit(), which never returns.
+          return undefined as never;
+        },
+      },
+    })
+    .catch((error: unknown) => {
+      if (error instanceof FailedToExitError) return;
+      process.exitCode = 1;
+      throw error;
+    });
 }
 
 function isVoicelabTalk(args: readonly string[]): boolean {

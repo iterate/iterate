@@ -23,6 +23,22 @@ container-backed CloudflareSandbox class per supported instance size
 sharded by immutable build key and holds only live single-flight state; build
 artifacts remain in KV.
 
+`/api` WebSocket upgrades are forwarded to a fresh `ItxSessionDurableObject`
+named by a server-generated session ID. That object owns the Cap'n Web export
+table and live capability mounts for exactly one connection, with ordinary
+`WebSocket.accept()` and no storage or alarms. Hibernation cannot preserve this
+in-memory RPC state. HTTP batches stay in the stateless fetch handler.
+
+This boundary is required for long-lived connections: a stateless Worker's
+WebSocket messages consume the original request's cumulative CPU allowance.
+Durable Objects receive a fresh CPU budget for each incoming WebSocket message
+([Cloudflare limits](https://developers.cloudflare.com/durable-objects/platform/limits/)).
+The minimal 50-appends/second repro previously exhausted 32 seconds of CPU after
+about seven minutes and closed with code 1006. The ingress Worker now forwards
+the upgrade response without accepting the socket or processing its frames.
+Session IDs join the ingress handshake, object handshake, and per-call logs;
+the external ingress boundary captures upgrade failures once.
+
 ## Compiler sidecars (the "+2")
 
 `itx.docs.typecheck` runs in a

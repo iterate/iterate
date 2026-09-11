@@ -18,7 +18,21 @@ function createStub(name: string, disposed: string[]): TestStub {
 }
 
 describe("withOwnedRpcSession", () => {
-  test("dups the target and every owned stub", () => {
+  test("a failed duplicate does not keep the session alive", () => {
+    const disposed: string[] = [];
+    const target = createStub("target", disposed);
+    target.dup = () => {
+      throw new Error("duplicate refused");
+    };
+    const session = createStub("session", disposed);
+    const wrapped = withOwnedRpcSession(target, session);
+
+    expect(() => wrapped.dup()).toThrow("duplicate refused");
+    wrapped[Symbol.dispose]();
+    expect(disposed).toEqual(["target", "session"]);
+  });
+
+  test("releases each leaf while retaining shared parents until the last duplicate", () => {
     const disposed: string[] = [];
     const target = createStub("target", disposed);
     const root = createStub("root", disposed);
@@ -27,18 +41,15 @@ describe("withOwnedRpcSession", () => {
     const wrapped = withOwnedRpcSession(target, root, session);
     const duplicate = wrapped.dup();
 
+    expect(target.dup).toHaveBeenCalledOnce();
+    expect(root.dup).not.toHaveBeenCalled();
+    expect(session.dup).not.toHaveBeenCalled();
+
     duplicate[Symbol.dispose]();
-    expect(disposed).toEqual(["target:dup", "root:dup", "session:dup"]);
+    expect(disposed).toEqual(["target:dup"]);
 
     wrapped[Symbol.dispose]();
-    expect(disposed).toEqual([
-      "target:dup",
-      "root:dup",
-      "session:dup",
-      "target",
-      "root",
-      "session",
-    ]);
+    expect(disposed).toEqual(["target:dup", "target", "root", "session"]);
   });
 
   test("attempts every disposer before rethrowing", () => {
@@ -64,5 +75,24 @@ describe("withOwnedRpcSession", () => {
 
     expect(() => wrapped[Symbol.dispose]()).toThrow(error);
     expect(calls).toEqual(["target", "root", "session"]);
+  });
+
+  test("does not retain extra parent references across repeated duplicates", () => {
+    const disposed: string[] = [];
+    const target = createStub("target", disposed);
+    const root = createStub("root", disposed);
+    const session = createStub("session", disposed);
+    const wrapped = withOwnedRpcSession(target, root, session);
+    const first = wrapped.dup();
+    const second = first.dup();
+
+    first[Symbol.dispose]();
+    second[Symbol.dispose]();
+    expect(disposed).toEqual(["target:dup", "target:dup:dup"]);
+    expect(root.dup).not.toHaveBeenCalled();
+    expect(session.dup).not.toHaveBeenCalled();
+
+    wrapped[Symbol.dispose]();
+    expect(disposed).toEqual(["target:dup", "target:dup:dup", "target", "root", "session"]);
   });
 });

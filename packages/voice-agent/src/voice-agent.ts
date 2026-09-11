@@ -360,6 +360,16 @@ const IDLE_TICK_MS = 5_000;
 const DIAL_RETRY_COOLDOWN_MS = 5_000;
 
 /**
+ * One unexpected provider close gets one fresh session for the same call.
+ *
+ * A provider socket is an incarnation-scoped transport, not the conversation
+ * itself, so ending a healthy call on its first close makes a transient
+ * upstream failure audible. Retrying without a durable ceiling would turn a
+ * provider that accepts then immediately closes into an endless dial storm.
+ */
+const MAX_PROVIDER_RECONNECTS_PER_CALL = 1;
+
+/**
  * How long the provider gets from socket adoption to `session.updated`.
  *
  * Nothing else bounds this gap, and an open-mic call that never becomes
@@ -1098,6 +1108,8 @@ const VoiceState = z.object({
       lastDeviceInputAtStreamMs: z.number(),
       /** Decided, not yet done: nothing re-dials a call with this set. */
       endRequested: z.strictObject({ reason: z.string() }).nullable(),
+      /** Unexpected provider closes already recovered for this call. */
+      providerReconnectAttempts: z.number().int().nonnegative().default(0),
     })
     .nullable()
     .default(null),
@@ -1214,7 +1226,10 @@ export const VoiceAgentContract = defineProcessorContract({
    * greets with the thread in mind, and every provider session's whole
    * briefing is recorded (`session-configured`) so the stream shows how
    * the frontend was initialized. Clean break as ever. */
-  version: "19.0.0",
+  /* 20.0.0: an unexpected provider close is a bounded reconnect obligation,
+   * counted in the call fold. Keeping the count durable prevents an eviction
+   * from resetting a provider-close retry storm. Clean break as ever. */
+  version: "20.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
   events: {
@@ -1323,8 +1338,20 @@ export const VoiceAgentContract = defineProcessorContract({
       payloadSchema: z.looseObject({ conversationId: z.string(), reason: z.string() }),
     },
     "events.iterate.com/voice-agent/provider-error": {
-      description: "Grok reported an error, verbatim.",
+      description: "The realtime provider reported an error, verbatim.",
       payloadSchema: z.looseObject({ conversationId: z.string(), message: z.string() }),
+    },
+    "events.iterate.com/voice-agent/provider-connection-closed": {
+      description:
+        "A provider socket closed, with its evidence and one bounded recovery or terminal decision.",
+      payloadSchema: z.strictObject({
+        conversationId: z.string(),
+        provider: z.enum(["grok", "openai"]),
+        closeCode: z.number().int(),
+        closeReason: z.string().optional(),
+        reason: z.string(),
+        reconnectAttempt: z.number().int().positive().nullable(),
+      }),
     },
 
     /*
@@ -1492,6 +1519,7 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/conversation-end-requested",
     "events.iterate.com/voice-agent/conversation-ended",
+    "events.iterate.com/voice-agent/provider-connection-closed",
     /* Consumed so the fold sees its own appends and the recap survives an
      * eviction — processEvent has no arm for them on purpose. */
     "events.iterate.com/voice-agent/utterance-transcript",
@@ -1518,6 +1546,7 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/conversation-end-requested",
     "events.iterate.com/voice-agent/conversation-ended",
     "events.iterate.com/voice-agent/provider-error",
+    "events.iterate.com/voice-agent/provider-connection-closed",
     "events.iterate.com/voice-agent/utterance-transcript",
     "events.iterate.com/voice-agent/answer-transcript",
     "events.iterate.com/voice-agent/colleague-status",
@@ -1916,6 +1945,17 @@ interface Dial {
   answer: Answer;
 }
 
+/** The one durable record owed after a provider socket closes. */
+interface ProviderCloseObligation {
+  conversationId: string;
+  provider: VoiceProvider;
+  closeCode: number;
+  closeReason: string;
+  reason: string;
+  attempt: number;
+  reconnectAttempt: number | null;
+}
+
 /** A dial just decided: no socket yet, nothing sent, a clear owed first. */
 const freshDial = (
   conversationId: string,
@@ -2004,6 +2044,20 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * dial` — strictly stronger than the socket-identity check it replaces.
    */
   #dial: Dial | null = null;
+  /**
+   * A close has committed this call to either a durable reconnect request or
+   * terminal obituary. The reservation closes the gap before that append is
+   * folded: mic and caught-up deliveries must not create a competing dial
+   * for the same conversation in that interval.
+   */
+  #providerCloseReservation: { conversationId: string; mode: "reconnect" | "terminal" } | null =
+    null;
+  /** A close append that background work did not persist. Retried at the
+   * next delivery as a blocker, so its rejection NACKs rather than silently
+   * losing the only recovery/terminal decision. */
+  #pendingProviderClose: ProviderCloseObligation | null = null;
+  /** Latest folded close budget for the active call, refreshed on every delivery. */
+  #providerReconnectAttempts: { conversationId: string; attempts: number } | null = null;
   /**
    * Capture that arrived before Grok's handshake finished, oldest first.
    *
@@ -2146,6 +2200,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
             conversationId: event.payload.conversationId,
             lastDeviceInputAtStreamMs: committedAtStreamMs,
             endRequested: null,
+            providerReconnectAttempts: 0,
           },
         };
 
@@ -2179,6 +2234,25 @@ export class VoiceAgentProcessor extends StreamProcessor<
         return state.call === null || state.call.conversationId !== event.payload.conversationId
           ? state
           : { ...state, call: { ...state.call, endRequested: { reason: event.payload.reason } } };
+
+      case "events.iterate.com/voice-agent/provider-connection-closed":
+        return state.call === null || state.call.conversationId !== event.payload.conversationId
+          ? state
+          : event.payload.reconnectAttempt === null
+            ? {
+                ...state,
+                call: { ...state.call, endRequested: { reason: event.payload.reason } },
+              }
+            : {
+                ...state,
+                call: {
+                  ...state.call,
+                  providerReconnectAttempts: Math.max(
+                    state.call.providerReconnectAttempts,
+                    event.payload.reconnectAttempt,
+                  ),
+                },
+              };
 
       case "events.iterate.com/voice-agent/conversation-ended":
         return state.call === null || state.call.conversationId !== event.payload.conversationId
@@ -2278,6 +2352,34 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (state.call !== null) {
       this.#callRequested = false;
       this.#lastDeviceInputAtStreamMsMirror = state.call.lastDeviceInputAtStreamMs;
+      this.#providerReconnectAttempts = {
+        conversationId: state.call.conversationId,
+        attempts: state.call.providerReconnectAttempts,
+      };
+    } else {
+      this.#providerReconnectAttempts = null;
+    }
+
+    const pendingProviderClose = this.#pendingProviderClose;
+    const deliveringPendingClose =
+      event?.type === "events.iterate.com/voice-agent/provider-connection-closed" &&
+      pendingProviderClose !== null &&
+      event.payload.conversationId === pendingProviderClose.conversationId &&
+      event.payload.closeCode === pendingProviderClose.closeCode &&
+      event.payload.reconnectAttempt === pendingProviderClose.reconnectAttempt;
+    if (deliveringPendingClose) {
+      /* The Stream DO committed this record before the caller received its
+       * append response. The durable event is now the authority: do not let
+       * the stale in-flight marker block its own recovery arm below. */
+      this.#pendingProviderClose = null;
+    } else if (pendingProviderClose !== null) {
+      args.blockProcessorWhile(async () => {
+        await this.#appendProviderClose(pendingProviderClose, append);
+        if (this.#pendingProviderClose === pendingProviderClose) {
+          this.#pendingProviderClose = null;
+        }
+      });
+      return;
     }
 
     /*
@@ -2300,6 +2402,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
      */
     if (owedCall !== null && owedCall.endRequested !== null) {
       const { conversationId, endRequested } = owedCall;
+      if (this.#providerCloseReservation?.conversationId === conversationId) {
+        this.#providerCloseReservation = null;
+      }
       this.#hangUp();
       /* A settlement at head: losing this append forever is a call the fold
        * says is ending and nothing ever buries. The cursor waits the one
@@ -2319,6 +2424,25 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (event === null) return;
 
     switch (event.type) {
+      case "events.iterate.com/voice-agent/provider-connection-closed": {
+        if (
+          state.call === null ||
+          state.call.conversationId !== event.payload.conversationId ||
+          state.call.endRequested !== null ||
+          event.payload.reconnectAttempt === null
+        ) {
+          return;
+        }
+        if (
+          this.#providerCloseReservation?.conversationId === event.payload.conversationId &&
+          this.#providerCloseReservation.mode === "reconnect"
+        ) {
+          this.#providerCloseReservation = null;
+        }
+        this.#openProviderConnection(event.payload.conversationId, state, append, runInBackground);
+        return;
+      }
+
       case "events.iterate.com/voice-agent/ptt-start":
       case "events.iterate.com/voice-agent/mic-frame":
       case "events.iterate.com/voice-agent/ptt-end": {
@@ -2428,8 +2552,18 @@ export class VoiceAgentProcessor extends StreamProcessor<
               type: "events.iterate.com/voice-agent/call-started",
               idempotencyKey: this.idempotencyKey(`call:${conversationId}`),
               payload: { conversationId },
-            }).catch(() => {
+            }).catch((error: unknown) => {
+              // A provider dial was intentionally started before this append
+              // settled. It belongs to the uncommitted call and must not
+              // survive into the redelivery, where it would block the retry
+              // from opening its own conversation.
+              this.#hangUp();
               this.#callRequested = false;
+              // Reset the in-memory guard so the retry can mint
+              // again, but leave the delivery unacknowledged. Swallowing this
+              // rejection acknowledges the PTT event without its required
+              // call-started fact, permanently losing the press.
+              throw error;
             }),
           );
           /*
@@ -2726,6 +2860,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
           this.#clearDeviceSpeaker(dial, this.deps.nowAtFacetMs(), append);
           this.#hangUp();
         }
+        if (this.#providerCloseReservation?.conversationId === event.payload.conversationId) {
+          this.#providerCloseReservation = null;
+        }
         return;
       }
 
@@ -2756,6 +2893,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     append: ProcessEventArgs<VoiceAgentContract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
   ): void {
+    if (this.#providerCloseReservation !== null) return;
     if (this.#dial !== null) return;
     /* The one choke point both callers share, so a dead provider cannot be
      * re-dialled at frame cadence — see DIAL_RETRY_COOLDOWN_MS. */
@@ -3583,12 +3721,41 @@ export class VoiceAgentProcessor extends StreamProcessor<
         }
       });
 
-      socket.addEventListener("close", () => {
+      socket.addEventListener("close", (event: CloseEvent) => {
         if (this.#dial !== dial) return;
         this.#dial = null;
-        this.runInBackground(() =>
-          this.#requestEnd(conversationId, "socket-closed", "Grok's socket closed", append),
-        );
+        const attemptsBeforeClose =
+          this.#providerReconnectAttempts?.conversationId === conversationId
+            ? this.#providerReconnectAttempts.attempts
+            : 0;
+        const attempt = attemptsBeforeClose + 1;
+        /* Keep the live incarnation monotonic while this close record waits
+         * to persist. A later folded record refreshes the same mirror after
+         * an eviction. */
+        this.#providerReconnectAttempts = { conversationId, attempts: attempt };
+        const closeMessage = `${state.provider} provider socket closed (code ${event.code})`;
+        const reconnectAttempt = attempt <= MAX_PROVIDER_RECONNECTS_PER_CALL ? attempt : null;
+        this.#providerCloseReservation = {
+          conversationId,
+          mode: reconnectAttempt === null ? "terminal" : "reconnect",
+        };
+        const obligation: ProviderCloseObligation = {
+          conversationId,
+          provider: state.provider,
+          closeCode: event.code,
+          closeReason: event.reason,
+          reason: closeMessage,
+          attempt,
+          reconnectAttempt,
+        };
+        this.#pendingProviderClose = obligation;
+        /* Background append gives the normal close path no delivery-latency
+         * penalty. Its failure leaves `#pendingProviderClose` intact; the
+         * next delivery retries it as an at-least-once blocker above. */
+        this.runInBackground(async () => {
+          await this.#appendProviderClose(obligation, append);
+          if (this.#pendingProviderClose === obligation) this.#pendingProviderClose = null;
+        });
       });
     });
 
@@ -3812,6 +3979,27 @@ export class VoiceAgentProcessor extends StreamProcessor<
       type: "events.iterate.com/voice-agent/conversation-end-requested",
       idempotencyKey: this.idempotencyKey(`${keyClass}:${conversationId}`),
       payload: { conversationId, reason },
+    });
+  }
+
+  /** Persist the close evidence and the decision it carries in one event. */
+  async #appendProviderClose(
+    obligation: ProviderCloseObligation,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+  ): Promise<void> {
+    await append({
+      type: "events.iterate.com/voice-agent/provider-connection-closed",
+      idempotencyKey: this.idempotencyKey(
+        `provider-close:${obligation.conversationId}:${obligation.attempt}`,
+      ),
+      payload: {
+        conversationId: obligation.conversationId,
+        provider: obligation.provider,
+        closeCode: obligation.closeCode,
+        ...(obligation.closeReason !== "" && { closeReason: obligation.closeReason }),
+        reason: obligation.reason,
+        reconnectAttempt: obligation.reconnectAttempt,
+      },
     });
   }
 
@@ -4881,6 +5069,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
     this.#turnEndedDuringHandshake = false;
     const dial = this.#dial;
     this.#dial = null;
+    if (this.#providerCloseReservation?.conversationId === dial?.conversationId) {
+      this.#providerCloseReservation = null;
+    }
     try {
       dial?.socket?.close();
     } catch {

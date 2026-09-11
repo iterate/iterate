@@ -276,7 +276,7 @@ describe("retired secret invariants (secret-leak protection)", () => {
   // and so never reaches the erase-on-acquire that removes retired secrets.
   it("deletes a lingering retired Worker secret and verifies removal (omitted secrets survive uploads)", async () => {
     const workerName = "os-preview-4";
-    const staleSecret = "APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC";
+    const staleSecret = "APP_CONFIG_CLOUDFLARE__ANALYTICS_API_TOKEN";
     expect(RETIRED_WORKER_SECRETS).toContain(staleSecret);
 
     const calls: Array<{ init?: RequestInit; path: string }> = [];

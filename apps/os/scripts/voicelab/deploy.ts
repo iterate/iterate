@@ -15,9 +15,12 @@ import {
   installVoiceAgent,
   legacyGuestPaths,
   removeLegacyGuest,
+  VOICE_AGENT_PACKAGE_NAME,
+  VOICE_AGENT_ZOD_SPEC,
   type VoiceAgentConfigRepo,
 } from "@iterate-com/voice-agent";
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
+import { buildLocalVoiceAgentArtifact } from "./local-voice-agent-source.ts";
 import { withRpcResult } from "./rpc-ownership.ts";
 
 /** Options for `pnpm cli voicelab deploy`. */
@@ -28,6 +31,8 @@ export interface DeployOptions extends VoicelabConnectOptions {
   message?: string;
   /** Also delete the source files an older deploy committed. */
   pruneLegacy?: boolean;
+  /** Bundle this checkout's voice worker into the config repo for a local preview. */
+  localSource?: boolean;
 }
 
 /**
@@ -54,9 +59,81 @@ export function voiceAgentConfigRepo(itx: unknown): VoiceAgentConfigRepo {
   };
 }
 
+/**
+ * Replace the package entrypoint with one auditable local bundle. The normal
+ * config repo already supplies `iterate`; `zod` is added when absent. Removing
+ * the package declaration means the preview cannot accidentally select a
+ * published voice-agent build instead of the displayed artifact hash.
+ */
+export async function installLocalVoiceAgentSource(
+  repo: VoiceAgentConfigRepo,
+  source: string,
+  message?: string,
+): Promise<{ changed: boolean; commitOid: string; changedPaths: string[] }> {
+  const [manifest, guest] = await Promise.all([
+    repo.readFile({ path: "package.json" }),
+    repo.readFile({ path: "voice-agent.ts" }),
+  ]);
+  if (manifest === null) throw new Error("The config repo has no package.json.");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(manifest.content);
+  } catch (error) {
+    throw new Error(`package.json is not valid JSON: ${String(error)}`);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("package.json must hold a JSON object.");
+  }
+  const packageJson = parsed as Record<string, unknown>;
+  const dependencies = packageJson.dependencies;
+  if (dependencies === null || typeof dependencies !== "object" || Array.isArray(dependencies)) {
+    throw new Error("package.json dependencies must hold an object.");
+  }
+  const nextDependencies = { ...(dependencies as Record<string, unknown>) };
+  if (typeof nextDependencies.iterate !== "string") {
+    throw new Error("Local voice-agent source requires package.json dependencies.iterate.");
+  }
+  if (nextDependencies.zod === undefined) nextDependencies.zod = VOICE_AGENT_ZOD_SPEC;
+  delete nextDependencies[VOICE_AGENT_PACKAGE_NAME];
+  const nextManifest = `${JSON.stringify({ ...packageJson, dependencies: nextDependencies }, null, 2)}\n`;
+  const changes = [
+    ...(nextManifest === manifest.content ? [] : [{ path: "package.json", content: nextManifest }]),
+    ...(guest?.content === source ? [] : [{ path: "voice-agent.ts", content: source }]),
+  ];
+  if (changes.length === 0) {
+    return { changed: false, changedPaths: [], commitOid: manifest.commitOid };
+  }
+  const commit = await repo.commitFiles({
+    changes,
+    message: message ?? "voice-agent: install local source artifact for preview",
+  });
+  return {
+    changed: !commit.noChanges,
+    changedPaths: changes.map((change) => change.path),
+    commitOid: commit.commitOid,
+  };
+}
+
 export async function deploy(options: DeployOptions) {
   using itx = await connectProject(options);
   const repo = voiceAgentConfigRepo(itx);
+  if (options.localSource === true) {
+    if (options.spec !== undefined) {
+      throw new Error("--local-source and --spec are mutually exclusive.");
+    }
+    if (options.pruneLegacy === true) {
+      throw new Error("--local-source and --prune-legacy are mutually exclusive.");
+    }
+    const artifact = await buildLocalVoiceAgentArtifact();
+    const install = await installLocalVoiceAgentSource(repo, artifact.source, options.message);
+    console.log(
+      install.changed
+        ? `committed ${install.commitOid.slice(0, 8)} (${install.changedPaths.join(", ")}): local voice-agent sha256 ${artifact.sha256}`
+        : `no change — the repo already names local voice-agent sha256 ${artifact.sha256} (${install.commitOid.slice(0, 8)})`,
+    );
+    console.log("restart the parent conversation stream before calling the updated hosted facet");
+    return;
+  }
   const install = await installVoiceAgent(repo, {
     spec: options.spec,
     existing: "replace",

@@ -510,17 +510,13 @@ static enum cli_options_status cli_options_check_combinations(
    * neither of them had. Picking one silently is worse than refusing: the
    * operator would spend the session wondering why their key does nothing.
    */
-  /* Three turn-taking postures, one microphone: a button, a schedule, or the
-   * server's VAD over a continuous stream. Any two together would fight over
-   * when capture starts and stops, so all pairs refuse. */
+  /* A button and a scheduler would each end the other's turn. The scheduler
+   * may deliberately feed an open microphone: its fixtures provide speech,
+   * then its continuous zero PCM lets server VAD observe the same end-of-turn
+   * silence as a board. */
   if (out->open_mic && out->push_to_talk) {
     cli_options_note(
         problem, problem_bytes, "--open-mic cannot run with --push-to-talk");
-    return CLI_OPTIONS_ERR_INCOMPATIBLE;
-  }
-  if (out->open_mic && out->converse_minutes > 0.0) {
-    cli_options_note(
-        problem, problem_bytes, "--open-mic cannot run with --converse");
     return CLI_OPTIONS_ERR_INCOMPATIBLE;
   }
   if (out->push_to_talk && out->converse_minutes > 0.0) {

@@ -380,6 +380,8 @@ export interface FakeGrok {
   log: string[];
   /** Push a message into the newest live session (scenario control). */
   poke(send: (session: FakeGrokSession, raw: (data: string | Uint8Array) => void) => void): boolean;
+  /** Close the newest session with an exact WebSocket close code and reason. */
+  closeNewest(code: number, reason: string): boolean;
   close(): void;
 }
 
@@ -415,6 +417,8 @@ export interface FakeGrokHandler {
   note(line: string): void;
   /** Push a message into the newest live session (scenario control). */
   poke(send: (session: FakeGrokSession, raw: (data: string | Uint8Array) => void) => void): boolean;
+  /** Close the newest live session with an exact WebSocket close code and reason. */
+  closeNewest(code: number, reason: string): boolean;
   /** Hang up every live session — the provider going away, on purpose. */
   close(): void;
 }
@@ -501,7 +505,7 @@ export function createFakeGrokHandler(options?: {
   const live: {
     session: FakeGrokSession;
     send: (data: string | Uint8Array) => void;
-    hangUp: (why: string) => void;
+    hangUp: (why: string, code?: number) => void;
   }[] = [];
   /**
    * Upgrades being held open, and how to let them go.
@@ -587,7 +591,7 @@ export function createFakeGrokHandler(options?: {
       }
     };
     const emit = (event: Record<string, unknown>) => raw(JSON.stringify(event));
-    const hangUp = (why: string) => {
+    const hangUp = (why: string, code = 1000) => {
       if (!alive) return;
       alive = false;
       session.closedAt = Date.now();
@@ -595,7 +599,7 @@ export function createFakeGrokHandler(options?: {
       say(`session ${session.id} CLOSING: ${why}`);
       for (const timer of timers) clearTimeout(timer);
       try {
-        server.close(1000, why.slice(0, 100));
+        server.close(code, why.slice(0, 100));
       } catch {
         /* already gone */
       }
@@ -934,6 +938,12 @@ export function createFakeGrokHandler(options?: {
       send(newest.session, newest.send);
       return true;
     },
+    closeNewest: (code, reason) => {
+      const newest = live[live.length - 1];
+      if (newest === undefined) return false;
+      newest.hangUp(reason, code);
+      return true;
+    },
     sessions,
   };
 }
@@ -975,6 +985,7 @@ export async function startFakeGrok(options?: {
     close: () => tunnel[Symbol.dispose](),
     log: fake.log,
     poke: fake.poke,
+    closeNewest: fake.closeNewest,
     sessions: fake.sessions,
     url: tunnel.url,
   };

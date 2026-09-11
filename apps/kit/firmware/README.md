@@ -29,7 +29,7 @@ or a driver serving them, it is in the wrong repo.
 Firmware is split at two ownership boundaries:
 
 - `components/core` owns the control plane and must not include the audio
-  component's seams or platform headers. Its `audio_playout` classifier is a
+  component's seams or platform headers. Its `voice_playout` classifier is a
   core policy module, not hardware access.
 - `components/audio` owns board-independent capture, processing, and playout.
 - `platforms` owns operating-system and ESP-IDF integrations.
@@ -72,6 +72,37 @@ fixed). What stays in each owner is exactly what is theirs: the queue's
 generations and reprime handshake, the codec's bounded wait, the room's
 lead — and the underrun promotion, which on the board is an app-task read
 of a playback-task stamp and so cannot live in a single-owner module.
+
+## Shared client controls
+
+`components/core/src/voice_uplink.c` owns microphone batching and turn markers
+for both clients. It preserves speech while admission is pending, snapshots the
+queued tail at release, flushes that tail within a deadline, and bounds stuck
+PTT input and outbox backpressure. Server VAD sends no PTT markers. Failed
+publications stop the uplink and report a fault; adapters replace the session
+instead of continuing with an ambiguous turn. Its cumulative counters survive
+session resets.
+
+The ESP application task supplies FreeRTOS queue operations and maps uplink
+notifications to the capture fence and view. It publishes capture permission
+to the capture task through atomics. `targets/host_cli/cli_uplink.c` supplies the
+host microphone queue, WAV preparation, recovery request, and reporting stamps.
+Terminal input, scripted conversations, recording, and room playback accounting
+remain CLI responsibilities. Each adapter supplies readiness; the ESP client
+also waits for call acceptance before sending its dial buffer.
+
+Physical controls follow one path through `board.c`: GPIO, injected taps, and
+`read_gestures` produce normalized gestures; the shared session grammar produces
+intent and ordered chimes. Board callbacks read hardware, render any dedicated
+sound path, and handle board-specific menus. They do not run another copy of the
+call grammar.
+
+`provider_mode.c` owns validation, silent boot adoption, changed-selection
+persistence, and settled-selection announcements. `provider_mode_nvs.c` supplies
+the ESP store. HAVPE and StackChan retain their namespaces, defaults, allowed
+modes, and mode assets; each apply callback updates its live configuration
+(including HAVPE's stream path and turn posture together). A failed write is
+reported while the live selection remains applied.
 
 Run the fastest complete host check from `apps/kit`:
 

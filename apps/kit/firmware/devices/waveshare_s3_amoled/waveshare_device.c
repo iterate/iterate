@@ -77,9 +77,7 @@ static const struct iterate_kit_register_script scripts[] = {
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/platforms/i2s_codec.h"
-#include "iterate/kit/devices/waveshare_s3_amoled.h"
 #include "capnweb/capnweb.h"
-#include "iterate/kit/session_grammar.h"
 #include "iterate/kit/voice/loop.h"
 #include "iterate/kit/voice_device_profile.h"
 
@@ -89,16 +87,14 @@ static const struct iterate_kit_register_script scripts[] = {
 
 /*
  * The baked UI sounds: the wake chime (the official Home Assistant Voice PE
- * press asset, trimmed to its audible body — see assets/make-sounds.py for
+ * press asset, trimmed to its audible body — see tools/generate-sounds.sh for
  * why an open microphone with no AEC makes the full ring a cost) and the
  * "call ended" announcement, 16 kHz mono PCM16LE in .rodata. Included here
  * because the COMPOSITION decides what a gesture sounds like; the audio
  * driver only knows how to play PCM it is handed.
  */
-#include "assets/waveshare_sounds_generated.inc"
+#include "assets/sounds_generated.inc"
 
-/** The shared grammar driven by this board's distinct button inputs. */
-static struct iterate_kit_session session;
 
 static const struct iterate_kit_audio_codec_properties codec_properties = {
   .capture_sample_rate_hz = WAVESHARE_AUDIO_SAMPLE_RATE_HZ,
@@ -116,7 +112,6 @@ static const struct iterate_kit_audio_codec_properties codec_properties = {
  */
 static DRAM_ATTR portMUX_TYPE dma_ledger_lock = portMUX_INITIALIZER_UNLOCKED;
 static volatile int32_t dma_owed_ms;
-static bool dma_watch;
 
 static bool IRAM_ATTR on_dma_sent(
     i2s_chan_handle_t handle, i2s_event_data_t *event, void *context) {
@@ -136,24 +131,6 @@ static bool IRAM_ATTR on_dma_sent(
 
 int32_t waveshare_audio_dma_owed_ms(void) {
   return dma_owed_ms;
-}
-
-static void phase(void *context, enum iterate_kit_voice_phase phase) {
-  (void)context;
-  portENTER_CRITICAL(&dma_ledger_lock);
-  switch (phase) {
-    case ITERATE_KIT_VOICE_PHASE_FEEDING:
-      dma_watch = true;
-      break;
-    case ITERATE_KIT_VOICE_PHASE_WAITING:
-    case ITERATE_KIT_VOICE_PHASE_DRAINING:
-    case ITERATE_KIT_VOICE_PHASE_FLUSHED:
-      dma_watch = false;
-      break;
-    default:
-      break;
-  }
-  portEXIT_CRITICAL(&dma_ledger_lock);
 }
 
 /** esp_codec_dev owns the blocking mono read; task/mailbox policy is shared. */
@@ -460,54 +437,12 @@ static void present(
   waveshare_avatar_tick();
 }
 
-/** Classify board inputs against the last view held by board.c. */
-static void poll(void *context, struct iterate_kit_voice_intent *out) {
-  const struct iterate_kit_voice_view *view = iterate_kit_board_view();
-  (void)context;
+/** Supply upper talk, upper call and lower dedicated-end gestures. */
+static void read_gestures(struct iterate_kit_board_gestures *out) {
   waveshare_buttons_poll();
-  /*
-   * THE BUTTONS MEAN WHAT THE SESSION SAYS THEY MEAN — the shared grammar
-   * in iterate/kit/session_grammar.h, push-to-talk posture. The upper
-   * button is both the call control and the talk hold: its press edge wakes
-   * from idle (`tap_wakes` — which is also what keeps the injected
-   * button.press() a wake, since injection raises only the edge, never the
-   * level) and its level is the microphone, but the press must NOT end the
-   * session (`tap_ends` false) or every turn would begin by hanging up. The
-   * lower button is the dedicated end (`end_press`), the one gesture whose
-   * only meaning is hang up. The grammar's chime edges render through the
-   * baked sounds: the wake chime (trimmed — the wake gesture opens the
-   * microphone on a board with no AEC, see assets/make-sounds.py) and the
-   * "call ended" announcement on every session's exit. What the machine
-   * fixes over the raw edges: an upper hold begun during the teardown no
-   * longer reopens the call the lower button just ended (ENDING absorbs
-   * it), and an idle lower press no longer minted a phantom end.
-   */
-  struct iterate_kit_session_actions actions;
-  const struct iterate_kit_session_poll gestures = {
-    .tap = waveshare_buttons_take_upper_press(),
-    .held = waveshare_buttons_upper_held(),
-    .end_press = waveshare_buttons_take_lower_press(),
-    .wants_call = view->wants_call,
-    .call_active = view->call_active,
-    .push_to_talk = true,
-    .tap_wakes = true,
-    .tap_ends = false,
-    .now_ms = (uint64_t)(esp_timer_get_time() / 1000),
-  };
-  iterate_kit_session_step(&session, &gestures, &actions);
-  out->start_call = actions.start_call;
-  out->end_call = actions.end_call;
-  out->talk_held = actions.talk_held;
-  /* End before wake: play_sound replaces, so if one poll carries both
-   * edges the newer intent — the wake — is the one heard. */
-  if (actions.end_chime) {
-    iterate_kit_i2s_codec_play_sound(
-        waveshare_sound_chime_ended, sizeof(waveshare_sound_chime_ended));
-  }
-  if (actions.wake_chime) {
-    iterate_kit_i2s_codec_play_sound(
-        waveshare_sound_chime_press, sizeof(waveshare_sound_chime_press));
-  }
+  out->tap |= waveshare_buttons_take_upper_press();
+  out->held |= waveshare_buttons_upper_held();
+  out->end_press |= waveshare_buttons_take_lower_press();
 }
 
 static void observe_playout(
@@ -590,12 +525,6 @@ static size_t health(void *context, char *out, size_t capacity) {
 static const struct iterate_kit_board_ops ops = {
   .start = start,
   .present = present,
-  .poll = poll,
-  .phase = phase,
-  .capture_meta = NULL,
-  /* Full duplex by policy rather than by hardware: see `turns` below. */
-  .capture_fence = NULL,
-  .playout_fenced_out = NULL,
   .observe_playout = observe_playout,
   .observe_answer = observe_answer,
   /* Speaker, health, conversation control and push-to-talk are the loop's. */
@@ -616,7 +545,6 @@ static const struct iterate_kit_board board = {
   .stream_path = "/agents/voice/waveshare",
   .client_path = "/clients/waveshare",
   .conversation_id = "wsdev",
-  .greeting = "Hi, I am your Iterate device. What can I do for you?",
   .instructions =
       "Waveshare AMOLED: a voice endpoint with a touch screen showing a face. "
       "The upper button is push-to-talk; the lower button hangs up. "
@@ -660,11 +588,6 @@ static const struct iterate_kit_board board = {
    * step can sit before the ring genuinely empties.
    */
   .speaker_dry_wait_ms = 60,
-  .processing_frame_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
-  /* This codec hands over one whole 20 ms frame per read, so the bridge's
-   * three cadences are all 320 and it degenerates to a pass-through. */
-  .capture_chunk_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
-  .capture_stack_bytes = 4096,
   .turns = ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK,
   /*
    * The codec first. This board's panel and codec share reset lines, so the
@@ -681,15 +604,16 @@ static const struct iterate_kit_board board = {
   .audio = NULL,
   .ring = {.gpio = -1, .power_gpio = -1},
   .status_led_gpio = -1,
-  /* Press-edge upper button plus expander lower button require extra's grammar. */
-  .button = {.gpio = -1},
-  .sounds = {.wake = waveshare_sound_chime_press, .wake_bytes = sizeof(waveshare_sound_chime_press),
-    .ended = waveshare_sound_chime_ended, .ended_bytes = sizeof(waveshare_sound_chime_ended)},
+  .button = {.gpio = -1, .tap_wakes = true, .tap_ends = false},
+  .read_gestures = read_gestures,
+  .sounds = {.wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),
+    .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended)},
   .open_codec = open_codec,
   .set_volume = set_volume,
   .extra = &ops,
 };
 
-void iterate_kit_waveshare_s3_amoled_run(void) {
+/** ESP-IDF entry point: run this board through the shared voice loop. */
+void app_main(void) {
   iterate_kit_board_run(&board);
 }

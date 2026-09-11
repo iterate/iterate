@@ -22,6 +22,19 @@ struct iterate_kit_wake_word_buffer {
   size_t used;
 };
 
+/** Portable reader for the esp-sr packed-model wire format.  The ESP binding
+ * supplies esp_partition_read; host tests supply an in-memory reader. */
+typedef bool (*iterate_kit_wake_word_read_fn)(
+    void *context, size_t offset, void *destination, size_t length);
+
+/** Validate the wire format emitted by esp-sr 2.4.7's model/pack_model.py
+ * before src/model_path.c's srmodel_load() walks it unchecked. The named
+ * model must have exactly one nonempty data, index and metadata file, with
+ * every file range inside the partition. */
+bool iterate_kit_wake_word_model_partition_valid(
+    size_t partition_size, iterate_kit_wake_word_read_fn read, void *context,
+    const char *model_name);
+
 /** Assemble arbitrary 16 kHz mono slices into exact model chunks, preserving
  * sample order and the unfinished suffix. Invalid storage/input returns false
  * without changing state. consume receives mutable scratch, never the uplink;

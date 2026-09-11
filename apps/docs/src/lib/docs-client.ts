@@ -95,6 +95,7 @@ export function createDocsClient<Project>(deps: {
   /** Replace the session a caller lost — unless someone already did. */
   const replace = (lost: number) => {
     if (live !== null && live.generation > lost) return live;
+    dispose(live?.project);
     dispose(live?.session);
     live = dial();
     return live;

@@ -65,11 +65,78 @@ describe("connectItxReady", () => {
 
     expect(server.upgradeCount()).toBe(2);
   });
+
+  test("closes the Node WebSocket when its root stub is disposed", async () => {
+    const server = await startRpcServer({});
+    const itx = await connectItxReady({ baseUrl: server.baseUrl });
+
+    itx[Symbol.dispose]();
+
+    await expect(server.clientClose).resolves.toBe(3000);
+  });
+
+  test("keeps the authenticated session owner after awaiting the ready connection", async () => {
+    const server = await startRpcServer({ authenticated: true });
+    const itx = await connectItxReady({
+      baseUrl: server.baseUrl,
+      auth: { type: "admin-secret", secret: "test-secret" },
+    });
+
+    itx[Symbol.dispose]();
+
+    await expect(server.clientClose).resolves.toBe(3000);
+  });
+
+  test("keeps the session open until every duplicated ready stub is disposed", async () => {
+    const server = await startRpcServer({ authenticated: true });
+    const itx = await connectItxReady({
+      baseUrl: server.baseUrl,
+      auth: { type: "admin-secret", secret: "test-secret" },
+    });
+    const duplicate = itx.dup();
+
+    itx[Symbol.dispose]();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(server.clientCloseCount()).toBe(0);
+    await expect(itx.__describe()).rejects.toThrow("disposed");
+    await expect(duplicate.__describe()).resolves.toEqual({ name: "test target" });
+
+    duplicate[Symbol.dispose]();
+    await expect(server.clientClose).resolves.toBe(3000);
+  });
+
+  test("does not retry a refused authentication after the WebSocket is open", async () => {
+    const server = await startRpcServer({ authError: new Error("refused") });
+    const onRetry = vi.fn();
+
+    await expect(
+      connectItxReady(
+        {
+          baseUrl: server.baseUrl,
+          auth: { type: "admin-secret", secret: "test-secret" },
+        },
+        { retryInitialConnection: { delayMs: 0, onRetry } },
+      ),
+    ).rejects.toThrow("refused");
+
+    expect(server.authenticationCount()).toBe(1);
+    expect(server.upgradeCount()).toBe(1);
+    expect(onRetry).not.toHaveBeenCalled();
+    await expect(server.clientClose).resolves.toBe(3000);
+  });
 });
 
-async function startRpcServer(options: { describeError?: Error; rejectUpgradeCount?: number }) {
+async function startRpcServer(options: {
+  authError?: Error;
+  authenticated?: boolean;
+  describeError?: Error;
+  rejectUpgradeCount?: number;
+}) {
   const httpServer = createServer();
   const webSocketServer = new WebSocketServer({ noServer: true });
+  const clientClose = Promise.withResolvers<number>();
+  let clientCloseCount = 0;
+  let authenticationCount = 0;
   let upgradeCount = 0;
 
   httpServer.on("upgrade", (request, socket, head) => {
@@ -84,9 +151,19 @@ async function startRpcServer(options: { describeError?: Error; rejectUpgradeCou
   });
   webSocketServer.on("connection", (webSocket) => {
     webSocket.on("error", () => {});
+    webSocket.once("close", (code) => {
+      clientCloseCount += 1;
+      clientClose.resolve(code);
+    });
     newWebSocketRpcSession(
       webSocket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
-      new DescribeTarget(options.describeError),
+      options.authenticated || options.authError
+        ? new AuthenticateTarget(
+            options.describeError,
+            options.authError,
+            () => authenticationCount++,
+          )
+        : new DescribeTarget(options.describeError),
     );
   });
 
@@ -103,6 +180,9 @@ async function startRpcServer(options: { describeError?: Error; rejectUpgradeCou
 
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
+    clientClose: clientClose.promise,
+    clientCloseCount: () => clientCloseCount,
+    authenticationCount: () => authenticationCount,
     upgradeCount: () => upgradeCount,
   };
 }
@@ -118,6 +198,25 @@ class DescribeTarget extends RpcTarget {
   __describe() {
     if (this.error) throw this.error;
     return { name: "test target" };
+  }
+}
+
+class AuthenticateTarget extends RpcTarget {
+  private readonly authError: Error | undefined;
+  private readonly error: Error | undefined;
+  private readonly onAuthenticate: () => void;
+
+  constructor(error: Error | undefined, authError: Error | undefined, onAuthenticate: () => void) {
+    super();
+    this.error = error;
+    this.authError = authError;
+    this.onAuthenticate = onAuthenticate;
+  }
+
+  authenticate() {
+    this.onAuthenticate();
+    if (this.authError) throw this.authError;
+    return new DescribeTarget(this.error);
   }
 }
 

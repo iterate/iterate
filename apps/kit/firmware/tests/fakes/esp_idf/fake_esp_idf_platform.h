@@ -77,6 +77,9 @@ size_t iterate_kit_fake_platform_restarts_requested(void);
  */
 void iterate_kit_fake_platform_set_hop_answers(bool answers);
 
+/** Record one complete frame arriving from the mounted peer. */
+void iterate_kit_fake_platform_receive_hop_frame(void);
+
 #ifdef __cplusplus
 }
 #endif

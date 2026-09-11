@@ -55,6 +55,7 @@
 #include "iterate/kit/platforms/posix_itx_transport.h"
 #include "iterate/kit/spsc_ring.h"
 #include "iterate/kit/voice_playout.h"
+#include "iterate/kit/voice_uplink.h"
 #include "iterate/kit/voicelab_stream.h"
 
 struct cli_runtime {
@@ -88,7 +89,6 @@ struct cli_runtime {
   enum iterate_kit_posix_itx_transport_state announced_transport;
   enum iterate_kit_voicelab_state announced_voicelab;
   enum iterate_kit_voicelab_failure announced_failure;
-  uint32_t frame_sequence;
   struct cli_microphone microphone;
   struct cli_speaker speaker;
   /*
@@ -129,18 +129,16 @@ struct cli_runtime {
   uint64_t finish_at_ms;
   /** A hang-up is in progress: the call is being ended before the process is. */
   bool hanging_up;
+  /** Set only by the server's conversation-ended control, never by our send. */
+  bool hangup_acknowledged;
   uint64_t hangup_deadline_ms;
+  struct iterate_kit_voice_uplink uplink;
   bool wants_talk;
-  bool talking;
-  bool flushing_turn;
   bool answer_done;
   bool restart_requested;
   uint64_t restart_requested_at_ms;
   bool stop_requested;
   bool source_finished;
-  uint32_t flush_frames_left;
-  uint64_t flush_deadline_ms;
-  uint64_t turn_started_ms;
   /*
    * THE ONE THING NOBODY COULD SEE: where the wait after a key comes up goes.
    *
@@ -176,7 +174,6 @@ struct cli_runtime {
   uint64_t last_pulse_ms;
   uint64_t last_sink_sync_ms;
   uint64_t started_ms;
-  uint32_t downlink_recycles_running;
   uint32_t stats_sequence;
   uint32_t loop_count;
   uint32_t mic_frames_captured;
@@ -192,7 +189,7 @@ struct cli_runtime {
   uint32_t liveness_restarts;
   uint32_t session_restarts;
   uint32_t bridge_losses;
-  uint32_t downlink_recycles;
+  uint32_t connection_recycles;
   uint32_t transport_restarts;
   uint32_t calls_lost;
   bool mounted_once;

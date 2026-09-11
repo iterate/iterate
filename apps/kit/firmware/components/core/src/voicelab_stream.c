@@ -11,6 +11,7 @@ static const char *const authenticate_path[] = {"authenticate"};
 static const char *const streams_get_path[] = {"streams", "get"};
 static const char *const project_path[] = {"projects", "get"};
 static const char *const append_path[] = {"append"};
+static const char *const stream_head_path[] = {"getEventPage"};
 
 static bool nonempty(const char *value) {
   return value != NULL && value[0] != '\0';
@@ -59,6 +60,13 @@ static bool take_result_capability(
   return result->kind == CAPNWEB_RESULT_VALUE &&
       result->status == CAPNWEB_OK &&
       capnweb_value_get_remote_capability(&result->value, capability);
+}
+
+static void advance_resume_cursor(
+    struct iterate_kit_voicelab *voicelab, int64_t offset) {
+  if (offset >= 0 && offset > voicelab->resume_after_offset) {
+    voicelab->resume_after_offset = offset;
+  }
 }
 
 /* --- base64 (RFC 4648, unpadded — matches the vendored writer) ---------- */
@@ -388,6 +396,7 @@ static enum capnweb_status batch_dispatch(
   struct capnweb_value batch;
   struct capnweb_value events_wrapper;
   struct capnweb_value events;
+  struct capnweb_value scanned_through;
   size_t event_count;
   size_t index;
   ++voicelab->batches_on_connection;
@@ -555,6 +564,13 @@ static enum capnweb_status batch_dispatch(
       }
     }
   }
+  /* Advance only after dispatch: a scan head may include this batch's events. */
+  if (capnweb_value_object_get(&batch, "scannedThroughOffset", &scanned_through)) {
+    int64_t offset;
+    if (capnweb_value_get_int64(&scanned_through, &offset)) {
+      advance_resume_cursor(voicelab, offset);
+    }
+  }
   return capnweb_reply_set_null(reply);
 }
 
@@ -640,8 +656,9 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
   struct capnweb_expression max_events;
   struct capnweb_expression max_bytes;
   struct capnweb_expression no_state;
+  struct capnweb_expression replay_after_offset;
   struct capnweb_expression callback;
-  struct capnweb_object_field fields[6];
+  struct capnweb_object_field fields[7];
   struct capnweb_expression argument;
   char key_text[64];
   int key_length;
@@ -676,7 +693,7 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
       voicelab->options.conversation_id,
       voicelab->connection_generation);
   if (key_length < 0 || (size_t)key_length >= sizeof(key_text)) {
-    return CAPNWEB_E_LIMIT;
+    return fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL, CAPNWEB_E_LIMIT);
   }
 
   event_type_items[0] = (struct capnweb_expression){
@@ -764,9 +781,19 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
     {"processEventBatch", sizeof("processEventBatch") - 1U},
     &callback,
   };
+  if (voicelab->resume_after_offset >= 0) {
+    replay_after_offset = (struct capnweb_expression){
+      CAPNWEB_EXPRESSION_INT64,
+      {.integer = voicelab->resume_after_offset},
+    };
+    fields[6] = (struct capnweb_object_field){
+      {"replayAfterOffset", sizeof("replayAfterOffset") - 1U},
+      &replay_after_offset,
+    };
+  }
   argument = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_OBJECT,
-    {.object = {fields, 6U}},
+    {.object = {fields, voicelab->resume_after_offset >= 0 ? 7U : 6U}},
   };
   status = capnweb_session_call_expressions(
       voicelab->options.session,
@@ -779,14 +806,51 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
       voicelab);
   if (status == CAPNWEB_OK) {
     voicelab->recycle_pending = true;
+  } else {
+    (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL, status);
   }
   return status;
+}
+
+static void stream_head_completed(
+    void *context, const struct capnweb_result *result) {
+  struct iterate_kit_voicelab *voicelab = context;
+  struct capnweb_value head;
+  int64_t offset = -1;
+  enum capnweb_status status;
+  if (voicelab->state == ITERATE_KIT_VOICELAB_CLOSED) return;
+  if (result->kind == CAPNWEB_RESULT_SESSION_ENDED) {
+    (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_SESSION_ENDED, result->status);
+    return;
+  }
+  if (result->kind == CAPNWEB_RESULT_REJECTION) {
+    (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_STREAM_HEAD_REJECTED, CAPNWEB_OK);
+    return;
+  }
+  if (result->kind != CAPNWEB_RESULT_VALUE || result->status != CAPNWEB_OK ||
+      !capnweb_value_object_get(&result->value, "streamMaxOffset", &head) ||
+      !capnweb_value_get_int64(&head, &offset) || offset < 0) {
+    (void)fail(
+        voicelab, ITERATE_KIT_VOICELAB_FAILURE_STREAM_HEAD_RESULT,
+        CAPNWEB_E_INVALID_MESSAGE);
+    return;
+  }
+  advance_resume_cursor(voicelab, offset);
+  voicelab->state = ITERATE_KIT_VOICELAB_OPENING_CONNECTION;
+  status = iterate_kit_voicelab_recycle_connection(voicelab);
+  if (status != CAPNWEB_OK && voicelab->state != ITERATE_KIT_VOICELAB_FAILED) {
+    (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL, status);
+  }
 }
 
 static void stream_completed(
     void *context, const struct capnweb_result *result) {
   struct iterate_kit_voicelab *voicelab = context;
   enum capnweb_status status;
+  struct capnweb_expression limit;
+  struct capnweb_expression after_offset;
+  struct capnweb_object_field head_fields[2];
+  struct capnweb_expression head_args;
   if (voicelab->state == ITERATE_KIT_VOICELAB_CLOSED) {
     return;
   }
@@ -819,17 +883,22 @@ static void stream_completed(
     voicelab->capnweb_status = CAPNWEB_OK;
     return;
   }
-  voicelab->state = ITERATE_KIT_VOICELAB_OPENING_CONNECTION;
-  status = iterate_kit_voicelab_recycle_connection(voicelab);
-  /*
-   * KEEP THE SPECIFIC FAILURE. `recycle_connection` fails through `fail()`
-   * itself for the causes it can name — a full export table is
-   * FAILURE_EXPORT — and overwriting that here relabelled every one of them
-   * "open-call". Which is how a leaked capability spent an evening looking
-   * like a networking problem.
-   */
-  if (status != CAPNWEB_OK && voicelab->state != ITERATE_KIT_VOICELAB_FAILED) {
-    (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL, status);
+  limit = (struct capnweb_expression){CAPNWEB_EXPRESSION_INT64, {.integer = 1}};
+  after_offset = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_INT64, {.integer = INT64_C(9007199254740991)}};
+  head_fields[0] = (struct capnweb_object_field){
+    {"limit", sizeof("limit") - 1U}, &limit};
+  head_fields[1] = (struct capnweb_object_field){
+    {"afterOffset", sizeof("afterOffset") - 1U}, &after_offset};
+  head_args = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_OBJECT, {.object = {head_fields, 2U}}};
+  voicelab->state = ITERATE_KIT_VOICELAB_GETTING_STREAM_HEAD;
+  status = capnweb_session_call_expressions(
+      voicelab->options.session, voicelab->stream_capability, stream_head_path,
+      sizeof(stream_head_path) / sizeof(stream_head_path[0]), &head_args, 1U,
+      stream_head_completed, voicelab);
+  if (status != CAPNWEB_OK) {
+    (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_STREAM_HEAD_CALL, status);
   }
 }
 
@@ -989,6 +1058,7 @@ enum capnweb_status iterate_kit_voicelab_start(
   }
   voicelab->options = *options;
   voicelab->last_event_offset = -1;
+  voicelab->resume_after_offset = -1;
   voicelab->state = ITERATE_KIT_VOICELAB_AUTHENTICATING;
   project_id = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
@@ -1503,6 +1573,7 @@ const char *iterate_kit_voicelab_state_name(
     case ITERATE_KIT_VOICELAB_AUTHENTICATING: return "authenticating";
     case ITERATE_KIT_VOICELAB_GETTING_PROJECT: return "getting-project";
     case ITERATE_KIT_VOICELAB_GETTING_STREAM: return "getting-stream";
+    case ITERATE_KIT_VOICELAB_GETTING_STREAM_HEAD: return "getting-stream-head";
     case ITERATE_KIT_VOICELAB_OPENING_CONNECTION: return "opening-connection";
     case ITERATE_KIT_VOICELAB_READY: return "ready";
     case ITERATE_KIT_VOICELAB_FAILED: return "failed";
@@ -1529,6 +1600,11 @@ const char *iterate_kit_voicelab_failure_name(
     case ITERATE_KIT_VOICELAB_FAILURE_STREAM_REJECTED:
       return "stream-rejected";
     case ITERATE_KIT_VOICELAB_FAILURE_STREAM_RESULT: return "stream-result";
+    case ITERATE_KIT_VOICELAB_FAILURE_STREAM_HEAD_CALL: return "stream-head-call";
+    case ITERATE_KIT_VOICELAB_FAILURE_STREAM_HEAD_REJECTED:
+      return "stream-head-rejected";
+    case ITERATE_KIT_VOICELAB_FAILURE_STREAM_HEAD_RESULT:
+      return "stream-head-result";
     case ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL: return "open-call";
     case ITERATE_KIT_VOICELAB_FAILURE_OPEN_REJECTED: return "open-rejected";
     case ITERATE_KIT_VOICELAB_FAILURE_OPEN_RESULT: return "open-result";

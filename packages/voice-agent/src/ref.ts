@@ -52,17 +52,18 @@ export const voiceAgentEntrypointRef: VoiceAgentEntrypointRef = {
 
 /**
  * The STATEFUL facet worker for one conversation stream — the ref the agent's
- * own setup writes into the stream's subscription, spelled once here so a CLI
- * can address (and kill) the same thing.
+ * own setup writes into the stream's subscription. The Stream Durable Object
+ * hosts that facet; this describes the class it loads, rather than a separate
+ * DynamicWorker Durable Object a CLI can kill directly.
  *
  * The durable key predates this package: a project that moves from a
- * committed copy of the agent to the package keeps its facet state. Why a CLI
- * ever needs to kill it: a stateful durable worker keeps the bundle it booted
+ * committed copy of the agent to the package keeps its facet state. A hosted
+ * stateful facet keeps the bundle it booted
  * with for as long as it stays warm, and back-to-back voicelab runs keep it
  * warm indefinitely — measured on prd (2026-08-26 evening): the facet served
  * a build three commits stale while the STATELESS entrypoint rebuilt fresh on
- * every run. After any install that changed the repo, kill it; the next
- * dispatch boots the build the repo declares now.
+ * every run. After any install that changed the repo, kill its parent stream;
+ * the next dispatch boots the build the repo declares now.
  */
 export function voiceAgentFacetRef(streamPath: string): VoiceAgentFacetRef {
   return {

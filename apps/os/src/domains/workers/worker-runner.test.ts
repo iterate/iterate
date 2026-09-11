@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { recordedSpans, resetRecordedSpans } from "../../test/cloudflare-workers-shim.ts";
 import type { DynamicWorkerRef } from "./schemas.ts";
-import { DynamicWorkerRunner, type DynamicWorkerTraceRole } from "./worker-runner.ts";
+import {
+  DynamicWorkerRunner,
+  isWorkerRpcTooManySubrequestsError,
+  type DynamicWorkerTraceRole,
+} from "./worker-runner.ts";
 import { WORKER_SERVE_HEADER } from "./worker-serve-info.ts";
 
 const h = vi.hoisted(() => ({
@@ -91,6 +95,13 @@ beforeEach(() => {
     fetch: h.statefulFetch,
     invokeCapability: h.statefulInvokeCapability,
   });
+});
+
+it("classifies only workerd's native subrequest exhaustion", () => {
+  expect(isWorkerRpcTooManySubrequestsError(new Error("Too many subrequests"))).toBe(true);
+  expect(isWorkerRpcTooManySubrequestsError(new Error("too many subrequests"))).toBe(false);
+  expect(isWorkerRpcTooManySubrequestsError(new Error("CPU limit exceeded"))).toBe(false);
+  expect(isWorkerRpcTooManySubrequestsError({ message: "Too many subrequests" })).toBe(false);
 });
 
 it("gives bare fetch and scoped ITX the same host-minted invocation source", () => {

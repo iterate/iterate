@@ -23,10 +23,12 @@
 #include "esp_timer.h"
 
 #include "iterate/kit/audio_processor.h"
+#include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/conversation_launch.h"
 #include "iterate/kit/voice_device_profile.h"
 
 #include <stdbool.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -97,7 +99,32 @@ struct board {
   struct iterate_kit_voice_view last_view;
   size_t presented;
   bool started;
+  bool physical_start_edge;
+  bool physical_held;
 };
+
+/* Deliberately larger than 4096 bytes together with the shared fields: every
+ * counter is valid uint32 telemetry, so a health reply must retain them all. */
+static size_t board_health(void *context, char *out, size_t capacity) {
+  enum { BOARD_HEALTH_COUNTERS = 70 };
+  size_t used = 0U;
+  (void)context;
+  for (size_t index = 0U; index < BOARD_HEALTH_COUNTERS; ++index) {
+    char name[32];
+    const int named = snprintf(
+        name, sizeof(name), "boardMaximumCounter%02u", (unsigned)index);
+    const struct iterate_kit_health_field field = {
+        .name = name,
+        .value = UINT32_MAX,
+    };
+    if (named <= 0 || (size_t)named >= sizeof(name)) return 0U;
+    const size_t added = iterate_kit_health_append_fields(
+        out + used, capacity - used, &field, 1U);
+    if (added == 0U) return 0U;
+    used += added;
+  }
+  return used;
+}
 
 static bool board_start(void *context, struct iterate_kit_board_audio *out) {
   struct board *board = context;
@@ -116,6 +143,14 @@ static void board_present(
   ++board->presented;
 }
 
+/* A controllable already-classified PTT edge/level for the launch timeout. */
+static void board_poll(void *context, struct iterate_kit_voice_intent *out) {
+  struct board *board = context;
+  out->start_call = board->physical_start_edge;
+  out->talk_held = board->physical_held;
+  board->physical_start_edge = false;
+}
+
 /*
  * NO `poll`, WHICH IS THE POINT. A NULL op is a board saying it has no such
  * hardware, so this program contains no physical control of any kind — every
@@ -123,7 +158,9 @@ static void board_present(
  */
 static const struct iterate_kit_board_ops board_ops = {
   .start = board_start,
+  .poll = board_poll,
   .present = board_present,
+  .health = board_health,
 };
 
 static const struct iterate_kit_board_facts push_to_talk_facts = {
@@ -245,17 +282,25 @@ static void pump(void) {
     struct iterate_kit_itx_connection *connection =
         iterate_kit_fake_platform_connection();
     bool answered_any = false;
+    bool stream_head = false;
     while (answered < iterate_kit_fake_platform_sent_count()) {
       const char *message = iterate_kit_fake_platform_sent(answered);
       const char *pull = strstr(message, "[\"pull\",");
+      if (strstr(message, "getEventPage") != NULL) stream_head = true;
       ++answered;
       if (pull == NULL) continue;
       {
         char reply[128];
         const long id = strtol(pull + strlen("[\"pull\","), NULL, 10);
-        (void)snprintf(
-            reply, sizeof(reply), "[\"resolve\",%ld,[\"export\",%ld]]", id,
-            -(id + 10));
+        if (stream_head) {
+          (void)snprintf(
+              reply, sizeof(reply), "[\"resolve\",%ld,{\"streamMaxOffset\":0}]", id);
+          stream_head = false;
+        } else {
+          (void)snprintf(
+              reply, sizeof(reply), "[\"resolve\",%ld,[\"export\",%ld]]", id,
+              -(id + 10));
+        }
         assert(
             iterate_kit_itx_connection_receive_text(
                 connection, reply, strlen(reply)) == CAPNWEB_OK);
@@ -294,6 +339,32 @@ static bool sent_after_contains(size_t from, const char *needle) {
   return false;
 }
 
+/* Resolve one ptt-start append successfully while deliberately withholding its
+ * conversation-accepted reduction. */
+static void resolve_start_append(size_t from) {
+  size_t index;
+  bool saw_start = false;
+  struct iterate_kit_itx_connection *connection =
+      iterate_kit_fake_platform_connection();
+  assert(connection != NULL);
+  for (index = from; index < iterate_kit_fake_platform_sent_count(); ++index) {
+    const char *message = iterate_kit_fake_platform_sent(index);
+    const char *pull;
+    if (strstr(message, "ptt-start") != NULL) saw_start = true;
+    if (saw_start) {
+      pull = strstr(message, "[\"pull\",");
+      if (pull == NULL) continue;
+      char reply[96];
+      const long id = strtol(pull + strlen("[\"pull\","), NULL, 10);
+      (void)snprintf(reply, sizeof(reply), "[\"resolve\",%ld,[{\"ok\":true}]]", id);
+      deliver(connection, reply);
+      return;
+    }
+  }
+  assert(saw_start);
+  assert(false);
+}
+
 /*
  * Deliver the call's acceptance, exactly as the stream delivers it — through
  * the `processEventBatch` callback the loop itself exported, whose id is read
@@ -302,6 +373,7 @@ static bool sent_after_contains(size_t from, const char *needle) {
  */
 static void deliver_accepted(void) {
   static char message[512];
+  static uint64_t next_offset = 1000U;
   struct iterate_kit_itx_connection *connection =
       iterate_kit_fake_platform_connection();
   const char *found = iterate_kit_fake_platform_find_sent("processEventBatch");
@@ -320,9 +392,43 @@ static void deliver_accepted(void) {
       sizeof(message),
       "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
       "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
-      "\"offset\":100,"
+      "\"offset\":%" PRIu64 ","
       "\"payload\":{\"conversationId\":\"convdial\",\"handshakeTookMs\":2000}}"
-      "]],\"scannedThroughOffset\":100,\"state\":null}]]]",
+      "]],\"scannedThroughOffset\":%" PRIu64 ",\"state\":null}]]]",
+      export_id, next_offset, next_offset);
+  ++next_offset;
+  deliver(connection, message);
+  {
+    char release[64];
+    (void)snprintf(
+        release, sizeof(release), "[\"release\",%lld,1]",
+        (long long)next_inbound_call_id++);
+    deliver(connection, release);
+  }
+}
+
+static void deliver_ended(void) {
+  static char message[512];
+  struct iterate_kit_itx_connection *connection =
+      iterate_kit_fake_platform_connection();
+  const char *found = iterate_kit_fake_platform_find_sent("processEventBatch");
+  const char *field;
+  const char *marker;
+  long export_id;
+  assert(connection != NULL);
+  assert(found != NULL);
+  field = strstr(found, "\"processEventBatch\":");
+  assert(field != NULL);
+  marker = strstr(field, "[\"export\",");
+  assert(marker != NULL);
+  export_id = strtol(marker + strlen("[\"export\","), NULL, 10);
+  (void)snprintf(
+      message,
+      sizeof(message),
+      "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
+      "{\"type\":\"events.iterate.com/voice-agent/conversation-ended\","
+      "\"offset\":10000000,\"payload\":{\"conversationId\":\"convdial\"}}"
+      "]],\"scannedThroughOffset\":10000000,\"state\":null}]]]",
       export_id);
   deliver(connection, message);
   {
@@ -388,13 +494,12 @@ static void conversation_control_opens_and_ends_a_call(void) {
 }
 
 /*
- * NOTHING PHYSICAL WAS INVOLVED IN ANY OF THE ABOVE. This board declares no
- * `poll` op, which is a board saying it has no such hardware — asserted rather
- * than assumed, because a fixture that quietly grew a button would make every
- * scenario here meaningless.
+ * NOTHING PHYSICAL WAS INVOLVED IN ANY OF THE ABOVE. The test board exposes a
+ * controllable poll only for the held-timeout regression below; it begins idle,
+ * so these RPC scenarios still arrive through the mounted capability alone.
  */
 static void nothing_physical_was_involved(void) {
-  assert(board_ops.poll == NULL);
+  assert(!board.physical_start_edge && !board.physical_held);
   assert(!iterate_kit_fake_esp_idf_restart_requested());
   assert(board.presented > 0U);
 }
@@ -424,6 +529,72 @@ static void a_press_into_a_live_hop_asks_once(void) {
   run_ms(4000U);
   assert(iterate_kit_fake_platform_probes_requested() == probes + 1U);
   assert(iterate_kit_fake_platform_restarts_requested() == 0U);
+}
+
+/*
+ * A held wake cannot turn a healthy-but-unreduced append stream into an
+ * infinite client-side retry. It needs a new physical edge or a new RPC after
+ * the full cold-start budget has failed; a late acceptance is closed because
+ * the person no longer wants that call.
+ */
+static void a_held_unaccepted_call_times_out_until_an_explicit_retry(void) {
+  size_t after_failure;
+  size_t retry_from;
+  size_t restarts_before;
+  quiescent();
+  pump();
+  run_ms(ITERATE_KIT_LAUNCH_PLACE_RETRY_MS + 500U);
+  iterate_kit_fake_platform_set_hop_answers(true);
+  restarts_before = iterate_kit_fake_platform_restarts_requested();
+
+  const size_t first_start = iterate_kit_fake_platform_sent_count();
+  board.physical_held = true;
+  board.physical_start_edge = true;
+  step();
+  assert(sent_after_contains(first_start, "ptt-start"));
+  step();
+  resolve_start_append(first_start);
+  step();
+
+  /* The append succeeded and the PONGs are healthy, but no acceptance arrives.
+   * Switch to open mic before expiry: its post-launch edge must not overwrite
+   * the terminal state with "listening" on this same pass or the next. */
+  iterate_kit_voice_loop_set_turns(ITERATE_KIT_VOICE_TURNS_SERVER_VAD);
+  run_ms(ITERATE_KIT_LAUNCH_ACCEPTANCE_TIMEOUT_MS + 500U);
+  assert(!board.last_view.wants_call);
+  assert(!board.last_view.listening);
+  assert(strcmp(board.last_view.status, "call start timed out — press to retry") == 0);
+  step();
+  assert(!board.last_view.listening);
+  assert(strcmp(board.last_view.status, "call start timed out — press to retry") == 0);
+  assert(iterate_kit_fake_platform_restarts_requested() == restarts_before);
+
+  after_failure = iterate_kit_fake_platform_sent_count();
+  run_ms(5000U);
+  assert(!sent_after_contains(after_failure, "ptt-start"));
+  assert(!board.last_view.wants_call);
+
+  /* A late stream event must be ended, never revive the failed local intent. */
+  retry_from = iterate_kit_fake_platform_sent_count();
+  deliver_accepted();
+  run_ms(200U);
+  assert(!board.last_view.wants_call);
+  assert(sent_after_contains(retry_from, "conversation-ended"));
+  deliver_ended();
+  run_ms(200U);
+
+  /* Held across failure is spent. Release then a new edge places exactly once. */
+  board.physical_held = false;
+  run_ms(100U);
+  retry_from = iterate_kit_fake_platform_sent_count();
+  board.physical_held = true;
+  board.physical_start_edge = true;
+  step();
+  assert(sent_after_contains(retry_from, "ptt-start"));
+  run_ms(500U);
+  assert(!sent_after_contains(retry_from + 1U, "ptt-start"));
+  board.physical_held = false;
+  run_ms(100U);
 }
 
 /*
@@ -510,8 +681,8 @@ static void a_silent_dial_release_commits_no_turn(void) {
  *
  * The hop stops answering: TCP still accepts every byte, the transport stays
  * READY, and the call request the press sent is gone into nothing. Before this
- * probe existed, the first thing to notice was DOWNLINK_SILENCE_MS ten seconds
- * later. Two probes, then the socket is replaced — one miss is a dropped
+ * probe existed, the first failure looked like a healthy quiet call. Two
+ * probes, then the socket is replaced — one miss is a dropped
  * packet, and the second is what makes it evidence.
  */
 static void a_press_into_a_dead_hop_replaces_the_socket(void) {
@@ -547,12 +718,80 @@ static void a_press_into_a_dead_hop_replaces_the_socket(void) {
   assert(iterate_kit_fake_platform_restarts_requested() == 1U);
 }
 
+/*
+ * A SPEAKING DEVICE MUST NOT REBOOT MERELY BECAUSE ITS PERIODIC PING WAS
+ * SUPPRESSED BY OUTBOUND TRAFFIC.
+ *
+ * The real WebSocket owner emits a PING after an inbound-silent interval even
+ * while microphone frames go out. This loop-level witness models the result:
+ * a mounted peer keeps delivering complete frames for more than the seven
+ * minute restart deadline. The old PONG-only watchdog reboots here. Then the
+ * peer goes silent, and the same READY transport must still reboot — outbound
+ * writes are never allowed to renew this lease.
+ */
+static void inbound_hop_frames_keep_a_live_stream_alive_but_not_a_dead_one(void) {
+  uint32_t elapsed;
+  for (elapsed = 0U;
+       elapsed < ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS + 60000U;
+       elapsed += 60000U) {
+    iterate_kit_fake_platform_receive_hop_frame();
+    run_ms(60000U);
+    assert(!iterate_kit_fake_esp_idf_restart_requested());
+  }
+
+  run_ms(ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS + 100U);
+  assert(iterate_kit_fake_esp_idf_restart_requested());
+}
+
+/** health() follows adopted turns, including changes after boot. */
+static void iterate_kit_health_reports_runtime_turns(void) {
+  const struct {
+    enum iterate_kit_voice_turns turns;
+    const char *field;
+  } rows[] = {
+    {ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK, "\"pushToTalk\":true"},
+    {ITERATE_KIT_VOICE_TURNS_SERVER_VAD, "\"pushToTalk\":false"},
+    {ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK, "\"pushToTalk\":true"},
+  };
+  struct iterate_kit_itx_connection *connection = iterate_kit_fake_platform_connection();
+  for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
+    char message[64];
+    const size_t before = iterate_kit_fake_platform_sent_count();
+    iterate_kit_voice_loop_set_turns(rows[i].turns);
+    deliver(connection, "[\"push\",[\"pipeline\",0,[\"health\"],[[]]]]");
+    (void)snprintf(message, sizeof(message), "[\"pull\",%lld]", (long long)next_inbound_call_id);
+    deliver(connection, message);
+    assert(sent_after_contains(before, rows[i].field));
+    (void)snprintf(message, sizeof(message), "[\"release\",%lld,1]", (long long)next_inbound_call_id++);
+    deliver(connection, message);
+  }
+}
+
+static void health_keeps_large_board_counter_documents(void) {
+  struct iterate_kit_itx_connection *connection =
+      iterate_kit_fake_platform_connection();
+  const size_t before = iterate_kit_fake_platform_sent_count();
+  assert(connection != NULL);
+  deliver(connection, "[\"push\",[\"pipeline\",0,[\"health\"],[[]]]]");
+  char pull[64];
+  (void)snprintf(pull, sizeof(pull), "[\"pull\",%lld]", (long long)next_inbound_call_id++);
+  deliver(connection, pull);
+  const char *response = iterate_kit_fake_platform_find_sent("boardMaximumCounter69");
+  assert(response != NULL);
+  assert(strlen(response) > 4096U);
+  assert(sent_after_contains(before, "boardMaximumCounter69"));
+  (void)snprintf(pull, sizeof(pull), "[\"release\",%lld,1]", (long long)(next_inbound_call_id - 1));
+  deliver(connection, pull);
+}
+
 int main(void) {
   boot();
   a_remote_press_raises_wants_call_with_no_button();
   releasing_talk_keeps_the_call();
   conversation_control_opens_and_ends_a_call();
   nothing_physical_was_involved();
+  iterate_kit_health_reports_runtime_turns();
+  health_keeps_large_board_counter_documents();
 
   /* From here on the device is mounted, so the launch ladder can run. */
   pump();
@@ -562,5 +801,7 @@ int main(void) {
   a_silent_dial_release_commits_no_turn();
   pump();
   a_press_into_a_dead_hop_replaces_the_socket();
+  a_held_unaccepted_call_times_out_until_an_explicit_retry();
+  inbound_hop_frames_keep_a_live_stream_alive_but_not_a_dead_one();
   return 0;
 }

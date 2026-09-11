@@ -185,6 +185,32 @@ describe("ITX observability", () => {
     });
   });
 
+  it("classifies the owned offline live-capability contract as unavailable", async () => {
+    const events: WideLogEvent[] = [];
+    const log = vi
+      .spyOn(console, "log")
+      .mockImplementation((event) => void events.push(event as WideLogEvent));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const session = createItxRpcSessionOptions({
+      transport: "websocket",
+      sessionId: "itx_session_provider_lost",
+      parentLogId: "log_handshake",
+    });
+
+    await expect(
+      session.onCall!({ path: ["call"], target: {} }, async () => {
+        throw new Error('capability "device" is offline');
+      }),
+    ).rejects.toThrow('capability "device" is offline');
+
+    expect(log).toHaveBeenCalledOnce();
+    expect(error).not.toHaveBeenCalled();
+    expect(events[0]).toMatchObject({ outcome: "unavailable" });
+    expect(recordedSpans[0]).toMatchObject({
+      attributes: { "itx.outcome": "unavailable" },
+    });
+  });
+
   it.each([
     {
       label: "a frozen pre-tagged Error",
