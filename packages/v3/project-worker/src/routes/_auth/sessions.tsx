@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
+import { useItx } from "../-itx.tsx";
 
 export const Route = createFileRoute("/_auth/sessions")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -14,7 +15,7 @@ export const Route = createFileRoute("/_auth/sessions")({
 function SessionsPage() {
   const { items, cursor, projects, canMintToken } = Route.useLoaderData();
   const router = useRouter();
-  const { api } = Route.useRouteContext();
+  const { api } = useItx();
   const search = Route.useSearch();
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

@@ -1,4 +1,5 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
+import { useItx } from "../-itx.tsx";
 import { Dashboard } from "../../client/dashboard.tsx";
 
 import { loadDashboard } from "../../client/dashboard-data.ts";
@@ -9,7 +10,7 @@ export const Route = createFileRoute("/_auth/")({
 });
 function AccountPage() {
   const data = Route.useLoaderData();
-  const { api } = Route.useRouteContext();
+  const { api } = useItx();
   const router = useRouter();
   return (
     <Dashboard

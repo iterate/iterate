@@ -8,6 +8,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, type FormEvent } from "react";
 import { useLiveState } from "../../client/react.tsx";
+import { useItx } from "../-itx.tsx";
 import { ACCOUNT_PROCESSOR_SOURCE } from "../../generated/account-processor-source.ts";
 import { tokenCreateRequestedEvent, type AccountView } from "../../account/contract.ts";
 
@@ -29,7 +30,7 @@ export const Route = createFileRoute("/_auth/account")({
 });
 
 function AccountLivePage() {
-  const { api } = Route.useRouteContext();
+  const { api } = useItx();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a capnweb stub is an untyped proxy, as in the demo
   const userItx = useMemo<any>(() => api.user, [api]);
   const { value, status, error } = useLiveState<AccountView>(userItx, {
