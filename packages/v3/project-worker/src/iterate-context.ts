@@ -297,7 +297,13 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  removes the row (and recalls the lent callback) when disposed or when the session ends. */
   async subscribe(input: {
     name?: string;
-    target: ItxExpressionInput | ClientRpcStub | null;
+    // A pure itx EXPRESSION, a lent RPC stub, or a LIVE callback `(events, range) => void` (lent to
+    // the registry as `subscription:<name>` — the client form live state uses); null removes the row.
+    target:
+      | ItxExpressionInput
+      | ClientRpcStub
+      | ((events: unknown[], range: unknown) => void)
+      | null;
     consumes?: string[];
     /** Where the cursor lane starts (0 = the whole log); absent = from now. A push target ignores it. */
     afterOffset?: number;

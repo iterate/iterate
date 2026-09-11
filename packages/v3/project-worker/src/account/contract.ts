@@ -48,7 +48,7 @@ export type TokenRevoke = z.infer<typeof TokenRevoke>;
 
 // ── the view ──
 
-const AccountView = z.object({
+export const AccountView = z.object({
   authentications: z
     .array(z.object({ credential: z.string(), at: z.number(), operationId: z.string() }))
     .default([]),

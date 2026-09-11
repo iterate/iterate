@@ -7,10 +7,11 @@
 // control-plane security spec's expected-fails.
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, type FormEvent } from "react";
+import { z } from "zod";
 import { useLiveState } from "../../client/react.tsx";
 import { useItx } from "../-itx.tsx";
 import { ACCOUNT_PROCESSOR_SOURCE } from "../../generated/account-processor-source.ts";
-import type { AccountView } from "../../account/contract.ts";
+import { AccountView } from "../../account/contract.ts";
 
 export const Route = createFileRoute("/_auth/account")({
   // Host the account processor on the user's own context before the page reads its live view. The
@@ -32,11 +33,13 @@ export const Route = createFileRoute("/_auth/account")({
 
 function AccountLivePage() {
   const { api } = useItx();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a capnweb stub is an untyped proxy, as in the demo
-  const userItx = useMemo<any>(() => api.user, [api]);
+  const userItx = useMemo(() => api.user, [api]);
   const { value, status, error } = useLiveState<AccountView>(userItx, {
     key: "account",
-    door: () => userItx.invoke("itx.facets.get('account').liveSnapshot()"),
+    door: async () =>
+      z
+        .object({ rev: z.number(), state: AccountView })
+        .parse(await userItx.invoke("itx.facets.get('account').liveSnapshot()")),
   });
 
   const [name, setName] = useState("");
