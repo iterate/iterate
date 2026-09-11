@@ -23,9 +23,11 @@ describe("diff", () => {
     expect(diff(5, { a: 1 })).toEqual({ set: { a: 1 } });
   });
 
-  it("treats arrays as opaque leaves (no positional diff)", () => {
-    expect(diff([1, 2, 3], [1, 9, 3])).toEqual({ set: [1, 9, 3] });
-    expect(diff({ xs: [1, 2] }, { xs: [1, 2, 3] })).toEqual({ fields: { xs: { set: [1, 2, 3] } } });
+  it("retains whole-array replacement for version 1", () => {
+    expect(diff([1, 2, 3], [1, 9, 3], { arrays: false })).toEqual({ set: [1, 9, 3] });
+    expect(diff({ xs: [1, 2] }, { xs: [1, 2, 3] }, { arrays: false })).toEqual({
+      fields: { xs: { set: [1, 2, 3] } },
+    });
   });
 
   it("emits only the changed keys of a plain object", () => {
@@ -70,6 +72,62 @@ describe("diff", () => {
 });
 
 describe("applyPatch", () => {
+  it("patches one changed array item without replacing its siblings", () => {
+    const previous = [{ text: { 0: "sealed", 1: "tail" } }, { untouched: true }];
+    const next = [{ text: { 0: "sealed", 1: "tail appended" } }, { untouched: true }];
+    const encoded = JSON.stringify(diff(previous, next));
+    expect(encoded).not.toContain("sealed");
+    const patch = JSON.parse(encoded);
+    const applied = applyPatch(previous, patch);
+    expect(applied).toEqual(next);
+    expect(applied[1]).toBe(previous[1]);
+    expect(patch).toEqual({
+      array: {
+        length: 2,
+        items: [
+          [
+            0,
+            {
+              fields: { text: { fields: { 1: { set: "tail appended" } } } },
+            },
+          ],
+        ],
+      },
+    });
+  });
+
+  it.each([
+    [
+      [1, 2],
+      [1, 2, 3],
+    ],
+    [[1, 2, 3], [1]],
+    [[1, 2], []],
+    [
+      [1, 2, 3],
+      [3, 2, 1],
+    ],
+    [[], [null, { x: [1, 2] }]],
+    [
+      [undefined, 1],
+      [undefined, 2],
+    ],
+  ])("round-trips dense array changes: %j → %j", (before, after) => {
+    expect(roundTrip(before, after)).toEqual(after);
+  });
+
+  it("keeps replacement semantics for sparse arrays", () => {
+    const sparse = new Array(3);
+    sparse[2] = 1;
+    expect(diff([], sparse)).toEqual({ set: sparse });
+  });
+
+  it("rejects an array patch with no array baseline or invalid positions", () => {
+    expect(() => applyPatch({}, { array: { length: 1, items: [] } })).toThrow(/baseline/);
+    expect(() => applyPatch([], { array: { length: 1, items: [[1, { set: 2 }]] } })).toThrow(
+      /length/,
+    );
+  });
   it("round-trips every shape back to next", () => {
     const cases: Array<[unknown, unknown]> = [
       [1, 2],
@@ -115,7 +173,8 @@ describe("applyPatch", () => {
     // The patch must stay WIRE-SERIALIZABLE: capnweb accepts exactly
     // Object.prototype objects, so the fields bag can't be null-proto (that
     // variant shipped briefly and killed every push — the panel froze).
-    if ("set" in patch) throw new Error("expected a fields patch, got a leaf replacement");
+    if ("set" in patch || "array" in patch)
+      throw new Error("expected a fields patch, got a leaf replacement");
     expect(Object.getPrototypeOf(patch.fields)).toBe(Object.prototype);
     const applied = applyPatch(prev, patch) as Record<string, unknown>;
     expect(Object.hasOwn(applied, "__proto__")).toBe(true);

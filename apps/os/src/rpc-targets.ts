@@ -54,6 +54,7 @@ import {
   LiveStateSubscriptionRpcTarget,
   type LiveStateRpc,
   type LiveStateSubscriptionHandle,
+  type LiveStateSubscriptionOptions,
   type LiveUpdate,
 } from "iterate/sdk/capnweb";
 import type {
@@ -2166,6 +2167,7 @@ class AgentCollectionLiveStateRpcTarget
 
   async subscribe(
     onUpdate: (update: LiveUpdate<AgentCollectionProcessorState>) => unknown,
+    options?: LiveStateSubscriptionOptions,
   ): Promise<LiveStateSubscriptionHandle> {
     // The Pager's upgrade is routed by the Stream DO's committed subscription
     // catalog and therefore fails before the relay can inspect the facade's
@@ -2173,7 +2175,7 @@ class AgentCollectionLiveStateRpcTarget
     // birth batch first; get() supplies that narrow initialization and leaves
     // no retained subscription.
     await this.get();
-    return await this.#relay().subscribe(onUpdate);
+    return await this.#relay().subscribe(onUpdate, options);
   }
 }
 
@@ -9011,8 +9013,9 @@ class RelayedLiveStateRpcTarget<State extends object>
 
   async subscribe(
     onUpdate: (update: LiveUpdate<State>) => unknown,
+    options?: LiveStateSubscriptionOptions,
   ): Promise<LiveStateSubscriptionHandle> {
-    return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
+    return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate, options));
   }
 }
 
@@ -9108,11 +9111,12 @@ class LiveStateRelayRpcTarget<State extends object>
 
   async subscribe(
     onUpdate: (update: LiveUpdate<State>) => unknown,
+    options?: LiveStateSubscriptionOptions,
   ): Promise<LiveStateSubscriptionHandle> {
     if (this.#relay !== undefined) {
-      return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
+      return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate, options));
     }
-    return await (await (await this.#stub()).liveState).subscribe(onUpdate);
+    return await (await (await this.#stub()).liveState).subscribe(onUpdate, options);
   }
 }
 
@@ -9280,6 +9284,7 @@ class LiveDemoTickerRpcTarget
 
   async subscribe(
     onUpdate: (update: LiveUpdate<{ tick: number; startedAt: number }>) => unknown,
+    options?: LiveStateSubscriptionOptions,
   ): Promise<LiveStateSubscriptionHandle> {
     const engine = new LiveState<{ tick: number; startedAt: number }>({
       tick: 0,
@@ -9287,8 +9292,8 @@ class LiveDemoTickerRpcTarget
     });
     return await new LiveStateRpcTarget({
       getState: () => engine.getState(),
-      subscribe: (listener) => {
-        const inner = engine.subscribe(listener);
+      subscribe: (listener, subscriptionOptions) => {
+        const inner = engine.subscribe(listener, subscriptionOptions);
         // LiveState drops a listener itself when an update call rejects (dead
         // client), and exposes no drop hook to the owner, so this driving loop
         // checks `ping()` to avoid leaving its timer behind.
@@ -9309,7 +9314,7 @@ class LiveDemoTickerRpcTarget
           [Symbol.dispose]: stop,
         };
       },
-    }).subscribe(onUpdate);
+    }).subscribe(onUpdate, options);
   }
 }
 

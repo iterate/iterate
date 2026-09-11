@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LiveUpdate } from "./protocol.ts";
 import { LiveState } from "./engine.ts";
+import { createLiveStateStore } from "./store.ts";
 
 /** Subscribe and accumulate every update the engine pushes to this sink. */
 function collect<State extends object>(engine: LiveState<State>) {
@@ -12,6 +13,89 @@ function collect<State extends object>(engine: LiveState<State>) {
 describe("LiveState", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+
+  it("negotiates positional patches while existing clients receive array replacements", () => {
+    const engine = new LiveState({ rows: [{ n: 1 }, { n: 2 }] }, { debounceMs: 0 });
+    const old = collect(engine);
+    const updates: LiveUpdate[] = [];
+    engine.subscribe((update) => void updates.push(update), { patchVersion: 2 });
+    engine.setState({ rows: [{ n: 1 }, { n: 3 }] });
+    vi.advanceTimersByTime(0);
+    expect(old.updates[1]).toMatchObject({
+      patch: { fields: { rows: { set: [{ n: 1 }, { n: 3 }] } } },
+    });
+    expect(updates[1]).toMatchObject({
+      patch: { fields: { rows: { array: { items: [[1, { fields: { n: { set: 3 } } }]] } } } },
+    });
+  });
+
+  it("serves one transient delta and re-seeds late readers or new incarnations", () => {
+    const engine = new LiveState({ n: 0 });
+    const seed = engine.readSince();
+    const cursor = { epoch: seed.epoch, revision: 0 };
+    engine.assign({ n: 1 });
+    const changed = engine.readSince(cursor);
+    expect(changed.update).toMatchObject({ type: "patch", from: 0, to: 1 });
+    expect(engine.readSince({ epoch: seed.epoch, revision: 1 }).update).toBeNull();
+    engine.assign({ n: 2 });
+    engine.readSince();
+    expect(engine.readSince(cursor).update).toEqual({
+      type: "snapshot",
+      revision: 2,
+      state: { n: 2 },
+    });
+    const restarted = new LiveState({ n: 2 }).readSince(cursor);
+    expect(restarted.epoch).not.toBe(seed.epoch);
+    expect(restarted.update).toMatchObject({ type: "snapshot", state: { n: 2 } });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(engine.observed).toBe(false);
+  });
+
+  it("bounds a slow sink to one outstanding call and coalesces its next update", async () => {
+    const engine = new LiveState({ n: 0 }, { debounceMs: 0 });
+    const store = createLiveStateStore<{ n: number }>();
+    const updates: LiveUpdate<{ n: number }>[] = [];
+    let acknowledge: () => void = () => {};
+    const handle = engine.subscribe(
+      (update) => {
+        updates.push(update);
+        store.apply(update, () => {
+          throw new Error("unexpected revision gap");
+        });
+        return new Promise<void>((resolve) => {
+          acknowledge = resolve;
+        });
+      },
+      { patchVersion: 2 },
+    );
+    for (let n = 1; n <= 100; n++) {
+      engine.assign({ n });
+      vi.advanceTimersByTime(0);
+    }
+    expect(updates).toHaveLength(1);
+    acknowledge();
+    await Promise.resolve();
+    expect(updates).toHaveLength(2);
+    expect(store.getState()).toEqual({ n: 100 });
+    acknowledge();
+    await Promise.resolve();
+    expect(vi.getTimerCount()).toBe(0);
+    handle.unsubscribe();
+  });
+
+  it("drops a sink that never acknowledges and releases its timer", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const engine = new LiveState({ n: 0 });
+    const handle = engine.subscribe(() => new Promise(() => {}));
+    vi.advanceTimersByTime(10_000);
+    expect(handle.ping()).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("acknowledgement timed out"),
+      expect.anything(),
+    );
+    expect(vi.getTimerCount()).toBe(0);
+    warn.mockRestore();
+  });
 
   it("delivers the current state as an immediate snapshot on subscribe", () => {
     const { updates } = collect(new LiveState({ n: 1 }));
@@ -68,7 +152,7 @@ describe("LiveState", () => {
     engine.setState({ n: 2 }); // no subscriber → nothing scheduled
     vi.advanceTimersByTime(100);
     const { updates } = collect(engine);
-    expect(updates).toEqual([{ type: "snapshot", revision: 0, state: { n: 2 } }]);
+    expect(updates).toEqual([{ type: "snapshot", revision: 1, state: { n: 2 } }]);
   });
 
   it("stops delivering after unsubscribe", () => {

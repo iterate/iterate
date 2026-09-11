@@ -16,6 +16,7 @@
 // alarm boots) reconstructs its host from that stash alone.
 
 import { DurableObject } from "cloudflare:workers";
+import type { LiveStateCursor } from "../sdk/capnweb/live-state/protocol.ts";
 import type { LiveStateRpc } from "../sdk/capnweb/live-state/types.ts";
 import { disposeIgnoredRpcResult } from "../sdk/capnweb/live-state/retain.ts";
 import type { ProcessorStream } from "./stream-handle.ts";
@@ -329,15 +330,26 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
     await this.#reads(args?.name).catchUp();
   }
 
-  /**
-   * The node's live-state door: snapshot + minimal diffs over the registry's
-   * engine, hydrated before the first read. The facet hop is Workers RPC,
-   * which cannot serialize capnweb RpcTargets, so this returns PLAIN objects
-   * of capability functions in the {@link LiveStateRpc} shape — the parent
-   * re-wraps them for its own transport. Subscriber callbacks flow INTO the
-   * facet as ordinary argument capabilities; the engine dups them on receipt
-   * (`retainCallback`) so they survive past the subscribe call.
-   */
+  /** Read a transient snapshot or delta for the parent's current stream lifetime.
+   * Cold or replaced processors hydrate from durable progress. Warm reads use
+   * committed local state: polling must not call back into the parent stream
+   * for every processor while it is delivering events to this facet. */
+  async readLiveState(args: { streamId: string; cursor?: LiveStateCursor }) {
+    const { registry } = this.#requireHost();
+    if (
+      registry.names.some((name) => {
+        const reads = registry.reads(name);
+        return !reads.isLoaded || reads.currentStreamId !== args.streamId;
+      })
+    ) {
+      await registry.loadAndRefreshLive();
+    } else {
+      registry.refreshLive();
+    }
+    return registry.live.readSince(args.cursor);
+  }
+
+  /** Direct subscriptions retain their callbacks across the Workers RPC hop. */
   liveState(): LiveStateRpc<Record<string, unknown>> {
     const { registry } = this.#requireHost();
     return {
@@ -345,9 +357,9 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
         await registry.loadAndRefreshLive();
         return registry.live.getState();
       },
-      subscribe: async (onUpdate) => {
+      subscribe: async (onUpdate, options) => {
         await registry.loadAndRefreshLive();
-        const subscription = registry.live.subscribe(onUpdate);
+        const subscription = registry.live.subscribe(onUpdate, options);
         return {
           ping: () => subscription.ping(),
           unsubscribe: () => subscription.unsubscribe(),

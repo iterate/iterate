@@ -6,7 +6,7 @@
 // session machinery into its bundle.
 import { RpcTarget } from "@iterate-com/capnweb";
 import type { LiveState as LiveStateEngine, LiveStateSubscription } from "./engine.ts";
-import type { LiveUpdate } from "./protocol.ts";
+import type { LiveStateSubscriptionOptions, LiveUpdate } from "./protocol.ts";
 import { isThenable } from "./retain.ts";
 import type { LiveStateRpc, LiveStateSubscriptionHandle } from "./types.ts";
 
@@ -19,7 +19,13 @@ type RefreshingLiveStateSource<State extends object> = {
 
 export { createLiveStateStore, type LiveStateStore } from "./store.ts";
 export { applyPatch, diff } from "./diff.ts";
-export type { LiveStatePatch, LiveUpdate } from "./protocol.ts";
+export type {
+  LiveStateCursor,
+  LiveStateRead,
+  LiveStatePatch,
+  LiveStateSubscriptionOptions,
+  LiveUpdate,
+} from "./protocol.ts";
 export { LiveState, type LiveStateSubscription } from "./engine.ts";
 export type { LiveStateRpc, LiveStateSubscriptionHandle } from "./types.ts";
 export {
@@ -58,10 +64,13 @@ export class LiveStateRpcTarget<State extends object>
     return this.#live.getState();
   }
 
-  async subscribe(onUpdate: (update: LiveUpdate<State>) => unknown) {
+  async subscribe(
+    onUpdate: (update: LiveUpdate<State>) => unknown,
+    options?: LiveStateSubscriptionOptions,
+  ) {
     const loading = this.#beforeRead?.();
     if (isThenable(loading)) await loading;
-    return new LiveStateSubscriptionRpcTarget(this.#live.subscribe(onUpdate));
+    return new LiveStateSubscriptionRpcTarget(this.#live.subscribe(onUpdate, options));
   }
 }
 

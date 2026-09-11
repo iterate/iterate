@@ -345,7 +345,10 @@ export interface ProjectCollection {
 /** Read-only live value exposed across a Cap'n Web capability boundary. */
 export interface LiveStateRpc<State = unknown> {
   get(): Promise<State>;
-  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;
+  subscribe(
+    onUpdate: (update: LiveUpdate<State>) => unknown,
+    options?: LiveStateSubscriptionOptions,
+  ): Promise<LiveStateSubscriptionHandle>;
 }
 
 /**
@@ -2576,6 +2579,9 @@ export type LiveUpdate<State = unknown> =
   | { type: "snapshot"; revision: number; state: State }
   | { type: "patch"; from: number; to: number; patch: LiveStatePatch };
 
+/** Explicit codec negotiation keeps already-open clients valid across deploys. */
+export type LiveStateSubscriptionOptions = { patchVersion?: 2 };
+
 /** Owned handle for one live-state subscription. */
 export type LiveStateSubscriptionHandle = Disposable & {
   ping(): boolean | Promise<boolean>;
@@ -4105,9 +4111,22 @@ export type FeedLiveState =
                 llmRequestOffset: number;
                 status: "done" | "running";
                 model?: string | undefined;
-                thinkingText: string;
-                responseText: string;
-                responseWindows: string[];
+                thinkingText:
+                  | string
+                  | {
+                      length: number;
+                      blockCount: number;
+                      tailOffset: number;
+                      groups: Record<string, Record<string, string>>;
+                    };
+                responseText:
+                  | string
+                  | {
+                      length: number;
+                      blockCount: number;
+                      tailOffset: number;
+                      groups: Record<string, Record<string, string>>;
+                    };
                 previewTruncated?: boolean | undefined;
                 assistantEventOffset?: number | undefined;
                 interpreted?: boolean | undefined;
@@ -4784,17 +4803,21 @@ export type ProcessorSnapshot<State> = {
 export type ProcessStreamWakeEventBatch = (batch: StreamWakeEventBatch) => unknown;
 
 /**
- * A structural patch turning a previous JSON value into the next one. Two
- * shapes, discriminated by whether the `set` key is present:
- * - `{ set }` — replace this position wholesale. Used for primitives, arrays
- *   (treated as opaque leaves, never diffed positionally), `null`, type changes,
+ * A structural patch turning a previous JSON value into the next one. Three
+ * shapes, discriminated by `set`, `array`, or an object patch:
+ * - `{ set }` — replace this position wholesale. Used for primitives,
+ *   `null`, type changes,
  *   and newly-added object keys.
  * - `{ fields?, drop? }` — descend into a plain object: `fields` maps each
  *   changed key to its own patch; `drop` lists keys that disappeared. At least
  *   one is present (an empty descend never gets emitted).
+ * - `{ array }` — patch changed positions and set the resulting length. Kept
+ *   elements retain their identity, including immutable text blocks inside a
+ *   changed step. This form is sent only to subscribers requesting version 2.
  */
 export type LiveStatePatch =
   | { set: unknown }
+  | { array: { length: number; items: [number, LiveStatePatch][] } }
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
 /**

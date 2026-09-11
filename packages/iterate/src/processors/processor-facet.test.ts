@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import type { LiveStateRead } from "../sdk/capnweb/live-state/protocol.ts";
 import type { StreamEvent } from "./schemas.ts";
 
 // Mirrors of the worker's constants — the worker module cannot be imported
@@ -74,6 +75,57 @@ async function invoke<T = any>(run: string, verb: string, args?: unknown): Promi
 }
 
 describe("ProcessorFacet in real workerd (Miniflare)", () => {
+  test("transient live reads cross Workers RPC as deltas and reset after facet eviction", async () => {
+    const run = "live-reads";
+    await invoke(run, "configureFacet");
+    const seed = await invoke<LiveStateRead<{ count: number }>>(run, "facetLiveRead", {});
+    if (seed.update?.type !== "snapshot") throw new Error("Expected seed snapshot");
+    expect(seed.update.state.count).toBe(0);
+    const cursor = { epoch: seed.epoch, revision: seed.update.revision };
+    const loaded = await invoke<{ eventPageReads: number }>(run, "facetReadProof");
+    expect(loaded.eventPageReads).toBeGreaterThan(0);
+    const unchanged = await invoke<LiveStateRead<{ count: number }>>(run, "facetLiveRead", {
+      cursor,
+    });
+    expect(unchanged.update).toBeNull();
+    expect(await invoke(run, "facetReadProof")).toMatchObject({
+      eventPageReads: loaded.eventPageReads,
+    });
+    const events = await invoke<StreamEvent[]>(run, "facetSeed", {
+      events: [{ type: "test/noted", payload: { note: "delta" } }],
+    });
+    await invoke(run, "wake");
+    await invoke(run, "deliver", {
+      events,
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 1,
+      streamMaxOffset: 1,
+    });
+    const changed = await invoke<LiveStateRead<{ count: number }>>(run, "facetLiveRead", {
+      cursor,
+    });
+    expect(changed.epoch).toBe(seed.epoch);
+    expect(changed.update).toMatchObject({
+      type: "patch",
+      patch: { fields: { count: { set: 1 } } },
+    });
+    await invoke(run, "abortFacet");
+    const restarted = await invoke<LiveStateRead<{ count: number }>>(run, "facetLiveRead", {
+      cursor,
+    });
+    expect(restarted.epoch).not.toBe(seed.epoch);
+    expect(restarted.update).toMatchObject({ type: "snapshot", state: { count: 1 } });
+    const reloaded = await invoke<{ eventPageReads: number }>(run, "facetReadProof");
+    expect(reloaded.eventPageReads).toBeGreaterThan(loaded.eventPageReads);
+
+    const replacementId = "22222222-2222-4222-8222-222222222222";
+    await invoke(run, "replaceWithEmptyStream", { streamId: replacementId });
+    const replaced = await invoke<LiveStateRead<{ count: number }>>(run, "facetLiveRead", {});
+    expect(replaced.update).toMatchObject({ type: "snapshot", state: { count: 0 } });
+    expect(await invoke(run, "facetReadProof")).toMatchObject({
+      progress: { streamId: replacementId, processing: { acknowledgedThroughOffset: 0 } },
+    });
+  });
   test(
     "R1: registry+runner+progress run in the facet; NAME-keyed progress survives abort; doors serve reads",
     { timeout: 60_000 },

@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./chunked-text": "./src/chunked-text.ts",
+    "./json-byte-length": "./src/json-byte-length.ts",
     "./message": "./src/message.ts",
     "./agent-events": "./src/agent-events.ts",
     "./config": "./src/config.ts",

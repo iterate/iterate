@@ -4,10 +4,7 @@ import {
   AgentUiStateSchema,
   initialAgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import {
-  FEED_ITEM_PUBLISHED,
-  FeedItemPublication,
-} from "@iterate-com/ui/components/events/feed-publication";
+import { FeedItemPublication } from "@iterate-com/ui/components/events/feed-publication";
 import {
   AgentProcessorContract,
   AgentRuntimeTransition,
@@ -51,7 +48,7 @@ export const FeedProcessorContract = defineProcessorContract({
   }),
   processorDeps: [AgentProcessorContract, CoreProcessorContract],
   events: {
-    [FEED_ITEM_PUBLISHED]: {
+    "events.iterate.com/feed/item-published": {
       description: "A complete renderable feed item revision, with a stable display position.",
       payloadSchema: FeedItemPublication,
     },
@@ -62,6 +59,6 @@ export const FeedProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/connection-opened",
     "events.iterate.com/stream/connection-closed",
   ],
-  emits: [FEED_ITEM_PUBLISHED],
+  emits: ["events.iterate.com/feed/item-published"],
 });
 export type FeedProcessorContract = typeof FeedProcessorContract;

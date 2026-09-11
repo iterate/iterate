@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { deriveAgentDisplayState, type AgentRuntime } from "@iterate-com/shared/agent-events";
 import { BanIcon, ChevronRightIcon, CircleAlertIcon, CodeIcon } from "lucide-react";
 import {
@@ -23,6 +23,7 @@ import {
 import { useTickingNowMs } from "@iterate-com/ui/hooks/use-ticking-now-ms";
 import { AgentActivityRoundRow } from "./agent-activity-rounds.tsx";
 import { AgentActivityRow, UserMessageBody } from "./agent-feed-item.tsx";
+import { StreamingCodeBlock, StreamingCursor, StreamingText } from "./streaming-text.tsx";
 
 // The live end of the agent chat: the in-flight activity tail the feed's
 // virtual list renders as its trailing item, and the queued-messages stack
@@ -328,7 +329,7 @@ function AgentLiveStatus({
 
 function liveStepHasVisibleContent(step: AgentUiStep) {
   if (step.kind === "code") return step.code !== "";
-  return step.thinkingText !== "" || step.responseText !== "";
+  return step.thinkingText.length > 0 || step.responseText.length > 0;
 }
 
 /**
@@ -366,86 +367,20 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
 
   return (
     <div className="flex flex-col gap-1.5 py-1">
-      {step.thinkingText === "" ? null : (
+      {step.thinkingText.length === 0 ? null : (
         <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm italic leading-relaxed text-muted-foreground">
-          {step.thinkingText}
-          {step.responseText === "" ? <StreamingCursor /> : null}
+          <StreamingText text={step.thinkingText} />
+          {step.responseText.length === 0 ? <StreamingCursor /> : null}
         </div>
       )}
-      {step.responseText === "" ? null : looksLikeCode(step.responseText) ? (
+      {step.responseText.length === 0 ? null : looksLikeCode(step.responseText) ? (
         <StreamingCodeBlock code={step.responseText} />
       ) : (
         <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm leading-relaxed">
-          <TokenRevealText windows={step.responseWindows} />
+          <StreamingText text={step.responseText} animate />
           <StreamingCursor />
         </div>
       )}
     </div>
-  );
-}
-
-/** The streamed response, one span per token with a CSS stagger: chunk events
- * arrive as ~150ms coalescing windows (~8 tokens each), and rendering a window
- * in one jump reads as chugging. Each window fans its tokens' animation-delay
- * across the gap to the next window instead — CSS is the clock, so there are
- * no timers and no extra re-renders. Keys are stable and windows are
- * append-only, so finished windows keep their DOM nodes and never re-animate.
- * The `token-in` keyframes live in the shared stylesheet (styles/globals.css). */
-function TokenRevealText({ windows }: { windows: string[] }) {
-  return windows.map((window, windowIndex) => {
-    const tokens = window.split(/(?<=\s)/);
-    return (
-      <span key={windowIndex}>
-        {tokens.map((token, tokenIndex) => (
-          <span
-            key={tokenIndex}
-            className="animate-token-in"
-            // Fan across ~140ms regardless of token count, so a large window
-            // always finishes revealing before the next window's tokens land.
-            style={{ animationDelay: `${Math.round((tokenIndex / tokens.length) * 140)}ms` }}
-          >
-            {token}
-          </span>
-        ))}
-      </span>
-    );
-  });
-}
-
-/** Amber-tinted block the response/code streams into, character by character.
- * Clamped to the same height as settled code and tail-pinned so the newest
- * tokens stay visible: a long codemode turn (minutes, thousands of chunks)
- * otherwise grows to fill the viewport and reads as one never-ending code
- * block. Scrolling up unpins; returning to the bottom re-pins. */
-function StreamingCodeBlock({ code }: { code: string }) {
-  const preRef = useRef<HTMLPreElement>(null);
-  const pinnedRef = useRef(true);
-  useLayoutEffect(() => {
-    const el = preRef.current;
-    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
-  }, [code]);
-  return (
-    <pre
-      ref={preRef}
-      onScroll={(event) => {
-        const el = event.currentTarget;
-        pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-      }}
-      className="max-h-80 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-words rounded-xl bg-amber-50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground dark:bg-amber-950/20"
-    >
-      {code}
-      <StreamingCursor className="bg-amber-600" />
-    </pre>
-  );
-}
-
-function StreamingCursor({ className }: { className?: string }) {
-  return (
-    <span
-      className={cn(
-        "ml-px inline-block h-3.5 w-[7px] animate-caret-blink bg-muted-foreground/40 align-[-2px]",
-        className,
-      )}
-    />
   );
 }

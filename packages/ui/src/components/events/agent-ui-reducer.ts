@@ -1,3 +1,4 @@
+import { appendText, sliceText, StreamText } from "@iterate-com/shared/chunked-text";
 import { AgentLlmRequestCancelReason, type AgentRuntime } from "@iterate-com/shared/agent-events";
 import {
   MessageMentions,
@@ -28,13 +29,9 @@ export type AgentUiLlmStep = {
   status: "running" | "done";
   model?: string;
   /** Streamed reasoning summary ("thinking") text. */
-  thinkingText: string;
+  thinkingText: StreamText;
   /** Streamed response text — for code-mode agents this is source code. */
-  responseText: string;
-  /** responseText split at chunk-event boundaries (one entry per coalesced
-   * window), so the UI can stagger each window's tokens into view instead of
-   * jumping ~8 tokens per event. Concatenation always equals responseText. */
-  responseWindows: string[];
+  responseText: StreamText;
   /** Server preview omitted text to stay bounded; durable request replay retains the full output. */
   previewTruncated?: boolean;
   /** Offset of the committed assistant context-added event carrying this
@@ -118,7 +115,8 @@ export function summarizeAgentUiActivity(
     const cancelled = step.outcome === "cancelled";
     if (cancelled && step.cancelReason === "interrupted-by-user-input") {
       interrupted = true;
-      interruptedWithPartialResponse ||= step.thinkingText !== "" || step.responseText !== "";
+      interruptedWithPartialResponse ||=
+        step.thinkingText.length > 0 || step.responseText.length > 0;
     } else if (step.outcome === "failed" || cancelled) {
       // Any cancellation other than the user's own interrupt (expired, or a
       // reason this UI doesn't recognize) means the turn produced nothing.
@@ -265,8 +263,8 @@ export function deriveAgentUiLiveStatus(state: AgentUiState): AgentUiLiveStatus 
   const phase = () => {
     const current = live.steps.findLast((step) => step.status === "running");
     if (current?.kind === "code") return "running";
-    if (current?.kind === "llm" && current.responseText !== "") return "writing";
-    if (current?.kind === "llm" && current.thinkingText !== "") return "thinking";
+    if (current?.kind === "llm" && current.responseText.length > 0) return "writing";
+    if (current?.kind === "llm" && current.thinkingText.length > 0) return "thinking";
     if (current?.kind === "llm") return "waiting";
     const last = live.steps.at(-1);
     // A paused loop owes no follow-up, whatever the last step promised — a
@@ -292,7 +290,8 @@ export function deriveAgentUiLiveStatus(state: AgentUiState): AgentUiLiveStatus 
       if (
         last.status === "done" &&
         last.outcome === "completed" &&
-        (/^[ \t]*```/m.test(last.responseText) || last.responseText.includes("<codemode"))
+        (/^[ \t]*```/m.test(sliceText(last.responseText)) ||
+          sliceText(last.responseText).includes("<codemode"))
       ) {
         return "processing";
       }
@@ -466,9 +465,8 @@ const AgentUiLlmStepSchema = z
     llmRequestOffset: z.number().int().nonnegative(),
     status: z.enum(["running", "done"]),
     model: z.string().optional(),
-    thinkingText: z.string(),
-    responseText: z.string(),
-    responseWindows: z.array(z.string()),
+    thinkingText: StreamText,
+    responseText: StreamText,
     previewTruncated: z.boolean().optional(),
     assistantEventOffset: z.number().int().positive().optional(),
     interpreted: z.boolean().optional(),
@@ -842,17 +840,6 @@ function reduceAgentUiEvent(
             ? {
                 ...step,
                 responseText: text,
-                // Keep the reveal windows covering the full text: a swallowed
-                // tail flush leaves the last window's tokens unjournaled, and
-                // the live prose renders from windows. Extend with the missing
-                // suffix; on any divergence the committed text replaces the
-                // windows wholesale.
-                responseWindows:
-                  text === step.responseText
-                    ? step.responseWindows
-                    : text.startsWith(step.responseText)
-                      ? [...step.responseWindows, text.slice(step.responseText.length)]
-                      : [text],
                 assistantEventOffset: event.offset,
               }
             : step,
@@ -949,7 +936,6 @@ function reduceAgentUiEvent(
         ...(model == null ? {} : { model }),
         thinkingText: "",
         responseText: "",
-        responseWindows: [],
         startedAtMs: timestampMs,
       };
       return { ...ready, live: { ...live, steps: [...live.steps, step] } };
@@ -972,13 +958,13 @@ function reduceAgentUiEvent(
       return updateLlmStep(state, llmRequestOffset, (step) => ({
         ...step,
         responseText:
-          step.status === "running" ? step.responseText + responseDelta : step.responseText,
-        responseWindows:
           step.status === "running" && responseDelta !== ""
-            ? [...step.responseWindows, responseDelta]
-            : step.responseWindows,
+            ? appendText(step.responseText, responseDelta)
+            : step.responseText,
         thinkingText:
-          step.status === "running" ? step.thinkingText + thinkingDelta : step.thinkingText,
+          step.status === "running" && thinkingDelta !== ""
+            ? appendText(step.thinkingText, thinkingDelta)
+            : step.thinkingText,
       }));
     }
 
@@ -1010,16 +996,11 @@ function reduceAgentUiEvent(
               // partialText is the authoritative superset: it accrued per
               // provider chunk, while responseText only holds FLUSHED windows
               // — an interrupt can strand up to one coalescing window's tail
-              // in the buffer. Adopt it whenever it extends what streamed;
-              // the suffix becomes a final window so the reveal animates it.
+              // in the buffer. Adopt the recorded text when it extends the preview.
               ...(partialText &&
                 partialText.length > step.responseText.length &&
-                partialText.startsWith(step.responseText) && {
+                partialText.startsWith(sliceText(step.responseText)) && {
                   responseText: partialText,
-                  responseWindows: [
-                    ...step.responseWindows,
-                    partialText.slice(step.responseText.length),
-                  ],
                 }),
               ...(typeof payload.durationMs === "number"
                 ? { durationMs: payload.durationMs }

@@ -21,8 +21,19 @@ import { StreamOffsetConflictError, streamOffsetConflictMessage } from "iterate/
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
 import { StreamRuntimeMetrics } from "iterate/processors";
-import { disposeIgnoredRpcResult, LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
-import type { LiveStateRpc, LiveStateSubscriptionHandle, LiveUpdate } from "iterate/sdk/capnweb";
+import {
+  createLiveStateStore,
+  disposeIgnoredRpcResult,
+  LiveState,
+  LiveStateRpcTarget,
+} from "iterate/sdk/capnweb";
+import type { LiveStateCursor, LiveStateRead } from "iterate/sdk/capnweb";
+import type {
+  LiveStateRpc,
+  LiveStateSubscriptionHandle,
+  LiveStateSubscriptionOptions,
+  LiveUpdate,
+} from "iterate/sdk/capnweb";
 import { streamDeliveryAuthContext } from "../../auth.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
@@ -388,6 +399,10 @@ type ProcessorFacetStub = {
   getRuntimeState(args?: { name?: string }): Promise<ProcessorRuntimeState>;
   waitUntilProcessed(args: { offset: number; timeoutMs?: number; name?: string }): Promise<void>;
   liveState(): Promise<LiveStateRpc<Record<string, unknown>>>;
+  readLiveState(args: {
+    streamId: string;
+    cursor?: LiveStateCursor;
+  }): Promise<LiveStateRead<Record<string, unknown>>>;
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   provideCapability(
     input: CapabilityProvidedPayload,
@@ -760,8 +775,9 @@ class FacetLiveStateRelayRpcTarget
 
   async subscribe(
     onUpdate: (update: LiveUpdate<Record<string, unknown>>) => unknown,
+    options?: LiveStateSubscriptionOptions,
   ): Promise<LiveStateSubscriptionHandle> {
-    const handle = await (await this.#dialLive()).subscribe(onUpdate);
+    const handle = await (await this.#dialLive()).subscribe(onUpdate, options);
     return {
       ping: () => handle.ping(),
       unsubscribe: () => handle.unsubscribe(),
@@ -1074,21 +1090,38 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (lane === undefined) {
       // The cache the flusher reads (readState must be synchronous — the
       // flusher sends what it read with no await in between). Pulls are
-      // chained so a slower OLDER pull can never overwrite a newer one — the
-      // wire has no revision guard by design, so cache monotonicity is the
-      // whole rewind defense.
-      let state: Record<string, unknown> = {};
+      // serialized so each pull starts at the previous pull's cursor. The
+      // mirror validates revisions and retains untouched object identities.
+      const mirror = createLiveStateStore<Record<string, unknown>>();
+      let cursor: LiveStateCursor | undefined;
       let chain: Promise<void> = Promise.resolve();
       const pull = async () => {
-        state = await this.#callProcessorFacet(name, async (facet) =>
-          (await facet.liveState()).get(),
+        const streamId = this.#coreProcessorState.streamId;
+        if (streamId === undefined) {
+          throw new Error("stream identity is unavailable after stream creation");
+        }
+        const read = await this.#callProcessorFacet(name, (facet) =>
+          facet.readLiveState({ streamId, cursor }),
         );
+        try {
+          const { epoch, update } = read;
+          if (!update) return;
+          if (epoch !== cursor?.epoch && update.type !== "snapshot") {
+            throw new Error("Facet live-state incarnation changed without a snapshot");
+          }
+          mirror.apply(update, () => {
+            throw new Error("Facet live-state revision gap");
+          });
+          cursor = { epoch, revision: update.type === "snapshot" ? update.revision : update.to };
+        } finally {
+          disposeAcknowledgedRpcResult(read, "facet-live-state");
+        }
       };
       const tag = liveStatePagerLaneTag(name);
       lane = new LiveStatePagers({
         getWebSockets: () => this.ctx.getWebSockets(tag),
         acceptWebSocket: (ws) => this.ctx.acceptWebSocket(ws, [tag]),
-        readState: () => state,
+        readState: () => mirror.getState() ?? {},
         refresh: () => {
           // Every refresh gets a FRESH pull that starts after its trigger
           // (sharing an in-flight pull could return state read before the

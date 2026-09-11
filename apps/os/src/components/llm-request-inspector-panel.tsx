@@ -1,3 +1,4 @@
+import { sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
 import { memo, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CheckIcon, CopyIcon } from "lucide-react";
@@ -9,21 +10,33 @@ import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { AgentUiLlmStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import {
-  formatDateTime,
-  formatSeconds,
-  looksLikeCode,
-} from "@iterate-com/ui/components/events/feed-format";
+  StreamingText,
+  StreamingCodeBlock,
+} from "@iterate-com/ui/components/agent-feed/streaming-text";
 import { LlmPreviewNotice } from "@iterate-com/ui/components/agent-feed/llm-preview-notice";
 import type { Stream } from "../itx-api.generated.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
+import {
+  formatDateTime,
+  formatSeconds,
+  looksLikeCode,
+} from "@iterate-com/ui/components/events/feed-format";
 import {
   type LlmRequestReplay,
   type LlmRequestReplayMessage,
   type LlmRequestReplayStats,
 } from "~/lib/llm-request-replay.ts";
 
-type LlmRequestPreview = LlmRequestReplay & { previewTruncated?: boolean };
+type LlmRequestPreview = Omit<LlmRequestReplay, "response"> & {
+  previewTruncated?: boolean;
+  response:
+    | (Omit<NonNullable<LlmRequestReplay["response"]>, "text" | "thinkingText"> & {
+        text: StreamText;
+        thinkingText: StreamText;
+      })
+    | null;
+};
 
 /** The server reconstructs durable request history; live state supplies in-progress text. */
 export function LlmRequestInspectorContent({
@@ -44,14 +57,24 @@ export function LlmRequestInspectorContent({
 }) {
   const lifecycle = useStreamQuery(
     database,
-    `SELECT MAX(offset) AS offset FROM events WHERE offset = ?
+    `SELECT (SELECT stream_id FROM stream_sync WHERE singleton = 1) AS stream_id,
+      MAX(offset) AS offset FROM events WHERE offset = ?
       OR json_extract(raw_jsonb, '$.payload.llmRequestOffset') = ?
       OR json_extract(raw_jsonb, '$.payload.requestOffset') = ?`,
     [llmRequestOffset, llmRequestOffset, llmRequestOffset],
   );
+  const source = lifecycle.data[0];
+  const streamId = typeof source?.stream_id === "string" ? source.stream_id : null;
   const request = useQuery({
+    enabled: lifecycle.status === "ok" && streamId !== null,
     staleTime: Infinity,
-    queryKey: ["llm-request", database.databasePath, llmRequestOffset, lifecycle.data[0]?.offset],
+    queryKey: ["llm-request", database.databasePath, streamId, llmRequestOffset, source?.offset],
+    // A later lifecycle event refreshes this request without flashing its
+    // loading state. A recreated source or another request must never inherit it.
+    placeholderData: (previous, query) =>
+      query?.queryKey[2] === streamId && query.queryKey[3] === llmRequestOffset
+        ? previous
+        : undefined,
     queryFn: async () => {
       const stream = await streamSource(streamPath);
       try {
@@ -179,7 +202,9 @@ function withLiveResponse(
     replay.outcome != null ||
     replay.response?.source === "output" ||
     liveStep?.llmRequestOffset !== llmRequestOffset ||
-    (!liveStep.previewTruncated && liveStep.responseText === "" && liveStep.thinkingText === "")
+    (!liveStep.previewTruncated &&
+      liveStep.responseText.length === 0 &&
+      liveStep.thinkingText.length === 0)
   ) {
     return replay;
   }
@@ -287,7 +312,7 @@ const ReplayResponseSection = memo(
   }) {
     const { response, outcome } = replay;
     const hasNoResponseText =
-      response == null || (response.text === "" && response.thinkingText === "");
+      response == null || (response.text.length === 0 && response.thinkingText.length === 0);
     return (
       <section className="border-b border-border/60 bg-muted/20 px-5 py-3">
         <div className="mb-2 flex items-baseline gap-2">
@@ -338,18 +363,30 @@ function ResponseBody({
   response,
   renderMode,
 }: {
-  response: LlmRequestReplay["response"];
+  response: LlmRequestPreview["response"];
   renderMode: "markdown" | "plain";
 }) {
   if (response == null) return null;
   return (
     <>
-      {response.thinkingText === "" ? null : (
+      {response.thinkingText.length === 0 ? null : (
         <div className="mb-2 max-w-full whitespace-pre-wrap rounded-xl bg-muted/50 px-4 py-3 text-sm italic leading-relaxed text-muted-foreground">
-          {response.thinkingText}
+          <StreamingText text={response.thinkingText} />
         </div>
       )}
-      <ResponseText text={response.text} renderMode={renderMode} />
+      {response.source === "chunks" ? (
+        looksLikeCode(
+          typeof response.text === "string" ? response.text : sliceText(response.text, 0, 4096),
+        ) ? (
+          <StreamingCodeBlock code={response.text} copy />
+        ) : (
+          <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+            <StreamingText text={response.text} animate />
+          </div>
+        )
+      ) : (
+        <ResponseText text={sliceText(response.text)} renderMode={renderMode} />
+      )}
     </>
   );
 }

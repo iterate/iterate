@@ -1,3 +1,4 @@
+import { sliceText } from "@iterate-com/shared/chunked-text";
 import { useMemo, useState, type ReactNode } from "react";
 import { ChevronRightIcon } from "lucide-react";
 import type {
@@ -17,6 +18,7 @@ import {
 } from "@iterate-com/ui/components/events/feed-format";
 import { buildRoundMetaYaml, resultYaml } from "./agent-round-meta-yaml.ts";
 import { LlmPreviewNotice } from "./llm-preview-notice.tsx";
+import { StreamingText } from "./streaming-text.tsx";
 import { MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS } from "./script-result-preview.ts";
 
 // The web feed's ROUND rendering: an expanded "Ran code N×" activity is a list
@@ -236,17 +238,21 @@ function LlmOnlyRound({
           </Button>
         )}
       </div>
-      {llm.thinkingText === "" ? null : (
+      {llm.thinkingText.length === 0 ? null : (
         <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm italic leading-relaxed text-muted-foreground">
-          {llm.thinkingText}
+          <StreamingText text={llm.thinkingText} />
         </div>
       )}
-      {llm.responseText === "" ? null : looksLikeCode(llm.responseText) ? (
+      {llm.responseText.length === 0 ? null : looksLikeCode(llm.responseText) ? (
         <div
           className={cn("w-full max-w-2xl", llm.interpreted && "opacity-75")}
           data-testid={llm.interpreted ? "agent-feed-raw-response" : undefined}
         >
-          <SourceCodeBlock code={llm.responseText} language="typescript" showLineNumbers={false} />
+          <SourceCodeBlock
+            code={sliceText(llm.responseText)}
+            language="typescript"
+            showLineNumbers={false}
+          />
         </div>
       ) : (
         <div
@@ -256,7 +262,7 @@ function LlmOnlyRound({
           )}
           data-testid={llm.interpreted ? "agent-feed-raw-response" : undefined}
         >
-          {llm.responseText}
+          <StreamingText text={llm.responseText} />
         </div>
       )}
       <LlmPreviewNotice truncated={llm.previewTruncated} />

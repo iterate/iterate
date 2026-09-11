@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { appendText } from "../../../shared/src/chunked-text.ts";
 import type { StreamEvent } from "../itx-api.generated.ts";
 import { createAgentFeedModel } from "./agent-feed-model.ts";
 
@@ -69,7 +70,10 @@ describe("createAgentFeedModel", () => {
     ]);
 
     const live = model.snapshot().live;
-    expect(live?.steps[0]).toMatchObject({ kind: "llm", responseText: "partial" });
+    expect(live?.steps[0]).toMatchObject({
+      kind: "llm",
+      responseText: appendText(appendText("", "par"), "tial"),
+    });
   });
 
   test("ignores replayed events at or below the folded offset", () => {
