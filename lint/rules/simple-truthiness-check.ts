@@ -4,6 +4,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import {
   ObjectFlags,
+  SignatureKind,
   TypeFlags,
   type Type,
   type TypeReference,
@@ -100,6 +101,20 @@ export const simpleTruthinessCheckRule = grandfatherRule({
               ? TypeFlags.StringLike
               : TypeFlags.Object | TypeFlags.NonPrimitive;
           if (!hasOnlyFlags(type, allowed | TypeFlags.Null | TypeFlags.Undefined)) return;
+          if (literal.value === "object" && file) {
+            // TypeScript groups functions and objects under Object, but typeof
+            // distinguishes them. Check each union member before calling this redundant.
+            const members = type.flags & TypeFlags.Union ? (type as UnionType).getTypes() : [type];
+            const checker = file.project.checker;
+            if (
+              members.some(
+                (member) =>
+                  checker.getSignaturesOfType(member, SignatureKind.Call).length ||
+                  checker.getSignaturesOfType(member, SignatureKind.Construct).length,
+              )
+            )
+              return;
+          }
         }
         context.report({
           node,

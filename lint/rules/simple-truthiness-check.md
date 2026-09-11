@@ -16,6 +16,8 @@ if (input.items) consume(input.items);
 const label = input.foo || "Default";
 ```
 
+This enforces part of the existing [truthiness review policy](../../rules/structure/simplify-truthiness-checks.md).
+
 The rule reports conditional spreads that merely repeat the guarded value,
 null/undefined comparisons, redundant `typeof`/`Array.isArray` checks on typed
 values, and `??`/`??=` for strings and objects. Type-based checks currently inspect

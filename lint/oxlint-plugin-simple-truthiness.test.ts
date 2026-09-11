@@ -93,10 +93,11 @@ test("leaves real type discrimination and conditional computation alone", () => 
   using fixture = createFixture();
   fixture.write(`
     declare const value: string | { name: string } | undefined;
+    declare const callable: (() => void) | { name: string } | undefined;
     declare const input: { foo?: string; items?: string[] };
     declare const raw: any;
     declare const arrayLike: ArrayLike<string>;
-    export const checks = [typeof value === "string", typeof value === "object", Array.isArray(raw), Array.isArray(arrayLike)];
+    export const checks = [typeof value === "string", typeof value === "object", typeof callable === "object", Array.isArray(raw), Array.isArray(arrayLike)];
     export const a = { ...(input.foo && { foo: input.foo.trim() }) };
     export const b = { ...(input.foo === undefined && { foo: input.foo }) };
     export const c = { ...(input.foo && { foo: "constant" }) };
