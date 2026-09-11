@@ -172,7 +172,6 @@ export async function connectItxReady(
     const socket = createItxSocket(input);
     try {
       await waitForOpen(socket);
-      return createItxConnection(input, socket);
     } catch (error) {
       if (attempt !== 1 || retryOptions === undefined) throw asError(error);
       await retryOptions.onRetry?.({
@@ -184,6 +183,18 @@ export async function connectItxReady(
         startedAt: startedAt.toISOString(),
       });
       if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      continue;
+    }
+
+    const connection = createItxConnection(input, socket);
+    try {
+      // Authenticated handles are pipelined RpcPromises. Awaiting one yields a
+      // new stub, which must retain the wrapper owning its parent session.
+      const ready = await connection;
+      return ready === connection ? connection : withOwnedRpcSession(ready, connection);
+    } catch (error) {
+      connection[Symbol.dispose]();
+      throw error;
     }
   }
 
