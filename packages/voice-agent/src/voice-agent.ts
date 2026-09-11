@@ -2071,12 +2071,17 @@ export class VoiceAgentProcessor extends StreamProcessor<
   /* ------------------------------------------------------------- the mic */
 
   /**
-   * The device's base64 goes to the wire VERBATIM: same rate, same encoding,
-   * no decode. The ONE site that knows the provider's spelling of "here is
-   * audio".
+   * The device's base64 goes to the wire as it came — same rate, same bytes,
+   * no decode — with ONE repair: padding. The kit firmware encodes RFC 4648
+   * unpadded (640 bytes → 854 characters; voicelab_stream.c), Node's decoder
+   * never minded, and GPT-Live's rejects every frame: `audio must be
+   * base64-encoded audio/pcm: illegal base64 data at input byte 852`
+   * (measured 2026-09-11, a Mac talk run heard nothing back). The ONE site
+   * that knows the provider's spelling of "here is audio".
    */
   #sendMicAudio(socket: WebSocket, b64: string): void {
-    socket.send(JSON.stringify({ type: "session.input_audio.append", audio: b64 }));
+    const padded = b64.length % 4 === 0 ? b64 : b64 + "=".repeat(4 - (b64.length % 4));
+    socket.send(JSON.stringify({ type: "session.input_audio.append", audio: padded }));
   }
 
   /**

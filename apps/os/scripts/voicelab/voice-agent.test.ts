@@ -358,6 +358,19 @@ describe("opening a call", () => {
     expect(eventsOfType(h, "call-started")).toHaveLength(1);
   });
 
+  it("pads the kit firmware's unpadded base64 before the provider sees it", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    /* voicelab_stream.c encodes RFC 4648 unpadded: 640 bytes → 854 chars. */
+    const unpadded = micFrame(7).payload.pcm.replace(/=+$/, "");
+    expect(unpadded.length % 4).not.toBe(0);
+    await h.append({ ...micFrame(7), payload: { ...micFrame(7).payload, pcm: unpadded } });
+    await h.settle();
+    const appends = h.provider.sentOfType("session.input_audio.append");
+    expect(appends.at(-1)!.audio).toBe(micFrame(7).payload.pcm);
+    expect(Buffer.from(String(appends.at(-1)!.audio), "base64")).toHaveLength(640);
+  });
+
   it("drops an empty mic frame instead of forwarding it (the provider rejects empty audio)", async () => {
     const h = makeHarness();
     await h.append({
