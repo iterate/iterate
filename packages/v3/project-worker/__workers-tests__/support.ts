@@ -73,7 +73,7 @@ const sessions: unknown[] = [];
 /** Open a capnweb session to the worker over a WebSocket upgrade on SELF.fetch —
  *  newWebSocketRpcSession accepts the existing (accepted) socket per its typings. */
 export async function openSession(): Promise<any> {
-  const res = await SELF.fetch(`https://test.local/internal/rpc`, {
+  const res = await SELF.fetch(`https://control.test/internal/rpc`, {
     headers: { Upgrade: "websocket" },
   });
   if (!res.webSocket) throw new Error(`expected a 101 with a WebSocket, got ${res.status}`);
