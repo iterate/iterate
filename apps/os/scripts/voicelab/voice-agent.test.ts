@@ -881,9 +881,10 @@ describe("the backend", () => {
     /* General context, not the delegation's own: the Responses delegation
      * refuses its id here (measured 2026-09-10). */
     expect(notes[0]!.delegation_id).toBeNull();
-    expect(String(notes[0]!.content)).toContain("step 1: ran exec_typescript");
+    expect(String(notes[0]!.content)).toContain("Step 1: ran exec_typescript");
+    expect(String(notes[0]!.content)).toContain("do not read it out");
     expect(String(notes[0]!.content)).toContain(JSON.stringify({ files: 3 }));
-    expect(String(notes[1]!.content)).toContain("step 2");
+    expect(String(notes[1]!.content)).toContain("Step 2");
     /* The note lands before the result that continues the response. */
     const order = h.provider.sent.map((message) => message.type);
     expect(order.indexOf("session.thinking.append")).toBeLessThan(

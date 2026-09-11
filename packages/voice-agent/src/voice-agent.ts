@@ -368,7 +368,9 @@ const LIVE_DELEGATION_POLICY = [
   "Every request to create, change, run or check something is its own delegation, however",
   "small, and however similar to work already done.",
   "Delegate before giving an answer that depends on backend work. Do not guess the result",
-  "while waiting: say you've handed it over and keep the conversation going. Say a thing is",
+  "while waiting: say you've handed it over and keep the conversation going. Backend progress",
+  "notes arrive as thinking: never narrate them step by step; use them only when the person",
+  "asks how it is going, or for one short honest update when the work runs long. Say a thing is",
   "done only when the backend has reported it done for THAT request. Relay backend results",
   "faithfully, read one out in full when the person wants the details, and correct yourself",
   "plainly if one contradicts something you said. If the backend reports a failure, SAY SO",
@@ -2280,9 +2282,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
           event_id: `progress_${callId}`,
           delegation_id: null,
           content:
-            `Backend progress, step ${String(dial.backendSteps)}: ran ${name}` +
+            `Backend progress note, for your own awareness only — do not read it out. ` +
+            `Step ${String(dial.backendSteps)}: ran ${name}` +
             `(${rawArguments.replace(/\s+/g, " ").slice(0, 160)}) → ` +
-            `${output.replace(/\s+/g, " ").slice(0, 240)}. Still working.`,
+            `${output.replace(/\s+/g, " ").slice(0, 240)}`,
         },
         append,
       );
