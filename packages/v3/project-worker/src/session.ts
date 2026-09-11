@@ -85,14 +85,6 @@ export class IterateRpcTarget extends RpcTarget {
     this.#sessionTeardown.disposeAll();
   }
 
-  /** Safe bootstrap data available before authenticating. */
-  serverInfo() {
-    return {
-      platformOrigin: this.#input.appConfig.platformOrigin,
-      projectHostnameBase: this.#input.appConfig.projectHostnameBase,
-    };
-  }
-
   async authenticate(input: unknown): Promise<SessionRpcTarget> {
     const credentials = SessionCredentials.safeParse(input);
     if (!credentials.success)

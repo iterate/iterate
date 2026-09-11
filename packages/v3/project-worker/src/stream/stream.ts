@@ -19,6 +19,7 @@
 
 import { codedError, errorCode, reportIssue } from "../lib.ts";
 import type { ItxExpressionInput } from "../context/expression.ts";
+import type { Caller } from "../principal.ts";
 import { CoreContract, reduceCoreEventBatch, type CoreState } from "./core-processor.ts";
 import {
   idempotencyConflictMessage,
@@ -801,9 +802,5 @@ export interface ReachableContext {
   /** THE dispatch door. `caller` (WHO is calling) is what a `cd(path)` hop carries across to a
    *  sibling — the same identity, so a sibling append is attributed too; `args` are the expression's
    *  positional args. Both optional, so a bare `invoke(call)` is an anonymous probe. */
-  invoke(
-    call: ItxExpressionInput,
-    args?: unknown[],
-    caller?: { principal: { actor: string; email?: string } | null; scopes?: string[] },
-  ): Promise<unknown>;
+  invoke(call: ItxExpressionInput, args?: unknown[], caller?: Caller): Promise<unknown>;
 }
