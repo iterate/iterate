@@ -38,6 +38,7 @@ test("ai.run decodes JSON, preserves binary/SSE streams and raw responses, and r
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
   using project = await itx.projects.get(`ai-response-${crypto.randomUUID()}`).create({});
   using _interception = await project.ai.intercept(async (call) => {
+    if (call.source !== "ai-run") throw new Error("Expected ai-run source");
     expect(call.request).toMatchObject({
       kind: "workers-ai",
       model: "test-model",

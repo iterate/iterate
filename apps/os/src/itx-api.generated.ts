@@ -4621,10 +4621,21 @@ export type LiveStatePatch =
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
 /** Original model name and the complete credential-free request that would be dispatched. */
-export type ProjectAiInterceptorInput = {
-  model: string;
-  request: AiRequest;
-} & ({ source: "agent-turn"; agentPath: string } | { source: "ai-run" });
+export type ProjectAiInterceptorInput =
+  | {
+      source: "agent-turn";
+      agentPath: string;
+      model: string;
+      request: AiRequest & {
+        body: {
+          messages: {
+            role: "system" | "developer" | "user" | "assistant";
+            content: string;
+          }[];
+        };
+      };
+    }
+  | { source: "ai-run"; model: string; request: AiRequest };
 
 /** One stored overlay: the fields it deviates from (or adds over) the derived table. */
 export type WorkspaceMountOverlay = WorkspaceConfig["mounts"][string];

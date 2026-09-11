@@ -11,7 +11,7 @@ test("a config file mention is materialized before the model sees the turn", asy
   let materializedContext: string | undefined;
   agent.responses.set(async (call) => {
     modelCalls += 1;
-    materializedContext = (call.request.body.messages as any[]).find((message) =>
+    materializedContext = call.request.body.messages.find((message) =>
       message.content.includes('<mention type="file" repo="/repos/config" path="ONBOARDING.md">'),
     )?.content;
     return [
@@ -57,9 +57,7 @@ test("multi-turn chat with a sarcastic agent served by the spec's own fake-model
 
   const agent = await fixture.createAgent();
   agent.responses.set(async (call) => {
-    const lastUser = [...(call.request.body.messages as { role: string; content: string }[])]
-      .reverse()
-      .find((m) => m.role === "user");
+    const lastUser = [...call.request.body.messages].reverse().find((m) => m.role === "user");
     const reply = formatSarcasticResponse(stripXmlBlocks(lastUser?.content ?? ""));
     return [
       "```ts",

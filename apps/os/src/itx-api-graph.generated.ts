@@ -2241,7 +2241,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectAiInterceptorInput",
     kind: "typeAlias",
     sourceText:
-      '/** Original model name and the complete credential-free request that would be dispatched. */\nexport type ProjectAiInterceptorInput = {\n  model: string;\n  request: AiRequest;\n} & ({ source: "agent-turn"; agentPath: string } | { source: "ai-run" });',
+      '/** Original model name and the complete credential-free request that would be dispatched. */\nexport type ProjectAiInterceptorInput =\n  | {\n      source: "agent-turn";\n      agentPath: string;\n      model: string;\n      request: AiRequest & {\n        body: {\n          messages: {\n            role: "system" | "developer" | "user" | "assistant";\n            content: string;\n          }[];\n        };\n      };\n    }\n  | { source: "ai-run"; model: string; request: AiRequest };',
     summary:
       "Original model name and the complete credential-free request that would be dispatched.",
     memberSummaries: {},

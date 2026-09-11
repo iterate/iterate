@@ -364,9 +364,7 @@ export function createAgentHelper<
 
       lastUserMessage(call: ProjectAiInterceptorInput) {
         if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
-        return (call.request.body.messages as { role: string; content: string }[]).findLast(
-          (m) => m.role === "user",
-        )?.content;
+        return call.request.body.messages.findLast((m) => m.role === "user")?.content;
       }
 
       codemodify(script: string) {
@@ -429,10 +427,8 @@ export function createAgentHelper<
       await addAgentTurnInterceptor(path, async (call) => {
         const next = responses.take(call);
         if (!next) throw new Error(`No responses available for agent ${path}`);
-        return aiTextResponse(
-          await next(call as Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>),
-          call,
-        );
+        const s = await next(call as Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>);
+        return aiTextResponse(s, call);
       });
     }
     const webUrl = `/projects/${input.projectSlug}/agents/streams${path}`;
@@ -440,6 +436,7 @@ export function createAgentHelper<
     // Cap'n Web stubs reject arbitrary property writes — proxy path/webUrl on.
     // `then: never` stops `await createAgent()` unwrapping through the stub's
     // Promise intersection and stripping path/webUrl from the type.
+    // oxlint-disable-next-line unicorn/no-thenable
     const extras = { path, webUrl, mobileUrl, responses, then: null as never };
     return new Proxy(agent as Agent & typeof extras, {
       get(target, prop, receiver) {

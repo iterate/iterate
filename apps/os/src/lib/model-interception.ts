@@ -50,10 +50,21 @@ export type WorkersAiRequest = {
 };
 
 /** Original model name and the complete credential-free request that would be dispatched. */
-export type ProjectAiInterceptorInput = {
-  model: string;
-  request: AiRequest;
-} & ({ source: "agent-turn"; agentPath: string } | { source: "ai-run" });
+export type ProjectAiInterceptorInput =
+  | {
+      source: "agent-turn";
+      agentPath: string;
+      model: string;
+      request: AiRequest & {
+        body: {
+          messages: {
+            role: "system" | "developer" | "user" | "assistant";
+            content: string;
+          }[];
+        };
+      };
+    }
+  | { source: "ai-run"; model: string; request: AiRequest };
 
 /** Replace only the provider call; response classification and decoding still run. */
 export type ProjectAiInterceptor = (

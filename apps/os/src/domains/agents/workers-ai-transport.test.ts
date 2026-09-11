@@ -1,5 +1,5 @@
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   adaptMessagesForModel,
   cloudflareAiGatewayResponseCacheKey,
@@ -110,6 +110,15 @@ it.each([
             }),
           },
           consultInterceptor: async (call) => {
+            if (call.source !== "agent-turn") throw new Error("Expected agent-turn source");
+            expectTypeOf(call.request.body.messages).toEqualTypeOf<
+              { role: "system" | "developer" | "user" | "assistant"; content: string }[]
+            >();
+            expect(call.request.body.messages).toEqual(
+              adaptMessagesForModel([{ role: "developer", content: "say hello" }], {
+                supportsDeveloperRole: billing === "byok" && providerModel.startsWith("openai/"),
+              }),
+            );
             expect(call.model).toBe(`intercepted/${providerModel}`);
             expect(JSON.stringify(call)).not.toContain("must-not-leak");
             requests.push(call.request);
