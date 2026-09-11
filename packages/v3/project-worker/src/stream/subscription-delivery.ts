@@ -99,7 +99,7 @@ const serializedChars = (events: StreamEvent[]): number =>
  *  (halt and resume keep it; a re-configure changes it), so an evaluation done for a row since
  *  replaced is dropped and the replacement's target is evaluated instead. */
 type EvaluatedSubscriptionTarget = {
-  call: (args: unknown[]) => Promise<unknown>;
+  call: (args: unknown[]) => Promise<void>;
   forRowConfiguredAtOffset: number;
 };
 
@@ -138,7 +138,7 @@ type SubscriptionDeliveryRecord = {
     configuredAtOffset: number;
     rewriteRulesRef: object;
     head: unknown;
-    call: (args: unknown[]) => Promise<unknown>;
+    call: (args: unknown[]) => Promise<void>;
   };
 };
 
@@ -568,7 +568,7 @@ export class SubscriptionDelivery {
   async #evaluateTargetHeadForRow(
     name: string,
     row: Subscription,
-  ): Promise<{ head: unknown; call: (args: unknown[]) => Promise<unknown> }> {
+  ): Promise<{ head: unknown; call: (args: unknown[]) => Promise<void> }> {
     const rewriteRulesRef = this.#stream.coreReducedState.itxExpressionRewriteRules;
     const cached = this.#deliveryRecordByName.get(name)?.evaluatedTargetHead;
     if (
@@ -593,17 +593,23 @@ export class SubscriptionDelivery {
    *  (`…get('presence').processEventBatch`). */
   async #evaluateItxExpressionTargetHead(
     target: ItxExpression,
-  ): Promise<{ head: unknown; call: (args: unknown[]) => Promise<unknown> }> {
+  ): Promise<{ head: unknown; call: (args: unknown[]) => Promise<void> }> {
     const last = target.at(-1);
     // A trailing name is a METHOD only past the root and one more step: a two-step target
     // (`itx.<alias>`) IS the callee and is root-called whole — peeling its name would leave the bare
     // scope root as the head, which nothing can ever match.
     const method = typeof last === "string" && target.length > 2 ? last : undefined;
     const head = await this.#evaluateItxExpression(method ? target.slice(0, -1) : target);
-    const call = async (args: unknown[]): Promise<unknown> =>
-      method
+    // Every lane below AWAITS this only for the ack and IGNORES the return. A Workers-RPC/capnweb
+    // call result pins the callee's export table until disposed, so release it here — a live client's
+    // push runs on every commit, and leaving each result to GC would leak a slot per delivered batch.
+    const call = async (args: unknown[]): Promise<void> => {
+      const result = method
         ? (await walkSteps({ value: head, receiver: undefined }, [[method, ...args]])).value
-        : callOn(head, undefined, args);
+        : await callOn(head, undefined, args);
+      if (typeof result === "object" && result !== null && Symbol.dispose in result)
+        (result as Disposable)[Symbol.dispose]();
+    };
     return { head, call };
   }
 
