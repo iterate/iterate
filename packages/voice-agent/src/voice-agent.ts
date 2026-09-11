@@ -210,6 +210,13 @@ export const IDLE_TIMEOUT_MS = 60_000;
  * continuously never triggers it.
  */
 export const SILENCE_FILL_MS = 100;
+/**
+ * How often a background loop waiting for work re-checks that its dial is
+ * still the live one, and how long the mirror flush lingers for the next
+ * event before releasing its registration. See #startSpeakerSender.
+ */
+const BACKGROUND_LOOP_TICK_MS = 1_000;
+const MIRROR_FLUSH_LINGER_MS = 30_000;
 const SILENCE_FILL_FRAME_B64 = bytesToBase64(new Uint8Array(SILENCE_FILL_MS * 32));
 
 /**
@@ -891,6 +898,8 @@ interface Dial {
    * device every ~1.5 s while the provider sent ten.
    */
   sending: boolean;
+  /** Wakes the sender waiting on an empty outbox; null while it is sending or gone. */
+  wakeSender: (() => void) | null;
   /** Facet clock at the last speaker frame handed over — the "this end is
    * busy" reading the idle deadline uses. */
   lastSpeakerFrameAtFacetMs: number;
@@ -967,6 +976,7 @@ const freshDial = (conversationId: string): Dial => ({
   ready: false,
   speakerOutbox: [],
   sending: false,
+  wakeSender: null,
   lastSpeakerFrameAtFacetMs: 0,
   lastDeviceSpeakerFrameSeq: 0,
   clearSpeakerBufferBeforeNextFrame: true,
@@ -1064,6 +1074,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     append: ProcessEventArgs<VoiceAgentContract>["append"];
   }[] = [];
   #mirrorFlushing = false;
+  #mirrorWake: (() => void) | null = null;
 
   /* ------------------------------------------------------------------ fold */
 
@@ -1914,13 +1925,32 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * append that fails is one ephemeral frame lost; the next carries on.
    */
   #startSpeakerSender(dial: Dial, append: ProcessEventArgs<VoiceAgentContract>["append"]): void {
-    if (dial.sending) return;
+    if (dial.sending) {
+      dial.wakeSender?.();
+      return;
+    }
     dial.sending = true;
     this.runInBackground(async () => {
       try {
         while (this.#dial === dial) {
           const frame = dial.speakerOutbox.shift();
-          if (frame === undefined) return;
+          if (frame === undefined) {
+            /* ONE REGISTRATION PER DIAL, NOT PER DELTA. An append finishes in
+             * a millisecond and the next delta comes a hundred later, so a
+             * sender that let go when the outbox drained re-registered for
+             * nearly every frame — ten storage writes and alarm arms a
+             * second inside the Durable Object. Measured on preview-7
+             * (2026-09-11 afternoon, `voicelab duplex`): provider→facet gaps
+             * p99 456 ms while the facet's own sends gapped p99 5.1 s, max
+             * 9.6 s, and a mic append's round trip reached 4.3 s. The sender
+             * now waits for the next frame; the tick is only so a dial that
+             * ended is noticed. */
+            await this.#waitForWork((wake) => {
+              dial.wakeSender = wake;
+            }, BACKGROUND_LOOP_TICK_MS);
+            dial.wakeSender = null;
+            continue;
+          }
           const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
           dial.clearSpeakerBufferBeforeNextFrame = false;
           try {
@@ -1936,22 +1966,27 @@ export class VoiceAgentProcessor extends StreamProcessor<
               },
             });
           } catch {
-            /* Ephemeral: nothing recovers a lost frame, and nothing should. */
+            /* A frame the stream would not take is gone; the next one is not. */
           }
         }
       } finally {
         dial.sending = false;
+        dial.wakeSender = null;
       }
     });
   }
 
-  /* ------------------------------------------------------------ transcript */
-
   /**
-   * Close every open row whose last fragment is TURN_GAP_MS behind the
-   * timeline — or every row, when the call is ending and no more fragments
-   * can come.
+   * Resolves when `wake` is called or after `tickMs`, whichever is first: a
+   * background loop's way of sleeping without giving up its registration.
    */
+  #waitForWork(arm: (wake: () => void) => void, tickMs: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      arm(resolve);
+      void this.deps.sleep(tickMs).then(resolve);
+    });
+  }
+
   #flushTurns(
     dial: Dial,
     append: ProcessEventArgs<VoiceAgentContract>["append"],
@@ -2039,46 +2074,46 @@ export class VoiceAgentProcessor extends StreamProcessor<
     append: ProcessEventArgs<VoiceAgentContract>["append"],
   ): void {
     this.#mirrorQueue.push({ payload, append });
-    if (this.#mirrorFlushing) return;
+    if (this.#mirrorFlushing) {
+      this.#mirrorWake?.();
+      return;
+    }
     this.#mirrorFlushing = true;
     this.runInBackground(async () => {
-      /* The flag clears in a finally around the WHOLE loop: a rejected
-       * append loses only its own batch, never the mirror. */
       try {
-        while (this.#mirrorQueue.length > 0) {
-          const batch = this.#mirrorQueue;
-          this.#mirrorQueue = [];
-          await batch[0]!.append(
-            ...batch.map(({ payload }) => ({
-              type: "events.iterate.com/voice-agent/grok-event" as const,
-              payload,
-            })),
-          );
+        for (;;) {
+          while (this.#mirrorQueue.length > 0) {
+            const batch = this.#mirrorQueue;
+            this.#mirrorQueue = [];
+            await batch[0]!.append(
+              ...batch.map(({ payload }) => ({
+                type: "events.iterate.com/voice-agent/grok-event" as const,
+                payload,
+              })),
+            );
+          }
+          /* Same as the speaker sender: the mirror sees an event per delta,
+           * and a flush that let go after each was a registration per delta.
+           * It lingers a while for the next one, then lets go. */
+          const idleFromMs = this.deps.nowAtFacetMs();
+          await this.#waitForWork((wake) => {
+            this.#mirrorWake = wake;
+          }, MIRROR_FLUSH_LINGER_MS);
+          this.#mirrorWake = null;
+          if (
+            this.#mirrorQueue.length === 0 &&
+            this.deps.nowAtFacetMs() - idleFromMs >= MIRROR_FLUSH_LINGER_MS
+          ) {
+            return;
+          }
         }
       } finally {
         this.#mirrorFlushing = false;
+        this.#mirrorWake = null;
       }
     });
   }
 
-  /* ------------------------------------------------------------- the mic */
-
-  /**
-   * The device's base64 goes to the wire as it came — same rate, same bytes,
-   * no decode — with ONE repair: padding. The kit firmware encodes RFC 4648
-   * unpadded (640 bytes → 854 characters; voicelab_stream.c), Node's decoder
-   * never minded, and GPT-Live's rejects every frame: `audio must be
-   * base64-encoded audio/pcm: illegal base64 data at input byte 852`
-   * (measured 2026-09-11, a Mac talk run heard nothing back). The ONE site
-   * that knows the provider's spelling of "here is audio".
-   */
-  /**
-   * The silence fill: ONE background loop per dial, not a tick chain. A tick
-   * chain re-registers with the runner's keepalive every 100 ms — a KV write
-   * and an alarm arm each time — which is the per-frame cost that stalled the
-   * relay once already (measured again with the chain: 52 underruns in a
-   * 9 s answer). One loop registers once; it ends with the dial.
-   */
   #startSilenceFill(dial: Dial, append: ProcessEventArgs<VoiceAgentContract>["append"]): void {
     this.runInBackground(async () => {
       while (this.#dial === dial && dial.socket !== null && dial.ready) {

@@ -733,6 +733,32 @@ describe("the speaker lane", () => {
     expect(registrations).toBeLessThan(5);
   });
 
+  it("deltas a hundred milliseconds apart keep ONE sender registered, not one per delta", async () => {
+    /* The burst above is the easy case. In steady state an append finishes
+     * long before the next delta arrives, and a sender that let go each time
+     * the outbox drained re-registered for nearly every frame: ten storage
+     * writes a second, measured on preview-7 as facet sends gapping up to
+     * 9.6 s while the provider delivered on time. */
+    let registrations = 0;
+    class CountingProcessor extends VoiceAgentProcessor {
+      protected override runInBackground(work: () => Promise<unknown>): void {
+        registrations += 1;
+        super.runInBackground(work);
+      }
+    }
+    const h = makeHarness(CountingProcessor);
+    await callIsLive(h);
+    registrations = 0;
+    for (let delta = 0; delta < 30; delta++) {
+      h.provider.speech(100);
+      await h.settle();
+      await h.advanceTime(100);
+      await h.settle();
+    }
+    expect(speakerFrames(h)).toHaveLength(30);
+    expect(registrations).toBeLessThan(5);
+  });
+
   it("clears once at the start of a session and never again unprompted", async () => {
     const h = makeHarness();
     await callIsLive(h);
