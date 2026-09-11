@@ -93,6 +93,32 @@ describe("contract", () => {
       }),
     ).toThrow(/parse \{\}/);
   });
+
+  test("two deps declaring the same event type is rejected", () => {
+    const dep = (slug: string, schema: z.ZodType) =>
+      defineProcessorContract({
+        slug,
+        version: "1",
+        description: "",
+        stateSchema: z.object({}),
+        events: { "demo/shared": { description: slug, payloadSchema: schema } },
+        consumes: [],
+        emits: [],
+      });
+    // Two deps own "demo/shared" with different payloads: `resolve` would pick one while
+    // ConsumedEvent's union includes both — a mismatch the definition must refuse up front.
+    expect(() =>
+      defineProcessorContract({
+        slug: "consumer",
+        version: "1",
+        description: "",
+        stateSchema: z.object({}),
+        processorDeps: [dep("dep-a", z.object({ a: z.string() })), dep("dep-b", z.object({ b: z.number() }))],
+        consumes: ["demo/shared"],
+        emits: [],
+      }),
+    ).toThrow(/declared by two deps/);
+  });
 });
 
 describe("consumesEvent — THE ONE consumes rule (engine, delivery loop, inline reduces)", () => {
@@ -1083,6 +1109,45 @@ describe("contract payload validation", () => {
     await settle();
     // Normalized: 0 + 2 + 3 = 5. Without normalization, "2" would concat to "02" then "023".
     expect((await p.snapshot()).state).toEqual({ sum: 5 });
+  });
+
+  test("a version replay reproduces the live coercion, not the raw input", async () => {
+    const mem = memoryStream();
+    const storage = memoryStorage();
+    const make = (version: string) => {
+      const Contract = defineProcessorContract({
+        slug: "coerce-replay",
+        version,
+        description: "sums a coerced n",
+        stateSchema: z.object({ sum: z.number().default(0) }),
+        events: {
+          "demo/add": { description: "add n", payloadSchema: z.object({ n: z.coerce.number() }) },
+        },
+        consumes: ["demo/add"],
+        emits: [],
+      });
+      return new ProcessorEngine(
+        new (class extends StreamProcessor<{ sum: number }> {
+          readonly contract = Contract;
+          override reduce({ event, state }: ReduceArgs<{ sum: number }>) {
+            return { sum: state.sum + (event.payload as { n: number }).n };
+          }
+        })(),
+        { stream: mem.stream, storage },
+      );
+    };
+    const p1 = make("1");
+    mem.stream.append(
+      { type: "demo/add", payload: { n: "2" } },
+      { type: "demo/add", payload: { n: 3 } },
+    );
+    await p1.catchUpFromLog();
+    expect((await p1.snapshot()).state).toEqual({ sum: 5 }); // live: coerced
+
+    // A contract version bump re-reduces from the log — it MUST apply the same coercion, or a bump
+    // would silently rewrite state ("02" + 3 = "023" instead of 5).
+    const p2 = make("2");
+    expect((await p2.snapshot()).state).toEqual({ sum: 5 });
   });
 });
 

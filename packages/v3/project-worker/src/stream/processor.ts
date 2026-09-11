@@ -367,7 +367,9 @@ export class ProcessorEngine<State> {
       const page = await this.#stream.read(reducedThroughOffset, 500);
       for (const event of page.events)
         if (event.offset <= target && reducesEvent(this.#contract.consumes, event))
-          state = this.#reduceOrKeep(event, state);
+          // The SAME validate+normalize+fold as the live flow — a replay must reproduce it exactly,
+          // else a coercion applied live but not here would make a version bump rewrite state.
+          state = this.#validateNormalizeAndReduce(event, state).state;
       if (page.scannedThroughOffset <= reducedThroughOffset) break; // nothing left below the target
       reducedThroughOffset = Math.min(page.scannedThroughOffset, target);
     }
@@ -445,6 +447,32 @@ export class ProcessorEngine<State> {
     }
   }
 
+  /** Validate a consumed event's payload against the contract's declared schema, then reduce it — or,
+   *  for a malformed payload, skip the fold and report (it must never corrupt reduced state, the
+   *  exported view a live client parses). Returns the next state AND the event to carry onward,
+   *  NORMALIZED to the schema's `z.output` (coercions/defaults applied) when it validated — so the
+   *  reducer, the effect hook, and the version replay all see exactly what `ConsumedEvent<Contract>`
+   *  promises. SHARED by the live flow and `#rereduceIfVersionChanged`, so the two can never diverge
+   *  (a coercion applied live but not on replay would make a version bump rewrite state). A payload-less
+   *  event validates as `{}` (the "empty defaults" convention the contract requires of its stateSchema);
+   *  a contract with no `events` catalog (the kernel-generic processors) folds unvalidated, as before. */
+  #validateNormalizeAndReduce(event: StreamEvent, state: State): { state: State; event: StreamEvent } {
+    const parsed = this.#contract.payloadSchemaFor?.(event.type)?.safeParse(event.payload ?? {});
+    if (parsed && !parsed.success) {
+      reportIssue("processor.reduce.payload", parsed.error, {
+        slug: this.#contract.slug,
+        offset: event.offset,
+        type: event.type,
+      });
+      return { state, event }; // malformed: not folded; the raw event still flows to the caller
+    }
+    // Owned-event payloads are object schemas, so `z.output` is a record.
+    const normalized = parsed
+      ? { ...event, payload: parsed.data as Record<string, unknown> }
+      : event;
+    return { state: this.#reduceOrKeep(normalized, state), event: normalized };
+  }
+
   /** THE per-event primitive (rules 2–3) — the batch loop and the eventless at-head pass both come
    *  here: a GUARDED reduce, then `processEvent` with a FIFO blocker chain drained to a FIXED POINT.
    *  Returns the next state; owns NO cursor / persist / waiter — the caller does. */
@@ -456,26 +484,12 @@ export class ProcessorEngine<State> {
     const { slug, version, emits } = this.#contract;
     const previousState = state;
     if (event) {
-      // Validate + NORMALIZE the payload against the contract's declared schema, so the reducer AND the
-      // effect hook below both see exactly what `ConsumedEvent<Contract>` promises — the schema's
-      // `z.output` (coercions/defaults applied), not the raw literal append. A payload-less event
-      // validates as `{}` (the "empty defaults" convention the contract already requires of its
-      // stateSchema). A malformed payload for a KNOWN event is NOT folded — it must never corrupt
-      // reduced state (the exported view a live client parses) — but the raw event still flows to
-      // processEvent so the batch's caught-up signalling is preserved. A contract with no `events`
-      // catalog (the kernel-generic processors) has no schema here and folds unvalidated, as before.
-      const parsed = this.#contract.payloadSchemaFor?.(event.type)?.safeParse(event.payload ?? {});
-      if (parsed && !parsed.success)
-        reportIssue("processor.reduce.payload", parsed.error, {
-          slug,
-          offset: event.offset,
-          type: event.type,
-        });
-      else {
-        // Owned-event payloads are object schemas, so `z.output` is a record.
-        if (parsed) event = { ...event, payload: parsed.data as Record<string, unknown> };
-        state = this.#reduceOrKeep(event, state);
-      }
+      // Validate + normalize + fold via the ONE shared path (so replay can't diverge). The reducer and
+      // the effect hook below both see the NORMALIZED event on the valid path; a malformed payload is
+      // not folded but the raw event still flows to processEvent, keeping the batch's caught-up signal.
+      const reduced = this.#validateNormalizeAndReduce(event, state);
+      state = reduced.state;
+      event = reduced.event;
     }
     // FIFO blocker chain for THIS event (rule 2); background work escapes it (rule 3).
     let blockers: Promise<unknown> = Promise.resolve();
@@ -958,11 +972,19 @@ export function defineProcessorContract<
     throw new Error(`contract "${contract.slug}": stateSchema must parse {} (default every field)`);
   const events = (contract.events ?? {}) as Events;
   const processorDeps = (contract.processorDeps ?? []) as Deps;
-  // One owner per event type: a local event may not shadow a dep's event.
+  // One owner per event type: a local event may not shadow a dep's event, and two deps may not both
+  // declare one. Otherwise `resolve` (and the runtime payload validation it backs) would pick just the
+  // first while `ConsumedEvent`'s type union includes BOTH payload types — a second dep's events would
+  // then validate against the wrong schema.
+  const depEventTypes = new Set<string>();
   for (const dep of processorDeps as readonly { events: EventCatalog }[])
-    for (const type of Object.keys(dep.events))
+    for (const type of Object.keys(dep.events)) {
       if (type in events)
         throw new Error(`contract "${contract.slug}": event "${type}" is already owned by a dep`);
+      if (depEventTypes.has(type))
+        throw new Error(`contract "${contract.slug}": event "${type}" is declared by two deps`);
+      depEventTypes.add(type);
+    }
   const resolve = (type: string): EventDefinition | undefined =>
     events[type] ??
     (processorDeps as readonly { events: EventCatalog }[]).map((dep) => dep.events[type]).find(Boolean);
