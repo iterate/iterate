@@ -2074,9 +2074,17 @@ export class VoiceAgentProcessor extends StreamProcessor<
       while (this.#dial === dial && dial.socket !== null && dial.ready) {
         await this.deps.sleep(SILENCE_FILL_MS);
         if (this.#dial !== dial || dial.socket === null || !dial.ready) return;
+        /* PACED TO THE WALL CLOCK, never to the loop: a sleep that wakes
+         * late still owes the provider every millisecond since the device
+         * was last heard, so as many whole frames as are owed go out — an
+         * input stream that drifts even a few percent slow starves the
+         * provider's clock a few seconds into a long answer. Device audio
+         * moves the stamp forward itself, so the fill covers only the gaps. */
         const nowAtFacetMs = this.deps.nowAtFacetMs();
-        if (nowAtFacetMs - dial.lastMicAudioAtFacetMs >= SILENCE_FILL_MS) {
-          dial.lastMicAudioAtFacetMs = nowAtFacetMs;
+        let owedMs = nowAtFacetMs - dial.lastMicAudioAtFacetMs;
+        while (owedMs >= SILENCE_FILL_MS) {
+          dial.lastMicAudioAtFacetMs += SILENCE_FILL_MS;
+          owedMs -= SILENCE_FILL_MS;
           this.#sendMicAudio(dial.socket, SILENCE_FILL_FRAME_B64);
         }
       }
