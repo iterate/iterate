@@ -832,9 +832,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           headers.get(ITX_PRINCIPAL_HEADER) ?? "null",
         ) as Principal | null;
         const forwarded = new Request(request, { headers });
-        const invoke = () =>
-          this.#itxExpressionResolver.invoke(itxExpressionEndingInFetch(itxExpression), forwarded);
-        const result = await this.#callerStorage.run({ principal }, invoke);
+        const result = await this.#callerStorage.run({ principal }, () =>
+          this.#itxExpressionResolver.invoke(itxExpressionEndingInFetch(itxExpression), forwarded),
+        );
         return result instanceof Response
           ? result
           : new Response(`fetch lane: ${JSON.stringify(result)}\n`);
