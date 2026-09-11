@@ -403,17 +403,17 @@ export interface Ai {
    * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
    * to `env.AI.run`; its `gateway` wins over any constructor-provided one.
    * An `intercepted/*` model never reaches Cloudflare: the live interceptor installed
-   * with `intercept(handler)` serves it, and its return value comes back
-   * verbatim (no handler installed → a loud error). */
+   * with `intercept(handler)` supplies a provider response decoded in the same
+   * way as a real call (no handler installed → a loud error). */
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
   /** Install a live handler for `intercepted/*` models (last writer wins); returns a
    * release handle. For deterministic testing: an agent configured with
    * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your
    * handler — an in-memory function on YOUR side of the connection — instead
    * of a real provider. The handler receives
-   * `{ source: "agent-turn" | "ai-run", model, body }`; for agent turns it
-   * returns assistant text (a string, or `{ text, usage? }`), for ai-run its
-   * return value is handed back verbatim. Live means session-bound, with the
+   * `{ source: "agent-turn" | "ai-run", model, request }` with the prepared
+   * request and no provider credentials. Return a `Response` containing the provider’s
+   * JSON or SSE response; its body may be a `ReadableStream<Uint8Array>`. Live means session-bound, with the
    * mount invariant: the interception lives exactly as long as your session
    * connection, and if the platform's half dies while your socket is open,
    * the socket closes (4901) — reconnect and intercept() again.
@@ -2618,14 +2618,10 @@ export type CfAiRunOptions = {
   returnRawResponse?: boolean;
 };
 
-/**
- * Live replacement for intercepted/* model calls. For `source: "agent-turn"` the
- * return value must be assistant text — a plain string, or
- * `{ text, usage? }` to also report token usage (report inflated numbers to
- * drive compaction deterministically). For `source: "ai-run"` the return value
- * is handed back to the `itx.ai.run` caller verbatim.
- */
-export type ProjectAiInterceptor = (input: ProjectAiInterceptorInput) => Promise<unknown>;
+/** Replace only the provider call; response classification and decoding still run. */
+export type ProjectAiInterceptor = (
+  input: ProjectAiInterceptorInput,
+) => Response | Promise<Response>;
 
 /** One file format the markdown converter accepts (extension plus MIME type);
  * `ai.toMarkdown()` with no arguments returns the full list. */
@@ -4839,26 +4835,22 @@ export type CompactLiveStatePatch =
   | [number, string]
   | { [address: string]: CompactLiveStatePatch };
 
-/**
- * One intercepted/* invocation as the interceptor sees it. `source` discriminates the
- * two egress paths: an agent conversation turn carries the provider-neutral
- * chat projection, a direct `itx.ai.run` call carries the caller's body
- * argument verbatim (honestly `unknown` — the caller chose its shape).
- */
+/** Original model name and the complete credential-free request that would be dispatched. */
 export type ProjectAiInterceptorInput =
   | {
       source: "agent-turn";
       agentPath: string;
       model: string;
-      body: {
-        messages: { role: "system" | "developer" | "user" | "assistant"; content: string }[];
+      request: AiRequest & {
+        body: {
+          messages: {
+            role: "system" | "developer" | "user" | "assistant";
+            content: string;
+          }[];
+        };
       };
     }
-  | {
-      source: "ai-run";
-      model: string;
-      body: unknown;
-    };
+  | { source: "ai-run"; model: string; request: AiRequest };
 
 /** One stored overlay: the fields it deviates from (or adds over) the derived table. */
 export type WorkspaceMountOverlay = WorkspaceConfig["mounts"][string];
@@ -5651,6 +5643,9 @@ export type StreamWakeEventBatch = StreamEventBatch & {
   reportDeliveryResult: ReportStreamWakeDeliveryResult;
 };
 
+/** The two concrete outbound APIs, after host policy and request preparation. No credentials. */
+export type AiRequest = OpenAiHttpRequest | WorkersAiRequest;
+
 /** A workspace's stored configuration: the mount OVERLAY table, keyed by mount path. */
 export type WorkspaceConfig = WorkspaceProcessorState["config"];
 
@@ -5888,6 +5883,25 @@ export type StreamSubscriptionDescription = {
  * each other forever.
  */
 export type ReportStreamWakeDeliveryResult = (result: StreamWakeDeliveryResult) => unknown;
+
+/** Prepared OpenAI HTTP request, with authorization supplied only at dispatch. */
+export type OpenAiHttpRequest = {
+  kind: "openai-http";
+  gatewayId: string;
+  endpoint: string;
+  headers: Record<string, string>;
+  body: Record<string, unknown>;
+};
+
+/** Prepared Workers AI binding invocation, including its raw-response option. */
+export type WorkersAiRequest = {
+  kind: "workers-ai";
+  model: string;
+  body: Record<string, unknown>;
+  options: CfAiRunOptions & {
+    returnRawResponse: true;
+  };
+};
 
 /**
  * One overlay change: a local file that shadows a mount file ("modified" —

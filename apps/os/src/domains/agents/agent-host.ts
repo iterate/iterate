@@ -9,6 +9,8 @@
 import { isIdempotencyConflict } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
 import type { ConfigRepoFileMentionTarget } from "@iterate-com/shared/message";
+import type { ProjectAiInterceptorInput } from "../../lib/model-interception.ts";
+import type { AgentLlmCompletion } from "./agent-processor-contract.ts";
 import type { AgentFileAttachment, AgentProcessorContract } from "./agent-processor-contract.ts";
 import type { AgentMentionReadResult } from "./agent-mention-materialization.ts";
 import type {
@@ -27,16 +29,7 @@ export type AgentLlmTransport = (args: {
   signal: AbortSignal;
   /** The transport awaits each result before delivering the next chunk. */
   onChunk?: (text: string) => Promise<void>;
-}) => Promise<{
-  text: string;
-  usage?: {
-    inputTokens: number;
-    outputTokens: number;
-    cachedInputTokens?: number;
-    reasoningOutputTokens?: number;
-  };
-  rawResponse?: unknown;
-}>;
+}) => Promise<AgentLlmCompletion>;
 
 /**
  * Host-provided deps beyond the stream plumbing.
@@ -73,12 +66,7 @@ export type AgentLlmTransport = (args: {
 export type AgentProcessorDeps = {
   ai?: WorkersAiBinding;
   cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
-  consultAiInterceptor?: (input: {
-    source: "agent-turn";
-    agentPath: string;
-    model: string;
-    body: { messages: WorkersAiMessage[] };
-  }) => Promise<unknown>;
+  consultAiInterceptor?: (input: ProjectAiInterceptorInput) => Promise<unknown>;
   resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
   readRepoFile?: (
     target: ConfigRepoFileMentionTarget,

@@ -101,6 +101,9 @@ importers:
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:packages/shared
+      '@iterate-com/test-support':
+        specifier: workspace:*
+        version: link:packages/test-support
       '@playwright/test':
         specifier: 1.60.0
         version: 1.60.0
@@ -1019,6 +1022,9 @@ importers:
       '@iterate-com/docs':
         specifier: workspace:*
         version: link:../docs
+      '@iterate-com/test-support':
+        specifier: workspace:*
+        version: link:../../packages/test-support
       '@iterate-com/voice-agent':
         specifier: workspace:*
         version: link:../../packages/voice-agent
@@ -1527,6 +1533,19 @@ importers:
       wrangler:
         specifier: 4.107.0
         version: 4.107.0(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))
+
+  packages/test-support:
+    dependencies:
+      iterate:
+        specifier: workspace:*
+        version: link:../iterate
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.10
+        version: 25.6.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
 
   packages/typm:
     devDependencies:
