@@ -144,7 +144,11 @@ export class BrowserSession extends DurableObject {
               signal: AbortSignal.timeout(10_000),
             }),
           );
-          await api.authenticate({ type: "from-server-cookie" }).logout();
+          // `authenticate(...)` returns a SessionRpcTarget STUB — its own RPC result to dispose (the
+          // capnweb README's `using authedApi = api.authenticate(...)`); disposing only `api` leaves
+          // it dangling and workerd warns the result was never disposed.
+          using session = api.authenticate({ type: "from-server-cookie" });
+          await session.logout();
         }
       }
       // Network failures preserve the session and are shown to the caller.
