@@ -14,7 +14,7 @@ import {
   type ProjectAiInterceptorInput,
 } from "iterate/node";
 import dedent from "dedent";
-import { installResilientAiInterceptor } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
+import { interceptor } from "@iterate-com/test-support";
 import { doppler, localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "./email-otp-signup.ts";
@@ -310,7 +310,7 @@ export function createAgentHelper<
 
   // The churn-surviving handler dials its own dedicated admin session.
   const interceptAi = (handler: ProjectAiInterceptor) =>
-    installResilientAiInterceptor({
+    interceptor.installResilientAiInterceptor({
       projectId: input.projectId,
       handler,
       connect: (options) => connectAdminItx(input.baseUrl, options),
@@ -364,7 +364,7 @@ export function createAgentHelper<
 
       lastUserMessage(call: ProjectAiInterceptorInput) {
         if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
-        return call.body.messages.findLast((m) => m.role === "user")?.content;
+        return call.request.body.messages.findLast((m) => m.role === "user")?.content;
       }
 
       codemodify(script: string) {
@@ -427,7 +427,8 @@ export function createAgentHelper<
       await addAgentTurnInterceptor(path, async (call) => {
         const next = responses.take(call);
         if (!next) throw new Error(`No responses available for agent ${path}`);
-        return await next(call as Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>);
+        const s = await next(call as Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>);
+        return interceptor.aiTextResponse(s, call);
       });
     }
     const webUrl = `/projects/${input.projectSlug}/agents/streams${path}`;
@@ -435,6 +436,7 @@ export function createAgentHelper<
     // Cap'n Web stubs reject arbitrary property writes — proxy path/webUrl on.
     // `then: never` stops `await createAgent()` unwrapping through the stub's
     // Promise intersection and stripping path/webUrl from the type.
+    // oxlint-disable-next-line unicorn/no-thenable
     const extras = { path, webUrl, mobileUrl, responses, then: null as never };
     return new Proxy(agent as Agent & typeof extras, {
       get(target, prop, receiver) {
@@ -459,7 +461,7 @@ export function createAgentHelper<
  * append events and assert the browser repaints from the push). Dispose with
  * `using` — the handle owns its WebSocket. `onWebSocketClose` observes the
  * socket dying, however it dies — the hook a reconnect loop hangs off (see
- * @iterate-com/shared/test-support/resilient-ai-interceptor).
+ * @iterate-com/test-support).
  */
 export async function connectAdminItx(
   baseUrl: string,

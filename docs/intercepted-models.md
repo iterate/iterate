@@ -8,6 +8,13 @@ real (debounce, journaled llm-request events, chunk streaming, codemode, chat
 reply); only the model is scripted. Non-fake models are never interceptable —
 a journaled `openai/*` turn is always the real provider.
 
+When testing provider-specific preparation, name the provider/model explicitly, for example
+`intercepted/openai/gpt-4.1-nano` or `intercepted/@cf/meta/llama-3.2-1b-instruct`.
+The prefix is stripped before request preparation; the configured transport
+still chooses BYOK versus Cloudflare billing. Interception does not choose the provider.
+For provider-independent tests, synthetic names such as `intercepted/echo-args`
+are sufficient; they use generic Workers AI preparation without calling a provider.
+
 ## Quick start
 
 ```ts
@@ -19,14 +26,14 @@ using session = await connectItxReady({
 });
 using project = session.projects.get("my-project");
 
-// Serve every intercepted/* call with your function. Last writer wins.
-using interception = await project.ai.intercept(async (call) => {
-  if (call.source === "ai-run") return { echo: call.body }; // returned verbatim
-  // call.source === "agent-turn": call.body.messages is the chat projection.
-  // Return assistant text — or { text, usage } to also script token usage
-  // (inflate the numbers to drive compaction deterministically).
-  return "scripted reply";
-});
+// Replace only provider dispatch, after host request preparation.
+using interception = await project.ai.intercept((call) =>
+  Response.json(
+    call.source === "ai-run"
+      ? { echo: call.request.body }
+      : { choices: [{ message: { content: "scripted reply" } }] },
+  ),
+);
 
 // Direct invocation path:
 await project.ai.run("intercepted/anything", { prompt: "hi" });
@@ -43,12 +50,40 @@ await agent.ask({ message: "hello" });
 await interception.release(); // or let `using` dispose it
 ```
 
-Handler input is
-`{ source: "agent-turn" | "ai-run", model, body }`
-([model-interception.ts](../apps/os/src/lib/model-interception.ts) has the
-exact types; they're also exported from `iterate/node` as
-`ProjectAiInterceptor` / `ProjectAiInterceptorInput`). A malformed agent-turn
-result fails the attempt loudly; omitted usage gets a text-length estimate.
+Handlers receive `source` (`agent-turn` or `ai-run`), the original
+`model`, and a completed `request` with one of two shapes:
+
+- `kind: "openai-http"`: gateway ID, endpoint, body, and headers.
+- `kind: "workers-ai"`: model, body, and binding options.
+
+Agent calls also carry `agentPath`. Credentials are excluded from both shapes.
+The sender does not change the prepared body or choose a provider from the model name.
+
+Return a `Response`, synchronously or from a promise. Use `Response.json(value)`
+for JSON, or `new Response(stream, { headers: { "content-type": "text/event-stream" } })`
+for SSE. Streams carry bytes (`ReadableStream<Uint8Array>`); chunks flow through
+the normal decoder as they arrive. Return an unused, unlocked body. Invalid
+responses and stream failures fail the attempt. There is one intercepted namespace and
+one request preparation path.
+
+Test helpers are grouped under the `interceptor` export from
+`@iterate-com/test-support`:
+
+```ts
+import { interceptor } from "@iterate-com/test-support";
+
+// Plain text, or { text, usage } for explicit token counts.
+interceptor.aiTextResponse("reply", call);
+
+// Agent code: wraps the source in a TypeScript fence before building the SSE response.
+interceptor.codemodeBackticksResponse(
+  'async (itx) => { await itx.chat.sendMessage("scripted reply"); }',
+  call,
+);
+```
+
+Both helpers emit SSE and estimate token usage unless explicit counts are supplied.
+Production interception always consumes a provider-shaped response.
 
 ## The lifetime contract
 
@@ -88,12 +123,16 @@ again**. An in-flight agent turn survives the gap on its own retries
 dedicated to the interception:
 
 ```ts
+import { interceptor } from "@iterate-com/test-support";
+
 await using fixture = await helpers.createFixture("my-spec");
-await using interception = await fixture.interceptAi(async (call) => "reply");
+await using interception = await fixture.interceptAi(async (call) =>
+  interceptor.aiTextResponse("reply", call),
+);
 ```
 
 (`fixture.interceptAi` wraps
-[installResilientAiInterceptor](../packages/shared/src/test-support/resilient-ai-interceptor.ts);
+[interceptor.installResilientAiInterceptor](../packages/test-support/src/resilient-ai-interceptor.ts);
 real usage: [agent-fake-model-chat.spec.ts](../specs/agent-fake-model-chat.spec.ts).)
 
 **Plain node** — the node client is deliberately vanilla and never reconnects
@@ -114,3 +153,14 @@ async function keepIntercepting(handler) {
 [ai-intercept.itx.e2e.test.ts](../apps/os/e2e/vitest/ai-intercept.itx.e2e.test.ts)
 exercises install, release, the 4901 close on a real DO restart, and
 supersession.
+
+## HTTP response fixtures
+
+Use any `intercepted/*` model with an HTTP fixture. The same handler can return
+streamed success or an HTTP failure. HTTP failures use the existing bounded agent failure policy.
+
+Direct `ai.run` retains the Workers AI binding's decoding rules: exactly
+`application/json` is decoded; other content types return a body stream.
+`returnRawResponse: true` returns the response even for HTTP errors. Decoded
+HTTP failures now throw an error with the status and response-body excerpt,
+rather than the binding's private `InferenceUpstreamError` class.

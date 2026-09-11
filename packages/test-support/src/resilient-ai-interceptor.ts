@@ -1,3 +1,5 @@
+import type { ProjectAiInterceptor } from "iterate/node";
+
 /**
  * Install an `intercepted/*` model handler that SURVIVES platform churn, on a
  * connection dedicated to the interception.
@@ -23,22 +25,22 @@
  */
 
 /** The slice of an itx session the loop needs: dial a project, mount a handler, hang up. */
-type InterceptorSession<Handler> = Disposable & {
+type InterceptorSession = Disposable & {
   projects: {
     get(projectId: string): {
-      ai: { intercept(handler: Handler): Promise<{ release(): Promise<void> }> };
+      ai: { intercept(handler: ProjectAiInterceptor): Promise<{ release(): Promise<void> }> };
     };
   };
 };
 
-export async function installResilientAiInterceptor<Handler>(input: {
+export async function installResilientAiInterceptor(input: {
   /** Project id or slug, as `session.projects.get` accepts. */
   projectId: string;
-  handler: Handler;
+  handler: ProjectAiInterceptor;
   /** Dial a fresh admin session; the close hook MUST be wired to the socket. */
   connect(options: {
     onWebSocketClose: (close: { code: number; reason: string }) => void;
-  }): Promise<InterceptorSession<Handler>> | InterceptorSession<Handler>;
+  }): Promise<InterceptorSession> | InterceptorSession;
 }): Promise<AsyncDisposable> {
   let disposed = false;
   // A close event triggers recovery only when it belongs to the CURRENT
@@ -66,7 +68,7 @@ export async function installResilientAiInterceptor<Handler>(input: {
     const previous = current;
     current = undefined;
     if (previous !== undefined) disposeSession(previous.session);
-    let session: InterceptorSession<Handler> | undefined;
+    let session: InterceptorSession | undefined;
     try {
       session = await input.connect({
         onWebSocketClose: (close) => {
@@ -138,4 +140,56 @@ export async function installResilientAiInterceptor<Handler>(input: {
       disposeSession(active.session);
     },
   };
+}
+
+function wrapCodemode(text: string) {
+  return "```ts\n" + text.toString() + "\n```";
+}
+
+/** Wrap code in a TypeScript fence, preserving explicit usage counts when provided. */
+export function codemodeBackticksResponse(...args: Parameters<typeof aiTextResponse>) {
+  if (typeof args[0] === "string") {
+    return aiTextResponse(wrapCodemode(args[0]), args[1]);
+  }
+
+  return aiTextResponse({ ...args[0], text: wrapCodemode(args[0].text) }, args[1]);
+}
+
+/** Scripted text still passes through the real SSE decoder and usage accounting. */
+export function aiTextResponse(
+  result:
+    | string
+    | {
+        text: string;
+        usage?: {
+          inputTokens: number;
+          outputTokens: number;
+          cachedInputTokens?: number;
+          reasoningOutputTokens?: number;
+        };
+      },
+  request: { request: { body: unknown } },
+) {
+  const { text, usage } = typeof result === "string" ? { text: result, usage: undefined } : result;
+  const counts = usage || {
+    inputTokens: Math.ceil(JSON.stringify(request.request.body).length / 4),
+    outputTokens: Math.ceil(text.length / 4),
+  };
+  return new Response(
+    text
+      .split(/\b/)
+      .filter(Boolean)
+      .map((content) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`)
+      .join("") +
+      `data: ${JSON.stringify({
+        choices: [],
+        usage: {
+          prompt_tokens: counts.inputTokens,
+          completion_tokens: counts.outputTokens,
+          prompt_tokens_details: { cached_tokens: counts.cachedInputTokens || 0 },
+          completion_tokens_details: { reasoning_tokens: counts.reasoningOutputTokens || 0 },
+        },
+      })}\n\ndata: [DONE]\n\n`,
+    { headers: { "content-type": "text/event-stream" } },
+  );
 }

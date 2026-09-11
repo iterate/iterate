@@ -240,6 +240,7 @@ const config: KnipConfig = {
     "!apps/browser-extension",
     "packages/*",
     "!packages/shared",
+    "!packages/test-support",
     "!packages/ui",
     "!packages/iterate",
     "!packages/voice-agent",
@@ -269,6 +270,7 @@ const config: KnipConfig = {
     "apps/docs": makeDocsWorkspace(),
     "apps/browser-extension": makeBrowserExtensionWorkspace(),
     "packages/shared": makeSharedWorkspace(),
+    "packages/test-support": { project: ["src/**/*.ts"] },
     "packages/ui": makeUiWorkspace(),
     "packages/iterate": makeIterateCliWorkspace(),
     "packages/voice-agent": {
