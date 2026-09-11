@@ -43,6 +43,11 @@ export default defineConfig({
     cloudflare({ viteEnvironment: { name: "ssr" } }),
     emittedWranglerConfig(),
     tanstackStart({
+      // SPA mode (spa: { enabled: true }) is the intended shape but is BLOCKED by the toolchain: it
+      // build-time-prerenders the shell by running THIS worker in @cloudflare/vite-plugin's bundled
+      // workerd, which supports compat date 2026-07-08 < the worker's 2026-09-01 (the same reason
+      // `pnpm dev` uses the package's own wrangler). Re-enable once the plugin's workerd is bumped, or
+      // switch to a manually-served shell + client-side auth. Tracked in BUILD-LOG / the design doc.
       router: { addExtensions: true, semicolons: true, quoteStyle: "double" },
       importProtection: { behavior: "error" },
     }),
