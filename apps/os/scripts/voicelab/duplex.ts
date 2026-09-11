@@ -269,7 +269,13 @@ export async function duplex(options: DuplexOptions): Promise<void> {
    * and counting it made every max and p99 on these lines the delegation's
    * duration. Consecutive frames of the same answer are the only pairs whose
    * spacing says anything about the path. */
-  const withinAnswer = (pick: (arrival: (typeof watch.spkArrivals)[number]) => number | null) => {
+  /* The largest gap is also placed on the call clock next to the delegation
+   * timeline, so a stall can be read against what the facet was doing. */
+  let largest: { gapMs: number; atMs: number; label: string } | null = null;
+  const withinAnswer = (
+    label: string,
+    pick: (arrival: (typeof watch.spkArrivals)[number]) => number | null,
+  ) => {
     const gaps: number[] = [];
     for (let index = 1; index < watch.spkArrivals.length; index++) {
       const previous = watch.spkArrivals[index - 1]!;
@@ -279,10 +285,13 @@ export async function duplex(options: DuplexOptions): Promise<void> {
       const b = pick(current);
       if (a === null || b === null) continue;
       gaps.push(b - a);
+      if (largest === null || b - a > largest.gapMs) {
+        largest = { gapMs: b - a, atMs: current.atMs, label };
+      }
     }
     return gapStatsOfGaps(gaps);
   };
-  const gaps = withinAnswer((arrival) => arrival.atMs);
+  const gaps = withinAnswer("arrival", (arrival) => arrival.atMs);
   let cushionMinMs = Number.POSITIVE_INFINITY;
   let dryFrames = 0;
   let runStartMs: number | null = null;
@@ -309,7 +318,7 @@ export async function duplex(options: DuplexOptions): Promise<void> {
    * minus its own minimum so the clock offset cancels) is the delivery hop
    * alone. */
   const providerGaps = gapStats(watch.providerDeltaReceivedAtFacetMs);
-  const sentGaps = withinAnswer((arrival) => arrival.sentAtFacetMs);
+  const sentGaps = withinAnswer("facet send", (arrival) => arrival.sentAtFacetMs);
   const transits = watch.spkArrivals
     .filter((arrival) => arrival.sentAtFacetMs !== null)
     .map((arrival) => arrival.atMs - arrival.sentAtFacetMs!)
@@ -341,6 +350,21 @@ export async function duplex(options: DuplexOptions): Promise<void> {
   console.log(
     `    frame arrival gaps        p50 ${String(gaps.p50)} p90 ${String(gaps.p90)} p99 ${String(gaps.p99)} max ${String(gaps.max)} ms; >150 ms: ${String(gaps.over150)}, >250 ms: ${String(gaps.over250)} of ${String(gaps.count)}`,
   );
+  if (largest !== null) {
+    const placed = largest as { gapMs: number; atMs: number; label: string };
+    const delegationNotes = watch.delegations.map(
+      (d, index) =>
+        `delegation ${String(index + 1)} created +${(d.createdAtMs / 1000).toFixed(1)}s` +
+        (d.finalTextDoneAtMs === null
+          ? ""
+          : `, final text +${(d.finalTextDoneAtMs / 1000).toFixed(1)}s`) +
+        `, ${String(d.functionCalls)} calls`,
+    );
+    console.log(
+      `    largest within-answer gap ${String(Math.round(placed.gapMs))} ms (${placed.label}) ending at +${(placed.atMs / 1000).toFixed(1)}s` +
+        (delegationNotes.length > 0 ? `; ${delegationNotes.join("; ")}` : ""),
+    );
+  }
   console.log(
     `    frames arriving clumped   ${String(clumped)} of ${String(watch.spkArrivals.length)} shared a delivery batch with another audio frame`,
   );

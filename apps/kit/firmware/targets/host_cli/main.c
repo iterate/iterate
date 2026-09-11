@@ -1736,8 +1736,17 @@ static void cli_main_supervise_downlink(
     struct cli_runtime *runtime, uint64_t now_ms, size_t outbox_free)
 {
   assert(runtime != NULL);
-  const bool silent = runtime->voicelab.state == ITERATE_KIT_VOICELAB_READY &&
-      runtime->voicelab.call_active &&
+  /* SILENCE IS EVIDENCE ONLY WHILE TRAFFIC IS OWED — the board's rule
+   * (iterate_kit_voicelab_downlink_expected): a call the device is talking
+   * into and nobody has accepted, or an answer begun whose `last` has not
+   * come. This client opens a call by talking, so "wanted" is `talking`. The facet drops idle
+   * silence, so a live call with the model listening delivers nothing; read
+   * as a dead lane that recycled the connection every ten seconds of an
+   * ordinary conversation (12 in a three-minute live-microphone call,
+   * 2026-09-11 evening), each one cutting whatever the model said next. */
+  const bool traffic_owed =
+      (runtime->talking && !runtime->voicelab.call_active) || runtime->voicelab.answer_open;
+  const bool silent = runtime->voicelab.state == ITERATE_KIT_VOICELAB_READY && traffic_owed &&
       runtime->voicelab.has_connection_capability &&
       !runtime->voicelab.recycle_pending &&
       outbox_free >= CLI_MAIN_RECYCLE_OUTBOX_SLOTS &&
