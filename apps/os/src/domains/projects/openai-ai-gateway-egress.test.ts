@@ -94,6 +94,10 @@ describe("openAiAiGatewayBindingHeaders", () => {
           authorization: "Bearer sk-customer-real",
         }),
       });
+      expect(JSON.parse(headers["cf-aig-metadata"]!)).toEqual({
+        projectId: "proj_test",
+        source: "project-egress",
+      });
       expect(
         headers,
         "customer authorization should not be replaced with the platform key",
