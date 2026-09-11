@@ -50,6 +50,11 @@ struct cli_options {
   /** Mounted as kit.<name>, and used as this run's call id. */
   const char *name;
   const char *utterance_dir;
+  /**
+   * What this Mac's speaker was handed, on CoreAudio's clock: a true
+   * timeline, silence and holes included. With a live speaker it is the
+   * render tap (darwin_audio_output.h); otherwise the playout's own record.
+   */
   const char *speaker_wav;
   /**
    * Where to record what the microphone captured.

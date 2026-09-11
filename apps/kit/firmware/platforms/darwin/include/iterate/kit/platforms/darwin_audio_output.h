@@ -106,6 +106,28 @@ enum {
    */
   ITERATE_KIT_DARWIN_AUDIO_OUTPUT_PULL_PRIME_BYTES =
       ITERATE_KIT_VOICE_FRAME_BYTES * 4,
+  /*
+   * HOW FAR AHEAD THE FEEDER MAY FILL THE RING IN PULLED MODE. The
+   * voice-processing unit does not ask for 20 ms at a time: it asks for a
+   * hardware quantum, 4096 frames at 48 kHz, about 85 ms of our 16 kHz
+   * audio per callback, and not a multiple of a frame. The four-frame lead
+   * above (80 ms, right for the queue's 20 ms buffers) is SMALLER than one
+   * such request, so a pull that arrived with the ring at its cap came up a
+   * few milliseconds short, padded with zeros and reprimed — measured on
+   * this Mac 2026-09-11: 28 reprimes in 43 requests during 3.7 s of speech,
+   * and a render tap full of one-frame holes. Ten frames covers one request
+   * and a main-loop hiccup on top. It is the hardware's queue, filled as
+   * soon as audio is there; it delays nothing at an answer's onset.
+   */
+  ITERATE_KIT_DARWIN_AUDIO_OUTPUT_PULL_LEAD_BYTES =
+      ITERATE_KIT_VOICE_FRAME_BYTES * 10,
+  /*
+   * Four seconds of the render tap between the I/O thread and the main loop
+   * that writes the file. The main loop drains it every pass, a few
+   * milliseconds apart; the ring only has to cover a stall of that loop.
+   */
+  ITERATE_KIT_DARWIN_AUDIO_OUTPUT_TAP_RING_BYTES =
+      ITERATE_KIT_VOICE_FRAME_BYTES * 200,
 };
 
 enum iterate_kit_darwin_audio_output_status {
@@ -200,6 +222,27 @@ struct iterate_kit_darwin_audio_output {
   atomic_bool pull_priming;
   /** PULLED mode: times the ring ran dry and the lead had to refill. */
   atomic_uint_least32_t pull_reprimes;
+  /*
+   * THE RENDER TAP: every byte handed to CoreAudio, zeros included, in the
+   * order and at the length the I/O thread asked for it. This is the only
+   * recording of the speaker that can show a hole, because it is taken
+   * downstream of every buffer this code owns, on CoreAudio's clock. The
+   * playout's own recording (what it chose to play) cannot: concealment
+   * plays nothing, and idle time is not a frame — a 57 s call with two short
+   * answers came back as a 3.7 s file with no gap in it.
+   *
+   * Written on the I/O thread into `tap_ring` — never to a file from there —
+   * and drained to `tap` by `iterate_kit_darwin_audio_output_pump` on the
+   * caller's thread. A ring that fills counts the bytes it could not take in
+   * `tap_dropped`; the drain writes that many zeros so the file's timeline
+   * keeps its length.
+   */
+  struct iterate_kit_darwin_audio_file_sink tap;
+  uint8_t tap_ring[ITERATE_KIT_DARWIN_AUDIO_OUTPUT_TAP_RING_BYTES];
+  atomic_uint_least32_t tap_write;
+  atomic_uint_least32_t tap_read;
+  atomic_uint_least32_t tap_dropped;
+  atomic_uint_least32_t tap_bytes;
 };
 
 /** Human-readable status name, for the one top-level log boundary. */
@@ -212,7 +255,9 @@ const char *iterate_kit_darwin_audio_output_status_name(enum iterate_kit_darwin_
  * callback in flight, so nothing would ever ask the ring for audio and the
  * speaker would stay silent however much the loop wrote.
  */
-enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_open(struct iterate_kit_darwin_audio_output *out);
+enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_open(
+    struct iterate_kit_darwin_audio_output *out,
+    const struct iterate_kit_darwin_audio_file_sink *tap);
 
 /**
  * Hand one PCM frame to the ring without blocking.
@@ -230,7 +275,8 @@ enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_writ
  * calls iterate_kit_darwin_audio_output_pull from its render callback.
  */
 enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_open_pulled(
-    struct iterate_kit_darwin_audio_output *out);
+    struct iterate_kit_darwin_audio_output *out,
+    const struct iterate_kit_darwin_audio_file_sink *tap);
 
 /**
  * PULLED mode: fill `destination` with `length` bytes for the hardware —
@@ -249,6 +295,15 @@ uint32_t iterate_kit_darwin_audio_output_pull(
  * Open in FILE mode: `sink` is pulled from by iterate_kit_darwin_audio_output_pump instead of
  * by CoreAudio. The caller owns the sink and must keep it open.
  */
+/** How far ahead the feeder may fill this ring: the lead for its mode. */
+uint32_t iterate_kit_darwin_audio_output_lead_bytes(const struct iterate_kit_darwin_audio_output *out);
+/*
+ * Throw away everything queued and not yet pulled — a barge-in. Returns the
+ * bytes discarded. Safe against a pull in flight on the I/O thread: the
+ * consumer claims what it took with a compare-and-swap, so a discard that
+ * lands mid-pull wins and that pull plays nothing.
+ */
+uint32_t iterate_kit_darwin_audio_output_discard(struct iterate_kit_darwin_audio_output *out);
 enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_open_file(
     struct iterate_kit_darwin_audio_output *out,
     const struct iterate_kit_darwin_audio_file_sink *sink);
@@ -286,6 +341,10 @@ uint32_t iterate_kit_darwin_audio_output_completed_bytes(const struct iterate_ki
 uint32_t iterate_kit_darwin_audio_output_starved_buffers(const struct iterate_kit_darwin_audio_output *out);
 /** PULLED mode: how often the lead had to refill after running dry. */
 uint32_t iterate_kit_darwin_audio_output_pull_reprimes(const struct iterate_kit_darwin_audio_output *out);
+/** Bytes the render tap recorded, and bytes it dropped for a full ring. */
+uint32_t iterate_kit_darwin_audio_output_tap_bytes(const struct iterate_kit_darwin_audio_output *out);
+uint32_t iterate_kit_darwin_audio_output_tap_dropped_bytes(
+    const struct iterate_kit_darwin_audio_output *out);
 int32_t iterate_kit_darwin_audio_output_platform_error(const struct iterate_kit_darwin_audio_output *out);
 
 /** Stop and release CoreAudio resources. Safe before or after a failed open. */

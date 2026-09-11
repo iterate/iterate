@@ -114,7 +114,7 @@ enum iterate_kit_status iterate_kit_darwin_audio_codec_open(
   if ((options->capture_enabled || options->force_voice_processing) &&
       options->playback_enabled && options->file_playback == NULL &&
       !options->echo_cancellation_off) {
-    if (iterate_kit_darwin_audio_output_open_pulled(&darwin->output) ==
+    if (iterate_kit_darwin_audio_output_open_pulled(&darwin->output, options->render_tap) ==
             ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK &&
         iterate_kit_darwin_audio_input_open_external(&darwin->input) ==
             ITERATE_KIT_DARWIN_AUDIO_INPUT_OK &&
@@ -135,7 +135,7 @@ enum iterate_kit_status iterate_kit_darwin_audio_codec_open(
   if (options->playback_enabled) {
     const enum iterate_kit_darwin_audio_output_status status =
         options->file_playback == NULL
-        ? iterate_kit_darwin_audio_output_open(&darwin->output)
+        ? iterate_kit_darwin_audio_output_open(&darwin->output, options->render_tap)
         : iterate_kit_darwin_audio_output_open_file(
               &darwin->output, options->file_playback);
     if (status != ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK) {
@@ -172,6 +172,22 @@ void iterate_kit_darwin_audio_codec_pump(
   if (darwin != NULL && darwin->playback_enabled) {
     iterate_kit_darwin_audio_output_pump(&darwin->output, now_us);
   }
+}
+
+uint32_t iterate_kit_darwin_audio_codec_playback_lead_bytes(
+    const struct iterate_kit_darwin_audio_codec *darwin) {
+  if (darwin == NULL || !darwin->playback_enabled) {
+    return 0U;
+  }
+  return iterate_kit_darwin_audio_output_lead_bytes(&darwin->output);
+}
+
+uint32_t iterate_kit_darwin_audio_codec_discard_playback(
+    struct iterate_kit_darwin_audio_codec *darwin) {
+  if (darwin == NULL || !darwin->playback_enabled) {
+    return 0U;
+  }
+  return iterate_kit_darwin_audio_output_discard(&darwin->output);
 }
 
 void iterate_kit_darwin_audio_codec_set_playback_expected(
@@ -236,4 +252,8 @@ void iterate_kit_darwin_audio_codec_metrics(
       &darwin->vpio.render_unaligned_requests, memory_order_relaxed);
   metrics->playback_pull_reprimes =
       iterate_kit_darwin_audio_output_pull_reprimes(&darwin->output);
+  metrics->render_tap_bytes =
+      iterate_kit_darwin_audio_output_tap_bytes(&darwin->output);
+  metrics->render_tap_dropped_bytes =
+      iterate_kit_darwin_audio_output_tap_dropped_bytes(&darwin->output);
 }

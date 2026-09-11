@@ -98,6 +98,8 @@ struct cli_runtime {
    */
   struct iterate_kit_voice_playout playout;
   uint8_t playout_frame[ITERATE_KIT_VOICE_FRAME_BYTES];
+  /* When both speaker queues were last found empty; one dry step per frame period. */
+  uint64_t last_dry_step_ms;
   struct cli_wav_source source;
   struct cli_wav_sink sink;
   /* What the microphone captured; opened only when --mic-record was given. */

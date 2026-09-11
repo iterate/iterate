@@ -46,6 +46,9 @@ static void iterate_kit_darwin_audio_output_classify_pull(
 
 static uint32_t iterate_kit_darwin_audio_output_pending_payload_bytes(
     const struct iterate_kit_darwin_audio_output *out);
+static void iterate_kit_darwin_audio_output_tap_record(
+    struct iterate_kit_darwin_audio_output *out, const uint8_t *pcm, uint32_t length);
+static void iterate_kit_darwin_audio_output_tap_drain(struct iterate_kit_darwin_audio_output *out);
 
 const char *iterate_kit_darwin_audio_output_status_name(enum iterate_kit_darwin_audio_output_status status)
 {
@@ -92,6 +95,9 @@ static OSStatus iterate_kit_darwin_audio_output_prime_one(
       atomic_load_explicit(&out->draining, memory_order_relaxed)) {
     return noErr;
   }
+  iterate_kit_darwin_audio_output_tap_record(
+      out, (const uint8_t *)buffer->mAudioData,
+      (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES);
   for (index = 0U; index < ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_COUNT; ++index) {
     if (out->buffers[index] == buffer) break;
   }
@@ -107,12 +113,16 @@ static OSStatus iterate_kit_darwin_audio_output_prime_one(
   return result;
 }
 
-enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_open(struct iterate_kit_darwin_audio_output *out)
+enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_open(
+    struct iterate_kit_darwin_audio_output *out,
+    const struct iterate_kit_darwin_audio_file_sink *tap)
 {
   if (out == NULL) return ITERATE_KIT_DARWIN_AUDIO_OUTPUT_ERR_ARG;
+  if (tap != NULL && tap->write == NULL) return ITERATE_KIT_DARWIN_AUDIO_OUTPUT_ERR_ARG;
   memset(out, 0, sizeof(*out));
   atomic_store(&out->read, 0U);
   atomic_store(&out->write, 0U);
+  if (tap != NULL) out->tap = *tap;
   const AudioStreamBasicDescription format = {
     .mSampleRate = ITERATE_KIT_DARWIN_AUDIO_OUTPUT_SAMPLE_RATE_HZ,
     .mFormatID = kAudioFormatLinearPCM,
@@ -184,12 +194,15 @@ enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_open
 }
 
 enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_open_pulled(
-    struct iterate_kit_darwin_audio_output *out)
+    struct iterate_kit_darwin_audio_output *out,
+    const struct iterate_kit_darwin_audio_file_sink *tap)
 {
   if (out == NULL) return ITERATE_KIT_DARWIN_AUDIO_OUTPUT_ERR_ARG;
+  if (tap != NULL && tap->write == NULL) return ITERATE_KIT_DARWIN_AUDIO_OUTPUT_ERR_ARG;
   memset(out, 0, sizeof(*out));
   atomic_store(&out->read, 0U);
   atomic_store(&out->write, 0U);
+  if (tap != NULL) out->tap = *tap;
   out->mode = ITERATE_KIT_DARWIN_AUDIO_OUTPUT_PULLED;
   atomic_store_explicit(&out->pull_priming, true, memory_order_release);
   atomic_store_explicit(&out->enabled, true, memory_order_release);
@@ -219,6 +232,7 @@ uint32_t iterate_kit_darwin_audio_output_pull(
         (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_PULL_PRIME_BYTES) {
       iterate_kit_darwin_audio_output_classify_pull(out, 0U, expected);
       memset(destination, 0, length);
+      iterate_kit_darwin_audio_output_tap_record(out, destination, length);
       return 0U;
     }
     atomic_store_explicit(&out->pull_priming, false, memory_order_release);
@@ -231,6 +245,7 @@ uint32_t iterate_kit_darwin_audio_output_pull(
     (void)atomic_fetch_add_explicit(&out->pull_reprimes, 1U, memory_order_relaxed);
   }
   (void)atomic_fetch_add_explicit(&out->completed_bytes, taken, memory_order_relaxed);
+  iterate_kit_darwin_audio_output_tap_record(out, destination, length);
   return taken;
 }
 
@@ -238,7 +253,9 @@ void iterate_kit_darwin_audio_output_pump(struct iterate_kit_darwin_audio_output
 {
   uint8_t frame[ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES];
   uint32_t served = 0U;
-  if (out == NULL || out->mode != ITERATE_KIT_DARWIN_AUDIO_OUTPUT_FILE ||
+  if (out == NULL) return;
+  iterate_kit_darwin_audio_output_tap_drain(out);
+  if (out->mode != ITERATE_KIT_DARWIN_AUDIO_OUTPUT_FILE ||
       !atomic_load_explicit(&out->enabled, memory_order_acquire)) return;
   if (out->next_pull_us == 0U) out->next_pull_us = now_us;
   /*
@@ -432,6 +449,19 @@ uint32_t iterate_kit_darwin_audio_output_pull_reprimes(const struct iterate_kit_
       &out->pull_reprimes, memory_order_acquire);
 }
 
+uint32_t iterate_kit_darwin_audio_output_tap_bytes(const struct iterate_kit_darwin_audio_output *out)
+{
+  return out == NULL ? 0U : (uint32_t)atomic_load_explicit(
+      &out->tap_bytes, memory_order_acquire);
+}
+
+uint32_t iterate_kit_darwin_audio_output_tap_dropped_bytes(
+    const struct iterate_kit_darwin_audio_output *out)
+{
+  return out == NULL ? 0U : (uint32_t)atomic_load_explicit(
+      &out->tap_dropped, memory_order_acquire);
+}
+
 int32_t iterate_kit_darwin_audio_output_platform_error(const struct iterate_kit_darwin_audio_output *out)
 {
   return out == NULL ? 0 : (int32_t)atomic_load_explicit(
@@ -448,8 +478,11 @@ void iterate_kit_darwin_audio_output_close(struct iterate_kit_darwin_audio_outpu
     return;
   }
   if (out->mode == ITERATE_KIT_DARWIN_AUDIO_OUTPUT_PULLED) {
-    /* The unit that pulls is closed by its owner; this ring just goes quiet. */
+    /* The unit that pulls is closed by its owner before this; this ring goes
+     * quiet, and what the unit was handed last is written out. */
     atomic_store_explicit(&out->enabled, false, memory_order_release);
+    iterate_kit_darwin_audio_output_tap_drain(out);
+    memset(&out->tap, 0, sizeof(out->tap));
     return;
   }
   if (out->queue == NULL) return;
@@ -467,6 +500,8 @@ void iterate_kit_darwin_audio_output_close(struct iterate_kit_darwin_audio_outpu
     if (dispose != noErr) iterate_kit_darwin_audio_output_remember_error(out, (int32_t)dispose);
   }
   out->queue = NULL;
+  iterate_kit_darwin_audio_output_tap_drain(out);
+  memset(&out->tap, 0, sizeof(out->tap));
 }
 
 static uint32_t iterate_kit_darwin_audio_output_take(
@@ -490,8 +525,34 @@ static uint32_t iterate_kit_darwin_audio_output_take(
       destination, &out->ring[read_index % (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_RING_BYTES],
       first);
   memcpy(destination + first, &out->ring[0], (size_t)taken - first);
-  atomic_store_explicit(&out->read, read_index + taken, memory_order_release);
+  /* A discard that landed since the load above wins: nothing was taken. */
+  if (!atomic_compare_exchange_strong_explicit(
+          &out->read, &read_index, read_index + taken,
+          memory_order_acq_rel, memory_order_relaxed)) {
+    return 0U;
+  }
   return taken;
+}
+
+uint32_t iterate_kit_darwin_audio_output_lead_bytes(const struct iterate_kit_darwin_audio_output *out)
+{
+  if (out == NULL) return 0U;
+  return out->mode == ITERATE_KIT_DARWIN_AUDIO_OUTPUT_PULLED
+      ? (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_PULL_LEAD_BYTES
+      : (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_LEAD_BYTES;
+}
+
+uint32_t iterate_kit_darwin_audio_output_discard(struct iterate_kit_darwin_audio_output *out)
+{
+  uint32_t read_index;
+  uint32_t write_index;
+  if (out == NULL) return 0U;
+  write_index = (uint32_t)atomic_load_explicit(&out->write, memory_order_relaxed);
+  read_index = (uint32_t)atomic_exchange_explicit(&out->read, write_index, memory_order_acq_rel);
+  if (out->mode == ITERATE_KIT_DARWIN_AUDIO_OUTPUT_PULLED) {
+    atomic_store_explicit(&out->pull_priming, true, memory_order_release);
+  }
+  return write_index - read_index;
 }
 
 static void iterate_kit_darwin_audio_output_refill(
@@ -584,4 +645,72 @@ static uint32_t iterate_kit_darwin_audio_output_pending_payload_bytes(
         &out->buffer_payload_bytes[index], memory_order_acquire);
   }
   return pending;
+}
+
+/*
+ * I/O thread. Copies what CoreAudio was just handed into the tap ring. A full
+ * ring loses the bytes and counts them; nothing here blocks or touches a file.
+ */
+static void iterate_kit_darwin_audio_output_tap_record(
+    struct iterate_kit_darwin_audio_output *out, const uint8_t *pcm, uint32_t length)
+{
+  uint32_t write_index;
+  uint32_t used;
+  uint32_t first;
+  assert(out != NULL && pcm != NULL);
+  if (out->tap.write == NULL || length == 0U) return;
+  write_index = (uint32_t)atomic_load_explicit(&out->tap_write, memory_order_relaxed);
+  used = write_index - (uint32_t)atomic_load_explicit(&out->tap_read, memory_order_acquire);
+  if (length > (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_TAP_RING_BYTES - used) {
+    (void)atomic_fetch_add_explicit(&out->tap_dropped, length, memory_order_relaxed);
+    return;
+  }
+  first = (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_TAP_RING_BYTES -
+          (write_index % (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_TAP_RING_BYTES);
+  if (first > length) first = length;
+  memcpy(&out->tap_ring[write_index % (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_TAP_RING_BYTES],
+         pcm, first);
+  memcpy(&out->tap_ring[0], pcm + first, (size_t)length - first);
+  atomic_store_explicit(&out->tap_write, write_index + length, memory_order_release);
+  (void)atomic_fetch_add_explicit(&out->tap_bytes, length, memory_order_relaxed);
+}
+
+/*
+ * Caller's thread. Writes whatever the I/O thread recorded since the last
+ * drain, preceded by zeros for anything the ring had to drop, so the file
+ * stays a timeline: one byte per byte the speaker was handed.
+ */
+static void iterate_kit_darwin_audio_output_tap_drain(struct iterate_kit_darwin_audio_output *out)
+{
+  static const uint8_t zeros[ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES] = {0};
+  uint32_t dropped;
+  uint32_t read_index;
+  uint32_t write_index;
+  assert(out != NULL);
+  if (out->tap.write == NULL) return;
+  dropped = (uint32_t)atomic_exchange_explicit(&out->tap_dropped, 0U, memory_order_acq_rel);
+  while (dropped > 0U) {
+    const uint32_t chunk = dropped < (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES
+        ? dropped : (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES;
+    if (!out->tap.write(out->tap.context, zeros, chunk)) {
+      iterate_kit_darwin_audio_output_remember_error(out, EIO);
+      return;
+    }
+    dropped -= chunk;
+  }
+  read_index = (uint32_t)atomic_load_explicit(&out->tap_read, memory_order_relaxed);
+  write_index = (uint32_t)atomic_load_explicit(&out->tap_write, memory_order_acquire);
+  while (read_index != write_index) {
+    const uint32_t offset = read_index % (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_TAP_RING_BYTES;
+    uint32_t chunk = write_index - read_index;
+    if (chunk > (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_TAP_RING_BYTES - offset) {
+      chunk = (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_TAP_RING_BYTES - offset;
+    }
+    if (!out->tap.write(out->tap.context, &out->tap_ring[offset], chunk)) {
+      iterate_kit_darwin_audio_output_remember_error(out, EIO);
+      return;
+    }
+    read_index += chunk;
+  }
+  atomic_store_explicit(&out->tap_read, read_index, memory_order_release);
 }

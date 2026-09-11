@@ -94,8 +94,8 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    "(ITERATE_KIT_CAPABILITY_NAME; default host)\n"},
   {"--speaker-wav", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_SPEAKER_WAV,
    NULL,
-   "  --speaker-wav FILE    True played timeline, including concealed "
-   "silence (default iterate-kit-playback.wav)\n"},
+   "  --speaker-wav FILE    What the speaker was handed, on CoreAudio's clock: a "
+   "true timeline, holes included (default iterate-kit-playback.wav)\n"},
   {"--live-audio", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_LIVE_AUDIO,
    NULL, "  --live-audio          Also send the true timeline to CoreAudio\n"},
   {"--live-mic", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_LIVE_MIC,

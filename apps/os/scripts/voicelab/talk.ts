@@ -20,7 +20,7 @@
 // The agent numbers every speaker frame within a conversation, so the report
 // can say whether a long call lost any of them. See --report at the bottom:
 // that is the proof, and it is arithmetic rather than opinion.
-import { spawnSync } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -366,6 +366,7 @@ export async function talk(options: TalkOptions = {}) {
   fs.mkdirSync(runDir, { recursive: true });
   const playback = path.join(runDir, "speaker.wav");
   const micRecord = path.join(runDir, "mic.wav");
+  const room = path.join(runDir, "room.wav");
   const reportJson = path.join(runDir, "report.json");
 
   console.log(`\n  ${baseUrl} · ${project}`);
@@ -381,56 +382,102 @@ export async function talk(options: TalkOptions = {}) {
   console.log(`\n  this run's evidence (gitignored):`);
   console.log(`    ${runDir}\n`);
 
-  runInherited(
-    binary,
-    [
-      // NO HYPHEN. The name becomes the capability mount `kit.<name>`, and a
-      // hyphen there is rejected as an invalid argument — the mount fails
-      // about five seconds in with `capnweb=-1` and a message that says
-      // nothing about names. The shell script this replaced used `mac-$STAMP`
-      // and had never once connected.
-      "--name",
-      `mac${stamp}`,
-      "--stream-path",
-      setup.streamPath,
-      ...driverArgs(options, minutes, options.openMic === true),
-      ...(options.pretendSpeaker === undefined
-        ? []
-        : ["--pretend-speaker", options.pretendSpeaker]),
-      "--speaker-wav",
-      playback,
-      "--mic-record",
-      micRecord,
-      "--report-json",
-      reportJson,
-    ],
-    {
-      ...process.env,
-      // These three names are the binary's contract, not ours: cli_options.c
-      // reads exactly these. Inventing friendlier ones makes the CLI exit
-      // demanding a --project-id nobody omitted, which is precisely how this
-      // command failed the first time it was written.
-      ITERATE_OS_BASE_URL: baseUrl,
-      ITERATE_PROJECT_API_KEY: ingressKey,
-      ITERATE_PROJECT_ID: project,
-    },
-  );
+  /* The recordings are the evidence of a bad run, so they are linked even
+   * when the CLI exits non-zero — that is when they matter most. */
+  const roomRecorder = options.pretendSpeaker === undefined ? startRoomRecorder(room) : undefined;
+  let exit: unknown;
+  try {
+    runInherited(
+      binary,
+      [
+        // NO HYPHEN. The name becomes the capability mount `kit.<name>`, and a
+        // hyphen there is rejected as an invalid argument — the mount fails
+        // about five seconds in with `capnweb=-1` and a message that says
+        // nothing about names. The shell script this replaced used `mac-$STAMP`
+        // and had never once connected.
+        "--name",
+        `mac${stamp}`,
+        "--stream-path",
+        setup.streamPath,
+        ...driverArgs(options, minutes, options.openMic === true),
+        ...(options.pretendSpeaker === undefined
+          ? []
+          : ["--pretend-speaker", options.pretendSpeaker]),
+        "--speaker-wav",
+        playback,
+        "--mic-record",
+        micRecord,
+        "--report-json",
+        reportJson,
+      ],
+      {
+        ...process.env,
+        // These three names are the binary's contract, not ours: cli_options.c
+        // reads exactly these. Inventing friendlier ones makes the CLI exit
+        // demanding a --project-id nobody omitted, which is precisely how this
+        // command failed the first time it was written.
+        ITERATE_OS_BASE_URL: baseUrl,
+        ITERATE_PROJECT_API_KEY: ingressKey,
+        ITERATE_PROJECT_ID: project,
+      },
+    );
+  } catch (error) {
+    exit = error;
+  }
+  stopRoomRecorder(roomRecorder);
 
-  reportSpeakerContinuity(reportJson);
-  reportRecordings(runDir, micRecord, playback);
+  if (fs.existsSync(reportJson)) reportSpeakerContinuity(reportJson);
+  reportRecordings(runDir, micRecord, playback, room);
+  if (exit !== undefined) throw exit;
 }
 
 /**
- * The run's audio, as links: what the microphone heard, what the speaker was
- * handed, and the two overlaid — a stereo file with the microphone on the
- * left and the speaker on the right (so a hole in the answer sits next to
- * what the room was doing at that moment), plus a mono mix for a quick
- * listen. sox does the mixing when it is installed; without it the two raw
- * recordings are still linked. The speaker track is a true timeline only if
- * the driver wrote one (silence for every idle interval); a compacted
- * recording overlays wrongly, and the duration line makes that visible.
+ * THE ROOM IS RECORDED BY ANOTHER PROCESS. The CLI's own capture runs through
+ * Apple's voice-processing unit, which cancels the speaker out of it — that
+ * is the point of it — and a second, plain capture opened by the same
+ * process records only zeros while that unit is open (measured 2026-09-11).
+ * sox, reading the default input from a process of its own, hears the room
+ * as a person does: the speaker, the person, and the rest. It starts a
+ * second or two before the CLI's audio units, so the file is that much
+ * longer at the front; SIGINT makes sox close the WAV properly.
  */
-function reportRecordings(runDir: string, micRecord: string, playback: string): void {
+function startRoomRecorder(file: string): ChildProcess | undefined {
+  if (spawnSync("sox", ["--version"], { stdio: "ignore" }).status !== 0) return undefined;
+  return spawn("sox", ["-q", "-d", "-t", "wav", "-r", "16000", "-c", "1", "-b", "16", file], {
+    stdio: "ignore",
+  });
+}
+
+function stopRoomRecorder(recorder: ChildProcess | undefined): void {
+  if (recorder === undefined || recorder.pid === undefined || recorder.exitCode !== null) return;
+  recorder.kill("SIGINT");
+  /* The driver is synchronous; wait for sox to finish the header, five seconds at most. */
+  spawnSync("sh", [
+    "-c",
+    `for i in $(seq 50); do kill -0 ${recorder.pid} 2>/dev/null || exit 0; sleep 0.1; done`,
+  ]);
+}
+
+/**
+ * The run's audio, as links. Three witnesses, each on its own clock:
+ *
+ * - microphone: what the model heard — the echo-cancelled capture.
+ * - speaker: what CoreAudio was handed, byte for byte on its own clock,
+ *   silence and holes included (the render tap in darwin_audio_output.c).
+ *   A hole in playback is a hole in this file; the playout's own record
+ *   could never show one, because concealment plays nothing.
+ * - room: what a person in the room heard — the default input recorded by
+ *   sox in a separate process (see startRoomRecorder), so the speaker is in
+ *   it along with the person. This is the independent recording: downstream
+ *   of everything, CoreAudio and the voice-processing unit included.
+ *
+ * Then the microphone and the speaker overlaid (mic left, speaker right, so
+ * a hole in the answer sits next to what the room was doing) and a mono mix.
+ * sox does the mixing when installed; without it the raw files are still
+ * linked. Microphone and speaker start together, at the audio units' start;
+ * the room file starts a second or two earlier, when the driver did.
+ */
+function reportRecordings(runDir: string, micRecord: string, playback: string, room: string): void {
   const link = (file: string) => `file://${file}`;
   const durationSeconds = (file: string): string => {
     if (!fs.existsSync(file)) return "missing";
@@ -447,8 +494,17 @@ function reportRecordings(runDir: string, micRecord: string, playback: string): 
     return byteRate > 0 ? (dataBytes / byteRate).toFixed(1) : "?";
   };
   console.log(`\n  RECORDINGS`);
-  console.log(`    microphone   ${link(micRecord)}  (${durationSeconds(micRecord)} s)`);
-  console.log(`    speaker      ${link(playback)}  (${durationSeconds(playback)} s)`);
+  console.log(
+    `    microphone   ${link(micRecord)}  (${durationSeconds(micRecord)} s, echo-cancelled: what the model heard)`,
+  );
+  console.log(
+    `    speaker      ${link(playback)}  (${durationSeconds(playback)} s, what CoreAudio was handed, holes included)`,
+  );
+  if (fs.existsSync(room)) {
+    console.log(
+      `    room         ${link(room)}  (${durationSeconds(room)} s, recorded by sox: what a person heard)`,
+    );
+  }
   if (!fs.existsSync(micRecord) || !fs.existsSync(playback)) return;
   const sox = spawnSync("sox", ["--version"], { stdio: "ignore" });
   if (sox.status !== 0) {

@@ -32,6 +32,13 @@ struct iterate_kit_darwin_audio_codec_options {
    * the plain queue by a driver that has no microphone (`--converse`).
    */
   bool force_voice_processing;
+  /*
+   * The render tap: every byte the live speaker path hands CoreAudio, zeros
+   * included, on CoreAudio's clock — a true timeline of the speaker (see
+   * darwin_audio_output.h). Ignored for file playback, whose pump already
+   * writes one.
+   */
+  const struct iterate_kit_darwin_audio_file_sink *render_tap;
 };
 
 struct iterate_kit_darwin_audio_codec_metrics {
@@ -56,6 +63,9 @@ struct iterate_kit_darwin_audio_codec_metrics {
   uint32_t vpio_render_unaligned_requests;
   /** PULLED playback: times the lead ran dry and had to refill. */
   uint32_t playback_pull_reprimes;
+  /** The render tap's bytes written, and bytes lost to a full tap ring. */
+  uint32_t render_tap_bytes;
+  uint32_t render_tap_dropped_bytes;
 };
 
 /**
@@ -89,6 +99,12 @@ void iterate_kit_darwin_audio_codec_pump(
     struct iterate_kit_darwin_audio_codec *darwin,
     uint64_t now_us);
 
+/** The playback ring's lead for its mode: how far ahead to feed it. */
+uint32_t iterate_kit_darwin_audio_codec_playback_lead_bytes(
+    const struct iterate_kit_darwin_audio_codec *darwin);
+/** Barge-in: drop everything queued for the speaker; returns the bytes dropped. */
+uint32_t iterate_kit_darwin_audio_codec_discard_playback(
+    struct iterate_kit_darwin_audio_codec *darwin);
 void iterate_kit_darwin_audio_codec_set_playback_expected(
     struct iterate_kit_darwin_audio_codec *darwin,
     bool expected);

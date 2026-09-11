@@ -81,8 +81,8 @@ static bool cli_main_init_transport(struct cli_runtime *runtime);
 /* Opens the authoritative WAV and optional CoreAudio mirror. */
 static bool cli_main_init_audio(struct cli_runtime *runtime);
 
-/* Adapts the host WAV writer to the Darwin file-clock boundary. */
-static bool cli_main_write_pretend_speaker(
+/* Adapts the host WAV writer to a Darwin file sink (pretend speaker, render tap). */
+static bool cli_main_write_wav_sink(
     void *context, const uint8_t *pcm, size_t length);
 
 /* Takes one coherent snapshot of Darwin's completion and fault evidence. */
@@ -626,7 +626,16 @@ static bool cli_main_init_audio(struct cli_runtime *runtime)
   }
   const struct iterate_kit_darwin_audio_file_sink pretend_speaker = {
     .context = &runtime->pretend_sink,
-    .write = cli_main_write_pretend_speaker,
+    .write = cli_main_write_wav_sink,
+  };
+  /*
+   * With a live speaker, --speaker-wav is the render tap: what CoreAudio was
+   * handed, on its clock, holes included. The playout's own record (see
+   * cli_main_record_frame) is what the file holds otherwise.
+   */
+  const struct iterate_kit_darwin_audio_file_sink render_tap = {
+    .context = &runtime->sink,
+    .write = cli_main_write_wav_sink,
   };
   const struct iterate_kit_darwin_audio_codec_options codec_options = {
     .capture_enabled = runtime->options.live_mic,
@@ -635,6 +644,7 @@ static bool cli_main_init_audio(struct cli_runtime *runtime)
     .file_playback = runtime->options.pretend_speaker == NULL
         ? NULL
         : &pretend_speaker,
+    .render_tap = runtime->options.live_audio ? &render_tap : NULL,
     /* ITERATE_KIT_NO_AEC=1 is the same switch for drivers that build the
      * argument list themselves (voicelab talk). */
     .echo_cancellation_off = runtime->options.no_aec ||
@@ -670,7 +680,7 @@ static bool cli_main_init_audio(struct cli_runtime *runtime)
   return true;
 }
 
-static bool cli_main_write_pretend_speaker(
+static bool cli_main_write_wav_sink(
     void *context, const uint8_t *pcm, size_t length)
 {
   return cli_wav_sink_write(context, pcm, length) == CLI_WAV_OK;
@@ -831,6 +841,11 @@ static bool cli_main_drain_audio(struct cli_runtime *runtime)
         audio.vpio_capture_short_renders, audio.vpio_render_requests,
         audio.vpio_render_shortfall_bytes, audio.vpio_render_unaligned_requests,
         audio.playback_pull_reprimes);
+  }
+  if (runtime->options.live_audio) {
+    cli_runtime_log(
+        "info", "speaker tap: bytes=%u droppedBytes=%u",
+        audio.render_tap_bytes, audio.render_tap_dropped_bytes);
   }
   return status == ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK &&
       audio.playback_platform_error == 0 &&
@@ -1006,6 +1021,8 @@ static void cli_main_on_control(
      */
     iterate_kit_darwin_audio_codec_set_playback_expected(&runtime->audio_codec, false);
     cli_speaker_clear(&runtime->speaker);
+    /* The hardware's queue too: up to 200 ms of the old answer sits there. */
+    (void)iterate_kit_darwin_audio_codec_discard_playback(&runtime->audio_codec);
     /* A new answer is a new timeline: the reprime forgets the old one. */
     iterate_kit_voice_playback_clock_reprime(&runtime->playout.clock);
     ++runtime->barge_in_flushes;
@@ -1046,7 +1063,9 @@ static bool cli_main_record_frame(
     struct cli_runtime *runtime, const uint8_t *pcm)
 {
   assert(runtime != NULL && pcm != NULL);
-  if (cli_wav_sink_write(
+  /* With a live speaker the render tap writes --speaker-wav (cli_main_init_audio). */
+  if (!runtime->options.live_audio &&
+      cli_wav_sink_write(
           &runtime->sink, pcm, ITERATE_KIT_VOICE_FRAME_BYTES) != CLI_WAV_OK) {
     runtime->stop_requested = true;
     return false;
@@ -1195,6 +1214,15 @@ static uint32_t cli_main_ring_queued_bytes(void *context)
   return (uint32_t)runtime->speaker.used;
 }
 
+/* Milliseconds of answer not yet played: the software ring plus the hardware's queue. */
+static uint32_t cli_main_buffered_ms(const struct cli_runtime *runtime)
+{
+  assert(runtime != NULL);
+  return cli_speaker_queued_ms(&runtime->speaker) +
+      cli_main_audio_metrics(runtime).playback_queued_bytes /
+          (uint32_t)(ITERATE_KIT_VOICE_FRAME_BYTES / ITERATE_KIT_VOICE_FRAME_MS);
+}
+
 static enum iterate_kit_voice_playout_read cli_main_ring_read(
     void *context, const uint8_t **frame, size_t *length)
 {
@@ -1235,8 +1263,7 @@ static enum iterate_kit_voice_playout_write cli_main_sink_write(
     const uint64_t now_ms = cli_runtime_now_ms(NULL);
     struct cli_report_turn *turn = runtime->conversation.current_turn;
     if (turn != NULL) {
-      cli_report_observe_occupancy(
-          turn, cli_speaker_queued_ms(&runtime->speaker));
+      cli_report_observe_occupancy(turn, cli_main_buffered_ms(runtime));
       ++turn->frames_played;
       runtime->turn_progress_ms = now_ms;
       if (turn->first_audio_ms == 0U) turn->first_audio_ms = now_ms;
@@ -1310,9 +1337,36 @@ static void cli_main_feed_playback(struct cli_runtime *runtime)
       runtime->options.pretend_speaker != NULL;
   const uint32_t room_queued_bytes =
       cli_main_audio_metrics(runtime).playback_queued_bytes;
-  if (room_pulls &&
-      room_queued_bytes >= ITERATE_KIT_DARWIN_AUDIO_OUTPUT_LEAD_BYTES) {
+  /* The lead is the hardware's: one queue buffer set, or one voice-processing request and change. */
+  const uint32_t room_lead_bytes =
+      iterate_kit_darwin_audio_codec_playback_lead_bytes(&runtime->audio_codec);
+  if (room_pulls && room_queued_bytes >= room_lead_bytes) {
     return;
+  }
+  /*
+   * AUDIO STILL QUEUED AT THE HARDWARE IS NOT STARVATION. With the hardware
+   * holding up to 200 ms, the software ring in front of it is empty most of
+   * the time by design — everything it gets is handed straight on. A dry
+   * read here would count that as a concealed frame and an underrun (the
+   * first run with the deeper lead showed 159 concealed while the render
+   * tap had no hole in it). Starvation is both queues empty.
+   */
+  if (room_pulls && runtime->speaker.used == 0U && room_queued_bytes > 0U) {
+    return;
+  }
+  /*
+   * AND A CONCEALED FRAME IS A FRAME. The board's loop is paced by its DMA
+   * write, so its dry reads come one per 20 ms and the core's count is in
+   * frames. This loop turns every few milliseconds; counted per pass, an
+   * 80 ms hole read as forty concealed frames. One dry step per frame period.
+   */
+  if (room_pulls && runtime->speaker.used == 0U) {
+    const uint64_t now_ms = cli_runtime_now_ms(NULL);
+    if (runtime->last_dry_step_ms != 0U &&
+        now_ms - runtime->last_dry_step_ms < ITERATE_KIT_VOICE_FRAME_MS) {
+      return;
+    }
+    runtime->last_dry_step_ms = now_ms;
   }
   /*
    * The first frame is unconditional, which is what this loop did before a
@@ -1366,8 +1420,7 @@ static void cli_main_feed_playback(struct cli_runtime *runtime)
   } while (fed < CLI_PACED_SINK_MAX_DEPTH_FRAMES &&
            (cli_paced_sink_ready(&runtime->paced_sink) ||
             (room_pulls &&
-             cli_main_audio_metrics(runtime).playback_queued_bytes <
-                 ITERATE_KIT_DARWIN_AUDIO_OUTPUT_LEAD_BYTES)));
+             cli_main_audio_metrics(runtime).playback_queued_bytes < room_lead_bytes)));
 }
 
 static void cli_main_capture_frame(struct cli_runtime *runtime, bool keep)
@@ -1575,6 +1628,7 @@ static void cli_main_start_talk(
   runtime->frame_sequence = 0U;
   cli_microphone_clear(&runtime->microphone);
   cli_speaker_clear(&runtime->speaker);
+  (void)iterate_kit_darwin_audio_codec_discard_playback(&runtime->audio_codec);
   iterate_kit_voice_playback_clock_reprime(&runtime->playout.clock);
   /* No turn marker: push-to-talk is a local microphone gate (2026-09-11). */
 }
@@ -1789,7 +1843,7 @@ static void cli_main_draw_screen(struct cli_runtime *runtime, uint64_t now_ms)
     .mic_lost = audio.capture_frames_dropped,
     .spk_received = runtime->voicelab.spk_frames_received,
     .spk_played = runtime->playout.stats.frames_played,
-    .spk_ring_ms = cli_speaker_queued_ms(&runtime->speaker),
+    .spk_ring_ms = cli_main_buffered_ms(runtime),
     .spk_conceal = runtime->playout.stats.conceal_frames,
     .spk_underruns = runtime->speaker_underruns,
     .spk_dropped = runtime->speaker_room_drops + runtime->speaker_overflow_drops,
@@ -1918,7 +1972,7 @@ static void cli_main_pulse(
       runtime->voicelab.frames_sent, runtime->voicelab.batches_on_connection,
       runtime->voicelab.spk_frames_received,
       runtime->playout.stats.frames_played, runtime->playout.stats.conceal_frames,
-      runtime->speaker_underruns, cli_speaker_queued_ms(&runtime->speaker),
+      runtime->speaker_underruns, cli_main_buffered_ms(runtime),
       /*
        * A live microphone that macOS refused looks exactly like a quiet room
        * until micIn stays at zero through a turn, so it is on the one line
