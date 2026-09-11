@@ -58,10 +58,13 @@ const externalizeToProcessorJs = {
   setup(pluginBuild) {
     // contract.ts imports the kernel (../stream/processor.ts) + zod; account-facet.ts imports the SDK
     // host (../sdk/index.ts). Every symbol they name is re-exported by the injected processor.js.
-    pluginBuild.onResolve({ filter: /(^zod$)|(\/sdk\/index\.ts$)|(\/stream\/processor\.ts$)/ }, () => ({
-      path: "./processor.js",
-      external: true,
-    }));
+    pluginBuild.onResolve(
+      { filter: /(^zod$)|(\/sdk\/index\.ts$)|(\/stream\/processor\.ts$)/ },
+      () => ({
+        path: "./processor.js",
+        external: true,
+      }),
+    );
   },
 };
 const accountFacet = await build({

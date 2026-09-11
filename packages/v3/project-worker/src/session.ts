@@ -131,7 +131,11 @@ export class IterateRpcTarget extends RpcTarget {
       projectId: GLOBAL_PROJECT_ID,
       path: `/users/${principal.actor}`,
     });
-    const fact = authenticatedEvent({ credential, at: Date.now(), operationId: crypto.randomUUID() });
+    const fact = authenticatedEvent({
+      credential,
+      at: Date.now(),
+      operationId: crypto.randomUUID(),
+    });
     this.#input.waitUntil(
       (
         this.#input.contextNamespace
@@ -336,7 +340,10 @@ class ProjectCollection extends RpcTarget {
    *  deployment's own org for the admin secret — and vend its root context. A bound session (a
    *  project token, the project secret) creates none: FORBIDDEN. A name ANY org already holds is
    *  refused, coded (PROJECT_NAME_TAKEN); the same org's again is idempotent. */
-  async create(input: { project: ProjectIdOrSlug; orgId?: string }): Promise<IterateContextRpcTarget> {
+  async create(input: {
+    project: ProjectIdOrSlug;
+    orgId?: string;
+  }): Promise<IterateContextRpcTarget> {
     const data = z.object({ project: z.string(), orgId: z.string().optional() }).parse(input);
     const project = await this.#input.directory.createProject(
       this.#reach,

@@ -55,11 +55,14 @@ function AccountLivePage() {
   };
 
   return (
-    <main style={{ maxWidth: "36rem", margin: "2.5rem auto", padding: "0 1.25rem", lineHeight: 1.5 }}>
+    <main
+      style={{ maxWidth: "36rem", margin: "2.5rem auto", padding: "0 1.25rem", lineHeight: 1.5 }}
+    >
       <h1 style={{ fontSize: "1.2rem", fontWeight: 600 }}>Account</h1>
       <p style={{ color: "#6b7280", fontSize: "0.85rem" }}>
         Live from <code>session.user</code> — no refresh. Create a token and it appears the instant
-        the account processor reduces the command. <span data-testid="status">{error ?? status}</span>
+        the account processor reduces the command.{" "}
+        <span data-testid="status">{error ?? status}</span>
       </p>
 
       <form onSubmit={createToken} style={{ display: "flex", gap: "0.6rem", margin: "1.25rem 0" }}>

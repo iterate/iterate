@@ -74,7 +74,10 @@ export type AccountView = z.infer<typeof AccountView>;
  *  narrows `reduce`'s `event.payload` per `event.type` (no cast). Keep in step with the contract's
  *  `consumes`. */
 type AccountEvent =
-  | (StreamEvent & { type: "events.iterate.com/account/authenticated"; payload: AuthenticationFact })
+  | (StreamEvent & {
+      type: "events.iterate.com/account/authenticated";
+      payload: AuthenticationFact;
+    })
   | (StreamEvent & {
       type: "events.iterate.com/account/token-create-requested";
       payload: TokenCreateRequest;
@@ -96,7 +99,10 @@ export class AccountProcessor extends StreamProcessor<AccountView, AccountEvent>
     emits: [],
   });
 
-  override reduce({ event, state }: ReduceArgs<AccountView, AccountEvent>): AccountView | undefined {
+  override reduce({
+    event,
+    state,
+  }: ReduceArgs<AccountView, AccountEvent>): AccountView | undefined {
     if (event.type === "events.iterate.com/account/authenticated")
       return {
         ...state,

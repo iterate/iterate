@@ -89,7 +89,9 @@ describe("account — foundation shape (passing)", () => {
         payload: { credential, at: 1, operationId },
       } as never,
     });
-    const one = processor.reduce({ ...authenticated("from-server-cookie", "op1"), state: initial }) ?? initial;
+    const one =
+      processor.reduce({ ...authenticated("from-server-cookie", "op1"), state: initial }) ??
+      initial;
     const two = processor.reduce({ ...authenticated("admin-secret", "op2"), state: one }) ?? one;
     expect(two.authentications.map((a) => a.operationId)).toEqual(["op1", "op2"]);
     // An unrelated event leaves the view unchanged.
@@ -101,9 +103,7 @@ describe("account — foundation shape (passing)", () => {
     // Publication is best-effort/async (waitUntil), so poll the user's own log until it lands.
     const fact = await until("account/authenticated fact", async () => {
       const page = (await s.user.invoke(["itx", ["readEvents"]])) as { events: { type: string }[] };
-      return page.events.find(
-        (event) => event.type === "events.iterate.com/account/authenticated",
-      );
+      return page.events.find((event) => event.type === "events.iterate.com/account/authenticated");
     });
     expect(fact.type).toBe("events.iterate.com/account/authenticated");
   });
@@ -147,7 +147,9 @@ describe("security requirements — currently INSECURE, captured as expected-fai
     const a = await userSession("write-a@sec.test");
     const b = await userSession("write-b@sec.test");
     const bId = (await b.whoami()).actor;
-    await refuses(() => a.user.cd(`/users/${bId}`).invoke(["itx", ["append", { type: "intrusion" }]]));
+    await refuses(() =>
+      a.user.cd(`/users/${bId}`).invoke(["itx", ["append", { type: "intrusion" }]]),
+    );
   });
 
   test.fails("a client cannot forge a platform fact in its own user context (append type-gate)", async () => {
