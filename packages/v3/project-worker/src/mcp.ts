@@ -42,32 +42,15 @@ async function projectOfToolCall(
 }
 
 const validator = new CfWorkerJsonSchemaValidator();
-/** A tool's input schema as `fromJsonSchema` takes it — the SDK's own JSON-Schema type. */
-type JsonSchema = Parameters<typeof fromJsonSchema>[0];
-const objectSchema = (properties: Record<string, unknown>, required: string[] = []) =>
-  fromJsonSchema(
-    { type: "object", properties, required, additionalProperties: false } as JsonSchema,
-    validator,
-  );
-const textResult = (text: string, isError = false) => ({
-  content: [{ type: "text" as const, text }],
-  isError,
-});
-/** A tool FAILURE as the protocol's own channel — an `isError` result, never a thrown error and
- *  never a 500 — its text led by the platform's CODE when the error carries one (lib.ts —
- *  `NO_ITX_EXPRESSION_MATCH`, `INVALID_CONTEXT`, …), the machine-readable channel a client
- *  classifies by, then the message. */
-const failure = (error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  const code = errorCode(error);
-  return textResult(code ? `${code}: ${message}` : message, true);
-};
 
 const PROJECT_INPUT = {
   type: "string",
   description:
     "The project (its id/slug). Optional when this token reaches exactly one; required for the admin secret.",
 };
+
+/** A tool's input schema as `fromJsonSchema` takes it — the SDK's own JSON-Schema type. */
+type JsonSchema = Parameters<typeof fromJsonSchema>[0];
 
 function buildServer(env: Env, authorization: Authorization): McpServer {
   const d1Directory = directory(env.DB);
@@ -80,17 +63,22 @@ function buildServer(env: Env, authorization: Authorization): McpServer {
       title: "Run a script",
       description:
         "Run a script in a project's context, under this token's principal — THE way to do work in a project over MCP. The script is the text of an async function of one parameter, `itx`: `async (itx) => { ... }` — a coding agent's whole output, an alternative to a tool call, its values baked in (no arguments). It is evaluated once in a confined worker with `itx` bound to the project (`itx.kv`, `itx.append`, `itx.readEvents`, `itx.connectToMcp`, `itx.workers.get`, …) and returns a JSON-serializable value. This is `itx.run`.",
-      inputSchema: objectSchema(
+      inputSchema: fromJsonSchema(
         {
-          project: PROJECT_INPUT,
-          script: {
-            type: "string",
-            minLength: 1,
-            description:
-              "The text of an async function of one parameter, `itx`: `async (itx) => { const n = Number(await itx.kv.get('n')) || 0; await itx.kv.put('n', String(n + 1)); return n + 1; }`. It bakes in its own values (there are no arguments — write the whole script). Return a JSON-serializable value (undefined, functions and live handles do not cross the boundary).",
+          type: "object",
+          additionalProperties: false,
+          required: ["script"],
+          properties: {
+            project: PROJECT_INPUT,
+            script: {
+              type: "string",
+              minLength: 1,
+              description:
+                "The text of an async function of one parameter, `itx`: `async (itx) => { const n = Number(await itx.kv.get('n')) || 0; await itx.kv.put('n', String(n + 1)); return n + 1; }`. It bakes in its own values (there are no arguments — write the whole script). Return a JSON-serializable value (undefined, functions and live handles do not cross the boundary).",
+            },
           },
-        },
-        ["script"],
+        } as JsonSchema,
+        validator,
       ),
     },
     async (raw: unknown) => {
@@ -114,7 +102,15 @@ function buildServer(env: Env, authorization: Authorization): McpServer {
           structuredContent: { result: JSON.parse(json) as unknown },
         };
       } catch (error) {
-        return failure(error);
+        // A tool FAILURE as the protocol's own channel — an isError result, never a thrown 500 — its
+        // text led by the platform's error CODE (lib.ts: NO_ITX_EXPRESSION_MATCH, INVALID_CONTEXT, …)
+        // when present so a client can classify it, then the message.
+        const message = error instanceof Error ? error.message : String(error);
+        const code = errorCode(error);
+        return {
+          content: [{ type: "text" as const, text: code ? `${code}: ${message}` : message }],
+          isError: true,
+        };
       }
     },
   );

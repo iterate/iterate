@@ -811,6 +811,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const itxExpressionHeader = request.headers.get(ITX_EXPRESSION_FETCH_HEADER);
     if (itxExpressionHeader !== null) {
       try {
+        // The JSON form is an edge-set (worker.ts) or self-addressed (env.ITX.fetch) expression; the
+        // resolver below canonicalizes it and rejects a malformed shape, so this parse trusts the JSON.
         const itxExpression = itxExpressionHeader.trimStart().startsWith("[")
           ? (JSON.parse(itxExpressionHeader) as ItxExpression)
           : parse(itxExpressionHeader);
@@ -827,7 +829,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         if (appLabel === undefined) headers.delete(ITERATE_APP_HEADER);
         else headers.set(ITERATE_APP_HEADER, appLabel);
         // The edge's stamp (ingress after the cookie check, a session's terminal fetch): the call runs
-        // under that principal, and the header stays on the Request the app receives.
+        // under that principal, and the header stays on the Request the app receives. Trusted here —
+        // the edge sets it and ItxEntrypoint strips a loaded worker's, so it is the edge's JSON or absent.
         const principal = JSON.parse(
           headers.get(ITX_PRINCIPAL_HEADER) ?? "null",
         ) as Principal | null;

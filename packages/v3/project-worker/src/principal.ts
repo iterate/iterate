@@ -1,4 +1,5 @@
 // Verified attribution, the signed-claims codec, and operator-only project credentials.
+import { z } from "zod";
 
 /** Who is acting: a stable actor id (the control plane's user id) and, when known, an email. */
 export type Principal = { actor: string; email?: string };
@@ -27,7 +28,13 @@ export function stampPrincipal<E extends { source?: Record<string, unknown> }>(
     : (({ source: _dropped, ...rest }) => rest as E)(event);
 }
 /** The claims a project token carries: the principal, for ONE project, until `expiresAt` (ms). */
-export type ProjectTokenClaims = Principal & { projectId: string; expiresAt: number };
+export const ProjectTokenClaims = z.object({
+  actor: z.string(),
+  email: z.string().optional(),
+  projectId: z.string(),
+  expiresAt: z.number(),
+});
+export type ProjectTokenClaims = z.infer<typeof ProjectTokenClaims>;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -100,20 +107,9 @@ export async function verifyProjectToken(
   secret: string,
   now = Date.now(),
 ): Promise<ProjectTokenClaims | null> {
-  const claims = (await verifyClaims(token, secret)) as ProjectTokenClaims | null;
-  if (
-    typeof claims?.projectId !== "string" ||
-    typeof claims?.actor !== "string" ||
-    typeof claims?.expiresAt !== "number" ||
-    claims.expiresAt <= now
-  )
-    return null;
-  return {
-    projectId: claims.projectId,
-    actor: claims.actor,
-    expiresAt: claims.expiresAt,
-    ...(typeof claims.email === "string" && { email: claims.email }),
-  };
+  const claims = ProjectTokenClaims.safeParse(await verifyClaims(token, secret));
+  if (!claims.success || claims.data.expiresAt <= now) return null;
+  return claims.data;
 }
 
 /** A project token: `claims` — the principal, for ONE project — signed with `secret`, expiring
