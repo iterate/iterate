@@ -8,7 +8,8 @@
 // passes; when enforcement lands the assertion passes, the expected-fail turns into a real failure,
 // and whoever wired the fix deletes the `.fails`. See docs/control-plane-context-resolved-design.md.
 import { beforeAll, describe, expect, test } from "vitest";
-import { adminCredentials, applyDirectorySchema, openSession } from "./support.ts";
+import { adminCredentials, applyDirectorySchema, openSession, until } from "./support.ts";
+import { ACCOUNT_AUTHENTICATED, AccountProcessor } from "../src/account/contract.ts";
 
 beforeAll(applyDirectorySchema);
 
@@ -74,6 +75,31 @@ describe("shape — a global context is an ordinary context (passing)", () => {
     const who = (await proj.cd("/users/someone-else").whoami()) as { projectId: string };
     // The hop stays in the project's own namespace; it can never spell `global`.
     expect(who.projectId).not.toBe("global");
+  });
+});
+
+describe("account — foundation shape (passing)", () => {
+  test("AccountProcessor folds authentication facts into the account view (kernel reducer)", () => {
+    const processor = new AccountProcessor();
+    const initial = processor.contract.initialState();
+    const fact = (credential: string, operationId: string) => ({
+      event: { type: ACCOUNT_AUTHENTICATED, payload: { credential, at: 1, operationId } } as never,
+    });
+    const one = processor.reduce({ ...fact("from-server-cookie", "op1"), state: initial }) ?? initial;
+    const two = processor.reduce({ ...fact("admin-secret", "op2"), state: one }) ?? one;
+    expect(two.authentications.map((a) => a.operationId)).toEqual(["op1", "op2"]);
+    // An unrelated event leaves the view unchanged.
+    expect(processor.reduce({ event: { type: "note" } as never, state: two })).toBeUndefined();
+  });
+
+  test("a successful authentication records a durable fact on the user's account context", async () => {
+    const s = await userSession("acct-fact@sec.test");
+    // Publication is best-effort/async (waitUntil), so poll the user's own log until it lands.
+    const fact = await until("account/authenticated fact", async () => {
+      const page = (await s.user.invoke(["itx", ["readEvents"]])) as { events: { type: string }[] };
+      return page.events.find((event) => event.type === ACCOUNT_AUTHENTICATED);
+    });
+    expect(fact.type).toBe(ACCOUNT_AUTHENTICATED);
   });
 });
 

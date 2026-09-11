@@ -16,6 +16,7 @@ import { describeReach, type Directory, type Project, type Reach } from "./direc
 import type { AppConfig } from "./app-config.ts";
 import { codedError } from "./lib.ts";
 import { verifyAdminSecret, type Principal } from "./principal.ts";
+import { authenticatedEvent } from "./account/contract.ts";
 
 /** One DNS-safe name — the directory row, the DO name, the host label; in this deployment a project's
  *  id IS its slug. */
@@ -102,6 +103,7 @@ export class IterateRpcTarget extends RpcTarget {
     if (credentials.data.type === "from-server-cookie") {
       if (!this.#resolved)
         throw codedError("UNAUTHENTICATED", "this transport carries no session — sign in first.");
+      this.#publishAuthenticationFact(this.#resolved.principal, "from-server-cookie");
       return new SessionRpcTarget(this.#input, this.#sessionTeardown, this.#resolved);
     }
     const admin = await verifyAdminSecret(
@@ -113,11 +115,41 @@ export class IterateRpcTarget extends RpcTarget {
     const user =
       credentials.data.as && (await this.#input.directory.upsertUser(credentials.data.as.email));
     const principal = user ? { actor: user.id, email: user.email } : admin;
+    this.#publishAuthenticationFact(principal, "admin-secret");
     return new SessionRpcTarget(this.#input, this.#sessionTeardown, {
       principal,
       reach: user ? { userId: user.id } : "every",
       projectDoors: this.#input,
     });
+  }
+
+  /** Record a successful authentication on the human's account context — best-effort and ASYNC (via
+   *  waitUntil), off the connection's hot path: it is "nice to see", not authoritative, so a lost one
+   *  on eviction is fine. Only a human (a principal with an email) has an account context — the admin
+   *  and project credentials name none. The fact rides `session.user`'s stream, where the
+   *  AccountProcessor folds it into the account view (src/account/contract.ts). NOTE: the boundary is
+   *  per-authenticate for now (a reconnect re-publishes); narrowing it to credential-establishment is
+   *  a later refinement. Attribution is the user's until the platform principal lands. */
+  #publishAuthenticationFact(
+    principal: SessionPrincipal,
+    credential: "from-server-cookie" | "admin-secret",
+  ): void {
+    if (!principal.email) return;
+    const name = DurableObjectNameCodec.stringify({
+      projectId: GLOBAL_PROJECT_ID,
+      path: `/users/${principal.actor}`,
+    });
+    const fact = authenticatedEvent({ credential, at: Date.now(), operationId: crypto.randomUUID() });
+    this.#input.waitUntil(
+      (
+        this.#input.contextNamespace
+          .getByName(name)
+          .invoke(["itx", ["append", fact]], [], { principal }) as Promise<unknown>
+      ).then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
   }
 }
 
