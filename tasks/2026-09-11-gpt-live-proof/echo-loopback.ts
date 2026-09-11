@@ -196,7 +196,7 @@ async function test(
       const input =
         spoken && echoed && mixHumanAndEcho
           ? (result.mixedFrames++, saturatedMix(spoken, echoed))
-          : (spoken ?? echoed ?? Buffer.alloc(frameBytes));
+          : (spoken || echoed || Buffer.alloc(frameBytes));
       if (socket.readyState === WebSocket.OPEN)
         socket.send(
           JSON.stringify({
@@ -229,7 +229,7 @@ void (async () => {
     ["echo_100ms_half_gain_mixed_human", true, true, true],
   ] as const;
   const requested = process.argv.at(2);
-  const selected = requested === undefined ? cases : cases.filter(([name]) => name === requested);
+  const selected = requested ? cases.filter(([name]) => name === requested) : cases;
   if (selected.length === 0) throw new Error(`unknown echo case: ${requested}`);
   for (const [name, echo, barge, mixHumanAndEcho] of selected)
     console.log(JSON.stringify(await test(name, echo, barge, mixHumanAndEcho)));
