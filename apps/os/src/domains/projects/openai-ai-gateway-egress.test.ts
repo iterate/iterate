@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import type { AppConfig } from "../../config.ts";
 import {
   applyOpenAiAiGatewayCacheHeaders,
@@ -83,20 +84,26 @@ describe("openAiAiGatewayBindingHeaders", () => {
     expect(headers["x-iterate-sandbox"]).toBeUndefined();
   });
 
-  test("replaces caller authorization even when it looks like a real key", () => {
-    const headers = openAiAiGatewayBindingHeaders({
-      openaiApiKey: "sk-platform",
-      projectId: "proj_test",
-      requestHeaders: new Headers({
-        authorization: "Bearer sk-customer-real",
-      }),
-    });
-    expect(headers.authorization).toBe("Bearer sk-platform");
-    expect(JSON.parse(headers["cf-aig-metadata"]!)).toEqual({
-      projectId: "proj_test",
-      source: "project-egress",
-    });
-  });
+  createFailing(test, /customer authorization should not be replaced with the platform key/)(
+    "preserves a customer's OpenAI key instead of billing Iterate",
+    () => {
+      const headers = openAiAiGatewayBindingHeaders({
+        openaiApiKey: "sk-platform",
+        projectId: "proj_test",
+        requestHeaders: new Headers({
+          authorization: "Bearer sk-customer-real",
+        }),
+      });
+      expect(JSON.parse(headers["cf-aig-metadata"]!)).toEqual({
+        projectId: "proj_test",
+        source: "project-egress",
+      });
+      expect(
+        headers,
+        "customer authorization should not be replaced with the platform key",
+      ).toMatchObject({ authorization: "Bearer sk-customer-real" });
+    },
+  );
 });
 
 describe("openAiAiGatewayRoutingFromConfig", () => {
