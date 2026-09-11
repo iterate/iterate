@@ -89,6 +89,23 @@ enum {
    */
   ITERATE_KIT_DARWIN_AUDIO_OUTPUT_RING_BYTES =
       ITERATE_KIT_VOICE_FRAME_BYTES * 100,
+  /*
+   * PULLED mode only: what the ring holds before the puller may consume it,
+   * and again after it has run dry.
+   *
+   * THE HARDWARE QUEUE IS GONE IN THIS MODE. The AudioQueue path keeps four
+   * buffers in flight — 80 ms of audio the hardware already holds — so a
+   * cooperative loop that misses its turn is invisible. A VoiceProcessingIO
+   * unit holds nothing: it asks this ring for a device quantum and plays
+   * whatever comes back, so the same hiccup is a hole. Measured on this Mac
+   * (2026-09-11): playback through the unit was audibly choppy while the
+   * core playout reported eleven concealed frames, and the recording showed
+   * dozens of 5–60 ms zero runs. Four frames restores exactly the lead the
+   * queue used to provide, on top of whatever the core's own prefill holds
+   * upstream — it is the hardware's buffer, not a second jitter buffer.
+   */
+  ITERATE_KIT_DARWIN_AUDIO_OUTPUT_PULL_PRIME_BYTES =
+      ITERATE_KIT_VOICE_FRAME_BYTES * 4,
 };
 
 enum iterate_kit_darwin_audio_output_status {
@@ -179,6 +196,10 @@ struct iterate_kit_darwin_audio_output {
   atomic_uint_least32_t starved;
   /** Dry pulls not yet proven to be internal rather than trailing silence. */
   atomic_uint_least32_t pending_starved;
+  /** PULLED mode: filling the lead, consuming nothing yet. */
+  atomic_bool pull_priming;
+  /** PULLED mode: times the ring ran dry and the lead had to refill. */
+  atomic_uint_least32_t pull_reprimes;
 };
 
 /** Human-readable status name, for the one top-level log boundary. */
@@ -216,6 +237,10 @@ enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_open
  * payload from the ring, silence for the shortfall — classifying a dry pull
  * exactly as the AudioQueue callback does. Returns the payload bytes taken.
  * Called on the owner's I/O thread.
+ *
+ * Consumes nothing until the ring holds PULL_PRIME_BYTES, and goes back to
+ * priming after it has run dry: see that constant for why this mode needs a
+ * lead the AudioQueue mode gets from the hardware.
  */
 uint32_t iterate_kit_darwin_audio_output_pull(
     struct iterate_kit_darwin_audio_output *out, uint8_t *destination, uint32_t length);
@@ -259,6 +284,8 @@ uint32_t iterate_kit_darwin_audio_output_queued_bytes(const struct iterate_kit_d
 
 uint32_t iterate_kit_darwin_audio_output_completed_bytes(const struct iterate_kit_darwin_audio_output *out);
 uint32_t iterate_kit_darwin_audio_output_starved_buffers(const struct iterate_kit_darwin_audio_output *out);
+/** PULLED mode: how often the lead had to refill after running dry. */
+uint32_t iterate_kit_darwin_audio_output_pull_reprimes(const struct iterate_kit_darwin_audio_output *out);
 int32_t iterate_kit_darwin_audio_output_platform_error(const struct iterate_kit_darwin_audio_output *out);
 
 /** Stop and release CoreAudio resources. Safe before or after a failed open. */

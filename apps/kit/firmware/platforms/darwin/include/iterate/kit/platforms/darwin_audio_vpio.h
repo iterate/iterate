@@ -79,6 +79,18 @@ struct iterate_kit_darwin_audio_vpio {
   size_t partial_bytes;
   /** Input callbacks larger than the staging area; counted, dropped. */
   atomic_uint_least32_t oversize_slices;
+  /*
+   * THE POSTMORTEM COUNTERS, both directions. Capture: callbacks seen, wire
+   * frames pushed to the ring, renders that returned fewer bytes than asked.
+   * Render: requests seen, bytes the ring could not supply (zero-filled),
+   * requests whose length was not a whole number of wire frames.
+   */
+  atomic_uint_least32_t capture_callbacks;
+  atomic_uint_least32_t capture_frames_pushed;
+  atomic_uint_least32_t capture_short_renders;
+  atomic_uint_least32_t render_requests;
+  atomic_uint_least32_t render_shortfall_bytes;
+  atomic_uint_least32_t render_unaligned_requests;
   /** First failing OSStatus, zero while healthy. */
   atomic_int_least32_t platform_error;
   atomic_bool running;

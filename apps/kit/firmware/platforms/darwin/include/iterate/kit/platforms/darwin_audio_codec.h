@@ -26,6 +26,12 @@ struct iterate_kit_darwin_audio_codec_options {
    * microphone; fall back to the queues if the unit is unavailable.
    */
   bool echo_cancellation_off;
+  /**
+   * MEASUREMENT ONLY: run the voice-processing unit even without a live
+   * microphone, so the playback path through it can be compared against
+   * the plain queue by a driver that has no microphone (`--converse`).
+   */
+  bool force_voice_processing;
 };
 
 struct iterate_kit_darwin_audio_codec_metrics {
@@ -41,6 +47,15 @@ struct iterate_kit_darwin_audio_codec_metrics {
   bool voice_processing_active;
   /** First VoiceProcessingIO failure, zero while healthy or when not in use. */
   int32_t voice_processing_error;
+  /** The unit's own counters (darwin_audio_vpio.h); zero when not in use. */
+  uint32_t vpio_capture_callbacks;
+  uint32_t vpio_capture_frames_pushed;
+  uint32_t vpio_capture_short_renders;
+  uint32_t vpio_render_requests;
+  uint32_t vpio_render_shortfall_bytes;
+  uint32_t vpio_render_unaligned_requests;
+  /** PULLED playback: times the lead ran dry and had to refill. */
+  uint32_t playback_pull_reprimes;
 };
 
 /**

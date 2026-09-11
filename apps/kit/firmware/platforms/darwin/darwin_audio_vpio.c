@@ -128,6 +128,22 @@ enum iterate_kit_darwin_audio_vpio_status iterate_kit_darwin_audio_vpio_open(
         vpio->unit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input,
         ITERATE_KIT_DARWIN_AUDIO_VPIO_OUTPUT_BUS, &render_callback, sizeof(render_callback));
   }
+  /*
+   * DO NOT DUCK THE REST OF THE MACHINE. By default the unit lowers every
+   * other application's audio whenever it hears voice — which is also what
+   * made a request played into the room by `afplay` vanish from the
+   * microphone (measured 2026-09-11). Best effort: an OS that lacks the
+   * property keeps its default and the unit still opens.
+   */
+  if (result == noErr) {
+    AUVoiceIOOtherAudioDuckingConfiguration ducking;
+    memset(&ducking, 0, sizeof(ducking));
+    ducking.mEnableAdvancedDucking = false;
+    ducking.mDuckingLevel = kAUVoiceIOOtherAudioDuckingLevelMin;
+    (void)AudioUnitSetProperty(
+        vpio->unit, kAUVoiceIOProperty_OtherAudioDuckingConfiguration, kAudioUnitScope_Global,
+        0U, &ducking, sizeof(ducking));
+  }
   if (result == noErr) result = AudioUnitInitialize(vpio->unit);
   if (result == noErr) {
     atomic_store_explicit(&vpio->running, true, memory_order_release);
@@ -181,6 +197,7 @@ static OSStatus iterate_kit_darwin_audio_vpio_capture(
   (void)unused;
   assert(vpio != NULL);
   if (!atomic_load_explicit(&vpio->running, memory_order_acquire)) return noErr;
+  (void)atomic_fetch_add_explicit(&vpio->capture_callbacks, 1U, memory_order_relaxed);
   if (frame_count > ITERATE_KIT_DARWIN_AUDIO_VPIO_MAX_FRAMES_PER_SLICE) {
     (void)atomic_fetch_add_explicit(&vpio->oversize_slices, 1U, memory_order_relaxed);
     return noErr;
@@ -196,6 +213,9 @@ static OSStatus iterate_kit_darwin_audio_vpio_capture(
   }
   bytes = (const uint8_t *)vpio->staging;
   remaining = list.mBuffers[0].mDataByteSize;
+  if (remaining < frame_count * ITERATE_KIT_DARWIN_AUDIO_VPIO_BYTES_PER_SAMPLE) {
+    (void)atomic_fetch_add_explicit(&vpio->capture_short_renders, 1U, memory_order_relaxed);
+  }
   while (remaining > 0U) {
     const size_t room = ITERATE_KIT_VOICE_FRAME_BYTES - vpio->partial_bytes;
     const size_t take = remaining < room ? remaining : room;
@@ -206,6 +226,7 @@ static OSStatus iterate_kit_darwin_audio_vpio_capture(
     if (vpio->partial_bytes == ITERATE_KIT_VOICE_FRAME_BYTES) {
       (void)iterate_kit_darwin_audio_input_push(
           vpio->input, vpio->partial, ITERATE_KIT_VOICE_FRAME_BYTES);
+      (void)atomic_fetch_add_explicit(&vpio->capture_frames_pushed, 1U, memory_order_relaxed);
       vpio->partial_bytes = 0U;
     }
   }
@@ -233,7 +254,15 @@ static OSStatus iterate_kit_darwin_audio_vpio_render(
     const uint32_t length = buffer->mDataByteSize < wanted ? buffer->mDataByteSize : wanted;
     if (buffer->mData == NULL) continue;
     if (index == 0U && atomic_load_explicit(&vpio->running, memory_order_acquire)) {
-      (void)iterate_kit_darwin_audio_output_pull(vpio->output, buffer->mData, length);
+      const uint32_t pulled =
+          iterate_kit_darwin_audio_output_pull(vpio->output, buffer->mData, length);
+      (void)atomic_fetch_add_explicit(&vpio->render_requests, 1U, memory_order_relaxed);
+      (void)atomic_fetch_add_explicit(
+          &vpio->render_shortfall_bytes, length - pulled, memory_order_relaxed);
+      if (length % ITERATE_KIT_VOICE_FRAME_BYTES != 0U) {
+        (void)atomic_fetch_add_explicit(
+            &vpio->render_unaligned_requests, 1U, memory_order_relaxed);
+      }
     } else {
       memset(buffer->mData, 0, length);
     }

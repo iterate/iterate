@@ -639,6 +639,9 @@ static bool cli_main_init_audio(struct cli_runtime *runtime)
      * argument list themselves (voicelab talk). */
     .echo_cancellation_off = runtime->options.no_aec ||
         (getenv("ITERATE_KIT_NO_AEC") != NULL && getenv("ITERATE_KIT_NO_AEC")[0] == '1'),
+    /* Measurement only: the unit's playback path without a live microphone. */
+    .force_voice_processing =
+        getenv("ITERATE_KIT_FORCE_AEC") != NULL && getenv("ITERATE_KIT_FORCE_AEC")[0] == '1',
   };
   if (iterate_kit_darwin_audio_codec_open(
           &runtime->audio_codec, &codec_options) != ITERATE_KIT_OK) {
@@ -818,6 +821,17 @@ static bool cli_main_drain_audio(struct cli_runtime *runtime)
       audio.playback_starved_buffers,
       audio.playback_platform_error,
       audio.capture_platform_error);
+  if (audio.voice_processing_active) {
+    cli_runtime_log(
+        "info",
+        "voice processing: captureCallbacks=%u captureFramesPushed=%u captureShortRenders=%u "
+        "renderRequests=%u renderShortfallBytes=%u renderUnalignedRequests=%u "
+        "pullReprimes=%u",
+        audio.vpio_capture_callbacks, audio.vpio_capture_frames_pushed,
+        audio.vpio_capture_short_renders, audio.vpio_render_requests,
+        audio.vpio_render_shortfall_bytes, audio.vpio_render_unaligned_requests,
+        audio.playback_pull_reprimes);
+  }
   return status == ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK &&
       audio.playback_platform_error == 0 &&
       audio.capture_platform_error == 0;
@@ -1562,19 +1576,7 @@ static void cli_main_start_talk(
   cli_microphone_clear(&runtime->microphone);
   cli_speaker_clear(&runtime->speaker);
   iterate_kit_voice_playback_clock_reprime(&runtime->playout.clock);
-  /*
-   * A LOST ptt-start IS A LOST BARGE-IN: the server's answer-drop triggers on
-   * this exact event, so a press that captures audio but fails to say
-   * "start" leaves a dead answer playing through the whole interruption —
-   * with nothing anywhere saying why. Never voided.
-   */
-  const enum capnweb_status turn_start_status = iterate_kit_voicelab_mark_turn(
-      &runtime->voicelab, ITERATE_KIT_VOICELAB_TURN_START);
-  if (turn_start_status != CAPNWEB_OK) {
-    cli_runtime_log(
-        "error", "ptt-start append failed: capnweb status %d",
-        (int)turn_start_status);
-  }
+  /* No turn marker: push-to-talk is a local microphone gate (2026-09-11). */
 }
 
 static void cli_main_finish_talk(
@@ -1591,15 +1593,7 @@ static void cli_main_finish_talk(
   }
   runtime->talking = false;
   runtime->flushing_turn = false;
-  /* A lost commit strands the provider holding an uncommitted turn — as
-   * invisible as a lost start, and logged for the same reason. */
-  const enum capnweb_status turn_commit_status = iterate_kit_voicelab_mark_turn(
-      &runtime->voicelab, ITERATE_KIT_VOICELAB_TURN_COMMIT);
-  if (turn_commit_status != CAPNWEB_OK) {
-    cli_runtime_log(
-        "error", "ptt-end append failed: capnweb status %d",
-        (int)turn_commit_status);
-  }
+  /* No commit marker either: GPT-Live's own voice activity ends the turn. */
   runtime->turn_committed_ms = now_ms;
 }
 

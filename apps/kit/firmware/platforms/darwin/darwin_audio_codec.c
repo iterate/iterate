@@ -111,8 +111,9 @@ enum iterate_kit_status iterate_kit_darwin_audio_codec_open(
    * the voice-processing unit, and the queues below are the fallback. A
    * pretend speaker has no room to echo in, so it keeps the plain queue.
    */
-  if (options->capture_enabled && options->playback_enabled &&
-      options->file_playback == NULL && !options->echo_cancellation_off) {
+  if ((options->capture_enabled || options->force_voice_processing) &&
+      options->playback_enabled && options->file_playback == NULL &&
+      !options->echo_cancellation_off) {
     if (iterate_kit_darwin_audio_output_open_pulled(&darwin->output) ==
             ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK &&
         iterate_kit_darwin_audio_input_open_external(&darwin->input) ==
@@ -221,4 +222,18 @@ void iterate_kit_darwin_audio_codec_metrics(
   metrics->voice_processing_active = darwin->voice_processing_active;
   metrics->voice_processing_error =
       iterate_kit_darwin_audio_vpio_platform_error(&darwin->vpio);
+  metrics->vpio_capture_callbacks =
+      (uint32_t)atomic_load_explicit(&darwin->vpio.capture_callbacks, memory_order_relaxed);
+  metrics->vpio_capture_frames_pushed =
+      (uint32_t)atomic_load_explicit(&darwin->vpio.capture_frames_pushed, memory_order_relaxed);
+  metrics->vpio_capture_short_renders =
+      (uint32_t)atomic_load_explicit(&darwin->vpio.capture_short_renders, memory_order_relaxed);
+  metrics->vpio_render_requests =
+      (uint32_t)atomic_load_explicit(&darwin->vpio.render_requests, memory_order_relaxed);
+  metrics->vpio_render_shortfall_bytes =
+      (uint32_t)atomic_load_explicit(&darwin->vpio.render_shortfall_bytes, memory_order_relaxed);
+  metrics->vpio_render_unaligned_requests = (uint32_t)atomic_load_explicit(
+      &darwin->vpio.render_unaligned_requests, memory_order_relaxed);
+  metrics->playback_pull_reprimes =
+      iterate_kit_darwin_audio_output_pull_reprimes(&darwin->output);
 }

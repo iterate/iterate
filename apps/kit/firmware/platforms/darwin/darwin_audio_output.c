@@ -191,6 +191,7 @@ enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_open
   atomic_store(&out->read, 0U);
   atomic_store(&out->write, 0U);
   out->mode = ITERATE_KIT_DARWIN_AUDIO_OUTPUT_PULLED;
+  atomic_store_explicit(&out->pull_priming, true, memory_order_release);
   atomic_store_explicit(&out->enabled, true, memory_order_release);
   return ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK;
 }
@@ -207,9 +208,28 @@ uint32_t iterate_kit_darwin_audio_output_pull(
   }
   /* Classified at the instant the hardware asked — see prime_one. */
   expected = atomic_load_explicit(&out->expecting_audio, memory_order_acquire);
+  /*
+   * THE LEAD THIS MODE HAS NO HARDWARE QUEUE FOR. While filling it the
+   * hardware gets silence and the ring keeps everything; a pull that cannot
+   * be served whole means the lead is spent, so it refills before playing
+   * again rather than handing out a hole every callback.
+   */
+  if (atomic_load_explicit(&out->pull_priming, memory_order_acquire)) {
+    if (iterate_kit_darwin_audio_output_queued_bytes(out) <
+        (uint32_t)ITERATE_KIT_DARWIN_AUDIO_OUTPUT_PULL_PRIME_BYTES) {
+      iterate_kit_darwin_audio_output_classify_pull(out, 0U, expected);
+      memset(destination, 0, length);
+      return 0U;
+    }
+    atomic_store_explicit(&out->pull_priming, false, memory_order_release);
+  }
   taken = iterate_kit_darwin_audio_output_take(out, destination, length);
   iterate_kit_darwin_audio_output_classify_pull(out, taken, expected);
-  if (taken < length) memset(destination + taken, 0, (size_t)length - taken);
+  if (taken < length) {
+    memset(destination + taken, 0, (size_t)length - taken);
+    atomic_store_explicit(&out->pull_priming, true, memory_order_release);
+    (void)atomic_fetch_add_explicit(&out->pull_reprimes, 1U, memory_order_relaxed);
+  }
   (void)atomic_fetch_add_explicit(&out->completed_bytes, taken, memory_order_relaxed);
   return taken;
 }
@@ -318,6 +338,8 @@ enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_drai
   }
   atomic_store_explicit(&out->expecting_audio, false, memory_order_release);
   atomic_store_explicit(&out->draining, true, memory_order_release);
+  /* The tail is shorter than the lead by definition: stop holding it back. */
+  atomic_store_explicit(&out->pull_priming, false, memory_order_release);
   if (out->mode == ITERATE_KIT_DARWIN_AUDIO_OUTPUT_FILE) {
     uint8_t frame[ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES];
     while (iterate_kit_darwin_audio_output_queued_bytes(out) > 0U) {
@@ -374,6 +396,7 @@ enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_drai
     /* The puller's unit keeps running on silence; nothing of ours to stop. */
     return ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK;
   }
+
   {
     const OSStatus result = AudioQueueStop(out->queue, false);
     if (result != noErr) {
@@ -401,6 +424,12 @@ uint32_t iterate_kit_darwin_audio_output_starved_buffers(const struct iterate_ki
 {
   return out == NULL ? 0U : (uint32_t)atomic_load_explicit(
       &out->starved, memory_order_acquire);
+}
+
+uint32_t iterate_kit_darwin_audio_output_pull_reprimes(const struct iterate_kit_darwin_audio_output *out)
+{
+  return out == NULL ? 0U : (uint32_t)atomic_load_explicit(
+      &out->pull_reprimes, memory_order_acquire);
 }
 
 int32_t iterate_kit_darwin_audio_output_platform_error(const struct iterate_kit_darwin_audio_output *out)
