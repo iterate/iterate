@@ -35,6 +35,7 @@ import process from "node:process";
 
 import { type VoicelabConnectOptions } from "./connect.ts";
 import { sleep, synthesizeFrames } from "./probe-audio.ts";
+import { gapStats } from "./live-probe.ts";
 import { talk } from "./talk.ts";
 import { openWireCall } from "./wire-call.ts";
 
@@ -54,6 +55,10 @@ export interface DuplexOptions extends VoicelabConnectOptions {
   skipDelegation?: boolean;
   /** How long to wait for the backend's spoken reply. */
   delegationTimeoutMs?: number;
+  /** Microphone frames per append (default 25 = one append per 500 ms). */
+  micBatchFrames?: number;
+  /** Frames joined into one mic event (default 1). */
+  micEventFrames?: number;
 }
 
 export async function duplex(options: DuplexOptions): Promise<void> {
@@ -102,6 +107,9 @@ export async function duplex(options: DuplexOptions): Promise<void> {
   rmSync(dir, { recursive: true, force: true });
 
   const call = await openWireCall({ ...options, streamPath });
+  console.log(
+    `  mic: ${String(options.micBatchFrames ?? 25)} frames per append, ${String(options.micEventFrames ?? 1)} frames per event`,
+  );
   const { watch } = call;
 
   const verdict: Record<string, boolean | null> = {};
@@ -244,6 +252,72 @@ export async function duplex(options: DuplexOptions): Promise<void> {
   console.log(`    backend function calls    ${String(watch.backendFunctionCalls)}`);
   console.log(
     `    durable transcript        ${String(utterances.length)} utterances, ${String(answers.length)} answers, ${String(notes.length)} backend notes`,
+  );
+  /*
+   * THE CADENCE THE DEVICE SEES. Consecutive audio frames should arrive
+   * 100 ms apart (GPT-Live's own cadence); a device playing straight from
+   * arrival has, at each frame, a cushion of (audio delivered so far) minus
+   * (time elapsed since the first frame of that run) — negative means it
+   * has already run dry. Runs restart at every answer-end marker.
+   */
+  const gaps = gapStats(watch.spkArrivals.map((arrival) => arrival.atMs));
+  let cushionMinMs = Number.POSITIVE_INFINITY;
+  let dryFrames = 0;
+  let runStartMs: number | null = null;
+  let runDeliveredMs = 0;
+  let previousAtMs: number | null = null;
+  for (const arrival of watch.spkArrivals) {
+    if (previousAtMs !== null && arrival.atMs - previousAtMs > 1_500) runStartMs = null;
+    if (runStartMs === null) {
+      runStartMs = arrival.atMs;
+      runDeliveredMs = 0;
+    }
+    const cushionMs = runDeliveredMs - (arrival.atMs - runStartMs);
+    if (cushionMs < cushionMinMs) cushionMinMs = cushionMs;
+    if (cushionMs < 0) dryFrames += 1;
+    runDeliveredMs += arrival.payloadMs;
+    previousAtMs = arrival.atMs;
+  }
+  const clumped = watch.spkArrivals.filter((arrival) => arrival.batchAudioFrames > 1).length;
+  /* THREE CLOCKS ON ONE STREAM OF FRAMES. Provider→facet: the mirror's
+   * receivedAtFacetMs per audio delta (every delta, silence included, so
+   * expect ~100 ms). Facet send: sentAtFacetMs per speaker frame. Client
+   * arrival: this driver's clock. Jitter that first appears at a later
+   * clock was added by that hop. The transit spread (arrival minus send,
+   * minus its own minimum so the clock offset cancels) is the delivery hop
+   * alone. */
+  const providerGaps = gapStats(watch.providerDeltaReceivedAtFacetMs);
+  const sentGaps = gapStats(
+    watch.spkArrivals
+      .map((arrival) => arrival.sentAtFacetMs)
+      .filter((value): value is number => value !== null),
+  );
+  const transits = watch.spkArrivals
+    .filter((arrival) => arrival.sentAtFacetMs !== null)
+    .map((arrival) => arrival.atMs - arrival.sentAtFacetMs!)
+    .sort((a, b) => a - b);
+  const transitBase = transits[0] ?? 0;
+  const transitAt = (q: number) =>
+    transits.length === 0
+      ? 0
+      : Math.round(
+          transits[Math.min(transits.length - 1, Math.floor(q * transits.length))]! - transitBase,
+        );
+  const fmt = (g: ReturnType<typeof gapStats>) =>
+    `p50 ${String(g.p50)} p90 ${String(g.p90)} p99 ${String(g.p99)} max ${String(g.max)} ms; >150 ms: ${String(g.over150)}, >250 ms: ${String(g.over250)} of ${String(g.count)}`;
+  console.log(`    provider→facet delta gaps ${fmt(providerGaps)}`);
+  console.log(`    facet send gaps           ${fmt(sentGaps)}`);
+  console.log(
+    `    delivery transit spread   p50 +${String(transitAt(0.5))} p90 +${String(transitAt(0.9))} p99 +${String(transitAt(0.99))} max +${String(transitAt(1))} ms over the fastest frame`,
+  );
+  console.log(
+    `    frame arrival gaps        p50 ${String(gaps.p50)} p90 ${String(gaps.p90)} p99 ${String(gaps.p99)} max ${String(gaps.max)} ms; >150 ms: ${String(gaps.over150)}, >250 ms: ${String(gaps.over250)} of ${String(gaps.count)}`,
+  );
+  console.log(
+    `    frames arriving clumped   ${String(clumped)} of ${String(watch.spkArrivals.length)} shared a delivery batch with another audio frame`,
+  );
+  console.log(
+    `    play-from-arrival cushion min ${String(Number.isFinite(cushionMinMs) ? Math.round(cushionMinMs) : "?")} ms; frames that would find the device dry: ${String(dryFrames)}`,
   );
   for (const line of watch.backendCalls) console.log(`  backend call ${line}`);
   console.log(`\n  heard:  ${watch.inputTranscript.trim().slice(0, 400)}`);

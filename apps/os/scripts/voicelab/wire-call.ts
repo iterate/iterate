@@ -54,6 +54,19 @@ export interface WireWatch {
   userFragmentArrivals: number[];
   /** Raw provider events by type, for anything a probe wants to count. */
   providerEventCounts: Record<string, number>;
+  /** Call clock at every audio-carrying speaker frame, with its length and
+   * how many audio frames shared its delivery batch — the cadence the device
+   * actually sees. */
+  spkArrivals: {
+    atMs: number;
+    payloadMs: number;
+    batchAudioFrames: number;
+    /** The facet's clock when it sent the frame (`sentAtFacetMs`). */
+    sentAtFacetMs: number | null;
+  }[];
+  /** Facet clock at every audio-carrying provider delta, off the mirror
+   * (`receivedAtFacetMs`): the provider→facet cadence. */
+  providerDeltaReceivedAtFacetMs: number[];
 }
 
 export interface WireCall {
@@ -84,8 +97,18 @@ interface VoiceStreamReads {
 }
 
 export async function openWireCall(
-  options: VoicelabConnectOptions & { streamPath: string },
+  options: VoicelabConnectOptions & {
+    streamPath: string;
+    /** Microphone frames per append (20 ms each); 25 = one append every 500 ms.
+     * A board sends ~8; smaller batches load the facet more evenly. */
+    micBatchFrames?: number;
+    /** Frames joined into ONE mic event (default 1): the same audio as fewer,
+     * longer events — is the facet's cost per event or per byte? */
+    micEventFrames?: number;
+  },
 ): Promise<WireCall> {
+  const micBatchFrames = options.micBatchFrames ?? 25;
+  const micEventFrames = Math.max(1, options.micEventFrames ?? 1);
   const stream = await openStream(options);
   const startedAtMs = Date.now();
   const clock = () => Date.now() - startedAtMs;
@@ -103,6 +126,8 @@ export async function openWireCall(
     assistantFragmentArrivals: [],
     userFragmentArrivals: [],
     providerEventCounts: {},
+    spkArrivals: [],
+    providerDeltaReceivedAtFacetMs: [],
   };
 
   const connection = await stream.openConnection({
@@ -112,6 +137,12 @@ export async function openWireCall(
       "events.iterate.com/voice-agent/grok-event",
     ],
     processEventBatch: (batch: { events?: { type: string; payload?: unknown }[] }) => {
+      const batchAudioFrames = (batch.events ?? []).filter(
+        (event) =>
+          event.type === "events.iterate.com/voice-agent/spk-frame" &&
+          typeof (event.payload as { pcm?: unknown } | undefined)?.pcm === "string" &&
+          (event.payload as { pcm: string }).pcm !== "",
+      ).length;
       for (const event of batch.events ?? []) {
         /* Stream payloads arrive as untyped JSON; the assertion only names
          * the record shape, and every field read below is checked by type. */
@@ -124,11 +155,26 @@ export async function openWireCall(
           if (pcm !== "") {
             watch.answerDeliveredMs += deliveredMsOf(pcm);
             watch.lastAudioFrameAtMs = clock();
+            watch.spkArrivals.push({
+              atMs: clock(),
+              payloadMs: deliveredMsOf(pcm),
+              batchAudioFrames,
+              sentAtFacetMs:
+                typeof payload.sentAtFacetMs === "number" ? payload.sentAtFacetMs : null,
+            });
           }
           continue;
         }
         const type = String(payload.type ?? "");
         watch.providerEventCounts[type] = (watch.providerEventCounts[type] ?? 0) + 1;
+        if (
+          type === "session.output_audio.delta" &&
+          typeof payload.deltaBytes === "number" &&
+          payload.deltaBytes > 0 &&
+          typeof payload.receivedAtFacetMs === "number"
+        ) {
+          watch.providerDeltaReceivedAtFacetMs.push(payload.receivedAtFacetMs);
+        }
         if (type === "session.delegation.created") {
           /* The provider's delegation object, per its schema; a differently
            * shaped one reads as an unknown target. */
@@ -185,7 +231,7 @@ export async function openWireCall(
     },
   });
 
-  /* THE MICROPHONE NEVER STOPS: one loop, 25 frames per half second. */
+  /* THE MICROPHONE NEVER STOPS: one loop, `micBatchFrames` frames per append. */
   let pending: string[] = [];
   let micFramesSent = 0;
   let stopMic = false;
@@ -193,23 +239,33 @@ export async function openWireCall(
     const startedAt = Date.now();
     let sequence = 0;
     while (!stopMic) {
-      const due = startedAt + (sequence + 25) * FRAME_MS;
+      const due = startedAt + (sequence + micBatchFrames) * FRAME_MS;
       const wait = due - Date.now();
       if (wait > 0) await sleep(wait);
       const events = [];
-      for (let index = 0; index < 25; index++) {
+      const frames: string[] = [];
+      for (let index = 0; index < micBatchFrames; index++) {
         /* The empty string is speak()'s end marker, never audio: it leaves
          * the queue here and silence goes out in its place. */
         const next = pending.shift();
-        const pcm = next === undefined || next === "" ? SILENCE_FRAME : next;
+        frames.push(next === undefined || next === "" ? SILENCE_FRAME : next);
+      }
+      for (let index = 0; index < frames.length; index += micEventFrames) {
+        const group = frames.slice(index, index + micEventFrames);
+        /* Base64 of concatenated PCM is not the concatenation of the base64
+         * (640 bytes is not a multiple of 3), so join the bytes. */
+        const pcm =
+          group.length === 1
+            ? group[0]!
+            : Buffer.concat(group.map((frame) => Buffer.from(frame, "base64"))).toString("base64");
         events.push({
           type: "events.iterate.com/voice-agent/mic-frame" as const,
           ephemeral: true as const,
           payload: { deviceMicFrameSeq: sequence, pcm },
         });
-        sequence += 1;
+        sequence += group.length;
       }
-      micFramesSent += 25;
+      micFramesSent += micBatchFrames;
       void stream.append(...events).catch(() => undefined);
     }
   })();

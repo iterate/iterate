@@ -293,7 +293,10 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
   let outputDeltas = 0;
   let silentDeltas = 0;
   let zeroDeltas = 0;
+  /** Probe clock at every output delta, for the arrival cadence. */
+  const deltaArrivalsMs: number[] = [];
   const noteAnswerAudio = (pcm: Buffer) => {
+    deltaArrivalsMs.push(clock());
     const now = clock();
     const bytes = pcm.length;
     outputDeltas += 1;
@@ -828,6 +831,9 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
     rate,
     output: {
       deltas: outputDeltas,
+      /* Inter-arrival gaps between consecutive 100 ms deltas: the jitter the
+       * provider itself puts on the wire, before any platform hop. */
+      arrivalGapsMs: gapStats(deltaArrivalsMs),
       silentDeltas,
       zeroDeltas,
       speechMs: Math.round(answers.reduce((total, answer) => total + answer.audioMs, 0)),
@@ -912,6 +918,34 @@ const EXEC_TYPESCRIPT_TOOL = {
   },
   strict: false,
 } as const;
+
+/** Distribution of the gaps between consecutive arrival times. */
+export function gapStats(arrivalsMs: number[]): {
+  count: number;
+  p50: number;
+  p90: number;
+  p99: number;
+  max: number;
+  over150: number;
+  over250: number;
+} {
+  const gaps: number[] = [];
+  for (let index = 1; index < arrivalsMs.length; index++) {
+    gaps.push(arrivalsMs[index]! - arrivalsMs[index - 1]!);
+  }
+  gaps.sort((a, b) => a - b);
+  const at = (q: number) =>
+    gaps.length === 0 ? 0 : gaps[Math.min(gaps.length - 1, Math.floor(q * gaps.length))]!;
+  return {
+    count: gaps.length,
+    p50: at(0.5),
+    p90: at(0.9),
+    p99: at(0.99),
+    max: gaps.at(-1) ?? 0,
+    over150: gaps.filter((gap) => gap > 150).length,
+    over250: gaps.filter((gap) => gap > 250).length,
+  };
+}
 
 function backendInstructions(withExec: boolean, allowWrites: boolean): string {
   return [
