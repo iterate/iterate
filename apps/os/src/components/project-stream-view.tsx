@@ -14,6 +14,7 @@ import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/shee
 import { toast } from "@iterate-com/ui/components/sonner";
 import {
   isAgentUiActivityWorking,
+  isAgentRuntimeVisiblyActive,
   type AgentUiLlmStep,
   type AgentUiRuntimeTransition,
   type AgentUiStep,
@@ -174,6 +175,7 @@ function BrowserDatabaseProjectStreamView({
 }: ProjectStreamViewProps) {
   const subscriberUser = useStreamSubscriberUser();
   const streamData = useProjectStreamData({
+    agentSource,
     projectId,
     resetStreamSourceTransport,
     subscriberUser,
@@ -199,9 +201,7 @@ function BrowserDatabaseProjectStreamView({
     void store.nudge();
   }, [store]);
 
-  // Runtime and presentation must describe the same source lifetime and revision.
-  // A separate agent subscription may already be idle or still hold a deleted stream.
-  const agentRuntime = presentedFeed?.runtimeChange?.runtime;
+  const agentRuntime = streamData.agentRuntime;
 
   const runningLlmRequestId = agentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestOffset;
   const interrupt = useAgentInterrupt({
@@ -275,6 +275,7 @@ function BrowserDatabaseProjectStreamView({
           interrupt={interrupt}
           messageComposer={messageComposer}
           agentSource={agentSource}
+          agentLiveState={streamData.agentLiveState}
           runtimeChange={presentedFeed?.runtimeChange}
           onNudgeDeliveries={nudgeDeliveries}
           presence={presence}
@@ -404,6 +405,7 @@ function ProjectStreamFeed({
 /** Keeps cached-connection feedback and queued input attached to the composer. */
 function StreamComposerFooter({
   agentSource,
+  agentLiveState,
   runtimeChange,
   messageComposer,
   agentFeed,
@@ -415,6 +417,7 @@ function StreamComposerFooter({
   ...composer
 }: Omit<ComponentProps<typeof StreamViewComposer>, "defaultMode"> & {
   agentSource: ProjectStreamViewProps["agentSource"];
+  agentLiveState: ReturnType<typeof useProjectStreamData>["agentLiveState"];
   runtimeChange: FeedLiveState["runtimeChange"];
   agentFeed: boolean;
   agentUiState: FeedLiveState["agent"] | null;
@@ -459,6 +462,7 @@ function StreamComposerFooter({
             {...composer}
             messageComposer={messageComposer}
             agentSource={agentSource}
+            agentLiveState={agentLiveState}
             runtimeChange={runtimeChange}
           />
         </div>
@@ -467,24 +471,18 @@ function StreamComposerFooter({
   );
 }
 
-/** Owns the acknowledgement subscription for this composer's stream lifetime. */
+/** Releases a submitted message only after its resulting runtime is presented. */
 function AcknowledgedStreamComposer({
   agentSource,
+  agentLiveState,
   runtimeChange,
   messageComposer,
   ...composer
 }: ComponentProps<typeof StreamViewComposer> & {
   agentSource: ProjectStreamViewProps["agentSource"];
+  agentLiveState: ReturnType<typeof useProjectStreamData>["agentLiveState"];
   runtimeChange: FeedLiveState["runtimeChange"];
 }) {
-  // This component remounts with the event mirror's source lifetime, so the
-  // acknowledgement subscription cannot retain a deleted agent's cursor.
-  const agentLiveState = useLiveState(
-    (agent: Agent) => agent.liveState,
-    (state) => state,
-    [],
-    agentSource ? { makeConnection: agentSource } : { root: undefined, enabled: false },
-  ).value;
   // Do not release the submitted message until its resulting runtime is on screen.
   const acknowledgedThroughOffset = Math.min(
     agentLiveState?.inputAcknowledgedThroughOffset ?? 0,
@@ -520,6 +518,7 @@ function useStreamSubscriberUser() {
 
 /** Owns the server live snapshot and local event mirror, including their publication barrier. */
 function useProjectStreamData({
+  agentSource,
   projectId,
   resetStreamSourceTransport,
   streamSource,
@@ -527,7 +526,7 @@ function useProjectStreamData({
   streamPath,
 }: Pick<
   ProjectStreamViewProps,
-  "projectId" | "resetStreamSourceTransport" | "streamSource" | "streamPath"
+  "agentSource" | "projectId" | "resetStreamSourceTransport" | "streamSource" | "streamPath"
 > & { subscriberUser?: BrowserStreamSubscriberUser }) {
   const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
   // The browser stream database receives events over the ONE shared session socket — the same connection
@@ -606,7 +605,19 @@ function useProjectStreamData({
     [streamPath, browserStore.snapshot.clearVersion],
     { makeConnection: makeFeedConnection },
   );
+  const agentLiveState = useLiveState(
+    (agent: Agent) => agent.liveState,
+    (state) => state,
+    [streamPath, browserStore.snapshot.clearVersion],
+    agentSource ? { makeConnection: agentSource } : { root: undefined, enabled: false },
+  ).value;
   const presentedFeed = useEventSynchronizedLiveState(store.streamDatabase, feed.value);
+  // Keep displayed work active until its publications arrive, and show new work
+  // as soon as the agent reports it. Both subscriptions reset with the source lifetime.
+  const feedRuntime = presentedFeed?.runtimeChange?.runtime;
+  const agentRuntime = isAgentRuntimeVisiblyActive(feedRuntime)
+    ? feedRuntime
+    : (agentLiveState?.runtimeChange?.runtime ?? feedRuntime);
   // Readers need actual shared history, not merely a pending writer election.
   // Both roles wait for the current live snapshot's publications to reach SQLite.
   const streamTransportReady =
@@ -618,6 +629,8 @@ function useProjectStreamData({
     resolvedStreamSource,
     ...browserStore,
     eventCount,
+    agentLiveState,
+    agentRuntime,
     feed,
     presentedFeed,
     streamTransportReady,
