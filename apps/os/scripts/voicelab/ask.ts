@@ -44,6 +44,9 @@ export interface AskOptions extends VoicelabConnectOptions {
   /** An itx script BODY (with `itx` in scope, ending in `return …`) run after
    * the last request, against the project, to check the effect. */
   verify?: string;
+  /** Send nothing between requests (a half-duplex client), and report the
+   * answer's frame flow: when its frames stopped relative to the request. */
+  micOffBetweenRequests?: boolean;
 }
 
 /* The CLI runtime's own wrapping (scripts/itx.ts): the body becomes an async
@@ -95,7 +98,11 @@ export async function ask(options: AskOptions): Promise<void> {
   const utterances = spoken.map((text, index) => synthesizeFrames(dir, `request-${index}`, text));
   rmSync(dir, { recursive: true, force: true });
 
-  const call = await openWireCall({ ...options, streamPath });
+  const call = await openWireCall({
+    ...options,
+    streamPath,
+    ...(options.micOffBetweenRequests === true && { micOffBetweenUtterances: true }),
+  });
   const { watch } = call;
   console.log(`  open mic on ${streamPath}; waiting for the session…`);
   await sleep(1_500);
@@ -145,6 +152,11 @@ export async function ask(options: AskOptions): Promise<void> {
       );
     }, requestTimeoutMs);
     const functionCalls = watch.backendCalls.slice(before.calls);
+    const framesThisRequest = watch.spkArrivals.filter((a) => a.atMs >= startedAt);
+    const lastFrameAtMs = framesThisRequest.at(-1)?.atMs ?? null;
+    console.log(
+      `    speaker frames: ${String(framesThisRequest.length)} (${String(Math.round(framesThisRequest.reduce((t, a) => t + a.payloadMs, 0)))} ms of audio), last one ${lastFrameAtMs === null ? "never" : `+${String(lastFrameAtMs - startedAt)} ms`}; now +${String(call.clock() - startedAt)} ms`,
+    );
     const heard = watch.inputTranscript.slice(before.input).trim();
     console.log(`    heard: ${heard.slice(0, 400)}`);
     for (const delegation of watch.delegations.slice(before.delegations)) {

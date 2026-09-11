@@ -108,6 +108,10 @@ export async function openWireCall(
     /** Frames joined into ONE mic event (default 1): the same audio as fewer,
      * longer events — is the facet's cost per event or per byte? */
     micEventFrames?: number;
+    /** A half-duplex client: send nothing at all between utterances (no
+     * silence frames), the way a released button or the C driver's converse
+     * mode behaves. */
+    micOffBetweenUtterances?: boolean;
     /** Extra ephemeral events of a type NO processor consumes, added to every
      * mic append: the stream's own per-event cost, isolated from the facet's. */
     noiseEventsPerAppend?: number;
@@ -253,6 +257,14 @@ export async function openWireCall(
       const due = startedAt + (sequence + micBatchFrames) * FRAME_MS;
       const wait = due - Date.now();
       if (wait > 0) await sleep(wait);
+      if (options.micOffBetweenUtterances === true && pending.length === 0 && sequence > 0) {
+        /* Nothing to say and a half-duplex client: no frame at all (the very
+         * first batch still goes out — one silent frame is what mints the
+         * call). The sequence still advances so a later frame's number
+         * reflects the time that passed. */
+        sequence += micBatchFrames;
+        continue;
+      }
       const events = [];
       const frames: string[] = [];
       for (let index = 0; index < micBatchFrames; index++) {
