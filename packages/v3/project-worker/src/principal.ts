@@ -3,13 +3,13 @@
 /** Who is acting: a stable actor id (the control plane's user id) and, when known, an email. */
 export type Principal = { actor: string; email?: string };
 
-/** WHO is making a call, and what they may do: the acting principal (null = anonymous) plus, when a
- *  grant resolved them, its permission scopes. The one thing carried through every dispatch and every
- *  sibling hop (`invoke(call, args, caller)`). Set ONLY by trusted code — the edge after admission,
- *  the kernel — never by a client: the DO's `invoke` is a Workers-RPC verb, never capnweb-exposed, so
- *  a client cannot supply its own `Caller`. The path-mask AUTHORITY that reads this to allow/refuse a
- *  path is NOT yet enforced (the control-plane security spec's expected-fails capture what it must do). */
-export type Caller = { principal: Principal | null; scopes?: string[] };
+/** WHO is making a call: the acting principal (null = anonymous). The one thing carried through every
+ *  dispatch and every sibling hop (`invoke(call, args, caller)`). Set ONLY by trusted code — the edge
+ *  after admission, the kernel — never by a client: the DO's `invoke` is a Workers-RPC verb, never
+ *  capnweb-exposed, so a client cannot supply its own `Caller`. Authority is inferred FROM the
+ *  principal (no separate scopes/trust field). The path-mask AUTHORITY that reads this to allow/refuse
+ *  a path is NOT yet enforced (the control-plane security spec's expected-fails capture what it must do). */
+export type Caller = { principal: Principal | null };
 /** The header the edge sets on a Request it forwards on a principal's behalf — the ingress after
  *  the cookie check, a session's terminal `fetch` — and strips from every inbound Request. */
 export const ITX_PRINCIPAL_HEADER = "x-itx-principal";

@@ -305,7 +305,8 @@ class ProjectCollection extends RpcTarget {
   readonly #reach: Reach;
   /** The verified principal stamped on context events. */
   readonly #contextPrincipal: Principal;
-  /** Only operator-created sessions carry the legacy project credential capabilities. */
+  /** The project-credential doors (mintToken / rotateApiKey) — carried only by a session an operator,
+   *  a member, or the admin secret vended; null for a delegated (project-token) or loaded-code handle. */
   readonly #projectDoors: ProjectDoorsInput | null;
 
   constructor(
