@@ -1,6 +1,6 @@
 # Streaming state and rendering
 
-Decision and local measurements, 10 September 2026. Research:
+Decision and local measurements, 10–11 September 2026. Research:
 [Phoenix LiveView](./liveview-streaming-performance-research.md) and
 [React streaming](./react-streaming-performance-research.md).
 
@@ -13,8 +13,9 @@ response-window array and no repeated full-prefix comparison.
 ## State transport
 
 - Generic positional array patches preserve unchanged nested objects after
-  JSON transport. Subscription version 2 opts into the new array opcode;
-  unversioned subscribers keep the existing replacement representation.
+  JSON transport. Version 3 adds compact field addresses and bounded string
+  appends. Already-open version 2 subscribers keep structural array patches;
+  unversioned subscribers keep array replacements until they reconnect.
 - Facets expose finite `readLiveState({ epoch, revision })` reads. One retained
   delta is sufficient for the serialized parent reader; a missed revision or
   new incarnation returns a snapshot. No facet callback keeps a DO awake.
@@ -47,6 +48,45 @@ prototype using `startsWith(previous)` to infer string suffixes took roughly
 The prior simulated full-state path sent approximately 6.17 MB per hop for
 64 KiB and 1.126 GB per hop for an uncapped 1 MiB stream. These simulations
 explain the design choice; deployed proof must separately cover RPC and state.
+
+### Compact wire protocol (11 September)
+
+The 1 KiB benchmark above understates small-token overhead: version 2 sends the
+whole changed block and repeats its field path on each update. Version 3 uses
+`{s: [revision, state]}` snapshots and `{p: [from, to, patch]}` deltas. Within a
+patch, an existing field's address is its position among the **sorted, defined
+keys of the previous object**. New fields carry `+name`; arrays use indices and
+send `#` only when their length changes. Primitives replace directly, `[value]`
+replaces an object or array, `[]` removes a field, and `[previousLength, suffix]`
+appends text. All addresses resolve against the original baseline before any
+keys are added or deleted. A snapshot reconstructs everything needed to decode
+future patches; there is no separately synchronized dictionary.
+
+String-prefix comparisons are restricted to previous strings of 16–4,096 UTF-16
+units. This includes immutable text blocks without scanning a whole response.
+Edits and larger ordinary strings use replacement. Malformed addresses or an
+incorrect append length fail before replacing the held state. The React hook
+keeps the last valid value, reports the error, and permits two automatic resyncs;
+receiving a valid delta or explicitly refreshing resets that recovery budget.
+
+`scripts/benchmarks/live-state-wire.ts` sends 64 KiB of text through a real local
+WebSocket using the production Cap'n Web serializer, with a flush per append.
+These are complete, uncompressed RPC callback messages including the initial
+snapshot and Cap'n Web's literal-array escaping; control messages are excluded:
+
+| Append size | Version 2 mean message | Version 3 mean message | Traffic reduction |
+| ----------- | ---------------------: | ---------------------: | ----------------: |
+| 16 B        |                  842 B |                  142 B |               83% |
+| 48 B        |                  874 B |                  173 B |               80% |
+| 128 B       |                  897 B |                  252 B |               72% |
+| 1 KiB       |                1,323 B |                1,123 B |               15% |
+
+The separate three-JSON-boundary benchmark includes 12 unchanged 2 KB code
+steps. For 48 B appends, bytes per hop drop from 1,187,465 to 278,618; synchronous
+CPU across all three hops is about 77 ms for either codec. It checks exact text
+and sealed-group identity at 64 KiB, 1 MiB and 4 MiB. CPU timings vary with host
+load; neither benchmark includes internet latency or WebSocket compression.
+The raw measurements are in `scripts/benchmarks/results/compact-live-state-*.json`.
 
 ## React and browser layout
 

@@ -19,7 +19,10 @@ type RefreshingLiveStateSource<State extends object> = {
 
 export { createLiveStateStore, type LiveStateStore } from "./store.ts";
 export { applyPatch, diff } from "./diff.ts";
+export { compactPatch, applyCompactPatch } from "./compact.ts";
+export { isLiveStateSnapshot, liveStateRevision } from "./protocol.ts";
 export type {
+  CompactLiveStatePatch,
   LiveStateCursor,
   LiveStateRead,
   LiveStatePatch,

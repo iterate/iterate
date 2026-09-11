@@ -1354,16 +1354,16 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "LiveUpdate",
     kind: "typeAlias",
     sourceText:
-      '/**\n * One message pushed down a live-state subscription. The first is always a\n * `snapshot` (a resync sends a fresh one); every message after carries only the\n * diff from revision `from` to `to`. Revisions are monotonic for the life of one\n * subscription, so a gap (`from` ≠ the client\'s revision) means a message was\n * missed and the client should resubscribe.\n *\n * `State` is asserted by the caller of `useLiveState` — the wire itself is\n * structure-agnostic.\n */\nexport type LiveUpdate<State = unknown> =\n  | { type: "snapshot"; revision: number; state: State }\n  | { type: "patch"; from: number; to: number; patch: LiveStatePatch };',
+      '/**\n * One message pushed down a live-state subscription. The first is always a\n * `snapshot` (a resync sends a fresh one); every message after carries only the\n * diff from revision `from` to `to`. Revisions are monotonic for the life of one\n * subscription, so a gap (`from` ≠ the client\'s revision) means a message was\n * missed and the client should resubscribe.\n *\n * `State` is asserted by the caller of `useLiveState` — the wire itself is\n * structure-agnostic.\n */\nexport type LiveUpdate<State = unknown> =\n  | { type: "snapshot"; revision: number; state: State }\n  | { type: "patch"; from: number; to: number; patch: LiveStatePatch }\n  | { s: [revision: number, state: State] }\n  | { p: [from: number, to: number, patch: CompactLiveStatePatch] };',
     summary: "One message pushed down a live-state subscription.",
     memberSummaries: {},
-    referencedTypeNames: ["LiveStatePatch"],
+    referencedTypeNames: ["LiveStatePatch", "CompactLiveStatePatch"],
   },
   {
     name: "LiveStateSubscriptionOptions",
     kind: "typeAlias",
     sourceText:
-      "/** Explicit codec negotiation keeps already-open clients valid across deploys. */\nexport type LiveStateSubscriptionOptions = { patchVersion?: 2 };",
+      "/** Explicit codec negotiation keeps already-open clients valid across deploys. */\nexport type LiveStateSubscriptionOptions = { patchVersion?: 2 | 3 };",
     summary: "Explicit codec negotiation keeps already-open clients valid across deploys.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -2275,6 +2275,16 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     sourceText:
       "/**\n * A structural patch turning a previous JSON value into the next one. Three\n * shapes, discriminated by `set`, `array`, or an object patch:\n * - `{ set }` — replace this position wholesale. Used for primitives,\n *   `null`, type changes,\n *   and newly-added object keys.\n * - `{ fields?, drop? }` — descend into a plain object: `fields` maps each\n *   changed key to its own patch; `drop` lists keys that disappeared. At least\n *   one is present (an empty descend never gets emitted).\n * - `{ array }` — patch changed positions and set the resulting length. Kept\n *   elements retain their identity, including immutable text blocks inside a\n *   changed step. This form is sent only to subscribers requesting version 2.\n */\nexport type LiveStatePatch =\n  | { set: unknown }\n  | { array: { length: number; items: [number, LiveStatePatch][] } }\n  | { fields?: Record<string, LiveStatePatch>; drop?: string[] };",
     summary: "A structural patch turning a previous JSON value into the next one.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "CompactLiveStatePatch",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * Version 3 addresses existing object fields by their sorted baseline position;\n * new fields use `+name`. Arrays use indices and an optional `#` length.\n * Primitives replace directly, `[value]` replaces other values, `[length, text]`\n * appends to a string, and `[]` deletes an object field. No dictionary survives\n * an update: every address refers to the acknowledged baseline of that patch.\n */\nexport type CompactLiveStatePatch =\n  | string\n  | number\n  | boolean\n  | null\n  | []\n  | [unknown]\n  | [number, string]\n  | { [address: string]: CompactLiveStatePatch };",
+    summary:
+      "Version 3 addresses existing object fields by their sorted baseline position; new fields use `+name`.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

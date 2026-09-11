@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { connectItx, useLiveState } from "iterate/sdk/itx/react";
 import { AgentDetailsSheet } from "~/components/agents/agent-details-sheet.tsx";
@@ -42,14 +43,10 @@ function ProjectAgentDetailContent() {
       (state) => state.agents,
       [],
     ).value ?? {};
-  const agentLiveState = useLiveState(
-    (itx) => itx.agents.get(streamPath).liveState,
-    (state) => state,
-    [streamPath],
-    { slug: project.id },
-  ).value;
-
-  const agentRuntimeTransition = agentLiveState?.runtimeChange;
+  const agentSource = useCallback(
+    async () => (await connectItx(project.id)).agents.get(streamPath),
+    [project.id, streamPath],
+  );
 
   // The stream view subscribes live, so a send needs no cache invalidation —
   // the new events arrive over the socket. Agent setup is represented by
@@ -121,12 +118,10 @@ function ProjectAgentDetailContent() {
               path={streamPath}
               projectId={project.id}
               projectSlug={project.slug}
-              runtimeTransition={agentRuntimeTransition}
             />
           }
           emptyLabel={null}
           messageComposer={{
-            acknowledgedThroughOffset: agentLiveState?.inputAcknowledgedThroughOffset ?? 0,
             onInterrupt: interruptAgentMessage,
             onSubmit: submitAgentMessage,
             onSubmitFiles: submitAgentFiles,
@@ -135,7 +130,7 @@ function ProjectAgentDetailContent() {
           }}
           projectId={project.id}
           projectSlug={project.slug}
-          agentRuntimeTransition={agentRuntimeTransition ?? null}
+          agentSource={agentSource}
           streamPath={streamPath}
         />
       </div>
