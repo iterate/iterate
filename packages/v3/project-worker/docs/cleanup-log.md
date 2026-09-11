@@ -131,3 +131,48 @@ Not adopting:
   session lifecycle inline (library.ts reopen/dispose) and its live callbacks via the delivery lane;
   importing apps/os's versions would add a dependency and indirection for no new behavior. The one real
   defect they'd have caught (the ignored-result leak) is fixed directly.
+
+## Round 2 (cont.) — codex astra round 2: five findings, verified
+
+Codex round 2 (gpt-6-astra, xhigh) over the improved state found five bugs, each with an
+in-memory repro. Every one was re-verified HERE by reading the code (not taken on trust).
+
+### Fixed with tests
+- **[bug] #5 waitForEvent ignored afterOffset on the waiter path.** The filter documents
+  "offset strictly greater than afterOffset"; the sync scan honored it but a registered waiter
+  stored only `type`, so an afterOffset ahead of head (or left behind by an ephemeral-offset
+  rewind) resolved on an earlier fresh event. FIXED (waiter carries afterOffset; resolve requires
+  `offset > afterOffset`) + failing test. (stream.ts)
+- **[bug] #4 live-state delta appends could reorder.** The ordering path cleared an in-flight flag
+  in the first append's `finally` while a later delta was still queued, so a newer delta forked a
+  parallel chain and could overtake it (commit order 1, 3, 2). FIXED by always chaining (flag +
+  fast path removed — simpler and race-free) + serialization-contract test. (processor.ts)
+- **[bug] #3 concurrent MCP requests raced the re-handshake.** initialize() cleared #closed at its
+  START, so a second concurrent request after a close skipped the handshake and posted session-less
+  (a real MCP server 400s). FIXED with a shared #handshake promise, #closed flipped only after the
+  handshake completes, close() clearing the memo + a DETERMINISTIC failing test (delayed initialize,
+  session-gated fake server). (library.ts)
+- **[bug] #1 cursor lane could skip history on a reconfigure.** If the old cursor loop was suspended
+  on the cursor-read-budget acquire when a reconfigure landed, it resumed with a stale cursor/row and
+  its empty-batch adopt wrote the old scan offset into the fresh record — a replacement's
+  afterOffset:0 history skipped. FIXED with a configuredAtOffset re-check after the budget await
+  (the file's own guard idiom); the window needs budget contention, so covered by inspection + the
+  existing replace/afterOffset suite rather than a bespoke contention repro. (subscription-delivery.ts)
+
+### Deferred — needs a schema/convention decision (do NOT rush into the engine)
+- **[bug/design] #2 consumed event payloads are not validated before reduce.** `#reduceOrKeep` guards
+  a THROWING reducer but never validates the payload, so a malformed payload for a KNOWN, owned event
+  (e.g. an account token event with `name: {bad:true}`) folds into reduced state — and that state can
+  then violate the EXPORTED `AccountView` schema, crashing a live client that parses it. The contract
+  already declares `events[type].payloadSchema` (and `defineProcessorContract` has a private `resolve`
+  over owned+dep events), so the systemic fix is reduce-time validation (skip+log a malformed payload
+  rather than fold it). BLOCKER found while scoping it: `payload` is optional and stored as `undefined`
+  when omitted (the demo appends `{ type: "tick" }` with no payload), but the presence `tick` schema is
+  `z.object({})`, which REJECTS `undefined` — so naive `schema.safeParse(event.payload)` would drop
+  every tick and break the demo. RECOMMENDATION (next round): add an optional
+  `payloadSchemaFor(type)` to the base ProcessorContract (implemented by defineProcessorContract via
+  its `resolve`), have `#reduceOrKeep` validate `event.payload ?? {}` (extending the existing
+  "empty defaults to {}" convention the contract already requires of stateSchema), skip+report on
+  failure, and audit every generic test processor that declares an events catalog. This overlaps the
+  round-1 deferred "malformed core control events commit as no-ops" item — decide the two together
+  (one validation boundary for core-owned control events AND app/contract events). (processor.ts:435)
