@@ -1,5 +1,6 @@
 #include "iterate/kit/platforms/darwin_audio_codec.h"
 
+#include <stdatomic.h>
 #include <string.h>
 
 #include "iterate/kit/voice_device_profile.h"
@@ -104,6 +105,32 @@ enum iterate_kit_status iterate_kit_darwin_audio_codec_open(
   };
   darwin->capture_enabled = options->capture_enabled;
   darwin->playback_enabled = options->playback_enabled;
+  /*
+   * ECHO CANCELLATION FIRST. A live microphone beside a live speaker is the
+   * one configuration where the far end hears itself; both then go through
+   * the voice-processing unit, and the queues below are the fallback. A
+   * pretend speaker has no room to echo in, so it keeps the plain queue.
+   */
+  if (options->capture_enabled && options->playback_enabled &&
+      options->file_playback == NULL && !options->echo_cancellation_off) {
+    if (iterate_kit_darwin_audio_output_open_pulled(&darwin->output) ==
+            ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK &&
+        iterate_kit_darwin_audio_input_open_external(&darwin->input) ==
+            ITERATE_KIT_DARWIN_AUDIO_INPUT_OK &&
+        iterate_kit_darwin_audio_vpio_open(&darwin->vpio, &darwin->input, &darwin->output) ==
+            ITERATE_KIT_DARWIN_AUDIO_VPIO_OK) {
+      darwin->voice_processing_active = true;
+      return iterate_kit_audio_codec_validate(&darwin->codec);
+    }
+    /* Remember why, then take the plain path below with fresh rings. */
+    {
+      const int32_t reason = iterate_kit_darwin_audio_vpio_platform_error(&darwin->vpio);
+      iterate_kit_darwin_audio_output_close(&darwin->output);
+      iterate_kit_darwin_audio_input_close(&darwin->input);
+      memset(&darwin->vpio, 0, sizeof(darwin->vpio));
+      atomic_store(&darwin->vpio.platform_error, (int_least32_t)reason);
+    }
+  }
   if (options->playback_enabled) {
     const enum iterate_kit_darwin_audio_output_status status =
         options->file_playback == NULL
@@ -129,10 +156,13 @@ void iterate_kit_darwin_audio_codec_close(
   if (darwin == NULL) {
     return;
   }
+  /* The unit first: it is what calls into the rings from the I/O thread. */
+  iterate_kit_darwin_audio_vpio_close(&darwin->vpio);
   iterate_kit_darwin_audio_output_close(&darwin->output);
   iterate_kit_darwin_audio_input_close(&darwin->input);
   darwin->capture_enabled = false;
   darwin->playback_enabled = false;
+  darwin->voice_processing_active = false;
 }
 
 void iterate_kit_darwin_audio_codec_pump(
@@ -188,4 +218,7 @@ void iterate_kit_darwin_audio_codec_metrics(
       iterate_kit_darwin_audio_input_platform_error(&darwin->input);
   metrics->playback_platform_error =
       iterate_kit_darwin_audio_output_platform_error(&darwin->output);
+  metrics->voice_processing_active = darwin->voice_processing_active;
+  metrics->voice_processing_error =
+      iterate_kit_darwin_audio_vpio_platform_error(&darwin->vpio);
 }

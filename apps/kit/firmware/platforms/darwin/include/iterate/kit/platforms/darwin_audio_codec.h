@@ -7,6 +7,7 @@
 #include "iterate/kit/audio_codec.h"
 #include "iterate/kit/platforms/darwin_audio_input.h"
 #include "iterate/kit/platforms/darwin_audio_output.h"
+#include "iterate/kit/platforms/darwin_audio_vpio.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -17,6 +18,14 @@ struct iterate_kit_darwin_audio_codec_options {
   bool playback_enabled;
   /** Non-NULL selects deterministic file playback instead of CoreAudio. */
   const struct iterate_kit_darwin_audio_file_sink *file_playback;
+  /**
+   * Keep the plain capture and playback queues even when both directions are
+   * live — no echo cancellation. Off (zero) means: when the microphone and
+   * this Mac's speaker are both live, route both through Apple's
+   * VoiceProcessingIO unit so the speaker is cancelled out of the
+   * microphone; fall back to the queues if the unit is unavailable.
+   */
+  bool echo_cancellation_off;
 };
 
 struct iterate_kit_darwin_audio_codec_metrics {
@@ -28,6 +37,10 @@ struct iterate_kit_darwin_audio_codec_metrics {
   uint32_t playback_starved_buffers;
   int32_t capture_platform_error;
   int32_t playback_platform_error;
+  /** Both directions run through the voice-processing unit (echo cancelled). */
+  bool voice_processing_active;
+  /** First VoiceProcessingIO failure, zero while healthy or when not in use. */
+  int32_t voice_processing_error;
 };
 
 /**
@@ -44,8 +57,10 @@ struct iterate_kit_darwin_audio_codec {
   struct iterate_kit_audio_codec codec;
   struct iterate_kit_darwin_audio_input input;
   struct iterate_kit_darwin_audio_output output;
+  struct iterate_kit_darwin_audio_vpio vpio;
   bool capture_enabled;
   bool playback_enabled;
+  bool voice_processing_active;
 };
 
 enum iterate_kit_status iterate_kit_darwin_audio_codec_open(

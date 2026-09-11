@@ -99,6 +99,13 @@ struct cli_options {
   bool open_mic;
   /** Skips TLS certificate verification. Off unless explicitly asked for. */
   bool insecure;
+  /**
+   * Keep the plain capture and playback queues: no echo cancellation. By
+   * default a live microphone beside this Mac's live speaker runs through
+   * Apple's VoiceProcessingIO unit, because the full-duplex model otherwise
+   * hears its own answer as a person interrupting it.
+   */
+  bool no_aec;
 };
 
 /** Human-readable status name, for logs and test failure messages. */

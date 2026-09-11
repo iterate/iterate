@@ -54,6 +54,7 @@ enum cli_options_field {
   CLI_OPTIONS_FIELD_PUSH_TO_TALK,
   CLI_OPTIONS_FIELD_OPEN_MIC,
   CLI_OPTIONS_FIELD_INSECURE,
+  CLI_OPTIONS_FIELD_NO_AEC,
   CLI_OPTIONS_FIELD_HELP,
 };
 
@@ -132,6 +133,10 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    NULL,
    "  --report-json FILE    Unattended JSON report (default "
    "iterate-kit-report.json)\n"},
+  {"--no-aec", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_NO_AEC,
+   NULL,
+   "  --no-aec              Plain capture and playback queues; no echo "
+   "cancellation\n"},
   {"--insecure", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_INSECURE,
    NULL,
    "  --insecure            Disable TLS certificate verification; local "
@@ -362,6 +367,7 @@ static enum cli_options_status cli_options_apply(
     case CLI_OPTIONS_FIELD_PUSH_TO_TALK: out->push_to_talk = true; break;
     case CLI_OPTIONS_FIELD_OPEN_MIC: out->open_mic = true; break;
     case CLI_OPTIONS_FIELD_INSECURE: out->insecure = true; break;
+    case CLI_OPTIONS_FIELD_NO_AEC: out->no_aec = true; break;
     case CLI_OPTIONS_FIELD_HELP: break;
     default: break;
   }

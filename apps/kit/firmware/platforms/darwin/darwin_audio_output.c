@@ -183,6 +183,37 @@ enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_open
   return ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK;
 }
 
+enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_open_pulled(
+    struct iterate_kit_darwin_audio_output *out)
+{
+  if (out == NULL) return ITERATE_KIT_DARWIN_AUDIO_OUTPUT_ERR_ARG;
+  memset(out, 0, sizeof(*out));
+  atomic_store(&out->read, 0U);
+  atomic_store(&out->write, 0U);
+  out->mode = ITERATE_KIT_DARWIN_AUDIO_OUTPUT_PULLED;
+  atomic_store_explicit(&out->enabled, true, memory_order_release);
+  return ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK;
+}
+
+uint32_t iterate_kit_darwin_audio_output_pull(
+    struct iterate_kit_darwin_audio_output *out, uint8_t *destination, uint32_t length)
+{
+  bool expected;
+  uint32_t taken;
+  if (out == NULL || destination == NULL) return 0U;
+  if (!atomic_load_explicit(&out->enabled, memory_order_acquire)) {
+    memset(destination, 0, length);
+    return 0U;
+  }
+  /* Classified at the instant the hardware asked — see prime_one. */
+  expected = atomic_load_explicit(&out->expecting_audio, memory_order_acquire);
+  taken = iterate_kit_darwin_audio_output_take(out, destination, length);
+  iterate_kit_darwin_audio_output_classify_pull(out, taken, expected);
+  if (taken < length) memset(destination + taken, 0, (size_t)length - taken);
+  (void)atomic_fetch_add_explicit(&out->completed_bytes, taken, memory_order_relaxed);
+  return taken;
+}
+
 void iterate_kit_darwin_audio_output_pump(struct iterate_kit_darwin_audio_output *out, uint64_t now_us)
 {
   uint8_t frame[ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES];
@@ -339,6 +370,10 @@ enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_drai
     }
   }
   atomic_store_explicit(&out->enabled, false, memory_order_release);
+  if (out->mode == ITERATE_KIT_DARWIN_AUDIO_OUTPUT_PULLED) {
+    /* The puller's unit keeps running on silence; nothing of ours to stop. */
+    return ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK;
+  }
   {
     const OSStatus result = AudioQueueStop(out->queue, false);
     if (result != noErr) {
@@ -381,6 +416,11 @@ void iterate_kit_darwin_audio_output_close(struct iterate_kit_darwin_audio_outpu
     /* The sink belongs to the caller; only stop pulling from it. */
     atomic_store_explicit(&out->enabled, false, memory_order_release);
     memset(&out->file, 0, sizeof(out->file));
+    return;
+  }
+  if (out->mode == ITERATE_KIT_DARWIN_AUDIO_OUTPUT_PULLED) {
+    /* The unit that pulls is closed by its owner; this ring just goes quiet. */
+    atomic_store_explicit(&out->enabled, false, memory_order_release);
     return;
   }
   if (out->queue == NULL) return;

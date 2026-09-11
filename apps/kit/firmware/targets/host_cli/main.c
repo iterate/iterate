@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
@@ -268,8 +269,6 @@ static void cli_main_poll_periodic(
     struct cli_runtime *runtime, uint64_t now_ms, size_t outbox_free);
 
 /* Recycles a completed downlink only after playback and talk are quiescent. */
-static void cli_main_recycle_if_ready(
-    struct cli_runtime *runtime, size_t outbox_free);
 
 /* Gives a restart reply time to leave, then re-executes the same argv. */
 static void cli_main_reexec_if_ready(
@@ -636,11 +635,28 @@ static bool cli_main_init_audio(struct cli_runtime *runtime)
     .file_playback = runtime->options.pretend_speaker == NULL
         ? NULL
         : &pretend_speaker,
+    /* ITERATE_KIT_NO_AEC=1 is the same switch for drivers that build the
+     * argument list themselves (voicelab talk). */
+    .echo_cancellation_off = runtime->options.no_aec ||
+        (getenv("ITERATE_KIT_NO_AEC") != NULL && getenv("ITERATE_KIT_NO_AEC")[0] == '1'),
   };
   if (iterate_kit_darwin_audio_codec_open(
           &runtime->audio_codec, &codec_options) != ITERATE_KIT_OK) {
     cli_runtime_log("error", "CoreAudio codec initialization failed");
     return false;
+  }
+  if (codec_options.capture_enabled && codec_options.playback_enabled &&
+      codec_options.file_playback == NULL) {
+    const struct iterate_kit_darwin_audio_codec_metrics audio =
+        cli_main_audio_metrics(runtime);
+    if (audio.voice_processing_active) {
+      cli_runtime_log("info", "audio: voice processing on (echo cancelled)");
+    } else {
+      cli_runtime_log(
+          "info", "audio: plain queues, no echo cancellation%s (vpio status %d)",
+          runtime->options.no_aec ? " (--no-aec)" : "",
+          (int)audio.voice_processing_error);
+    }
   }
   runtime->audio_processor = iterate_kit_audio_processor_passthrough();
   if (iterate_kit_audio_processor_validate(&runtime->audio_processor) !=
@@ -1954,7 +1970,6 @@ static void cli_main_poll_ready(
   const size_t outbox_free = ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS -
       outbox->current_slots;
   cli_main_reconcile_call(runtime, outbox_free);
-  cli_main_recycle_if_ready(runtime, outbox_free);
   cli_main_poll_periodic(runtime, now_ms, outbox_free);
   cli_main_pulse(runtime, now_ms, outbox);
 }
@@ -1974,17 +1989,6 @@ static void cli_main_poll_periodic(
     }
     runtime->next_stats_at_ms = now_ms + ITERATE_KIT_VOICE_STATS_INTERVAL_MS;
   }
-}
-
-static void cli_main_recycle_if_ready(
-    struct cli_runtime *runtime, size_t outbox_free)
-{
-  assert(runtime != NULL);
-  if (!iterate_kit_voicelab_needs_recycle(&runtime->voicelab) ||
-      runtime->speaker.used != 0U || runtime->talking ||
-      outbox_free < CLI_MAIN_RECYCLE_OUTBOX_SLOTS) return;
-  ++runtime->downlink_recycles;
-  (void)iterate_kit_voicelab_recycle_connection(&runtime->voicelab);
 }
 
 static void cli_main_reexec_if_ready(

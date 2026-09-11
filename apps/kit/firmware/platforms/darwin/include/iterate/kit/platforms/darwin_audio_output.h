@@ -119,6 +119,14 @@ enum iterate_kit_darwin_audio_output_mode {
    * and leave a recording of exactly what the speaker would have played.
    */
   ITERATE_KIT_DARWIN_AUDIO_OUTPUT_FILE,
+  /**
+   * Another CoreAudio owner pulls: the VoiceProcessingIO unit's render
+   * callback (darwin_audio_vpio.h) asks this ring for audio on the hardware
+   * clock, so the speaker is cancelled out of the microphone. Same ring,
+   * same drain arithmetic, same starvation accounting; only the puller and
+   * the absence of this module's own AudioQueue differ.
+   */
+  ITERATE_KIT_DARWIN_AUDIO_OUTPUT_PULLED,
 };
 
 /**
@@ -195,6 +203,22 @@ enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_open
  */
 enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_write(
     struct iterate_kit_darwin_audio_output *out, const uint8_t *pcm, size_t length);
+
+/**
+ * Open in PULLED mode: no AudioQueue of its own; an external CoreAudio owner
+ * calls iterate_kit_darwin_audio_output_pull from its render callback.
+ */
+enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_open_pulled(
+    struct iterate_kit_darwin_audio_output *out);
+
+/**
+ * PULLED mode: fill `destination` with `length` bytes for the hardware —
+ * payload from the ring, silence for the shortfall — classifying a dry pull
+ * exactly as the AudioQueue callback does. Returns the payload bytes taken.
+ * Called on the owner's I/O thread.
+ */
+uint32_t iterate_kit_darwin_audio_output_pull(
+    struct iterate_kit_darwin_audio_output *out, uint8_t *destination, uint32_t length);
 
 /**
  * Open in FILE mode: `sink` is pulled from by iterate_kit_darwin_audio_output_pump instead of
