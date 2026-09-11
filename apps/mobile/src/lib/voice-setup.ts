@@ -22,9 +22,9 @@ export { voiceAgentEntrypointRef };
 /**
  * Where a CHAT's calls live: one line per chat, shared by every device —
  * the chat's phone number, not the phone's. `/agents/mobile/173…` →
- * `/agents/voice/chat/mobile/173…`; the certificate's `colleaguePath` (the
- * chat itself) is what makes the chat agent the backend, so the derived
- * voice-notes path never comes into play.
+ * `/agents/voice/chat/mobile/173…`. The backend is the facet's own
+ * delegation target (gpt-6-astra with the project's itx); the chat is
+ * where the call's UI lives, not a party on the wire.
  */
 export function chatVoiceStreamPath(chatPath: string): string {
   const suffix = chatPath.startsWith("/agents/")
@@ -60,22 +60,17 @@ export const MOBILE_VOICE_SETUP = {
   ],
 };
 
-/**
- * The certificate for one call target. The per-device line takes the base
- * config; a per-chat line adds `colleaguePath` (facet 18.0.0), which is
- * what flips the arrangement to "this chat's agent is the backend".
- */
-export function voiceSetupConfig(colleaguePath: string | null): Record<string, unknown> {
-  return colleaguePath === null
-    ? { ...MOBILE_VOICE_SETUP }
-    : { ...MOBILE_VOICE_SETUP, colleaguePath };
+/** The certificate for one call target: the same on every line — what
+ * differs per chat is the stream path, which the marker also hashes. */
+export function voiceSetupConfig(): Record<string, unknown> {
+  return { ...MOBILE_VOICE_SETUP };
 }
 
 /** Bump to force one re-setup on every device after changing the setup
- * semantics in a way the config hash alone would not capture. v7: the
- * transcript transform stamps `kind` on spoken turns — only a setup rerun
- * replaces the installed subscription. */
-const SETUP_MARKER_VERSION = 7;
+ * semantics in a way the config hash alone would not capture. v8: the
+ * certificate no longer names a colleague (GPT-Live's facet delegates to
+ * its own backend); an installed one with the stale key is re-asserted. */
+const SETUP_MARKER_VERSION = 8;
 
 /** FNV-1a over the exact payload we would send — pure, no crypto import, and
  * two devices/app-versions agree iff they would send identical setups. */
@@ -129,12 +124,10 @@ export async function ensureVoiceAgentSetup(deps: {
   workers: VoiceSetupWorkers;
   repo: VoiceSetupRepo;
   streamPath: string;
-  /** The chat this line calls (per-chat mode), or null for the device's own line. */
-  colleaguePath: string | null;
   readMarker: (streamPath: string) => Promise<string | null>;
   writeMarker: (streamPath: string, marker: string) => Promise<void>;
 }): Promise<void> {
-  const config = voiceSetupConfig(deps.colleaguePath);
+  const config = voiceSetupConfig();
   const marker = setupMarker(deps.streamPath, config);
   if ((await deps.readMarker(deps.streamPath)) === marker) return;
   /* Inside the marker miss on purpose: one repo read per config change,

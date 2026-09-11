@@ -20,10 +20,9 @@ import type { VoiceAudioSession } from "./voice-audio.ts";
 
 const EVENT = {
   answerTranscript: "events.iterate.com/voice-agent/answer-transcript",
+  backendReply: "events.iterate.com/voice-agent/backend-reply",
   keepalive: "events.iterate.com/voice-agent/keepalive",
   callStarted: "events.iterate.com/voice-agent/call-started",
-  colleagueNote: "events.iterate.com/voice-agent/colleague-note",
-  colleagueStatus: "events.iterate.com/voice-agent/colleague-status",
   conversationAccepted: "events.iterate.com/voice-agent/conversation-accepted",
   conversationEnded: "events.iterate.com/voice-agent/conversation-ended",
   micFrame: "events.iterate.com/voice-agent/mic-frame",
@@ -35,8 +34,8 @@ export type VoiceCallPhase = "connecting" | "live" | "ended";
 
 export interface VoiceCallStatus {
   phase: VoiceCallPhase;
-  /** One quiet line under the pulse — call lifecycle and the colleague
-   * status/note events share it (grill Q6): the sheet never looks dead. */
+  /** One quiet line under the pulse — call lifecycle and the backend's
+   * replies share it (grill Q6): the sheet never looks dead. */
   caption: string;
 }
 
@@ -99,12 +98,9 @@ export function captionForEvent(type: string, payload: unknown): string | null {
        * listening) — the accepted event can land mid-hold and must not
        * overwrite "listening…" under the caller's thumb. */
       return null;
-    case EVENT.colleagueStatus: {
-      const status =
-        (typeof p.activity === "string" && p.activity) || (typeof p.phase === "string" && p.phase);
-      return status ? `backend: ${status}` : null;
-    }
-    case EVENT.colleagueNote:
+    case EVENT.backendReply:
+      /* The backend's final words for one delegation — the voice speaks
+       * them; the caption shows their head. */
       return typeof p.text === "string" && p.text !== ""
         ? `backend: ${p.text.length > 90 ? `${p.text.slice(0, 90)}…` : p.text}`
         : null;
@@ -120,15 +116,14 @@ export function captionForEvent(type: string, payload: unknown): string | null {
 /** One line of the call sheet's live transcript. */
 export interface VoiceTranscriptItem {
   key: string;
-  kind: "you" | "voice" | "backend" | "status";
+  kind: "you" | "voice" | "backend";
   text: string;
 }
 
 /**
  * The sheet's transcript, derived pure from the stream's durable events —
- * the same events that brief reconnects and land on the colleague's stream,
- * so what the sheet shows IS the record, not a parallel guess. Consecutive
- * duplicate status lines collapse (phase churn re-whispers the same fold).
+ * the same events that brief a reconnect's session history — so what the
+ * sheet shows IS the record, not a parallel guess.
  */
 export function transcriptItems(
   events: { type: string; offset: number; payload?: unknown }[],
@@ -152,20 +147,9 @@ export function transcriptItems(
           });
         }
         break;
-      case EVENT.colleagueNote:
+      case EVENT.backendReply:
         if (text !== "") items.push({ key: `e${event.offset}`, kind: "backend", text });
         break;
-      case EVENT.colleagueStatus: {
-        const status =
-          (typeof p.activity === "string" && p.activity) ||
-          (typeof p.phase === "string" && p.phase);
-        if (status === false || status === "") break;
-        const line = `${status}${typeof p.failure === "string" && p.failure !== "" ? ` — ${p.failure}` : ""}`;
-        const last = items[items.length - 1];
-        if (last?.kind === "status" && last.text === line) break;
-        items.push({ key: `e${event.offset}`, kind: "status", text: line });
-        break;
-      }
       default:
         break;
     }
@@ -178,8 +162,7 @@ export function transcriptItems(
 export const TRANSCRIPT_EVENT_TYPES = [
   EVENT.utteranceTranscript,
   EVENT.answerTranscript,
-  EVENT.colleagueNote,
-  EVENT.colleagueStatus,
+  EVENT.backendReply,
 ] as const;
 
 export async function startVoiceCall(deps: {
@@ -314,8 +297,7 @@ export async function startVoiceCall(deps: {
       EVENT.callStarted,
       EVENT.conversationAccepted,
       EVENT.conversationEnded,
-      EVENT.colleagueStatus,
-      EVENT.colleagueNote,
+      EVENT.backendReply,
     ],
     processEventBatch: (batch) => {
       for (const event of batch.events ?? []) {
@@ -358,8 +340,8 @@ export async function startVoiceCall(deps: {
         }
         const caption = captionForEvent(event.type, payload);
         if (caption !== null && !ended) {
-          /* A colleague event can land while still RINGING (the recap runs
-           * during the handshake): its caption may show, but only pickup
+          /* A backend reply can land while still RINGING (a re-dial's
+           * backend finishing late): its caption may show, but only pickup
            * flips the phase — "live" here would reveal hold-to-talk while
            * the ring and the no-answer timer are still running. */
           deps.onStatus({ phase: accepted ? "live" : "connecting", caption });

@@ -72,7 +72,7 @@ test("the spk-frame buffer policy: clear before frame, then play", async () => {
   expect(h.audioLog).toEqual(["start", "play:QUJD", "clear", "play:REVG"]);
 });
 
-test("lifecycle and the colleague events share the caption; ended stops audio and closes", async () => {
+test("lifecycle and the backend's replies share the caption; ended stops audio and closes", async () => {
   const h = makeHarness();
   const call = await startVoiceCall(h.deps);
   h.deliver({
@@ -84,12 +84,8 @@ test("lifecycle and the colleague events share the caption; ended stops audio an
     payload: { conversationId: "conv_x", handshakeTookMs: 900, heldMicFrames: 0 },
   });
   h.deliver({
-    type: "events.iterate.com/voice-agent/colleague-status",
-    payload: { phase: "running code" },
-  });
-  h.deliver({
-    type: "events.iterate.com/voice-agent/colleague-note",
-    payload: { text: "The codeword is walrus trumpet." },
+    type: "events.iterate.com/voice-agent/backend-reply",
+    payload: { conversationId: "conv_1", text: "The codeword is walrus trumpet." },
   });
   call.setTalking(true);
   h.deliver({ type: ENDED, payload: { conversationId: "conv_1", reason: "idle" } });
@@ -98,7 +94,6 @@ test("lifecycle and the colleague events share the caption; ended stops audio an
     /* Live only at PICKUP (conversation-accepted) — the ring covers the
      * dial and handshake. */
     "live:hold the mic to talk",
-    "live:backend: running code",
     "live:backend: The codeword is walrus trumpet.",
     "live:listening…",
     "ended:call ended — idle · heard 0.0s (0 frames)",
@@ -112,12 +107,12 @@ test("lifecycle and the colleague events share the caption; ended stops audio an
   expect(h.appends.length).toBe(before);
 });
 
-test("a colleague event during ringing captions but does not fake a pickup", async () => {
+test("a backend reply during ringing captions but does not fake a pickup", async () => {
   const h = makeHarness();
   await startVoiceCall({ ...h.deps, ringTimeoutMs: 15 });
   h.deliver({
-    type: "events.iterate.com/voice-agent/colleague-status",
-    payload: { phase: "writing code" },
+    type: "events.iterate.com/voice-agent/backend-reply",
+    payload: { conversationId: "conv_1", text: "writing code" },
   });
   /* Still connecting: the hold-to-talk button must stay hidden and the
    * no-answer timer must stay armed — only conversation-accepted is a
@@ -243,15 +238,13 @@ test("captionForEvent stays quiet for events a glancing human does not need", ()
   expect(
     captionForEvent("events.iterate.com/voice-agent/call-started", { conversationId: "c" }),
   ).toBeNull();
+  expect(captionForEvent("events.iterate.com/voice-agent/backend-reply", { text: "" })).toBeNull();
   expect(
-    captionForEvent("events.iterate.com/voice-agent/colleague-status", { waitingFor: null }),
-  ).toBeNull();
-  expect(
-    captionForEvent("events.iterate.com/voice-agent/colleague-note", { text: "y".repeat(200) }),
+    captionForEvent("events.iterate.com/voice-agent/backend-reply", { text: "y".repeat(200) }),
   ).toMatch(/…$/);
 });
 
-test("transcriptItems: both sides, notes, deduped statuses, empties skipped", () => {
+test("transcriptItems: both sides and the backend's replies, empties skipped", () => {
   const items = transcriptItems([
     {
       type: "events.iterate.com/voice-agent/utterance-transcript",
@@ -263,28 +256,11 @@ test("transcriptItems: both sides, notes, deduped statuses, empties skipped", ()
       offset: 2,
       payload: { text: "Let me check." },
     },
-    /* The facet's quiet opening status, then the same folded line twice —
-     * one status row, not three. */
+    /* The backend's final words for the delegation. */
     {
-      type: "events.iterate.com/voice-agent/colleague-status",
-      offset: 3,
-      payload: { activity: "checking the forecast" },
-    },
-    {
-      type: "events.iterate.com/voice-agent/colleague-status",
-      offset: 4,
-      payload: { activity: "checking the forecast" },
-    },
-    /* A waitingFor-only patch says nothing a glancing human needs. */
-    {
-      type: "events.iterate.com/voice-agent/colleague-status",
-      offset: 5,
-      payload: { waitingFor: null },
-    },
-    {
-      type: "events.iterate.com/voice-agent/colleague-note",
+      type: "events.iterate.com/voice-agent/backend-reply",
       offset: 6,
-      payload: { text: "Sunny, 24 degrees." },
+      payload: { conversationId: "conv_1", text: "Sunny, 24 degrees." },
     },
     /* An interrupted answer keeps its words, marked. */
     {
@@ -304,22 +280,9 @@ test("transcriptItems: both sides, notes, deduped statuses, empties skipped", ()
   expect(items).toEqual([
     { key: "e1", kind: "you", text: "what's the weather?" },
     { key: "e2", kind: "voice", text: "Let me check." },
-    { key: "e3", kind: "status", text: "checking the forecast" },
     { key: "e6", kind: "backend", text: "Sunny, 24 degrees." },
     { key: "e7", kind: "voice", text: "It's sunny and —" },
   ]);
-});
-
-test("transcriptItems: a failed script's status carries its error", () => {
-  expect(
-    transcriptItems([
-      {
-        type: "events.iterate.com/voice-agent/colleague-status",
-        offset: 1,
-        payload: { phase: "a script failed", failure: "TypeError: no ledger" },
-      },
-    ]),
-  ).toEqual([{ key: "e1", kind: "status", text: "a script failed — TypeError: no ledger" }]);
 });
 
 /* ------------------------------------------------------------- harness --- */
