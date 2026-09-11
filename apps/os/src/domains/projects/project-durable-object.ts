@@ -245,7 +245,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     const secretPaths = scanned.problems.length === 0 ? scanned.paths : [];
 
     const rule = matchEgressRule(rules, { method: request.method, url: request.url, secretPaths });
-    if (rule === undefined) return this.#egress(request, streamContext);
+    if (!rule) return this.#egress(request, streamContext);
     if (rule.verdict === "deny") {
       return approvalGateResponse({
         code: "egress_denied",

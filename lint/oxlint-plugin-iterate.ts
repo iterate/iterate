@@ -6,6 +6,7 @@ import unicorn from "eslint-plugin-unicorn";
 import type { Rule, Scope, SourceCode } from "eslint";
 import type { Program, Node } from "estree";
 
+import { simpleTruthinessCheckRule } from "./rules/simple-truthiness-check.ts";
 import { mechanicalClassImplRule } from "./rules/mechanical-class-impl.ts";
 import { tseslintRules } from "./rules/tseslint.ts";
 import type { StrictPlugin, StrictRule } from "./types.ts";
@@ -789,6 +790,7 @@ const plugin: StrictPlugin = {
         };
       },
     },
+    "simple-truthiness-check": simpleTruthinessCheckRule,
     "prefer-logical-and-spread": {
       meta: {
         type: "suggestion",

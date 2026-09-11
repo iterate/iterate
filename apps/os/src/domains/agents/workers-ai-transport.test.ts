@@ -5,7 +5,37 @@ import {
   cloudflareAiGatewayResponseCacheKey,
   maskCloudflareAiGatewayResponseCacheEntropy,
   runWorkersAiAttempt,
+  prepareOpenAiRequest,
 } from "./workers-ai-transport.ts";
+
+it.each([
+  { override: undefined, expected: "caller-key" },
+  { override: "", expected: "caller-key" },
+  { override: "agent-key", expected: "agent-key" },
+])(
+  "uses prompt cache key $expected with transport override '$override'",
+  async ({ override, expected }) => {
+    const prepared = await prepareOpenAiRequest({
+      transport: {
+        kind: "byok",
+        gatewayId: "test",
+        openaiApiKey: "test-key",
+        openaiPromptCacheKey: override,
+      },
+      endpoint: "chat/completions",
+      body: { model: "caller-model", prompt_cache_key: "caller-key", stream: true },
+      headers: new Headers(),
+      cache: null,
+    });
+    expect(prepared).toMatchObject({
+      body: {
+        model: "caller-model",
+        prompt_cache_key: expected,
+        stream_options: { include_usage: true },
+      },
+    });
+  },
+);
 
 createFailing(it, /attempt should report its timeout/)(
   "reports the AI attempt timeout while provider stream cleanup is still pending",

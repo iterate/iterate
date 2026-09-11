@@ -264,8 +264,8 @@ export function deriveAgentRuntime(state: AgentRuntimeSource): AgentRuntimeRecor
   // A settled script's result still owes model input. Keep that follow-up
   // visible while it is materialized, without scheduling before the input exists.
   const pending =
-    state.pendingLlmRequestTrigger !== null ||
-    Object.keys(state.pendingInputConsequences ?? {}).some((key) =>
+    state.pendingLlmRequestTrigger ||
+    Object.keys(state.pendingInputConsequences || {}).some((key) =>
       key.startsWith("script-result:"),
     )
       ? 1

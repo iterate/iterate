@@ -1100,7 +1100,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       let chain: Promise<void> = Promise.resolve();
       const pull = async () => {
         const streamId = this.#coreProcessorState.streamId;
-        if (streamId === undefined) {
+        if (!streamId) {
           throw new Error("stream identity is unavailable after stream creation");
         }
         const read = await this.#callProcessorFacet(name, (facet) =>

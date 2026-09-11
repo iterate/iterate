@@ -121,7 +121,7 @@ export async function runWorkersAiAttempt(input: {
     message: `LLM attempt timed out after ${input.deadlineMs / 60_000} minutes.`,
   });
   try {
-    const route = resolveAiRoute(input.model, input.transport ?? { kind: "unified" });
+    const route = resolveAiRoute(input.model, input.transport || { kind: "unified" });
     const body = {
       messages: adaptMessagesForModel(input.messages, {
         supportsDeveloperRole: route.kind === "openai-http",
@@ -180,13 +180,12 @@ export async function runWorkersAiAttempt(input: {
     return {
       text: completion.text,
       usage: normalizeLlmUsage(completion.usage),
-      rawResponse:
-        cacheStatus === null
-          ? completion.rawResponse
-          : {
-              ...z.record(z.string(), z.unknown()).parse(completion.rawResponse),
-              cloudflareAiGatewayResponseCacheStatus: cacheStatus,
-            },
+      rawResponse: cacheStatus
+        ? {
+            ...z.record(z.string(), z.unknown()).parse(completion.rawResponse),
+            cloudflareAiGatewayResponseCacheStatus: cacheStatus,
+          }
+        : completion.rawResponse,
     };
   } finally {
     deadline.clear();
@@ -453,7 +452,7 @@ export async function prepareOpenAiRequest(input: {
     ...input.body,
     ...openAiStreamingUsage(input.endpoint, input.body),
     ...(model && { model: model.replace(/^intercepted\//, "").replace(/^openai\//, "") }),
-    ...(transport.openaiPromptCacheKey && { prompt_cache_key: transport.openaiPromptCacheKey }),
+    prompt_cache_key: transport.openaiPromptCacheKey || input.body.prompt_cache_key,
   };
   const cacheHeaders: Record<string, string> = input.cache
     ? {

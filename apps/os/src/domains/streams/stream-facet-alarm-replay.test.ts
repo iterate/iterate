@@ -46,7 +46,7 @@ test.each([false, true])(
       close,
     } as unknown as WebSocket;
     harness.context.ctx.getWebSockets = (tag) =>
-      tag === undefined || tag === "live-state-pager:agent" ? [socket] : [];
+      !tag || tag === "live-state-pager:agent" ? [socket] : [];
     harness.context.ctx.getTags = () => ["live-state-pager:agent"];
     try {
       new StreamDurableObject(harness.context.ctx, fakeEnv());

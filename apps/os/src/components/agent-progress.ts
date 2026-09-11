@@ -8,9 +8,7 @@ export function presentAgentProgress(
 ) {
   const current = agent?.runtimeChange;
   const latest =
-    current && current.sinceOffset > (presented?.sinceOffset ?? 0)
-      ? current
-      : (presented ?? current);
+    current && current.sinceOffset > (presented?.sinceOffset ?? 0) ? current : presented || current;
   // New work is visible immediately. An idle transition waits until the
   // corresponding feed publications arrive, so progress never vanishes early.
   const agentRuntime = isAgentRuntimeVisiblyActive(latest?.runtime)
