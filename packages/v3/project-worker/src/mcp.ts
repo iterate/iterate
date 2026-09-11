@@ -110,6 +110,7 @@ function buildServer(env: Env, authorization: Authorization): McpServer {
         const json = JSON.stringify(value) ?? "null";
         return {
           content: [{ type: "text" as const, text: json }],
+          isError: false, // a success is an explicit non-error, mirroring the failure() channel
           structuredContent: { result: JSON.parse(json) as unknown },
         };
       } catch (error) {
