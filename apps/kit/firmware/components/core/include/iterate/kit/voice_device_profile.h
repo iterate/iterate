@@ -102,12 +102,31 @@ enum {
    * together with the batch, not raising one of the three. Until somebody
    * does that with a measurement in hand, this stays where it was proven.
    */
-  ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND = 4,
+  ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND = 8,
+  /*
+   * THE UPLINK FLUSHES BY THE CLOCK, NOT BY COUNT (2026-09-11). Whatever the
+   * microphone has captured goes out once this many milliseconds have passed
+   * since the last flush, as ONE mic-frame event carrying the accumulated
+   * PCM — the facet forwards any even byte length to the provider verbatim,
+   * and GPT-Live says "chunk boundaries are arbitrary: preserve a continuous,
+   * ordered stream". Fifty is Jonas's number: the model hears speech 50 ms
+   * after capture instead of 80 (four frames) or 160 (eight), and each append
+   * is a smaller lump for the stream's single thread to digest — measured on
+   * preview-7, smaller inbound appends left the provider's returning frames
+   * less delayed (p90 113–131 ms at 60 ms appends vs 126–185 at 160 ms).
+   *
+   * THE COST IS MESSAGE RATE: a flush every 50 ms is 20 appends/s, 40
+   * WebSocket messages/s against the ~25–50/s the taskless control socket
+   * sustains on a board (see the note above). If a board's uplink goes quiet
+   * again, raise this first. The frame cap above (8 = 160 ms) is what a
+   * flush sends when the outbox was short for a while, never the target.
+   */
+  ITERATE_KIT_VOICE_MIC_FLUSH_MS = 50,
 
   /*
-   * The speaker ring is 1.5 s of jitter, not an answer store. Playback starts
-   * after 390 ms (300 ms acoustic lead plus the 90 ms I2S DMA lead), conceals
-   * at most 400 ms, and sheds one frame per 50 above 1200 ms so catch-up is
+   * The speaker ring is jitter, not an answer store. Playback starts after
+   * the prefill below (300 ms including the 90 ms I2S DMA lead), conceals at
+   * most 400 ms, and sheds one frame per 50 above 1200 ms so catch-up is
    * audible only as bounded latency recovery rather than pitch distortion.
    */
   /*
@@ -138,27 +157,30 @@ enum {
    */
   ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES = 320000,
   /*
-   * 60 ms of cushion, plus one hardware ring. DOWN FROM 300.
+   * 210 ms of cushion, plus one hardware ring (2880 bytes, 90 ms): 300 ms
+   * before the first word of every answer. BACK UP FROM 150 (2026-09-11).
    *
-   * Raised to 1000 ms once on the theory that a bigger cushion would stop the
-   * holes. It did not: measured on the CLI, concealment went 1.06% -> 1.24%,
-   * slightly WORSE, because the holes were never starvation. The real causes
-   * were a ring too small to hold an answer and a debt mechanism deleting
-   * frames, both since fixed. 300 was the retreat from that, and it was still
-   * sized for a danger that no longer exists.
+   * The 150 ms below was right for gpt-realtime, which shipped an answer
+   * faster than it plays: the facet held four seconds of it and the frames
+   * behind the first were already in flight when it landed, so this cushion
+   * bought nothing and the holes of that era were never starvation.
    *
-   * THIS IS PAID ON EVERY ANSWER, not once per call: the first frame of an
-   * answer always REPLACEs, which reprimes the clock. At 300 ms it was 390 ms
-   * of silence before every first word — four times the entire measured cost
-   * of the server round trip it sits behind (48 ms up, 46 ms down).
+   * GPT-Live is the opposite source. It emits exactly one 100 ms delta per
+   * 100 ms, the facet forwards each the instant it arrives, and the device's
+   * only lead against jitter is whatever this prefill holds. Measured at the
+   * client end on preview-7 (voicelab duplex, three-clock report): frame
+   * arrival gaps p50 ~100 ms, p90 150–240 ms, p99 300–400 ms — the Durable
+   * Object adds ~50–130 ms p90 to the provider's frames and Cloudflare→client
+   * adds +50–110 ms p90 on top. At 150 ms one frame in seven found the ring
+   * dry: a Mac talk run played 17 s of answer with 557 concealed frames, 54
+   * underruns and 64 gaps of digital zero (10–527 ms). 300 ms covers p99.
    *
-   * And it buys nothing the sender is not already buying. The facet's pacer
-   * hands over its whole budget — four seconds of audio — as fast as it can
-   * append the instant an answer begins, so the frames behind the first one
-   * are already in flight when it lands. Two cushions for one hazard, and only
-   * this one costs the listener.
+   * Still paid on every answer (the first frame REPLACEs and reprimes the
+   * clock), and still the ONLY buffer in the path by design: the facet holds
+   * nothing back ("play as soon as humanly possible"), so this is where the
+   * network's jitter has to be absorbed. If it causes issues, increase it.
    */
-  ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES = 60 * 32 + 2880,
+  ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES = 210 * 32 + 2880,
   ITERATE_KIT_VOICE_SPEAKER_CONCEAL_LIMIT_MS = 400,
   /*
    * How far behind its own timeline playback may fall before a frame is

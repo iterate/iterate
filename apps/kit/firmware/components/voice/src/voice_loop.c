@@ -187,6 +187,7 @@ enum {
   FRAME_BYTES = ITERATE_KIT_VOICE_FRAME_BYTES,
   MIC_QUEUE_DEPTH = ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH,
   MIC_FRAMES_PER_APPEND = ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND,
+  MIC_FLUSH_MS = ITERATE_KIT_VOICE_MIC_FLUSH_MS,
   /*
    * The speaker buffer holds JITTER, never an answer. A 1 MiB (32 s) buffer
    * was the single worst defect here: the bridge paced above realtime, so
@@ -3365,7 +3366,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       const size_t outbox_free =
           CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots;
       static struct mic_frame frame_storage[MIC_FRAMES_PER_APPEND];
-      static uint64_t drain_window_at;
+      static uint64_t mic_flushed_at;
       static struct iterate_kit_launch launch;
       static uint64_t call_pending_since;
       static bool call_active_shown;
@@ -3882,9 +3883,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       /* The microphone is only on the wire while the talk button is down. */
       {
         const size_t queued = uxQueueMessagesWaiting(runtime.mic_queue);
-        /* A partial batch is only worth sending at the end of a turn. */
-        const size_t needed =
-            runtime.flushing_turn ? 1U : (size_t)MIC_FRAMES_PER_APPEND;
         /*
          * A MICROPHONE THAT CANNOT DRAIN INTO A LIVE CALL IS A DEAD LANE,
          * and the device is the only one who can tell: the appends are
@@ -3916,35 +3914,34 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
           }
         }
         /*
-         * The window paces the uplink at exactly capture rate, so any
-         * backlog is permanent — four of ten turns in one call hit the
-         * flush deadline with audio still queued ("tail dropped"). When a
-         * backlog exists, send immediately instead of waiting for the
-         * window, so the sender can actually catch up.
+         * THE FLUSH RUNS ON THE CLOCK (MIC_FLUSH_MS), NOT ON A FRAME COUNT.
+         * Whatever has been captured since the last flush goes out as one
+         * event the moment the interval is up — a count-based batch held the
+         * first frame hostage to the last, 80 ms of mic latency at four
+         * frames, and made the four-frame lump the unit of work the stream's
+         * thread had to digest at once. A backlog (the outbox was short, the
+         * cap is MIC_FRAMES_PER_APPEND frames per event) sends at once.
          */
-        const bool behind = queued >= (size_t)(MIC_FRAMES_PER_APPEND * 2U);
+        const bool behind = queued >= (size_t)MIC_FRAMES_PER_APPEND;
+        const bool due = mic_flushed_at == 0U ||
+            iterate_kit_voice_elapsed_ms(now, mic_flushed_at) >= MIC_FLUSH_MS;
         /* `call_active &&`: dial-buffered speech leaves only once there is
          * a call to carry it. Push-to-talk already implied this through the
          * turn machinery; the open microphone now needs it said. */
         if (runtime.talking && runtime.voicelab.call_active &&
-            (behind || now >= drain_window_at) &&
-            queued >= needed && outbox_free >= (size_t)MIC_OUTBOX_RESERVE) {
+            (behind || due || runtime.flushing_turn) &&
+            queued >= 1U && outbox_free >= (size_t)MIC_OUTBOX_RESERVE) {
           const size_t take = queued < (size_t)MIC_FRAMES_PER_APPEND
               ? queued
               : (size_t)MIC_FRAMES_PER_APPEND;
           /*
-           * The window only advances on a batch that was actually sent. It
-           * used to advance regardless, so a moment of outbox backpressure
-           * silently dropped that speech instead of sending it a beat later —
-           * the mic queue holds 640ms and is the right place to absorb this.
+           * The stamp only advances on a flush that was actually sent, so a
+           * moment of outbox backpressure delays the speech a beat instead of
+           * dropping it — the mic queue is the right place to absorb this.
            */
           const uint8_t *frame_pointers[MIC_FRAMES_PER_APPEND];
           size_t index;
-          drain_window_at =
-              (drain_window_at == 0U ||
-               iterate_kit_voice_elapsed_ms(now, drain_window_at) > MIC_FRAMES_PER_APPEND * FRAME_MS * 4U)
-              ? now + (uint64_t)take * FRAME_MS
-              : drain_window_at + (uint64_t)take * FRAME_MS;
+          mic_flushed_at = now;
           for (index = 0U; index < take; ++index) {
             (void)xQueueReceive(runtime.mic_queue, &frame_storage[index], 0);
             frame_pointers[index] =

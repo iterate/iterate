@@ -50,12 +50,14 @@ enum {
   ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND =
       ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND,
   /*
-   * Each frame costs at most ~980 characters here: ~125 of JSON envelope
-   * (type, conversationId, a 10-digit sequence, a 20-digit timestamp) plus 854 of
-   * base64. Eight frames needed ~7.8 KiB against a 7600-byte buffer, so
-   * base64_encode ran out of room and the whole append was abandoned — with
-   * the microphone silently disconnected, because that path returns before
-   * the failure counter. Six frames (120 ms) is 5.9 KiB, with real margin.
+   * ONE EVENT PER APPEND NOW (2026-09-11): the frames of a flush are encoded
+   * as one continuous base64 body under a single ~125-character envelope, so
+   * eight frames (5120 bytes) is 6828 characters of base64 plus the envelope
+   * — about 6.95 KiB against this 7600-byte buffer. Before, each frame paid
+   * its own envelope and eight of them overflowed the buffer silently (the
+   * microphone went quiet with every counter reading zero), which is why the
+   * cap sat at four. The cap is the outbox-was-short backlog, not the target:
+   * the flush runs on the clock (ITERATE_KIT_VOICE_MIC_FLUSH_MS).
    */
   ITERATE_KIT_VOICELAB_ARGS_CAPACITY = 7600,
   /*

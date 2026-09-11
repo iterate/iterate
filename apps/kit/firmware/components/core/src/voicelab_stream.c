@@ -61,7 +61,7 @@ static bool take_result_capability(
       capnweb_value_get_remote_capability(&result->value, capability);
 }
 
-/* --- base64 (RFC 4648, unpadded — matches the vendored writer) ---------- */
+/* --- base64 (RFC 4648; the uplink pads, see append_frames) -------------- */
 
 static const char base64_alphabet[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -1064,51 +1064,108 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
   }
   offset = 0U;
   voicelab->args_buffer[offset++] = '[';
-  for (index = 0U; index < frame_count; ++index) {
-    written = snprintf(
-        voicelab->args_buffer + offset,
-        sizeof(voicelab->args_buffer) - offset,
-        /*
-         * NO conversationId. The client does not know which call it is on and
-         * does not need to: frames belong to whatever call its own press
-         * opened. Naming one here made the device a second source of truth for
-         * a fact only the server holds.
-         */
-        "%s{\"type\":\"events.iterate.com/voice-agent/mic-frame\",\"ephemeral\":true,"
-        "\"payload\":{\"seq\":%" PRIu32
-        /* No codec field. It said "p" for PCM16 while the servers still had a
-         * mu-law arm to avoid; with that arm gone it was a constant nobody
-         * read, sent fifty times a second. */
-        ",\"t\":%" PRIu64 ",\"pcm\":\"",
-        index == 0U ? "" : ",",
-        sequence + (uint32_t)index,
-        captured_at_ms);
-    if (written < 0 ||
-        (size_t)written >= sizeof(voicelab->args_buffer) - offset) {
-      ++voicelab->frame_send_failures;
-      return CAPNWEB_E_LIMIT;
-    }
-    offset += (size_t)written;
-    /* Straight from the capture buffer: no transcode, no staging buffer. */
-    encoded_length = base64_encode(
-        frames[index],
-        frame_length,
-        voicelab->args_buffer + offset,
-        sizeof(voicelab->args_buffer) - offset - sizeof("\"}}]"));
-    if (encoded_length == 0U) {
-      /* The args buffer could not hold this batch — count it, or the
-       * microphone goes quiet with every counter reading zero. */
-      ++voicelab->frame_send_failures;
-      return CAPNWEB_E_LIMIT;
-    }
-    offset += encoded_length;
-    if (offset + 4U >= sizeof(voicelab->args_buffer)) {
-      ++voicelab->frame_send_failures;
-      return CAPNWEB_E_LIMIT;
-    }
-    memcpy(voicelab->args_buffer + offset, "\"}}", 3U);
-    offset += 3U;
+  /*
+   * ONE EVENT FOR THE WHOLE FLUSH. The frames of a flush are one continuous
+   * run of capture, so they go out as one `pcm` body: the facet forwards it
+   * to the provider verbatim, and every event costs the stream's single
+   * thread a fold and a fan-out — eight of them per append was eight times
+   * the work for the same audio. `seq` is the first frame's; the count is
+   * implied by the byte length.
+   */
+  written = snprintf(
+      voicelab->args_buffer + offset,
+      sizeof(voicelab->args_buffer) - offset,
+      /*
+       * NO conversationId. The client does not know which call it is on and
+       * does not need to: frames belong to whatever call its own press
+       * opened. Naming one here made the device a second source of truth for
+       * a fact only the server holds.
+       */
+      "{\"type\":\"events.iterate.com/voice-agent/mic-frame\",\"ephemeral\":true,"
+      "\"payload\":{\"seq\":%" PRIu32
+      /* No codec field. It said "p" for PCM16 while the servers still had a
+       * mu-law arm to avoid; with that arm gone it was a constant nobody
+       * read, sent fifty times a second. */
+      ",\"t\":%" PRIu64 ",\"pcm\":\"",
+      sequence,
+      captured_at_ms);
+  if (written < 0 ||
+      (size_t)written >= sizeof(voicelab->args_buffer) - offset) {
+    ++voicelab->frame_send_failures;
+    return CAPNWEB_E_LIMIT;
   }
+  offset += (size_t)written;
+  /*
+   * Straight from the capture buffers — no staging copy — with the base64
+   * groups CARRIED across frame boundaries: 640 is not a multiple of 3, so
+   * encoding each frame on its own would leave a broken group at every seam.
+   * Whole groups go out as they complete; the 1–2 bytes left at a frame's end
+   * ride into the next frame's first group.
+   */
+  {
+    uint8_t carry[3];
+    size_t carry_count = 0U;
+    const size_t body_capacity =
+        sizeof(voicelab->args_buffer) - sizeof("\"}}]") - 4U;
+    for (index = 0U; index < frame_count; ++index) {
+      const uint8_t *frame = frames[index];
+      size_t position = 0U;
+      while (carry_count > 0U && carry_count < 3U && position < frame_length) {
+        carry[carry_count++] = frame[position++];
+      }
+      if (carry_count == 3U) {
+        if (offset + 4U > body_capacity) {
+          ++voicelab->frame_send_failures;
+          return CAPNWEB_E_LIMIT;
+        }
+        offset += base64_encode(carry, 3U, voicelab->args_buffer + offset, 4U);
+        carry_count = 0U;
+      }
+      {
+        const size_t whole = ((frame_length - position) / 3U) * 3U;
+        if (whole > 0U) {
+          encoded_length = base64_encode(
+              frame + position,
+              whole,
+              voicelab->args_buffer + offset,
+              body_capacity > offset ? body_capacity - offset : 0U);
+          if (encoded_length == 0U) {
+            /* The args buffer could not hold this flush — count it, or the
+             * microphone goes quiet with every counter reading zero. */
+            ++voicelab->frame_send_failures;
+            return CAPNWEB_E_LIMIT;
+          }
+          offset += encoded_length;
+          position += whole;
+        }
+      }
+      while (position < frame_length) {
+        carry[carry_count++] = frame[position++];
+      }
+    }
+    if (carry_count > 0U) {
+      /* The tail group, PADDED: GPT-Live's decoder rejects unpadded base64
+       * ("illegal base64 data at input byte 852" — a Mac talk run heard
+       * nothing back until the facet learned to pad). */
+      if (offset + 4U > body_capacity) {
+        ++voicelab->frame_send_failures;
+        return CAPNWEB_E_LIMIT;
+      }
+      encoded_length =
+          base64_encode(carry, carry_count, voicelab->args_buffer + offset, 4U);
+      offset += encoded_length;
+      while (encoded_length < 4U) {
+        voicelab->args_buffer[offset++] = '=';
+        ++encoded_length;
+      }
+    }
+  }
+  if (offset + 4U >= sizeof(voicelab->args_buffer)) {
+    ++voicelab->frame_send_failures;
+    return CAPNWEB_E_LIMIT;
+  }
+  memcpy(voicelab->args_buffer + offset, "\"}}", 3U);
+  offset += 3U;
   voicelab->args_buffer[offset++] = ']';
 
   status = capnweb_session_call_oneway_path(
