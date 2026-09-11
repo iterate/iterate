@@ -63,6 +63,8 @@ export interface WireWatch {
     batchAudioFrames: number;
     /** The facet's clock when it sent the frame (`sentAtFacetMs`). */
     sentAtFacetMs: number | null;
+    /** Which answer the frame belongs to: how many end markers preceded it. */
+    answerIndex: number;
   }[];
   /** Facet clock at every audio-carrying provider delta, off the mirror
    * (`receivedAtFacetMs`): the provider→facet cadence. */
@@ -176,6 +178,7 @@ export async function openWireCall(
               batchAudioFrames,
               sentAtFacetMs:
                 typeof payload.sentAtFacetMs === "number" ? payload.sentAtFacetMs : null,
+              answerIndex: watch.answersEnded,
             });
           }
           continue;

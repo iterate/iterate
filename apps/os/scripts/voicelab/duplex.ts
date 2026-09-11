@@ -35,7 +35,7 @@ import process from "node:process";
 
 import { type VoicelabConnectOptions } from "./connect.ts";
 import { sleep, synthesizeFrames } from "./probe-audio.ts";
-import { gapStats } from "./live-probe.ts";
+import { gapStats, gapStatsOfGaps } from "./live-probe.ts";
 import { talk } from "./talk.ts";
 import { openWireCall } from "./wire-call.ts";
 
@@ -264,7 +264,25 @@ export async function duplex(options: DuplexOptions): Promise<void> {
    * (time elapsed since the first frame of that run) — negative means it
    * has already run dry. Runs restart at every answer-end marker.
    */
-  const gaps = gapStats(watch.spkArrivals.map((arrival) => arrival.atMs));
+  /* WITHIN AN ANSWER ONLY. The silence between two answers — the backend
+   * working for ten seconds, the person talking — is not a gap in delivery,
+   * and counting it made every max and p99 on these lines the delegation's
+   * duration. Consecutive frames of the same answer are the only pairs whose
+   * spacing says anything about the path. */
+  const withinAnswer = (pick: (arrival: (typeof watch.spkArrivals)[number]) => number | null) => {
+    const gaps: number[] = [];
+    for (let index = 1; index < watch.spkArrivals.length; index++) {
+      const previous = watch.spkArrivals[index - 1]!;
+      const current = watch.spkArrivals[index]!;
+      if (previous.answerIndex !== current.answerIndex) continue;
+      const a = pick(previous);
+      const b = pick(current);
+      if (a === null || b === null) continue;
+      gaps.push(b - a);
+    }
+    return gapStatsOfGaps(gaps);
+  };
+  const gaps = withinAnswer((arrival) => arrival.atMs);
   let cushionMinMs = Number.POSITIVE_INFINITY;
   let dryFrames = 0;
   let runStartMs: number | null = null;
@@ -291,11 +309,7 @@ export async function duplex(options: DuplexOptions): Promise<void> {
    * minus its own minimum so the clock offset cancels) is the delivery hop
    * alone. */
   const providerGaps = gapStats(watch.providerDeltaReceivedAtFacetMs);
-  const sentGaps = gapStats(
-    watch.spkArrivals
-      .map((arrival) => arrival.sentAtFacetMs)
-      .filter((value): value is number => value !== null),
-  );
+  const sentGaps = withinAnswer((arrival) => arrival.sentAtFacetMs);
   const transits = watch.spkArrivals
     .filter((arrival) => arrival.sentAtFacetMs !== null)
     .map((arrival) => arrival.atMs - arrival.sentAtFacetMs!)

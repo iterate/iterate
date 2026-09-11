@@ -944,7 +944,16 @@ const EXEC_TYPESCRIPT_TOOL = {
 } as const;
 
 /** Distribution of the gaps between consecutive arrival times. */
-export function gapStats(arrivalsMs: number[]): {
+export function gapStats(arrivalsMs: number[]): GapStats {
+  const gaps: number[] = [];
+  for (let index = 1; index < arrivalsMs.length; index++) {
+    gaps.push(arrivalsMs[index]! - arrivalsMs[index - 1]!);
+  }
+  return gapStatsOfGaps(gaps);
+}
+
+/** Percentiles of a set of intervals; see gapStats. */
+export interface GapStats {
   count: number;
   p50: number;
   p90: number;
@@ -952,11 +961,11 @@ export function gapStats(arrivalsMs: number[]): {
   max: number;
   over150: number;
   over250: number;
-} {
-  const gaps: number[] = [];
-  for (let index = 1; index < arrivalsMs.length; index++) {
-    gaps.push(arrivalsMs[index]! - arrivalsMs[index - 1]!);
-  }
+}
+
+/** The same statistics over intervals the caller already computed. */
+export function gapStatsOfGaps(intervals: number[]): GapStats {
+  const gaps = [...intervals];
   gaps.sort((a, b) => a - b);
   const at = (q: number) =>
     gaps.length === 0 ? 0 : gaps[Math.min(gaps.length - 1, Math.floor(q * gaps.length))]!;
