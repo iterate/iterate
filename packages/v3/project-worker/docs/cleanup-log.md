@@ -159,20 +159,19 @@ in-memory repro. Every one was re-verified HERE by reading the code (not taken o
   (the file's own guard idiom); the window needs budget contention, so covered by inspection + the
   existing replace/afterOffset suite rather than a bespoke contention repro. (subscription-delivery.ts)
 
-### Deferred — needs a schema/convention decision (do NOT rush into the engine)
-- **[bug/design] #2 consumed event payloads are not validated before reduce.** `#reduceOrKeep` guards
-  a THROWING reducer but never validates the payload, so a malformed payload for a KNOWN, owned event
-  (e.g. an account token event with `name: {bad:true}`) folds into reduced state — and that state can
-  then violate the EXPORTED `AccountView` schema, crashing a live client that parses it. The contract
-  already declares `events[type].payloadSchema` (and `defineProcessorContract` has a private `resolve`
-  over owned+dep events), so the systemic fix is reduce-time validation (skip+log a malformed payload
-  rather than fold it). BLOCKER found while scoping it: `payload` is optional and stored as `undefined`
-  when omitted (the demo appends `{ type: "tick" }` with no payload), but the presence `tick` schema is
-  `z.object({})`, which REJECTS `undefined` — so naive `schema.safeParse(event.payload)` would drop
-  every tick and break the demo. RECOMMENDATION (next round): add an optional
-  `payloadSchemaFor(type)` to the base ProcessorContract (implemented by defineProcessorContract via
-  its `resolve`), have `#reduceOrKeep` validate `event.payload ?? {}` (extending the existing
-  "empty defaults to {}" convention the contract already requires of stateSchema), skip+report on
-  failure, and audit every generic test processor that declares an events catalog. This overlaps the
-  round-1 deferred "malformed core control events commit as no-ops" item — decide the two together
-  (one validation boundary for core-owned control events AND app/contract events). (processor.ts:435)
+### Fixed (safe systemic version — the scoping blocker turned out avoidable)
+- **[bug] #2 consumed event payloads were not validated before reduce.** `#reduceOrKeep` guarded a
+  THROWING reducer but never checked the payload, so a malformed payload for a KNOWN, owned event
+  (e.g. an account token event with `name: {bad:true}`) folded into reduced state — which then
+  violated the EXPORTED `AccountView` schema and crashed a live client parsing it. FIXED: exposed the
+  contract's owned+dep `resolve` as an optional `payloadSchemaFor(type)` on the base ProcessorContract
+  (kernel-generic contracts omit it → reduce unvalidated, as before), and `#reduceOrKeep` now validates
+  `event.payload ?? {}` against it, skipping + reporting a malformed payload instead of folding it. The
+  scoping blocker (the demo's payload-less `{ type: "tick" }` vs the presence `z.object({})` schema)
+  was avoided by validating `payload ?? {}` — the same "empty defaults to {}" convention the contract
+  already requires of its stateSchema — so a payload-less event validates as `{}`. Audited: only Account
+  and Presence declare events catalogs; all real appends match, workers lane shows 0 payload rejections.
+  Failing test added + full unit/workers lanes green. (processor.ts)
+  NOTE: this covers CONTRACT (app) events. Core-owned CONTROL events (subscription-configured, etc.) go
+  through the hand-built core reduce, which has no events catalog — that validation (the round-1 deferred
+  "malformed core control events commit as no-ops") is still open and wants discriminated schemas.
