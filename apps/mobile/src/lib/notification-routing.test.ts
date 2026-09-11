@@ -17,7 +17,7 @@ test("an approval push focuses its request in the project's approval queue", () 
 test("opening the same notification retries the same durable observation", () => {
   expect(notificationOpenedEvent(42, 1_784_361_600_000)).toEqual({
     type: "events.iterate.com/device/notification-opened",
-    idempotencyKey: "device-notification-opened:42",
+    idempotencyKey: "device-notification-opened:42:1784361600000",
     payload: { openedAt: "2026-07-18T08:00:00.000Z", requestOffset: 42 },
   });
 });
@@ -26,6 +26,16 @@ test("an unknown destination kind routes nowhere", () => {
   expect(
     pushNotificationRoute({ destination: { kind: "approvals-group" }, projectId: "prj_test" }),
   ).toBeNull();
+});
+
+test("a phone fetch notification opens the project's notification list", () => {
+  expect(
+    pushNotificationRoute({
+      destination: { kind: "client-capability", capability: "fetch" },
+      projectId: "prj_test",
+      requestOffset: 42,
+    }),
+  ).toEqual({ pathname: "/project/[projectId]/notifications", params: { projectId: "prj_test" } });
 });
 
 test("an agent push opens only a well-formed agent path", () => {

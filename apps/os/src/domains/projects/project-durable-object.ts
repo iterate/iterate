@@ -213,7 +213,16 @@ export class ProjectDurableObject extends DurableObject<Env> {
     if (this.#egressInterceptor !== undefined) {
       // Egress interceptors run before secret substitution. They must never
       // receive raw secret material, only getSecret(...) placeholders.
-      return await this.#egressInterceptor.value(taken.request);
+      const response = await this.#egressInterceptor.value(taken.request, (request) =>
+        this.#egressWithApprovalGate(request, taken.streamContext),
+      );
+      if (response.body === null) return response;
+      // The callback's body arrives over RPC, possibly from the same script
+      // that is awaiting this fetch. Own the outgoing stream in this fetch
+      // context and keep its pipe alive until the caller consumes it.
+      const { readable, writable } = new TransformStream();
+      this.ctx.waitUntil(response.body.pipeTo(writable));
+      return new Response(readable, response);
     }
     return this.#egressWithApprovalGate(taken.request, taken.streamContext);
   }

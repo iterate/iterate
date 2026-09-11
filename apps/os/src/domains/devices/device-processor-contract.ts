@@ -38,7 +38,8 @@ export const DeviceProcessorContract = defineProcessorContract({
   // intent they suppress. Pending claims plus the approval-offset high-water
   // mark preserve that ordered-lane race without retaining late claims. The
   // bump refolds persisted reduction caches into the new shape.
-  version: "0.7.0",
+  // 0.8.0: a separate notification-correlated client capability acknowledgement.
+  version: "0.8.0",
   description: "One enrolled installation and its durable push-notification obligations.",
   // ApprovalPresentedEvents is a standalone catalog, not a contract: the
   // project contract owns the claim event but already imports THIS module, so
@@ -468,6 +469,20 @@ export const DeviceProcessorContract = defineProcessorContract({
         }),
       }),
     },
+    "events.iterate.com/device/capability-ready": {
+      description:
+        "The app registered its live capability after a notification was opened. " +
+        "A correlated observation, not an egress approval or a guarantee against later disconnects.",
+      payloadSchema: z.strictObject({
+        requestOffset: z.number().int().positive().meta({
+          description: "Offset of the requesting notification on this device stream.",
+        }),
+        capability: z.literal("fetch").meta({ description: "The registered capability." }),
+        clientPath: z.string().startsWith("/clients/mobile/").meta({
+          description: "Live client mount to call via itx.clients.get(clientPath).capabilities.",
+        }),
+      }),
+    },
     "events.iterate.com/device/notification-opened": {
       description: "The app observed that the user opened a correlated notification.",
       payloadSchema: z.strictObject({
@@ -502,6 +517,7 @@ export const DeviceProcessorContract = defineProcessorContract({
     "events.iterate.com/device/notification-ticket-observed",
     "events.iterate.com/device/notification-settled",
     "events.iterate.com/device/notification-opened",
+    "events.iterate.com/device/capability-ready",
     // The eventless at-head pass settles orphaned attempts and expired requests
     // after recovery; the platform revival fact itself is not consumed.
     // `stream/woken` and

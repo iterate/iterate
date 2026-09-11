@@ -317,8 +317,14 @@ reference secrets as placeholders — `getSecret("/secrets/foo")` in a
 header — and `itx.egress.fetch(request)` substitutes them only when the
 request origin is in the secret's egress allowlist, recording usage audit
 events. Dynamic workers' bare `fetch()` routes through the same egress path.
-`itx.egress.intercept(handler)` installs a live replacement for testing;
-the interceptor sees placeholders, never material
+`itx.egress.intercept((request, next) => ...)` installs a live project-wide
+replacement. `next(request)` continues through normal approvals and secret
+substitution without re-entering the interceptor; bare hosted-script `fetch`
+would recurse. The callback sees placeholders, never material. Keep its handle
+alive during the operation and release it in `finally`. This is an in-memory,
+last-writer-wins hook, not durable policy. The `sandbox-phone-fetch` example
+uses it to wait for a notification-correlated mobile capability, then return
+the phone's HTTP response to sandbox curl
 (`apps/os/docs/adr/0002-project-egress-interception-uses-fetch-capabilities.md`).
 
 ## Dynamic workers

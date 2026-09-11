@@ -446,10 +446,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Clients",
     kind: "interface",
     sourceText:
-      "/**\n * Connected clients within one project (`itx.clients`). A client is a\n * capability-host scope — typically under `/clients/**` — that\n * `projects.connect` provided a live capability to; nothing client-specific\n * exists at the platform layer. The birth batch every connect appends\n * configures a narrow copy subscription sending the scope's\n * `capability-provider-pager-connected` / `-disconnected` facts to the\n * project root, where the project processor reduces the clients catalog\n * (`list()`). Presence is last-known but honest: the platform journals the\n * disconnect when the provider's Pager socket dies. `get(path)` returns the\n * scope's capability host — `get(path).capabilities.browser.navigate(url)`\n * invokes the live capability mounted there through the shipped capability\n * machinery (hibernating Provider Pager, no pinned Durable Objects).\n */\nexport interface Clients {\n  __describe(): Promise<Description>;\n  /** The client scope's capability host — the full shipped surface, no wrapper. */\n  get(path: string): CapabilityHost;\n  /** Known clients, read from the project processor's reduced catalog. */\n  list(): Promise<ProjectClientListItem[]>;\n}",
+      "/**\n * Connected clients within one project (`itx.clients`). A client is a\n * capability-host scope — typically under `/clients/**` — that\n * `projects.connect` provided a live capability to; nothing client-specific\n * exists at the platform layer. The birth batch every connect appends\n * configures a narrow copy subscription sending the scope's\n * `capability-provider-pager-connected` / `-disconnected` facts to the\n * project root, where the project processor reduces the clients catalog\n * (`list()`). Presence is last-known but honest: the platform journals the\n * disconnect when the provider's Pager socket dies. `get(path)` returns the\n * scope's capability host — `get(path).capabilities.browser.navigate(url)`\n * invokes the live capability mounted there through the shipped capability\n * machinery (hibernating Provider Pager, no pinned Durable Objects).\n */\nexport interface Clients {\n  __describe(): Promise<Description>;\n  /** The client scope's capability host, including its live `capabilities` mount.\n   * Supply a capability type when known; otherwise members are dynamically typed. */\n  get<Capabilities = Record<string, any>>(\n    path: string,\n  ): CapabilityHost & { capabilities: Capabilities };\n  /** Known clients, read from the project processor's reduced catalog. */\n  list(): Promise<ProjectClientListItem[]>;\n}",
     summary: "Connected clients within one project (`itx.clients`).",
     memberSummaries: {
-      get: "The client scope's capability host — the full shipped surface, no wrapper.",
+      get: "The client scope's capability host, including its live `capabilities` mount.",
       list: "Known clients, read from the project processor's reduced catalog.",
     },
     referencedTypeNames: ["Description", "CapabilityHost", "ProjectClientListItem"],
@@ -458,12 +458,13 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectEgress",
     kind: "interface",
     sourceText:
-      "/**\n * Public project egress facet.\n *\n * The Project Durable Object is the single egress decision point: it owns the\n * live runtime interceptor slot and, when there is no interceptor, performs the\n * terminal secret-substitution fetch path.\n */\nexport interface ProjectEgress {\n  __describe(): Promise<Description>;\n  /** Outbound fetch with project identity and secret substitution — the\n   * standard fetch signature: a Request, or a URL plus optional init. Set\n   * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string\n   * values in an `application/json` (or `+json`) body. */\n  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<EgressResponse>;\n  /** Install a live egress interceptor (last writer wins); returns a release handle. */\n  intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;\n}",
+      "/**\n * Public project egress facet.\n *\n * The Project Durable Object is the single egress decision point: it owns the\n * live runtime interceptor slot and, when there is no interceptor, performs the\n * terminal secret-substitution fetch path.\n */\nexport interface ProjectEgress {\n  __describe(): Promise<Description>;\n  /** Outbound fetch with project identity and secret substitution — the\n   * standard fetch signature: a Request, or a URL plus optional init. Set\n   * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string\n   * values in an `application/json` (or `+json`) body. */\n  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<EgressResponse>;\n  /** Install a live project-wide interceptor (last writer wins); returns a release handle.\n   * Call the handler's next(request) to forward normally; hosted-script fetch() recurses. */\n  intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;\n}",
     summary: "Public project egress facet.",
     memberSummaries: {
       fetch:
         "Outbound fetch with project identity and secret substitution — the standard fetch signature: a Request, or a URL plus optional init.",
-      intercept: "Install a live egress interceptor (last writer wins); returns a release handle.",
+      intercept:
+        "Install a live project-wide interceptor (last writer wins); returns a release handle.",
     },
     referencedTypeNames: [
       "Description",
@@ -1679,8 +1680,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectEgressInterceptor",
     kind: "typeAlias",
     sourceText:
-      "/** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */\nexport type ProjectEgressInterceptor = (req: Request) => Promise<Response>;",
-    summary: "Live replacement for project egress.",
+      "/**\n * Live project egress handler. It sees getSecret(...) placeholders, never material.\n * Call next(request) to continue through ordinary approvals and secret substitution.\n * Bare fetch() in a hosted script re-enters interception instead.\n */\nexport type ProjectEgressInterceptor = (\n  request: Request,\n  next: (request: Request) => Promise<Response>,\n) => Promise<Response>;",
+    summary: "Live project egress handler.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -2451,7 +2452,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "DeviceAppendInput",
     kind: "typeAlias",
     sourceText:
-      '/** Public stream vocabulary, mechanically retaining payloads from the processor contract. */\nexport type DeviceAppendInput =\n  | TypedConsumedEventInput<\n      "events.iterate.com/device/notification-opened",\n      { openedAt: string; requestOffset: number }\n    >\n  | TypedConsumedEventInput<\n      "events.iterate.com/device/notification-requested",\n      {\n        agentReplyEventOffset?: number | undefined;\n        approvalRequestEventOffset?: number | undefined;\n        body: string;\n        destination:\n          | { kind: "project" }\n          | { kind: "approvals"; approvalRequestEventOffset: number }\n          | { kind: "agent-chat"; path: string };\n        expiresAt: number;\n        title: string;\n      }\n    >;',
+      '/** Public stream vocabulary, mechanically retaining payloads from the processor contract. */\nexport type DeviceAppendInput =\n  | TypedConsumedEventInput<\n      "events.iterate.com/device/capability-ready",\n      { requestOffset: number; capability: "fetch"; clientPath: string }\n    >\n  | TypedConsumedEventInput<\n      "events.iterate.com/device/notification-opened",\n      { openedAt: string; requestOffset: number }\n    >\n  | TypedConsumedEventInput<\n      "events.iterate.com/device/notification-requested",\n      {\n        agentReplyEventOffset?: number | undefined;\n        approvalRequestEventOffset?: number | undefined;\n        body: string;\n        destination:\n          | { kind: "client-capability"; capability: "fetch" }\n          | { kind: "project" }\n          | { kind: "approvals"; approvalRequestEventOffset: number }\n          | { kind: "agent-chat"; path: string };\n        expiresAt: number;\n        title: string;\n      }\n    >;',
     summary:
       "Public stream vocabulary, mechanically retaining payloads from the processor contract.",
     memberSummaries: {},

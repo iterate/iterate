@@ -96,6 +96,13 @@ export type IterateSessionConfig = {
   /** OS deployment base URL, e.g. `https://os.iterate.com`; `/api` is appended. */
   baseUrl: string;
   /**
+   * Create the owned project handle for each connection. Clients publishing
+   * capabilities can use `session.projects.connect` here; the keeper disposes
+   * the handle on disconnect and calls this again on the next connection.
+   * Defaults to `session.projects.get`.
+   */
+  projectConnection?: (session: SessionStub, projectId: string) => ProjectStub;
+  /**
    * How `authenticate()` identifies the caller. A provider is resolved for
    * every dial, so rotating credentials stay fresh across transport reconnects.
    * If authentication rejects with an auth-shaped error, providers get one
@@ -275,7 +282,9 @@ export function projectStubFor(session: SessionStub, slug: string): ProjectStub 
   }
   let stub = cache.get(slug);
   if (stub === undefined) {
-    stub = session.projects.get(slug);
+    stub = explicitConfig?.projectConnection
+      ? explicitConfig.projectConnection(session, slug)
+      : session.projects.get(slug);
     cache.set(slug, stub);
   }
   return stub;

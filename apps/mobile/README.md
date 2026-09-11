@@ -259,6 +259,43 @@ Exists so testing a platform feature never needs a laptop CLI step first:
 every mobile feature here is built by agents, so it needs to be fully
 testable from the phone alone. The runner shipped in PR #2059.
 
+## Try sandbox egress through this phone
+
+1. Run this branch's OS and native mobile app against the same deployment. Sign in,
+   open the project, and enroll the phone for notifications.
+2. In that project's REPL, run `await itx.devices.list()` and copy this phone's `deviceId`.
+3. Open the **Run a sandbox HTTP request through your phone** example (`sandbox-phone-fetch`).
+   Set `vars.deviceId` and `vars.targetUrl` to an HTTP(S) endpoint you control, then run it.
+4. Tap its push, or tap the request in the app's Notifications list. The waiting
+   sandbox curl should print the endpoint's response and HTTP status.
+
+The app connects at `/clients/mobile/<deviceId>` and publishes `capabilities.fetch`.
+The shared itx session owns registration and republishes it on reconnect. Any
+project script can call it while this phone has the project connected and is
+foregrounded; the notification is a way to wake a waiting script, not a per-call
+authorization token. `device/notification-opened` records the tap separately from
+`device/capability-ready`, which acknowledges registration for that notification.
+The script uses stream subscriptions with replay, never polling. A later disconnect
+is still a failed call, and expired notifications do not acknowledge readiness.
+
+Fetch accepts `{ url, method, headers: [name, value][], body: Uint8Array | null }`
+and returns `{ status, headers, body }`. It buffers bodies, rejects results over
+8 MiB, and aborts network work after 30 seconds. Native fetch follows redirects,
+uses the native cookie behavior, and owns request framing. Decoded responses omit
+compression/framing headers. This is HTTP forwarding, not a TCP tunnel or browser
+session proxy. The target sees the phone's current Wi-Fi/cellular/VPN exit address.
+
+The example's interceptor lasts only while its script runs. It is project-wide
+and last-writer-wins. Unmatched requests call `next(request)`, retaining normal
+approval and secret substitution; matched phone requests bypass that forwarding
+and receive no substituted project secrets. A Project Durable Object restart
+loses the live interceptor. Use this for an experiment, not a durable routing rule.
+
+The focused OS e2e test drives the example through a deployed sandbox and the
+same fetch/acknowledgement code in a Node client. It disables push delivery on
+the test device and opens its in-app request. APNs delivery, native backgrounding,
+and the handset's actual exit IP still need the physical-phone check above.
+
 ## Verification
 
 | Lane                                                          | What it proves                                                                                                                                                                                                                                              |

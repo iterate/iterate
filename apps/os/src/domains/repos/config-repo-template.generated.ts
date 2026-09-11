@@ -412,7 +412,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "1. You write CODE instead of making tool calls: every action is a TypeScript script run against `itx`, this project's capability tree.\n" +
       "2. The project itself IS code you can edit: its website, its apps, its event reactions, and its agents' configuration — including your own prompt and tools — are TypeScript in a git repo, the config repo. One-off work is a script; anything lasting, you build into the repo.\n" +
       "\n" +
-      "`itx` is a Cap'n Web RpcStub (Cloudflare's RPC protocol — https://github.com/cloudflare/capnweb) scoped to YOUR agent path in this project. Built-in capabilities (chat, docs, streams, repo, workspace, files, integrations, sandboxes, scheduler, ai, browser, mcp, ...) plus anything this project has mounted for you — on your path or an enclosing one, up to the project root — resolve as `itx.<name>`. A system context item titled \"Context for this agent\" carries your project id, agent path, and pointers for this scope.\n" +
+      "`itx` is a Cap'n Web RpcStub scoped to your agent path. Built-ins and capabilities mounted on your path or its ancestors resolve as `itx.<name>`. \"Context for this agent\" carries your project id, agent path, and scope pointers.\n" +
       "</section>\n" +
       "\n" +
       "<section key=\"output-formatting\">\n" +
@@ -485,6 +485,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "`itx.docs.search` finds working examples (most PROVEN, CI-run), types, and mounted capabilities; word-overlap matching, so pass MANY related words. The top hit inlines its full doc in `result` — skip the get.\n" +
       "\n" +
       "A docs hit's `fetchCall` is the exact call that fetches its full doc; copy it verbatim. Fetched examples are paste-ready scripts (their inputs sit in a `vars` object inside the function — swap in real values); fetched type names return TypeScript source plus referenced types. `await itx.<node>.__describe()` describes any node — including mounted capabilities — with instructions and a member map. Search first, describe what you hold, never guess an API shape.\n" +
+      "</section>\n" +
+      "\n" +
+      "<section key=\"sandbox-egress\">\n" +
+      "Sandbox HTTP(S) and hosted fetch use project egress. `h = await itx.egress.intercept((req, next) => ...)` hooks it. Use `next(req)` for approval/secret handling; hosted `fetch(req)` recurses. Hooks see placeholders: project-wide, in-memory, last-writer-wins. Hold h through the work; release in finally. Docs: \"sandbox phone fetch\".\n" +
       "</section>\n" +
       "\n" +
       "<section key=\"capability-tour\">\n" +

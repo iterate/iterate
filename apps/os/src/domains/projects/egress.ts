@@ -3,8 +3,15 @@ import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { withStreamContext, type StreamContext } from "./stream-context.ts";
 
-/** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
-export type ProjectEgressInterceptor = (req: Request) => Promise<Response>;
+/**
+ * Live project egress handler. It sees getSecret(...) placeholders, never material.
+ * Call next(request) to continue through ordinary approvals and secret substitution.
+ * Bare fetch() in a hosted script re-enters interception instead.
+ */
+export type ProjectEgressInterceptor = (
+  request: Request,
+  next: (request: Request) => Promise<Response>,
+) => Promise<Response>;
 
 /**
  * What `egress.fetch` resolves: a real fetch `Response`, with `json()` pinned

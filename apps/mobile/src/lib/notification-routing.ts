@@ -1,6 +1,7 @@
 export type PushNotificationData = {
   destination?: {
     kind?: string;
+    capability?: string;
     path?: string;
     approvalRequestEventOffset?: number;
   };
@@ -10,6 +11,12 @@ export type PushNotificationData = {
 
 export function pushNotificationRoute(data: PushNotificationData) {
   if (typeof data.projectId !== "string") return null;
+  if (data.destination?.kind === "client-capability" && data.destination.capability === "fetch") {
+    return {
+      pathname: "/project/[projectId]/notifications" as const,
+      params: { projectId: data.projectId },
+    };
+  }
   if (data.destination?.kind === "approvals") {
     if (typeof data.destination.approvalRequestEventOffset !== "number") return null;
     // The standalone Approvals screen is retired: batch pushes land on the
@@ -42,7 +49,9 @@ export function pushNotificationRoute(data: PushNotificationData) {
 export function notificationOpenedEvent(requestOffset: number, notificationDate: number) {
   return {
     type: "events.iterate.com/device/notification-opened" as const,
-    idempotencyKey: `device-notification-opened:${requestOffset}`,
+    // A retry of one tap is identical. A later in-app tap may have a new
+    // timestamp and must not conflict with the first opened observation.
+    idempotencyKey: `device-notification-opened:${requestOffset}:${notificationDate}`,
     payload: {
       openedAt: new Date(notificationDate).toISOString(),
       requestOffset,

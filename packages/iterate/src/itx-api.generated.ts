@@ -834,8 +834,11 @@ export interface AgentCollection {
  */
 export interface Clients {
   __describe(): Promise<Description>;
-  /** The client scope's capability host — the full shipped surface, no wrapper. */
-  get(path: string): CapabilityHost;
+  /** The client scope's capability host, including its live `capabilities` mount.
+   * Supply a capability type when known; otherwise members are dynamically typed. */
+  get<Capabilities = Record<string, any>>(
+    path: string,
+  ): CapabilityHost & { capabilities: Capabilities };
   /** Known clients, read from the project processor's reduced catalog. */
   list(): Promise<ProjectClientListItem[]>;
 }
@@ -854,7 +857,8 @@ export interface ProjectEgress {
    * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
    * values in an `application/json` (or `+json`) body. */
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<EgressResponse>;
-  /** Install a live egress interceptor (last writer wins); returns a release handle. */
+  /** Install a live project-wide interceptor (last writer wins); returns a release handle.
+   * Call the handler's next(request) to forward normally; hosted-script fetch() recurses. */
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
 }
 
@@ -3255,8 +3259,15 @@ export type EgressResponse = {
   json(): Promise<unknown>;
 } & Response;
 
-/** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
-export type ProjectEgressInterceptor = (req: Request) => Promise<Response>;
+/**
+ * Live project egress handler. It sees getSecret(...) placeholders, never material.
+ * Call next(request) to continue through ordinary approvals and secret substitution.
+ * Bare fetch() in a hosted script re-enters interception instead.
+ */
+export type ProjectEgressInterceptor = (
+  request: Request,
+  next: (request: Request) => Promise<Response>,
+) => Promise<Response>;
 
 /** Reduced project email-routing state exposed through the processor capability. */
 export type EmailProcessorState = {
@@ -5029,6 +5040,10 @@ export type DeviceEnrollInput = {
 /** Public stream vocabulary, mechanically retaining payloads from the processor contract. */
 export type DeviceAppendInput =
   | TypedConsumedEventInput<
+      "events.iterate.com/device/capability-ready",
+      { requestOffset: number; capability: "fetch"; clientPath: string }
+    >
+  | TypedConsumedEventInput<
       "events.iterate.com/device/notification-opened",
       { openedAt: string; requestOffset: number }
     >
@@ -5039,6 +5054,7 @@ export type DeviceAppendInput =
         approvalRequestEventOffset?: number | undefined;
         body: string;
         destination:
+          | { kind: "client-capability"; capability: "fetch" }
           | { kind: "project" }
           | { kind: "approvals"; approvalRequestEventOffset: number }
           | { kind: "agent-chat"; path: string };

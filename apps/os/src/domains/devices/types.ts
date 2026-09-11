@@ -25,7 +25,8 @@ export type DeviceDescription = {
 
 type PublicDeviceEventType =
   | "events.iterate.com/device/notification-requested"
-  | "events.iterate.com/device/notification-opened";
+  | "events.iterate.com/device/notification-opened"
+  | "events.iterate.com/device/capability-ready";
 
 /** Public stream vocabulary, mechanically retaining payloads from the processor contract. */
 export type DeviceAppendInput = Extract<
@@ -36,4 +37,5 @@ export type DeviceAppendInput = Extract<
 export const PUBLIC_DEVICE_EVENT_TYPES = new Set<PublicDeviceEventType>([
   "events.iterate.com/device/notification-requested",
   "events.iterate.com/device/notification-opened",
+  "events.iterate.com/device/capability-ready",
 ]);

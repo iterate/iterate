@@ -63,8 +63,8 @@ export function useSignIn() {
       await signIn(baseUrl, loginHint ? { loginHint } : {});
       return baseUrl;
     },
-    onSuccess: (baseUrl) => {
-      reconnectItxSession(baseUrl);
+    onSuccess: async (baseUrl) => {
+      await reconnectItxSession(baseUrl);
       queryClient.clear();
     },
   });
@@ -78,8 +78,8 @@ export function useUseServer() {
       await setServerBaseUrl(baseUrl);
       return baseUrl;
     },
-    onSuccess: (baseUrl) => {
-      reconnectItxSession(baseUrl);
+    onSuccess: async (baseUrl) => {
+      await reconnectItxSession(baseUrl);
       queryClient.clear();
     },
   });

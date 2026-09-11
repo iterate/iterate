@@ -16,7 +16,7 @@
 // rows keep tap-to-navigate (lib/notification-routing.ts), exactly like
 // tapping the real push.
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import type { StreamEvent } from "iterate/sdk/itx/react";
 import { useState } from "react";
@@ -34,7 +34,7 @@ import {
   readAllApprovalEvents,
 } from "../../../lib/approvals.ts";
 import { getMobileDeviceId } from "../../../lib/device-identity.ts";
-import { getProjectItx } from "../../../lib/itx.ts";
+import { acknowledgeMobileNotification, getProjectItx } from "../../../lib/itx.ts";
 import {
   deriveDeviceNotifications,
   deriveNotificationListRows,
@@ -213,10 +213,26 @@ function NotificationRow({
   const [toggled, setToggled] = useState<boolean | null>(null);
   const expanded = toggled ?? targeted;
   const expandable = row.approvalRequestEventOffset !== null;
+  const phoneFetch = row.kind === "device" && row.destination?.kind === "client-capability";
+  const acknowledge = useMutation({
+    mutationFn: async () => {
+      if (row.kind !== "device") return;
+      return await acknowledgeMobileNotification({
+        baseUrl,
+        projectId,
+        requestOffset: row.requestOffset,
+        notificationDate: Date.now(),
+      });
+    },
+  });
   const openDestination = () => {
     // Synthetic rows are always expandable, so this only fires for a device
     // row without a batch identity — the push's own tap behavior.
     if (row.kind !== "device") return;
+    if (phoneFetch) {
+      acknowledge.mutate();
+      return;
+    }
     const route = pushNotificationRoute({
       destination: row.destination || undefined,
       projectId,
@@ -265,6 +281,18 @@ function NotificationRow({
           {row.status.label}
         </Text>
       </Pressable>
+      {phoneFetch ? (
+        <Text style={styles.body}>
+          {acknowledge.isPending
+            ? "Connecting this phone…"
+            : acknowledge.data === "expired"
+              ? "Request expired."
+              : acknowledge.data === "capability-ready"
+                ? "Phone ready."
+                : "Tap to use this phone."}
+        </Text>
+      ) : null}
+      {acknowledge.isError ? <Text style={styles.error}>{acknowledge.error.message}</Text> : null}
       {expanded && row.approvalRequestEventOffset !== null ? (
         <ApprovalNotificationDetail
           baseUrl={baseUrl}

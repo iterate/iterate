@@ -11,23 +11,50 @@ import {
   retryFailedIterateSession,
   type SessionStub,
 } from "iterate/sdk/itx/react";
+import { AppState, Platform } from "react-native";
 import { getAccessToken } from "./auth.ts";
+import { getMobileDeviceId } from "./device-identity.ts";
+import { MobileFetchCapabilities, MOBILE_FETCH_TYPES } from "./mobile-fetch.ts";
+import { acknowledgeDeviceNotification } from "./notification-acknowledgement.ts";
 
 export type ItxSession = SessionStub;
 
-export function getItxSession(baseUrl: string): Promise<SessionStub> {
-  configure(baseUrl);
+export async function getItxSession(baseUrl: string): Promise<SessionStub> {
+  await configure(baseUrl);
   return connectIterateSession();
 }
 
-export function getProjectItx(baseUrl: string, projectId: string) {
-  configure(baseUrl);
+export async function getProjectItx(baseUrl: string, projectId: string) {
+  await configure(baseUrl);
   return connectItx(projectId);
 }
 
+/** Shared by OS push taps and the same request's in-app notification row. */
+export async function acknowledgeMobileNotification(input: {
+  baseUrl: string;
+  projectId: string;
+  requestOffset: number;
+  notificationDate: number;
+}) {
+  if (Platform.OS === "web") throw new Error("Open this notification in the native Iterate app.");
+  const session = await getItxSession(input.baseUrl);
+  const project = session.projects.get(input.projectId);
+  try {
+    return await acknowledgeDeviceNotification({
+      project,
+      connect: () => getProjectItx(input.baseUrl, input.projectId),
+      deviceId: await getMobileDeviceId(),
+      requestOffset: input.requestOffset,
+      notificationDate: input.notificationDate,
+    });
+  } finally {
+    project[Symbol.dispose]();
+  }
+}
+
 /** Re-authenticate on the selected deployment after credentials change. */
-export function reconnectItxSession(baseUrl: string): void {
-  configure(baseUrl);
+export async function reconnectItxSession(baseUrl: string): Promise<void> {
+  await configure(baseUrl);
   reconnectIterateSession();
 }
 
@@ -36,9 +63,22 @@ export function disconnectItxSession(): void {
   disconnectIterateSession();
 }
 
-function configure(baseUrl: string): void {
+async function configure(baseUrl: string): Promise<void> {
+  const deviceId = await getMobileDeviceId();
   configureIterateSession({
     baseUrl,
+    projectConnection: (session, projectId) =>
+      Platform.OS === "web"
+        ? session.projects.get(projectId)
+        : session.projects.connect(projectId, {
+            path: `/clients/mobile/${deviceId}`,
+            description: "Foreground phone HTTP fetch using this device's network connection.",
+            capabilities: new MobileFetchCapabilities(
+              fetch,
+              () => AppState.currentState === "active",
+            ),
+            types: MOBILE_FETCH_TYPES,
+          }),
     credentials: async ({ forceRefresh }) => ({
       type: "bearer",
       token: await getAccessToken(baseUrl, { forceRefresh }),

@@ -12,6 +12,7 @@ import type {
   Agent,
   AgentChat,
   CapabilityProvision,
+  CapabilityHost,
   DynamicWorkerRef,
   FileData,
   FileHandle,
@@ -518,6 +519,117 @@ return await itx.projects.get(pid).__describe();
         marker: marker.stdout.trim(), // "hello"
         exitCode: marker.exitCode,
       };
+    },
+  }),
+  projectExample<{
+    clients: {
+      get(path: string): CapabilityHost & {
+        capabilities: {
+          fetch(request: {
+            url: string;
+            method: "GET";
+            headers: [string, string][];
+            body: null;
+          }): Promise<{
+            status: number;
+            headers: [string, string][];
+            body: Uint8Array | null;
+          }>;
+        };
+      };
+    };
+  }>({
+    id: "sandbox-phone-fetch",
+    e2eProven: false,
+    title: "Run a sandbox HTTP request through your phone",
+    description:
+      "Pass deviceId (from itx.devices.list()) and targetUrl. The sandbox's curl waits while you open a notification in the native app. The app publishes its fetch capability and acknowledges device/capability-ready; a stream wait resumes the request through that phone. Uses the phone's current Wi-Fi/cellular/VPN route, not necessarily a residential IP. The interceptor is temporary, project-wide, and last-writer-wins. Unmatched URLs use next(request), retaining normal approval and secret handling. Matching requests bypass that handling and receive no substituted project secrets. This example needs a real enrolled phone; the focused e2e test proves the flow with a test client, not APNs or a physical handset.",
+    runtimes: ["browser", "node", "cli", "run-script"],
+    fn: async (itx, vars: { deviceId?: string; targetUrl?: string; sandboxPath?: string }) => {
+      if (!vars.deviceId || !vars.targetUrl) {
+        throw new Error(
+          "Pass deviceId from itx.devices.list() and the HTTP(S) targetUrl to fetch.",
+        );
+      }
+      const target = new URL(vars.targetUrl);
+      if (!["http:", "https:"].includes(target.protocol))
+        throw new Error("targetUrl must be HTTP(S).");
+      const device = itx.devices.get(vars.deviceId);
+      const stream = itx.streams.get(`/devices/${vars.deviceId}`);
+      const clientPath = `/clients/mobile/${vars.deviceId}`;
+      const sandbox = itx.sandboxes.get(vars.sandboxPath || "/sandboxes/phone-fetch");
+      await sandbox.create({ instanceType: "lite" });
+      await sandbox.exec("true"); // Boot before starting the phone's response window.
+
+      const interceptor = await itx.egress.intercept(async (request, next) => {
+        const url = new URL(request.url);
+        // Edit this predicate to select an origin, pathname, or query parameter.
+        if (request.method !== "GET" || url.href !== target.href) return await next(request);
+        const expiresAt = Date.now() + 45_000;
+        const [notification] = await device.append({
+          type: "events.iterate.com/device/notification-requested",
+          payload: {
+            title: "HTTP request waiting for your phone",
+            body: `Open Iterate to fetch ${url.origin}${url.pathname} using this phone's network.`,
+            destination: { kind: "client-capability", capability: "fetch" },
+            expiresAt,
+          },
+        });
+        try {
+          // Both waits replay from the request, so a fast tap or registration
+          // can arrive before we subscribe without being missed.
+          await stream.waitForEvent({
+            afterOffset: notification.offset,
+            eventTypes: ["events.iterate.com/device/notification-opened"],
+            predicate: (event) => event.payload?.requestOffset === notification.offset,
+            timeoutMs: Math.max(1, expiresAt - Date.now()),
+          });
+          await stream.waitForEvent({
+            afterOffset: notification.offset,
+            eventTypes: ["events.iterate.com/device/capability-ready"],
+            predicate: (event) =>
+              event.payload?.requestOffset === notification.offset &&
+              event.payload.capability === "fetch" &&
+              event.payload.clientPath === clientPath,
+            timeoutMs: Math.max(1, expiresAt - Date.now()),
+          });
+        } catch (error) {
+          return Response.json(
+            { message: "Waiting for the phone failed.", detail: String(error) },
+            { status: 502 },
+          );
+        }
+        if (Date.now() >= expiresAt) {
+          return Response.json({ message: "Phone request expired." }, { status: 504 });
+        }
+        try {
+          const response = await itx.clients.get(clientPath).capabilities.fetch({
+            url: request.url,
+            method: "GET",
+            headers: [...request.headers.entries()],
+            body: null,
+          });
+          return new Response(response.body?.slice().buffer, {
+            status: response.status,
+            headers: response.headers,
+          });
+        } catch (error) {
+          // Readiness is an observation; a later disconnect remains a failure.
+          return Response.json(
+            { message: "Phone fetch failed.", detail: String(error) },
+            { status: 502 },
+          );
+        }
+      });
+      try {
+        const quotedUrl = "'" + target.href.replaceAll("'", "'\\''") + "'";
+        return await sandbox.exec(
+          `curl -sS --max-time 80 --write-out '\\nHTTP %{http_code}\\n' ${quotedUrl}`,
+          { timeout: 90_000 },
+        );
+      } finally {
+        await interceptor.release();
+      }
     },
   }),
   projectExample({

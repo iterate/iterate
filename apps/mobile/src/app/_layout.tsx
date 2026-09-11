@@ -3,6 +3,7 @@ import "../lib/streams-polyfill.ts";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { router, Stack, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import { Pressable, Text } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { initialWindowMetrics, SafeAreaProvider } from "react-native-safe-area-context";
 import { NoteCaptureOverlay } from "../components/note-composer.tsx";
@@ -61,7 +62,7 @@ function RootStack() {
     retry: false,
     staleTime: Infinity,
   });
-  useQuery({
+  const notification = useQuery({
     queryKey: ["initial-notification"],
     queryFn: async () => {
       await routeInitialNotification();
@@ -74,6 +75,16 @@ function RootStack() {
   return (
     <>
       <StatusBar style="light" />
+      {notification.isError ? (
+        <Pressable
+          onPress={() => void notification.refetch()}
+          style={{ backgroundColor: colors.background, padding: 12 }}
+        >
+          <Text style={{ color: colors.text }}>
+            Could not open notification: {notification.error.message}. Tap to retry.
+          </Text>
+        </Pressable>
+      ) : null}
       <Stack
         screenOptions={{
           headerStyle: { backgroundColor: colors.background },

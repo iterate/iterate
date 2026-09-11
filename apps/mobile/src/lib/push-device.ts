@@ -4,12 +4,8 @@ import * as Notifications from "expo-notifications";
 import { router } from "expo-router";
 import { Platform } from "react-native";
 import { getMobileDeviceId } from "./device-identity.ts";
-import { getProjectItx } from "./itx.ts";
-import {
-  notificationOpenedEvent,
-  pushNotificationRoute,
-  type PushNotificationData,
-} from "./notification-routing.ts";
+import { acknowledgeMobileNotification, getProjectItx } from "./itx.ts";
+import { pushNotificationRoute, type PushNotificationData } from "./notification-routing.ts";
 import { queryClient } from "./query.ts";
 import { DEFAULT_SERVER } from "./servers.ts";
 import { getServerBaseUrl } from "./storage.ts";
@@ -107,11 +103,12 @@ async function handlePushNotificationResponse(response: Notifications.Notificati
   const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
   router.push(route);
   if (typeof data.requestOffset === "number") {
-    const deviceId = await getMobileDeviceId();
-    const project = await getProjectItx(baseUrl, data.projectId);
-    await project.devices
-      .get(deviceId)
-      .append(notificationOpenedEvent(data.requestOffset, response.notification.date));
+    await acknowledgeMobileNotification({
+      baseUrl,
+      projectId: data.projectId,
+      requestOffset: data.requestOffset,
+      notificationDate: response.notification.date,
+    });
   }
 }
 

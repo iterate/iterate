@@ -18,7 +18,8 @@ export const NotificationIntentContract = defineProcessorContract({
   // agentReplyEventOffset (the suppression handle for chat-reply intents).
   // 0.4.0: optional requests (the held batch's method+url pairs, in-journal
   // detail for in-app rows; push title/body stay host-only).
-  version: "0.4.0",
+  // 0.5.0: client-capability destinations for foreground phone fetch requests.
+  version: "0.5.0",
   description:
     "Channel-neutral project notification intent vocabulary, shared by producers (the " +
     "notification processor) and delivery channels (device push). A contract dependency, " +
@@ -96,6 +97,12 @@ export const NotificationIntentContract = defineProcessorContract({
           }),
         destination: z
           .discriminatedUnion("kind", [
+            z
+              .strictObject({
+                kind: z.literal("client-capability"),
+                capability: z.literal("fetch"),
+              })
+              .meta({ description: "Open the app and publish the requested phone capability." }),
             z
               .strictObject({ kind: z.literal("project") })
               .meta({ description: "The project home screen." }),

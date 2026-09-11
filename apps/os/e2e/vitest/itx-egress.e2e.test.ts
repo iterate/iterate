@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import { withTunnel } from "../test-support/tunnel.ts";
+import { itxScript } from "../test-support/itx-script-builder.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startEgressEcho } from "./itx-capability-fixtures.ts";
 import {
@@ -10,6 +11,83 @@ import {
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 // These are hand written tests - they MUST pass
+test("a script interceptor forwards with next without recursion and preserves secrets and denial", async () => {
+  await using echo = await startEgressEcho();
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects.get(`egress-next-${crypto.randomUUID()}`).create({});
+  const secretPath = "/secrets/forwarded";
+  await project.secrets.get(secretPath).create({
+    material: "forwarded-secret",
+    egress: { urls: [echo.url] },
+  });
+  await project.streams.get("/").append({
+    type: "events.iterate.com/project/egress-rules-configured",
+    payload: {
+      rules: [{ ruleKey: "deny-delete", match: { methods: ["DELETE"] }, verdict: "deny" }],
+    },
+  });
+  await waitForCondition(
+    async () => (await project.processor.snapshot()).state.egressRules.length === 1,
+    { description: "forwarding policy to be applied" },
+  );
+
+  const result = await itxScript(project.capabilityHost)
+    .vars({ url: echo.url, secretPath })
+    .execute(async (itx, { url, secretPath }) => {
+      const intercepted: string[] = [];
+      const interceptor = await itx.egress.intercept(async (request, next) => {
+        intercepted.push(request.headers.get("x-itx-egress-proof") || request.method);
+        return await next(request);
+      });
+      try {
+        const forwarded = await fetch(url, {
+          headers: { "x-itx-egress-proof": `Bearer getSecret("${secretPath}")` },
+        });
+        const denied = await fetch(url, { method: "DELETE" });
+        return {
+          intercepted,
+          forwarded: await forwarded.json(),
+          denied: { status: denied.status, body: await denied.json() },
+        };
+      } finally {
+        await interceptor.release();
+      }
+    });
+  expect(result.success()).toMatchObject({
+    intercepted: ['Bearer getSecret("/secrets/forwarded")', "DELETE"],
+    forwarded: { headers: { "x-itx-egress-proof": "Bearer forwarded-secret" } },
+    denied: { status: 403, body: { code: "egress_denied" } },
+  });
+});
+
+test("a hosted script can consume the binary response from its own interceptor", async () => {
+  const forwarded: string[] = [];
+  await using upstream = await withTunnel((request) => {
+    forwarded.push(request.url);
+    return new Response("unexpected forwarding");
+  });
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects.get(`egress-body-${crypto.randomUUID()}`).create({});
+
+  const result = await itxScript(project.capabilityHost)
+    .vars({ url: upstream.url })
+    .execute(async (itx, { url }) => {
+      const interceptor = await itx.egress.intercept(
+        async () => new Response(new Uint8Array([0, 255, 42]), { status: 422 }),
+      );
+      try {
+        const response = await fetch(url);
+        return { status: response.status, body: [...new Uint8Array(await response.arrayBuffer())] };
+      } finally {
+        await interceptor.release();
+      }
+    });
+  expect(result.success()).toMatchObject({ status: 422, body: [0, 255, 42] });
+  expect(forwarded).toEqual([]);
+});
+
 test("two-arg fetch(url, init) carries method, headers, and body to the upstream", async () => {
   await using echo = await startEgressEcho();
   using session = withItxSession();

@@ -2210,14 +2210,20 @@ class ClientsRpcTarget extends IterateRpcTarget<"Clients"> {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** The client scope's capability host — the full shipped surface, no wrapper. */
-  get(path: string): CapabilityHostRpcTarget {
+  /** The client scope's capability host, including its live `capabilities` mount.
+   * Supply a capability type when known; otherwise members are dynamically typed. */
+  get<Capabilities = Record<string, any>>(
+    path: string,
+  ): CapabilityHostRpcTarget & { capabilities: Capabilities } {
+    // The capability-host RPC dispatcher resolves mounted members. They are
+    // not JavaScript properties on the host instance itself; connect() mounts
+    // this client's target at the documented `capabilities` path.
     return new CapabilityHostRpcTarget({
       auth: this.props.auth,
       ctx: this.props.ctx,
       path,
       projectId: this.props.projectId,
-    });
+    }) as CapabilityHostRpcTarget & { capabilities: Capabilities };
   }
 
   /** Known clients, read from the project processor's reduced catalog. */
@@ -3204,7 +3210,8 @@ class DeviceRpcTarget extends IterateRpcTarget<"Device"> {
         `Device ${this.props.deviceId}: append a device/notification-requested event to notify it. ` +
         "enroll/revoke are authenticated phone lifecycle operations; no push credential is readable.",
       children: {
-        append: "Append one or more typed notification request/opened facts.",
+        append:
+          "Append typed notification requests, opened observations, or capability-ready acknowledgements.",
         enroll: "Enroll or rotate this authenticated user's Expo push token.",
         kill: "Restart the server-side device object.",
         revoke: "Disable push for this authenticated user's installation.",
@@ -8262,7 +8269,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Project-attributed outbound fetch: fetch(input, init?) — the standard fetch signature — egresses with the project's identity and secret substitution. Headers, URL paths and URL query values interpolate getSecret(...); an application/json body substitutes exact string values when x-iterate-secret-template: json is set. intercept(handler) installs a live egress interceptor (last writer wins).",
+        "Project-attributed outbound fetch: fetch(input, init?) — the standard fetch signature — egresses with the project's identity and secret substitution. Headers, URL paths and URL query values interpolate getSecret(...); an application/json body substitutes exact string values when x-iterate-secret-template: json is set. intercept((request, next) => ...) installs a live project-wide interceptor (last writer wins). next(request) continues through normal approvals and secret substitution without re-entering interception. Keep the returned handle alive and release it when the operation ends.",
       children: {
         fetch: "Outbound fetch through project egress.",
         intercept: "Install an egress interceptor; returns a release handle.",
@@ -8285,7 +8292,8 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
     );
   }
 
-  /** Install a live egress interceptor (last writer wins); returns a release handle. */
+  /** Install a live project-wide interceptor (last writer wins); returns a release handle.
+   * Call the handler's next(request) to forward normally; hosted-script fetch() recurses. */
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept> {
     return projectStub(env.PROJECT, this.props.projectId).interceptEgress(handler);
   }
