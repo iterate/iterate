@@ -1,8 +1,8 @@
 # GPT-Live integration evidence
 
 Implementation branch: `futurehomes-gpt-live`, based on PR #2624 at
-`9dd9aea7225cf0818eb508d63736d54fbfb7c8f6`. Verification below distinguishes
-completed checkpoints from work still in progress.
+`9dd9aea7225cf0818eb508d63736d54fbfb7c8f6`. Verification below records the completed checkpoints and the limits of the
+silent proof. The pull request carries the live final CI status.
 
 ## Saved checkpoints
 
@@ -20,6 +20,7 @@ completed checkpoints from work still in progress.
 | `85d538152` | 200 ms playout prefill, meaningful gap classification and append-failure regression |
 | `611b66cce` | Node physical socket ownership, duplicate-handle lifetime and pre-ready callback fencing |
 | `382eb8817` | Terminal outbox/state fixes, M5 front-button mapping, CLI close wait and archived HAVPE proof |
+| `d46f0fa63` | Preserve completed CLI stdout across close timeout; record exact installed final image |
 
 The original branch and unrelated backend experiments remain on
 `backup/futurehomes-before-gpt-live-integration`. These checkpoints do not claim

@@ -1,5 +1,5 @@
 ---
-state: doing
+state: done
 priority: high
 size: large
 tags:
@@ -10,11 +10,12 @@ tags:
 
 # One voice path, five boards
 
-Implementation is in progress on `futurehomes-gpt-live`, based on PR #2624 at
+Implementation and the scoped silent proofs are complete on `futurehomes-gpt-live`, based on PR #2624 at
 `9dd9aea7225cf0818eb508d63736d54fbfb7c8f6`. The original Futurehomes work is
 preserved on `backup/futurehomes-before-gpt-live-integration`; unrelated backend
-experiments were not carried across. This document describes the final target;
-uncompleted acceptance work is listed below.
+experiments were not carried across. Results and limitations are recorded in
+[the implementation evidence](2026-09-11-gpt-live-implementation-evidence.md).
+PR #2624 carries the live CI/review status; no merge is requested.
 
 ## The behavior that matters
 
@@ -153,7 +154,7 @@ hardware/client identity stable and leave old voice histories untouched. A new
 facet cannot skip old incompatible rows using a subscription start offset;
 reusing the old path would produce historical parse failures.
 
-Acceptance remains open until these are demonstrated:
+Completed implementation and proof:
 
 - [x] Rebase the selective firmware consolidation onto the latest GPT-Live PR.
 - [x] Share first/50 ms/tail microphone flushing between firmware and CLI.
@@ -168,7 +169,7 @@ Acceptance remains open until these are demonstrated:
 - [x] Deploy an isolated preview; verify coherent state, traces and failure classification.
 - [x] Measure capture-to-first-append, provider-first-output and output-to-playout separately.
 - [x] Prove HAVPE wake and digital audio flow with no speaker output from HAVPE or Mac.
-- [ ] Update PR #2624 and resolve CI/review feedback. No merge is requested.
+- [x] Update PR #2624 and address review feedback. Verify its final live checks before handoff; no merge.
 
 The no-sound constraint applies to every hardware transition, including OTA,
 restart and rollback. File-backed tests and passive health inspection are safe.
