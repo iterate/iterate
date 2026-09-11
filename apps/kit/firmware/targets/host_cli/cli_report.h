@@ -58,6 +58,10 @@ struct cli_report_turn {
   /** The turn stopped progressing before its answer completed and drained. */
   bool watchdog_stalled;
   uint64_t started_ms;
+  /** First processed microphone frame for this turn, on the local monotonic clock. */
+  uint64_t first_input_capture_ms;
+  /** First successful append accepted by the local stream sender. */
+  uint64_t first_append_ms;
   uint64_t committed_ms;
   uint64_t first_audio_ms;
   uint64_t completed_ms;
@@ -149,6 +153,10 @@ uint64_t cli_report_speech_end_to_first_packet_ms(const struct cli_report_turn *
 
 /** Speech end to first nonquiet speaker output, or zero when unavailable. */
 uint64_t cli_report_speech_end_to_first_played_ms(const struct cli_report_turn *turn);
+
+/** True only when both locally stamped endpoints make the latency meaningful. */
+bool cli_report_has_speech_end_to_first_packet(const struct cli_report_turn *turn);
+bool cli_report_has_speech_end_to_first_played(const struct cli_report_turn *turn);
 
 /** Write the whole run as JSON. */
 enum cli_report_status cli_report_write(

@@ -29,7 +29,7 @@
  *
  * OFF BY DEFAULT. Scripted runs, recordings and the fault harnesses are read
  * by other programs, and those parse the line log. The screen is enabled only
- * for an interactive push-to-talk session on a terminal.
+ * for an interactive terminal session.
  */
 
 #include <stdbool.h>
@@ -48,16 +48,7 @@ enum {
   CLI_SCREEN_FRAME_BYTES = 4096,
 };
 
-/**
- * Everything the frame shows, gathered by the caller for one draw.
- *
- * TWO KINDS OF FACT, DELIBERATELY MIXED. Some of this is what the server last
- * told us and some is only true on this machine — whether the space bar is
- * down right now cannot be learned from a stream, and how long ago the
- * provider accepted a call cannot be learned from a keyboard. A person
- * debugging a dead press needs both on the same line of sight, which is the
- * reason this is one struct and not two.
- */
+/** Everything the terminal status frame needs for one draw. */
 struct cli_screen_state {
   /** Which stream this session is talking to; drawn in the heading. */
   const char *stream_path;
@@ -78,12 +69,10 @@ struct cli_screen_state {
   /** Transport state name, for the case where neither light is green. */
   const char *transport_state;
 
-  /** The space bar, right now. Known only here. */
-  bool space_held;
-  /** A turn is open and capture is being sent. */
+  /** A local or remote conversation has requested capture. */
+  bool capture_requested;
+  /** Capture is currently feeding the active conversation. */
   bool talking;
-  /** The key came up and the tail of the turn is still going out. */
-  bool flushing;
 
   uint32_t mic_captured;
   /** Frames waiting for a link that cannot take them yet. */
@@ -133,13 +122,6 @@ struct cli_screen_state {
    */
   uint32_t spk_catchup;
 
-  /*
-   * The last completed turn, broken at the two seams a person can act on:
-   * how long this machine took to commit after the key came up, and how long
-   * everything past it took to answer. Zero means no turn has finished.
-   */
-  uint32_t turn_release_to_commit_ms;
-  uint32_t turn_commit_to_audio_ms;
 
   uint32_t outbox_used;
   uint32_t outbox_slots;

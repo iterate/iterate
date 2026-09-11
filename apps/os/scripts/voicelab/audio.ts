@@ -1,6 +1,6 @@
 // Audio I/O for the voice lab. 16kHz mono PCM16 throughout (the pipeline's rate, GPT-Live's too).
 // MicSource captures from the real mic via sox `rec`, or emits a PCM file paced in
-// realtime followed by open-mic silence (deterministic, headless test input).
+// realtime followed by continuous-mic silence (deterministic, headless test input).
 // PlayoutBuffer paces PCM to the speaker (sox `play`) in fixed ticks, counts underruns
 // (audible gaps), and supports clear() for barge-in. With device=false it keeps the
 // exact same accounting without touching an audio device.

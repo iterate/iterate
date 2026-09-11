@@ -4,10 +4,8 @@
  * `components/voice/src/voice_loop.c` is the one program all four boards run,
  * and until this file it was in no host build: its intent mapping was verified
  * by diffing it against the four device files it replaced, and that is exactly
- * where the bug lived. Driving a button board with `pushToTalk.start()` alone
- * looked completely dead — the press was accepted, latched, and never consulted
- * because the turn machine reads the latch only inside `wants_call`. An
- * afternoon of hardware bisection, and no test anywhere could have failed.
+ * where the bug lived. This fixture drives conversation control through the
+ * mounted capability, exercising the same route a real caller uses.
  *
  * This is that test. The board here has no `poll` op at all, so there is no
  * physical button in the program: every intent has to come from the capability
@@ -55,7 +53,7 @@ static const struct iterate_kit_audio_codec_properties codec_properties = {
 
 /*
  * How many 20 ms frames the "microphone" still owes. Zero — the default —
- * is a silent board, which is what every scenario but the dial-speech one
+ * is a silent board, which is what every scenario but the speech ones
  * wants; see speak_frames.
  */
 static size_t capture_frames_pending;
@@ -72,7 +70,7 @@ static enum iterate_kit_status codec_read(
   (void)context;
   (void)reference;
   if (capture_frames_pending == 0U) {
-    /* Silent by default; the dial-speech test arms frames explicitly. */
+    /* Silent by default; speech tests arm frames explicitly. */
     return ITERATE_KIT_UNAVAILABLE;
   }
   --capture_frames_pending;
@@ -106,6 +104,7 @@ struct board {
   struct iterate_kit_voice_view last_view;
   size_t presented;
   bool started;
+  bool microphone_muted;
 };
 
 static bool board_start(void *context, struct iterate_kit_board_audio *out) {
@@ -125,24 +124,28 @@ static void board_present(
   ++board->presented;
 }
 
+static void board_poll(void *context, struct iterate_kit_voice_intent *out) {
+  const struct board *board = context;
+  out->microphone_muted = board->microphone_muted;
+}
+
 /*
- * NO `poll`, WHICH IS THE POINT. A NULL op is a board saying it has no such
- * hardware, so this program contains no physical control of any kind — every
- * intent below had to arrive over the wire to arrive at all.
+ * The fixture reports only its mute level. It has no physical start/end control,
+ * so every conversation intent below arrives over the mounted capability.
  */
 static const struct iterate_kit_board_ops board_ops = {
   .start = board_start,
   .present = board_present,
+  .poll = board_poll,
 };
 
-static const struct iterate_kit_board_facts push_to_talk_facts = {
+static const struct iterate_kit_board_facts voice_facts = {
   .device_name = "host-test",
   .speaker = {0},
   .speaker_dry_wait_ms = 40U,
   .processing_frame_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
   .capture_chunk_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
   .capture_stack_bytes = 4096U,
-  .hold_to_talk = true,
 };
 
 /* --- driving the loop ----------------------------------------------------- */
@@ -166,7 +169,7 @@ static void boot(void) {
   iterate_kit_fake_esp_idf_set_now_us(1000000);
   assert(
       iterate_kit_voice_loop_init(
-          &board_ops, &push_to_talk_facts, &board));
+          &board_ops, &voice_facts, &board));
   /* Boot ran to the end rather than parking: both audio tasks were asked for. */
   assert(iterate_kit_fake_esp_idf_tasks_created() == 2U);
   assert(!iterate_kit_fake_esp_idf_restart_requested());
@@ -180,10 +183,10 @@ static void step(void) {
 }
 
 /*
- * A REMOTE PRESS, AS BYTES.
+ * A REMOTE CONVERSATION CONTROL, AS BYTES.
  *
  * Target 0 is the session's main capability, which is the peer the loop
- * assembled out of push-to-talk, conversation control, the speaker, health and
+ * assembled out of conversation control, the speaker, health and
  * whatever the board added. So this is not a test hook or a shortcut into the
  * loop's internals: it is the message a caller sends, arriving where a caller's
  * message arrives.
@@ -223,12 +226,11 @@ static void remote_call(const char *first, const char *second) {
 
 /* Model a wake/control edge arriving while codec read has not returned. */
 static void activate_during_codec_read(void) {
-  remote_call("pushToTalk", "start");
+  remote_call("conversation", "start");
 }
 
 /** Back to idle, and prove it, so the next scenario starts from nothing. */
 static void quiescent(void) {
-  remote_call("pushToTalk", "stop");
   remote_call("conversation", "end");
   step();
   assert(!board.last_view.wants_call);
@@ -295,6 +297,15 @@ static bool sent_after_contains(size_t from, const char *needle) {
   return false;
 }
 
+static size_t first_sent_after_containing(size_t from, const char *needle) {
+  for (size_t index = from; index < iterate_kit_fake_platform_sent_count(); ++index) {
+    if (strstr(iterate_kit_fake_platform_sent(index), needle) != NULL) {
+      return index;
+    }
+  }
+  return iterate_kit_fake_platform_sent_count();
+}
+
 static const char *current_activation(void) {
   static char activation[65];
   for (size_t index = iterate_kit_fake_platform_sent_count(); index-- > 0U;) {
@@ -355,46 +366,6 @@ static size_t collect_sent_microphone(
 static int16_t collected_sample(const uint8_t *pcm, size_t frame) {
   const size_t offset = frame * ITERATE_KIT_VOICE_FRAME_BYTES;
   return (int16_t)((uint16_t)pcm[offset] | ((uint16_t)pcm[offset + 1U] << 8));
-}
-
-/*
- * Deliver the call's acceptance, exactly as the stream delivers it — through
- * the `processEventBatch` callback the loop itself exported, whose id is read
- * out of the message the device SENT rather than assumed. The same shape
- * `voice_loop_answer_clock_test.c` delivers, for the same reason.
- */
-static void deliver_accepted(void) {
-  static char message[512];
-  struct iterate_kit_itx_connection *connection =
-      iterate_kit_fake_platform_connection();
-  const char *found = iterate_kit_fake_platform_find_sent("processEventBatch");
-  const char *field;
-  const char *marker;
-  long export_id;
-  assert(connection != NULL);
-  assert(found != NULL);
-  field = strstr(found, "\"processEventBatch\":");
-  assert(field != NULL);
-  marker = strstr(field, "[\"export\",");
-  assert(marker != NULL);
-  export_id = strtol(marker + strlen("[\"export\","), NULL, 10);
-  (void)snprintf(
-      message,
-      sizeof(message),
-      "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
-      "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
-      "\"offset\":100,"
-      "\"payload\":{\"activation\":\"%s\",\"conversationId\":\"convdial\",\"handshakeTookMs\":2000}}"
-      "]],\"scannedThroughOffset\":100,\"state\":null}]]]",
-      export_id, current_activation());
-  deliver(connection, message);
-  {
-    char release[64];
-    (void)snprintf(
-        release, sizeof(release), "[\"release\",%lld,1]",
-        (long long)next_inbound_call_id++);
-    deliver(connection, release);
-  }
 }
 
 /** One speaker chunk for the accepted call: 30 bytes of PCM, optionally `last`. */
@@ -474,47 +445,49 @@ static void deliver_accepted_latest(void) {
   }
 }
 
+static void deliver_ended_latest(void) {
+  static char message[512];
+  struct iterate_kit_itx_connection *connection =
+      iterate_kit_fake_platform_connection();
+  const long export_id = latest_callback_export_id();
+  const long offset = next_event_offset++;
+  assert(connection != NULL);
+  (void)snprintf(
+      message,
+      sizeof(message),
+      "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
+      "{\"type\":\"events.iterate.com/voice-agent/conversation-ended\","
+      "\"offset\":%ld,"
+      "\"payload\":{\"activation\":\"%s\",\"reason\":\"server-ended\"}}"
+      "]],\"scannedThroughOffset\":%ld,\"state\":null}]]]",
+      export_id, offset, current_activation(), offset);
+  deliver(connection, message);
+  (void)snprintf(
+      message, sizeof(message), "[\"release\",%lld,1]",
+      (long long)next_inbound_call_id++);
+  deliver(connection, message);
+}
+
 /* --- the tests ------------------------------------------------------------ */
 
 /*
  * THE ONE THAT WOULD HAVE SAVED THE AFTERNOON.
  *
- * No preamble, no `conversation.start()`, no button: one press, and this device
- * is trying to be in a call. Reverting the two-line collapse in
- * handle_device_event fails exactly this assertion.
+ * One `conversation.start()` reaches the loop through the mounted capability
+ * and opens continuous capture.
  */
-static void a_remote_press_raises_wants_call_with_no_button(void) {
+static void conversation_start_raises_wants_call_with_no_button(void) {
   quiescent();
 
-  remote_call("pushToTalk", "start");
+  remote_call("conversation", "start");
   step();
 
   assert(board.last_view.wants_call);
 }
 
 /*
- * AND RELEASING TALK DOES NOT HANG UP. A release closes the microphone gate
- * and says nothing to the far end; it does not end the conversation, and
- * neither does this. A device that dropped the call on every release would
- * take one turn and stop.
- */
-static void releasing_talk_keeps_the_call(void) {
-  quiescent();
-  remote_call("pushToTalk", "start");
-  step();
-  assert(board.last_view.wants_call);
-
-  remote_call("pushToTalk", "stop");
-  step();
-
-  assert(board.last_view.wants_call);
-}
-
-/*
- * THE OTHER VERB STILL EXISTS, and it is not the same verb. An open-mic board
- * has no press at all, and on a button board this is how you open a call to be
- * greeted without holding the microphone open — so it must raise the intent and
- * `conversation.end()` must put it back down.
+ * Conversation control opens continuous capture and `conversation.end()` puts
+ * it back down.
  */
 static void conversation_control_opens_and_ends_a_call(void) {
   quiescent();
@@ -529,20 +502,57 @@ static void conversation_control_opens_and_ends_a_call(void) {
 }
 
 /*
- * NOTHING PHYSICAL WAS INVOLVED IN ANY OF THE ABOVE. This board declares no
- * `poll` op, which is a board saying it has no such hardware — asserted rather
- * than assumed, because a fixture that quietly grew a button would make every
- * scenario here meaningless.
+ * No physical start/end control is involved in the scenarios above.
  */
 static void nothing_physical_was_involved(void) {
-  assert(board_ops.poll == NULL);
+  assert(!board.microphone_muted);
   assert(!iterate_kit_fake_esp_idf_restart_requested());
   assert(board.presented > 0U);
 }
 
+/* Ending and starting in one inbound drain creates B, never revives A. */
+static void same_pass_end_then_start_creates_a_new_activation(void) {
+  char activation_a[65];
+  const size_t before = iterate_kit_fake_platform_sent_count();
+  quiescent();
+  remote_call("conversation", "start");
+  step();
+  pump();
+  speak_frames(1U);
+  run_ms(50U);
+  (void)snprintf(activation_a, sizeof(activation_a), "%s", current_activation());
+
+  remote_call("conversation", "end");
+  remote_call("conversation", "start");
+  step();
+  speak_frames(1U);
+  run_ms(50U);
+
+  assert(board.last_view.wants_call);
+  assert(strcmp(current_activation(), activation_a) != 0);
+  assert(sent_after_contains(before, "conversation-ended"));
+  quiescent();
+}
+
+/* A capability start cannot override an already asserted physical mute. */
+static void muted_remote_start_does_not_open_capture(void) {
+  const size_t before = iterate_kit_fake_platform_sent_count();
+  quiescent();
+  board.microphone_muted = true;
+  step();
+  remote_call("conversation", "start");
+  step();
+  speak_frames(1U);
+  run_ms(50U);
+  assert(!board.last_view.wants_call);
+  assert(!sent_after_contains(before, "\"pcm\":\""));
+  board.microphone_muted = false;
+  step();
+}
+
 /*
  * Wake detection reaches the app after audio has already crossed the codec.
- * The first, middle and release-tail frames must therefore survive the mount
+ * The first, middle and following frames must therefore survive the mount
  * and reach the stream in chronological order, even though no call was ready
  * while they were captured.
  */
@@ -552,12 +562,11 @@ static void pre_mount_speech_is_preserved_and_sent_immediately(void) {
   quiescent();
   capture_frame_value = 1000;
 
-  remote_call("pushToTalk", "start");
+  remote_call("conversation", "start");
   step();
   speak_frames(1U); /* prefix */
   speak_frames(4U); /* middle */
-  speak_frames(1U); /* tail */
-  remote_call("pushToTalk", "stop");
+  speak_frames(1U); /* following frame */
   step();
 
   assert(!sent_after_contains(before, "mic-frame"));
@@ -570,97 +579,12 @@ static void pre_mount_speech_is_preserved_and_sent_immediately(void) {
   assert(collected_sample(pcm, 5U) == 1005);
 }
 
-/*
- * SPEECH SPOKEN INTO THE DIAL FLOWS AT ONCE, AND NO TURN IS EVER MARKED.
- *
- * Press from sleep, say "count to forty", let go — the words go up as mic
- * frames the moment the stream is up, call or no call: the first frame is
- * what opens the call and the facet holds the rest while it dials (it did
- * this device's holding for it; the device used to queue until accepted
- * behind a durable `ptt-start`). Push-to-talk left the wire on 2026-09-11:
- * no `ptt-start` on the press, no `ptt-end` on the release, nothing when the
- * call connects — the button is a microphone gate and the far side's own
- * voice activity decides the turn.
- */
-static void dial_speech_flows_at_once_and_no_turn_is_marked(void) {
-  size_t after_press;
-  size_t after_accept;
-  char activation[65];
-  quiescent();
-
-  /* Press from sleep and speak into the dial: 400 ms of words. */
-  after_press = iterate_kit_fake_platform_sent_count();
-  remote_call("pushToTalk", "start");
-  step();
-  speak_frames(20U);
-  run_ms(500U);
-  /* Already on the wire, with no call accepted yet. */
-  assert(sent_after_contains(after_press, "mic-frame"));
-  (void)snprintf(activation, sizeof(activation), "%s", current_activation());
-  assert(!sent_after_contains(after_press, "ptt-start"));
-
-  /* Let go before anything answered: nothing is said about it. */
-  remote_call("pushToTalk", "stop");
-  step();
-  run_ms(2000U);
-  assert(!sent_after_contains(after_press, "ptt-end"));
-
-  /* The call connects late, with the button long since up: still nothing. */
-  after_accept = iterate_kit_fake_platform_sent_count();
-  deliver_accepted_latest();
-  run_ms(1000U);
-  assert(!sent_after_contains(after_accept, "ptt-start"));
-  assert(!sent_after_contains(after_accept, "ptt-end"));
-  assert(!sent_after_contains(after_press, "button-pressed"));
-
-  /* Releasing and pressing again is another utterance in the same call, not
-   * a new backend activation. */
-  remote_call("pushToTalk", "start");
-  step();
-  speak_frames(1U);
-  run_ms(50U);
-  assert(strcmp(current_activation(), activation) == 0);
-  remote_call("pushToTalk", "stop");
-  step();
-}
-
-/*
- * A PROMISE WITH NO WORDS IN IT COMMITS NOTHING. `dial_speech_queued` is
- * raised from intent — wanting the call while it dialled — but on a board
- * whose microphone only owns its pins behind the capture fence, the dial can
- * end with an empty queue. The accept path once opened a turn anyway and
- * committed an empty ptt-end, asking the provider to answer silence; now the
- * empty promise is consumed silently and the call waits for a real press.
- */
-static void a_silent_dial_release_commits_no_turn(void) {
-  size_t after_accept;
-  quiescent();
-
-  /* Press from sleep, HOLD — long enough to be a hold, not a tap — and let
-   * go without a single captured frame, the stick's fence-closed dial. */
-  remote_call("pushToTalk", "start");
-  run_ms(400U);
-  remote_call("pushToTalk", "stop");
-  step();
-
-  /* Seconds pass with no call, exactly like the spoken sibling above. */
-  run_ms(2000U);
-
-  after_accept = iterate_kit_fake_platform_sent_count();
-  deliver_accepted();
-  run_ms(2000U);
-
-  /* No turn opened on the empty queue: no commit, no mic audio. */
-  assert(!sent_after_contains(after_accept, "ptt-end"));
-  assert(!sent_after_contains(after_accept, "mic-frame"));
-}
-
 /* Ending A fences its queued tail before B gets a fresh activation. */
 static void ending_a_never_sends_its_tail_as_b(void) {
   char activation_a[65];
   size_t after_end;
   quiescent();
-  remote_call("pushToTalk", "start");
+  remote_call("conversation", "start");
   step();
   speak_frames(3U);
   run_ms(50U);
@@ -672,11 +596,67 @@ static void ending_a_never_sends_its_tail_as_b(void) {
   run_ms(100U);
   assert(!sent_after_contains(after_end, "mic-frame"));
 
-  remote_call("pushToTalk", "start");
+  remote_call("conversation", "start");
   step();
   speak_frames(1U);
   run_ms(50U);
   assert(strcmp(current_activation(), activation_a) != 0);
+}
+
+/* A cancellation before mount is durable and ordered ahead of B's microphone. */
+static void ending_before_acceptance_terminates_a_before_b(void) {
+  const size_t before = iterate_kit_fake_platform_sent_count();
+  size_t terminal;
+  size_t microphone;
+  quiescent();
+  remote_call("conversation", "start");
+  step();
+  speak_frames(1U);
+  remote_call("conversation", "end");
+  step();
+
+  remote_call("conversation", "start");
+  step();
+  speak_frames(1U);
+  pump();
+  run_ms(50U);
+
+  terminal = first_sent_after_containing(before, "conversation-ended");
+  microphone = first_sent_after_containing(before, "\"pcm\":");
+  assert(terminal < iterate_kit_fake_platform_sent_count());
+  assert(microphone < iterate_kit_fake_platform_sent_count());
+  assert(terminal < microphone);
+  assert(sent_after_contains(terminal, "\"reason\":\"button\""));
+  quiescent();
+}
+
+/* A server terminal fences queued A audio before a later local B starts. */
+static void server_end_discards_a_tail_before_b(void) {
+  uint8_t pcm[12U * ITERATE_KIT_VOICE_FRAME_BYTES];
+  size_t after_end;
+  quiescent();
+  capture_frame_value = 4000;
+  remote_call("conversation", "start");
+  step();
+  pump();
+  speak_frames(1U);
+  run_ms(50U);
+  deliver_accepted_latest();
+  step();
+  speak_frames(10U);
+  deliver_ended_latest();
+  for (size_t wait = 0U; wait < 10U; ++wait) step();
+  after_end = iterate_kit_fake_platform_sent_count();
+  remote_call("conversation", "start");
+  step();
+  capture_frame_value = 5000;
+  speak_frames(1U);
+  speak_frames(1U);
+  run_ms(50U);
+  assert(collect_sent_microphone(after_end, pcm, sizeof(pcm)) ==
+         2U * ITERATE_KIT_VOICE_FRAME_BYTES);
+  assert(collected_sample(pcm, 0U) == 5000);
+  quiescent();
 }
 
 /*
@@ -690,12 +670,10 @@ static void an_idle_accepted_call_is_not_recycled_for_silence(void) {
   size_t after_answer;
   quiescent();
   after_accept = iterate_kit_fake_platform_sent_count();
-  remote_call("pushToTalk", "start");
-  /* A HOLD, not a tap: a tap is the end-call gesture. */
+  remote_call("conversation", "start");
   run_ms(1500U);
   speak_frames(10U);
   run_ms(200U);
-  remote_call("pushToTalk", "stop");
   step();
   deliver_accepted_latest();
   run_ms(2000U);
@@ -720,12 +698,10 @@ static void a_lane_silent_mid_answer_is_recycled(void) {
   size_t after_chunk;
   quiescent();
   after_accept = iterate_kit_fake_platform_sent_count();
-  remote_call("pushToTalk", "start");
-  /* A HOLD, not a tap: a tap is the end-call gesture. */
+  remote_call("conversation", "start");
   run_ms(1500U);
   speak_frames(10U);
   run_ms(200U);
-  remote_call("pushToTalk", "stop");
   step();
   deliver_accepted_latest();
   run_ms(2000U);
@@ -742,6 +718,8 @@ static void activation_during_codec_read_keeps_idle_pre_roll(void) {
   uint8_t pcm[7U * ITERATE_KIT_VOICE_FRAME_BYTES];
   const size_t before = iterate_kit_fake_platform_sent_count();
   quiescent();
+  /* Let capture consume the terminal fence before building fresh idle history. */
+  speak_frames(1U);
   capture_frame_value = 3000;
   speak_frames(5U);
   capture_read_hook = activate_during_codec_read;
@@ -754,7 +732,6 @@ static void activation_during_codec_read_keeps_idle_pre_roll(void) {
   assert(collected_sample(pcm, 0U) == 3000);
   assert(collected_sample(pcm, 5U) == 3005);
   assert(collected_sample(pcm, 6U) == 3006);
-  remote_call("pushToTalk", "stop");
   step();
 }
 
@@ -762,10 +739,15 @@ static void activation_during_codec_read_keeps_idle_pre_roll(void) {
 static void an_unaccepted_activation_times_out_once(void) {
   const size_t before = iterate_kit_fake_platform_sent_count();
   quiescent();
-  remote_call("pushToTalk", "start");
+  remote_call("conversation", "start");
   step();
   pump();
+  speak_frames(1U);
+  run_ms(50U);
   run_ms(20000U);
+  /* The terminal survives an unavailable mount and is appended once it recovers. */
+  pump();
+  step();
   assert(!board.last_view.wants_call);
   assert(strcmp(board.last_view.status, "opening timed out") == 0);
   assert(sent_after_contains(before, "conversation-ended"));
@@ -774,15 +756,17 @@ static void an_unaccepted_activation_times_out_once(void) {
 
 int main(void) {
   boot();
-  a_remote_press_raises_wants_call_with_no_button();
-  releasing_talk_keeps_the_call();
+  conversation_start_raises_wants_call_with_no_button();
   conversation_control_opens_and_ends_a_call();
   nothing_physical_was_involved();
 
   pre_mount_speech_is_preserved_and_sent_immediately();
-  dial_speech_flows_at_once_and_no_turn_is_marked();
-  a_silent_dial_release_commits_no_turn();
+  same_pass_end_then_start_creates_a_new_activation();
+  muted_remote_start_does_not_open_capture();
+
   ending_a_never_sends_its_tail_as_b();
+  ending_before_acceptance_terminates_a_before_b();
+  server_end_discards_a_tail_before_b();
   pump();
   an_idle_accepted_call_is_not_recycled_for_silence();
   a_lane_silent_mid_answer_is_recycled();

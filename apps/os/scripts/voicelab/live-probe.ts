@@ -714,11 +714,11 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
     }
     await sleep(1_000);
     if (options.stopAfterUtteranceMs !== undefined) {
-      /* Release the button the instant the words end: no frames at all. */
+      /* Pause microphone frames the instant the words end. */
       const speaking = speak(utterance1, "utterance 1");
       await waitFor(() => pending.length === 0, 30_000);
       micPaused = true;
-      log(`mic stopped dead for ${String(options.stopAfterUtteranceMs)}ms (push-to-talk release)`);
+      log(`mic stopped dead for ${String(options.stopAfterUtteranceMs)}ms`);
       await speaking;
       await sleep(options.stopAfterUtteranceMs);
       micPaused = false;

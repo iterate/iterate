@@ -17,10 +17,8 @@
  * loop owns the conversion, so the fail-closed silence rule lives in one place
  * instead of being restated here.
  *
- * The microphone rides the open call on the strength of that canceller. A
- * recorded divergence from decision A2, and the right one — hold-to-talk's rationale is
- * the echo story on boards WITHOUT cancellation, and gating this microphone
- * would defeat the ported AEC's entire purpose.
+ * The microphone runs continuously during a call; the ported canceller uses
+ * the playback reference supplied by the audio path.
  *
  * The status STRINGS go to the console log rather than the screen: the face
  * owns the glass and a semantic snapshot owns the rail, so there is nowhere a
@@ -248,11 +246,11 @@ static void present(
   }
 }
 
-/** Either physical call control supplies the same open-mic session tap. */
+/** Either physical call control supplies the same session tap. */
 static void read_gestures(struct iterate_kit_board_gestures *out) {
   bool ignored_left_half;
-  out->tap |= iterate_kit_stackchan_avatar_take_side_button_tap();
-  out->tap |= iterate_kit_stackchan_avatar_take_face_tap(&ignored_left_half);
+  out->pressed |= iterate_kit_stackchan_avatar_take_side_button_tap();
+  out->pressed |= iterate_kit_stackchan_avatar_take_face_tap(&ignored_left_half);
 }
 
 /** Poll StackChan-only presentation controls after the shared call grammar. */
@@ -545,7 +543,7 @@ static enum capnweb_status head_shake(
  * What this board has that no other does: a head (raw moves and the two
  * named gestures), a camera, its own screen as an image source, the fill,
  * and a face that can be asked for by name. Conversation control, the
- * speaker and health are the loop's. This board has no remote hold-to-talk
+ * speaker and health are the loop's.
  * control because its microphone stays open during the call.
  */
 static size_t modules(
@@ -771,7 +769,6 @@ static const struct iterate_kit_board board = {
    * first frame is processed.
    */
   .capture_stack_bytes = 8192,
-  .hold_to_talk = false,
   /*
    * Codec first, like everyone but the HA Voice PE. This board's bring-up is
    * not the long pole — the camera is, and it is deliberately deferred to its
@@ -782,7 +779,7 @@ static const struct iterate_kit_board board = {
   .audio = NULL, /* Four-slot TDM and esp-sr remain board-owned. */
   .ring = {.gpio = -1, .power_gpio = -1},
   .status_led_gpio = -1,
-  .button = {.gpio = -1, .tap_ends = true},
+  .button = {.gpio = -1},
   .read_gestures = read_gestures,
   .sounds = {.wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),
     .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended)},

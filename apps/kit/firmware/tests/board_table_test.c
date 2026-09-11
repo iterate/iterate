@@ -168,60 +168,56 @@ static void iterate_kit_board_defaults_table(void) {
 /* Board.c alone translates normalized board input into grammar facts. */
 static void normalized_gestures_use_the_shared_grammar(void) {
   const struct iterate_kit_voice_view idle = {0};
-  const struct iterate_kit_gpio_button m5 = {.tap_wakes = true, .tap_ends = true};
-  const struct iterate_kit_gpio_button waveshare = {.tap_wakes = true, .tap_ends = false};
-  const struct iterate_kit_gpio_button havpe = {.tap_wakes = false, .tap_ends = true};
-  const struct iterate_kit_gpio_button stackchan = {.tap_ends = true};
   struct iterate_kit_session session = {0};
   struct iterate_kit_session_actions actions;
 
   /* M5's physical side tap and injected tap both become a wake. */
   iterate_kit_board_apply_gestures(
-      &session, &(struct iterate_kit_board_gestures){.tap = true}, &m5,
-      true, &idle, 1U, &actions);
-  assert(actions.start_call && actions.wake_chime && !actions.talk_held);
+      &session, &(struct iterate_kit_board_gestures){.pressed = true},
+      &idle, &actions);
+  assert(actions.start_call && actions.wake_chime);
 
   /* Waveshare's dedicated lower button has no board-specific end branch. */
   iterate_kit_board_apply_gestures(
-      &session, &(struct iterate_kit_board_gestures){.end_press = true}, &waveshare,
-      true,
+      &session, &(struct iterate_kit_board_gestures){.end_press = true},
       &(struct iterate_kit_voice_view){.wants_call = true, .call_active = true},
-      2U, &actions);
+      &actions);
   assert(actions.end_call);
 
   /* HAVPE is fixed open-mic: a tap opens the call. */
   session = (struct iterate_kit_session){0};
   iterate_kit_board_apply_gestures(
-      &session, &(struct iterate_kit_board_gestures){.tap = true}, &havpe,
-      false, &idle, 3U, &actions);
+      &session, &(struct iterate_kit_board_gestures){.pressed = true},
+      &idle, &actions);
   assert(actions.start_call && actions.wake_chime);
 
   /* StackChan's side tap has the provider-VAD open-mic meaning. */
   session = (struct iterate_kit_session){0};
   iterate_kit_board_apply_gestures(
-      &session, &(struct iterate_kit_board_gestures){.tap = true}, &stackchan,
-      false, &idle, 4U, &actions);
+      &session, &(struct iterate_kit_board_gestures){.pressed = true},
+      &idle, &actions);
   assert(actions.start_call && actions.wake_chime);
 }
 
 static void down_edge_wakes_before_release(void) {
   struct iterate_kit_session session = {0};
   struct iterate_kit_session_actions actions;
-  const struct iterate_kit_gpio_button button = {
-    /* HAVPE's tap_wakes flag applied only to its deleted selectable PTT mode. */
-    .gpio = 0, .active_low = true, .tap_wakes = false, .tap_ends = true,
-  };
   const struct iterate_kit_voice_view idle = {0};
   iterate_kit_board_apply_gestures(
-      &session, &(struct iterate_kit_board_gestures){.pressed = true}, &button,
-      false, &idle, 30U, &actions);
+      &session, &(struct iterate_kit_board_gestures){.pressed = true},
+      &idle, &actions);
   assert(actions.start_call && actions.wake_chime);
-  /* The same down-edge during a call does not accidentally end it. */
+  /* Release produces no gesture, however long the first press was held. */
   const struct iterate_kit_voice_view active = {.wants_call = true, .call_active = true};
   iterate_kit_board_apply_gestures(
-      &session, &(struct iterate_kit_board_gestures){.pressed = true}, &button,
-      false, &active, 2000U, &actions);
+      &session, &(struct iterate_kit_board_gestures){0},
+      &active, &actions);
   assert(!actions.start_call && !actions.end_call);
+  /* A second down edge ends the established call. */
+  iterate_kit_board_apply_gestures(
+      &session, &(struct iterate_kit_board_gestures){.pressed = true},
+      &active, &actions);
+  assert(actions.end_call);
 }
 
 int main(void) {

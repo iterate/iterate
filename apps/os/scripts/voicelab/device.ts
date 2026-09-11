@@ -20,7 +20,7 @@ export interface DeviceOptions extends VoicelabConnectOptions {
   name?: string;
   /** Where to write output: a PNG for screenshot, a directory for pull. */
   out?: string;
-  /** How long to hold the talk button (`turn`) or play a tone (`tone`). */
+  /** How long to speak into a live call (`turn`) or play a tone (`tone`). */
   seconds?: number;
   /** Stream the device is on; only needed for `tone`. */
   path?: string;
@@ -33,7 +33,6 @@ interface DeviceCapability {
   /* `end` is the name the firmware mounts; `hangUp` never existed on a
    * board and failed as "unknown device capability". */
   conversation: { start(): Promise<boolean>; end(): Promise<boolean> };
-  pushToTalk: { start(): Promise<boolean>; stop(): Promise<boolean> };
   setBackground(colour: string): Promise<boolean>;
   health(): Promise<Record<string, unknown>>;
   /**
@@ -161,12 +160,10 @@ export async function device(options: DeviceOptions) {
   }
 
   if (action === "turn") {
-    const heldMs = Math.round((options.seconds ?? 3) * 1000);
-    await capability.pushToTalk.start();
-    console.error(`talk button held for ${heldMs}ms — speak now`);
-    await new Promise((resolve) => setTimeout(resolve, heldMs));
-    await capability.pushToTalk.stop();
-    console.error("released; the answer follows on the device");
+    const speakingMs = Math.round((options.seconds ?? 3) * 1000);
+    console.error(`microphone is live for ${speakingMs}ms — speak now`);
+    await new Promise((resolve) => setTimeout(resolve, speakingMs));
+    console.error("waiting for the answer on the device");
     return;
   }
 
@@ -219,7 +216,7 @@ export async function device(options: DeviceOptions) {
     /*
      * The whole user journey, driven the way a person drives it and observed
      * the way a person observes it: press call, wait for it to actually be
-     * live, hold talk, let go, wait for the answer. Every step is timed and
+     * live, speak into its continuous microphone, wait for the answer. Every step is timed and
      * screenshotted, because "it takes forever" and "the screen is stuck"
      * are only diagnosable if you can see WHICH step stalled and what the
      * device was showing while it did.
@@ -309,11 +306,9 @@ export async function device(options: DeviceOptions) {
     }
     await shot("2-call-live");
 
-    console.error("journey: holding talk");
-    await timed("hold talk", () => capability.pushToTalk.start());
+    console.error("journey: microphone is live; speak now");
     await new Promise((resolve) => setTimeout(resolve, (options.seconds ?? 3) * 1000));
-    await shot("3-talking");
-    await timed("release talk", () => capability.pushToTalk.stop());
+    await shot("3-listening");
 
     /*
      * Watch the STREAM for the answer, not the device's SD-card log. The log

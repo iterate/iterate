@@ -118,19 +118,12 @@ void cli_screen_draw(
       CLI_SCREEN_RESET);
   cli_screen_line(frame, sizeof(frame), &length, "%s", "");
 
-  /*
-   * THE KEY, AS THIS PROCESS SEES IT. Held is the raw fact from the keyboard
-   * and talking is what the loop did about it; they are drawn separately
-   * because the whole of the reported defect was the gap between them.
-   */
   cli_screen_line(
-      frame, sizeof(frame), &length, "  %s%s%s   %s%s%s   %s%s%s",
-      state->space_held ? CLI_SCREEN_BOLD : CLI_SCREEN_DIM,
-      state->space_held ? "SPACE HELD" : "space     ", CLI_SCREEN_RESET,
+      frame, sizeof(frame), &length, "  %s%s%s   %s%s%s",
+      state->capture_requested ? CLI_SCREEN_BOLD : CLI_SCREEN_DIM,
+      state->capture_requested ? "CAPTURE ON" : "idle      ", CLI_SCREEN_RESET,
       state->talking ? CLI_SCREEN_BOLD CLI_SCREEN_GREEN : CLI_SCREEN_DIM,
-      state->talking ? "TALKING" : "       ", CLI_SCREEN_RESET,
-      state->flushing ? CLI_SCREEN_BOLD CLI_SCREEN_YELLOW : CLI_SCREEN_DIM,
-      state->flushing ? "FLUSHING" : "        ", CLI_SCREEN_RESET);
+      state->talking ? "UPLINKING" : "         ", CLI_SCREEN_RESET);
   cli_screen_line(frame, sizeof(frame), &length, "%s", "");
 
   cli_screen_line(
@@ -144,14 +137,6 @@ void cli_screen_draw(
       state->spk_hole_ms, state->spk_dry_frames,
       state->spk_underruns, state->spk_dropped, state->spk_starved,
       state->spk_catchup, state->spk_ring_ms);
-  if (state->turn_release_to_commit_ms != 0U ||
-      state->turn_commit_to_audio_ms != 0U) {
-    cli_screen_line(
-        frame, sizeof(frame), &length,
-        "  turn  release->commit %-5ums commit->audio %-5ums total %ums",
-        state->turn_release_to_commit_ms, state->turn_commit_to_audio_ms,
-        state->turn_release_to_commit_ms + state->turn_commit_to_audio_ms);
-  }
   cli_screen_line(
       frame, sizeof(frame), &length,
       "  net   outbox %u/%u   loops %u   up %" PRIu64 "s",

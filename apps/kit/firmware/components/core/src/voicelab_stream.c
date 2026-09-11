@@ -309,7 +309,7 @@ static void handle_spk_frame(
   /*
    * A CHUNK WITH NO AUDIO IS NOT A BROKEN CHUNK. The sender closes an answer
    * whose audio has already all gone with a bare `last`, and that chunk is the
-   * only thing that releases the half-duplex fence. Treating it as a decode
+   * only marker that completes the answer. Treating it as a decode
    * failure and returning early is what made a conversation go deaf after two
    * or three turns.
    */
@@ -612,8 +612,7 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
   key_length = snprintf(
       key_text,
       sizeof(key_text),
-      "%s-cb-g%" PRIu32,
-      voicelab->options.stream_path,
+      "kit-cb-g%" PRIu32,
       voicelab->connection_generation);
   if (key_length < 0 || (size_t)key_length >= sizeof(key_text)) {
     return CAPNWEB_E_LIMIT;
@@ -1246,13 +1245,15 @@ enum capnweb_status iterate_kit_voicelab_keepalive_if_due(
   return iterate_kit_voicelab_send_keepalive(voicelab);
 }
 
-enum capnweb_status iterate_kit_voicelab_end_call(
-    struct iterate_kit_voicelab *voicelab, const char *reason) {
+enum capnweb_status iterate_kit_voicelab_end_activation(
+    struct iterate_kit_voicelab *voicelab,
+    const char *activation,
+    const char *reason) {
   int length;
   if (voicelab == NULL) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
-  if (!valid_activation(voicelab->options.activation)) {
+  if (!valid_activation(activation)) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
   if (voicelab->state != ITERATE_KIT_VOICELAB_READY) {
@@ -1266,14 +1267,11 @@ enum capnweb_status iterate_kit_voicelab_end_call(
       sizeof(voicelab->args_buffer),
       "[{\"type\":\"events.iterate.com/voice-agent/conversation-ended\",\"payload\":{"
       "\"activation\":\"%s\",\"reason\":\"%s\"}}]",
-      voicelab->options.activation,
+      activation,
       reason != NULL ? reason : "hangup");
   if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
     return CAPNWEB_E_LIMIT;
   }
-  voicelab->call_active = false;
-  voicelab->answer_open = false;
-  voicelab->last_presence_at_ms = 0U;
   return capnweb_session_call_oneway_path(
       voicelab->options.session,
       voicelab->stream_capability,
@@ -1281,6 +1279,19 @@ enum capnweb_status iterate_kit_voicelab_end_call(
       1U,
       voicelab->args_buffer,
       (size_t)length);
+}
+
+enum capnweb_status iterate_kit_voicelab_end_call(
+    struct iterate_kit_voicelab *voicelab, const char *reason) {
+  enum capnweb_status status;
+  if (voicelab == NULL) return CAPNWEB_E_INVALID_ARGUMENT;
+  status = iterate_kit_voicelab_end_activation(
+      voicelab, voicelab->options.activation, reason);
+  if (status != CAPNWEB_OK) return status;
+  voicelab->call_active = false;
+  voicelab->answer_open = false;
+  voicelab->last_presence_at_ms = 0U;
+  return CAPNWEB_OK;
 }
 
 

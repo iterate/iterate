@@ -133,9 +133,6 @@ iterate_kit_add_test(iterate-kit-health-fields-test health_fields_test.c
 iterate_kit_add_test(iterate-kit-health-test health_test.c
   LINK iterate-kit-capabilities)
 
-iterate_kit_add_test(iterate-kit-push-to-talk-test push_to_talk_test.c
-  LINK iterate-kit-capabilities)
-
 function(iterate_kit_add_avatar_test NAME)
   iterate_kit_add_test(${NAME} ${ARGN} LINK iterate-kit-avatar)
 endfunction()

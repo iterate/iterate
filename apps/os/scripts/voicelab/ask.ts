@@ -45,7 +45,6 @@ export async function ask(options: AskOptions): Promise<void> {
       streamPath,
       setupOnly: true,
       auto: true,
-      openMic: true,
     });
   }
 
@@ -61,7 +60,7 @@ export async function ask(options: AskOptions): Promise<void> {
     ...(options.micOffBetweenRequests === true && { micOffBetweenUtterances: true }),
   });
   const { watch } = call;
-  console.log(`  open mic on ${streamPath}; waiting for GPT-Live…`);
+  console.log(`  continuous mic on ${streamPath}; waiting for GPT-Live…`);
   const live = await call.waitFor(
     () => watch.conversationAcceptedAtMs !== null && watch.sessionConfiguredAtMs !== null,
     45_000,

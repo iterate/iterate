@@ -27,7 +27,6 @@ int main(void) {
       .microphone_listening = true, .microphone_peak = 1234}},
     {{.screen = ITERATE_KIT_VOICE_SCREEN_SPEAKING, .fault = true},
      {.media_failed = true, .speaker_peak = 4096}},
-    {{.talk_held = true, .listening = true}, {0}},
   };
   for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
     struct iterate_kit_conversation_visual_state actual;

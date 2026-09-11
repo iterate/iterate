@@ -75,6 +75,10 @@ static enum cli_report_status cli_report_write_string(
 static enum cli_report_status cli_report_write_turn(
     FILE *file, const struct cli_report_turn *turn, size_t index, bool last);
 
+/* Formats a locally stamped turn offset, or JSON null when that edge did not occur. */
+static void cli_report_format_offset(
+    char *out, size_t capacity, const struct cli_report_turn *turn, uint64_t stamp);
+
 /* Writes one metric's min/p10/p50/p90/max across every turn. */
 static enum cli_report_status cli_report_write_distribution(
     FILE *file,
@@ -204,8 +208,7 @@ uint64_t cli_report_time_to_answer_ms(const struct cli_report_turn *turn)
 
 uint64_t cli_report_speech_end_to_first_packet_ms(const struct cli_report_turn *turn)
 {
-  if (turn == NULL || turn->last_nonquiet_input_ms == 0U ||
-      turn->first_speaker_packet_ms <= turn->last_nonquiet_input_ms) {
+  if (!cli_report_has_speech_end_to_first_packet(turn)) {
     return 0U;
   }
   return turn->first_speaker_packet_ms - turn->last_nonquiet_input_ms;
@@ -213,11 +216,22 @@ uint64_t cli_report_speech_end_to_first_packet_ms(const struct cli_report_turn *
 
 uint64_t cli_report_speech_end_to_first_played_ms(const struct cli_report_turn *turn)
 {
-  if (turn == NULL || turn->last_nonquiet_input_ms == 0U ||
-      turn->first_nonquiet_speaker_played_ms <= turn->last_nonquiet_input_ms) {
+  if (!cli_report_has_speech_end_to_first_played(turn)) {
     return 0U;
   }
   return turn->first_nonquiet_speaker_played_ms - turn->last_nonquiet_input_ms;
+}
+
+bool cli_report_has_speech_end_to_first_packet(const struct cli_report_turn *turn)
+{
+  return turn != NULL && turn->last_nonquiet_input_ms != 0U &&
+      turn->first_speaker_packet_ms > turn->last_nonquiet_input_ms;
+}
+
+bool cli_report_has_speech_end_to_first_played(const struct cli_report_turn *turn)
+{
+  return turn != NULL && turn->last_nonquiet_input_ms != 0U &&
+      turn->first_nonquiet_speaker_played_ms > turn->last_nonquiet_input_ms;
 }
 
 enum cli_report_status cli_report_write(
@@ -328,6 +342,33 @@ static enum cli_report_status cli_report_write_turn(
     FILE *file, const struct cli_report_turn *turn, size_t index, bool last)
 {
   assert(file != NULL && turn != NULL);
+  char first_input[32];
+  char first_append[32];
+  char first_packet[32];
+  char first_played[32];
+  char packet_latency[32];
+  char played_latency[32];
+  cli_report_format_offset(
+      first_input, sizeof(first_input), turn, turn->first_input_capture_ms);
+  cli_report_format_offset(
+      first_append, sizeof(first_append), turn, turn->first_append_ms);
+  cli_report_format_offset(
+      first_packet, sizeof(first_packet), turn, turn->first_speaker_packet_ms);
+  cli_report_format_offset(
+      first_played, sizeof(first_played), turn,
+      turn->first_nonquiet_speaker_played_ms);
+  if (cli_report_has_speech_end_to_first_packet(turn)) {
+    (void)snprintf(packet_latency, sizeof(packet_latency), "%" PRIu64,
+                   cli_report_speech_end_to_first_packet_ms(turn));
+  } else {
+    (void)snprintf(packet_latency, sizeof(packet_latency), "null");
+  }
+  if (cli_report_has_speech_end_to_first_played(turn)) {
+    (void)snprintf(played_latency, sizeof(played_latency), "%" PRIu64,
+                   cli_report_speech_end_to_first_played_ms(turn));
+  } else {
+    (void)snprintf(played_latency, sizeof(played_latency), "null");
+  }
   (void)fprintf(file, "    {\"index\":%zu,\"utterance\":", index + 1U);
   const enum cli_report_status status = cli_report_write_string(
       file, turn->utterance);
@@ -336,8 +377,10 @@ static enum cli_report_status cli_report_write_turn(
       file,
       ",\"failure\":%s,\"completion\":\"%s\",\"timeToFirstAudioMs\":%" PRIu64
       ",\"timeToAnswerCompleteMs\":%" PRIu64
-      ",\"speechEndToFirstPacketMs\":%" PRIu64
-      ",\"speechEndToFirstNonquietSpeakerMs\":%" PRIu64
+      ",\"firstInputCaptureOffsetMs\":%s,\"firstAppendOffsetMs\":%s"
+      ",\"firstSpeakerPacketOffsetMs\":%s,\"firstNonquietSpeakerPlayedOffsetMs\":%s"
+      ",\"speechEndToFirstPacketMs\":%s"
+      ",\"speechEndToFirstNonquietSpeakerMs\":%s"
       ",\"speakerQueuedAtFirstPacketFrames\":%u"
       ",\"speakerQueuedAtFirstNonquietPlayedFrames\":%u"
       ",\"framesSent\":%u,\"framesReceived\":%u,\"framesPlayed\":%u,"
@@ -347,8 +390,8 @@ static enum cli_report_status cli_report_write_turn(
       turn->watchdog_stalled ? "watchdog-stalled" : "drained",
       cli_report_time_to_first_audio_ms(turn),
       cli_report_time_to_answer_ms(turn),
-      cli_report_speech_end_to_first_packet_ms(turn),
-      cli_report_speech_end_to_first_played_ms(turn),
+      first_input, first_append, first_packet, first_played,
+      packet_latency, played_latency,
       turn->speaker_queued_at_first_packet_frames,
       turn->speaker_queued_at_first_played_frames, turn->frames_sent,
       turn->frames_received, turn->frames_played, turn->frames_concealed,
@@ -357,6 +400,17 @@ static enum cli_report_status cli_report_write_turn(
       cli_report_occupancy_percentile(turn, CLI_REPORT_P10),
       turn->occupancy_max_ms, last ? "" : ",");
   return ferror(file) == 0 ? CLI_REPORT_OK : CLI_REPORT_ERR_IO;
+}
+
+static void cli_report_format_offset(
+    char *out, size_t capacity, const struct cli_report_turn *turn, uint64_t stamp)
+{
+  assert(out != NULL && capacity > 0U && turn != NULL);
+  if (stamp == 0U || stamp < turn->started_ms) {
+    (void)snprintf(out, capacity, "null");
+    return;
+  }
+  (void)snprintf(out, capacity, "%" PRIu64, stamp - turn->started_ms);
 }
 
 static enum cli_report_status cli_report_write_distribution(

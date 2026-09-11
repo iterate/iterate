@@ -92,23 +92,13 @@ bool iterate_kit_i2s_codec_valid(const struct iterate_kit_i2s_codec_facts *facts
 void iterate_kit_board_apply_gestures(
     struct iterate_kit_session *session,
     const struct iterate_kit_board_gestures *gestures,
-    const struct iterate_kit_gpio_button *button,
-    bool hold_to_talk,
     const struct iterate_kit_voice_view *view,
-    uint64_t now_ms,
     struct iterate_kit_session_actions *actions) {
   const struct iterate_kit_session_poll poll = {
-    .tap = gestures->tap || (gestures->pressed && !hold_to_talk &&
-        !view->wants_call && !view->call_active),
-    .held = gestures->held,
-    .end_hold = gestures->end_hold,
+    .press = gestures->pressed,
     .end_press = gestures->end_press,
     .wants_call = view->wants_call,
     .call_active = view->call_active,
-    .push_to_talk = hold_to_talk,
-    .tap_wakes = button->tap_wakes,
-    .tap_ends = button->tap_ends,
-    .now_ms = now_ms,
   };
   iterate_kit_session_step(session, &poll, actions);
 }
@@ -265,7 +255,7 @@ static enum iterate_kit_status set_volume(void *context, uint8_t percent, uint8_
   (void)context;
   return iterate_kit_board_set_volume(percent, applied);
 }
-void iterate_kit_board_inject_tap(void) { iterate_kit_button_inject_tap(&button); }
+void iterate_kit_board_inject_press(void) { iterate_kit_button_inject_press(&button); }
 /** Finish wake-word startup on the app task, before accepting any detections.
  * Wake-word injection requires the shared GPIO button classifier.
  */
@@ -335,7 +325,7 @@ static void present(void *context, const struct iterate_kit_voice_view *value) {
   view = *value;
 #ifdef CONFIG_ITERATE_KIT_WAKE_WORD
   if (board->wake_word != NULL) iterate_kit_wake_word_set_enabled(
-      !microphone_muted && !board->facts.hold_to_talk &&
+      !microphone_muted &&
       !view.call_active && !view.wants_call);
 #endif
   if (board->ring.pixels != 0U) {
@@ -367,27 +357,21 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
 #ifdef CONFIG_ITERATE_KIT_WAKE_WORD
   /* Worker detections reach the same synthetic-tap queue as capabilities. */
   if (!microphone_muted && board->wake_word != NULL &&
-      !board->facts.hold_to_talk && !view.call_active && !view.wants_call &&
-      iterate_kit_wake_word_take_detection()) iterate_kit_board_inject_tap();
+      !view.call_active && !view.wants_call &&
+      iterate_kit_wake_word_take_detection()) iterate_kit_board_inject_press();
 #endif
   if (board->button.gpio >= 0) {
     const bool pressed = (gpio_get_level(board->button.gpio) == 0) == board->button.active_low;
     iterate_kit_button_update(&button, pressed, now_ms);
     gestures.pressed = iterate_kit_button_take_press(&button);
-    gestures.held = iterate_kit_button_held(&button);
-    gestures.end_hold = iterate_kit_button_take_end_hold(&button);
   }
   if (board->read_gestures != NULL) board->read_gestures(&gestures);
-  /* Consume the queued tap even when hardware supplied one in this pass. */
-  const bool button_tap = iterate_kit_button_take_tap(&button);
-  gestures.tap = gestures.tap || button_tap;
   iterate_kit_board_apply_gestures(
-      &session, &gestures, &board->button, board->facts.hold_to_talk,
-      &view, now_ms, &actions);
+      &session, &gestures,
+      &view, &actions);
   *out = (struct iterate_kit_voice_intent){
     .start_call = !microphone_muted && actions.start_call,
     .end_call = microphone_muted ? (view.call_active || view.wants_call) : actions.end_call,
-    .talk_held = !microphone_muted && actions.talk_held,
     .microphone_muted = microphone_muted,
   };
   /* End before wake: replacement playback leaves the newer intent audible. */
@@ -421,7 +405,7 @@ static enum capnweb_status iterate_kit_board_button_press(
     void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
   (void)context;
   (void)call;
-  iterate_kit_board_inject_tap();
+  iterate_kit_board_inject_press();
   return capnweb_reply_set_boolean(reply, true);
 }
 

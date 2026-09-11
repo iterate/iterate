@@ -353,13 +353,15 @@ static void record_control(
  */
 static void downlink_flow(void) {
   static struct fixture fixture;
+  static const char long_stream_path[] =
+      "/agents/voice/v23/havpe-diagnostic-stream-name-longer-than-sixty-four-characters";
   fixture_init(&fixture);
   {
     const struct iterate_kit_voicelab_options options = {
       .session = &fixture.session,
       .project_id = "prj_test",
       .project_api_key = "itxk_secret-never-log",
-      .stream_path = "/voice-agent/dev-test",
+      .stream_path = long_stream_path,
       .activation = TEST_ACTIVATION,
       .now_ms = fixture_now_ms,
       .clock_context = &fixture,
@@ -388,7 +390,7 @@ static void downlink_flow(void) {
     }
     assert(open_message != NULL);
     assert(strstr(open_message,
-        "\"connectionKey\":\"/voice-agent/dev-test-cb-g1\"") != NULL);
+        "\"connectionKey\":\"kit-cb-g1\"") != NULL);
     /*
      * The subscription IS the wire contract, so it is pinned literally rather
      * than checked for membership: a type quietly added or dropped upstream
@@ -610,7 +612,7 @@ static void downlink_flow(void) {
       CAPNWEB_OK);
   {
     const char *second_open = fixture.captured[fixture.captured_count - 2U];
-    assert(strstr(second_open, "\"connectionKey\":\"/voice-agent/dev-test-cb-g2\"") != NULL);
+    assert(strstr(second_open, "\"connectionKey\":\"kit-cb-g2\"") != NULL);
   }
   receive(&fixture, "[\"resolve\",5,[\"export\",-14]]");
   assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_READY);

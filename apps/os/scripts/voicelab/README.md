@@ -24,23 +24,24 @@ through a deployed platform from the wire alone, no microphone anywhere.
 
 Every type below is prefixed `events.iterate.com/voice-agent/`, elided here
 for width. The full contract, with every payload documented, is
-`packages/voice-agent/src/voice-agent.ts` (contract 21.0.0). A client's
+`packages/voice-agent/src/voice-agent.ts` (contract 23.0.0). A client's
 whole contract: mic frames up, speaker frames down, `keepalive` while its
-call UI is open, `conversation-end-requested` to end. A button, where a
-client has one, only unmutes its microphone while held.
+call UI is open, and `conversation-ended` to end. Capture runs continuously
+from call start; a physical mute remains a local hardware control, never a
+wire event.
 
-| Event                                               | Durability | Payload                                                                                                                                                         |
-| --------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `configured`                                        | durable    | the fixed GPT-Live setup: `instructions`, backend overrides, `tools`, `visemes`; replaced wholesale by every setup run                                          |
-| `mic-frame`                                         | ephemeral  | `{ conversationId, deviceMicFrameSeq, pcm }` — base64 PCM16 @ 16 kHz, any length, numbered by the device, sent verbatim to GPT-Live; the first one opens a call |
-| `call-started`                                      | durable    | `{ conversationId }`                                                                                                                                            |
-| `conversation-accepted`                             | durable    | `{ conversationId, handshakeTookMs, heldMicFrames }` — `session.started` arrived                                                                                |
-| `session-configured`                                | durable    | `{ instructions, backendModel, tools }` — what the GPT-Live session was started with                                                                            |
-| `spk-frame`                                         | ephemeral  | `{ conversationId, deviceSpeakerFrameSeq, pcm, clearSpeakerBufferBeforeFrame?, lastFrameOfAnswer? }` — see below                                                |
-| `utterance-transcript`                              | durable    | `{ conversationId, text }` — one finished listener turn, grouped from the provider's timeline fragments                                                         |
-| `answer-transcript`                                 | durable    | `{ conversationId, text }` — one finished spoken answer, in words                                                                                               |
-| `backend-reply`                                     | durable    | `{ conversationId, text }` — the backend model's final text for one delegation                                                                                  |
-| `conversation-end-requested` / `conversation-ended` | durable    | `{ conversationId, reason }` — decided, then done                                                                                                               |
+| Event                   | Durability | Payload                                                                                                                      |
+| ----------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `configured`            | durable    | the fixed GPT-Live setup: `instructions`, backend overrides, `tools`, `visemes`; replaced wholesale by every setup run       |
+| `mic-frame`             | ephemeral  | `{ activation, pcm }` — base64 PCM16 @ 16 kHz; the first frame opens that client-local activation                            |
+| `call-started`          | durable    | `{ activation, conversationId }` — the server assigned the authoritative conversation id                                     |
+| `conversation-accepted` | durable    | `{ activation, conversationId, handshakeTookMs, heldMicFrames }` — `session.started` arrived                                 |
+| `session-configured`    | durable    | `{ activation, conversationId, instructions, backendModel, tools }` — what the GPT-Live session was started with             |
+| `spk-frame`             | ephemeral  | `{ activation, conversationId, deviceSpeakerFrameSeq, pcm, clearSpeakerBufferBeforeFrame?, lastFrameOfAnswer? }` — see below |
+| `utterance-transcript`  | durable    | `{ conversationId, text }` — one finished listener turn, grouped from the provider's timeline fragments                      |
+| `answer-transcript`     | durable    | `{ conversationId, text }` — one finished spoken answer, in words                                                            |
+| `backend-reply`         | durable    | `{ conversationId, text }` — the backend model's final text for one delegation                                               |
+| `conversation-ended`    | durable    | `{ activation, reason }` — one terminal event, valid before the server assigns a conversation id                             |
 
 The two transcript events are the stream's only readable record of what was
 said — `pnpm cli voicelab transcript` prints them — and the fold's bounded
@@ -99,9 +100,8 @@ doppler run --config prd -- pnpm cli voicelab ask --project <slug> --setup \
   --requests '["Create a markdown file called hello dot md in the notes folder of my config repo, containing hello world, and commit it."]' \
   --verify 'return await itx.repo.readFile({ path: "notes/hello.md" })'
 
-# a real conversation from this Mac: hold SPACE to talk (or --open-mic)
+# a real conversation from this Mac: capture starts automatically and stays continuous; q hangs up
 doppler run --config prd -- pnpm cli voicelab talk --project <slug>
-doppler run --config prd -- pnpm cli voicelab talk --project <slug> --backend-model gpt-5.6-terra --backend-effort none
 
 # what a call said, after the fact
 doppler run --config prd -- pnpm cli voicelab transcript --project <slug> --stream-path /agents/voice/<name>
@@ -110,43 +110,25 @@ doppler run --config prd -- pnpm cli voicelab transcript --project <slug> --stre
 ## Ending a conversation
 
 A conversation is a **session**, not a turn and not an answer: one provider
-socket across many turns and several minutes. It ends when nobody has spoken
-in EITHER direction for sixty seconds, or when a person or the model hangs up.
+socket across many turns and several minutes. It ends after sixty seconds with
+no device input or keepalive, or when a person or the model hangs up.
 
-There is one way to end a call and three things that can decide to. Whoever
-decides appends `voice-agent/conversation-end-requested` with a reason; the
-facet consumes it on its ordinary delivery, lets the provider socket go,
-and appends `voice-agent/conversation-ended`. Both are on the stream, so a
-teardown is readable after the fact rather than inferred from silence.
+There is one terminal event and three things that can decide to end a call.
+Whoever decides appends `voice-agent/conversation-ended` with its local
+activation and a reason; the facet closes the provider socket. The durable
+event makes teardown readable after the fact rather than inferred from silence.
 
 The deadline is kept twice, deliberately. An in-memory countdown ends a call on
-a Durable Object that is still up and sees both directions — a keepalive-backed
+a Durable Object that is still up and receives device input — a keepalive-backed
 `runInBackground` loop that sleeps exactly as long as the call has left, NOT a
 `setTimeout` (one of those, armed from a delivery whose request context has
 already ended, silently never fires; measured on preview-3). The same deadline
-is also derivable from the fold (`call.lastHeardAtMs`, folded from every
-microphone frame and keepalive using their own commit stamps, with no extra
+is also derivable from the fold (`call.lastDeviceInputAtStreamMs`, folded from
+every microphone frame and keepalive using their own commit stamps, with no extra
 appends), which is the half that survives the eviction the first cannot — and
 which is what stops a revived incarnation re-dialling an abandoned call every
 ten seconds forever. `voice-agent.ts`'s `idleDeadlinePassed` explains why the
 two cannot disagree.
-
-Proving it takes a real deployment and real silence, because the interesting
-case is the Durable Object being evicted underneath the call:
-
-```bash
-# one utterance, then 150s of nobody saying anything: expect the request and the end
-doppler run --config preview_3 -- pnpm cli voicelab teardown \
-  --project marginal-1 --stream-path /agents/voice/teardown-1
-
-# the negative: four presses 45s apart stay on ONE call, and only then end
-doppler run --config preview_3 -- pnpm cli voicelab teardown \
-  --project marginal-1 --stream-path /agents/voice/teardown-2 \
-  --presses 4 --gap-ms 45000
-```
-
-The quiet phase drops the itx connection entirely rather than polling — a poll
-every few seconds keeps the object awake and proves the easy half.
 
 ## Against a real device
 

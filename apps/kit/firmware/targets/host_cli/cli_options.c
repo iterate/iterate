@@ -49,8 +49,6 @@ enum cli_options_field {
   CLI_OPTIONS_FIELD_MINUTES,
   CLI_OPTIONS_FIELD_LIVE_AUDIO,
   CLI_OPTIONS_FIELD_LIVE_MIC,
-  CLI_OPTIONS_FIELD_PUSH_TO_TALK,
-  CLI_OPTIONS_FIELD_OPEN_MIC,
   CLI_OPTIONS_FIELD_INSECURE,
   CLI_OPTIONS_FIELD_NO_AEC,
   CLI_OPTIONS_FIELD_HELP,
@@ -100,14 +98,6 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    NULL,
    "  --live-mic            Capture from this Mac's default input instead of "
    "test synthesis\n"},
-  {"--push-to-talk", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_PUSH_TO_TALK,
-   NULL,
-   "  --push-to-talk        Hold SPACE to talk, release to send, q to hang "
-   "up\n"},
-  {"--open-mic", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_OPEN_MIC,
-   NULL,
-   "  --open-mic            Stream the microphone continuously; server VAD "
-   "takes the turns, q hangs up\n"},
   {"--minutes", CLI_OPTIONS_KIND_MINUTES, CLI_OPTIONS_FIELD_MINUTES,
    NULL,
    "  --minutes MINUTES     Wall-clock limit for an interactive session\n"},
@@ -355,8 +345,6 @@ static enum cli_options_status cli_options_apply(
       return cli_options_read_minutes(value, &out->minutes);
     case CLI_OPTIONS_FIELD_LIVE_AUDIO: out->live_audio = true; break;
     case CLI_OPTIONS_FIELD_LIVE_MIC: out->live_mic = true; break;
-    case CLI_OPTIONS_FIELD_PUSH_TO_TALK: out->push_to_talk = true; break;
-    case CLI_OPTIONS_FIELD_OPEN_MIC: out->open_mic = true; break;
     case CLI_OPTIONS_FIELD_INSECURE: out->insecure = true; break;
     case CLI_OPTIONS_FIELD_NO_AEC: out->no_aec = true; break;
     case CLI_OPTIONS_FIELD_HELP: break;
@@ -484,27 +472,6 @@ static enum cli_options_status cli_options_check_combinations(
   assert(out != NULL);
   if (out->converse_minutes > 0.0 && out->utterance_dir == NULL) {
     cli_options_note(problem, problem_bytes, "--converse needs --utterance-dir");
-    return CLI_OPTIONS_ERR_INCOMPATIBLE;
-  }
-  /*
-   * Two drivers, one talk button. --converse takes turns on a schedule and
-   * --push-to-talk takes them when a person presses a key; run together, each
-   * would end the other's turn and the report would describe a conversation
-   * neither of them had. Picking one silently is worse than refusing: the
-   * operator would spend the session wondering why their key does nothing.
-   */
-  /* A button and a scheduler would each end the other's turn. The scheduler
-   * may deliberately feed an open microphone: its fixtures provide speech,
-   * then its continuous zero PCM lets server VAD observe the same end-of-turn
-   * silence as a board. */
-  if (out->open_mic && out->push_to_talk) {
-    cli_options_note(
-        problem, problem_bytes, "--open-mic cannot run with --push-to-talk");
-    return CLI_OPTIONS_ERR_INCOMPATIBLE;
-  }
-  if (out->push_to_talk && out->converse_minutes > 0.0) {
-    cli_options_note(
-        problem, problem_bytes, "--push-to-talk cannot run with --converse");
     return CLI_OPTIONS_ERR_INCOMPATIBLE;
   }
   return CLI_OPTIONS_OK;

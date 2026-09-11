@@ -174,7 +174,6 @@ static const struct iterate_kit_board_facts open_mic_facts = {
   .processing_frame_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
   .capture_chunk_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
   .capture_stack_bytes = 4096U,
-  .hold_to_talk = false,
 };
 
 /* --- driving the loop ----------------------------------------------------- */

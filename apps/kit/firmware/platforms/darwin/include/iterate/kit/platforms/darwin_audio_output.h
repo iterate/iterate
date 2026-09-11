@@ -257,7 +257,7 @@ struct iterate_kit_darwin_audio_output {
   atomic_uint_least32_t shortfall_bytes;
   atomic_uint_least32_t audible_shortfalls;
   atomic_uint_least32_t audible_shortfall_bytes;
-  uint16_t last_taken_peak;
+  atomic_uint_least16_t last_taken_peak;
 };
 
 /** Human-readable status name, for the one top-level log boundary. */

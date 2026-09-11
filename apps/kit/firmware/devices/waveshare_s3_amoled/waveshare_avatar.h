@@ -95,7 +95,7 @@ void waveshare_avatar_tick(void);
  */
 void waveshare_avatar_note_abandoned(void);
 
-/** The person is holding the talk button: attend, and keep the mouth shut. */
+/** Enter or leave the user-facing listening pose, which keeps the mouth shut. */
 void waveshare_avatar_set_listening(bool listening);
 
 /*

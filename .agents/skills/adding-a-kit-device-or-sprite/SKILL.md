@@ -1,6 +1,6 @@
 ---
 name: adding-a-kit-device-or-sprite
-description: Add a new ESP32 voice board to apps/kit/firmware, or add a new avatar sprite pack to the shared face. Use when wiring a board's audio/display/buttons, deciding push-to-talk vs open-mic, mounting capabilities, or registering a sprite atlas — and when a board is on the bench and "not working".
+description: Add a new ESP32 voice board to apps/kit/firmware, or add a new avatar sprite pack to the shared face. Use when wiring duplex audio, displays, buttons and capabilities, or registering a sprite atlas — and when a board is on the bench and "not working".
 publish: false
 ---
 
@@ -28,7 +28,7 @@ GPT-Live-1 is the only voice model; a new board adds hardware, never a provider 
 | When the face sleeps                | `iterate_kit_face_awake`                   | nothing                                  |
 | Playout identity / interrupt policy | `iterate_kit_playout_*`                    | nothing                                  |
 | PCM wire framing and base64         | `voicelab_stream.c`                        | nothing                                  |
-| Microphone flush timing             | `microphone_flush.h`                       | native queue and hardware capture fence  |
+| Microphone flush timing             | `microphone_flush.h`                       | native capture queue                     |
 | Physical call grammar and chimes    | `board.c` + `session_grammar.c`            | normalized `read_gestures`, sound output |
 
 If you find yourself writing a second answer to any row above, stop: the
@@ -47,7 +47,7 @@ The table carries the hardware facts and nothing else:
 
 | Field                                         | What it is                                                                                                       | Satellite1                            |
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `facts`                                       | one `device_name`, fixed local `hold_to_talk`, and capture/playout timing                                        | `satellite1`, hands-free              |
+| `facts`                                       | one `device_name` and capture/playout timing                                                                     | `satellite1`                          |
 | `i2c`                                         | sda/scl/hz; board.c opens the bus                                                                                | 5/6 @ 400 kHz                         |
 | `boot[]`                                      | GPIO steps in order: rails, reset pulses, boot waits                                                             | `{4, 0, 0}` (XMOS runs)               |
 | `scripts[]`                                   | I2C register scripts, `BEFORE_I2S` or `AFTER_I2S`, with a settle                                                 | empty (its chips have drivers)        |
@@ -64,11 +64,11 @@ Three things are code because no table can say them:
   live here (Satellite1: SPI version poll, TAS2780 init + activate, PCM5122).
 - `set_volume`: for a chip with no plain register (TAS2780's DVC map).
 - `extra`: a full `iterate_kit_board_ops` for what only this board has (a face,
-  servos, a camera, a half-duplex fence, a dial, side buttons). board.c runs its
+  servos, a camera, a dial, side buttons). board.c runs its
   shared half of each op and then the board extension. `extra->poll` runs first
   so physical mute is known before wake/gesture handling; `read_gestures` supplies normalized call input when `button.gpio == -1`.
   The shared board poll owns grammar, intent, and chime ordering for every board.
-  Hands-free activation uses the debounced button-down edge, never release.
+  Activation uses the debounced button-down edge, never release.
   Capture retains 500 ms of processed pre-roll and must open before networking
   or a chime can delay the user’s first words. Test the actual board flags.
   Set `play_sound` only for a dedicated hardware sound path.
@@ -97,8 +97,9 @@ config, then MEASURE:
    it is not release-ready. Current firmware uses NS slot 1 at gain 32 with
    output cap 60, after applying Q31 gain before PCM16 conversion. Its first
    AEC and barge evidence meets the documented keyword criterion but has
-   partial ASR; a repeated barge proof is required. Do not promote a board
-   signal path until its complete AEC/quiet/barge proof is verified.
+   partial ASR; a repeated barge proof is required. These historical signal-path
+   measurements do not establish GPT-Live behavior. Judge self-echo by unwanted
+   responses and interrupted human speech, not self-transcription alone.
 
 ### Four files and one sound invocation
 
@@ -132,7 +133,7 @@ device owns its directly required managed drivers. Let ESP-IDF regenerate
 `dependencies.lock` during the target build.
 
 After defaults or partitions change, generate a fresh configuration with
-`idf.py -B /tmp/<board>-build -D SDKCONFIG=/tmp/<board>.sdkconfig build`.
+`idf.py -B /tmp/<board>-build -D IDF_TARGET=esp32s3 -D SDKCONFIG=/tmp/<board>.sdkconfig build`.
 Use the CMake `-D` argument: an environment-only `SDKCONFIG` assignment is ignored.
 This preserves local generated files while proving the committed defaults.
 
@@ -143,32 +144,22 @@ keep explicit measured waits for board-owned audio. StackChan's 256/128
 cadences and 8192-byte capture stack remain explicit.
 
 `voicelab boards --only <name>` resolves any client name or existing alias
-through `deviceClientPath` and reads `pushToTalk` from `health()`. No board
+through `deviceClientPath`. Every board uses continuous capture. No board
 registration is needed for that command; `BOARDS` only supplies the default
 list when `--only` is omitted.
 
-### Push-to-talk or open microphone
+### Continuous capture
 
-Decide it from whether the hardware really cancels echo, not from taste (the
-board declares it through `facts.turns`; the old codec property that claimed
-it was deleted because nobody checked it):
+All boards capture throughout an active call. Missing AEC is not a reason to
+introduce push-to-talk: GPT-Live owns conversational turn handling. File-only
+loopback testing showed it ignoring its own output while responding to a new
+caller phrase; room echo and hardware coupling still require a board test.
 
-- **Cancellation exists** (StackChan's esp-sr, HA Voice PE's XMOS) →
-  **open mic**. The microphone rides the
-  open call and the provider segments turns.
-- **No cancellation** (M5StickS3, Waveshare) → a **local hold-to-talk gate**. It is a hardware constraint, not provider turn control.
-
-Getting this backwards is not cosmetic. The HA Voice PE shipped with hardware
-AEC _and_ push-to-talk: a tap opened a call, the ring showed a call with
-nobody listening, and speaking did nothing at all.
-
-For an open-mic board, send the measured AEC/processed microphone plane at its
-measured fixed gain. Do not add speaker-time ducking, muting, or a double-talk
-gate based on an assumption that speech playout is echo: the current StackChan
-processor explicitly forbids those policies, and the HAVPE's measured hardware
-AEC is the evidence used to select open mic. Prove the actual board's residual
-and barge behaviour with `health()` plus `voicelab boards`; change the posture
-or signal path only when that evidence contradicts the board's claim.
+Preserve physical mute, existing AEC and measured gain/reference routing. Do not
+add speaker-time ducking, muting or a double-talk gate without a reproduced
+failure. Check actual clock ownership before declaring hardware half-duplex:
+M5StickS3's former handoff disappeared when ADC and DAC shared native I2S0.
+Keep idle wake-word self-trigger prevention separate from active-call capture.
 
 ### Instruments: the rule that keeps boards debuggable
 
@@ -323,17 +314,14 @@ In order, because each step is cheaper than the next:
    settled. Three green is a healthy network sector.
 5. **Only then the console**, accepting that opening it reboots the board.
 
-Two things that look like a dead board and are not (2026-09-09):
+Two things to check before changing the audio path:
 
-- **The call never becomes active, `ptt-start` repeats on the stream.** The
-  stream has no voice agent, or has the wrong turn posture. Set up an open-mic
-  board with `pnpm cli voicelab talk --project <slug> --setup-only --open-mic
---stream-path /agents/voice/<board>`. The command appends the configured
-  voice-agent event itself. It refuses a posture change on an existing stream;
-  inspect that refusal and use `--flip-turn-posture` only for a deliberate
-  migration. Do not hand-append `voice-agent/configured`: that bypasses the
-  guard that prevents a silent posture flip. A bare `agents.get(path).create()`
-  births a chat agent, not a voice agent.
+- **The call never becomes active.** Confirm the stream has the matching voice
+  agent. Set it up with `pnpm cli voicelab talk --project <slug> --setup-only
+--stream-path /agents/voice/v23/<device_name>`. The command installs/configures
+  the voice agent; a bare `agents.get(path).create()` births a chat agent.
+  Preserve old incompatible histories instead of installing a new contract on
+  their paths. A shared guest upgrade also affects its other streams.
 - **Selecting a board.** `voicelab boards --only` accepts any client name,
   path, or existing alias such as `havpe`; `voicelab device` takes `--name`.
 

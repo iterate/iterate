@@ -252,7 +252,6 @@ static const struct iterate_kit_board board = {
     .ceiling = 100,
   },
   /* XMOS cancellation makes a continuously open microphone safe. */
-  .hold_to_talk = false,
   },
   .i2c = {.sda = 5, .scl = 6, .hz = 400000},
   .boot = boot, .boot_count = sizeof(boot) / sizeof(boot[0]),
@@ -277,7 +276,7 @@ static const struct iterate_kit_board board = {
     .registers = {0x41, 0x42}, .register_count = 2, .full_code = 0, .floor_code = -126},
   .ring = {.gpio = 21, .pixels = 12, .order = LED_PIXEL_FORMAT_GRB, .power_gpio = 45},
   .status_led_gpio = -1,
-  .button = {.gpio = 0, .active_low = true, .tap_wakes = false, .tap_ends = true},
+  .button = {.gpio = 0, .active_low = true},
   .wake_word = "jarvis",
   .sounds = {.wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),
     .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended)},

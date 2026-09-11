@@ -185,7 +185,6 @@ static const struct iterate_kit_board board = {
   .facts = {
     .device_name = "satellite1",
     .speaker = {.ceiling = ITERATE_KIT_SATELLITE1_SPEAKER_CEILING},
-    .hold_to_talk = false,
   },
   .i2c = {.sda = 5, .scl = 6, .hz = 400000},
   .boot = boot, .boot_count = 1,
@@ -195,7 +194,7 @@ static const struct iterate_kit_board board = {
   .volume = {.register_count = 0},
   .ring = {.gpio = 21, .pixels = 24, .order = LED_PIXEL_FORMAT_GRB, .power_gpio = -1},
   .status_led_gpio = 45,
-  .button = {.gpio = 0, .active_low = true, .tap_wakes = true, .tap_ends = true},
+  .button = {.gpio = 0, .active_low = true},
   .wake_word = "jarvis",
   .sounds = {
     .wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),

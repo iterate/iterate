@@ -58,23 +58,13 @@ interface Board {
   /** The capability name it mounts itself under: `itx.kit.<name>`. */
   name: string;
   label: string;
-  /**
-   * Whether the microphone has to be held open around the prompt.
-   *
-   * The two boards with echo cancellation — StackChan in software, the HA
-   * Voice PE in its XMOS DSP — run open-mic on the provider's server VAD.
-   * The two without it unmute the microphone only while the button is held
-   * (a fact about the board, never the stream), and speaking at one of those
-   * without holding the button proves nothing.
-   */
-  pushToTalk: boolean;
 }
 
 const BOARDS: readonly Board[] = [
-  { label: "StackChan CoreS3", name: "stackchan", pushToTalk: false },
-  { label: "M5StickS3", name: "m5stick-s3", pushToTalk: true },
-  { label: "HA Voice PE", name: "home-assistant-voice-preview-edition", pushToTalk: false },
-  { label: "Waveshare AMOLED", name: "waveshare", pushToTalk: true },
+  { label: "StackChan CoreS3", name: "stackchan" },
+  { label: "M5StickS3", name: "m5stick-s3" },
+  { label: "HA Voice PE", name: "home-assistant-voice-preview-edition" },
+  { label: "Waveshare AMOLED", name: "waveshare" },
 ];
 
 /** What one board's attempt produced. Written out whole, pass or fail. */
@@ -224,9 +214,7 @@ export async function boards(options: BoardsOptions) {
         /* Let the call settle before speaking: interruption is a different
          * test, and a flakier one. */
         await sleep(4000);
-        if (board.pushToTalk) await kit.pushToTalk.start();
         await run("say", ["-r", "170", prompt]);
-        if (board.pushToTalk) await kit.pushToTalk.stop();
 
         let answered = false;
         for (let attempt = 0; attempt < 40; attempt++) {
@@ -291,9 +279,7 @@ export async function boards(options: BoardsOptions) {
           const heardBefore = heardUs.length;
           const responsesBefore = responsesCreated;
 
-          if (board.pushToTalk) await kit.pushToTalk.start();
           await run("say", ["-r", "170", "Stop. Say the word pineapple instead."]);
-          if (board.pushToTalk) await kit.pushToTalk.stop();
 
           /*
            * A REAL SECOND ANSWER, not the barge's own echo. The interruption

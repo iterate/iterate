@@ -53,11 +53,9 @@ struct iterate_kit_voice_view {
    * It used to live in the display module on three of the four boards, so the
    * one fact that decides whether this device is trying to be in a call was
    * stored behind a panel driver and read back through a mutex three times a
-   * pass. A board with no panel had nowhere to put it, which is why the fourth
-   * kept a `remote_talk` bool of its own beside it.
+   * pass.
    */
   bool wants_call;
-  bool talk_held;
   /** The local microphone gate is open. */
   bool listening;
   /**
@@ -96,8 +94,6 @@ struct iterate_kit_voice_intent {
   bool start_call;
   /** An edge: end the session. */
   bool end_call;
-  /** A level: the talk control is down on a hold-to-talk board. */
-  bool talk_held;
   /** A level: hardware mute is engaged; capture continues for AEC only. */
   bool microphone_muted;
 };
@@ -201,18 +197,6 @@ struct iterate_kit_board_ops {
   void (*capture_meta)(
       void *context, struct iterate_kit_voice_capture_meta *out);
   /**
-   * Move the half-duplex fence: the microphone is asking for, or giving back,
-   * pins the speaker also uses. Asynchronous — see `playout_fenced_out`.
-   *
-   * Providing this pair is how a board declares itself half duplex. On the one
-   * board that is, the ES8311's ADC and DAC share MCLK/BCLK/WS, so capture
-   * requires DELETING the playback channel; the microphone physically cannot
-   * run while the speaker does.
-   */
-  void (*capture_fence)(void *context, bool microphone_owns_pins);
-  /** True while the microphone owns the pins, or the fence is moving either way. */
-  bool (*playout_fenced_out)(void *context);
-  /**
    * The samples the DAC just accepted. Called from the PLAYBACK task.
    *
    * Separate from `observe_answer` precisely because of that: this is the only
@@ -294,8 +278,6 @@ struct iterate_kit_board_facts {
    * on the first frame.
    */
   uint16_t capture_stack_bytes;
-  /** The board's physical capture control. False keeps the mic open in a call. */
-  bool hold_to_talk;
 };
 
 /**

@@ -22,8 +22,7 @@ extern "C" {
  *
  * ONLY THE UPPER BUTTON MAY BE HELD. PWR sits in the board's power path, and
  * holding it powers the device down in hardware — no firmware involved, and
- * none of it interceptable. Push-to-talk therefore lives on BOOT, an ordinary
- * pin that can be held all day; the lower button is only ever tapped.
+ * none of it interceptable. The lower button is therefore only tapped.
  *
  * Reading the lower button is an I2C transaction on the bus the codec and the
  * touch controller share, so both are polled at a human cadence rather than
@@ -52,7 +51,6 @@ void waveshare_buttons_inject_lower(void);
  * while the button is down, so the caller needs this on every pass rather
  * than once.
  */
-bool waveshare_buttons_upper_held(void);
 
 /** One press of the LOWER button, taken on the down edge and consumed here. */
 bool waveshare_buttons_take_lower_press(void);

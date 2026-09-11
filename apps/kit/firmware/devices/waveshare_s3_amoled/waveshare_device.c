@@ -1,5 +1,4 @@
-/* Waveshare's board-owned ES8311 and DMA mouth timing. Full duplex, no
- * AEC reference: push-to-talk remains the echo story. The BSP display owns
+/* Waveshare's board-owned ES8311 and DMA mouth timing. The BSP display owns
  * I2C0 and shared reset lines, so extra->start brings it up before audio.
  */
 #include "iterate/kit/platforms/board.h"
@@ -433,15 +432,18 @@ static void present(
    * first one does not.
    */
   waveshare_avatar_set_call_active(view->call_active);
-  waveshare_avatar_set_listening(view->listening);
+  /* Capture stays open while GPT-Live speaks. The face's listening lock is
+   * only the user-facing listening screen; applying it during SPEAKING would
+   * close the mouth over playout-driven animation. */
+  waveshare_avatar_set_listening(
+      view->screen == ITERATE_KIT_VOICE_SCREEN_LISTENING);
   waveshare_avatar_tick();
 }
 
 /** Supply upper talk, upper call and lower dedicated-end gestures. */
 static void read_gestures(struct iterate_kit_board_gestures *out) {
   waveshare_buttons_poll();
-  out->tap |= waveshare_buttons_take_upper_press();
-  out->held |= waveshare_buttons_upper_held();
+  out->pressed |= waveshare_buttons_take_upper_press();
   out->end_press |= waveshare_buttons_take_lower_press();
 }
 
@@ -527,7 +529,7 @@ static const struct iterate_kit_board_ops ops = {
   .present = present,
   .observe_playout = observe_playout,
   .observe_answer = observe_answer,
-  /* Speaker, health, conversation control and push-to-talk are the loop's. */
+  /* Speaker, health and conversation control are the loop's. */
   .modules = modules,
   .health = health,
 };
@@ -559,7 +561,6 @@ static const struct iterate_kit_board board = {
    * step can sit before the ring genuinely empties.
    */
   .speaker_dry_wait_ms = 60,
-  .hold_to_talk = true,
   /*
    * The codec first. This board's panel and codec share reset lines, so the
    * order inside `start` is fixed — and its bring-up is fast, so there is
@@ -574,7 +575,7 @@ static const struct iterate_kit_board board = {
   .audio = NULL,
   .ring = {.gpio = -1, .power_gpio = -1},
   .status_led_gpio = -1,
-  .button = {.gpio = -1, .tap_wakes = true, .tap_ends = false},
+  .button = {.gpio = -1},
   .read_gestures = read_gestures,
   .sounds = {.wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),
     .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended)},

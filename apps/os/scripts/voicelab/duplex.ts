@@ -38,7 +38,6 @@ export async function duplex(options: DuplexOptions): Promise<void> {
       streamPath,
       setupOnly: true,
       auto: true,
-      openMic: true,
     });
   }
 
@@ -68,7 +67,7 @@ export async function duplex(options: DuplexOptions): Promise<void> {
     process.exitCode = 1;
   };
 
-  console.log(`  open mic on ${streamPath}; waiting for GPT-Live…`);
+  console.log(`  continuous mic on ${streamPath}; waiting for GPT-Live…`);
   const started = await call.waitFor(
     () => watch.conversationAcceptedAtMs !== null && watch.sessionConfiguredAtMs !== null,
     30_000,

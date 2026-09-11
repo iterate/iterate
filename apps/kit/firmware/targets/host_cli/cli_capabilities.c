@@ -19,12 +19,10 @@ enum {
   "[{\"type\":\"events.iterate.com/voice-agent/dev-stats\",\"ephemeral\":true,\"payload\":"
 #define CLI_CAPABILITIES_DESCRIPTION \
   "{\"instructions\":\"The macOS execution target of the Iterate voice " \
-  "device. It has the device's bounded queues, manual push-to-talk call, " \
+  "device. It has the device's bounded queues, local capture control, " \
   "speaker playout policy, health and restart controls.\",\"children\":{" \
   "\"conversation\":{\"start\":\"Start a voice call.\"," \
-  "\"hangUp\":\"End the voice call.\"},\"pushToTalk\":{" \
-  "\"start\":\"Begin the configured WAV utterance.\"," \
-  "\"stop\":\"Commit the utterance and ask for an answer.\"}," \
+  "\"hangUp\":\"End the voice call.\"}," \
   "\"health\":\"Return device-compatible health JSON.\"," \
   "\"restart\":\"Re-exec this process.\"}}"
 

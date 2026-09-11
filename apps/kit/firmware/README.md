@@ -21,7 +21,7 @@ retain native queues; neither needs a second uploader state machine.
 
 A press or wake must open capture before connection progress. Preserve opening
 speech while mounting, and drain it as soon as the stream can accept it without
-waiting for call acceptance. Release drains the captured tail. Cancel and mute
+waiting for call acceptance. Capture continues after button release. End and mute
 discard that activation’s queued speech and fence late callbacks. Buffer limits
 are measured in PCM duration, with an explicit failure on overflow.
 
@@ -53,8 +53,13 @@ mic/speaker clock. A new board must not add a model choice, wire dialect, voice
 loop branch or another capture/playback pipeline.
 
 Confirm pins, I2S slots/rates, amplifier polarity and AEC ownership from vendor
-source. HAVPE and Satellite1 use XMOS. M5StickS3 and Waveshare retain their local
-capture/playback constraints. A board name alone is not evidence of working AEC.
+source. Every board captures throughout an active call. HAVPE and Satellite1 use
+XMOS; M5StickS3 uses one native I2S0 duplex owner. Missing AEC does not require
+push-to-talk. Keep existing AEC and prove self-echo and caller interruption on
+the actual hardware before changing its signal path.
+
+The client identity stays stable. Contract 23 uses a fresh stream at
+`/agents/voice/v23/<device_name>`; old incompatible histories remain untouched.
 
 See the [device onboarding skill](../../../.agents/skills/adding-a-kit-device-or-sprite/SKILL.md)
 for codec examples, managed dependency pins, sprites and bench verification.
@@ -70,7 +75,7 @@ Build each ESP target from its own directory. Use a fresh configuration when
 changing defaults so a stale generated file cannot conceal the change:
 
 ```bash
-idf.py -B /tmp/kit-havpe-build -D SDKCONFIG=/tmp/kit-havpe.sdkconfig build
+idf.py -B /tmp/kit-havpe-build -D IDF_TARGET=esp32s3 -D SDKCONFIG=/tmp/kit-havpe.sdkconfig build
 ```
 
 For silent HAVPE diagnostics, compile with

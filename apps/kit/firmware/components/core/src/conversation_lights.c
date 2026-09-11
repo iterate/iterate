@@ -129,8 +129,7 @@ static void render_audio(
 
   const uint8_t speaker_level = pcm_peak_level(state->speaker_peak);
   /*
-   * In manual-PTT mode both sides are intentionally silent between turns. One
-   * dim blue pixel means the call's media lane is ready; without it a valid
+   * One dim blue pixel means the call's media lane is ready; without it a valid
    * connected call and a call with no playable return path are visually
    * identical. Speech replaces the baseline with the 1--3 pixel peak meter.
    */

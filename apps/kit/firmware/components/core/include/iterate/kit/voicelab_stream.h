@@ -217,11 +217,7 @@ struct iterate_kit_voicelab_options {
   /** Client-owned, RAM-only activation for the local microphone edge. */
   const char *activation;
   /**
-   * Who segments turns, as the worker's voice-agent understands it:
-   * "manual" (NULL defaults here) for push-to-talk boards that commit
-   * turns themselves, "vad" for open-microphone boards whose provider
-   * server VAD does the segmenting. A board with no turn machine that
-   * requests manual turns gets a provider that never listens.
+   * Deprecated turn-segmentation setting. GPT-Live owns turn detection.
    */
   /** Monotonic clock in milliseconds; stamps every frame and every deadline. */
   uint64_t (*now_ms)(void *clock_context);
@@ -248,17 +244,14 @@ struct iterate_kit_voicelab_options {
  * per wall-clock flush, any even byte length).
  *
  * THE CLIENT CONTRACT IS THREE SENTENCES (2026-09-11). Send microphone audio
- * up while the microphone is open — an open-mic board's follows the call, a
- * hold-to-talk board's follows the button — and the FIRST frame is what opens
- * the call: the facet mints it, holds what arrives while it dials, and
+ * up while the call is open. The first frame opens the call: the facet mints
+ * it, holds what arrives while it dials, and
  * GPT-Live's own voice activity decides the turns. Say `keepalive` every
  * ~20 s while the call is open, so a released button is not an abandoned
  * call. Play speaker frames in arrival order, clear on
  * `clearSpeakerBufferBeforeFrame`, and treat `lastFrameOfAnswer` as the end
  * of an answer. Ending the call is the one thing the button says to the far
- * side (`conversation-ended`). There is no `ptt-start`, no `ptt-end`, no
- * button audit and no re-press: push-to-talk is a local microphone gate and
- * the wire never hears about it.
+ * side (`conversation-ended`).
  *
  * There WAS a low-rate pulled `voice-agent/ping` append here as an RTT and
  * health probe, answered by a `voice-agent/pong` the bridge appended back. It
@@ -434,6 +427,17 @@ enum capnweb_status iterate_kit_voicelab_append_raw(
  */
 enum capnweb_status iterate_kit_voicelab_end_call(
     struct iterate_kit_voicelab *voicelab, const char *reason);
+
+/**
+ * Append an authoritative terminal event for `activation`.
+ *
+ * This is used when a local activation ends before the stream has accepted it;
+ * it does not alter a later activation's local call state.
+ */
+enum capnweb_status iterate_kit_voicelab_end_activation(
+    struct iterate_kit_voicelab *voicelab,
+    const char *activation,
+    const char *reason);
 
 
 /**

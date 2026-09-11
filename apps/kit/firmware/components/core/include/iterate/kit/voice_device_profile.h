@@ -34,7 +34,6 @@ enum {
   ITERATE_KIT_VOICE_SAMPLE_RATE_HZ =
       ITERATE_KIT_VOICE_FRAME_SAMPLES * 1000 / ITERATE_KIT_VOICE_FRAME_MS,
 
-  /* Preserve up to five seconds of opening speech while mounting. */
   /* 20 s opening deadline plus 500 ms wake history. */
   ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH = 21000 / ITERATE_KIT_VOICE_FRAME_MS,
 

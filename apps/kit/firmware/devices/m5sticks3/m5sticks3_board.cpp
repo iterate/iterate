@@ -6,13 +6,8 @@
  * the same not-connected banner — with the four-line text status kept as the
  * fallback when a face cannot be had.
  *
- * The earlier port deliberately showed only text, reasoning that 38.4 KiB
- * frames over this panel's SPI bus could crowd a HALF-DUPLEX audio path where
- * capture and playback already hand I2S back and forth. That risk is real and
- * is why the frame rate here is modest and the render buffer lives in PSRAM —
- * but "no face at all" was the wrong answer to it: this is the product's face,
- * and the audio counters (spkStarvedMs, micDropped) are the instrument that
- * says whether drawing it costs anything. They read zero with it on.
+ * The frame rate is modest and the render buffer lives in PSRAM. Audio
+ * counters are the instrument for deciding whether drawing costs audio.
  *
  * THE FACE AND THE TEXT SCREEN ARE ALTERNATIVES, NEVER LAYERS. The first
  * version of this drew the text screen at boot and then pushed a 160x120 face
@@ -68,7 +63,6 @@ struct ui_model {
 };
 
 ui_model ui;
-bool talk_held_level;
 bool side_press_pending;
 
 const char *state_label(enum m5sticks3_ui_state state) {
@@ -325,8 +319,11 @@ bool m5sticks3_board_init(void) {
   config.output_power = false;
   config.internal_imu = false;
   config.internal_rtc = false;
-  config.internal_mic = true;
-  config.internal_spk = true;
+  /* The shared table codec owns one duplex I2S0 pair. Letting M5Unified
+   * create its separate I2S1 microphone or I2S0 speaker owner would put two
+   * clock masters on GPIO18/17/15. */
+  config.internal_mic = false;
+  config.internal_spk = false;
   config.external_imu = false;
   config.external_rtc = false;
   config.led_brightness = 0;
@@ -348,13 +345,6 @@ bool m5sticks3_board_init(void) {
      */
     return false;
   }
-  /*
-   * Playback uses a direct ESP-IDF channel and must never coexist with
-   * M5Unified's mixer task or retained playRaw() buffers; the microphone is
-   * started only inside the half-duplex fence.
-   */
-  M5.Mic.end();
-  M5.Speaker.end();
   M5.Display.setRotation(1);
   M5.Display.setColorDepth(16);
   M5.Display.setSwapBytes(true);
@@ -382,18 +372,7 @@ bool m5sticks3_board_init(void) {
 
 void m5sticks3_board_poll(void) {
   M5.update();
-  /*
-   * Store the stable level plus one pending bit instead of queueing edges.
-   * Push-to-talk is polled every app-loop pass; the invariant is eventual
-   * agreement with the physical button, without bounce building a backlog.
-   */
-  if (M5.BtnA.wasPressed()) talk_held_level = true;
-  if (M5.BtnA.wasReleased()) talk_held_level = false;
   if (M5.BtnB.wasPressed()) side_press_pending = true;
-}
-
-bool m5sticks3_board_talk_held(void) {
-  return talk_held_level;
 }
 
 void m5sticks3_board_inject_side_press(void) { side_press_pending = true; }

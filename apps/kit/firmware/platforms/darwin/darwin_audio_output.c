@@ -346,6 +346,7 @@ void iterate_kit_darwin_audio_output_set_expected(struct iterate_kit_darwin_audi
   if (out == NULL) return;
   atomic_store_explicit(&out->expecting_audio, expected, memory_order_release);
   if (!expected) {
+    atomic_store_explicit(&out->last_taken_peak, 0U, memory_order_release);
     (void)atomic_exchange_explicit(
         &out->pending_starved, 0U, memory_order_acq_rel);
   }
@@ -568,6 +569,7 @@ uint32_t iterate_kit_darwin_audio_output_discard(struct iterate_kit_darwin_audio
   uint32_t read_index;
   uint32_t write_index;
   if (out == NULL) return 0U;
+  atomic_store_explicit(&out->last_taken_peak, 0U, memory_order_release);
   write_index = (uint32_t)atomic_load_explicit(&out->write, memory_order_relaxed);
   read_index = (uint32_t)atomic_exchange_explicit(&out->read, write_index, memory_order_acq_rel);
   if (out->mode == ITERATE_KIT_DARWIN_AUDIO_OUTPUT_PULLED) {
@@ -747,7 +749,9 @@ static void iterate_kit_darwin_audio_output_note_shortfall(
   if (taken < wanted && expected && !atomic_load_explicit(&out->draining, memory_order_relaxed)) {
     (void)atomic_fetch_add_explicit(&out->shortfalls, 1U, memory_order_relaxed);
     (void)atomic_fetch_add_explicit(&out->shortfall_bytes, wanted - taken, memory_order_relaxed);
-    if (out->last_taken_peak >= ITERATE_KIT_DARWIN_AUDIO_OUTPUT_AUDIBLE_PEAK) {
+    if (atomic_load_explicit(
+            &out->last_taken_peak, memory_order_relaxed) >=
+        ITERATE_KIT_DARWIN_AUDIO_OUTPUT_AUDIBLE_PEAK) {
       (void)atomic_fetch_add_explicit(&out->audible_shortfalls, 1U, memory_order_relaxed);
       (void)atomic_fetch_add_explicit(
           &out->audible_shortfall_bytes, wanted - taken, memory_order_relaxed);
@@ -760,6 +764,6 @@ static void iterate_kit_darwin_audio_output_note_shortfall(
       const uint16_t magnitude = (uint16_t)(sample < 0 ? -(int32_t)sample : sample);
       if (magnitude > peak) peak = magnitude;
     }
-    out->last_taken_peak = peak;
+    atomic_store_explicit(&out->last_taken_peak, peak, memory_order_relaxed);
   }
 }

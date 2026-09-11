@@ -162,10 +162,15 @@ void cli_conversation_finish_turn(
   struct cli_report_turn *turn = runtime->conversation.current_turn;
   turn->completed_ms = now_ms;
   turn->watchdog_stalled = !played_out;
-  const bool latency_missing =
-      cli_report_speech_end_to_first_packet_ms(turn) == 0U ||
-      cli_report_speech_end_to_first_played_ms(turn) == 0U;
-  turn->failed = !played_out || turn->frames_played == 0U || latency_missing;
+  const bool latency_available =
+      cli_report_has_speech_end_to_first_packet(turn) &&
+      cli_report_has_speech_end_to_first_played(turn);
+  /*
+   * A silent fixture can reach and drain the local speaker without a
+   * speech-end endpoint. That makes latency unavailable, not the completed
+   * audio path a failure. The report emits null for those two measurements.
+   */
+  turn->failed = !played_out || turn->frames_played == 0U;
   turn->frames_sent = runtime->voicelab.frames_sent - turn->frames_sent;
   if (runtime->options.live_audio) {
     struct iterate_kit_darwin_audio_codec_metrics audio;
@@ -185,7 +190,7 @@ void cli_conversation_finish_turn(
       cli_report_time_to_first_audio_ms(turn),
       cli_report_time_to_answer_ms(turn), turn->frames_sent,
       turn->frames_received, turn->frames_played, turn->frames_concealed,
-      turn->underruns, latency_missing ? "missing" : "ok");
+      turn->underruns, latency_available ? "ok" : "unavailable");
   runtime->conversation.current_turn = NULL;
 }
 
@@ -304,7 +309,7 @@ static enum cli_conversation_status cli_conversation_start_turn(
           &runtime->device_controls,
           true,
           ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM) != ITERATE_KIT_OK) {
-    cli_runtime_log("error", "scripted talk start exceeded device event bound");
+    cli_runtime_log("error", "scripted conversation start exceeded device event bound");
     return CLI_CONVERSATION_ERR_REPORT;
   }
   conversation->state = CLI_CONVERSATION_SENDING;
@@ -318,19 +323,6 @@ static void cli_conversation_finish_sending(
   assert(runtime != NULL);
   if (!runtime->source_finished ||
       cli_microphone_queued(&runtime->microphone) != 0U) return;
-  if (runtime->options.open_mic) {
-    /* Keep zero PCM flowing: server VAD, rather than a PTT commit, ends this turn. */
-    runtime->conversation.state = CLI_CONVERSATION_WAIT_ANSWER;
-    return;
-  }
-  if (cli_device_controls_request_talk(
-          &runtime->device_controls,
-          false,
-          ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM) != ITERATE_KIT_OK) {
-    cli_runtime_log("error", "scripted talk stop exceeded device event bound");
-    runtime->stop_requested = true;
-    return;
-  }
   runtime->conversation.state = CLI_CONVERSATION_WAIT_ANSWER;
   if (runtime->conversation.current_turn != NULL) {
     runtime->conversation.current_turn->committed_ms = now_ms;

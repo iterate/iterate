@@ -3,19 +3,8 @@
  *
  * The program it runs is components/voice/src/voice_loop.c, and it is the same
  * program the other three run. What is left here is the hardware: a 240x135
- * status screen, two buttons, an ES8311, and the one structural novelty this
- * board has — the HALF-DUPLEX FENCE.
- *
- * THE FENCE IS PHYSICS, NOT POLICY. The microphone is the same codec's ADC
- * driven on I2S1, sharing MCLK/BCLK/WS (GPIO 18/17/15) with the I2S0 speaker
- * path — two masters on one set of pins. Capture therefore requires DELETING
- * the playback channel, so the microphone cannot run while the speaker does
- * even if the firmware wanted it to. On a board with no AEC that is the whole
- * echo story, and it is why turns here are push-to-talk.
- *
- * The loop owns the SEQUENCING of that fence (marker on the wire -> speaker
- * queue empty -> pins), because the ordering is a correctness argument rather
- * than a driver detail. This file owns only the asking and the answering.
+ * status screen, two buttons and an ES8311. This file owns hardware setup;
+ * the shared loop owns call lifetime and continuous capture.
  */
 #include <stdio.h>
 
@@ -104,7 +93,6 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
    * must not drive another board's pins. */
   if (!m5sticks3_board_init()) return false;
   if (!m5sticks3_audio_prepare()) return false;
-  out->codec = m5sticks3_audio_codec();
   out->processor = iterate_kit_audio_processor_passthrough();
   return true;
 }
@@ -120,8 +108,7 @@ static void present(
 /** Supply M5's distinct side-tap and front-hold as normalized input. */
 static void read_gestures(struct iterate_kit_board_gestures *out) {
   m5sticks3_board_poll();
-  out->tap |= m5sticks3_board_take_side_press();
-  out->held |= m5sticks3_board_talk_held();
+  out->pressed |= m5sticks3_board_take_side_press();
 }
 
 static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
@@ -129,28 +116,12 @@ static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
   if (phase_value == ITERATE_KIT_VOICE_PHASE_ARRIVED) {
     m5sticks3_audio_amplifier(true);
   } else if (phase_value == ITERATE_KIT_VOICE_PHASE_QUIET) {
-    /* The idle powerdown fires 1.5 s after the last stream write, while
-     * "call ended" may still be playing. QUIET repeats each idle pass, so
-     * the amp drops on the first pass after the board's own voice finishes. */
-    if (!m5sticks3_audio_sound_active()) m5sticks3_audio_amplifier(false);
+    if (!iterate_kit_i2s_codec_sound_active()) m5sticks3_audio_amplifier(false);
   }
-}
-
-static void capture_fence(void *context, bool microphone_owns_pins) {
-  (void)context;
-  m5sticks3_audio_set_capture(microphone_owns_pins);
-}
-
-static bool playout_fenced_out(void *context) {
-  (void)context;
-  /* Either the microphone holds the pins, or the handover is still in flight. */
-  return m5sticks3_audio_capturing() || m5sticks3_audio_mode_switching();
 }
 
 static size_t health(void *context, char *out, size_t capacity) {
   const struct iterate_kit_health_field fields[] = {
-    /* The half-duplex fence, this board's one structural novelty. */
-    {"audioModeSwitches", m5sticks3_audio_mode_switches()},
     /*
      * The face, counted rather than eyeballed. A face is the one part of this
      * device a person judges by eye, which makes it the easiest thing to
@@ -168,28 +139,33 @@ static const struct iterate_kit_board_ops ops = {
   .start = start,
   .present = present,
   .phase = phase,
-  /* Providing this pair is how this board declares itself half duplex. */
-  .capture_fence = capture_fence,
-  .playout_fenced_out = playout_fenced_out,
   .modules = modules,
   .health = health,
 };
 
-/** Native stereo PCM16: 320x6 gives a 120 ms DMA ring. MCLK is present
- * but the codec clocks off BCLK: 0x01=B5, 0x02=18 selects 8xBCLK=256fs.
- * The microphone on I2S1 shares these clocks, so extra deletes/rebuilds TX
- * before M5.Mic can own them; this is deliberately not a duplex declaration.
+/** One native stereo PCM16 bus, owned by one ESP I2S controller. ES8311
+ * clocks from BCLK (0x01=B5, 0x02=18), while MCLK remains physically routed.
+ * ADCDAT is the right slot, matching M5Unified's prior microphone config.
+ * This concurrent ADC/DAC configuration needs bench capture/playout
+ * qualification; compiling it is not acoustic proof.
  */
 const struct iterate_kit_i2s_codec_facts m5sticks3_audio_facts = {
-  .playback_port = I2S_NUM_0, .capture_port = I2S_NUM_1, .role = I2S_ROLE_MASTER,
+  .playback_port = I2S_NUM_0, .capture_port = I2S_NUM_0, .role = I2S_ROLE_MASTER,
   .playback = {
     .clk_cfg = {.sample_rate_hz = 16000, .clk_src = I2S_CLK_SRC_DEFAULT,
       .mclk_multiple = I2S_MCLK_MULTIPLE_128},
     .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
-    .gpio_cfg = {.mclk = 18, .bclk = 17, .ws = 15, .dout = 14, .din = I2S_GPIO_UNUSED},
+    .gpio_cfg = {.mclk = 18, .bclk = 17, .ws = 15, .dout = 14, .din = 16},
+  },
+  .capture = {
+    .clk_cfg = {.sample_rate_hz = 16000, .clk_src = I2S_CLK_SRC_DEFAULT,
+      .mclk_multiple = I2S_MCLK_MULTIPLE_128},
+    .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+    .gpio_cfg = {.mclk = 18, .bclk = 17, .ws = 15, .dout = 14, .din = 16},
   },
   .dma_frames = 320, .dma_descriptors = 6,
-  .playback_shape = {16, 2, 0, -1, 1},
+  .playback_shape = {16, 2, 0, -1, 1}, .capture_shape = {16, 2, 1, -1, 1},
+  .capture_gain = 1,
   .amplifier_gpio = -1,
 };
 
@@ -198,13 +174,15 @@ const struct iterate_kit_i2s_codec_facts m5sticks3_audio_facts = {
  * tone trip brownout. Raising this ceiling needs a physical power proof.
  * Writes fail on the first NACK. The PMIC amplifier is muted by extra.
  */
-static const struct iterate_kit_register_write dac_writes[] = {
+static const struct iterate_kit_register_write codec_writes[] = {
   {0x00, 0x80}, {0x01, 0xb5}, {0x02, 0x18}, {0x0d, 0x01},
-  {0x12, 0x00}, {0x13, 0x10}, {0x32, 0x9b}, {0x37, 0x08},
+  {0x0e, 0x02}, {0x12, 0x00}, {0x13, 0x10},
+  {0x14, 0x10}, {0x17, 0xff}, {0x1c, 0x6a},
+  {0x32, 0x9b}, {0x37, 0x08},
 };
 const struct iterate_kit_register_script m5sticks3_audio_script = {
-  .i2c_address = 0x18, .writes = dac_writes,
-  .count = sizeof(dac_writes) / sizeof(dac_writes[0]),
+  .i2c_address = 0x18, .writes = codec_writes,
+  .count = sizeof(codec_writes) / sizeof(codec_writes[0]),
   .when = ITERATE_KIT_SCRIPT_BEFORE_I2S,
 };
 
@@ -227,22 +205,19 @@ static const struct iterate_kit_board board = {
    * step can sit before the ring genuinely empties.
    */
   .speaker_dry_wait_ms = 80,
-  .hold_to_talk = true,
   },
   .i2c = {.sda = 47, .scl = 48, .hz = 100000},
   .scripts = &m5sticks3_audio_script, .script_count = 1,
-  .audio = NULL, /* M5.Mic and the fence own capture; only TX uses the facts above. */
+  .audio = &m5sticks3_audio_facts,
   .volume = {.i2c_address = 0x18, .page_register = 0xff, .registers = {0x32},
     .register_count = 1, .full_code = 0x9b, .floor_code = 0},
   .ring = {.gpio = -1, .power_gpio = -1},
   .status_led_gpio = -1,
-  .button = {.gpio = -1, .tap_wakes = true, .tap_ends = true},
+  .button = {.gpio = -1},
   .read_gestures = read_gestures,
   .sounds = {.wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),
     .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended)},
-  /* Its sound path observes the half-duplex fence before touching shared pins. */
   .play_sound = m5sticks3_audio_play_sound,
-  .open_codec = m5sticks3_audio_init,
   .extra = &ops,
 };
 

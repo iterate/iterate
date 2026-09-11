@@ -77,7 +77,7 @@ struct cli_runtime {
   size_t outbox_lengths[ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS];
   struct iterate_kit_posix_itx_transport transport;
   struct iterate_kit_peer peer;
-  struct iterate_kit_module modules[2];
+  struct iterate_kit_module modules[1];
   struct cli_capabilities capabilities;
   struct cli_device_controls device_controls;
   struct iterate_kit_voicelab voicelab;
@@ -141,35 +141,13 @@ struct cli_runtime {
   bool hanging_up;
   uint64_t hangup_deadline_ms;
   bool wants_talk;
-  /**
-   * MAY MICROPHONE FRAMES GO ON THE WIRE — the board's rule, same words
-   * (components/voice/src/voice_loop.c). It gates only what JOINS the queue:
-   * capture keeps draining, and frames already queued still go out, because a
-   * release is no longer a commit (push-to-talk left the wire 2026-09-11).
-   */
+  /** Capture remains on while this locally owned conversation is active. */
   bool talking;
   bool answer_done;
   bool restart_requested;
   uint64_t restart_requested_at_ms;
   bool stop_requested;
   bool source_finished;
-  uint64_t turn_started_ms;
-  /*
-   * THE ONE THING NOBODY COULD SEE: where the wait after a key comes up goes.
-   *
-   * Six hops sit between letting go of a button and hearing a reply — the
-   * loop noticing, the commit reaching the outbox, the stream carrying it, the
-   * provider being asked, the first delta coming back, and the first sample
-   * reaching the speaker — and not one of them was timed. Every diagnosis of
-   * "it takes ages" so far has been somebody's reading of a scrolling log,
-   * including two of mine that were wrong. These are stamped at the edges and
-   * differenced once, when the answer starts.
-   */
-  uint64_t turn_released_ms;
-  uint64_t turn_committed_ms;
-  uint64_t turn_answer_seen_ms;
-  uint32_t turn_release_to_commit_ms;
-  uint32_t turn_commit_to_audio_ms;
   /**
    * When this turn's answer last made progress — a frame played or arrived.
    *

@@ -1,5 +1,5 @@
 // Hold a voice conversation from this Mac: real microphone in, speakers out,
-// hold-to-talk (or an open microphone). No ESP32 involved. GPT-Live on the
+// and continuous capture while the call is active. No ESP32 involved. GPT-Live on the
 // far end, delegating to a fast Astra with exec_typescript on the project.
 //
 //   pnpm cli voicelab talk                # asks which environment and project
@@ -117,7 +117,7 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
    */
   auto?: boolean;
   /**
-   * Run unattended for this many minutes instead of hold-to-talk.
+   * Run unattended for this many minutes instead of attending the call.
    *
    * The driver takes the turns itself from recorded utterances, so an
    * hour-long conversation needs nobody at the keyboard — which is the only
@@ -145,16 +145,6 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
    * born able to end its own call; pass `--hang-up false` to withhold it.
    */
   hangUp?: boolean;
-  /**
-   * Hold the microphone open for the whole call instead of holding SPACE.
-   *
-   * A DRIVER flag, not a certificate one: GPT-Live takes every turn itself
-   * and answers a button-release-shaped stop just as it answers silence
-   * (measured 475 ms after the last frame, live-probe 2026-09-10), so the
-   * stream carries no turn posture any more. Off by default because this
-   * Mac's speaker feeds its microphone; the boards have echo cancellation.
-   */
-  openMic?: boolean;
   /** Classify the answer into mouth shapes for a face-rendering board. */
   visemes?: boolean;
   /**
@@ -346,9 +336,7 @@ export async function talk(options: TalkOptions = {}) {
 
   console.log(`\n  ${baseUrl} · ${project}`);
   if (options.converse === undefined) {
-    console.log(`\n  HOLD space to talk, release to send, q to hang up.`);
-    console.log(`  A tap does nothing: a terminal has no key-up event, so release is`);
-    console.log(`  inferred from the key repeat stopping.`);
+    console.log(`\n  The microphone captures continuously; q hangs up.`);
     console.log(`  If micIn stays at 0 in the pulse line, macOS denied the microphone —`);
     console.log(`  that is the only symptom it gives.`);
   } else {
@@ -373,7 +361,7 @@ export async function talk(options: TalkOptions = {}) {
         `mac${stamp}`,
         "--stream-path",
         setup.streamPath,
-        ...driverArgs(options, minutes, options.openMic === true),
+        ...driverArgs(options, minutes),
         ...(!options.pretendSpeaker ? [] : ["--pretend-speaker", options.pretendSpeaker]),
         "--speaker-wav",
         playback,
@@ -661,19 +649,11 @@ export function resolveKitDir(explicit?: string): string {
  * report would describe a conversation neither of them had — so choosing one
  * is a branch rather than a set of flags that happen not to collide.
  */
-export function driverArgs(
-  options: TalkOptions,
-  minutes: number,
-  /** Attended open mic: the C streams continuously and GPT-Live hears the
-   * room. Off, holding SPACE unmutes the microphone — a fact about this
-   * driver only; the stream sees frames while it is held and nothing else. */
-  openMic = false,
-): string[] {
+export function driverArgs(options: TalkOptions, minutes: number): string[] {
   if (options.converse === undefined) {
     return [
       ...(options.pretendSpeaker === undefined ? ["--live-audio"] : []),
       "--live-mic",
-      openMic ? "--open-mic" : "--push-to-talk",
       "--minutes",
       String(minutes),
     ];
@@ -752,7 +732,7 @@ export function voicelabRunsDir(): string {
  * Run with the terminal attached, and report what happened verbatim.
  *
  * `stdio: "inherit"` is load-bearing rather than a convenience: the C puts the
- * terminal into raw mode for hold-to-talk and cannot do that through a pipe.
+ * terminal into raw mode for its local call controls and cannot do that through a pipe.
  */
 export function runInherited(command: string, args: string[], env = process.env): void {
   const result = spawnSync(command, args, { env, stdio: "inherit" });

@@ -25,8 +25,8 @@ struct iterate_kit_volume_register {
   int16_t floor_code;
 };
 
-/** The call-control posture. gpio -1 means a board callback supplies gestures. */
-struct iterate_kit_gpio_button { int8_t gpio; bool active_low; bool tap_wakes; bool tap_ends; };
+/** gpio -1 means a board callback supplies gestures. */
+struct iterate_kit_gpio_button { int8_t gpio; bool active_low; };
 
 /** Physical input, normalized before the shared session grammar sees it.
  * A board reports only edges and levels: it does not decide call lifecycle,
@@ -34,10 +34,7 @@ struct iterate_kit_gpio_button { int8_t gpio; bool active_low; bool tap_wakes; b
  * board.c with these fields before the grammar runs once per app-loop pass.
  */
 struct iterate_kit_board_gestures {
-  bool pressed; /* Debounced down-edge, for immediate wake. */
-  bool tap;
-  bool held;
-  bool end_hold;
+  bool pressed; /* Debounced or synthetic down-edge. */
   bool end_press;
 };
 
@@ -120,17 +117,14 @@ const struct iterate_kit_voice_view *iterate_kit_board_view(void);
  * when extra supplies one, otherwise the table's full-scale initial setting.
  */
 uint8_t iterate_kit_board_volume(void);
-/** Queue a synthetic tap in the same classifier as every physical control. */
-void iterate_kit_board_inject_tap(void);
+/** Queue a synthetic down edge in the same classifier as physical controls. */
+void iterate_kit_board_inject_press(void);
 /** Apply the shared grammar to normalized input. Exposed for focused host
  * tests; board.c is the only firmware caller. */
 void iterate_kit_board_apply_gestures(
     struct iterate_kit_session *session,
     const struct iterate_kit_board_gestures *gestures,
-    const struct iterate_kit_gpio_button *button,
-    bool hold_to_talk,
     const struct iterate_kit_voice_view *view,
-    uint64_t now_ms,
     struct iterate_kit_session_actions *actions);
 #ifdef ESP_PLATFORM
 #include "driver/i2c_master.h"

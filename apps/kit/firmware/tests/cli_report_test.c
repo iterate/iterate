@@ -47,10 +47,14 @@ static void speech_end_latency_requires_ordered_real_endpoints(void)
       cli_report_begin_turn(&report, "count.wav", 0U);
   assert(turn != NULL);
   turn->last_nonquiet_input_ms = 1000U;
+  assert(!cli_report_has_speech_end_to_first_packet(turn));
+  assert(!cli_report_has_speech_end_to_first_played(turn));
   assert(cli_report_speech_end_to_first_packet_ms(turn) == 0U);
   assert(cli_report_speech_end_to_first_played_ms(turn) == 0U);
   turn->first_speaker_packet_ms = 1250U;
   turn->first_nonquiet_speaker_played_ms = 1320U;
+  assert(cli_report_has_speech_end_to_first_packet(turn));
+  assert(cli_report_has_speech_end_to_first_played(turn));
   assert(cli_report_speech_end_to_first_packet_ms(turn) == 250U);
   assert(cli_report_speech_end_to_first_played_ms(turn) == 320U);
   turn->first_speaker_packet_ms = 999U;
@@ -116,6 +120,8 @@ static void one_bad_turn_survives_into_the_summary(void)
         cli_report_begin_turn(&report, "x.wav", 0U);
     assert(turn != NULL);
     turn->committed_ms = 100U;
+    turn->first_input_capture_ms = 40U;
+    turn->first_append_ms = 60U;
     turn->first_audio_ms = 300U;
     turn->completed_ms = 2000U;
     turn->last_nonquiet_input_ms = 80U;
@@ -157,6 +163,8 @@ static void one_bad_turn_survives_into_the_summary(void)
   assert(strstr(body, "\"colleagueQuestionsAsked\"") == NULL);
   assert(strstr(body, "\"roomCompletedBytes\":1280") != NULL);
   assert(strstr(body, "\"roomDroppedBytes\":640") != NULL);
+  assert(strstr(body, "\"firstInputCaptureOffsetMs\":40") != NULL);
+  assert(strstr(body, "\"firstAppendOffsetMs\":60") != NULL);
   assert(strstr(body, "\"roomStarvedBuffers\":2") != NULL);
   assert(strstr(body, "\"speakerPlatformError\":-50") != NULL);
   assert(strstr(body, "\"microphonePlatformError\":0") != NULL);

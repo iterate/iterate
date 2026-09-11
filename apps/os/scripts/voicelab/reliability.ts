@@ -7,7 +7,7 @@
 // spoke, and nothing came out", which is the only test that matters.
 //
 // One attempt is: restart the device, wait for it to come back, press call,
-// wait for the call to be LIVE, speak into its open microphone, and then require
+// wait for the call to be LIVE, speak into its continuous microphone, and then require
 // that AUDIO WAS PLAYED — bytes written to the speaker, not a transcript
 // event. A transcript proves the model answered; only the speaker counter
 // proves the person heard it.
@@ -26,7 +26,7 @@ import {
 export interface ReliabilityOptions extends VoicelabConnectOptions {
   /** How many full journeys to run. */
   attempts?: number;
-  /** Seconds to hold the local microphone gate open before judging the answer. */
+  /** Seconds to speak into the continuous microphone before judging the answer. */
   seconds?: number;
   /** Capability the device mounts itself under (itx.kit.<name>). */
   name?: string;
@@ -48,7 +48,7 @@ const LIMITS = {
   bootMs: 90_000,
   /** From pressing call to the bridge announcing it. */
   callLiveMs: 45_000,
-  /** From releasing the button to audio arriving at the speaker. */
+  /** From speaking to audio arriving at the speaker. */
   answerMs: 30_000,
   /** Any single capability call. */
   rpcMs: 20_000,
@@ -175,7 +175,6 @@ export async function reliability(options: ReliabilityOptions) {
 
   interface DeviceCapability {
     conversation: { start(): Promise<boolean>; end(): Promise<boolean> };
-    pushToTalk: { start(): Promise<boolean>; stop(): Promise<boolean> };
     restart(): Promise<boolean>;
     health(): Promise<Record<string, unknown>>;
   }
@@ -287,18 +286,16 @@ export async function reliability(options: ReliabilityOptions) {
         console.error(`  · call live in ${(ms.callLive / 1000).toFixed(1)}s`);
       }
 
-      // 3. Open the local microphone gate. This is hardware capture control,
-      //    not a provider turn boundary.
+      // 3. The microphone is continuous from call start. Leave time for the
+      //    person to speak before judging the answer.
       const beforeSpeaking = (await withTimeout("health", () => device().health())) as Record<
         string,
         number
       >;
       {
         const at = Date.now();
-        step("capturing");
-        await withTimeout("open microphone", () => device().pushToTalk.start());
+        step("speaking into the live microphone");
         await sleep(holdSeconds * 1000);
-        await withTimeout("close microphone", () => device().pushToTalk.stop());
         ms.turn = Date.now() - at;
       }
 

@@ -57,7 +57,7 @@ framework, durable audio journal, provider hierarchy, or replay protocol.
 - Send microphone events as `{ activation, pcm }`. Send one authoritative
   `conversation-ended { activation, reason }`, including before call acceptance.
   Downstream accepted, speaker and terminal events must match the activation.
-- Local release drains the captured tail. End and mute discard unsent audio and
+- Button release leaves capture running. End and mute discard unsent audio and
   invalidate in-flight capture. Late audio or callbacks from A cannot start or
   alter B. There is no post-hangup time-based suppression.
 - Preserve definitely unsent audio through ordinary mounting and backpressure.
@@ -82,7 +82,7 @@ fail the activation with a classified reason; neither prefix nor tail is
 silently trimmed. Allocation failure must be visible before claiming readiness.
 
 The shared microphone function decides only when and how much to flush. A full
-backlog drains on each eligible pass; the final partial batch drains on release.
+backlog drains on each eligible pass; partial batches obey the same 50 ms bound.
 On `session.started`, the backend forwards its FIFO synchronously and in order,
 without waiting for new input or adding a replay timer.
 
@@ -101,7 +101,7 @@ do not silently replay uncertain speech or actions into a replacement session.
 | --- | --- |
 | Grok, provider URLs/model knobs, provider modes and mode NVS/assets | Fixed OpenAI endpoint/model/voice and injectable test socket |
 | Pickup greetings and greeting detection | Responses to actual captured speech |
-| Remote PTT, turn commits/cancels, turn sequence IDs and silence padding | Local physical capture/playout constraints |
+| PTT policy, turn commits/cancels, turn sequence IDs and silence padding | Continuous duplex capture, physical mute and correct codec clocks |
 | No-op start-call RPC, pending call, launch ladder, cooldown/grace state | Local activation, actual transport readiness and provider acceptance |
 | Raw provider-event mirror and its background work | Transcripts, session timing, classified errors and speaker telemetry |
 | Scheduled callback recycling and dead counters | Registration and proven failure recovery |
@@ -123,15 +123,18 @@ normal source/config addition:
 4. `targets/<name>/sdkconfig.defaults`: chip, flash, PSRAM and wake-model facts.
 
 Reuse existing codec, volume, button, LED and face implementations. A BSP-owned
-display, servo or shared-clock fence can justify an extra hardware callback.
+display, servo or native duplex driver can justify an extra hardware callback.
 No edits to the voice loop, GPT-Live processor or wire contract should be needed
 for a conventional new board such as a supported stopwatch-style ESP32 device.
 Installer publication separately records artifacts and hashes in its catalog.
 
 HAVPE and Satellite1 retain XMOS AEC. StackChan retains its real DSP/reference
-path. M5StickS3 retains its shared-clock capture/TX fence; Waveshare retains local
-hold-to-talk and playout exclusion until AEC is proven. One fixed hardware fact
-replaces selectable turn modes. GPT-Live does not remove acoustic limitations.
+path. **Missing AEC is not itself a reason to require push-to-talk.** Waveshare
+already supports simultaneous capture and playback. Replace M5StickS3's two
+competing I2S clock owners with one shared duplex owner, then remove its handoff
+fence. Test GPT-Live with delayed speaker feedback and real caller interruptions
+before deciding whether any remaining speech gate earns its place. Keep this
+separate from physical mute and preventing idle wake-word self-triggering.
 
 ## Migration and proof
 
@@ -145,15 +148,22 @@ Face data stays in reduced runtime state. The C client uses direct
 `getProcessorRuntimeState`, so the browser LiveState delta change does not require
 a second C decoder. Verify monotonic updates and playout-aligned consumption.
 
+Use `/agents/voice/v23/<device_name>` for firmware's new stream contract. Keep
+hardware/client identity stable and leave old voice histories untouched. A new
+facet cannot skip old incompatible rows using a subscription start offset;
+reusing the old path would produce historical parse failures.
+
 Acceptance remains open until these are demonstrated:
 
 - [x] Rebase the selective firmware consolidation onto the latest GPT-Live PR.
 - [x] Share first/50 ms/tail microphone flushing between firmware and CLI.
 - [x] Preserve a complete pre-mount utterance and fence A → end → B.
 - [x] Remove board provider modes while retaining volume and real hardware controls.
+- [x] Replace M5's competing audio clock owners and remove unnecessary PTT policy.
+- [x] Verify model behavior under digital speaker echo and overlapping caller speech.
 - [x] Cover activation during an in-flight capture, mute, opening timeout and overflow.
 - [x] Finish provider/config/launch/turn deletions and update every consumer.
-- [x] Run focused behavior tests, all host tests and all five fresh ESP builds on the final source.
+- [ ] Run focused behavior tests, all host tests and all five fresh ESP builds on the final source.
 - [ ] Complete required repository checks and review the final changes with Claude Fable 5.1 xhigh.
 - [ ] Deploy an isolated preview; verify coherent state, traces and failure classification.
 - [ ] Measure capture-to-first-append, provider-first-output and output-to-playout separately.

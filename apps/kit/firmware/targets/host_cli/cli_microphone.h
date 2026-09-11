@@ -4,10 +4,8 @@
 /*
  * cli_microphone: frames captured but not yet sent.
  *
- * The device's microphone never stops; the talk button decides whether what
- * it hears is wanted. So this queue is always being written and only
- * sometimes drained, and its interesting behaviour is what it does when the
- * uplink cannot keep up.
+ * Input is read continuously. An active conversation admits frames to this
+ * queue, which retains bounded current audio while the uplink cannot keep up.
  *
  * IT DROPS THE OLDEST, and counts it. The alternative — refusing the newest —
  * keeps a queue full of speech from a second ago and sends it late for the

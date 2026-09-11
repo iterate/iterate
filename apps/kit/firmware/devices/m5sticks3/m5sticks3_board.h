@@ -25,9 +25,6 @@ bool m5sticks3_board_init(void);
 /** Poll M5Unified's buttons; call from the app loop. */
 void m5sticks3_board_poll(void);
 
-/** The front button's debounced level: held means the microphone is wanted. */
-bool m5sticks3_board_talk_held(void);
-
 /** One latched press of the side button (consumed on read). */
 bool m5sticks3_board_take_side_press(void);
 
