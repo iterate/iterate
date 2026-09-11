@@ -4764,3 +4764,16 @@ tutorial's chapter 0), and kernel-vs-library namespacing (an open question in ch
   with any email → account page (an org auto-created) → create `demo-playground` → open its
   `demo-playground.iterate2.app` host (TLS + the `/.itx/session` token accepted; the config worker's
   default 404 for a project with no website yet). The console is fully usable.
+
+## 2026-09-11 — dynamic client registration on every deployment (MCP client compat)
+
+- JONAS: the MCP Inspector (and Claude's connector) refused the deployed server — "Incompatible auth
+  server: does not support dynamic client registration." DCR was gated to a local `http:` issuer only
+  (`src/oauth.ts` set `clientRegistrationEndpoint` only there; `src/api.ts` 404'd `/oauth/register` on
+  https), with CIMD as the console's own path (`browser-session.ts` uses a client-id metadata document
+  on https, and only registered via DCR when local). Standard MCP clients require DCR, so the endpoint
+  is now ALWAYS published and the provider serves it; CIMD stays on beside it, and the console's https
+  flow is unchanged (still CIMD). `__workers-tests__/oauth.test.ts` flipped to assert the endpoint is
+  advertised and registers a client (201 + client_id). Deployed **e82d8c34**: the AS metadata carries
+  `registration_endpoint: https://os.iterate2.com/oauth/register`, and a live DCR POST returns 201 with
+  a client_id — the MCP Inspector connects.
