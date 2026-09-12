@@ -17,12 +17,14 @@ const Manifest = z.object({
       z.object({
         chipFamily: z.string().min(1),
         serialType: z.enum(["cdc", "uart"]).optional(),
-        parts: z.array(
-          z.object({
-            path: z.string().min(1),
-            offset: z.number().int().nonnegative(),
-          }),
-        ),
+        parts: z
+          .array(
+            z.object({
+              path: z.string().min(1),
+              offset: z.number().int().nonnegative(),
+            }),
+          )
+          .min(1),
       }),
     )
     .min(1),
@@ -74,9 +76,7 @@ export async function loadInstallManifestTemplate(input: {
   device: FirmwareDevice;
   release: EspWebToolsFirmwareRelease;
 }): Promise<InstallManifestTemplate> {
-  if (input.device.installMethod.kind !== "esp-web-tools") {
-    throw new Error(`${input.device.name} is not configured for ESP Web Tools.`);
-  }
+  const chipFamily = input.device.installMethod.chipFamily;
   const manifestPath = firmwareManifestPath(input.device.id, input.release.version);
   const manifestUrl = new URL(manifestPath, window.location.href);
   const response = await fetch(manifestUrl);
@@ -91,6 +91,7 @@ export async function loadInstallManifestTemplate(input: {
       path: new URL(part.path, manifestUrl).href,
     })),
   }));
+  validateManifest(input.device.name, chipFamily, input.release, baseManifest, builds, manifestUrl);
 
   return {
     prepare: (configuration) => {
@@ -133,4 +134,80 @@ export async function loadInstallManifestTemplate(input: {
       }
     },
   };
+}
+
+/** Check the generated manifest against the release that selected it. */
+function validateManifest(
+  deviceName: string,
+  chipFamily: string,
+  release: EspWebToolsFirmwareRelease,
+  manifest: z.infer<typeof Manifest>,
+  builds: {
+    chipFamily: string;
+    serialType?: "cdc" | "uart";
+    parts: { path: string; offset: number }[];
+  }[],
+  manifestUrl: URL,
+): void {
+  if (manifest.name !== deviceName) {
+    throw new Error(
+      `Firmware manifest is for ${JSON.stringify(manifest.name)}, not ${deviceName}.`,
+    );
+  }
+  if (manifest.version !== release.version) {
+    throw new Error(
+      `Firmware manifest is version ${JSON.stringify(manifest.version)}, not ${release.version}.`,
+    );
+  }
+  const configuration = release.artifact.configurationPartition;
+  if (
+    !Number.isSafeInteger(configuration.offset) ||
+    configuration.offset < 0 ||
+    !Number.isSafeInteger(configuration.size) ||
+    configuration.size <= 0
+  ) {
+    throw new Error("Firmware release has an invalid configuration partition.");
+  }
+  const configurationEnd = configuration.offset + configuration.size;
+  if (!Number.isSafeInteger(configurationEnd)) {
+    throw new Error("Firmware release configuration partition exceeds safe flash offsets.");
+  }
+  const manifestDirectory = new URL("./", manifestUrl);
+  const expectedParts = release.artifact.parts.map((part) => ({
+    fileName: part.fileName,
+    offset: part.offset,
+  }));
+  for (const build of builds) {
+    if (build.chipFamily !== chipFamily) {
+      throw new Error(`Firmware manifest chip ${build.chipFamily} does not match ${chipFamily}.`);
+    }
+    if (
+      build.parts.length !== expectedParts.length ||
+      build.parts.some((part, index) => {
+        const expected = expectedParts[index];
+        if (!expected || part.offset !== expected.offset) return true;
+        const partUrl = new URL(part.path);
+        const fileName = partUrl.pathname.slice(partUrl.pathname.lastIndexOf("/") + 1);
+        const encodedExpectedFileName = encodeURIComponent(expected.fileName);
+        return (
+          partUrl.origin !== manifestDirectory.origin ||
+          partUrl.pathname.slice(0, partUrl.pathname.lastIndexOf("/") + 1) !==
+            manifestDirectory.pathname ||
+          fileName.length !== encodedExpectedFileName.length + 65 ||
+          fileName[64] !== "-" ||
+          !/^[a-f0-9]{64}$/.test(fileName.slice(0, 64)) ||
+          fileName.slice(65) !== encodedExpectedFileName
+        );
+      })
+    ) {
+      throw new Error("Firmware manifest parts do not match the selected release.");
+    }
+    if (
+      build.parts.some(
+        (part) => part.offset >= configuration.offset && part.offset < configurationEnd,
+      )
+    ) {
+      throw new Error("Firmware manifest places a binary inside the configuration partition.");
+    }
+  }
 }

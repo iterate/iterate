@@ -7,6 +7,7 @@
 #include "iterate/kit/audio_codec.h"
 #include "iterate/kit/platforms/darwin_audio_input.h"
 #include "iterate/kit/platforms/darwin_audio_output.h"
+#include "iterate/kit/platforms/darwin_audio_vpio.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -17,6 +18,27 @@ struct iterate_kit_darwin_audio_codec_options {
   bool playback_enabled;
   /** Non-NULL selects deterministic file playback instead of CoreAudio. */
   const struct iterate_kit_darwin_audio_file_sink *file_playback;
+  /**
+   * Keep the plain capture and playback queues even when both directions are
+   * live — no echo cancellation. Off (zero) means: when the microphone and
+   * this Mac's speaker are both live, route both through Apple's
+   * VoiceProcessingIO unit so the speaker is cancelled out of the
+   * microphone; fall back to the queues if the unit is unavailable.
+   */
+  bool echo_cancellation_off;
+  /**
+   * MEASUREMENT ONLY: run the voice-processing unit even without a live
+   * microphone, so the playback path through it can be compared against
+   * the plain queue by a driver that has no microphone (`--converse`).
+   */
+  bool force_voice_processing;
+  /*
+   * The render tap: every byte the live speaker path hands CoreAudio, zeros
+   * included, on CoreAudio's clock — a true timeline of the speaker (see
+   * darwin_audio_output.h). Ignored for file playback, whose pump already
+   * writes one.
+   */
+  const struct iterate_kit_darwin_audio_file_sink *render_tap;
 };
 
 struct iterate_kit_darwin_audio_codec_metrics {
@@ -28,6 +50,27 @@ struct iterate_kit_darwin_audio_codec_metrics {
   uint32_t playback_starved_buffers;
   int32_t capture_platform_error;
   int32_t playback_platform_error;
+  /** Both directions run through the voice-processing unit (echo cancelled). */
+  bool voice_processing_active;
+  /** First VoiceProcessingIO failure, zero while healthy or when not in use. */
+  int32_t voice_processing_error;
+  /** The unit's own counters (darwin_audio_vpio.h); zero when not in use. */
+  uint32_t vpio_capture_callbacks;
+  uint32_t vpio_capture_frames_pushed;
+  uint32_t vpio_capture_short_renders;
+  uint32_t vpio_render_requests;
+  uint32_t vpio_render_shortfall_bytes;
+  uint32_t vpio_render_unaligned_requests;
+  /** PULLED playback: times the lead ran dry and had to refill. */
+  uint32_t playback_pull_reprimes;
+  /** The render tap's bytes written, and bytes lost to a full tap ring. */
+  uint32_t render_tap_bytes;
+  uint32_t render_tap_dropped_bytes;
+  /** Pulls that came up short while audio was expected, and those right after audible audio. */
+  uint32_t playback_shortfalls;
+  uint32_t playback_shortfall_bytes;
+  uint32_t playback_audible_shortfalls;
+  uint32_t playback_audible_shortfall_bytes;
 };
 
 /**
@@ -44,8 +87,10 @@ struct iterate_kit_darwin_audio_codec {
   struct iterate_kit_audio_codec codec;
   struct iterate_kit_darwin_audio_input input;
   struct iterate_kit_darwin_audio_output output;
+  struct iterate_kit_darwin_audio_vpio vpio;
   bool capture_enabled;
   bool playback_enabled;
+  bool voice_processing_active;
 };
 
 enum iterate_kit_status iterate_kit_darwin_audio_codec_open(
@@ -59,6 +104,12 @@ void iterate_kit_darwin_audio_codec_pump(
     struct iterate_kit_darwin_audio_codec *darwin,
     uint64_t now_us);
 
+/** The playback ring's lead for its mode: how far ahead to feed it. */
+uint32_t iterate_kit_darwin_audio_codec_playback_lead_bytes(
+    const struct iterate_kit_darwin_audio_codec *darwin);
+/** Barge-in: drop everything queued for the speaker; returns the bytes dropped. */
+uint32_t iterate_kit_darwin_audio_codec_discard_playback(
+    struct iterate_kit_darwin_audio_codec *darwin);
 void iterate_kit_darwin_audio_codec_set_playback_expected(
     struct iterate_kit_darwin_audio_codec *darwin,
     bool expected);

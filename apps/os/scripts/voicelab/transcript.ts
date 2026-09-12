@@ -28,8 +28,6 @@ export interface TranscriptRow {
   conversationId: string;
   role: "listener" | "assistant";
   text: string;
-  /** Present on an answer the listener barged. */
-  cancelled?: boolean;
 }
 
 /** The slice of a stream event this command reads. */
@@ -128,7 +126,6 @@ export async function transcript(options: TranscriptOptions): Promise<void> {
       continue;
     }
     const speaker = entry.role === "assistant" ? "assistant" : "listener ";
-    const marker = entry.cancelled === true ? " [barged]" : "";
-    console.log(`${entry.at.slice(11, 19)} ${speaker}${marker}  ${entry.text}`);
+    console.log(`${entry.at.slice(11, 19)} ${speaker}  ${entry.text}`);
   }
 }

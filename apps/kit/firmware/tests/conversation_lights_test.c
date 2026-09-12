@@ -93,14 +93,8 @@ static void distinguishes_listening_silence_from_idle(void) {
   }
 }
 
-/*
- * Stick is deliberately silent between manual PTT turns, but that silence
- * must not look identical to a call whose /pcm lane never connected. The
- * speaker sector therefore carries one dim blue readiness pixel for the
- * lifetime of an active, media-ready call. Amplitude may grow that meter; it
- * is not required merely to prove the lane is alive.
- */
-static void keeps_one_media_ready_pixel_visible_between_ptt_turns(void) {
+/* A quiet accepted call still shows that its speaker connection is ready. */
+static void keeps_one_media_ready_pixel_visible_during_silence(void) {
   struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
   const struct iterate_kit_conversation_visual_state state = {
     .network = ITERATE_KIT_NETWORK_CONNECTED,
@@ -114,14 +108,8 @@ static void keeps_one_media_ready_pixel_visible_between_ptt_turns(void) {
   assert(is_colour(&pixels[5], 0U, 0U, 0U));
 }
 
-/*
- * Stick is half duplex: an open call is not microphone capture until FRONT is
- * held. Reusing HAVPE's always-listening baseline there would give the same
- * green feedback for two materially different privacy/audio states. The
- * shared semantic model therefore carries listening explicitly rather than
- * making each adapter reinterpret `conversation_active`.
- */
-static void keeps_half_duplex_microphone_dark_until_capture(void) {
+/* An active call with capture disabled must not show a listening indicator. */
+static void keeps_microphone_dark_when_capture_is_disabled(void) {
   struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
   const struct iterate_kit_conversation_visual_state state = {
     .network = ITERATE_KIT_NETWORK_CONNECTED,
@@ -364,8 +352,8 @@ static void a_rung_is_only_reached_when_everything_below_it_is(void) {
 int main(void) {
   renders_one_shared_three_sector_grammar();
   distinguishes_listening_silence_from_idle();
-  keeps_one_media_ready_pixel_visible_between_ptt_turns();
-  keeps_half_duplex_microphone_dark_until_capture();
+  keeps_one_media_ready_pixel_visible_during_silence();
+  keeps_microphone_dark_when_capture_is_disabled();
   makes_media_failure_unambiguously_red();
   keeps_media_failure_visible_while_idle();
   restart_arm_supersedes_all_status();

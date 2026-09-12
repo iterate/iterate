@@ -50,7 +50,14 @@ struct cli_options {
   /** Mounted as kit.<name>, and used as this run's call id. */
   const char *name;
   const char *utterance_dir;
+  /**
+   * What this Mac's speaker was handed, on CoreAudio's clock: a true
+   * timeline, silence and holes included. With a live speaker it is the
+   * render tap (darwin_audio_output.h); otherwise the playout's own record.
+   */
   const char *speaker_wav;
+  /** What a person in the room heard: sox recording the default input, started by this process. */
+  const char *room_wav;
   /**
    * Where to record what the microphone captured.
    *
@@ -82,23 +89,18 @@ struct cli_options {
    * site that has to ask which kind of run this is.
    */
   double minutes;
-  /** Every Nth utterance forces a back-office consultation; 0 disables. */
-  uint32_t back_office_every;
   bool live_audio;
   /** Captures from this machine's default input device instead of a WAV. */
   bool live_mic;
-  /** Hold SPACE to talk, release to send, q to hang up. */
-  bool push_to_talk;
-  /**
-   * Stream the microphone continuously — a board's posture on a Mac. The
-   * server's VAD owns the turns (it needs the silence BETWEEN utterances,
-   * which a space-gated capture never sends); SPACE does nothing, q still
-   * hangs up. The stream's certificate must be open-mic too, or the agent
-   * waits for a ptt-end that never comes.
-   */
-  bool open_mic;
   /** Skips TLS certificate verification. Off unless explicitly asked for. */
   bool insecure;
+  /**
+   * Keep the plain capture and playback queues: no echo cancellation. By
+   * default a live microphone beside this Mac's live speaker runs through
+   * Apple's VoiceProcessingIO unit, because the full-duplex model otherwise
+   * hears its own answer as a person interrupting it.
+   */
+  bool no_aec;
 };
 
 /** Human-readable status name, for logs and test failure messages. */

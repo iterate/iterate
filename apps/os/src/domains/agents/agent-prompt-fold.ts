@@ -155,6 +155,8 @@ function reduceAgentEventCore(input: {
       if (payload.role === "developer" && payload.compaction !== undefined) {
         const cutoff = payload.compaction.replacesHistoryThrough;
         if (cutoff >= event.offset) return state;
+        const rebaselinedSystemSections = collapseKeyedSystemToLatest(state.contextItems);
+        const rebaselinedSystemKeys = new Set(rebaselinedSystemSections.map((item) => item.key));
         return {
           ...state,
           // The summarizer saw the projection through this barrier. Seal
@@ -162,12 +164,13 @@ function reduceAgentEventCore(input: {
           // un-sent and may still coalesce before the next request.
           lastLlmRequestOffset: Math.max(state.lastLlmRequestOffset, cutoff),
           contextItems: [
-            // The rebaseline for keyed content: superseded occurrences rode
-            // the collection until now — compaction collapses every key to
-            // its NEWEST occurrence, in first-appearance order (supersedes
-            // cleared: these are the standing document again), so repeated
-            // updates cannot grow history forever.
-            ...collapseKeyedToLatest(state.contextItems),
+            // The rebaseline for durable keyed system context: superseded
+            // occurrences rode the collection until now — compaction
+            // collapses every key to its NEWEST occurrence, in
+            // first-appearance order (supersedes cleared: these are the
+            // standing document again). Non-system keyed context is ordinary
+            // compactable history.
+            ...rebaselinedSystemSections,
             // Unkeyed system facts are durable instructions outside
             // compactable history: keep them (whatever side of the barrier
             // they sit on), ahead of the summary.
@@ -177,14 +180,17 @@ function reduceAgentEventCore(input: {
             // The summary replaces a prefix and therefore precedes everything
             // that arrived after its barrier.
             { kind: "message" as const, offset: event.offset, payload },
-            // Post-barrier conversation and send stamps survive at their
-            // positions; section occurrences do not — their newest content is
-            // already in the collapsed block above.
+            // Post-barrier conversation, send stamps, and non-system keyed
+            // context survive at their positions. A correction that arrives
+            // while the summary runs must not be folded into its past.
             ...state.contextItems.filter(
               (item) =>
                 item.offset > cutoff &&
                 (item.kind === "request" ||
-                  (item.kind === "message" && item.payload.role !== "system")),
+                  (item.kind === "message" && item.payload.role !== "system") ||
+                  (item.kind === "section" &&
+                    item.payload.role !== "system" &&
+                    !rebaselinedSystemKeys.has(item.key))),
             ),
           ],
         };
@@ -685,18 +691,21 @@ function applyContextRewritten(args: {
   ];
 }
 
-/** The compaction rebaseline for keyed content: every key collapses to its
- * NEWEST occurrence, placed in first-appearance order with `supersedes`
- * cleared — these occurrences are the standing document again (the
- * superseded copies were riding the collection only until now). */
-function collapseKeyedToLatest(contextItems: AgentContextItems): AgentContextItems {
+/** The compaction rebaseline for durable keyed system context: every key
+ * collapses to its NEWEST occurrence, placed in first-appearance order with
+ * `supersedes` cleared. Non-system sections remain compactable history. */
+function collapseKeyedSystemToLatest(
+  contextItems: AgentContextItems,
+): Extract<AgentContextItem, { kind: "section" }>[] {
   const newestByKey = new Map<string, Extract<AgentContextItem, { kind: "section" }>>();
   for (const item of contextItems) {
     if (item.kind === "section") newestByKey.set(item.key, item);
   }
   // Map insertion order IS first-appearance order (set() keeps the original
   // slot on overwrite).
-  return [...newestByKey.values()].map(({ supersedes: _supersedes, ...item }) => item);
+  return [...newestByKey.values()]
+    .filter((item) => item.payload.role === "system")
+    .map(({ supersedes: _supersedes, ...item }) => item);
 }
 
 // -----------------------------------------------------------------------------
@@ -737,14 +746,14 @@ export function buildAgentLlmRequestBody(input: {
     input.events.filter((event) => event.offset <= input.llmRequestOffset),
   );
   // The standing document is DERIVED here: the collection's leading run of
-  // section items (ending at the first message, send stamp, or superseding
-  // occurrence — membership is position, not a stored partition), merged
-  // into ONE system message of tagged blocks (empty when nothing stands).
+  // keyed SYSTEM sections (ending at any other role, message, send stamp, or
+  // superseding occurrence — membership is position, not a stored partition),
+  // merged into ONE system message of tagged blocks (empty when nothing stands).
   // The tag syntax is the SAME the authoring parser reads, so an unforked
   // prompt file round-trips byte-identically.
   const standingSections: string[] = [];
   for (const item of state.contextItems) {
-    if (item.kind !== "section" || item.supersedes) break;
+    if (item.kind !== "section" || item.supersedes || item.payload.role !== "system") break;
     standingSections.push(
       `<section key=${JSON.stringify(item.key)}>\n${item.payload.content}\n</section>`,
     );

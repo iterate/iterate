@@ -1,84 +1,52 @@
 # Iterate Kit
 
-`apps/kit` is the small device installer served at `https://k.iterate.com`.
-The first supported hardware class is selected ESP32-S3 devices installed
-through [ESP Web Tools](https://esphome.github.io/esp-web-tools/).
+Kit Flasher is the browser installer at `https://k.iterate.com` for the five
+supported ESP32-S3 voice boards: HA Voice PE, FutureProofHomes Satellite1, M5StickS3,
+StackChan and Waveshare AMOLED. It prepares the selected project, then flashes
+a checked source-built release and its private configuration directly over USB.
 
-## Firmware model
+## What a person needs
 
-The source of truth is
-[`src/firmware/catalog.ts`](./src/firmware/catalog.ts). Device identity,
-install method, and release artifact are separate:
+Choose a board release, enter Wi-Fi, the OS URL, project slug and that project's
+API key, then click **Prepare device** and **Flash device**. The prepare step installs
+this Kit build's isolated VoiceAgent guest, checks `/secrets/openai`, resolves
+the canonical project ID, and returns `/agents/voice/v23/<device_id>`. It
+requires a valid OS host, project slug/key and no active call before writing.
 
-- `installMethod` is a discriminated union for `esp-web-tools`,
-  `uf2-download`, `webusb-dfu`, or an `external-tool`.
-- each release has an independently discriminated artifact;
-- ESP releases name every immutable source URL, flash offset, file name, and
-  expected SHA-256, plus the reserved configuration partition.
+Wi-Fi stays in browser memory until it is written to the connected board's
+`iterate_kit` partition. The project key authenticates directly to the chosen OS
+host and is also written to the board. Neither credential goes to the Kit worker
+or a URL. The board validates the versioned CRC-protected image at boot, joins Wi-Fi, authenticates,
+mounts `/clients/<device_id>` and is ready for its activation button or optional
+wake word.
 
-Only ESP Web Tools is implemented in the UI today. The wider model prevents a
-future RP2040, Nordic, STM32, or other board from being incorrectly treated as
-an ESP merely because it can be installed from a browser.
+## Release a firmware build
 
-The two devices currently have no releases on purpose. Stock Home Assistant
-Voice and StackChan firmware does not understand Iterate project credentials,
-so presenting it as a working Kit image would create a successful flash and a
-non-working device. Add the first release only when an Iterate-aware build and
-its partition layout exist.
+Kit publishes from source, never from a third-party binary URL. The reviewed
+five-target inventory and flash layout are in
+[`src/firmware/catalog.ts`](./src/firmware/catalog.ts). With ESP-IDF active:
 
-## Bundled assets
+```sh
+cd apps/kit
+source "$IDF_PATH/export.sh"
+pnpm firmware:release
+pnpm firmware:sync
+```
 
-`pnpm firmware:sync`:
+`firmware:release` builds every catalog target into a fingerprinted local cache,
+checks ESP-IDF's flash plan and `iterate_kit` partition against the catalogue,
+and records a hash for each generated part. `firmware:sync` accepts only that
+current cache, copies the hashed parts into `public/firmware`, and writes ESP
+Web Tools manifests. `pnpm build` runs sync before the web build.
 
-1. downloads every catalog artifact over HTTPS;
-2. rejects any SHA-256 mismatch, unsafe path, or overlapping ESP flash region;
-3. emits local ESP Web Tools manifests and binaries under `public/firmware`;
-4. emits a public, source-URL-free `catalog.json`.
+Sound assets are checked in; avatar sources are generated locally from their
+tracked atlases. Releasing existing boards needs no TTS request. Run host tests
+before release:
 
-`pnpm build` runs the sync first. Vite and the Cloudflare plugin then include
-the generated directory in the Worker's static assets, so a production flash
-does not depend on a third-party firmware host. The generated assets are
-gitignored; the reviewed catalog and checksums remain the durable source.
+```sh
+pnpm firmware:test:host
+```
 
-## Private configuration
-
-For an ESP release, the page creates a dynamic ESP Web Tools manifest in the
-browser. It adds one generated binary part at the release's declared
-configuration offset. Wi-Fi and Iterate credentials therefore travel directly
-from browser memory to the connected device and never enter a URL or request
-to the Kit Worker.
-
-The raw `iterate-kit/v1` partition is:
-
-| Offset   | Value                               |
-| -------- | ----------------------------------- |
-| `0..7`   | ASCII `ITERKIT1`                    |
-| `8..11`  | little-endian payload byte length   |
-| `12..15` | little-endian CRC-32 of the payload |
-| `16..`   | TLV fields, padded with `0xff`      |
-
-The payload is **not JSON** — it is a flat run of `u8 tag | u16 LE length |
-bytes`, because the firmware parses it before it has a JSON reader and a
-mismatch here is unrecoverable in the field. The flasher wrote JSON while the
-firmware read TLV once, and the symptom was a board that flashed perfectly and
-never joined a network.
-
-| Tag | Field                         |
-| --- | ----------------------------- |
-| 1   | Wi-Fi SSID                    |
-| 2   | Wi-Fi password (may be empty) |
-| 3   | Iterate base URL              |
-| 4   | project slug                  |
-| 5   | Project API key               |
-| 6   | device id (optional)          |
-| 7   | kit mount path (optional)     |
-
-Tag 2 is the one field whose value may be zero-length — an open network still
-has a password field, it is simply empty — and every other required tag must
-carry bytes. OS resolves the immutable slug to its stable project ID before
-checking the key revealed from `/secrets/project-api-key`, so the setup flow
-does not expose internal project identity.
-
-Firmware should parse this partition at boot, reject an unknown magic/version
-or checksum mismatch explicitly, and retain Improv Wi-Fi or a local recovery
-path for credential rotation.
+For board structure, hardware requirements, target builds and air-path proof,
+see the [firmware guide](./firmware/README.md). The installer does not replace
+that hardware validation.

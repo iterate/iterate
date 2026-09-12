@@ -114,6 +114,103 @@ describe("StreamEventLog.getRange", () => {
     expect(sized.map((entry) => entry.event)).toEqual(committedEvents);
   });
 
+  it("does not materialize later bodies after the byte budget", () => {
+    const db = new DatabaseSync(":memory:");
+    const materializedBodyBytes: number[] = [];
+    const storage = wrapSqlStorage(db);
+    const originalExec = storage.exec.bind(storage);
+    storage.exec = ((sql, ...bindings) => {
+      const result = originalExec(sql, ...bindings);
+      if (!sql.includes("chunk_bytes as chunkBytes")) return result;
+      // SqlStorageCursor's generic row shape is erased at this test seam; the
+      // real cursor is retained and only its toArray observation is wrapped.
+      return new Proxy(result, {
+        get(target, property, receiver) {
+          if (property !== "toArray") return Reflect.get(target, property, receiver);
+          return () => {
+            const rows = target.toArray();
+            materializedBodyBytes.push(
+              rows.reduce(
+                (sum, row) =>
+                  sum + ((row as { chunkBytes: ArrayBuffer }).chunkBytes.byteLength ?? 0),
+                0,
+              ),
+            );
+            return rows;
+          };
+        },
+      });
+    }) as SqlStorage["exec"];
+    const log = new StreamEventLog(storage, "/tests/stream");
+    const large = (offset: number): StreamEvent => ({
+      ...event(offset, "events.iterate.com/test/large"),
+      payload: { content: "x".repeat(256 * 1024), offset },
+    });
+    const events = [large(1), large(2), large(3)];
+    const lengths = log.insert(events);
+
+    expect(
+      log.getRangeSized({
+        afterOffset: 0,
+        beforeOffset: Number.MAX_SAFE_INTEGER,
+        limit: 3,
+        byteLimit: lengths[0]!,
+      }),
+    ).toEqual([{ event: events[0], byteLength: lengths[0] }]);
+    // Only the selected first body crossed the BLOB cursor; later large bodies
+    // were never read from SQLite before their byte budget excluded them.
+    expect(materializedBodyBytes).toEqual([lengths[0]]);
+  });
+
+  it("reads a thousand selected bodies without a variable per event", () => {
+    const db = new DatabaseSync(":memory:");
+    const storage = wrapSqlStorage(db);
+    const originalExec = storage.exec.bind(storage);
+    storage.exec = (sql, ...bindings) => {
+      // workerd caps SQLite variables at 100. This guards the body query from
+      // regressing to an `offset in (?, …)` placeholder per selected event.
+      if (sql.includes("chunk_bytes as chunkBytes") && bindings.length > 100) {
+        throw new Error("body query exceeded workerd's SQLite variable limit");
+      }
+      return originalExec(sql, ...bindings);
+    };
+    const log = new StreamEventLog(storage, "/tests/stream");
+    const events = Array.from({ length: 1_000 }, (_, index) =>
+      event(index + 1, "events.iterate.com/test/small"),
+    );
+    log.insert(events);
+
+    expect(
+      log
+        .getRangeSized({
+          afterOffset: 0,
+          beforeOffset: Number.MAX_SAFE_INTEGER,
+          limit: 1_000,
+        })
+        .map((entry) => entry.event.offset),
+    ).toEqual(events.map((entry) => entry.offset));
+  });
+
+  it("keeps the first oversized event as a progress escape hatch", () => {
+    const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
+    const oversized: StreamEvent = {
+      ...event(1, "events.iterate.com/test/oversized"),
+      payload: { content: "x".repeat(16 * 1024) },
+    };
+    log.insert([oversized, event(2, "events.iterate.com/test/next")]);
+
+    expect(
+      log
+        .getRangeSized({
+          afterOffset: 0,
+          beforeOffset: Number.MAX_SAFE_INTEGER,
+          limit: 2,
+          byteLimit: 1,
+        })
+        .map((entry) => entry.event.offset),
+    ).toEqual([1]);
+  });
+
   it("fails loudly when an indexed event has no stored body", () => {
     const log = createLog();
     log.sql.exec("delete from event_chunks where offset = ?", 2);

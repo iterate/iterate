@@ -103,59 +103,14 @@ static void conversing_without_utterances_is_refused(void)
   assert(parse(&options, problem, argv, 3) == CLI_OPTIONS_ERR_INCOMPATIBLE);
 }
 
-/*
- * Two drivers cannot share one talk button. Running both, each would end the
- * other's turn and the report would describe a conversation neither of them
- * had; picking one silently would leave the operator pressing a key that does
- * nothing and no way to find out why.
- */
-static void a_person_and_a_driver_cannot_both_take_the_turns(void)
-{
-  struct cli_options options;
-  char problem[128];
-  char *argv[] = {
-    (char *)"cli", (char *)"--push-to-talk", (char *)"--converse",
-    (char *)"5", (char *)"--utterance-dir", (char *)"/tmp"};
-
-  (void)setenv("ITERATE_PROJECT_ID", "prj", 1);
-  (void)setenv("ITERATE_PROJECT_API_KEY", "key", 1);
-  (void)setenv("ITERATE_OS_BASE_URL", "https://os.example", 1);
-  assert(parse(&options, problem, argv, 6) == CLI_OPTIONS_ERR_INCOMPATIBLE);
-}
-
-/*
- * An interactive session's limit is its own field. Folded into --converse it
- * would start the unattended driver, which needs utterances nobody supplied,
- * and the session would refuse to start for a reason that made no sense.
- */
-static void an_interactive_limit_is_not_the_conversation_driver(void)
-{
-  struct cli_options options;
-  char problem[128];
-  char *argv[] = {
-    (char *)"cli", (char *)"--push-to-talk", (char *)"--live-mic",
-    (char *)"--minutes", (char *)"5"};
-
-  assert(parse(&options, problem, argv, 5) == CLI_OPTIONS_OK);
-  assert(options.push_to_talk && options.live_mic);
-  assert(options.minutes == 5.0);
-  assert(options.converse_minutes == 0.0);
-  /* And it defaults to no limit, so a session lasts until somebody ends it. */
-  char *bare[] = {(char *)"cli"};
-  assert(parse(&options, problem, bare, 1) == CLI_OPTIONS_OK);
-  assert(options.minutes == 0.0);
-}
-
 /* Numbers are checked, so a typo cannot become a silent zero-minute run. */
-static void numbers_must_be_numbers(void)
+static void minutes_must_be_numbers(void)
 {
   struct cli_options options;
   char problem[128];
   char *bad_minutes[] = {(char *)"cli", (char *)"--converse", (char *)"ten"};
   char *zero_minutes[] = {(char *)"cli", (char *)"--converse", (char *)"0"};
   char *trailing[] = {(char *)"cli", (char *)"--converse", (char *)"10m"};
-  char *bad_count[] = {
-    (char *)"cli", (char *)"--colleague-every", (char *)"-1"};
 
   assert(parse(&options, problem, bad_minutes, 3) ==
          CLI_OPTIONS_ERR_NOT_A_NUMBER);
@@ -163,8 +118,17 @@ static void numbers_must_be_numbers(void)
          CLI_OPTIONS_ERR_NOT_A_NUMBER);
   assert(parse(&options, problem, trailing, 3) ==
          CLI_OPTIONS_ERR_NOT_A_NUMBER);
-  assert(parse(&options, problem, bad_count, 3) ==
-         CLI_OPTIONS_ERR_NOT_A_NUMBER);
+}
+
+/* The old cross-provider conversation driver is gone with its flag. */
+static void colleague_forcing_is_not_a_cli_mode(void)
+{
+  struct cli_options options;
+  char problem[128];
+  char *argv[] = {(char *)"cli", (char *)"--colleague-every", (char *)"1"};
+
+  assert(parse(&options, problem, argv, 3) == CLI_OPTIONS_ERR_UNKNOWN);
+  assert(strcmp(problem, "--colleague-every") == 0);
 }
 
 /* --insecure must never be reachable by accident. */
@@ -217,9 +181,8 @@ int main(void)
   the_credentials_are_required();
   the_environment_fills_only_what_the_flags_left();
   conversing_without_utterances_is_refused();
-  a_person_and_a_driver_cannot_both_take_the_turns();
-  an_interactive_limit_is_not_the_conversation_driver();
-  numbers_must_be_numbers();
+  minutes_must_be_numbers();
+  colleague_forcing_is_not_a_cli_mode();
   certificate_checking_is_on_unless_asked_otherwise();
   help_is_reported_rather_than_taken();
   null_arguments_are_refused();

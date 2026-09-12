@@ -58,23 +58,23 @@ interface Board {
   /** The capability name it mounts itself under: `itx.kit.<name>`. */
   name: string;
   label: string;
-  /**
-   * Whether the microphone has to be held open around the prompt.
-   *
-   * The two boards with echo cancellation — StackChan in software, the HA
-   * Voice PE in its XMOS DSP — run open-mic on the provider's server VAD.
-   * The two without it are push-to-talk, and speaking at one of those
-   * without holding the button proves nothing.
-   */
-  pushToTalk: boolean;
 }
 
 const BOARDS: readonly Board[] = [
-  { label: "StackChan CoreS3", name: "stackchan", pushToTalk: false },
-  { label: "M5StickS3", name: "m5stick-s3", pushToTalk: true },
-  { label: "HA Voice PE", name: "home-assistant-voice-preview-edition", pushToTalk: false },
-  { label: "Waveshare AMOLED", name: "waveshare", pushToTalk: true },
+  { label: "StackChan CoreS3", name: "stackchan" },
+  { label: "M5StickS3", name: "m5stick-s3" },
+  { label: "HA Voice PE", name: "home-assistant-voice-preview-edition" },
+  { label: "Future Home Satellite", name: "satellite1" },
+  { label: "Waveshare AMOLED", name: "waveshare" },
 ];
+
+/** Resolve `--only` exactly as every device command does: aliases and client
+ * paths name one canonical client, while this table is only the default run. */
+export function selectBoards(only?: string): readonly Board[] {
+  if (!only) return BOARDS;
+  const selectedPath = deviceClientPath(only);
+  return BOARDS.filter((board) => deviceClientPath(board.name) === selectedPath);
+}
 
 /** What one board's attempt produced. Written out whole, pass or fail. */
 interface BoardResult {
@@ -125,7 +125,7 @@ async function healthWithRetry(
 export async function boards(options: BoardsOptions) {
   const prompt = options.prompt ?? "Hello there. Please reply with the single word banana.";
   const expect = (options.expect ?? "banana").toLowerCase();
-  const chosen = options.only ? BOARDS.filter((board) => board.name === options.only) : BOARDS;
+  const chosen = selectBoards(options.only);
   if (chosen.length === 0) {
     throw new Error(
       `no board named ${options.only}; known: ${BOARDS.map((b) => b.name).join(", ")}`,
@@ -188,44 +188,42 @@ export async function boards(options: BoardsOptions) {
       let responsesCreated = 0;
       const connection = await itx.streams.get(streamPath).openConnection({
         connectionKey: `boards-${board.name}-${askedAt}`,
-        eventTypes: ["events.iterate.com/voice-agent/grok-event"],
-        processEventBatch: (batch: { events?: { payload?: unknown }[] }) => {
+        eventTypes: [
+          "events.iterate.com/voice-agent/spk-frame",
+          "events.iterate.com/voice-agent/utterance-transcript",
+          "events.iterate.com/voice-agent/answer-transcript",
+          "events.iterate.com/voice-agent/provider-error",
+          "events.iterate.com/voice-agent/provider-disconnected",
+        ],
+        processEventBatch: (batch: { events?: { type: string; payload?: unknown }[] }) => {
           for (const event of batch.events ?? []) {
-            /* v2 mirrors provider events FLAT on the payload; the bridge era
-             * nested them under `.event`. Read both so this instrument keeps
-             * working across the tracks. */
             const payload = (event.payload ?? {}) as {
-              event?: { type?: string; delta?: string; transcript?: string };
-              type?: string;
-              delta?: string;
-              transcript?: string;
+              text?: string;
+              lastFrameOfAnswer?: boolean;
             };
-            const inner = payload.event ?? payload;
-            /* One count per answer the model began — the barge check below
-             * reads it, because a new response is the one edge the barge's
-             * own clear frame cannot fake. */
-            if (inner?.type === "response.created") responsesCreated += 1;
-            if (inner?.type === "response.output_audio_transcript.delta") {
-              saidBack += inner.delta ?? "";
+            /* One count per answer the voice finished — GPT-Live has no
+             * response lifecycle; the facet marks the end of each run of
+             * speech in the speaker frames, and the barge check below reads it. */
+            if (
+              event.type === "events.iterate.com/voice-agent/spk-frame" &&
+              payload.lastFrameOfAnswer === true
+            ) {
+              responsesCreated += 1;
+              continue;
             }
-            /* The provider streams the user's transcription TWICE — every
-             * delta, then the completed whole. Summing both wrote every
-             * utterance into the evidence twice; the completed event alone
-             * is each utterance exactly once, one line per turn. */
-            if (inner?.type?.endsWith("input_audio_transcription.completed")) {
-              heardUs += (heardUs === "" ? "" : "\n") + (inner.transcript ?? "");
-            }
+            if (event.type === "events.iterate.com/voice-agent/answer-transcript")
+              saidBack += payload.text || "";
+            if (event.type === "events.iterate.com/voice-agent/utterance-transcript")
+              heardUs += payload.text || "";
           }
         },
       });
 
       try {
-        /* Let the greeting finish rather than talking over it: an interrupted
-         * greeting is a different test, and a flakier one. */
+        /* Let the call settle before speaking: interruption is a different
+         * test, and a flakier one. */
         await sleep(4000);
-        if (board.pushToTalk) await kit.pushToTalk.start();
         await run("say", ["-r", "170", prompt]);
-        if (board.pushToTalk) await kit.pushToTalk.stop();
 
         let answered = false;
         for (let attempt = 0; attempt < 40; attempt++) {
@@ -246,7 +244,7 @@ export async function boards(options: BoardsOptions) {
           await sleep(1000);
         }
         console.error(`  ${JSON.stringify(record.after)}`);
-        /* The transcription lane lags the audio it describes: the answer
+        /* The transcription lags the audio it describes: the answer
          * starts a second or two before the provider finishes transcribing
          * the question that provoked it. Reading the evidence the instant
          * audio moves reads as a device that heard nothing. */
@@ -259,7 +257,7 @@ export async function boards(options: BoardsOptions) {
           heardUs.toLowerCase().includes(expect) || saidBack.toLowerCase().includes(expect);
         /*
          * "audio only" is deliberately not a pass. Frames moving in both
-         * directions proves the lanes are alive; it does not prove the device
+         * directions proves the transport is alive; it does not prove the device
          * understood anything, and those are different claims.
          */
         record.verdict = answered
@@ -290,9 +288,7 @@ export async function boards(options: BoardsOptions) {
           const heardBefore = heardUs.length;
           const responsesBefore = responsesCreated;
 
-          if (board.pushToTalk) await kit.pushToTalk.start();
           await run("say", ["-r", "170", "Stop. Say the word pineapple instead."]);
-          if (board.pushToTalk) await kit.pushToTalk.stop();
 
           /*
            * A REAL SECOND ANSWER, not the barge's own echo. The interruption
