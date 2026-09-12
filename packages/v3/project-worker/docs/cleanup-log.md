@@ -278,3 +278,33 @@ should end the re-open cycle in those areas:
   reference_live_hibernation_proof_inherently_flaky). Not rushed into the relay. (context/rpc-stubs.ts:862)
 
 Round tally: R1 12 · R2 5 · R3 5 · R4 5 · R5 5 (4 fixed + 1 pinned) = 31 fixed, 1 pinned.
+
+## Round 6 — codex astra round 6: convergence check (5 findings, all fixed)
+
+The convergence signal we were after: codex reported "no new issue in the shared processor
+validation/replay/effect path" — that redesign (round 5 #1) has CONVERGED. The remaining findings were
+in the MCP client + live-state (some follow-ons to round-5 fixes) plus one pre-existing OpenAPI one:
+
+- **[bug] #1 (P1, round-5 regression)** MCPToolResult stripped non-text content (image data/mimeType).
+  Content items → z.looseObject (type validated, other fields preserved). Test added.
+- **[bug] #2** initialize() cleared #handshake unconditionally; a stale handshake's rejection wiped its
+  replacement's memo. Now cleared only when the memo still references THIS handshake. (library.ts)
+- **[bug] #3** a setup failure left the allocated MCP session undeleted. #runHandshake DELETEs its own
+  session on ANY post-allocation failure; connectToMcp closes the client on discovery failure. Test added.
+- **[bug] #4** store.apply → applyPatch throws on a refused patch (/__proto__), escaping + skipping later
+  frames. Contained per frame → heal via the door. Test added. (client/live-state.ts)
+- **[bug] #5 (pre-existing)** OpenAPI listOperations returned { name: undefined } for a $ref parameter.
+  Parameters zod-parsed; $ref/malformed dropped (already a no-op in the request builder). Test added. (library.ts)
+
+### Meta-observations for a later DISCUSSION (not code this pass)
+- **The MCP client's session/handshake lifecycle has taken 5 rounds of edge-fixes** (concurrent request,
+  close-during-handshake, stale-clobber, memo-clearing, setup-leak). Each fix has been correct and is
+  now tested, but the sheer number of concurrency edges suggests the lifecycle would benefit from a
+  HOLISTIC redesign review (e.g. a single owned "session epoch" object that encapsulates handshake +
+  session-id + close, instead of several interacting private fields). Worth a design pass before adding
+  more MCP features. NOT urgent — the current code is correct and covered.
+- **OpenAPI `$ref` resolution is unsupported** — $ref parameters (and, more broadly, $ref anywhere in the
+  document) are dropped, not resolved. A full fix zod-parses the whole OpenAPI document at the boundary
+  and resolves (or explicitly rejects) $refs. Deferred feature. (library.ts listOperations)
+
+Round tally: R1 12 · R2 5 · R3 5 · R4 5 · R5 5 · R6 5 = 36 fixed, 1 pinned (WS-relay), 2 discussion items.
