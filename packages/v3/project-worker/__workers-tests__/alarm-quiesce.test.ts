@@ -33,7 +33,6 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test, vi } from "vitest";
 import type { ItxExpression } from "../src/context/expression.ts";
-import { normalizeControlEvent } from "../src/stream/core-processor.ts";
 import { adminCredentials, Echo, openSession, quiesce, stub } from "./support.ts";
 
 /** A tiny userspace processor: counts every durable event. The tally fixture's shape
@@ -74,30 +73,26 @@ const durableCount = async (ctx: string): Promise<number> =>
  *  subscription name = the `.get(name)` name). */
 async function enableCounter(ctx: string, name = "counter"): Promise<void> {
   const s = stub(ctx);
-  await s.append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        name,
-        target: [
-          "itx",
-          "facets",
-          ["get", name, { source: { "cap.js": COUNTER_SRC }, className: "CounterDurableObject" }],
-          "processEventBatch",
-        ],
-      },
-    }),
-  );
+  await s.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      name,
+      target: [
+        "itx",
+        "facets",
+        ["get", name, { source: { "cap.js": COUNTER_SRC }, className: "CounterDurableObject" }],
+        "processEventBatch",
+      ],
+    },
+  });
 }
 /** The `itx.processors.disable(name)` root: ONE event — `target: null`; the DO deletes the facet the
  *  row hosted, storage included, before the append returns. */
 async function disableCounter(ctx: string, name = "counter"): Promise<void> {
-  await stub(ctx).append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: { name, target: null },
-    }),
-  );
+  await stub(ctx).append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: { name, target: null },
+  });
 }
 
 // The DO-only transport facts ({stubs, borrowed, rpcStubPagesInFlight, dormant}) — the quiesce probes are
@@ -215,29 +210,23 @@ test("a facet TWO rows host survives the removal of ONE of them — memo and sto
   const spec = { source: { "cap.js": BUMP_COUNTER_SRC }, className: "BumpCounterDurableObject" };
   const target: ItxExpression = ["itx", "facets", ["get", "shared", spec], "processEventBatch"];
   // Two rows, both HOSTING the same facet — the `processors.enable` shape, twice.
-  await context.append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: { name: "a", target, consumes: ["demo/ping"] },
-    }),
-  );
-  await context.append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: { name: "b", target, consumes: ["demo/ping"] },
-    }),
-  );
+  await context.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: { name: "a", target, consumes: ["demo/ping"] },
+  });
+  await context.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: { name: "b", target, consumes: ["demo/ping"] },
+  });
   await context.invoke(["itx", "facets", ["get", "shared", spec], ["bump"]]);
   await context.invoke(["itx", "facets", ["get", "shared", spec], ["bump"]]);
   expect(await context.invoke(["itx", "facets", ["get", "shared", spec], ["count"]])).toBe(2);
 
   // Remove ONE of the two rows. The other still hosts the facet.
-  await context.append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: { name: "a", target: null },
-    }),
-  );
+  await context.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: { name: "a", target: null },
+  });
   const core = (await context.invoke("itx.facets.get('core').snapshot()")) as {
     state: { subscriptions: Record<string, unknown> };
   };
@@ -263,27 +252,25 @@ test("RE-ENABLE WITH NEW SOURCE: a materialized processor re-enabled under the s
   const before = await snapCounter(ctx);
   expect(before.state.n).toBe(await durableCount(ctx));
   // The same name and class, NEW source: counts by 10.
-  await s.append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        name: "counter",
-        target: [
-          "itx",
-          "facets",
-          [
-            "get",
-            "counter",
-            {
-              source: { "cap.js": COUNTER_SRC.replace("state.n + 1", "state.n + 10") },
-              className: "CounterDurableObject",
-            },
-          ],
-          "processEventBatch",
+  await s.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      name: "counter",
+      target: [
+        "itx",
+        "facets",
+        [
+          "get",
+          "counter",
+          {
+            source: { "cap.js": COUNTER_SRC.replace("state.n + 1", "state.n + 10") },
+            className: "CounterDurableObject",
+          },
         ],
-      },
-    }),
-  );
+        "processEventBatch",
+      ],
+    },
+  });
   await new Promise((r) => setTimeout(r, 400));
   await s.append({ type: "a/2" });
   await new Promise((r) => setTimeout(r, 400));
@@ -322,25 +309,23 @@ export class SlowPushDurableObject extends DurableObject {
 test.fails("the self-wake breaker never trips on the root context: the wake's own `config` delivery goes through this.invoke — a public door — so eight alarm-only passes append no halt fact (and the halt's residual, a facet left pinned mid-call, stays unreachable behind it)", async () => {
   const ctx = "prj_q_halt_pinned";
   const s = stub(ctx);
-  await s.append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        name: "slow",
-        target: [
-          "itx",
-          "facets",
-          [
-            "get",
-            "slow",
-            { source: { "cap.js": SLOW_PUSH_SRC }, className: "SlowPushDurableObject" },
-          ],
-          "processEventBatch",
+  await s.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      name: "slow",
+      target: [
+        "itx",
+        "facets",
+        [
+          "get",
+          "slow",
+          { source: { "cap.js": SLOW_PUSH_SRC }, className: "SlowPushDurableObject" },
         ],
-        consumes: ["events.iterate.com/stream/woken"],
-      },
-    }),
-  );
+        "processEventBatch",
+      ],
+      consumes: ["events.iterate.com/stream/woken"],
+    },
+  });
   await new Promise((r) => setTimeout(r, 300)); // materialized (catchUpFromLog)
   await quiesce(ctx);
   await evictDurableObject(s);
@@ -517,21 +502,14 @@ test("ALARM PUMPS THE CURSOR LANE: a failed at-least-once delivery is retried fr
   const ctx = "prj_q_cursorpump";
   const s = stub(ctx);
   await s.invoke(["itx", "kv", ["put", "flaky-mode", "fail"]]);
-  await s.append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        name: "flaky",
-        target: [
-          "itx",
-          "workers",
-          ["get", { source: { "cap.js": FLAKY_SRC } }],
-          "processEventBatch",
-        ],
-        consumes: ["mark"],
-      },
-    }),
-  );
+  await s.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      name: "flaky",
+      target: ["itx", "workers", ["get", { source: { "cap.js": FLAKY_SRC } }], "processEventBatch"],
+      consumes: ["mark"],
+    },
+  });
   // (cast: workers-types' Rpc.Serializable types a StreamEvent-returning stub method as `never`)
   const [mark] = (await s.append({ type: "mark" })) as unknown as { offset: number }[];
 

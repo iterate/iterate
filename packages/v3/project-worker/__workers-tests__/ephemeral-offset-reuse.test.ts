@@ -9,7 +9,6 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import type { ItxExpression } from "../src/context/expression.ts";
-import { normalizeControlEvent } from "../src/stream/core-processor.ts";
 import { quiesce, stub } from "./support.ts";
 
 const COUNTER_SRC = /* js */ `
@@ -60,16 +59,14 @@ const DIGEST_MODULES = { "cap.js": DIGEST_SRC };
 test("stream-kept cursor: an alarm pump with ephemerals at head leaves the cursor on the durable mark; after quiesce + evict the durables re-minted at those offsets are delivered", async () => {
   const ctx = "prj_rev_cursorskip";
   const s = stub(ctx);
-  await s.append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        name: "dig",
-        target: ["itx", "workers", ["get", { source: DIGEST_MODULES }], "processEventBatch"],
-        consumes: ["mark"],
-      },
-    }),
-  );
+  await s.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      name: "dig",
+      target: ["itx", "workers", ["get", { source: DIGEST_MODULES }], "processEventBatch"],
+      consumes: ["mark"],
+    },
+  });
   await s.append({ type: "mark" });
   await sleep(400);
   expect(
@@ -120,19 +117,14 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
 test("enable with a consumes filter: itx.facets.get(name) answers before the first consumed event (the facet is materialized at configure time)", async () => {
   const ctx = "prj_rev_nofacet";
   const s = stub(ctx);
-  await s.append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        name: "c2",
-        target: [
-          ...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "c2"),
-          "processEventBatch",
-        ],
-        consumes: ["tick"],
-      },
-    }),
-  );
+  await s.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      name: "c2",
+      target: [...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "c2"), "processEventBatch"],
+      consumes: ["tick"],
+    },
+  });
   await sleep(300); // onCommit's void #resolve(sub.target) has long finished
   const snap = (await s.invoke(["itx", "facets", ["get", "c2"], ["snapshot"]])) as {
     state: { n: number };
@@ -143,19 +135,17 @@ test("enable with a consumes filter: itx.facets.get(name) answers before the fir
 test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals at head checkpoints the durable mark; after quiesce + evict the durable re-minted at an ephemeral's offset is reduced exactly once", async () => {
   const ctx = "prj_rev_procskip_b";
   const s = stub(ctx);
-  await s.append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        name: "counter",
-        target: [
-          ...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "counter"),
-          "processEventBatch",
-        ],
-        consumes: ["tick", "events.iterate.com/stream/subscription-configured"],
-      },
-    }),
-  );
+  await s.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      name: "counter",
+      target: [
+        ...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "counter"),
+        "processEventBatch",
+      ],
+      consumes: ["tick", "events.iterate.com/stream/subscription-configured"],
+    },
+  });
   await sleep(300); // the configured event is consumed → push → facet materialized, cursor = its offset (durable ground)
   await s.append({ type: "tick" }); // pushed → reduced, cursor = tick offset (durable)
   await sleep(300);

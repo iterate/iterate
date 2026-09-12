@@ -36,7 +36,6 @@ import { afterAll, expect, test, vi } from "vitest";
 import type { ItxExpression } from "../src/context/expression.ts";
 import { errorCode } from "../src/lib.ts";
 const codeOf = errorCode;
-import { normalizeControlEvent } from "../src/stream/core-processor.ts";
 import { stub, until } from "./support.ts";
 
 const MiB = 1024 * 1024;
@@ -124,23 +123,19 @@ const enableProcessorByEvent = (
   className: string,
   consumes?: string[],
 ) =>
-  stub(ctx).append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        name,
-        target: hostingTarget(name, source, className),
-        ...(consumes && { consumes }),
-      },
-    }),
-  );
+  stub(ctx).append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      name,
+      target: hostingTarget(name, source, className),
+      ...(consumes && { consumes }),
+    },
+  });
 const disableProcessorByEvent = (ctx: string, name: string) =>
-  stub(ctx).append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: { name, target: null },
-    }),
-  );
+  stub(ctx).append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: { name, target: null },
+  });
 const snapshotOf = (ctx: string, name: string) =>
   stub(ctx).invoke(["itx", "facets", ["get", name], ["snapshot"]]);
 type SubscriptionRow = {
@@ -189,19 +184,15 @@ const bigWorkerRuleTarget = (tag: string, chars: number): ItxExpression => [
 test("A1 — core state over the checkpoint ceiling: the configure is refused coded, REDUCE_CHECKPOINT_TOO_LARGE, in our words", async () => {
   const ctx = "prj_ud_corecap_message";
   const s = stub(ctx);
-  await s.append(
-    normalizeControlEvent({
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: "itx.bigA", target: bigWorkerRuleTarget("A", 1 * MiB) },
-    }),
-  ); // state ≈ 1 MiB: lands
+  await s.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.bigA", target: bigWorkerRuleTarget("A", 1 * MiB) },
+  }); // state ≈ 1 MiB: lands
   const err = await rejectionOf(() =>
-    s.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: "itx.bigB", target: bigWorkerRuleTarget("B", 1.5 * MiB) },
-      }),
-    ),
+    s.append({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.bigB", target: bigWorkerRuleTarget("B", 1.5 * MiB) },
+    }),
   ); // state ≈ 2.5 MiB: over the 2 MB cell
   expect(errorCode(err)).toBe("REDUCE_CHECKPOINT_TOO_LARGE");
   expect(err?.message).toMatch(/checkpoint "core".*over the .*ceiling.*nothing was written/);
@@ -214,20 +205,16 @@ test("A2 — CONTROL: the refused configure leaves memory and the log consistent
   const ctx = "prj_ud_corecap_consistent";
   const s = stub(ctx);
   const a = offsetOf(
-    await s.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: "itx.bigA", target: bigWorkerRuleTarget("A", 1 * MiB) },
-      }),
-    ),
+    await s.append({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.bigA", target: bigWorkerRuleTarget("A", 1 * MiB) },
+    }),
   );
   const err = await rejectionOf(() =>
-    s.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: "itx.bigB", target: bigWorkerRuleTarget("B", 1.5 * MiB) },
-      }),
-    ),
+    s.append({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.bigB", target: bigWorkerRuleTarget("B", 1.5 * MiB) },
+    }),
   );
   expect(errorCode(err)).toBe("REDUCE_CHECKPOINT_TOO_LARGE");
   const core = (await s.invoke("itx.facets.get('core').snapshot()")) as {
@@ -239,12 +226,10 @@ test("A2 — CONTROL: the refused configure leaves memory and the log consistent
   // The refused batch's offset was never burnt: A's live-state delta took a+1, so the next durable
   // event lands at a+2 — exactly where B would have.
   const c = offsetOf(
-    await s.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: "itx.small", target: "itx.whoami" },
-      }),
-    ),
+    await s.append({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.small", target: "itx.whoami" },
+    }),
   );
   expect(c).toBe(a + 2);
   const page = (await s.invoke(["itx", ["readEvents", 0, 500]])) as {
@@ -568,21 +553,19 @@ const RETRYING_WORKER_SRC = /* js */ `import { WorkerEntrypoint } from "cloudfla
 export default class extends WorkerEntrypoint { processEventBatch() { throw new Error("flaky sink: try again"); } }`;
 async function retryingCursorRow(ctx: string): Promise<SubscriptionRow> {
   const s = stub(ctx);
-  await s.append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        name: "u",
-        target: [
-          "itx",
-          "workers",
-          ["get", { source: { "cap.js": RETRYING_WORKER_SRC } }],
-          "processEventBatch",
-        ],
-        consumes: ["mark"],
-      },
-    }),
-  );
+  await s.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      name: "u",
+      target: [
+        "itx",
+        "workers",
+        ["get", { source: { "cap.js": RETRYING_WORKER_SRC } }],
+        "processEventBatch",
+      ],
+      consumes: ["mark"],
+    },
+  });
   await s.append({ type: "mark" });
   return until("the first ladder attempt", async () => {
     const row = await subscriptionRow(ctx, "u");
@@ -591,12 +574,10 @@ async function retryingCursorRow(ctx: string): Promise<SubscriptionRow> {
 }
 async function uncallableCursorRow(ctx: string): Promise<SubscriptionRow> {
   const s = stub(ctx);
-  await s.append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: { name: "u", target: "itx.kv", consumes: ["mark"] },
-    }),
-  );
+  await s.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: { name: "u", target: "itx.kv", consumes: ["mark"] },
+  });
   await s.append({ type: "mark" });
   return until("the first failure (a halt or a ladder attempt)", async () => {
     const row = await subscriptionRow(ctx, "u");

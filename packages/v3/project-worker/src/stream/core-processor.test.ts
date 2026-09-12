@@ -161,6 +161,28 @@ describe("the rewrite-rule table — a MAP by match", () => {
     expect(Object.keys(s.itxExpressionRewriteRules)).toEqual(["itx.fine"]);
   });
 
+  // EXPECTED-TO-FAIL — pins a known, pre-existing bug (docs/cleanup-log.md round 9). A rule match is
+  // stored as a STRING and parsed TWICE: once at the append boundary (`normalizeControlEvent`, which
+  // canonicalizes via `print`) and again in THIS reduce. `print` can EXPAND a value (`1e99`→`1e+99`),
+  // so a match under the 2048-char codec cap on input can exceed it once canonicalized: the boundary
+  // ACCEPTS the event but the reduce THROWS `EXPRESSION_TOO_LONG`, committing the event while silently
+  // skipping its rule (and replay re-throws). Boundary and reduce must AGREE on validity. Fix (a
+  // decision, logged): carry the parsed match through storage so the reduce never re-parses — the table
+  // key is `print`ed once (no cap on printing). Remove `.fails` when the double-parse is gone.
+  test.fails("a well-formed match the boundary accepts must reduce, not throw once its canonical form crosses the codec cap", () => {
+    const longMatch = "itx.foo(" + Array(400).fill("1e99").join(",") + ")";
+    const normalized = normalizeControlEvent({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: longMatch, target: "itx.kv" },
+    });
+    // the boundary accepted it (no throw above); the reduce must store the rule, not throw
+    const reduced = reduceCoreEvent({
+      event: at(1, normalized.type, normalized.payload as Record<string, unknown>),
+      state: CoreContract.initialState(),
+    });
+    expect(Object.keys(reduced?.itxExpressionRewriteRules ?? {})).toHaveLength(1);
+  });
+
   test("a removal with `ifTarget` (a handle's undo) applies only while the row's target is still that — a replacement survives a stale undo, identity kept; a mask's undo names `null`", () => {
     const configure = (offset: number, target: string | null) =>
       at(offset, "events.iterate.com/itx/rewrite-rule-configured", { match: "itx.x", target });

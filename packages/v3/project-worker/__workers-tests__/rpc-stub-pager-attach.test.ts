@@ -19,7 +19,6 @@
 import { runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { normalizeControlEvent } from "../src/stream/core-processor.ts";
 import {
   encodeRpcStubPagerAttachRequest,
   RPC_STUB_PAGER_WEBSOCKET_HEADER,
@@ -40,11 +39,10 @@ const openPager = (ctx: string, rpcStubKey: string, appendEvents: StreamEventInp
     },
   });
 
-const ruleFor = (rpcStubKey: string) =>
-  normalizeControlEvent({
-    type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: { match: rpcStubKey, target: ["itx", "rpcStubs", ["get", rpcStubKey]] },
-  });
+const ruleFor = (rpcStubKey: string): StreamEventInput => ({
+  type: "events.iterate.com/itx/rewrite-rule-configured",
+  payload: { match: rpcStubKey, target: ["itx", "rpcStubs", ["get", rpcStubKey]] },
+});
 
 const transportState = async (ctx: string) =>
   (await stub(ctx).rpcStubTransportState()) as unknown as {

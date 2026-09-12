@@ -406,3 +406,32 @@ Two logged larger refactors, each a dedicated pass: **app-config.ts → one zod 
 pinning test first — a bad parse 500s every route) and **library.ts protocol split** (cohesion win vs
 the import-boundary test that reads the file whole). Both are decisions/dedicated passes, not quick
 cleanups. The style/idiom/conciseness sweep and the headline event-builder cruft are DONE.
+
+### Round 9 codex review (xhigh, gpt-6-astra) — 2 findings, both actioned
+
+A focused codex read of the round-9 commit. It confirmed `ifTarget` survives end-to-end (stale +
+current + `null`-mask removal cases all pass), no deleted-builder references remain, and `restoreRuleTarget`
+earns its keep. Two findings:
+
+- **P2 — a canonical match can cross the codec cap (PINNED with an expected-fail test + logged).** A rule
+  match is stored as a STRING and parsed TWICE — once at the boundary (`normalizeControlEvent`
+  canonicalizes via `print`) and again in the reduce. `print` can EXPAND a value (`1e99`→`1e+99`), so a
+  match under the 2048-char cap on input can exceed it once canonicalized: the boundary ACCEPTS the
+  event but the reduce throws `EXPRESSION_TOO_LONG`, committing it while skipping its rule (replay
+  re-throws). Repro confirmed: input 2008 → canonical 2408 chars. This is PRE-EXISTING (the deleted
+  builder stored the same `print(matchPrefix)`); the boundary only extended that canonicalization to raw
+  appends. Per the rubric (a bug needing a decision), pinned with `test.fails` in core-processor.test.ts
+  and logged here. FIX (a decision for a focused pass): carry the parsed match THROUGH storage so the
+  reduce never re-parses — derive the table key with `print` once (printing has no cap). Same shape as
+  the target, which is already stored parsed. Keeping the match a readable STRING in the event payload
+  (the owner's "see the payload" preference) argues for fixing the reduce side, not the payload shape.
+- **P3 — worker tests normalized before reaching the boundary (FIXED).** The DO's `append` and the
+  pager-attach path BOTH run `normalizeControlEvent`, so the tests' own `normalizeControlEvent(...)`
+  wrappers were redundant AND blind: a test would still pass if the DO's normalization vanished. Stripped
+  all 36 wrappers across the 5 workers tests — they now append LITERAL `{ type, payload }` straight at
+  the door (the canonicalization assertion now proves the BOUNDARY canonicalizes, appending a
+  leading-whitespace match raw). `ruleFor` kept as a raw-literal fixture. The unit/reducer fixtures
+  (core-processor, itx-expression-rewriting, subscription-delivery, memory-budget) KEEP the explicit
+  normalize — they drive a bare Stream/reduce with no boundary in front.
+
+Gates after both: unit 543 | 6 xfail · workers 77 | 13 xfail | 2 skip · typecheck · oxlint 0/0 · knip clean.
