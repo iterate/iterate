@@ -150,7 +150,49 @@ static void connecting_walks_and_ready_holds_still(void) {
   }
 }
 
+/** Mute overrides activity, restart and connection chase, but never a fault. */
+static void hardware_mute_is_steady_except_during_faults(void) {
+  const struct {
+    bool muted;
+    bool fault;
+    enum iterate_kit_network_state network;
+    bool becomes_steady_red;
+  } cases[] = {
+    {true, false, ITERATE_KIT_NETWORK_CONNECTED, true},
+    {true, false, ITERATE_KIT_NETWORK_CONNECTING, true},
+    {true, true, ITERATE_KIT_NETWORK_CONNECTED, false},
+    {false, false, ITERATE_KIT_NETWORK_CONNECTED, false},
+  };
+  for (size_t row = 0; row < sizeof(cases) / sizeof(cases[0]); ++row) {
+    const struct iterate_kit_conversation_visual_state state = {
+      .network = cases[row].network, .media_ready = true,
+      .media_failed = cases[row].fault, .microphone_muted = cases[row].muted,
+      .conversation_active = true, .microphone_listening = true,
+      .microphone_peak = 30000U, .speaker_peak = 30000U, .restart_armed = true,
+    };
+    struct iterate_kit_rgb8 first[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+    struct iterate_kit_rgb8 later[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+    iterate_kit_conversation_lights_animate(&state, 0U, first);
+    iterate_kit_conversation_lights_animate(&state, 700U, later);
+    bool red_ring = true;
+    for (size_t i = 0; i < ITERATE_KIT_CONVERSATION_LIGHT_COUNT; ++i) {
+      red_ring = red_ring && first[i].red == 8U && first[i].green == 0U && first[i].blue == 0U;
+    }
+    assert(red_ring == cases[row].becomes_steady_red);
+    if (cases[row].becomes_steady_red) {
+      assert(memcmp(first, later, sizeof(first)) == 0);
+      iterate_kit_conversation_lights_render(&state, later);
+      assert(memcmp(first, later, sizeof(first)) == 0);
+    }
+    if (cases[row].fault) {
+      assert(first[0].red == 255U);
+      assert(memcmp(first, later, sizeof(first)) != 0);
+    }
+  }
+}
+
 int main(void) {
+  hardware_mute_is_steady_except_during_faults();
   connecting_walks_and_ready_holds_still();
   every_light_has_a_socket();
   an_absent_state_still_says_something();

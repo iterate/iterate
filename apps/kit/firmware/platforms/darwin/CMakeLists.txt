@@ -13,6 +13,7 @@ add_library(iterate-kit-darwin STATIC
   darwin_audio_codec.c
   darwin_audio_input.c
   darwin_audio_output.c
+  darwin_audio_vpio.c
   posix_itx_transport.c
   tls_stream.c
   websocket_client.c)

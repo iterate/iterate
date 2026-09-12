@@ -16,6 +16,34 @@ static bool nonempty(const char *value) {
   return value != NULL && value[0] != '\0';
 }
 
+static bool valid_activation(const char *value) {
+  size_t length = 0U;
+  if (!nonempty(value)) return false;
+  while (value[length] != '\0') {
+    const char c = value[length];
+    if (length >= 64U ||
+        !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+          (c >= 'A' && c <= 'Z') || c == '-' || c == '_')) {
+      return false;
+    }
+    ++length;
+  }
+  return true;
+}
+
+static bool payload_matches_activation(
+    const struct iterate_kit_voicelab *voicelab,
+    const struct capnweb_value *payload) {
+  struct capnweb_value value;
+  char activation[65];
+  size_t length = 0U;
+  return valid_activation(voicelab->options.activation) &&
+      capnweb_value_object_get(payload, "activation", &value) &&
+      capnweb_value_copy_string(
+          &value, activation, sizeof(activation), &length) == CAPNWEB_OK &&
+      strcmp(activation, voicelab->options.activation) == 0;
+}
+
 static bool valid_options(
     const struct iterate_kit_voicelab_options *options) {
   return options != NULL &&
@@ -23,7 +51,6 @@ static bool valid_options(
       nonempty(options->project_id) &&
       nonempty(options->project_api_key) &&
       nonempty(options->stream_path) &&
-      nonempty(options->conversation_id) &&
       options->now_ms != NULL;
 }
 
@@ -61,7 +88,7 @@ static bool take_result_capability(
       capnweb_value_get_remote_capability(&result->value, capability);
 }
 
-/* --- base64 (RFC 4648, unpadded — matches the vendored writer) ---------- */
+/* --- base64 (RFC 4648; the uplink pads, see append_frames) -------------- */
 
 static const char base64_alphabet[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -230,9 +257,6 @@ static void handle_spk_frame(
   if (!voicelab->call_active) return;
 
 
-  if (capnweb_value_object_get(payload, "drop", &flag)) {
-    (void)capnweb_value_get_boolean(&flag, &drop);
-  }
   /*
    * THE SAME INSTRUCTION UNDER THE SECOND AGENT'S NAME FOR IT.
    *
@@ -250,9 +274,6 @@ static void handle_spk_frame(
       capnweb_value_object_get(payload, "clearSpeakerBufferBeforeFrame", &flag)) {
     (void)capnweb_value_get_boolean(&flag, &drop);
   }
-  if (capnweb_value_object_get(payload, "last", &flag)) {
-    (void)capnweb_value_get_boolean(&flag, &last);
-  }
   /*
    * The second agent's name for the same edge. It says what the frame MEANS —
    * this is the last frame of the answer — rather than `last`, which needed
@@ -260,32 +281,6 @@ static void handle_spk_frame(
    */
   if (!last && capnweb_value_object_get(payload, "lastFrameOfAnswer", &flag)) {
     (void)capnweb_value_get_boolean(&flag, &last);
-  }
-
-  /*
-   * COUNTED BEFORE THE AUDIO IS TOUCHED, so a chunk that fails to decode is
-   * still counted as having ARRIVED. Continuity is a question about the
-   * delivery lane; whether the bytes were good is a separate counter, and
-   * folding the two would let a decode failure masquerade as a lost frame.
-   */
-  {
-    struct capnweb_value seq_value;
-    int64_t seq = 0;
-    if (capnweb_value_object_get(payload, "deviceSpeakerFrameSeq", &seq_value) &&
-        capnweb_value_get_int64(&seq_value, &seq)) {
-      if (voicelab->spk_seq_last >= 0) {
-        if (seq > voicelab->spk_seq_last + 1) {
-          ++voicelab->spk_seq_gaps;
-          voicelab->spk_seq_missing +=
-              (uint32_t)(seq - voicelab->spk_seq_last - 1);
-        } else if (seq <= voicelab->spk_seq_last) {
-          ++voicelab->spk_seq_regressions;
-        }
-      }
-      /* Only ever forwards: a regression must not rewind the watermark, or the
-       * frames after it would each be counted as a gap in turn. */
-      if (seq > voicelab->spk_seq_last) voicelab->spk_seq_last = seq;
-    }
   }
 
   /*
@@ -314,7 +309,7 @@ static void handle_spk_frame(
   /*
    * A CHUNK WITH NO AUDIO IS NOT A BROKEN CHUNK. The sender closes an answer
    * whose audio has already all gone with a bare `last`, and that chunk is the
-   * only thing that releases the half-duplex fence. Treating it as a decode
+   * only marker that completes the answer. Treating it as a decode
    * failure and returning early is what made a conversation go deaf after two
    * or three turns.
    */
@@ -342,13 +337,15 @@ static void handle_spk_frame(
    *
    * IT USED TO GO OUT 640 BYTES AT A TIME, and that rule cost more than it ever
    * bought. It made a chunk with anything left over on the end a protocol
-   * violation to be counted and dropped, which every chunk had, because Grok's
-   * deltas are audio of no particular length: 118 dropped chunks in three turns.
+   * violation to be counted and dropped, which every chunk had, because audio
+   * deltas are of no particular length: 118 dropped chunks in three turns.
    * Buying it back needed the sender to carry a remainder between deltas and pad
    * an answer's tail with silence. The click that the rule was supposed to
    * prevent cannot happen — a ring has no phase, and consecutive PCM16 samples
    * written consecutively are the same waveform however they were cut.
    */
+  /* The lane owes more frames until `last`; an empty clear frame owes none. */
+  voicelab->answer_open = !last && chunk_length > 0U;
   if (chunk_length > 0U && voicelab->options.on_speaker != NULL) {
     ++voicelab->spk_frames_received;
     voicelab->options.on_speaker(
@@ -370,12 +367,12 @@ static void handle_spk_frame(
 }
 
 /*
- * `handle_viseme` and `handle_grok_event` were here.
+ * Face and provider-event handlers were here.
  *
- * The face is no longer an event: it is reduced state in the facet's runtime
- * bag, published through `liveState`, and the `viseme` type is deleted from
- * the contract. `grok-event` carried exactly two facts this device acted on,
- * `speech_started` and `response.done`, and both now ride the `spk-frame` that
+ * The face is no longer an event: it is reduced processor runtime state in
+ * the facet's runtime bag, read by a direct RPC poll, and the `viseme` type
+ * is deleted from the contract. The old event mirror carried exactly two facts
+ * this device acted on, `speech_started` and `response.done`, and both now ride the `spk-frame` that
  * they are about — see the two notes in `handle_spk_frame` for why that is not
  * merely tidier but removes an ordering question neither lane could answer.
  */
@@ -432,6 +429,17 @@ static enum capnweb_status batch_dispatch(
         !capnweb_value_object_get(&event, "payload", &payload)) {
       continue;
     }
+    if ((capnweb_value_string_equals(
+             &type_value, "events.iterate.com/voice-agent/call-started") ||
+         capnweb_value_string_equals(
+             &type_value, "events.iterate.com/voice-agent/conversation-accepted") ||
+         capnweb_value_string_equals(
+             &type_value, "events.iterate.com/voice-agent/conversation-ended") ||
+         capnweb_value_string_equals(
+             &type_value, "events.iterate.com/voice-agent/spk-frame")) &&
+        !payload_matches_activation(voicelab, &payload)) {
+      continue;
+    }
     /*
      * Every event here was appended BY THE BRIDGE, so any of them is proof
      * that the far end of the call is still running. Stamping it once, here,
@@ -465,18 +473,6 @@ static enum capnweb_status batch_dispatch(
        * just the same.
        */
       {
-        struct capnweb_value bridge_value;
-        size_t length = 0U;
-        voicelab->live_bridge_id[0] = '\0';
-        if (capnweb_value_object_get(&payload, "bridgeId", &bridge_value)) {
-          (void)capnweb_value_copy_string(
-              &bridge_value,
-              voicelab->live_bridge_id,
-              sizeof(voicelab->live_bridge_id),
-              &length);
-        }
-      }
-      {
         struct capnweb_value conversation_value;
         size_t length = 0U;
         voicelab->live_conversation_id[0] = '\0';
@@ -490,18 +486,7 @@ static enum capnweb_status batch_dispatch(
         }
       }
       voicelab->call_active = true;
-      voicelab->call_pending = false;
-      /*
-       * THE WATERMARK IS PER-CONVERSATION; THE TOTALS ARE PER-RUN.
-       *
-       * Sequence numbers restart at zero with each call, so carrying the
-       * watermark across one would score every new call's first frame as a
-       * regression and the rest as a fresh gap. The gap and regression TOTALS
-       * deliberately survive: the question a long session is asking is how
-       * much audio it lost in all, not how much it lost since the last time
-       * somebody pressed the button.
-       */
-      voicelab->spk_seq_last = -1;
+      voicelab->answer_open = false;
       if (voicelab->options.on_control != NULL) {
         voicelab->options.on_control(
             voicelab->options.downlink_context,
@@ -510,44 +495,11 @@ static enum capnweb_status batch_dispatch(
     } else if (capnweb_value_string_equals(
                    &type_value,
                    "events.iterate.com/voice-agent/conversation-ended")) {
-      /* Only the bridge serving this call may end it. */
-      struct capnweb_value bridge_value;
-      char ended_by[sizeof(voicelab->live_bridge_id)] = {0};
-      size_t length = 0U;
-      if (voicelab->live_bridge_id[0] != '\0' &&
-          capnweb_value_object_get(&payload, "bridgeId", &bridge_value) &&
-          capnweb_value_copy_string(
-              &bridge_value, ended_by, sizeof(ended_by), &length) ==
-              CAPNWEB_OK &&
-          strcmp(ended_by, voicelab->live_bridge_id) != 0) {
-        continue; /* a stale bridge shutting down; not our call */
-      }
-      /*
-       * AND ONLY THIS CONVERSATION'S OBITUARY COUNTS. Consecutive calls on
-       * one stream share a bridge, so the bridge guard alone let the
-       * previous call's late obituary kill the call a person had JUST
-       * opened — accepted at 14:41:09.576, dead at .647, and the device
-       * then announced an end it never asked for.
-       */
-      {
-        struct capnweb_value conversation_value;
-        char ended_conversation[sizeof(voicelab->live_conversation_id)] = {0};
-        size_t ended_length = 0U;
-        if (voicelab->live_conversation_id[0] != '\0' &&
-            capnweb_value_object_get(
-                &payload, "conversationId", &conversation_value) &&
-            capnweb_value_copy_string(
-                &conversation_value,
-                ended_conversation,
-                sizeof(ended_conversation),
-                &ended_length) == CAPNWEB_OK &&
-            strcmp(ended_conversation, voicelab->live_conversation_id) != 0) {
-          continue; /* an earlier conversation's obituary; not our call */
-        }
-      }
       voicelab->live_bridge_id[0] = '\0';
       voicelab->live_conversation_id[0] = '\0';
       voicelab->call_active = false;
+      voicelab->answer_open = false;
+      voicelab->last_presence_at_ms = 0U;
       if (voicelab->options.on_control != NULL) {
         voicelab->options.on_control(
             voicelab->options.downlink_context,
@@ -613,28 +565,16 @@ static void connection_opened(
   voicelab->capnweb_status = CAPNWEB_OK;
 }
 
-bool iterate_kit_voicelab_needs_recycle(
+bool iterate_kit_voicelab_downlink_expected(
     const struct iterate_kit_voicelab *voicelab) {
-  return voicelab != NULL &&
-      !voicelab->recycle_pending &&
-      voicelab->state == ITERATE_KIT_VOICELAB_READY &&
-      voicelab->has_connection_capability &&
-      voicelab->batches_on_connection >=
-          ITERATE_KIT_VOICELAB_RECYCLE_AFTER_BATCHES;
+  if (voicelab == NULL) return false;
+  return !voicelab->call_active || voicelab->answer_open;
 }
 
-/*
- * openConnection with the constrained-consumer contract this device needs:
- * one exported callback capability, at most 2 events / 2600 event-bytes per
- * batch (one inbox slot's worth), and no per-batch core state. Serves both
- * the first open and every proactive recycle; the incumbent connection is
- * released only after its successor resolves (make-before-break, offset
- * dedupe handles the overlap).
- */
 enum capnweb_status iterate_kit_voicelab_recycle_connection(
     struct iterate_kit_voicelab *voicelab) {
   static const char *const open_path[] = {"openConnection"};
-  struct capnweb_expression event_type_items[3];
+  struct capnweb_expression event_type_items[4];
   struct capnweb_expression event_types;
   struct capnweb_expression connection_key;
   struct capnweb_expression max_events;
@@ -672,8 +612,7 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
   key_length = snprintf(
       key_text,
       sizeof(key_text),
-      "%s-cb-g%" PRIu32,
-      voicelab->options.conversation_id,
+      "kit-cb-g%" PRIu32,
       voicelab->connection_generation);
   if (key_length < 0 || (size_t)key_length >= sizeof(key_text)) {
     return CAPNWEB_E_LIMIT;
@@ -700,9 +639,16 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
       sizeof("events.iterate.com/voice-agent/conversation-accepted") - 1U,
     }},
   };
+  event_type_items[3] = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {
+      "events.iterate.com/voice-agent/call-started",
+      sizeof("events.iterate.com/voice-agent/call-started") - 1U,
+    }},
+  };
   event_types = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_ARRAY,
-    {.array = {event_type_items, 3U}},
+    {.array = {event_type_items, 4U}},
   };
   connection_key = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
@@ -978,9 +924,6 @@ enum capnweb_status iterate_kit_voicelab_start(
     (void)iterate_kit_voicelab_close(voicelab);
   }
   memset(voicelab, 0, sizeof(*voicelab));
-  /* -1 rather than the memset's 0, because 0 is a legal first sequence number
-   * and "none seen yet" has to be a value no frame can carry. */
-  voicelab->spk_seq_last = -1;
   if (!valid_options(options)) {
     voicelab->state = ITERATE_KIT_VOICELAB_FAILED;
     voicelab->failure = ITERATE_KIT_VOICELAB_FAILURE_INVALID_OPTIONS;
@@ -1036,18 +979,17 @@ enum capnweb_status iterate_kit_voicelab_start(
 
 enum capnweb_status iterate_kit_voicelab_append_frames(
     struct iterate_kit_voicelab *voicelab,
-    const uint8_t *const *frames,
+    const uint8_t *pcm,
     size_t frame_count,
     size_t frame_length,
-    uint32_t sequence,
-    uint64_t captured_at_ms) {
+    const char *activation) {
   int written;
   size_t offset;
   size_t encoded_length;
-  size_t index;
   enum capnweb_status status;
   if (voicelab == NULL ||
-      frames == NULL ||
+      pcm == NULL ||
+      !valid_activation(activation) ||
       frame_count == 0U ||
       frame_count > ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND ||
       frame_length == 0U ||
@@ -1057,58 +999,72 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
   if (voicelab->state != ITERATE_KIT_VOICELAB_READY) {
     return CAPNWEB_E_STATE;
   }
-  for (index = 0U; index < frame_count; ++index) {
-    if (frames[index] == NULL) {
-      return CAPNWEB_E_INVALID_ARGUMENT;
-    }
-  }
   offset = 0U;
   voicelab->args_buffer[offset++] = '[';
-  for (index = 0U; index < frame_count; ++index) {
-    written = snprintf(
-        voicelab->args_buffer + offset,
-        sizeof(voicelab->args_buffer) - offset,
-        /*
-         * NO conversationId. The client does not know which call it is on and
-         * does not need to: frames belong to whatever call its own press
-         * opened. Naming one here made the device a second source of truth for
-         * a fact only the server holds.
-         */
-        "%s{\"type\":\"events.iterate.com/voice-agent/mic-frame\",\"ephemeral\":true,"
-        "\"payload\":{\"seq\":%" PRIu32
-        /* No codec field. It said "p" for PCM16 while the servers still had a
-         * mu-law arm to avoid; with that arm gone it was a constant nobody
-         * read, sent fifty times a second. */
-        ",\"t\":%" PRIu64 ",\"pcm\":\"",
-        index == 0U ? "" : ",",
-        sequence + (uint32_t)index,
-        captured_at_ms);
-    if (written < 0 ||
-        (size_t)written >= sizeof(voicelab->args_buffer) - offset) {
-      ++voicelab->frame_send_failures;
-      return CAPNWEB_E_LIMIT;
-    }
-    offset += (size_t)written;
-    /* Straight from the capture buffer: no transcode, no staging buffer. */
+  /*
+   * ONE EVENT FOR THE WHOLE FLUSH. The frames of a flush are one continuous
+   * run of capture, so they go out as one `pcm` body: the facet forwards it
+   * to the provider verbatim, and every event costs the stream's single
+   * thread a fold and a fan-out — eight of them per append was eight times
+   * the work for the same audio. `seq` is the first frame's; the count is
+   * implied by the byte length.
+   */
+  written = snprintf(
+      voicelab->args_buffer + offset,
+      sizeof(voicelab->args_buffer) - offset,
+      /*
+       * NO conversationId. The client does not know which call it is on and
+       * does not need to: frames belong to whatever call its own press
+       * opened. Naming one here made the device a second source of truth for
+       * a fact only the server holds.
+       */
+      "{\"type\":\"events.iterate.com/voice-agent/mic-frame\",\"ephemeral\":true,"
+      "\"payload\":{\"activation\":\"%s\",\"pcm\":\"",
+      activation);
+  if (written < 0 ||
+      (size_t)written >= sizeof(voicelab->args_buffer) - offset) {
+    ++voicelab->frame_send_failures;
+    return CAPNWEB_E_LIMIT;
+  }
+  offset += (size_t)written;
+  /*
+   * ONE ENCODE OVER THE WHOLE FLUSH. 640 is not a multiple of 3, so encoding
+   * frame by frame would leave a broken base64 group at every seam — but the
+   * frames of a flush are one continuous run of capture and the caller hands
+   * them over contiguous, so there are no seams to straddle.
+   */
+  {
+    const size_t body_capacity =
+        sizeof(voicelab->args_buffer) - sizeof("\"}}]") - 4U;
+    size_t padding;
     encoded_length = base64_encode(
-        frames[index],
-        frame_length,
+        pcm,
+        frame_count * frame_length,
         voicelab->args_buffer + offset,
-        sizeof(voicelab->args_buffer) - offset - sizeof("\"}}]"));
+        body_capacity > offset ? body_capacity - offset : 0U);
     if (encoded_length == 0U) {
-      /* The args buffer could not hold this batch — count it, or the
+      /* The args buffer could not hold this flush — count it, or the
        * microphone goes quiet with every counter reading zero. */
       ++voicelab->frame_send_failures;
       return CAPNWEB_E_LIMIT;
     }
     offset += encoded_length;
-    if (offset + 4U >= sizeof(voicelab->args_buffer)) {
+    /* PADDED: GPT-Live's decoder rejects unpadded base64 ("illegal base64
+     * data at input byte 852" — a Mac talk run heard nothing back until the
+     * facet learned to pad). */
+    padding = (4U - (encoded_length % 4U)) % 4U;
+    if (offset + padding > body_capacity) {
       ++voicelab->frame_send_failures;
       return CAPNWEB_E_LIMIT;
     }
-    memcpy(voicelab->args_buffer + offset, "\"}}", 3U);
-    offset += 3U;
+    while (padding-- > 0U) voicelab->args_buffer[offset++] = '=';
   }
+  if (offset + 4U >= sizeof(voicelab->args_buffer)) {
+    ++voicelab->frame_send_failures;
+    return CAPNWEB_E_LIMIT;
+  }
+  memcpy(voicelab->args_buffer + offset, "\"}}", 3U);
+  offset += 3U;
   voicelab->args_buffer[offset++] = ']';
 
   status = capnweb_session_call_oneway_path(
@@ -1120,6 +1076,8 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
       offset);
   if (status == CAPNWEB_OK) {
     voicelab->frames_sent += (uint32_t)frame_count;
+    voicelab->last_presence_at_ms =
+        voicelab->options.now_ms(voicelab->options.clock_context);
   } else {
     ++voicelab->frame_send_failures;
   }
@@ -1145,16 +1103,6 @@ enum capnweb_status iterate_kit_voicelab_append_raw(
       length);
 }
 
-static void start_call_completed(
-    void *context, const struct capnweb_result *result) {
-  struct iterate_kit_voicelab *voicelab = context;
-  voicelab->call_pending = false;
-  if (result->kind == CAPNWEB_RESULT_VALUE && result->status == CAPNWEB_OK) {
-    ++voicelab->call_starts;
-  } else {
-    ++voicelab->call_failures;
-  }
-}
 
 /* --- the face, pulled out of the processor's own runtime bag ------------- */
 
@@ -1263,93 +1211,64 @@ static bool json_literal_contents_are_safe(const char *value) {
   return true;
 }
 
-/*
- * THE PRESS OPENS THE CALL, so this asks for one WITHOUT naming it.
- *
- * This used to append `conversation-requested` carrying a device-minted
- * conversationId, a greeting, a turn mode and a colleague flag — a device
- * telling the server what kind of call to have. The server holds the state
- * that decides all of that, and two sides holding one fact is how a stream
- * wedges: the device asked for a call the server already had, nine times, and
- * every request went unanswered in silence.
- *
- * `ptt-start` is the whole request now. A device with no call gets one; a
- * device already on a call gets a fresh utterance. The client path still
- * rides along so the conversation can subscribe to this board's presence.
- */
-enum capnweb_status iterate_kit_voicelab_start_call(
-    struct iterate_kit_voicelab *voicelab, const char *greeting) {
-  int length;
-  enum capnweb_status status;
-  if (voicelab == NULL) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  if (voicelab->state != ITERATE_KIT_VOICELAB_READY ||
-      voicelab->call_pending || !voicelab->has_stream_capability) {
-    return CAPNWEB_E_STATE;
-  }
-  /* Greetings are the server's to decide; accepted for source compatibility
-   * with the four device loops and deliberately not sent. */
-  (void)greeting;
-  length = snprintf(
-      voicelab->args_buffer,
-      sizeof(voicelab->args_buffer),
-      /* DURABLE, deliberately: the opening press must survive the Durable
-       * Object reset that first touch of an idle stream provokes, so the
-       * rebuilt facet's catch-up can mint the call the reset swallowed. */
-      "[{\"type\":\"events.iterate.com/voice-agent/ptt-start\","
-      "\"payload\":{\"t\":%" PRIu64 "%s%s%s}}]",
-      voicelab->options.now_ms(voicelab->options.clock_context),
-      voicelab->options.client_path != NULL ? ",\"client\":\"" : "",
-      voicelab->options.client_path != NULL ? voicelab->options.client_path : "",
-      voicelab->options.client_path != NULL ? "\"" : "");
-  if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
-    return CAPNWEB_E_LIMIT;
-  }
-  status = capnweb_session_call_path(
+static enum capnweb_status iterate_kit_voicelab_send_keepalive(
+    struct iterate_kit_voicelab *voicelab) {
+  static const char args[] =
+      "[{\"type\":\"events.iterate.com/voice-agent/keepalive\",\"ephemeral\":true,"
+      "\"payload\":{}}]";
+  const enum capnweb_status status = capnweb_session_call_oneway_path(
       voicelab->options.session,
       voicelab->stream_capability,
       append_path,
-      sizeof(append_path) / sizeof(append_path[0]),
-      voicelab->args_buffer,
-      (size_t)length,
-      start_call_completed,
-      voicelab);
+      1U,
+      args,
+      sizeof(args) - 1U);
   if (status == CAPNWEB_OK) {
-    voicelab->call_pending = true;
+    voicelab->last_presence_at_ms =
+        voicelab->options.now_ms(voicelab->options.clock_context);
   }
   return status;
 }
 
-void iterate_kit_voicelab_forget_call(struct iterate_kit_voicelab *voicelab) {
-  if (voicelab == NULL) {
-    return;
+enum capnweb_status iterate_kit_voicelab_keepalive_if_due(
+    struct iterate_kit_voicelab *voicelab) {
+  uint64_t now;
+  if (voicelab == NULL) return CAPNWEB_E_INVALID_ARGUMENT;
+  if (voicelab->state != ITERATE_KIT_VOICELAB_READY ||
+      !voicelab->call_active) return CAPNWEB_E_STATE;
+  now = voicelab->options.now_ms(voicelab->options.clock_context);
+  if (voicelab->last_presence_at_ms != 0U &&
+      now - voicelab->last_presence_at_ms <
+          ITERATE_KIT_VOICE_CALL_KEEPALIVE_MS) {
+    return CAPNWEB_OK;
   }
-  voicelab->call_active = false;
-  voicelab->call_pending = false;
-  voicelab->live_bridge_id[0] = '\0';
-  voicelab->last_bridge_ms = 0U;
-  /* Forgotten along with the call it belonged to — see the note where
-   * conversation-accepted resets it. */
-  voicelab->spk_seq_last = -1;
+  return iterate_kit_voicelab_send_keepalive(voicelab);
 }
 
-enum capnweb_status iterate_kit_voicelab_note_button(
-    struct iterate_kit_voicelab *voicelab, const char *control) {
+enum capnweb_status iterate_kit_voicelab_end_activation(
+    struct iterate_kit_voicelab *voicelab,
+    const char *activation,
+    const char *reason) {
   int length;
-  if (voicelab == NULL) return CAPNWEB_E_INVALID_ARGUMENT;
-  if (voicelab->state != ITERATE_KIT_VOICELAB_READY) return CAPNWEB_E_STATE;
-  if (!json_literal_contents_are_safe(control)) {
+  if (voicelab == NULL) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
-  /* DURABLE, deliberately: the audit's whole point is that somebody can
-   * read it later, and a server that wants to react subscribes to it. */
+  if (!valid_activation(activation)) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
+  }
+  if (voicelab->state != ITERATE_KIT_VOICELAB_READY) {
+    return CAPNWEB_E_STATE;
+  }
+  if (!json_literal_contents_are_safe(reason)) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
+  }
   length = snprintf(
       voicelab->args_buffer,
       sizeof(voicelab->args_buffer),
-      "[{\"type\":\"events.iterate.com/voice-agent/button-pressed\",\"payload\":{"
-      "\"control\":\"%s\"}}]",
-      control != NULL ? control : "press");
+      "[{\"type\":\"events.iterate.com/voice-agent/conversation-ended\",\"payload\":{"
+      "\"activation\":\"%s\",\"reason\":\"%s\"}}]",
+      activation,
+      reason != NULL ? reason : "hangup");
   if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
     return CAPNWEB_E_LIMIT;
   }
@@ -1364,82 +1283,17 @@ enum capnweb_status iterate_kit_voicelab_note_button(
 
 enum capnweb_status iterate_kit_voicelab_end_call(
     struct iterate_kit_voicelab *voicelab, const char *reason) {
-  int length;
-  if (voicelab == NULL) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  if (voicelab->state != ITERATE_KIT_VOICELAB_READY) {
-    return CAPNWEB_E_STATE;
-  }
-  if (!json_literal_contents_are_safe(reason)) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  length = snprintf(
-      voicelab->args_buffer,
-      sizeof(voicelab->args_buffer),
-      "[{\"type\":\"events.iterate.com/voice-agent/conversation-ended\",\"payload\":{"
-      "\"conversationId\":\"%s\",\"reason\":\"%s\"}}]",
-      /* The conversation actually being ended, not the compiled-in default:
-       * an end named "scdev" is unattributable in the stream record. */
-      voicelab->live_conversation_id[0] != '\0'
-          ? voicelab->live_conversation_id
-          : voicelab->options.conversation_id,
-      reason != NULL ? reason : "hangup");
-  if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
-    return CAPNWEB_E_LIMIT;
-  }
+  enum capnweb_status status;
+  if (voicelab == NULL) return CAPNWEB_E_INVALID_ARGUMENT;
+  status = iterate_kit_voicelab_end_activation(
+      voicelab, voicelab->options.activation, reason);
+  if (status != CAPNWEB_OK) return status;
   voicelab->call_active = false;
-  return capnweb_session_call_oneway_path(
-      voicelab->options.session,
-      voicelab->stream_capability,
-      append_path,
-      1U,
-      voicelab->args_buffer,
-      (size_t)length);
+  voicelab->answer_open = false;
+  voicelab->last_presence_at_ms = 0U;
+  return CAPNWEB_OK;
 }
 
-enum capnweb_status iterate_kit_voicelab_mark_turn(
-    struct iterate_kit_voicelab *voicelab,
-    enum iterate_kit_voicelab_turn turn) {
-  int length;
-  if (voicelab == NULL) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  if (voicelab->state != ITERATE_KIT_VOICELAB_READY) {
-    return CAPNWEB_E_STATE;
-  }
-  if (turn == ITERATE_KIT_VOICELAB_TURN_START) {
-    /* A new turn cancels whatever answer was mid-flight; its partial text
-     * must not prefix the next one. */
-  }
-  length = snprintf(
-      voicelab->args_buffer,
-      sizeof(voicelab->args_buffer),
-      /*
-       * THE PRESS IS THE VERB. A start/commit pair inside one `turn` event
-       * asked the reader to decode an action before it knew what happened;
-       * two named events say it outright, and `ptt-start` is also what opens
-       * a call — so a device that has never called before needs no separate
-       * request, and one already on a call needs no special case.
-       */
-      /* ptt-start durable (it can open a call and must outlive a DO reset);
-       * ptt-end stays ephemeral (losing it costs a turn, not a call). */
-      "[{\"type\":\"events.iterate.com/voice-agent/%s\"%s,"
-      "\"payload\":{\"t\":%" PRIu64 "}}]",
-      turn == ITERATE_KIT_VOICELAB_TURN_START ? "ptt-start" : "ptt-end",
-      turn == ITERATE_KIT_VOICELAB_TURN_START ? "" : ",\"ephemeral\":true",
-      voicelab->options.now_ms(voicelab->options.clock_context));
-  if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
-    return CAPNWEB_E_LIMIT;
-  }
-  return capnweb_session_call_oneway_path(
-      voicelab->options.session,
-      voicelab->stream_capability,
-      append_path,
-      1U,
-      voicelab->args_buffer,
-      (size_t)length);
-}
 
 enum capnweb_status iterate_kit_voicelab_close(
     struct iterate_kit_voicelab *voicelab) {

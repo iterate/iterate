@@ -19,12 +19,10 @@ enum {
   "[{\"type\":\"events.iterate.com/voice-agent/dev-stats\",\"ephemeral\":true,\"payload\":"
 #define CLI_CAPABILITIES_DESCRIPTION \
   "{\"instructions\":\"The macOS execution target of the Iterate voice " \
-  "device. It has the device's bounded queues, manual push-to-talk call, " \
+  "device. It has the device's bounded queues, local capture control, " \
   "speaker playout policy, health and restart controls.\",\"children\":{" \
   "\"conversation\":{\"start\":\"Start a voice call.\"," \
-  "\"hangUp\":\"End the voice call.\"},\"pushToTalk\":{" \
-  "\"start\":\"Begin the configured WAV utterance.\"," \
-  "\"stop\":\"Commit the utterance and ask for an answer.\"}," \
+  "\"hangUp\":\"End the voice call.\"}," \
   "\"health\":\"Return device-compatible health JSON.\"," \
   "\"restart\":\"Re-exec this process.\"}}"
 
@@ -229,7 +227,7 @@ static void cli_capabilities_write_health_start(
       writer,
       "{\"transport\":\"%s\",\"voicelab\":\"%s\","
       "\"voicelabFailure\":\"%s\",\"connectionState\":%d,"
-      "\"callActive\":%s,\"callPending\":%s,\"wantsCall\":%s,"
+      "\"callActive\":%s,\"wantsCall\":%s,"
       "\"talking\":%s,\"gateOpen\":%s,\"seq\":%u,\"t\":%" PRIu64
       ",\"framesSent\":%u,\"frameFailures\":%u,\"micCaptured\":%u,"
       "\"micDropped\":%u,\"micGated\":%u,\"spkFrames\":%u,"
@@ -239,7 +237,6 @@ static void cli_capabilities_write_health_start(
       iterate_kit_voicelab_failure_name(runtime->voicelab.failure),
       (int)runtime->connection.state,
       runtime->voicelab.call_active ? "true" : "false",
-      runtime->voicelab.call_pending ? "true" : "false",
       runtime->hanging_up ? "true" : "false",
       runtime->talking ? "true" : "false", gate ? "true" : "false",
       runtime->stats_sequence++, cli_runtime_now_ms(NULL),

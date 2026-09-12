@@ -1,10 +1,15 @@
 // One voice call, as the third dumb client of the voice-agent facet speaks
 // it (after the C host CLI and the ESP32 boards): open a live stream
-// connection, append one durable ptt-start to mint the call, pump ephemeral
-// base64 PCM16 mic-frames up, and obey the spk-frame three-line buffer
-// policy coming down — clear-before-frame throws the queue away, pcm is
-// appended to playback, and that is the entire client (see
-// apps/os/scripts/voicelab/README.md).
+// connection, pump ephemeral base64 PCM16 mic-frames up — the FIRST one
+// mints the call — and obey the spk-frame buffer policy coming down:
+// clear-before-frame throws the queue away, pcm is appended to playback,
+// and that is the entire client (see apps/os/scripts/voicelab/README.md).
+//
+// There is no push-to-talk on the wire. GPT-Live is full duplex: it listens
+// while it speaks and yields on its own when the person talks, so the
+// "hold to talk" button is nothing more than a LOCAL microphone gate —
+// frames flow while it is held, nothing flows while it is not, and the
+// facet is never told about either edge.
 //
 // Pure TypeScript with every effect injected (audio session, stream handle,
 // clock), so the SAME module runs on the phone, under vitest with fakes, and
@@ -15,15 +20,12 @@ import type { VoiceAudioSession } from "./voice-audio.ts";
 
 const EVENT = {
   answerTranscript: "events.iterate.com/voice-agent/answer-transcript",
+  backendReply: "events.iterate.com/voice-agent/backend-reply",
   keepalive: "events.iterate.com/voice-agent/keepalive",
   callStarted: "events.iterate.com/voice-agent/call-started",
-  colleagueNote: "events.iterate.com/voice-agent/colleague-note",
-  colleagueStatus: "events.iterate.com/voice-agent/colleague-status",
   conversationAccepted: "events.iterate.com/voice-agent/conversation-accepted",
   conversationEnded: "events.iterate.com/voice-agent/conversation-ended",
   micFrame: "events.iterate.com/voice-agent/mic-frame",
-  pttEnd: "events.iterate.com/voice-agent/ptt-end",
-  pttStart: "events.iterate.com/voice-agent/ptt-start",
   spkFrame: "events.iterate.com/voice-agent/spk-frame",
   utteranceTranscript: "events.iterate.com/voice-agent/utterance-transcript",
 };
@@ -32,8 +34,8 @@ export type VoiceCallPhase = "connecting" | "live" | "ended";
 
 export interface VoiceCallStatus {
   phase: VoiceCallPhase;
-  /** One quiet line under the pulse — call lifecycle and the colleague
-   * status/note events share it (grill Q6): the sheet never looks dead. */
+  /** One quiet line under the pulse — call lifecycle and the backend's
+   * replies share it (grill Q6): the sheet never looks dead. */
   caption: string;
 }
 
@@ -44,6 +46,14 @@ export interface VoiceCallStatus {
  * audio arriving late (unrecoverable — the model answers the past).
  */
 const MAX_INFLIGHT_MIC_APPENDS = 8;
+
+/**
+ * One 20 ms frame of digital silence at 16 kHz mono PCM16 (640 zero bytes),
+ * as the wire's base64. The MINT: a call opens when the facet hears a
+ * microphone, so this frame goes out once, the moment the connection is up
+ * — the provider then dials during the ring and can greet at pickup.
+ */
+const SILENT_MIC_FRAME_B64 = `${"A".repeat(852)}AA==`;
 
 /** The stream surface a call drives — the probe-audio.ts shape plus the
  * head read that keeps history out of a fresh connection. */
@@ -64,12 +74,12 @@ export interface VoiceCallStream {
 export interface VoiceCallHandle {
   hangUp(): Promise<void>;
   /**
-   * The hold-to-talk button's two edges. Press appends the durable
-   * ptt-start (the FIRST press is also the mint that dials the provider —
-   * the facet holds mic frames through the handshake and commits the held
-   * turn on release, so speaking immediately works); release appends the
-   * ephemeral ptt-end that commits the turn and asks for the answer. Mic
-   * frames flow only while talking.
+   * The hold-to-talk button's two edges, and a LOCAL microphone gate is all
+   * they are: mic frames flow while held and stop when released; nothing is
+   * appended for either edge. A press also empties the local playback queue
+   * so talking over the model feels instant (it yields by itself once it
+   * hears the person; this only spares the beat the phone was still
+   * holding).
    */
   setTalking(talking: boolean): void;
 }
@@ -84,15 +94,12 @@ export function captionForEvent(type: string, payload: unknown): string | null {
     case EVENT.callStarted:
     case EVENT.conversationAccepted:
       /* Lifecycle captions are LOCAL state (ringing / hold to talk /
-       * listening) — the accepted event lands mid-first-hold and must not
+       * listening) — the accepted event can land mid-hold and must not
        * overwrite "listening…" under the caller's thumb. */
       return null;
-    case EVENT.colleagueStatus: {
-      const status =
-        (typeof p.activity === "string" && p.activity) || (typeof p.phase === "string" && p.phase);
-      return status ? `backend: ${status}` : null;
-    }
-    case EVENT.colleagueNote:
+    case EVENT.backendReply:
+      /* The backend's final words for one delegation — the voice speaks
+       * them; the caption shows their head. */
       return typeof p.text === "string" && p.text !== ""
         ? `backend: ${p.text.length > 90 ? `${p.text.slice(0, 90)}…` : p.text}`
         : null;
@@ -108,15 +115,14 @@ export function captionForEvent(type: string, payload: unknown): string | null {
 /** One line of the call sheet's live transcript. */
 export interface VoiceTranscriptItem {
   key: string;
-  kind: "you" | "voice" | "backend" | "status";
+  kind: "you" | "voice" | "backend";
   text: string;
 }
 
 /**
  * The sheet's transcript, derived pure from the stream's durable events —
- * the same events that brief reconnects and land on the colleague's stream,
- * so what the sheet shows IS the record, not a parallel guess. Consecutive
- * duplicate status lines collapse (phase churn re-whispers the same fold).
+ * the same events that brief a reconnect's session history — so what the
+ * sheet shows IS the record, not a parallel guess.
  */
 export function transcriptItems(
   events: { type: string; offset: number; payload?: unknown }[],
@@ -140,20 +146,9 @@ export function transcriptItems(
           });
         }
         break;
-      case EVENT.colleagueNote:
+      case EVENT.backendReply:
         if (text !== "") items.push({ key: `e${event.offset}`, kind: "backend", text });
         break;
-      case EVENT.colleagueStatus: {
-        const status =
-          (typeof p.activity === "string" && p.activity) ||
-          (typeof p.phase === "string" && p.phase);
-        if (status === false || status === "") break;
-        const line = `${status}${typeof p.failure === "string" && p.failure !== "" ? ` — ${p.failure}` : ""}`;
-        const last = items[items.length - 1];
-        if (last?.kind === "status" && last.text === line) break;
-        items.push({ key: `e${event.offset}`, kind: "status", text: line });
-        break;
-      }
       default:
         break;
     }
@@ -166,8 +161,7 @@ export function transcriptItems(
 export const TRANSCRIPT_EVENT_TYPES = [
   EVENT.utteranceTranscript,
   EVENT.answerTranscript,
-  EVENT.colleagueNote,
-  EVENT.colleagueStatus,
+  EVENT.backendReply,
 ] as const;
 
 export async function startVoiceCall(deps: {
@@ -186,26 +180,22 @@ export async function startVoiceCall(deps: {
    * facet — a recycled preview backend, an unprovisioned project — otherwise
    * rings forever at a press nobody consumes. */
   ringTimeoutMs?: number;
-  /** How often to tell the server this call UI is still alive (default
-   * 20s). The facet's 60s idle reaper counts DEVICE INPUT; without the
-   * heartbeat, waiting quietly for a slow answer — or stepping away from
-   * the app with the call up — ends the call under you (observed live,
-   * 2026-08-29 evening). Injectable so tests need not wait 20 seconds. */
+  /** Quiet-call liveness lease interval (default 20s). Successful mic
+   * appends already renew it, so the fallback runs only while capture is
+   * quiet. Injectable so tests need not wait 20 seconds. */
   keepaliveIntervalMs?: number;
-  now(): number;
 }): Promise<VoiceCallHandle> {
   let ended = false;
   let accepted = false;
-  let conversationId: string | null = null;
   let connection: unknown;
   let inflightMicAppends = 0;
-  let deviceMicFrameSeq = 0;
+  let lastSuccessfulMicAppendAt: number | null = null;
   let spkFramesHeard = 0;
   let spkMsHeard = 0;
   let ringTimer: ReturnType<typeof setInterval> | null = null;
   let noAnswerTimer: ReturnType<typeof setTimeout> | null = null;
   let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
-  const startedAtMs = deps.now();
+  const activation = crypto.randomUUID();
 
   const stopRinging = () => {
     if (ringTimer !== null) clearInterval(ringTimer);
@@ -217,6 +207,7 @@ export async function startVoiceCall(deps: {
   const finish = (caption: string) => {
     if (ended) return;
     ended = true;
+    deps.audio.clearPlayback();
     stopRinging();
     if (keepaliveTimer !== null) clearInterval(keepaliveTimer);
     keepaliveTimer = null;
@@ -240,6 +231,31 @@ export async function startVoiceCall(deps: {
 
   deps.onStatus({ phase: "connecting", caption: "ringing…" });
 
+  const appendMicFrame = (pcmBase64: string) => {
+    if (ended || inflightMicAppends >= MAX_INFLIGHT_MIC_APPENDS) return;
+    inflightMicAppends++;
+    deps.stream
+      .append({
+        type: EVENT.micFrame,
+        ephemeral: true,
+        payload: {
+          activation,
+          pcm: pcmBase64,
+        },
+      })
+      .then(() => {
+        lastSuccessfulMicAppendAt = Date.now();
+      })
+      .catch(() => {
+        /* A dropped mic frame is a moment of lost audio, not an error the
+         * person can act on; the connection's own failure surfaces are the
+         * real signal. */
+      })
+      .finally(() => {
+        inflightMicAppends--;
+      });
+  };
+
   /*
    * AUDIO FIRST, wire second. The mic runs from here (no frames leak —
    * `talking` gates the wire) so the ring tone has a live output path and
@@ -250,26 +266,7 @@ export async function startVoiceCall(deps: {
   try {
     await deps.audio.start((frame) => {
       deps.onLevel(talking ? frame.level : 0);
-      if (!talking || ended || inflightMicAppends >= MAX_INFLIGHT_MIC_APPENDS) return;
-      inflightMicAppends++;
-      deps.stream
-        .append({
-          type: EVENT.micFrame,
-          ephemeral: true,
-          payload: {
-            pcm: frame.pcmBase64,
-            deviceMicFrameSeq: ++deviceMicFrameSeq,
-            capturedAtDeviceMs: deps.now() - startedAtMs,
-          },
-        })
-        .catch(() => {
-          /* A dropped mic frame is a moment of lost audio, not an error the
-           * person can act on; the connection's own failure surfaces are the
-           * real signal. */
-        })
-        .finally(() => {
-          inflightMicAppends--;
-        });
+      if (talking) appendMicFrame(frame.pcmBase64);
     });
   } catch (error) {
     finish("microphone failed");
@@ -295,14 +292,23 @@ export async function startVoiceCall(deps: {
       EVENT.callStarted,
       EVENT.conversationAccepted,
       EVENT.conversationEnded,
-      EVENT.colleagueStatus,
-      EVENT.colleagueNote,
+      EVENT.backendReply,
     ],
     processEventBatch: (batch) => {
       for (const event of batch.events ?? []) {
+        if (ended) continue;
         /* Same cast-then-narrow as captionForEvent: unvalidated wire JSON,
          * typeof-checked per field where it is read. */
         const payload = (event.payload ?? {}) as Record<string, unknown>;
+        if (
+          (event.type === EVENT.spkFrame ||
+            event.type === EVENT.callStarted ||
+            event.type === EVENT.conversationAccepted ||
+            event.type === EVENT.conversationEnded) &&
+          payload.activation !== activation
+        ) {
+          continue;
+        }
         if (event.type === EVENT.spkFrame) {
           /* The three-line buffer policy, lines one and two. Line three
            * (lastFrameOfAnswer) exists for half-duplex clients releasing a
@@ -316,9 +322,6 @@ export async function startVoiceCall(deps: {
           }
           continue;
         }
-        if (event.type === EVENT.callStarted && typeof payload.conversationId === "string") {
-          conversationId = payload.conversationId;
-        }
         if (event.type === EVENT.conversationAccepted && !ended) {
           /* Picked up: stop ringing mid-burst (never into the call) and
            * hand the caption to the live state. */
@@ -329,18 +332,13 @@ export async function startVoiceCall(deps: {
           continue;
         }
         if (event.type === EVENT.conversationEnded) {
-          /* Ours or unattributed — a fresh connection past the head only
-           * sees this call's lifecycle, but the id check keeps a racing
-           * stale obituary from ending the wrong call. */
-          if (conversationId === null || payload.conversationId === conversationId) {
-            finish(captionForEvent(event.type, payload) ?? "call ended");
-          }
+          finish(captionForEvent(event.type, payload) ?? "call ended");
           continue;
         }
         const caption = captionForEvent(event.type, payload);
         if (caption !== null && !ended) {
-          /* A colleague event can land while still RINGING (the recap runs
-           * during the handshake): its caption may show, but only pickup
+          /* A backend reply can land while still RINGING (a re-dial's
+           * backend finishing late): its caption may show, but only pickup
            * flips the phase — "live" here would reveal hold-to-talk while
            * the ring and the no-answer timer are still running. */
           deps.onStatus({ phase: accepted ? "live" : "connecting", caption });
@@ -350,13 +348,13 @@ export async function startVoiceCall(deps: {
   });
 
   /*
-   * The mint press goes out NOW, before any hold: with `greeting` on the
-   * certificate the provider dials during the ring and says hi at pickup —
-   * the ring keeps sounding until conversation-accepted (the actual
-   * pickup), where the live caption takes over.
+   * The mint goes out NOW, before any hold: one silent mic frame opens the
+   * call, so the provider dials during the ring — the ring keeps sounding
+   * until conversation-accepted (the actual pickup), where the live caption
+   * takes over. ONCE: a new call mints again, a lost mint does not.
    */
-  await deps.stream.append({ type: EVENT.pttStart, payload: { t: 0 } });
-  /* A press nobody consumes must not ring forever: no pickup in time ends
+  appendMicFrame(SILENT_MIC_FRAME_B64);
+  /* A mint nobody consumes must not ring forever: no pickup in time ends
    * the call with a caption a person can act on. Seen live when a preview
    * backend recycled under the app — fresh project, no facet, eternal
    * ring. Setup now auto-installs a missing template (and a missing secret
@@ -365,15 +363,23 @@ export async function startVoiceCall(deps: {
   noAnswerTimer = setTimeout(() => {
     finish("no answer — try again");
   }, deps.ringTimeoutMs ?? 25_000);
-  /* The heartbeat runs for the call's whole life — it dies with finish(),
-   * so a dead app re-arms the server's reaper. Ephemeral: losing one costs
-   * nothing (the next is 20s away), and history is not presence. */
+  /* A successful mic append is already proof that this client is alive.
+   * Between holds, renew that proof once per interval so the 60s server
+   * reaper retains an intentional quiet call while a dead app still expires. */
+  const keepaliveIntervalMs = deps.keepaliveIntervalMs ?? 20_000;
   keepaliveTimer = setInterval(() => {
+    if (
+      ended ||
+      (lastSuccessfulMicAppendAt !== null &&
+        Date.now() - lastSuccessfulMicAppendAt < keepaliveIntervalMs)
+    ) {
+      return;
+    }
     deps.stream
       .append({
         type: EVENT.keepalive,
         ephemeral: true,
-        payload: { t: deps.now() - startedAtMs },
+        payload: {},
       })
       .catch(() => {
         /* The connection's own failure surfaces carry this. */
@@ -384,41 +390,31 @@ export async function startVoiceCall(deps: {
     setTalking: (next: boolean) => {
       if (ended || talking === next) return;
       talking = next;
-      if (!next) deps.onLevel(0);
-      /* Durable press, ephemeral release — the press is the event whose
-       * loss strands a caller (the FIRST one mints the call), the release
-       * costs a turn at worst; exactly the boards' durability split. */
-      deps.stream
-        .append(
-          next
-            ? { type: EVENT.pttStart, payload: { t: deps.now() - startedAtMs } }
-            : { type: EVENT.pttEnd, ephemeral: true, payload: { t: deps.now() - startedAtMs } },
-        )
-        .catch(() => {
-          /* The connection's own failure surfaces carry this. */
-        });
-      if (!ended) {
-        deps.onStatus({ phase: "live", caption: next ? "listening…" : "hold the mic to talk" });
+      if (next) {
+        /* Taking the floor: whatever the phone still holds of the model's
+         * answer is a beat nobody wants to hear. The model itself yields
+         * the moment it hears the person. */
+        deps.audio.clearPlayback();
+      } else {
+        deps.onLevel(0);
       }
+      deps.onStatus({ phase: "live", caption: next ? "listening…" : "hold the mic to talk" });
     },
     hangUp: async () => {
       if (ended) return;
-      const buriedConversationId = conversationId;
       /* END LOCALLY FIRST. The obituary rides a socket that may be wedged —
        * awaiting it before updating the UI turned the hang-up button into a
        * no-op on the first on-device session. */
       finish("call ended");
-      if (buriedConversationId !== null) {
-        await deps.stream
-          .append({
-            type: EVENT.conversationEnded,
-            payload: { conversationId: buriedConversationId, reason: "hang-up button" },
-          })
-          .catch(() => {
-            /* Ending locally still ended locally; the idle deadline is the
-             * server's backstop for a lost obituary. */
-          });
-      }
+      await deps.stream
+        .append({
+          type: EVENT.conversationEnded,
+          payload: { activation, reason: "hang-up button" },
+        })
+        .catch(() => {
+          /* Ending locally still ended locally; the idle deadline is the
+           * server's backstop for a lost obituary. */
+        });
     },
   };
 }

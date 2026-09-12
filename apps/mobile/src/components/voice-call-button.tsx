@@ -1,15 +1,17 @@
-// The in-call UI: every call is a PHONE CALL TO A CHAT (the chat's agent
-// is the backend via the certificate's colleaguePath; there is no separate
-// device line any more). Calls start from a chat's header phone button or
+// The in-call UI: every call is a PHONE CALL TO A CHAT — the call's stream
+// is derived from the chat's path, and the chat is where the call UI lives
+// (there is no separate device line any more). Calls start from a chat's header phone button or
 // the chat list's "new phone chat" button — startChatCall is the one entry
 // point — and the floating mic + sheet here float over the call's own chat
 // (the root layout's VoiceCallBanner covers every other screen).
 //
-// PUSH-TO-TALK: hold the big mic to speak (ptt-start / mic frames /
-// ptt-end), release to let the model answer; the level bar throbs with
-// LOCAL mic level — VU feedback only, never a turn control. The sheet also
-// carries the live transcript (both sides + backend notes/statuses) off
-// the stream's durable events; tap outside to minimise.
+// HOLD TO TALK is a LOCAL microphone gate and nothing more: mic frames flow
+// while the big mic is held and stop when it is released; the wire carries
+// no press or release (GPT-Live is full duplex and yields by itself when
+// the person speaks). The level bar throbs with LOCAL mic level — VU
+// feedback only, never a turn control. The sheet also carries the live
+// transcript (both sides + the backend's replies) off the stream's durable
+// events; tap outside to minimise.
 //
 // State lives in the query cache (the composer's precedent — no
 // useState/useEffect); the live call handle and the pulse Animated.Value are
@@ -192,9 +194,9 @@ export function VoiceCallButton(props: { baseUrl: string; projectId: string }) {
 
 /**
  * The frontend conversation, live, off the stream's own durable events —
- * what was said (both sides), the backend's notes, and its status line.
- * The same events brief reconnects and land on the colleague's stream, so
- * this view IS the record. Last dozen lines, pinned to the tail.
+ * what was said (both sides) and the backend's replies. The same events
+ * brief a reconnect's session history, so this view IS the record. Last
+ * dozen lines, pinned to the tail.
  */
 function CallTranscript(props: { baseUrl: string; projectId: string }) {
   const target = useVoiceCallTarget();
@@ -225,7 +227,6 @@ function CallTranscript(props: { baseUrl: string; projectId: string }) {
           style={[
             styles.transcriptLine,
             item.kind === "you" && styles.transcriptYou,
-            item.kind === "status" && styles.transcriptStatus,
             item.kind === "backend" && styles.transcriptBackend,
           ]}
         >
@@ -238,9 +239,9 @@ function CallTranscript(props: { baseUrl: string; projectId: string }) {
 }
 
 /**
- * The phone button a chat header wears: call THIS chat — its agent becomes
- * the call's backend (the certificate's colleaguePath), the conversation
- * lands on its stream. One call at a time app-wide, like a phone: while any
+ * The phone button a chat header wears: call THIS chat — the conversation
+ * lands on the chat's own voice stream and the call UI lives on its
+ * screen. One call at a time app-wide, like a phone: while any
  * call is live the button just reopens the sheet (the floating overlay owns
  * the in-call UI).
  */
@@ -295,11 +296,6 @@ const styles = StyleSheet.create({
   },
   transcriptBackend: {
     color: colors.accent,
-  },
-  transcriptStatus: {
-    color: colors.textMuted,
-    fontStyle: "italic",
-    fontSize: 11,
   },
   buttonSlot: {
     alignSelf: "flex-end",

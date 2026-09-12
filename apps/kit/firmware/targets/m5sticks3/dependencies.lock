@@ -9,6 +9,16 @@ dependencies:
       path: c
       type: git
     version: aee32b391063c4f5baf0aec852f38851eeeed1d9
+  espressif/led_strip:
+    component_hash: 28c6509a727ef74925b372ed404772aeedf11cce10b78c3f69b3c66799095e2d
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.5.5
   idf:
     source:
       type: idf
@@ -33,8 +43,9 @@ dependencies:
     version: 0.2.19
 direct_dependencies:
 - capnweb
+- espressif/led_strip
 - idf
 - m5stack/m5unified
-manifest_hash: e51da431c0dee040b0fe07d5a1a619eaf976a851594d352513c49268c3d01f49
+manifest_hash: e232bff6fb8d0f3d2274873a719c6bb659fa970a95dae23f4bf21336f4716e5c
 target: esp32s3
 version: 2.0.0

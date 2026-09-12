@@ -1,82 +1,95 @@
 # Iterate Kit firmware
 
-## What a client is
+Every board and the Mac CLI use GPT-Live-1 through the same voice stream.
+The device owns capture, playback, controls, and its hardware capabilities.
+The backend owns the OpenAI session, continuous input clock, and agent behavior.
 
-A client does exactly four things, and nothing else:
+## Ownership
 
-1. **Maintain the connection** — one WebSocket to `/api`, kept alive with the
-   transport's full correctness grammar (generations, session-scoped
-   discards, mount deadlines, backoff).
-2. **Render state onto the local output surfaces** — screen, lights, sound,
-   vibration, servos. State is both local (mic input amplitude, whether
-   `/api` is connected, haptic/audio-visual button feedback) and remote (the
-   live state of the agent stream).
-3. **Respond to physical IO** — button presses, mic input, touch. Every
-   physical input is also exposed as a remote-triggerable capability, and
-   every actuation — physical or injected — appends a stream event, so the
-   server can both cause and audit it.
-4. **Provide device capabilities to Cap'n Web** — face.set, screen.show,
-   servo moves, volume, camera, restart: whatever this body can do, offered
-   as callable capabilities.
+| Code               | Owns                                                                       |
+| ------------------ | -------------------------------------------------------------------------- |
+| `components/core`  | Cap’n Web, PCM framing, microphone flush timing, playout and control state |
+| `components/audio` | PCM conversion, AEC processing, capture and starvation accounting          |
+| `components/voice` | ESP application loop and capture/playback task coordination                |
+| `platforms`        | ESP-IDF and macOS hardware, networking, and task ownership                 |
+| `devices/<board>`  | Pins, codecs, DMA, physical controls, display and board-specific DSP       |
+| `targets/<board>`  | Build composition, chip/flash geometry and SDK defaults                    |
 
-Everything under those four is a _driver_: XMOS bring-up, AEC, mic and
-speaker buffers are the same class of code as a panel driver — hardware
-truth behind a clean seam, never policy. Conversation logic, turn-taking
-doctrine, and anything resembling "what should happen next" lives on the
-server; if a piece of device code is not one of the four responsibilities
-or a driver serving them, it is in the wrong repo.
+Microphone batching is `microphone_flush.h`: first batch immediately, subsequent
+partial batches within 50 ms, at most eight 20 ms frames per append. Both clients
+retain native queues; neither needs a second uploader state machine.
 
-Firmware is split at two ownership boundaries:
+A press or wake must open capture before connection progress. Preserve opening
+speech while mounting, and drain it as soon as the stream can accept it without
+waiting for call acceptance. Capture continues after button release. End and mute
+discard that activation’s queued speech and fence late callbacks. Buffer limits
+are measured in PCM duration, with an explicit failure on overflow.
 
-- `components/core` owns the control plane and must not include the audio
-  component's seams or platform headers. Its `audio_playout` classifier is a
-  core policy module, not hardware access.
-- `components/audio` owns board-independent capture, processing, and playout.
-- `platforms` owns operating-system and ESP-IDF integrations.
-- `devices` owns board profile data, while `targets` only compose a device.
+`voice_playout.c` supplies one playback step for both clients. The board owns
+its DMA/reference clock; the Mac owns its CoreAudio pull and render tap. Keep
+these physical timing differences at their hardware implementations.
 
-Phase 0 established these boundaries before implementation was imported. Keep
-platform-private headers out of public include paths; a component that bypasses
-a seam should fail to compile. The architecture check also rejects
-audio-component seam or platform includes added to `components/core`.
+The two transports remain platform-specific: ESP splits network and application
+work across tasks; the CLI has one owner. Changes to socket generations, mount
+recovery or message ordering must be verified on both.
 
-## The two itx transports rhyme on purpose
+Face animation stays in reduced processor runtime state. The C client polls
+`getProcessorRuntimeState` only while answer audio needs facial updates; it does
+not subscribe to the browser LiveState delta protocol.
 
-`platforms/iterate_esp_idf/itx_transport.c` and
-`platforms/darwin/posix_itx_transport.c` implement the same connection
-grammar — socket generations, mount deadlines, session-scoped discards,
-READY-gated retry reset — under two different ownership models: the device
-splits the work across a Wi-Fi-owning network task and the application
-poll (every shared flag is an atomic with documented publication order),
-while the Mac CLI runs single-owner and can discard a dead generation
-synchronously. A shared "transport core" was attempted and rejected during
-the 2026-08 shrink: every line that looks duplicated differs in which task
-may touch it, so extracting it means abstracting clocks, atomics, and
-ring ownership behind callbacks — a framework where the codebase wants two
-short rhyming implementations. If you change the grammar, change it in
-both files in the same commit.
+Physical LED rings use the shared `conversation_ring` renderer: faint white
+when ready, a gentle breath while capture is open, and independent microphone
+and locally admitted speaker blooms. Capture remains visible during connection
+and playback. Hardware mute and faults override the volume display. Screens
+retain their diagnostic sectors; boards only supply hardware and sample facts.
 
-## The playout step is shared, and the transport is not, for the same reason
+## Add an ESP32 board
 
-`components/core/src/voice_playout.c` is the one speaker pass both the board
-(`components/voice/src/voice_loop.c`) and the Mac CLI
-(`targets/host_cli/main.c`) run — prime, take a frame, hole or end, skip or
-play, report — with only the ring and the sink injected as callbacks. That
-is the abstraction the transport refused, and it is right here because the
-ownership is different: playout is single-owner on both targets (one task on
-the board, the one loop on the host), so nothing inside the step is an
-atomic and no callback crosses a task. The two owners had drifted apart
-twice in one week before it was shared (2026-09-06 and 2026-09-09, both
-the answer timeline failing to restart, each on a path the other had
-fixed). What stays in each owner is exactly what is theirs: the queue's
-generations and reprime handshake, the codec's bounded wait, the room's
-lead — and the underrun promotion, which on the board is an app-task read
-of a playback-task stamp and so cannot live in a single-owner module.
+Start with `devices/satellite1/satellite1_device.c` for the table shape, or the
+closest supported codec. A normal addition has four small files:
 
-Run the fastest complete host check from `apps/kit`:
+1. `devices/<board>/<board>_device.c`: hardware table and `app_main()`.
+2. `devices/<board>/CMakeLists.txt`: that source and its direct dependencies.
+3. `targets/<board>/CMakeLists.txt`: shared components plus the device.
+4. `targets/<board>/sdkconfig.defaults`: chip, flash, PSRAM and wake-model facts.
+
+Reuse the existing I2S codec, volume, button, LED and face code. Add an `extra`
+callback only for real hardware work such as a display BSP, servo or a shared
+mic/speaker clock. A new board must not add a model choice, wire dialect, voice
+loop branch or another capture/playback pipeline.
+
+Confirm pins, I2S slots/rates, amplifier polarity and AEC ownership from vendor
+source. Every board captures throughout an active call. HAVPE and Satellite1 use
+XMOS; M5StickS3 uses one native I2S0 duplex owner. Missing AEC does not require
+push-to-talk. Keep existing AEC and prove self-echo and caller interruption on
+the actual hardware before changing its signal path.
+
+The client identity stays stable. Contract 23 uses a fresh stream at
+`/agents/voice/v23/<device_name>`; old incompatible histories remain untouched.
+
+See the [device onboarding skill](../../../.agents/skills/adding-a-kit-device-or-sprite/SKILL.md)
+for codec examples, managed dependency pins, sprites and bench verification.
+Installer publication separately adds the built binaries and hashes to
+`apps/kit/src/firmware/catalog.ts`.
+
+## Verify
+
+From `apps/kit`, run `pnpm firmware:test:host`. The ignored host build is
+`firmware/.build/host`. Tests use fakes or file/memory audio sinks.
+
+Build each ESP target from its own directory. Use a fresh configuration when
+changing defaults so a stale generated file cannot conceal the change:
 
 ```bash
-pnpm firmware:test:host
+idf.py -B /tmp/kit-havpe-build -D IDF_TARGET=esp32s3 -D SDKCONFIG=/tmp/kit-havpe.sdkconfig build
 ```
 
-Its build tree is disposable and ignored at `firmware/.build/host`.
+For silent HAVPE diagnostics, compile with
+`CONFIG_ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT=y`. This holds its amplifier disabled,
+suppresses local sounds, and writes only zero PCM while preserving XMOS clocks.
+It latches the amplifier off before networking and accepts the OTA image early,
+preventing automatic rollback into audible firmware. A non-networking diagnostic
+image therefore needs explicit serial recovery. Use only a board with a verified
+amplifier shutdown GPIO and reset circuit.
+It proves digital capture/transport behavior; acoustic wake, AEC and audible
+playout require a separate physical measurement.

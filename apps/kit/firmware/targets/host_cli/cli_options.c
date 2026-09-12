@@ -31,8 +31,6 @@ enum cli_options_kind {
   CLI_OPTIONS_KIND_SWITCH,
   /** Positive number of minutes. */
   CLI_OPTIONS_KIND_MINUTES,
-  /** Non-negative count. */
-  CLI_OPTIONS_KIND_COUNT,
 };
 
 /** Which field a flag writes. Named so the table stays readable. */
@@ -44,16 +42,15 @@ enum cli_options_field {
   CLI_OPTIONS_FIELD_UTTERANCE_DIR,
   CLI_OPTIONS_FIELD_SPEAKER_WAV,
   CLI_OPTIONS_FIELD_MIC_RECORD,
+  CLI_OPTIONS_FIELD_ROOM_WAV,
   CLI_OPTIONS_FIELD_PRETEND_SPEAKER,
   CLI_OPTIONS_FIELD_REPORT_JSON,
   CLI_OPTIONS_FIELD_CONVERSE,
   CLI_OPTIONS_FIELD_MINUTES,
-  CLI_OPTIONS_FIELD_BACK_OFFICE_EVERY,
   CLI_OPTIONS_FIELD_LIVE_AUDIO,
   CLI_OPTIONS_FIELD_LIVE_MIC,
-  CLI_OPTIONS_FIELD_PUSH_TO_TALK,
-  CLI_OPTIONS_FIELD_OPEN_MIC,
   CLI_OPTIONS_FIELD_INSECURE,
+  CLI_OPTIONS_FIELD_NO_AEC,
   CLI_OPTIONS_FIELD_HELP,
 };
 
@@ -93,22 +90,14 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    "(ITERATE_KIT_CAPABILITY_NAME; default host)\n"},
   {"--speaker-wav", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_SPEAKER_WAV,
    NULL,
-   "  --speaker-wav FILE    True played timeline, including concealed "
-   "silence (default iterate-kit-playback.wav)\n"},
+   "  --speaker-wav FILE    What the speaker was handed, on CoreAudio's clock: a "
+   "true timeline, holes included (default iterate-kit-playback.wav)\n"},
   {"--live-audio", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_LIVE_AUDIO,
    NULL, "  --live-audio          Also send the true timeline to CoreAudio\n"},
   {"--live-mic", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_LIVE_MIC,
    NULL,
    "  --live-mic            Capture from this Mac's default input instead of "
    "test synthesis\n"},
-  {"--push-to-talk", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_PUSH_TO_TALK,
-   NULL,
-   "  --push-to-talk        Hold SPACE to talk, release to send, q to hang "
-   "up\n"},
-  {"--open-mic", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_OPEN_MIC,
-   NULL,
-   "  --open-mic            Stream the microphone continuously; server VAD "
-   "takes the turns, q hangs up\n"},
   {"--minutes", CLI_OPTIONS_KIND_MINUTES, CLI_OPTIONS_FIELD_MINUTES,
    NULL,
    "  --minutes MINUTES     Wall-clock limit for an interactive session\n"},
@@ -118,12 +107,10 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    NULL,
    "  --utterance-dir DIR   Directory of PCM16 mono 16 kHz WAVs for "
    "--converse\n"},
-  {"--colleague-every", CLI_OPTIONS_KIND_COUNT,
-   CLI_OPTIONS_FIELD_BACK_OFFICE_EVERY, NULL,
-   "  --colleague-every N   Use the colleague-forcing utterance every "
-   "Nth turn (0 disables)\n"},
   {"--mic-record", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_MIC_RECORD, NULL,
    "  --mic-record FILE     Record what the microphone captured\n"},
+  {"--room-wav", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_ROOM_WAV, NULL,
+   "  --room-wav FILE       Record the room with sox (what a person heard)\n"},
   {"--pretend-speaker", CLI_OPTIONS_KIND_TEXT,
    CLI_OPTIONS_FIELD_PRETEND_SPEAKER, NULL,
    "  --pretend-speaker FILE  Run the live speaker path into FILE, not the "
@@ -132,6 +119,10 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    NULL,
    "  --report-json FILE    Unattended JSON report (default "
    "iterate-kit-report.json)\n"},
+  {"--no-aec", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_NO_AEC,
+   NULL,
+   "  --no-aec              Plain capture and playback queues; no echo "
+   "cancellation\n"},
   {"--insecure", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_INSECURE,
    NULL,
    "  --insecure            Disable TLS certificate verification; local "
@@ -168,10 +159,6 @@ static enum cli_options_status cli_options_parse_flags(
 /* Parses a positive count of minutes. Fails with ERR_NOT_A_NUMBER. */
 static enum cli_options_status cli_options_read_minutes(
     const char *text, double *out_minutes);
-
-/* Parses a non-negative count. Fails with ERR_NOT_A_NUMBER. */
-static enum cli_options_status cli_options_read_count(
-    const char *text, uint32_t *out_count);
 
 /* Fills anything still unset from the environment, then from defaults. */
 static void cli_options_fill(struct cli_options *out);
@@ -347,6 +334,7 @@ static enum cli_options_status cli_options_apply(
     case CLI_OPTIONS_FIELD_UTTERANCE_DIR: out->utterance_dir = value; break;
     case CLI_OPTIONS_FIELD_SPEAKER_WAV: out->speaker_wav = value; break;
     case CLI_OPTIONS_FIELD_MIC_RECORD: out->mic_record = value; break;
+    case CLI_OPTIONS_FIELD_ROOM_WAV: out->room_wav = value; break;
     case CLI_OPTIONS_FIELD_PRETEND_SPEAKER:
       out->pretend_speaker = value;
       break;
@@ -355,13 +343,10 @@ static enum cli_options_status cli_options_apply(
       return cli_options_read_minutes(value, &out->converse_minutes);
     case CLI_OPTIONS_FIELD_MINUTES:
       return cli_options_read_minutes(value, &out->minutes);
-    case CLI_OPTIONS_FIELD_BACK_OFFICE_EVERY:
-      return cli_options_read_count(value, &out->back_office_every);
     case CLI_OPTIONS_FIELD_LIVE_AUDIO: out->live_audio = true; break;
     case CLI_OPTIONS_FIELD_LIVE_MIC: out->live_mic = true; break;
-    case CLI_OPTIONS_FIELD_PUSH_TO_TALK: out->push_to_talk = true; break;
-    case CLI_OPTIONS_FIELD_OPEN_MIC: out->open_mic = true; break;
     case CLI_OPTIONS_FIELD_INSECURE: out->insecure = true; break;
+    case CLI_OPTIONS_FIELD_NO_AEC: out->no_aec = true; break;
     case CLI_OPTIONS_FIELD_HELP: break;
     default: break;
   }
@@ -379,20 +364,6 @@ static enum cli_options_status cli_options_read_minutes(
     return CLI_OPTIONS_ERR_NOT_A_NUMBER;
   }
   *out_minutes = minutes;
-  return CLI_OPTIONS_OK;
-}
-
-static enum cli_options_status cli_options_read_count(
-    const char *text, uint32_t *out_count)
-{
-  assert(out_count != NULL);
-  if (text == NULL) return CLI_OPTIONS_ERR_NOT_A_NUMBER;
-  char *end = NULL;
-  const unsigned long value = strtoul(text, &end, 10);
-  if (end == text || end == NULL || *end != '\0' || value > UINT32_MAX) {
-    return CLI_OPTIONS_ERR_NOT_A_NUMBER;
-  }
-  *out_count = (uint32_t)value;
   return CLI_OPTIONS_OK;
 }
 
@@ -501,31 +472,6 @@ static enum cli_options_status cli_options_check_combinations(
   assert(out != NULL);
   if (out->converse_minutes > 0.0 && out->utterance_dir == NULL) {
     cli_options_note(problem, problem_bytes, "--converse needs --utterance-dir");
-    return CLI_OPTIONS_ERR_INCOMPATIBLE;
-  }
-  /*
-   * Two drivers, one talk button. --converse takes turns on a schedule and
-   * --push-to-talk takes them when a person presses a key; run together, each
-   * would end the other's turn and the report would describe a conversation
-   * neither of them had. Picking one silently is worse than refusing: the
-   * operator would spend the session wondering why their key does nothing.
-   */
-  /* Three turn-taking postures, one microphone: a button, a schedule, or the
-   * server's VAD over a continuous stream. Any two together would fight over
-   * when capture starts and stops, so all pairs refuse. */
-  if (out->open_mic && out->push_to_talk) {
-    cli_options_note(
-        problem, problem_bytes, "--open-mic cannot run with --push-to-talk");
-    return CLI_OPTIONS_ERR_INCOMPATIBLE;
-  }
-  if (out->open_mic && out->converse_minutes > 0.0) {
-    cli_options_note(
-        problem, problem_bytes, "--open-mic cannot run with --converse");
-    return CLI_OPTIONS_ERR_INCOMPATIBLE;
-  }
-  if (out->push_to_talk && out->converse_minutes > 0.0) {
-    cli_options_note(
-        problem, problem_bytes, "--push-to-talk cannot run with --converse");
     return CLI_OPTIONS_ERR_INCOMPATIBLE;
   }
   return CLI_OPTIONS_OK;

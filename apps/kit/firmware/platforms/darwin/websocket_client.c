@@ -600,7 +600,7 @@ iterate_kit_posix_websocket_client_service_control(
    * THE QUIET-PING, exactly as the ESP transport originates it: a probe only
    * when the hop is silent BOTH ways, queued into the bounded control slot,
    * stamped as outbound so one quiet period yields one probe. This adapter
-   * used to only ANSWER pings — and a push-to-talk session between turns is
+   * used to only ANSWER pings — and an idle connection is
    * silent long enough that the edge closes the socket (measured ~30 s,
    * close code 1006), which is why the period lives well inside that.
    */

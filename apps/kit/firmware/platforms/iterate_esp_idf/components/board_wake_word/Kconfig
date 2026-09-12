@@ -1,0 +1,6 @@
+config ITERATE_KIT_WAKE_WORD
+    bool
+    default y
+    depends on IDF_TARGET_ESP32S3
+    help
+        Compile the shared capture tap only when board_wake_word is present.

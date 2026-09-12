@@ -1,6 +1,6 @@
 /**
  * The face module, pinned WITHOUT the harness: pcm chunks, answer boundaries
- * and barge events in, one newest face value out. The processor's own tests
+ * events in, one newest face value out. The processor's own tests
  * (voice-agent.test.ts, "the face") prove the call sites against a pretend
  * provider; these prove the mechanism itself — which is the point of it being
  * pure: no sockets, no clock, no fixture, just inputs.
@@ -58,20 +58,6 @@ describe("the face module", () => {
     expect(value!.at).toBe(250);
     /* The close lands at (or after) the end of the answer's own samples. */
     expect(value!.playoutSamples).toBeGreaterThanOrEqual(600 * 16);
-  });
-
-  it("a barge shuts the mouth at once, playout clock zeroed", () => {
-    const face = createFace();
-    face.answerStarted();
-    face.audio(voicedPcm(2_000), 100);
-    expect(face.read()!.viseme).not.toBe(firmwareVisemes.SIL);
-    face.barge(333);
-    const value = face.read();
-    expect(value!.viseme).toBe(firmwareVisemes.SIL);
-    expect(value!.playoutSamples).toBe(0);
-    expect(value!.confidence).toBe(0);
-    expect(value!.answer).toBe(1);
-    expect(value!.at).toBe(333);
   });
 
   it("numbers answers 1-based, playout clock restarting with each", () => {

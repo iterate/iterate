@@ -2347,7 +2347,12 @@ export class StreamDurableObject extends DurableObject<Env> {
     const justCommittedEvents = newEvents.map((event) => sizedByOffset.get(event.offset)!);
 
     this.#coreProcessorState = workingState;
-    this.#checkpointCoreProcessorState(newEvents.length);
+    // Ephemeral events change no durable core state (they advance only
+    // `maxOffset`, whose floor is the SQL row above), so they do not count
+    // toward the checkpoint cadence: a voice stream appending sixty
+    // microphone and speaker frames a second otherwise serialized the whole
+    // core state to KV every second for nothing the rebuild could use.
+    this.#checkpointCoreProcessorState(durableEvents.length);
     this.#metrics.ingress.bump(
       Date.now(),
       newEvents.length,

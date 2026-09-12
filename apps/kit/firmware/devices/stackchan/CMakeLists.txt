@@ -1,9 +1,3 @@
-if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/assets/stackchan_sounds_generated.inc")
-  message(FATAL_ERROR
-    "assets/stackchan_sounds_generated.inc is generated, not committed - run "
-    "apps/kit/firmware/tools/generate-sounds.sh (needs OPENAI_API_KEY)")
-endif()
-
 idf_component_register(
   SRCS
     stackchan_device.c
@@ -13,11 +7,10 @@ idf_component_register(
     stackchan_body.c
     stackchan_camera.c
     stackchan_image.c
-    stackchan_modes.c
     core_s3_capture_reserve.c
-  INCLUDE_DIRS include
   PRIV_INCLUDE_DIRS .
   REQUIRES
+    board
     audio
     avatar
     capnweb
@@ -33,6 +26,7 @@ idf_component_register(
     esp_driver_gpio
     esp_driver_uart
     esp_lcd
+    lcd_transfer
     esp_http_client
     mbedtls
     nvs_flash

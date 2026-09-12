@@ -5,10 +5,31 @@
 #include "iterate/kit/status.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/** One unsigned health counter; name must be a JSON-safe, unescaped key. */
+struct iterate_kit_health_field {
+  const char *name;
+  uint32_t value;
+};
+
+/**
+ * Append comma-prefixed JSON counters at out, returning bytes excluding NUL.
+ * The caller supplies the unused tail of its document and must drop the whole
+ * document on 0: a clipped JSON document is unparseable, not a smaller answer.
+ * out must address capacity writable bytes (and be non-NULL even at zero
+ * capacity). fields must address count counters with valid names. count 0
+ * also returns 0 and writes nothing.
+ */
+size_t iterate_kit_health_append_fields(
+    char *out,
+    size_t capacity,
+    const struct iterate_kit_health_field *fields,
+    size_t count);
 
 /**
  * Ask the device how it is, on demand.

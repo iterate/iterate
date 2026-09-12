@@ -1,4 +1,4 @@
-#include "voice_pe_hardware_config.h"
+#include "iterate/kit/platforms/aic3204.h"
 
 #include <assert.h>
 
@@ -12,7 +12,7 @@
  */
 int main(void) {
   assert(
-      iterate_kit_voice_pe_xmos_uplink_stage() ==
-      ITERATE_KIT_VOICE_PE_XMOS_STAGE_AEC);
+      iterate_kit_xmos_uplink_stage() ==
+      ITERATE_KIT_XMOS_STAGE_AEC);
   return 0;
 }

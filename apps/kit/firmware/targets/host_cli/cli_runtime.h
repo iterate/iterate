@@ -15,7 +15,7 @@
  * other — the client's, the facet's, the stream Durable Object's, and the
  * inference provider's. The taxonomy and the naming rule live in
  * `voice-agent2.ts`, which is where events are defined; on the wire they are
- * `...AtDeviceMs`, `...AtFacetMs`, `...AtStreamMs` and `...AtGrokMs`.
+ * `...AtDeviceMs`, `...AtFacetMs`, and `...AtStreamMs`.
  *
  * IN HERE, THIS MACHINE IS THE DEVICE, and every bare `_ms` below is
  * `cli_runtime_now_ms()` — this process's own monotonic clock, and nothing
@@ -24,7 +24,7 @@
  *
  * So the rule for this struct is the inverse of the rule on the wire: a bare
  * `_ms` is OURS, and a stamp from anywhere else must name where it came from
- * (`..._at_facet_ms`, `..._at_stream_ms`, `..._at_grok_ms`) and may never be
+ * (`..._at_facet_ms`, `..._at_stream_ms`) and may never be
  * subtracted from one of ours. There are currently NONE — this target reads no
  * foreign timestamp off any payload, and `turn-timing` is deliberately read by
  * the latency probes rather than by the client. Adding the first one is the
@@ -43,7 +43,6 @@
 #include "cli_keyboard.h"
 #include "cli_microphone.h"
 #include "cli_options.h"
-#include "cli_paced_sink.h"
 #include "cli_screen.h"
 #include "cli_speaker.h"
 #include "cli_wav.h"
@@ -78,7 +77,7 @@ struct cli_runtime {
   size_t outbox_lengths[ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS];
   struct iterate_kit_posix_itx_transport transport;
   struct iterate_kit_peer peer;
-  struct iterate_kit_module modules[2];
+  struct iterate_kit_module modules[1];
   struct cli_capabilities capabilities;
   struct cli_device_controls device_controls;
   struct iterate_kit_voicelab voicelab;
@@ -88,7 +87,15 @@ struct cli_runtime {
   enum iterate_kit_posix_itx_transport_state announced_transport;
   enum iterate_kit_voicelab_state announced_voicelab;
   enum iterate_kit_voicelab_failure announced_failure;
-  uint32_t frame_sequence;
+  /** RAM-only id for the current local microphone activation. */
+  char activation[33];
+  bool activation_active;
+  /** Monotonic local activation edge; zero before the first activation. */
+  uint64_t activation_started_ms;
+  /** True until provider acceptance or one terminal opening timeout. */
+  bool opening_pending;
+  bool opening_timed_out;
+  uint32_t opening_timeouts;
   struct cli_microphone microphone;
   struct cli_speaker speaker;
   /*
@@ -98,6 +105,10 @@ struct cli_runtime {
    */
   struct iterate_kit_voice_playout playout;
   uint8_t playout_frame[ITERATE_KIT_VOICE_FRAME_BYTES];
+  /* When both speaker queues were last found empty; one dry step per frame period. */
+  uint64_t last_dry_step_ms;
+  /* sox, recording the room (see cli_main_start_room_recorder); 0 when there is none. */
+  pid_t room_recorder_pid;
   struct cli_wav_source source;
   struct cli_wav_sink sink;
   /* What the microphone captured; opened only when --mic-record was given. */
@@ -122,41 +133,24 @@ struct cli_runtime {
    */
   uint64_t api_connected_at_ms;
   uint64_t call_established_at_ms;
-  /* Models the converter's clock; unpaced by default. See cli_paced_sink.h. */
-  struct cli_paced_sink paced_sink;
   struct cli_conversation conversation;
   /** Wall-clock end of an interactive session; 0 means no limit was asked. */
   uint64_t finish_at_ms;
   /** A hang-up is in progress: the call is being ended before the process is. */
   bool hanging_up;
+  /** The activation owns its pending terminal across remounts until the bridge
+   * confirms it ended. One idempotent append is attempted per generation. */
+  bool hangup_terminal_attempted;
+  uint32_t hangup_terminal_generation;
   uint64_t hangup_deadline_ms;
   bool wants_talk;
+  /** Capture remains on while this locally owned conversation is active. */
   bool talking;
-  bool flushing_turn;
   bool answer_done;
   bool restart_requested;
   uint64_t restart_requested_at_ms;
   bool stop_requested;
   bool source_finished;
-  uint32_t flush_frames_left;
-  uint64_t flush_deadline_ms;
-  uint64_t turn_started_ms;
-  /*
-   * THE ONE THING NOBODY COULD SEE: where the wait after a key comes up goes.
-   *
-   * Six hops sit between letting go of a button and hearing a reply — the
-   * loop noticing, the commit reaching the outbox, the stream carrying it, the
-   * provider being asked, the first delta coming back, and the first sample
-   * reaching the speaker — and not one of them was timed. Every diagnosis of
-   * "it takes ages" so far has been somebody's reading of a scrolling log,
-   * including two of mine that were wrong. These are stamped at the edges and
-   * differenced once, when the answer starts.
-   */
-  uint64_t turn_released_ms;
-  uint64_t turn_committed_ms;
-  uint64_t turn_answer_seen_ms;
-  uint32_t turn_release_to_commit_ms;
-  uint32_t turn_commit_to_audio_ms;
   /**
    * When this turn's answer last made progress — a frame played or arrived.
    *
@@ -170,6 +164,8 @@ struct cli_runtime {
   /** Bytes this scripted turn successfully submitted to the room boundary. */
   uint32_t turn_room_submitted_bytes;
   uint64_t next_mic_at_ms;
+  /** Last successful microphone append; 0 sends the first frame immediately. */
+  uint64_t mic_flushed_at_ms;
   uint64_t next_playback_at_ms;
   uint64_t next_stats_at_ms;
   uint64_t unhealthy_since_ms;

@@ -1,5 +1,6 @@
 #include "iterate/kit/platforms/darwin_audio_codec.h"
 
+#include <stdatomic.h>
 #include <string.h>
 
 #include "iterate/kit/voice_device_profile.h"
@@ -104,10 +105,37 @@ enum iterate_kit_status iterate_kit_darwin_audio_codec_open(
   };
   darwin->capture_enabled = options->capture_enabled;
   darwin->playback_enabled = options->playback_enabled;
+  /*
+   * ECHO CANCELLATION FIRST. A live microphone beside a live speaker is the
+   * one configuration where the far end hears itself; both then go through
+   * the voice-processing unit, and the queues below are the fallback. A
+   * pretend speaker has no room to echo in, so it keeps the plain queue.
+   */
+  if ((options->capture_enabled || options->force_voice_processing) &&
+      options->playback_enabled && options->file_playback == NULL &&
+      !options->echo_cancellation_off) {
+    if (iterate_kit_darwin_audio_output_open_pulled(&darwin->output, options->render_tap) ==
+            ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK &&
+        iterate_kit_darwin_audio_input_open_external(&darwin->input) ==
+            ITERATE_KIT_DARWIN_AUDIO_INPUT_OK &&
+        iterate_kit_darwin_audio_vpio_open(&darwin->vpio, &darwin->input, &darwin->output) ==
+            ITERATE_KIT_DARWIN_AUDIO_VPIO_OK) {
+      darwin->voice_processing_active = true;
+      return iterate_kit_audio_codec_validate(&darwin->codec);
+    }
+    /* Remember why, then take the plain path below with fresh rings. */
+    {
+      const int32_t reason = iterate_kit_darwin_audio_vpio_platform_error(&darwin->vpio);
+      iterate_kit_darwin_audio_output_close(&darwin->output);
+      iterate_kit_darwin_audio_input_close(&darwin->input);
+      memset(&darwin->vpio, 0, sizeof(darwin->vpio));
+      atomic_store(&darwin->vpio.platform_error, (int_least32_t)reason);
+    }
+  }
   if (options->playback_enabled) {
     const enum iterate_kit_darwin_audio_output_status status =
         options->file_playback == NULL
-        ? iterate_kit_darwin_audio_output_open(&darwin->output)
+        ? iterate_kit_darwin_audio_output_open(&darwin->output, options->render_tap)
         : iterate_kit_darwin_audio_output_open_file(
               &darwin->output, options->file_playback);
     if (status != ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK) {
@@ -129,10 +157,13 @@ void iterate_kit_darwin_audio_codec_close(
   if (darwin == NULL) {
     return;
   }
+  /* The unit first: it is what calls into the rings from the I/O thread. */
+  iterate_kit_darwin_audio_vpio_close(&darwin->vpio);
   iterate_kit_darwin_audio_output_close(&darwin->output);
   iterate_kit_darwin_audio_input_close(&darwin->input);
   darwin->capture_enabled = false;
   darwin->playback_enabled = false;
+  darwin->voice_processing_active = false;
 }
 
 void iterate_kit_darwin_audio_codec_pump(
@@ -141,6 +172,22 @@ void iterate_kit_darwin_audio_codec_pump(
   if (darwin != NULL && darwin->playback_enabled) {
     iterate_kit_darwin_audio_output_pump(&darwin->output, now_us);
   }
+}
+
+uint32_t iterate_kit_darwin_audio_codec_playback_lead_bytes(
+    const struct iterate_kit_darwin_audio_codec *darwin) {
+  if (darwin == NULL || !darwin->playback_enabled) {
+    return 0U;
+  }
+  return iterate_kit_darwin_audio_output_lead_bytes(&darwin->output);
+}
+
+uint32_t iterate_kit_darwin_audio_codec_discard_playback(
+    struct iterate_kit_darwin_audio_codec *darwin) {
+  if (darwin == NULL || !darwin->playback_enabled) {
+    return 0U;
+  }
+  return iterate_kit_darwin_audio_output_discard(&darwin->output);
 }
 
 void iterate_kit_darwin_audio_codec_set_playback_expected(
@@ -188,4 +235,33 @@ void iterate_kit_darwin_audio_codec_metrics(
       iterate_kit_darwin_audio_input_platform_error(&darwin->input);
   metrics->playback_platform_error =
       iterate_kit_darwin_audio_output_platform_error(&darwin->output);
+  metrics->voice_processing_active = darwin->voice_processing_active;
+  metrics->voice_processing_error =
+      iterate_kit_darwin_audio_vpio_platform_error(&darwin->vpio);
+  metrics->vpio_capture_callbacks =
+      (uint32_t)atomic_load_explicit(&darwin->vpio.capture_callbacks, memory_order_relaxed);
+  metrics->vpio_capture_frames_pushed =
+      (uint32_t)atomic_load_explicit(&darwin->vpio.capture_frames_pushed, memory_order_relaxed);
+  metrics->vpio_capture_short_renders =
+      (uint32_t)atomic_load_explicit(&darwin->vpio.capture_short_renders, memory_order_relaxed);
+  metrics->vpio_render_requests =
+      (uint32_t)atomic_load_explicit(&darwin->vpio.render_requests, memory_order_relaxed);
+  metrics->vpio_render_shortfall_bytes =
+      (uint32_t)atomic_load_explicit(&darwin->vpio.render_shortfall_bytes, memory_order_relaxed);
+  metrics->vpio_render_unaligned_requests = (uint32_t)atomic_load_explicit(
+      &darwin->vpio.render_unaligned_requests, memory_order_relaxed);
+  metrics->playback_pull_reprimes =
+      iterate_kit_darwin_audio_output_pull_reprimes(&darwin->output);
+  metrics->render_tap_bytes =
+      iterate_kit_darwin_audio_output_tap_bytes(&darwin->output);
+  metrics->render_tap_dropped_bytes =
+      iterate_kit_darwin_audio_output_tap_dropped_bytes(&darwin->output);
+  {
+    const struct iterate_kit_darwin_audio_output_shortfalls shortfalls =
+        iterate_kit_darwin_audio_output_shortfalls(&darwin->output);
+    metrics->playback_shortfalls = shortfalls.count;
+    metrics->playback_shortfall_bytes = shortfalls.bytes;
+    metrics->playback_audible_shortfalls = shortfalls.audible_count;
+    metrics->playback_audible_shortfall_bytes = shortfalls.audible_bytes;
+  }
 }

@@ -9,7 +9,6 @@
 #include "iterate/kit/avatar/face_doze.h"
 #include "iterate/kit/avatar/face_keyframe.h"
 #include "iterate/kit/avatar/face_viseme_queue.h"
-#include "waveshare_audio.h"
 
 static const char tag[] = "waveshare-face";
 

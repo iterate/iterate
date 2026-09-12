@@ -1,5 +1,6 @@
 // Hold a voice conversation from this Mac: real microphone in, speakers out,
-// hold-to-talk. No ESP32 involved.
+// and continuous capture while the call is active. No ESP32 involved. GPT-Live on the
+// far end, delegating to a fast Astra with exec_typescript on the project.
 //
 //   pnpm cli voicelab talk                # asks which environment and project
 //   pnpm cli voicelab talk --auto         # defaults for both prompts: default project, fresh stream
@@ -30,7 +31,8 @@ import type { DynamicWorkerCapability } from "iterate/sdk";
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 
 import {
-  installVoiceAgent,
+  installVoiceAgentFromSource,
+  VOICE_AGENT_SOURCE_FILES,
   voiceAgentEntrypointRef,
   voiceAgentFacetRef,
   type VoiceAgentRpc,
@@ -56,7 +58,7 @@ import { discardRpcResult, withRpcResult } from "./rpc-ownership.ts";
  * slug is something you can recognise in a prompt.
  *
  * `iterate` because voice belongs on the project people already live in, not
- * in a lab annex: a bare run should land where its colleague notes, its
+ * in a lab annex: a bare run should land where its notes, its
  * tools and its transcripts are part of the same working world. A missing
  * slug is created on first run (ensureProjectExists), so the default works
  * on a fresh environment too.
@@ -65,16 +67,6 @@ import { discardRpcResult, withRpcResult } from "./rpc-ownership.ts";
  */
 const DEFAULT_PROJECT = "iterate";
 const DEFAULT_MINUTES = 30;
-const XAI_SECRET = "/secrets/xai";
-/**
- * The provider key in the Doppler config this command already runs inside.
- *
- * Named exactly as Doppler has it so nobody has to map one name to another;
- * see docs/devops-cloudflare-doppler.md for where env config comes from.
- */
-const XAI_ENV = "APP_CONFIG_X_AI_API_KEY";
-/** Where the key may be sent. A secret pinned nowhere can be sent anywhere. */
-const XAI_EGRESS = ["https://api.x.ai"];
 
 /**
  * What to tell the model it is, when the caller does not say.
@@ -125,7 +117,7 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
    */
   auto?: boolean;
   /**
-   * Run unattended for this many minutes instead of hold-to-talk.
+   * Run unattended for this many minutes instead of attending the call.
    *
    * The driver takes the turns itself from recorded utterances, so an
    * hour-long conversation needs nobody at the keyboard — which is the only
@@ -134,8 +126,6 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   converse?: number;
   /** PCM16 mono 16 kHz WAVs the unattended driver speaks. Required by --converse. */
   utteranceDir?: string;
-  /** Force a back-office consultation every Nth utterance. */
-  colleagueEvery?: number;
   /**
    * Play into this file instead of this Mac's speaker.
    *
@@ -147,71 +137,22 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   pretendSpeaker?: string;
   /** What the model is told it is. Defaults to a short assistant prompt. */
   instructions?: string;
-  /** Dial this instead of the provider. Carries no credential. */
-  providerBaseUrl?: string;
-  /** Which realtime voice provider the stream's birth certificate names.
-   * OPENAI unless you say otherwise — the fleet's default provider. */
-  provider?: "grok" | "openai";
-  /** Model and voice overrides for that provider. */
-  providerModel?: string;
-  providerVoice?: string;
   /** Install the subscription under a fresh key even if an identical one exists. */
   reinstall?: boolean;
   /**
    * Offer the model a hang_up tool: say goodbye, end the call — the baseline
-   * proof the tool lane works end to end. ON BY DEFAULT — every stream is
+   * proof the tool path works end to end. ON BY DEFAULT — every stream is
    * born able to end its own call; pass `--hang-up false` to withhold it.
    */
   hangUp?: boolean;
-  /**
-   * Hold the microphone open for the whole call and let Grok find the turns.
-   *
-   * OFF BY DEFAULT, BECAUSE THIS CLI IS NOT AN OPEN-MIC CLIENT. It sends audio
-   * only while a turn is in progress — the space bar in attended mode, one
-   * utterance at a time in unattended mode — and then stops. Server VAD needs
-   * the silence AFTER speech to decide the turn ended, so on a stream that
-   * simply stops it hears `speech_started` and then waits for ever. Measured:
-   * Grok took the audio, detected the speech, and never once answered.
-   *
-   * The boards ARE open-mic and this is the path they take, so it is worth
-   * being able to exercise from here — with a driver that keeps sending.
-   */
-  openMic?: boolean;
-  /**
-   * The provider's own turn_detection object as JSON, passed to the birth
-   * certificate verbatim — open-mic VAD tuning per stream. Example:
-   * '{"type":"server_vad","threshold":0.5,"silence_duration_ms":300}'.
-   */
-  turnDetection?: string;
-  /**
-   * Deliberately change an existing stream's turn posture (clientTakesTurns).
-   *
-   * Without this, a reinstall whose posture differs from the stream's current
-   * certificate REFUSES. A posture flip is not a tweak: an open-mic board on a
-   * clientTakesTurns stream is never told a turn ended and goes silent, and a
-   * button board on an open-mic stream double-commits every turn. One silent
-   * flip — a `talk --setup-only` without `--open-mic` onto a board stream —
-   * took two boards down for hours on 2026-08-20.
-   */
-  flipTurnPosture?: boolean;
   /** Classify the answer into mouth shapes for a face-rendering board. */
   visemes?: boolean;
   /**
-   * Thinking fast and slow: `note_to_self` writes to the stream's ONE
-   * colleague agent — minted under `/agents/voice-notes/` at a path derived
-   * from this stream's, remembering across every call on the stream — and
-   * its chat replies are read back into whichever call is live.
-   *
-   * ON BY DEFAULT — every stream is born with its colleague; pass
-   * `--colleague false` to install one without.
-   */
-  colleague?: boolean;
-  /**
    * Extra tools for the birth certificate, as a JSON array of
-   * `{name, description, parameters?, expression}` entries — appended after
-   * the `--hang-up` base tool. Each `expression` is the itx walk the fold
-   * validates and the tool runner applies, e.g.
-   * `["clients",["get","/clients/stackchan"],"capabilities","face","set"]`.
+   * `{name, description, parameters?}` entries — appended after the
+   * `--hang-up` base tool. The certificate accepts only names the agent
+   * knows how to be (today: `hang_up`); everything else the backend does
+   * through `exec_typescript`.
    */
   tools?: string;
 }
@@ -267,22 +208,25 @@ export async function talk(options: TalkOptions = {}) {
    * one. Present is enough: a spec somebody pinned on purpose stays as it
    * is (`voicelab deploy` is the upgrade path), and a repo that already
    * declares the package is left untouched. */
-  const install = await installVoiceAgent(voiceAgentConfigRepo(itx), { existing: "keep" });
+  /* FROM THIS CHECKOUT, NOT FROM A PUBLISHED PACKAGE. The agent is userspace
+   * code and the config repo is its deployment unit, so the checkout's own
+   * copy of the facet's source goes into the repo and the platform builds
+   * it from there on the next call — no OS deploy, no package publish, no
+   * preview pin (which rewrites every published-package spec to the
+   * deployed commit; see installVoiceAgentFromSource). An edit to
+   * packages/voice-agent is live on the next `talk`. */
+  const install = await installVoiceAgentFromSource(
+    voiceAgentConfigRepo(itx),
+    readVoiceAgentSource(),
+  );
   console.log(
     install.changed
-      ? `the repo now names ${install.spec} (${install.commitOid.slice(0, 8)}: ${install.changedPaths.join(", ")})`
-      : `the repo already names ${install.spec} (${install.commitOid.slice(0, 8)})`,
+      ? `the repo now carries this checkout's voice agent (${install.commitOid.slice(0, 8)}: ${install.changedPaths.join(", ")})`
+      : `the repo already carries this checkout's voice agent (${install.commitOid.slice(0, 8)})`,
   );
 
-  /* Only the secret the chosen provider's dial will spend — setup's gate is
-   * per-provider (secretForHost), and a baseUrl seam needs none at all. */
-  if (options.providerBaseUrl === undefined) {
-    console.log(
-      options.provider === "grok"
-        ? `xai secret ${await ensureXaiSecret(itx)}`
-        : `openai secret ${await ensureOpenaiSecret(itx)}`,
-    );
-  }
+  /* The GPT-Live dial spends this project secret. */
+  console.log(`openai secret ${await ensureOpenaiSecret(itx)}`);
 
   using voiceAgent = itx.workers.get(
     voiceAgentEntrypointRef,
@@ -310,7 +254,7 @@ export async function talk(options: TalkOptions = {}) {
    * measured on prd (2026-08-26 evening): three commits behind while the
    * stateless entrypoint rebuilt every run, so setup wrote the new
    * contract's delivery filter and the live facet installed the previous
-   * revision's colleague subscription. Killing the incarnation is the
+   * revision's stale subscription. Killing the incarnation is the
    * upgrade: the next dispatch boots the build this run just committed.
    */
   if (install.changed) {
@@ -325,33 +269,11 @@ export async function talk(options: TalkOptions = {}) {
     await facetWorker.kill().catch(() => {});
     console.log(`restarted voice-agent facet worker for the new build`);
   }
-  await refuseSilentPostureFlip(itx, streamPath, {
-    intendedClientTakesTurns: options.openMic !== true,
-    flipTurnPosture: options.flipTurnPosture === true,
-  });
   const setup = await withRpcResult(
     voiceAgent.setupVoiceAgent({
       streamPath,
       instructions: options.instructions ?? DEFAULT_INSTRUCTIONS,
-      /*
-       * THIS CLI SEGMENTS ITS OWN TURNS, in both of its modes.
-       *
-       * Attended, a person holds the space bar. Unattended, the driver plays
-       * one utterance and stops. Either way the audio ENDS rather than going
-       * quiet, and server VAD cannot tell a finished sentence from a stalled
-       * connection without hearing the silence that follows it. `--open-mic`
-       * exists to exercise the boards' path deliberately; it is not the
-       * default because on this client it produces a call that hears you and
-       * never replies.
-       */
-      clientTakesTurns: options.openMic !== true,
       ...(options.visemes === true && { visemes: true }),
-      colleague: options.colleague !== false,
-      ...(options.turnDetection !== undefined && {
-        turnDetection: JSON.parse(options.turnDetection) as Record<string, unknown> & {
-          type: string;
-        },
-      }),
       ...(() => {
         const tools = [
           ...(options.hangUp !== false
@@ -371,17 +293,10 @@ export async function talk(options: TalkOptions = {}) {
                 name: string;
                 description: string;
                 parameters?: Record<string, unknown>;
-                expression?: (string | [string, ...unknown[]])[];
               }[])),
         ];
         return tools.length > 0 ? { tools } : {};
       })(),
-      ...(options.provider === undefined ? {} : { provider: options.provider }),
-      ...(options.providerModel === undefined ? {} : { providerModel: options.providerModel }),
-      ...(options.providerVoice === undefined ? {} : { providerVoice: options.providerVoice }),
-      ...(options.providerBaseUrl === undefined
-        ? {}
-        : { providerBaseUrl: options.providerBaseUrl }),
       ...(options.reinstall === undefined ? {} : { reinstall: options.reinstall }),
     }),
     ({ streamPath: resultPath, warmMs }) => ({ streamPath: resultPath, warmMs }),
@@ -416,13 +331,12 @@ export async function talk(options: TalkOptions = {}) {
   fs.mkdirSync(runDir, { recursive: true });
   const playback = path.join(runDir, "speaker.wav");
   const micRecord = path.join(runDir, "mic.wav");
+  const room = path.join(runDir, "room.wav");
   const reportJson = path.join(runDir, "report.json");
 
   console.log(`\n  ${baseUrl} · ${project}`);
   if (options.converse === undefined) {
-    console.log(`\n  HOLD space to talk, release to send, q to hang up.`);
-    console.log(`  A tap does nothing: a terminal has no key-up event, so release is`);
-    console.log(`  inferred from the key repeat stopping.`);
+    console.log(`\n  The microphone captures continuously; q hangs up.`);
     console.log(`  If micIn stays at 0 in the pulse line, macOS denied the microphone —`);
     console.log(`  that is the only symptom it gives.`);
   } else {
@@ -431,42 +345,116 @@ export async function talk(options: TalkOptions = {}) {
   console.log(`\n  this run's evidence (gitignored):`);
   console.log(`    ${runDir}\n`);
 
-  runInherited(
-    binary,
-    [
-      // NO HYPHEN. The name becomes the capability mount `kit.<name>`, and a
-      // hyphen there is rejected as an invalid argument — the mount fails
-      // about five seconds in with `capnweb=-1` and a message that says
-      // nothing about names. The shell script this replaced used `mac-$STAMP`
-      // and had never once connected.
-      "--name",
-      `mac${stamp}`,
-      "--stream-path",
-      setup.streamPath,
-      ...driverArgs(options, minutes, options.openMic === true),
-      ...(options.pretendSpeaker === undefined
-        ? []
-        : ["--pretend-speaker", options.pretendSpeaker]),
-      "--speaker-wav",
-      playback,
-      "--mic-record",
-      micRecord,
-      "--report-json",
-      reportJson,
-    ],
-    {
-      ...process.env,
-      // These three names are the binary's contract, not ours: cli_options.c
-      // reads exactly these. Inventing friendlier ones makes the CLI exit
-      // demanding a --project-id nobody omitted, which is precisely how this
-      // command failed the first time it was written.
-      ITERATE_OS_BASE_URL: baseUrl,
-      ITERATE_PROJECT_API_KEY: ingressKey,
-      ITERATE_PROJECT_ID: project,
-    },
-  );
+  /* The recordings are the evidence of a bad run, so they are linked even
+   * when the CLI exits non-zero — that is when they matter most. */
+  let exit: unknown;
+  try {
+    runInherited(
+      binary,
+      [
+        // NO HYPHEN. The name becomes the capability mount `kit.<name>`, and a
+        // hyphen there is rejected as an invalid argument — the mount fails
+        // about five seconds in with `capnweb=-1` and a message that says
+        // nothing about names. The shell script this replaced used `mac-$STAMP`
+        // and had never once connected.
+        "--name",
+        `mac${stamp}`,
+        "--stream-path",
+        setup.streamPath,
+        ...driverArgs(options, minutes),
+        ...(!options.pretendSpeaker ? [] : ["--pretend-speaker", options.pretendSpeaker]),
+        "--speaker-wav",
+        playback,
+        "--mic-record",
+        micRecord,
+        // The CLI records the room itself, after its audio units are up (see
+        // cli_main_start_room_recorder); it only has a speaker to hear when live.
+        ...(!options.pretendSpeaker ? ["--room-wav", room] : []),
+        "--report-json",
+        reportJson,
+      ],
+      {
+        ...process.env,
+        // These three names are the binary's contract, not ours: cli_options.c
+        // reads exactly these. Inventing friendlier ones makes the CLI exit
+        // demanding a --project-id nobody omitted, which is precisely how this
+        // command failed the first time it was written.
+        ITERATE_OS_BASE_URL: baseUrl,
+        ITERATE_PROJECT_API_KEY: ingressKey,
+        ITERATE_PROJECT_ID: project,
+      },
+    );
+  } catch (error) {
+    exit = error;
+  }
 
-  reportSpeakerContinuity(reportJson);
+  if (fs.existsSync(reportJson)) reportSpeakerContinuity(reportJson);
+  reportRecordings(runDir, micRecord, playback, room);
+  if (exit !== undefined) throw exit;
+}
+
+/**
+ * The run's audio, as links. Three witnesses, each on its own clock:
+ *
+ * - microphone: what the model heard — the echo-cancelled capture.
+ * - speaker: what CoreAudio was handed, byte for byte on its own clock,
+ *   silence and holes included (the render tap in darwin_audio_output.c).
+ *   A hole in playback is a hole in this file; the playout's own record
+ *   could never show one, because concealment plays nothing.
+ * - room: what a person in the room heard — the default input recorded by
+ *   sox, a child the CLI starts once its audio units are up (a recorder
+ *   started earlier sees the device change rate under it), so the speaker
+ *   is in it along with the person. This is the independent recording: downstream
+ *   of everything, CoreAudio and the voice-processing unit included.
+ *
+ * Then the microphone and the speaker overlaid (mic left, speaker right, so
+ * a hole in the answer sits next to what the room was doing) and a mono mix.
+ * sox does the mixing when installed; without it the raw files are still
+ * linked. All three start within a moment of the audio units' start.
+ */
+function reportRecordings(runDir: string, micRecord: string, playback: string, room: string): void {
+  const link = (file: string) => `file://${file}`;
+  const durationSeconds = (file: string): string => {
+    if (!fs.existsSync(file)) return "missing";
+    const header = Buffer.alloc(44);
+    const fd = fs.openSync(file, "r");
+    try {
+      fs.readSync(fd, header, 0, 44, 0);
+    } finally {
+      fs.closeSync(fd);
+    }
+    /* Canonical 44-byte PCM WAV header: byte rate at 28, data size at 40. */
+    const byteRate = header.readUInt32LE(28);
+    const dataBytes = fs.statSync(file).size - 44;
+    return byteRate > 0 ? (dataBytes / byteRate).toFixed(1) : "?";
+  };
+  console.log(`\n  RECORDINGS`);
+  console.log(
+    `    microphone   ${link(micRecord)}  (${durationSeconds(micRecord)} s, echo-cancelled: what the model heard)`,
+  );
+  console.log(
+    `    speaker      ${link(playback)}  (${durationSeconds(playback)} s, what CoreAudio was handed, holes included)`,
+  );
+  if (fs.existsSync(room)) {
+    console.log(
+      `    room         ${link(room)}  (${durationSeconds(room)} s, recorded by sox: what a person heard)`,
+    );
+  }
+  if (!fs.existsSync(micRecord) || !fs.existsSync(playback)) return;
+  const sox = spawnSync("sox", ["--version"], { stdio: "ignore" });
+  if (sox.status !== 0) {
+    console.log(`    (install sox for the overlaid and mixed versions)`);
+    return;
+  }
+  const overlay = path.join(runDir, "overlay-mic-left-speaker-right.wav");
+  const mix = path.join(runDir, "mix.wav");
+  /* -M merges channels (mic → left, speaker → right); -m sums them. Both
+   * pad the shorter input with silence to the longer one's length. */
+  const merged = spawnSync("sox", ["-M", micRecord, playback, overlay], { stdio: "ignore" });
+  const mixed = spawnSync("sox", ["-m", micRecord, playback, mix], { stdio: "ignore" });
+  if (merged.status === 0)
+    console.log(`    overlaid     ${link(overlay)}  (mic left, speaker right)`);
+  if (mixed.status === 0) console.log(`    mixed        ${link(mix)}`);
 }
 
 /**
@@ -534,92 +522,6 @@ function reportSpeakerContinuity(reportJson: string): void {
   }
 }
 
-/** The slice of a `voice-agent/configured` event this guard reads. */
-interface ConfiguredEventLike {
-  offset: number;
-  payload?: { clientTakesTurns?: boolean };
-}
-
-/**
- * THE TURN POSTURE IS PART OF THE HARDWARE, NOT OF THE RUN.
- *
- * `clientTakesTurns` on the certificate must match what the physical client
- * does: an open-mic board on a clientTakesTurns stream is never told its turn
- * ended and the call goes silent; a push-to-talk client on an open-mic stream
- * double-commits. Setup re-appends `configured` on every run, so a reinstall
- * that forgets `--open-mic` silently flips a board stream's posture — which
- * muted two boards for hours on 2026-08-20. So: if the stream already has a
- * certificate and the posture would CHANGE, refuse loudly, naming both
- * postures and the stream, unless `--flip-turn-posture` says it is on
- * purpose. A stream with no `configured` yet is a fresh install and passes.
- */
-export async function refuseSilentPostureFlip(
-  itx: unknown,
-  streamPath: string,
-  args: { intendedClientTakesTurns: boolean; flipTurnPosture: boolean },
-): Promise<void> {
-  const streams = (
-    itx as {
-      streams: {
-        get(path: string): {
-          getEvents(input: {
-            afterOffset: number;
-            eventTypes: string[];
-            limit: number;
-          }): Promise<ConfiguredEventLike[] | null>;
-        };
-      };
-    }
-  ).streams;
-  const stream = streams.get(streamPath);
-  let latest: ConfiguredEventLike | null = null;
-  try {
-    /* Filtered to `configured` only, so even a long-lived board stream is a
-     * page or two — and paged anyway, because "surely under 500" is how
-     * guards rot. */
-    let afterOffset = 0;
-    for (;;) {
-      const page =
-        (await stream.getEvents({
-          afterOffset,
-          eventTypes: ["events.iterate.com/voice-agent/configured"],
-          limit: 500,
-        })) ?? [];
-      if (page.length === 0) break;
-      latest = page[page.length - 1]!;
-      afterOffset = latest.offset;
-      if (page.length < 500) break;
-    }
-  } finally {
-    disposeIgnoredRpcResult(stream);
-  }
-  if (latest === null) return; /* fresh stream: nothing to preserve */
-  const current = latest.payload?.clientTakesTurns ?? false;
-  if (current === args.intendedClientTakesTurns) return;
-  if (args.flipTurnPosture) {
-    console.log(
-      `flipping turn posture of ${streamPath}: ${postureName(current)} -> ` +
-        `${postureName(args.intendedClientTakesTurns)} (--flip-turn-posture)`,
-    );
-    return;
-  }
-  throw new Error(
-    `refusing to reinstall ${streamPath}: its current certificate says ` +
-      `${postureName(current)}, and this install would write ` +
-      `${postureName(args.intendedClientTakesTurns)}. A silent posture flip mutes the ` +
-      `client that lives on this stream. Either match the stream (` +
-      `${current ? "drop" : "pass"} --open-mic), or pass --flip-turn-posture to ` +
-      `change the posture on purpose.`,
-  );
-}
-
-/** One posture, named the way the certificate and the failure both read. */
-function postureName(clientTakesTurns: boolean): string {
-  return clientTakesTurns
-    ? "clientTakesTurns=true (push-to-talk: the client segments turns)"
-    : "clientTakesTurns=false (open mic: server VAD owns the turns)";
-}
-
 /** Wait until the guest answers, retrying a cold build; re-throw the last error verbatim. */
 async function waitForVoiceAgent(
   voiceAgent: DynamicWorkerCapability<VoiceAgentSetup>,
@@ -641,7 +543,7 @@ async function waitForVoiceAgent(
 }
 
 /**
- * Make sure the project can reach the provider, using the key from the
+ * Make sure the project can reach OpenAI, using the key from the
  * Doppler config this command is already running inside.
  *
  * The config-repo worker deliberately never creates a credential — it only
@@ -653,20 +555,11 @@ async function waitForVoiceAgent(
  *
  * Existing material is LEFT ALONE. Material is write-only and not
  * comparable, so a "create" over a live secret cannot check whether it
- * matches; silently rotating the provider key of a running project because
+ * matches; silently rotating the OpenAI key of a running project because
  * somebody ran a voice command would be a genuinely bad surprise.
  */
-export async function ensureXaiSecret(itx: unknown): Promise<string> {
-  return await ensureProviderSecret(itx, {
-    path: XAI_SECRET,
-    envNames: [XAI_ENV],
-    egress: XAI_EGRESS,
-  });
-}
-
-/** The OpenAI twin of the xAI secret, for the voice provider comparison. */
 export async function ensureOpenaiSecret(itx: unknown): Promise<string> {
-  return await ensureProviderSecret(itx, {
+  return await ensureOpenaiProjectSecret(itx, {
     path: "/secrets/openai",
     envNames: ["OPENAI_API_KEY", "APP_CONFIG_OPENAI_API_KEY"],
     egress: ["https://api.openai.com"],
@@ -674,17 +567,22 @@ export async function ensureOpenaiSecret(itx: unknown): Promise<string> {
 }
 
 /** The subset of the secret capability this command uses. */
-interface XaiSecret {
+interface OpenaiProjectSecret {
   __describe(): Promise<{ created?: boolean; hasMaterial?: boolean }>;
   create(input: { egress: { urls: string[] }; material: string }): Promise<unknown>;
   update(input: { material: string }): Promise<unknown>;
 }
 
-async function ensureProviderSecret(
+async function ensureOpenaiProjectSecret(
   itx: unknown,
   args: { path: string; envNames: string[]; egress: string[] },
 ): Promise<string> {
-  const secret = (itx as { secrets: { get(path: string): XaiSecret } }).secrets.get(args.path);
+  /* The project handle arrives untyped (the generated client type lives in
+   * apps/os); the assertion spells exactly the one member this command uses,
+   * so a wrong assertion fails loudly at the RPC boundary. */
+  const secret = (itx as { secrets: { get(path: string): OpenaiProjectSecret } }).secrets.get(
+    args.path,
+  );
   try {
     const described = await withRpcResult(secret.__describe(), ({ created, hasMaterial }) => ({
       created,
@@ -751,19 +649,11 @@ export function resolveKitDir(explicit?: string): string {
  * report would describe a conversation neither of them had — so choosing one
  * is a branch rather than a set of flags that happen not to collide.
  */
-export function driverArgs(
-  options: TalkOptions,
-  minutes: number,
-  /** Attended open mic: the C streams continuously and the server's VAD owns
-   * the turns. Off, the space bar owns them. Must match the stream's
-   * certificate, which is why talk passes its own --open-mic here. */
-  openMic = false,
-): string[] {
+export function driverArgs(options: TalkOptions, minutes: number): string[] {
   if (options.converse === undefined) {
     return [
       ...(options.pretendSpeaker === undefined ? ["--live-audio"] : []),
       "--live-mic",
-      openMic ? "--open-mic" : "--push-to-talk",
       "--minutes",
       String(minutes),
     ];
@@ -781,10 +671,16 @@ export function driverArgs(
     "--utterance-dir",
     options.utteranceDir,
   ];
-  if (options.colleagueEvery !== undefined) {
-    args.push("--colleague-every", String(options.colleagueEvery));
-  }
   return args;
+}
+
+/** This checkout's copy of the facet's source, keyed as the installer wants it. */
+function readVoiceAgentSource(): Record<(typeof VOICE_AGENT_SOURCE_FILES)[number], string> {
+  const here = fileURLToPath(new URL(".", import.meta.url));
+  const src = path.resolve(here, "../../../../packages/voice-agent/src");
+  return Object.fromEntries(
+    VOICE_AGENT_SOURCE_FILES.map((file) => [file, fs.readFileSync(path.join(src, file), "utf8")]),
+  ) as Record<(typeof VOICE_AGENT_SOURCE_FILES)[number], string>;
 }
 
 /** Incrementally build the host CLI from the current source tree. */
@@ -836,7 +732,7 @@ export function voicelabRunsDir(): string {
  * Run with the terminal attached, and report what happened verbatim.
  *
  * `stdio: "inherit"` is load-bearing rather than a convenience: the C puts the
- * terminal into raw mode for hold-to-talk and cannot do that through a pipe.
+ * terminal into raw mode for its local call controls and cannot do that through a pipe.
  */
 export function runInherited(command: string, args: string[], env = process.env): void {
   const result = spawnSync(command, args, { env, stdio: "inherit" });
