@@ -4,7 +4,7 @@ import { z } from "zod";
 import { useItx } from "../-itx.tsx";
 import { useLiveState } from "../../client/react.tsx";
 import { ACCOUNT_PROCESSOR_SOURCE } from "../../generated/account-processor-source.ts";
-import { AccountView } from "../../account/contract.ts";
+import { AccountContract, AccountView } from "../../account/contract.ts";
 
 export const Route = createFileRoute("/_auth/sessions")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -17,11 +17,7 @@ export const Route = createFileRoute("/_auth/sessions")({
     await context.api.user.processors.enable("account", {
       source: ACCOUNT_PROCESSOR_SOURCE,
       className: "AccountDurableObject",
-      consumes: [
-        "events.iterate.com/account/authenticated",
-        "events.iterate.com/account/token-create-requested",
-        "events.iterate.com/account/token-revoked",
-      ],
+      consumes: [...AccountContract.consumes],
     });
     return await context.api.grants.list(deps.cursor);
   },

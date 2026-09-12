@@ -8,11 +8,7 @@
 // `itx.builtins.rpcStubs`), and the reduce as the DO runs it — the rules are `core` state, reduced
 // from the log.
 import { describe, expect, test } from "vitest";
-import {
-  CoreContract,
-  reduceCoreEvent,
-  type ItxExpressionRewriteRule,
-} from "../stream/core-processor.ts";
+import { CoreContract, reduceCoreEvent } from "../stream/core-processor.ts";
 import type { StreamEvent } from "../stream/processor.ts";
 import { memoryStream } from "../stream/test-support.ts";
 import {
@@ -24,6 +20,7 @@ import {
 } from "./expression.ts";
 import {
   ItxExpressionResolver,
+  type ItxExpressionRewriteRule,
   matchItxExpressionPrefix,
   resolveItxExpression,
   rewriteRuleConfiguredEvent,

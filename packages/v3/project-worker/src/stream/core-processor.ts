@@ -39,7 +39,6 @@ import {
 import { jsonEqual } from "../lib.ts";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "./processor.ts";
 
-export type { ItxExpressionRewriteRule } from "../context/itx-expression-rewriting.ts";
 
 /** A hosting spec, read off a RESOLVED target. */
 export type HostingFacetSpec = {

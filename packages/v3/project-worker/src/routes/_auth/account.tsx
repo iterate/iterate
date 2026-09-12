@@ -11,7 +11,7 @@ import { z } from "zod";
 import { useLiveState } from "../../client/react.tsx";
 import { useItx } from "../-itx.tsx";
 import { ACCOUNT_PROCESSOR_SOURCE } from "../../generated/account-processor-source.ts";
-import { AccountView } from "../../account/contract.ts";
+import { AccountContract, AccountView } from "../../account/contract.ts";
 
 export const Route = createFileRoute("/_auth/account")({
   // Host the account processor on the user's own context before the page reads its live view. The
@@ -21,11 +21,7 @@ export const Route = createFileRoute("/_auth/account")({
     await context.api.user.processors.enable("account", {
       source: ACCOUNT_PROCESSOR_SOURCE,
       className: "AccountDurableObject",
-      consumes: [
-        "events.iterate.com/account/authenticated",
-        "events.iterate.com/account/token-create-requested",
-        "events.iterate.com/account/token-revoked",
-      ],
+      consumes: [...AccountContract.consumes],
     });
   },
   component: AccountLivePage,

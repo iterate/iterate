@@ -1,7 +1,7 @@
 // Executable spec for the expression codec — two directions over one table.
 import { describe, expect, test, it } from "vitest";
 import { RpcStub, RpcTarget } from "capnweb";
-import type { ItxExpressionRewriteRule } from "../stream/core-processor.ts";
+import type { ItxExpressionRewriteRule } from "./itx-expression-rewriting.ts";
 import {
   normalizedItxExpression,
   parse,

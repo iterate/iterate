@@ -29,7 +29,6 @@ import {
   CoreContract,
   facetSpecFromHostingTarget,
   type CoreState,
-  type Subscription,
   subscriptionConfiguredEvent,
 } from "./stream/core-processor.ts";
 import { codedError, errorCode, reportIssue, withTimeout } from "./lib.ts";
@@ -92,10 +91,6 @@ const IDLE_QUIESCE_AFTER_MS = 60_000;
 /** How long one facet call may take before the facet is aborted (a call that never answers would
  *  hold the quiesce, and with it this actor, forever). */
 const FACET_CALL_WATCHDOG_MS = 60_000;
-
-/** The core reduce's facet-shaped address (`itx.facets.get('core')`) — always on, never deletable,
- *  and reserved as a subscription name. */
-const CORE_SLUG = CoreContract.slug;
 
 /** The bindings THE DO reads (wrangler.jsonc): the DO namespace, the Worker Loader, the kv namespaces,
  *  Workers AI, Artifacts — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
@@ -314,17 +309,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     committedEvents: StreamEvent[],
     subscriptionsBeforeCommit: CoreState["subscriptions"],
   ): void {
-    // M1: the marker, not the (source-less) target, says which facet a row hosts.
-    const hostedFacetName = (row: Subscription): string | undefined => row.hostedFacet?.name;
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/stream/subscription-configured") continue;
       const { name, target } = event.payload as { name: string; target: string | null };
       const removedRow = target === null ? subscriptionsBeforeCommit[name] : undefined;
-      const facetName = removedRow && hostedFacetName(removedRow);
+      // M1: the marker, not the (source-less) target, says which facet a row hosts.
+      const facetName = removedRow?.hostedFacet?.name;
       if (!facetName) continue;
       // Another row still hosts it (a mirror, an audit): the facet is theirs now, not gone.
       const stillHosted = Object.values(this.#stream.coreReducedState.subscriptions).some(
-        (row) => hostedFacetName(row) === facetName,
+        (row) => row.hostedFacet?.name === facetName,
       );
       if (!stillHosted) this.#deleteFacet(facetName);
     }
@@ -599,7 +593,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     if (itxExpressionSteps.length === 0) throw new Error(`facet: name a method`);
     // The core reduce answers at its facet-shaped address with a synthesized view — it is not a
     // facet, pins nothing, needs no watchdog, and can never be hosted.
-    if (name === CORE_SLUG) {
+    if (name === CoreContract.slug) {
       if (spec) throw new Error(`"${name}" is the core reduce — never a facet name`);
       return (
         await walkSteps(
@@ -769,7 +763,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** Delete a facet, storage included (there is no delete verb: a removed hosting row ends here). A
    *  re-load into the same name is a clean rebuild, never a resume from orphaned state. */
   #deleteFacet(name: string): void {
-    if (name === CORE_SLUG)
+    if (name === CoreContract.slug)
       throw new Error(`"${name}" is the core reduce — always on, never a facet`);
     this.ctx.facets.delete(name);
     this.ctx.storage.kv.delete(`facet:${name}`);
