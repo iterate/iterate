@@ -14,14 +14,12 @@ static enum iterate_kit_status cli_device_controls_handle(
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   switch ((enum iterate_kit_device_event_type)event->type) {
-    case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED:
+    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
       controls->runtime->wants_talk = true;
       return ITERATE_KIT_OK;
-    case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED:
+    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED:
       controls->runtime->wants_talk = false;
       return ITERATE_KIT_OK;
-    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
-    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED:
     case ITERATE_KIT_DEVICE_EVENT_TYPE_COUNT:
       return ITERATE_KIT_INVALID_ARGUMENT;
   }
@@ -47,18 +45,7 @@ enum iterate_kit_status cli_device_controls_init(
     },
   };
   status = iterate_kit_device_event_queue_init(&controls->events, &options);
-  if (status != ITERATE_KIT_OK) return status;
-  return iterate_kit_push_to_talk_init(
-      &controls->push_to_talk, &controls->events);
-}
-
-struct iterate_kit_module cli_device_controls_module(
-    struct cli_device_controls *controls)
-{
-  if (controls == NULL) {
-    return (struct iterate_kit_module){0};
-  }
-  return iterate_kit_push_to_talk_module(&controls->push_to_talk);
+  return status;
 }
 
 enum iterate_kit_status cli_device_controls_request_talk(
@@ -70,8 +57,8 @@ enum iterate_kit_status cli_device_controls_request_talk(
   return iterate_kit_device_event_publish(
       &controls->events,
       active
-          ? ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED
-          : ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED,
+          ? ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED
+          : ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED,
       source);
 }
 

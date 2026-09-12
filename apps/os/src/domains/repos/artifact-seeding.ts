@@ -1,5 +1,6 @@
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit } from "@cloudflare/shell/git";
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
 import { readCheckoutFiles, repoContentHash } from "./checkout-files.ts";
 import { stripArtifactTokenExpiry } from "./artifact-creation.ts";
@@ -17,8 +18,16 @@ const REPO_DIR = "/repo";
 
 export async function artifactWriteToken(artifacts: Artifacts, name: string): Promise<string> {
   const repo = await artifacts.get(name);
-  const { plaintext } = await repo.createToken("write", REPO_WRITE_TOKEN_TTL_SECONDS);
-  return stripArtifactTokenExpiry(plaintext);
+  try {
+    const token = await repo.createToken("write", REPO_WRITE_TOKEN_TTL_SECONDS);
+    try {
+      return stripArtifactTokenExpiry(token.plaintext);
+    } finally {
+      disposeIgnoredRpcResult(token);
+    }
+  } finally {
+    disposeIgnoredRpcResult(repo);
+  }
 }
 
 /**

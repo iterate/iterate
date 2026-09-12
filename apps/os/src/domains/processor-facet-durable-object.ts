@@ -603,26 +603,6 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
               truncated: result.truncated,
             };
       },
-      // Oversized script results spill into the agent's OWN workspace
-      // directory (/workspace, private scratch — never
-      // committable), so the model can page through the file instead of
-      // blowing its context window.
-      writeWorkspaceFile: async ({
-        content,
-        path: filePath,
-      }: {
-        content: string;
-        path: string;
-      }) => {
-        const absolutePath = `/workspace/${filePath}`;
-        await this.env.WORKSPACE_V2.getByName(
-          DurableObjectNameCodec.stringify({
-            path,
-            projectId,
-          }),
-        ).writeFile(absolutePath, content);
-        return { absolutePath };
-      },
     };
     // Registered WITH recovery: LLM turns are consequential `runInBackground`
     // work (stream-committed requested/started obligations whose OUTCOME

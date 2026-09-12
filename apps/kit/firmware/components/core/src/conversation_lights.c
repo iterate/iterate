@@ -60,7 +60,7 @@ static void render_network(
    * THE LADDER, NOT THE SIGNAL. See `enum iterate_kit_reach`: three bars of
    * Wi-Fi next to a board that cannot place a call is the exact confusion
    * these pixels used to create. One green means /api, two means a stream,
-   * three means a live provider session.
+   * three means a live GPT-Live session.
    *
    * Rung zero is amber rather than dark: Wi-Fi is up and the device still
    * cannot be talked to, which is a state worth showing rather than one to
@@ -107,7 +107,7 @@ static void render_audio(
   /*
    * LISTENING IS RENDERED BEFORE ANY OF THIS, because it starts before the
    * call does. A press opens the microphone and queues frames while the stream
-   * and the provider are still being reached, and the person doing the
+   * and GPT-Live are still being reached, and the person doing the
    * pressing has to be able to see that they are already being heard —
    * otherwise the only honest thing to do would be to tell them to wait.
    */
@@ -129,8 +129,7 @@ static void render_audio(
 
   const uint8_t speaker_level = pcm_peak_level(state->speaker_peak);
   /*
-   * In manual-PTT mode both sides are intentionally silent between turns. One
-   * dim blue pixel means the call's media lane is ready; without it a valid
+   * One dim blue pixel means the call's media lane is ready; without it a valid
    * connected call and a call with no playable return path are visually
    * identical. Speech replaces the baseline with the 1--3 pixel peak meter.
    */
@@ -188,6 +187,13 @@ void iterate_kit_conversation_lights_render(
       0,
       sizeof(*pixels) * ITERATE_KIT_CONVERSATION_LIGHT_COUNT);
   if (state == NULL) return;
+
+  if (state->microphone_muted && !state->media_failed) {
+    for (uint8_t index = 0U; index < ITERATE_KIT_CONVERSATION_LIGHT_COUNT; ++index) {
+      pixels[index] = (struct iterate_kit_rgb8){8U, 0U, 0U};
+    }
+    return;
+  }
 
   if (state->restart_armed) {
     /* Whole-output magenta intentionally supersedes the sector grammar. */

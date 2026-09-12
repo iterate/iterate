@@ -1442,16 +1442,8 @@ describe("AgentProcessor script execution", () => {
     expect(h.llm.calls).toHaveLength(0);
   });
 
-  it("spills an oversized script result to a workspace file and mentions it; small results stay inline", async () => {
-    const written: { path: string; content: string }[] = [];
-    const h = makeAgentHarness(undefined, {
-      // The host dep writes relative to the agent's own workspace directory
-      // and answers with the fully-qualified path it wrote.
-      writeWorkspaceFile: async (input) => {
-        written.push(input);
-        return { absolutePath: `/workspace/${input.path}` };
-      },
-    });
+  it("renders an oversized raw result as a bounded preview with a durable-result recipe", async () => {
+    const h = makeAgentHarness();
     await h.play(
       [
         "append",
@@ -1477,79 +1469,17 @@ describe("AgentProcessor script execution", () => {
       },
     ]);
 
-    // ONE write: the spill file itself, at a workspace-relative path under
-    // script-results/ (private scratch — no .gitignore seeding needed).
-    expect(written).toMatchObject([
-      {
-        path: expect.stringMatching(/^script-results\/agent-output-\d+\.txt$/),
-        content: bigText,
-      },
-    ]);
-    const rendered = conversationMessages(h.state()).find((item) =>
+    const renderedResults = conversationMessages(h.state()).filter((item) =>
       item.payload.content.startsWith("Your script returned"),
     );
-    // The notice names exactly the fully-qualified path the dep answered with.
-    expect(rendered!.payload.content).toContain(
-      `saved in your workspace at "/workspace/${written[0]!.path}"`,
-    );
+    expect(renderedResults).toHaveLength(1);
+    const rendered = renderedResults[0]!;
     // Raw string result: no json fence label, no JSON escaping.
-    expect(rendered!.payload.content).not.toContain("```json");
-
-    // A small result later does not spill. (30s, not more: the follow-up
-    // attempt dials early in this window and a manual-respond attempt idle
-    // 45s+ would trip the progress watchdog.)
-    const writesBefore = written.length;
-    await h.play(["advanceTime", 30_000], () =>
-      h.llm.respond("```ts\nasync (itx) => itx.small()\n```"),
-    );
-    const secondExecution = h.events("events.iterate.com/capability-host/script-run-requested")[1]!
-      .payload.executionId;
-    await h.play([
-      "append",
-      {
-        type: "events.iterate.com/capability-host/script-run-settled",
-        payload: {
-          executionId: secondExecution,
-          settlement: { status: "succeeded", result: "ok" },
-        },
-      },
-    ]);
-    expect(written.length).toBe(writesBefore);
-  });
-
-  it("falls back to inline truncation when the workspace spill fails", async () => {
-    const h = makeAgentHarness(undefined, {
-      writeWorkspaceFile: async () => {
-        throw new Error("workspace unavailable");
-      },
-    });
-    await h.play(
-      [
-        "append",
-        ...NEW_AGENT_EVENTS,
-        {
-          type: "events.iterate.com/agent/configured",
-          payload: { config: { scriptResultHistoryLimit: 50 } },
-        },
-        userMessage("fetch"),
-      ],
-      ["advanceTime", 10_000],
-      () => h.llm.respond("```ts\nasync (itx) => itx.big()\n```"),
-    );
-    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
-      .payload.executionId;
-    await h.play([
-      "append",
-      {
-        type: "events.iterate.com/capability-host/script-run-settled",
-        payload: { executionId, settlement: { status: "succeeded", result: "y".repeat(200) } },
-      },
-    ]);
-    const rendered = conversationMessages(h.state()).find((item) =>
-      item.payload.content.startsWith("Your script returned"),
-    );
-    expect(rendered!.payload.content).toContain("truncated");
-    expect(rendered!.payload.content).not.toContain("saved in your workspace");
+    expect(rendered.payload.content).not.toContain("```json");
+    expect(rendered.payload.content).toContain(bigText.slice(0, 100));
+    expect(rendered.payload.content).not.toContain(bigText.slice(0, 101));
+    expect(rendered.payload.content).toContain("results[0].data");
+    expect(rendered.payload.content).not.toContain("workspace");
   });
 
   it('renders whole minutes for near-minute script durations — never "1m 60s"', async () => {
@@ -1661,11 +1591,7 @@ describe("AgentProcessor script execution", () => {
   });
 
   it("an oversized result's render points at the preamble's typed loader instead of .data", async () => {
-    const h = makeAgentHarness(undefined, {
-      writeWorkspaceFile: async (input) => ({
-        absolutePath: `/workspace/${input.path}`,
-      }),
-    });
+    const h = makeAgentHarness();
     await h.play(
       [
         "append",
@@ -1699,6 +1625,7 @@ describe("AgentProcessor script execution", () => {
     // The paging recipe itself uses the preamble loader, not a readFile call.
     expect(rendered!.payload.content).toContain("await results[0].load(itx)");
     expect(rendered!.payload.content).not.toContain("await itx.workspace.readFile(");
+    expect(rendered!.payload.content).not.toContain("workspace");
   });
 
   it("transcribes preamble changes as developer context without triggering a turn", async () => {
@@ -1740,14 +1667,8 @@ describe("AgentProcessor script execution", () => {
     expect(h.llm.calls.length).toBe(callsBefore);
   });
 
-  it("spills an object result as pretty-printed JSON with a loader-first recipe", async () => {
-    const written: { path: string; content: string }[] = [];
-    const h = makeAgentHarness(undefined, {
-      writeWorkspaceFile: async (input) => {
-        written.push(input);
-        return { absolutePath: `/workspace/${input.path}` };
-      },
-    });
+  it("renders an oversized object with a bounded JSON preview and durable-result recipe", async () => {
+    const h = makeAgentHarness();
     await h.play(
       [
         "append",
@@ -1773,46 +1694,30 @@ describe("AgentProcessor script execution", () => {
       },
     ]);
 
-    // The full result spills as pretty-printed .json (strings spill as .txt).
-    const spilled = JSON.stringify(result, null, 2);
-    expect(written).toMatchObject([
-      {
-        path: expect.stringMatching(/^script-results\/agent-output-\d+\.json$/),
-        content: spilled,
-      },
-    ]);
-    // The rendered item: a bounded preview plus the paste-ready recipe. The
-    // recipe leads with the preamble loader (a competing readFile snippet
-    // would win over a footnote); the workspace path stays as a pointer.
-    const rendered = conversationMessages(h.state()).find((item) =>
+    const rendered = JSON.stringify(result, null, 2);
+    // The rendered item has a bounded preview and a paste-ready durable-result
+    // recipe. This result still fits in the preamble's inline data member.
+    const renderedContext = conversationMessages(h.state()).find((item) =>
       item.payload.content.startsWith("Your script returned"),
     );
-    expect(rendered!.payload.content).toContain(
-      `saved in your workspace at "/workspace/${written[0]!.path}"`,
+    expect(renderedContext!.payload.content).toContain("const data = results[0].data;");
+    expect(renderedContext!.payload.content).not.toContain("results[0].load(");
+    expect(renderedContext!.payload.content).not.toContain(
+      "JSON.parse(await itx.workspace.readFile(",
     );
-    // Spilled for HISTORY (tiny historyLimit) but small enough to embed in
-    // the preamble: the row has `.data`, not `.load` — the recipe must match.
-    expect(rendered!.payload.content).toContain("const data = results[0].data;");
-    expect(rendered!.payload.content).not.toContain("results[0].load(");
-    expect(rendered!.payload.content).not.toContain("JSON.parse(await itx.workspace.readFile(");
-    expect(rendered!.payload.content).toContain(
-      `Your script returned ${spilled.length.toLocaleString("en-US")} chars of JSON (in 0ms) — over the ~100-char inline limit.`,
+    expect(renderedContext!.payload.content).not.toContain("workspace");
+    expect(renderedContext!.payload.content).toContain(
+      `Your script returned ${rendered.length.toLocaleString("en-US")} chars of JSON (in 0ms) — over the ~100-char inline limit.`,
     );
     // The inferred type block tells the model the shape it cannot see.
-    expect(rendered!.payload.content).toContain("Inferred type:");
-    expect(rendered!.payload.content).toContain("type Result = {");
-    expect(rendered!.payload.content).toContain("items: string");
-    expect(rendered!.payload.content).not.toContain("x".repeat(200)); // preview stays bounded
+    expect(renderedContext!.payload.content).toContain("Inferred type:");
+    expect(renderedContext!.payload.content).toContain("type Result = {");
+    expect(renderedContext!.payload.content).toContain("items: string");
+    expect(renderedContext!.payload.content).not.toContain("x".repeat(200)); // preview stays bounded
   });
 
   it("an oversized structured result renders an inferred type and an array-eliding preview", async () => {
-    const written: { path: string; content: string }[] = [];
-    const h = makeAgentHarness(undefined, {
-      writeWorkspaceFile: async (input) => {
-        written.push(input);
-        return { absolutePath: `/workspace/${input.path}` };
-      },
-    });
+    const h = makeAgentHarness();
     await h.play(
       [
         "append",
@@ -2583,6 +2488,31 @@ describe("AgentProcessor summary", () => {
 // =============================================================================
 
 describe("AgentProcessor compaction", () => {
+  it("replays past large script results in byte-capped pages before answering later context", async () => {
+    const h = makeAgentHarness();
+    const readEvents = vi.spyOn(h.stream, "readEvents");
+    const largeResults: AgentEventInput[] = Array.from({ length: 9 }, (_, index) => ({
+      type: "events.iterate.com/capability-host/script-run-settled",
+      payload: {
+        executionId: `large-review-result-${index}`,
+        settlement: { status: "succeeded", result: "x".repeat(1_000_000) },
+      },
+    }));
+
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, ...largeResults, userMessage("Review the current head.")],
+      ["advanceTime", 10_000],
+    );
+
+    expect(readEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ byteLimit: 8 * 1024 * 1024, limit: 500 }),
+    );
+    expect(h.llm.calls).toHaveLength(1);
+    expect(h.llm.calls[0]!.messages.map((message) => message.content).join("\n")).toContain(
+      "Review the current head.",
+    );
+  });
+
   it("an over-threshold usage report triggers compaction: summary via the report's model, history replaced through the barrier", async () => {
     const h = makeAgentHarness();
     await h.play(
@@ -2883,6 +2813,69 @@ describe("AgentProcessor compaction", () => {
     expect(
       conversationMessages(replay.state()).filter((item) => item.payload.compaction !== undefined),
     ).toHaveLength(1);
+  });
+
+  it("keeps the first compaction when concurrent incarnations summarize one trigger differently", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("First question")],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("First answer"),
+    );
+    const requestOffset = h.events(REQUESTED)[0]!.offset;
+
+    // A second incarnation has caught up before the report. Both therefore
+    // pass the durable-compaction probe, then produce different summaries.
+    const revived = makeAgentHarness({
+      clock: h.clock,
+      stream: h.stream,
+      progress: makeMemoryProgressStore(AgentProcessorContract),
+    });
+    await revived.settle();
+    await h.stream.append({
+      type: "events.iterate.com/agent/token-usage-reported",
+      payload: {
+        llmRequestOffset: requestOffset,
+        model: "compactor-model",
+        maxContextTokens: 1_000,
+        inputTokens: 900,
+        outputTokens: 50,
+      },
+    });
+
+    const firstCatchUp = h.runner().catchUp();
+    const secondCatchUp = revived.runner().catchUp();
+    for (let i = 0; i < 50 && (h.llm.calls.length < 2 || revived.llm.calls.length < 1); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(h.llm.calls).toHaveLength(2);
+    expect(revived.llm.calls).toHaveLength(1);
+
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    let loggedCompactionFailure = false;
+    try {
+      h.llm.respond("First durable summary.");
+      await firstCatchUp;
+      revived.llm.respond("Different revived summary.");
+      await secondCatchUp;
+      await h.settle();
+      await revived.settle();
+    } finally {
+      loggedCompactionFailure = consoleError.mock.calls.some(
+        ([message]) => typeof message === "string" && message.includes("context compaction failed"),
+      );
+      consoleError.mockRestore();
+    }
+
+    const compactions = h.events(CONTEXT_ADDED).filter((event) => event.payload.compaction);
+    expect(compactions).toMatchObject([
+      {
+        idempotencyKey: `agent/compact-context@${h.events("events.iterate.com/agent/token-usage-reported")[0]!.offset}`,
+        payload: { content: expect.stringContaining("First durable summary.") },
+      },
+    ]);
+    expect(compactions).toHaveLength(1);
+    expect(loggedCompactionFailure).toBe(false);
   });
 
   it("an earlier-cutoff summary does not suppress compaction of a later request", async () => {

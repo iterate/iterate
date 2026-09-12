@@ -54,12 +54,27 @@ enum cli_report_status {
  */
 struct cli_report_turn {
   char utterance[CLI_REPORT_UTTERANCE_MAX];
-  bool back_office;
   bool failed;
+  /** The turn stopped progressing before its answer completed and drained. */
+  bool watchdog_stalled;
   uint64_t started_ms;
+  /** First processed microphone frame for this turn, on the local monotonic clock. */
+  uint64_t first_input_capture_ms;
+  /** First successful append accepted by the local stream sender. */
+  uint64_t first_append_ms;
   uint64_t committed_ms;
   uint64_t first_audio_ms;
   uint64_t completed_ms;
+  /** Last 10 ms uplink window whose RMS reached 150 PCM16 units. */
+  uint64_t last_nonquiet_input_ms;
+  /** First nonempty speaker packet accepted from the stream for this turn. */
+  uint64_t first_speaker_packet_ms;
+  /** First nonquiet speaker frame submitted at the real or pretend boundary. */
+  uint64_t first_nonquiet_speaker_played_ms;
+  /** PCM frames queued when the first packet reached shared playout. */
+  uint32_t speaker_queued_at_first_packet_frames;
+  /** PCM frames still queued when first nonquiet output was submitted. */
+  uint32_t speaker_queued_at_first_played_frames;
   uint32_t frames_sent;
   uint32_t frames_received;
   uint32_t frames_played;
@@ -73,12 +88,12 @@ struct cli_report_turn {
 
 /** Run-wide facts that are not per-turn. */
 struct cli_report_summary {
+  /** `real`, `pretend`, or `timeline`: where firstNonquietSpeaker is stamped. */
+  const char *speaker_boundary;
   uint32_t session_restarts;
   uint32_t transport_restarts;
   uint32_t connection_recycles;
   uint32_t calls_lost;
-  uint32_t back_office_sent;
-  uint32_t back_office_heard;
   /** In-progress turns intentionally stopped by the configured run deadline. */
   uint32_t deadline_cancelled_turns;
   /** Payload that completed at the CoreAudio callback/file boundary. */
@@ -90,24 +105,14 @@ struct cli_report_summary {
   /** First output/input platform status; zero means the boundary stayed healthy. */
   int32_t speaker_platform_error;
   int32_t microphone_platform_error;
-  /**
-   * DID THE CALL LOSE ANY OF THE ANSWER? The numbers that can answer it.
-   *
-   * Everything else in this struct measures what happened AFTER a chunk
-   * arrived — whether it decoded, whether the ring had room, whether the
-   * hardware pulled it in time. None of them can see a chunk that never
-   * arrived at all, and for a long conversation that is the question worth
-   * asking. The second voice agent numbers every chunk within a call, so a
-   * hole in the numbering is a lost chunk; the first sends no numbers and
-   * leaves all four of these at zero, which is why the reader has to know
-   * which agent it is reading before "0 gaps" means anything.
-   */
+  /** Chunks the downlink delivered, and the ones whose bytes were unusable. */
   uint32_t spk_frames_received;
-  uint32_t spk_seq_gaps;
-  uint32_t spk_seq_missing;
-  uint32_t spk_seq_regressions;
   uint32_t spk_decode_failures;
 };
+
+/** A drained turn still fails when it has no audio or a confirmed audible gap. */
+bool cli_report_turn_failed(
+    const struct cli_report_turn *turn, bool played_out);
 
 /** Every turn of one run, bounded, with an honest count of what did not fit. */
 struct cli_report {
@@ -131,7 +136,6 @@ void cli_report_reset(struct cli_report *report);
 struct cli_report_turn *cli_report_begin_turn(
     struct cli_report *report,
     const char *utterance,
-    bool back_office,
     uint64_t now);
 
 /** Record one observation of how much audio was queued behind a write. */
@@ -147,6 +151,16 @@ uint64_t cli_report_time_to_first_audio_ms(const struct cli_report_turn *turn);
 
 /** Milliseconds from the commit to the answer finishing; 0 if it never did. */
 uint64_t cli_report_time_to_answer_ms(const struct cli_report_turn *turn);
+
+/** Speech end to first received speaker packet, or zero when unavailable. */
+uint64_t cli_report_speech_end_to_first_packet_ms(const struct cli_report_turn *turn);
+
+/** Speech end to first nonquiet speaker output, or zero when unavailable. */
+uint64_t cli_report_speech_end_to_first_played_ms(const struct cli_report_turn *turn);
+
+/** True only when both locally stamped endpoints make the latency meaningful. */
+bool cli_report_has_speech_end_to_first_packet(const struct cli_report_turn *turn);
+bool cli_report_has_speech_end_to_first_played(const struct cli_report_turn *turn);
 
 /** Write the whole run as JSON. */
 enum cli_report_status cli_report_write(

@@ -12,6 +12,7 @@ import type {
 import {
   idempotencyConflictMessage,
   jsonValuesEqual,
+  MAX_STREAM_EVENT_READ_BYTE_LIMIT,
   sameIdempotentEvent,
   StreamIdMismatchError,
   streamIdMismatchMessage,
@@ -105,6 +106,7 @@ import type { StreamRuntimeDebugState } from "./stream-runtime-state.ts";
 import { retainProcessorWakeResponse } from "./retained-event-callbacks.ts";
 import {
   isDurableObjectLifecycleError,
+  isRetryableDurableObjectAvailabilityError,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./stream-unavailable.ts";
 import {
@@ -666,12 +668,18 @@ class StreamProcessorFacadeRpcTarget extends RpcTarget {
   async snapshot(): Promise<ProcessorSnapshot<unknown>> {
     const facet = await this.#dial();
     await facet.catchUp({ name: this.#name });
-    return await facet.snapshot({ name: this.#name });
+    return detachPlainReadResult(
+      await facet.snapshot({ name: this.#name }),
+      "facet-processor-snapshot",
+    );
   }
 
   async getRuntimeState(): Promise<ProcessorRuntimeState> {
     const facet = await this.#dial();
-    return await facet.getRuntimeState({ name: this.#name });
+    return detachPlainReadResult(
+      await facet.getRuntimeState({ name: this.#name }),
+      "facet-processor-runtime-state",
+    );
   }
 
   /** Offset barrier against the named runner's confirmed fold (self-pulling). */
@@ -746,11 +754,17 @@ class StreamProcessorFacadeRpcTarget extends RpcTarget {
     text: string;
     entries: { key: string; code: string }[];
   } | null> {
-    return await (await this.#dial()).describePreamble();
+    return detachPlainReadResult(
+      await (await this.#dial()).describePreamble(),
+      "facet-processor-describe-preamble",
+    );
   }
 
   async getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }> {
-    return await (await this.#dial()).getScriptResult(executionId);
+    return detachPlainReadResult(
+      await (await this.#dial()).getScriptResult(executionId),
+      "facet-processor-script-result",
+    );
   }
 }
 
@@ -801,12 +815,12 @@ type HostedProcessorReceiver = Extract<
 >;
 
 /**
- * Copy an expression-evaluation result into plain data and release the
- * original. The worker's processor node answers with plain JSON, but the
+ * Copy a processor read result into plain data and release the original.
+ * Hosted processors answer with plain JSON, but the
  * value reaching this DO may be a disposable-augmented RPC result whose
  * lifetime must not leak into the caller's Cap'n Web session.
  */
-function detachExpressionReadResult<T>(value: unknown, operation: string): T {
+function detachPlainReadResult<T>(value: unknown, operation: string): T {
   if (value === null || typeof value !== "object") return value as T;
   const detached: unknown = Array.isArray(value) ? [...value] : { ...value };
   Reflect.deleteProperty(detached as object, Symbol.dispose);
@@ -842,14 +856,14 @@ class ExpressionProcessorFacadeRpcTarget extends RpcTarget {
   }
 
   async snapshot(): Promise<ProcessorSnapshot<unknown>> {
-    return detachExpressionReadResult(
+    return detachPlainReadResult(
       await this.#callProcessorNode(["snapshot"]),
       "expression-processor-snapshot",
     );
   }
 
   async getRuntimeState(): Promise<ProcessorRuntimeState> {
-    return detachExpressionReadResult(
+    return detachPlainReadResult(
       await this.#callProcessorNode(["getRuntimeState"]),
       "expression-processor-runtime-state",
     );
@@ -972,6 +986,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           afterOffset: args.afterOffset,
           beforeOffset: args.beforeOffset,
           limit: args.limit,
+          byteLimit: args.byteLimit,
           includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
@@ -1635,11 +1650,20 @@ export class StreamDurableObject extends DurableObject<Env> {
         } catch (error) {
           const failures = (this.#facetAlarmFailures.get(facet) ?? 0) + 1;
           this.#facetAlarmFailures.set(facet, failures);
-          console.error("facet alarm replay failed; re-arming a bounded retry", {
-            facet,
-            failures,
-            error,
-          });
+          if (isRetryableDurableObjectAvailabilityError(error)) {
+            console.info("facet alarm replay unavailable; re-arming a bounded retry", {
+              facet,
+              failures,
+              error,
+              outcome: "unavailable",
+            });
+          } else {
+            console.error("facet alarm replay failed; re-arming a bounded retry", {
+              facet,
+              failures,
+              error,
+            });
+          }
           // Best effort: if this arming write itself fails, the rejection
           // reaches the alarm handler's await and the platform retry covers it.
           this.#mergeFacetAlarmDesire(
@@ -1729,11 +1753,15 @@ export class StreamDurableObject extends DurableObject<Env> {
   async #capabilityHostState(facet: ProcessorFacetStub): Promise<CapabilityHostFacetState> {
     await facet.catchUp({ name: CapabilityHostProcessorContract.slug });
     const snapshot = await facet.snapshot({ name: CapabilityHostProcessorContract.slug });
-    // Safe: every project-scoped facet composition registers the
-    // CapabilityHostProcessor under its contract slug, so this snapshot's
-    // state is that contract's fold; CapabilityHostFacetState is the narrow
-    // slice of it this wiring reads.
-    return snapshot.state as CapabilityHostFacetState;
+    try {
+      // Safe: every project-scoped facet composition registers the
+      // CapabilityHostProcessor under its contract slug, so this snapshot's
+      // state is that contract's fold; CapabilityHostFacetState is the narrow
+      // slice of it this wiring reads.
+      return snapshot.state as CapabilityHostFacetState;
+    } finally {
+      disposeAcknowledgedRpcResult(snapshot, "capability-host-facet-snapshot");
+    }
   }
 
   /**
@@ -2347,7 +2375,12 @@ export class StreamDurableObject extends DurableObject<Env> {
     const justCommittedEvents = newEvents.map((event) => sizedByOffset.get(event.offset)!);
 
     this.#coreProcessorState = workingState;
-    this.#checkpointCoreProcessorState(newEvents.length);
+    // Ephemeral events change no durable core state (they advance only
+    // `maxOffset`, whose floor is the SQL row above), so they do not count
+    // toward the checkpoint cadence: a voice stream appending sixty
+    // microphone and speaker frames a second otherwise serialized the whole
+    // core state to KV every second for nothing the rebuild could use.
+    this.#checkpointCoreProcessorState(durableEvents.length);
     this.#metrics.ingress.bump(
       Date.now(),
       newEvents.length,
@@ -2384,6 +2417,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     beforeOffset: number;
     eventTypes?: readonly string[];
     limit: number;
+    byteLimit?: number;
     includeEphemeral: boolean;
   }): SizedStreamEvent[] {
     const durableEvents = this.#log.getRangeSized({
@@ -2391,12 +2425,20 @@ export class StreamDurableObject extends DurableObject<Env> {
       beforeOffset: args.beforeOffset,
       eventTypes: args.eventTypes,
       limit: args.limit,
+      byteLimit: args.byteLimit,
     });
     if (!args.includeEphemeral) return durableEvents;
 
+    // A byte-capped durable prefix may stop before a later durable body. Do
+    // not merge a farther ephemeral row into that prefix: callers advance a
+    // single shared offset cursor, so doing so would silently skip the omitted
+    // durable event. The next read starts after this retained durable prefix.
     const ephemeralEvents = this.#ephemeralEvents.getRangeSized({
       afterOffset: args.afterOffset,
-      beforeOffset: args.beforeOffset,
+      beforeOffset:
+        args.byteLimit !== undefined && durableEvents.length > 0
+          ? Math.min(args.beforeOffset, durableEvents.at(-1)!.event.offset + 1)
+          : args.beforeOffset,
       eventTypes: args.eventTypes,
       limit: args.limit,
     });
@@ -2416,6 +2458,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       beforeOffset?: number | null;
       eventTypes?: readonly string[];
       limit?: number;
+      byteLimit?: number;
       includeEphemeral?: boolean;
     } = {},
   ): StreamEvent[] {
@@ -2426,11 +2469,22 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (limit !== undefined && limit > MAX_GET_EVENTS_LIMIT) {
       throw new Error(`getEvents limit must be at most ${MAX_GET_EVENTS_LIMIT}.`);
     }
+    const byteLimit = args.byteLimit;
+    if (byteLimit !== undefined && (!Number.isInteger(byteLimit) || byteLimit <= 0)) {
+      throw new Error("getEvents byteLimit must be a positive integer.");
+    }
+    if (byteLimit !== undefined && byteLimit > MAX_STREAM_EVENT_READ_BYTE_LIMIT) {
+      throw new Error(`getEvents byteLimit must be at most ${MAX_STREAM_EVENT_READ_BYTE_LIMIT}.`);
+    }
+    if (byteLimit !== undefined && args.includeEphemeral === true) {
+      throw new Error("getEvents byteLimit cannot include ephemeral events.");
+    }
     return this.#readEventsSized({
       afterOffset: args.afterOffset ?? 0,
       beforeOffset: args.beforeOffset ?? Number.MAX_SAFE_INTEGER,
       eventTypes: args.eventTypes,
       limit: limit ?? DEFAULT_GET_EVENTS_LIMIT,
+      byteLimit,
       includeEphemeral: args.includeEphemeral === true,
     }).map((entry) => entry.event);
   }
@@ -2446,6 +2500,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       beforeOffset?: number | null;
       eventTypes?: readonly string[];
       limit?: number;
+      byteLimit?: number;
       includeEphemeral?: boolean;
     } = {},
   ): { streamId: string; streamMaxOffset: number; events: StreamEvent[] } {

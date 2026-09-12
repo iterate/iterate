@@ -234,6 +234,77 @@ async function receiverStream() {
 
 afterEach(() => vi.restoreAllMocks());
 
+describe("StreamDurableObject byte-capped reads", () => {
+  it("keeps filtered pages cursor-safe and returns an oversized first event", async () => {
+    const context = durableObjectContext(streamName("/byte-capped-read"));
+    const env = {
+      STREAM: {
+        getByName() {
+          return {
+            async appendCoreEvent(event: StreamEventInput): Promise<StreamEvent> {
+              return {
+                ...event,
+                path: "/",
+                offset: 1,
+                createdAt: "2026-07-21T12:00:00.000Z",
+              } as StreamEvent;
+            },
+          };
+        },
+      },
+    } as unknown as Env;
+    const stream = new StreamDurableObject(context.ctx, env);
+    await context.settle();
+
+    const [first, ignored, second] = stream.append(
+      { type: "example.com/match", payload: { body: "a".repeat(100) } },
+      { type: "example.com/ignored", payload: { body: "b".repeat(100) } },
+      { type: "example.com/match", payload: { body: "c".repeat(100) } },
+    );
+    const byteLimit = new TextEncoder().encode(JSON.stringify(first)).byteLength;
+    const input = {
+      afterOffset: 0,
+      beforeOffset: second.offset + 1,
+      byteLimit,
+      eventTypes: ["example.com/match"],
+      limit: 500,
+    };
+
+    expect(stream.getEvents(input)).toEqual([first]);
+    expect(stream.getEvents({ ...input, afterOffset: first.offset })).toEqual([second]);
+    expect(stream.getEvents({ ...input, afterOffset: second.offset })).toEqual([]);
+    expect(ignored.offset).toBeLessThan(second.offset);
+
+    const [oversized] = stream.append({
+      type: "example.com/match",
+      payload: { body: "d".repeat(1_000) },
+    });
+    expect(
+      stream.getEvents({
+        afterOffset: second.offset,
+        byteLimit: 1,
+        eventTypes: ["example.com/match"],
+      }),
+    ).toEqual([oversized]);
+  });
+
+  it("validates byte caps and rejects ephemeral reads with one", async () => {
+    const context = durableObjectContext(streamName("/byte-capped-validation"));
+    const stream = new StreamDurableObject(context.ctx, {} as Env);
+    await context.settle();
+
+    expect(() => stream.getEvents({ byteLimit: 0 })).toThrow(
+      "byteLimit must be a positive integer",
+    );
+    expect(() => stream.getEvents({ byteLimit: 8 * 1024 * 1024 + 1 })).toThrow(
+      "byteLimit must be at most",
+    );
+    expect(() => stream.getEvents({ byteLimit: 1, includeEphemeral: true })).toThrow(
+      "byteLimit cannot include ephemeral events",
+    );
+  });
+});
+
 describe("StreamDurableObject stream-ID-guarded append", () => {
   it("checks the current lifetime and commits in the same synchronous turn", async () => {
     const context = durableObjectContext(streamName("/guarded-append"));
@@ -581,7 +652,7 @@ describe("StreamDurableObject reconciliation recovery", () => {
     const streamNamespace = {
       getByName(name: string): StreamStub {
         const target = streams.get(name);
-        if (target === undefined) throw new Error(`test stream ${name} does not exist`);
+        if (!target) throw new Error(`test stream ${name} does not exist`);
         return {
           async appendCoreEvent(event) {
             return target.appendCoreEvent(event);
@@ -680,6 +751,80 @@ describe("StreamDurableObject reconciliation recovery", () => {
           },
         }),
       );
+    } finally {
+      receiverContext.close();
+      sourceContext.close();
+    }
+  });
+
+  it("does not let an ephemeral row advance a byte-capped copy cursor past a durable body", async () => {
+    const sourceContext = durableObjectContext(streamName(SOURCE_PATH));
+    const receiverContext = durableObjectContext(streamName(RECEIVING_STREAM_PATH));
+    const streams = new Map<string, StreamDurableObject>();
+    const batches: StreamDeliveryBatch[] = [];
+    const streamNamespace = {
+      getByName(name: string): StreamStub {
+        const target = streams.get(name);
+        if (!target) throw new Error(`test stream ${name} does not exist`);
+        return {
+          async appendCoreEvent(event) {
+            return target.appendCoreEvent(event);
+          },
+          async receiveCopiedEvents(batch) {
+            batches.push(structuredClone(batch));
+            return target.receiveCopiedEvents(batch);
+          },
+        };
+      },
+    };
+    const env = { STREAM: streamNamespace } as unknown as Env;
+    const source = new StreamDurableObject(sourceContext.ctx, env);
+    streams.set(streamName(SOURCE_PATH), source);
+    const receiver = new StreamDurableObject(receiverContext.ctx, env);
+    streams.set(streamName(RECEIVING_STREAM_PATH), receiver);
+    await Promise.all([sourceContext.settle(), receiverContext.settle()]);
+
+    try {
+      const [durable] = source.append({
+        type: MATCHING_EVENT_TYPE,
+        payload: { issue: "x".repeat(2 * 1024 * 1024) },
+      });
+      const [ephemeral] = source.append({
+        type: MATCHING_EVENT_TYPE,
+        payload: { issue: "ephemeral tail" },
+        ephemeral: true,
+      });
+      const configuration = {
+        ...subscriptionConfiguration(),
+        receiver: {
+          action: "copy-to-stream" as const,
+          receivingStreamPath: RECEIVING_STREAM_PATH,
+          delivery: { start: "beginning" as const, onFailingEvent: "halt" as const },
+        },
+      };
+      source.setCopySubscription({ configuration });
+      source.alarm();
+      await Promise.all([sourceContext.settle(), receiverContext.settle()]);
+
+      // The first durable body is larger than the delivery byte cap. The
+      // following ephemeral row must not merge into that shortened read and
+      // advance its source cursor past the durable event.
+      expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).toContain(
+        durable!.offset,
+      );
+      expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).not.toContain(
+        ephemeral!.offset,
+      );
+      expect(
+        receiver
+          .getEvents({ eventTypes: [MATCHING_EVENT_TYPE] })
+          .map((event) => event.source?.copiedFrom?.at(-1)?.offset),
+      ).toContain(durable!.offset);
+      expect(source.runtimeState().runtime.subscriptions[SUBSCRIPTION_NAME]).toMatchObject({
+        confirmedOffset: expect.any(Number),
+        attempt: 0,
+        lastError: null,
+      });
     } finally {
       receiverContext.close();
       sourceContext.close();

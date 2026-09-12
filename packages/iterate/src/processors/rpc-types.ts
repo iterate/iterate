@@ -7,6 +7,9 @@
 import type { StatefulDynamicWorkerRef } from "../itx-api.generated.ts";
 import type { StreamEvent } from "./schemas.ts";
 
+/** Maximum serialized durable-event bytes one Stream read may return. */
+export const MAX_STREAM_EVENT_READ_BYTE_LIMIT = 8 * 1024 * 1024;
+
 /** Source-local identity for one durable subscription that sends matching stream events. */
 export type SubscriptionName = string;
 
@@ -23,6 +26,14 @@ export type StreamEventReadInput = {
   eventTypes?: readonly string[];
   /** Page size, 1-500. Defaults to 500. */
   limit?: number;
+  /**
+   * Maximum serialized durable-event bytes in one page, from 1 through 8 MiB.
+   * It cannot be used with `includeEphemeral`. A shorter nonempty page may
+   * still have more matching events; advance from its last offset until an
+   * empty page confirms the current head. The first matching event is returned
+   * even when it alone exceeds this cap, so the cursor can make progress.
+   */
+  byteLimit?: number;
   /**
    * Include ephemeral events (default false). The Durable Object incarnation
    * keeps their bodies in a bounded memory buffer;

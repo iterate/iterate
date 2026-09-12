@@ -82,6 +82,15 @@ enum iterate_kit_darwin_audio_input_status iterate_kit_darwin_audio_input_open(s
   return ITERATE_KIT_DARWIN_AUDIO_INPUT_OK;
 }
 
+enum iterate_kit_darwin_audio_input_status iterate_kit_darwin_audio_input_open_external(
+    struct iterate_kit_darwin_audio_input *in)
+{
+  if (in == NULL) return ITERATE_KIT_DARWIN_AUDIO_INPUT_ERR_ARG;
+  memset(in, 0, sizeof(*in));
+  atomic_store_explicit(&in->enabled, true, memory_order_release);
+  return ITERATE_KIT_DARWIN_AUDIO_INPUT_OK;
+}
+
 enum iterate_kit_darwin_audio_input_status iterate_kit_darwin_audio_input_push(
     struct iterate_kit_darwin_audio_input *in, const uint8_t *pcm, size_t length)
 {
@@ -127,8 +136,9 @@ enum iterate_kit_darwin_audio_input_status iterate_kit_darwin_audio_input_pop(
 
 void iterate_kit_darwin_audio_input_close(struct iterate_kit_darwin_audio_input *in)
 {
-  if (in == NULL || in->queue == NULL) return;
+  if (in == NULL) return;
   atomic_store_explicit(&in->enabled, false, memory_order_release);
+  if (in->queue == NULL) return;
   {
     const OSStatus stop = AudioQueueStop(in->queue, true);
     if (stop != noErr) iterate_kit_darwin_audio_input_remember_error(in, (int32_t)stop);
