@@ -9,7 +9,7 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import type { ItxExpression } from "../src/context/expression.ts";
-import { subscriptionConfiguredEvent } from "../src/stream/core-processor.ts";
+import { normalizeControlEvent } from "../src/stream/core-processor.ts";
 import { quiesce, stub } from "./support.ts";
 
 const COUNTER_SRC = /* js */ `
@@ -61,10 +61,13 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
   const ctx = "prj_rev_cursorskip";
   const s = stub(ctx);
   await s.append(
-    subscriptionConfiguredEvent({
-      name: "dig",
-      target: ["itx", "workers", ["get", { source: DIGEST_MODULES }], "processEventBatch"],
-      consumes: ["mark"],
+    normalizeControlEvent({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        name: "dig",
+        target: ["itx", "workers", ["get", { source: DIGEST_MODULES }], "processEventBatch"],
+        consumes: ["mark"],
+      },
     }),
   );
   await s.append({ type: "mark" });
@@ -118,10 +121,16 @@ test("enable with a consumes filter: itx.facets.get(name) answers before the fir
   const ctx = "prj_rev_nofacet";
   const s = stub(ctx);
   await s.append(
-    subscriptionConfiguredEvent({
-      name: "c2",
-      target: [...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "c2"), "processEventBatch"],
-      consumes: ["tick"],
+    normalizeControlEvent({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        name: "c2",
+        target: [
+          ...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "c2"),
+          "processEventBatch",
+        ],
+        consumes: ["tick"],
+      },
     }),
   );
   await sleep(300); // onCommit's void #resolve(sub.target) has long finished
@@ -135,13 +144,16 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
   const ctx = "prj_rev_procskip_b";
   const s = stub(ctx);
   await s.append(
-    subscriptionConfiguredEvent({
-      name: "counter",
-      target: [
-        ...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "counter"),
-        "processEventBatch",
-      ],
-      consumes: ["tick", "events.iterate.com/stream/subscription-configured"],
+    normalizeControlEvent({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        name: "counter",
+        target: [
+          ...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "counter"),
+          "processEventBatch",
+        ],
+        consumes: ["tick", "events.iterate.com/stream/subscription-configured"],
+      },
     }),
   );
   await sleep(300); // the configured event is consumed → push → facet materialized, cursor = its offset (durable ground)

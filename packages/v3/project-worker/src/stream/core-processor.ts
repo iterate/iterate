@@ -13,13 +13,13 @@
 // (`reduceCoreEventBatch`), NOT a hosted `StreamProcessor`: owned by the Stream itself and reduced
 // inside every commit, because its readers (the append door, the dispatcher, the delivery loop) are
 // all synchronous. The COMMANDS that append these events live beside the code that reads each slice
-// (context/itx-expression-rewriting.ts for the rules, `subscriptionConfiguredEvent` below for rows). Control is
+// (context/itx-expression-rewriting.ts for the rules, `normalizeControlEvent` below normalizes literal rows). Control is
 // ORDINARY EVENTS: `itx.append({ type: 'events.iterate.com/stream/paused', payload: { reason } })`
 // pauses — so a POLICY processor (a token-bucket breaker, a quota) runs as an ordinary facet and
 // trips the stream by appending `paused`. Core knows nothing about it; e2e/support/sources.ts's
 // BreakerProcessor is that pattern. created/woken come from the DO constructor
 // (Stream.appendCreatedAndWokenEvents); the pause exemptions are Stream.append's.
-//   subscriptions — `subscriptionConfiguredEvent`, THE SUBSCRIPTIONS TABLE's one command (the rows are core state)
+//   subscriptions — a literal `subscription-configured` event, THE SUBSCRIPTIONS TABLE's one command (the rows are core state)
 
 import {
   normalizedItxExpression,
@@ -33,12 +33,12 @@ import {
 import {
   isBuiltInRoot,
   isBuiltInsRooted,
+  normalizeRewriteRuleConfigured,
   resolveItxExpression,
   type ItxExpressionRewriteRule,
 } from "../context/itx-expression-rewriting.ts";
 import { jsonEqual } from "../lib.ts";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "./processor.ts";
-
 
 /** A hosting spec, read off a RESOLVED target. */
 export type HostingFacetSpec = {
@@ -447,13 +447,13 @@ export function reduceCoreEvent(
 /** The `subscription-configured` event for `input.name`. `ifConfiguredAtOffset` (with a null
  *  target) is a handle's undo: the reduce drops the row ONLY while it is still the one configured at
  *  that offset (core-processor.ts). */
-export function subscriptionConfiguredEvent(input: {
+function normalizeSubscriptionConfigured(input: {
   name: string;
   target: ItxExpressionInput | null;
   consumes?: string[];
   afterOffset?: number;
   ifConfiguredAtOffset?: number;
-}): StreamEventInput {
+}): Record<string, unknown> {
   const name = parseSubscriptionName(input.name);
   const { afterOffset } = input;
   if (afterOffset !== undefined && !(Number.isInteger(afterOffset) && afterOffset >= 0))
@@ -469,16 +469,42 @@ export function subscriptionConfiguredEvent(input: {
       `a subscription target must be rooted at "itx" (got ${JSON.stringify(print(target))})`,
     );
   return {
-    type: "events.iterate.com/stream/subscription-configured",
-    payload: {
-      name,
-      target,
-      ...(target && input.consumes && { consumes: input.consumes }),
-      ...(target && afterOffset !== undefined && { afterOffset }),
-      ...(!target &&
-        input.ifConfiguredAtOffset !== undefined && {
-          ifConfiguredAtOffset: input.ifConfiguredAtOffset,
-        }),
-    },
+    name,
+    target,
+    ...(target && input.consumes && { consumes: input.consumes }),
+    ...(target && afterOffset !== undefined && { afterOffset }),
+    ...(!target &&
+      input.ifConfiguredAtOffset !== undefined && {
+        ifConfiguredAtOffset: input.ifConfiguredAtOffset,
+      }),
   };
+}
+
+/** THE APPEND BOUNDARY for core CONTROL events: validate + normalize a LITERAL control event so call
+ *  sites write `itx.append({ type, payload })` with NO event-builder helper. A subscription/rewrite
+ *  target is validated and normalized STRING→array before storage (the reduce must never string-parse
+ *  a facet source — the codec's 2 KiB cap), and a malformed control event throws HERE instead of
+ *  committing a durable no-op. Every other event passes through untouched. The DO runs this on every
+ *  append (iterate-context-durable-object.ts). */
+export function normalizeControlEvent(event: StreamEventInput): StreamEventInput {
+  if (event.type === "events.iterate.com/stream/subscription-configured")
+    return {
+      ...event,
+      payload: normalizeSubscriptionConfigured(
+        event.payload as Parameters<typeof normalizeSubscriptionConfigured>[0],
+      ),
+    };
+  if (event.type === "events.iterate.com/itx/rewrite-rule-configured") {
+    const payload = event.payload as {
+      match: ItxExpressionInput;
+      target: ItxExpressionInput | null;
+      ifTarget?: unknown;
+    };
+    const { match, target } = normalizeRewriteRuleConfigured(payload);
+    return {
+      ...event,
+      payload: { match, target, ...("ifTarget" in payload && { ifTarget: payload.ifTarget }) },
+    };
+  }
+  return event;
 }

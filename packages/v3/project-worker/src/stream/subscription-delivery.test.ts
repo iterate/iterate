@@ -32,7 +32,7 @@ import type { StreamEvent, ScannedRange } from "./processor.ts";
 import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 import { SubscriptionDelivery } from "./subscription-delivery.ts";
-import { subscriptionConfiguredEvent } from "./core-processor.ts";
+import { normalizeControlEvent } from "./core-processor.ts";
 
 const MiB = 1024 * 1024;
 const settle = () => new Promise((r) => setImmediate(r));
@@ -107,10 +107,13 @@ function stuckFacetRig(previous?: { storage: DurableObjectStorageSlice }) {
   const configuredAtOffset = previous
     ? rig.stream.coreReducedState.subscriptions.slow.configuredAtOffset
     : rig.stream.append(
-        subscriptionConfiguredEvent({
-          name: "slow",
-          target: ["itx", "facets", ["get", "slow"], "processEventBatch"],
-          consumes: ["blob"],
+        normalizeControlEvent({
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            name: "slow",
+            target: ["itx", "facets", ["get", "slow"], "processEventBatch"],
+            consumes: ["blob"],
+          },
         }),
       )[0].offset;
   /** `count` durable 1 MiB `blob` events, one commit each; returns their offsets. */
@@ -240,7 +243,10 @@ describe("halt once, for the right row", () => {
     // `consumes` absent = EVERY durable event: the configure and the resume are themselves pushed,
     // racing the catch-up each one triggers.
     rig.stream.append(
-      subscriptionConfiguredEvent({ name: "poison", target: facetTarget("poison") }),
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "poison", target: facetTarget("poison") },
+      }),
     );
     await settled();
     expect(rig.stream.coreReducedState.subscriptions.poison.halted).toMatchObject({
@@ -269,10 +275,13 @@ describe("halt once, for the right row", () => {
     );
     const configure = () =>
       rig.stream.append(
-        subscriptionConfiguredEvent({
-          name: "swap",
-          target: facetTarget("swap"),
-          consumes: ["blob"],
+        normalizeControlEvent({
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            name: "swap",
+            target: facetTarget("swap"),
+            consumes: ["blob"],
+          },
         }),
       )[0].offset;
     configure();
@@ -307,14 +316,20 @@ describe("subscribe({ afterOffset }) — the cursor lane starts where the row as
     );
     for (const n of [1, 2, 3]) rig.stream.append({ type: "demo/ping", payload: { n } });
     rig.stream.append(
-      subscriptionConfiguredEvent({ name: "now", target: "itx.now.push", consumes: ["demo/ping"] }),
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "now", target: "itx.now.push", consumes: ["demo/ping"] },
+      }),
     );
     rig.stream.append(
-      subscriptionConfiguredEvent({
-        name: "history",
-        target: "itx.history.push",
-        consumes: ["demo/ping"],
-        afterOffset: 0,
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: {
+          name: "history",
+          target: "itx.history.push",
+          consumes: ["demo/ping"],
+          afterOffset: 0,
+        },
       }),
     );
     await settled();
@@ -343,7 +358,10 @@ describe("the cursor lane across an eviction and a replace", () => {
         : undefined,
     );
     first.stream.append(
-      subscriptionConfiguredEvent({ name: "s", target: "itx.sink.push", consumes: ["demo/ping"] }),
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
+      }),
     );
     const armedBeforeAnyDelivery = first.alarms.length;
     first.stream.append({ type: "demo/ping", payload: { n: 1 } });
@@ -390,7 +408,10 @@ describe("the cursor lane across an eviction and a replace", () => {
       return undefined;
     });
     stream.append(
-      subscriptionConfiguredEvent({ name: "s", target: "itx.sinkA.push", consumes: ["demo/ping"] }),
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "s", target: "itx.sinkA.push", consumes: ["demo/ping"] },
+      }),
     );
     stream.append({ type: "demo/ping", payload: { n: 1 } });
     await settled();
@@ -398,7 +419,10 @@ describe("the cursor lane across an eviction and a replace", () => {
 
     // The row is REPLACED while that delivery is parked, and a second batch lands behind it.
     stream.append(
-      subscriptionConfiguredEvent({ name: "s", target: "itx.sinkB.push", consumes: ["demo/ping"] }),
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "s", target: "itx.sinkB.push", consumes: ["demo/ping"] },
+      }),
     );
     stream.append({ type: "demo/ping", payload: { n: 2 } });
     await settled();
@@ -416,7 +440,10 @@ describe("the cursor lane across an eviction and a replace", () => {
         : undefined,
     );
     stream.append(
-      subscriptionConfiguredEvent({ name: "mirror", target: "itx.sink", consumes: ["demo/ping"] }),
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "mirror", target: "itx.sink", consumes: ["demo/ping"] },
+      }),
     );
     stream.append({ type: "demo/ping", payload: { n: 1 } });
     await settled();
@@ -461,15 +488,21 @@ describe("the cursor lane's read reservation is never re-acquired while held", (
     });
     // `history` must READ the page holding the big event (the whole log); `now` is "from now".
     rig.stream.append(
-      subscriptionConfiguredEvent({
-        name: "history",
-        target: "itx.history.push",
-        consumes: ["blob"],
-        afterOffset: 0,
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: {
+          name: "history",
+          target: "itx.history.push",
+          consumes: ["blob"],
+          afterOffset: 0,
+        },
       }),
     );
     rig.stream.append(
-      subscriptionConfiguredEvent({ name: "now", target: "itx.now.push", consumes: ["tick"] }),
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "now", target: "itx.now.push", consumes: ["tick"] },
+      }),
     );
     const [tick] = rig.stream.append({ type: "tick" });
     await settled();
@@ -494,7 +527,10 @@ describe("a rule re-point re-classifies a row", () => {
     );
     // A two-step target (`itx.proc`) — root-called whole; what it evaluates to decides the lane.
     rig.stream.append(
-      subscriptionConfiguredEvent({ name: "s", target: "itx.proc", consumes: ["blob"] }),
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "s", target: "itx.proc", consumes: ["blob"] },
+      }),
     );
     await settled();
     rig.stream.append({ type: "blob" });
@@ -546,15 +582,21 @@ describe("a superseded evaluation can neither classify nor invoke its replacemen
     );
     const configureFacet = () =>
       rig.stream.append(
-        subscriptionConfiguredEvent({
-          name: "s",
-          target: "itx.proc.processEventBatch",
-          consumes: ["blob"],
+        normalizeControlEvent({
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            name: "s",
+            target: "itx.proc.processEventBatch",
+            consumes: ["blob"],
+          },
         }),
       );
     const configureSink = () =>
       rig.stream.append(
-        subscriptionConfiguredEvent({ name: "s", target: "itx.sink.push", consumes: ["blob"] }),
+        normalizeControlEvent({
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "s", target: "itx.sink.push", consumes: ["blob"] },
+        }),
       );
     // AT CONFIGURE: the facet row's catch-up parks on its evaluation; the row is replaced meanwhile.
     gate = new Promise((r) => (openGate = r));

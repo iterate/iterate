@@ -29,7 +29,7 @@ import {
   CoreContract,
   facetSpecFromHostingTarget,
   type CoreState,
-  subscriptionConfiguredEvent,
+  normalizeControlEvent,
 } from "./stream/core-processor.ts";
 import { codedError, errorCode, reportIssue, withTimeout } from "./lib.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
@@ -62,7 +62,7 @@ import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
 import {
   CONFIG_WORKER_PLATFORM_ROW,
   ItxExpressionResolver,
-  rewriteRuleRemovedEvent,
+  restoreRuleTarget,
   rowsNamingRpcStub,
   rpcStubKeysNamed,
   type ItxExpressionRewriteRule,
@@ -164,13 +164,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     });
     for (const match of ruleMatches) {
       try {
-        void this.append(rewriteRuleRemovedEvent(match)).catch(() => undefined);
+        void this.append({
+          type: "events.iterate.com/itx/rewrite-rule-configured",
+          payload: { match, target: restoreRuleTarget(match) },
+        }).catch(() => undefined);
       } catch {
         /* a match the removal spelling cannot express — the other rows still go */
       }
     }
     for (const name of subscriptionNames)
-      void this.append(subscriptionConfiguredEvent({ name, target: null })).catch(() => undefined);
+      void this.append({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name, target: null },
+      }).catch(() => undefined);
   }
 
   /** The two tables as the pure census functions read them: every rule, every subscription's target. */
@@ -220,14 +226,18 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // halts arming regardless; `itx.worker` always resolves (a bundled no-op default,
     // itx-expression-rewriting.ts), so a config-less project never halts. Idempotent — one row per
     // context whatever the incarnation.
-    this.#stream.append({
-      ...subscriptionConfiguredEvent({
-        name: "config",
-        target: "itx.cd('/').worker.processEventBatch",
-        consumes: ["*"],
+    // The birth append bypasses the DO's append boundary, so normalize this literal here.
+    this.#stream.append(
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: {
+          name: "config",
+          target: "itx.cd('/').worker.processEventBatch",
+          consumes: ["*"],
+        },
+        idempotencyKey: "config-subscription",
       }),
-      idempotencyKey: "config-subscription",
-    });
+    );
   }
 
   /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,
@@ -253,7 +263,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  refusal in the same turn it accepted the socket. */
   #appendAndRunCommittedEffects(events: StreamEventInput[]): StreamEvent[] {
     const subscriptionsBeforeCommit = this.#stream.coreReducedState.subscriptions;
-    const committedEvents = this.#stream.append(...events);
+    // THE APPEND BOUNDARY: every event is validated + normalized here (core-processor's
+    // `normalizeControlEvent`), so a control command's itx-expression fields are checked and stored
+    // in parsed form — call sites append LITERAL `{ type, payload }`, never an event-builder helper.
+    const committedEvents = this.#stream.append(...events.map(normalizeControlEvent));
     this.#recordActivityForQuietClock();
     this.#deleteFacetsWhoseHostingSubscriptionWasRemoved(
       committedEvents,

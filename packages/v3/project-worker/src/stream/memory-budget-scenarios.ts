@@ -21,7 +21,7 @@ import { memoryUsage } from "node:process";
 import { deserialize, serialize } from "node:v8";
 import { FacetHandle } from "../context/expression.ts";
 import { errorCode } from "../lib.ts";
-import { CoreContract, subscriptionConfiguredEvent } from "./core-processor.ts";
+import { CoreContract, normalizeControlEvent } from "./core-processor.ts";
 import {
   type StreamEvent,
   ProcessorEngine,
@@ -431,10 +431,13 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       recordActivityForQuietClock: () => {},
     });
     stream.append(
-      subscriptionConfiguredEvent({
-        name: "watcher",
-        target: ["itx", "facets", ["get", "watcher"], "processEventBatch"],
-        consumes: ["events.iterate.com/live-state/changed"],
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: {
+          name: "watcher",
+          target: ["itx", "facets", ["get", "watcher"], "processEventBatch"],
+          consumes: ["events.iterate.com/live-state/changed"],
+        },
       }),
     );
     await new Promise((r) => setImmediate(r));
@@ -479,10 +482,13 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     const typeOf = (i: number) => (args.disjointTypes ? `blob-${i % args.rowCount}` : "blob");
     stream.append(
       ...Array.from({ length: args.rowCount }, (_, i) =>
-        subscriptionConfiguredEvent({
-          name: `p${i}`,
-          target: ["itx", "facets", ["get", `p${i}`], "processEventBatch"],
-          consumes: [typeOf(i)],
+        normalizeControlEvent({
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            name: `p${i}`,
+            target: ["itx", "facets", ["get", `p${i}`], "processEventBatch"],
+            consumes: [typeOf(i)],
+          },
         }),
       ),
     );
@@ -519,10 +525,13 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     // loop ran, so no cursor was ever acked into kv.
     stream.append(
       ...Array.from({ length: args.rowCount }, (_, i) =>
-        subscriptionConfiguredEvent({
-          name: `sink${i}`,
-          target: ["itx", "sink"],
-          consumes: ["blob"],
+        normalizeControlEvent({
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            name: `sink${i}`,
+            target: ["itx", "sink"],
+            consumes: ["blob"],
+          },
         }),
       ),
     );
@@ -584,10 +593,13 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     });
     stream.append(
       ...Array.from({ length: args.rowCount }, (_, i) =>
-        subscriptionConfiguredEvent({
-          name: `sink${i}`,
-          target: "itx.sink",
-          consumes: [`blob-${i}`],
+        normalizeControlEvent({
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            name: `sink${i}`,
+            target: "itx.sink",
+            consumes: [`blob-${i}`],
+          },
         }),
       ),
     );
@@ -638,10 +650,13 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     const storage = nodeSqliteDurableObjectStorage();
     const stream = bareStream(storage);
     const configure = (name: string) =>
-      subscriptionConfiguredEvent({
-        name,
-        target: ["itx", "facets", ["get", name], "processEventBatch"],
-        consumes: ["blob"],
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: {
+          name,
+          target: ["itx", "facets", ["get", name], "processEventBatch"],
+          consumes: ["blob"],
+        },
       });
     let rows = 0;
     let refused: unknown;
@@ -665,7 +680,12 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       JSON.stringify(refused instanceof Error ? refused.message : String(refused ?? "none")),
     );
     // An un-configure still lands (the state shrinks), and the cost of ONE configure at this size.
-    stream.append(subscriptionConfiguredEvent({ name: "row0", target: null }));
+    stream.append(
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "row0", target: null },
+      }),
+    );
     const t0 = performance.now();
     stream.append(configure("row0"));
     fact("configureMsAtCap", (performance.now() - t0).toFixed(1));

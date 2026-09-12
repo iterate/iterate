@@ -20,7 +20,7 @@ import {
   reduceCoreEventBatch,
   type CoreState,
   type Subscription,
-  subscriptionConfiguredEvent,
+  normalizeControlEvent,
 } from "./core-processor.ts";
 import type { StreamEvent } from "./processor.ts";
 import { memoryStream } from "./test-support.ts";
@@ -808,7 +808,7 @@ describe("the platform rows a null MASKS (kept) vs a plain delete", () => {
   });
 });
 
-// ── subscriptions ── the subscriptions table's one COMMAND (src/stream/core-processor.ts): `subscriptionConfiguredEvent`
+// ── subscriptions ── the subscriptions table's one COMMAND (a literal `subscription-configured` event, normalized at the append boundary by `normalizeControlEvent`)
 // BUILDS the event the caller appends — a configure, a replace, or (target null) a removal; a refusal
 // (a dotted name, a target not rooted at itx) THROWS at the door, nothing appended (the reserved
 // `core` is the APPEND door's refusal — stream.test.ts). A subscription is PURE DATA — a name, a target expression stored as its printed string,
@@ -832,7 +832,10 @@ const setup = () => {
     consumes?: string[];
     afterOffset?: number;
   }) => {
-    const event = subscriptionConfiguredEvent(input);
+    const event = normalizeControlEvent({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: input,
+    });
     stream.append(event);
     return event;
   };

@@ -16,7 +16,7 @@
 // `rotateApiKey` (the project's own secret) — which touch no DO at all. Each verb builds ONE event and appends it;
 // every built-in root rides the hop with ZERO code here. `provide` and `subscribe` hand back a
 // DISPOSABLE handle, so what they make is SESSION-SCOPED (capnweb disposes every exported handle at
-// session end); the raw event — `itx.append(rewriteRuleConfiguredEvent(match, target))` — is the verb
+// session end); the raw event — `itx.append({ type: "…/rewrite-rule-configured", payload: { match, target } })` — is the verb
 // minus the handle and outlives the session. A client reaches a root context through session.ts and
 // the rest with `cd(path)`.
 //   durable object names — `DurableObjectNameCodec` / `resolveContextPath`: the ONE place a context DO name is formatted and parsed
@@ -41,8 +41,8 @@ import {
   installPrototypeInvokeFallback,
 } from "./context/expression.ts";
 import {
-  rewriteRuleConfiguredEvent,
-  rewriteRuleRemovedEvent,
+  normalizeRewriteRuleConfigured,
+  restoreRuleTarget,
 } from "./context/itx-expression-rewriting.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { SessionTeardown, type ProjectDoorsInput } from "./session.ts";
@@ -53,7 +53,6 @@ import {
   type Principal,
 } from "./principal.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
-import { subscriptionConfiguredEvent } from "./stream/core-processor.ts";
 import { codedError } from "./lib.ts";
 
 export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
@@ -240,7 +239,7 @@ export class IterateContextRpcTarget extends RpcTarget {
    *      `match`, and the pure-data rule `match ⇒ itx.builtins.rpcStubs.get('<match>')` is appended. The DO
    *      un-sets that rule when the stub's LAST pager closes. Re-providing the same match re-lends
    *      (reconnect — the pager is replaced);
-   *    • an itx EXPRESSION — a pure rewrite: literally `append(rewriteRuleConfiguredEvent(match, target))`;
+   *    • an itx EXPRESSION — a pure rewrite: literally `append({ type: "…/rewrite-rule-configured", payload: { match, target } })`;
    *    • `null` — MASK `match` when a platform row lies beneath it, delete the row otherwise (and
    *      recall a stub THIS session lent under it).
    *  Either way the durable thing made is the rule, so the handle is a `RewriteRuleHandle`: disposing
@@ -255,21 +254,30 @@ export class IterateContextRpcTarget extends RpcTarget {
       // Appended FIRST, then whatever THIS session lent under the match is recalled: the DO's un-set
       // on the pager close finds a row that no longer names the stub and removes nothing, so it can
       // never take the fresh mask or rule with it.
-      const event = rewriteRuleConfiguredEvent(matchString, target);
+      // Validate + normalize here so the handle knows the STORED target (its undo's compare-and-set);
+      // the appended event is literal and the DO's boundary re-normalizes it idempotently.
+      const { target: expectedTarget } = normalizeRewriteRuleConfigured({
+        match: matchString,
+        target,
+      });
+      const event: StreamEventInput = {
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: matchString, target: expectedTarget },
+      };
       this.#refuseAnOverrideNamingItsOwnContext(matchString, event);
       await this.#append(event);
       this.#sessionTeardown.dispose(sessionTeardownKey);
-      const expectedTarget = (event.payload as { target: ItxExpression | null }).target;
       return new RewriteRuleHandle(() => this.#removeRuleInBackground(matchString, expectedTarget));
     }
     // Built BEFORE the lend so a match the codec refuses throws with nothing lent; the rule rides the
     // pager upgrade and the DO appends it as it accepts the pager (context/rpc-stubs.ts).
-    const ruleEvent = rewriteRuleConfiguredEvent(matchString, [
-      "itx",
-      "builtins",
-      "rpcStubs",
-      ["get", matchString],
-    ]);
+    const ruleEvent: StreamEventInput = {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: matchString,
+        target: ["itx", "builtins", "rpcStubs", ["get", matchString]],
+      },
+    };
     const pager = await lendRpcStubOverPager(
       this.#durableObject,
       target,
@@ -293,7 +301,7 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  `itx.builtins.rpcStubs.get('subscription:<name>')`; `null` removes the row. HOW it is served is not declared here: the
    *  context looks at what the target evaluates to — a facet or a lent stub owns its progress and gets
    *  a push (the client heals a gap with `readEvents`); anything else gets an at-least-once cursor the
-   *  stream keeps. Same name REPLACES. Literally `append(subscriptionConfiguredEvent(…))` — the handle
+   *  stream keeps. Same name REPLACES. Literally `append({ type: "…/subscription-configured", payload: … })` — the handle
    *  removes the row (and recalls the lent callback) when disposed or when the session ends. */
   async subscribe(input: {
     name?: string;
@@ -318,11 +326,14 @@ export class IterateContextRpcTarget extends RpcTarget {
     if (input.target !== null && typeof input.target !== "string" && !Array.isArray(input.target)) {
       // A LIVE callback: the row rides the pager upgrade exactly as `provide`'s rule does (built
       // first, so a name the reduce rejects throws with nothing lent).
-      const row = subscriptionConfiguredEvent({
-        name,
-        target: ["itx", "builtins", "rpcStubs", ["get", rpcStubKey]],
-        ...consumes,
-      });
+      const row: StreamEventInput = {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: {
+          name,
+          target: ["itx", "builtins", "rpcStubs", ["get", rpcStubKey]],
+          ...consumes,
+        },
+      };
       const pager = await lendRpcStubOverPager(
         this.#durableObject,
         input.target as ClientRpcStub,
@@ -338,9 +349,10 @@ export class IterateContextRpcTarget extends RpcTarget {
     // An expression (or a removal): appended FIRST, then this session's lend under the name is
     // recalled — the same order as `provide`, for the same reason.
     const target = input.target as ItxExpressionInput | null;
-    const [committed] = (await this.#append(
-      subscriptionConfiguredEvent({ name, target, ...consumes }),
-    )) as StreamEvent[];
+    const [committed] = (await this.#append({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: { name, target, ...consumes },
+    })) as StreamEvent[];
     this.#sessionTeardown.dispose(sessionTeardownKey);
     return new SubscriptionHandle(name, () => {
       // no pager to recall: the handle un-sets the row itself — only the one this call wrote
@@ -364,7 +376,14 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  cannot await), a refusal ignored. */
   #removeRuleInBackground(matchString: string, expectedTarget: ItxExpression | null): void {
     this.#waitUntil(
-      this.#append(rewriteRuleRemovedEvent(matchString, expectedTarget)).catch(() => undefined),
+      this.#append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: {
+          match: matchString,
+          target: restoreRuleTarget(matchString),
+          ifTarget: expectedTarget,
+        },
+      }).catch(() => undefined),
     );
   }
 
@@ -373,13 +392,10 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  subscribe owns the name and the reduce ignores the stale removal. Fire-and-forget, as above. */
   #removeSubscriptionInBackground(name: string, configuredAtOffset: number): void {
     this.#waitUntil(
-      this.#append(
-        subscriptionConfiguredEvent({
-          name,
-          target: null,
-          ifConfiguredAtOffset: configuredAtOffset,
-        }),
-      ).catch(() => undefined),
+      this.#append({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name, target: null, ifConfiguredAtOffset: configuredAtOffset },
+      }).catch(() => undefined),
     );
   }
 

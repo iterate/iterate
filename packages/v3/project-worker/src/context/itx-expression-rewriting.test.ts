@@ -3,12 +3,12 @@
 // the code. Rules are written `"match ⇒ target"`; `null` is a MASK. Built-in roots for the table: kv,
 // whoami, rpcStubs, ai — reached as `itx.builtins.<root>` (the fixed point) or through the implicit
 // platform row `itx.<root> ⇒ itx.builtins.<root>`. Below the table: the ONE door
-// (`rewriteRuleConfiguredEvent` and its removal spelling), the resolver over a fake physical scope
+// (`normalizeRewriteRuleConfigured` + `restoreRuleTarget`), the resolver over a fake physical scope
 // (rules first, masks, the fixed point, default-deny, depth 32, lent stubs through a fake
 // `itx.builtins.rpcStubs`), and the reduce as the DO runs it — the rules are `core` state, reduced
 // from the log.
 import { describe, expect, test } from "vitest";
-import { CoreContract, reduceCoreEvent } from "../stream/core-processor.ts";
+import { CoreContract, normalizeControlEvent, reduceCoreEvent } from "../stream/core-processor.ts";
 import type { StreamEvent } from "../stream/processor.ts";
 import { memoryStream } from "../stream/test-support.ts";
 import {
@@ -23,8 +23,7 @@ import {
   type ItxExpressionRewriteRule,
   matchItxExpressionPrefix,
   resolveItxExpression,
-  rewriteRuleConfiguredEvent,
-  rewriteRuleRemovedEvent,
+  restoreRuleTarget,
   rowsNamingRpcStub,
 } from "./itx-expression-rewriting.ts";
 
@@ -453,36 +452,66 @@ describe("`@` round-trips the codec (targets only): parse → print → parse; t
 
 // ───────────────────────────── the door ─────────────────────────────
 
-describe("rewriteRuleConfiguredEvent — ONE event, both halves canonical, loud at the door", () => {
+describe("rewrite-rule-configured — ONE event, both halves canonical, loud at the append boundary", () => {
   test("AT REST: the match is the printed prefix (a short canonical key), the target THE PARSED FORM (it may carry a whole source as data)", () => {
-    expect(rewriteRuleConfiguredEvent("itx.db", ["itx", "facets", ["get", "tab-1"]])).toEqual({
+    expect(
+      normalizeControlEvent({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: "itx.db", target: ["itx", "facets", ["get", "tab-1"]] },
+      }),
+    ).toEqual({
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: "itx.db", target: ["itx", "facets", ["get", "tab-1"]] },
     });
     // either codec half on either side
-    expect(rewriteRuleConfiguredEvent(["itx", "db"], "itx.facets.get('tab-1')").payload).toEqual({
+    expect(
+      normalizeControlEvent({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: ["itx", "db"], target: "itx.facets.get('tab-1')" },
+      }).payload,
+    ).toEqual({
       match: "itx.db",
       target: ["itx", "facets", ["get", "tab-1"]], // a string target is parsed once, at the door
     });
   });
 
   test("`null` target is the deny: the same event, target null", () => {
-    expect(rewriteRuleConfiguredEvent("itx.db", null)).toEqual({
+    expect(
+      normalizeControlEvent({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: "itx.db", target: null },
+      }),
+    ).toEqual({
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: "itx.db", target: null },
     });
   });
 
   test("the REMOVAL spelling is the platform-equivalent target `itx.builtins.<match…>` (the reduce deletes the row)", () => {
-    expect(rewriteRuleRemovedEvent("itx.kv").payload).toEqual({
+    expect(
+      normalizeControlEvent({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: "itx.kv", target: restoreRuleTarget("itx.kv") },
+      }).payload,
+    ).toEqual({
       match: "itx.kv",
       target: ["itx", "builtins", "kv"], // the parsed form at rest
     });
-    expect(rewriteRuleRemovedEvent("itx.ai.run('gpt-5')").payload).toEqual({
+    expect(
+      normalizeControlEvent({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: "itx.ai.run('gpt-5')", target: restoreRuleTarget("itx.ai.run('gpt-5')") },
+      }).payload,
+    ).toEqual({
       match: "itx.ai.run('gpt-5')",
       target: ["itx", "builtins", "ai", ["run", "gpt-5"]],
     });
-    expect(rewriteRuleRemovedEvent("itx").payload).toEqual({
+    expect(
+      normalizeControlEvent({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: "itx", target: restoreRuleTarget("itx") },
+      }).payload,
+    ).toEqual({
       match: "itx",
       target: ["itx", "builtins"],
     });
@@ -530,7 +559,12 @@ describe("rewriteRuleConfiguredEvent — ONE event, both halves canonical, loud 
   ];
   for (const { match, target, throws } of doorRefusals)
     test(`REFUSED: ${JSON.stringify(match)} ⇒ ${JSON.stringify(target)}  ${throws}`, () => {
-      expect(() => rewriteRuleConfiguredEvent(match, target)).toThrow(throws);
+      expect(() =>
+        normalizeControlEvent({
+          type: "events.iterate.com/itx/rewrite-rule-configured",
+          payload: { match: match, target: target },
+        }),
+      ).toThrow(throws);
     });
 
   // …and what the door ACCEPTS, stored canonical: `{ match, target, payload }`.
@@ -559,7 +593,12 @@ describe("rewriteRuleConfiguredEvent — ONE event, both halves canonical, loud 
     ];
   for (const { match, target, payload } of doorAccepts)
     test(`ACCEPTED: ${JSON.stringify(match)} ⇒ ${JSON.stringify(target)}`, () => {
-      expect(rewriteRuleConfiguredEvent(match, target).payload).toEqual(payload);
+      expect(
+        normalizeControlEvent({
+          type: "events.iterate.com/itx/rewrite-rule-configured",
+          payload: { match: match, target: target },
+        }).payload,
+      ).toEqual(payload);
     });
 });
 
@@ -676,7 +715,14 @@ const setup = () => {
   /** The edge's `provide(match, expression | null)`: build the ONE event, append it. A refusal throws
    *  at the door — nothing is appended. */
   const rewrite = (match: ItxExpressionInput, target: ItxExpressionInput | null) =>
-    (stream.append(rewriteRuleConfiguredEvent(match, target)) as StreamEvent[])[0];
+    (
+      stream.append(
+        normalizeControlEvent({
+          type: "events.iterate.com/itx/rewrite-rule-configured",
+          payload: { match: match, target: target },
+        }),
+      ) as StreamEvent[]
+    )[0];
   /** The edge's `provide(match, stub)`, spelled out: lend under the key (= the match), configure the
    *  pure-data rule naming the PHYSICAL registry. */
   const provide = (rpcStubKey: string, stub: unknown) => {
@@ -692,7 +738,14 @@ const setup = () => {
     resolve: (call: ItxExpressionInput) => resolver.resolve(call).map((step) => print(step)),
     rewrite,
     remove: (match: ItxExpressionInput) =>
-      (stream.append(rewriteRuleRemovedEvent(match)) as StreamEvent[])[0],
+      (
+        stream.append(
+          normalizeControlEvent({
+            type: "events.iterate.com/itx/rewrite-rule-configured",
+            payload: { match: match, target: restoreRuleTarget(match) },
+          }),
+        ) as StreamEvent[]
+      )[0],
     provide,
     _lend: (rpcStubKey: string, stub: unknown) => lentRpcStubs.set(rpcStubKey, stub),
     _recall: (rpcStubKey: string) => lentRpcStubs.delete(rpcStubKey),

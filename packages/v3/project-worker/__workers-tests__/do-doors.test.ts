@@ -6,9 +6,8 @@
 // fetch-upgrade leg, the itx-expression fetch lane, egress) and the rpc-stub plumbing
 // (`lendRpcStub`, `rpcStubTransportState`; the pager attach IS the upgrade). There are NO configuration
 // verbs: every change to a context is an appended event, so a Workers-RPC caller configures a
-// rewrite rule exactly as the edge's `provide` does — `append(rewriteRuleConfiguredEvent(match,
-// target))` (context/itx-expression-rewriting.ts) — and a subscription with
-// `append(subscriptionConfiguredEvent(…))` (stream/core-processor.ts). The pins:
+// rewrite rule exactly as the edge's `provide` does — `append(normalizeControlEvent({ type: "events.iterate.com/itx/rewrite-rule-configured", payload: { match: match, target: // target } }))` (context/itx-expression-rewriting.ts) — and a subscription with
+// `append(normalizeControlEvent({ type: "events.iterate.com/stream/subscription-configured", payload: … }))` (stream/core-processor.ts). The pins:
 //
 //   • the QUIET CLOCK's reason to exist: a probe (`itx.facets.get('core').snapshot()`) on a
 //     never-touched ctx MATERIALIZES it (the constructor's `Stream.appendCreatedAndWokenEvents()`
@@ -32,11 +31,8 @@ import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { parse, print, type ItxExpression } from "../src/context/expression.ts";
-import {
-  rewriteRuleConfiguredEvent,
-  rewriteRuleRemovedEvent,
-} from "../src/context/itx-expression-rewriting.ts";
-import { subscriptionConfiguredEvent } from "../src/stream/core-processor.ts";
+import { restoreRuleTarget } from "../src/context/itx-expression-rewriting.ts";
+import { normalizeControlEvent } from "../src/stream/core-processor.ts";
 import { adminCredentials, openSession, stub, until } from "./support.ts";
 
 /** One rewrite-rule row as the core snapshot serializes it (the rules are `core` state — a RECORD
@@ -145,7 +141,10 @@ test("the DO's doors are the stream, invoke, fetch and the rpc-stub plumbing —
   // (a live stub's rule is pure data naming the `itx.rpcStubs` registry; a subscription is its own
   // layer's event, not a rule).
   await stub(ctx).append(
-    rewriteRuleConfiguredEvent(" itx.aliased.ghost", "itx.rpcStubs.get('itx.aliased.ghost')"),
+    normalizeControlEvent({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: " itx.aliased.ghost", target: "itx.rpcStubs.get('itx.aliased.ghost')" },
+    }),
   );
   const rules = await rewriteRulesOf(ctx);
   expect(Object.keys(rules)).toEqual(["itx.aliased.ghost"]); // keyed by the canonical match
@@ -158,18 +157,38 @@ test("the DO's doors are the stream, invoke, fetch and the rpc-stub plumbing —
 test("the rule table is a MAP: a re-set at the same match REPLACES (one row, nothing beneath), `null` DELETES, a second `null` is a benign no-op — and every set or un-set is exactly ONE event, never deduped", async () => {
   const ctx = "prj_doors_map";
   const s = stub(ctx);
-  await s.append(rewriteRuleConfiguredEvent("itx.alias", "itx.whoami"));
+  await s.append(
+    normalizeControlEvent({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.alias", target: "itx.whoami" },
+    }),
+  );
   expect(await s.invoke("itx.alias()")).toEqual({ projectId: ctx, path: "/" });
   // The same match set again: the row is replaced in place — one key, the new target, no stack.
-  await s.append(rewriteRuleConfiguredEvent("itx.alias", "itx.rpcStubs.list"));
+  await s.append(
+    normalizeControlEvent({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.alias", target: "itx.rpcStubs.list" },
+    }),
+  );
   expect(await s.invoke("itx.alias()")).toEqual([]);
   expect(Object.keys(await rewriteRulesOf(ctx))).toEqual(["itx.alias"]);
   expect(await rewriteRuleEventCount(ctx)).toBe(2); // one event per set — no dedupe against the current row
   // `null` deletes; nothing is "restored from beneath" — the first target went with the replace.
-  await s.append(rewriteRuleConfiguredEvent("itx.alias", null));
+  await s.append(
+    normalizeControlEvent({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.alias", target: null },
+    }),
+  );
   expect(await rewriteRulesOf(ctx)).toEqual({});
   // A second `null` lands as a row (the log is the log) and changes nothing — the reduce's no-op.
-  await s.append(rewriteRuleConfiguredEvent("itx.alias", null));
+  await s.append(
+    normalizeControlEvent({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.alias", target: null },
+    }),
+  );
   expect(await rewriteRulesOf(ctx)).toEqual({});
   expect(await rewriteRuleEventCount(ctx)).toBe(4);
 });
@@ -190,7 +209,12 @@ test("un-setting a rule is pure data — the lent stub's transport is untouched:
   // The rule un-set AT THE DO DOOR — the raw event, not the handle. The row pops; the transport is
   // NOT touched: the census is unchanged, the registry still lists the key, and only the RULE is
   // gone (default-deny at the match — NO_ITX_EXPRESSION_MATCH, not offline).
-  await s.append(rewriteRuleConfiguredEvent("itx.livecap", null));
+  await s.append(
+    normalizeControlEvent({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.livecap", target: null },
+    }),
+  );
   expect(await rpcStubPagersOf(ctx)).toBe(rpcStubPagersBefore);
   expect(await s.invoke("itx.rpcStubs.list()")).toEqual(["itx.livecap"]);
   expect(await deniedCode(itx, "itx.livecap.ping()")).toBe("NO_ITX_EXPRESSION_MATCH");
@@ -199,7 +223,12 @@ test("un-setting a rule is pure data — the lent stub's transport is untouched:
   expect(await s.invoke("itx.rpcStubs.get('itx.livecap').ping()")).toBe("alive");
 
   // A NEW rule at the match brings the SAME stub back dotted — the rule was the only thing gone.
-  await s.append(rewriteRuleConfiguredEvent("itx.livecap", "itx.rpcStubs.get('itx.livecap')"));
+  await s.append(
+    normalizeControlEvent({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.livecap", target: "itx.rpcStubs.get('itx.livecap')" },
+    }),
+  );
   expect(await itx.invoke("itx.livecap.ping()")).toBe("alive");
 });
 
@@ -241,34 +270,66 @@ test("a handle's undo is a COMPARE-AND-SET decided in the reduce: a stale remova
   const ctx = "prj_doors_undo_cas";
   const s = stub(ctx);
   // RULES: session A's row, replaced by session B's; A's undo names A's target and changes nothing.
-  await s.append(rewriteRuleConfiguredEvent("itx.x", "itx.tab1"));
-  await s.append(rewriteRuleConfiguredEvent("itx.x", "itx.tab2"));
-  await s.append(rewriteRuleRemovedEvent("itx.x", parse("itx.tab1")));
+  await s.append(
+    normalizeControlEvent({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.x", target: "itx.tab1" },
+    }),
+  );
+  await s.append(
+    normalizeControlEvent({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.x", target: "itx.tab2" },
+    }),
+  );
+  await s.append(
+    normalizeControlEvent({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.x", target: restoreRuleTarget("itx.x"), ifTarget: parse("itx.tab1") },
+    }),
+  );
   expect(print((await rewriteRulesOf(ctx))["itx.x"].target)).toBe("itx.tab2");
-  await s.append(rewriteRuleRemovedEvent("itx.x", parse("itx.tab2"))); // B's own undo
+  await s.append(
+    normalizeControlEvent({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.x", target: restoreRuleTarget("itx.x"), ifTarget: parse("itx.tab2") },
+    }),
+  ); // B's own undo
   expect((await rewriteRulesOf(ctx))["itx.x"]).toBeUndefined();
   // SUBSCRIPTIONS: the row's identity is its configure offset.
   const [first] = (await s.append(
-    subscriptionConfiguredEvent({ name: "digest", target: "itx.digest.processEventBatch" }),
+    normalizeControlEvent({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: { name: "digest", target: "itx.digest.processEventBatch" },
+    }),
   )) as unknown as { offset: number }[];
   const [second] = (await s.append(
-    subscriptionConfiguredEvent({ name: "digest", target: "itx.digest.processEventBatch" }),
+    normalizeControlEvent({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: { name: "digest", target: "itx.digest.processEventBatch" },
+    }),
   )) as unknown as { offset: number }[];
   const row = async () =>
     (await s.invoke("itx.subscriptions.get('digest')")) as { configuredAtOffset: number } | null;
   await s.append(
-    subscriptionConfiguredEvent({
-      name: "digest",
-      target: null,
-      ifConfiguredAtOffset: first.offset,
+    normalizeControlEvent({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        name: "digest",
+        target: null,
+        ifConfiguredAtOffset: first.offset,
+      },
     }),
   );
   expect((await row())?.configuredAtOffset).toBe(second.offset); // the replacement stands
   await s.append(
-    subscriptionConfiguredEvent({
-      name: "digest",
-      target: null,
-      ifConfiguredAtOffset: second.offset,
+    normalizeControlEvent({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        name: "digest",
+        target: null,
+        ifConfiguredAtOffset: second.offset,
+      },
     }),
   );
   expect(await row()).toBeNull();

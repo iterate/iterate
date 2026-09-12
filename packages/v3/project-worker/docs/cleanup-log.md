@@ -365,3 +365,44 @@ consolidation beyond the already-logged larger items. The style/idiom/concisenes
 the remaining shape work is the three LOGGED larger refactors (core-builder append-boundary
 unification; app-config→zod; library.ts protocol split) — each a decision/dedicated pass, not a quick
 cleanup.
+
+## Round 9 — the core-builder append-boundary unification (the headline refactor: DONE)
+
+The #1 logged larger refactor, executed. The three core event builders are gone; every call site now
+writes a LITERAL `itx.append({ type, payload })` — the event type string and payload body are visible
+at the point of use, exactly the goal ("the more we can _see_ events … the better").
+
+### What replaced the builders
+- **`normalizeControlEvent(event)`** (stream/core-processor.ts) — ONE discriminated normalizer/validator
+  for the `stream/subscription-configured` and `itx/rewrite-rule-configured` control events. The DO runs
+  it on EVERY append (`this.#stream.append(...events.map(normalizeControlEvent))`) and on the
+  constructor's birth events, so a literal `{ type, payload }` is validated + normalized (match →
+  canonical string key, target STRING→parsed array before the 2 KiB codec) exactly once, at the door,
+  before `Stream.append`. Idempotent (a normalized event re-normalized is itself).
+- **`normalizeRewriteRuleConfigured(payload)`** / **`normalizeSubscriptionConfigured(input)`** — the
+  builders' validation+normalization bodies, now pure functions returning a payload (no event wrapper).
+- **`restoreRuleTarget(match)`** — the platform-equivalent target `["itx","builtins",...match.slice(1)]`
+  a rule REMOVAL names (the reduce turns it into a deletion). Replaces `rewriteRuleRemovedEvent`; a
+  compare-and-set undo passes `ifTarget` in the literal payload.
+
+### Deleted
+`subscriptionConfiguredEvent`, `rewriteRuleConfiguredEvent`, `rewriteRuleRemovedEvent` and their imports
+across production (iterate-context.ts, iterate-context-durable-object.ts, built-ins.ts) and ~7 test
+files (call sites rewritten to literals + `normalizeControlEvent`/`restoreRuleTarget`).
+
+### Bonus: the round-1 deferred "malformed core control events" bug is now CLOSED
+Because validation moved from the builder (which only the trusted edge called) to the DO append
+BOUNDARY, a raw invalid control event is now refused for EVERY caller — a Workers-RPC caller can no
+longer append a rule whose match is rooted at `itx.builtins` (the reserved fixed point). That is a real
+behavior change: `rpc-stub-pager-attach`'s "a raw row the removal spelling cannot express" scenario is
+now IMPOSSIBLE, so that test was rewritten to prove the door REFUSES the illegal match (and that a real
+rule's un-set sweep is untouched).
+
+### Gates
+unit 543 passed | 5 xfail · workers 77 passed | 13 xfail | 2 skip · typecheck PASS · oxlint 0/0 · knip clean.
+
+### What remains (unchanged from round 8)
+Two logged larger refactors, each a dedicated pass: **app-config.ts → one zod env schema** (needs a
+pinning test first — a bad parse 500s every route) and **library.ts protocol split** (cohesion win vs
+the import-boundary test that reads the file whole). Both are decisions/dedicated passes, not quick
+cleanups. The style/idiom/conciseness sweep and the headline event-builder cruft are DONE.

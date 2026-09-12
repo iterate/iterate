@@ -11,13 +11,15 @@
 // append share one synchronous turn. A malformed header is a 400.
 //
 // The UN-SET half, same layer: the key's last pager close appends the removal — refused under a
-// pause, it lands on the `resumed` commit; one row the removal spelling cannot express stops none
-// of the others. And a pager REPLACED at its key (a reconnect) is a reconnect, not a close: a page
-// in flight survives the swap and the new pager's lend answers it.
+// pause, it lands on the `resumed` commit; a match at itx.builtins (the one row the removal spelling
+// could never express) is refused AT THE DOOR, so no such row can ever sit beside the real ones. And
+// a pager REPLACED at its key (a reconnect) is a reconnect, not a close: a page in flight survives
+// the swap and the new pager's lend answers it.
 
+import { runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { rewriteRuleConfiguredEvent } from "../src/context/itx-expression-rewriting.ts";
+import { normalizeControlEvent } from "../src/stream/core-processor.ts";
 import {
   encodeRpcStubPagerAttachRequest,
   RPC_STUB_PAGER_WEBSOCKET_HEADER,
@@ -39,7 +41,10 @@ const openPager = (ctx: string, rpcStubKey: string, appendEvents: StreamEventInp
   });
 
 const ruleFor = (rpcStubKey: string) =>
-  rewriteRuleConfiguredEvent(rpcStubKey, ["itx", "rpcStubs", ["get", rpcStubKey]]);
+  normalizeControlEvent({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: rpcStubKey, target: ["itx", "rpcStubs", ["get", rpcStubKey]] },
+  });
 
 const transportState = async (ctx: string) =>
   (await stub(ctx).rpcStubTransportState()) as unknown as {
@@ -129,14 +134,20 @@ test("a stub whose last pager closes DURING a pause keeps its rule (the un-set a
   await until("the rule un-set after resume", async () => (await ruleAt(ctx, "itx.k5")) === null);
 });
 
-test("a raw row the removal spelling cannot express (a match rooted at itx.builtins) stops none of the other rows' un-set", async () => {
+test("the append door REFUSES a rule match rooted at itx.builtins (the reserved fixed point is no rule's to claim) — the un-expressible row can never enter the log beside the real ones", async () => {
   const ctx = "prj_pager_raw_builtins_row";
-  const s = stub(ctx);
-  // the raw event bypasses the door: the reduce stores a row at the fixed point
-  await s.append({
-    type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: { match: "itx.builtins.foo", target: "itx.builtins.rpcStubs.get('itx.k7')" },
+  // The door validates every append: a match at itx.builtins — the fixed point every call rewrites
+  // TO — is refused, so the "raw row the removal spelling cannot express" can never enter the log to
+  // begin with (a raw append once bypassed the builder; the boundary is the door now).
+  await runInDurableObject(stub(ctx), async (instance) => {
+    await expect(
+      instance.append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: "itx.builtins.foo", target: "itx.builtins.rpcStubs.get('itx.k7')" },
+      }),
+    ).rejects.toThrow(/itx\.builtins/);
   });
+  // and a real rule's own un-set sweep is untouched: the pager's last close un-sets itx.k7's row.
   const pager = await openPager(ctx, "itx.k7", [ruleFor("itx.k7")]);
   expect(pager.status).toBe(101);
   pager.webSocket!.accept();

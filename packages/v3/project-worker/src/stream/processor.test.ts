@@ -113,7 +113,10 @@ describe("contract", () => {
         version: "1",
         description: "",
         stateSchema: z.object({}),
-        processorDeps: [dep("dep-a", z.object({ a: z.string() })), dep("dep-b", z.object({ b: z.number() }))],
+        processorDeps: [
+          dep("dep-a", z.object({ a: z.string() })),
+          dep("dep-b", z.object({ b: z.number() })),
+        ],
         consumes: ["demo/shared"],
         emits: [],
       }),
@@ -1094,7 +1097,8 @@ describe("contract payload validation", () => {
       contract = coerceContract;
       reduce({ event, state }: ReduceArgs<z.infer<typeof coerceContract.stateSchema>>) {
         // The engine normalizes the payload to z.output, so `n` is a NUMBER here even for `"2"`.
-        if (event.type === "demo/add") return { sum: state.sum + (event.payload as { n: number }).n };
+        if (event.type === "demo/add")
+          return { sum: state.sum + (event.payload as { n: number }).n };
         return undefined;
       }
     }
@@ -1127,7 +1131,9 @@ describe("contract payload validation", () => {
       reduce({ event, state }: ReduceArgs<z.infer<typeof contract.stateSchema>>) {
         return { seen: [...state.seen, (event.payload as { n: number }).n] };
       }
-      override processEvent({ event }: ProcessEventArgs<z.infer<typeof contract.stateSchema>>) {
+      override processEvent({
+        event,
+      }: ProcessEventArgs<z.infer<typeof contract.stateSchema>>): undefined {
         // The hook is typed against ConsumedEvent's z.output — `n` is a number. A malformed event
         // reaching here (n a string) would THROW and wedge the batch: checkpoints never advance and
         // catch-up refails the same row. It must be skipped upstream.

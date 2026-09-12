@@ -34,7 +34,7 @@
 //      the fixed point; anything else is refused. 32 rewrites is the budget (a self-referential rule
 //      errors, never spins). The platform rows are never materialized on this path; `list()` and
 //      `resolve()` are the only readers that spell them out.
-//   6. THE DOOR (`rewriteRuleConfiguredEvent`): a match is rooted at `itx`; never at `itx.builtins`
+//   6. THE DOOR (`normalizeRewriteRuleConfigured`, run at the append boundary): a match is rooted at `itx`; never at `itx.builtins`
 //      (the fixed point is what every call rewrites TO, never a name a row claims); never at one of
 //      the proxy's own verbs (`cd`, `invoke`, `provide`, `subscribe` — the dotted surface never
 //      hands those to the table, so such a row could fire from a string invoke but never from the
@@ -56,12 +56,11 @@
 // user's row at `itx.facets` or `itx.rpcStubs` redirects the user's calls and nothing else. A LENT RPC
 // STUB is no exception: `itx.provide(match, stub)` lends the stub to the `itx.builtins.rpcStubs`
 // registry (physical) under the key = the canonical match and configures that pure-data rule — the log
-// records the rule, never the socket. AT REST (`rewriteRuleConfiguredEvent`, below): the event stores
+// records the rule, never the socket. AT REST (`normalizeRewriteRuleConfigured`, below): the event stores
 // the match as its canonical STRING (the table's key) and the target in the PARSED form; the core
 // reduce parses the match once and takes the target as it is.
 
 import { codedError, jsonEqual } from "../lib.ts";
-import type { StreamEventInput } from "../stream/processor.ts";
 import {
   callOn,
   walkSteps,
@@ -337,11 +336,20 @@ export function resolveItxExpression(
  *  `match` (a MASK when a platform row lies beneath, a deletion otherwise); the platform-equivalent
  *  target `itx.builtins.<match…>` restores the platform row (the reduce deletes the row). Rule 6 is
  *  enforced here, at the door. */
-export function rewriteRuleConfiguredEvent(
-  match: ItxExpressionInput,
-  target: ItxExpressionInput | null,
-): StreamEventInput {
-  const matchPrefix = parseItxExpressionPrefix(match);
+/** Validate + normalize the payload of a LITERAL `events.iterate.com/itx/rewrite-rule-configured`
+ *  event (the append boundary calls this — core-processor's `normalizeControlEvent`): the match is
+ *  validated (rooted at `itx`, no `@` hole, not `itx.builtins`, not a proxy verb) and canonicalized to
+ *  a string; the target is validated (rooted at `itx`, whole-context override targets the physical
+ *  spelling, `@` only in its final step) and normalized to the PARSED array form BEFORE storage — a
+ *  target may carry a whole facet source, which the reduce must never re-parse through the string
+ *  codec (its 2 KiB cap). So call sites write `itx.append({ type, payload: { match, target } })`
+ *  literally. A `null` target is the caller's deliberate MASK (deny); the platform-equivalent target
+ *  from `restoreRuleTarget` is a removal (the reduce turns it into a deletion). */
+export function normalizeRewriteRuleConfigured(payload: {
+  match: ItxExpressionInput;
+  target: ItxExpressionInput | null;
+}): { match: string; target: ItxExpression | null } {
+  const matchPrefix = parseItxExpressionPrefix(payload.match);
   if (matchPrefix[0] !== "itx")
     throw new Error(
       `a rewrite rule's match must be rooted at "itx" (every call starts there — ${JSON.stringify(print(matchPrefix))} could never match one)`,
@@ -362,7 +370,7 @@ export function rewriteRuleConfiguredEvent(
   // Stored as the PARSED form (a target may carry a whole source as data — never through the string
   // codec again); a string target is parsed once here, an array shape-checked in place.
   const targetExpression =
-    target === null ? null : normalizedItxExpression(target, { holes: true });
+    payload.target === null ? null : normalizedItxExpression(payload.target, { holes: true });
   if (targetExpression && targetExpression[0] !== "itx")
     throw new Error(
       `a rewrite rule's target must be rooted at "itx" (a bare built-in root is unspellable — targets resolve through the rules; the physical spelling is "itx.builtins.…")`,
@@ -379,13 +387,16 @@ export function rewriteRuleConfiguredEvent(
     throw new Error(
       `\`@\` (the caller's input) is legal only in the target's FINAL step — ${JSON.stringify(print(targetExpression, { holes: true }))} holds it earlier (rule 7)`,
     );
-  return {
-    type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: {
-      match: print(matchPrefix),
-      target: targetExpression,
-    },
-  };
+  return { match: print(matchPrefix), target: targetExpression };
+}
+
+/** The platform-equivalent target for a match (`itx.ai ⇒ itx.builtins.ai`, `itx ⇒ itx.builtins`) — a
+ *  rule REMOVAL: an `itx.append({ type: "…rewrite-rule-configured", payload: { match, target:
+ *  restoreRuleTarget(match) } })` the reduce turns into a deletion (back to the platform row when one
+ *  lies beneath), so a disposed handle RESTORES `itx.ai` rather than masking it (`null` is a deny). */
+export function restoreRuleTarget(match: ItxExpressionInput): ItxExpression {
+  const matchPrefix = parseItxExpressionPrefix(match);
+  return ["itx", "builtins", ...matchPrefix.slice(1)];
 }
 
 // ── WHAT NAMES A LENT STUB (pure; the DO appends the removals it decides) ──
@@ -468,28 +479,6 @@ export function rpcStubKeysNamed(args: {
     }
   }
   return keys;
-}
-
-/** The REMOVAL spelling of the same event: the row at `match` is gone — back to the platform row when
- *  one lies beneath, nothing otherwise. Spelled as the platform-equivalent target
- *  `itx.builtins.<match…>`, which the core reduce turns into a deletion, so a disposed handle and a
- *  dead stub RESTORE `itx.ai` rather than mask it (`null` is the caller's deliberate deny).
- *  `ifTarget` is a handle's undo: the reduce removes the row ONLY while its target is still the one
- *  the handle wrote (a `null` for a mask) — a later provide at the same match owns the row and a
- *  stale undo is a no-op. Decided inside the commit: there is no read-then-append window. */
-export function rewriteRuleRemovedEvent(
-  match: ItxExpressionInput,
-  ifTarget?: ItxExpression | null,
-): StreamEventInput {
-  const matchPrefix = parseItxExpressionPrefix(match);
-  const event = rewriteRuleConfiguredEvent(matchPrefix, [
-    "itx",
-    "builtins",
-    ...matchPrefix.slice(1),
-  ]);
-  return ifTarget === undefined
-    ? event
-    : { ...event, payload: { ...(event.payload as object), ifTarget } };
 }
 
 // ── THE RESOLVER (parent-constructed over the physical built-ins and a reader of the CURRENT rules) ──

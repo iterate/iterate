@@ -14,7 +14,6 @@ import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream
 import { stampPrincipal, type Caller } from "../principal.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/processor.ts";
 import type { LibraryRoots } from "../library.ts";
-import { subscriptionConfiguredEvent } from "../stream/core-processor.ts";
 import { resolveContextPath } from "../iterate-context.ts";
 import {
   assertFacetSourceWithinCeiling,
@@ -415,8 +414,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             `processors.enable(${JSON.stringify(name)}, { source, className, consumes? }): name the host class the source exports — there are no built-in processors to enable by name`,
           );
         assertFacetSourceWithinCeiling(spec, `processors.enable("${name}")`);
-        await append(
-          subscriptionConfiguredEvent({
+        await append({
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
             name,
             target: [
               "itx",
@@ -426,12 +426,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               "processEventBatch",
             ],
             ...(spec.consumes && { consumes: spec.consumes }),
-          }),
-        );
+          },
+        });
         return { name };
       },
       disable: async (name) => {
-        await append(subscriptionConfiguredEvent({ name, target: null }));
+        await append({
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name, target: null },
+        });
       },
       list: () => deps.subscriptions.list().filter((row) => row.hostedFacet !== undefined),
     },
