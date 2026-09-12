@@ -443,13 +443,20 @@ export async function connectToMcp(
 ): Promise<McpConnection> {
   const client = new McpJsonRpcClient(itx, url, options.headers ?? {});
   const serverInfo = await client.initialize();
-  const { tools } = MCPToolsList.parse(await client.request("tools/list", {}));
-  const Connection = subclassWithMethods(
-    McpConnection,
-    tools.map((tool) => tool.name),
-    (self, name, args) => self.callTool(name, args as Record<string, unknown> | undefined),
-  );
-  return new Connection(client, serverInfo);
+  try {
+    const { tools } = MCPToolsList.parse(await client.request("tools/list", {}));
+    const Connection = subclassWithMethods(
+      McpConnection,
+      tools.map((tool) => tool.name),
+      (self, name, args) => self.callTool(name, args as Record<string, unknown> | undefined),
+    );
+    return new Connection(client, serverInfo);
+  } catch (error) {
+    // Discovery failed AFTER the handshake went live — close the client so its session is DELETEd
+    // rather than leaked (nothing else holds this half-built connection).
+    await client.close();
+    throw error;
+  }
 }
 
 /** A connected MCP server. Held across calls it is an RpcTarget; disposed, it DELETEs its session. */
@@ -486,7 +493,9 @@ export class McpConnection extends RpcTarget {
 }
 
 const MCPToolResult = z.object({
-  content: z.array(z.object({ type: z.string(), text: z.string().optional() })).optional(),
+  // A loose content item: `type` and (for text) `text` are validated, but every OTHER field survives —
+  // an image/audio/resource part keeps its `data`/`mimeType`/`resource` instead of being stripped.
+  content: z.array(z.looseObject({ type: z.string(), text: z.string().optional() })).optional(),
   structuredContent: z.unknown().optional(),
   isError: z.boolean().optional(),
 });
@@ -534,10 +543,16 @@ class McpJsonRpcClient {
    *  caller (a concurrent request re-opening a closed client) joins the same one instead of racing a
    *  second handshake or posting session-less mid-handshake. `#closed` stays true until it completes. */
   async initialize(): Promise<MCPServerInfo> {
-    this.#handshake ??= this.#runHandshake().catch((error) => {
-      this.#handshake = null; // a failed handshake must not stick — the next request retries
-      throw error;
-    });
+    if (!this.#handshake) {
+      const handshake = this.#runHandshake();
+      this.#handshake = handshake;
+      // Clear the memo when THIS handshake settles — but ONLY if it is still the current one, so a
+      // handshake that lost a close race never clears its replacement's memo (which would let a third
+      // handshake start and leave one session unowned).
+      void handshake.catch(() => {}).finally(() => {
+        if (this.#handshake === handshake) this.#handshake = null;
+      });
+    }
     return this.#handshake;
   }
   async #runHandshake(): Promise<MCPServerInfo> {
@@ -550,18 +565,23 @@ class McpJsonRpcClient {
       capabilities: {},
       clientInfo: CLIENT_INFO,
     });
-    const serverInfo = MCPServerInfo.parse(initialized.result);
     const sessionId = initialized.sessionId; // OUR session id, from the initialize response
-    await this.notify("notifications/initialized", undefined, sessionId);
-    if (generation !== this.#generation) {
-      // close() (or another close) ran while this handshake was in flight: do NOT revive the client,
-      // and DELETE OUR OWN session — never the shared #sessionId, which a newer handshake may now own.
+    try {
+      const serverInfo = MCPServerInfo.parse(initialized.result);
+      await this.notify("notifications/initialized", undefined, sessionId);
+      // close() (or another close) ran while this handshake was in flight: do NOT revive the client.
+      if (generation !== this.#generation)
+        throw new Error("MCP client was closed during its handshake");
+      this.#sessionId = sessionId; // publish OUR session as the live one …
+      this.#closed = false; // … and only now — session id set, initialized sent — is it usable
+      return serverInfo;
+    } catch (error) {
+      // ANY failure once the session was allocated — a bad initialize result, a failed `initialized`
+      // notify, or the close race — DELETEs OUR OWN session so the server never keeps it orphaned.
+      // (Never the shared #sessionId, which a newer handshake may now own.)
       if (sessionId !== null) await this.#deleteSession(sessionId);
-      throw new Error("MCP client was closed during its handshake");
+      throw error;
     }
-    this.#sessionId = sessionId; // publish OUR session as the live one …
-    this.#closed = false; // … and only now — session id set, initialized sent — is the client usable
-    return serverInfo;
   }
   async request(method: string, params: unknown): Promise<unknown> {
     if (this.#closed) await this.initialize();
@@ -849,20 +869,32 @@ function requestBase(
   return base;
 }
 
+/** A concrete OpenAPI parameter — PARSED, never cast: a `$ref` parameter (or any malformed one) has no
+ *  string `name`/`in`, so it fails this and is dropped instead of surfacing as `{ name: undefined }`
+ *  that violates OpenApiOperation. $ref RESOLUTION is a deferred feature (see docs/cleanup-log.md). */
+const OpenAPIParameter = z.object({
+  name: z.string(),
+  in: z.string(),
+  required: z.boolean().optional(),
+});
+const concreteParameters = (raw: unknown): OpenApiOperation["parameters"] =>
+  Array.isArray(raw)
+    ? raw.flatMap((p) => {
+        const parsed = OpenAPIParameter.safeParse(p);
+        return parsed.success ? [parsed.data] : [];
+      })
+    : [];
+
 function listOperations(spec: OpenApiDocument): OpenApiOperation[] {
   const operations: OpenApiOperation[] = [];
   for (const [path, pathItem] of Object.entries(spec.paths ?? {})) {
     if (pathItem == null || typeof pathItem !== "object") continue;
-    const pathParameters = Array.isArray(pathItem.parameters)
-      ? (pathItem.parameters as OpenApiOperation["parameters"])
-      : [];
+    const pathParameters = concreteParameters(pathItem.parameters);
     for (const [method, raw] of Object.entries(pathItem)) {
       if (!HTTP_METHODS.has(method) || raw == null || typeof raw !== "object") continue;
       const op = raw as Record<string, unknown>;
       if (typeof op.operationId !== "string") continue;
-      const own = Array.isArray(op.parameters)
-        ? (op.parameters as OpenApiOperation["parameters"])
-        : [];
+      const own = concreteParameters(op.parameters);
       operations.push({
         operationId: op.operationId,
         method,
@@ -873,7 +905,7 @@ function listOperations(spec: OpenApiDocument): OpenApiOperation[] {
             (inherited) => !own.some((o) => o.name === inherited.name && o.in === inherited.in),
           ),
           ...own,
-        ].map(({ name, in: location, required }) => ({ name, in: location, required })),
+        ],
         hasRequestBody: op.requestBody != null,
         ...(typeof op.summary === "string" && { summary: op.summary }),
       });

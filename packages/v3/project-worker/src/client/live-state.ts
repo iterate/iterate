@@ -202,7 +202,16 @@ export async function connectLiveState<S>(
           reseed();
           continue;
         }
-        if (parsed.data.key === opts.key) store.apply(parsed.data, reseed);
+        if (parsed.data.key !== opts.key) continue;
+        // `store.apply` runs `applyPatch`, which THROWS on a patch it refuses (a `/__proto__` path a
+        // legitimate state with an own `__proto__` key produces, say). Contain it per frame: heal via
+        // the door — which re-seeds the state DIRECTLY, no patch to reject — instead of escaping this
+        // callback and skipping every later frame.
+        try {
+          store.apply(parsed.data, reseed);
+        } catch {
+          reseed();
+        }
       }
     },
   });

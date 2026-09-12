@@ -612,6 +612,52 @@ describe("mcp", () => {
       expect(deletes).not.toContain("s-3"); // the live session was not deleted
     });
 
+    /** A minimal live server: session s-1, and `handler` for tools/list + tools/call. */
+    const serverWith = (handler: (body: any) => unknown): LibraryItx =>
+      fakeItx((request, body) => {
+        if (request.method === "DELETE") return new Response(null, { status: 204 });
+        if (body.method === "initialize")
+          return json(
+            { jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "f" } } },
+            { headers: { "mcp-session-id": "s-1" } },
+          );
+        if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+        return json({ jsonrpc: "2.0", id: body.id, result: handler(body) });
+      }).itx;
+
+    test("callTool PRESERVES non-text content — an image part keeps its data and mimeType", async () => {
+      const itx = serverWith((body) =>
+        body.method === "tools/list"
+          ? { tools: [] }
+          : { content: [{ type: "image", data: "aGk=", mimeType: "image/png" }] },
+      );
+      const conn = await connectToMcp(itx, "https://mcp.example/rpc");
+      // No text/structuredContent → callTool returns the whole result; the image bytes must survive.
+      expect(await conn.callTool("shot")).toEqual({
+        content: [{ type: "image", data: "aGk=", mimeType: "image/png" }],
+      });
+    });
+
+    test("a failed tool discovery closes the client — the handshake's session is DELETEd, not leaked", async () => {
+      const deletes: string[] = [];
+      const { itx } = fakeItx((request, body) => {
+        if (request.method === "DELETE") {
+          deletes.push(request.headers.get("mcp-session-id") ?? "?");
+          return new Response(null, { status: 204 });
+        }
+        if (body.method === "initialize")
+          return json(
+            { jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "f" } } },
+            { headers: { "mcp-session-id": "s-1" } },
+          );
+        if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+        // discovery fails AFTER the handshake went live
+        return json({ jsonrpc: "2.0", id: body.id, error: { code: -32000, message: "boom" } });
+      });
+      await expect(connectToMcp(itx, "https://mcp.example/rpc")).rejects.toThrow();
+      expect(deletes).toContain("s-1"); // the live session was cleaned up, not orphaned
+    });
+
     test("close DELETEs the session once; a server without a session id gets no DELETE", async () => {
       const withSession = fakeItx(referenceServer());
       const conn = await connectToMcp(withSession.itx, "https://mcp.example/rpc");
@@ -731,6 +777,32 @@ describe("openapi", () => {
       ...init,
       headers: { "content-type": "application/json" },
     });
+
+  test("a $ref (or malformed) parameter is dropped, not surfaced as { name: undefined }", async () => {
+    const spec = {
+      openapi: "3.0.0",
+      servers: [{ url: "https://api.example/v1" }],
+      paths: {
+        "/pets": {
+          get: {
+            operationId: "listPets",
+            parameters: [
+              { $ref: "#/components/parameters/Limit" }, // a $ref — unsupported; must be dropped
+              { name: "tag", in: "query" },
+            ],
+          },
+        },
+      },
+      // eslint-disable-next-line -- $ref parameters are not in the typed shape; this simulates a real doc
+    } as unknown as OpenApiDocument;
+    const { itx } = fakeItx();
+    const conn = await connectToOpenApi(itx, spec);
+    const [op] = conn.operations();
+    expect(op.parameters).toEqual([{ name: "tag", in: "query" }]); // the $ref param is gone
+    expect(op.parameters.every((p) => typeof p.name === "string" && typeof p.in === "string")).toBe(
+      true,
+    );
+  });
 
   describe("connectToOpenApi", () => {
     const rows: Array<{

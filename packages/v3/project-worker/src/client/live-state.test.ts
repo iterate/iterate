@@ -164,3 +164,29 @@ test("an event with an OMITTED payload heals and does not skip a later valid del
   expect(connection.store.rev()).toBe(6);
   await connection.dispose();
 });
+
+test("a patch applyPatch REJECTS heals through the door instead of escaping the callback", async () => {
+  const h = harness();
+  const connecting = connectLiveState(h.itx, { key: "k", door: h.door });
+  await settle();
+  h.doorReads[0]({ rev: 5, state: { n: 5 } });
+  const connection = await connecting;
+  expect(connection.store.rev()).toBe(5);
+
+  // A schema-valid delta whose patch applyPatch REFUSES (a `/__proto__` path a legitimate state with an
+  // own `__proto__` key would produce). store.apply throws; without a guard it escapes and skips later
+  // frames. It must heal via the door and keep going.
+  const before = h.doorReads.length;
+  h.deliverDelta({ key: "k", from: 5, to: 6, patch: [{ op: "add", path: "/__proto__", value: {} }] });
+  await settle();
+  expect(h.doorReads.length).toBe(before + 1); // healed via the door
+  h.doorReads[h.doorReads.length - 1]({ rev: 6, state: { n: 6 } });
+  await settle();
+
+  // A later valid delta still applies — the callback was not wedged.
+  h.deliverDelta({ key: "k", from: 6, to: 7, patch: [{ op: "replace", path: "/n", value: 7 }] });
+  await settle();
+  expect(connection.store.rev()).toBe(7);
+  expect(connection.store.get()).toEqual({ n: 7 });
+  await connection.dispose();
+});
