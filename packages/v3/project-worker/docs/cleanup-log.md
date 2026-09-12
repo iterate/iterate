@@ -355,3 +355,13 @@ in round 1 (the owner's exact example is fixed).
 - **library.ts (≈900 lines, 3 protocols)** → extract capnweb/mcp/openapi modules for cohesion. Judgment
   call: it improves cohesion but adds files (vs the owner's "fewer files") and the import-boundary test
   reads library.ts whole. Recommend extracting; needs the boundary test updated to cover the new modules.
+
+## Round 8 — STYLE round 2: converged
+
+Codex style round 2 reported the pass "close to converged": three small wins (done above — DRY the
+account `consumes`, inline the `hostedFacetName` getter + `CORE_SLUG` constant, drop the
+`ItxExpressionRewriteRule` re-export), NO new event builders, and no compelling small-file
+consolidation beyond the already-logged larger items. The style/idiom/conciseness pass has converged;
+the remaining shape work is the three LOGGED larger refactors (core-builder append-boundary
+unification; app-config→zod; library.ts protocol split) — each a decision/dedicated pass, not a quick
+cleanup.
