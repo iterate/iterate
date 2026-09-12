@@ -220,13 +220,23 @@ class KvStream implements ProcessorStream {
     const limit = args?.limit ?? 500;
     const max = this.#max();
     const events: StreamEvent[] = [];
+    let bytes = 0;
     const wantAll = args?.eventTypes === undefined || args.eventTypes.includes("*");
     for (let offset = Math.min(after, max) + 1; offset <= max && events.length < limit; offset++) {
       if (before !== null && before !== undefined && offset >= before) break;
       const event = this.#get(offset);
       if (event === undefined) continue;
       if (!wantAll && !args!.eventTypes!.includes(event.type)) continue;
+      const eventBytes = new TextEncoder().encode(JSON.stringify(event)).byteLength;
+      if (
+        args?.byteLimit !== undefined &&
+        events.length > 0 &&
+        bytes + eventBytes > args.byteLimit
+      ) {
+        break;
+      }
       events.push(event);
+      bytes += eventBytes;
     }
     return Promise.resolve({ streamId: this.streamId, streamMaxOffset: max, events });
   }

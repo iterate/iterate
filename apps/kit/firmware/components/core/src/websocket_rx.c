@@ -15,6 +15,12 @@
  * irrelevant bad control or empty data frame into delayed work on a new socket,
  * while still forcing the caller to count the loss visibly.
  */
+int32_t iterate_kit_websocket_close_status_code(
+    const uint8_t *payload, size_t payload_size) {
+  if (payload == NULL || payload_size < 2U) return 0;
+  return (int32_t)(((uint16_t)payload[0] << 8U) | payload[1]);
+}
+
 static bool control_opcode(
     enum iterate_kit_websocket_opcode opcode) {
   return opcode == ITERATE_KIT_WEBSOCKET_CLOSE ||

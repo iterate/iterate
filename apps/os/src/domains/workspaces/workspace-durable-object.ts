@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { Workspace } from "@cloudflare/shell";
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import type { StreamEventInput } from "iterate/processors";
 import { isStreamOffsetConflictError } from "iterate/processors";
 import { minimatch } from "minimatch";
@@ -155,7 +156,17 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   async #refreshReducedState(): Promise<WorkspaceProcessorState> {
     let state: WorkspaceProcessorState;
     try {
-      ({ state } = await (await this.#processorFacade()).snapshot());
+      const facade = await this.#processorFacade();
+      try {
+        const snapshot = await facade.snapshot();
+        try {
+          state = snapshot.state;
+        } finally {
+          disposeIgnoredRpcResult(snapshot);
+        }
+      } finally {
+        disposeIgnoredRpcResult(facade);
+      }
     } catch (error) {
       // Before the birth batch commits, the workspace subscription is absent
       // from the stream catalog (and a read must never materialize its facet).
@@ -167,6 +178,18 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     }
     this.#reducedState = state;
     return state;
+  }
+
+  async #waitUntilProcessed(offset: number): Promise<void> {
+    const facade = await this.#processorFacade();
+    try {
+      await facade.waitUntilProcessed({
+        offset,
+        timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+      });
+    } finally {
+      disposeIgnoredRpcResult(facade);
+    }
   }
 
   /** The stored OVERLAY table (reduced state) — deviations only. Synchronous
@@ -283,12 +306,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
       // plain conflict retry.
       const { maxDurableOffset, maxOffset: rawHead } =
         await this.#stream[STREAM_DURABLE_OBJECT_STUB].getMaxOffsets();
-      await (
-        await this.#processorFacade()
-      ).waitUntilProcessed({
-        offset: maxDurableOffset,
-        timeoutMs: INGEST_WAIT_TIMEOUT_MS,
-      });
+      await this.#waitUntilProcessed(maxDurableOffset);
       await this.#refreshReducedState();
       const current = this.#currentConfig();
       const patch = plan(current);
@@ -309,12 +327,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
           }),
           offset: rawHead + 1,
         } as StreamEventInput);
-        await (
-          await this.#processorFacade()
-        ).waitUntilProcessed({
-          offset: event!.offset,
-          timeoutMs: INGEST_WAIT_TIMEOUT_MS,
-        });
+        await this.#waitUntilProcessed(event!.offset);
         await this.#refreshReducedState();
         return this.#currentConfig();
       } catch (error) {

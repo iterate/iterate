@@ -8,7 +8,9 @@ set(ITERATE_KIT_AUDIO_SOURCES
   src/aec_uplink_selector.c
   src/audio_codec.c
   src/audio_processor.c
-  src/pcm_high_pass.c)
+  src/pcm_format.c
+  src/pcm_high_pass.c
+  src/starvation_ledger.c)
 
 if(COMMAND idf_component_register)
   idf_component_register(

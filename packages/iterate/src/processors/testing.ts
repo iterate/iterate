@@ -189,7 +189,7 @@ export class MemoryStream implements ProcessorStream {
   async getEvents(input: StreamEventReadInput = {}): Promise<StreamEvent[]> {
     const { afterOffset = 0, limit = 500 } = input;
     const beforeOffset = input.beforeOffset ?? Number.MAX_SAFE_INTEGER;
-    return this.events
+    const matching = this.events
       .filter((event) => event.offset > afterOffset)
       .filter((event) => event.offset < beforeOffset)
       .filter(
@@ -199,6 +199,13 @@ export class MemoryStream implements ProcessorStream {
           input.eventTypes.includes(event.type),
       )
       .slice(0, limit);
+    const byteLimit = input.byteLimit;
+    if (byteLimit === undefined) return matching;
+    let bytes = 0;
+    return matching.filter((event, index) => {
+      bytes += new TextEncoder().encode(JSON.stringify(event)).byteLength;
+      return bytes <= byteLimit || index === 0;
+    });
   }
 
   async getEventPage(input: StreamEventReadInput = {}) {
