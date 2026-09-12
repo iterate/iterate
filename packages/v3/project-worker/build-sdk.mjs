@@ -84,12 +84,12 @@ async function bundleFacet(entryPoint, constName, generatedPath) {
   console.log(`${constName}: ${(text.length / 1024).toFixed(1)} KiB`);
 }
 await bundleFacet(
-  "src/account/account-facet.ts",
+  "src/account/durable-object.ts",
   "ACCOUNT_PROCESSOR_SOURCE",
   "src/generated/account-processor-source.ts",
 );
 await bundleFacet(
-  "src/client/presence-processor.ts",
+  "src/client/presence/durable-object.ts",
   "PRESENCE_PROCESSOR_SOURCE",
   "src/generated/presence-processor-source.ts",
 );

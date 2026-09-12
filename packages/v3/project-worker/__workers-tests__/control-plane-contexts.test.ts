@@ -8,7 +8,7 @@
 // passes; when enforcement lands the assertion passes, the expected-fail turns into a real failure,
 // and whoever wired the fix deletes the `.fails`. See packages/v3/project-worker/docs/control-plane-context-resolved-design.md.
 import { beforeAll, describe, expect, test } from "vitest";
-import { AccountProcessor } from "../src/account/contract.ts";
+import { AccountProcessor } from "../src/account/processor.ts";
 import { ACCOUNT_PROCESSOR_SOURCE } from "../src/generated/account-processor-source.ts";
 import { adminCredentials, applyDirectorySchema, openSession, until } from "./support.ts";
 

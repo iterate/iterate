@@ -10,13 +10,7 @@
 // the loaded `cap.js`, one source. No D1: the foundation processor only reduces its own stream; the
 // privileged ctx.exports variant (worker env, D1/OAuth) is for the later token EFFECTS, and is deferred.
 import { z } from "zod";
-import {
-  type ConsumedEvent,
-  defineProcessorContract,
-  type ProcessorState,
-  type ReduceArgs,
-  StreamProcessor,
-} from "../stream/processor.ts";
+import { defineProcessorContract } from "../stream/processor.ts";
 
 // ── event payloads (facts the platform publishes, commands a client submits) ──
 
@@ -84,29 +78,3 @@ export const AccountContract = defineProcessorContract({
   ],
   emits: [],
 });
-
-/** Folds account facts and commands into the view. Pure — the kernel's `ProcessorEngine` drives it
- *  and projects it to live state, exactly as it does a project processor; `session.user` hosts it as
- *  a facet, and a client reads it with `useLiveState`. */
-export class AccountProcessor extends StreamProcessor<
-  ProcessorState<typeof AccountContract>,
-  ConsumedEvent<typeof AccountContract>
-> {
-  readonly contract = AccountContract;
-
-  override reduce({
-    event,
-    state,
-  }: ReduceArgs<AccountView, ConsumedEvent<typeof AccountContract>>): AccountView | undefined {
-    if (event.type === "events.iterate.com/account/authenticated")
-      return { ...state, authentications: [...state.authentications, event.payload] };
-    if (event.type === "events.iterate.com/account/token-create-requested")
-      return { ...state, tokens: [...state.tokens, event.payload] };
-    if (event.type === "events.iterate.com/account/token-revoked")
-      return {
-        ...state,
-        tokens: state.tokens.filter((token) => token.requestId !== event.payload.requestId),
-      };
-    return undefined;
-  }
-}

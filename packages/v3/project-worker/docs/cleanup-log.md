@@ -573,3 +573,25 @@ Gates: unit 544 | 5 xfail · workers 77 | 13 xfail | 2 skip · typecheck · oxli
   params still drop. Test updated: an internal ref resolves, an external/missing/malformed one drops.
 
 Gates: unit 544 | 5 xfail · workers (ws-fetch-live-101) 4/4 · typecheck · oxlint 0/0.
+
+## Round 15 — D3 (declarative processor test harness) + the processor TRIPLET convention
+
+- **D3 — a declarative `{ events → state }` processor harness, DONE.** `stream/test-support.ts`
+  `reduceProcessor(processor, inputs)` folds inputs through a processor's pure `reduce` exactly as the
+  engine does — initial state, per-payload contract validation (a malformed KNOWN payload is skipped),
+  reduce, thread the state — the apps/os shape without booting the engine/storage. Table tests added for
+  both foundation processors: `account/processor.test.ts` (authentications fold, token create/revoke by
+  requestId, malformed-payload skip) and `client/presence/processor.test.ts` (ticks reduced, ephemeral
+  pokes never reduced).
+- **The processor TRIPLET convention (owner's steer).** Each processor is a FOLDER of three files:
+  `contract.ts` (the vocabulary — events, schemas, the view), `processor.ts` (the PURE class — reduce /
+  processEvent / projectLiveState, imports only the kernel, so the node lane constructs it with `new`),
+  and `durable-object.ts` (the 2–3-line loadable host build-sdk.mjs bundles). Applied to both:
+  - `src/account/` → `contract.ts` + `processor.ts` (AccountProcessor, split out of contract.ts) +
+    `durable-object.ts` (was account-facet.ts) + `processor.test.ts`.
+  - `src/client/presence/` (new folder, was two loose files) → the same four.
+  build-sdk.mjs now bundles the `durable-object.ts` of each; the generated source names + the
+  PRESENCE/ACCOUNT_PROCESSOR_SOURCE constants are unchanged, so demo/e2e are untouched. knip's explicit
+  account build-entry updated to the new path (presence rides the `src/client/**` glob).
+
+Gates: unit 552 | 5 xfail · workers 78 | 13 xfail | 2 skip · typecheck · oxlint 0/0 · knip clean.

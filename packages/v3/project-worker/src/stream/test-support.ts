@@ -17,11 +17,45 @@ import {
   sameIdempotentEvent,
   type StreamEvent,
   type StreamEventInput,
+  type ProcessorContract,
   type ProcessorEngine,
   type ProcessorStream,
   ReduceCheckpointTable,
 } from "./processor.ts";
 import type { DurableObjectStorageSlice } from "./stream.ts";
+
+/** THE PROCESSOR HARNESS: fold `inputs` through a processor's pure `reduce`, exactly as the engine
+ *  does — start from the contract's initial state, validate each payload against the contract (a
+ *  malformed KNOWN payload is SKIPPED, never reduced), reduce, thread the state — for a declarative
+ *  `{ events → state }` processor spec (apps/os shape, no engine/storage/effects). Construct the
+ *  processor with `new` and hand it the events; the offsets are the input order. Ephemeral inputs are
+ *  reduced like any other — the reduce decides what it folds (presence's `poke` returns undefined). */
+export function reduceProcessor<State>(
+  processor: {
+    contract: ProcessorContract<State>;
+    // Method syntax (bivariant params) so a processor whose reduce narrows `event` to its own
+    // contract's union is accepted — the harness only ever hands it events its contract consumes.
+    reduce(args: { event: StreamEvent; state: State }): State | null | undefined;
+  },
+  inputs: readonly { type: string; payload?: unknown }[],
+): State {
+  let state = processor.contract.initialState();
+  inputs.forEach((input, index) => {
+    const parsed = processor.contract
+      .payloadSchemaFor?.(input.type)
+      ?.safeParse(input.payload ?? {});
+    if (parsed && !parsed.success) return; // the engine skips a malformed known payload
+    const event = {
+      type: input.type,
+      payload: parsed?.success ? parsed.data : input.payload,
+      offset: index + 1,
+      createdAt: new Date((index + 1) * 1000).toISOString(),
+      path: "/",
+    } as StreamEvent;
+    state = processor.reduce({ event, state }) ?? state;
+  });
+  return state;
+}
 
 export function memoryStream(path = "/") {
   const durableEvents: StreamEvent[] = []; // the durable log — what `read` answers
