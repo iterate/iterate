@@ -26,7 +26,6 @@ static struct cli_screen_state baseline(void)
     .elapsed_ms = 20000U,
     .api_connected_at_ms = 8297U,
     .call_established_at_ms = 9730U,
-    .call_pending = false,
     .transport_state = "ready",
     .capture_requested = true,
     .talking = true,

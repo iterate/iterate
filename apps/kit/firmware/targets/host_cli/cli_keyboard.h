@@ -47,19 +47,17 @@ const char *cli_keyboard_event_name(enum cli_keyboard_event event);
 enum cli_keyboard_status cli_keyboard_open(struct cli_keyboard *keyboard);
 
 /**
- * Apply bytes read at now_ms. Only q produces an event.
+ * Apply bytes read from stdin. Only q produces an event.
  */
 enum cli_keyboard_status cli_keyboard_feed(
     struct cli_keyboard *keyboard,
     const uint8_t *keys,
     size_t count,
-    uint64_t now_ms,
     enum cli_keyboard_event *out);
 
 /** Read whatever is waiting on stdin and feed it. Never blocks. */
 enum cli_keyboard_status cli_keyboard_poll(
     struct cli_keyboard *keyboard,
-    uint64_t now_ms,
     enum cli_keyboard_event *out);
 
 /** Restore the terminal and forget the key state. Safe if never opened. */

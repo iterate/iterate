@@ -665,6 +665,45 @@ describe("the speaker lane", () => {
     expect(speakerMsDelivered(h)).toBeGreaterThanOrEqual(1_000);
   });
 
+  it("ends the call rather than silently losing a rejected speaker frame", async () => {
+    const h = makeHarness();
+    const append = h.stream.append.bind(h.stream);
+    let rejected = false;
+    vi.spyOn(h.stream, "append").mockImplementation(async (...inputs) => {
+      if (
+        !rejected &&
+        inputs.some((input) => input.type === "events.iterate.com/voice-agent/spk-frame")
+      ) {
+        rejected = true;
+        throw new Error("injected one-shot speaker append failure");
+      }
+      return append(...inputs);
+    });
+
+    await callIsLive(h);
+    h.provider.speech(100);
+    await h.settle();
+
+    expect(rejected).toBe(true);
+    const ended = eventsOfType(h, "conversation-ended");
+    expect(ended).toHaveLength(1);
+    expect(ended[0]?.payload).toMatchObject({
+      reason: "the device speaker frame could not be appended",
+    });
+    expect(h.provider.closed).toBe(true);
+    expect(h.state().call).toBeNull();
+    /* The failed audio is never replayed; only the existing empty cleanup
+     * frame may follow before the durable terminal event reaches the device. */
+    expect(speakerFrames(h).filter((frame) => frame.pcm !== "")).toEqual([]);
+    expect(speakerFrames(h).filter((frame) => frame.lastFrameOfAnswer === true)).toEqual([]);
+
+    h.provider.speech(100);
+    await h.settle();
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    expect(speakerFrames(h).filter((frame) => frame.pcm !== "")).toEqual([]);
+    expect(speakerFrames(h).filter((frame) => frame.lastFrameOfAnswer === true)).toEqual([]);
+  });
+
   it("ends the answer after 700 ms of silence with a numbered marker, and keeps short pauses", async () => {
     const h = makeHarness();
     await callIsLive(h);

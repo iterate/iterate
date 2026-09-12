@@ -12,7 +12,7 @@ static struct cli_keyboard keyboard;
 static enum cli_keyboard_event feed(const uint8_t *keys, size_t count)
 {
   enum cli_keyboard_event event = CLI_KEYBOARD_NONE;
-  assert(cli_keyboard_feed(&keyboard, keys, count, 0U, &event) ==
+  assert(cli_keyboard_feed(&keyboard, keys, count, &event) ==
          CLI_KEYBOARD_OK);
   return event;
 }
@@ -38,9 +38,9 @@ static void a_hang_up_wins_in_a_mixed_read(void)
 static void unusable_arguments_are_refused(void)
 {
   enum cli_keyboard_event event;
-  assert(cli_keyboard_feed(NULL, NULL, 0U, 0U, &event) ==
+  assert(cli_keyboard_feed(NULL, NULL, 0U, &event) ==
          CLI_KEYBOARD_ERR_ARG);
-  assert(cli_keyboard_feed(&keyboard, NULL, 1U, 0U, &event) ==
+  assert(cli_keyboard_feed(&keyboard, NULL, 1U, &event) ==
          CLI_KEYBOARD_ERR_ARG);
 }
 

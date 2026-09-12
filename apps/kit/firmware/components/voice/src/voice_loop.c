@@ -374,7 +374,6 @@ EXT_RAM_BSS_ATTR static struct {
   uint32_t speaker_drops;
   uint32_t last_drop_uptime_ms;
   uint32_t voicelab_generation;
-  uint32_t frame_sequence;
   /* Health serialization must fit completely; truncation is not sent. */
   char stats_buffer[2816];
   uint32_t stats_sequence;
@@ -2879,7 +2878,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       }
       if (started == CAPNWEB_OK) {
         runtime.voicelab_generation = runtime.connection.generation;
-        runtime.frame_sequence = 0U;
         /*
          * NOTHING TO FORGET ABOUT THE SENDER ANY MORE.
          *

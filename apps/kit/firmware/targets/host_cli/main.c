@@ -928,7 +928,6 @@ static void cli_main_start_voicelab(struct cli_runtime *runtime)
   if (runtime->mounted_once) ++runtime->session_restarts;
   runtime->mounted_once = true;
   runtime->voicelab_generation = runtime->connection.generation;
-  runtime->frame_sequence = 0U;
   cli_runtime_log(
       "info", "voicelab mount generation=%u", runtime->connection.generation);
 }
@@ -1555,7 +1554,6 @@ static void cli_main_send_microphone(struct cli_runtime *runtime, uint64_t now_m
     runtime->conversation.current_turn->first_append_ms = now_ms;
   }
   runtime->mic_flushed_at_ms = now_ms;
-  runtime->frame_sequence += (uint32_t)frame_count;
   runtime->microphone.read = (runtime->microphone.read + frame_count) %
       ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH;
   runtime->microphone.used -= frame_count;
@@ -1616,8 +1614,7 @@ static void cli_main_start_talk(
     cli_main_begin_activation(runtime, now_ms);
     runtime->activation_active = true;
   }
-  /* A reconnect resumes the same activation FIFO; do not renumber or clear it. */
-  if (runtime->microphone.used == 0U) runtime->frame_sequence = 0U;
+  /* A reconnect resumes the same activation FIFO; do not clear it. */
   runtime->mic_flushed_at_ms = 0U;
   cli_speaker_clear(&runtime->speaker);
   (void)iterate_kit_darwin_audio_codec_discard_playback(&runtime->audio_codec);
@@ -1802,7 +1799,6 @@ static void cli_main_draw_screen(struct cli_runtime *runtime, uint64_t now_ms)
         ? 0U
         : iterate_kit_voice_elapsed_ms(
               runtime->call_established_at_ms, runtime->started_ms),
-    .call_pending = false,
     .transport_state =
         iterate_kit_posix_itx_transport_state_name(runtime->transport.state),
     .capture_requested = runtime->wants_talk,
@@ -2079,7 +2075,7 @@ static void cli_main_poll_interactive(
   }
   if (!runtime->keyboard.raw) return;
   enum cli_keyboard_event event = CLI_KEYBOARD_NONE;
-  if (cli_keyboard_poll(&runtime->keyboard, now_ms, &event) !=
+  if (cli_keyboard_poll(&runtime->keyboard, &event) !=
       CLI_KEYBOARD_OK) return;
   cli_main_apply_key(runtime, event, now_ms);
 }

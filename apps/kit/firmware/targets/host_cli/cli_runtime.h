@@ -87,7 +87,6 @@ struct cli_runtime {
   enum iterate_kit_posix_itx_transport_state announced_transport;
   enum iterate_kit_voicelab_state announced_voicelab;
   enum iterate_kit_voicelab_failure announced_failure;
-  uint32_t frame_sequence;
   /** RAM-only id for the current local microphone activation. */
   char activation[33];
   bool activation_active;

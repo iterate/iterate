@@ -44,20 +44,16 @@ static void a_turn_that_never_committed_reports_no_duration(void)
 static void audible_gap_counters_are_turn_failures(void)
 {
   struct cli_report_turn turn = {.frames_played = 1U};
-  assert(!cli_report_turn_has_audible_gap(&turn));
   assert(!cli_report_turn_failed(&turn, true));
   turn.frames_concealed = 1U;
-  assert(cli_report_turn_has_audible_gap(&turn));
   assert(cli_report_turn_failed(&turn, true));
   turn.frames_concealed = 0U;
   turn.underruns = 1U;
-  assert(cli_report_turn_has_audible_gap(&turn));
   assert(cli_report_turn_failed(&turn, true));
   turn.underruns = 0U;
   assert(cli_report_turn_failed(&turn, false));
   turn.frames_played = 0U;
   assert(cli_report_turn_failed(&turn, true));
-  assert(!cli_report_turn_has_audible_gap(NULL));
   assert(cli_report_turn_failed(NULL, true));
 }
 

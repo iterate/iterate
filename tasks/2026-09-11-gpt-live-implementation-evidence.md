@@ -292,3 +292,47 @@ subsequent final-image samples through 23:35:02 and telemetry through 23:35:35
 were clear. It is retained in the raw artifact rather than counted as a passing
 sample. Trace/source audit:
 `/tmp/havpe-final-382eb8817-telemetry-audit.md`.
+
+## Follow-up cleanup and source review — 2026-09-12
+
+Removed unused microphone sequence counters, the CLI's permanently false
+`call_pending` field, unused keyboard timestamps, and test-only microphone/report
+APIs. The emitted health sequence, activation FIFO and playback gap detection
+remain. A rejected speaker-frame append now ends the affected call through the
+existing terminal path; it no longer silently loses audio or an answer-end marker.
+The regression proves one terminal event, provider closure and rejection of late
+provider audio.
+
+StackChan and Waveshare now share the small ESP-LCD completion helper. Each board
+still owns its pixels and panel setup. A failed or timed-out transfer permanently
+retires the DMA buffer. Waveshare stops only its display task after a runtime
+transfer failure, logs the cause and latches its fault; a startup clear failure
+follows the existing fatal initialization path. The completion wait is 50 ms.
+No hardware fault injection was performed; source review and ESP-IDF builds do
+not establish physical timing under load.
+
+The talking face remains on **StackChan, Waveshare and M5StickS3**. StackChan derives its
+mouth envelope from completed I2S DMA; Waveshare uses its local playout sample
+clock, and M5StickS3 observes local playout PCM. Waveshare can also consume the
+preserved opt-in backend viseme state. That state is not enabled by ordinary
+setup. HAVPE, Satellite1 and the CLI have no avatar; M5StickS3's status text is
+an explicit avatar-initialization fallback. No hardware was exercised in this pass.
+
+Current primary sources checked against the implementation:
+
+- [GPT-Live WebSockets](https://developers.openai.com/api/docs/guides/voice-websockets?api=live): input starts after `session.started`, stays continuous and ordered, and supports the existing 16 kHz PCM format. Output has no audio-done event or playback timing fields. Keep immediate device capture and opening buffering, provider pacing, local playback accounting and the face's physical sample clock.
+- [ESP-IDF 5.4.2 LCD API](https://docs.espressif.com/projects/esp-idf/en/v5.4.2/esp32s3/api-reference/peripherals/lcd/index.html): queued colour DMA retains the caller's buffer until its completion callback. Share that ownership rule between the two direct-rendered faces; keep panel setup, geometry and rendering board-local.
+- [ESP-IDF 5.4.2 I2S](https://docs.espressif.com/projects/esp-idf/en/v5.4.2/esp32s3/api-reference/peripherals/i2s.html#full-duplex): paired TX/RX share clock signals and compatible configuration. The existing shared codec owner is the default for adding boards; codec-specific setup still needs its hardware facts preserved.
+
+A new target registry would replace only a few lines of each target's CMake
+launcher while adding indirection, so the existing common include stays. Keep
+the opt-in viseme feature; removing redundant polls needs call-scoped availability
+and stale-response handling, not deletion of the classifier. Keep the separately
+justified quiet-call presence, provider silence fill and transport PING/PONG.
+
+Local verification: all 70 firmware host tests and all five ESP-IDF 5.4.2 builds
+pass, with unchanged dependency locks. Full repository tests pass (OS: 293 files,
+3,072 passing tests, 18 existing expected failures and one existing skip), as do
+typecheck, lint, formatting and knip. The speaker regression also passes in the
+focused 55-test voice-agent suite. Logs: `/tmp/gpt-live-cleanup-*.log`;
+StackChan/Waveshare build logs are under `/tmp/gpt-live-final-build/<board>/log/`.

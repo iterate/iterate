@@ -104,17 +104,11 @@ static uint64_t cli_report_percentile(
     cli_report_metric_fn read,
     uint32_t percentile);
 
-bool cli_report_turn_has_audible_gap(const struct cli_report_turn *turn)
-{
-  return turn != NULL &&
-      (turn->frames_concealed != 0U || turn->underruns != 0U);
-}
-
 bool cli_report_turn_failed(
     const struct cli_report_turn *turn, bool played_out)
 {
   return turn == NULL || !played_out || turn->frames_played == 0U ||
-      cli_report_turn_has_audible_gap(turn);
+      turn->frames_concealed != 0U || turn->underruns != 0U;
 }
 
 const char *cli_report_status_name(enum cli_report_status status)

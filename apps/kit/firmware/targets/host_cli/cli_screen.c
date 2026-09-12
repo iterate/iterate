@@ -100,14 +100,10 @@ void cli_screen_draw(
    * TWO LIGHTS, AND THE SECOND CANNOT BE GREEN WITHOUT THE FIRST. Neither lit
    * means nothing has reached /api; one means the stream is mounted and the
    * provider has not accepted a call; two means a call is up and speech has
-   * somewhere to go. A pending call is drawn amber rather than green so the
-   * seconds between asking and being accepted are visible — those seconds are
-   * where a press used to disappear.
+   * somewhere to go.
    */
   const char *api_colour = api_up ? CLI_SCREEN_GREEN : CLI_SCREEN_RED;
-  const char *call_colour = call_up
-      ? CLI_SCREEN_GREEN
-      : (state->call_pending ? CLI_SCREEN_YELLOW : CLI_SCREEN_RED);
+  const char *call_colour = call_up ? CLI_SCREEN_GREEN : CLI_SCREEN_RED;
   cli_screen_line(
       frame, sizeof(frame), &length,
       "  %s●%s%s●%s   api %-10s  call %-10s  %s%s%s",

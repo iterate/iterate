@@ -10,6 +10,7 @@
 #include "iterate/kit/conversation_lights.h"
 #include "iterate/kit/conversation_overlay.h"
 #include "iterate/kit/face_wake.h"
+#include "iterate/kit/platforms/lcd_transfer.h"
 #include "iterate/kit/touch_tap.h"
 
 #include "bsp/m5stack_core_s3.h"
@@ -205,7 +206,7 @@ struct stackchan_avatar_owner {
   SemaphoreHandle_t framebuffer_access;
 
   StaticSemaphore_t display_transfer_control;
-  SemaphoreHandle_t display_transfer_complete;
+  struct iterate_kit_lcd_transfer display_transfer;
 
   StaticQueue_t mailbox_control;
   uint8_t mailbox_storage[sizeof(struct stackchan_avatar_frame)];
@@ -307,19 +308,6 @@ static void IRAM_ATTR isr_saturating_increment(
   }
 }
 
-static bool IRAM_ATTR display_transfer_finished(
-    esp_lcd_panel_io_handle_t panel_io,
-    esp_lcd_panel_io_event_data_t *event_data,
-    void *context) {
-  (void)panel_io;
-  (void)event_data;
-  (void)context;
-  BaseType_t higher_priority_task_woken = pdFALSE;
-  xSemaphoreGiveFromISR(
-      owner.display_transfer_complete, &higher_priority_task_woken);
-  return higher_priority_task_woken == pdTRUE;
-}
-
 static bool draw_region_and_wait(
     uint32_t x,
     uint32_t y,
@@ -339,25 +327,19 @@ static bool draw_region_and_wait(
    * easier to reason about than a display FIFO. The low-priority visual task
    * is the only waiter, so this can never stall audio or a WebSocket owner.
    */
-  (void)xSemaphoreTake(owner.display_transfer_complete, 0U);
   const uint64_t started_at_us = now_us_wide();
-  const esp_err_t status = esp_lcd_panel_draw_bitmap(
-      owner.panel,
-      (int)x,
-      (int)y,
-      (int)(x + width),
-      (int)(y + height),
-      pixels);
-  if (status != ESP_OK) {
+  const enum iterate_kit_lcd_transfer_result result =
+      iterate_kit_lcd_transfer_draw_and_wait(
+          &owner.display_transfer, owner.panel, (int32_t)x, (int32_t)y,
+          (int32_t)width, (int32_t)height, pixels,
+          pdMS_TO_TICKS(STACKCHAN_AVATAR_DISPLAY_TRANSFER_TIMEOUT_MS));
+  if (result == ITERATE_KIT_LCD_TRANSFER_DRAW_FAILED) {
     iterate_kit_atomic_saturating_increment_relaxed_u32(
         &owner.metrics.display_transfer_failures);
     __atomic_store_n(&owner.display_active, 0U, __ATOMIC_RELEASE);
     return false;
   }
-  if (xSemaphoreTake(
-          owner.display_transfer_complete,
-          pdMS_TO_TICKS(STACKCHAN_AVATAR_DISPLAY_TRANSFER_TIMEOUT_MS)) !=
-      pdPASS) {
+  if (result == ITERATE_KIT_LCD_TRANSFER_TIMED_OUT) {
     /*
      * After a timeout the DMA ownership of the buffer is unknowable. Never
      * reuse it and never retry into a possible in-flight transfer. Disabling
@@ -921,9 +903,8 @@ esp_err_t iterate_kit_stackchan_avatar_start(void) {
    * steady-state rendering allocation-free. It also removes PSRAM/cache
    * contention from the display transfer that runs beside the AEC owner.
    */
-  owner.display_transfer_complete = xSemaphoreCreateBinaryStatic(
-      &owner.display_transfer_control);
-  if (owner.display_transfer_complete == NULL) {
+  if (!iterate_kit_lcd_transfer_init(
+          &owner.display_transfer, &owner.display_transfer_control)) {
     return ESP_ERR_NO_MEM;
   }
   owner.framebuffer_access = xSemaphoreCreateMutexStatic(
@@ -956,10 +937,10 @@ esp_err_t iterate_kit_stackchan_avatar_start(void) {
   }
   if (status == ESP_OK) {
     const esp_lcd_panel_io_callbacks_t callbacks = {
-        .on_color_trans_done = display_transfer_finished,
+        .on_color_trans_done = iterate_kit_lcd_transfer_complete,
     };
     status = esp_lcd_panel_io_register_event_callbacks(
-        owner.panel_io, &callbacks, NULL);
+        owner.panel_io, &callbacks, &owner.display_transfer);
   }
   if (status == ESP_OK) {
     status = esp_lcd_panel_disp_on_off(owner.panel, true);

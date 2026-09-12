@@ -64,8 +64,6 @@ struct cli_screen_state {
   uint64_t api_connected_at_ms;
   /** The server reported a provider call established. 0 means none now. */
   uint64_t call_established_at_ms;
-  /** A call has been asked for and not yet confirmed. */
-  bool call_pending;
   /** Transport state name, for the case where neither light is green. */
   const char *transport_state;
 

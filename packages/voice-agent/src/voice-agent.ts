@@ -1538,8 +1538,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         return;
 
       default:
-        /* Acknowledgements (`*.appended`), `session.usage.updated`, `info`:
-         * in the mirror already, nothing to act on. */
+        /* Acknowledgements and usage updates require no audio action. */
         return;
     }
   }
@@ -1662,16 +1661,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
   }
 
   /**
-   * Hand the outbox to the stream, one frame after another, then exit.
-   *
-   * NOT A PACER: there is no schedule and no sleep — a frame goes the moment
-   * the one before it has landed, and the awaits are only what keeps the
-   * numbering and the stream order the same thing. The sequence number is
-   * minted here, at the send; the clear a fresh dial owes rides on its
-   * first frame out; `sentAtFacetMs` is the instruments'
-   * facet-side clock, stamped when the append is issued so a sender running
-   * behind a slow stream shows up as late sends, not as a slow network. An
-   * append that fails is one ephemeral frame lost; the next carries on.
+   * Send queued speaker frames in order for the lifetime of the dial.
+   * Assign sequence numbers and timestamps at append time so instrumentation
+   * distinguishes sender delays from network delays. A rejected append ends
+   * the call: losing audio, the initial clear, or the answer's final marker
+   * cannot be recovered by continuing with the next frame.
    */
   #startSpeakerSender(dial: Dial, append: ProcessEventArgs<VoiceAgentContract>["append"]): void {
     if (dial.sending) {
@@ -1716,7 +1710,12 @@ export class VoiceAgentProcessor extends StreamProcessor<
               },
             });
           } catch {
-            /* A frame the stream would not take is gone; the next one is not. */
+            await this.#end(
+              dial.activation,
+              "the device speaker frame could not be appended",
+              append,
+            );
+            return;
           }
         }
       } finally {

@@ -110,9 +110,6 @@ struct cli_report_summary {
   uint32_t spk_decode_failures;
 };
 
-/** True only for gaps Darwin/timeline accounting has classified as audible. */
-bool cli_report_turn_has_audible_gap(const struct cli_report_turn *turn);
-
 /** A drained turn still fails when it has no audio or a confirmed audible gap. */
 bool cli_report_turn_failed(
     const struct cli_report_turn *turn, bool played_out);

@@ -70,9 +70,8 @@ enum cli_keyboard_status cli_keyboard_open(struct cli_keyboard *keyboard)
 
 enum cli_keyboard_status cli_keyboard_feed(
     struct cli_keyboard *keyboard, const uint8_t *keys, size_t count,
-    uint64_t now_ms, enum cli_keyboard_event *out)
+    enum cli_keyboard_event *out)
 {
-  (void)now_ms;
   if (keyboard == NULL || out == NULL || (keys == NULL && count != 0U)) {
     return CLI_KEYBOARD_ERR_ARG;
   }
@@ -89,13 +88,13 @@ enum cli_keyboard_status cli_keyboard_feed(
 }
 
 enum cli_keyboard_status cli_keyboard_poll(
-    struct cli_keyboard *keyboard, uint64_t now_ms, enum cli_keyboard_event *out)
+    struct cli_keyboard *keyboard, enum cli_keyboard_event *out)
 {
   if (keyboard == NULL || out == NULL) return CLI_KEYBOARD_ERR_ARG;
   uint8_t keys[CLI_KEYBOARD_READ_BYTES];
   const ssize_t taken = read(STDIN_FILENO, keys, sizeof(keys));
   return cli_keyboard_feed(
-      keyboard, keys, taken > 0 ? (size_t)taken : 0U, now_ms, out);
+      keyboard, keys, taken > 0 ? (size_t)taken : 0U, out);
 }
 
 void cli_keyboard_close(struct cli_keyboard *keyboard)

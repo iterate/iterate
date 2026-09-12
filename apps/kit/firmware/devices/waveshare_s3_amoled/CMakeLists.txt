@@ -20,6 +20,7 @@ idf_component_register(
     esp_driver_i2s
     esp_driver_i2c
     esp_driver_gpio
+    lcd_transfer
     espressif__esp_codec_dev
     mbedtls
     nvs_flash

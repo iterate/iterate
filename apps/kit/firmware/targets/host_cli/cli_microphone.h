@@ -25,8 +25,6 @@
 enum cli_microphone_status {
   CLI_MICROPHONE_OK = 0,
   CLI_MICROPHONE_ERR_ARG,
-  /** Nothing captured yet. */
-  CLI_MICROPHONE_ERR_EMPTY,
 };
 
 /**
@@ -45,9 +43,6 @@ struct cli_microphone {
   uint32_t dropped;
 };
 
-/** Human-readable status name, for logs and test failure messages. */
-const char *cli_microphone_status_name(enum cli_microphone_status status);
-
 /** Empty the queue, keeping the drop count. Used when a turn ends. */
 void cli_microphone_clear(struct cli_microphone *microphone);
 
@@ -62,9 +57,5 @@ size_t cli_microphone_queued(const struct cli_microphone *microphone);
  */
 enum cli_microphone_status cli_microphone_push(
     struct cli_microphone *microphone, const uint8_t *frame, size_t length);
-
-/** Take the oldest frame. Fails with ERR_EMPTY. */
-enum cli_microphone_status cli_microphone_pop(
-    struct cli_microphone *microphone, uint8_t *out, size_t length);
 
 #endif /* ITERATE_KIT_CLI_MICROPHONE_H */
