@@ -195,24 +195,80 @@ export class StreamEventLog {
 
   /**
    * `getRange` plus each event's serialized byte length, summed from the
-   * chunk rows already in hand — so delivery batching can enforce its byte
-   * cap without re-stringifying every event it just parsed.
+   * chunk metadata before their bodies are fetched — so delivery batching can
+   * enforce its byte cap without materializing later event bodies.
    */
   getRangeSized(args: {
     afterOffset: number;
     beforeOffset: number;
     eventTypes?: readonly string[];
     limit: number;
+    /**
+     * Stop before reading later event bodies once this serialized-byte budget
+     * is full. The first event remains an intentional escape hatch: callers
+     * can advance past one oversized event instead of retrying it forever.
+     */
+    byteLimit?: number;
   }): SizedStreamEvent[] {
     if (args.eventTypes?.length === 0) return [];
     const eventTypes =
       args.eventTypes === undefined || args.eventTypes.includes("*") ? undefined : args.eventTypes;
     const eventTypeClause =
       eventTypes === undefined ? "" : `and type in (${eventTypes.map(() => "?").join(", ")})`;
-    // One indexed metadata subquery picks the replay window; the join then streams each
-    // event's chunks in primary-key order (offset, chunk_index).
+    // Select only bounded metadata first. The aggregate join returns lengths,
+    // never event BLOB bodies: delivery can scan a hundred rows without
+    // materializing every multi-MiB body before applying its byte cap.
+    const candidates = this.sql
+      .exec<{ offset: number; chunkCount: number; byteLength: number | null }>(
+        `
+          select
+            selected.offset as offset,
+            count(event_chunks.chunk_index) as chunkCount,
+            sum(length(event_chunks.chunk_bytes)) as byteLength
+          from (
+            select offset
+            from events
+            where offset > ?
+              and offset < ?
+              ${eventTypeClause}
+            order by offset asc
+            limit ?
+          ) selected
+          left join event_chunks on event_chunks.offset = selected.offset
+          group by selected.offset
+          order by selected.offset asc
+        `,
+        args.afterOffset,
+        args.beforeOffset,
+        ...(eventTypes || []),
+        args.limit,
+      )
+      .toArray();
+    const selectedOffsets: number[] = [];
+    let bytes = 0;
+    for (const candidate of candidates) {
+      if (candidate.chunkCount === 0 || candidate.byteLength === null) {
+        throw new Error(
+          `stream event at path "${this.path}", offset ${candidate.offset} has no body`,
+        );
+      }
+      if (
+        args.byteLimit !== undefined &&
+        selectedOffsets.length > 0 &&
+        bytes + candidate.byteLength > args.byteLimit
+      ) {
+        break;
+      }
+      selectedOffsets.push(candidate.offset);
+      bytes += candidate.byteLength;
+    }
+    if (selectedOffsets.length === 0) return [];
+
+    // Fetch and validate bodies only after the metadata budget has selected
+    // their offsets. The primary-key order preserves replay order and retains
+    // the existing missing/out-of-order-chunk corruption checks.
     const chunks = this.sql
-      .exec<{ offset: number; chunkIndex: number | null; chunkBytes: ArrayBuffer | null }>(
+      .exec<{ offset: number; chunkIndex: number; chunkBytes: ArrayBuffer }>(
         `
           select
             selected.offset as offset,
@@ -227,20 +283,17 @@ export class StreamEventLog {
             order by offset asc
             limit ?
           ) selected
-          left join event_chunks on event_chunks.offset = selected.offset
+          join event_chunks on event_chunks.offset = selected.offset
           order by selected.offset asc, event_chunks.chunk_index asc
         `,
         args.afterOffset,
         args.beforeOffset,
-        ...(eventTypes ?? []),
-        args.limit,
+        ...(eventTypes || []),
+        selectedOffsets.length,
       )
       .toArray();
     const chunksByOffset = new Map<number, ArrayBuffer[]>();
     for (const chunk of chunks) {
-      if (chunk.chunkIndex === null || chunk.chunkBytes === null) {
-        throw new Error(`stream event at path "${this.path}", offset ${chunk.offset} has no body`);
-      }
       const eventChunks = chunksByOffset.get(chunk.offset);
       if (eventChunks === undefined) {
         if (chunk.chunkIndex !== 0) {
@@ -258,10 +311,16 @@ export class StreamEventLog {
         eventChunks.push(chunk.chunkBytes);
       }
     }
-    return [...chunksByOffset.values()].map((eventChunks) => ({
-      event: this.#parseEvent(eventChunks),
-      byteLength: eventChunks.reduce((sum, chunk) => sum + chunk.byteLength, 0),
-    }));
+    return selectedOffsets.map((offset) => {
+      const eventChunks = chunksByOffset.get(offset);
+      if (!eventChunks) {
+        throw new Error(`stream event at path "${this.path}", offset ${offset} has no body`);
+      }
+      return {
+        event: this.#parseEvent(eventChunks),
+        byteLength: eventChunks.reduce((sum, chunk) => sum + chunk.byteLength, 0),
+      };
+    });
   }
 
   #readEventFromChunks(offset: number): StreamEvent {

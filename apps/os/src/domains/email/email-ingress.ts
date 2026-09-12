@@ -16,6 +16,7 @@
 // retries instead of vanishing.
 
 import PostalMime, { type Email } from "postal-mime";
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import { itxEnv } from "../../env.ts";
 import { parseConfig } from "../../config.ts";
 import { readProjectBySlug } from "../../project-directory.ts";
@@ -177,12 +178,20 @@ async function readCreatedProjectAllowedSenders(projectId: string): Promise<stri
     const facade = await itxEnv.STREAM.getByName(
       DurableObjectNameCodec.stringify({ projectId, path: EMAIL_INTEGRATION_STREAM_PATH }),
     ).processorFacade({ name: EmailProcessorContract.slug });
-    const snapshot = await facade.snapshot();
-    const state = EmailProcessorContract.stateSchema.parse(snapshot.state);
-    if (state.birthCertificate === null) {
-      throw new Error(`Email router for project ${projectId} has not been created`);
+    try {
+      const snapshot = await facade.snapshot();
+      try {
+        const state = EmailProcessorContract.stateSchema.parse(snapshot.state);
+        if (!state.birthCertificate) {
+          throw new Error(`Email router for project ${projectId} has not been created`);
+        }
+        return state.allowedSenders;
+      } finally {
+        disposeIgnoredRpcResult(snapshot);
+      }
+    } finally {
+      disposeIgnoredRpcResult(facade);
     }
-    return state.allowedSenders;
   } catch (error) {
     console.error("[email] project email router is not ready", { error, projectId });
     throw new Error(`Email router for project ${projectId} is not ready; retry delivery.`, {

@@ -19,4 +19,26 @@ describe("MemoryStream", () => {
     cyclic.self = cyclic;
     await expect(stream.append({ type: "test/cyclic", payload: cyclic })).rejects.toThrow();
   });
+
+  it("pages a byte-capped filtered window through its short nonempty pages", async () => {
+    const stream = new MemoryStream();
+    const [first, ignored, second] = await stream.append(
+      { type: "test/match", payload: { body: "a".repeat(100) } },
+      { type: "test/ignored", payload: { body: "b".repeat(100) } },
+      { type: "test/match", payload: { body: "c".repeat(100) } },
+    );
+    const byteLimit = new TextEncoder().encode(JSON.stringify(first)).byteLength;
+
+    using pager = stream.readEvents({
+      afterOffset: 0,
+      beforeOffset: second.offset + 1,
+      byteLimit,
+      eventTypes: ["test/match"],
+      limit: 500,
+    });
+    await expect(pager.next()).resolves.toEqual([first]);
+    await expect(pager.next()).resolves.toEqual([second]);
+    await expect(pager.next()).resolves.toEqual([]);
+    expect(ignored.offset).toBeLessThan(second.offset);
+  });
 });

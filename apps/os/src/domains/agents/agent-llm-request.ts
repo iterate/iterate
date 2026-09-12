@@ -19,8 +19,9 @@ import {
 } from "./agent-processor-contract.ts";
 import {
   AGENT_COMPACTION_PROMPT,
-  buildAgentLlmRequestBody,
+  buildAgentLlmRequestBodyFromState,
   flattenMessageToText,
+  reduceAgentEvents,
   type AgentChatMessage,
 } from "./agent-prompt-fold.ts";
 import {
@@ -212,8 +213,9 @@ export class AgentLlmRequest {
 
     args.runInBackground(async () => {
       try {
-        const events = await this.readConsumedEvents();
-        const body = buildAgentLlmRequestBody({ events, llmRequestOffset: requestOffset });
+        const body = buildAgentLlmRequestBodyFromState(
+          await this.readPromptStateThrough(requestOffset),
+        );
         const completion = await this.attempt({
           eventOffset: requestOffset,
           model: open.model,
@@ -456,24 +458,23 @@ export class AgentLlmRequest {
     return completion;
   }
 
-  /**
-   * The whole stream's consumed subset, paged from offset 0 — the one read
-   * behind prompt building and the compaction guards. Filtering to `consumes`
-   * keeps bulk emitted-only types (response chunks) out of the transfer;
-   * paging (rather than one capped read) means long histories are never
-   * silently truncated.
-   */
-  async readConsumedEvents(): Promise<StreamEvent[]> {
-    const events: StreamEvent[] = [];
+  /** Fold the consumed prefix straight from bounded pages. Raw script results
+   * are deliberately not retained after their page has reduced: prompt state
+   * contains only the existing reducer projection. */
+  async readPromptStateThrough(llmRequestOffset: number): Promise<AgentProcessorState> {
+    let state = AgentProcessorContract.stateSchema.parse({});
     using pager = this.#host.readEvents({
       afterOffset: 0,
       eventTypes: AgentProcessorContract.consumes,
+      byteLimit: CONSUMED_EVENTS_BYTE_LIMIT,
       limit: CONSUMED_EVENTS_PAGE_SIZE,
     });
     for (;;) {
       const page = await pager.next();
-      events.push(...page);
-      if (page.length < CONSUMED_EVENTS_PAGE_SIZE) return events;
+      if (page.length === 0) return state;
+      const afterRequest = page.findIndex((event) => event.offset > llmRequestOffset);
+      state = reduceAgentEvents(afterRequest === -1 ? page : page.slice(0, afterRequest), state);
+      if (afterRequest !== -1 || page.at(-1)?.offset === llmRequestOffset) return state;
     }
   }
 
@@ -507,7 +508,7 @@ export class AgentLlmRequest {
     if (!hasHistory) return;
     try {
       if (await this.#hasCompactionCovering(llmRequestOffset)) return;
-      const events = await this.readConsumedEvents();
+      const state = await this.readPromptStateThrough(llmRequestOffset);
 
       // Same transport seam as normal turns: BYOK carries the per-agent
       // prompt_cache_key, so this request lands on the shard that already
@@ -520,7 +521,7 @@ export class AgentLlmRequest {
         eventOffset: triggerOffset,
         model,
         messages: await prepareAgentLlmMessages(
-          buildAgentCompactionRequestBody({ events, llmRequestOffset }).messages,
+          buildAgentCompactionRequestBodyFromState(state).messages,
           this.#host.deps.resolveModelFileUrl,
         ),
         signal: new AbortController().signal,
@@ -528,21 +529,23 @@ export class AgentLlmRequest {
         onChunk: async () => {},
       });
 
-      await this.#host.append({
-        type: "events.iterate.com/agents/context-added",
-        idempotencyKey: this.#host.idempotencyKey(`compact-context@${triggerOffset}`),
-        payload: {
-          role: "developer",
-          content:
-            `[Earlier conversation history was compacted through @${llmRequestOffset} ` +
-            `(~${contextTokens} tokens > ${thresholdTokens}). Summary:]\n\n${summary.text}`,
-          compaction: {
-            replacesHistoryThrough: llmRequestOffset,
-            ...(summary.usage === undefined ? {} : { usage: summary.usage }),
+      await appendUnlessLostIdempotencyRace(this.#host.append, [
+        {
+          type: "events.iterate.com/agents/context-added",
+          idempotencyKey: this.#host.idempotencyKey(`compact-context@${triggerOffset}`),
+          payload: {
+            role: "developer",
+            content:
+              `[Earlier conversation history was compacted through @${llmRequestOffset} ` +
+              `(~${contextTokens} tokens > ${thresholdTokens}). Summary:]\n\n${summary.text}`,
+            compaction: {
+              replacesHistoryThrough: llmRequestOffset,
+              usage: summary.usage,
+            },
+            llmRequestPolicy: { behaviour: "dont-trigger-request" },
           },
-          llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
-      });
+      ]);
     } catch (error) {
       // A throw here would fail the whole batch into redelivery and stall the
       // agent behind delivery backoff — for a best-effort lane, releasing the
@@ -634,6 +637,7 @@ export class AgentLlmRequest {
 
 /** Page size for full-stream reads (prompt building, compaction guards). */
 const CONSUMED_EVENTS_PAGE_SIZE = 500;
+const CONSUMED_EVENTS_BYTE_LIMIT = 8 * 1024 * 1024;
 
 /**
  * Chunk-coalescing window: how much streamed provider output rides one
@@ -716,10 +720,18 @@ export function buildAgentCompactionRequestBody(input: {
 }): {
   messages: AgentChatMessage[];
 } {
+  return buildAgentCompactionRequestBodyFromState(
+    reduceAgentEvents(input.events.filter((event) => event.offset <= input.llmRequestOffset)),
+  );
+}
+
+function buildAgentCompactionRequestBodyFromState(state: AgentProcessorState): {
+  messages: AgentChatMessage[];
+} {
   return {
     messages: [
-      ...buildAgentLlmRequestBody(input).messages,
-      { role: "developer" as const, content: AGENT_COMPACTION_PROMPT },
+      ...buildAgentLlmRequestBodyFromState(state).messages,
+      { role: "developer", content: AGENT_COMPACTION_PROMPT },
     ],
   };
 }

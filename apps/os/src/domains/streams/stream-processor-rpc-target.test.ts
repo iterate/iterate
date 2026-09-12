@@ -750,6 +750,30 @@ describe("StreamProcessorRpcTarget", () => {
 });
 
 describe("ProcessorRelayRpcTarget", () => {
+  it.each(["snapshot", "getRuntimeState"] as const)(
+    "releases the native %s result before returning plain data",
+    async (method) => {
+      const dispose = vi.fn();
+      const result =
+        method === "snapshot"
+          ? { offset: 4, state: { running: true } }
+          : { snapshot: { offset: 4, state: { running: true } } };
+      Object.defineProperty(result, Symbol.dispose, { value: dispose });
+      const relay = new ProcessorRelayRpcTarget({
+        auth: streamDeliveryAuthContext("prj_test"),
+        host: () => ({
+          processor: Promise.resolve({ [method]: async () => result }),
+          wakeStreamProcessor: vi.fn() as never,
+        }),
+      });
+
+      const returned = await relay[method]();
+      expect(returned).toEqual(result);
+      expect(Symbol.dispose in returned).toBe(false);
+      expect(dispose).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each(["user:test", "trusted-internal"])(
     "rejects hosted-processor wake calls carrying only principal %s",
     async (principal) => {

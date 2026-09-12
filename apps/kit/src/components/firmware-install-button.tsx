@@ -26,6 +26,7 @@ export function FirmwareInstallButton({
   release: EspWebToolsFirmwareRelease;
 }) {
   const [state, setState] = useState<InstallerState>({ status: "loading" });
+  const [attempt, setAttempt] = useState(0);
   const [activationError, setActivationError] = useState<string>();
   const installerRef = useRef<HTMLElement>(null);
 
@@ -55,7 +56,7 @@ export function FirmwareInstallButton({
     return () => {
       disposed = true;
     };
-  }, [device, release]);
+  }, [device, release, attempt]);
 
   if (state.status === "loading") {
     return (
@@ -69,9 +70,9 @@ export function FirmwareInstallButton({
   if (state.status === "error") {
     return (
       <div className="flex w-full flex-col gap-2">
-        <Button className="w-full" type="button" disabled>
+        <Button className="w-full" type="button" onClick={() => setAttempt((value) => value + 1)}>
           <UsbIcon data-icon="inline-start" />
-          Installer unavailable
+          Retry firmware
         </Button>
         <p role="alert" className="text-xs text-destructive">
           {state.message}

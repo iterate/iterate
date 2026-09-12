@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import { isStreamOffsetConflictError } from "iterate/processors";
 import type { StreamEventInput } from "iterate/processors";
 import type { ProcessorState } from "iterate/processors";
@@ -753,7 +754,17 @@ export class SecretDurableObject extends DurableObject<Env> {
     // head — which keeps create()'s offset-bound encryption rider exactly
     // where the old catch-up snapshot put it.
     try {
-      return await (await this.#processorFacade()).snapshot();
+      const facade = await this.#processorFacade();
+      try {
+        const snapshot = await facade.snapshot();
+        try {
+          return { offset: snapshot.offset, state: snapshot.state };
+        } finally {
+          disposeIgnoredRpcResult(snapshot);
+        }
+      } finally {
+        disposeIgnoredRpcResult(facade);
+      }
     } catch (error) {
       if (!isUnconfiguredSubscriptionError(error)) throw error;
       const page = await this.#stream.getEventPage({
@@ -772,12 +783,15 @@ export class SecretDurableObject extends DurableObject<Env> {
     // self-pulls when the runner is behind. A separate catchUp here would put
     // an unbounded Stream RPC in front of the timeout and can orphan the
     // command even after the target Stream DO finished serving the read.
-    await (
-      await this.#processorFacade()
-    ).waitUntilProcessed({
-      offset,
-      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
-    });
+    const facade = await this.#processorFacade();
+    try {
+      await facade.waitUntilProcessed({
+        offset,
+        timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+      });
+    } finally {
+      disposeIgnoredRpcResult(facade);
+    }
   }
 
   async #decrypt(

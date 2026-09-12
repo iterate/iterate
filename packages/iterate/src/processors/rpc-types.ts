@@ -24,6 +24,14 @@ export type StreamEventReadInput = {
   /** Page size, 1-500. Defaults to 500. */
   limit?: number;
   /**
+   * Maximum serialized durable-event bytes in one page, from 1 through 8 MiB.
+   * It cannot be used with `includeEphemeral`. A shorter nonempty page may
+   * still have more matching events; advance from its last offset until an
+   * empty page confirms the current head. The first matching event is returned
+   * even when it alone exceeds this cap, so the cursor can make progress.
+   */
+  byteLimit?: number;
+  /**
    * Include ephemeral events (default false). The Durable Object incarnation
    * keeps their bodies in a bounded memory buffer;
    * this opt-in merges the events still buffered into the durable page.

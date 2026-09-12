@@ -155,9 +155,8 @@ export const AgentProcessorContract = defineProcessorContract({
           .default(30_000)
           .meta({
             description:
-              "Script results longer than this are truncated in rendered context (the full " +
-              "result spills to a workspace file when the host can write one) — big payloads " +
-              "belong in files the next script reads, not in the prompt.",
+              "Script results longer than this get a bounded rendered preview. Their full " +
+              "data remains available to the next script through the preamble results array.",
           }),
         compactionTriggerFraction: z
           .number()
