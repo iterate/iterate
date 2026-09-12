@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTestHarness } from "wrangler";
 import type { TestProject } from "vitest/node";
+import { projectWorkerEnvs } from "../../../../../envs.ts";
 import { E2E_ADMIN_API_SECRET, e2eWorkerConfig, PACKAGE_DIR } from "./worker-config.ts";
 
 declare module "vitest" {
@@ -20,6 +21,14 @@ declare module "vitest" {
      *  (support/client.ts): the local worker's (worker-config.ts), a deployed worker's
      *  `APP_CONFIG_ADMIN_API_SECRET` handed to the run as ADMIN_API_SECRET (never in the tree). */
     adminApiSecret: string;
+    /** The base project hosts hang under — `localhost` for the local worker, the deployed worker's
+     *  `APP_CONFIG_PROJECT_HOSTNAME_BASE` otherwise. Injected into the worker thread's env so
+     *  support/project-host.ts reads it (vitest worker threads do NOT inherit the run's process.env). */
+    projectHostnameBase: string;
+    /** Where MCP's protocol endpoint lives — the deployed worker's `APP_CONFIG_MCP_ORIGIN` when it
+     *  serves MCP on its own origin, else `<worker>/mcp` (the local worker, and any deploy without a
+     *  distinct MCP origin). support/session tests POST here. */
+    mcpBaseUrl: string;
   }
 }
 
@@ -35,6 +44,22 @@ export default async function setup(project: TestProject): Promise<() => Promise
       );
     project.provide("workerBaseUrl", deployedWorkerBaseUrl);
     project.provide("adminApiSecret", adminApiSecret);
+    // The deployment's ingress lives in envs.ts (the same source the deploy and wrangler-config
+    // generation read): project hosts hang under `projectHostnameBase`, MCP on `mcpBaseUrl`. Match the
+    // env by its baseUrl; an explicit PROJECT_HOSTNAME_BASE / MCP_BASE_URL still wins.
+    const deployedEnv = Object.values(projectWorkerEnvs).find((env) =>
+      deployedWorkerBaseUrl.startsWith(env.baseUrl),
+    );
+    project.provide(
+      "projectHostnameBase",
+      process.env.PROJECT_HOSTNAME_BASE ?? deployedEnv?.projectHostnameBase ?? "",
+    );
+    project.provide(
+      "mcpBaseUrl",
+      process.env.MCP_BASE_URL ??
+        deployedEnv?.mcpBaseUrl ??
+        new URL("/mcp", deployedWorkerBaseUrl).href,
+    );
     return async () => {};
   }
   const server = createTestHarness({
@@ -57,6 +82,10 @@ export default async function setup(project: TestProject): Promise<() => Promise
   await DB.batch(statements.map((statement) => DB.prepare(statement)));
   project.provide("workerBaseUrl", url.href);
   project.provide("adminApiSecret", E2E_ADMIN_API_SECRET);
+  // The local worker's project hosts hang under `localhost` (worker-config.ts) and it serves MCP at
+  // `/mcp` (no distinct MCP origin).
+  project.provide("projectHostnameBase", "localhost");
+  project.provide("mcpBaseUrl", new URL("/mcp", url.href).href);
   return async () => {
     await server.close();
   };
