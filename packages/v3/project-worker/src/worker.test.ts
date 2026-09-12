@@ -14,7 +14,7 @@ vi.mock("cloudflare:workers", () => ({
   RpcProperty: class {},
 }));
 import worker from "./worker.ts";
-import { appConfigOf, parseAppConfig } from "./app-config.ts";
+import { appConfigOf, parseAppConfig, type AppConfig } from "./app-config.ts";
 import { projectHostOf } from "./hosts.ts";
 import type { Env } from "./control-plane.ts";
 
@@ -45,6 +45,16 @@ const MINIMAL_CONFIG = {
   adminApiSecret: "admin-secret",
   deployId: "unversioned",
 };
+
+/** Secrets are `Redacted` (they never print); expose them for a value comparison against the plain
+ *  strings above. */
+const expose = (config: AppConfig) => ({
+  ...config,
+  projectTokenSecret: config.projectTokenSecret.exposeSecret(),
+  sessionSecret: config.sessionSecret.exposeSecret(),
+  adminApiSecret: config.adminApiSecret.exposeSecret(),
+  googleClientSecret: config.googleClientSecret.exposeSecret(),
+});
 
 describe("parseAppConfig", () => {
   const rows: { vars: Record<string, unknown>; becomes?: unknown; throws?: RegExp }[] = [
@@ -126,22 +136,23 @@ describe("parseAppConfig", () => {
       vars: { ...MINIMAL, APP_CONFIG_ADMIN_API_SECRET: "" },
       throws: /^APP_CONFIG_ADMIN_API_SECRET: required, but unset or blank$/,
     },
-    // a wrangler var may be a JSON object; a var wants a string
+    // a wrangler var may be a JSON object; the config parser only reads STRING vars, so a non-string
+    // is ignored — the field is then unset, and its required-ness is what's refused
     {
       vars: { ...MINIMAL, APP_CONFIG_ENVIRONMENT_NAME: { not: "a string" } },
-      throws: /^APP_CONFIG_ENVIRONMENT_NAME: expected a string variable/,
+      throws: /^APP_CONFIG_ENVIRONMENT_NAME: required, but unset or blank$/,
     },
-    // an APP_CONFIG_* variable this worker does not name is a typo, refused with the known names —
-    // the deleted login mode among them
+    // an APP_CONFIG_* variable this worker does not name (a typo, or the deleted login mode) is not
+    // consumed: the shared parser WARNS loudly and ignores it, the rest parses
     {
       vars: { ...MINIMAL, APP_CONFIG_LOGIN_MODE: "open" },
-      throws: /^APP_CONFIG_LOGIN_MODE: unknown configuration variable \(known:/,
+      becomes: MINIMAL_CONFIG,
     },
   ];
   for (const { vars, becomes, throws } of rows)
     test(`${JSON.stringify(vars)} → ${throws ? `throws ${throws}` : JSON.stringify(becomes)}`, () => {
       if (throws) expect(() => parseAppConfig(vars)).toThrow(throws);
-      else expect(parseAppConfig(vars)).toEqual(becomes);
+      else expect(expose(parseAppConfig(vars))).toEqual(becomes);
     });
   test("the deploy id is handed in", () => {
     expect(parseAppConfig(MINIMAL, "v-123").deployId).toBe("v-123");
@@ -204,9 +215,9 @@ describe("appConfigOf — once per env object", () => {
       CF_VERSION_METADATA: { id: "" },
     };
     const bare = { ...MINIMAL, APP_CONFIG_ENVIRONMENT_NAME: "e2e" };
-    expect(appConfigOf(deployed)).toEqual({ ...MINIMAL_CONFIG, deployId: "v-9" });
-    expect(appConfigOf(local)).toEqual({ ...MINIMAL_CONFIG, environmentName: "test" });
-    expect(appConfigOf(bare)).toEqual({ ...MINIMAL_CONFIG, environmentName: "e2e" });
+    expect(expose(appConfigOf(deployed))).toEqual({ ...MINIMAL_CONFIG, deployId: "v-9" });
+    expect(expose(appConfigOf(local))).toEqual({ ...MINIMAL_CONFIG, environmentName: "test" });
+    expect(expose(appConfigOf(bare))).toEqual({ ...MINIMAL_CONFIG, environmentName: "e2e" });
     expect(appConfigOf(deployed)).toBe(appConfigOf(deployed)); // the same object, parsed once
     expect(appConfigOf(deployed)).not.toBe(appConfigOf(local));
   });

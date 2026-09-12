@@ -153,7 +153,8 @@ export function providerOptions(
     clientIdMetadataDocumentEnabled: true,
     allowPlainPKCE: false,
     async resolveExternalToken({ token }) {
-      if (!(await verifyAdminSecret(token, appConfigOf(env).adminApiSecret))) return null;
+      if (!(await verifyAdminSecret(token, appConfigOf(env).adminApiSecret.exposeSecret())))
+        return null;
       return { props: { kind: "admin" }, audience: [api, mcp] };
     },
     async tokenExchangeCallback(input) {

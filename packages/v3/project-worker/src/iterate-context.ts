@@ -210,7 +210,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     return signProjectToken(
       { projectId: this.#durableObjectAddress.projectId, ...this.#principal },
       ttlSeconds * 1000,
-      this.#projectDoors.appConfig.projectTokenSecret,
+      this.#projectDoors.appConfig.projectTokenSecret.exposeSecret(),
     );
   }
 

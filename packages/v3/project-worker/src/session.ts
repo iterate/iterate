@@ -100,7 +100,7 @@ export class IterateRpcTarget extends RpcTarget {
     }
     const admin = await verifyAdminSecret(
       credentials.data.secret,
-      this.#input.appConfig.adminApiSecret,
+      this.#input.appConfig.adminApiSecret.exposeSecret(),
     );
     if (!admin) throw codedError("INVALID_CREDENTIALS", "The admin secret did not match.");
     // Test/operator fixture only; product impersonation must retain operator attribution.

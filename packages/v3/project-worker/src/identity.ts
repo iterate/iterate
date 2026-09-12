@@ -30,7 +30,7 @@ export async function identityDoor(request: Request, env: Env) {
   if (!["/.auth/identity", "/.auth/identity/callback"].includes(url.pathname)) return null;
   if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
   const config = appConfigOf(env);
-  if (!config.googleClientId || !config.googleClientSecret)
+  if (!config.googleClientId || !config.googleClientSecret.exposeSecret())
     return new Response("Google sign-in is not configured", { status: 503 });
   const as = await oauth
     .discoveryRequest(issuer)
@@ -58,7 +58,7 @@ export async function identityDoor(request: Request, env: Env) {
       code_challenge: await oauth.calculatePKCECodeChallenge(flow.verifier),
       code_challenge_method: "S256",
     }).toString();
-    const flowCookie = `${cookie}=${await signClaims(flow, config.sessionSecret)}; ${cookieAttributes}; Max-Age=600`;
+    const flowCookie = `${cookie}=${await signClaims(flow, config.sessionSecret.exposeSecret())}; ${cookieAttributes}; Max-Age=600`;
     if (new TextEncoder().encode(flowCookie).length > 4096)
       return new Response("The sign-in request exceeds the browser cookie limit.", { status: 400 });
     headers.set("Set-Cookie", flowCookie);
@@ -67,7 +67,9 @@ export async function identityDoor(request: Request, env: Env) {
   }
   headers.append("Set-Cookie", `${cookie}=; ${cookieAttributes}; Max-Age=0`);
   const signed = cookieValueOf(request.headers.get("cookie"), cookie);
-  const flow = Flow.safeParse(signed && (await verifyClaims(signed, config.sessionSecret)));
+  const flow = Flow.safeParse(
+    signed && (await verifyClaims(signed, config.sessionSecret.exposeSecret())),
+  );
   if (!flow.success || flow.data.expiresAt <= Date.now())
     return new Response("Sign-in expired. Please start again.", { status: 400, headers });
   try {
@@ -75,7 +77,7 @@ export async function identityDoor(request: Request, env: Env) {
     const response = await oauth.authorizationCodeGrantRequest(
       as,
       client,
-      oauth.ClientSecretPost(config.googleClientSecret),
+      oauth.ClientSecretPost(config.googleClientSecret.exposeSecret()),
       parameters,
       redirectUri,
       flow.data.verifier,

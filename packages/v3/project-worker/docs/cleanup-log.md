@@ -435,3 +435,35 @@ earns its keep. Two findings:
   normalize — they drive a bare Stream/reduce with no boundary in front.
 
 Gates after both: unit 543 | 6 xfail · workers 77 | 13 xfail | 2 skip · typecheck · oxlint 0/0 · knip clean.
+
+## Round 10 — app-config → the shared zod env parser (one of the logged larger refactors: DONE)
+
+Per the owner's steer ("use app config for all env vars from packages/shared"), `app-config.ts` no
+longer hand-rolls a var whitelist + interface + imperative parser (was ~150 lines). It now declares a
+zod schema and parses through `@iterate-com/shared/config`'s `parseAppConfigFromEnv` — the same idiom
+apps/os, auth and semaphore use.
+
+- **The schema IS the field list.** `AppConfig = z.object({ … })`; the shared parser maps
+  `APP_CONFIG_PROJECT_HOSTNAME_BASE` → `projectHostnameBase`, so one declaration replaces the whitelist,
+  the interface and the reader. Per-field validation (required, HTTP(S) origin) lives on the fields;
+  cross-field rules (a distinct MCP origin; Google id+secret together) and the derived `testEmailLogin`
+  stay in `parseAppConfig` (the shared parser needs a plain-object schema).
+- **Secrets are `Redacted`** (`redacted(z.string()…)`) — a config object can no longer leak an HMAC key
+  or admin bearer to a log. The four consumers call `.exposeSecret()` at the one point of use
+  (verifyAdminSecret, signClaims/verifyClaims, ClientSecretPost, signProjectToken).
+- **Boot errors still name the variable.** A small wrapper turns the shared parser's ZodError into
+  `APP_CONFIG_<VAR>: <message>` (the inverse of the parser's key mapping), so a misconfigured deploy
+  still fails loud and named — the property the clean room cared about.
+- **Behavior deltas from adopting the shared parser** (both platform-standard): an unknown `APP_CONFIG_*`
+  var now WARNS loudly and is ignored (was: refused); a non-string var is ignored → its field reads as
+  unset. worker.test.ts's table updated for both, plus `.exposeSecret()` comparison of the secrets.
+
+Gates: unit 543 | 6 xfail · workers 77 | 13 xfail | 2 skip · typecheck · oxlint 0/0. PROVEN on prd
+(version a7f67c24): all four deploy smoke checks green, and 38 auth-critical e2e (session, oauth,
+rewrite-rules, secrets) pass against the deployed worker — every one authenticates through
+`adminApiSecret.exposeSecret()`, and the token-mint path exercises `projectTokenSecret.exposeSecret()`.
+The 2 e2e failures are pre-existing/environmental (secrets-egress + context-DNS need PROJECT_HOSTNAME_BASE
+injected into the vitest worker thread — a harness gap; session's MCP personal-token 401), all failing
+identically before this refactor.
+
+Remaining logged item: library.ts protocol split (a cohesion decision).

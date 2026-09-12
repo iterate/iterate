@@ -44,7 +44,7 @@ export async function signIn(
   const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
   if (
     !config.testEmailLogin &&
-    !(bearer && (await verifyAdminSecret(bearer, config.adminApiSecret)))
+    !(bearer && (await verifyAdminSecret(bearer, config.adminApiSecret.exposeSecret())))
   )
     throw codedError("UNAUTHENTICATED", "Sign in with Google.");
   const email = input.email.trim();
