@@ -1,0 +1,65 @@
+{
+  // wrangler.test.jsonc — config for the `workers` project of vitest.config.ts (the lane that runs
+  // INSIDE workerd via @cloudflare/vitest-plugin; `pnpm test`). wrangler.jsonc stays the deploy
+  // truth. The divergences, each deliberate and test-only:
+  //
+  //  1. no "build" block: the plugin imports the worker through Vite (same isolate as the tests).
+  //     The generated SDK bundle (src/generated/*) is built by vitest.global-setup.ts.
+  //  2. no `ai` binding (see the note by the bindings below); the in-process control plane's D1 +
+  //     OAuth KV are fresh local namespaces with no schema — control-plane.test.ts applies
+  //     control-plane.sql itself (the e2e lane does the same in its global-setup).
+  //
+  // KEPT identical on purpose: compatibility_date + flags, the declarative DO export, the LOADER
+  // worker-loader binding, the DO binding, and the KV bindings (ids are meaningless locally —
+  // miniflare keys namespaces by binding).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "os-next",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "allow_irrevocable_stub_storage",
+    "global_fetch_strictly_public",
+  ],
+  "worker_loaders": [{ "binding": "LOADER" }],
+  // NO `ai` binding here, on purpose: Workers AI is REMOTE-ONLY in local dev, and vitest-pool-workers
+  // starts a remote proxy session for it at boot (an account to pick, a network to reach). The
+  // workers lane never calls `itx.ai`; the e2e lane boots from wrangler.jsonc (support/worker-config.ts)
+  // and carries the binding, and its AI tests shadow it locally / call it only against the deployed
+  // worker (e2e/ai-root-shadow-and-fable.e2e.test.ts). `env.AI` is undefined in this lane.
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  "durable_objects": {
+    "bindings": [
+      { "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" },
+      { "name": "BROWSER_SESSION", "class_name": "BrowserSession" },
+    ],
+  },
+  "exports": {
+    "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "BrowserSession": { "type": "durable-object", "storage": "sqlite" },
+  },
+  // The control plane is in-process: a local (empty) D1 + OAuth KV so the worker loads; the e2e lane
+  // applies the schema (support/global-setup.ts). ids are meaningless locally.
+  "d1_databases": [
+    { "binding": "DB", "database_name": "control-plane-directory", "database_id": "test" },
+  ],
+  "kv_namespaces": [
+    { "binding": "SECRETS_KV", "id": "6df3b8c18a624d078d1a1da66f3251c0" },
+    { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },
+    { "binding": "OAUTH_KV", "id": "oauth-test" },
+  ],
+  // Configuration (src/worker.ts `parseAppConfig`): the workers lane is its own deployment name; its
+  // project hosts hang under `projects.test` (SELF.fetch takes any hostname — no DNS); the three
+  // required secrets are test values (control-plane.test.ts and session-doors.test.ts sign in,
+  // mint and authenticate with them).
+  "vars": {
+    "APP_CONFIG_ENVIRONMENT_NAME": "test",
+    "APP_CONFIG_PLATFORM_ORIGIN": "https://control.test",
+    "APP_CONFIG_GOOGLE_CLIENT_ID": "google-test-client",
+    "APP_CONFIG_GOOGLE_CLIENT_SECRET": "google-test-secret",
+    "APP_CONFIG_PROJECT_HOSTNAME_BASE": "projects.test",
+    "APP_CONFIG_PROJECT_TOKEN_SECRET": "test-project-token-secret",
+    "APP_CONFIG_SESSION_SECRET": "test-session-secret",
+    "APP_CONFIG_ADMIN_API_SECRET": "test-admin-api-secret",
+  },
+}
