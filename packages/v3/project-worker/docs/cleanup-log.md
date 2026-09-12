@@ -308,3 +308,50 @@ in the MCP client + live-state (some follow-ons to round-5 fixes) plus one pre-e
   and resolves (or explicitly rejects) $refs. Deferred feature. (library.ts listOperations)
 
 Round tally: R1 12 · R2 5 · R3 5 · R4 5 · R5 5 · R6 5 = 36 fixed, 1 pinned (WS-relay), 2 discussion items.
+
+## Round 7 — STYLE / IDIOM / CONCISENESS pass (reoriented codex, not correctness)
+
+Course-correction: rounds 2–6 over-indexed on correctness bugs; this round is the style/cleanup the
+goal actually asked for (apply apps/os idioms, kill cruft, make concise, consolidate). Confirmed apps/os
+is overwhelmingly LITERAL events (`.append({ type, payload })`; `buildEvent` used once) — the clean
+room's direction. The account trivial builders (`tokenRevokedEvent` etc.) were already deleted + literal
+in round 1 (the owner's exact example is fixed).
+
+### Done this round (obvious style wins)
+- **demo.tsx**: buttons call `itx.append({ type: "tick" })` DIRECTLY (was `itx.invoke(["itx",["append",
+  event]])` behind a wrapper) — the append verb + event visible at the call site.
+- **account/contract.ts**: `AccountView.tokens`/`authentications` ARE their events
+  (`z.array(TokenCreateRequest)` / `z.array(AuthenticationFact)`); the reducer folds `event.payload`.
+  No triple re-spelling. (account processor bundle 2.0→1.6 KiB.)
+- Inlined single-use indirection constants (`MCP_PROTOCOL_VERSION`, `CLIENT_INFO`, `PROJECT_INPUT`).
+- Inlined single-use `exchangeToken`; dropped the `authorizationCodeRequest` re-export.
+
+### Examined, judged NOT cruft (kept, with reasoning)
+- `#publishAuthenticationFact` (session.ts): writes the `authenticated` event LITERALLY inside, and does
+  real plumbing (email guard, DO routing, waitUntil, idempotency) parameterized only by `credential`,
+  used 2×. Inlining would duplicate the plumbing. Kept.
+- `const env = this.#env` locals (grants.ts/consent.ts): used 4–5× per method; the HARD "fully-qualified
+  names" rule is about not ABBREVIATING the field (`#borrowed` vs `#borrowedRpcStubs`), not banning
+  locals. Not a violation. Kept.
+- `runScriptModule`'s `[...lines].join("\n")` (library.ts): a fine idiom for a GENERATED module; dedent
+  risks whitespace changes to code that must parse, and isn't in the library import allowlist. Kept.
+
+### Larger refactors / decisions — RESEARCHED, logged for a focused pass (per the rubric)
+- **The 3 core event builders** (`subscriptionConfiguredEvent`, `rewriteRuleConfiguredEvent`,
+  `rewriteRuleRemovedEvent`). Unlike the trivial account builders, these do append-time VALIDATION
+  (roots/holes/proxy-verbs) and normalize itx-expression targets STRING→array BEFORE storage — essential
+  because a facet-hosting target carries the whole facet SOURCE, which the reduce must never string-parse
+  (the codec's 2 KiB cap). CONCRETE FINDING: the core reduce ALREADY re-normalizes these targets
+  (core-processor.ts:347/373/397), so the builder's normalization is partly redundant. RECOMMENDED
+  refactor (unifies both + resolves the round-1 deferred "malformed core control events" bug): ONE
+  append-boundary discriminated normalizer/validator for `events.iterate.com/stream|itx/*` control
+  events, so call sites write LITERAL `{ type, payload }` and the boundary validates+normalizes once
+  before Stream.append. Scope: the append path + ~11 production + ~30 test call sites. Risky (core append
+  path); do as a dedicated, well-tested pass. NOT rushed.
+- **app-config.ts three representations** (var whitelist + interface + imperative parser). A single zod
+  env schema would derive keys/types (apps/os style). BUT app-config is a critical path (a bad parse →
+  every route 500s) and has NO unit test — do it only AFTER writing a test that pins the current
+  validation + exact error messages, then refactor keeping it green.
+- **library.ts (≈900 lines, 3 protocols)** → extract capnweb/mcp/openapi modules for cohesion. Judgment
+  call: it improves cohesion but adds files (vs the owner's "fewer files") and the import-boundary test
+  reads library.ts whole. Recommend extracting; needs the boundary test updated to cover the new modules.
