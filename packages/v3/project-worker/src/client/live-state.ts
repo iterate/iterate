@@ -186,12 +186,19 @@ export async function connectLiveState<S>(
       if (disposed) return;
       for (const e of events) {
         // capnweb hands each event as a live proxy value — deep-copy to a plain object, then PARSE
-        // the frame (never cast network data). A malformed frame heals via the door instead of
-        // poisoning the held rev or throwing out of this callback.
-        const parsed = LiveStateDeltaMessage.safeParse(
-          JSON.parse(JSON.stringify((e as { payload: unknown }).payload)),
-        );
-        if (!parsed.success) {
+        // the frame (never cast network data). The whole decode is guarded: an ABSENT payload makes
+        // `JSON.parse(JSON.stringify(undefined))` throw before validation, and any throw here would
+        // skip every later delta in the batch. A malformed OR undecodable frame heals via the door
+        // instead of poisoning the held rev or escaping this callback.
+        let parsed: ReturnType<(typeof LiveStateDeltaMessage)["safeParse"]> | undefined;
+        try {
+          parsed = LiveStateDeltaMessage.safeParse(
+            JSON.parse(JSON.stringify((e as { payload: unknown }).payload)),
+          );
+        } catch {
+          parsed = undefined;
+        }
+        if (!parsed?.success) {
           reseed();
           continue;
         }

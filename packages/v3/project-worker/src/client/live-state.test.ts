@@ -32,6 +32,7 @@ function harness() {
     doorReads,
     deliverDelta: (delta: LiveStateDelta) => deliver([{ payload: delta }], {}),
     deliverRaw: (payload: unknown) => deliver([{ payload }], {}),
+    deliverEvents: (rawEvents: unknown[]) => deliver(rawEvents, {}),
   };
 }
 
@@ -135,5 +136,31 @@ test("a malformed delta (a non-numeric rev) heals through the door instead of po
   await settle();
   expect(connection.store.rev()).toBe(6);
   expect(connection.store.get()).toEqual({ n: 6 });
+  await connection.dispose();
+});
+
+test("an event with an OMITTED payload heals and does not skip a later valid delta in the batch", async () => {
+  const h = harness();
+  const connecting = connectLiveState(h.itx, { key: "k", door: h.door });
+  await settle();
+  h.doorReads[0]({ rev: 5, state: { n: 5 } });
+  const connection = await connecting;
+  expect(connection.store.rev()).toBe(5);
+
+  // A batch whose FIRST event has no payload — `JSON.parse(JSON.stringify(undefined))` throws before
+  // validation; an unguarded callback would throw out and drop the valid second delta. The decode is
+  // guarded, so the malformed one heals (a door read) and the valid one still applies.
+  h.deliverEvents([
+    {}, // no payload key
+    { payload: { key: "k", from: 5, to: 6, patch: [{ op: "replace", path: "/n", value: 6 }] } },
+  ]);
+  await settle();
+  expect(connection.store.rev()).toBe(6); // the valid delta was NOT skipped
+  expect(connection.store.get()).toEqual({ n: 6 });
+
+  // The malformed event also kicked off a heal; answer it stale — monotonic seed must not move back.
+  h.doorReads[1]?.({ rev: 5, state: { n: 5 } });
+  await settle();
+  expect(connection.store.rev()).toBe(6);
   await connection.dispose();
 });
