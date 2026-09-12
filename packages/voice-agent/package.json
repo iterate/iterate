@@ -1,12 +1,11 @@
 {
   "name": "@iterate-com/voice-agent",
   "version": "0.1.0",
-  "description": "The realtime voice agent for iterate projects. A config repo declares this package and re-exports the agent from a three-line voice-agent.ts; the platform builds that file as a guest worker. VoiceAgentApp gives the project worker a partial fetch for the voice app slug plus setup and remove; the worker refs and installer let a CLI or a phone enable and dial it.",
+  "description": "The GPT-Live voice agent for iterate projects. A config repo declares this package and re-exports the agent from a three-line voice-agent.ts; the platform builds that file as a guest worker. VoiceAgentApp gives the project worker a partial fetch for the voice app slug plus setup and remove; the worker refs and installer let a CLI or a phone enable and dial it.",
   "keywords": [
     "iterate",
     "voice",
-    "realtime",
-    "grok",
+    "gpt-live",
     "openai",
     "cloudflare-workers",
     "durable-objects"

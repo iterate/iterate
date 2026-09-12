@@ -2,6 +2,8 @@
 
 #include "rpc_internal.h"
 
+#include <inttypes.h>
+#include <stdio.h>
 #include <string.h>
 
 /*
@@ -77,4 +79,20 @@ struct iterate_kit_module iterate_kit_health_module(
     .session_ended = NULL,
   };
   return module;
+}
+
+size_t iterate_kit_health_append_fields(
+    char *out,
+    size_t capacity,
+    const struct iterate_kit_health_field *fields,
+    size_t count) {
+  size_t used = 0U;
+  for (size_t index = 0U; index < count; index++) {
+    const int written = snprintf(
+        out + used, capacity - used, ",\"%s\":%" PRIu32,
+        fields[index].name, fields[index].value);
+    if (written <= 0 || (size_t)written >= capacity - used) return 0U;
+    used += (size_t)written;
+  }
+  return used;
 }

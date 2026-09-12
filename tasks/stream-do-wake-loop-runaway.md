@@ -72,10 +72,17 @@ all three):
 - [ ] Preview GC: periodically DO-reset slots that are *leased but idle* (no
       deploy/e2e in >3h) — leases protect the slot assignment, not the DO
       population. Alternatively: spec teardown erases the streams it created.
-- [ ] Related in-flight work: PR #2572 (bound oversized settlements),
-      PR #2573 (crash-loop quarantine for OOMing DOs), PR #2575 (repro). Those
-      cover the OOM strain; this task covers the "successfully looping
-      forever" strain.
+- [x] Bounded oversized settlement replay implemented and deployed 2026-09-12: body reads now
+      select byte metadata before BLOBs and retain a bounded durable prefix,
+      with an oversized first-event progress escape hatch. The original
+      expected-failure body no longer reproduced in CI run
+      `pr2624-8acd-preview-p6lmv29mkh` (19.9s). The promoted ordinary regression
+      requires six accepted 14MB appends and individual post-eviction readback;
+      it passed against preview 12 version
+      `d4cf8f0f-2ca4-457e-bb9c-636a9710ca37` (run
+      `os-vitest-run-20260912-132455`, 19.26s).
+      PR #2573 (crash-loop quarantine for OOMing DOs) remains separate. This
+      task still covers the "successfully looping forever" strain.
 
 ## Evidence breadcrumbs
 

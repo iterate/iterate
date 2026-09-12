@@ -129,8 +129,7 @@ static void render_audio(
 
   const uint8_t speaker_level = pcm_peak_level(state->speaker_peak);
   /*
-   * In manual-PTT mode both sides are intentionally silent between turns. One
-   * dim blue pixel means the call's media lane is ready; without it a valid
+   * One dim blue pixel means the call's media lane is ready; without it a valid
    * connected call and a call with no playable return path are visually
    * identical. Speech replaces the baseline with the 1--3 pixel peak meter.
    */
@@ -188,6 +187,13 @@ void iterate_kit_conversation_lights_render(
       0,
       sizeof(*pixels) * ITERATE_KIT_CONVERSATION_LIGHT_COUNT);
   if (state == NULL) return;
+
+  if (state->microphone_muted && !state->media_failed) {
+    for (uint8_t index = 0U; index < ITERATE_KIT_CONVERSATION_LIGHT_COUNT; ++index) {
+      pixels[index] = (struct iterate_kit_rgb8){8U, 0U, 0U};
+    }
+    return;
+  }
 
   if (state->restart_armed) {
     /* Whole-output magenta intentionally supersedes the sector grammar. */

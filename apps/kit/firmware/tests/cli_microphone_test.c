@@ -15,7 +15,6 @@ enum {
 
 static struct cli_microphone microphone;
 static uint8_t frame[ITERATE_KIT_VOICE_FRAME_BYTES];
-static uint8_t output[ITERATE_KIT_VOICE_FRAME_BYTES];
 
 /* Fill one frame with a visible sequence identity. */
 static void make_frame(uint8_t identity)
@@ -37,15 +36,16 @@ static void captured_frames_stay_ordered_across_ring_wrap(void)
     assert(cli_microphone_push(&microphone, frame, sizeof(frame)) ==
            CLI_MICROPHONE_OK);
   }
-  assert(cli_microphone_pop(&microphone, output, sizeof(output)) ==
-         CLI_MICROPHONE_OK);
+  /* The sender consumes one frame before this next capture wraps the ring. */
+  microphone.read = (microphone.read + 1U) % ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH;
+  --microphone.used;
   make_frame((uint8_t)ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH);
   assert(cli_microphone_push(&microphone, frame, sizeof(frame)) ==
          CLI_MICROPHONE_OK);
   for (size_t index = 1U; index <= ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH; ++index) {
-    assert(cli_microphone_pop(&microphone, output, sizeof(output)) ==
-           CLI_MICROPHONE_OK);
-    assert(output[0] == (uint8_t)index);
+    const size_t slot =
+        (microphone.read + index - 1U) % ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH;
+    assert(microphone.frames[slot][0] == (uint8_t)index);
   }
 }
 
@@ -69,14 +69,11 @@ static void a_full_microphone_discards_and_counts_its_oldest_frame(void)
   assert(microphone.dropped == 1U);
   assert(cli_microphone_queued(&microphone) ==
          ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH);
-  assert(cli_microphone_pop(&microphone, output, sizeof(output)) ==
-         CLI_MICROPHONE_OK);
-  assert(output[0] == TEST_FIRST_RETAINED_FRAME);
-  for (size_t index = 1U; index < ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH; ++index) {
-    assert(cli_microphone_pop(&microphone, output, sizeof(output)) ==
-           CLI_MICROPHONE_OK);
-  }
-  assert(output[0] == TEST_NEWEST_FRAME);
+  assert(microphone.frames[microphone.read][0] == TEST_FIRST_RETAINED_FRAME);
+  const size_t newest_slot =
+      (microphone.read + ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH - 1U) %
+      ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH;
+  assert(microphone.frames[newest_slot][0] == TEST_NEWEST_FRAME);
 }
 
 /*
@@ -88,8 +85,7 @@ static void clearing_audio_keeps_the_drop_count(void)
   microphone.dropped = TEST_PRIOR_DROPS;
   cli_microphone_clear(&microphone);
   assert(microphone.dropped == TEST_PRIOR_DROPS);
-  assert(cli_microphone_pop(&microphone, output, sizeof(output)) ==
-         CLI_MICROPHONE_ERR_EMPTY);
+  assert(cli_microphone_queued(&microphone) == 0U);
 }
 
 /* A short frame cannot be admitted because every downstream offset assumes 20 ms. */
@@ -99,10 +95,6 @@ static void partial_and_null_frames_are_refused(void)
          CLI_MICROPHONE_ERR_ARG);
   assert(cli_microphone_push(&microphone, frame, sizeof(frame) - 1U) ==
          CLI_MICROPHONE_ERR_ARG);
-  assert(cli_microphone_pop(&microphone, NULL, sizeof(output)) ==
-         CLI_MICROPHONE_ERR_ARG);
-  assert(strcmp(cli_microphone_status_name(CLI_MICROPHONE_ERR_EMPTY),
-                "empty") == 0);
 }
 
 int main(void)

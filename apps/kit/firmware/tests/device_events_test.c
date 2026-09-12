@@ -82,7 +82,7 @@ static void fixture_init(struct fixture *fixture) {
 }
 
 /*
- * GPIO edges and remote push-to-talk calls can arrive faster than the device
+ * GPIO edges and remote conversation calls can arrive faster than the device
  * owner handles them while audio still needs its turn every loop iteration.
  * Blocking publishers or retrying a failed handler was rejected because that
  * can delay PCM and replay a physical action. This proves capacity exhaustion
@@ -97,7 +97,7 @@ static void bounded_queue_never_waits_or_retries_failed_events(void) {
   assert(
       iterate_kit_device_event_publish(
           &fixture.queue,
-          ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED,
+          ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED,
           ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL) ==
       ITERATE_KIT_OK);
   assert(
@@ -128,7 +128,7 @@ static void bounded_queue_never_waits_or_retries_failed_events(void) {
   assert(fixture.observed_count == 1U);
   assert(
       fixture.handled[0].type ==
-      ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED);
+      ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED);
   assert(
       fixture.handled[0].source ==
       ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL);
@@ -171,13 +171,13 @@ static void invalid_events_are_rejected_without_entering_the_queue(void) {
   assert(
       iterate_kit_device_event_publish(
           &fixture.queue,
-          ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED,
+          ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED,
           ITERATE_KIT_DEVICE_EVENT_SOURCE_COUNT) ==
       ITERATE_KIT_INVALID_ARGUMENT);
   assert(strcmp(
       iterate_kit_device_event_type_name(
-          ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED),
-      "pushToTalk.started") == 0);
+          ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED),
+      "conversation.started") == 0);
   assert(strcmp(
       iterate_kit_device_event_type_name(
           ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED),

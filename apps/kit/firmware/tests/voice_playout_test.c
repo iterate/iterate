@@ -165,6 +165,64 @@ static void nothing_plays_before_prefill(void) {
  * nothing is concealed, and the timeline is forgotten so that nothing is
  * late afterwards however long the silence.
  */
+/*
+ * A SHORT ANSWER PLAYS AT THE PRIME WAIT, WITHOUT A MARKER. 100 ms of answer,
+ * half the prefill, and no `last`: the ring waits exactly as long as a
+ * long answer's prefill would have taken to fill, then plays every frame.
+ */
+static void a_short_answer_plays_at_the_prime_wait(void) {
+  uint32_t index;
+  reset(1000U);
+  ring_deliver(5U);
+  assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PRIMING);
+  sink_state.now_ms = 1000U + ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS - 1U;
+  assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PRIMING);
+  sink_state.now_ms += 1U;
+  for (index = 0U; index < 5U; ++index) {
+    assert(tick(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PLAYED);
+  }
+  assert(sink_state.written == 5U);
+  assert(sink_state.concealed == 0U);
+}
+
+/*
+ * A JITTER GAP DURING PRIMING DOES NOT START PLAYBACK EARLY. A chunk, then
+ * 150 ms of nothing (a late frame on a jittery link), then the rest: the ring
+ * keeps priming through the gap and starts when the prefill is in.
+ */
+static void a_jitter_gap_during_priming_does_not_start_early(void) {
+  reset(1000U);
+  ring_deliver(5U);
+  assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PRIMING);
+  sink_state.now_ms = 1150U;
+  assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PRIMING);
+  assert(sink_state.written == 0U);
+  ring_deliver((uint32_t)PREFILL_FRAMES - 5U);
+  sink_state.now_ms = 1160U;
+  assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PLAYED);
+}
+
+/*
+ * A LONG ANSWER STILL PRIMES TO THE PREFILL. Chunks every 100 ms reach the
+ * prefill before the wait is up, so playback starts on bytes, as before.
+ */
+static void an_arriving_answer_still_primes_to_the_prefill(void) {
+  uint32_t delivered = 0U;
+  reset(1000U);
+  while ((delivered + 5U) * (uint32_t)FRAME_BYTES <
+         (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES) {
+    ring_deliver(5U);
+    delivered += 5U;
+    assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PRIMING);
+    sink_state.now_ms += 100U;
+    assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PRIMING);
+  }
+  /* The chunk that reaches the prefill starts playback at once. */
+  ring_deliver((uint32_t)PREFILL_FRAMES - delivered);
+  assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PLAYED);
+  assert(playout.stats.waits_priming > 0U);
+}
+
 static void an_answer_plays_whole_then_settles(void) {
   uint32_t index;
   reset(1000U);
@@ -344,6 +402,9 @@ static void the_stamp_is_taken_before_the_write(void) {
 
 int main(void) {
   nothing_plays_before_prefill();
+  a_short_answer_plays_at_the_prime_wait();
+  a_jitter_gap_during_priming_does_not_start_early();
+  an_arriving_answer_still_primes_to_the_prefill();
   an_answer_plays_whole_then_settles();
   a_hole_mid_answer_is_concealed_only_by_a_sink_that_can();
   an_answer_after_a_long_silence_is_on_time();

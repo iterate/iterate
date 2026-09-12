@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   installVoiceAgent,
+  installVoiceAgentFromSource,
   legacyGuestPaths,
   removeLegacyGuest,
   VOICE_AGENT_GUEST_SOURCE,
   VOICE_AGENT_PACKAGE_NAME,
+  VOICE_AGENT_GUEST_SOURCE_FROM_REPO,
   VOICE_AGENT_PACKAGE_SPEC,
+  VOICE_AGENT_SOURCE_FILES,
   VOICE_AGENT_ZOD_SPEC,
   withVoiceAgentDependency,
   withVoiceAgentGuestFile,
@@ -210,5 +213,97 @@ describe("the committed copy from before the package", () => {
 
     expect(await removeLegacyGuest(repo)).toBeNull();
     expect(commits).toHaveLength(1);
+  });
+});
+
+describe("installVoiceAgentFromSource", () => {
+  const source = Object.fromEntries(
+    VOICE_AGENT_SOURCE_FILES.map((file) => [file, `// ${file}\n`]),
+  ) as Record<(typeof VOICE_AGENT_SOURCE_FILES)[number], string>;
+
+  it("commits the checkout's files, the repo re-export and a manifest without the published package", async () => {
+    const { repo, commits, files } = fakeRepo({
+      "package.json": manifest({
+        iterate: ITERATE,
+        [VOICE_AGENT_PACKAGE_NAME]: PINNED,
+        zod: "4.5.4",
+      }),
+      "voice-agent.ts": VOICE_AGENT_GUEST_SOURCE,
+    });
+    const result = await installVoiceAgentFromSource(repo, source);
+    expect(result.changed).toBe(true);
+    expect(commits).toHaveLength(1);
+    expect(result.changedPaths).toEqual([
+      "package.json",
+      "voice-agent.ts",
+      ...VOICE_AGENT_SOURCE_FILES.map((file) => `voice-agent/${file}`),
+    ]);
+    expect(files["voice-agent.ts"]).toBe(VOICE_AGENT_GUEST_SOURCE_FROM_REPO);
+    expect(files["voice-agent/worker.ts"]).toBe("// worker.ts\n");
+    const dependencies = JSON.parse(files["package.json"]!).dependencies;
+    expect(dependencies[VOICE_AGENT_PACKAGE_NAME]).toBeUndefined();
+    expect(dependencies.zod).toBe("4.5.4");
+    expect(dependencies.iterate).toBe(ITERATE);
+  });
+
+  it("commits nothing when the repo already carries this exact copy, and only the file that changed otherwise", async () => {
+    const { repo, commits } = fakeRepo({
+      "package.json": manifest({ iterate: ITERATE, zod: "4.5.4" }),
+      "voice-agent.ts": VOICE_AGENT_GUEST_SOURCE_FROM_REPO,
+      ...Object.fromEntries(
+        VOICE_AGENT_SOURCE_FILES.map((file) => [`voice-agent/${file}`, source[file]]),
+      ),
+    });
+    const same = await installVoiceAgentFromSource(repo, source);
+    expect(same.changed).toBe(false);
+    expect(commits).toHaveLength(0);
+    const edited = await installVoiceAgentFromSource(repo, {
+      ...source,
+      "face.ts": "// face.ts, edited\n",
+    });
+    expect(edited.changed).toBe(true);
+    expect(edited.changedPaths).toEqual(["voice-agent/face.ts"]);
+  });
+
+  it("can install an isolated source guest without changing the project's package guest", async () => {
+    const customGuest = "export { CustomVoice } from './custom.ts';\n";
+    const { repo, files } = fakeRepo({
+      "package.json": manifest({
+        iterate: ITERATE,
+        [VOICE_AGENT_PACKAGE_NAME]: PINNED,
+        zod: "4.5.4",
+      }),
+      "voice-agent.ts": customGuest,
+    });
+    const result = await installVoiceAgentFromSource(repo, source, {
+      guestFile: "kit-voice-agent.ts",
+      sourceDirectory: "kit-voice-agent",
+      preservePublishedVoiceAgentDependency: true,
+    });
+    expect(result.changedPaths).toEqual([
+      "kit-voice-agent.ts",
+      ...VOICE_AGENT_SOURCE_FILES.map((file) => `kit-voice-agent/${file}`),
+    ]);
+    expect(files["voice-agent.ts"]).toBe(customGuest);
+    expect(JSON.parse(files["package.json"]!).dependencies[VOICE_AGENT_PACKAGE_NAME]).toBe(PINNED);
+    expect(files["kit-voice-agent.ts"]).toBe(
+      'export { default, VoiceAgentFacet } from "./kit-voice-agent/worker.ts";\n',
+    );
+  });
+
+  it("a from-source repo is left alone by the package install's keep mode and cleaned by prune", async () => {
+    const { repo, files } = fakeRepo({
+      "package.json": manifest({ iterate: ITERATE, zod: "4.5.4" }),
+    });
+    await installVoiceAgentFromSource(repo, source);
+    const kept = await installVoiceAgent(repo, { existing: "keep" });
+    expect(files["voice-agent.ts"]).toBe(VOICE_AGENT_GUEST_SOURCE_FROM_REPO);
+    expect(kept.changedPaths).toEqual(["package.json"]);
+    expect(await legacyGuestPaths(repo)).toEqual(
+      VOICE_AGENT_SOURCE_FILES.map((file) => `voice-agent/${file}`),
+    );
+    const removed = await removeLegacyGuest(repo);
+    expect(removed?.paths).toHaveLength(VOICE_AGENT_SOURCE_FILES.length);
+    expect(files["voice-agent/worker.ts"]).toBeUndefined();
   });
 });

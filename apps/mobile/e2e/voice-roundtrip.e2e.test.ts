@@ -39,9 +39,8 @@ test("calling a chat: speak, be answered, and the conversation lands on the chat
     projectId,
   });
 
-  /* A fresh "chat" per run — the per-chat mode covers strictly more than
-   * the device line did: the certificate's colleaguePath, the call-start
-   * colleague link, and the transcript subscription onto the chat's stream. */
+  /* A fresh "chat" per run: every call is a call to a chat, and the chat's
+   * voice line is derived from its path. */
   const chatPath = `/agents/mobile/e2e-${Date.now().toString(36)}`;
   const streamPath = chatVoiceStreamPath(chatPath);
   const markers = new Map<string, string>();
@@ -59,7 +58,6 @@ test("calling a chat: speak, be answered, and the conversation lands on the chat
         workers: { get: (ref) => (project as any).workers.get(ref) },
         repo: (project as any).repo,
         streamPath,
-        colleaguePath: chatPath,
         readMarker: async (p) => markers.get(p) ?? null,
         writeMarker: async (p, marker) => {
           markers.set(p, marker);
@@ -67,12 +65,12 @@ test("calling a chat: speak, be answered, and the conversation lands on the chat
       }),
     onStatus: (status) => statuses.push(status),
     onLevel: () => {},
-    now: () => Date.now(),
   });
 
-  /* Push-to-talk: hold, speak the whole utterance (the FIRST press is the
-   * mint — the facet holds mic frames through the provider handshake and
-   * commits the held turn on release), release. */
+  /* Hold to talk is a local microphone gate: hold, speak the whole
+   * utterance, release. The call was minted by the silent frame at start;
+   * the facet holds mic frames through the provider handshake, and GPT-Live
+   * answers when the person stops. */
   call.setTalking(true);
   await audio.speakUtterance();
   call.setTalking(false);
@@ -101,30 +99,23 @@ test("calling a chat: speak, be answered, and the conversation lands on the chat
   expect(answers.length).toBeGreaterThan(0);
   expect(String(answers[0].payload.text).length).toBeGreaterThan(0);
 
-  /* THE CONVERSATION ON THE CHAT'S STREAM: the transcript subscription copies both
-   * sides onto the colleague (the chat) as developer context items. The
-   * listener's transcription can lag the answer, so poll for both sides. */
-  let voiceLines: string[] = [];
-  const copyDeadline = Date.now() + 60_000;
-  while (Date.now() < copyDeadline) {
-    const contextItems = await (project as any).streams.get(chatPath).getEvents({
-      afterOffset: 0,
-      eventTypes: ["events.iterate.com/agents/context-added"],
-      limit: 100,
-    });
-    voiceLines = contextItems
-      .map((event: any) => String(event.payload?.content ?? ""))
-      .filter((content: string) => content.startsWith("<voice-turn"));
-    if (
-      voiceLines.some((line) => line.includes('speaker="person"')) &&
-      voiceLines.some((line) => line.includes('speaker="assistant"'))
-    ) {
-      break;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  /* THE RECORD: both sides land durably on the voice stream — the person's
+   * words as utterance-transcript, the model's as answer-transcript — which
+   * is what the phone's transcript sheet reads. The listener's transcription
+   * of the person can lag the answer, so poll for it. */
+  let utterances: any[] = [];
+  const recordDeadline = Date.now() + 60_000;
+  while (utterances.length === 0 && Date.now() < recordDeadline) {
+    utterances = (
+      await (project as any).streams.get(streamPath).getEvents({
+        afterOffset: 0,
+        eventTypes: ["events.iterate.com/voice-agent/utterance-transcript"],
+        limit: 50,
+      })
+    ).filter((event: any) => String(event.payload?.text ?? "") !== "");
+    if (utterances.length === 0) await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
-  expect(voiceLines.some((line) => line.includes('speaker="person"'))).toBe(true);
-  expect(voiceLines.some((line) => line.includes('speaker="assistant"'))).toBe(true);
+  expect(utterances.length).toBeGreaterThan(0);
 }, 210_000);
 
 /* ------------------------------------------------------------- fixtures --- */

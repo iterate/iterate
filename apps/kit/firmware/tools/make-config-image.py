@@ -19,12 +19,16 @@ Write it with:
 THE OFFSET IS NOT THE SAME ON EVERY BOARD, and assuming it is corrupts the app.
 It follows the app partition, which differs by flash size and image:
 
-    m5sticks3  0x210000     waveshare  0x410000     havpe/stackchan  0x510000
+    By partition file (targets/common/):
+    partitions-8mb.csv          0x210000
+    partitions-16mb-4mb-app.csv  0x410000
+    partitions-16mb.csv         0x510000
+    partitions-16mb-model.csv   0x510000
 
 Writing M5Stick's offset to a HAVPE puts 196 bytes inside its application image
 and leaves the real config untouched, so the board keeps talking to whatever
 deployment it was provisioned for and looks simply absent. `--offset-for`
-reads the target's own partitions.csv, which is the only authority.
+reads the partition file selected by the target's sdkconfig.defaults.
 
 A plain `idf.py flash` leaves the partition alone — only `--erase-all` wipes it.
 """
@@ -75,10 +79,19 @@ def build(values: dict[str, str]) -> bytes:
 
 
 def offset_for(target: str) -> str:
-    """The `iterate_kit` offset from a target's own partitions.csv."""
-    csv = pathlib.Path(__file__).resolve().parents[1] / "targets" / target / "partitions.csv"
+    """Read the target's partition pointer relative to its project directory."""
+    directory = pathlib.Path(__file__).resolve().parents[1] / "targets" / target
+    defaults = directory / "sdkconfig.defaults"
+    if not defaults.exists():
+        raise SystemExit(f"no sdkconfig.defaults for target {target!r} at {defaults}")
+    values = dict(line.split("=", 1) for line in defaults.read_text().splitlines()
+                  if line.startswith("CONFIG_"))
+    filename = values.get("CONFIG_PARTITION_TABLE_CUSTOM_FILENAME")
+    if filename is None:
+        raise SystemExit(f"{defaults} declares no custom partition file")
+    csv = directory / filename.strip('"')
     if not csv.exists():
-        raise SystemExit(f"no partitions.csv for target {target!r} at {csv}")
+        raise SystemExit(f"no partition file for target {target!r} at {csv}")
     for line in csv.read_text().splitlines():
         if line.strip().startswith("iterate_kit"):
             return line.split(",")[3].strip()

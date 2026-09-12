@@ -64,9 +64,9 @@ enum iterate_kit_reach {
  * owns timing and samples RSSI/audio elsewhere; this model owns no clock,
  * GPIO, Wi-Fi, audio, task, queue, or heap allocation.
  *
- * The output grammar reserves three pixels each for network, assistant output,
- * microphone/listening, and future use. Keeping the fourth quarter dark until
- * it has an agreed meaning avoids silently shipping device-specific semantics.
+ * The diagnostic renderer reserves three pixels each for network, assistant
+ * output, microphone/listening, and future use. Physical rings use the same
+ * facts through conversation_ring's softer, continuous animation.
  */
 struct iterate_kit_conversation_visual_state {
   enum iterate_kit_network_state network;
@@ -77,6 +77,8 @@ struct iterate_kit_conversation_visual_state {
   bool conversation_active;
   bool media_ready;
   bool media_failed;
+  /** Hardware microphone rail is cut: steady dim red, except during a fault. */
+  bool microphone_muted;
   /**
    * The microphone is open and what it hears is being kept.
    *

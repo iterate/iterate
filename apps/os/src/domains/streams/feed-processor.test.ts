@@ -10,18 +10,64 @@ import { createFeedPublicationStore, FeedProcessor, reduceFeed } from "./feed-pr
 const databases: DatabaseSync[] = [];
 afterEach(() => databases.splice(0).forEach((db) => db.close()));
 
-function publicationStore() {
+function publicationStore(beforeCreate?: (db: DatabaseSync) => void) {
   const db = new DatabaseSync(":memory:");
   databases.push(db);
+  let failNextChunkInsert = false;
   // This adapter implements the only SqlStorage surface the publication index uses.
   const sql = {
-    exec<T>(statement: string, ...params: (string | number | null)[]) {
-      const rows = db.prepare(statement).all(...params);
+    exec<T>(statement: string, ...params: (string | number | null | ArrayBuffer)[]) {
+      for (const param of params) {
+        const bytes =
+          typeof param === "string"
+            ? new TextEncoder().encode(param).byteLength
+            : param instanceof ArrayBuffer
+              ? param.byteLength
+              : 0;
+        if (bytes > 512 * 1024) throw new Error("test SQLite cell budget exceeded");
+      }
+      if (failNextChunkInsert && statement.includes("INSERT INTO feed_publication_chunks")) {
+        failNextChunkInsert = false;
+        throw new Error("injected publication chunk failure");
+      }
+      const rows = db
+        .prepare(statement)
+        .all(
+          ...params.map((param) => (param instanceof ArrayBuffer ? new Uint8Array(param) : param)),
+        );
+      // node:sqlite yields Uint8Array; Cloudflare SqlStorage yields ArrayBuffer.
+      const cloudflareRows = rows.map((row) =>
+        Object.fromEntries(
+          Object.entries(row).map(([key, value]) =>
+            value instanceof Uint8Array
+              ? [key, value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)]
+              : [key, value],
+          ),
+        ),
+      );
       // SqlStorage.exec<T> gives its caller the same row-shape assertion.
-      return { toArray: () => rows as T[] };
+      return { toArray: () => cloudflareRows as T[] };
     },
   } as SqlStorage;
-  return createFeedPublicationStore(sql);
+  const transactionSync = <T>(closure: () => T): T => {
+    db.exec("BEGIN");
+    try {
+      const value = closure();
+      db.exec("COMMIT");
+      return value;
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  };
+  beforeCreate?.(db);
+  const store = createFeedPublicationStore(sql, transactionSync);
+  return Object.assign(store, {
+    failNextChunkInsert: () => {
+      failNextChunkInsert = true;
+    },
+    reopen: () => createFeedPublicationStore(sql, transactionSync),
+  });
 }
 
 function userMessage(text = "hello") {
@@ -69,6 +115,95 @@ describe("server feed publications", () => {
     expect(publications.get("user-1")).toBeUndefined();
     publications.save(prior, 2);
     expect(publications.get("user-1")).toEqual(prior);
+  });
+
+  it("keeps the prior publication intact if a chunk write fails", () => {
+    const publications = publicationStore();
+    const first = FeedItemPublication.parse({
+      item: { kind: "user", id: "message", text: "before", timestampMs: 1 },
+      firstOffset: 1,
+      ordinal: 0,
+      revisionOffset: 1,
+    });
+    publications.save(first, 1);
+    publications.failNextChunkInsert();
+    expect(() =>
+      publications.save(
+        FeedItemPublication.parse({
+          ...first,
+          item: { kind: "user", id: "message", text: "x".repeat(6_491_614), timestampMs: 1 },
+          revisionOffset: 2,
+        }),
+        2,
+      ),
+    ).toThrow("injected publication chunk failure");
+    expect(publications.get("message")).toEqual(first);
+  });
+
+  it("migrates legacy full rows once and keeps the latest inferred activity", () => {
+    const old = FeedItemPublication.parse({
+      item: {
+        kind: "activity",
+        id: "legacy-old",
+        status: "done",
+        startedAtMs: 1,
+        endedAtMs: 2,
+        steps: [
+          {
+            kind: "code",
+            id: "code-legacy",
+            executionId: "legacy-execution",
+            status: "done",
+            code: "old",
+            success: false,
+            outcomeSource: "inferred",
+            startedAtMs: 1,
+            expiresAtMs: 2,
+          },
+        ],
+      },
+      firstOffset: 1,
+      ordinal: 0,
+      revisionOffset: 2,
+    });
+    if (old.item.kind !== "activity") throw new Error("test fixture is not an activity");
+    const latest = FeedItemPublication.parse({
+      ...old,
+      item: {
+        ...old.item,
+        id: "legacy-latest",
+        steps: [{ ...old.item.steps[0]!, code: "🦊".repeat(150_000) }],
+      },
+      firstOffset: 3,
+      revisionOffset: 4,
+    });
+    const publications = publicationStore((db) => {
+      db.exec(`CREATE TABLE feed_publications (
+        item_id TEXT PRIMARY KEY, revision_offset INTEGER NOT NULL,
+        publication_offset INTEGER NOT NULL, data TEXT NOT NULL
+      )`);
+      const insert = db.prepare(
+        `INSERT INTO feed_publications(item_id, revision_offset, publication_offset, data) VALUES (?, ?, ?, ?)`,
+      );
+      insert.run(old.item.id, old.revisionOffset, 3, JSON.stringify(old));
+      insert.run(latest.item.id, latest.revisionOffset, 4, JSON.stringify(latest));
+    });
+    expect(publications.get(old.item.id)).toEqual(old);
+    expect(publications.get(latest.item.id)).toEqual(latest);
+    expect(publications.findInferredActivity("legacy-execution")).toEqual(latest);
+    expect(publications.reopen().get(latest.item.id)).toEqual(latest);
+  });
+
+  it("round-trips UTF-8 text split through a publication chunk boundary", () => {
+    const publications = publicationStore();
+    const publication = FeedItemPublication.parse({
+      item: { kind: "user", id: "unicode", text: "🦊".repeat(131_073), timestampMs: 1 },
+      firstOffset: 1,
+      ordinal: 0,
+      revisionOffset: 1,
+    });
+    publications.save(publication, 1);
+    expect(publications.get("unicode")).toEqual(publication);
   });
 
   it("publishes a complete immutable message and does not recursively publish its own output", async () => {
@@ -405,7 +540,7 @@ describe("server feed publications", () => {
   it.each(["code", "result", "queued-input"])(
     "explicitly omits oversized %s without changing durable data",
     async (kind) => {
-      const { harness } = createHarness();
+      const { harness, publications } = createHarness();
       const large = "x".repeat(8 * 1024 * 1024);
       await harness.append({
         type: "events.iterate.com/agent/llm-request-requested",
@@ -454,6 +589,18 @@ describe("server feed publications", () => {
         agent: { live: null },
       });
       expect(harness.events("events.iterate.com/feed/item-published").length).toBeGreaterThan(0);
+      if (kind === "result") {
+        const publication = FeedItemPublication.parse(
+          harness.events("events.iterate.com/feed/item-published").at(-1)!.payload,
+        );
+        const stored = publications.get(publication.item.id);
+        expect(stored?.item.kind).toBe("activity");
+        const storedResult =
+          stored?.item.kind === "activity"
+            ? stored.item.steps.find((step) => step.kind === "code")?.result
+            : undefined;
+        expect((storedResult as { text?: string } | undefined)?.text).toHaveLength(large.length);
+      }
     },
   );
 

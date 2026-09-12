@@ -14,9 +14,10 @@ describe("connectItxReady", () => {
   test("retries one failed initial transport before returning a proven capability", async () => {
     const server = await startRpcServer({ rejectUpgradeCount: 1 });
     const onRetry = vi.fn();
+    const onWebSocketClose = vi.fn();
 
-    using itx = await connectItxReady(
-      { baseUrl: server.baseUrl },
+    const itx = await connectItxReady(
+      { baseUrl: server.baseUrl, onWebSocketClose },
       {
         retryInitialConnection: {
           delayMs: 0,
@@ -28,6 +29,7 @@ describe("connectItxReady", () => {
     expect(await itx.__describe()).toEqual({ name: "test target" });
     expect(server.upgradeCount()).toBe(2);
     expect(onRetry).toHaveBeenCalledOnce();
+    expect(onWebSocketClose).not.toHaveBeenCalled();
     expect(onRetry).toHaveBeenCalledWith(
       expect.objectContaining({
         delayMs: 0,
@@ -35,6 +37,10 @@ describe("connectItxReady", () => {
         nextAttempt: 2,
       }),
     );
+
+    itx[Symbol.dispose]();
+    await expect(waitFor(() => onWebSocketClose.mock.calls.length === 1)).resolves.toBeUndefined();
+    expect(onWebSocketClose).toHaveBeenCalledWith({ code: 1000, reason: "" });
   });
 
   test("does not retry an application failure after the connection is returned", async () => {
@@ -56,6 +62,45 @@ describe("connectItxReady", () => {
     expect(onRetry).not.toHaveBeenCalled();
   });
 
+  test("closes the unauthenticated transport when the returned handle is disposed", async () => {
+    const server = await startRpcServer({});
+    const onWebSocketClose = vi.fn();
+    const itx = await connectItxReady({ baseUrl: server.baseUrl, onWebSocketClose });
+    const duplicate = itx.dup();
+
+    itx[Symbol.dispose]();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(onWebSocketClose).not.toHaveBeenCalled();
+
+    duplicate[Symbol.dispose]();
+    await expect(waitFor(() => onWebSocketClose.mock.calls.length === 1)).resolves.toBeUndefined();
+    expect(onWebSocketClose).toHaveBeenCalledWith({ code: 1000, reason: "" });
+    await expect(server.waitForClientClose()).resolves.toEqual({ code: 1000, reason: "" });
+  });
+
+  test("closes the transport once after the last returned handle is disposed", async () => {
+    const server = await startRpcServer({});
+    const onWebSocketClose = vi.fn();
+    const itx = await connectItxReady({
+      auth: { type: "bearer", token: "test" },
+      baseUrl: server.baseUrl,
+      onWebSocketClose,
+    });
+    const duplicate = itx.dup();
+    itx[Symbol.dispose]();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(onWebSocketClose).not.toHaveBeenCalled();
+
+    duplicate[Symbol.dispose]();
+    await expect(waitFor(() => onWebSocketClose.mock.calls.length === 1)).resolves.toBeUndefined();
+    expect(onWebSocketClose).toHaveBeenCalledWith({ code: 1000, reason: "" });
+    await expect(server.waitForClientClose()).resolves.toEqual({ code: 1000, reason: "" });
+
+    duplicate[Symbol.dispose]();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(onWebSocketClose).toHaveBeenCalledOnce();
+  });
+
   test("bounds an unavailable endpoint to the original dial and one retry", async () => {
     const server = await startRpcServer({ rejectUpgradeCount: 2 });
 
@@ -70,6 +115,10 @@ describe("connectItxReady", () => {
 async function startRpcServer(options: { describeError?: Error; rejectUpgradeCount?: number }) {
   const httpServer = createServer();
   const webSocketServer = new WebSocketServer({ noServer: true });
+  let resolveClientClose: ((close: { code: number; reason: string }) => void) | undefined;
+  const clientClosed = new Promise<{ code: number; reason: string }>((resolve) => {
+    resolveClientClose = resolve;
+  });
   let upgradeCount = 0;
 
   httpServer.on("upgrade", (request, socket, head) => {
@@ -84,6 +133,9 @@ async function startRpcServer(options: { describeError?: Error; rejectUpgradeCou
   });
   webSocketServer.on("connection", (webSocket) => {
     webSocket.on("error", () => {});
+    webSocket.once("close", (code, reason) =>
+      resolveClientClose?.({ code, reason: reason.toString() }),
+    );
     newWebSocketRpcSession(
       webSocket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
       new DescribeTarget(options.describeError),
@@ -104,7 +156,16 @@ async function startRpcServer(options: { describeError?: Error; rejectUpgradeCou
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     upgradeCount: () => upgradeCount,
+    waitForClientClose: () => clientClosed,
   };
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for condition.");
 }
 
 class DescribeTarget extends RpcTarget {
@@ -118,6 +179,10 @@ class DescribeTarget extends RpcTarget {
   __describe() {
     if (this.error) throw this.error;
     return { name: "test target" };
+  }
+
+  authenticate() {
+    return new DescribeTarget(this.error);
   }
 }
 

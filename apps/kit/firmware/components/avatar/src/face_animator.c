@@ -12,7 +12,7 @@ enum {
 const face_envelope_config_t FACE_ENVELOPE_DEFAULT_CONFIG = {
     .speech_floor = 256,
     /*
-     * Grok's levelled speech usually peaks around mean |PCM| 3400-4300.
+     * Levelled speech usually peaks around mean |PCM| 3400-4300.
      * Keep the noise floor, but let normal speech use nearly the full visual
      * range instead of reserving half of it for unusually hot audio.
      */
@@ -441,4 +441,3 @@ bool face_animator_snapshot(const face_animator_t *animator,
     *state = candidate;
     return true;
 }
-

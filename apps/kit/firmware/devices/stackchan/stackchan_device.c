@@ -3,9 +3,8 @@
  *
  * The program it runs is components/voice/src/voice_loop.c, and it is the same
  * program the other three run. What is left here is the hardware: a face on a
- * 320x240 panel, a touch screen that opens the provider menu, a PMIC side
- * button that speaks the session grammar (stackchan_modes.c — wake with a
- * chime, every end says "call ended"), a head on two servos, a camera, and —
+ * 320x240 panel, a touch screen and PMIC side button that speak the session
+ * grammar, a head on two servos, a camera, and —
  * the one structural novelty — a SOFTWARE echo canceller with three
  * different frame sizes behind it.
  *
@@ -18,11 +17,8 @@
  * loop owns the conversion, so the fail-closed silence rule lives in one place
  * instead of being restated here.
  *
- * Turn taking is the PROVIDER'S, on the strength of that canceller: the
- * microphone rides the open call and server VAD segments turns. A recorded
- * divergence from decision A2, and the right one — push-to-talk's rationale is
- * the echo story on boards WITHOUT cancellation, and gating this microphone
- * would defeat the ported AEC's entire purpose.
+ * The microphone runs continuously during a call; the ported canceller uses
+ * the playback reference supplied by the audio path.
  *
  * The status STRINGS go to the console log rather than the screen: the face
  * owns the glass and a semantic snapshot owns the rail, so there is nowhere a
@@ -35,17 +31,14 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "nvs.h"
-#include "nvs_flash.h"
 
 #include "iterate/kit/capabilities/arguments.h"
 #include "iterate/kit/capabilities/camera.h"
 #include "iterate/kit/capabilities/servos.h"
 #include "iterate/kit/conversation_lights.h"
 #include "iterate/kit/conversation_overlay.h"
-#include "iterate/kit/devices/stackchan.h"
-#include "iterate/kit/session_grammar.h"
-#include "iterate/kit/voice/loop.h"
+#include "iterate/kit/capabilities/health.h"
+#include "iterate/kit/platforms/board.h"
 #include "iterate/kit/voice_device_profile.h"
 
 #include "stackchan_audio.h"
@@ -53,11 +46,10 @@
 #include "stackchan_body.h"
 #include "stackchan_camera.h"
 #include "stackchan_image.h"
-#include "stackchan_modes.h"
 #include "stackchan_processor.h"
 
-/* The baked chimes and provider announcements; see assets/make-sounds.py. */
-#include "assets/stackchan_sounds_generated.inc"
+/* The baked wake and end chimes; see tools/generate-sounds.sh. */
+#include "assets/sounds_generated.inc"
 
 static const char tag[] = "iterate-stackchan";
 
@@ -86,71 +78,6 @@ static struct iterate_kit_rgb8 body_shown[ITERATE_KIT_STACKCHAN_LED_COUNT];
 static bool body_shown_valid;
 static uint64_t last_body_write_ms;
 static uint64_t last_present_ms;
-
-/*
- * The provider choice, the menu that changes it, and the session the side
- * button speaks. The loop's two facts are mirrored here because `poll`
- * classifies the session before the pass's view exists.
- */
-static struct {
-  struct stackchan_menu menu;
-  struct iterate_kit_session session;
-  uint8_t mode;
-  bool call_active;
-  bool wants_call;
-} mode_state;
-
-/*
- * The chosen provider survives a power cycle. This board brings its codec up
- * BEFORE the radio, so unlike the HAVPE it cannot lean on the transport
- * having mounted NVS already — load_mode initialises the store itself, which
- * is idempotent and free when the transport does it again later.
- */
-#define STACKCHAN_NVS_NAMESPACE "stackchan"
-#define STACKCHAN_NVS_MODE_KEY "mode"
-
-static uint8_t load_mode(void) {
-  nvs_handle_t handle;
-  uint8_t stored = STACKCHAN_MODE_OPENAI;
-  (void)nvs_flash_init();
-  if (nvs_open(STACKCHAN_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) {
-    return STACKCHAN_MODE_OPENAI;
-  }
-  if (nvs_get_u8(handle, STACKCHAN_NVS_MODE_KEY, &stored) != ESP_OK ||
-      stored >= STACKCHAN_MODE_COUNT) {
-    stored = STACKCHAN_MODE_OPENAI;
-  }
-  nvs_close(handle);
-  return stored;
-}
-
-static void store_mode(uint8_t mode) {
-  nvs_handle_t handle;
-  if (nvs_open(STACKCHAN_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
-    return;
-  }
-  if (nvs_set_u8(handle, STACKCHAN_NVS_MODE_KEY, mode) == ESP_OK) {
-    (void)nvs_commit(handle);
-  }
-  nvs_close(handle);
-}
-
-/*
- * Point the loop at the mode's stream. `settled=false` is the silent boot
- * restore; `settled=true` is a menu pick, which persists only a CHANGE and
- * always announces — the person asked which provider this is, and the
- * announcement is the answer. No turn policy moves here: both of this
- * board's modes are server-VAD full duplex behind its own canceller.
- */
-static void adopt_mode(uint8_t mode, bool settled) {
-  iterate_kit_voice_loop_set_stream_path(stackchan_mode_stream_path(mode));
-  if (settled) {
-    if (mode != mode_state.mode) store_mode(mode);
-    stackchan_audio_play_sound(
-        stackchan_mode_sounds[mode].pcm, stackchan_mode_sounds[mode].bytes);
-  }
-  mode_state.mode = mode;
-}
 
 /*
  * THE HEAD GESTURES, stepped from `poll` on the app task: a gesture is a
@@ -221,14 +148,12 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
   /* The mouth animates audio the hardware actually played. */
   stackchan_audio_set_playout_observer(
       iterate_kit_stackchan_avatar_observe_playout, NULL);
-  /* The silent boot restore: dial whichever provider NVS remembers. */
-  adopt_mode(load_mode(), false);
   out->codec = stackchan_audio_codec();
   out->processor = stackchan_processor();
   return true;
 }
 
-/*
+/**
  * TWO SURFACES, ONE SNAPSHOT, TWO CEILINGS.
  *
  * The face's status rail and the body's LED run consume the same semantic
@@ -272,32 +197,17 @@ static void present(
     return;
   }
   last_present_ms = now;
-  /* `poll` classifies the session before this pass's view exists, so the
-   * grammar reads last pass's facts — one poll of lag, invisible at 5 ms. */
-  mode_state.call_active = view->call_active;
-  mode_state.wants_call = view->wants_call;
-  visual = (struct iterate_kit_conversation_visual_state){
-    .network = view->link_ready ? ITERATE_KIT_NETWORK_CONNECTED
-                                : ITERATE_KIT_NETWORK_CONNECTING,
-    .reach = iterate_kit_reach_from(
-        view->api_ready, view->stream_ready, view->call_active),
-    .has_wifi_rssi = false,
-    .wifi_rssi_dbm = 0,
-    /*
-     * A session in play, not just a call: the wake press must open the
-     * robot's eyes while the dial is still in flight, or the chime answers
-     * a face that sleeps through its own wake — and the body LEDs lighting
-     * during the dial is the working feedback the ring boards already give.
-     */
-    .conversation_active = view->call_active || view->wants_call,
-    .media_ready = view->link_ready,
-    .media_failed = view->fault,
-    .microphone_listening = view->listening,
-    .microphone_peak = view->microphone_peak,
-    /* The one hardware-owned "is it speaking" fact both surfaces share. */
-    .speaker_peak = iterate_kit_stackchan_avatar_speaker_status_peak(),
-    .restart_armed = false,
-  };
+  /* One fleet mapping, then two facts only this board has:
+   * (a) the FACE opens its eyes on conversation_active, and it must open on
+   *     the press, not seconds later when the GPT-Live session is live —
+   *     otherwise the chime answers a sleeping face (the regression the
+   *     deleted mapping's comment recorded, and review round 2 found again);
+   * (b) the physical playout meter is the SPEAKER's level, not the mic's;
+   *     routing it through microphone_peak painted the speaker in the mic
+   *     sector and dropped the person's level while listening. */
+  iterate_kit_voice_view_lights(view, &visual);
+  visual.conversation_active = view->call_active || view->wants_call;
+  visual.speaker_peak = iterate_kit_stackchan_avatar_speaker_status_peak();
   /*
    * The OVERLAY comparison for the face, not the lights one: the screen also
    * carries a word, and "connecting" and "ready" can render the same twelve
@@ -336,96 +246,24 @@ static void present(
   }
 }
 
+/** Either physical call control supplies the same session tap. */
+static void read_gestures(struct iterate_kit_board_gestures *out) {
+  bool ignored_left_half;
+  out->pressed |= iterate_kit_stackchan_avatar_take_side_button_tap();
+  out->pressed |= iterate_kit_stackchan_avatar_take_face_tap(&ignored_left_half);
+}
+
+/** Poll StackChan-only presentation controls after the shared call grammar. */
 static void poll(void *context, struct iterate_kit_voice_intent *out) {
   const uint64_t now = (uint64_t)(esp_timer_get_time() / 1000);
   (void)context;
+  (void)out;
   head_gesture_step(now);
-  /*
-   * THE SIDE BUTTON IS THE CALL, THE FACE IS THE MENU. The PMIC button
-   * speaks the shared session grammar — wake with a chime, tap again to
-   * end (after the open-mic grace: the reflexive press right behind a wake
-   * means nothing), and every end path says "call ended" through the
-   * machine's one exit edge. A tap on the glass opens the provider menu
-   * instead of toggling the call, which is the swap this board asked for:
-   * conversations on the button people can feel, choices on the screen
-   * people can read. Open-mic posture, and no hold anywhere: the PMIC owns
-   * the long press as hardware power-off, so a press is only ever a tap.
-   */
-  {
-    const struct iterate_kit_session_poll session_poll = {
-      .tap = iterate_kit_stackchan_avatar_take_side_button_tap(),
-      .wants_call = mode_state.wants_call,
-      .call_active = mode_state.call_active,
-      .push_to_talk = false,
-      .tap_ends = true,
-      .now_ms = now,
-    };
-    struct iterate_kit_session_actions actions;
-    iterate_kit_session_step(&mode_state.session, &session_poll, &actions);
-    /* End before wake: play_sound replaces rather than mixes, so if one
-     * poll carries both edges the newer intent wins. */
-    if (actions.end_chime) {
-      stackchan_audio_play_sound(
-          stackchan_sound_chime_ended, sizeof(stackchan_sound_chime_ended));
-    }
-    if (actions.wake_chime) {
-      stackchan_audio_play_sound(
-          stackchan_sound_chime_press, sizeof(stackchan_sound_chime_press));
-    }
-    out->start_call = actions.start_call;
-    out->end_call = actions.end_call;
-  }
-  {
-    bool left = false;
-    const bool tap = iterate_kit_stackchan_avatar_take_face_tap(&left);
-    const struct stackchan_menu_poll menu_poll = {
-      .tap = tap,
-      .tap_left_half = left,
-      .call_in_play = mode_state.call_active || mode_state.wants_call,
-      .now_ms = now,
-    };
-    uint8_t pick = STACKCHAN_MENU_NO_PICK;
-    const bool visible =
-        stackchan_menu_step(&mode_state.menu, &menu_poll, &pick);
-    if (pick != STACKCHAN_MENU_NO_PICK) adopt_mode(pick, true);
-    if (visible) {
-      iterate_kit_stackchan_avatar_show_menu(mode_state.mode);
-    } else {
-      iterate_kit_stackchan_avatar_hide_menu();
-    }
-  }
 }
 
-static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
-  (void)context;
-  switch (phase_value) {
-    case ITERATE_KIT_VOICE_PHASE_ARRIVED:
-    case ITERATE_KIT_VOICE_PHASE_QUIET:
-      /*
-       * NO AMPLIFIER TO GATE. The speaker rail stays up for the life of the
-       * boot: the software canceller's reference is taken from the running TX
-       * stream, so cutting the rail between answers would take the reference
-       * with it and the filter would re-adapt at the start of every answer.
-       */
-      break;
-    case ITERATE_KIT_VOICE_PHASE_FEEDING:
-      stackchan_audio_watch(true);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_WAITING:
-      stackchan_audio_watch(false);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_DRAINING:
-      stackchan_audio_draining();
-      stackchan_audio_watch(false);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_FLUSHED:
-      /* Disarm before declaring: the other order records the device's own
-       * intentional cut as listener-visible starvation. */
-      stackchan_audio_watch(false);
-      stackchan_audio_note_flush();
-      break;
-  }
-}
+/* The rail remains on for the boot: the software canceller's reference
+ * rides TX. Gating it would force re-adaptation on every answer; the table
+ * has no amplifier GPIO and ARRIVED/QUIET only update the shared ledger. */
 
 /*
  * WHAT THE CODEC KNOWS ABOUT THE CHUNK IT JUST HANDED OVER, which on this
@@ -444,12 +282,6 @@ static void capture_meta(
   stackchan_audio_last_chunk_meta(
       &out->sequence, &out->captured_through_at_us,
       &out->playback_content_active);
-}
-
-static enum iterate_kit_status set_volume(
-    void *context, uint8_t percent, uint8_t *applied) {
-  (void)context;
-  return stackchan_audio_set_volume(percent, applied);
 }
 
 static uint8_t volume(void *context) {
@@ -711,8 +543,8 @@ static enum capnweb_status head_shake(
  * What this board has that no other does: a head (raw moves and the two
  * named gestures), a camera, its own screen as an image source, the fill,
  * and a face that can be asked for by name. Conversation control, the
- * speaker and health are the loop's, and push-to-talk is not mounted at all
- * because this board's turns are the provider's.
+ * speaker and health are the loop's.
+ * control because its microphone stays open during the call.
  */
 static size_t modules(
     void *context, struct iterate_kit_module *out, size_t capacity) {
@@ -806,17 +638,11 @@ static size_t modules(
  * truncated document is not a shorter one.
  */
 static size_t health(void *context, char *out, size_t capacity) {
-  struct field {
-    const char *name;
-    uint32_t value;
-  };
   struct iterate_kit_stackchan_avatar_metrics face_metrics;
-  size_t used = 0U;
-  size_t index;
   (void)context;
   iterate_kit_stackchan_avatar_metrics_snapshot(&face_metrics);
   {
-    const struct field fields[] = {
+    const struct iterate_kit_health_field fields[] = {
       {"codecCaptureOverruns", stackchan_audio_capture_overruns()},
       {"codecCaptureFailures", stackchan_audio_capture_driver_failures()},
       /*
@@ -825,10 +651,7 @@ static size_t health(void *context, char *out, size_t capacity) {
        * what makes the two numbers underneath falsifiable rather than
        * reassuring — that gate was silently dark on this board.
        */
-      {"dmaWrittenMs", stackchan_audio_written_ms()},
-      /* The task-side starvation measure: ms the ring was empty, how often. */
-      {"spkStarvedMs", stackchan_audio_starved_ms()},
-      {"spkStarveEvents", stackchan_audio_starve_events()},
+      {"dmaWrittenMs", iterate_kit_i2s_codec_written_ms()},
       {"codecPlaybackFailures", stackchan_audio_playback_driver_failures()},
       {"spkPartialChunks", stackchan_audio_playback_partial_chunks()},
       /*
@@ -903,115 +726,27 @@ static size_t health(void *context, char *out, size_t capacity) {
       {"imageShowsCompleted",
        iterate_kit_stackchan_avatar_image_shows_completed()},
     };
-    for (index = 0U; index < sizeof(fields) / sizeof(fields[0]); index++) {
-      const int written = snprintf(
-          out + used,
-          capacity - used,
-          ",\"%s\":%u",
-          fields[index].name,
-          (unsigned int)fields[index].value);
-      if (written <= 0 || (size_t)written >= capacity - used) return 0U;
-      used += (size_t)written;
-    }
+    return iterate_kit_health_append_fields(
+        out, capacity, fields, sizeof(fields) / sizeof(fields[0]));
   }
-  return used;
 }
 
 static const struct iterate_kit_board_ops ops = {
   .start = start,
   .present = present,
   .poll = poll,
-  .phase = phase,
   /* The only board that can answer this, and the reason the bridge exists. */
   .capture_meta = capture_meta,
-  /* Full duplex behind its own canceller: no fence, nothing to wait for. */
-  .capture_fence = NULL,
-  .playout_fenced_out = NULL,
-  /*
-   * The mouth is fed by the AUDIO DRIVER, not from here: the observer is
-   * installed in `start` so the analyser sees samples the hardware accepted,
-   * on the task that accepted them. `observe_playout` would be the same tap
-   * one hop later.
-   */
-  .observe_playout = NULL,
-  .observe_answer = NULL,
   .modules = modules,
   .health = health,
 };
 
-static const struct iterate_kit_board_facts facts = {
-  .stream_path = "/agents/voice/stackchan-2",
-  .client_path = "/clients/stackchan",
-  .conversation_id = "scdev",
-  .greeting = "Hi, I am your Iterate device. What can I do for you?",
-  .instructions =
-      "StackChan: a small desk robot with a face, a moving head and a camera. "
-      "Its SIDE BUTTON starts and ends the call — with a chime on wake and a "
-      "spoken \"call ended\" on every end — and its microphone stays OPEN "
-      "throughout: it cancels its own speaker, so it can be interrupted. "
-      "Tapping its face opens a two-cell provider menu (Grok left, OpenAI "
-      "right); the choice is announced and survives reboots. "
-      "conversation.start() and conversation.end() begin and end a call. "
-      "health() returns this device's full diagnostics — start there when it "
-      "seems unwell. "
-      "speaker.setVolume({percent}) sets how loud it plays, 0-100, clamped to "
-      "a ceiling this board has a measured reason for; speaker.volume() reads "
-      "it back. Both answer {percent,ceiling}. "
-      "servos.move({yawDegrees,pitchDegrees,speed}) turns its head: yaw -128 "
-      "to 128, pitch 0 to 90, speed up to 1000. Returning to 0,0 is looking "
-      "straight ahead. head.nod() nods yes and head.shake() shakes no — one "
-      "call each, the itinerary is the board's. "
-      "face.set({face}) changes which face it wears; the catalogue is "
-      "dot-matrix-oracle, furnace-imp, karakuri-brass, moonscope, starbyte. "
-      "camera.take() photographs what it can see and returns "
-      "{width,height,contentType,bytes,chunkSize,chunks}; "
-      "camera.readChunk({index}) then returns each piece in order, because one "
-      "image is larger than a single message. The first take() powers the "
-      "sensor up, so it is the slow one. "
-      "screen.take() and screen.readChunk({index}) do the same for what is on "
-      "the panel right now, and screen.fill({colour}) paints it a flat RGB565 "
-      "colour — the only way to tell a dark panel from a dark face. "
-      "screen.show({url, seconds}) fetches a JPEG url and shows it "
-      "full-screen for that long, then the face returns. "
-      "Audio and lifecycle events share this stream connection.",
-  /*
-   * WHAT THE MODEL IS TOLD IT CAN DO. `children` stays empty because this is a
-   * flattened dispatch target — sub-paths are routes the device interprets,
-   * not members the host can enumerate — so the method list has to be in the
-   * prose or it is nowhere. A capability nothing advertises is one nothing
-   * calls: a back-office agent asked for this device's metrics once went
-   * hunting through telemetry streams because nothing told it health() existed.
-   */
-  .peer_description =
-      "{\"instructions\":\"StackChan voice robot. "
-      "conversation.start() / conversation.end() begin and end a call. "
-      "servos.move({yawDegrees,pitchDegrees,speed}) turns its head; yaw "
-      "-128..128, pitch 0..90, speed up to 1000. head.nod() nods yes and "
-      "head.shake() shakes no, one call each. "
-      "face.set({face}) changes which face it wears; the catalogue is "
-      "dot-matrix-oracle, furnace-imp, karakuri-brass, moonscope, starbyte. "
-      "speaker.setVolume({percent}) sets how loud it plays, 0-100; it clamps "
-      "to a ceiling this board has a measured reason for and answers with "
-      "{percent,ceiling}, which speaker.volume() also returns. "
-      "health() returns this device's full diagnostics document, including "
-      "whether its audio directions are alive. "
-      "camera.take() photographs what it can see and returns "
-      "{width,height,contentType,bytes,chunkSize,chunks}; then "
-      "camera.readChunk({index}) returns each piece in order — the image is "
-      "delivered in pieces because one is larger than a single message, and it "
-      "is held until the next take(). The sensor is powered up by the first "
-      "take(), so that call is the slow one and it is the call that reports a "
-      "unit whose camera cannot start. screen.take() / screen.readChunk() do "
-      "the same for the panel's current contents, and screen.fill({colour}) "
-      "paints it flat. screen.show({url, seconds}) fetches a JPEG url and "
-      "shows it full-screen for that long, then the face returns."
-      "\",\"children\":{}}",
-  .talk_hint = "speak whenever you like",
-  .call_hint = "connection lost — press the side button to call",
+static const struct iterate_kit_board board = {
+  .facts = {
+  .device_name = "stackchan",
   .speaker = {
     .context = NULL,
-    .set_volume = set_volume,
-    .volume = volume,
+    .volume = volume, /* Seed board.c from the NVS-restored hardware volume. */
     .ceiling = STACKCHAN_AUDIO_VOLUME_CEILING,
   },
   /*
@@ -1034,15 +769,26 @@ static const struct iterate_kit_board_facts facts = {
    * first frame is processed.
    */
   .capture_stack_bytes = 8192,
-  .turns = ITERATE_KIT_VOICE_TURNS_SERVER_VAD,
   /*
    * Codec first, like everyone but the HA Voice PE. This board's bring-up is
    * not the long pole — the camera is, and it is deliberately deferred to its
    * first take() so it cannot take the internal DMA memory Wi-Fi needs.
    */
-  .radio_before_codec = false,
+  },
+  .i2c = {.sda = -1, .scl = -1}, /* The CoreS3 BSP owns all buses in extra. */
+  .audio = NULL, /* Four-slot TDM and esp-sr remain board-owned. */
+  .ring = {.gpio = -1, .power_gpio = -1},
+  .status_led_gpio = -1,
+  .button = {.gpio = -1},
+  .read_gestures = read_gestures,
+  .sounds = {.wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),
+    .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended)},
+  .play_sound = stackchan_audio_play_sound,
+  .set_volume = stackchan_audio_set_volume,
+  .extra = &ops,
 };
 
-void iterate_kit_stackchan_run(void) {
-  iterate_kit_voice_loop_run(&ops, &facts, NULL);
+/** ESP-IDF entry point: run this board through the shared voice loop. */
+void app_main(void) {
+  iterate_kit_board_run(&board);
 }

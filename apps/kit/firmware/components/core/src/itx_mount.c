@@ -211,7 +211,7 @@ static enum capnweb_status begin_connect(
   /*
    * An exported Cap'n Web capability is a path-building proxy, not a material
    * JavaScript object tree. The capability host's ordinary nested replay
-   * awaits each intermediate member; awaiting `pushToTalk` would therefore
+   * awaits each intermediate member; awaiting `conversation` would therefore
    * issue an incomplete remote call before it ever reaches `start`. Ask the
    * host to preserve the complete dotted path as one invocation envelope. The
    * peer unwraps that envelope allocation-free into its existing static method
