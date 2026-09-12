@@ -241,3 +241,40 @@ the next seam). All re-verified, all fixed:
   DELETEs the session it established. Deterministic test (both s-1 and s-2 get DELETE). (library.ts)
 
 Round tally so far: R1 12 · R2 5 · R3 5 · R4 5 — all fixed or deferred-with-reasoning above.
+
+## Round 5 — codex astra round 5: five findings (4 fixed, 1 pinned)
+
+Three of these were incomplete-fix follow-ons in the areas rounds 2–4 kept touching — now given deeper,
+more fundamental fixes (a single validation path, handshake session-ownership, a guarded decode), which
+should end the re-open cycle in those areas:
+
+- **[bug] #1 (P1) malformed events reached the TYPED effect hook.** Round-4 kept processEvent running on
+  a malformed payload (passing the raw event); processEvent is typed against ConsumedEvent's z.output, so
+  a hook reading the promised shape threw and WEDGED the batch (checkpoints never advance, catch-up
+  refails the row). Now #reduceAndProcessEvent returns { state, processed } and skips BOTH reduce and
+  effect for a malformed event; the batch falls back to the eventless caught-up pass. Test added. (processor.ts)
+- **[bug] #4 an absent live-state payload threw past recovery.** The round-3 boundary parse did
+  JSON.parse(JSON.stringify(payload)) before safeParse — an omitted payload made JSON.parse("undefined")
+  throw and escape the callback, skipping later deltas. Guarded the whole decode; a malformed/undecodable
+  frame heals via the door. Test added. (client/live-state.ts)
+- **[bug] #2 (P1) a stale MCP handshake clobbered the live session.** Round-4's generation counter still
+  shared #sessionId across concurrent handshakes (#post wrote it for both), so "A parks, close, B goes
+  live, A resumes" had A overwrite + null B's live #sessionId. REDESIGNED: #post no longer touches
+  #sessionId (it takes+returns the id); each handshake owns its session id, DELETEs only its own on a lost
+  close race, and publishes to #sessionId only on a non-stale commit. Deterministic test added. (library.ts)
+- **[bug] #5 MCP results were cast, not parsed.** listTools/callTool/initialize cast an EXTERNAL (untrusted)
+  MCP server's JSON to their promised types; an off-spec server handed a typed frontend the wrong shape.
+  Now zod-parsed at every boundary (McpTool/MCPToolsList/MCPServerInfo/MCPToolResult). Test added. (library.ts)
+
+### Pinned — a deeper WS-relay race, deferred for an e2e-verified fix
+- **[bug] #3 the fetch-upgrade relay can drop an early server frame.** RpcStubFetchServer.serve accepts the
+  EYEBALL socket only AFTER `await transport.fetch(...)` opens the LEG, so a frame the remote sends the
+  instant the leg connects finds no peer (#peerOf → null) and is dropped. The PRIMARY transport (capnweb)
+  is client-first — the server never sends before the eyeball's first call — so this bites only RAW WS
+  proxying to a remote that greets. RECOMMENDED FIX: accept the eyeball BEFORE calling transport.fetch
+  (close it if the fetch rejects), so the peer exists when the greeting arrives — BUT this depends on
+  workerd buffering frames sent to an accepted eyeball before its client half reads the 101, which must be
+  proven by an e2e against real workerd (this hibernatable relay is inherently flaky to unit-test —
+  reference_live_hibernation_proof_inherently_flaky). Not rushed into the relay. (context/rpc-stubs.ts:862)
+
+Round tally: R1 12 · R2 5 · R3 5 · R4 5 · R5 5 (4 fixed + 1 pinned) = 31 fixed, 1 pinned.
