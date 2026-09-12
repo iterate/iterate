@@ -110,7 +110,7 @@ esp_err_t iterate_kit_stackchan_avatar_request_status(
  * Reports whether physical speaker DMA has carried audible PCM recently.
  *
  * The body LEDs and LCD headline must use the same hardware-owned fact. A
- * provider event or received WebSocket frame is too early and would present
+ * received stream frame is too early and would present
  * speaking while audio still waits downstream. The returned peak is coarse
  * presentation state only and never feeds AEC, VAD, or flow control.
  */
@@ -120,7 +120,7 @@ uint32_t iterate_kit_stackchan_avatar_speaker_status_peak(void);
  * Consumes one completed face tap, if one is pending.
  *
  * `*left_half` reports which half of the panel the tap pressed — the only
- * coordinate the provider menu needs, remembered from the press because the
+ * coordinate the board UI needs, remembered from the press because the
  * release sample carries no position. The dedicated input owner counts taps
  * so a quick pair cannot collapse into one latest-state update. This
  * consumer is constant-time and never touches the shared I2C bus.
@@ -141,17 +141,6 @@ bool iterate_kit_stackchan_avatar_take_side_button_tap(void);
  * capability alike. */
 void iterate_kit_stackchan_avatar_inject_side_button(void);
 void iterate_kit_stackchan_avatar_inject_face_tap(uint16_t x);
-
-/**
- * Show or hide the two-cell provider menu over the face.
- *
- * `highlighted` is 0 for the left cell (Grok), 1 for the right (OpenAI) —
- * the same halves the tap hit-test reports, so drawing and picking cannot
- * disagree. Latest-state atomics like the sprite request: the render owner
- * reads the newest value at its own 15 Hz and never waits for the caller.
- */
-void iterate_kit_stackchan_avatar_show_menu(uint8_t highlighted);
-void iterate_kit_stackchan_avatar_hide_menu(void);
 
 /**
  * Accepts one 128-sample frame which has completed speaker DMA.
@@ -223,7 +212,7 @@ esp_err_t iterate_kit_stackchan_avatar_capture(
  * screenshot's buffer, a board asked twice must not fail the second time
  * because the heap moved. NULL means PSRAM could not supply it.
  *
- * SINGLE-WRITER DISCIPLINE, same shape as the menu overlay's atomic slot:
+ * SINGLE-WRITER DISCIPLINE:
  * write this surface only while NO show deadline is active, because the
  * render task reads it exactly while one is. The fetch path upholds that by
  * refusing a new image while one is still on the glass.

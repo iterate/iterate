@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GithubRepoLink, Project, StreamEvent, StreamEventInput } from "iterate/sdk";
+import { MemoryStream } from "iterate/processors/testing";
 import {
+  GithubAiLinterProcessorContract,
   githubAiLinterEventTypes,
   handleGithubPullRequestWebhook as handleGithubPullRequestWebhookWithPolicy,
 } from "iterate/starter-apps/github-ai-linter/worker";
+import { compileEventFilter } from "../streams/event-filter.ts";
 
 const testAndSpecFileGlobs = [
   "!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",
@@ -385,11 +388,11 @@ describe("userspace GitHub pull-request routing", () => {
       {
         type: "events.iterate.com/stream/subscription-configured",
         idempotencyKey:
-          "github-ai-linter/subscription:install-789:101:7:policy:2:stream:/agents/repos/config/pr/7/ai-linter",
+          "github-ai-linter/subscription:install-789:101:7:policy:2:delivery:2:stream:/agents/repos/config/pr/7/ai-linter",
         payload: {
           name: "github-ai-linter",
           filter: {
-            eventTypes: Object.values(githubAiLinterEventTypes),
+            eventTypes: GithubAiLinterProcessorContract.consumes,
           },
           receiver: {
             action: "wake-processor",
@@ -415,6 +418,44 @@ describe("userspace GitHub pull-request routing", () => {
       },
     ]);
     expect(JSON.stringify(linterStreamEvents[1])).toContain('"className":"GithubAiLinterApp"');
+    expect(JSON.stringify(linterStreamEvents[1])).toContain('"events.iterate.com/agent/paused"');
+    // This is the actual persisted subscription filter, so the pause reaches
+    // the linter processor's existing terminal-settlement branch.
+    const linterSubscription = linterStreamEvents[1];
+    if (!linterSubscription) throw new Error("linter subscription was not configured");
+    const subscriptionFilter = linterSubscription.payload as {
+      filter: { eventTypes: string[] };
+      receiver: unknown;
+    };
+    expect(
+      compileEventFilter(subscriptionFilter.filter).matches({
+        createdAt: "2026-09-13T00:00:00.000Z",
+        offset: 8,
+        path: linterPath,
+        payload: { reason: "autonomous turn limit reached" },
+        type: "events.iterate.com/agent/paused",
+      }),
+    ).toBe(true);
+    const persistedSubscriptions = new MemoryStream(linterPath);
+    const oldSubscription = {
+      ...linterSubscription,
+      idempotencyKey:
+        "github-ai-linter/subscription:install-789:101:7:policy:2:stream:/agents/repos/config/pr/7/ai-linter",
+      payload: {
+        name: "github-ai-linter",
+        filter: { eventTypes: Object.values(githubAiLinterEventTypes) },
+        receiver: subscriptionFilter.receiver,
+      },
+    } satisfies StreamEventInput;
+    const [oldPersisted] = await persistedSubscriptions.append(oldSubscription);
+    const [upgradedPersisted] = await persistedSubscriptions.append(linterSubscription);
+    const [retriedUpgrade] = await persistedSubscriptions.append(linterSubscription);
+    // The previous filter has its old durable key; the changed delivery body
+    // appends once under its revision and an identical replay deduplicates.
+    expect(oldPersisted?.idempotencyKey).toBe(oldSubscription.idempotencyKey);
+    expect(upgradedPersisted?.idempotencyKey).toBe(linterSubscription.idempotencyKey);
+    expect(retriedUpgrade?.offset).toBe(upgradedPersisted?.offset);
+    expect(persistedSubscriptions.events).toHaveLength(2);
     expect(JSON.stringify(linterStreamEvents[1])).toMatch(
       /"durableWorkerKey":"app-gh-linter-[0-9a-f]{32}"/,
     );
