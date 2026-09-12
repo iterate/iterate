@@ -494,3 +494,33 @@ Gates: unit 543 | 6 xfail · workers 77 | 13 xfail | 2 skip · typecheck · oxli
 
 Both reviewers CONFIRMED the two remaining parked bugs are still live (see the parked list below):
 idempotency-echo effects (LOW–MED) and library-WebSocket idle cleanup (MED).
+
+## Round 12 — the two confirmed parked bugs fixed (A1, A2), minimal impl
+
+The owner asked to clear the two live bugs both reviewers confirmed, ahead of a merge.
+
+- **A1 — idempotency-echo re-runs the DO commit effects (FIXED).** `#appendAndRunCommittedEffects` ran
+  the three effects (facet delete / memo refresh / dead-stub un-set) on `committedEvents`, which
+  interleaves idempotency ECHOES (a retry re-answers with the historical event); delivery already used
+  `freshEvents`. Configure A → replace with B → retry A could re-refresh A's stale startup memo. Fix
+  (minimal, no API change): the DO reads `highestAssignedOffset()` before the append and runs the three
+  effects on `committedEvents.filter(e => e.offset > headBeforeCommit)` — fresh commits get NEW offsets,
+  echoes keep their historical (<= head) one (stream.test.ts already pins that echo behavior). The
+  return value (full committed) is unchanged, so the built-in `append` verb and every caller are
+  untouched.
+- **A2 — library connections escaped the idle quiesce (FIXED).** `#recordActivityForQuietClock` armed
+  the quiesce alarm only for live facets / borrowed stubs, so a connection-only context never armed it
+  and pinned the DO awake (billed) — even though library.ts's own header says a held connection "pins
+  the context awake exactly like a borrowed stub". Fix: `buildLibrary` exposes `hasOpenConnections()`
+  (its live-connection map is the truth); both the arm-eligibility and the alarm's re-arm now count it;
+  and `invoke` records activity in a `finally` (the pre-call note ran before the connection existed), so
+  a connection-opening call arms the clock. Release stays as-is (fire-and-forget, matching returnBorrowed).
+
+No dedicated tests (minimal, per the owner): A1's echo-offset mechanism is already pinned in
+stream.test.ts and the filter is a trivial consequence; A2 needs a live connectable endpoint (an e2e
+concern like the WS-relay pin) and a facet-counting unit test would be materialization-timing fragile.
+Gates: unit 543 | 6 xfail · workers 77 | 13 xfail | 2 skip · typecheck · oxlint 0/0 · knip clean.
+
+Remaining parked (see the round-11 tail list): A3 double-parse (pinned), A4 WS-relay race (pinned),
+A5 dispose-during-pause, the B decisions (token systems, path-mask, MCP lifecycle), C1 library split,
+and the D nice-to-haves.

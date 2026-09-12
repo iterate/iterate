@@ -258,17 +258,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  refusal in the same turn it accepted the socket. */
   #appendAndRunCommittedEffects(events: StreamEventInput[]): StreamEvent[] {
     const subscriptionsBeforeCommit = this.#stream.coreReducedState.subscriptions;
+    const headBeforeCommit = this.#stream.highestAssignedOffset();
     // THE APPEND BOUNDARY: every event is validated + normalized here (core-processor's
     // `normalizeControlEvent`), so a control command's itx-expression fields are checked and stored
     // in parsed form — call sites append LITERAL `{ type, payload }`, never an event-builder helper.
     const committedEvents = this.#stream.append(...events.map(normalizeControlEvent));
+    // Effects run on FRESH commits only. An idempotency retry ECHOES the historical event (its offset
+    // is <= the pre-append head), and re-running an effect on an echo could revert state a later event
+    // already moved on — configure A, replace with B, retry A would restore A's facet startup memo.
+    const freshEvents = committedEvents.filter((event) => event.offset > headBeforeCommit);
     this.#recordActivityForQuietClock();
-    this.#deleteFacetsWhoseHostingSubscriptionWasRemoved(
-      committedEvents,
-      subscriptionsBeforeCommit,
-    );
-    this.#refreshFacetStartupMemosFromHostingConfigurations(committedEvents);
-    this.#unsetWhatNamesDeadRpcStubsOnResume(committedEvents);
+    this.#deleteFacetsWhoseHostingSubscriptionWasRemoved(freshEvents, subscriptionsBeforeCommit);
+    this.#refreshFacetStartupMemosFromHostingConfigurations(freshEvents);
+    this.#unsetWhatNamesDeadRpcStubsOnResume(freshEvents);
     return committedEvents;
   }
 
@@ -489,10 +491,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #lastActivityMs = 0;
   #recordActivityForQuietClock(): void {
     this.#lastActivityMs = Date.now();
-    // NOTHING TO QUIESCE, NO ALARM: with no live facet and no borrowed stub, arming is one storage
-    // write plus one billed wake for nothing — a bare probe must not pay that. `#lastActivityMs`
-    // still updates, so the first materialization or borrow arms with an honest quiet-period start.
-    if (this.#liveFacetNames.size === 0 && !this.#rpcStubs.hasBorrowedRpcStubs()) return;
+    // NOTHING TO QUIESCE, NO ALARM: with no live facet, no borrowed stub and no library connection,
+    // arming is one storage write plus one billed wake for nothing — a bare probe must not pay that.
+    // `#lastActivityMs` still updates, so the first materialization / borrow / connection arms with an
+    // honest quiet-period start.
+    if (
+      this.#liveFacetNames.size === 0 &&
+      !this.#rpcStubs.hasBorrowedRpcStubs() &&
+      !this.#library.hasOpenConnections()
+    )
+      return;
     this.#stream.armAlarmNoLaterThan(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS);
   }
 
@@ -566,7 +574,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // and released here, borrowed and reopened on use.
       this.#rpcStubs.returnBorrowedRpcStubs();
       this.#library.releaseConnections();
-    } else if (this.#liveFacetNames.size > 0 || this.#rpcStubs.hasBorrowedRpcStubs()) {
+    } else if (
+      this.#liveFacetNames.size > 0 ||
+      this.#rpcStubs.hasBorrowedRpcStubs() ||
+      this.#library.hasOpenConnections()
+    ) {
       // Look again when the quiet period would end — never in the PAST (work in flight for over a
       // minute would otherwise re-fire this alarm in a tight, billed loop). With NOTHING to quiesce
       // there is no re-arm (the #recordActivityForQuietClock rule): re-arming regardless was the
@@ -794,7 +806,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   ): Promise<unknown> {
     this.#notePublicDoor();
     this.#recordActivityForQuietClock();
-    return this.#callerStorage.run(caller, () => this.#itxExpressionResolver.invoke(call, ...args));
+    try {
+      return await this.#callerStorage.run(caller, () =>
+        this.#itxExpressionResolver.invoke(call, ...args),
+      );
+    } finally {
+      // Note AGAIN after the call: it may have OPENED a library connection (the pre-call note ran
+      // before it existed), and a connection is exactly what the quiet clock must arm for.
+      this.#recordActivityForQuietClock();
+    }
   }
   readonly #callerStorage = new AsyncLocalStorage<Caller>();
 

@@ -82,6 +82,9 @@ export interface LibraryRoots {
  *  pays nothing for the library until a verb runs. */
 export function buildLibrary(itx: LibraryItx): {
   roots: LibraryRoots;
+  /** Whether the library holds any live connection — one thing the idle quiesce must wait for (they
+   *  pin this actor awake the same way a live facet or a borrowed stub does). */
+  hasOpenConnections(): boolean;
   /** Close every connection the library holds (the idle quiesce's call); the next use reopens. */
   releaseConnections(): void;
 } {
@@ -107,6 +110,7 @@ export function buildLibrary(itx: LibraryItx): {
       connectToCapnweb: (url, options) =>
         memoized(["capnweb", url, options], () => connectToCapnweb(itx, url, options)),
     },
+    hasOpenConnections: () => liveConnections.size > 0,
     releaseConnections: () => {
       // `close()` where a connection has one (the graceful half-close), else its dispose; a release
       // that throws is REPORTED — a connection that will not close is a fact worth a log line.
@@ -546,9 +550,11 @@ class McpJsonRpcClient {
       // Clear the memo when THIS handshake settles — but ONLY if it is still the current one, so a
       // handshake that lost a close race never clears its replacement's memo (which would let a third
       // handshake start and leave one session unowned).
-      void handshake.catch(() => {}).finally(() => {
-        if (this.#handshake === handshake) this.#handshake = null;
-      });
+      void handshake
+        .catch(() => {})
+        .finally(() => {
+          if (this.#handshake === handshake) this.#handshake = null;
+        });
     }
     return this.#handshake;
   }
@@ -636,7 +642,10 @@ class McpJsonRpcClient {
       new Request(this.#url, { method: "POST", headers, body: JSON.stringify(body) }),
     );
     const nextSessionId = response.headers.get("mcp-session-id") ?? sessionId;
-    return { response: await refuseUnlessOk(response, `MCP ${body.method}`), sessionId: nextSessionId };
+    return {
+      response: await refuseUnlessOk(response, `MCP ${body.method}`),
+      sessionId: nextSessionId,
+    };
   }
 }
 
