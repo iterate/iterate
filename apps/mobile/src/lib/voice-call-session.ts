@@ -98,7 +98,6 @@ export async function startChatCall(
           },
           repo: (project as any).repo,
           streamPath,
-          colleaguePath: target.colleaguePath,
           /* Keyed by PROJECT too, not just stream path: the path is the
            * same on every project, so a marker written against one project
            * must not convince another that its stream already has a
@@ -123,7 +122,6 @@ export async function startChatCall(
          * for the JS driver. */
         Animated.timing(pulse, { toValue: level, duration: 90, useNativeDriver: false }).start();
       },
-      now: () => Date.now(),
     });
   } catch (error) {
     activeCall = null;

@@ -284,9 +284,9 @@ function ProcessorRevivedRow({
           </TooltipTrigger>
           <TooltipContent className="max-w-80 text-left leading-snug">
             <p>
-              This processor's runtime died while it had work in flight (an eviction, crash, or
-              deployment) and the platform revived it. The open work was adopted and continued —
-              nothing was cancelled or lost.
+              The platform ran this processor's recovery check after its runtime restarted or
+              background work failed. Durable work can resume from the stream; live connections may
+              have been interrupted. This marker alone does not establish the cause or outcome.
             </p>
           </TooltipContent>
         </Tooltip>

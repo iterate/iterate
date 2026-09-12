@@ -937,6 +937,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
       "import { parsePromptSections } from \"iterate/processors\";\n" +
       "import { TodoApp } from \"iterate/starter-apps/todo\";\n" +
+      "import { z } from \"zod\";\n" +
       "\n" +
       "const githubAiLinterRulePaths = [\n" +
       "  \"rules/structure/no-lame-helpers.md\",\n" +
@@ -957,6 +958,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "//\n" +
       "// Hence, the essence of an iterate project can be expressed as two functions:\n" +
       "// { fetch, processEvent }\n" +
+      "\n" +
+      "const BrowserCapabilityProvidedPayload = z.object({\n" +
+      "  path: z.tuple([z.literal(\"capabilities\")]),\n" +
+      "  type: z.literal(\"live\"),\n" +
+      "});\n" +
       "\n" +
       "export default class ProjectWorker extends IterateWorkerEntrypoint {\n" +
       "  #aiLintApp = GithubAiLinter.create(this.env, {\n" +
@@ -1163,8 +1169,58 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    );\n" +
       "  }\n" +
       "\n" +
-      "  // The base class delivers committed events on ANY stream here at least once and in\n" +
-      "  // per-stream order.\n" +
+      "  /** Navigate a browser client once the supplied live browser mount is ready. */\n" +
+      "  async #navigateOnboardingClient(clientPath: string): Promise<void> {\n" +
+      "    const onboardingAgent = this.itx.agents.get(\"/agents/onboarding\");\n" +
+      "    const [instructions, delivered] = await Promise.all([\n" +
+      "      onboardingAgent.stream.getEvent({\n" +
+      "        idempotencyKey: \"iterate/config/onboarding-instructions:v1\",\n" +
+      "      }),\n" +
+      "      onboardingAgent.stream.getEvent({\n" +
+      "        idempotencyKey: \"iterate/config/onboarding-navigation-delivered:v1\",\n" +
+      "      }),\n" +
+      "    ]);\n" +
+      "    if (!instructions || delivered) return;\n" +
+      "\n" +
+      "    const { slug } = await this.itx.identity();\n" +
+      "    const projectHomePath = `/projects/${slug}`;\n" +
+      "    const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;\n" +
+      "    const browserClient = this.itx.clients.get(clientPath);\n" +
+      "    const description = await browserClient.__describe();\n" +
+      "    if (\n" +
+      "      !description.capabilities.some(\n" +
+      "        (capability) =>\n" +
+      "          capability.scope === clientPath &&\n" +
+      "          capability.type === \"live\" &&\n" +
+      "          capability.path.length === 1 &&\n" +
+      "          capability.path[0] === \"capabilities\",\n" +
+      "      )\n" +
+      "    )\n" +
+      "      return;\n" +
+      "    const currentUrl = await browserClient.invokeCapability({\n" +
+      "      path: [\"capabilities\", \"browser\", \"url\"],\n" +
+      "    });\n" +
+      "    if (typeof currentUrl !== \"string\") return;\n" +
+      "    const currentPath = new URL(currentUrl).pathname.replace(/\\/$/, \"\");\n" +
+      "    if (currentPath !== onboardingUrl) {\n" +
+      "      if (currentPath !== projectHomePath) return;\n" +
+      "      await browserClient.invokeCapability({\n" +
+      "        path: [\"capabilities\", \"browser\", \"navigate\"],\n" +
+      "        args: [onboardingUrl],\n" +
+      "      });\n" +
+      "    }\n" +
+      "    await onboardingAgent.append({\n" +
+      "      type: \"events.iterate.com/agents/context-added\",\n" +
+      "      idempotencyKey: \"iterate/config/onboarding-navigation-delivered:v1\",\n" +
+      "      payload: {\n" +
+      "        role: \"developer\",\n" +
+      "        key: \"config/onboarding-navigation\",\n" +
+      "        content: \"The initial onboarding browser navigation was delivered.\",\n" +
+      "        llmRequestPolicy: { behaviour: \"dont-trigger-request\" },\n" +
+      "      },\n" +
+      "    });\n" +
+      "  }\n" +
+      "\n" +
       "  protected override async processEvent(event: StreamEvent): Promise<void> {\n" +
       "    switch (event.type) {\n" +
       "      case \"events.iterate.com/project/created\": {\n" +
@@ -1200,32 +1256,27 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          },\n" +
       "        );\n" +
       "\n" +
-      "        const [{ slug }, clients] = await Promise.all([\n" +
-      "          this.itx.identity(),\n" +
-      "          this.itx.clients.list(),\n" +
-      "        ]);\n" +
-      "        const projectHomePath = `/projects/${slug}`;\n" +
-      "        const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;\n" +
+      "        const clients = await this.itx.clients.list();\n" +
       "        await Promise.all(\n" +
       "          clients\n" +
       "            .filter((client) => client.connected && client.path.startsWith(\"/clients/os-app/\"))\n" +
-      "            .map(async (client) => {\n" +
-      "              const browserClient = this.itx.clients.get(client.path);\n" +
-      "              const currentUrl = await browserClient.invokeCapability({\n" +
-      "                path: [\"capabilities\", \"browser\", \"url\"],\n" +
-      "              });\n" +
-      "              if (\n" +
-      "                typeof currentUrl !== \"string\" ||\n" +
-      "                new URL(currentUrl).pathname.replace(/\\/$/, \"\") !== projectHomePath\n" +
-      "              ) {\n" +
-      "                return;\n" +
-      "              }\n" +
-      "              await browserClient.invokeCapability({\n" +
-      "                path: [\"capabilities\", \"browser\", \"navigate\"],\n" +
-      "                args: [onboardingUrl],\n" +
-      "              });\n" +
-      "            }),\n" +
+      "            .map(async (client) => await this.#navigateOnboardingClient(client.path)),\n" +
       "        );\n" +
+      "        break;\n" +
+      "      }\n" +
+      "      case \"events.iterate.com/capability-host/capability-provided\": {\n" +
+      "        const copiedFrom = event.source?.copiedFrom?.at(-1);\n" +
+      "        const payload = BrowserCapabilityProvidedPayload.safeParse(event.payload);\n" +
+      "        if (\n" +
+      "          event.path !== \"/\" ||\n" +
+      "          !copiedFrom?.path.startsWith(\"/clients/os-app/\") ||\n" +
+      "          !payload.success\n" +
+      "        )\n" +
+      "          break;\n" +
+      "        await this.itx.clients\n" +
+      "          .get(copiedFrom.path)\n" +
+      "          .processor.waitUntilProcessed({ offset: copiedFrom.offset });\n" +
+      "        await this.#navigateOnboardingClient(copiedFrom.path);\n" +
       "        break;\n" +
       "      }\n" +
       "      case \"events.iterate.com/agent/created\": {\n" +

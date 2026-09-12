@@ -1,6 +1,64 @@
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
+import { z } from "zod";
+
+const BrowserCapabilityProvidedPayload = z.object({
+  path: z.tuple([z.literal("capabilities")]),
+  type: z.literal("live"),
+});
 
 export default class VoiceProjectWorker extends IterateWorkerEntrypoint {
+  /** Navigate a browser client once the supplied live browser mount is ready. */
+  async #navigateOnboardingClient(clientPath: string): Promise<void> {
+    const onboardingAgent = this.itx.agents.get("/agents/onboarding");
+    const [instructions, delivered] = await Promise.all([
+      onboardingAgent.stream.getEvent({
+        idempotencyKey: "iterate/config/onboarding-instructions:v1",
+      }),
+      onboardingAgent.stream.getEvent({
+        idempotencyKey: "iterate/config/onboarding-navigation-delivered:v1",
+      }),
+    ]);
+    if (!instructions || delivered) return;
+
+    const { slug } = await this.itx.identity();
+    const projectHomePath = `/projects/${slug}`;
+    const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;
+    const browserClient = this.itx.clients.get(clientPath);
+    const description = await browserClient.__describe();
+    if (
+      !description.capabilities.some(
+        (capability) =>
+          capability.scope === clientPath &&
+          capability.type === "live" &&
+          capability.path.length === 1 &&
+          capability.path[0] === "capabilities",
+      )
+    )
+      return;
+    const currentUrl = await browserClient.invokeCapability({
+      path: ["capabilities", "browser", "url"],
+    });
+    if (typeof currentUrl !== "string") return;
+    const currentPath = new URL(currentUrl).pathname.replace(/\/$/, "");
+    if (currentPath !== onboardingUrl) {
+      if (currentPath !== projectHomePath) return;
+      await browserClient.invokeCapability({
+        path: ["capabilities", "browser", "navigate"],
+        args: [onboardingUrl],
+      });
+    }
+    await onboardingAgent.append({
+      type: "events.iterate.com/agents/context-added",
+      idempotencyKey: "iterate/config/onboarding-navigation-delivered:v1",
+      payload: {
+        role: "developer",
+        key: "config/onboarding-navigation",
+        content: "The initial onboarding browser navigation was delivered.",
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+      },
+    });
+  }
+
   protected override async processEvent(event: StreamEvent): Promise<void> {
     if (
       event.type === "events.iterate.com/agent/created" &&
@@ -16,6 +74,20 @@ export default class VoiceProjectWorker extends IterateWorkerEntrypoint {
         idempotencyKey: "iterate/config/agent-birth-configured:v1",
         payload: { config: { llmRequestDebounceMs: 250 } },
       });
+      return;
+    }
+    const copiedFrom = event.source?.copiedFrom?.at(-1);
+    const payload = BrowserCapabilityProvidedPayload.safeParse(event.payload);
+    if (
+      event.type === "events.iterate.com/capability-host/capability-provided" &&
+      event.path === "/" &&
+      copiedFrom?.path.startsWith("/clients/os-app/") &&
+      payload.success
+    ) {
+      await this.itx.clients
+        .get(copiedFrom.path)
+        .processor.waitUntilProcessed({ offset: copiedFrom.offset });
+      await this.#navigateOnboardingClient(copiedFrom.path);
       return;
     }
     if (event.type !== "events.iterate.com/project/created" || event.path !== "/") return;
@@ -51,54 +123,11 @@ export default class VoiceProjectWorker extends IterateWorkerEntrypoint {
       },
     );
 
-    // Project creation can finish just before the creating tab mounts its
-    // ordinary project client. Keep that race entirely in this template: for
-    // eight seconds, look for an OS client whose browser capability is ready.
-    // No client is a valid outcome (CLI/API-created projects have none).
-    const clientDeadline = Date.now() + 8_000;
-    let browserClientPaths: string[] = [];
-    while (browserClientPaths.length === 0 && Date.now() < clientDeadline) {
-      const clients = await this.itx.clients.list();
-      browserClientPaths = (
-        await Promise.all(
-          clients
-            .filter((client) => client.connected && client.path.startsWith("/clients/os-app/"))
-            .map(async (client) => {
-              const description = await this.itx.clients.get(client.path).__describe();
-              return description.capabilities.some(
-                (capability) =>
-                  capability.path.length === 1 && capability.path[0] === "capabilities",
-              )
-                ? client.path
-                : undefined;
-            }),
-        )
-      ).filter((path): path is string => path !== undefined);
-      if (browserClientPaths.length === 0 && Date.now() < clientDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-    }
-
-    const { slug } = await this.itx.identity();
-    const projectHomePath = `/projects/${slug}`;
-    const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;
+    const clients = await this.itx.clients.list();
     await Promise.all(
-      browserClientPaths.map(async (clientPath) => {
-        const browserClient = this.itx.clients.get(clientPath);
-        const currentUrl = await browserClient.invokeCapability({
-          path: ["capabilities", "browser", "url"],
-        });
-        if (
-          typeof currentUrl !== "string" ||
-          new URL(currentUrl).pathname.replace(/\/$/, "") !== projectHomePath
-        ) {
-          return;
-        }
-        await browserClient.invokeCapability({
-          path: ["capabilities", "browser", "navigate"],
-          args: [onboardingUrl],
-        });
-      }),
+      clients
+        .filter((client) => client.connected && client.path.startsWith("/clients/os-app/"))
+        .map(async (client) => await this.#navigateOnboardingClient(client.path)),
     );
   }
 

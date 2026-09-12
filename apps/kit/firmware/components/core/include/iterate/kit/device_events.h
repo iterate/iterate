@@ -12,9 +12,7 @@ extern "C" {
 #endif
 
 enum iterate_kit_device_event_type {
-  ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED = 0,
-  ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED,
-  ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED,
+  ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED = 0,
   ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED,
   ITERATE_KIT_DEVICE_EVENT_TYPE_COUNT,
 };
@@ -83,7 +81,7 @@ struct iterate_kit_device_event_queue_metrics {
  * This is deliberately not ISR-safe or multi-producer. Platforms must first
  * marshal ISR/cross-core edges onto the owner task. Making that restriction
  * explicit keeps the hot path free of locks and atomics and gives physical and
- * remote push-to-talk transitions one deterministic order.
+ * remote conversation transitions one deterministic order.
  */
 struct iterate_kit_device_event_queue {
   struct iterate_kit_device_event_queue_options options;

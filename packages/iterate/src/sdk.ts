@@ -48,11 +48,11 @@ export { serveItx } from "./serve-itx.ts";
 /**
  * What the platform supplies to every dynamic worker: the `ITX` binding
  * (`get()` for capability method calls, `fetch()` for HTTP into sibling
- * workers) and `ITERATE_WORKER_VERSION` — the worker's own content-addressed
- * build identity, changing exactly when its source does. Pass the latter as
- * the `version` of a hosted processor registry: a version change is what
- * resets a crash-looping keepalive's backoff budget, so a broken-then-fixed
- * worker recovers on its next build instead of waiting out the backoff.
+ * workers) and `ITERATE_WORKER_VERSION` — the content-addressed identity of
+ * what Worker Loader executes: modules and effective compatibility settings.
+ * Pass the latter as the `version` of a hosted processor registry: an
+ * executable change resets a crash-looping keepalive's backoff budget, while
+ * an unrelated source-repository revision does not.
  */
 type IterateEnv = { ITX: ItxBinding; ITERATE_WORKER_VERSION: string };
 type PipelinedProject = ReturnType<ItxBinding["get"]>;
