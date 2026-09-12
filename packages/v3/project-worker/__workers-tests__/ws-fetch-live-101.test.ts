@@ -118,6 +118,49 @@ test("lent-stub WebSocket fetch: the eyeball's upgrade on the project host gets 
   eyeball.close(1000, "done");
 });
 
+// ─────────────────── a provider that GREETS on connect: the early server frame must not drop ───────────────────
+
+// The primary transport (capnweb) is client-first, so this bites only RAW-WS to a provider that
+// speaks first. The DO must accept the eyeball BEFORE the transport opens its upgrade leg, or the
+// greeting the provider sends the instant it upgrades routes to a not-yet-existent eyeball
+// (#peerOf → null) and is dropped. A regression pin for that accept-order (context/rpc-stubs.ts).
+class GreetingSite extends RpcTarget {
+  fetch(request: Request): Response {
+    if ((request.headers.get("Upgrade") ?? "").toLowerCase() !== "websocket")
+      return new Response("greeting site");
+    const pair = new WebSocketPair();
+    pair[1].accept();
+    pair[1].addEventListener("message", (e) => pair[1].send(`greet-echo:${e.data}`));
+    pair[1].send("server-hello"); // GREET first — before any eyeball frame
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+}
+
+test("a lent-stub WebSocket provider that GREETS on connect: the eyeball receives the server's first frame without sending one", async () => {
+  const project = "ws101-greet";
+  await (await createProject(project)).provide("itx.apps.wsdev", new GreetingSite());
+  const res = await SELF.fetch(`https://wsdev--${project}.projects.test/`, {
+    headers: { Upgrade: "websocket" },
+  });
+  expect(res.status).toBe(101);
+  const eyeball = res.webSocket;
+  if (!eyeball) throw new Error("101 without a webSocket");
+  const greeting = await new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("no server greeting within 10s")), 10_000);
+    eyeball.addEventListener("message", (ev) => {
+      clearTimeout(timer);
+      resolve(String(ev.data));
+    });
+    eyeball.addEventListener("close", (ev) => {
+      clearTimeout(timer);
+      reject(new Error(`eyeball closed before the greeting: ${ev.code} ${ev.reason}`));
+    });
+    eyeball.accept(); // NB: no eyeball.send() — the server speaks first
+  });
+  expect(greeting).toBe("server-hello");
+  eyeball.close(1000, "done");
+});
+
 // ─────────────── the loaded-worker half: a capnweb API served by loaded code, behind the host ───────────────
 
 /** A capnweb server as a LOADED WORKER: the SDK's `newWorkersRpcResponse` over its `fetch`. */

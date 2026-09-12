@@ -138,12 +138,23 @@ describe("the library", () => {
             initializeCount++;
             await new Promise((r) => setTimeout(r, 5)); // let a racing request interleave first
             return json(
-              { jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "f" } } },
+              {
+                jsonrpc: "2.0",
+                id: body.id,
+                result: {
+                  protocolVersion: "2025-03-26",
+                  capabilities: {},
+                  serverInfo: { name: "f" },
+                },
+              },
               { headers: { "mcp-session-id": "s-1" } },
             );
           }
           if (!request.headers.get("mcp-session-id"))
-            return json({ jsonrpc: "2.0", id: body.id, error: { code: -32000, message: "no session" } }, { status: 400 });
+            return json(
+              { jsonrpc: "2.0", id: body.id, error: { code: -32000, message: "no session" } },
+              { status: 400 },
+            );
           const result =
             body.method === "tools/list"
               ? { tools: [{ name: "echo" }] }
@@ -177,7 +188,15 @@ describe("the library", () => {
             const id = `s-${++sessions}`;
             if (sessions > 1) await new Promise<void>((r) => (releaseHandshake = r)); // park the re-handshake
             return json(
-              { jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "f" } } },
+              {
+                jsonrpc: "2.0",
+                id: body.id,
+                result: {
+                  protocolVersion: "2025-03-26",
+                  capabilities: {},
+                  serverInfo: { name: "f" },
+                },
+              },
               { headers: { "mcp-session-id": id } },
             );
           }
@@ -552,7 +571,15 @@ describe("mcp", () => {
         if (request.method === "DELETE") return new Response(null, { status: 204 });
         if (body.method === "initialize")
           return json(
-            { jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "fake", version: "0" } } },
+            {
+              jsonrpc: "2.0",
+              id: body.id,
+              result: {
+                protocolVersion: "2025-03-26",
+                capabilities: {},
+                serverInfo: { name: "fake", version: "0" },
+              },
+            },
             { headers: { "mcp-session-id": "s-1" } },
           );
         if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
@@ -580,7 +607,15 @@ describe("mcp", () => {
         if (body.method === "initialize") {
           const n = ++inits;
           const answer = json(
-            { jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "f" } } },
+            {
+              jsonrpc: "2.0",
+              id: body.id,
+              result: {
+                protocolVersion: "2025-03-26",
+                capabilities: {},
+                serverInfo: { name: "f" },
+              },
+            },
             { headers: { "mcp-session-id": `s-${n}` } },
           );
           return n === 2 ? new Promise<Response>((r) => (releaseA = () => r(answer))) : answer; // A parks
@@ -591,7 +626,11 @@ describe("mcp", () => {
         return json({
           jsonrpc: "2.0",
           id: body.id,
-          result: { content: [{ type: "text", text: JSON.stringify(request.headers.get("mcp-session-id")) }] },
+          result: {
+            content: [
+              { type: "text", text: JSON.stringify(request.headers.get("mcp-session-id")) },
+            ],
+          },
         });
       });
       const conn = await connectToMcp(itx, "https://mcp.example/rpc"); // s-1
@@ -618,7 +657,15 @@ describe("mcp", () => {
         if (request.method === "DELETE") return new Response(null, { status: 204 });
         if (body.method === "initialize")
           return json(
-            { jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "f" } } },
+            {
+              jsonrpc: "2.0",
+              id: body.id,
+              result: {
+                protocolVersion: "2025-03-26",
+                capabilities: {},
+                serverInfo: { name: "f" },
+              },
+            },
             { headers: { "mcp-session-id": "s-1" } },
           );
         if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
@@ -647,7 +694,15 @@ describe("mcp", () => {
         }
         if (body.method === "initialize")
           return json(
-            { jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "f" } } },
+            {
+              jsonrpc: "2.0",
+              id: body.id,
+              result: {
+                protocolVersion: "2025-03-26",
+                capabilities: {},
+                serverInfo: { name: "f" },
+              },
+            },
             { headers: { "mcp-session-id": "s-1" } },
           );
         if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
@@ -778,7 +833,7 @@ describe("openapi", () => {
       headers: { "content-type": "application/json" },
     });
 
-  test("a $ref (or malformed) parameter is dropped, not surfaced as { name: undefined }", async () => {
+  test("an internal $ref parameter is RESOLVED; an external / missing / malformed ref is dropped, never surfaced as { name: undefined }", async () => {
     const spec = {
       openapi: "3.0.0",
       servers: [{ url: "https://api.example/v1" }],
@@ -787,18 +842,26 @@ describe("openapi", () => {
           get: {
             operationId: "listPets",
             parameters: [
-              { $ref: "#/components/parameters/Limit" }, // a $ref — unsupported; must be dropped
+              { $ref: "#/components/parameters/Limit" }, // internal — RESOLVED against components below
+              { $ref: "https://other.example/p.json#/Cursor" }, // external — dropped (this lane fetches only the spec)
+              { $ref: "#/components/parameters/Missing" }, // internal but absent — dropped
               { name: "tag", in: "query" },
             ],
           },
         },
+      },
+      components: {
+        parameters: { Limit: { name: "limit", in: "query", required: true } },
       },
       // eslint-disable-next-line -- $ref parameters are not in the typed shape; this simulates a real doc
     } as unknown as OpenApiDocument;
     const { itx } = fakeItx();
     const conn = await connectToOpenApi(itx, spec);
     const [op] = conn.operations();
-    expect(op.parameters).toEqual([{ name: "tag", in: "query" }]); // the $ref param is gone
+    expect(op.parameters).toEqual([
+      { name: "limit", in: "query", required: true }, // the internal $ref resolved
+      { name: "tag", in: "query" },
+    ]);
     expect(op.parameters.every((p) => typeof p.name === "string" && typeof p.in === "string")).toBe(
       true,
     );

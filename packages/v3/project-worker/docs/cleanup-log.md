@@ -554,3 +554,22 @@ Working the parked list smallest-first, per the owner's calls.
   dereferencing is ever needed. Owner to decide dep vs. hand-roll before implementing.
 
 Gates: unit 544 | 5 xfail · workers 77 | 13 xfail | 2 skip · typecheck · oxlint 0/0 · knip clean.
+
+## Round 14 — A4 (investigated: false positive) + D1 (internal $ref resolver)
+
+- **A4 (WS-relay early-frame race) — NOT A REAL BUG; regression pin added.** A workerd test with a
+  provider that GREETS on connect (`GreetingSite` sends its first frame the instant it upgrades, before
+  any eyeball frame) receives that frame correctly on the CURRENT code — 5/5 green. `serve()` accepts
+  the eyeball SYNCHRONOUSLY the moment `transport.fetch` resolves, which reliably precedes the ASYNC
+  frame-delivery event on the leg, so the codex-flagged race does not manifest in workerd. Kept the
+  greeting test as a regression pin; did NOT apply the accept-before-dial reorder (a risky change to a
+  hibernation relay for a bug that does not reproduce — the owner concurred: keep the pin).
+- **D1 (OpenAPI internal `$ref`) — DONE, hand-rolled (owner: "20 lines").** `connectToOpenApi` now
+  resolves internal (`#/…`) `$ref` parameters (and path-item refs) with a tiny cycle-guarded resolver
+  (`resolveInternalRef` + `derefInternal`), zero deps — oRPC's OpenAPI lib was the wrong direction (it
+  generates/serves a spec from a router, can't parse a foreign one), and the consumed surface is only
+  param name/in/required (the request-body schema is never read), so a full dereferencer was overkill.
+  External refs (URL/file — this lane fetches only the spec), missing internal refs, and malformed
+  params still drop. Test updated: an internal ref resolves, an external/missing/malformed one drops.
+
+Gates: unit 544 | 5 xfail · workers (ws-fetch-live-101) 4/4 · typecheck · oxlint 0/0.

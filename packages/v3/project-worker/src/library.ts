@@ -876,30 +876,63 @@ function requestBase(
 
 /** A concrete OpenAPI parameter — PARSED, never cast: a `$ref` parameter (or any malformed one) has no
  *  string `name`/`in`, so it fails this and is dropped instead of surfacing as `{ name: undefined }`
- *  that violates OpenApiOperation. $ref RESOLUTION is a deferred feature (see docs/cleanup-log.md). */
+ *  that violates OpenApiOperation. An internal `$ref` (a shared `#/components/parameters/…`) is
+ *  resolved first; an external ref (a URL or file) stays dropped — this lane fetches only the spec. */
 const OpenAPIParameter = z.object({
   name: z.string(),
   in: z.string(),
   required: z.boolean().optional(),
 });
-const concreteParameters = (raw: unknown): OpenApiOperation["parameters"] =>
+
+/** Resolve an internal JSON pointer (`#/a/b`, RFC 6901 un-escaping) against the root document;
+ *  `undefined` for an external ref or a missing target. */
+function resolveInternalRef(root: unknown, ref: string): unknown {
+  if (!ref.startsWith("#/")) return undefined;
+  let node: unknown = root;
+  for (const segment of ref
+    .slice(2)
+    .split("/")
+    .map((s) => s.replace(/~1/g, "/").replace(/~0/g, "~"))) {
+    if (node == null || typeof node !== "object") return undefined;
+    node = (node as Record<string, unknown>)[segment];
+  }
+  return node;
+}
+
+/** Follow a `$ref` chain (internal only, cycle-guarded) to the concrete node it names. */
+function derefInternal(root: unknown, node: unknown, seen = new Set<string>()): unknown {
+  while (
+    node != null &&
+    typeof node === "object" &&
+    typeof (node as { $ref?: unknown }).$ref === "string"
+  ) {
+    const ref = (node as { $ref: string }).$ref;
+    if (seen.has(ref)) return undefined; // a ref cycle resolves to nothing, never a hang
+    seen.add(ref);
+    node = resolveInternalRef(root, ref);
+  }
+  return node;
+}
+
+const concreteParameters = (raw: unknown, spec: unknown): OpenApiOperation["parameters"] =>
   Array.isArray(raw)
     ? raw.flatMap((p) => {
-        const parsed = OpenAPIParameter.safeParse(p);
+        const parsed = OpenAPIParameter.safeParse(derefInternal(spec, p));
         return parsed.success ? [parsed.data] : [];
       })
     : [];
 
 function listOperations(spec: OpenApiDocument): OpenApiOperation[] {
   const operations: OpenApiOperation[] = [];
-  for (const [path, pathItem] of Object.entries(spec.paths ?? {})) {
+  for (const [path, rawPathItem] of Object.entries(spec.paths ?? {})) {
+    const pathItem = derefInternal(spec, rawPathItem) as Record<string, unknown> | null;
     if (pathItem == null || typeof pathItem !== "object") continue;
-    const pathParameters = concreteParameters(pathItem.parameters);
+    const pathParameters = concreteParameters(pathItem.parameters, spec);
     for (const [method, raw] of Object.entries(pathItem)) {
       if (!HTTP_METHODS.has(method) || raw == null || typeof raw !== "object") continue;
       const op = raw as Record<string, unknown>;
       if (typeof op.operationId !== "string") continue;
-      const own = concreteParameters(op.parameters);
+      const own = concreteParameters(op.parameters, spec);
       operations.push({
         operationId: op.operationId,
         method,
