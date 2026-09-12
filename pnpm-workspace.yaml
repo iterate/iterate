@@ -87,9 +87,28 @@ overrides:
   axios: 1.13.6
   baseline-browser-mapping: ^2.9.14
   capnweb: npm:@iterate-com/capnweb@0.10.0
+  # os-next (a standalone wrangler-deployed worker — no shared RpcTarget identity with the
+  # rest of the graph) runs ahead on 0.12.0: arg-disposal-on-broken, exact binary serialization,
+  # the batch-latency fix. The monorepo-wide pin above stays 0.10.0 until each consumer is verified.
+  'os-next>capnweb': npm:@iterate-com/capnweb@0.12.2
+  # dummy-petshop's /capnweb door is the pet shop the clean-room's `itx.connectToCapnweb` connector is
+  # proved against, so its server speaks the same 0.12 wire as that client.
+  '@iterate-com/dummy-petshop>capnweb': npm:@iterate-com/capnweb@0.12.2
   quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
   srvx: 0.11.12
   wrangler: 4.107.0
+  # os-next runs ahead on wrangler 4.131.1 (bundled workerd 1.20260911): its createTestHarness
+  # + `wrangler dev` accept the allow_irrevocable_stub_storage flag, so the harness/E2E lane can load
+  # userspace facets locally (stable in that workerd; the older 4.107.0 gates it behind --experimental).
+  # Scoped like the capnweb bump above — the monorepo-wide pin stays 4.107.0 until each consumer is
+  # verified. It also runs @cloudflare/vite-plugin 1.54.8 off-catalog (its own devDep) so the plugin's
+  # bundled workerd — via miniflare 5.x — is new enough to run THIS worker at its 2026-09-01 compat
+  # date under `vite dev`/build; the plugin's own nested wrangler needs the same 4.131.1 (the bare
+  # `wrangler` override would otherwise pin it to 4.107.0). Build/dev-only; the deploy uses the direct
+  # wrangler, and miniflare 5.x-alpha never ships to production.
+  'os-next>wrangler': 4.131.1
+  '@cloudflare/vite-plugin@1.54.8>wrangler': 4.131.1
+  '@iterate-com/notes>wrangler': 4.127.1
   ws: 8.19.0
 
 packageExtensions:
