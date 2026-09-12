@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import { type ProcessorState, type StreamEventInput } from "iterate/processors";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
@@ -189,7 +190,17 @@ export class DeviceDurableObject extends DurableObject<Env> {
     // name (reads must never materialize a facet). Substitute the unborn
     // shape the facade used to serve: the schema-default fold.
     try {
-      return await (await this.#processorFacade()).snapshot();
+      const facade = await this.#processorFacade();
+      try {
+        const snapshot = await facade.snapshot();
+        try {
+          return { offset: snapshot.offset, state: snapshot.state };
+        } finally {
+          disposeIgnoredRpcResult(snapshot);
+        }
+      } finally {
+        disposeIgnoredRpcResult(facade);
+      }
     } catch (error) {
       if (!isUnconfiguredSubscriptionError(error)) throw error;
       return {
@@ -204,12 +215,15 @@ export class DeviceDurableObject extends DurableObject<Env> {
   async #waitUntilProcessed(offset: number) {
     // The offset wait self-pulls and owns the complete read-your-writes
     // timeout. Do not put an unbounded catch-up RPC in front of it.
-    await (
-      await this.#processorFacade()
-    ).waitUntilProcessed({
-      offset,
-      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
-    });
+    const facade = await this.#processorFacade();
+    try {
+      await facade.waitUntilProcessed({
+        offset,
+        timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+      });
+    } finally {
+      disposeIgnoredRpcResult(facade);
+    }
   }
 
   get #pushTokenSecretPath(): string {

@@ -49,9 +49,9 @@ function inferShape(value: unknown, depth: number): Shape {
     return { kind: "array", element, minLength: value.length, maxLength: value.length };
   }
   if (typeof value === "object") {
-    // undefined-valued keys are dropped, matching what JSON.stringify writes
-    // to the spill file — they surface as optional fields after merging, not
-    // as `| null` branches that the file would contradict.
+    // undefined-valued keys are dropped by JSON.stringify — they surface as
+    // optional fields after merging, not as `| null` branches that the
+    // serialized result would contradict.
     const entries = Object.entries(value).filter(([, child]) => child !== undefined);
     const fields = new Map(
       entries.map(([key, child]) => [key, { shape: inferShape(child, depth + 1), seen: 1 }]),

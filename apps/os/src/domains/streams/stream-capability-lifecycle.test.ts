@@ -10,15 +10,18 @@ import { StreamDurableObject } from "./stream-durable-object.ts";
 
 test("provideCapability releases the facet RPC result before returning its durable identity", async () => {
   const dispose = vi.fn();
+  const disposeSnapshot = vi.fn();
   const result = { path: ["review"], providedAtOffset: 42 };
+  const snapshot = { state: { capabilities: [], capabilityProviderPagers: [] } };
   Object.defineProperty(result, Symbol.dispose, {
     value: dispose,
   });
+  Object.defineProperty(snapshot, Symbol.dispose, { value: disposeSnapshot });
   const facet = {
     catchUp: async () => undefined,
     configure: async () => undefined,
     provideCapability: async () => result,
-    snapshot: async () => ({ state: { capabilities: [], capabilityProviderPagers: [] } }),
+    snapshot: async () => snapshot,
   };
   const context = durableObjectContext(facet);
   const stream = new StreamDurableObject(context.ctx, fakeEnv());
@@ -41,6 +44,48 @@ test("provideCapability releases the facet RPC result before returning its durab
     expect(provision).toEqual({ path: ["review"], providedAtOffset: 42 });
     expect(Symbol.dispose in provision).toBe(false);
     expect(dispose).toHaveBeenCalledOnce();
+    expect(disposeSnapshot).toHaveBeenCalledTimes(2);
+  } finally {
+    context.close();
+  }
+});
+
+test("processor facade releases plain facet read results before returning them", async () => {
+  const disposeSnapshot = vi.fn();
+  const disposeRuntime = vi.fn();
+  const snapshot = { offset: 3, state: { ready: true } };
+  const runtime = { state: "idle" };
+  Object.defineProperty(snapshot, Symbol.dispose, { value: disposeSnapshot });
+  Object.defineProperty(runtime, Symbol.dispose, { value: disposeRuntime });
+  const facet = {
+    catchUp: async () => undefined,
+    configure: async () => undefined,
+    getRuntimeState: async () => runtime,
+    snapshot: async () => snapshot,
+  };
+  const context = durableObjectContext(facet);
+  const stream = new StreamDurableObject(context.ctx, fakeEnv());
+  await context.initialized;
+  stream.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      name: "plain-read",
+      receiver: { action: "facet-processor", source: { kind: "builtin" } },
+    },
+  });
+  await context.settle();
+
+  try {
+    const processor = stream.processorFacade({ name: "plain-read" });
+    const receivedSnapshot = await processor.snapshot();
+    const receivedRuntime = await processor.getRuntimeState();
+
+    expect(receivedSnapshot).toEqual({ offset: 3, state: { ready: true } });
+    expect(receivedRuntime).toEqual({ state: "idle" });
+    expect(Symbol.dispose in receivedSnapshot).toBe(false);
+    expect(Symbol.dispose in receivedRuntime).toBe(false);
+    expect(disposeSnapshot).toHaveBeenCalledOnce();
+    expect(disposeRuntime).toHaveBeenCalledOnce();
   } finally {
     context.close();
   }

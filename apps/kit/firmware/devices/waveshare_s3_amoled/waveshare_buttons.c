@@ -134,9 +134,6 @@ bool waveshare_buttons_take_upper_press(void) {
   return pressed;
 }
 
-bool waveshare_buttons_upper_held(void) {
-  return buttons.upper_down;
-}
 
 bool waveshare_buttons_take_lower_press(void) {
   const bool pressed = buttons.lower_press_pending;

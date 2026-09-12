@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
+import { disposeIgnoredRpcResult, LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import type { StreamEvent } from "iterate/processors";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
@@ -98,9 +98,18 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   async #refreshReducedState(): Promise<ProjectProcessorState> {
-    const { state } = await (await this.#processorFacade()).snapshot();
-    this.#lastReduced = state;
-    return state;
+    const facade = await this.#processorFacade();
+    try {
+      const snapshot = await facade.snapshot();
+      try {
+        this.#lastReduced = snapshot.state;
+        return snapshot.state;
+      } finally {
+        disposeIgnoredRpcResult(snapshot);
+      }
+    } finally {
+      disposeIgnoredRpcResult(facade);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -788,6 +797,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
         throw noAiInterceptorError(input.model);
       }
       throw error;
+    } finally {
+      disposeIgnoredRpcResult(facade);
     }
   }
 }
