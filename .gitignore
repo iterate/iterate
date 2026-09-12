@@ -15,6 +15,7 @@ dist
 .mf
 .wrangler
 .dev.vars*
+
 .dev-server
 # generated from the root envs.ts by each app's scripts/generate-wrangler-config.ts
 apps/os/wrangler.jsonc

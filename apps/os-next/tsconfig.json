@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "ESNext.Disposable"],
+    "types": ["@cloudflare/workers-types"],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true
+  },
+  "include": ["src"],
+  "exclude": [
+    "src/routes",
+    "src/router.tsx",
+    "src/routeTree.gen.ts",
+    "src/client/demo.tsx",
+    "src/client/browser.ts",
+    "src/client/dashboard.tsx",
+    "src/client/dashboard-data.ts"
+  ]
+}

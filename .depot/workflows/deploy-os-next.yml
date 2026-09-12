@@ -1,0 +1,80 @@
+name: Deploy OS-Next
+permissions:
+  contents: read
+  deployments: write
+concurrency:
+  # Every ref deploys to the same production Worker (os-next-prd:
+  # os.iterate2.com, mcp.iterate2.com, *.iterate2.app). Never interrupt a
+  # credentialed deployment midway through its rollout.
+  group: deploy-os-next-production
+  cancel-in-progress: false
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .depot/workflows/deploy-os-next.yml
+      - apps/os-next/**
+      - envs.ts
+      - scripts/lib/**
+      - packages/shared/**
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to deploy. Leave empty for the current branch or commit.
+        required: false
+        type: string
+        default: ""
+jobs:
+  deploy:
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 30
+    outputs:
+      public_url: ${{ steps.metadata.outputs.public_url }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ inputs.ref || github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      # The Doppler project slug is still `project-worker` (the secrets bucket
+      # predates the os-next rename; renaming a Doppler project slug is a
+      # separate migration). The deployed Cloudflare Worker is os-next-prd.
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config prd --project project-worker
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - id: metadata
+        name: Resolve OS-Next deploy URL
+        run: echo "public_url=https://os.iterate2.com" >> "$GITHUB_OUTPUT"
+      - name: Deploy apps/os-next
+        working-directory: apps/os-next
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run -- pnpm run-script deploy --env prd
+  notify:
+    needs:
+      - deploy
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.deploy.result == 'success' || needs.deploy.result == 'failure')
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 10
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Notify Slack
+        env:
+          APP_DISPLAY_NAME: OS-Next
+          PUBLIC_URL: ${{ needs.deploy.outputs.public_url }}
+        run: pnpm tsx scripts/ci/notify.ts deploy-${{ needs.deploy.result }}
