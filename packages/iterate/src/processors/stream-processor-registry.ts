@@ -189,7 +189,7 @@ type RegistryEntry = {
  * progress storage all already key by that name (see `reads`, `resolveProcessorName`,
  * and `durableObjectProgressStore`), so the instances stay independent.
  */
-export type RegisterProcessorOptions = {
+export type RegisterProcessorOptions<State = unknown> = {
   /** Clear this processor's related projections synchronously with source-lifetime replacement. */
   resetForStream?: () => void;
   /** Post-eviction keepalive recovery — REQUIRED for consequential
@@ -199,6 +199,11 @@ export type RegisterProcessorOptions = {
    * (name === slug, the identity-doctrine default). Supply a distinct name to
    * host two instances of one contract on one registry without colliding. */
   name?: string;
+  /** Persist a bounded reduction cache; a cold runner refolds when it is omitted. */
+  reductionCache?: {
+    shouldCacheReduction(state: State): boolean;
+    initialState(): State;
+  };
 };
 
 const WakeDeliveryThrowableFields = z.object({
@@ -288,7 +293,10 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
    * Duplicate names (and re-registering the same instance) throw. Returns the
    * processor, so DOs keep their `field = registry.register(new XProcessor(...))` shape.
    */
-  register<P extends RegisterableProcessor>(processor: P, opts?: RegisterProcessorOptions): P;
+  register<P extends RegisterableProcessor>(
+    processor: P,
+    opts?: RegisterProcessorOptions<RegisteredProcessorState<P>>,
+  ): P;
   /**
    * The runner-backed READ surface for one registered processor. The runner
    * owns both cursors and the fold — the processor instance holds no
@@ -587,6 +595,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
             storage: ctx.storage,
             name,
             resetForStream: opts?.resetForStream,
+            reductionCache: opts?.reductionCache,
           }),
           ...(recovery === undefined ? {} : { recovery }),
         },

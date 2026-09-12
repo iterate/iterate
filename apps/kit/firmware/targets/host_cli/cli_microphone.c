@@ -12,16 +12,6 @@ static void cli_microphone_displace_oldest(struct cli_microphone *microphone);
 static void cli_microphone_store(
     struct cli_microphone *microphone, const uint8_t *frame);
 
-const char *cli_microphone_status_name(enum cli_microphone_status status)
-{
-  switch (status) {
-    case CLI_MICROPHONE_OK: return "ok";
-    case CLI_MICROPHONE_ERR_ARG: return "bad-argument";
-    case CLI_MICROPHONE_ERR_EMPTY: return "empty";
-    default: return "unknown";
-  }
-}
-
 void cli_microphone_clear(struct cli_microphone *microphone)
 {
   if (microphone == NULL) return;
@@ -53,26 +43,6 @@ enum cli_microphone_status cli_microphone_push(
     cli_microphone_displace_oldest(microphone);
   }
   cli_microphone_store(microphone, frame);
-  return CLI_MICROPHONE_OK;
-}
-
-enum cli_microphone_status cli_microphone_pop(
-    struct cli_microphone *microphone, uint8_t *out, size_t length)
-{
-  if (microphone == NULL || out == NULL ||
-      length != ITERATE_KIT_VOICE_FRAME_BYTES) {
-    return CLI_MICROPHONE_ERR_ARG;
-  }
-  if (microphone->used > ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH) {
-    return CLI_MICROPHONE_ERR_ARG;
-  }
-  if (microphone->used == 0U) return CLI_MICROPHONE_ERR_EMPTY;
-
-  memcpy(out, microphone->frames[microphone->read], length);
-  microphone->read =
-      (microphone->read + 1U) % ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH;
-  --microphone->used;
-  assert(microphone->used < ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH);
   return CLI_MICROPHONE_OK;
 }
 

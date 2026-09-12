@@ -148,7 +148,7 @@ static enum capnweb_status dispatch_static_path(
  * before it reaches this peer. That host preserves the complete nested method
  * route as data:
  *
- *   invokeCapability({ path: ["pushToTalk", "start"], args: [] })
+ *   invokeCapability({ path: ["conversation", "start"], args: [] })
  *
  * Reconstructing a borrowed capnweb_call view lets the normal generated method
  * table remain the only dispatcher. Copying strings into a second routing

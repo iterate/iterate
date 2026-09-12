@@ -22,11 +22,11 @@ bool iterate_kit_touch_tap_update(
     }
     return false;
   }
-  if (touched) {
-    tap->held = true;
+  if (!touched) {
+    tap->held = false;
     return false;
   }
-  if (!tap->held) return false;
-  tap->held = false;
+  if (tap->held) return false;
+  tap->held = true;
   return true;
 }

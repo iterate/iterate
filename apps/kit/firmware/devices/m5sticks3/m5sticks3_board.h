@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "iterate/kit/voice/loop.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -23,15 +25,12 @@ bool m5sticks3_board_init(void);
 /** Poll M5Unified's buttons; call from the app loop. */
 void m5sticks3_board_poll(void);
 
-/** The front button's debounced level: held means the microphone is wanted. */
-bool m5sticks3_board_talk_held(void);
+/** One latched, debounced press of either physical call button. */
+bool m5sticks3_board_take_call_press(void);
 
-/** One latched press of the side button (consumed on read). */
-bool m5sticks3_board_take_side_press(void);
-
-/** Inject a side-button press into the same pending latch the poller fills
- * — one handler path for finger and capability alike. */
-void m5sticks3_board_inject_side_press(void);
+/** Inject a call-button press into the same pending latch the poller fills
+ * — one handler path for a physical press and a capability request alike. */
+void m5sticks3_board_inject_call_press(void);
 
 /* --- the 240x135 status screen -------------------------------------------- */
 
@@ -42,22 +41,10 @@ enum m5sticks3_ui_state {
   M5STICKS3_UI_SPEAKING,
 };
 
-void m5sticks3_ui_set_state(enum m5sticks3_ui_state state);
-void m5sticks3_ui_set_status(const char *status);
-void m5sticks3_ui_set_call_active(bool active);
-void m5sticks3_ui_set_link_ready(bool ready);
-/** The first rung: the Cap'n Web session to /api is up and this device is on it. */
-void m5sticks3_ui_set_api_ready(bool ready);
-/** The middle rung: a conversation stream exists and this device is on it. */
-void m5sticks3_ui_set_stream_ready(bool ready);
-/**
- * Latches an unrecoverable start-up fault onto this device's status surface.
- *
- * Distinct from "not connected": a device that is still trying looks like one
- * that is trying, and a device that will never work must not. Nothing clears
- * this — the only exit is a reboot, which is the truth.
+/** Copy one complete loop view on the app task, preserving the latched fault
+ * and the existing screen mapping; tick performs the throttled repaint.
  */
-void m5sticks3_ui_set_fault(void);
+void m5sticks3_ui_present(const struct iterate_kit_voice_view *view);
 
 /** Throttled repaint of whatever changed; call from the app loop only. */
 /**

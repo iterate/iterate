@@ -7,17 +7,13 @@
 //
 // WHY THIS EXISTS. The host CLI's report says what the DEVICE saw: frames
 // received, ring occupancy, starvation. When playback starves while every
-// frame still arrives (the back-office consultation of 2026-09-09), that
-// report cannot say whether the provider delivered late or the facet
-// released late. The facet stamps both: every mirrored provider event and
-// client control carries `receivedAtFacetMs`, every spk-frame carries
-// `sentAtFacetMs`, and the durable colleague events say when the back office
-// spoke. This tap writes them all as one JSONL, one row per event, with the
-// tap's own arrival clock beside the facet's — the whole timeline of a call
-// in a file `voicelab tap-report` can judge.
+// frame still arrives, that report cannot say whether the server released it
+// late. This tap records the live speaker lane alongside the durable call,
+// transcript, and provider-lifecycle records in one JSONL timeline.
 import fs from "node:fs";
 import { openStream } from "./probe-audio.ts";
 import type { VoicelabConnectOptions } from "./connect.ts";
+import { closeAndDisposeRpcHandle } from "./rpc-ownership.ts";
 
 /** Options for `pnpm cli voicelab tap`. */
 export interface TapOptions extends VoicelabConnectOptions {
@@ -34,36 +30,28 @@ export interface TapRow {
   /** Milliseconds since the tap opened, on the tap's clock. */
   atTapMs: number;
   type: string;
-  /** Facet clock at the moment the facet stamped the event, when it did. */
-  receivedAtFacetMs?: number;
   sentAtFacetMs?: number;
   /** spk-frame: sequence and base64 length (bytes = length * 3 / 4). */
   deviceSpeakerFrameSeq?: number;
   pcmB64Length?: number;
   lastFrameOfAnswer?: boolean;
   clearSpeakerBufferBeforeFrame?: boolean;
-  /** grok-event: the provider event's own type and, for audio deltas, its byte count. */
-  providerType?: string;
-  deltaBytes?: number;
   /** Everything else the event carried, minus audio bytes. */
   payload?: Record<string, unknown>;
 }
 
 const LIVE_TYPES = [
   "events.iterate.com/voice-agent/spk-frame",
-  "events.iterate.com/voice-agent/grok-event",
   "events.iterate.com/voice-agent/mic-frame",
-  "events.iterate.com/voice-agent/ptt-start",
-  "events.iterate.com/voice-agent/ptt-end",
+  "events.iterate.com/voice-agent/keepalive",
   "events.iterate.com/voice-agent/call-started",
   "events.iterate.com/voice-agent/conversation-accepted",
-  "events.iterate.com/voice-agent/conversation-end-requested",
   "events.iterate.com/voice-agent/conversation-ended",
   "events.iterate.com/voice-agent/utterance-transcript",
   "events.iterate.com/voice-agent/answer-transcript",
-  "events.iterate.com/voice-agent/colleague-status",
-  "events.iterate.com/voice-agent/colleague-note",
+  "events.iterate.com/voice-agent/session-configured",
   "events.iterate.com/voice-agent/provider-error",
+  "events.iterate.com/voice-agent/provider-disconnected",
 ];
 
 export async function tap(options: TapOptions): Promise<void> {
@@ -71,7 +59,8 @@ export async function tap(options: TapOptions): Promise<void> {
     throw new Error(`--path must be absolute; received ${JSON.stringify(options.path)}`);
   }
   const minutes = options.minutes ?? 3;
-  const stream = await openStream({ ...options, streamPath: options.path });
+  const openedStream = await openStream({ ...options, streamPath: options.path });
+  const { stream } = openedStream;
   const file = fs.openSync(options.out, "w");
   const openedAt = Date.now();
   let rows = 0;
@@ -91,8 +80,6 @@ export async function tap(options: TapOptions): Promise<void> {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
         const type = event.type.replace("events.iterate.com/voice-agent/", "");
         const row: TapRow = { atTapMs, type };
-        if (typeof payload.receivedAtFacetMs === "number")
-          row.receivedAtFacetMs = payload.receivedAtFacetMs;
         if (typeof payload.sentAtFacetMs === "number") row.sentAtFacetMs = payload.sentAtFacetMs;
         if (type === "spk-frame") {
           if (typeof payload.deviceSpeakerFrameSeq === "number")
@@ -101,11 +88,6 @@ export async function tap(options: TapOptions): Promise<void> {
           if (payload.lastFrameOfAnswer === true) row.lastFrameOfAnswer = true;
           if (payload.clearSpeakerBufferBeforeFrame === true)
             row.clearSpeakerBufferBeforeFrame = true;
-        } else if (type === "grok-event") {
-          if (typeof payload.type === "string") row.providerType = payload.type;
-          if (typeof payload.deltaBytes === "number") row.deltaBytes = payload.deltaBytes;
-          const { type: _t, deltaBytes: _b, delta: _d, receivedAtFacetMs: _r, ...rest } = payload;
-          row.payload = rest;
         } else if (type === "mic-frame") {
           if (typeof payload.pcm === "string") row.pcmB64Length = payload.pcm.length;
         } else {
@@ -123,7 +105,8 @@ export async function tap(options: TapOptions): Promise<void> {
     /* The subscription closes BEFORE the file: batches keep arriving until the
      * live stream hears the close, and a write after closeSync would throw. */
     closed = true;
-    connection.close();
+    closeAndDisposeRpcHandle(connection);
+    openedStream.close();
     fs.closeSync(file);
   }
   console.log(`${rows} rows`);

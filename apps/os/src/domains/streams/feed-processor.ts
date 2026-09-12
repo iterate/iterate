@@ -64,6 +64,40 @@ type FeedPublicationStore = {
   save(publication: FeedItemPublication, offset: number): void;
 };
 
+// Cloudflare Durable Object SQLite accepts neither a text nor BLOB cell above
+// roughly 2 MiB. Feed rows preserve full renderable revisions, so store their
+// JSON bytes in bounded rows just as the stream event log does.
+const FEED_PUBLICATION_CHUNK_BYTES = 512 * 1024;
+const FEED_PUBLICATION_CHUNKED = "feed-publication-chunked-v1";
+const feedPublicationEncoder = new TextEncoder();
+const feedPublicationDecoder = new TextDecoder();
+
+function* chunkFeedPublication(value: Uint8Array): Generator<[number, ArrayBuffer]> {
+  let index = 0;
+  for (let start = 0; start < value.byteLength; start += FEED_PUBLICATION_CHUNK_BYTES) {
+    const chunk = value.slice(
+      start,
+      Math.min(start + FEED_PUBLICATION_CHUNK_BYTES, value.byteLength),
+    );
+    yield [index, chunk.buffer];
+    index += 1;
+  }
+  if (index === 0) yield [0, new ArrayBuffer(0)];
+}
+
+function decodeFeedPublication(chunks: ArrayBuffer[]): FeedItemPublication {
+  let value = "";
+  for (const chunk of chunks) value += feedPublicationDecoder.decode(chunk, { stream: true });
+  return FeedItemPublication.parse(JSON.parse(value + feedPublicationDecoder.decode()));
+}
+
+function inferredExecutionIds(publication: FeedItemPublication): string[] {
+  if (publication.item.kind !== "activity") return [];
+  return publication.item.steps.flatMap((step) =>
+    step.kind === "code" && step.outcomeSource === "inferred" ? [step.executionId] : [],
+  );
+}
+
 const ScriptSettlement = z.object({ executionId: z.string() });
 
 /** Bound retained LLM preview text across the activity, prioritizing the newest request.
@@ -211,7 +245,10 @@ export class FeedProcessor extends StreamProcessor<
   }
 }
 
-export function createFeedPublicationStore(sql: SqlStorage): FeedPublicationStore {
+export function createFeedPublicationStore(
+  sql: SqlStorage,
+  transactionSync: <T>(closure: () => T) => T,
+): FeedPublicationStore {
   sql.exec(`CREATE TABLE IF NOT EXISTS feed_publications (
     item_id TEXT PRIMARY KEY, revision_offset INTEGER NOT NULL,
     publication_offset INTEGER NOT NULL, data TEXT NOT NULL
@@ -219,47 +256,160 @@ export function createFeedPublicationStore(sql: SqlStorage): FeedPublicationStor
   sql.exec(
     `CREATE INDEX IF NOT EXISTS feed_publications_recent ON feed_publications(publication_offset)`,
   );
+  sql.exec(`CREATE TABLE IF NOT EXISTS feed_publication_chunks (
+    item_id TEXT NOT NULL, revision_offset INTEGER NOT NULL, chunk_index INTEGER NOT NULL,
+    chunk_bytes BLOB NOT NULL,
+    PRIMARY KEY (item_id, revision_offset, chunk_index)
+  ) WITHOUT ROWID`);
+  sql.exec(`CREATE TABLE IF NOT EXISTS feed_publication_inferred_steps (
+    execution_id TEXT NOT NULL, item_id TEXT NOT NULL, revision_offset INTEGER NOT NULL,
+    PRIMARY KEY (execution_id, item_id)
+  ) WITHOUT ROWID`);
+
+  const readChunks = (itemId: string, revisionOffset: number) =>
+    sql
+      .exec<{ chunk_bytes: ArrayBuffer }>(
+        `SELECT chunk_bytes FROM feed_publication_chunks
+         WHERE item_id = ? AND revision_offset = ? ORDER BY chunk_index ASC`,
+        itemId,
+        revisionOffset,
+      )
+      .toArray()
+      .map((row) => row.chunk_bytes);
+  const read = (row: { item_id: string; revision_offset: number; data: string }) =>
+    row.data === FEED_PUBLICATION_CHUNKED
+      ? decodeFeedPublication(readChunks(row.item_id, row.revision_offset))
+      : FeedItemPublication.parse(JSON.parse(row.data));
+
+  // Existing rows are necessarily below SQLite's single-cell limit. Upgrade
+  // once, keeping the legacy JSON authoritative until all chunks were written.
+  const legacy = sql
+    .exec<{ item_id: string; revision_offset: number; data: string }>(
+      `SELECT item_id, revision_offset, data FROM feed_publications WHERE data != ?`,
+      FEED_PUBLICATION_CHUNKED,
+    )
+    .toArray();
+  for (const row of legacy) {
+    transactionSync(() => {
+      const publication = FeedItemPublication.parse(JSON.parse(row.data));
+      sql.exec(
+        `DELETE FROM feed_publication_chunks WHERE item_id = ? AND revision_offset = ?`,
+        row.item_id,
+        row.revision_offset,
+      );
+      for (const [index, chunk] of chunkFeedPublication(feedPublicationEncoder.encode(row.data))) {
+        sql.exec(
+          `INSERT INTO feed_publication_chunks(item_id, revision_offset, chunk_index, chunk_bytes)
+           VALUES (?, ?, ?, ?)`,
+          row.item_id,
+          row.revision_offset,
+          index,
+          chunk,
+        );
+      }
+      for (const executionId of inferredExecutionIds(publication)) {
+        sql.exec(
+          `INSERT INTO feed_publication_inferred_steps(execution_id, item_id, revision_offset)
+           VALUES (?, ?, ?) ON CONFLICT(execution_id, item_id) DO UPDATE SET
+           revision_offset = excluded.revision_offset`,
+          executionId,
+          row.item_id,
+          row.revision_offset,
+        );
+      }
+      sql.exec(
+        `UPDATE feed_publications SET data = ? WHERE item_id = ? AND revision_offset = ?`,
+        FEED_PUBLICATION_CHUNKED,
+        row.item_id,
+        row.revision_offset,
+      );
+    });
+  }
+
   return {
     latestOffset() {
-      return sql
-        .exec<{ offset: number }>(
-          `SELECT COALESCE(MAX(publication_offset), 0) AS offset FROM feed_publications`,
-        )
-        .toArray()[0]!.offset;
+      return (
+        sql
+          .exec<{ offset: number }>(
+            `SELECT COALESCE(MAX(publication_offset), 0) AS offset FROM feed_publications`,
+          )
+          .toArray()[0]?.offset ?? 0
+      );
     },
     clear() {
-      sql.exec(`DELETE FROM feed_publications`);
+      transactionSync(() => {
+        sql.exec(`DELETE FROM feed_publication_inferred_steps`);
+        sql.exec(`DELETE FROM feed_publication_chunks`);
+        sql.exec(`DELETE FROM feed_publications`);
+      });
     },
     get(itemId) {
       const row = sql
-        .exec<{ data: string }>(`SELECT data FROM feed_publications WHERE item_id = ?`, itemId)
+        .exec<{ item_id: string; revision_offset: number; data: string }>(
+          `SELECT item_id, revision_offset, data FROM feed_publications WHERE item_id = ?`,
+          itemId,
+        )
         .toArray()[0];
-      return row ? FeedItemPublication.parse(JSON.parse(row.data)) : undefined;
+      return row ? read(row) : undefined;
     },
     findInferredActivity(executionId) {
       const row = sql
-        .exec<{ data: string }>(
-          `SELECT data FROM feed_publications WHERE EXISTS (
-          SELECT 1 FROM json_each(data, '$.item.steps') AS step
-          WHERE json_extract(step.value, '$.executionId') = ?
-            AND json_extract(step.value, '$.outcomeSource') = 'inferred'
-        ) ORDER BY publication_offset DESC LIMIT 1`,
+        .exec<{ item_id: string; revision_offset: number; data: string }>(
+          `SELECT p.item_id, p.revision_offset, p.data
+           FROM feed_publication_inferred_steps i
+           JOIN feed_publications p ON p.item_id = i.item_id AND p.revision_offset = i.revision_offset
+           WHERE i.execution_id = ? ORDER BY p.publication_offset DESC LIMIT 1`,
           executionId,
         )
         .toArray()[0];
-      return row ? FeedItemPublication.parse(JSON.parse(row.data)) : undefined;
+      return row ? read(row) : undefined;
     },
     save(publication, offset) {
-      sql.exec(
-        `INSERT INTO feed_publications(item_id, revision_offset, publication_offset, data)
-        VALUES (?, ?, ?, ?) ON CONFLICT(item_id) DO UPDATE SET
-          revision_offset = excluded.revision_offset, publication_offset = excluded.publication_offset,
-          data = excluded.data WHERE excluded.revision_offset >= revision_offset`,
-        publication.item.id,
-        publication.revisionOffset,
-        offset,
-        JSON.stringify(publication),
-      );
+      transactionSync(() => {
+        const existing = sql
+          .exec<{ revision_offset: number }>(
+            `SELECT revision_offset FROM feed_publications WHERE item_id = ?`,
+            publication.item.id,
+          )
+          .toArray()[0];
+        if (existing && existing.revision_offset > publication.revisionOffset) return;
+        const raw = JSON.stringify(publication);
+        sql.exec(`DELETE FROM feed_publication_chunks WHERE item_id = ?`, publication.item.id);
+        for (const [index, chunk] of chunkFeedPublication(feedPublicationEncoder.encode(raw))) {
+          sql.exec(
+            `INSERT INTO feed_publication_chunks(item_id, revision_offset, chunk_index, chunk_bytes)
+             VALUES (?, ?, ?, ?)`,
+            publication.item.id,
+            publication.revisionOffset,
+            index,
+            chunk,
+          );
+        }
+        sql.exec(
+          `INSERT INTO feed_publications(item_id, revision_offset, publication_offset, data)
+           VALUES (?, ?, ?, ?) ON CONFLICT(item_id) DO UPDATE SET
+             revision_offset = excluded.revision_offset, publication_offset = excluded.publication_offset,
+             data = excluded.data WHERE excluded.revision_offset >= revision_offset`,
+          publication.item.id,
+          publication.revisionOffset,
+          offset,
+          FEED_PUBLICATION_CHUNKED,
+        );
+        sql.exec(
+          `DELETE FROM feed_publication_inferred_steps WHERE item_id = ?`,
+          publication.item.id,
+        );
+        for (const executionId of inferredExecutionIds(publication)) {
+          sql.exec(
+            `INSERT INTO feed_publication_inferred_steps(execution_id, item_id, revision_offset)
+             VALUES (?, ?, ?) ON CONFLICT(execution_id, item_id) DO UPDATE SET
+             revision_offset = excluded.revision_offset`,
+            executionId,
+            publication.item.id,
+            publication.revisionOffset,
+          );
+        }
+      });
     },
   };
 }

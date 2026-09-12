@@ -49,7 +49,6 @@ struct cli_runtime;
 struct cli_conversation_options {
   const char *directory;
   double minutes;
-  uint32_t back_office_every;
   uint64_t now_ms;
 };
 
@@ -60,10 +59,7 @@ struct cli_conversation {
                  [CLI_CONVERSATION_PATH_BYTES];
   size_t utterance_count;
   size_t utterances_dropped;
-  size_t ordinary_index;
-  uint32_t back_office_every;
-  uint32_t back_office_sent;
-  uint32_t back_office_heard;
+  size_t next_utterance_index;
   uint32_t deadline_cancelled_turns;
   uint64_t finish_at_ms;
   uint64_t next_action_at_ms;
@@ -82,8 +78,12 @@ enum cli_conversation_status cli_conversation_init(
 /** Advance the unattended state machine once without blocking. */
 void cli_conversation_poll(struct cli_runtime *runtime, uint64_t now_ms);
 
-/** Close the active turn from its observed playback facts. */
-void cli_conversation_finish_turn(struct cli_runtime *runtime, uint64_t now_ms);
+/**
+ * Close the active turn. `played_out` distinguishes normal room completion
+ * from a watchdog ending an answer that stopped making progress.
+ */
+void cli_conversation_finish_turn(
+    struct cli_runtime *runtime, uint64_t now_ms, bool played_out);
 
 /** Write the final bounded report. */
 enum cli_conversation_status cli_conversation_write_report(

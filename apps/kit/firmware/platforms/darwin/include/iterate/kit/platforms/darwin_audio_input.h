@@ -114,6 +114,14 @@ struct iterate_kit_darwin_audio_input {
 enum iterate_kit_darwin_audio_input_status iterate_kit_darwin_audio_input_open(struct iterate_kit_darwin_audio_input *in);
 
 /**
+ * Open with no queue of its own: an external CoreAudio owner (the
+ * VoiceProcessingIO unit, darwin_audio_vpio.h) pushes captured frames with
+ * iterate_kit_darwin_audio_input_push. Same ring, same overrun policy.
+ */
+enum iterate_kit_darwin_audio_input_status iterate_kit_darwin_audio_input_open_external(
+    struct iterate_kit_darwin_audio_input *in);
+
+/**
  * Accept one captured frame. Called from the CoreAudio capture thread, and
  * directly by tests, which is why it is public: the ring's overrun policy is
  * the interesting part of this module and it must be provable without a

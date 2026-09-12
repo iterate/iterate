@@ -11,6 +11,8 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
+
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 
 export const FRAME_MS = 20;
@@ -77,12 +79,31 @@ export interface StreamHandle {
   ): Promise<unknown>;
 }
 
-/** Connect to the project and take the stream — the cast both probes copied. */
+export interface OpenedStream {
+  stream: StreamHandle;
+  close(): void;
+}
+
+/**
+ * Open a stream and retain the project session that owns its transport.
+ * Call close() after every child handle is closed; otherwise Node exits by
+ * dropping the WebSocket and makes the server report a network failure.
+ */
 export async function openStream(
   options: VoicelabConnectOptions & { streamPath: string },
-): Promise<StreamHandle> {
+): Promise<OpenedStream> {
   const itx = await connectProject(options);
-  return (itx as unknown as { streams: { get(path: string): StreamHandle } }).streams.get(
+  const stream = (itx as unknown as { streams: { get(path: string): StreamHandle } }).streams.get(
     options.streamPath,
   );
+  let closed = false;
+  return {
+    stream,
+    close: () => {
+      if (closed) return;
+      closed = true;
+      disposeIgnoredRpcResult(stream);
+      disposeIgnoredRpcResult(itx);
+    },
+  };
 }

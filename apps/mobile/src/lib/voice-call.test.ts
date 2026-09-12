@@ -1,7 +1,7 @@
 // The call core against fakes of its two injected dependencies — the stream
 // handle and the audio session (the same interfaces the phone, the Node e2e,
 // and a future library swap use; nothing here mocks internals).
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import {
   captionForEvent,
   startVoiceCall,
@@ -12,17 +12,20 @@ import {
 const SPK = "events.iterate.com/voice-agent/spk-frame";
 const ENDED = "events.iterate.com/voice-agent/conversation-ended";
 
-test("push-to-talk: the mint press dials at call start; holds gate the mic; release commits", async () => {
+test("the mint is one silent mic frame at call start; holding gates the mic locally; no press or release rides the wire", async () => {
   const h = makeHarness();
   const call = await startVoiceCall(h.deps);
-  /* The mint press went out at start (the greeting needs the dial before
-   * any hold) — but captured frames still go nowhere until a hold. */
+  /* The mint went out at start (the greeting needs the dial before any
+   * hold): one ephemeral frame of digital silence — and captured frames
+   * still go nowhere until a hold. */
   expect(h.appends).toHaveLength(1);
   expect(h.appends[0]).toMatchObject({
-    type: "events.iterate.com/voice-agent/ptt-start",
-    payload: { t: 0 },
+    type: "events.iterate.com/voice-agent/mic-frame",
+    ephemeral: true,
+    payload: { activation: expect.any(String) },
   });
-  expect(h.appends[0]!.ephemeral).toBeUndefined();
+  const mint = h.appends[0]!.payload as { pcm: string };
+  expect(mint.pcm).toBe(`${"A".repeat(852)}AA==`);
   h.captureFrame("AAAA", 0.4);
   await settle();
   expect(h.appends).toHaveLength(1);
@@ -34,24 +37,21 @@ test("push-to-talk: the mint press dials at call start; holds gate the mic; rele
   call.setTalking(false);
   await settle();
 
+  /* Held frames go out as mic frames and NOTHING ELSE: no push, no release
+   * — the facet never hears about the button. The press emptied the local
+   * playback queue (the model's held beat) and the release zeroed the bar. */
+  const types = h.appends.map((a) => a.type);
+  expect(types).toEqual([
+    "events.iterate.com/voice-agent/mic-frame",
+    "events.iterate.com/voice-agent/mic-frame",
+    "events.iterate.com/voice-agent/mic-frame",
+  ]);
   expect(h.appends[1]).toMatchObject({
-    type: "events.iterate.com/voice-agent/ptt-start",
-    payload: {},
-  });
-  /* The press is DURABLE like the mint; the release is not. */
-  expect(h.appends[1]!.ephemeral).toBeUndefined();
-  const micFrames = h.appends.filter((a) => a.type.endsWith("mic-frame"));
-  expect(micFrames).toHaveLength(2);
-  expect(micFrames[0]).toMatchObject({
     ephemeral: true,
-    payload: { pcm: "BBBB", deviceMicFrameSeq: 1 },
+    payload: { pcm: "BBBB", activation: expect.any(String) },
   });
-  expect(micFrames[1]!.payload).toMatchObject({ deviceMicFrameSeq: 2 });
-  expect(h.appends.at(-1)).toMatchObject({
-    type: "events.iterate.com/voice-agent/ptt-end",
-    ephemeral: true,
-  });
-  /* Held frames metered, release zeroes the bar. */
+  expect(h.appends[2]!.payload).toMatchObject({ pcm: "CCCC", activation: expect.any(String) });
+  expect(h.audioLog).toContain("clear");
   expect(h.levels).toEqual([0, 0.5, 0.6, 0]);
 });
 
@@ -72,7 +72,22 @@ test("the spk-frame buffer policy: clear before frame, then play", async () => {
   expect(h.audioLog).toEqual(["start", "play:QUJD", "clear", "play:REVG"]);
 });
 
-test("lifecycle and the colleague events share the caption; ended stops audio and closes", async () => {
+test("activation-bound downlink for another call never reaches this speaker or UI", async () => {
+  const h = makeHarness();
+  await startVoiceCall(h.deps);
+  h.deliver({
+    type: SPK,
+    payload: { activation: "another-activation", pcm: "QUJD", deviceSpeakerFrameSeq: 1 },
+  });
+  h.deliver({
+    type: "events.iterate.com/voice-agent/conversation-accepted",
+    payload: { activation: "another-activation", conversationId: "conv_other" },
+  });
+  expect(h.audioLog).toEqual(["start"]);
+  expect(h.statuses.at(-1)).toMatchObject({ phase: "connecting", caption: "ringing…" });
+});
+
+test("lifecycle and the backend's replies share the caption; ended stops audio and closes", async () => {
   const h = makeHarness();
   const call = await startVoiceCall(h.deps);
   h.deliver({
@@ -84,12 +99,8 @@ test("lifecycle and the colleague events share the caption; ended stops audio an
     payload: { conversationId: "conv_x", handshakeTookMs: 900, heldMicFrames: 0 },
   });
   h.deliver({
-    type: "events.iterate.com/voice-agent/colleague-status",
-    payload: { phase: "running code" },
-  });
-  h.deliver({
-    type: "events.iterate.com/voice-agent/colleague-note",
-    payload: { text: "The codeword is walrus trumpet." },
+    type: "events.iterate.com/voice-agent/backend-reply",
+    payload: { conversationId: "conv_1", text: "The codeword is walrus trumpet." },
   });
   call.setTalking(true);
   h.deliver({ type: ENDED, payload: { conversationId: "conv_1", reason: "idle" } });
@@ -98,7 +109,6 @@ test("lifecycle and the colleague events share the caption; ended stops audio an
     /* Live only at PICKUP (conversation-accepted) — the ring covers the
      * dial and handshake. */
     "live:hold the mic to talk",
-    "live:backend: running code",
     "live:backend: The codeword is walrus trumpet.",
     "live:listening…",
     "ended:call ended — idle · heard 0.0s (0 frames)",
@@ -112,12 +122,12 @@ test("lifecycle and the colleague events share the caption; ended stops audio an
   expect(h.appends.length).toBe(before);
 });
 
-test("a colleague event during ringing captions but does not fake a pickup", async () => {
+test("a backend reply during ringing captions but does not fake a pickup", async () => {
   const h = makeHarness();
   await startVoiceCall({ ...h.deps, ringTimeoutMs: 15 });
   h.deliver({
-    type: "events.iterate.com/voice-agent/colleague-status",
-    payload: { phase: "writing code" },
+    type: "events.iterate.com/voice-agent/backend-reply",
+    payload: { conversationId: "conv_1", text: "writing code" },
   });
   /* Still connecting: the hold-to-talk button must stay hidden and the
    * no-answer timer must stay armed — only conversation-accepted is a
@@ -131,7 +141,7 @@ test("a colleague event during ringing captions but does not fake a pickup", asy
   expect(h.statuses.at(-1)!.caption).toMatch(/^no answer/);
 });
 
-test("another call's stale obituary does not end this one", async () => {
+test("another activation's stale obituary does not end this call", async () => {
   const h = makeHarness();
   await startVoiceCall(h.deps);
   h.deliver({
@@ -142,18 +152,29 @@ test("another call's stale obituary does not end this one", async () => {
     type: "events.iterate.com/voice-agent/conversation-accepted",
     payload: { conversationId: "conv_x", handshakeTookMs: 900, heldMicFrames: 0 },
   });
-  h.deliver({ type: ENDED, payload: { conversationId: "conv_other", reason: "idle" } });
+  h.deliver({
+    type: ENDED,
+    payload: { activation: "another-activation", reason: "idle" },
+  });
   expect(h.statuses.at(-1)!.phase).toBe("live");
+});
+
+test("teardown clears queued playback and ignores a racing speaker frame", async () => {
+  const h = makeHarness();
+  const call = await startVoiceCall(h.deps);
+  h.deliver({ type: SPK, payload: { pcm: "QUJD", deviceSpeakerFrameSeq: 1 } });
+  await call.hangUp();
+  const afterEnd = h.audioLog.length;
+  h.deliver({ type: SPK, payload: { pcm: "REVG", deviceSpeakerFrameSeq: 2 } });
+  expect(h.audioLog.slice(afterEnd)).toEqual([]);
+  expect(h.audioLog).toContain("clear");
 });
 
 test("hang up ends locally FIRST, then appends the obituary — a wedged socket cannot eat the button", async () => {
   const h = makeHarness({ stallObituary: true });
   const call = await startVoiceCall(h.deps);
-  h.deliver({
-    type: "events.iterate.com/voice-agent/call-started",
-    payload: { conversationId: "conv_9" },
-  });
-  /* Do not await: the stalled obituary must not delay the local end. */
+  /* Do not await: an activation can end before the provider accepts it, and
+   * a stalled terminal append must not delay the local end. */
   void call.hangUp();
   await settle();
   expect(h.statuses.at(-1)!.caption).toMatch(/^call ended · heard/);
@@ -161,7 +182,7 @@ test("hang up ends locally FIRST, then appends the obituary — a wedged socket 
   expect(h.audioLog.at(-1)).toBe("stop");
   expect(h.appends.at(-1)).toMatchObject({
     type: ENDED,
-    payload: { conversationId: "conv_9", reason: "hang-up button" },
+    payload: { activation: expect.any(String), reason: "hang-up button" },
   });
 });
 
@@ -173,25 +194,42 @@ test("a microphone that will not start ends the call cleanly instead of leaving 
   /* Failed before any connection opened — nothing to close. */
 });
 
-test("the keepalive heartbeat runs for the call's life and dies with it", async () => {
-  const h = makeHarness();
-  const call = await startVoiceCall({ ...h.deps, keepaliveIntervalMs: 4 });
-  const beats = () => h.appends.filter((a) => a.type.endsWith("/keepalive"));
-  /* Poll-until with a watchdog, not a fixed sleep: a loaded CI runner can
-   * starve a 4ms interval past any fixed wait (measured: one beat in 20ms
-   * on Depot). Two beats prove periodicity. */
-  const deadline = Date.now() + 2_000;
-  while (beats().length < 2 && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 5));
+test("a quiet call renews its presence lease until it ends", async () => {
+  vi.useFakeTimers();
+  try {
+    const h = makeHarness();
+    const call = await startVoiceCall({ ...h.deps, keepaliveIntervalMs: 4 });
+    const beats = () => h.appends.filter((a) => a.type.endsWith("/keepalive"));
+    /* Four timer periods prove the fallback keeps renewing a quiet call,
+     * rather than sending one startup pulse. */
+    await vi.advanceTimersByTimeAsync(16);
+    expect(beats()).toHaveLength(4);
+    expect(beats()[0]).toMatchObject({ ephemeral: true });
+    await call.hangUp();
+    const after = beats().length;
+    await vi.advanceTimersByTimeAsync(25);
+    expect(beats()).toHaveLength(after);
+  } finally {
+    vi.useRealTimers();
   }
-  expect(beats().length).toBeGreaterThanOrEqual(2);
-  expect(beats()[0]).toMatchObject({ ephemeral: true });
-  await call.hangUp();
-  /* A cleared interval cannot fire again, so a short fixed wait suffices
-   * to catch a timer that survived finish(). */
-  const after = beats().length;
-  await new Promise((resolve) => setTimeout(resolve, 25));
-  expect(beats().length).toBe(after);
+});
+
+test("continuous successful microphone appends suppress quiet keepalives", async () => {
+  vi.useFakeTimers();
+  try {
+    const h = makeHarness();
+    const call = await startVoiceCall({ ...h.deps, keepaliveIntervalMs: 20 });
+    call.setTalking(true);
+    for (let tick = 0; tick < 10; tick++) {
+      h.captureFrame("BBBB", 0.5);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(10);
+    }
+    expect(h.appends.filter((append) => append.type.endsWith("/keepalive"))).toEqual([]);
+    await call.hangUp();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("a stalled socket drops mic frames instead of queueing the past", async () => {
@@ -243,15 +281,13 @@ test("captionForEvent stays quiet for events a glancing human does not need", ()
   expect(
     captionForEvent("events.iterate.com/voice-agent/call-started", { conversationId: "c" }),
   ).toBeNull();
+  expect(captionForEvent("events.iterate.com/voice-agent/backend-reply", { text: "" })).toBeNull();
   expect(
-    captionForEvent("events.iterate.com/voice-agent/colleague-status", { waitingFor: null }),
-  ).toBeNull();
-  expect(
-    captionForEvent("events.iterate.com/voice-agent/colleague-note", { text: "y".repeat(200) }),
+    captionForEvent("events.iterate.com/voice-agent/backend-reply", { text: "y".repeat(200) }),
   ).toMatch(/…$/);
 });
 
-test("transcriptItems: both sides, notes, deduped statuses, empties skipped", () => {
+test("transcriptItems: both sides and the backend's replies, empties skipped", () => {
   const items = transcriptItems([
     {
       type: "events.iterate.com/voice-agent/utterance-transcript",
@@ -263,28 +299,11 @@ test("transcriptItems: both sides, notes, deduped statuses, empties skipped", ()
       offset: 2,
       payload: { text: "Let me check." },
     },
-    /* The facet's quiet opening status, then the same folded line twice —
-     * one status row, not three. */
+    /* The backend's final words for the delegation. */
     {
-      type: "events.iterate.com/voice-agent/colleague-status",
-      offset: 3,
-      payload: { activity: "checking the forecast" },
-    },
-    {
-      type: "events.iterate.com/voice-agent/colleague-status",
-      offset: 4,
-      payload: { activity: "checking the forecast" },
-    },
-    /* A waitingFor-only patch says nothing a glancing human needs. */
-    {
-      type: "events.iterate.com/voice-agent/colleague-status",
-      offset: 5,
-      payload: { waitingFor: null },
-    },
-    {
-      type: "events.iterate.com/voice-agent/colleague-note",
+      type: "events.iterate.com/voice-agent/backend-reply",
       offset: 6,
-      payload: { text: "Sunny, 24 degrees." },
+      payload: { conversationId: "conv_1", text: "Sunny, 24 degrees." },
     },
     /* An interrupted answer keeps its words, marked. */
     {
@@ -299,27 +318,14 @@ test("transcriptItems: both sides, notes, deduped statuses, empties skipped", ()
       payload: { text: "" },
     },
     /* Machinery events are not conversation. */
-    { type: "events.iterate.com/voice-agent/ptt-start", offset: 9, payload: {} },
+    { type: "events.iterate.com/voice-agent/keepalive", offset: 9, payload: {} },
   ]);
   expect(items).toEqual([
     { key: "e1", kind: "you", text: "what's the weather?" },
     { key: "e2", kind: "voice", text: "Let me check." },
-    { key: "e3", kind: "status", text: "checking the forecast" },
     { key: "e6", kind: "backend", text: "Sunny, 24 degrees." },
     { key: "e7", kind: "voice", text: "It's sunny and —" },
   ]);
-});
-
-test("transcriptItems: a failed script's status carries its error", () => {
-  expect(
-    transcriptItems([
-      {
-        type: "events.iterate.com/voice-agent/colleague-status",
-        offset: 1,
-        payload: { phase: "a script failed", failure: "TypeError: no ledger" },
-      },
-    ]),
-  ).toEqual([{ key: "e1", kind: "status", text: "a script failed — TypeError: no ledger" }]);
 });
 
 /* ------------------------------------------------------------- harness --- */
@@ -353,8 +359,22 @@ function makeHarness(
     get openedWith() {
       return openedWith;
     },
-    deliver(event: { type: string; payload?: unknown }) {
-      processBatch!({ events: [event] });
+    deliver(event: { type: string; payload?: Record<string, unknown> }) {
+      const activation = (
+        appends.find((append) => append.type.endsWith("/mic-frame"))?.payload as
+          | { activation?: string }
+          | undefined
+      )?.activation;
+      const activationBound =
+        event.type === SPK ||
+        event.type === "events.iterate.com/voice-agent/call-started" ||
+        event.type === "events.iterate.com/voice-agent/conversation-accepted" ||
+        event.type === ENDED;
+      const payload =
+        activationBound && event.payload && !("activation" in event.payload)
+          ? { ...event.payload, activation }
+          : event.payload;
+      processBatch!({ events: [{ ...event, payload }] });
       harness.closed = closed;
     },
     captureFrame(pcmBase64: string, level: number) {
@@ -398,7 +418,6 @@ function makeHarness(
       ensureSetup: async () => {},
       onStatus: (status: VoiceCallStatus) => statuses.push(status),
       onLevel: (level: number) => levels.push(level),
-      now: () => 1000,
     },
   };
   return harness;

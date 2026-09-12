@@ -180,10 +180,12 @@ Compaction is an ordinary projection change, not wholesale state replacement:
    reports it; neither field is rendered into model-visible content. Its
    provider role is `user`, so quoted third-party instructions remain memory
    rather than acquiring trusted instruction precedence.
-3. The reducer prepends that summary, retains history whose source offset is
-   greater than the cutoff behind it, and retains the system lane. Because
-   compaction already rebases the cache, it also collapses old occurrences of
-   each keyed system item to the latest value; unkeyed system items all remain.
+3. The reducer prepends that summary, retains every non-system item whose
+   source offset is greater than the cutoff behind it, including keyed
+   corrections that arrived while the summary ran, and retains the system
+   lane. Because compaction already rebases the cache, it also collapses old
+   occurrences of each keyed system item to the latest value; unkeyed system
+   items all remain.
 
 The measured assistant answer and anything arriving while it ran are after the
 request cutoff. They survive verbatim behind the summary, so compaction cannot

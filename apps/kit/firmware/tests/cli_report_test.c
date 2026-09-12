@@ -27,7 +27,7 @@ static void a_turn_that_never_committed_reports_no_duration(void)
 {
   cli_report_reset(&report);
   struct cli_report_turn *turn =
-      cli_report_begin_turn(&report, "hello.wav", false, 1000U);
+      cli_report_begin_turn(&report, "hello.wav", 1000U);
   assert(turn != NULL);
   turn->completed_ms = 14088564U;
   assert(cli_report_time_to_answer_ms(turn) == 0U);
@@ -38,6 +38,44 @@ static void a_turn_that_never_committed_reports_no_duration(void)
   turn->completed_ms = 4500U;
   assert(cli_report_time_to_first_audio_ms(turn) == 400U);
   assert(cli_report_time_to_answer_ms(turn) == 3000U);
+}
+
+/* Only a confirmed audible gap may fail an otherwise drained turn. */
+static void audible_gap_counters_are_turn_failures(void)
+{
+  struct cli_report_turn turn = {.frames_played = 1U};
+  assert(!cli_report_turn_failed(&turn, true));
+  turn.frames_concealed = 1U;
+  assert(cli_report_turn_failed(&turn, true));
+  turn.frames_concealed = 0U;
+  turn.underruns = 1U;
+  assert(cli_report_turn_failed(&turn, true));
+  turn.underruns = 0U;
+  assert(cli_report_turn_failed(&turn, false));
+  turn.frames_played = 0U;
+  assert(cli_report_turn_failed(&turn, true));
+  assert(cli_report_turn_failed(NULL, true));
+}
+
+static void speech_end_latency_requires_ordered_real_endpoints(void)
+{
+  cli_report_reset(&report);
+  struct cli_report_turn *turn =
+      cli_report_begin_turn(&report, "count.wav", 0U);
+  assert(turn != NULL);
+  turn->last_nonquiet_input_ms = 1000U;
+  assert(!cli_report_has_speech_end_to_first_packet(turn));
+  assert(!cli_report_has_speech_end_to_first_played(turn));
+  assert(cli_report_speech_end_to_first_packet_ms(turn) == 0U);
+  assert(cli_report_speech_end_to_first_played_ms(turn) == 0U);
+  turn->first_speaker_packet_ms = 1250U;
+  turn->first_nonquiet_speaker_played_ms = 1320U;
+  assert(cli_report_has_speech_end_to_first_packet(turn));
+  assert(cli_report_has_speech_end_to_first_played(turn));
+  assert(cli_report_speech_end_to_first_packet_ms(turn) == 250U);
+  assert(cli_report_speech_end_to_first_played_ms(turn) == 320U);
+  turn->first_speaker_packet_ms = 999U;
+  assert(cli_report_speech_end_to_first_packet_ms(turn) == 0U);
 }
 
 /*
@@ -57,7 +95,7 @@ static void occupancy_percentiles_track_the_observations(void)
 {
   cli_report_reset(&report);
   struct cli_report_turn *turn =
-      cli_report_begin_turn(&report, "count.wav", false, 0U);
+      cli_report_begin_turn(&report, "count.wav", 0U);
   assert(turn != NULL);
   for (uint32_t index = 0U; index < 90U; ++index) {
     cli_report_observe_occupancy(turn, 2000U);
@@ -80,9 +118,9 @@ static void turns_past_the_limit_are_counted_not_forgotten(void)
 {
   cli_report_reset(&report);
   for (size_t index = 0U; index < CLI_REPORT_MAX_TURNS; ++index) {
-    assert(cli_report_begin_turn(&report, "x.wav", false, 0U) != NULL);
+    assert(cli_report_begin_turn(&report, "x.wav", 0U) != NULL);
   }
-  assert(cli_report_begin_turn(&report, "x.wav", false, 0U) == NULL);
+  assert(cli_report_begin_turn(&report, "x.wav", 0U) == NULL);
   assert(report.count == CLI_REPORT_MAX_TURNS);
   assert(report.dropped == 1U);
 }
@@ -96,22 +134,29 @@ static void one_bad_turn_survives_into_the_summary(void)
   cli_report_reset(&report);
   for (size_t index = 0U; index < 40U; ++index) {
     struct cli_report_turn *turn =
-        cli_report_begin_turn(&report, "x.wav", index % 3U == 0U, 0U);
+        cli_report_begin_turn(&report, "x.wav", 0U);
     assert(turn != NULL);
     turn->committed_ms = 100U;
+    turn->first_input_capture_ms = 40U;
+    turn->first_append_ms = 60U;
     turn->first_audio_ms = 300U;
     turn->completed_ms = 2000U;
+    turn->last_nonquiet_input_ms = 80U;
+    turn->first_speaker_packet_ms = 200U;
+    turn->first_nonquiet_speaker_played_ms = 300U;
     turn->frames_played = 100U;
   }
   report.turns[17].failed = true;
   report.turns[17].frames_played = 0U;
+  /* Partial playback still fails when the turn ended at its watchdog. */
+  report.turns[18].failed = true;
+  report.turns[18].watchdog_stalled = true;
+  report.turns[18].frames_played = 12U;
 
   const struct cli_report_summary summary = {
     .session_restarts = 1U,
     .transport_restarts = 2U,
     .connection_recycles = 3U,
-    .back_office_sent = 13U,
-    .back_office_heard = 12U,
     .deadline_cancelled_turns = 1U,
     .room_completed_bytes = 1280U,
     .room_dropped_bytes = 640U,
@@ -128,15 +173,21 @@ static void one_bad_turn_survives_into_the_summary(void)
   const size_t length = fread(body, 1U, sizeof(body) - 1U, file);
   body[length] = '\0';
   (void)fclose(file);
-  assert(strstr(body, "\"failedTurns\":1") != NULL);
+  assert(strstr(body, "\"failedTurns\":2") != NULL);
+  assert(strstr(body, "\"failure\":true,\"completion\":\"watchdog-stalled\"") != NULL);
   assert(strstr(body, "\"deadlineCancelledTurns\":1") != NULL);
-  assert(strstr(body, "\"colleague\":") != NULL);
-  assert(strstr(body, "\"colleagueQuestionsAsked\":13") != NULL);
+  assert(strstr(body, "\"colleague\":") == NULL);
+  assert(strstr(body, "\"colleagueQuestionsAsked\"") == NULL);
   assert(strstr(body, "\"roomCompletedBytes\":1280") != NULL);
   assert(strstr(body, "\"roomDroppedBytes\":640") != NULL);
+  assert(strstr(body, "\"firstInputCaptureOffsetMs\":40") != NULL);
+  assert(strstr(body, "\"firstAppendOffsetMs\":60") != NULL);
   assert(strstr(body, "\"roomStarvedBuffers\":2") != NULL);
   assert(strstr(body, "\"speakerPlatformError\":-50") != NULL);
   assert(strstr(body, "\"microphonePlatformError\":0") != NULL);
+  assert(strstr(body, "\"speakerBoundary\":\"timeline\"") != NULL);
+  assert(strstr(body, "\"speechEndToFirstPacketMs\":120") != NULL);
+  assert(strstr(body, "\"speechEndToFirstNonquietSpeakerMs\":220") != NULL);
   assert(strstr(body, "\"framesPlayed\":") != NULL);
   assert(strstr(body, "\"ringOccupancyP10Ms\":") != NULL);
   /* The minimum across turns is the failed one: a spread cannot hide it. */
@@ -148,7 +199,7 @@ static void one_bad_turn_survives_into_the_summary(void)
 static void an_awkward_utterance_name_is_escaped(void)
 {
   cli_report_reset(&report);
-  assert(cli_report_begin_turn(&report, "he said \"go\"\\now.wav", false, 0U) !=
+  assert(cli_report_begin_turn(&report, "he said \"go\"\\now.wav", 0U) !=
          NULL);
   const struct cli_report_summary summary = {0};
   const char *path = "/tmp/iterate-kit-cli-report-escape.json";
@@ -171,7 +222,7 @@ static void null_arguments_are_refused(void)
   assert(cli_report_write(NULL, &summary, "/tmp/x.json") == CLI_REPORT_ERR_ARG);
   assert(cli_report_write(&report, NULL, "/tmp/x.json") == CLI_REPORT_ERR_ARG);
   assert(cli_report_write(&report, &summary, NULL) == CLI_REPORT_ERR_ARG);
-  assert(cli_report_begin_turn(NULL, "x", false, 0U) == NULL);
+  assert(cli_report_begin_turn(NULL, "x", 0U) == NULL);
   cli_report_observe_occupancy(NULL, 10U);
   assert(cli_report_occupancy_percentile(NULL, 50U) == 0U);
   assert(strcmp(cli_report_status_name(CLI_REPORT_ERR_OPEN), "cannot-open") ==
@@ -181,6 +232,8 @@ static void null_arguments_are_refused(void)
 int main(void)
 {
   a_turn_that_never_committed_reports_no_duration();
+  audible_gap_counters_are_turn_failures();
+  speech_end_latency_requires_ordered_real_endpoints();
   the_occupancy_histogram_is_small_enough_to_keep();
   occupancy_percentiles_track_the_observations();
   turns_past_the_limit_are_counted_not_forgotten();

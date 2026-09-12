@@ -26,6 +26,7 @@
     "viseme-model.generated.ts",
     "voice-template.generated.ts",
     "apps/kit/firmware/components/avatar/src/face_avatar_catalog_generated.inc",
+    "apps/kit/firmware/devices/*/assets/sounds_generated.inc",
     "configs/default/prompts/",
     "configs/codemode-tag/prompts/",
     "apps/os/src/domains/agents/prompt-scenarios/*.md",

@@ -1,161 +1,134 @@
 # Voice lab
 
-Experiments answering one question: **can realtime voice (Grok Voice Agent,
-16kHz PCM16 both directions) ride the streams abstraction** — mic and speaker
-audio as ephemeral stream events — **and what does that cost against a plain
-WebSocket proxy?**
+Instruments for the GPT-Live voice agent (`packages/voice-agent`) over the
+streams abstraction: mic and speaker audio as ephemeral stream events and a
+durable transcript.
 
-## Topology under test
+## Topology
 
 ```
-direct     mic ──────────────────────────► Grok WS ──► speaker        (latency floor)
-streams    mic ──► stream (ephemeral) ──► bridge ──► Grok WS
-                                            │
-           speaker ◄── stream (ephemeral) ◄─┘
+live-probe   mic ──────────────────────────► GPT-Live WS ──► speaker   (the raw wire, from this Mac)
+platform     mic ──► stream (ephemeral) ──► facet ──► GPT-Live WS
+                                              │
+             speaker ◄── stream (ephemeral) ◄─┘
+                                              │
+                                  standard Agent processor (same stream)
 ```
 
-The bridge is the "server side": it holds the Grok WebSocket and relays both
-directions through the stream. It exists in two variants with identical
-protocol: a **node process** (`voicelab bridge`, isolates stream-transport cost
-from Cloudflare execution) and a **userspace worker** in a project's config
-repo (the real deployment shape).
+The facet holds the GPT-Live WebSocket in the stream's Durable Object and
+relays audio. The standard Agent processor works on that same stream through
+durable events. `live-probe` dials the provider directly; `duplex` exercises
+the deployed platform from the wire alone.
 
 ## Event protocol (one stream per call)
 
 Every type below is prefixed `events.iterate.com/voice-agent/`, elided here
-for width.
+for width. The full contract, with every payload documented, is
+`packages/voice-agent/src/voice-agent.ts` (contract 24.0.0). A client's
+whole contract: mic frames up, speaker frames down, `keepalive` while its
+call UI is open, and `conversation-ended` to end. Capture runs continuously
+from call start; a physical mute remains a local hardware control, never a
+wire event.
 
-| Event                    | Durability | Payload                                                                                                                                                                                                                                                                                                                             |
-| ------------------------ | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `conversation-requested` | durable    | `{ conversationId, model?, voice?, effort }` — client opens a conversation                                                                                                                                                                                                                                                          |
-| `conversation-accepted`  | durable    | `{ conversationId, bridge, model }` — bridge's Grok session is ready                                                                                                                                                                                                                                                                |
-| `conversation-ended`     | durable    | `{ conversationId, reason }`                                                                                                                                                                                                                                                                                                        |
-| `mic-frame`              | ephemeral  | `{ conversationId, seq, t, pcm }` — 20ms base64 PCM16 @16kHz                                                                                                                                                                                                                                                                        |
-| `spk-frame`              | ephemeral  | `{ conversationId, pcm, drop?, last? }` — see below                                                                                                                                                                                                                                                                                 |
-| `grok-event`             | ephemeral  | `{ conversationId, t, event }` — the provider's own lane, verbatim, for observability only. No client subscribes to it: the two bits a board ever needed off it (`speech_started`, `response.done`) now ride the audio as `drop` and `last`.                                                                                        |
-| `bench-frame`            | ephemeral  | transport bench traffic                                                                                                                                                                                                                                                                                                             |
-| `utterance-transcript`   | durable    | `{ conversationId, text }` — the provider's transcription of one finished listener turn                                                                                                                                                                                                                                             |
-| `answer-transcript`      | durable    | `{ conversationId, text, cancelled? }` — one finished answer, in words; `cancelled` marks a barged answer whose text was generated but not necessarily heard                                                                                                                                                                        |
-| `colleague-status`       | durable    | `{ activity?, title?, waitingFor?, phase?, failure? }` — the colleague's narration plus its model/script lifecycle ("writing code", "running code", failed scripts with their error), forwarded by a copy-to-stream subscription its mint installs; whispered to the live session as quiet context, folded into the reconnect brief |
-| `colleague-note`         | durable    | `{ text }` — one chat message from the colleague, copied from its `web-message-sent` feed: THE reply lane (durable, uncorrelated, no deadline), read into whichever call is live and folded (bounded) for the reconnect brief                                                                                                       |
+| Event                   | Durability | Payload                                                                                                                      |
+| ----------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `configured`            | durable    | the fixed GPT-Live setup: `instructions`, optional `backend.model`, `visemes`; replaced wholesale by every setup run         |
+| `mic-frame`             | ephemeral  | `{ activation, pcm }` — base64 PCM16 @ 16 kHz; the first frame opens that client-local activation                            |
+| `call-started`          | durable    | `{ activation, conversationId }` — the server assigned the authoritative conversation id                                     |
+| `conversation-accepted` | durable    | `{ activation, conversationId, handshakeTookMs, heldMicFrames }` — `session.started` arrived                                 |
+| `session-configured`    | durable    | `{ activation, conversationId, instructions }` — what the GPT-Live session was started with                                  |
+| `spk-frame`             | ephemeral  | `{ activation, conversationId, deviceSpeakerFrameSeq, pcm, clearSpeakerBufferBeforeFrame?, lastFrameOfAnswer? }` — see below |
+| `utterance-transcript`  | durable    | `{ conversationId, text }` — one finished listener turn, grouped from the provider's timeline fragments                      |
+| `answer-transcript`     | durable    | `{ conversationId, text }` — one finished spoken answer, in words                                                            |
+| `instructions`          | durable    | `{ activation, delegationId, content }` — Agent context for GPT-Live                                                         |
+| `thinking`              | durable    | `{ activation, delegationId, content }` — quiet useful facts or progress                                                     |
+| `commentary`            | durable    | `{ activation, delegationId, content, hangUp? }` — speakable Agent outcome                                                   |
+| `conversation-ended`    | durable    | `{ activation, reason }` — one terminal event, valid before the server assigns a conversation id                             |
 
-The two transcript events (contract 13.0.0) are the stream's only readable
-record of what was said — `pnpm cli voicelab transcript` prints them — and
-the fold's bounded recap of them briefs every fresh provider session, so the
+The two transcript events are the stream's only readable record of what was
+said — `pnpm cli voicelab transcript` prints them — and the fold's bounded
+recap of them is seeded as history into every fresh provider session, so the
 reconnect the idle deadline manufactures resumes the conversation instead of
 greeting the listener as a stranger.
+
+Every completed user and assistant transcript is also projected to the normal
+Agent as `agents/context-added` with `dont-trigger-request`: it is context,
+not a request. A GPT-Live client delegation is the sole triggering input. It
+appends delegation-id metadata with `after-current-request`, so it never
+interrupts Agent work already under way. The Agent sends the three events
+above; they convey context to GPT-Live without guaranteeing a particular response.
 
 Ephemeral frames are only visible to live `openConnection()` callbacks — never
 to durable subscriptions or hosted processors — which is exactly the delivery
 contract audio wants (no replay of stale audio after reconnect).
 
-## The speaker lane
+## The speaker frames
 
 **A client's entire buffer policy is three lines.** On a `spk-frame`: if
-`drop`, clear the speaker buffer; write `pcm`; if `last`, the answer is over
-and the half-duplex fence can be released. There is nothing else to implement
+`clearSpeakerBufferBeforeFrame`, clear the speaker buffer; write `pcm`; if
+`lastFrameOfAnswer`, the answer is over. There is nothing else to implement
 and deliberately nothing else to get wrong.
 
-That is possible because **the server holds the answer**. The provider emits a
-ninety-second answer in a few seconds; the agent (now `packages/voice-agent/src/voice-agent.ts`
-at the repo root, which folded in the former `speaker.ts`) buffers it and
-releases it at playback rate, never running more than `leadMs` ahead of the
-listener. It is a pure reducer — no clock, no timer, no I/O — so the whole
-policy is unit-tested in `speaker.test.ts`, and `voice-agent.count-to-100.test.ts`
-drives the real facet against a simulated board with the board's real bounds.
-
-It used to be the other way round: the device's ring was grown to thirty
-seconds and described in its own comment as "the answer" rather than a
-cushion, with catch-up, high-water and lag-skip machinery around it all
-compensating for a sender that would not wait. `drop`/`last` replaced
-`audio_playout.c`, 230 lines of answer numbering whose latches could silence a
-board permanently.
-
-### Knobs, and what each is coupled to
-
-`DEFAULT_SPEAKER_LIMITS` in the agent (now `packages/voice-agent/src/voice-agent.ts`). **None of these moves
-alone** — each has a counterpart in the firmware, and the failure when they
-disagree is silent from the server's side.
-
-| Knob         | Default | Moves with                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `leadMs`     | 3000    | `ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES` (10 s). The ring must exceed the lead with margin for jitter, or the board refuses audio at the door — and a frame refused on arrival was never a frame that went missing, so the loss counters stay innocent while whole seconds vanish.                                                                                                                                            |
-| `maxChunkMs` | 300     | `ITERATE_KIT_VOICELAB_B64_CAPACITY` and `ITERATE_KIT_VOICELAB_CHUNK_MULAW_BYTES`, and the 16 KiB `ITERATE_KIT_VOICE_CONTROL_INBOX_SLOT_CAPACITY`. An oversized `pcm` string is dropped **silently**; an oversized **message** is **terminal** and latches the socket generation. The device cannot defend itself here: it asks for `maxDeliveryBytes: 13000`, but `capSessionDelivery` always ships at least one event whole. |
-| `minChunkMs` | 100     | nothing — pure event-count/latency trade. Not applied to an answer's opening chunk, which always goes immediately.                                                                                                                                                                                                                                                                                                            |
-| `frameMs`    | 20      | `ITERATE_KIT_VOICELAB_FRAME_BYTES` (640). Both device consumers reject any other length outright, so chunks are a whole number of frames and an answer's tail is padded with silence rather than truncated.                                                                                                                                                                                                                   |
-
-Raising `maxChunkMs` toward "one event per answer" is the obvious win for
-device CPU and needs three firmware buffers and a PSRAM budget raised first.
+GPT-Live's output is a CONTINUOUS stream — one 100 ms delta per 100 ms for
+the life of the call, idle silence as digital zero. The facet drops the idle
+silence at the door (the downlink carries speech only), treats a run of
+audible deltas as an answer, sends up to 700 ms of trailing silence so the
+natural tail plays, and marks `lastFrameOfAnswer` once the queue behind that
+drains — the provider has no end-of-answer event. The pacer that bounds the
+device's backlog (`MAX_DEVICE_SPEAKER_BACKLOG_BYTES`, 4 s, derived from the
+firmware's ring) stays, though a provider that hands audio over at play rate
+never reaches it.
 
 ## Commands
 
-All take `--project prj_…` plus `APP_CONFIG_BASE_URL`/`APP_CONFIG_ADMIN_API_SECRET`
+All take `--project <slug>` plus `APP_CONFIG_BASE_URL`/`APP_CONFIG_ADMIN_API_SECRET`
 from the Doppler config (local dev server is the fallback).
 
 ```bash
-# latency floor: no iterate infra in the path
-XAI_API_KEY=… pnpm cli voicelab direct --say "What is the capital of France?"
+# the raw wire, no Iterate infrastructure: cadence, interruption and gaps
+doppler run --config dev -- pnpm cli voicelab live-probe --save-wav out.wav
+doppler run --config dev -- pnpm cli voicelab live-probe --barge-after-ms 4000 --say2 "Stop. What was the last number?"
 
-# server side, terminal A (holds the Grok socket)
-XAI_API_KEY=… pnpm cli voicelab bridge --project prj_… --path /voicelab/call-1 --once
+# full duplex through the platform, from the wire alone (no microphone): session,
+# continuous mic, answers + markers, quiet idle downlink, spoken barge,
+# durable transcript, and same-stream Agent commentary
+doppler run --config prd -- pnpm cli voicelab duplex --project <slug> --setup
 
-# client, terminal B — headless synthetic utterance (macOS `say`), prints summary JSON
-pnpm cli voicelab client --project prj_… --path /voicelab/call-1
+# the task battery: speak real requests to a deployed Agent and read the
+# durable commentary plus the voice's answer; --verify checks project state
+doppler run --config prd -- pnpm cli voicelab ask --project <slug> --setup \
+  --requests '["Create a markdown file called hello dot md in the notes folder of my config repo, containing hello world, and commit it."]' \
+  --verify 'return await itx.repo.readFile({ path: "notes/hello.md" })'
 
-# live: real mic + speaker, space = push-to-talk mute toggle, q quits
-pnpm cli voicelab client --project prj_… --path /voicelab/call-1 --mic --device
+# a real conversation from this Mac: capture starts automatically and stays continuous; q hangs up
+doppler run --config prd -- pnpm cli voicelab talk --project <slug>
 
-# Literal no-cloud proof: loopback fake provider, synthetic mic, accounted speaker
-pnpm cli voicelab local --project voice-test --say "Prove the local audio path."
-
-# transport-only bench: floods PCM-sized ephemeral events at voice cadence,
-# measures one-way latency / loss / dupes / stalls / per-connection ceilings
-pnpm cli voicelab bench --project prj_… --seconds 120 --rate 50
+# what a call said, after the fact
+doppler run --config prd -- pnpm cli voicelab transcript --project <slug> --stream-path /agents/voice/<name>
 ```
-
-Every command prints a JSON summary with nearest-rank percentiles; `client`
-and `direct` share a summary shape so overhead subtracts cleanly.
 
 ## Ending a conversation
 
-A conversation is a **session**, not a press and not an answer: one provider
-socket across many presses and several minutes. It ends when nobody has spoken
-in EITHER direction for sixty seconds, or when a person or the model hangs up.
+A conversation is a **session**, not a turn and not an answer: one provider
+socket across many turns and several minutes. It ends after sixty seconds with
+no device input or keepalive, or when a person or the model hangs up.
 
-There is one way to end a call and three things that can decide to. Whoever
-decides appends `voice-agent/conversation-end-requested` with a reason; the
-facet consumes it on its ordinary delivery lane, lets the provider socket go,
-and appends `voice-agent/conversation-ended`. Both are on the stream, so a
-teardown is readable after the fact rather than inferred from silence.
+There is one terminal event and three things that can decide to end a call.
+Whoever decides appends `voice-agent/conversation-ended` with its local
+activation and a reason; the facet closes the provider socket. The durable
+event makes teardown readable after the fact rather than inferred from silence.
 
 The deadline is kept twice, deliberately. An in-memory countdown ends a call on
-a Durable Object that is still up and sees both directions — a keepalive-backed
+a Durable Object that is still up and receives device input — a keepalive-backed
 `runInBackground` loop that sleeps exactly as long as the call has left, NOT a
 `setTimeout` (one of those, armed from a delivery whose request context has
 already ended, silently never fires; measured on preview-3). The same deadline
-is also derivable from the fold (`call.lastHeardAtMs`, folded from the press
-verbs and every microphone frame using their own commit stamps, with no extra
+is also derivable from the fold (`call.lastDeviceInputAtStreamMs`, folded from
+every microphone frame and keepalive using their own commit stamps, with no extra
 appends), which is the half that survives the eviction the first cannot — and
 which is what stops a revived incarnation re-dialling an abandoned call every
 ten seconds forever. `voice-agent.ts`'s `idleDeadlinePassed` explains why the
 two cannot disagree.
-
-Proving it takes a real deployment and real silence, because the interesting
-case is the Durable Object being evicted underneath the call:
-
-```bash
-# one press, then 150s of nobody saying anything: expect the request and the end
-doppler run --config preview_3 -- pnpm cli voicelab teardown \
-  --project marginal-1 --stream-path /agents/voice/teardown-1
-
-# the negative: four presses 45s apart stay on ONE call, and only then end
-doppler run --config preview_3 -- pnpm cli voicelab teardown \
-  --project marginal-1 --stream-path /agents/voice/teardown-2 \
-  --presses 4 --gap-ms 45000
-```
-
-The quiet phase drops the itx connection entirely rather than polling — a poll
-every few seconds keeps the object awake and proves the easy half.
 
 ## Against a real device
 

@@ -1,6 +1,7 @@
 import { tracing } from "cloudflare:workers";
 import type { RpcSessionOptions } from "capnweb";
 import { ItxAuthenticationError } from "../auth.ts";
+import { isItxClientDisconnectedError } from "../session-transport.ts";
 import { isStreamUnavailableError } from "../domains/streams/stream-unavailable.ts";
 import { runWideLog, wideLogger } from "../observability/wide-log.ts";
 
@@ -10,7 +11,7 @@ type RpcCallInfo = {
 };
 
 const itxOutcome = Symbol("itxOutcome");
-type ItxErrorOutcome = "client_error" | "error" | "unavailable";
+type ItxErrorOutcome = "client_disconnected" | "client_error" | "error" | "unavailable";
 const spanNamePart = /^[a-zA-Z0-9_$:-]+$/;
 
 function safeNamePart(value: unknown, fallback: string) {
@@ -68,6 +69,7 @@ function correlatedItxError(error: unknown, callId: string, outcome: ItxErrorOut
 function itxErrorOutcome(error: unknown): ItxErrorOutcome {
   try {
     if (error instanceof ItxAuthenticationError) return "client_error";
+    if (isItxClientDisconnectedError(error)) return "client_disconnected";
     // Stream incarnation loss is an explicit, retryable availability outcome
     // (deploy rollover, eviction, overload, or operator kill), not an
     // application/server defect. Keep it observable without polluting the
@@ -75,7 +77,11 @@ function itxErrorOutcome(error: unknown): ItxErrorOutcome {
     if (isStreamUnavailableError(error)) return "unavailable";
     if (typeof error === "object" && error !== null) {
       const inheritedOutcome: unknown = Reflect.get(error, itxOutcome);
-      if (inheritedOutcome === "client_error" || inheritedOutcome === "unavailable") {
+      if (
+        inheritedOutcome === "client_disconnected" ||
+        inheritedOutcome === "client_error" ||
+        inheritedOutcome === "unavailable"
+      ) {
         return inheritedOutcome;
       }
     }
