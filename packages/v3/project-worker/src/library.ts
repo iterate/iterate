@@ -13,6 +13,7 @@ import {
   type RpcTransport,
   RpcTarget,
 } from "capnweb";
+import { z } from "zod";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/expression.ts";
 
@@ -410,14 +411,24 @@ class EgressBatchTransport implements RpcTransport {
 export type McpConnectOptions = { headers?: Record<string, string> };
 
 /** One tool as `tools/list` describes it. */
-export type McpTool = { name: string; description?: string; inputSchema?: unknown };
+// An external MCP server's responses are UNTRUSTED network data — parsed against these schemas at
+// every boundary, never cast, so a server that answers off-spec heals into a clear error instead of
+// handing a typed frontend a value of the wrong shape (a tool whose `name` is a number, say).
+export const MCPTool = z.object({
+  name: z.string(),
+  description: z.string().optional(),
+  inputSchema: z.unknown().optional(),
+});
+export type MCPTool = z.infer<typeof MCPTool>;
+const MCPToolsList = z.object({ tools: z.array(MCPTool) });
 
 /** What `initialize` answered: the server's name and version, its protocol version and capabilities. */
-export type McpServerInfo = {
-  protocolVersion?: string;
-  capabilities?: Record<string, unknown>;
-  serverInfo?: { name?: string; version?: string };
-};
+export const MCPServerInfo = z.object({
+  protocolVersion: z.string().optional(),
+  capabilities: z.record(z.string(), z.unknown()).optional(),
+  serverInfo: z.object({ name: z.string().optional(), version: z.string().optional() }).optional(),
+});
+export type MCPServerInfo = z.infer<typeof MCPServerInfo>;
 
 const MCP_PROTOCOL_VERSION = "2025-03-26";
 const CLIENT_INFO = { name: "iterate-context", version: "1" };
@@ -432,7 +443,7 @@ export async function connectToMcp(
 ): Promise<McpConnection> {
   const client = new McpJsonRpcClient(itx, url, options.headers ?? {});
   const serverInfo = await client.initialize();
-  const { tools } = (await client.request("tools/list", {})) as { tools: McpTool[] };
+  const { tools } = MCPToolsList.parse(await client.request("tools/list", {}));
   const Connection = subclassWithMethods(
     McpConnection,
     tools.map((tool) => tool.name),
@@ -444,28 +455,26 @@ export async function connectToMcp(
 /** A connected MCP server. Held across calls it is an RpcTarget; disposed, it DELETEs its session. */
 export class McpConnection extends RpcTarget {
   readonly #jsonRpcClient: McpJsonRpcClient;
-  readonly #serverInfo: McpServerInfo;
-  constructor(client: McpJsonRpcClient, serverInfo: McpServerInfo) {
+  readonly #serverInfo: MCPServerInfo;
+  constructor(client: McpJsonRpcClient, serverInfo: MCPServerInfo) {
     super();
     this.#jsonRpcClient = client;
     this.#serverInfo = serverInfo;
   }
   /** The `initialize` answer. */
-  serverInfo(): McpServerInfo {
+  serverInfo(): MCPServerInfo {
     return this.#serverInfo;
   }
   /** Ask the server again — `tools/list` now. */
-  async listTools(): Promise<McpTool[]> {
-    const { tools } = (await this.#jsonRpcClient.request("tools/list", {})) as { tools: McpTool[] };
-    return tools;
+  async listTools(): Promise<MCPTool[]> {
+    return MCPToolsList.parse(await this.#jsonRpcClient.request("tools/list", {})).tools;
   }
   /** `tools/call`: the result's `structuredContent`, else its text content JSON-parsed when it
    *  parses, else the text; an `isError` result throws with that text. */
   async callTool(name: string, args?: Record<string, unknown>): Promise<unknown> {
-    const result = (await this.#jsonRpcClient.request("tools/call", {
-      name,
-      arguments: args ?? {},
-    })) as McpToolResult;
+    const result = MCPToolResult.parse(
+      await this.#jsonRpcClient.request("tools/call", { name, arguments: args ?? {} }),
+    );
     return mcpResultToValue(name, result);
   }
   async close(): Promise<void> {
@@ -476,13 +485,14 @@ export class McpConnection extends RpcTarget {
   }
 }
 
-type McpToolResult = {
-  content?: Array<{ type: string; text?: string }>;
-  structuredContent?: unknown;
-  isError?: boolean;
-};
+const MCPToolResult = z.object({
+  content: z.array(z.object({ type: z.string(), text: z.string().optional() })).optional(),
+  structuredContent: z.unknown().optional(),
+  isError: z.boolean().optional(),
+});
+type MCPToolResult = z.infer<typeof MCPToolResult>;
 
-function mcpResultToValue(name: string, result: McpToolResult): unknown {
+function mcpResultToValue(name: string, result: MCPToolResult): unknown {
   const text = (result.content ?? [])
     .flatMap((part) => (part.type === "text" && typeof part.text === "string" ? [part.text] : []))
     .join("\n");
@@ -511,7 +521,7 @@ class McpJsonRpcClient {
   #closed = false;
   /** The in-flight handshake, shared while it runs so concurrent requests await ONE — and never post
    *  before the session id is established. Cleared on failure so the next request retries it. */
-  #handshake: Promise<McpServerInfo> | null = null;
+  #handshake: Promise<MCPServerInfo> | null = null;
   /** Bumped by `close()`. A handshake captures it at the start and, on completing, refuses to revive a
    *  client closed meanwhile — it DELETEs the session it just established instead of leaking it. */
   #generation = 0;
@@ -523,20 +533,22 @@ class McpJsonRpcClient {
   /** The handshake: `initialize` → `notifications/initialized`. Memoized while in flight — a second
    *  caller (a concurrent request re-opening a closed client) joins the same one instead of racing a
    *  second handshake or posting session-less mid-handshake. `#closed` stays true until it completes. */
-  async initialize(): Promise<McpServerInfo> {
+  async initialize(): Promise<MCPServerInfo> {
     this.#handshake ??= this.#runHandshake().catch((error) => {
       this.#handshake = null; // a failed handshake must not stick — the next request retries
       throw error;
     });
     return this.#handshake;
   }
-  async #runHandshake(): Promise<McpServerInfo> {
+  async #runHandshake(): Promise<MCPServerInfo> {
     const generation = this.#generation;
-    const serverInfo = (await this.#send("initialize", {
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: CLIENT_INFO,
-    })) as McpServerInfo;
+    const serverInfo = MCPServerInfo.parse(
+      await this.#send("initialize", {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: CLIENT_INFO,
+      }),
+    );
     await this.notify("notifications/initialized");
     if (generation !== this.#generation) {
       // close() ran while this handshake was in flight: do NOT revive the client. DELETE the session

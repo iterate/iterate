@@ -544,6 +544,26 @@ describe("mcp", () => {
       expect(await conn.callTool("echo", { x: 1 })).toEqual({ echoed: { x: 1 } });
     });
 
+    test("listTools REFUSES a server tool of the wrong shape — network data is parsed, not cast", async () => {
+      // An external MCP server is untrusted: a tool whose `name` is a number must not reach a typed
+      // frontend as McpTool[]. The first tools/list (at connect) is clean; the second is off-spec.
+      let listings = 0;
+      const { itx } = fakeItx((request, body) => {
+        if (request.method === "DELETE") return new Response(null, { status: 204 });
+        if (body.method === "initialize")
+          return json(
+            { jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "fake", version: "0" } } },
+            { headers: { "mcp-session-id": "s-1" } },
+          );
+        if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+        const result =
+          body.method === "tools/list" ? { tools: ++listings === 1 ? [] : [{ name: 42 }] } : {};
+        return json({ jsonrpc: "2.0", id: body.id, result });
+      });
+      const conn = await connectToMcp(itx, "https://mcp.example/rpc");
+      await expect(conn.listTools()).rejects.toThrow();
+    });
+
     test("close DELETEs the session once; a server without a session id gets no DELETE", async () => {
       const withSession = fakeItx(referenceServer());
       const conn = await connectToMcp(withSession.itx, "https://mcp.example/rpc");
@@ -872,6 +892,7 @@ describe("openapi", () => {
 const ALLOWED_RUNTIME_IMPORTS = new Set([
   "capnweb",
   "cloudflare:workers",
+  "zod", // an npm package a userspace worker could bundle too — used to PARSE untrusted MCP responses
   "./context/expression.ts",
 ]);
 
