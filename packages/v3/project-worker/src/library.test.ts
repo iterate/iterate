@@ -564,6 +564,54 @@ describe("mcp", () => {
       await expect(conn.listTools()).rejects.toThrow();
     });
 
+    test("a stale handshake deletes ITS OWN session and never clobbers the live replacement", async () => {
+      // The hard race: handshake A parks, a close happens, handshake B completes and goes live, then A
+      // resumes. A must delete only ITS OWN session (s-2) and never touch the live one (s-3) — each
+      // handshake owns its session id, so A cannot clobber B into sending sessionless requests.
+      let inits = 0;
+      const deletes: string[] = [];
+      let releaseA: (() => void) | undefined;
+      const { itx } = fakeItx((request, body) => {
+        if (request.method === "DELETE") {
+          deletes.push(request.headers.get("mcp-session-id") ?? "?");
+          return new Response(null, { status: 204 });
+        }
+        if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+        if (body.method === "initialize") {
+          const n = ++inits;
+          const answer = json(
+            { jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "f" } } },
+            { headers: { "mcp-session-id": `s-${n}` } },
+          );
+          return n === 2 ? new Promise<Response>((r) => (releaseA = () => r(answer))) : answer; // A parks
+        }
+        if (body.method === "tools/list")
+          return json({ jsonrpc: "2.0", id: body.id, result: { tools: [] } });
+        // a tool call echoes the session id it carried, so the test can see which session B used
+        return json({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: { content: [{ type: "text", text: JSON.stringify(request.headers.get("mcp-session-id")) }] },
+        });
+      });
+      const conn = await connectToMcp(itx, "https://mcp.example/rpc"); // s-1
+      await conn.close(); // DELETE s-1; generation 1
+      const aCall = conn.callTool("x").then(
+        () => "A ok",
+        (e: unknown) => (e instanceof Error ? e.message : String(e)),
+      ); // handshake A parks at initialize #2 (captures generation 1)
+      await new Promise((r) => setTimeout(r, 10));
+      await conn.close(); // generation 2; A's memo cleared
+      const bResult = await conn.callTool("y"); // handshake B → s-3 goes live, then tools/call carries s-3
+      releaseA?.(); // A resumes → stale (gen 1 ≠ 2) → deletes s-2, throws
+      const aOutcome = await aCall;
+
+      expect(bResult).toBe("s-3"); // B's call used its OWN live session — never clobbered by A
+      expect(aOutcome).toMatch(/closed during its handshake/);
+      expect(deletes).toEqual(expect.arrayContaining(["s-1", "s-2"]));
+      expect(deletes).not.toContain("s-3"); // the live session was not deleted
+    });
+
     test("close DELETEs the session once; a server without a session id gets no DELETE", async () => {
       const withSession = fakeItx(referenceServer());
       const conn = await connectToMcp(withSession.itx, "https://mcp.example/rpc");

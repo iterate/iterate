@@ -542,42 +542,48 @@ class McpJsonRpcClient {
   }
   async #runHandshake(): Promise<MCPServerInfo> {
     const generation = this.#generation;
-    const serverInfo = MCPServerInfo.parse(
-      await this.#send("initialize", {
-        protocolVersion: MCP_PROTOCOL_VERSION,
-        capabilities: {},
-        clientInfo: CLIENT_INFO,
-      }),
-    );
-    await this.notify("notifications/initialized");
+    // This handshake OWNS the session it establishes — it never reads or writes the shared #sessionId
+    // until it commits, so a concurrent handshake (a re-open racing a close) can neither clobber the
+    // live session nor be clobbered by ours.
+    const initialized = await this.#send("initialize", {
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: CLIENT_INFO,
+    });
+    const serverInfo = MCPServerInfo.parse(initialized.result);
+    const sessionId = initialized.sessionId; // OUR session id, from the initialize response
+    await this.notify("notifications/initialized", undefined, sessionId);
     if (generation !== this.#generation) {
-      // close() ran while this handshake was in flight: do NOT revive the client. DELETE the session
-      // this handshake just established (#post set #sessionId from the initialize response) so the
-      // server does not keep an orphaned session close() could not know to delete.
-      const orphaned = this.#sessionId;
-      this.#sessionId = null;
-      if (orphaned !== null) await this.#deleteSession(orphaned);
+      // close() (or another close) ran while this handshake was in flight: do NOT revive the client,
+      // and DELETE OUR OWN session — never the shared #sessionId, which a newer handshake may now own.
+      if (sessionId !== null) await this.#deleteSession(sessionId);
       throw new Error("MCP client was closed during its handshake");
     }
-    this.#closed = false; // only now — session id set, initialized sent — is the client usable
+    this.#sessionId = sessionId; // publish OUR session as the live one …
+    this.#closed = false; // … and only now — session id set, initialized sent — is the client usable
     return serverInfo;
   }
   async request(method: string, params: unknown): Promise<unknown> {
     if (this.#closed) await this.initialize();
-    return this.#send(method, params);
+    return (await this.#send(method, params, this.#sessionId)).result;
   }
-  /** Post one JSON-RPC request and return its result — the handshake guard is `request`'s, so
-   *  `#runHandshake` uses this directly (the guard would deadlock on its own in-flight handshake). */
-  async #send(method: string, params: unknown): Promise<unknown> {
+  /** Post one JSON-RPC request against `sessionId` (default: the live #sessionId) and return its
+   *  result AND the session id now in effect. The handshake guard is `request`'s, so `#runHandshake`
+   *  uses this directly (the guard would deadlock on its own in-flight handshake). */
+  async #send(
+    method: string,
+    params: unknown,
+    sessionId: string | null = this.#sessionId,
+  ): Promise<{ result: unknown; sessionId: string | null }> {
     const id = this.#nextId++;
-    const response = await this.#post({ jsonrpc: "2.0", id, method, params });
-    const message = await readJsonRpcResponse(response, id);
+    const posted = await this.#post({ jsonrpc: "2.0", id, method, params }, sessionId);
+    const message = await readJsonRpcResponse(posted.response, id);
     if (message.error)
       throw new Error(`MCP ${method}: ${message.error.message ?? JSON.stringify(message.error)}`);
-    return message.result;
+    return { result: message.result, sessionId: posted.sessionId };
   }
-  async notify(method: string, params?: unknown): Promise<void> {
-    const response = await this.#post({ jsonrpc: "2.0", method, params });
+  async notify(method: string, params: unknown, sessionId: string | null): Promise<void> {
+    const { response } = await this.#post({ jsonrpc: "2.0", method, params }, sessionId);
     await response.body?.cancel();
   }
   async close(): Promise<void> {
@@ -598,17 +604,22 @@ class McpJsonRpcClient {
       .then((r) => r.body?.cancel())
       .catch(() => undefined);
   }
-  async #post(body: { jsonrpc: "2.0"; id?: number; method: string; params?: unknown }) {
+  /** Send `sessionId` (when set) and return the response plus the session id now in effect — the
+   *  server's freshly-assigned one (initialize) or the one we sent. Does NOT touch #sessionId: the
+   *  caller owns it, so a handshake that loses the close race never clobbers the live session. */
+  async #post(
+    body: { jsonrpc: "2.0"; id?: number; method: string; params?: unknown },
+    sessionId: string | null,
+  ): Promise<{ response: Response; sessionId: string | null }> {
     const headers = new Headers(this.#headers);
     headers.set("content-type", "application/json");
     headers.set("accept", "application/json, text/event-stream");
-    if (this.#sessionId !== null) headers.set("mcp-session-id", this.#sessionId);
+    if (sessionId !== null) headers.set("mcp-session-id", sessionId);
     const response = await this.#itx.fetch(
       new Request(this.#url, { method: "POST", headers, body: JSON.stringify(body) }),
     );
-    const sessionId = response.headers.get("mcp-session-id");
-    if (sessionId) this.#sessionId = sessionId;
-    return refuseUnlessOk(response, `MCP ${body.method}`);
+    const nextSessionId = response.headers.get("mcp-session-id") ?? sessionId;
+    return { response: await refuseUnlessOk(response, `MCP ${body.method}`), sessionId: nextSessionId };
   }
 }
 
