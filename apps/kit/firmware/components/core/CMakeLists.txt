@@ -1,8 +1,9 @@
 set(ITERATE_KIT_CORE_SOURCES
+  src/button.c
   src/configuration.c
-  src/conversation_launch.c
   src/conversation_lights.c
   src/conversation_overlay.c
+  src/conversation_ring.c
   src/device_events.c
   src/face_wake.c
   src/itx_connection.c
@@ -20,7 +21,8 @@ set(ITERATE_KIT_CORE_SOURCES
   src/websocket_frame_writer.c
   src/websocket_rx.c
   src/websocket_text.c
-  src/websocket_tx.c)
+  src/websocket_tx.c
+  src/xmos_control.c)
 
 if(COMMAND idf_component_register)
   idf_component_register(
@@ -31,7 +33,7 @@ if(COMMAND idf_component_register)
 else()
   add_library(iterate-kit-core STATIC ${ITERATE_KIT_CORE_SOURCES})
   target_include_directories(iterate-kit-core PUBLIC include)
-  target_link_libraries(iterate-kit-core PUBLIC capnweb)
+  target_link_libraries(iterate-kit-core PUBLIC capnweb m)
   set(ITERATE_KIT_CORE_TARGET iterate-kit-core)
 endif()
 

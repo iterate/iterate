@@ -75,6 +75,27 @@ enum cli_speaker_status cli_speaker_read(
   return CLI_SPEAKER_OK;
 }
 
+enum cli_speaker_status cli_speaker_read_playout(
+    struct cli_speaker *speaker,
+    uint8_t *out,
+    size_t length,
+    bool answer_done)
+{
+  if (speaker == NULL || out == NULL || length == 0U) {
+    return CLI_SPEAKER_ERR_ARG;
+  }
+  if (speaker->used > sizeof(speaker->bytes)) return CLI_SPEAKER_ERR_ARG;
+  if (speaker->used >= length) return cli_speaker_read(speaker, out, length);
+  if (!answer_done || speaker->used == 0U) return CLI_SPEAKER_ERR_EMPTY;
+
+  const size_t tail_bytes = speaker->used;
+  const enum cli_speaker_status status =
+      cli_speaker_read(speaker, out, tail_bytes);
+  if (status != CLI_SPEAKER_OK) return status;
+  memset(out + tail_bytes, 0, length - tail_bytes);
+  return CLI_SPEAKER_OK;
+}
+
 static void cli_speaker_copy_in(
     struct cli_speaker *speaker, const uint8_t *pcm, size_t length)
 {

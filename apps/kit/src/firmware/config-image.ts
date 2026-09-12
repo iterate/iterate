@@ -4,18 +4,20 @@ const CONFIG_HEADER_BYTES = 16;
 /**
  * Field tags, matching `configuration.c` in the firmware exactly.
  *
- * These numbers ARE the wire format. 1-5 are required — the firmware fails
- * closed on a partition missing any of them — and everything above is
- * forward-compatible: its decoder skips unknown length-delimited tags so a
- * newer flash tool can provision a field an older build has never heard of.
+ * These numbers are the wire format. All five are required by the firmware.
  */
-const FIELD_WIFI_SSID = 1;
-const FIELD_WIFI_PASSWORD = 2;
-const FIELD_OS_BASE_URL = 3;
-const FIELD_PROJECT_ID = 4;
-const FIELD_PROJECT_API_KEY = 5;
-const FIELD_DEVICE_ID = 6;
-const FIELD_KIT_PATH = 7;
+const fieldWifiSsid = 1;
+const fieldWifiPassword = 2;
+const fieldOsBaseUrl = 3;
+const fieldProjectId = 4;
+const fieldProjectApiKey = 5;
+
+/* These include the C string terminator: configuration.h is the ABI source. */
+const wifiSsidMaxBytes = 32;
+const wifiPasswordMaxBytes = 64;
+const osBaseUrlMaxBytes = 128;
+const projectIdMaxBytes = 64;
+const projectApiKeyMaxBytes = 128;
 
 export interface DeviceConfiguration {
   schemaVersion: 1;
@@ -25,16 +27,8 @@ export interface DeviceConfiguration {
   };
   iterate: {
     baseUrl: string;
-    projectSlug: string;
+    projectId: string;
     projectApiKey: string;
-    /**
-     * Which device this is, and where it mounts itself — both optional
-     * because current firmware hardcodes them per board and skips these
-     * tags. Provisioning them now means a partition written today already
-     * carries the answer when the firmware learns to ask.
-     */
-    deviceId?: string;
-    kitPath?: string;
   };
 }
 
@@ -63,13 +57,8 @@ export function normalizeOsBaseUrl(value: string) {
  * with no terminator: the length is the only delimiter, which is what lets the
  * firmware skip a tag it does not know.
  *
- * THIS IS NOT JSON, and it used to be. The firmware has only ever had a
- * tag-length-value decoder, so every partition this function produced was
- * rejected before a single credential was read — browser flashing could not
- * have worked, and the two devices proven on hardware were provisioned by a
- * hand-built image instead. The lesson is in the shape of the bug: an encoder
- * and a decoder that never met in a test agree on nothing but the magic
- * number, which is exactly the part that made the output look right.
+ * The installed firmware supports one active configuration: replacing this
+ * partition replaces that device's Wi-Fi and project identity.
  */
 export function encodeDeviceConfiguration(
   configuration: DeviceConfiguration,
@@ -83,7 +72,12 @@ export function encodeDeviceConfiguration(
   const magic = textEncoder.encode(CONFIG_MAGIC);
   const payload = encodeFields(
     [
-      { tag: FIELD_WIFI_SSID, name: "Wi-Fi SSID", value: configuration.wifi.ssid },
+      {
+        tag: fieldWifiSsid,
+        name: "Wi-Fi SSID",
+        value: configuration.wifi.ssid,
+        maxBytes: wifiSsidMaxBytes,
+      },
       /*
        * ALWAYS WRITTEN, EVEN EMPTY. An open network has no password, and the
        * firmware is built for exactly that: the password is the one field it
@@ -92,20 +86,35 @@ export function encodeDeviceConfiguration(
        * SSID unprovisionable with a "missing field" fault.
        */
       {
-        tag: FIELD_WIFI_PASSWORD,
+        tag: fieldWifiPassword,
         name: "Wi-Fi password",
         value: configuration.wifi.password,
         mayBeEmpty: true,
+        maxBytes: wifiPasswordMaxBytes,
+        validate: (value, bytes) =>
+          bytes.byteLength === 0 ||
+          (bytes.byteLength >= 8 && bytes.byteLength <= 63) ||
+          (bytes.byteLength === 64 && /^[0-9a-fA-F]+$/.test(value)),
       },
-      { tag: FIELD_OS_BASE_URL, name: "OS base URL", value: configuration.iterate.baseUrl },
-      { tag: FIELD_PROJECT_ID, name: "project id", value: configuration.iterate.projectSlug },
       {
-        tag: FIELD_PROJECT_API_KEY,
+        tag: fieldOsBaseUrl,
+        name: "OS base URL",
+        value: normalizeOsBaseUrl(configuration.iterate.baseUrl),
+        maxBytes: osBaseUrlMaxBytes,
+      },
+      {
+        tag: fieldProjectId,
+        name: "project id",
+        value: configuration.iterate.projectId,
+        maxBytes: projectIdMaxBytes,
+        validate: (value) => /^prj_[A-Za-z0-9_-]+$/.test(value),
+      },
+      {
+        tag: fieldProjectApiKey,
         name: "project API key",
         value: configuration.iterate.projectApiKey,
+        maxBytes: projectApiKeyMaxBytes,
       },
-      { tag: FIELD_DEVICE_ID, name: "device id", value: configuration.iterate.deviceId },
-      { tag: FIELD_KIT_PATH, name: "kit path", value: configuration.iterate.kitPath },
     ],
     textEncoder,
   );
@@ -130,30 +139,36 @@ interface ConfigurationField {
   tag: number;
   /** Human name, so a rejected value names itself in the error. */
   name: string;
-  /** `undefined` means the caller did not provide it at all. */
-  value: string | undefined;
+  value: string;
   /** True only for the Wi-Fi password; see the call site. */
   mayBeEmpty?: boolean;
+  /** Firmware destination capacity less its NUL terminator. */
+  maxBytes?: number;
+  /** Firmware policy beyond the container's structural validation. */
+  validate?: (value: string, bytes: Uint8Array) => boolean;
 }
 
 /**
  * Lay out the tag-length-value payload.
  *
- * Absent optional fields are skipped — the firmware skips tags it does not
- * know, which is what makes them forward-compatible. A required field that is
- * empty is a different thing entirely and throws here rather than being
- * dropped: the device would otherwise reject the finished partition at boot
- * with a generic "missing field", turning a fixable typo in a flashing form
- * into a mystery on hardware.
+ * Required empty fields throw here, before a device can reject the completed
+ * partition at boot with an unhelpful missing-field fault.
  */
 function encodeFields(fields: readonly ConfigurationField[], textEncoder: TextEncoder) {
   const encoded = fields.flatMap((field) => {
-    const optional = field.mayBeEmpty !== true && field.tag > FIELD_PROJECT_API_KEY;
-    if (field.value === undefined || (field.value.length === 0 && optional)) return [];
     if (field.value.length === 0 && field.mayBeEmpty !== true) {
       throw new Error(`Device configuration is missing its ${field.name}.`);
     }
     const bytes = textEncoder.encode(field.value);
+    if (bytes.includes(0)) {
+      throw new Error(`Device configuration ${field.name} cannot contain a NUL character.`);
+    }
+    if (field.maxBytes !== undefined && bytes.byteLength > field.maxBytes) {
+      throw new Error(`Device configuration ${field.name} is longer than firmware allows.`);
+    }
+    if (field.validate && !field.validate(field.value, bytes)) {
+      throw new Error(`Device configuration has an invalid ${field.name}.`);
+    }
     if (bytes.byteLength > 0xffff) {
       throw new Error(`Configuration field ${field.tag} is longer than the format allows.`);
     }

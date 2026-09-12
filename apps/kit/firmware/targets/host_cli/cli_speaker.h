@@ -69,4 +69,15 @@ enum cli_speaker_status cli_speaker_write(
 enum cli_speaker_status cli_speaker_read(
     struct cli_speaker *speaker, uint8_t *out, size_t length);
 
+/**
+ * Take one playout frame. At a declared answer end, pad a final short PCM
+ * fragment with silence so an arbitrary transport chunk boundary cannot leave
+ * the queue permanently non-empty.
+ */
+enum cli_speaker_status cli_speaker_read_playout(
+    struct cli_speaker *speaker,
+    uint8_t *out,
+    size_t length,
+    bool answer_done);
+
 #endif /* ITERATE_KIT_CLI_SPEAKER_H */

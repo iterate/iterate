@@ -1,3 +1,4 @@
+#include "iterate/kit/atomic.h"
 #include "stackchan_avatar.h"
 
 #include "iterate/kit/avatar/face_animator.h"
@@ -9,6 +10,7 @@
 #include "iterate/kit/conversation_lights.h"
 #include "iterate/kit/conversation_overlay.h"
 #include "iterate/kit/face_wake.h"
+#include "iterate/kit/platforms/lcd_transfer.h"
 #include "iterate/kit/touch_tap.h"
 
 #include "bsp/m5stack_core_s3.h"
@@ -39,7 +41,7 @@
 #define STACKCHAN_AVATAR_SAMPLE_RATE_HZ 16000U
 #define STACKCHAN_AVATAR_PLAYOUT_FRAME_SAMPLES 128U
 /*
- * The first production-shaped Grok turn measured only 464 bytes of unused
+ * The first production-shaped voice turn measured only 464 bytes of unused
  * stack while this task was rendering and submitting a real frame. That is a
  * valid measurement, not permission to run at the cliff: ESP-IDF display/SPI
  * internals can take a slightly deeper call path on an error or timeout. One
@@ -204,7 +206,7 @@ struct stackchan_avatar_owner {
   SemaphoreHandle_t framebuffer_access;
 
   StaticSemaphore_t display_transfer_control;
-  SemaphoreHandle_t display_transfer_complete;
+  struct iterate_kit_lcd_transfer display_transfer;
 
   StaticQueue_t mailbox_control;
   uint8_t mailbox_storage[sizeof(struct stackchan_avatar_frame)];
@@ -251,12 +253,6 @@ struct stackchan_avatar_owner {
   volatile uint32_t last_face_tap_left;
   volatile uint32_t last_touch_x;
   /*
-   * Zero hides the provider menu; otherwise highlighted cell + 1. A
-   * latest-only atomic slot like the avatar request: the menu is state the
-   * device owns, and the render task only ever needs the newest one.
-   */
-  volatile uint32_t menu_highlight_plus_one;
-  /*
    * THE IMAGE OVERLAY, following the menu's latest-state pattern. The staging
    * surface is a second 160x120 host-order RGB565 frame in PSRAM, written by
    * the fetch task only while no deadline is active; while the deadline is in
@@ -300,52 +296,6 @@ static uint64_t now_us_wide(void) {
   return now <= 0 ? 0U : (uint64_t)now;
 }
 
-static void atomic_saturating_increment(volatile uint32_t *value) {
-  uint32_t current = __atomic_load_n(value, __ATOMIC_RELAXED);
-  while (current != UINT32_MAX &&
-         !__atomic_compare_exchange_n(
-             value,
-             &current,
-             current + 1U,
-             false,
-             __ATOMIC_RELAXED,
-             __ATOMIC_RELAXED)) {
-  }
-}
-
-static void atomic_saturating_add(
-    volatile uint32_t *value, uint32_t amount) {
-  uint32_t current = __atomic_load_n(value, __ATOMIC_RELAXED);
-  while (current != UINT32_MAX) {
-    const uint32_t next = amount > UINT32_MAX - current
-        ? UINT32_MAX
-        : current + amount;
-    if (__atomic_compare_exchange_n(
-            value,
-            &current,
-            next,
-            false,
-            __ATOMIC_RELAXED,
-            __ATOMIC_RELAXED)) {
-      return;
-    }
-  }
-}
-
-static void atomic_note_maximum(
-    volatile uint32_t *maximum, uint32_t candidate) {
-  uint32_t current = __atomic_load_n(maximum, __ATOMIC_RELAXED);
-  while (candidate > current &&
-         !__atomic_compare_exchange_n(
-             maximum,
-             &current,
-             candidate,
-             false,
-             __ATOMIC_RELAXED,
-             __ATOMIC_RELAXED)) {
-  }
-}
-
 /*
  * There is exactly one I2S-ISR writer for these counters. A compare/exchange
  * loop would add an unbounded retry shape to the callback for no ownership
@@ -356,19 +306,6 @@ static void IRAM_ATTR isr_saturating_increment(
   if (*value != UINT32_MAX) {
     ++*value;
   }
-}
-
-static bool IRAM_ATTR display_transfer_finished(
-    esp_lcd_panel_io_handle_t panel_io,
-    esp_lcd_panel_io_event_data_t *event_data,
-    void *context) {
-  (void)panel_io;
-  (void)event_data;
-  (void)context;
-  BaseType_t higher_priority_task_woken = pdFALSE;
-  xSemaphoreGiveFromISR(
-      owner.display_transfer_complete, &higher_priority_task_woken);
-  return higher_priority_task_woken == pdTRUE;
 }
 
 static bool draw_region_and_wait(
@@ -390,32 +327,26 @@ static bool draw_region_and_wait(
    * easier to reason about than a display FIFO. The low-priority visual task
    * is the only waiter, so this can never stall audio or a WebSocket owner.
    */
-  (void)xSemaphoreTake(owner.display_transfer_complete, 0U);
   const uint64_t started_at_us = now_us_wide();
-  const esp_err_t status = esp_lcd_panel_draw_bitmap(
-      owner.panel,
-      (int)x,
-      (int)y,
-      (int)(x + width),
-      (int)(y + height),
-      pixels);
-  if (status != ESP_OK) {
-    atomic_saturating_increment(
+  const enum iterate_kit_lcd_transfer_result result =
+      iterate_kit_lcd_transfer_draw_and_wait(
+          &owner.display_transfer, owner.panel, (int32_t)x, (int32_t)y,
+          (int32_t)width, (int32_t)height, pixels,
+          pdMS_TO_TICKS(STACKCHAN_AVATAR_DISPLAY_TRANSFER_TIMEOUT_MS));
+  if (result == ITERATE_KIT_LCD_TRANSFER_DRAW_FAILED) {
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
         &owner.metrics.display_transfer_failures);
     __atomic_store_n(&owner.display_active, 0U, __ATOMIC_RELEASE);
     return false;
   }
-  if (xSemaphoreTake(
-          owner.display_transfer_complete,
-          pdMS_TO_TICKS(STACKCHAN_AVATAR_DISPLAY_TRANSFER_TIMEOUT_MS)) !=
-      pdPASS) {
+  if (result == ITERATE_KIT_LCD_TRANSFER_TIMED_OUT) {
     /*
      * After a timeout the DMA ownership of the buffer is unknowable. Never
      * reuse it and never retry into a possible in-flight transfer. Disabling
      * the visual sidecar is the bounded failure policy; audio remains live and
      * diagnostics retain the exact incident.
      */
-    atomic_saturating_increment(
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
         &owner.metrics.display_transfer_timeouts);
     __atomic_store_n(&owner.display_active, 0U, __ATOMIC_RELEASE);
     return false;
@@ -423,12 +354,12 @@ static bool draw_region_and_wait(
 
   const uint32_t transfer_us = saturating_elapsed_us(
       now_us_wide(), started_at_us);
-  atomic_saturating_increment(&owner.metrics.display_transfers);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.display_transfers);
   __atomic_store_n(
       &owner.metrics.last_display_transfer_us,
       transfer_us,
       __ATOMIC_RELAXED);
-  atomic_note_maximum(
+  iterate_kit_atomic_update_max_relaxed_u32(
       &owner.metrics.maximum_display_transfer_us, transfer_us);
   return true;
 }
@@ -446,106 +377,6 @@ static void swap_rgb565_bytes_for_panel(void) {
     const uint16_t pixel = owner.framebuffer[index];
     owner.framebuffer[index] =
         (uint16_t)((pixel << 8U) | (pixel >> 8U));
-  }
-}
-
-/*
- * THE PROVIDER MENU, drawn over the face for the moment it is open.
- *
- * Two cells, left and right — the same halves the touch hit-test uses, one
- * comparison on either side, so the drawing and the picking cannot
- * disagree. The labels come from a nine-glyph 5x7 alphabet: exactly the
- * letters GROK and OPENAI spend, because a menu with two words does not
- * need a font, it needs those two words.
- */
-enum {
-  MENU_CELL_TOP = 34U,
-  MENU_CELL_BOTTOM = 86U,
-  MENU_CELL_INSET = 2U,     /* from the panel edge and from the midline */
-  MENU_GLYPH_SCALE = 2U,    /* 5x7 source glyphs, so 20x28 on the panel */
-};
-
-/* Rows top-down, bit 4 = leftmost column. */
-static const uint8_t menu_glyphs[9][7] = {
-  /* G */ {0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0e},
-  /* R */ {0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11},
-  /* O */ {0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e},
-  /* K */ {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11},
-  /* P */ {0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10},
-  /* E */ {0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f},
-  /* N */ {0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11},
-  /* A */ {0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11},
-  /* I */ {0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e},
-};
-
-enum { MENU_G, MENU_R, MENU_O, MENU_K, MENU_P, MENU_E, MENU_N, MENU_A, MENU_I };
-static const uint8_t menu_word_grok[] = {MENU_G, MENU_R, MENU_O, MENU_K};
-static const uint8_t menu_word_openai[] = {
-  MENU_O, MENU_P, MENU_E, MENU_N, MENU_A, MENU_I};
-
-static void menu_fill_rect(
-    uint32_t left, uint32_t top, uint32_t right, uint32_t bottom,
-    uint16_t colour) {
-  for (uint32_t y = top; y < bottom && y < FACE_RENDER_HEIGHT; ++y) {
-    uint16_t *row = owner.framebuffer + (size_t)y * FACE_RENDER_WIDTH;
-    for (uint32_t x = left; x < right && x < FACE_RENDER_WIDTH; ++x) {
-      row[x] = colour;
-    }
-  }
-}
-
-static void menu_draw_word(
-    const uint8_t *word, size_t length, uint32_t centre_x, uint32_t centre_y,
-    uint16_t colour) {
-  const uint32_t advance = 5U * MENU_GLYPH_SCALE + MENU_GLYPH_SCALE;
-  const uint32_t width = (uint32_t)length * advance - MENU_GLYPH_SCALE;
-  uint32_t pen_x = centre_x - width / 2U;
-  const uint32_t pen_y = centre_y - (7U * MENU_GLYPH_SCALE) / 2U;
-  for (size_t index = 0U; index < length; ++index) {
-    const uint8_t *rows = menu_glyphs[word[index]];
-    for (uint32_t gy = 0U; gy < 7U; ++gy) {
-      for (uint32_t gx = 0U; gx < 5U; ++gx) {
-        if ((rows[gy] & (0x10U >> gx)) == 0U) continue;
-        menu_fill_rect(
-            pen_x + gx * MENU_GLYPH_SCALE,
-            pen_y + gy * MENU_GLYPH_SCALE,
-            pen_x + (gx + 1U) * MENU_GLYPH_SCALE,
-            pen_y + (gy + 1U) * MENU_GLYPH_SCALE,
-            colour);
-      }
-    }
-    pen_x += advance;
-  }
-}
-
-/* Analyzer task only, before the byte swap: host-order RGB565. */
-static void menu_draw_overlay(uint8_t highlighted) {
-  const uint32_t midline = FACE_RENDER_WIDTH / 2U;
-  for (uint8_t cell = 0U; cell < 2U; ++cell) {
-    const uint32_t left =
-        cell == 0U ? MENU_CELL_INSET : midline + MENU_CELL_INSET;
-    const uint32_t right =
-        cell == 0U ? midline - MENU_CELL_INSET
-                   : FACE_RENDER_WIDTH - MENU_CELL_INSET;
-    const bool bright = cell == highlighted;
-    /* Border first, fill inside it: 1 source pixel = 2 panel pixels. */
-    menu_fill_rect(
-        left, MENU_CELL_TOP, right, MENU_CELL_BOTTOM,
-        bright ? 0xffffU : 0x8410U);
-    menu_fill_rect(
-        left + 1U, MENU_CELL_TOP + 1U, right - 1U, MENU_CELL_BOTTOM - 1U,
-        bright ? 0x2104U : 0x18e3U);
-    if (cell == 0U) {
-      menu_draw_word(
-          menu_word_grok, sizeof(menu_word_grok),
-          (left + right) / 2U, (MENU_CELL_TOP + MENU_CELL_BOTTOM) / 2U,
-          bright ? 0xffffU : 0x8410U);
-    } else {
-      menu_draw_word(
-          menu_word_openai, sizeof(menu_word_openai),
-          (left + right) / 2U, (MENU_CELL_TOP + MENU_CELL_BOTTOM) / 2U,
-          bright ? 0xffffU : 0x8410U);
-    }
   }
 }
 
@@ -573,7 +404,7 @@ static bool prepare_avatar_frame_under_lock(
   if (face_animator_snapshot(&owner.animator, &candidate)) {
     owner.latest_pose = candidate;
   } else {
-    atomic_saturating_increment(&owner.metrics.snapshot_races);
+    iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.snapshot_races);
   }
 
   /*
@@ -600,7 +431,7 @@ static bool prepare_avatar_frame_under_lock(
         now_us_wide() < __atomic_load_n(
             &owner.image_visible_through_us, __ATOMIC_ACQUIRE);
     if (owner.image_was_visible && !image_visible) {
-      atomic_saturating_increment(&owner.image_shows_completed);
+      iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.image_shows_completed);
     }
     owner.image_was_visible = image_visible;
     if (image_visible) {
@@ -619,7 +450,7 @@ static bool prepare_avatar_frame_under_lock(
               owner.latest_pose.playout_samples,
               owner.framebuffer,
               FACE_RENDER_PIXEL_COUNT)) {
-        atomic_saturating_increment(&owner.metrics.render_failures);
+        iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
         return false;
       }
       if (dozing && !face_doze_apply_overlay(
@@ -632,15 +463,10 @@ static bool prepare_avatar_frame_under_lock(
          * replacing the last coherent display when buffer geometry and
          * renderer assumptions diverge.
          */
-        atomic_saturating_increment(&owner.metrics.render_failures);
+        iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
         return false;
       }
     }
-  }
-  {
-    const uint32_t menu = __atomic_load_n(
-        &owner.menu_highlight_plus_one, __ATOMIC_ACQUIRE);
-    if (menu != 0U) menu_draw_overlay((uint8_t)(menu - 1U));
   }
   swap_rgb565_bytes_for_panel();
   *render_cpu_us = saturating_elapsed_us(now_us_wide(), started_at_us);
@@ -665,7 +491,7 @@ static bool transfer_avatar_frame(
             source_rows,
             owner.scaled_strip,
             STACKCHAN_AVATAR_SCALE_STRIP_PIXEL_COUNT)) {
-      atomic_saturating_increment(&owner.metrics.render_failures);
+      iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
       return false;
     }
     render_cpu_us += saturating_elapsed_us(
@@ -677,7 +503,7 @@ static bool transfer_avatar_frame(
             STACKCHAN_AVATAR_SCALED_WIDTH,
             source_rows * STACKCHAN_AVATAR_SCALE,
             owner.scaled_strip)) {
-      atomic_saturating_increment(&owner.metrics.render_failures);
+      iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
       return false;
     }
   }
@@ -686,17 +512,17 @@ static bool transfer_avatar_frame(
       : (uint32_t)render_cpu_us;
   __atomic_store_n(
       &owner.metrics.last_render_us, render_us, __ATOMIC_RELAXED);
-  atomic_note_maximum(&owner.metrics.maximum_render_us, render_us);
+  iterate_kit_atomic_update_max_relaxed_u32(&owner.metrics.maximum_render_us, render_us);
   if (render_key->controls.mouth_open != 0U) {
     /*
      * Count only a mouth-open frame whose LCD transfer completed. Analyzer
      * state alone cannot prove the talking pose reached the panel, while a
      * pre-transfer increment would turn a timed-out DMA into false evidence.
      */
-    atomic_saturating_increment(
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
         &owner.metrics.mouth_open_rendered_frames);
   }
-  atomic_saturating_increment(&owner.metrics.rendered_frames);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.rendered_frames);
   return true;
 }
 
@@ -742,7 +568,7 @@ static void analyze_frame(
        * counted, never replayed: replaying them would make the mouth tell an
        * old story after the speaker has already moved on.
        */
-      atomic_saturating_add(
+      iterate_kit_atomic_saturating_add_relaxed_u32(
           &owner.metrics.analyzer_sequence_gaps, distance - 1U);
     }
   }
@@ -774,7 +600,7 @@ static void analyze_frame(
         frame->completed_at_us + STACKCHAN_SPEAKER_STATUS_HANGOVER_US,
         __ATOMIC_RELEASE);
   }
-  atomic_saturating_increment(&owner.metrics.analyzer_frames);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.analyzer_frames);
 
   const uint64_t finished_at_us = now_us_wide();
   const uint32_t handoff_delay_us = saturating_elapsed_us(
@@ -785,11 +611,11 @@ static void analyze_frame(
       &owner.metrics.last_handoff_delay_us,
       handoff_delay_us,
       __ATOMIC_RELAXED);
-  atomic_note_maximum(
+  iterate_kit_atomic_update_max_relaxed_u32(
       &owner.metrics.maximum_handoff_delay_us, handoff_delay_us);
   __atomic_store_n(
       &owner.metrics.last_analyzer_us, analyzer_us, __ATOMIC_RELAXED);
-  atomic_note_maximum(&owner.metrics.maximum_analyzer_us, analyzer_us);
+  iterate_kit_atomic_update_max_relaxed_u32(&owner.metrics.maximum_analyzer_us, analyzer_us);
 }
 
 static bool select_avatar_index(size_t requested_index) {
@@ -800,7 +626,7 @@ static bool select_avatar_index(size_t requested_index) {
    * rendering or can wait behind LCD DMA.
    */
   if (!face_avatar_registry_select(&owner.registry, requested_index)) {
-    atomic_saturating_increment(&owner.metrics.render_failures);
+    iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
     __atomic_store_n(&owner.display_active, 0U, __ATOMIC_RELEASE);
     ESP_LOGE(
         TAG,
@@ -822,7 +648,7 @@ static void sample_physical_controls(void) {
       BSP_POWER_BUTTON_EVENT_NONE;
   esp_err_t status;
 
-  atomic_saturating_increment(&owner.metrics.touch_samples);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.touch_samples);
   status = esp_lcd_touch_read_data(owner.touch);
   if (status == ESP_OK) {
     status = esp_lcd_touch_get_data(
@@ -834,7 +660,7 @@ static void sample_physical_controls(void) {
      * last coherent level; feeding false into the edge detector would turn a
      * transient bus fault into an unintended tap.
      */
-    atomic_saturating_increment(&owner.metrics.touch_read_failures);
+    iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.touch_read_failures);
   } else {
     /*
      * The finger's place is only reported while it is DOWN, so the half a
@@ -848,7 +674,7 @@ static void sample_physical_controls(void) {
     }
     if (iterate_kit_touch_tap_update(
             &owner.touch_tap, touch_point_count != 0U)) {
-      atomic_saturating_increment(&owner.metrics.touch_taps);
+      iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.touch_taps);
       __atomic_store_n(
           &owner.last_face_tap_left,
           __atomic_load_n(&owner.last_touch_x, __ATOMIC_RELAXED) <
@@ -856,14 +682,14 @@ static void sample_physical_controls(void) {
               ? 1U
               : 0U,
           __ATOMIC_RELEASE);
-      atomic_saturating_increment(&owner.pending_face_taps);
+      iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.pending_face_taps);
     }
   }
 
-  atomic_saturating_increment(&owner.metrics.face_button_samples);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.face_button_samples);
   status = bsp_power_button_take_events(&power_events);
   if (status != ESP_OK) {
-    atomic_saturating_increment(
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
         &owner.metrics.face_button_read_failures);
   } else if (!owner.face_button_baseline_established) {
     /*
@@ -876,7 +702,7 @@ static void sample_physical_controls(void) {
      */
     owner.face_button_baseline_established = true;
     if (power_events != BSP_POWER_BUTTON_EVENT_NONE) {
-      atomic_saturating_increment(
+      iterate_kit_atomic_saturating_increment_relaxed_u32(
           &owner.metrics.face_button_boot_events_discarded);
       ESP_LOGI(
           TAG,
@@ -890,16 +716,16 @@ static void sample_physical_controls(void) {
      * Face changes moved to the far end's set_face tool; the button that
      * used to cycle sprites opens conversations instead.
      */
-    atomic_saturating_increment(
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
         &owner.metrics.face_button_short_clicks);
-    atomic_saturating_increment(&owner.pending_side_button_taps);
+    iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.pending_side_button_taps);
   } else if (power_events != BSP_POWER_BUTTON_EVENT_NONE) {
     /*
      * AXP2101 owns the long-hold hard-power policy. Recording the event but
      * taking no application action prevents a power-off gesture from also
      * changing face immediately before the rail disappears.
      */
-    atomic_saturating_increment(
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
         &owner.metrics.face_button_long_or_ambiguous_events);
   }
 }
@@ -917,7 +743,7 @@ static void input_task_main(void *context) {
           &owner.metrics.last_input_sample_interval_us,
           interval_us,
           __ATOMIC_RELAXED);
-      atomic_note_maximum(
+      iterate_kit_atomic_update_max_relaxed_u32(
           &owner.metrics.maximum_input_sample_interval_us, interval_us);
     }
     previous_sample_at_us = sampled_at_us;
@@ -1061,7 +887,7 @@ esp_err_t iterate_kit_stackchan_avatar_start(void) {
    * This target needs a talking head, not a general widget toolkit. LVGL's
    * generic CoreS3 startup consumed a task, a touch driver, approximately
    * 12.8 KiB even after tuning its DMA strip, and enough linked code/state to
-   * leave only 3.6 KiB of minimum internal heap during a real Grok turn. The
+   * leave only 3.6 KiB of minimum internal heap during a real voice turn. The
    * direct panel path has one source surface, one bounded DMA strip, and no
    * display queue above ESP-IDF's own DMA transaction. The 160x120 portable
    * face is expanded with exact nearest-neighbour pixels to fill 320x240; the
@@ -1077,9 +903,8 @@ esp_err_t iterate_kit_stackchan_avatar_start(void) {
    * steady-state rendering allocation-free. It also removes PSRAM/cache
    * contention from the display transfer that runs beside the AEC owner.
    */
-  owner.display_transfer_complete = xSemaphoreCreateBinaryStatic(
-      &owner.display_transfer_control);
-  if (owner.display_transfer_complete == NULL) {
+  if (!iterate_kit_lcd_transfer_init(
+          &owner.display_transfer, &owner.display_transfer_control)) {
     return ESP_ERR_NO_MEM;
   }
   owner.framebuffer_access = xSemaphoreCreateMutexStatic(
@@ -1112,10 +937,10 @@ esp_err_t iterate_kit_stackchan_avatar_start(void) {
   }
   if (status == ESP_OK) {
     const esp_lcd_panel_io_callbacks_t callbacks = {
-        .on_color_trans_done = display_transfer_finished,
+        .on_color_trans_done = iterate_kit_lcd_transfer_complete,
     };
     status = esp_lcd_panel_io_register_event_callbacks(
-        owner.panel_io, &callbacks, NULL);
+        owner.panel_io, &callbacks, &owner.display_transfer);
   }
   if (status == ESP_OK) {
     status = esp_lcd_panel_disp_on_off(owner.panel, true);
@@ -1221,12 +1046,12 @@ esp_err_t iterate_kit_stackchan_avatar_request_status(
   }
 
   if (uxQueueMessagesWaiting(owner.status_mailbox) != 0U) {
-    atomic_saturating_increment(&owner.metrics.status_overwrites);
+    iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.status_overwrites);
   }
   if (xQueueOverwrite(owner.status_mailbox, status) != pdPASS) {
     return ESP_FAIL;
   }
-  atomic_saturating_increment(&owner.metrics.status_updates);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.status_updates);
   return ESP_OK;
 }
 
@@ -1265,7 +1090,7 @@ bool iterate_kit_stackchan_avatar_take_side_button_tap(void) {
  * sampler fills, so everything downstream — the session grammar, the menu,
  * the audit — cannot tell a capability from a finger. That is the point. */
 void iterate_kit_stackchan_avatar_inject_side_button(void) {
-  atomic_saturating_increment(&owner.pending_side_button_taps);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.pending_side_button_taps);
 }
 
 void iterate_kit_stackchan_avatar_inject_face_tap(uint16_t x) {
@@ -1274,18 +1099,7 @@ void iterate_kit_stackchan_avatar_inject_face_tap(uint16_t x) {
       &owner.last_face_tap_left,
       (uint32_t)x < (uint32_t)(BSP_LCD_H_RES / 2U) ? 1U : 0U,
       __ATOMIC_RELEASE);
-  atomic_saturating_increment(&owner.pending_face_taps);
-}
-
-void iterate_kit_stackchan_avatar_show_menu(uint8_t highlighted) {
-  __atomic_store_n(
-      &owner.menu_highlight_plus_one,
-      (uint32_t)highlighted + 1U,
-      __ATOMIC_RELEASE);
-}
-
-void iterate_kit_stackchan_avatar_hide_menu(void) {
-  __atomic_store_n(&owner.menu_highlight_plus_one, 0U, __ATOMIC_RELEASE);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.pending_face_taps);
 }
 
 bool IRAM_ATTR iterate_kit_stackchan_avatar_observe_playout(
@@ -1484,6 +1298,12 @@ esp_err_t iterate_kit_stackchan_avatar_fill(uint16_t colour) {
   const uint16_t wire = (uint16_t)((colour << 8U) | (colour >> 8U));
   if (xSemaphoreTake(owner.framebuffer_access, pdMS_TO_TICKS(400)) != pdPASS) {
     return ESP_ERR_TIMEOUT;
+  }
+  /* A timed-out transfer may still own the strip. Check under the renderer's
+   * lock before writing any pixels, including for this diagnostic path. */
+  if (__atomic_load_n(&owner.display_active, __ATOMIC_ACQUIRE) == 0U) {
+    (void)xSemaphoreGive(owner.framebuffer_access);
+    return ESP_ERR_INVALID_STATE;
   }
   esp_err_t status = ESP_OK;
   for (uint32_t source_y = 0U; source_y < FACE_RENDER_HEIGHT;

@@ -53,17 +53,32 @@ function(iterate_kit_add_core_test NAME)
   iterate_kit_add_test(${NAME} ${ARGN} LINK iterate-kit-core)
 endfunction()
 
+# Pure board-table rules; IDF value types only, no simulated hardware startup.
+iterate_kit_add_test(iterate-kit-board-table-test
+  board_table_test.c
+  ../platforms/iterate_esp_idf/components/board/board.c
+  INCLUDES fakes/board ../platforms/iterate_esp_idf/components/board/include
+  LINK iterate-kit-voice iterate-kit-audio iterate-kit-core)
+
+# Exact WakeNet chunk assembly is pure; inference remains an ESP bench check.
+iterate_kit_add_test(iterate-kit-wake-word-test
+  wake_word_test.c ../platforms/iterate_esp_idf/components/board/wake_word.c
+  INCLUDES ../platforms/iterate_esp_idf/components/board/include)
+
 iterate_kit_add_core_test(iterate-kit-atomic-test atomic_test.c)
+iterate_kit_add_core_test(iterate-kit-button-test button_test.c)
 iterate_kit_add_core_test(iterate-kit-configuration-test configuration_test.c)
-iterate_kit_add_core_test(
-  iterate-kit-conversation-launch-test conversation_launch_test.c)
 iterate_kit_add_core_test(
   iterate-kit-conversation-lights-test conversation_lights_test.c)
 iterate_kit_add_core_test(
   iterate-kit-conversation-overlay-test conversation_overlay_test.c)
+iterate_kit_add_core_test(
+  iterate-kit-conversation-ring-test conversation_ring_test.c)
 iterate_kit_add_core_test(iterate-kit-device-events-test device_events_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-connection-test itx_connection_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-mount-test itx_mount_test.c)
+iterate_kit_add_core_test(iterate-kit-microphone-flush-test microphone_flush_test.c)
+
 iterate_kit_add_core_test(iterate-kit-retry-gate-test retry_gate_test.c)
 # The one session grammar all four boards drive: both postures, the tap-end
 # grace, hold-is-the-wake, the single end-chime edge, and ENDING absorbing
@@ -83,6 +98,13 @@ iterate_kit_add_core_test(
 iterate_kit_add_core_test(iterate-kit-websocket-rx-test websocket_rx_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-text-test websocket_text_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-tx-test websocket_tx_test.c)
+
+# The ESP WebSocket keepalive decision itself is host-pure: this tests the
+# exact PING queue policy without recreating ESP-TLS or a radio.
+iterate_kit_add_test(
+  iterate-kit-esp-websocket-keepalive-test websocket_keepalive_test.c
+  INCLUDES fakes/esp_idf ../platforms/iterate_esp_idf/include
+  LINK iterate-kit-core)
 
 # THE SHARED LOOP, ON A LAPTOP. Four boards run components/voice and nothing
 # outside a flash had ever compiled it, so the mapping from a press to an
@@ -107,10 +129,10 @@ iterate_kit_add_test(iterate-kit-audio-seams-test audio_seams_test.c
 iterate_kit_add_test(iterate-kit-camera-test camera_test.c
   LINK iterate-kit-capabilities)
 
-iterate_kit_add_test(iterate-kit-health-test health_test.c
+iterate_kit_add_test(iterate-kit-health-fields-test health_fields_test.c
   LINK iterate-kit-capabilities)
 
-iterate_kit_add_test(iterate-kit-push-to-talk-test push_to_talk_test.c
+iterate_kit_add_test(iterate-kit-health-test health_test.c
   LINK iterate-kit-capabilities)
 
 function(iterate_kit_add_avatar_test NAME)
@@ -163,6 +185,25 @@ if(APPLE)
     OPTIONS -Wconversion -Wshadow
     LINK iterate-kit-capabilities iterate-kit-darwin)
 
+  iterate_kit_add_test(iterate-kit-cli-hangup-test
+    cli_hangup_test.c
+    ../targets/host_cli/cli_capabilities.c
+    ../targets/host_cli/cli_conversation.c
+    ../targets/host_cli/cli_device_controls.c
+    ../targets/host_cli/cli_keyboard.c
+    ../targets/host_cli/cli_microphone.c
+    ../targets/host_cli/cli_options.c
+    ../targets/host_cli/cli_report.c
+    ../targets/host_cli/cli_screen.c
+    ../targets/host_cli/cli_speaker.c
+    ../targets/host_cli/cli_wav.c
+    ../targets/host_cli/main.c
+    STD 11
+    INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli"
+    DEFINES ITERATE_KIT_CLI_MAIN_TEST
+    OPTIONS -Wconversion -Wshadow -Wno-unused-function -Wno-unused-variable
+    LINK iterate-kit-capabilities iterate-kit-darwin)
+
   iterate_kit_add_cli_test(
     iterate-kit-cli-keyboard-test
     ../targets/host_cli/cli_keyboard.c
@@ -175,11 +216,6 @@ if(APPLE)
     iterate-kit-cli-options-test
     ../targets/host_cli/cli_options.c
     cli_options_test.c)
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-paced-sink-test
-    ../targets/host_cli/cli_paced_sink.c
-    ../targets/host_cli/cli_speaker.c
-    cli_paced_sink_test.c)
   iterate_kit_add_cli_test(
     iterate-kit-cli-screen-test
     ../targets/host_cli/cli_screen.c
@@ -216,41 +252,32 @@ endif()
 
 # HAVPE's adopted pure hardware policy: byte-exact register/wire vectors and
 # the deliberately compiler-visible XMOS uplink-stage selector. These build
-# the device sources directly because devices/ are ESP-IDF components, not
-# host libraries; the two files under test are pure C99 by construction.
+# the pure hardware table directly, including the diagnostic override; no
+# I2C transport or ESP-IDF runtime is required by these literal table tests.
 function(iterate_kit_add_havpe_pure_test NAME)
   iterate_kit_add_test(${NAME} ${ARGN}
     INCLUDES ../devices/havpe ../components/core/include)
 endfunction()
 
-iterate_kit_add_havpe_pure_test(iterate-kit-havpe-hardware-config-test
-  havpe_hardware_config_test.c ../devices/havpe/voice_pe_hardware_config.c)
+iterate_kit_add_test(iterate-kit-havpe-hardware-config-test
+  havpe_hardware_config_test.c ../platforms/iterate_esp_idf/components/board/codecs/aic3204.c
+  ../platforms/iterate_esp_idf/components/board/board.c
+  INCLUDES fakes/board ../platforms/iterate_esp_idf/components/board/include
+  LINK iterate-kit-voice iterate-kit-audio iterate-kit-core)
 
-iterate_kit_add_havpe_pure_test(
-  iterate-kit-havpe-hardware-config-aec-override-test
+iterate_kit_add_test(iterate-kit-havpe-hardware-config-aec-override-test
   havpe_hardware_config_aec_override_test.c
-  ../devices/havpe/voice_pe_hardware_config.c
-  DEFINES ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE=1)
+  ../platforms/iterate_esp_idf/components/board/codecs/aic3204.c
+  INCLUDES ../platforms/iterate_esp_idf/components/board/include
+  DEFINES ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE=1
+  LINK iterate-kit-core)
 
-iterate_kit_add_havpe_pure_test(iterate-kit-havpe-pcm-format-test
-  havpe_pcm_format_test.c ../devices/havpe/voice_pe_pcm_format.c)
+iterate_kit_add_test(iterate-kit-pcm-format-test pcm_format_test.c
+  LINK iterate-kit-audio)
 
-# The dial: mode table (a wire contract with four provisioned streams), the
-# polled quadrature decoder, and the spin-then-settle wheel policy. What the
-# centre button MEANS is the shared session grammar's test above.
-iterate_kit_add_havpe_pure_test(iterate-kit-havpe-modes-test
-  havpe_modes_test.c ../devices/havpe/havpe_modes.c)
-
-# StackChan's menu: the two-stream mode table (a wire contract like the
-# HAVPE's) and the face-tap provider menu. What the side button MEANS is the
-# shared session grammar's test above.
-function(iterate_kit_add_stackchan_pure_test NAME)
-  iterate_kit_add_test(${NAME} ${ARGN}
-    INCLUDES ../devices/stackchan ../components/core/include)
-endfunction()
-
-iterate_kit_add_stackchan_pure_test(iterate-kit-stackchan-modes-test
-  stackchan_modes_test.c ../devices/stackchan/stackchan_modes.c)
+# The HAVPE dial is a pure resolution-2 quadrature decoder.
+iterate_kit_add_havpe_pure_test(iterate-kit-havpe-dial-test
+  havpe_dial_test.c ../devices/havpe/havpe_dial.c)
 
 # StackChan's adopted pure DSP primitives (components/audio): the AEC cadence
 # bridge, reference scaler, uplink selector, and near high-pass, each with the
@@ -270,6 +297,40 @@ iterate_kit_add_audio_test(
 
 # The capture reserve is StackChan's ISR-side raw ring; pure C outside
 # ESP_PLATFORM, built from the device sources like the HAVPE modules.
-iterate_kit_add_stackchan_pure_test(
+iterate_kit_add_test(
   iterate-kit-core-s3-capture-reserve-test core_s3_capture_reserve_test.c
-  ../devices/stackchan/core_s3_capture_reserve.c)
+  ../devices/stackchan/core_s3_capture_reserve.c
+  INCLUDES ../devices/stackchan ../components/core/include)
+
+iterate_kit_add_test(iterate-kit-voice-view-lights-test voice_view_lights_test.c
+  STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)
+
+iterate_kit_add_core_test(iterate-kit-xmos-control-test xmos_control_test.c)
+
+iterate_kit_add_audio_test(
+  iterate-kit-starvation-ledger-test starvation_ledger_test.c)
+
+# Pure pixel arithmetic from the board ring; hardware entry points are ESP-only.
+iterate_kit_add_test(iterate-kit-led-ring-pixels-test led_ring_pixels_test.c
+  ../platforms/iterate_esp_idf/components/board/led_ring.c
+  INCLUDES ../platforms/iterate_esp_idf/components/board/include
+  LINK iterate-kit-core)
+
+# Satellite1 chip facts compile directly, like HAVPE's pure register scripts.
+set(ITERATE_KIT_BOARD_CHIPS
+  "${CMAKE_CURRENT_SOURCE_DIR}/../platforms/iterate_esp_idf/components/board")
+
+iterate_kit_add_test(iterate-kit-tas2780-registers-test tas2780_registers_test.c
+  "${ITERATE_KIT_BOARD_CHIPS}/codecs/tas2780_registers.c"
+  INCLUDES "${ITERATE_KIT_BOARD_CHIPS}/include"
+  LINK iterate-kit-core iterate-kit-capabilities)
+
+iterate_kit_add_test(iterate-kit-pcm5122-registers-test pcm5122_registers_test.c
+  "${ITERATE_KIT_BOARD_CHIPS}/codecs/pcm5122_registers.c"
+  INCLUDES "${ITERATE_KIT_BOARD_CHIPS}/include"
+  LINK iterate-kit-core iterate-kit-capabilities)
+
+iterate_kit_add_test(iterate-kit-xmos-spi-registers-test xmos_spi_registers_test.c
+  "${ITERATE_KIT_BOARD_CHIPS}/codecs/xmos_spi_registers.c"
+  INCLUDES "${ITERATE_KIT_BOARD_CHIPS}/include"
+  LINK iterate-kit-core iterate-kit-capabilities)

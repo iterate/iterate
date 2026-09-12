@@ -26,6 +26,7 @@ void iterate_kit_voice_playback_clock_reprime(
     struct iterate_kit_voice_playback_clock *clock) {
   if (clock == NULL) return;
   clock->priming = true;
+  clock->priming_since_ms = 0U;
   clock->answer_done = false;
   /*
    * AND THE ANSWER'S CLOCK GOES WITH ITS AUDIO.
@@ -77,45 +78,35 @@ uint32_t iterate_kit_voice_playback_clock_lag_ms(
 
 bool iterate_kit_voice_playback_clock_ready(
     struct iterate_kit_voice_playback_clock *clock,
-    uint32_t queued_bytes) {
+    uint32_t queued_bytes,
+    uint64_t now_ms) {
   if (clock == NULL) return false;
   /*
-   * A FINISHED ANSWER IS ALWAYS READY, however little of it there is.
-   *
-   * Prefill answers "will more arrive in time?", and once the sender has
-   * said the answer is complete the question is settled: nothing more is
-   * coming, so waiting for a threshold that can never be reached is waiting
-   * forever. Without this, every answer SHORTER than the prefill was never
-   * played at all — "Yes, I can hear you clearly" is under a second, and the
-   * larger the prefill the more of the conversation disappears. That failure
-   * is silent at both ends: the model believes it spoke, and the listener
-   * hears nothing.
+   * A SHORT ANSWER NEEDS NO MARKER. The end marker used to end priming early,
+   * so an answer shorter than the prefill would play; the prime wait below
+   * covers it — and it arrives sooner, because the marker trails the audio by
+   * the sender's 700 ms tail silence.
    */
-  /*
-   * A finished answer short-circuits the PREFILL WAIT, and nothing else.
-   *
-   * Written as an unconditional `if (answer_done) return true`, this became a
-   * latch: `answer_done` stays set until the dry-tick path clears it, that
-   * path is only reached once a frame has been taken, and a caller that skips
-   * its idle branch because ready() said true never takes one. The speaker
-   * task then span on an empty buffer for the rest of the session - played
-   * and concealed both frozen while frames arrived, no counter moving,
-   * because neither the play path nor the conceal path was ever reached.
-   *
-   * Measured: 0 of 5 journeys, recovering completely on a restart, after the
-   * first answer completed. Scoped to `priming` it does what it was added
-   * for - an answer shorter than the prefill still plays - and stops being a
-   * latch, because once priming is false the flag is irrelevant anyway.
-   */
-  if (clock->priming && clock->answer_done) {
-    clock->priming = false;
-    return true;
-  }
   if (clock->priming &&
       queued_bytes < ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES) {
-    return false;
+    /*
+     * PRIMING ENDS ON TIME AS WELL AS ON BYTES. An answer shorter than the
+     * prefill never fills it and its end marker is 700 ms of silence away,
+     * so the wait is bounded by the prefill's own duration, counted from the
+     * moment audio first appeared in this priming. Counted from the FIRST
+     * chunk, not the newest: a rule keyed on "nothing new for 150 ms" fired
+     * on ordinary arrival jitter and started playback with too little
+     * buffered (see ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS). An EMPTY ring
+     * never starts: there is nothing to play.
+     */
+    if (queued_bytes == 0U) return false;
+    if (clock->priming_since_ms == 0U) clock->priming_since_ms = now_ms;
+    if (now_ms - clock->priming_since_ms < ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS) {
+      return false;
+    }
   }
   clock->priming = false;
+  clock->priming_since_ms = 0U;
   return true;
 }
 
@@ -129,6 +120,7 @@ iterate_kit_voice_playback_clock_empty(
            ITERATE_KIT_VOICE_SPEAKER_CONCEAL_LIMIT_MS)) {
     clock->answer_done = false;
     clock->priming = true;
+    clock->priming_since_ms = 0U;
     /*
      * SETTLED BACK TO PRIMING, WHICH IS THE DEVICE'S OWN PROOF THAT NO
      * ANSWER IS IN FLIGHT — and therefore that nothing is late.

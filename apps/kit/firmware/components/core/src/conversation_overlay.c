@@ -55,6 +55,8 @@ void iterate_kit_conversation_lights_animate(
     uint32_t now_ms,
     struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]) {
   iterate_kit_conversation_lights_render(state, pixels);
+  /* A hardware mute is steady even while connecting; only a fault moves. */
+  if (state != NULL && state->microphone_muted && !state->media_failed) return;
   if (!iterate_kit_conversation_needs_attention(state)) return;
   {
     /*

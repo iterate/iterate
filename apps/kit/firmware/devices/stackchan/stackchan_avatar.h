@@ -143,17 +143,6 @@ void iterate_kit_stackchan_avatar_inject_side_button(void);
 void iterate_kit_stackchan_avatar_inject_face_tap(uint16_t x);
 
 /**
- * Show or hide the two-cell provider menu over the face.
- *
- * `highlighted` is 0 for the left cell (Grok), 1 for the right (OpenAI) —
- * the same halves the tap hit-test reports, so drawing and picking cannot
- * disagree. Latest-state atomics like the sprite request: the render owner
- * reads the newest value at its own 15 Hz and never waits for the caller.
- */
-void iterate_kit_stackchan_avatar_show_menu(uint8_t highlighted);
-void iterate_kit_stackchan_avatar_hide_menu(void);
-
-/**
  * Accepts one 128-sample frame which has completed speaker DMA.
  *
  * This function runs in I2S interrupt context. It performs one fixed-size copy
@@ -223,7 +212,7 @@ esp_err_t iterate_kit_stackchan_avatar_capture(
  * screenshot's buffer, a board asked twice must not fail the second time
  * because the heap moved. NULL means PSRAM could not supply it.
  *
- * SINGLE-WRITER DISCIPLINE, same shape as the menu overlay's atomic slot:
+ * SINGLE-WRITER DISCIPLINE:
  * write this surface only while NO show deadline is active, because the
  * render task reads it exactly while one is. The fetch path upholds that by
  * refusing a new image while one is still on the glass.

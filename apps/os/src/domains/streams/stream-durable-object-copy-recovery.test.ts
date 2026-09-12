@@ -581,7 +581,7 @@ describe("StreamDurableObject reconciliation recovery", () => {
     const streamNamespace = {
       getByName(name: string): StreamStub {
         const target = streams.get(name);
-        if (target === undefined) throw new Error(`test stream ${name} does not exist`);
+        if (!target) throw new Error(`test stream ${name} does not exist`);
         return {
           async appendCoreEvent(event) {
             return target.appendCoreEvent(event);
@@ -680,6 +680,80 @@ describe("StreamDurableObject reconciliation recovery", () => {
           },
         }),
       );
+    } finally {
+      receiverContext.close();
+      sourceContext.close();
+    }
+  });
+
+  it("does not let an ephemeral row advance a byte-capped copy cursor past a durable body", async () => {
+    const sourceContext = durableObjectContext(streamName(SOURCE_PATH));
+    const receiverContext = durableObjectContext(streamName(RECEIVING_STREAM_PATH));
+    const streams = new Map<string, StreamDurableObject>();
+    const batches: StreamDeliveryBatch[] = [];
+    const streamNamespace = {
+      getByName(name: string): StreamStub {
+        const target = streams.get(name);
+        if (!target) throw new Error(`test stream ${name} does not exist`);
+        return {
+          async appendCoreEvent(event) {
+            return target.appendCoreEvent(event);
+          },
+          async receiveCopiedEvents(batch) {
+            batches.push(structuredClone(batch));
+            return target.receiveCopiedEvents(batch);
+          },
+        };
+      },
+    };
+    const env = { STREAM: streamNamespace } as unknown as Env;
+    const source = new StreamDurableObject(sourceContext.ctx, env);
+    streams.set(streamName(SOURCE_PATH), source);
+    const receiver = new StreamDurableObject(receiverContext.ctx, env);
+    streams.set(streamName(RECEIVING_STREAM_PATH), receiver);
+    await Promise.all([sourceContext.settle(), receiverContext.settle()]);
+
+    try {
+      const [durable] = source.append({
+        type: MATCHING_EVENT_TYPE,
+        payload: { issue: "x".repeat(2 * 1024 * 1024) },
+      });
+      const [ephemeral] = source.append({
+        type: MATCHING_EVENT_TYPE,
+        payload: { issue: "ephemeral tail" },
+        ephemeral: true,
+      });
+      const configuration = {
+        ...subscriptionConfiguration(),
+        receiver: {
+          action: "copy-to-stream" as const,
+          receivingStreamPath: RECEIVING_STREAM_PATH,
+          delivery: { start: "beginning" as const, onFailingEvent: "halt" as const },
+        },
+      };
+      source.setCopySubscription({ configuration });
+      source.alarm();
+      await Promise.all([sourceContext.settle(), receiverContext.settle()]);
+
+      // The first durable body is larger than the delivery byte cap. The
+      // following ephemeral row must not merge into that shortened read and
+      // advance its source cursor past the durable event.
+      expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).toContain(
+        durable!.offset,
+      );
+      expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).not.toContain(
+        ephemeral!.offset,
+      );
+      expect(
+        receiver
+          .getEvents({ eventTypes: [MATCHING_EVENT_TYPE] })
+          .map((event) => event.source?.copiedFrom?.at(-1)?.offset),
+      ).toContain(durable!.offset);
+      expect(source.runtimeState().runtime.subscriptions[SUBSCRIPTION_NAME]).toMatchObject({
+        confirmedOffset: expect.any(Number),
+        attempt: 0,
+        lastError: null,
+      });
     } finally {
       receiverContext.close();
       sourceContext.close();

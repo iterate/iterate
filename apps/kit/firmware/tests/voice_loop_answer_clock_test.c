@@ -168,21 +168,12 @@ static const struct iterate_kit_board_ops board_ops = {
  * boards that work and the two that do not.
  */
 static const struct iterate_kit_board_facts open_mic_facts = {
-  .stream_path = "/agents/voice/host-test-open-mic",
-  .client_path = "/clients/host-test-open-mic",
-  .conversation_id = "hostmic",
-  .greeting = "hello",
-  .instructions = "an open-mic board that exists only in a test",
-  .peer_description = "{\"instructions\":\"host test\",\"children\":{}}",
-  .talk_hint = "speak whenever you like",
-  .call_hint = "press to call",
+  .device_name = "host-test-open-mic",
   .speaker = {0},
   .speaker_dry_wait_ms = 40U,
   .processing_frame_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
   .capture_chunk_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
   .capture_stack_bytes = 4096U,
-  .turns = ITERATE_KIT_VOICE_TURNS_SERVER_VAD,
-  .radio_before_codec = false,
 };
 
 /* --- driving the loop ----------------------------------------------------- */
@@ -273,12 +264,14 @@ static long callback_export_id(void) {
  * not: the speaker path refuses any PCM length but 640, so a chunk that is not
  * a whole number of frames would be counted as bad rather than played.
  */
+static uint8_t speaker_pcm_byte;
+
 static const char *frames_b64(size_t frames) {
   static char encoded[8192];
   static const char alphabet[] =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   const size_t byte_count = frames * (size_t)ITERATE_KIT_VOICELAB_FRAME_BYTES;
-  const uint8_t fill = 0x00U; /* PCM16 silence */
+  const uint8_t fill = speaker_pcm_byte;
   size_t at = 0U;
   size_t out = 0U;
   assert((byte_count + 2U) / 3U * 4U < sizeof(encoded));
@@ -309,6 +302,61 @@ static const char *frames_b64(size_t frames) {
 static long long next_offset = 100;
 static long long next_release_id = 1;
 
+static const char *test_activation(void) {
+  static char activation[33];
+  uint32_t state = 2000000U ^ 0x9e3779b9U;
+  uint32_t words[4];
+  for (size_t index = 0U; index < 4U; ++index) {
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    words[index] = state;
+  }
+  (void)snprintf(activation, sizeof(activation), "%08x%08x%08x%08x",
+      words[0], words[1], words[2], words[3]);
+  return activation;
+}
+
+static void start_local_call(void) {
+  char message[256];
+  struct iterate_kit_itx_connection *connection =
+      iterate_kit_fake_platform_connection();
+  assert(connection != NULL);
+  (void)snprintf(message, sizeof(message),
+      "[\"push\",[\"pipeline\",0,[\"conversation\",\"start\"],[[]]]]" );
+  assert(iterate_kit_itx_connection_receive_text(
+      connection, message, strlen(message)) == CAPNWEB_OK);
+  (void)snprintf(
+      message, sizeof(message), "[\"release\",%lld,1]", next_release_id++);
+  assert(iterate_kit_itx_connection_receive_text(
+      connection, message, strlen(message)) == CAPNWEB_OK);
+  if (esp_timer_get_time() < 2000000) {
+    iterate_kit_fake_esp_idf_set_now_us(2000000);
+  } else {
+    iterate_kit_fake_esp_idf_advance_ms(25U);
+  }
+  step();
+}
+
+static void end_local_call(void) {
+  struct iterate_kit_itx_connection *connection =
+      iterate_kit_fake_platform_connection();
+  assert(connection != NULL);
+  assert(iterate_kit_itx_connection_receive_text(
+      connection,
+      "[\"push\",[\"pipeline\",0,[\"conversation\",\"end\"],[[]]]]",
+      strlen("[\"push\",[\"pipeline\",0,[\"conversation\",\"end\"],[[]]]]")
+  ) == CAPNWEB_OK);
+  {
+    char release[64];
+    (void)snprintf(
+        release, sizeof(release), "[\"release\",%lld,1]", next_release_id++);
+    assert(iterate_kit_itx_connection_receive_text(
+        connection, release, strlen(release)) == CAPNWEB_OK);
+  }
+  step();
+}
+
 /** Deliver one `spk-frame` chunk, exactly as the stream delivers one. */
 static void deliver_chunk(bool drop, bool last, size_t frames) {
   static char message[16384];
@@ -322,12 +370,13 @@ static void deliver_chunk(bool drop, bool last, size_t frames) {
       sizeof(message),
       "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
       "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":%lld,"
-      "\"payload\":{%s%s\"pcm\":\"%s\"}}"
+      "\"payload\":{\"activation\":\"%s\",%s%s\"pcm\":\"%s\"}}"
       "]],\"scannedThroughOffset\":%lld,\"state\":null}]]]",
       callback_export_id(),
       offset,
-      drop ? "\"drop\":true," : "",
-      last ? "\"last\":true," : "",
+      test_activation(),
+      drop ? "\"clearSpeakerBufferBeforeFrame\":true," : "",
+      last ? "\"lastFrameOfAnswer\":true," : "",
       frames_b64(frames),
       offset);
   assert(
@@ -361,10 +410,11 @@ static void deliver_accepted(void) {
       "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
       "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
       "\"offset\":%lld,"
-      "\"payload\":{\"conversationId\":\"convtest\",\"handshakeTookMs\":1}}"
+      "\"payload\":{\"activation\":\"%s\",\"conversationId\":\"convtest\",\"handshakeTookMs\":1}}"
       "]],\"scannedThroughOffset\":%lld,\"state\":null}]]]",
       callback_export_id(),
       offset,
+      test_activation(),
       offset);
   assert(
       iterate_kit_itx_connection_receive_text(
@@ -415,6 +465,53 @@ static void the_first_answer_plays_whole(void) {
  * ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS, because those two numbers are what
  * the failure is made of.
  */
+/*
+ * A SHORT ANSWER WITHOUT A MARKER PLAYS AT THE PRIME WAIT. One chunk, 100 ms,
+ * half the prefill and no `last`: nothing plays while the ring waits,
+ * a 100 ms gap changes nothing, and once the wait is up every frame plays.
+ */
+static void a_short_answer_without_a_marker_plays_at_the_prime_wait(void) {
+  const uint32_t written_before = frames_written;
+  int pass;
+  iterate_kit_fake_esp_idf_advance_ms(5000U);
+  deliver_chunk(true, false, CHUNK_FRAMES);
+  /*
+   * A priming pass sleeps 5 ms of fake time, so `play_out()`'s 400 passes
+   * would run the wait out by themselves; ten passes are 50 ms.
+   */
+  for (pass = 0; pass < 10; ++pass) playback();
+  assert(frames_written == written_before);
+  /* A 100 ms gap plus earlier poll time is still below the deadline. */
+  iterate_kit_fake_esp_idf_advance_ms(100U);
+  for (pass = 0; pass < 5; ++pass) playback();
+  assert(frames_written == written_before);
+  iterate_kit_fake_esp_idf_advance_ms(
+      (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS);
+  play_out();
+  assert(frames_written == written_before + (uint32_t)CHUNK_FRAMES);
+}
+
+/*
+ * AND A MARKED ONE PLAYS AT EXACTLY THE SAME TIME. The marker used to end
+ * priming on the spot; it no longer does, because the sender only sends it
+ * after 700 ms of tail silence and the prime wait has long since fired.
+ */
+static void a_short_answer_with_a_marker_plays_at_the_prime_wait_too(void) {
+  const uint32_t written_before = frames_written;
+  int pass;
+  iterate_kit_fake_esp_idf_advance_ms(5000U);
+  deliver_chunk(true, true, CHUNK_FRAMES);
+  for (pass = 0; pass < 10; ++pass) playback();
+  assert(frames_written == written_before);
+  iterate_kit_fake_esp_idf_advance_ms(100U);
+  for (pass = 0; pass < 5; ++pass) playback();
+  assert(frames_written == written_before);
+  iterate_kit_fake_esp_idf_advance_ms(
+      (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS);
+  play_out();
+  assert(frames_written == written_before + (uint32_t)CHUNK_FRAMES);
+}
+
 static void a_later_answer_plays_whole_too(void) {
   const uint32_t answer_one_number = board.last_admitted_answer;
   const uint32_t written_before = frames_written;
@@ -457,8 +554,13 @@ static void a_live_answer_superseded_after_a_stall(void) {
   iterate_kit_fake_esp_idf_advance_ms(5000U);
   playback();
 
-  /* An answer arrives and only part of it is played. */
+  /*
+   * An answer arrives and only part of it is played before replacement.
+   */
   deliver_answer();
+  playback();
+  iterate_kit_fake_esp_idf_advance_ms(
+      (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS);
   for (pass = 0; pass < 5; ++pass) playback();
   assert(frames_written > written_before);
   assert(frames_written < written_before + (uint32_t)ANSWER_FRAMES);
@@ -519,6 +621,51 @@ static void audio_with_no_clear_at_all_still_plays(void) {
   assert(frames_written == written_before + (uint32_t)ANSWER_FRAMES);
 }
 
+/* The ring gets only codec-admitted PCM, and forgets it after one frame or end. */
+static void speaker_peak_is_fresh_only_while_local_playout_is_feeding(void) {
+  const uint32_t written_before = frames_written;
+  speaker_pcm_byte = 0x20U;
+  deliver_chunk(true, false, CHUNK_FRAMES);
+  playback();
+  iterate_kit_fake_esp_idf_advance_ms(
+      (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS);
+  playback();
+  assert(frames_written > written_before);
+  step();
+  assert(board.last_view.speaker_peak == 0x2020U);
+
+  iterate_kit_fake_esp_idf_advance_ms((uint32_t)ITERATE_KIT_VOICE_FRAME_MS + 1U);
+  step();
+  assert(board.last_view.speaker_peak == 0U);
+
+  playback();
+  step();
+  assert(board.last_view.speaker_peak == 0x2020U);
+  speaker_pcm_byte = 0U;
+}
+
+/* A local end is an immediate local cut, even before its terminal is delivered.
+ * `main` has started and accepted this activation before any answer test runs. */
+static void ending_a_call_discards_queued_audio_before_the_next_call(void) {
+  const uint32_t admitted_before = board.admitted;
+  const uint32_t written_before = frames_written;
+
+  deliver_chunk(true, true, CHUNK_FRAMES);
+  assert(board.admitted == admitted_before + (uint32_t)CHUNK_FRAMES);
+  end_local_call();
+  assert(board.last_view.speaker_peak == 0U);
+  assert(!board.last_view.listening && !board.last_view.wants_call);
+  iterate_kit_fake_esp_idf_advance_ms(
+      (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS + 100U);
+  play_out();
+  assert(frames_written == written_before);
+
+  start_local_call();
+  play_out();
+  assert(frames_written == written_before);
+  end_local_call();
+}
+
 int main(void) {
   iterate_kit_fake_esp_idf_reset();
   iterate_kit_fake_platform_reset();
@@ -529,13 +676,18 @@ int main(void) {
   assert(board.started);
   iterate_kit_fake_platform_connect();
   pump();
+  start_local_call();
   /* The call this whole file's audio belongs to; see deliver_accepted. */
   deliver_accepted();
 
   the_first_answer_plays_whole();
+  a_short_answer_without_a_marker_plays_at_the_prime_wait();
+  a_short_answer_with_a_marker_plays_at_the_prime_wait_too();
   a_later_answer_plays_whole_too();
   a_live_answer_superseded_after_a_stall();
   audio_with_no_clear_at_all_still_plays();
+  speaker_peak_is_fresh_only_while_local_playout_is_feeding();
+  ending_a_call_discards_queued_audio_before_the_next_call();
 
   assert(!iterate_kit_fake_esp_idf_restart_requested());
   return 0;

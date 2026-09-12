@@ -1,82 +1,129 @@
 # Iterate Kit firmware
 
-## What a client is
+Every ESP board and the host CLI use the same GPT-Live-1 stream. A board owns
+physical audio, controls and display; shared components own the conversation.
+The backend owns the OpenAI session and the ordinary Agent. A new board should
+therefore be small and mostly data. One `device_name` means one client path,
+one voice stream and no per-board model choice.
 
-A client does exactly four things, and nothing else:
+## Where code belongs
 
-1. **Maintain the connection** — one WebSocket to `/api`, kept alive with the
-   transport's full correctness grammar (generations, session-scoped
-   discards, mount deadlines, backoff).
-2. **Render state onto the local output surfaces** — screen, lights, sound,
-   vibration, servos. State is both local (mic input amplitude, whether
-   `/api` is connected, haptic/audio-visual button feedback) and remote (the
-   live state of the agent stream).
-3. **Respond to physical IO** — button presses, mic input, touch. Every
-   physical input is also exposed as a remote-triggerable capability, and
-   every actuation — physical or injected — appends a stream event, so the
-   server can both cause and audit it.
-4. **Provide device capabilities to Cap'n Web** — face.set, screen.show,
-   servo moves, volume, camera, restart: whatever this body can do, offered
-   as callable capabilities.
+| Path                        | Owns                                                                        |
+| --------------------------- | --------------------------------------------------------------------------- |
+| `components/core`           | Cap’n Web, stream protocol, PCM framing, microphone flush and playout state |
+| `components/audio`          | PCM conversion, AEC processing and audio accounting                         |
+| `components/voice`          | activation, continuous capture and ESP task coordination                    |
+| `platforms/iterate_esp_idf` | Wi-Fi, ESP-IDF, codec tasks and provisioning                                |
+| `devices/<board>`           | board-only pins, codecs, display and DSP facts                              |
+| `targets/<board>`           | target composition, partitions and SDK defaults                             |
 
-Everything under those four is a _driver_: XMOS bring-up, AEC, mic and
-speaker buffers are the same class of code as a panel driver — hardware
-truth behind a clean seam, never policy. Conversation logic, turn-taking
-doctrine, and anything resembling "what should happen next" lives on the
-server; if a piece of device code is not one of the four responsibilities
-or a driver serving them, it is in the wrong repo.
+Do not fork the voice loop for a board. All clients capture before the stream
+mounts, retain opening audio, flush the first PCM immediately when ready, and
+continue capture through a call. Mute and end discard queued PCM. GPT-Live
+handles turn-taking; no board needs push-to-talk because it lacks AEC. Preserve
+existing AEC/reference routing and prove room echo and barge-in on the hardware.
 
-Firmware is split at two ownership boundaries:
+## Minimum viable board
 
-- `components/core` owns the control plane and must not include the audio
-  component's seams or platform headers. Its `audio_playout` classifier is a
-  core policy module, not hardware access.
-- `components/audio` owns board-independent capture, processing, and playout.
-- `platforms` owns operating-system and ESP-IDF integrations.
-- `devices` owns board profile data, while `targets` only compose a device.
+Start with `devices/satellite1/satellite1_device.c` for a table board or the
+closest existing codec. The table type is
+`platforms/iterate_esp_idf/components/board/include/iterate/kit/platforms/board.h`.
+A minimum board has a microphone, speaker and one activation button. A wake
+word is optional. It does not need AEC, a display or a custom board table: use
+the shared loop and a small device implementation unless the hardware facts
+need a table. A normal table board needs only:
 
-Phase 0 established these boundaries before implementation was imported. Keep
-platform-private headers out of public include paths; a component that bypasses
-a seam should fail to compile. The architecture check also rejects
-audio-component seam or platform includes added to `components/core`.
+1. `devices/<board>/<board>_device.c` — `struct iterate_kit_board`, hardware-only
+   callbacks and `app_main()`.
+2. `devices/<board>/CMakeLists.txt` — that code and direct dependencies.
+3. `targets/<board>/CMakeLists.txt` — common components plus the device.
+4. `targets/<board>/sdkconfig.defaults` — chip, flash, PSRAM, partition and
+   wake-model settings specific to this target.
 
-## The two itx transports rhyme on purpose
+Put GPIO/I2C/I2S facts, boot/reset order, codec register scripts, volume,
+physical controls, chimes and wake-word model in the table. Add code only where
+a table cannot describe it: codec initialization with required ordering, an
+unusual volume register, or a real board extension such as a display BSP.
+Reuse the shared I2S codec, session grammar, LED ring, playout and health path.
 
-`platforms/iterate_esp_idf/itx_transport.c` and
-`platforms/darwin/posix_itx_transport.c` implement the same connection
-grammar — socket generations, mount deadlines, session-scoped discards,
-READY-gated retry reset — under two different ownership models: the device
-splits the work across a Wi-Fi-owning network task and the application
-poll (every shared flag is an atomic with documented publication order),
-while the Mac CLI runs single-owner and can discard a dead generation
-synchronously. A shared "transport core" was attempted and rejected during
-the 2026-08 shrink: every line that looks duplicated differs in which task
-may touch it, so extracting it means abstracting clocks, atomics, and
-ring ownership behind callbacks — a framework where the codebase wants two
-short rhyming implementations. If you change the grammar, change it in
-both files in the same commit.
+Confirm from vendor source, then measure: microphone slot and sample shape,
+clock master/MCLK, GPIO polarity, amplifier polarity, gain, DMA sizes, and AEC
+reference. Give a new board a stable `facts.device_name`; firmware derives its
+client `/clients/<device_name>` and voice stream
+`/agents/voice/v23/<device_name>` from it.
 
-## The playout step is shared, and the transport is not, for the same reason
+Register the board once in `apps/kit/src/firmware/catalog.ts`: device identity,
+ESP-IDF target, chip and flash plan, including its configuration partition.
+Use the target's partition CSV and generated `flasher_args.json` to establish
+those offsets. The release builder checks them against the actual binary
+partition table. Add the board to `voicelab/boards.ts` for bench selection and
+provide its checked-in chime assets if it uses them. The browser selector and
+release builder both consume the catalog; neither needs a separate board switch.
 
-`components/core/src/voice_playout.c` is the one speaker pass both the board
-(`components/voice/src/voice_loop.c`) and the Mac CLI
-(`targets/host_cli/main.c`) run — prime, take a frame, hole or end, skip or
-play, report — with only the ring and the sink injected as callbacks. That
-is the abstraction the transport refused, and it is right here because the
-ownership is different: playout is single-owner on both targets (one task on
-the board, the one loop on the host), so nothing inside the step is an
-atomic and no callback crosses a task. The two owners had drifted apart
-twice in one week before it was shared (2026-09-06 and 2026-09-09, both
-the answer timeline failing to restart, each on a path the other had
-fixed). What stays in each owner is exactly what is theirs: the queue's
-generations and reprime handshake, the codec's bounded wait, the room's
-lead — and the underrun promotion, which on the board is an app-task read
-of a playback-task stamp and so cannot live in a single-owner module.
+## Build and provision
 
-Run the fastest complete host check from `apps/kit`:
+Install ESP-IDF and build from the target directory. Use a fresh generated SDK
+config after changing defaults or partitions:
 
-```bash
+```sh
+cd apps/kit/firmware/targets/<board>
+idf.py -B /tmp/iterate-kit-<board> -D IDF_TARGET=esp32s3 \
+  -D SDKCONFIG=/tmp/iterate-kit-<board>.sdkconfig build
+```
+
+Run shared checks from `apps/kit`:
+
+```sh
 pnpm firmware:test:host
 ```
 
-Its build tree is disposable and ignored at `firmware/.build/host`.
+Kit Flasher prepares the project before it enables USB install: it installs this
+Kit build's isolated VoiceAgent guest, verifies `/secrets/openai`, and creates
+or verifies `/agents/voice/v23/<device_name>`. It returns the canonical project
+ID and stream before flashing. The browser then writes Wi-Fi, OS URL, canonical project
+ID and project API key into the versioned `iterate_kit` partition on the
+connected board. Credentials never enter the Kit worker or a URL.
+
+At boot, firmware rejects a missing or invalid partition, joins Wi-Fi,
+authenticates with the project key and mounts `/clients/<device_name>`. Health
+classifies provisioning, Wi-Fi/authentication, mount and audio failures.
+
+## Release and proof
+
+Kit releases are built from this checkout. With ESP-IDF active, run from
+`apps/kit`:
+
+```sh
+source "$IDF_PATH/export.sh"
+pnpm firmware:release
+pnpm firmware:sync
+```
+
+`firmware:release` builds all five reviewed catalogue targets into a
+fingerprinted cache, checks their ESP-IDF flash plans and configuration
+partitions, then records a hash for every part. `firmware:sync` only publishes
+that current cache as hashed ESP Web Tools parts and manifests. Do not edit
+release offsets by hand or substitute downloaded binaries.
+
+Prove code before publishing a release:
+
+```sh
+pnpm --dir apps/kit firmware:test:host
+cd apps/kit/firmware/targets/<board> && idf.py build
+```
+
+Then use a provisioned, idle board for the air-path proof:
+
+```sh
+doppler run --config <environment> -- pnpm --dir apps/os cli voicelab boards \
+  --project <project> --only <device-name-or-/clients/path>
+```
+
+`voicelab boards` talks through real air and hangs up afterward; do not run it
+while someone is using the board. Inspect health before and after. A serial
+monitor can reboot a board, so use stream health for in-call observation.
+
+For sprites and managed dependency pins, see the
+[onboarding skill](../../../.agents/skills/adding-a-kit-device-or-sprite/SKILL.md).
+The retained board measurements, USB recovery notes and configuration traps are
+in [bench notes](./bench-notes.md).

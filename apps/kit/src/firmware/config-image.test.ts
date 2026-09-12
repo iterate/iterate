@@ -11,7 +11,7 @@ const configuration: DeviceConfiguration = {
   wifi: { ssid: "studio", password: "correct horse battery staple" },
   iterate: {
     baseUrl: "https://os.iterate.com",
-    projectSlug: "voice-lab",
+    projectId: "prj_voice_lab",
     projectApiKey: "itxk_secret",
   },
 };
@@ -70,24 +70,10 @@ describe("encodeDeviceConfiguration", () => {
     expect(fields.get(1)).toBe("studio");
     expect(fields.get(2)).toBe("correct horse battery staple");
     expect(fields.get(3)).toBe("https://os.iterate.com");
-    expect(fields.get(4)).toBe("voice-lab");
+    expect(fields.get(4)).toBe("prj_voice_lab");
     expect(fields.get(5)).toBe("itxk_secret");
     // Every field the firmware requires, and nothing it would reject.
     expect([...fields.keys()].sort()).toEqual([1, 2, 3, 4, 5]);
-  });
-
-  it("provisions the forward fields when they are supplied", () => {
-    const fields = decodeLikeFirmware(
-      encodeDeviceConfiguration(
-        {
-          ...configuration,
-          iterate: { ...configuration.iterate, deviceId: "sc-01", kitPath: "kit.stackchan" },
-        },
-        512,
-      ),
-    );
-    expect(fields.get(6)).toBe("sc-01");
-    expect(fields.get(7)).toBe("kit.stackchan");
   });
 
   it("writes an empty password tag for an open network", () => {
@@ -134,5 +120,41 @@ describe("encodeDeviceConfiguration", () => {
 
   it("rejects a payload larger than the firmware's declared partition", () => {
     expect(() => encodeDeviceConfiguration(configuration, 32)).toThrow("the partition allows");
+  });
+
+  it("rejects values the firmware's fixed C strings cannot represent", () => {
+    expect(() =>
+      encodeDeviceConfiguration(
+        { ...configuration, wifi: { ...configuration.wifi, ssid: "a".repeat(33) } },
+        512,
+      ),
+    ).toThrow("Wi-Fi SSID is longer than firmware allows");
+    expect(() =>
+      encodeDeviceConfiguration(
+        { ...configuration, iterate: { ...configuration.iterate, projectApiKey: "key\0suffix" } },
+        512,
+      ),
+    ).toThrow("project API key cannot contain a NUL");
+  });
+
+  it("rejects Wi-Fi and project identities that boot networking would reject", () => {
+    expect(() =>
+      encodeDeviceConfiguration(
+        { ...configuration, wifi: { ...configuration.wifi, password: "short" } },
+        512,
+      ),
+    ).toThrow("invalid Wi-Fi password");
+    expect(() =>
+      encodeDeviceConfiguration(
+        { ...configuration, wifi: { ...configuration.wifi, password: "g".repeat(64) } },
+        512,
+      ),
+    ).toThrow("invalid Wi-Fi password");
+    expect(() =>
+      encodeDeviceConfiguration(
+        { ...configuration, iterate: { ...configuration.iterate, projectId: "voice-lab" } },
+        512,
+      ),
+    ).toThrow("invalid project id");
   });
 });

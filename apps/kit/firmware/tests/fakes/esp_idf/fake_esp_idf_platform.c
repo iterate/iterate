@@ -1,4 +1,5 @@
 #include "fake_esp_idf_platform.h"
+#include "iterate/kit/voice_device_profile.h"
 
 #include "fake_esp_idf.h"
 
@@ -8,8 +9,10 @@
 #include "iterate/kit/platforms/esp_idf_reset_reason.h"
 #include "iterate/kit/platforms/esp_idf_restart_note.h"
 #include "iterate/kit/platforms/esp_idf_system_update.h"
+#include "iterate/kit/spsc_ring.h"
 
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 
 /*
@@ -18,14 +21,24 @@
 
 enum {
   /*
-   * 96, raised from 32: a scenario that drains a 20-frame dial buffer sends
-   * five mic appends plus markers on top of the ~28 messages a mounted
-   * session has already recorded, and a recorder that silently refuses the
-   * overflow (CAPNWEB_E_TRANSPORT below) makes the loop under test look
-   * like it stopped sending.
+   * 1024, raised from 96 (from 32): the recorder refuses anything past its
+   * capacity with CAPNWEB_E_TRANSPORT, which fails the capnweb session for
+   * good and makes the loop under test look like it stopped sending. Since
+   * push-to-talk left the wire (2026-09-11) microphone frames flow the moment
+   * the stream is up, so a scenario that speaks into a dial records every
+   * flush, not a handful of turn markers — and eleven scenarios share one
+   * recorder. Eight megabytes of static in a host test binary is cheap.
    */
-  FAKE_SENT_CAPACITY = 96,
-  FAKE_MESSAGE_CAPACITY = 4096,
+  FAKE_SENT_CAPACITY = 1024,
+  /*
+   * One recorded message holds what one real outbox slot holds
+   * (ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOT_CAPACITY, 8 KiB). It was 4096,
+   * sized for four 20 ms mic frames as four events; a wall-clock flush that
+   * caught up an 8-frame backlog as ONE event is ~7 KiB, and a recorder
+   * that refuses it fails the capnweb session for good — every later append
+   * in the scenario reads as "the device stopped sending".
+   */
+  FAKE_MESSAGE_CAPACITY = ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOT_CAPACITY,
 };
 
 static struct {
@@ -35,16 +48,15 @@ static struct {
   size_t sent_lengths[FAKE_SENT_CAPACITY];
   size_t sent_count;
   bool message_open;
-  size_t probes_requested;
+  bool fail_next_send;
   size_t restarts_requested;
-  bool hop_answers;
   uint32_t pongs;
+  uint32_t frames_received;
   char restart_note[128];
 } platform;
 
 void iterate_kit_fake_platform_reset(void) {
   memset(&platform, 0, sizeof(platform));
-  platform.hop_answers = true;
 }
 
 struct iterate_kit_itx_connection *iterate_kit_fake_platform_connection(void) {
@@ -81,16 +93,48 @@ const char *iterate_kit_fake_platform_find_sent(const char *needle) {
   return NULL;
 }
 
-size_t iterate_kit_fake_platform_probes_requested(void) {
-  return platform.probes_requested;
-}
-
 size_t iterate_kit_fake_platform_restarts_requested(void) {
   return platform.restarts_requested;
 }
 
-void iterate_kit_fake_platform_set_hop_answers(bool answers) {
-  platform.hop_answers = answers;
+void iterate_kit_fake_platform_fail_next_send(void) {
+  platform.fail_next_send = true;
+}
+
+void iterate_kit_fake_platform_fill_control_outbox(void) {
+  struct iterate_kit_spsc_ring *ring;
+  void *slot;
+  size_t capacity;
+  if (platform.transport == NULL ||
+      platform.transport->options.control_outbox == NULL) {
+    return;
+  }
+  ring = platform.transport->options.control_outbox;
+  while (iterate_kit_spsc_ring_write_acquire(ring, &slot, &capacity) ==
+         ITERATE_KIT_OK) {
+    if (capacity != 0U) ((char *)slot)[0] = 'x';
+    if (iterate_kit_spsc_ring_write_publish(ring, capacity == 0U ? 0U : 1U) !=
+        ITERATE_KIT_OK) {
+      return;
+    }
+  }
+}
+
+void iterate_kit_fake_platform_drain_control_outbox(void) {
+  struct iterate_kit_spsc_ring *ring;
+  const void *slot;
+  size_t length;
+  if (platform.transport == NULL ||
+      platform.transport->options.control_outbox == NULL) {
+    return;
+  }
+  ring = platform.transport->options.control_outbox;
+  while (iterate_kit_spsc_ring_read_acquire(ring, &slot, &length) ==
+         ITERATE_KIT_OK) {
+    (void)slot;
+    (void)length;
+    if (iterate_kit_spsc_ring_read_release(ring) != ITERATE_KIT_OK) return;
+  }
 }
 
 /* --- provisioning --------------------------------------------------------- */
@@ -193,6 +237,10 @@ enum capnweb_status iterate_kit_esp_idf_itx_transport_send_text(
     size_t length) {
   size_t *used;
   (void)context;
+  if (platform.fail_next_send) {
+    platform.fail_next_send = false;
+    return CAPNWEB_E_TRANSPORT;
+  }
   if (platform.sent_count >= FAKE_SENT_CAPACITY) return CAPNWEB_E_TRANSPORT;
   if (kind == CAPNWEB_TEXT_BEGIN) {
     platform.message_open = true;
@@ -248,20 +296,6 @@ void iterate_kit_esp_idf_itx_transport_request_restart(
   ++platform.restarts_requested;
 }
 
-/*
- * THE HOP, ANSWERING OR NOT. On hardware the PING is queued for the network
- * task and the PONG arrives some milliseconds later; here the answer is
- * immediate, because what the press probe is watching is the COUNT and not the
- * timing of the reply. A hop set not to answer is exactly the half-open socket
- * the probe exists for.
- */
-void iterate_kit_esp_idf_itx_transport_request_probe(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
-  if (transport == NULL) return;
-  ++platform.probes_requested;
-  if (platform.hop_answers) ++platform.pongs;
-}
-
 enum iterate_kit_status iterate_kit_esp_idf_itx_transport_stop(
     struct iterate_kit_esp_idf_itx_transport *transport) {
   if (transport == NULL) return ITERATE_KIT_INVALID_ARGUMENT;
@@ -277,6 +311,7 @@ void iterate_kit_esp_idf_itx_transport_metrics(
   memset(metrics, 0, sizeof(*metrics));
   if (transport == NULL) return;
   metrics->websocket_pongs_received = platform.pongs;
+  metrics->websocket_frames_received = platform.frames_received;
   metrics->ready_socket_generation = transport->ready_socket_generation;
   metrics->control_inbox_capacity_slots = 1U;
   metrics->control_outbox_capacity_slots = 1U;

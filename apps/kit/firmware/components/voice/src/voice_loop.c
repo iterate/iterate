@@ -1,39 +1,7 @@
 /*
- * The Iterate voice device, once, for every board that is one.
- *
- * The whole product is here: a UI (start call / hang up), a live capability at
- * kit.<board> so an agent can drive the screen and the call, and the voice pipe
- * itself. What a board physically IS arrives through
- * `struct iterate_kit_board_ops`; voice/loop.h says why that surface is the
- * size it is, and what four copies of this file cost before it existed.
- *
- * ONE Cap'n Web WebSocket to /api carries everything, exactly like the
- * TypeScript voicelab client: authenticate -> projects.get -> streams.get,
- * then 50 Hz one-way appends of ephemeral events.iterate.com/voice-agent/mic-frame events (real
- * microphone), and a live openConnection callback delivering
- * events.iterate.com/voice-agent/spk-frame events (decoded to the speaker) plus grok-events
- * (speech_started = barge-in flush, response.done = end of answer).
- *
- * Nothing runs off-device: pressing "start call" calls the project's OWN
- * userspace worker (itx.worker.startCall) over that same socket, and the
- * worker holds the Grok session detached. No laptop bridge, no second
- * connection.
- *
- * Turn taking is a per-board FACT, not a per-board program. A board with no
- * echo cancellation holds a control while speaking and sends nothing from the
- * microphone unless it is down — the whole echo story there, since the speaker
- * is never live into an open microphone and pressing to talk cancels an answer
- * in flight instead of talking over it. A board that cancels its own speaker
- * leaves the microphone open and lets the far end segment turns. Both are
- * below, chosen by `facts->turns`.
- *
- * Observability is the `health()` capability, PULLED — opening the USB
- * console resets some of these boards, so it is the instrument of record.
- * Nothing is pushed on a timer; see the note where append_stats used to be.
- *
- * DELIBERATE DEPARTURE from the dual-WebSocket decision in
- * docs/fable-v2-plan/DECISIONS.md — this is the single-socket measurement that
- * decision asked for.
+ * The shared ESP voice loop. One transport carries activation-tagged microphone
+ * frames and speaker control/audio. Capture and playback run in dedicated tasks;
+ * app-task callbacks coordinate their generations and presentation.
  */
 #include <inttypes.h>
 #include <stdatomic.h>
@@ -49,6 +17,9 @@
 #include "esp_system.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
+#ifdef ESP_PLATFORM
+#include "esp_random.h"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
@@ -56,7 +27,6 @@
 
 #include "capnweb/capnweb.h"
 #include "iterate/kit/audio_codec.h"
-#include "iterate/kit/conversation_launch.h"
 #include "iterate/kit/retry_gate.h"
 #include "iterate/kit/platforms/esp_idf_reset_reason.h"
 #include "iterate/kit/capabilities/system_update.h"
@@ -64,7 +34,6 @@
 #include "iterate/kit/platforms/esp_idf_system_update.h"
 #include "iterate/kit/capabilities/conversation.h"
 #include "iterate/kit/capabilities/health.h"
-#include "iterate/kit/capabilities/push_to_talk.h"
 #include "iterate/kit/capabilities/speaker.h"
 #include "iterate/kit/aec_capture_bridge.h"
 #include "iterate/kit/audio_processor.h"
@@ -87,6 +56,7 @@ static bool clock_slug(char *out, size_t capacity);
 static uint32_t abandon_speaker_audio(void);
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/itx_connection.h"
+#include "iterate/kit/microphone_flush.h"
 #include "iterate/kit/peer.h"
 #include "iterate/kit/platforms/esp_idf_configuration.h"
 #include "iterate/kit/platforms/esp_idf_itx_transport.h"
@@ -109,15 +79,7 @@ enum {
   PENDING_CALL_CAPACITY = ITERATE_KIT_VOICE_PENDING_CALL_CAPACITY,
   EXPORT_CAPACITY = ITERATE_KIT_VOICE_EXPORT_CAPACITY,
   IMPORT_CAPACITY = ITERATE_KIT_VOICE_IMPORT_CAPACITY,
-  /*
-   * Replies to pulled calls and inbound delivery batches both parse inside
-   * this budget, one token per JSON key, value, object and array —
-   * exhaustion ABORTS THE SESSION. A capped batch of 4 speaker frames is
-   * ~72, but a single Grok response.done carries a nested event object that
-   * alone runs to several hundred. 256 was sized for a 2-event batch and was
-   * never re-checked when the cap doubled; 1024 costs 12 KiB of otherwise
-   * idle PSRAM-eligible RAM and takes this off the table.
-   */
+  /* Token storage for a full inbound control batch. */
   TOKEN_CAPACITY = ITERATE_KIT_VOICE_TOKEN_CAPACITY,
   OUTPUT_CAPACITY = ITERATE_KIT_VOICE_OUTPUT_CAPACITY,
   /*
@@ -159,7 +121,7 @@ enum {
   /*
    * 64, not 16. Pushing into a FULL outbox returns CAPNWEB_E_TRANSPORT, and
    * this peer terminalizes on that — the session ends, the turn is lost, and
-   * the screen sits on "listening". Measured: every push-to-talk turn died
+   * the screen sits on "listening". Measured: every opening turn died
    * this way (appCapnweb=-4 at the moment the microphone opened).
    *
    * The microphone is bursty — three seconds of speech, then nothing — so the
@@ -174,6 +136,7 @@ enum {
    * starves the very lane that keeps the session alive.
    */
   MIC_OUTBOX_RESERVE = ITERATE_KIT_VOICE_MIC_OUTBOX_RESERVE,
+  TERMINAL_PENDING_CAPACITY = 2U,
   FRAME_MS = ITERATE_KIT_VOICE_FRAME_MS,
   FRAME_SAMPLES = ITERATE_KIT_VOICE_FRAME_SAMPLES,
   /*
@@ -185,7 +148,11 @@ enum {
    * from it and is read on every dry wait.
    */
   FRAME_BYTES = ITERATE_KIT_VOICE_FRAME_BYTES,
+  /* One local activation gets one finite opening attempt. */
+  OPENING_DEADLINE_MS = 20000U,
   MIC_QUEUE_DEPTH = ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH,
+  /* Covers WakeNet plus board-poll handoff without retaining idle room audio. */
+  MIC_PRE_ROLL_FRAMES = 25,
   MIC_FRAMES_PER_APPEND = ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND,
   /*
    * The speaker buffer holds JITTER, never an answer. A 1 MiB (32 s) buffer
@@ -232,22 +199,7 @@ enum {
   SPEAKER_BUFFER_BYTES = ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES,
   /* Whole-frame queueing makes replacement atomic at frame boundaries. */
   SPEAKER_QUEUE_DEPTH = SPEAKER_BUFFER_BYTES / FRAME_BYTES,
-  /*
-   * Playback will not start, or resume after starving, until this much audio
-   * is queued. Without it the first frame starts the speaker with zero margin
-   * and the DMA's 90 ms is the only tolerance the whole path has.
-   */
-  /*
-   * 300ms before playback starts. The bridge bursts 600ms at the opening of
-   * every response, so this is reached as fast as the wire allows and costs
-   * almost nothing in latency — while doubling the cushion that a network
-   * hiccup has to exhaust before anything is audible.
-   */
-  /*
-   * Net of the DMA ring: the first 2880 bytes of any prefill go into the
-   * hardware, not into jitter cushion, so the old "300ms" was really 210.
-   * 300ms of true cushion plus one ring.
-   */
+  /* Shared measured opening budget; capacity above is not a playback delay. */
   SPEAKER_PREFILL_BYTES = ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES,
   /*
    * Recovering from a starve does NOT re-buy the full opening prefill. It
@@ -267,33 +219,13 @@ enum {
    */
   SPEAKER_IDLE_POWERDOWN_MS = ITERATE_KIT_VOICE_SPEAKER_IDLE_POWERDOWN_MS,
   /* Longest a released turn waits for the uplink before committing anyway. */
-  TURN_FLUSH_TIMEOUT_MS = ITERATE_KIT_VOICE_TURN_FLUSH_TIMEOUT_MS,
   /* Longest a single spoken turn may run before it is closed regardless. */
-  TURN_MAX_MS = ITERATE_KIT_VOICE_TURN_MAX_MS,
   /* Control scan cadence; on one board each scan costs an I2C transaction. */
   CONTROL_POLL_MS = ITERATE_KIT_VOICE_CONTROL_POLL_MS,
   /* How long the transport may stay FAILED before the device reboots itself. */
   UNHEALTHY_RESTART_MS = ITERATE_KIT_VOICE_UNHEALTHY_RESTART_MS,
-  /*
-   * With a call wanted there is a live answer coming, so this long without ANY
-   * batch on the delivery lane means the lane itself is gone. The remedy is a
-   * recycle — one round trip that keeps the call — rather than giving up on it
-   * and throwing away a live Grok session.
-   *
-   * This is now the ONLY application-level liveness deadline the device has.
-   * It is also the only one that ever had honest evidence behind it: it fires
-   * on silence when traffic is EXPECTED, which is the single condition under
-   * which silence means anything at all.
-   */
+  /* No inbound traffic while a call is wanted means the delivery lane is stale. */
   DOWNLINK_SILENCE_MS = ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS,
-  /*
-   * The press's own liveness question, and the only one on this device that is
-   * asked by an EVENT rather than by a clock. Ten seconds of nothing after a
-   * press was the worst failure left here; three is what the arithmetic below
-   * costs. See ITERATE_KIT_VOICE_PRESS_PROBE_MS for why the evidence is a PONG.
-   */
-  PRESS_PROBE_MS = ITERATE_KIT_VOICE_PRESS_PROBE_MS,
-  PRESS_PROBE_ATTEMPTS = ITERATE_KIT_VOICE_PRESS_PROBE_ATTEMPTS,
   /*
    * Last resort. The transport can be READY, the socket open, and nothing
    * whatsoever moving: a half-open TCP connection looks perfectly healthy
@@ -315,41 +247,16 @@ EXT_RAM_BSS_ATTR static uint8_t
 EXT_RAM_BSS_ATTR static uint8_t
     outbox_storage_psram[CONTROL_OUTBOX_SLOTS][CONTROL_OUTBOX_SLOT_CAPACITY];
 
-/*
- * The stream this device mounts, as a runtime value seeded from the board's
- * `facts->stream_path`.
- *
- * A fresh path per conversation, and mutable. The old shared one accumulated
- * durable events until its Durable Object took ~1s per append — measured
- * against a fresh stream's 72ms — and since every handshake step is one append,
- * the device took 20s to come up and calls felt glacial.
- *
- * Mutable because a compile-time constant is exactly why "start a fresh
- * conversation" could not be expressed: one device, one stream, forever, and
- * every reboot resumed a context that might be days old. The path IS the
- * conversation's identity, so choosing it is choosing whether to continue or
- * begin — no other mechanism is needed.
- *
- * Its per-board DEFAULT, its /agents/voice/ prefix, and the client path beside
- * it are all constants and live in `struct iterate_kit_board_facts`; the notes
- * on why each is what it is went with them.
- */
+/* Mutable paths used while mounting the board's stream. */
 static char stream_path[96];
+static char client_path[96];
 
-/*
- * The turn policy this loop is CURRENTLY running, seeded from the board's
- * `facts->turns`.
- *
- * Runtime for the same reason the path above is: one board's dial re-selects
- * its conversation among streams whose far ends take turns differently, and
- * the posture has to follow the path — a push-to-talk board on a server-VAD
- * stream is a mic that only opens under a button the provider never asks for,
- * and the reverse commits turns the server's VAD owns. Only the two per-pass
- * reads below honour this; the push-to-talk MODULE stays decided by the
- * compile-time fact, because the capability surface is described to the peer
- * once at mount and cannot follow a dial that turns afterwards.
- */
-static enum iterate_kit_voice_turns turn_policy;
+enum opening_outcome {
+  OPENING_IDLE = 0,
+  OPENING_WAITING,
+  OPENING_ACCEPTED,
+  OPENING_TIMED_OUT,
+};
 
 /*
  * pdMS_TO_TICKS() truncates, so any wait shorter than one tick becomes zero —
@@ -429,18 +336,7 @@ EXT_RAM_BSS_ATTR static struct {
    * this from 48 places; see voice/loop.h for the state that cost.
    */
   struct iterate_kit_voice_view view;
-  /*
-   * INTENT, which is now the loop's rather than a panel driver's.
-   *
-   * `view.wants_call` and `view.talk_held` are the two flags a physical
-   * control and an RPC both land on, so remote and local control cannot
-   * disagree about what the device is doing. `remote_talk` is the RPC half of
-   * the second one, kept apart so releasing the button does not cancel a hold
-   * an agent is still asking for, and vice versa.
-   */
-  bool remote_talk;
-  /** What the board's controls last said. Edges are consumed once, on the pass
-   * that resolves them; `talk_held` is a level and is read every pass. */
+  /** What the board's controls requested on this pass. */
   struct iterate_kit_voice_intent intent;
   struct iterate_kit_audio_codec codec;
   struct iterate_kit_audio_processor processor;
@@ -464,84 +360,21 @@ EXT_RAM_BSS_ATTR static struct {
   size_t inbox_lengths[CONTROL_INBOX_SLOTS];
   size_t outbox_lengths[CONTROL_OUTBOX_SLOTS];
   struct iterate_kit_peer peer;
-  /*
-   * REMOTE HANDS. This board is the one that gets left on a shelf running a
-   * soak, and it was also the only one of the four with NO capabilities at
-   * all: it mounted at kit.waveshare and answered nothing, so the only way to
-   * ask it anything was its console, which reboots it. Same three as the
-   * others now — talk, conversation, health — reaching the same two intent
-   * flags the physical buttons set.
-   */
+  /* Remote control events share the local intent path. */
   struct iterate_kit_device_event device_event_storage
       [ITERATE_KIT_VOICE_DEVICE_EVENT_CAPACITY];
   struct iterate_kit_device_event_queue device_events;
-  struct iterate_kit_push_to_talk push_to_talk;
   struct iterate_kit_conversation_control conversation_control;
   struct iterate_kit_voicelab voicelab;
-  /* The last refusal from start_call, and how many there have been. */
-  enum capnweb_status last_start_status;
-  /* The launch seam's own answer, so a branch is named not inferred. */
-  int last_launch_step;
-  uint32_t launch_polls;
-  /*
-   * What the seam SAW, captured in the same poll as its answer.
-   *
-   * Reading these separately through health() reads them at different
-   * instants, so a latch that is true when health asks and false when the
-   * loop asks looks like an impossibility: every input green and the answer
-   * still NOTHING. Captured together, the paradox resolves itself.
-   */
-  bool saw_wants_call;
-  bool saw_link_ready;
-  uint32_t wants_call_polls;
-  uint32_t start_call_failures;
-  /*
-   * WHICH ANSWER THE SPEAKER IS PLAYING, counted locally because nothing on
-   * the wire numbers them any more.
-   *
-   * The sender paces the audio and marks the first chunk of each answer with
-   * `drop`, which arrives here as SPEECH_STARTED — so "a new answer began" is
-   * an EDGE the device observes rather than a number it compares. The count
-   * exists for one reason: the viseme ledger scopes a mouth track to an
-   * answer, so notes about the audio have to say which answer they are about.
-   */
+  /* Local answer epoch for the face timeline. */
   uint32_t answers_started;
-  /**
-   * Answers that displaced audio the listener had not heard yet.
-   *
-   * The subset of `answers_started` that costs something: a flush with an
-   * empty queue is the ordinary gap between turns, a flush with audio still
-   * in it is a barge-in or a supersede. Measured from the bytes the abandon
-   * actually threw away, which is the only honest witness now that the
-   * classifier's answer bookkeeping is gone.
-   */
+  /** Answers that replaced speaker audio not yet heard. */
   uint32_t answers_superseded_midplay;
-  /* Drops obeyed, and the board's own uptime at the last one. See the
-   * SPEECH_STARTED arm: this is how a late instruction is told apart from
-   * a slow ring, which the ephemeral lane's coalescing otherwise hides. */
+  /* Replacement controls observed, and the time of the latest one. */
   uint32_t speaker_drops;
   uint32_t last_drop_uptime_ms;
   uint32_t voicelab_generation;
-  uint32_t frame_sequence;
-  /*
-   * Generous on purpose: a stats line that outgrows this is silently NOT
-   * sent (snprintf truncates and the append is skipped), so the instrument
-   * would go dark exactly when someone added the counter that explains a
-   * bug. The overflow is logged for the same reason.
-   */
-  /*
-   * 2816, and it grows whenever fields are added. It was 1536; nine added
-   * fields overflowed it and the device went dark, because every downstream
-   * reader then sees "no stats", which looks like a broken speaker rather than
-   * a full buffer. The guard names the field it stopped at, which is how that
-   * was found in one read.
-   *
-   * The last +256 is the four press-probe fields. 81 fields at their longest
-   * rendering is ~2.3 KiB before the board appends its own dozen, so the
-   * headroom here is thinner than the number looks. This lives in PSRAM with
-   * the rest of `runtime`, so the margin is nearly free and the failure it
-   * prevents is a board that answers nothing when asked how it is.
-   */
+  /* Health serialization must fit completely; truncation is not sent. */
   char stats_buffer[2816];
   uint32_t stats_sequence;
   enum iterate_kit_esp_idf_itx_transport_state last_transport_state;
@@ -551,6 +384,9 @@ EXT_RAM_BSS_ATTR static struct {
   QueueHandle_t speaker_queue;
   atomic_uint speaker_generation;
   atomic_uint_fast64_t speaker_last_write_ms;
+  /* Written by accepted playout, read when the app task assembles the view. */
+  atomic_uint speaker_peak;
+  atomic_uint_fast64_t speaker_peak_at_ms;
   /*
    * The playback step's persistent state — the shared playout clock, its
    * counters and the last write — written only by the playback task. The
@@ -609,86 +445,58 @@ EXT_RAM_BSS_ATTR static struct {
    * after it, meaning the answer was still in progress.
    */
   uint32_t speaker_underruns;
-  atomic_uint_fast64_t starve_at_ms;
   uint32_t speaker_bad_frames;
   /* Connections replaced because nothing was being delivered on them. */
   uint32_t downlink_recycles;
   /* How many of those in a row have not yet produced a batch. */
   uint32_t downlink_recycles_running;
-  /*
-   * THE PRESS PROBE: is this socket still connected to anything?
-   *
-   * Armed when a call is placed and disarmed by the PONG. `sent_ms` is zero
-   * when nothing is outstanding, which is every moment of an idle board's life
-   * — see ITERATE_KIT_VOICE_PRESS_PROBE_MS for why an idle probe would be the
-   * wrong thing entirely.
-   */
-  uint64_t press_probe_sent_ms;
-  uint32_t press_probe_pongs_before;
-  /* The PONG count as of this pass, sampled by the liveness block so the
-   * launch below can take a baseline without a second metrics snapshot. */
-  uint32_t pongs_seen;
-  uint8_t press_probe_attempt;
-  /* Probes sent, probes that no PONG answered, and the last measured round
-   * trip. The last one is the instrument that turns the 1500 ms budget into a
-   * number somebody can check. */
-  uint32_t press_probes;
-  uint32_t press_probe_misses;
-  uint32_t press_probe_ms;
-  uint32_t press_probe_restarts;
   /* Diagnostics for a frozen device: see the pulse in the app loop. */
   uint32_t loop_count;
   uint64_t last_pulse_ms;
-  bool talking;
-  /*
-   * Speech spoken INTO THE DIAL is captured, not thrown away. From the
-   * press that wants a call until the call is active, capture queues into
-   * mic_queue (5.12 s deep) and the drain holds it back; the accepted call
-   * then carries it. Without this, everything said between the wake press
-   * and CALL_ACCEPTED — two to four seconds warm, twenty cold — was
-   * discarded at the capture gate, and a person who pressed and spoke got
-   * an answer to nothing. The host CLI never showed it only because its
-   * dial is warm in about a second.
-   */
-  /** The unwritten button audit, latest wins; see the resolution site. */
-  const char *pending_button_audit;
-  bool dial_buffering;
-  /* A push-to-talk dial buffered speech; the OPENING turn must not reset
-   * the queue that holds it. SURVIVES a release during the dial — the
-   * accepted call drains and commits it as the first turn. Consumed at
-   * turn start, cleared with the call. */
-  bool dial_speech_queued;
-  /*
-   * A call that vanished WITHOUT its obituary holds the relaunch ladder
-   * until this deadline, because the obituary may simply not have arrived
-   * yet: the far end's hang-up settles the device's call RPC ~100 ms before
-   * its conversation-ended event can be delivered, and relaunching in that
-   * gap births a zombie call the late obituary then kills — measured
-   * 2026-08-19 14:22:42: relaunch 87 ms after the end, the zombie shot down
-   * mid-wake ("call ended" twice in a row), its conversation orphaned until
-   * the 60 s idle timeout. A genuine connection recycle still relaunches,
-   * just this much later.
-   */
-  uint64_t obituary_grace_until_ms;
+  uint64_t mic_flushed_at_ms;
+  /* The app opens/closes capture; only the capture task mutates these queues. */
+  atomic_bool capture_open;
+  atomic_bool capture_muted;
+  atomic_bool capture_discard_requested;
+  atomic_uint capture_generation;
+  uint32_t capture_generation_inflight;
+  atomic_bool capture_activation_overflow;
+  atomic_uint capture_activation_overflows;
+  char activation[33];
+  bool activation_live;
+  struct {
+    char activation[33];
+    const char *reason;
+  } pending_terminals[TERMINAL_PENDING_CAPACITY];
+  size_t pending_terminal_head;
+  size_t pending_terminal_count;
+  /* Monotonic local time of the current/most recent activation. */
+  uint64_t activation_started_at_ms;
+  /* Zero until a microphone append was accepted for that activation. */
+  uint64_t first_mic_append_at_ms;
+  /* Nonzero while the current activation is opening. */
+  uint64_t opening_started_at_ms;
+  enum opening_outcome opening_outcome;
+  uint32_t opening_timeouts;
+  struct mic_frame mic_pre_roll[MIC_PRE_ROLL_FRAMES];
+  size_t mic_pre_roll_next;
+  size_t mic_pre_roll_count;
   /* Release pressed, but the capture queue is not yet on the wire. */
-  bool flushing_turn;
   atomic_bool speaker_reprime;
   /* The answer's playout timeline — when it began, how much has played, the
    * worst lag — is `playout.clock`'s, shared with the host CLI; see
    * iterate/kit/voice_playback_clock.h. */
-  atomic_bool speaker_answer_done;
+  /* One atomic epoch notification: reprime cannot erase a newer short answer
+   * terminal. UINT32_MAX means no pending terminal. */
+  atomic_uint speaker_answer_done_generation;
   /*
    * The SENDER said this answer is complete, latched until the speaker actually
-   * drains it. `speaker_answer_done` is consumed by the playback clock the
+   * drains it. `speaker_answer_done_generation` is consumed by the playback clock the
    * moment it is seen, long before the buffer empties, so it cannot answer
    * "has this answer finished being heard?" — and that question is the whole
    * difference between an answer that ended and an answer that was cut off.
    */
   atomic_bool answer_declared_done;
-  uint32_t turn_marker_failures;
-  uint32_t flush_frames_left;
-  uint64_t flush_deadline_ms;
-  uint64_t turn_started_ms;
 } runtime;
 
 /*
@@ -711,29 +519,20 @@ static void board_answer(const struct iterate_kit_voice_answer_note *note) {
   }
 }
 
-/*
- * MOVE THE HALF-DUPLEX FENCE, or do nothing on a board that has none.
- *
- * On the one board that is half duplex the ES8311's ADC and DAC share
- * MCLK/BCLK/WS, so capture requires DELETING the playback channel: the
- * microphone physically cannot run while the speaker does. Asynchronous —
- * `playout_fenced_out` is how the playback step learns the fence has settled.
- *
- * The SEQUENCING is the loop's and stays below, because it is policy and not a
- * driver: the pins are taken only after the turn marker is on the wire AND the
- * speaker queue has been emptied, and they are given back at the RELEASE edge
- * rather than at the commit, so the answer can play the moment it arrives.
- */
-static void board_fence(bool microphone_owns_pins) {
-  if (runtime.board->capture_fence != NULL) {
-    runtime.board->capture_fence(runtime.board_context, microphone_owns_pins);
-  }
-}
-
 static void board_playout(const int16_t *pcm, size_t samples) {
   if (runtime.board->observe_playout != NULL) {
     runtime.board->observe_playout(runtime.board_context, pcm, samples);
   }
+}
+
+static uint32_t pcm_peak(const int16_t *samples, size_t sample_count) {
+  int32_t peak = 0;
+  for (size_t index = 0U; index < sample_count; ++index) {
+    const int32_t sample = samples[index];
+    const int32_t magnitude = sample < 0 ? -sample : sample;
+    if (magnitude > peak) peak = magnitude;
+  }
+  return (uint32_t)peak;
 }
 
 /*
@@ -749,14 +548,6 @@ static uint32_t speaker_queued_bytes(void) {
   if (runtime.speaker_queue == NULL) return 0U;
   return (uint32_t)uxQueueMessagesWaiting(runtime.speaker_queue) * FRAME_BYTES;
 }
-
-/*
- * The two strings that describe this device to whoever holds the capability
- * are `facts->instructions` and `facts->peer_description`. They are per-board
- * prose — one board says "the upper button is push-to-talk", another says
- * "speak whenever you like" — and voice/loop.h records which of the two a
- * model actually reads, which is not the one you would guess.
- */
 
 static void on_session_ended(void *context) {
   (void)context;
@@ -776,41 +567,10 @@ static uint64_t now_ms(void *context) {
   return (uint64_t)(esp_timer_get_time() / 1000);
 }
 
-static bool publish_turn_marker(enum iterate_kit_voicelab_turn turn) {
-  const enum capnweb_status status =
-      iterate_kit_voicelab_mark_turn(&runtime.voicelab, turn);
-  if (status == CAPNWEB_OK) return true;
-
-  ++runtime.turn_marker_failures;
-  ESP_LOGE(
-      tag,
-      "turn %s publication failed: capnweb=%d; replacing transport",
-      turn == ITERATE_KIT_VOICELAB_TURN_START ? "start" : "commit",
-      (int)status);
-  /*
-   * The bridge cannot infer a missing edge. Invalidate the producer gate now,
-   * then remount on a fresh session rather than sending audio whose turn state
-   * is ambiguous or pretending a commit succeeded.
-   */
-  runtime.voicelab_generation = 0U;
-  iterate_kit_esp_idf_itx_transport_request_restart(&transport);
-  runtime.view.status = ("reconnecting");
-  return false;
-}
 
 /* --- speaker path (voicelab callbacks run on the app task) ---------------- */
 
-/*
- * ONE FRAME OF THE ANSWER, ALREADY PACED BY THE SENDER.
- *
- * There is no policy left here, and that is the change: the device used to
- * decide per frame whether to append, replace or ignore it, from a call /
- * answer / frame identity on the wire. The sender now releases the answer at
- * playback rate in chunks, marks the first chunk of a replacing answer with
- * `drop` — which arrives as SPEECH_STARTED, ahead of the audio it invalidates
- * — and marks the last with `last`. So a frame that reaches this function is
- * a frame to play, in order, full stop.
- */
+/* Admit one paced speaker frame to the local playout queue. */
 static void admit_speaker_frame(const uint8_t *pcm, size_t pcm_length) {
   static struct speaker_frame frame;
   if (uxQueueSpacesAvailable(runtime.speaker_queue) == 0U) {
@@ -828,31 +588,17 @@ static void admit_speaker_frame(const uint8_t *pcm, size_t pcm_length) {
    */
   board_phase(ITERATE_KIT_VOICE_PHASE_ARRIVED);
   atomic_store_explicit(
-      &runtime.speaker_answer_done, false, memory_order_release);
-  /*
-   * SPEAKING FOLLOWS THE AUDIO, not a transcript.
-   *
-   * This used to be set from `on_transcript`, which meant the face and the
-   * lights announced the answer when its TEXT arrived. Text and audio are
-   * separate event streams and routinely arrive out of order, so the screen
-   * could say "speaking" before a sample had played, or stay on the previous
-   * state through the first words. Clients no longer receive transcripts at
-   * all; a frame admitted to the speaker queue is the honest signal, and the setter
-   * is idempotent so paying for it per frame costs one compare.
-   */
+      &runtime.speaker_answer_done_generation, UINT32_MAX, memory_order_release);
+  /* Speaker state follows admitted audio. */
   runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_SPEAKING;
   /*
    * Audio arriving within a second of a starve means the answer was still
-   * going: the pipe genuinely ran dry mid-speech, and that is audible.
+   * going: the pipe genuinely ran dry mid-speech, and that is audible. The
+   * rule is the clock's, shared with the host CLI.
    */
-  {
-    const uint64_t starved_at = atomic_exchange_explicit(
-        &runtime.starve_at_ms, 0U, memory_order_acq_rel);
-    const uint64_t now = now_ms(NULL);
-    if (starved_at != 0U &&
-        iterate_kit_voice_elapsed_ms(now, starved_at) < 1000U) {
-      ++runtime.speaker_underruns;
-    }
+  if (iterate_kit_voice_playback_clock_audio_arrived(
+          &runtime.playout.clock, now_ms(NULL))) {
+    ++runtime.speaker_underruns;
   }
   frame.generation = atomic_load_explicit(
       &runtime.speaker_generation, memory_order_acquire);
@@ -875,27 +621,7 @@ static void admit_speaker_frame(const uint8_t *pcm, size_t pcm_length) {
   }
 }
 
-/*
- * THE SPEAKER QUEUE IS FRAME-SHAPED, AND THE WIRE IS NOT. So the phase is
- * absorbed HERE, in the one place that knows how the queue is built, rather
- * than being made the sender's problem.
- *
- * A FreeRTOS queue holds fixed-size items, so audio has to reach it in whole
- * frames; a partial write would splice the head of one frame onto the next at
- * an arbitrary phase. That much is real. What was NOT real is the rule this
- * replaces — refusing any chunk that was not exactly one frame — which pushed
- * the alignment all the way back up the wire to a provider whose deltas are
- * audio of no particular length, and cost a carried remainder in the sender, a
- * silence-padded tail on every answer, and 118 dropped chunks in three turns
- * when it slipped. Consecutive samples written consecutively are the same
- * waveform however they were cut, so all that was ever needed is a few hundred
- * bytes of memory to hold a part-frame until the audio that continues it lands.
- *
- * CLEARED WITH THE QUEUE, by abandon_speaker_audio(): a remainder left over
- * from an abandoned answer would otherwise be spliced onto the front of the
- * next one, which is the click this is supposed to prevent, arriving once per
- * barge-in.
- */
+/* Assemble arbitrary wire chunks into fixed-size speaker queue frames. */
 static uint8_t speaker_partial[FRAME_BYTES];
 static size_t speaker_partial_length;
 
@@ -955,6 +681,8 @@ static uint32_t abandon_speaker_audio(void) {
       memory_order_relaxed);
   atomic_store_explicit(
       &runtime.speaker_reprime, true, memory_order_release);
+  atomic_store_explicit(&runtime.speaker_peak, 0U, memory_order_relaxed);
+  atomic_store_explicit(&runtime.speaker_peak_at_ms, 0U, memory_order_release);
   /*
    * AND THE ANSWER'S CLOCK GOES WITH ITS AUDIO — carried by the reprime the
    * playback task applies before its next frame: the playout clock owns the
@@ -984,79 +712,22 @@ static uint32_t abandon_speaker_audio(void) {
   return bytes;
 }
 
+static void end_local_activation(const char *reason, const char *status);
+static void end_authoritative_activation(const char *status);
+
 static void on_control(
     void *context, enum iterate_kit_voicelab_control control) {
   (void)context;
   if (control == ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED) {
-    /*
-     * A NEW ANSWER STARTS HERE, AND SO DOES ITS TIMELINE.
-     *
-     * `drop` rides the first chunk of the replacing answer and is raised
-     * BEFORE that chunk's audio is handed over, so everything below happens
-     * while the queue still holds only the answer being displaced. The old
-     * per-frame REPLACE branch did the same three things; it just discovered
-     * the transition by comparing numbers a frame carried.
-     *
-     * THIS USED TO BE GATED ON THE LOCAL MICROPHONE, AND THAT COST TWO BOARDS
-     * FOUR FIFTHS OF EVERY ANSWER AFTER THE FIRST.
-     *
-     * The gate — `iterate_kit_barge_in_admit`, 300 PCM16 within 600 ms — was
-     * written for a `speech_started` that arrived on the provider's OWN event
-     * lane, where it really was a VAD firing on echo the canceller missed and
-     * really did stop an answer mid-word (barge_in.h has those measurements).
-     * That lane is gone. `drop` is raised by the SENDER, from
-     * `response.created`, and reaches this device on the first chunk of the
-     * audio it invalidates — so it does not mean "somebody interrupted", it
-     * means "the answer you are holding has been superseded".
-     *
-     * Corroborating it against the microphone therefore asks the wrong
-     * question and gets the wrong answer on every ordinary turn: an answer's
-     * first chunk lands one to two seconds after the person stopped talking,
-     * which is past the window, so the whole branch was refused — including
-     * the timeline reset below, so the NEXT answer was measured against the
-     * PREVIOUS answer's clock and the lag catch-up rule deleted it as
-     * hopelessly late. Measured on the StackChan: 3616 frames received, 1026
-     * played, 2590 skipped, `spkLagMaxMs` 643,208.
-     *
-     * AND THE GATE COULD NOT HAVE SAVED THE OLD ANSWER ANYWAY. `speakerReplace`
-     * empties the sender's pending bytes before it arms `drop`, so by the time
-     * this arrives the audio it is about has already been destroyed at the
-     * source. Refusing the flush keeps a dead answer's tail in the ring in
-     * front of the live one — worse on both counts.
-     */
-    /*
-     * WE ARE ABOUT TO ABANDON AUDIO, SO SAY SO NOW.
-     *
-     * The starvation watch is disarmed inside the funnel rather than in the
-     * speaker task's reprime branch, because the flush happens on THIS task
-     * while the speaker task is blocked in its 60ms receive with the watch
-     * still armed. The ring plays out the last 90ms of the abandoned answer and
-     * then goes dry waiting for the replacement's first frame — and that gap
-     * was landing in the DMA ledger deficit at send index 164: deep into
-     * feeding, nowhere near an opening, and only ever when an answer was
-     * displaced.
-     *
-     * The gap is real and the listener hears it. It is also entirely ours and
-     * entirely intended, which is the whole difference from starvation.
-     *
-     * The funnel also restarts the answer's clock, which is the other half of
-     * "a new answer starts here".
-     */
+    /* Replacement precedes its new audio. Abandoning resets the playout clock
+     * and disarms its starvation accounting on this task. */
     if (abandon_speaker_audio() > 0U) ++runtime.answers_superseded_midplay;
     ++runtime.answers_started;
-    /*
-     * WHEN THIS DEVICE WAS TOLD, ON ITS OWN CLOCK.
-     *
-     * Everything the harness can see is an arrival time on an ephemeral lane
-     * that coalesces by seconds, so "the board kept talking for nine seconds"
-     * cannot currently be split into the two halves that have opposite fixes:
-     * the instruction arriving late, or the instruction arriving on time and
-     * the ring taking that long to empty. This stamp is the split. It is read
-     * over RPC (`health()`), which is not that lane, and compared against the
-     * board's own uptime in the same payload.
-     */
+    /* Timestamp the local observation for health diagnostics. */
     ++runtime.speaker_drops;
     runtime.last_drop_uptime_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    atomic_store_explicit(
+        &runtime.answer_declared_done, false, memory_order_release);
     runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_LISTENING;
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE) {
     /*
@@ -1067,83 +738,33 @@ static void on_control(
      * concealed frames and the metric could never reach zero.
      */
     atomic_store_explicit(
-        &runtime.speaker_answer_done, true, memory_order_release);
+        &runtime.speaker_answer_done_generation,
+        atomic_load_explicit(&runtime.speaker_generation, memory_order_acquire),
+        memory_order_release);
     atomic_store_explicit(
         &runtime.answer_declared_done, true, memory_order_release);
-    /*
-     * IT MUST NOT THROW THE QUEUE AWAY, however tempting "the answer is over,
-     * clear up for the next one" looks. This edge now rides the answer's last
-     * chunk and is raised after that chunk's audio is handed over, so there
-     * are still up to a few hundred milliseconds of it queued here — the end
-     * of the sentence. Discarding it clips every answer.
-     *
-     * It used to be a `response.done` on a separate text lane, where it
-     * routinely overtook the audio entirely: measured at 258 frames received
-     * and none played, with a transcript proving the model had spoken.
-     */
+    /* The terminal control follows the final frame; let queued audio drain. */
     /* The answer is complete: back to waiting for the next turn. */
     runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
-    runtime.view.status = runtime.facts->talk_hint;
+    runtime.view.status = "ready";
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED) {
-    /*
-     * A NEW CALL IS A NEW SENDER, AND THE ONLY THING THAT CARRIED ACROSS ONE
-     * WAS THE AUDIO ITSELF.
-     *
-     * A reset of the frame classifier used to be the important part of this
-     * branch: answer and frame numbers restarted with every call, so a second
-     * call on the same mount opened numerically BEHIND the last one and every
-     * frame of it was refused as a duplicate — measured at 539 of 583 frames,
-     * 10.78s of an answer nobody heard. There is no numbering to be behind any
-     * more. What remains is emptying the queue, so the previous conversation
-     * does not play into the opening of this one.
-     */
+    /* A newly accepted call must not inherit prior speaker audio. */
     (void)abandon_speaker_audio();
     atomic_store_explicit(
-        &runtime.speaker_answer_done, false, memory_order_release);
+        &runtime.speaker_answer_done_generation, UINT32_MAX, memory_order_release);
     atomic_store_explicit(
         &runtime.answer_declared_done, false, memory_order_release);
     ESP_LOGI(tag, "new call accepted: speaker queue emptied for a fresh sender");
     runtime.view.call_active = (true);
+    runtime.opening_started_at_ms = 0U;
+    runtime.opening_outcome = OPENING_ACCEPTED;
     /* The viseme lane owns the mouth for the duration of the call. */
     runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
-    runtime.view.status = runtime.facts->talk_hint;
+    runtime.view.status = "ready";
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
-    /*
-     * Drop whatever is still queued. The ring holds thirty seconds, so a call
-     * that ends mid-answer otherwise plays the dead conversation out after
-     * the screen has already said it is over.
-     *
-     * AND STOP MEASURING FIRST. Abandoning queued audio is the device's own
-     * decision, so the starvation detector must be disarmed before the source
-     * goes away — otherwise the audio-empty deadline it is holding passes with
-     * nothing more written, and a deliberate abandon is recorded as a real
-     * starve event. Every other discard site pairs these three lines; this one
-     * did not, and it survived by luck: the local hang-up path usually drains
-     * first. Measured on 2026-08-04, session 5 turn 7 of the acceptance run —
-     * the bridge had raced 13,020ms of audio ahead of realtime, so CALL_ENDED
-     * arrived with the ring still deep, and `spkStarveEvents` moved by 1.
-     */
+    /* An authoritative end abandons queued audio and its accounting. */
     (void)abandon_speaker_audio();
-    /*
-     * AND THE SESSION ENDS WITH IT. The intent used to survive this event on
-     * the reasoning that only a person changes intent, so any bridge-side end
-     * was a call to reopen — and the launch ladder obliged on the next pass.
-     * That doctrine turned every ANNOUNCED end into a resurrection: measured
-     * 2026-08-19, the model's hang_up tool ended a call at 12:53:25 and its
-     * successor was up within the same second, which makes hanging up
-     * impossible on a board whose microphone rides the call, and turns the
-     * bridge's own 60 s idle timeout into a metronome. A conversation the far
-     * end declares over IS over: the latch clears, the microphone gate closes
-     * behind it (SERVER_VAD talk rides call_active; push-to-talk requires the
-     * latch), and the next call takes a new wake press. A call lost WITHOUT
-     * this event — the liveness forget, a connection recycle — still
-     * relaunches, because there the person still wants the session they
-     * opened; this arm is only ever the far end saying goodbye.
-     */
-    runtime.view.wants_call = (false);
-    runtime.view.call_active = (false);
-    /* The dial buffer dies with the call it was dialling. */
-    runtime.dial_speech_queued = false;
+    end_authoritative_activation("call ended");
     /* Envelope mouth returns for whatever local life the face has next. */
     runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
     runtime.view.status = ("call ended");
@@ -1181,10 +802,12 @@ static bool playback_apply_reprime(
           &runtime.speaker_reprime, false, memory_order_acq_rel)) {
     return false;
   }
-  atomic_store_explicit(
-      &runtime.speaker_answer_done, false, memory_order_release);
-  atomic_store_explicit(
-      &runtime.answer_declared_done, false, memory_order_release);
+  /*
+   * The done flags go with the OLD answer only. A `last` that already
+   * arrived for the answer this reprime opens (same generation) is the new
+   * answer's end, and wiping it would leave a short answer priming forever —
+   * see `speaker_answer_done_generation`.
+   */
   /*
    * abandon_speaker_audio() already disarmed and accounted for the hardware
    * flush before publishing speaker_reprime. This task owns only the portable
@@ -1249,10 +872,8 @@ static enum iterate_kit_voice_playout_read playout_ring_read(
    * unconditionally (which I tried) makes every inter-feed gap invisible and
    * buys a clean run by blinding the detector.
    *
-   * The one case where a dry ring is legitimate is an answer that is OVER:
-   * the sender said `response.done` and the tail is draining. That is exactly
-   * `answer_declared_done`, latched until the drain completes, so it is the
-   * only condition that disarms.
+   * A dry ring is legitimate only after its terminal control; then
+   * `answer_declared_done` stays latched until the tail drains.
    *
    * Arming happens at the write. Between a write and the next one the watch is
    * on; past a declared end it is off; during priming, a reprime flush or a
@@ -1385,12 +1006,17 @@ static enum iterate_kit_voice_playout_write playout_sink_write(
 
   if (write_status == ITERATE_KIT_OK) {
     /*
-     * The mouth, from audio the DAC has accepted rather than audio that
-     * arrived. This is the only place on the device where those two are the
-     * same thing, which is why the tap is here and not on the receive path:
-     * see waveshare_avatar.h for what the delay line does with it.
+     * The meter and mouth observe audio admitted to the codec, never merely
+     * received from the network. It may still sit in DMA before it is heard,
+     * which is why this is a local playout signal rather than an acoustic one.
      */
-    board_playout(playout_item.samples, length / 2U);
+    atomic_store_explicit(
+        &runtime.speaker_peak,
+        pcm_peak(playout_item.samples, length / sizeof(playout_item.samples[0])),
+        memory_order_relaxed);
+    atomic_store_explicit(
+        &runtime.speaker_peak_at_ms, now_ms(NULL), memory_order_release);
+    board_playout(playout_item.samples, length / sizeof(playout_item.samples[0]));
     return ITERATE_KIT_VOICE_PLAYOUT_WRITE_OK;
   }
   if (write_status == ITERATE_KIT_UNAVAILABLE &&
@@ -1445,22 +1071,11 @@ void iterate_kit_voice_loop_playback_step(void) {
    * rather than concealed — see the read callback above.
    */
 
-  /*
-   * FENCED OUT. While the microphone owns the shared pins — or the fence is
-   * moving in either direction — this step must not pull frames it can only
-   * fail to write. Frames stay queued; the fence drops within milliseconds of
-   * the turn committing, long before an answer.
-   */
-  if (runtime.board->playout_fenced_out != NULL &&
-      runtime.board->playout_fenced_out(runtime.board_context)) {
-    board_phase(ITERATE_KIT_VOICE_PHASE_WAITING);
-    DELAY_MS(5);
-    return;
-  }
-
   (void)playback_apply_reprime(&runtime.playout.clock);
   if (atomic_exchange_explicit(
-          &runtime.speaker_answer_done, false, memory_order_acq_rel)) {
+          &runtime.speaker_answer_done_generation, UINT32_MAX,
+          memory_order_acq_rel) ==
+      atomic_load_explicit(&runtime.speaker_generation, memory_order_acquire)) {
     iterate_kit_voice_playback_clock_answer_done(&runtime.playout.clock);
   }
 
@@ -1491,11 +1106,9 @@ void iterate_kit_voice_loop_playback_step(void) {
     /*
      * A hole mid-answer. The step counted it (`spkSoftDryTicks`: how often
      * the source could not keep up; it no longer costs the listener anything)
-     * and this stamp lets the admit path promote it to an underrun if audio
-     * resumes within a second — a hole in an answer that was still going.
+     * and the clock stamped it, so the admit path promotes it to an underrun
+     * if audio resumes within a second — a hole in an answer still going.
      */
-    atomic_store_explicit(
-        &runtime.starve_at_ms, now_ms(NULL), memory_order_release);
     return;
   case ITERATE_KIT_VOICE_PLAYOUT_SETTLED:
     /*
@@ -1576,6 +1189,168 @@ static enum iterate_kit_status bridge_reset_processor(void *context) {
   return iterate_kit_audio_processor_reset(&runtime.processor);
 }
 
+/* Capture owns both the rolling wake history and the activation FIFO. */
+static void capture_reset_audio(void) {
+  (void)xQueueReset(runtime.mic_queue);
+  runtime.mic_pre_roll_next = 0U;
+  runtime.mic_pre_roll_count = 0U;
+}
+
+static void capture_remember(const int16_t *samples) {
+  memcpy(
+      runtime.mic_pre_roll[runtime.mic_pre_roll_next].samples, samples,
+      sizeof(runtime.mic_pre_roll[0].samples));
+  runtime.mic_pre_roll_next =
+      (runtime.mic_pre_roll_next + 1U) % MIC_PRE_ROLL_FRAMES;
+  if (runtime.mic_pre_roll_count < MIC_PRE_ROLL_FRAMES) {
+    ++runtime.mic_pre_roll_count;
+  }
+}
+
+static bool capture_open_activation(void) {
+  const size_t first =
+      (runtime.mic_pre_roll_next + MIC_PRE_ROLL_FRAMES -
+       runtime.mic_pre_roll_count) % MIC_PRE_ROLL_FRAMES;
+  for (size_t index = 0U; index < runtime.mic_pre_roll_count; ++index) {
+    const size_t slot = (first + index) % MIC_PRE_ROLL_FRAMES;
+    if (xQueueSend(runtime.mic_queue, &runtime.mic_pre_roll[slot], 0) != pdTRUE) {
+      return false;
+    }
+  }
+  runtime.mic_pre_roll_count = 0U;
+  return true;
+}
+
+static uint32_t activation_random(void) {
+#ifdef ESP_PLATFORM
+  return esp_random();
+#else
+  static uint32_t state;
+  if (state == 0U) state = (uint32_t)esp_timer_get_time() ^ 0x9e3779b9U;
+  state ^= state << 13;
+  state ^= state >> 17;
+  state ^= state << 5;
+  return state;
+#endif
+}
+
+static void begin_activation(uint64_t now) {
+  const uint32_t first = activation_random();
+  const uint32_t second = activation_random();
+  const uint32_t third = activation_random();
+  const uint32_t fourth = activation_random();
+  (void)snprintf(
+      runtime.activation, sizeof(runtime.activation), "%08" PRIx32 "%08" PRIx32
+      "%08" PRIx32 "%08" PRIx32,
+      first, second, third, fourth);
+  runtime.activation_started_at_ms = now;
+  runtime.activation_live = true;
+  runtime.first_mic_append_at_ms = 0U;
+  runtime.opening_started_at_ms = now;
+  runtime.opening_outcome = OPENING_WAITING;
+}
+
+static bool queue_terminal(const char *reason) {
+  size_t slot;
+  if (runtime.activation[0] == '\0') return true;
+  if (runtime.pending_terminal_count > 0U) {
+    const size_t last =
+        (runtime.pending_terminal_head + runtime.pending_terminal_count - 1U) %
+        TERMINAL_PENDING_CAPACITY;
+    if (strcmp(runtime.pending_terminals[last].activation, runtime.activation) ==
+        0) {
+      return true;
+    }
+  }
+  if (runtime.pending_terminal_count == TERMINAL_PENDING_CAPACITY) return false;
+  slot = (runtime.pending_terminal_head + runtime.pending_terminal_count) %
+      TERMINAL_PENDING_CAPACITY;
+  memcpy(
+      runtime.pending_terminals[slot].activation,
+      runtime.activation,
+      sizeof(runtime.pending_terminals[slot].activation));
+  runtime.pending_terminals[slot].reason = reason;
+  ++runtime.pending_terminal_count;
+  return true;
+}
+
+static void end_local_activation(const char *reason, const char *status) {
+  bool queued;
+  /* Every local end is immediately audible: discard the old answer before
+   * fencing capture or waiting for its terminal to reach the stream. */
+  (void)abandon_speaker_audio();
+  /* A terminal is required only after this activation reached the stream. */
+  queued = !runtime.activation_live ||
+      runtime.first_mic_append_at_ms == 0U || queue_terminal(reason);
+  runtime.activation_live = false;
+  atomic_store_explicit(&runtime.speaker_peak, 0U, memory_order_relaxed);
+  atomic_store_explicit(&runtime.speaker_peak_at_ms, 0U, memory_order_release);
+  runtime.view.wants_call = false;
+  runtime.view.listening = false;
+  /* A queued terminal fences later microphone appends, so the old call must
+   * stop governing new local intent immediately. */
+  runtime.view.call_active = false;
+  runtime.voicelab.call_active = false;
+  runtime.voicelab.answer_open = false;
+  runtime.voicelab.last_presence_at_ms = 0U;
+  runtime.opening_started_at_ms = 0U;
+  runtime.opening_outcome = OPENING_IDLE;
+  atomic_fetch_add_explicit(
+      &runtime.capture_generation, 1U, memory_order_acq_rel);
+  atomic_store_explicit(&runtime.capture_open, false, memory_order_release);
+  atomic_store_explicit(
+      &runtime.capture_discard_requested, true, memory_order_release);
+  runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
+  runtime.view.status = queued ? status : "cancel backlog full";
+  if (!queued) ESP_LOGE(tag, "terminal backlog full for activation");
+}
+
+/* The server has already accepted the terminal; fence only local audio. */
+static void end_authoritative_activation(const char *status) {
+  if (!runtime.activation_live) return;
+  runtime.activation_live = false;
+  atomic_store_explicit(&runtime.speaker_peak, 0U, memory_order_relaxed);
+  atomic_store_explicit(&runtime.speaker_peak_at_ms, 0U, memory_order_release);
+  runtime.view.wants_call = false;
+  runtime.view.listening = false;
+  runtime.view.call_active = false;
+  runtime.voicelab.call_active = false;
+  runtime.voicelab.answer_open = false;
+  runtime.voicelab.last_presence_at_ms = 0U;
+  runtime.opening_started_at_ms = 0U;
+  runtime.opening_outcome = OPENING_IDLE;
+  atomic_fetch_add_explicit(
+      &runtime.capture_generation, 1U, memory_order_acq_rel);
+  atomic_store_explicit(&runtime.capture_open, false, memory_order_release);
+  atomic_store_explicit(
+      &runtime.capture_discard_requested, true, memory_order_release);
+  runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
+  runtime.view.status = status;
+}
+
+static void flush_pending_terminal(size_t outbox_free) {
+  enum capnweb_status status;
+  const size_t slot = runtime.pending_terminal_head;
+  if (runtime.pending_terminal_count == 0U) return;
+  /* A full outbox makes a Cap'n Web append session-fatal. Keep the terminal
+   * pending until its one control slot is available. */
+  if (outbox_free == 0U) return;
+  status = iterate_kit_voicelab_end_activation(
+      &runtime.voicelab,
+      runtime.pending_terminals[slot].activation,
+      runtime.pending_terminals[slot].reason);
+  if (status != CAPNWEB_OK) return;
+  /* The pending terminal owns the old stream call. `runtime.activation` may
+   * already name a new local capture, which has not appended while terminals
+   * are pending. */
+  runtime.voicelab.call_active = false;
+  runtime.voicelab.answer_open = false;
+  runtime.voicelab.last_presence_at_ms = 0U;
+  runtime.pending_terminal_head =
+      (runtime.pending_terminal_head + 1U) % TERMINAL_PENDING_CAPACITY;
+  --runtime.pending_terminal_count;
+}
+
 /*
  * ONE COMPLETE WIRE FRAME, and everything that is true once per wire frame.
  *
@@ -1598,6 +1373,11 @@ static enum iterate_kit_status bridge_copy_egress(
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   ++runtime.mic_frames_captured;
+  if (runtime.capture_generation_inflight !=
+      atomic_load_explicit(&runtime.capture_generation, memory_order_acquire)) {
+    capture_reset_audio();
+    return ITERATE_KIT_OK;
+  }
   /*
    * HOW LOUD THE ROOM IS, ONCE PER FRAME.
    *
@@ -1609,18 +1389,13 @@ static enum iterate_kit_status bridge_copy_egress(
    * canceller.
    */
   {
-    int32_t peak = 0;
-    for (size_t index = 0U; index < FRAME_SAMPLES; ++index) {
-      const int32_t sample = samples[index];
-      const int32_t magnitude = sample < 0 ? -sample : sample;
-      if (magnitude > peak) peak = magnitude;
-    }
+    const uint32_t peak = pcm_peak(samples, FRAME_SAMPLES);
     atomic_store_explicit(
-        &runtime.mic_peak, (unsigned int)peak, memory_order_relaxed);
-    if ((unsigned int)peak >
+        &runtime.mic_peak, peak, memory_order_relaxed);
+    if (peak >
         atomic_load_explicit(&runtime.mic_peak_max, memory_order_relaxed)) {
       atomic_store_explicit(
-          &runtime.mic_peak_max, (unsigned int)peak, memory_order_relaxed);
+          &runtime.mic_peak_max, peak, memory_order_relaxed);
     }
   }
   /*
@@ -1638,8 +1413,27 @@ static enum iterate_kit_status bridge_copy_egress(
    * measurement that would show a real uplink fault was buried in room noise
    * nobody wanted.
    */
-  if (!runtime.talking && !runtime.dial_buffering) {
+  if (atomic_exchange_explicit(
+          &runtime.capture_discard_requested, false, memory_order_acq_rel)) {
+    capture_reset_audio();
+    /* A new local activation may have followed end before this task ran. */
+    if (!atomic_load_explicit(&runtime.capture_open, memory_order_acquire)) {
+      return ITERATE_KIT_OK;
+    }
+  }
+  if (!atomic_load_explicit(&runtime.capture_open, memory_order_acquire)) {
+    if (atomic_load_explicit(&runtime.capture_muted, memory_order_acquire)) {
+      return ITERATE_KIT_OK;
+    }
+    capture_remember(samples);
     ++runtime.mic_frames_idle;
+    return ITERATE_KIT_OK;
+  }
+  if (!capture_open_activation()) {
+    atomic_store_explicit(
+        &runtime.capture_activation_overflow, true, memory_order_release);
+    atomic_fetch_add_explicit(
+        &runtime.capture_activation_overflows, 1U, memory_order_relaxed);
     return ITERATE_KIT_OK;
   }
   /*
@@ -1647,31 +1441,13 @@ static enum iterate_kit_status bridge_copy_egress(
    * exactly FRAME_SAMPLES of PCM16 and xQueueSend copies, so a staging frame
    * here would be one memcpy and 640 bytes of .bss to say the same thing.
    */
-  if (xQueueSend(runtime.mic_queue, samples, 0) != pdTRUE) {
-    /*
-     * FULL, and which end to sacrifice depends on what the queue is doing.
-     *
-     * DIALLING: keep the OLDEST. The queue is the dial buffer, nothing
-     * leaves it until the call is accepted, and the start of what somebody
-     * said is what makes the rest of it intelligible — the same rule the
-     * far end applies to its own held-frame cap. Latest-wins here was
-     * measured on a real press: a 7.5 s cold dial against 5.12 s of queue
-     * evicted the person's whole opening sentence and delivered the room
-     * noise that followed it (/agents/voice/stackchan, conversation-accepted
-     * handshakeTookMs 7489, 2026-08-20).
-     *
-     * IN A CALL: freshest wins — discard the OLDEST frame, keep this one.
-     * Stale speech after a network hiccup is worse than a gap, and it is
-     * the only way a backlog can never delay what the customer says next.
-     */
-    if (runtime.dial_buffering) {
-      ++runtime.mic_frames_dropped;
-      return ITERATE_KIT_OK;
-    }
-    struct mic_frame discarded;
-    (void)xQueueReceive(runtime.mic_queue, &discarded, 0);
-    (void)xQueueSend(runtime.mic_queue, samples, 0);
-    ++runtime.mic_frames_dropped;
+  if (xQueueSend(runtime.mic_queue, samples, 0) == pdTRUE) return ITERATE_KIT_OK;
+  {
+    /* Twenty-one seconds is the declared bound: fail the activation, never trim it. */
+    atomic_store_explicit(
+        &runtime.capture_activation_overflow, true, memory_order_release);
+    atomic_fetch_add_explicit(
+        &runtime.capture_activation_overflows, 1U, memory_order_relaxed);
   }
   return ITERATE_KIT_OK;
 }
@@ -1687,6 +1463,8 @@ void iterate_kit_voice_loop_capture_step(void) {
   static int16_t activity_chunk[FRAME_SAMPLES];
   struct iterate_kit_voice_capture_meta meta;
   size_t sample_count = 0U;
+  runtime.capture_generation_inflight = atomic_load_explicit(
+      &runtime.capture_generation, memory_order_acquire);
   const size_t chunk_samples = runtime.facts->capture_chunk_samples;
   /*
    * A reference plane exactly when the codec advertises one — the seam's own
@@ -1823,42 +1601,14 @@ static enum iterate_kit_status handle_device_event(
     void *context, const struct iterate_kit_device_event *event) {
   (void)context;
   switch ((enum iterate_kit_device_event_type)event->type) {
-    case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED:
-      /*
-       * A PRESS OPENS THE CALL. ONE VERB, NOT TWO.
-       *
-       * This set the talk latch and nothing else, and the turn machine below
-       * reads that latch only inside `wants_call` — so a press with no call up
-       * was latched and then never consulted. Driving a button board with
-       * `pushToTalk.start()` alone looked completely dead, the reply said the
-       * event had been accepted (it had), and an afternoon went into bisecting
-       * hardware that was working. The caller had to know to call
-       * `conversation.start()` first, and nothing anywhere said so.
-       *
-       * The stream protocol already decided this the right way round:
-       * `ptt-start` opens a call if none is up and the SERVER resolves it. A
-       * device press is the same request, so it makes the same claim here —
-       * and it is ONE assignment rather than a wrapper that calls two verbs,
-       * because two verbs is the thing that was wrong.
-       *
-       * `conversation.start()` still exists and still means something: an
-       * open-mic board has no press at all, and on a button board it is how you
-       * open a call to be greeted without holding the microphone open.
-       *
-       * Only STARTED. Releasing talk commits the turn; it does not hang up, for
-       * the same reason `ptt-end` does not.
-       */
-      runtime.remote_talk = (true);
-      runtime.view.wants_call = (true);
-      return ITERATE_KIT_OK;
-    case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED:
-      runtime.remote_talk = (false);
-      return ITERATE_KIT_OK;
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
-      runtime.view.wants_call = (true);
+      if (!atomic_load_explicit(&runtime.capture_muted, memory_order_acquire) &&
+          runtime.pending_terminal_count < TERMINAL_PENDING_CAPACITY) {
+        runtime.view.wants_call = true;
+      }
       return ITERATE_KIT_OK;
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED:
-      runtime.view.wants_call = (false);
+      end_local_activation("button", "call ended");
       return ITERATE_KIT_OK;
     case ITERATE_KIT_DEVICE_EVENT_TYPE_COUNT:
       break;
@@ -1869,20 +1619,9 @@ static enum iterate_kit_status handle_device_event(
 /* Defined beside health_json, which it adapts. */
 static size_t render_health(void *context, char *out, size_t capacity);
 
-/*
- * `talk_would_be_honoured` WAS HERE, and it answered the reply's `latched`
- * field: would a talk request arriving right now actually open the microphone?
- * On a board where a press did not open the call, the honest answer was often
- * "no", and reporting it was the best that could be done about an ordering
- * every caller had to know.
- *
- * The gate it reported is gone — a press opens the call — so the predicate can
- * only answer "yes" and the field it fed can only say `true`. Both went.
- */
-
 static bool initialise_connection(void) {
   /*
-   * Five shared (push-to-talk, conversation control, speaker, health,
+   * Four shared (conversation control, speaker, health,
    * system.update) plus whatever the board has of its own: an AEC stage,
    * servos, a camera, a screen to fill. The busiest board mounts eight.
    */
@@ -1904,24 +1643,10 @@ static bool initialise_connection(void) {
     };
     if (iterate_kit_device_event_queue_init(
             &runtime.device_events, &event_options) != ITERATE_KIT_OK ||
-        iterate_kit_push_to_talk_init(
-            &runtime.push_to_talk, &runtime.device_events) != ITERATE_KIT_OK ||
         iterate_kit_conversation_control_init(
             &runtime.conversation_control, &runtime.device_events) !=
             ITERATE_KIT_OK) {
       return false;
-    }
-    /*
-     * MOUNTED ONLY WHERE IT MEANS SOMETHING. A board whose microphone is open
-     * for the whole call has no push-to-talk to offer, and offering it anyway
-     * gives an agent a method that would silently mute live audio. Two boards
-     * already refused these events by hand in `handle_device_event`, one
-     * returning "invalid" and one "state error"; not mounting the module says
-     * the same thing once, before anybody can call it.
-     */
-    if (runtime.facts->turns == ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK) {
-      modules[module_count++] =
-          iterate_kit_push_to_talk_module(&runtime.push_to_talk);
     }
     modules[module_count++] =
         iterate_kit_conversation_control_module(&runtime.conversation_control);
@@ -1992,8 +1717,8 @@ static bool initialise_connection(void) {
         (sizeof(modules) / sizeof(modules[0])) - module_count);
   }
   peer_options = (struct iterate_kit_peer_options){
-    runtime.facts->peer_description,
-    strlen(runtime.facts->peer_description),
+    "{}",
+    2U,
     modules,
     module_count,
   };
@@ -2016,7 +1741,7 @@ static bool initialise_connection(void) {
   options.send_text_context = &transport;
   options.project_id = runtime.configuration.project_id;
   options.project_api_key = runtime.configuration.project_api_key;
-  options.client_path = runtime.facts->client_path;
+  options.client_path = client_path;
   options.capability = iterate_kit_peer_capability(&runtime.peer);
   /*
    * THE ONLY DESCRIPTION A MODEL EVER SEES.
@@ -2030,7 +1755,7 @@ static bool initialise_connection(void) {
    * telemetry streams instead of calling health(): nothing told it the call
    * existed.
    */
-  options.description = runtime.facts->instructions;
+  options.description = "Voice device";
   options.session_ended = on_session_ended;
   options.session_ended_context = NULL;
   if (iterate_kit_itx_connection_init(&runtime.connection, &options) !=
@@ -2117,6 +1842,15 @@ static size_t health_json(char *out, size_t capacity) {
 
   const struct field fields[] = {
     {"connectionState", (uint32_t)runtime.connection.state},
+    {"openingTimeouts", runtime.opening_timeouts},
+    {"openingAgeMs",
+     runtime.opening_started_at_ms == 0U
+         ? 0U
+         : (uint32_t)iterate_kit_voice_elapsed_ms(
+               now, runtime.opening_started_at_ms)},
+    {"queuedPcmMs", runtime.mic_queue == NULL
+         ? 0U
+         : (uint32_t)(uxQueueMessagesWaiting(runtime.mic_queue) * FRAME_MS)},
     {"seq", runtime.stats_sequence++},
     {"framesSent", runtime.voicelab.frames_sent},
     {"frameFailures", runtime.voicelab.frame_send_failures},
@@ -2183,16 +1917,9 @@ static size_t health_json(char *out, size_t capacity) {
      * The old classifier's `spkIgnoredCall`/`spkIgnoredStale`/`spkIgnoredDup`
      * are gone with the classifier: the sender paces the answer and no frame
      * carries a call or an answer any more, so there is nothing for the
-     * device to refuse. Numbering, though, RETURNED with
-     * `deviceSpeakerFrameSeq` — the flush that names a sequence number needs
-     * one — and the stream layer counts its holes. Published here because a
-     * lost-chunk question asked over RPC had no witness: a whole evening's
-     * barge diagnosis (2026-08-20) stalled on exactly that.
+     * device to refuse.
      */
     {"spkDecodeFailures", runtime.voicelab.spk_decode_failures},
-    {"spkSeqGaps", runtime.voicelab.spk_seq_gaps},
-    {"spkSeqMissing", runtime.voicelab.spk_seq_missing},
-    {"spkSeqRegressions", runtime.voicelab.spk_seq_regressions},
     {"spkDiscarded",
      atomic_load_explicit(
          &runtime.speaker_discarded_frames, memory_order_relaxed)},
@@ -2222,7 +1949,6 @@ static size_t health_json(char *out, size_t capacity) {
      */
     {"facePolls", runtime.voicelab.face_polls},
     {"faceUpdates", runtime.voicelab.face_updates},
-    {"turnMarkerFailures", runtime.turn_marker_failures},
     /*
      * THE FACE, AND THE ONE NUMBER THAT SAYS IT IS ALIVE.
      *
@@ -2244,21 +1970,6 @@ static size_t health_json(char *out, size_t capacity) {
          : (uint32_t)iterate_kit_voice_elapsed_ms(
                now, runtime.voicelab.last_bridge_ms)},
     {"downlinkRecycles", runtime.downlink_recycles},
-    /*
-     * THE PRESS PROBE, AS AN INSTRUMENT RATHER THAN A BELIEF.
-     *
-     * `pressProbeMs` is the last PONG round trip measured after a press, and it
-     * is the only evidence anybody has for what that costs on this hardware —
-     * the 1500 ms budget it is checked against was a guess. `pressProbeMisses`
-     * counts probes no PONG answered (a lossy access point moves this without
-     * anything being wrong); `pressProbeRestarts` counts sockets replaced
-     * because two in a row went unanswered, and that one should stay at zero
-     * unless a socket really did die.
-     */
-    {"pressProbes", runtime.press_probes},
-    {"pressProbeMs", runtime.press_probe_ms},
-    {"pressProbeMisses", runtime.press_probe_misses},
-    {"pressProbeRestarts", runtime.press_probe_restarts},
     {"batchAgeMs",
      runtime.voicelab.last_batch_ms == 0U
          ? 0U
@@ -2329,52 +2040,42 @@ static size_t health_json(char *out, size_t capacity) {
       out,
       capacity,
       "{\"transport\":\"%s\",\"voicelab\":\"%s\",\"voicelabFailure\":\"%s\","
-      /*
-       * WHICH CONVERSATION. Every call gets its own stream and the path is
-       * chosen ON THE DEVICE, so without this the only way to find the
-       * transcript of the call you are looking at is to guess a UTC second.
-       */
+      /* Current stream path. */
       "\"conversation\":\"%s\","
+      "\"opening\":\"%s\","
       "\"clock\":\"%s\","
       /* WHY IT LAST RESTARTED. Uptime says one happened; only this
        * says whether it was a panic, a stall or somebody's thumb. */
       "\"resetReason\":\"%s\",\"restartNote\":\"%s\","
       "\"connection\":\"%s\","
-      "\"callActive\":%s,\"callPending\":%s,\"wantsCall\":%s,\"talking\":%s,"
-      /*
-       * WHY A PRESS DID NOT BECOME A CALL. Every input the launch seam reads,
-       * reported over the stream — because the console port reboots this
-       * board, so the only way to watch it decide is to have it say so. A
-       * board that wants a call and never places one is otherwise silent
-       * about which of three conditions refused it.
-       */
+      "\"callActive\":%s,\"wantsCall\":%s,"
+      /* Opening inputs and capture-gate state. */
       "\"hasStreamCap\":%s,\"outboxFree\":%u,"
-      "\"lastStartStatus\":%d,\"startCallFailures\":%u,"
-      "\"lastLaunchStep\":%d,\"launchPolls\":%u,"
-      "\"sawWantsCall\":%s,\"sawLinkReady\":%s,\"wantsCallPolls\":%u,"
-      "\"gateOpen\":%s,\"t\":%" PRIu64 ",\"uptimeMs\":%" PRIu64,
+      "\"gateOpen\":%s,\"activationStartedMs\":%" PRIu64
+      ",\"firstMicAppendOffsetMs\":%" PRId64 ",\"t\":%" PRIu64
+      ",\"uptimeMs\":%" PRIu64,
       iterate_kit_esp_idf_itx_transport_state_name(transport.state),
       iterate_kit_voicelab_state_name(runtime.voicelab.state),
       iterate_kit_voicelab_failure_name(runtime.voicelab.failure),
       stream_path,
+      runtime.opening_outcome == OPENING_WAITING ? "waiting"
+      : runtime.opening_outcome == OPENING_ACCEPTED ? "accepted"
+      : runtime.opening_outcome == OPENING_TIMED_OUT ? "timed-out" : "idle",
       clock,
       iterate_kit_esp_reset_reason_name(),
       iterate_kit_esp_last_restart_note(),
       iterate_kit_itx_connection_state_name(runtime.connection.state),
       runtime.voicelab.call_active ? "true" : "false",
-      runtime.voicelab.call_pending ? "true" : "false",
       runtime.view.wants_call ? "true" : "false",
-      runtime.talking ? "true" : "false",
       runtime.voicelab.has_stream_capability ? "true" : "false",
       (unsigned)(CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots),
-      (int)runtime.last_start_status,
-      (unsigned)runtime.start_call_failures,
-      runtime.last_launch_step,
-      (unsigned)runtime.launch_polls,
-      runtime.saw_wants_call ? "true" : "false",
-      runtime.saw_link_ready ? "true" : "false",
-      (unsigned)runtime.wants_call_polls,
       gate_open ? "true" : "false",
+      runtime.activation_started_at_ms,
+      runtime.first_mic_append_at_ms == 0U ||
+              runtime.activation_started_at_ms == 0U
+          ? INT64_C(-1)
+          : (int64_t)iterate_kit_voice_elapsed_ms(
+                runtime.first_mic_append_at_ms, runtime.activation_started_at_ms),
       now,
       now);
   if (written <= 0 || (size_t)written >= capacity) return 0U;
@@ -2529,8 +2230,7 @@ static void park_with_fault(const char *what) {
  *
  * The order INSIDE `start` is the board's own: one must raise its panel before
  * its codec because both resets hang off a single TCA9554, and doing it the
- * other way round resets a configured codec. WHEN this runs relative to the
- * radio is the loop's, and that is `facts->radio_before_codec`.
+ * other way round resets a configured codec.
  */
 static bool start_board(void) {
   /*
@@ -2602,12 +2302,24 @@ bool iterate_kit_voice_loop_init(
       ops->present == NULL) {
     return false;
   }
+  atomic_store_explicit(
+      &runtime.speaker_answer_done_generation, UINT32_MAX, memory_order_release);
   runtime.board = ops;
   runtime.facts = facts;
   runtime.board_context = context;
-  (void)snprintf(
-      stream_path, sizeof(stream_path), "%s", facts->stream_path);
-  turn_policy = facts->turns;
+  if (facts->device_name == NULL || facts->device_name[0] == '\0') {
+    return false;
+  }
+  const int stream_path_length = snprintf(
+      stream_path, sizeof(stream_path), "/agents/voice/v23/%s", facts->device_name);
+  const int client_path_length = snprintf(
+      client_path, sizeof(client_path), "/clients/%s", facts->device_name);
+  if (stream_path_length < 0 ||
+      (size_t)stream_path_length >= sizeof(stream_path) ||
+      client_path_length < 0 ||
+      (size_t)client_path_length >= sizeof(client_path)) {
+    return false;
+  }
   iterate_kit_voice_playout_init(&runtime.playout);
   /*
    * The app task is the sole consumer of the control inbox and therefore the
@@ -2661,7 +2373,7 @@ bool iterate_kit_voice_loop_init(
    * so a stall must still reboot loudly.
    */
   (void)esp_task_wdt_add(NULL);
-  if (!runtime.facts->radio_before_codec && !start_board()) {
+  if (!start_board()) {
     park_with_fault("board bring-up failed");
   }
   runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_CONNECTING;
@@ -2735,17 +2447,6 @@ bool iterate_kit_voice_loop_init(
       vTaskDelay(pdMS_TO_TICKS(100));
     }
   }
-  /*
-   * ...AND THE CODEC NOW, on the board that asked for it, while the radio is
-   * off doing its own waiting. Its XMOS + AIC3204 bring-up is 6.2 s measured
-   * and it used to run to completion BEFORE Wi-Fi was even started, so two
-   * waits ran back to back for no reason: that board reached a ready mount at
-   * ~14 s where the others managed ~8. Nothing in the transport needs the
-   * codec, and only the two tasks below do.
-   */
-  if (runtime.facts->radio_before_codec && !start_board()) {
-    park_with_fault("board bring-up failed");
-  }
   if (xTaskCreatePinnedToCore(
           capture_task,
           "vl-capture",
@@ -2774,30 +2475,6 @@ bool iterate_kit_voice_loop_init(
       (unsigned int)sizeof(transport),
       stream_path);
   return true;
-}
-
-/*
- * ASK THE HOP, BECAUSE A PRESS JUST MADE THE ANSWER WORTH KNOWING.
- *
- * Queues one WebSocket PING and records the PONG count to beat. Called when a
- * call is placed and, once, again if the first went unanswered — see
- * ITERATE_KIT_VOICE_PRESS_PROBE_MS for why the answer is a PONG rather than a
- * delivered batch, and why a single missed one is not evidence.
- *
- * Takes the pong baseline from a metrics snapshot the caller already has, so
- * arming costs one control frame and no extra sampling.
- */
-static void arm_press_probe(uint64_t now, uint32_t pongs_now) {
-  runtime.press_probe_sent_ms = now;
-  runtime.press_probe_pongs_before = pongs_now;
-  ++runtime.press_probe_attempt;
-  ++runtime.press_probes;
-  iterate_kit_esp_idf_itx_transport_request_probe(&transport);
-}
-
-static void disarm_press_probe(void) {
-  runtime.press_probe_sent_ms = 0U;
-  runtime.press_probe_attempt = 0U;
 }
 
 /*
@@ -2886,50 +2563,53 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
      * two controls in one pass is already a person mashing, and the append
      * below needs a READY session the press may predate.
      */
-    if (runtime.intent.end_call) runtime.pending_button_audit = "end";
-    if (runtime.intent.start_call) runtime.pending_button_audit = "start";
+    if (runtime.intent.microphone_muted &&
+        !atomic_exchange_explicit(
+            &runtime.capture_muted, true, memory_order_acq_rel)) {
+      end_local_activation("microphone-muted", "microphone muted");
+    } else if (!runtime.intent.microphone_muted) {
+      atomic_store_explicit(&runtime.capture_muted, false, memory_order_release);
+    }
     if (runtime.intent.end_call) {
-      runtime.view.wants_call = false;
-      /*
-       * THE TAIL DIES WITH THE PRESS. The far end's conversation-ended will
-       * also abandon, but that is a round trip away, and the ring holds
-       * thirty seconds — a person who just ended a call and keeps hearing
-       * the answer reads the button as broken, not the call as draining.
-       */
-      (void)abandon_speaker_audio();
+      end_local_activation("button", "call ended");
       ESP_LOGI(tag, "control: ending call");
     }
-    if (runtime.intent.start_call && !runtime.voicelab.call_active) {
+    if (runtime.intent.start_call && !runtime.intent.microphone_muted &&
+        !runtime.voicelab.call_active &&
+        runtime.pending_terminal_count < TERMINAL_PENDING_CAPACITY) {
       runtime.view.wants_call = true;
       ESP_LOGI(tag, "control: starting call");
     }
     runtime.intent.start_call = false;
     runtime.intent.end_call = false;
+    /* Capture starts at activation and remains open until an explicit end. */
     {
-      static bool talk_down;
-      if (runtime.intent.talk_held != talk_down) {
-        talk_down = runtime.intent.talk_held;
-        /*
-         * ...AND A FINGER ON THE TALK BUTTON OPENS THE CALL TOO, for the same
-         * reason `pushToTalk.start()` does: one verb. The shared session
-         * grammar already mints `start_call` for the hold that wakes a
-         * push-to-talk board and reports the level only where the table says
-         * holding means talking, so this edge restates a claim the board has
-         * already made — kept because it is the loop's own spelling of the
-         * one-verb rule, the same claim `ptt-start` makes over the wire.
-         *
-         * THE RISING EDGE, not the level. `talk_held` stays true for as long as
-         * the button is down, so raising on the level would re-open a call the
-         * person had just ended with their other hand and there would be no way
-         * to hang up without letting go first.
-         *
-         * Placed after the explicit start/end above so that within one pass
-         * the specific instruction wins over this implicit one.
-         */
-        if (talk_down) runtime.view.wants_call = true;
-        ESP_LOGI(
-            tag, "talk %s",
-            talk_down ? "down (talking)" : "up (commit)");
+      if (runtime.view.wants_call && !runtime.activation_live) {
+        begin_activation(now_ms(NULL));
+      }
+      if (atomic_exchange_explicit(
+              &runtime.capture_activation_overflow, false,
+              memory_order_acq_rel)) {
+        end_local_activation(
+            "activation-overflow", "opening speech exceeded 21s");
+        ESP_LOGE(tag, "activation microphone FIFO overflow");
+      } else if (atomic_load_explicit(
+                     &runtime.capture_open, memory_order_acquire) !=
+                 runtime.view.wants_call) {
+        runtime.view.listening = runtime.view.wants_call;
+        if (runtime.view.wants_call) {
+          atomic_store_explicit(
+              &runtime.capture_open, true, memory_order_release);
+          (void)abandon_speaker_audio();
+          runtime.mic_flushed_at_ms = 0U;
+          runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_LISTENING;
+          runtime.view.status = "listening";
+        } else {
+          atomic_store_explicit(
+              &runtime.capture_open, false, memory_order_release);
+          runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
+          runtime.view.status = "ready";
+        }
       }
     }
 
@@ -2999,6 +2679,17 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
 
     const uint64_t now = now_ms(NULL);
 
+    /* Each activation has one bounded opening deadline and one capture FIFO. */
+    if (runtime.opening_started_at_ms != 0U &&
+        !runtime.voicelab.call_active &&
+        iterate_kit_voice_elapsed_ms(now, runtime.opening_started_at_ms) >=
+            OPENING_DEADLINE_MS) {
+      end_local_activation("opening-timeout", "opening timed out");
+      runtime.opening_outcome = OPENING_TIMED_OUT;
+      ++runtime.opening_timeouts;
+      ESP_LOGE(tag, "activation opening timed out before acceptance");
+    }
+
     /*
      * The transport can latch a fatal state that nothing ever clears — most
      * reachably when the network task's stack high-water (a minimum-EVER
@@ -3067,69 +2758,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       if (liveness.websocket_pongs_received != last_pong_count) {
         last_pong_count = liveness.websocket_pongs_received;
         last_liveness_ms = now;
-      }
-      runtime.pongs_seen = liveness.websocket_pongs_received;
-      /*
-       * THE PRESS'S OWN QUESTION, ANSWERED ON THE PRESS'S OWN CLOCK.
-       *
-       * The watchdog above waits seven minutes, deliberately, because on an
-       * idle board a dead hop costs nothing. This one waits three seconds,
-       * because a press just went out and a press is the one moment a dead hop
-       * is the difference between a device and a brick. It exists at all
-       * because the append the press sends CANNOT report its own failure: a
-       * one-way write into a half-open socket is accepted by TCP, reports
-       * success, and is noticed by nothing until DOWNLINK_SILENCE_MS ten
-       * seconds later.
-       *
-       * It shares this block only because the PONG count is already sampled
-       * here; the two deadlines are unrelated and must not be merged.
-       *
-       * Disarmed the moment the transport stops being READY — the socket is
-       * already being replaced, and a PONG from a connection that no longer
-       * exists is never coming.
-       */
-      if (runtime.press_probe_sent_ms != 0U) {
-        if (transport.state != ITERATE_KIT_ESP_IDF_ITX_READY) {
-          disarm_press_probe();
-        } else if (liveness.websocket_pongs_received !=
-                   runtime.press_probe_pongs_before) {
-          /*
-           * ALIVE — and now measured. `pressProbeMs` is the only evidence
-           * anybody has for what a PONG round trip actually costs on these
-           * boards, which is what the 1500 ms budget was guessed against.
-           */
-          runtime.press_probe_ms = (uint32_t)iterate_kit_voice_elapsed_ms(
-              now, runtime.press_probe_sent_ms);
-          disarm_press_probe();
-        } else if (iterate_kit_voice_elapsed_ms(
-                       now, runtime.press_probe_sent_ms) > PRESS_PROBE_MS) {
-          ++runtime.press_probe_misses;
-          if (runtime.press_probe_attempt < PRESS_PROBE_ATTEMPTS) {
-            /* One missed PONG is a dropped packet. Ask again before acting. */
-            ESP_LOGW(
-                tag,
-                "no pong %ums after a press — asking once more",
-                (unsigned int)PRESS_PROBE_MS);
-            arm_press_probe(now, liveness.websocket_pongs_received);
-          } else {
-            /*
-             * TWO IN A ROW IS A DEAD SOCKET, and the only remedy for a dead
-             * socket is a new one: recycling the stream connection would send
-             * its round trip down the same silent pipe. Forget the call first
-             * — it was requested into nothing, and believing in it would stop
-             * the intent from placing a real one on the replacement session.
-             */
-            ESP_LOGE(
-                tag,
-                "hop did not answer %u probes after a press — replacing the "
-                "socket",
-                (unsigned int)PRESS_PROBE_ATTEMPTS);
-            ++runtime.press_probe_restarts;
-            disarm_press_probe();
-            iterate_kit_voicelab_forget_call(&runtime.voicelab);
-            iterate_kit_esp_idf_itx_transport_request_restart(&transport);
-          }
-        }
       }
       /*
        * A TRANSPORT THAT IS NEVER READY MUST NOT DISABLE THE RESTART.
@@ -3234,8 +2862,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         .project_id = runtime.configuration.project_id,
         .project_api_key = runtime.configuration.project_api_key,
         .stream_path = stream_path,
-        .client_path = runtime.facts->client_path,
-        .conversation_id = runtime.facts->conversation_id,
+        .activation = runtime.activation,
         .now_ms = now_ms,
         .clock_context = NULL,
         .on_speaker = on_speaker_pcm,
@@ -3266,9 +2893,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       }
       if (started == CAPNWEB_OK) {
         runtime.voicelab_generation = runtime.connection.generation;
-        runtime.frame_sequence = 0U;
-        (void)xQueueReset(runtime.mic_queue); /* drop pre-session stale audio */
-        runtime.dial_speech_queued = false;
         /*
          * NOTHING TO FORGET ABOUT THE SENDER ANY MORE.
          *
@@ -3304,49 +2928,11 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
          */
         runtime.view.status = ("");
       } else if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_FAILED) {
-        /* A dead session takes the call with it; the button starts over. */
-        runtime.view.wants_call = (false);
+        /* A retry keeps the local activation and its FIFO intact. */
         runtime.view.call_active = (false);
         runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_CONNECTING;
         runtime.view.status = (iterate_kit_voicelab_failure_name(runtime.voicelab.failure));
       }
-    }
-
-    /*
-     * The turn's UI state is settled OUTSIDE the session gate below.
-     *
-     * All of this used to live inside "session is READY", so if the session
-     * dropped while the button was held, the release was never processed at
-     * all: the device sat on "listening" forever, nothing was ever committed,
-     * and no answer could arrive. The user's intent and what the screen says
-     * must never depend on the network being up — only the appends do.
-     */
-    if (runtime.talking && !runtime.flushing_turn &&
-        (runtime.voicelab.state != ITERATE_KIT_VOICELAB_READY ||
-         /*
-          * `&& !wants_call`: talking WITHOUT a call is now the legitimate
-          * WAKING state — the microphone opens at the wake press and
-          * buffers into the dial. Without this conjunct the abandon fired
-          * on every pass of every dial, flapping `talking` and resetting
-          * the queue at 200 Hz, which erased the dial buffer this state
-          * exists to hold and spammed a WARN per pass while doing it.
-          */
-         (!runtime.voicelab.call_active && !runtime.view.wants_call))) {
-      ESP_LOGW(tag, "turn abandoned: session or call went away");
-      runtime.talking = false;
-      runtime.flushing_turn = false;
-      runtime.remote_talk = false;
-      /* Give the pins back: the answer path needs them. */
-      board_fence(false);
-      /*
-       * AND STOP ATTENDING. Every other path out of a turn clears this at the
-       * commit; this one bypasses the commit entirely, so a face left here
-       * held its listening pose until the next turn opened. Reachable on any
-       * board — an open-mic board takes it on every call end.
-       */
-      runtime.view.listening = false;
-      runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
-      runtime.view.status = runtime.facts->call_hint;
     }
 
     if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
@@ -3362,13 +2948,19 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        */
       struct iterate_kit_spsc_ring_metrics outbox_metrics;
       iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
-      const size_t outbox_free =
+      size_t outbox_free =
           CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots;
       static struct mic_frame frame_storage[MIC_FRAMES_PER_APPEND];
-      static uint64_t drain_window_at;
-      static struct iterate_kit_launch launch;
-      static uint64_t call_pending_since;
+      static int16_t pcm_storage[MIC_FRAMES_PER_APPEND][FRAME_SAMPLES];
       static bool call_active_shown;
+
+      /* Terminals are ordered ahead of later activation audio. */
+      flush_pending_terminal(outbox_free);
+      /* A terminal append consumes the same ring as mic frames. Refresh the
+       * headroom before deciding whether another producer may append. */
+      iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
+      outbox_free = CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots;
+      const bool terminal_pending = runtime.pending_terminal_count != 0U;
 
       /*
        * One intent path for both sources: a physical button edge and an RPC
@@ -3390,39 +2982,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         if (wants_call && !wanted_previously) runtime.voicelab.last_batch_ms = now;
         wanted_previously = wants_call;
       }
-      /*
-       * A WIRED-OR, and then a turn policy on top of it.
-       *
-       * A physical control and an RPC hold the microphone open the same way,
-       * so either is enough. On a board whose far end segments turns there is
-       * no control to hold at all and the microphone rides the open call —
-       * requesting the manual default there produces an accepted call and a
-       * deaf assistant, so the policy is a fact rather than a guess.
-       *
-       * `wants_call &&` IS NOW A SAFETY NET RATHER THAN AN ORDERING. It used to
-       * be the reason a talk request needed `conversation.start()` in front of
-       * it: the latch was set and this conjunct silently discarded it forever.
-       * Both talk sources raise `wants_call` at the press now, so nothing can
-       * arrive here holding talk without a call being wanted — except the one
-       * case this still has to refuse, which is talk held across a deliberate
-       * hang-up. Sending microphone frames into a call nobody wants is not a
-       * turn, so the conjunct stays.
-       */
-      const bool wants_talk =
-          turn_policy == ITERATE_KIT_VOICE_TURNS_SERVER_VAD
-          /*
-           * `|| wants_call`: the microphone opens at the WAKE PRESS, not at
-           * CALL_ACCEPTED, so speech spoken into the dial lands in the
-           * queue and the accepted call carries it — see `dial_buffering`.
-           * The drain below still waits for the call, so nothing is SENT
-           * early; end-goes-silent means wants_call only rises on a
-           * deliberate wake, so this no longer admits idle room noise.
-           */
-          ? (runtime.voicelab.call_active || wants_call)
-          : (wants_call &&
-             (runtime.intent.talk_held || runtime.remote_talk));
-      runtime.view.talk_held = wants_talk;
-
       /*
        * THE BRIDGE-SILENCE WATCHDOG WAS HERE, AND ITS EVIDENCE IS GONE.
        *
@@ -3459,15 +3018,23 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        * sees, and nothing in the device was ever going to notice: the socket
        * was fine, the session was fine, the appends were fine.
        *
-       * Silence is only evidence when traffic is expected. It is expected
-       * whenever a call is wanted: an accepted call answers, so ten seconds
-       * without a single batch means the lane is dead, not quiet.
+       * Silence is only evidence when traffic is expected, and with GPT-Live
+       * that is narrower than "a call is wanted": the facet drops idle
+       * silence, so an accepted call with nothing owed delivers NOTHING while
+       * the person thinks and the model listens. Read as a dead lane, that
+       * recycled the connection every ten seconds of ordinary conversation
+       * (18 times in a six-minute call, 2026-09-11), each one a TLS round
+       * trip on this task. Traffic is owed while a wanted call has not been
+       * accepted yet, or an answer has begun and its `last` has not come —
+       * iterate_kit_voicelab_downlink_expected() — and ten seconds of
+       * nothing in either state means the lane is dead, not quiet.
        * The cure is the recycle that already exists — make-before-break, one
        * round trip — and if three of those change nothing then it is not the
        * connection that is broken, it is the session under it.
        */
       if (wants_call && runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
           runtime.voicelab.has_connection_capability &&
+          iterate_kit_voicelab_downlink_expected(&runtime.voicelab) &&
           !runtime.voicelab.recycle_pending && outbox_free >= 4U &&
           runtime.voicelab.last_batch_ms != 0U &&
           iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_batch_ms) > DOWNLINK_SILENCE_MS) {
@@ -3501,103 +3068,9 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         runtime.downlink_recycles_running = 0U;
       }
 
-      /*
-       * call_pending is a promise that something will answer, and promises
-       * expire. It is cleared by conversation-accepted or by the start RPC failing —
-       * so a start whose reply is simply lost (the session died underneath
-       * it, the bridge never came up) latched it true forever, and the
-       * reconcile below never ran again. The device then waits, with a call
-       * it wants and no call, for as long as it is left on.
-       */
-      if (runtime.voicelab.call_pending && call_pending_since != 0U &&
-          iterate_kit_voice_elapsed_ms(now, call_pending_since) > 20000U) {
-        ESP_LOGW(tag, "call start went unanswered for 20s — trying again");
-        iterate_kit_voicelab_forget_call(&runtime.voicelab);
-        call_pending_since = 0U;
-        iterate_kit_launch_retry_now(&launch);
-      }
-      if (!runtime.voicelab.call_pending) call_pending_since = 0U;
-
-      /*
-       * The obituary grace is armed HERE, before the ladder ever sees the
-       * fall: the fall and the ladder share a pass, and arming it in the
-       * display reconcile sixty lines below let the ladder place the
-       * zombie first — measured twice, 126 ms and 87 ms end-to-relaunch.
-       * `call_active_shown` still carries last pass's value at this point;
-       * the display reconcile below is what updates it.
-       */
-      if (call_active_shown && !runtime.voicelab.call_active && wants_call) {
-        runtime.obituary_grace_until_ms = now + 1500U;
-      }
-      /*
-       * GETTING INTO A CALL. The ladder — prepare ahead, prepare now, place —
-       * and its three separate deadlines live in conversation_launch.c, which
-       * every board shares and which is tested on the host.
-       */
-      {
-        const struct iterate_kit_launch_inputs launching = {
-            .call_active = runtime.voicelab.call_active,
-            .call_pending = runtime.voicelab.call_pending,
-            .link_ready = outbox_free >= 3U,
-            .now_ms = now,
-            /* Masked, not cleared: if the obituary lands during the grace it
-             * clears the intent itself; if none comes, the want resumes. */
-            .wants_call =
-                wants_call && now >= runtime.obituary_grace_until_ms,
-        };
-        runtime.last_launch_step = (int)iterate_kit_launch_next_step(&launch, &launching);
-        ++runtime.launch_polls;
-        runtime.saw_wants_call = launching.wants_call;
-        runtime.saw_link_ready = launching.link_ready;
-        if (launching.wants_call) ++runtime.wants_call_polls;
-        switch ((enum iterate_kit_launch_step)runtime.last_launch_step) {
-          case ITERATE_KIT_LAUNCH_PLACE_CALL:
-            call_pending_since = now;
-            /*
-             * KEEP THE REFUSAL. This discarded the status, so a start that
-             * failed was indistinguishable from one that was never attempted:
-             * a board sat wanting a call with every launch gate green and
-             * nothing anywhere said why.
-             */
-            runtime.last_start_status =
-                iterate_kit_voicelab_start_call(
-                    &runtime.voicelab, runtime.facts->greeting);
-            if (runtime.last_start_status == CAPNWEB_OK) {
-              runtime.view.status = ("starting call");
-              /*
-               * AND ASK THE HOP, because the request above cannot report its
-               * own delivery. It is a Cap'n Web call whose reply arrives only
-               * if the far side is still there, and into a half-open socket it
-               * simply never returns — accepted by TCP, READY transport, ten
-               * seconds of silence before anything notices. The probe is armed
-               * HERE and nowhere else: a press is the only event on this device
-               * that makes a stale socket expensive, and an idle board must
-               * stay silent or the Durable Object behind it never hibernates.
-               */
-              arm_press_probe(now, runtime.pongs_seen);
-            } else {
-              ++runtime.start_call_failures;
-            }
-            break;
-          case ITERATE_KIT_LAUNCH_NOTHING:
-          default:
-            break;
-        }
-      }
-      if (!wants_call && runtime.voicelab.call_active && outbox_free >= 3U) {
-        /*
-         * ENDING A CALL ABANDONS WHATEVER WAS PLAYING.
-         *
-         * Same reasoning as the barge-in flush: the ring still holds the last
-         * 90ms of an answer nobody will hear the rest of, and it drains while
-         * the speaker task sits armed. That gap was counted as starvation on
-         * every hang-up-mid-answer — send index 44 in the run that showed it.
-         * Ours, intended, and declared at the moment we cause it.
-         */
-        board_phase(ITERATE_KIT_VOICE_PHASE_WAITING);
-        (void)iterate_kit_voicelab_end_call(&runtime.voicelab, "button");
-        runtime.view.status = ("call ended");
-        runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
+      if (!terminal_pending && wants_call && runtime.voicelab.call_active &&
+          outbox_free >= 3U) {
+        (void)iterate_kit_voicelab_keepalive_if_due(&runtime.voicelab);
       }
       if (runtime.voicelab.call_active &&
           runtime.voicelab.call_active != call_active_shown) {
@@ -3605,15 +3078,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         runtime.playout.stats.writes = 0U;
       }
       if (runtime.voicelab.call_active != call_active_shown) {
-        /*
-         * The call fell while still WANTED and no obituary explained it —
-         * either a genuine connection recycle, or a far-end hang-up whose
-         * conversation-ended is still in flight. Hold the relaunch long
-         * enough to tell them apart; see `obituary_grace_until_ms`.
-         */
-        if (call_active_shown && !runtime.voicelab.call_active && wants_call) {
-          runtime.obituary_grace_until_ms = now + 1500U;
-        }
         call_active_shown = runtime.voicelab.call_active;
         runtime.view.call_active = (call_active_shown);
         /*
@@ -3630,233 +3094,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
            * call's first frame.
            */
           runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
-          runtime.view.status = runtime.facts->talk_hint;
-        }
-      }
-
-      /*
-       * TURN EDGES ARE PUSH-TO-TALK'S, AND ONLY PUSH-TO-TALK'S.
-       *
-       * A marker is not a notification, it is an instruction: `ptt-start`
-       * tells the far side `input_audio_buffer.clear` and re-accepts the call,
-       * and `ptt-end` sends `input_audio_buffer.commit` + `response.create`
-       * with no server-VAD guard on either. On a board whose microphone rides
-       * the open call that is wrong twice — the call request ALREADY sent the
-       * one `ptt-start` such a board owes, carrying the client path that is
-       * what selects server VAD on the far side, so a second one throws away
-       * audio the provider had buffered mid-conversation; and a commit forces
-       * an answer to a turn the provider's own VAD is responsible for closing.
-       *
-       * Neither open-mic board published either marker before it ran this
-       * loop, and the whole edge machine below — the maximum-length bound, the
-       * press, the release, the tail flush — is the same shape: it describes a
-       * BUTTON. An open-mic board has none, so its `talking` follows the call
-       * and nothing else.
-       */
-      const bool marks_turns =
-          turn_policy == ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK;
-      /*
-       * DIAL-TIME SPEECH IS BUFFERED, NOT SENT AND NOT DROPPED. While a
-       * call is wanted-but-not-active and the posture says the person is
-       * talking (open mic: the wake press itself; push-to-talk: the held
-       * button), capture queues and the drain waits for the call. The
-       * queue is reset once, at the moment buffering begins, so pre-press
-       * room noise is dropped exactly where the press is.
-       */
-      {
-        const bool buffering =
-            wants_talk && !runtime.voicelab.call_active;
-        if (buffering && !runtime.dial_buffering) {
-          (void)xQueueReset(runtime.mic_queue); /* pre-press room noise */
-          runtime.frame_sequence = 0U;
-        }
-        if (buffering && marks_turns) runtime.dial_speech_queued = true;
-        /*
-         * RELEASED DURING THE DIAL: THE SPEECH IS KEPT. This used to clear
-         * `dial_speech_queued` on the release edge, on the doctrine that the
-         * turn which would have carried the speech never opened. Reversed
-         * 2026-08-20: from the moment the device starts listening, captured
-         * audio is a promise — press from sleep, say "count to forty",
-         * release, and a call that connects seconds later must answer those
-         * words as its FIRST turn (the host CLI has always behaved this
-         * way, because its dial is warm in a second). The queue holds
-         * exactly the press-to-release speech — capture stops queueing when
-         * `dial_buffering` falls — and the accept-side branch below the
-         * turn-open branch drains it and commits the turn. A NEW press
-         * still starts clean: the buffering rising edge above resets the
-         * queue, so the kept speech can never prepend itself to a later
-         * press's words — it is either carried by the call it dialled, or
-         * replaced at the next press, or dies with the call (CALL_ENDED
-         * clears the flag). The mint side keeps its own guard — a ptt-start
-         * older than 30 s never mints — but the launch ladder re-presses
-         * every 3 s, so a long dial still connects and still gets this
-         * speech.
-         */
-        runtime.dial_buffering = buffering;
-      }
-      if (!marks_turns) {
-        /*
-         * The microphone rides the call, so this is one edge, not two, and it
-         * carries no wire traffic at all. The queue reset is the one thing the
-         * press did that still applies: room noise captured before the call
-         * came up is not part of it.
-         */
-        if (runtime.talking != wants_talk) {
-          runtime.talking = wants_talk;
-          runtime.view.listening = wants_talk;
-          if (wants_talk) {
-            (void)xQueueReset(runtime.mic_queue); /* pre-call room noise */
-            runtime.frame_sequence = 0U;
-            runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_LISTENING;
-            runtime.view.status = ("listening");
-          }
-        }
-      }
-      /*
-       * A turn is bounded no matter what. The talk button is read over a
-       * shared I2C bus and the UI can request a turn remotely; either can
-       * fail in a way that leaves the request stuck on. Rather than trust
-       * both, the turn ends itself after a maximum length — nobody speaks
-       * for a minute straight, and a wedged turn is worse than a truncated
-       * one because nothing is ever sent for an answer.
-       */
-      if (marks_turns && runtime.talking && !runtime.flushing_turn &&
-          iterate_kit_voice_elapsed_ms(now, runtime.turn_started_ms) > TURN_MAX_MS) {
-        ESP_LOGW(tag, "turn exceeded %ums — ending it", (unsigned)TURN_MAX_MS);
-        runtime.remote_talk = false;
-        board_fence(false);
-        runtime.flushing_turn = true;
-        runtime.flush_frames_left = 0U;
-        runtime.flush_deadline_ms = now;
-      }
-      if (marks_turns && wants_talk && !runtime.talking &&
-          runtime.voicelab.call_active && outbox_free >= 3U) {
-        /*
-         * Pressing to talk abandons whatever is still playing, which is an
-         * intentional flush like any other — and this site never disarmed the
-         * starvation watch at all. The funnel also reprimes: the discard empties
-         * the ring, so the next answer's first frame would otherwise play with
-         * zero cushion and starve immediately, putting a hole at the START of
-         * every answer after a turn.
-         */
-        (void)abandon_speaker_audio();
-        if (!runtime.dial_speech_queued) {
-          (void)xQueueReset(runtime.mic_queue); /* drop pre-press room noise */
-          runtime.frame_sequence = 0U;
-        }
-        /* Consumed either way: only the turn that OPENED the call may keep
-         * the dial buffer, and it just did. */
-        runtime.dial_speech_queued = false;
-        if (publish_turn_marker(ITERATE_KIT_VOICELAB_TURN_START)) {
-          runtime.talking = true;
-          runtime.turn_started_ms = now;
-          runtime.flushing_turn = false;
-          /*
-           * THE HANDOFF: only now, with the turn marker on the wire and the
-           * speaker queue emptied by the abandon above, may the microphone
-           * take the pins. If the marker failed, nothing is taken and no turn
-           * opens — which is the whole reason this sits inside the branch.
-           */
-          board_fence(true);
-          ESP_LOGI(tag, "turn start");
-          /*
-           * The face attends and shuts its mouth. Told rather than inferred from
-           * silence: the audio it was animating has just been discarded, and
-           * without this the last shape of the interrupted word would sit on the
-           * face for the whole time the person is speaking.
-           */
-          runtime.view.listening = (true);
-          runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_LISTENING;
-          runtime.view.status = ("listening — release to send");
-        }
-      }
-      /*
-       * THE BUTTON CAME UP WHILE THE CALL WAS STILL DIALLING, and the words
-       * are already in the queue. The moment the accepted call can carry
-       * them, open the turn they were always going to be: publish the turn
-       * marker, mark the turn open, and let the release machinery directly
-       * below — which sees `talking && !wants_talk` on this very pass —
-       * flush the queue and send the commit exactly as it does for a live
-       * release. The marker mirrors the held-through-connect path, which
-       * also publishes a fresh ptt-start after CALL_ACCEPTED, so the far
-       * side sees the same wire shape either way. `dial_speech_queued` is
-       * consumed only once the marker is actually on the wire, so a full
-       * outbox retries next pass instead of losing the words. The launch
-       * ladder's 3 s re-press appends more durable ptt-starts while
-       * dialling, but they all land BEFORE call_active — this branch runs
-       * once per accepted call and owes exactly one commit.
-       */
-      if (marks_turns && !wants_talk && !runtime.talking &&
-          runtime.voicelab.call_active && runtime.dial_speech_queued &&
-          outbox_free >= 3U) {
-        if (uxQueueMessagesWaiting(runtime.mic_queue) == 0U) {
-          /*
-           * A PROMISE WITH NO WORDS IN IT IS CONSUMED SILENTLY. The flag is
-           * raised from intent — wanting the call while it dialled — but on
-           * a board whose microphone only owns its pins behind the capture
-           * fence (the stick), a dial can end with nothing captured. Opening
-           * a turn here committed an EMPTY ptt-end and asked the provider to
-           * answer silence — worse than the pre-buffering behaviour, which
-           * simply stayed quiet until the next real press.
-           */
-          runtime.dial_speech_queued = false;
-        } else {
-          /* A turn opening is a barge like any other; on a call this fresh
-           * the abandon is usually a no-op, but a greeting's first frames
-           * must not play under the person's own turn. */
-          (void)abandon_speaker_audio();
-          if (publish_turn_marker(ITERATE_KIT_VOICELAB_TURN_START)) {
-            runtime.dial_speech_queued = false;
-            runtime.talking = true;
-            runtime.turn_started_ms = now;
-            runtime.flushing_turn = false;
-            ESP_LOGI(tag, "turn start (dial speech, button already up)");
-          }
-        }
-      }
-      /*
-       * Releasing does NOT commit immediately. The capture queue holds up to
-       * 640 ms, and the sender only drains it 6 frames at a time — so
-       * committing on the button edge threw away the tail of every
-       * utterance, which is the last word or two of whatever was said. The
-       * turn stays open until the queue is empty (or a bounded deadline
-       * passes, so a stalled uplink cannot hang the turn forever), and only
-       * then is the commit sent.
-       */
-      if (marks_turns && !wants_talk && runtime.talking &&
-          !runtime.flushing_turn) {
-        /*
-         * Flush exactly what was captured UP TO the release, and no more.
-         * Waiting for the queue to empty could not work: the capture task
-         * keeps filling it every 20ms regardless, so "empty" was a race the
-         * sender only won transiently — and four turns in ten hit the
-         * deadline instead, dropping their tail.
-         */
-        runtime.flushing_turn = true;
-        runtime.flush_frames_left =
-            (uint32_t)uxQueueMessagesWaiting(runtime.mic_queue);
-        runtime.flush_deadline_ms = now + TURN_FLUSH_TIMEOUT_MS;
-        /*
-         * The microphone's job ended at the RELEASE edge, so give the pins
-         * back now rather than at the commit below — the answer can then play
-         * the moment it arrives. Queued frames still flush; the fence only
-         * stops NEW capture.
-         */
-        board_fence(false);
-        runtime.view.status = "sending";
-      }
-      if (runtime.flushing_turn &&
-          (runtime.flush_frames_left == 0U ||
-           now >= runtime.flush_deadline_ms)) {
-        const bool timed_out = runtime.flush_frames_left > 0U;
-        runtime.talking = false;
-        runtime.flushing_turn = false;
-        ESP_LOGI(tag, "turn commit%s", timed_out ? " (tail dropped)" : "");
-        /* Done listening: the face waits for the answer rather than for us. */
-        runtime.view.listening = (false);
-        if (publish_turn_marker(ITERATE_KIT_VOICELAB_TURN_COMMIT)) {
-          runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_SPEAKING;
-          runtime.view.status = ("thinking");
+          runtime.view.status = "ready";
         }
       }
 
@@ -3873,18 +3111,11 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
 
       /* The pressed-button audit, owed since its press, sent when the
        * session can carry it. */
-      if (runtime.pending_button_audit != NULL && outbox_free >= 3U) {
-        (void)iterate_kit_voicelab_note_button(
-            &runtime.voicelab, runtime.pending_button_audit);
-        runtime.pending_button_audit = NULL;
-      }
 
-      /* The microphone is only on the wire while the talk button is down. */
       {
         const size_t queued = uxQueueMessagesWaiting(runtime.mic_queue);
-        /* A partial batch is only worth sending at the end of a turn. */
-        const size_t needed =
-            runtime.flushing_turn ? 1U : (size_t)MIC_FRAMES_PER_APPEND;
+        const bool discarding = atomic_load_explicit(
+            &runtime.capture_discard_requested, memory_order_acquire);
         /*
          * A MICROPHONE THAT CANNOT DRAIN INTO A LIVE CALL IS A DEAD LANE,
          * and the device is the only one who can tell: the appends are
@@ -3898,7 +3129,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
          */
         {
           static uint64_t drain_jammed_since;
-          const bool jammed = runtime.talking &&
+          const bool jammed = runtime.view.wants_call &&
               runtime.voicelab.call_active &&
               queued >= (size_t)(MIC_QUEUE_DEPTH / 2) &&
               outbox_free < (size_t)MIC_OUTBOX_RESERVE;
@@ -3916,51 +3147,54 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
           }
         }
         /*
-         * The window paces the uplink at exactly capture rate, so any
-         * backlog is permanent — four of ten turns in one call hit the
-         * flush deadline with audio still queued ("tail dropped"). When a
-         * backlog exists, send immediately instead of waiting for the
-         * window, so the sender can actually catch up.
+         * THE FLUSH RUNS ON THE CLOCK (MIC_FLUSH_MS), NOT ON A FRAME COUNT.
+         * Whatever has been captured since the last flush goes out as one
+         * event the moment the interval is up — a count-based batch held the
+         * first frame hostage to the last, 80 ms of mic latency at four
+         * frames, and made the four-frame lump the unit of work the stream's
+         * thread had to digest at once. A backlog (the outbox was short, the
+         * cap is MIC_FRAMES_PER_APPEND frames per event) sends at once.
          */
-        const bool behind = queued >= (size_t)(MIC_FRAMES_PER_APPEND * 2U);
-        /* `call_active &&`: dial-buffered speech leaves only once there is
-         * a call to carry it. Push-to-talk already implied this through the
-         * turn machinery; the open microphone now needs it said. */
-        if (runtime.talking && runtime.voicelab.call_active &&
-            (behind || now >= drain_window_at) &&
-            queued >= needed && outbox_free >= (size_t)MIC_OUTBOX_RESERVE) {
-          const size_t take = queued < (size_t)MIC_FRAMES_PER_APPEND
-              ? queued
-              : (size_t)MIC_FRAMES_PER_APPEND;
+        /*
+         * Frames flow as soon as the stream is up. The first opens the call;
+         * the facet holds later frames while it dials.
+         */
+        size_t take = iterate_kit_microphone_flush_frames(
+            discarding || terminal_pending ? 0U : queued,
+            runtime.view.wants_call,
+            runtime.mic_flushed_at_ms, now);
+        if (take != 0U &&
+            runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
+            outbox_free >= (size_t)MIC_OUTBOX_RESERVE) {
           /*
-           * The window only advances on a batch that was actually sent. It
-           * used to advance regardless, so a moment of outbox backpressure
-           * silently dropped that speech instead of sending it a beat later —
-           * the mic queue holds 640ms and is the right place to absorb this.
+           * The stamp only advances on a flush that was actually sent, so a
+           * moment of outbox backpressure delays the speech a beat instead of
+           * dropping it — the mic queue is the right place to absorb this.
            */
-          const uint8_t *frame_pointers[MIC_FRAMES_PER_APPEND];
           size_t index;
-          drain_window_at =
-              (drain_window_at == 0U ||
-               iterate_kit_voice_elapsed_ms(now, drain_window_at) > MIC_FRAMES_PER_APPEND * FRAME_MS * 4U)
-              ? now + (uint64_t)take * FRAME_MS
-              : drain_window_at + (uint64_t)take * FRAME_MS;
           for (index = 0U; index < take; ++index) {
             (void)xQueueReceive(runtime.mic_queue, &frame_storage[index], 0);
-            frame_pointers[index] =
-                (const uint8_t *)frame_storage[index].samples;
+            memcpy(pcm_storage[index], frame_storage[index].samples,
+                   sizeof(pcm_storage[index]));
           }
-          (void)iterate_kit_voicelab_append_frames(
+          /* `struct mic_frame` is exactly its samples, so the popped run is
+           * one contiguous stretch of PCM. */
+          if (iterate_kit_voicelab_append_frames(
               &runtime.voicelab,
-              frame_pointers,
+              (const uint8_t *)pcm_storage,
               take,
               sizeof(frame_storage[0].samples),
-              runtime.frame_sequence,
-              now);
-          runtime.frame_sequence += (uint32_t)take;
-          runtime.flush_frames_left = runtime.flush_frames_left > take
-              ? runtime.flush_frames_left - (uint32_t)take
-              : 0U;
+              runtime.activation) == CAPNWEB_OK) {
+            runtime.mic_flushed_at_ms = now;
+            if (runtime.activation_started_at_ms != 0U &&
+                runtime.first_mic_append_at_ms == 0U) {
+                runtime.first_mic_append_at_ms = now;
+            }
+          } else {
+            end_local_activation(
+                "microphone-append-failed", "microphone append failed");
+            ESP_LOGE(tag, "microphone append failed");
+          }
         }
       }
       /*
@@ -3993,26 +3227,14 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         }
       }
       /*
-       * Recycling opens a NEW connection — a TLS-backed round trip — inline
-       * on this task, which is the same task that decodes speaker PCM. The
-       * steady-state cushion is only the 160 ms prefill plus ~90 ms of DMA,
-       * so a recycle mid-answer starves the DAC and costs an audible hole.
-       * At ~600 batches that lands roughly 12 s into every answer and again
-       * every 12 s after — "it gets worse as the session goes on".
-       *
-       * So it waits for a quiet moment: no audio queued and nothing being
-       * spoken. The budget it is racing is ~1000 pushes and it becomes due
-       * at 600, so there is ample room to wait for a gap between turns.
+       * The PROACTIVE connection recycle was here — a new TLS-backed
+       * connection every 600 delivered batches, racing a per-connection
+       * push budget the platform no longer has (see the note where
+       * ITERATE_KIT_VOICELAB_RECYCLE_AFTER_BATCHES used to be declared). It
+       * ran on this task, the one that decodes speaker PCM, and on an
+       * open-mic call it fired every ~15 s. Reconnects are failure-driven
+       * only: the downlink deadline above and the transport restart.
        */
-      if (outbox_free >= 4U &&
-          iterate_kit_voicelab_needs_recycle(&runtime.voicelab)) {
-        const bool speaker_idle = speaker_queued_bytes() == 0U;
-        if ((speaker_idle && !runtime.talking) ||
-            runtime.voicelab.batches_on_connection >
-                ITERATE_KIT_VOICELAB_RECYCLE_AFTER_BATCHES + 250U) {
-          (void)iterate_kit_voicelab_recycle_connection(&runtime.voicelab);
-        }
-      }
       /*
        * A one-second pulse while a turn is open. When the device freezes
        * mid-turn nothing else can be read out of it — health() is answered by
@@ -4029,7 +3251,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        * delivered 240ms and then went quiet for two seconds, which is what
        * a listener hears as clipping in and out.
        */
-      if (runtime.talking || runtime.voicelab.call_active ||
+      if (runtime.view.wants_call || runtime.voicelab.call_active ||
           iterate_kit_voice_elapsed_ms(now, runtime.last_pulse_ms) < 3000U) {
         if (iterate_kit_voice_elapsed_ms(now, runtime.last_pulse_ms) >= 1000U) {
           struct iterate_kit_esp_idf_itx_transport_metrics pulse;
@@ -4070,6 +3292,15 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
    */
   runtime.view.microphone_peak =
       atomic_load_explicit(&runtime.mic_peak, memory_order_relaxed);
+  {
+    const uint64_t speaker_peak_at_ms = atomic_load_explicit(
+        &runtime.speaker_peak_at_ms, memory_order_acquire);
+    runtime.view.speaker_peak =
+        speaker_peak_at_ms != 0U &&
+            iterate_kit_voice_elapsed_ms(now_ms(NULL), speaker_peak_at_ms) < FRAME_MS
+        ? atomic_load_explicit(&runtime.speaker_peak, memory_order_relaxed)
+        : 0U;
+  }
   /*
    * SHOW IT, LAST AND ALWAYS.
    *
@@ -4100,26 +3331,20 @@ void iterate_kit_voice_loop_run(
   }
 }
 
-void iterate_kit_voice_loop_set_stream_path(const char *path) {
-  if (path == NULL || path[0] == '\0') return;
-  if (strcmp(stream_path, path) == 0) return;
-  (void)snprintf(stream_path, sizeof(stream_path), "%s", path);
-  /*
-   * The path is read once per mount — `streams.get(stream_path)` — so a
-   * voicelab that is already up is holding the OLD conversation. Close it and
-   * zero the generation: the standing remount arm sees the generations
-   * disagree and rebuilds on the same connection at the new path within a
-   * pass, exactly as the failed-with-a-ready-connection branch already does.
-   * Before the first mount both conditions are already false and this is
-   * nothing but the copy above.
-   */
-  if (runtime.voicelab.state != ITERATE_KIT_VOICELAB_IDLE &&
-      runtime.voicelab.state != ITERATE_KIT_VOICELAB_CLOSED) {
-    (void)iterate_kit_voicelab_close(&runtime.voicelab);
-  }
-  runtime.voicelab_generation = 0U;
-}
-
-void iterate_kit_voice_loop_set_turns(enum iterate_kit_voice_turns turns) {
-  turn_policy = turns;
+void iterate_kit_voice_view_lights(
+    const struct iterate_kit_voice_view *view,
+    struct iterate_kit_conversation_visual_state *out) {
+  *out = (struct iterate_kit_conversation_visual_state){
+    .network = view->link_ready ? ITERATE_KIT_NETWORK_CONNECTED
+                                : ITERATE_KIT_NETWORK_CONNECTING,
+    .reach = iterate_kit_reach_from(
+        view->api_ready, view->stream_ready, view->call_active),
+    .conversation_active = view->call_active,
+    .media_ready = view->link_ready,
+    .media_failed = view->fault,
+    .microphone_listening = view->listening,
+    .microphone_peak = view->microphone_peak,
+    .speaker_peak = view->speaker_peak,
+  };
+  if (view->wants_call && !view->call_active) out->media_ready = false;
 }
