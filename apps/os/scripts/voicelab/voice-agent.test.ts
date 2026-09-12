@@ -6,7 +6,7 @@
  * lifecycle, no VAD onsets, no item ids. Every claim here is about how the
  * facet turns that stream into the device's three-sentence contract (numbered
  * frames, a clear that names a sequence number, an end-of-answer marker) and
- * how it answers the backend model's function calls. `fetch` is mocked rather
+ * how it hands a delegation to the standard Agent. `fetch` is mocked rather
  * than the dial injected, so `dialProviderSocket` itself is under test too.
  *
  * THE SEQUENCE NUMBERS ARE STILL THE POINT: contiguous, a flush names one,
@@ -14,7 +14,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeProcessorHarness } from "iterate/processors/testing";
-import {
+import type { Project } from "iterate/sdk";
+import VoiceAgentEntrypoint, {
   dialProviderSocket,
   IDLE_TIMEOUT_MS,
   MAX_SPEAKER_PAYLOAD_BYTES,
@@ -147,38 +148,12 @@ class FakeLive {
     this.push({ type: "session.output_transcript.delta", delta, start_ms: startMs, end_ms: endMs });
   }
 
-  /** The backend asked for a function, nested the way the wire nests it. */
-  backendFunctionCall(callId: string, name: string, args: string): void {
-    this.push({
-      type: "response.event",
-      event_id: "e_fn",
-      delegation_id: "item_b",
-      event: {
-        type: "response.output_item.done",
-        item: { type: "function_call", call_id: callId, name, arguments: args },
-      },
-    });
-  }
-
   /** The voice handed the conversation so far to the backend. */
   delegationCreated(id = "item_b", offsetMs = 0): void {
     this.push({
       type: "session.delegation.created",
       offset_ms: offsetMs,
-      delegation: { id, target: "responses" },
-    });
-  }
-
-  /** The backend's final words. */
-  backendMessage(itemId: string, text: string): void {
-    this.push({
-      type: "response.event",
-      event_id: "e_msg",
-      delegation_id: "item_b",
-      event: {
-        type: "response.output_item.done",
-        item: { type: "message", id: itemId, content: [{ type: "output_text", text }] },
-      },
+      delegation: { id, target: "client" },
     });
   }
 }
@@ -196,24 +171,19 @@ function makeHarness(Processor: typeof VoiceAgentProcessor = VoiceAgentProcessor
     return { webSocket: socket } as unknown as Response;
   });
 
-  /* What a backend function walks: a stand-in for the guest's itx that
-   * records the scripts it was asked to run — and, like a real voice
-   * stream, has no capability host until somebody creates it. */
-  const scripts: string[] = [];
-  let hostCreates = 0;
+  const agentCreates: string[] = [];
+  const agentAppends: { path: string; events: unknown[] }[] = [];
   const projectRoot: { current: unknown } = {
     current: {
-      capabilityHost: {
-        create: async () => {
-          hostCreates += 1;
-        },
-        runScript: async (code: string) => {
-          if (hostCreates === 0) {
-            throw new Error("capability host at /agents/voice/test has not been created");
-          }
-          scripts.push(code);
-          return { result: { files: 3 } };
-        },
+      agents: {
+        get: (path: string) => ({
+          create: async () => {
+            agentCreates.push(path);
+          },
+          append: async (...events: unknown[]) => {
+            agentAppends.push({ path, events });
+          },
+        }),
       },
     },
   };
@@ -226,7 +196,7 @@ function makeHarness(Processor: typeof VoiceAgentProcessor = VoiceAgentProcessor
         nowAtFacetMs: deps.now,
         buildCacheKey: "test-build",
         dialProvider: dialProviderSocket,
-        withProject: (fn) => fn(projectRoot.current),
+        withProject: (fn) => fn(projectRoot.current as Project),
       }),
   });
   return {
@@ -237,8 +207,8 @@ function makeHarness(Processor: typeof VoiceAgentProcessor = VoiceAgentProcessor
     },
     dialled,
     projectRoot,
-    scripts,
-    hostCreates: () => hostCreates,
+    agentCreates,
+    agentAppends,
   };
 }
 
@@ -501,25 +471,13 @@ describe("opening a call", () => {
     });
     expect(String(session.instructions)).toContain("You are Iterate on a small speaker.");
     expect(String(session.instructions)).toContain("Delegation policy:");
-    /* ONE backend, the fast Astra, with exec_typescript. */
-    const delegation = session.delegation as {
-      type: string;
-      responses: {
-        model: string;
-        reasoning: { effort: string };
-        service_tier: string;
-        tools: { name: string }[];
-        parallel_tool_calls: boolean;
-        instructions: string;
-      };
-    };
-    expect(delegation.type).toBe("responses");
-    expect(delegation.responses.model).toBe("gpt-6-astra");
-    expect(delegation.responses.reasoning).toEqual({ effort: "low" });
-    expect(delegation.responses.service_tier).toBe("priority");
-    expect(delegation.responses.tools.map((tool) => tool.name)).toEqual(["exec_typescript"]);
-    expect(delegation.responses.parallel_tool_calls).toBe(false);
-    expect(delegation.responses.instructions).toContain("exec_typescript runs one TypeScript");
+    expect(String(session.instructions)).toContain(
+      "Always request a NEW client delegation when the user asks to end or hang up",
+    );
+    expect(String(session.instructions)).toContain("Saying goodbye does not close it: delegate");
+    expect(String(session.instructions)).toContain("Delegate to the backend when:");
+    expect(String(session.instructions)).toContain("When uncertain, delegate.");
+    expect(session.delegation).toEqual({ type: "client" });
 
     h.provider.start();
     await h.settle();
@@ -533,13 +491,11 @@ describe("opening a call", () => {
     expect(accepted.heldMicFrames).toBe(3);
     /* And the briefing is on the record. */
     const configured = eventsOfType(h, "session-configured")[0]!.payload as {
+      delegation: string;
       provider: string;
-      backendModel: string;
-      tools: string[];
     };
     expect(configured.provider).toBe("gpt-live");
-    expect(configured.backendModel).toBe("gpt-6-astra");
-    expect(configured.tools).toEqual(["exec_typescript"]);
+    expect(configured.delegation).toBe("client");
   });
 
   it("sends later capture straight through, and nothing else", async () => {
@@ -553,24 +509,76 @@ describe("opening a call", () => {
     expect(later).toEqual(["session.input_audio.append", "session.input_audio.append"]);
   });
 
-  it("certificate overrides reach the backend delegation and tools", async () => {
+  it("backend overrides do not change the client delegation", async () => {
     const h = makeHarness();
     await callIsLive(h, {
       backend: { model: "gpt-5.6-terra", reasoningEffort: "none", serviceTier: "default" },
-      tools: [{ name: "hang_up", description: "End the call." }],
     });
     const session = h.provider.startedWith;
     expect(session.model).toBe("gpt-live-1");
     expect((session.audio as { output: { voice: string } }).output.voice).toBe("marin");
-    const responses = (session.delegation as { responses: Record<string, unknown> }).responses;
-    expect(responses.model).toBe("gpt-5.6-terra");
-    expect(responses.reasoning).toEqual({ effort: "none" });
-    expect(responses.service_tier).toBe("default");
-    const tools = responses.tools as { name: string; parameters?: unknown }[];
-    expect(tools.map((tool) => tool.name)).toEqual(["exec_typescript", "hang_up"]);
-    /* A tool with no parameters of its own gets an empty schema. */
-    expect(tools[1]!.parameters).toEqual({ type: "object", properties: {} });
-    expect(String(responses.instructions)).toContain("hang_up: End the call.");
+    expect(session.delegation).toEqual({ type: "client" });
+  });
+
+  it("replays exact v23 configured and session-configured rows", async () => {
+    const historicSessionConfigured = {
+      type: "events.iterate.com/voice-agent/session-configured" as const,
+      payload: {
+        activation: "historic-activation",
+        conversationId: "historic-conversation",
+        provider: "gpt-live",
+        instructions: "Historic voice instructions.",
+        backendModel: "gpt-6-astra",
+        tools: ["exec_typescript", "hang_up"],
+      },
+    };
+    expect(VoiceAgentContract.parseEventInput(historicSessionConfigured)).toMatchObject(
+      historicSessionConfigured,
+    );
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: {
+        instructions: "Historic voice instructions.",
+        visemes: true,
+        backend: {
+          model: "gpt-6-astra",
+          reasoningEffort: "low",
+          serviceTier: "priority",
+        },
+        tools: [{ name: "hang_up", description: "End the call." }],
+      },
+    });
+    await h.stream.append(historicSessionConfigured);
+    await h.append(
+      {
+        type: "events.iterate.com/voice-agent/utterance-transcript",
+        payload: { conversationId: "historic-conversation", text: "Historic listener turn." },
+      },
+      {
+        type: "events.iterate.com/voice-agent/answer-transcript",
+        payload: { conversationId: "historic-conversation", text: "Historic assistant turn." },
+      },
+    );
+    await h.settle();
+    expect(h.agentAppends.flatMap((append) => append.events)).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          content: "Historic listener turn.",
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        }),
+      }),
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          role: "developer",
+          content: "Voice agent (spoken transcript): Historic assistant turn.",
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        }),
+      }),
+    ]);
+    await h.append(micFrame(1));
+    await h.settle();
+    expect(h.state().call?.activation).toBe(ACTIVATION);
   });
 
   it("seeds the session with the fold's transcript as typed history", async () => {
@@ -917,215 +925,404 @@ describe("the transcript", () => {
 /* THINKING, FAST AND SLOW — the backend                                      */
 /* ========================================================================== */
 
-describe("the backend", () => {
-  it("runs exec_typescript on the stream's own capability host, created once per dial, and continues the response", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    h.provider.backendFunctionCall(
-      "call_1",
-      "exec_typescript",
-      JSON.stringify({ code: "async (itx) => itx.repo.listFiles()" }),
-    );
-    await h.settle();
-    expect(h.scripts).toEqual(["async (itx) => itx.repo.listFiles()"]);
-    expect(h.hostCreates()).toBe(1);
-    /* The second call finds the host already there: one script, no create. */
-    h.provider.backendFunctionCall(
-      "call_2",
-      "exec_typescript",
-      JSON.stringify({ code: "async (itx) => 2" }),
-    );
-    await h.settle();
-    expect(h.scripts).toEqual(["async (itx) => itx.repo.listFiles()", "async (itx) => 2"]);
-    expect(h.hostCreates()).toBe(1);
-    const results = h.provider.sentOfType("response.item.create");
-    expect(results).toHaveLength(2);
-    expect(results[0]!.item).toEqual({
-      type: "function_call_output",
-      call_id: "call_1",
-      output: JSON.stringify({ files: 3 }),
+describe("the Agent bridge", () => {
+  it("sets up the ordinary Agent once on the voice stream with its standing protocol", async () => {
+    const agentCreates: string[] = [];
+    const agentAppends: { path: string; events: unknown[] }[] = [];
+    const project = {
+      secrets: {
+        get: () => ({
+          __describe: async () => ({ created: true, hasMaterial: true }),
+          [Symbol.dispose]: () => {},
+        }),
+      },
+      agents: {
+        get: (path: string) => ({
+          create: async () => {
+            agentCreates.push(path);
+          },
+          append: async (...events: unknown[]) => {
+            agentAppends.push({ path, events });
+          },
+        }),
+      },
+      streams: {
+        get: () => ({
+          append: async () => [{ offset: 3 }],
+          subscriptions: {
+            get: () => ({
+              waitUntilProcessed: async () => {},
+              [Symbol.dispose]: () => {},
+            }),
+          },
+          [Symbol.dispose]: () => {},
+        }),
+      },
+    };
+    /* setupVoiceAgent only needs this invocation's project capability. */
+    const entrypoint = { itx: project } as unknown as VoiceAgentEntrypoint;
+    await VoiceAgentEntrypoint.prototype.setupVoiceAgent.call(entrypoint, {
+      streamPath: "/agents/voice/test",
+      backend: { model: "gpt-6-astra" },
     });
-    /* The output, THEN the continuation — appending a result does not
-     * continue the response on its own. */
-    const order = h.provider.sent.map((message) => message.type);
-    expect(order.indexOf("response.item.create")).toBeLessThan(order.indexOf("response.create"));
-  });
 
-  it("tells the voice what the backend did: a progress note per step, at most one every few seconds", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    h.provider.backendFunctionCall(
-      "call_1",
-      "exec_typescript",
-      JSON.stringify({ code: "async (itx) => itx.repo.listFiles()" }),
-    );
-    await h.settle();
-    /* A step right behind the first is folded: no second note yet. */
-    h.provider.backendFunctionCall("call_1b", "exec_typescript", '{"code":"async (itx) => 1"}');
-    await h.settle();
-    expect(h.provider.sentOfType("session.thinking.append")).toHaveLength(1);
-    await playOutEverything(h, 5_000);
-    h.provider.backendFunctionCall("call_2", "exec_typescript", '{"code":"async (itx) => 2"}');
-    await h.settle();
-    const notes = h.provider.sentOfType("session.thinking.append");
-    expect(notes).toHaveLength(2);
-    /* General context, not the delegation's own: the Responses delegation
-     * refuses its id here (measured 2026-09-10). */
-    expect(notes[0]!.delegation_id).toBeNull();
-    expect(String(notes[0]!.content)).toContain("Step 1: ran exec_typescript");
-    expect(String(notes[0]!.content)).toContain("do not read it out");
-    /* Status only: the script's output never rides in a note. */
-    expect(String(notes[0]!.content)).toContain("→ ok");
-    expect(String(notes[0]!.content)).not.toContain(JSON.stringify({ files: 3 }));
-    expect(String(notes[1]!.content)).toContain("Step 3");
-    /* The note lands before the result that continues the response. */
-    const order = h.provider.sent.map((message) => message.type);
-    expect(order.indexOf("session.thinking.append")).toBeLessThan(
-      order.indexOf("response.item.create"),
-    );
-  });
-
-  it("holds a delegation's tool result while the person is still talking, then hands the backend the rest of the request", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    /* The voice delegates at the first pause, mid-request. */
-    h.provider.userSays(" Open a workspace called scratch.", 1_000, 2_400);
-    h.provider.delegationCreated();
-    h.provider.backendFunctionCall("call_1", "exec_typescript", '{"code":"async (itx) => 1"}');
-    await h.settle();
-    /* The script has run, but the person is mid-sentence: no result yet. */
-    expect(h.scripts).toEqual(["async (itx) => 1"]);
-    expect(h.provider.sentOfType("response.item.create")).toHaveLength(0);
-    h.provider.userSays(" In it, write a file called", 2_600, 3_600);
-    await h.advanceTime(1_000);
-    await h.settle();
-    expect(h.provider.sentOfType("response.item.create")).toHaveLength(0);
-    h.provider.userSays(" note dot md.", 3_600, 4_200);
-    await playOutEverything(h, 2_000);
-    await h.settle();
-    /* The rest of the request, then the result, then the continuation. */
-    const items = h.provider.sentOfType("response.item.create");
-    expect(items.map((message) => (message.item as { type: string }).type)).toEqual([
-      "message",
-      "function_call_output",
-    ]);
-    expect(JSON.stringify(items[0]!.item)).toContain(
-      'said more since this delegation was raised: \\"In it, write a file called note dot md.\\"',
-    );
-    const order = h.provider.sent.map((message) => message.type);
-    expect(order.lastIndexOf("response.item.create")).toBeLessThan(
-      order.lastIndexOf("response.create"),
-    );
-    /* Nothing new to hand over on the next call, and no hold for a person
-     * who has finished: straight through. */
-    h.provider.backendFunctionCall("call_2", "exec_typescript", '{"code":"async (itx) => 2"}');
-    await h.settle();
-    expect(h.provider.sentOfType("response.item.create")).toHaveLength(3);
-    expect((h.provider.sentOfType("response.item.create")[2]!.item as { type: string }).type).toBe(
-      "function_call_output",
-    );
-  });
-
-  it("never holds hang_up: the goodbye must land inside the grace, whatever the person is saying", async () => {
-    const h = makeHarness();
-    await callIsLive(h, { tools: [{ name: "hang_up", description: "End the call." }] });
-    h.provider.userSays(" Okay bye, thanks for", 1_000, 2_000);
-    h.provider.delegationCreated();
-    h.provider.backendFunctionCall("call_bye", "hang_up", "{}");
-    await h.settle();
-    /* Straight through, no developer message, while the person is mid-word. */
-    const items = h.provider.sentOfType("response.item.create");
-    expect(items.map((message) => (message.item as { type: string }).type)).toEqual([
-      "function_call_output",
+    expect(agentCreates).toEqual(["/agents/voice/test"]);
+    expect(agentAppends).toEqual([
+      {
+        path: "/agents/voice/test",
+        events: [
+          expect.objectContaining({
+            type: "events.iterate.com/agent/configured",
+            payload: { config: { llm: { model: "openai/gpt-6-astra" } } },
+          }),
+          expect.objectContaining({
+            type: "events.iterate.com/agents/context-added",
+            payload: expect.objectContaining({
+              key: "voice-agent/protocol",
+              content: expect.stringContaining(
+                "Completing a task does not end a call: omit hangUp on ordinary results.",
+              ),
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            }),
+          }),
+        ],
+      },
     ]);
   });
 
-  it("a failing script answers the backend with the error, and an unknown function too", async () => {
+  it("puts passive open-transcript snapshots before each queued delegation request", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    h.provider.userSays("Create a note.", 1_000, 1_500);
+    h.provider.delegationCreated("delegate-a");
+    h.provider.delegationCreated("delegate-b");
+    await h.settle();
+
+    expect(h.agentAppends).toHaveLength(2);
+    for (const [index, append] of h.agentAppends.entries()) {
+      const [snapshot, metadata] = append.events as { payload: Record<string, unknown> }[];
+      expect(snapshot!.payload).toMatchObject({
+        role: "user",
+        content: "Create a note.",
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+      });
+      expect(metadata!.payload).toMatchObject({
+        role: "developer",
+        llmRequestPolicy: { behaviour: "after-current-request" },
+        content: expect.stringContaining(`"delegationId":"delegate-${index === 0 ? "a" : "b"}"`),
+      });
+    }
+  });
+
+  it("ends the matching call when an Agent handoff cannot be recorded", async () => {
     const h = makeHarness();
     h.projectRoot.current = {
-      capabilityHost: {
-        create: async () => {},
-        runScript: async () => {
-          throw new Error("Repo has no commits yet");
-        },
+      agents: {
+        get: () => ({
+          append: async () => {
+            throw new Error("injected Agent append failure");
+          },
+        }),
       },
     };
     await callIsLive(h);
-    h.provider.backendFunctionCall("call_x", "exec_typescript", '{"code":"async (itx) => 1"}');
-    h.provider.backendFunctionCall("call_y", "teleport", "{}");
+    h.provider.delegationCreated("delegate-a");
     await h.settle();
-    const outputs = h.provider
-      .sentOfType("response.item.create")
-      .map((message) => message.item as { call_id: string; output: string });
-    expect(outputs.find((item) => item.call_id === "call_x")!.output).toContain("no commits yet");
-    expect(outputs.find((item) => item.call_id === "call_y")!.output).toContain("no such function");
-    expect(h.provider.sentOfType("response.create")).toHaveLength(2);
-  });
 
-  it("hang_up ends the call only after the goodbye — spoken AFTER the call — finishes playing", async () => {
-    const h = makeHarness();
-    await callIsLive(h, { tools: [{ name: "hang_up", description: "End the call." }] });
-    /* The backend hangs up first; the voice's goodbye follows a moment later. */
-    h.provider.backendFunctionCall("call_bye", "hang_up", "{}");
-    await h.settle();
-    await h.advanceTime(1_000);
-    await h.settle();
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
-    h.provider.speech(1_500);
-    h.provider.assistantSays(" Bye for now.", 1_000, 2_400);
-    await playOutEverything(h, 1_000);
-    /* Mid-goodbye: still not over. */
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
-    h.provider.silence(1_000);
-    await playOutEverything(h, 4_000);
     const ended = eventsOfType(h, "conversation-ended");
     expect(ended).toHaveLength(1);
-    expect((ended[0]!.payload as { reason: string }).reason).toContain("hung up");
-    /* And the goodbye is on the record: the end path closed the open row
-     * before the dial went. */
-    expect(
-      eventsOfType(h, "answer-transcript").map((event) => (event.payload as { text: string }).text),
-    ).toEqual(["Bye for now."]);
+    expect(ended[0]?.payload).toMatchObject({
+      reason: "the Agent handoff could not be recorded: Error: injected Agent append failure",
+    });
+    expect(h.provider.sentOfType("session.thinking.append")).toEqual([]);
+    expect(h.provider.closed).toBe(true);
   });
 
-  it("hang_up with nothing playing ends the call once the goodbye grace runs out", async () => {
-    const h = makeHarness();
-    await callIsLive(h, { tools: [{ name: "hang_up", description: "End the call." }] });
-    h.provider.backendFunctionCall("call_bye", "hang_up", "{}");
-    await h.settle();
-    await playOutEverything(h, 5_000);
-    await h.settle();
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
-    await playOutEverything(h, 4_000);
-    await h.settle();
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
-  });
-
-  it("an end decided in the fold still lands the open answer row durably", async () => {
+  it("keeps user speech distinct from observed GPT-Live speech under the same keys", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.provider.speech(500);
-    h.provider.assistantSays(" Goodbye then.", 1_000, 1_500);
+    h.provider.userSays("Make", 1_000, 1_200);
+    h.provider.assistantSays("Okay", 1_000, 1_200);
+    h.provider.delegationCreated("delegate-a");
     await h.settle();
-    expect(eventsOfType(h, "answer-transcript")).toHaveLength(0);
-    await h.append({
-      type: "events.iterate.com/voice-agent/conversation-ended",
-      payload: { activation: ACTIVATION, reason: "test" },
-    });
+    const snapshots = h.agentAppends[0]!.events as { payload: Record<string, unknown> }[];
+    expect(snapshots).toHaveLength(3);
+
+    h.provider.userSays(" it private.", 1_200, 1_500);
+    h.provider.assistantSays("; I will.", 1_200, 1_500);
+    h.provider.silence(2_000);
     await h.settle();
-    const answers = eventsOfType(h, "answer-transcript");
-    expect(answers).toHaveLength(1);
-    expect((answers[0]!.payload as { text: string }).text).toBe("Goodbye then.");
+    const finalized = h.agentAppends.slice(1).flatMap((append) => append.events) as {
+      payload: Record<string, unknown>;
+    }[];
+    for (const [role, content] of [
+      ["user", "Make it private."],
+      ["developer", "Voice agent (spoken transcript): Okay; I will."],
+    ] as const) {
+      const snapshot = snapshots.find((event) => event.payload.role === role)!;
+      const final = finalized.find((event) => event.payload.content === content)!;
+      expect(final.payload).toMatchObject({
+        role,
+        key: snapshot.payload.key,
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+      });
+    }
   });
 
-  it("records the backend's final words durably", async () => {
+  it("cannot let a deferred prefix snapshot overwrite its keyed finalized transcript", async () => {
     const h = makeHarness();
-    const conversationId = await callIsLive(h);
-    h.provider.backendMessage("msg_1", "The repo holds eight files.");
+    let releaseSnapshot: (() => void) | undefined;
+    let snapshotKey = "";
+    let markSnapshotStarted: (() => void) | undefined;
+    const snapshotStarted = new Promise<void>((resolve) => {
+      markSnapshotStarted = resolve;
+    });
+    const completedContents: string[] = [];
+    h.projectRoot.current = {
+      agents: {
+        get: () => ({
+          create: async () => {},
+          append: async (...events: { payload?: { content?: unknown; key?: unknown } }[]) => {
+            const context = events.find((event) => event.payload?.content === "prefix")?.payload;
+            if (context) {
+              snapshotKey = String(context.key);
+              markSnapshotStarted!();
+              await new Promise<void>((resolve) => {
+                releaseSnapshot = resolve;
+              });
+            }
+            completedContents.push(String(events[0]?.payload?.content));
+          },
+        }),
+      },
+    };
+    await callIsLive(h);
+    h.provider.userSays("prefix", 1_000, 1_200);
+    h.provider.delegationCreated("delegate-a");
+    await snapshotStarted;
+
+    const finalProjection = h.append({
+      type: "events.iterate.com/voice-agent/utterance-transcript",
+      payload: { conversationId: "conv_test", text: "final", key: snapshotKey },
+    });
+    await Promise.resolve();
+    releaseSnapshot!();
+    await finalProjection;
     await h.settle();
-    const replies = eventsOfType(h, "backend-reply");
-    expect(replies).toHaveLength(1);
-    expect(replies[0]!.payload).toEqual({ conversationId, text: "The repo holds eight files." });
+
+    expect(
+      completedContents.filter((content) => content === "prefix" || content === "final"),
+    ).toEqual(["prefix", "final"]);
+  });
+
+  it("snapshots a just-closed turn before its durable projection arrives", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    h.provider.userSays("Close then delegate.", 1_000, 1_400);
+    h.provider.silence(2_000); /* queues closeTurn's durable append */
+    h.provider.delegationCreated("delegate-a"); /* before that append is observed */
+    await h.settle();
+
+    const contexts = h.agentAppends.flatMap((append) => append.events) as {
+      payload: Record<string, unknown>;
+    }[];
+    const snapshot = contexts.find(
+      (event) => event.payload.content === "Close then delegate." && event.payload.role === "user",
+    )!;
+    const final = contexts.filter(
+      (event) => event.payload.content === "Close then delegate." && event.payload.role === "user",
+    )[1]!;
+    expect(snapshot.payload).toMatchObject({
+      key: expect.stringContaining("voice-agent/transcript:"),
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
+    });
+    expect(final.payload).toMatchObject({ key: snapshot.payload.key });
+  });
+
+  it("keeps a delegation with no transcript alive and forwards later speech once it closes", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    h.provider.delegationCreated("delegate-a");
+    await h.settle();
+    const beforeSpeech = h.agentAppends.length;
+
+    h.provider.userSays("Make", 1_000, 1_200);
+    h.provider.userSays(" a note.", 1_200, 1_500);
+    await h.settle();
+    /* Raw deltas do not wake the normal Agent one word at a time. */
+    expect(h.agentAppends).toHaveLength(beforeSpeech);
+
+    h.provider.silence(2_000);
+    await h.settle();
+    const laterContext = (
+      h.agentAppends.flatMap((append) => append.events) as {
+        type: string;
+        payload: Record<string, unknown>;
+      }[]
+    ).find(
+      (event) =>
+        event.type === "events.iterate.com/agents/context-added" &&
+        (event.payload as { content?: unknown }).content === "Make a note.",
+    ) as { payload: Record<string, unknown> } | undefined;
+    expect(laterContext).toEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          role: "user",
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        }),
+      }),
+    );
+  });
+
+  it("forwards each repeated completed transcript once without requesting Agent work", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    await h.append(
+      {
+        type: "events.iterate.com/voice-agent/utterance-transcript",
+        payload: { conversationId: "conv_test", text: "yes" },
+      },
+      {
+        type: "events.iterate.com/voice-agent/utterance-transcript",
+        payload: { conversationId: "conv_test", text: "yes" },
+      },
+      {
+        type: "events.iterate.com/voice-agent/answer-transcript",
+        payload: { conversationId: "conv_test", text: "I heard you." },
+      },
+    );
+    await h.settle();
+    const contexts = h.agentAppends.flatMap((append) => append.events) as {
+      idempotencyKey: string;
+      payload: Record<string, unknown>;
+    }[];
+    expect(contexts).toHaveLength(3);
+    expect(contexts.map((event) => event.payload.content)).toEqual([
+      "yes",
+      "yes",
+      "Voice agent (spoken transcript): I heard you.",
+    ]);
+    expect(contexts.map((event) => event.payload.role)).toEqual(["user", "user", "developer"]);
+    expect(
+      contexts.every(
+        (event) =>
+          JSON.stringify(event.payload.llmRequestPolicy) ===
+          JSON.stringify({ behaviour: "dont-trigger-request" }),
+      ),
+    ).toBe(true);
+    expect(new Set(contexts.map((event) => event.idempotencyKey)).size).toBe(3);
+  });
+
+  it("maps all three Agent output channels, including concurrent and repeated commentary", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    await h.append(
+      {
+        type: "events.iterate.com/voice-agent/instructions",
+        payload: { activation: ACTIVATION, delegationId: "delegate-a", content: "Use Celsius." },
+      },
+      {
+        type: "events.iterate.com/voice-agent/thinking",
+        payload: { activation: ACTIVATION, delegationId: null, content: "The weather is clear." },
+      },
+      {
+        type: "events.iterate.com/voice-agent/commentary",
+        payload: { activation: ACTIVATION, delegationId: "delegate-a", content: "It is 18 C." },
+      },
+      {
+        type: "events.iterate.com/voice-agent/commentary",
+        payload: {
+          activation: ACTIVATION,
+          delegationId: "delegate-b",
+          content: "I saved the note.",
+        },
+      },
+      {
+        type: "events.iterate.com/voice-agent/commentary",
+        payload: { activation: ACTIVATION, delegationId: "delegate-a", content: "Anything else?" },
+      },
+    );
+    await h.settle();
+    const controls = h.provider.sent.filter((message) =>
+      [
+        "session.instructions.append",
+        "session.thinking.append",
+        "session.commentary.append",
+      ].includes(String(message.type)),
+    );
+    expect(controls.map(({ event_id: _eventId, ...control }) => control)).toEqual([
+      { type: "session.instructions.append", delegation_id: "delegate-a", content: "Use Celsius." },
+      {
+        type: "session.thinking.append",
+        delegation_id: null,
+        content: "The weather is clear.",
+      },
+      { type: "session.commentary.append", delegation_id: "delegate-a", content: "It is 18 C." },
+      {
+        type: "session.commentary.append",
+        delegation_id: "delegate-b",
+        content: "I saved the note.",
+      },
+      {
+        type: "session.commentary.append",
+        delegation_id: "delegate-a",
+        content: "Anything else?",
+      },
+    ]);
+  });
+
+  it("never sends a late old-call commentary control into its successor", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    await h.append({
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { activation: ACTIVATION, reason: "button" },
+    });
+    await h.append(micFrame(2, "activation-b"));
+    await h.settle();
+    h.provider.start();
+    await h.settle();
+
+    await h.append({
+      type: "events.iterate.com/voice-agent/commentary",
+      payload: {
+        activation: ACTIVATION,
+        delegationId: "delegate-a",
+        content: "late old call",
+      },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("session.commentary.append")).toEqual([]);
+  });
+
+  it("keeps an in-progress acknowledgement alive, then ends after the later goodbye plays out", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    h.provider.speech(100);
+    await h.settle();
+    await h.append({
+      type: "events.iterate.com/voice-agent/commentary",
+      payload: {
+        activation: ACTIVATION,
+        delegationId: "delegate-a",
+        content: "Goodbye.",
+        hangUp: true,
+      },
+    });
+    h.provider.silence(700); /* ends the pre-existing acknowledgement */
+    await h.settle();
+    await playOutEverything(h, 500);
+    expect(eventsOfType(h, "conversation-ended")).toEqual([]);
+
+    h.provider.speech(200);
+    h.provider.silence(700);
+    await h.settle();
+    expect(speakerFrames(h).some((frame) => frame.pcm !== "")).toBe(true);
+    expect(speakerFrames(h).at(-1)?.lastFrameOfAnswer).toBe(true);
+    await playOutEverything(h, 499);
+    expect(eventsOfType(h, "conversation-ended")).toEqual([]);
+    await playOutEverything(h, 1);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
   });
 });
 
@@ -1172,6 +1369,58 @@ describe("ending a call", () => {
     );
     expect(calls.map((call) => call.activation)).toEqual([ACTIVATION]);
     expect(h.state().call).toBeNull();
+  });
+
+  it("does not let A's late terminal erase B's cancellation fence", async () => {
+    const h = makeHarness();
+    const activationB = "test-activation-b";
+    await callIsLive(h);
+    await h.append(
+      {
+        type: "events.iterate.com/voice-agent/conversation-ended",
+        payload: { activation: ACTIVATION, reason: "button" },
+      },
+      micFrame(2, activationB),
+    );
+    await h.settle();
+    await h.append({
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { activation: activationB, reason: "button" },
+    });
+    await h.settle();
+
+    await h.append(
+      {
+        type: "events.iterate.com/voice-agent/conversation-ended",
+        payload: { activation: ACTIVATION, reason: "late" },
+      },
+      micFrame(3, activationB),
+    );
+    await h.settle();
+
+    expect(h.state().recentEndedActivations).toEqual([activationB, ACTIVATION]);
+    expect(eventsOfType(h, "call-started")).toHaveLength(2);
+  });
+
+  it("fences B when B ends before its delayed opening microphone frame", async () => {
+    const h = makeHarness();
+    const activationB = "test-activation-b";
+    await h.append({ type: "events.iterate.com/voice-agent/created", payload: {} });
+    await h.append(
+      {
+        type: "events.iterate.com/voice-agent/conversation-ended",
+        payload: { activation: ACTIVATION, reason: "button" },
+      },
+      {
+        type: "events.iterate.com/voice-agent/conversation-ended",
+        payload: { activation: activationB, reason: "button" },
+      },
+      micFrame(3, activationB),
+    );
+    await h.settle();
+
+    expect(h.state().recentEndedActivations).toEqual([activationB, ACTIVATION]);
+    expect(eventsOfType(h, "call-started")).toHaveLength(0);
   });
 
   it("does not append a late dial failure for A after B has replaced it", async () => {
@@ -1280,34 +1529,6 @@ describe("ending a call", () => {
     await h.append(micFrame(2, "test-activation-b"));
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(2);
-  });
-
-  it("does not end a call while the backend is still running a function for it", async () => {
-    const h = makeHarness();
-    let finish: (() => void) | null = null;
-    h.projectRoot.current = {
-      capabilityHost: {
-        create: async () => {},
-        runScript: () =>
-          new Promise<{ result: unknown }>((resolve) => {
-            finish = () => resolve({ result: { slow: true } });
-          }),
-      },
-    };
-    await callIsLive(h);
-    h.provider.backendFunctionCall("call_slow", "exec_typescript", '{"code":"async (itx) => 1"}');
-    await h.settle();
-    /* The person waits in silence past the deadline; the script is the activity. */
-    await playOutEverything(h, IDLE_TIMEOUT_MS - 5_000);
-    await h.settle();
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
-    finish!();
-    await h.settle();
-    expect(h.provider.sentOfType("response.item.create")).toHaveLength(1);
-    /* And once the backend is done and nothing else happens, the deadline bites. */
-    await playOutEverything(h, IDLE_TIMEOUT_MS + 10_000);
-    await h.settle();
-    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
   });
 
   it("does not end a call while it is still speaking, nor one the device keeps feeding", async () => {

@@ -47,6 +47,8 @@ enum {
    * far end, but a wedged transport must not hold a person's terminal.
    */
   CLI_MAIN_HANGUP_GRACE_MS = 3000,
+  /* Pace a transient terminal append failure inside the bounded grace. */
+  CLI_MAIN_HANGUP_TERMINAL_RETRY_MS = 250,
   /* One local activation gets one finite chance to reach acceptance. */
   CLI_MAIN_OPENING_DEADLINE_MS = 20000,
   /* Frames one feed pass may hand the room before returning to the loop. */
@@ -246,7 +248,7 @@ static void cli_main_reconcile_talk(
 
 /* Reconciles desired call state with the mounted runtime. */
 static void cli_main_reconcile_call(
-    struct cli_runtime *runtime, size_t outbox_free);
+    struct cli_runtime *runtime, uint64_t now_ms, size_t outbox_free);
 
 /* Supervises fatal transport state and the process-level liveness deadline. */
 static void cli_main_supervise_transport(
@@ -431,8 +433,8 @@ void iterate_kit_cli_main_test_poll_hangup(
 }
 
 void iterate_kit_cli_main_test_reconcile_call(
-    struct cli_runtime *runtime, size_t outbox_free) {
-  cli_main_reconcile_call(runtime, outbox_free);
+    struct cli_runtime *runtime, uint64_t now_ms, size_t outbox_free) {
+  cli_main_reconcile_call(runtime, now_ms, outbox_free);
 }
 
 void iterate_kit_cli_main_test_on_control(
@@ -1667,7 +1669,7 @@ static void cli_main_reconcile_talk(
 }
 
 static void cli_main_reconcile_call(
-    struct cli_runtime *runtime, size_t outbox_free)
+    struct cli_runtime *runtime, uint64_t now_ms, size_t outbox_free)
 {
   assert(runtime != NULL);
   /*
@@ -1685,17 +1687,24 @@ static void cli_main_reconcile_call(
   }
   if (!runtime->hanging_up || !runtime->activation_active ||
       outbox_free < CLI_MAIN_CALL_OUTBOX_SLOTS) return;
-  if (runtime->hangup_terminal_attempted &&
+  if (runtime->hangup_terminal_sent &&
       runtime->hangup_terminal_generation == runtime->connection.generation) return;
+  if (now_ms < runtime->hangup_terminal_retry_at_ms) return;
 
-  runtime->hangup_terminal_attempted = true;
-  runtime->hangup_terminal_generation = runtime->connection.generation;
   const enum capnweb_status status = iterate_kit_voicelab_end_activation(
       &runtime->voicelab, runtime->activation, CLI_MAIN_CALL_END_REASON);
   if (status != CAPNWEB_OK) {
-    cli_runtime_log("error", "hang-up terminal append failed status=%d", status);
+    if (runtime->hangup_terminal_retry_at_ms == 0U) {
+      cli_runtime_log(
+          "warn", "hang-up terminal append failed status=%d; retrying", status);
+    }
+    runtime->hangup_terminal_retry_at_ms =
+        now_ms + CLI_MAIN_HANGUP_TERMINAL_RETRY_MS;
     return;
   }
+  runtime->hangup_terminal_sent = true;
+  runtime->hangup_terminal_generation = runtime->connection.generation;
+  runtime->hangup_terminal_retry_at_ms = 0U;
 }
 
 static void cli_main_supervise_transport(
@@ -2004,7 +2013,7 @@ static void cli_main_poll_ready(
       runtime->voicelab_generation != runtime->connection.generation) return;
   const size_t outbox_free = ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS -
       outbox->current_slots;
-  cli_main_reconcile_call(runtime, outbox_free);
+  cli_main_reconcile_call(runtime, now_ms, outbox_free);
   cli_main_poll_periodic(runtime, now_ms, outbox_free);
   cli_main_pulse(runtime, now_ms, outbox);
 }
@@ -2078,8 +2087,9 @@ static void cli_main_begin_hangup(
   assert(runtime != NULL);
   if (runtime->hanging_up) return;
   runtime->hanging_up = true;
-  runtime->hangup_terminal_attempted = false;
+  runtime->hangup_terminal_sent = false;
   runtime->hangup_terminal_generation = 0U;
+  runtime->hangup_terminal_retry_at_ms = 0U;
   (void)cli_main_request_talk(runtime, false, source);
   runtime->hangup_deadline_ms = now_ms + CLI_MAIN_HANGUP_GRACE_MS;
   cli_runtime_log("info", "hanging up");
@@ -2092,8 +2102,9 @@ static void cli_main_poll_interactive(
   if (runtime->hanging_up) {
     /* Remote capability hang-up arrives as an intent, without a local clock. */
     if (runtime->hangup_deadline_ms == 0U) {
-      runtime->hangup_terminal_attempted = false;
+      runtime->hangup_terminal_sent = false;
       runtime->hangup_terminal_generation = 0U;
+      runtime->hangup_terminal_retry_at_ms = 0U;
       runtime->hangup_deadline_ms = now_ms + CLI_MAIN_HANGUP_GRACE_MS;
     }
     /*
@@ -2102,8 +2113,14 @@ static void cli_main_poll_interactive(
      * terminal; leaving at once would strand the session at the provider,
      * still listening to a room nobody is in.
      */
-    if (!runtime->activation_active ||
-        now_ms >= runtime->hangup_deadline_ms) runtime->stop_requested = true;
+    if (!runtime->activation_active) {
+      runtime->stop_requested = true;
+    } else if (now_ms >= runtime->hangup_deadline_ms) {
+      if (!runtime->hangup_terminal_sent) {
+        cli_runtime_log("error", "hang-up terminal did not reach the bridge");
+      }
+      runtime->stop_requested = true;
+    }
     return;
   }
   if (runtime->finish_at_ms != 0U && now_ms >= runtime->finish_at_ms) {

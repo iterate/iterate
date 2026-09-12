@@ -9,22 +9,22 @@ durable transcript.
 ```
 live-probe   mic ──────────────────────────► GPT-Live WS ──► speaker   (the raw wire, from this Mac)
 platform     mic ──► stream (ephemeral) ──► facet ──► GPT-Live WS
-                                              │            └─► backend model (gpt-6-astra) ──► exec_typescript on the project
+                                              │
              speaker ◄── stream (ephemeral) ◄─┘
+                                              │
+                                  standard Agent processor (same stream)
 ```
 
-The facet is the server side: it holds the GPT-Live WebSocket in the
-stream's own Durable Object, relays both directions through the stream, and
-answers the backend model's function calls. `live-probe` dials the provider
-directly with no iterate infrastructure in the path — the measurements every
-design decision in the facet rests on; `duplex` proves the same things
-through a deployed platform from the wire alone, no microphone anywhere.
+The facet holds the GPT-Live WebSocket in the stream's Durable Object and
+relays audio. The standard Agent processor works on that same stream through
+durable events. `live-probe` dials the provider directly; `duplex` exercises
+the deployed platform from the wire alone.
 
 ## Event protocol (one stream per call)
 
 Every type below is prefixed `events.iterate.com/voice-agent/`, elided here
 for width. The full contract, with every payload documented, is
-`packages/voice-agent/src/voice-agent.ts` (contract 23.0.0). A client's
+`packages/voice-agent/src/voice-agent.ts` (contract 24.0.0). A client's
 whole contract: mic frames up, speaker frames down, `keepalive` while its
 call UI is open, and `conversation-ended` to end. Capture runs continuously
 from call start; a physical mute remains a local hardware control, never a
@@ -32,15 +32,17 @@ wire event.
 
 | Event                   | Durability | Payload                                                                                                                      |
 | ----------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `configured`            | durable    | the fixed GPT-Live setup: `instructions`, backend overrides, `tools`, `visemes`; replaced wholesale by every setup run       |
+| `configured`            | durable    | the fixed GPT-Live setup: `instructions`, optional `backend.model`, `visemes`; replaced wholesale by every setup run         |
 | `mic-frame`             | ephemeral  | `{ activation, pcm }` — base64 PCM16 @ 16 kHz; the first frame opens that client-local activation                            |
 | `call-started`          | durable    | `{ activation, conversationId }` — the server assigned the authoritative conversation id                                     |
 | `conversation-accepted` | durable    | `{ activation, conversationId, handshakeTookMs, heldMicFrames }` — `session.started` arrived                                 |
-| `session-configured`    | durable    | `{ activation, conversationId, instructions, backendModel, tools }` — what the GPT-Live session was started with             |
+| `session-configured`    | durable    | `{ activation, conversationId, instructions }` — what the GPT-Live session was started with                                  |
 | `spk-frame`             | ephemeral  | `{ activation, conversationId, deviceSpeakerFrameSeq, pcm, clearSpeakerBufferBeforeFrame?, lastFrameOfAnswer? }` — see below |
 | `utterance-transcript`  | durable    | `{ conversationId, text }` — one finished listener turn, grouped from the provider's timeline fragments                      |
 | `answer-transcript`     | durable    | `{ conversationId, text }` — one finished spoken answer, in words                                                            |
-| `backend-reply`         | durable    | `{ conversationId, text }` — the backend model's final text for one delegation                                               |
+| `instructions`          | durable    | `{ activation, delegationId, content }` — Agent context for GPT-Live                                                         |
+| `thinking`              | durable    | `{ activation, delegationId, content }` — quiet useful facts or progress                                                     |
+| `commentary`            | durable    | `{ activation, delegationId, content, hangUp? }` — speakable Agent outcome                                                   |
 | `conversation-ended`    | durable    | `{ activation, reason }` — one terminal event, valid before the server assigns a conversation id                             |
 
 The two transcript events are the stream's only readable record of what was
@@ -48,6 +50,13 @@ said — `pnpm cli voicelab transcript` prints them — and the fold's bounded
 recap of them is seeded as history into every fresh provider session, so the
 reconnect the idle deadline manufactures resumes the conversation instead of
 greeting the listener as a stranger.
+
+Every completed user and assistant transcript is also projected to the normal
+Agent as `agents/context-added` with `dont-trigger-request`: it is context,
+not a request. A GPT-Live client delegation is the sole triggering input. It
+appends delegation-id metadata with `after-current-request`, so it never
+interrupts Agent work already under way. The Agent sends the three events
+above; they convey context to GPT-Live without guaranteeing a particular response.
 
 Ephemeral frames are only visible to live `openConnection()` callbacks — never
 to durable subscriptions or hosted processors — which is exactly the delivery
@@ -76,26 +85,17 @@ All take `--project <slug>` plus `APP_CONFIG_BASE_URL`/`APP_CONFIG_ADMIN_API_SEC
 from the Doppler config (local dev server is the fallback).
 
 ```bash
-# the raw wire, no iterate infra: cadence, interrupt, gaps, mute, delegation
+# the raw wire, no Iterate infrastructure: cadence, interruption and gaps
 doppler run --config dev -- pnpm cli voicelab live-probe --save-wav out.wav
 doppler run --config dev -- pnpm cli voicelab live-probe --barge-after-ms 4000 --say2 "Stop. What was the last number?"
-doppler run --config prd -- pnpm cli voicelab live-probe --delegation responses --exec --project templestein
-# ...a second request while the backend works (delegations serialize), progress
-# notes into the voice per backend step, late speech forwarded to the backend
-doppler run --config prd -- pnpm cli voicelab live-probe --delegation responses --exec --project <slug> \
-  --say2 "How is it going?" --say2-after-delegation-ms 9000 --progress-thinking
-doppler run --config prd -- pnpm cli voicelab live-probe --delegation responses --exec --allow-writes --project <slug> \
-  --say2 "Oh, and put purple elephant in it." --say2-after-delegation-ms 300 --forward-transcript
 
 # full duplex through the platform, from the wire alone (no microphone): session,
 # continuous mic, answers + markers, quiet idle downlink, spoken barge,
-# durable transcript, the Astra delegation round trip
+# durable transcript, and same-stream Agent commentary
 doppler run --config prd -- pnpm cli voicelab duplex --project <slug> --setup
 
-# the task battery: speak real requests to a deployed agent and read back the
-# delegation (and how much of the request it carried), every backend script
-# and its result, the backend's text, the voice's words; --verify checks the
-# project's actual state afterwards with an itx script body
+# the task battery: speak real requests to a deployed Agent and read the
+# durable commentary plus the voice's answer; --verify checks project state
 doppler run --config prd -- pnpm cli voicelab ask --project <slug> --setup \
   --requests '["Create a markdown file called hello dot md in the notes folder of my config repo, containing hello world, and commit it."]' \
   --verify 'return await itx.repo.readFile({ path: "notes/hello.md" })'

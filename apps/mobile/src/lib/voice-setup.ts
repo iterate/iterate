@@ -34,27 +34,15 @@ export function chatVoiceStreamPath(chatPath: string): string {
 }
 
 /**
- * The birth certificate this app asserts. The phone holds a hold-to-talk
- * button and sends audio only while it is held; GPT-Live takes the turns
- * itself either way, so the certificate carries no posture. The same
- * hang_up tool talk.ts arms — called by the backend model when the person
- * says goodbye — is one of the ways a call ends (tap, hang_up, 60s
- * idle).
+ * The birth certificate this app asserts. GPT-Live listens continuously; the
+ * standard Agent can request a hang-up after its goodbye. Physical mute,
+ * explicit hang-up, and idle closure remain local call controls.
  */
 export const MOBILE_VOICE_SETUP = {
   instructions:
     "You are Iterate, on a phone call with someone who knows you well. Casual, " +
     "direct, brief — never customer-service polish. Greet in a couple of words ('hey', " +
     "'hi again'), answer in plain short sentences, acknowledge in two or three words.",
-  tools: [
-    {
-      name: "hang_up",
-      description:
-        "End this call when the user says goodbye or the conversation is " +
-        "clearly over. Say a short goodbye BEFORE calling this; the call " +
-        "ends after you finish speaking.",
-    },
-  ],
 };
 
 /** The certificate for one call target: the same on every line — what

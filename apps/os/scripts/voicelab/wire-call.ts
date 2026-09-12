@@ -1,7 +1,17 @@
 // A small synthetic client for the GPT-Live voice stream. It owns one local
 // activation and observes only the public call contract.
+import type { StreamEvent } from "iterate/sdk";
+
 import { type VoicelabConnectOptions } from "./connect.ts";
-import { deliveredMsOf, FRAME_BYTES, FRAME_MS, openStream, sleep } from "./probe-audio.ts";
+import {
+  deliveredMsOf,
+  FRAME_BYTES,
+  FRAME_MS,
+  openStream,
+  sleep,
+  type StreamHandle,
+} from "./probe-audio.ts";
+import { closeAndDisposeRpcHandle, RpcResultObserver } from "./rpc-ownership.ts";
 
 const SILENCE_FRAME = Buffer.alloc(FRAME_BYTES).toString("base64");
 
@@ -25,7 +35,9 @@ export interface WireWatch {
   clearsSeen: number;
   utterances: TimedText[];
   answers: TimedText[];
-  backendReplies: TimedText[];
+  instructions: TimedText[];
+  thinking: TimedText[];
+  commentary: TimedText[];
   providerErrors: TimedText[];
   providerDisconnects: TimedText[];
   ended: TimedText[];
@@ -48,7 +60,7 @@ export interface WireCall {
   waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean>;
   quietFor(quietMs: number): boolean;
   stop(reason?: string): Promise<void>;
-  durableEvents(): Promise<{ type: string; createdAt: string; payload?: unknown }[]>;
+  durableEvents(): Promise<StreamEvent[]>;
 }
 
 interface VoiceStreamReads {
@@ -56,7 +68,7 @@ interface VoiceStreamReads {
     afterOffset: number;
     eventTypes?: string[];
     limit: number;
-  }): Promise<{ type: string; createdAt: string; payload?: unknown }[]>;
+  }): Promise<StreamEvent[]>;
 }
 
 export async function openWireCall(
@@ -71,7 +83,8 @@ export async function openWireCall(
 ): Promise<WireCall> {
   const micBatchFrames = options.micBatchFrames ?? 3;
   const micEventFrames = Math.max(1, options.micEventFrames ?? micBatchFrames);
-  const stream = await openStream(options);
+  const openedStream = await openStream(options);
+  const { stream } = openedStream;
   const startedAtMs = Date.now();
   const clock = () => Date.now() - startedAtMs;
   const activation = crypto.randomUUID();
@@ -90,7 +103,9 @@ export async function openWireCall(
     clearsSeen: 0,
     utterances: [],
     answers: [],
-    backendReplies: [],
+    instructions: [],
+    thinking: [],
+    commentary: [],
     providerErrors: [],
     providerDisconnects: [],
     ended: [],
@@ -103,107 +118,128 @@ export async function openWireCall(
     (watch.conversationId && payload.conversationId === watch.conversationId);
   const text = (payload: Record<string, unknown>) =>
     typeof payload.text === "string" ? payload.text : "";
+  const content = (payload: Record<string, unknown>) =>
+    typeof payload.content === "string" ? payload.content : "";
 
-  const connection = await stream.openConnection({
-    connectionKey: `wire-call-${activation}`,
-    eventTypes: [
-      "events.iterate.com/voice-agent/spk-frame",
-      "events.iterate.com/voice-agent/call-started",
-      "events.iterate.com/voice-agent/conversation-accepted",
-      "events.iterate.com/voice-agent/session-configured",
-      "events.iterate.com/voice-agent/utterance-transcript",
-      "events.iterate.com/voice-agent/answer-transcript",
-      "events.iterate.com/voice-agent/backend-reply",
-      "events.iterate.com/voice-agent/provider-error",
-      "events.iterate.com/voice-agent/provider-disconnected",
-      "events.iterate.com/voice-agent/conversation-ended",
-    ],
-    processEventBatch: (batch: { events?: { type: string; payload?: unknown }[] }) => {
-      const events = batch.events || [];
-      /* `spk-frame` is the selected event whose contract carries `pcm`.
-       * Stream batches are untyped at this boundary, so these small casts
-       * express only the field being measured; the runtime checks exclude a
-       * malformed payload rather than trusting it as parsed voice data. */
-      const batchAudioFrames = events.filter(
-        (event) =>
-          event.type === "events.iterate.com/voice-agent/spk-frame" &&
-          typeof (event.payload as { pcm?: unknown } | undefined)?.pcm === "string" &&
-          (event.payload as { pcm: string }).pcm !== "",
-      ).length;
-      for (const event of events) {
-        const payload = (event.payload ?? {}) as Record<string, unknown>;
-        if (event.type === "events.iterate.com/voice-agent/call-started") {
-          if (payload.activation !== activation || typeof payload.conversationId !== "string")
+  let connection: Awaited<ReturnType<StreamHandle["openConnection"]>>;
+  try {
+    connection = await stream.openConnection({
+      connectionKey: `wire-call-${activation}`,
+      eventTypes: [
+        "events.iterate.com/voice-agent/spk-frame",
+        "events.iterate.com/voice-agent/call-started",
+        "events.iterate.com/voice-agent/conversation-accepted",
+        "events.iterate.com/voice-agent/session-configured",
+        "events.iterate.com/voice-agent/utterance-transcript",
+        "events.iterate.com/voice-agent/answer-transcript",
+        "events.iterate.com/voice-agent/instructions",
+        "events.iterate.com/voice-agent/thinking",
+        "events.iterate.com/voice-agent/commentary",
+        "events.iterate.com/voice-agent/provider-error",
+        "events.iterate.com/voice-agent/provider-disconnected",
+        "events.iterate.com/voice-agent/conversation-ended",
+      ],
+      processEventBatch: (batch: { events?: { type: string; payload?: unknown }[] }) => {
+        const events = batch.events || [];
+        /* `spk-frame` is the selected event whose contract carries `pcm`.
+         * Stream batches are untyped at this boundary, so these small casts
+         * express only the field being measured; the runtime checks exclude a
+         * malformed payload rather than trusting it as parsed voice data. */
+        const batchAudioFrames = events.filter(
+          (event) =>
+            event.type === "events.iterate.com/voice-agent/spk-frame" &&
+            typeof (event.payload as { pcm?: unknown } | undefined)?.pcm === "string" &&
+            (event.payload as { pcm: string }).pcm !== "",
+        ).length;
+        for (const event of events) {
+          const payload = (event.payload ?? {}) as Record<string, unknown>;
+          if (event.type === "events.iterate.com/voice-agent/call-started") {
+            if (payload.activation !== activation || typeof payload.conversationId !== "string")
+              continue;
+            watch.conversationId = payload.conversationId;
+            watch.callStartedAtMs = clock();
             continue;
-          watch.conversationId = payload.conversationId;
-          watch.callStartedAtMs = clock();
-          continue;
-        }
-        if (!belongsToCall(payload)) continue;
-        if (event.type === "events.iterate.com/voice-agent/conversation-accepted") {
-          watch.conversationAcceptedAtMs = clock();
-          watch.handshakeTookMs =
-            typeof payload.handshakeTookMs === "number" ? payload.handshakeTookMs : null;
-          watch.heldMicFrames =
-            typeof payload.heldMicFrames === "number" ? payload.heldMicFrames : null;
-          continue;
-        }
-        if (event.type === "events.iterate.com/voice-agent/session-configured") {
-          watch.sessionConfiguredAtMs = clock();
-          continue;
-        }
-        if (event.type === "events.iterate.com/voice-agent/utterance-transcript") {
-          watch.utterances.push({ atMs: clock(), text: text(payload) });
-          continue;
-        }
-        if (event.type === "events.iterate.com/voice-agent/answer-transcript") {
-          watch.answers.push({ atMs: clock(), text: text(payload) });
-          continue;
-        }
-        if (event.type === "events.iterate.com/voice-agent/backend-reply") {
-          watch.backendReplies.push({ atMs: clock(), text: text(payload) });
-          continue;
-        }
-        if (event.type === "events.iterate.com/voice-agent/provider-error") {
-          watch.providerErrors.push({
+          }
+          if (!belongsToCall(payload)) continue;
+          if (event.type === "events.iterate.com/voice-agent/conversation-accepted") {
+            watch.conversationAcceptedAtMs = clock();
+            watch.handshakeTookMs =
+              typeof payload.handshakeTookMs === "number" ? payload.handshakeTookMs : null;
+            watch.heldMicFrames =
+              typeof payload.heldMicFrames === "number" ? payload.heldMicFrames : null;
+            continue;
+          }
+          if (event.type === "events.iterate.com/voice-agent/session-configured") {
+            watch.sessionConfiguredAtMs = clock();
+            continue;
+          }
+          if (event.type === "events.iterate.com/voice-agent/utterance-transcript") {
+            watch.utterances.push({ atMs: clock(), text: text(payload) });
+            continue;
+          }
+          if (event.type === "events.iterate.com/voice-agent/answer-transcript") {
+            watch.answers.push({ atMs: clock(), text: text(payload) });
+            continue;
+          }
+          if (event.type === "events.iterate.com/voice-agent/instructions") {
+            watch.instructions.push({ atMs: clock(), text: content(payload) });
+            continue;
+          }
+          if (event.type === "events.iterate.com/voice-agent/thinking") {
+            watch.thinking.push({ atMs: clock(), text: content(payload) });
+            continue;
+          }
+          if (event.type === "events.iterate.com/voice-agent/commentary") {
+            watch.commentary.push({ atMs: clock(), text: content(payload) });
+            continue;
+          }
+          if (event.type === "events.iterate.com/voice-agent/provider-error") {
+            watch.providerErrors.push({
+              atMs: clock(),
+              text: text(payload) || String(payload.message ?? ""),
+            });
+            continue;
+          }
+          if (event.type === "events.iterate.com/voice-agent/provider-disconnected") {
+            watch.providerDisconnects.push({
+              atMs: clock(),
+              text: text(payload) || String(payload.reason ?? ""),
+            });
+            continue;
+          }
+          if (event.type === "events.iterate.com/voice-agent/conversation-ended") {
+            watch.ended.push({ atMs: clock(), text: String(payload.reason ?? "") });
+            continue;
+          }
+          if (event.type !== "events.iterate.com/voice-agent/spk-frame") continue;
+          watch.spkFrames += 1;
+          const pcm = typeof payload.pcm === "string" ? payload.pcm : "";
+          if (payload.clearSpeakerBufferBeforeFrame === true && pcm === "") watch.clearsSeen += 1;
+          if (payload.lastFrameOfAnswer === true) watch.answersEnded += 1;
+          if (pcm === "") continue;
+          watch.answerDeliveredMs += deliveredMsOf(pcm);
+          watch.lastAudioFrameAtMs = clock();
+          watch.spkArrivals.push({
             atMs: clock(),
-            text: text(payload) || String(payload.message ?? ""),
+            payloadMs: deliveredMsOf(pcm),
+            batchAudioFrames,
+            sentAtFacetMs: typeof payload.sentAtFacetMs === "number" ? payload.sentAtFacetMs : null,
+            answerIndex: watch.answersEnded,
           });
-          continue;
         }
-        if (event.type === "events.iterate.com/voice-agent/provider-disconnected") {
-          watch.providerDisconnects.push({
-            atMs: clock(),
-            text: text(payload) || String(payload.reason ?? ""),
-          });
-          continue;
-        }
-        if (event.type === "events.iterate.com/voice-agent/conversation-ended") {
-          watch.ended.push({ atMs: clock(), text: String(payload.reason ?? "") });
-          continue;
-        }
-        if (event.type !== "events.iterate.com/voice-agent/spk-frame") continue;
-        watch.spkFrames += 1;
-        const pcm = typeof payload.pcm === "string" ? payload.pcm : "";
-        if (payload.clearSpeakerBufferBeforeFrame === true && pcm === "") watch.clearsSeen += 1;
-        if (payload.lastFrameOfAnswer === true) watch.answersEnded += 1;
-        if (pcm === "") continue;
-        watch.answerDeliveredMs += deliveredMsOf(pcm);
-        watch.lastAudioFrameAtMs = clock();
-        watch.spkArrivals.push({
-          atMs: clock(),
-          payloadMs: deliveredMsOf(pcm),
-          batchAudioFrames,
-          sentAtFacetMs: typeof payload.sentAtFacetMs === "number" ? payload.sentAtFacetMs : null,
-          answerIndex: watch.answersEnded,
-        });
-      }
-    },
-  });
+      },
+    });
+  } catch (error) {
+    openedStream.close();
+    throw error;
+  }
 
   const pending: Array<string | symbol> = [];
+  const micAppendErrors: unknown[] = [];
+  const micAppends = new RpcResultObserver((error) => micAppendErrors.push(error));
   let micFramesSent = 0;
   let stopMic = false;
+  let stopped = false;
   const micLoop = (async () => {
     const startedAt = Date.now();
     let sequence = 0;
@@ -249,10 +285,9 @@ export async function openWireCall(
       sequence += micBatchFrames;
       micFramesSent += micBatchFrames;
       const appendStartedAtMs = Date.now();
-      void stream
-        .append(...events)
-        .then(() => watch.micAppendLatenciesMs.push(Date.now() - appendStartedAtMs))
-        .catch(() => undefined);
+      micAppends.observe(stream.append(...events), () => {
+        watch.micAppendLatenciesMs.push(Date.now() - appendStartedAtMs);
+      });
     }
   })();
 
@@ -282,35 +317,59 @@ export async function openWireCall(
     quietFor: (quietMs) =>
       watch.lastAudioFrameAtMs !== null && clock() - watch.lastAudioFrameAtMs > quietMs,
     stop: async (reason = "script-complete") => {
-      stopMic = true;
-      await micLoop;
-      await stream.append({
-        type: "events.iterate.com/voice-agent/conversation-ended" as const,
-        payload: { activation, reason },
-      });
-      connection.close();
+      if (stopped) return;
+      stopped = true;
+      try {
+        stopMic = true;
+        await micLoop;
+        await micAppends.drain();
+        const micAppendError = micAppendErrors[0];
+        if (watch.ended.length === 0) {
+          await stream.append({
+            type: "events.iterate.com/voice-agent/conversation-ended" as const,
+            payload: { activation, reason },
+          });
+        }
+        if (micAppendError !== undefined) throw micAppendError;
+      } finally {
+        closeAndDisposeRpcHandle(connection);
+        openedStream.close();
+      }
     },
     durableEvents: async () => {
-      const readable = stream as unknown as VoiceStreamReads;
-      const events = await readable.getEvents({
-        afterOffset: 0,
-        eventTypes: [
+      const openedReadStream = await openStream(options);
+      try {
+        const readable = openedReadStream.stream as unknown as VoiceStreamReads;
+        const eventTypes = [
           "events.iterate.com/voice-agent/call-started",
           "events.iterate.com/voice-agent/conversation-accepted",
           "events.iterate.com/voice-agent/session-configured",
           "events.iterate.com/voice-agent/utterance-transcript",
           "events.iterate.com/voice-agent/answer-transcript",
-          "events.iterate.com/voice-agent/backend-reply",
+          "events.iterate.com/voice-agent/instructions",
+          "events.iterate.com/voice-agent/thinking",
+          "events.iterate.com/voice-agent/commentary",
           "events.iterate.com/voice-agent/provider-error",
           "events.iterate.com/voice-agent/provider-disconnected",
           "events.iterate.com/voice-agent/conversation-ended",
-        ],
-        limit: 500,
-      });
-      return (events || []).filter((event) => {
-        const payload = (event.payload ?? {}) as Record<string, unknown>;
-        return payload.activation === activation || payload.conversationId === watch.conversationId;
-      });
+        ];
+        const events: StreamEvent[] = [];
+        let afterOffset = 0;
+        for (;;) {
+          const page = await readable.getEvents({ afterOffset, eventTypes, limit: 500 });
+          events.push(...page);
+          if (page.length < 500) break;
+          afterOffset = page.at(-1)!.offset;
+        }
+        return events.filter((event) => {
+          const payload = (event.payload || {}) as Record<string, unknown>;
+          return (
+            payload.activation === activation || payload.conversationId === watch.conversationId
+          );
+        });
+      } finally {
+        openedReadStream.close();
+      }
     },
   };
 }

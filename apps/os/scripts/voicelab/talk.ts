@@ -1,6 +1,6 @@
 // Hold a voice conversation from this Mac: real microphone in, speakers out,
-// and continuous capture while the call is active. No ESP32 involved. GPT-Live on the
-// far end, delegating to a fast Astra with exec_typescript on the project.
+// and continuous capture while the call is active. No ESP32 involved. GPT-Live
+// delegates work to the normal Agent processor on this stream.
 //
 //   pnpm cli voicelab talk                # asks which environment and project
 //   pnpm cli voicelab talk --auto         # defaults for both prompts: default project, fresh stream
@@ -139,22 +139,8 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   instructions?: string;
   /** Install the subscription under a fresh key even if an identical one exists. */
   reinstall?: boolean;
-  /**
-   * Offer the model a hang_up tool: say goodbye, end the call — the baseline
-   * proof the tool path works end to end. ON BY DEFAULT — every stream is
-   * born able to end its own call; pass `--hang-up false` to withhold it.
-   */
-  hangUp?: boolean;
   /** Classify the answer into mouth shapes for a face-rendering board. */
   visemes?: boolean;
-  /**
-   * Extra tools for the birth certificate, as a JSON array of
-   * `{name, description, parameters?}` entries — appended after the
-   * `--hang-up` base tool. The certificate accepts only names the agent
-   * knows how to be (today: `hang_up`); everything else the backend does
-   * through `exec_typescript`.
-   */
-  tools?: string;
 }
 
 /**
@@ -274,29 +260,6 @@ export async function talk(options: TalkOptions = {}) {
       streamPath,
       instructions: options.instructions ?? DEFAULT_INSTRUCTIONS,
       ...(options.visemes === true && { visemes: true }),
-      ...(() => {
-        const tools = [
-          ...(options.hangUp !== false
-            ? [
-                {
-                  name: "hang_up",
-                  description:
-                    "End this call when the user says goodbye or the conversation is " +
-                    "clearly over. Say a short goodbye BEFORE calling this; the call " +
-                    "ends after you finish speaking.",
-                },
-              ]
-            : []),
-          ...(options.tools === undefined
-            ? []
-            : (JSON.parse(options.tools) as {
-                name: string;
-                description: string;
-                parameters?: Record<string, unknown>;
-              }[])),
-        ];
-        return tools.length > 0 ? { tools } : {};
-      })(),
       ...(options.reinstall === undefined ? {} : { reinstall: options.reinstall }),
     }),
     ({ streamPath: resultPath, warmMs }) => ({ streamPath: resultPath, warmMs }),

@@ -15,9 +15,9 @@
  * https://developers.cloudflare.com/workers/runtime-apis/bindings/#importing-env-as-a-global
  */
 import handler from "@tanstack/react-start/server-entry";
-import { newHttpBatchRpcResponse, newWebSocketRpcSession } from "capnweb";
+import { newHttpBatchRpcResponse, RpcSession } from "capnweb";
 import type { Env } from "./env.ts";
-import { registerItxSessionTransport } from "./session-transport.ts";
+import { createItxWebSocketTransport, registerItxSessionTransport } from "./session-transport.ts";
 import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname } from "./project-hostname-directory.ts";
 import { readProjectById, readProjectBySlug, resolveProjectIdBySlug } from "./project-directory.ts";
@@ -38,6 +38,7 @@ import { wideLogger } from "./observability/wide-log.ts";
 import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
 import { schedulePosthogException, withPosthogExceptionCapture } from "./observability/posthog.ts";
 import { STREAM_CONTEXT_HEADER } from "./domains/projects/stream-context.ts";
+import { bridgeProjectRequestBody } from "./project-request-body-bridge.ts";
 
 // Every Durable Object class in the product, plus the loopback entrypoints
 // (`ctx.exports`) shared by the itx runtime.
@@ -185,13 +186,14 @@ async function apiFetch(
         }),
       });
     }
+    const bodyBridge = bridgeProjectRequestBody(request);
     const init: RequestInit = {
-      body: request.body,
+      body: bodyBridge.body,
       headers: route.fetch.headers,
       method: route.fetch.method,
       redirect: request.redirect,
     };
-    if (request.body !== null) {
+    if (bodyBridge.body) {
       (init as RequestInit & { duplex: "half" }).duplex = "half";
     }
     // Project-app HTTP is ONE transport: the fetch-native worker lane. Pages,
@@ -241,7 +243,7 @@ async function apiFetch(
       }),
     });
     if (outcome !== null) wideLogger.setOutcome(outcome);
-    return response;
+    return await bodyBridge.finish(response);
   }
 
   if (route.lane === "notFound") {
@@ -299,7 +301,11 @@ async function apiFetch(
   const server = pair[0];
   server.accept();
   registerItxSessionTransport(ctx, (code, reason) => server.close(code, reason));
-  newWebSocketRpcSession(server as never, unauthenticated, itxObservability("websocket"));
+  new RpcSession(
+    createItxWebSocketTransport(server),
+    unauthenticated,
+    itxObservability("websocket"),
+  );
   return new Response(null, { status: 101, webSocket: pair[1] });
 }
 

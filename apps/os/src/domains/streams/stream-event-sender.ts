@@ -351,6 +351,7 @@ type StreamEventSenderHooks = {
     afterOffset: number;
     beforeOffset: number;
     limit: number;
+    byteLimit?: number;
   }): SizedStreamEvent[];
   /** Current core reduced state, read in the same synchronous block as each delivery. */
   coreState(): CoreProcessorState;
@@ -1299,7 +1300,7 @@ export class StreamEventSender {
         ? this.#justCommittedEvents
             .filter((entry) => entry.event.offset < beforeOffset)
             .slice(0, limit)
-        : this.#hooks.readEvents({ afterOffset, beforeOffset, limit });
+        : this.#hooks.readEvents({ afterOffset, beforeOffset, limit, byteLimit });
     if (sized.length <= 1) return sized;
     let bytes = 0;
     for (let index = 0; index < sized.length; index += 1) {

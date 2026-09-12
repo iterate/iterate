@@ -1,5 +1,11 @@
 /** GPT-Live relay and durable call fold for one voice stream. */
-import { IterateWorkerEntrypoint, StreamProcessorFacet, type ProcessorHostDeps } from "iterate/sdk";
+import {
+  IterateWorkerEntrypoint,
+  StreamProcessorFacet,
+  type AgentEventInput,
+  type ProcessorHostDeps,
+  type Project,
+} from "iterate/sdk";
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import {
   defineProcessorContract,
@@ -33,17 +39,6 @@ const LIVE = {
   model: "gpt-live-1",
   voice: "marin",
   rate: 16_000,
-} as const;
-
-/**
- * The backend the voice delegates to, unless the certificate overrides it:
- * the most capable model on the fast tier at low effort. Measured 7 s from
- * delegation to a spoken three-script answer (live-probe, 2026-09-10).
- */
-const BACKEND = {
-  model: "gpt-6-astra",
-  reasoningEffort: "low",
-  serviceTier: "priority",
 } as const;
 
 /**
@@ -127,28 +122,6 @@ const BACKGROUND_LOOP_TICK_MS = 1_000;
 const SILENCE_FILL_FRAME_B64 = bytesToBase64(new Uint8Array(SILENCE_FILL_MS * 32));
 
 /**
- * A person whose last transcript fragment is younger than this is still
- * talking. GPT-Live raises a delegation at the first pause, mid-request, and
- * the backend then works from the first clause alone (measured 2026-09-11:
- * "Open a workspace called scratch." created the workspace and asked what
- * file; "Create an agent at" made up a path and asked what it should do).
- * The facet hears the whole request, so a delegation's tool result is HELD
- * while the person is still talking and the rest of what they said goes to
- * the backend with it. Input transcription lags real time by ~250 ms and
- * arrives in fragments; a gap this long is a finished sentence.
- */
-const USER_STILL_TALKING_MS = 1_500;
-/** The longest a tool result waits for the person to finish. */
-const FORWARD_HOLD_MAX_MS = 15_000;
-/**
- * Progress notes reach the voice at most this often. The voice turns each
- * note into a filler ("Still checking.") however it is told not to — three
- * in ten seconds on one duplex run — so a fast backend's steps are folded
- * into one note per gap; the latest note is what "how is it going?" needs.
- */
-const PROGRESS_NOTE_MIN_GAP_MS = 4_000;
-
-/**
  * The idle stamp advances in steps of this, not per frame. Folding every mic
  * frame's commit stamp made EVERY delivery batch dirty the reduced state; the
  * deadline is sixty seconds, so knowing the device's last input to five is
@@ -163,19 +136,7 @@ const IDLE_TICK_MS = 5_000;
 const OPENING_DEADLINE_MS = 15_000;
 
 /**
- * A backend function that hangs must still be answered: the backend model
- * hears "took too long" and the voice can say so. Sixty seconds because the
- * functions run real itx scripts against the project, and the voice keeps
- * the conversation going meanwhile — that is the whole point of delegation.
- */
-const BACKEND_FUNCTION_DEADLINE_MS = 60_000;
-
-/** A function result lives in the backend's context for the rest of the
- * response; nobody budgeted it for a table dump. */
-const FUNCTION_OUTPUT_MAX_CHARS = 8_000;
-
-/**
- * How long a decided hang-up waits for the goodbye. The BACKEND calls
+ * How long a decided hang-up waits for the goodbye. The Agent calls
  * `hang_up`, and the voice speaks its farewell only after the backend's
  * response completes — so the flag is armed before the goodbye exists, and
  * settling at the next quiet moment would cut the call before "bye" is said.
@@ -210,6 +171,17 @@ interface TranscriptTurn {
   text: string;
 }
 
+type AgentTranscriptContext = { role: "user" | "developer"; content: string };
+
+function agentTranscriptContext(
+  speaker: "user" | "assistant",
+  text: string,
+): AgentTranscriptContext {
+  return speaker === "user"
+    ? { role: "user", content: text }
+    : { role: "developer", content: `Voice agent (spoken transcript): ${text}` };
+}
+
 /** Fold one finished turn onto the recap, applying both bounds. */
 function foldTranscriptTurn(transcript: TranscriptTurn[], turn: TranscriptTurn): TranscriptTurn[] {
   const text =
@@ -217,6 +189,27 @@ function foldTranscriptTurn(transcript: TranscriptTurn[], turn: TranscriptTurn):
       ? `${turn.text.slice(0, TRANSCRIPT_TURN_MAX_CHARS)}…`
       : turn.text;
   return [...transcript, { role: turn.role, text }].slice(-TRANSCRIPT_MAX_TURNS);
+}
+
+/** Each Live context append allows 500 tokens. UTF-8 bytes are a conservative
+ * upper bound, independent of language/tokenizer; split at spaces where possible. */
+function* commentaryChunks(text: string): Generator<string> {
+  const encoder = new TextEncoder();
+  let chunk = "";
+  let bytes = 0;
+  for (const character of text) {
+    const size = encoder.encode(character).length;
+    if (bytes + size > 500) {
+      const space = chunk.lastIndexOf(" ");
+      const boundary = space > 0 ? space + 1 : chunk.length;
+      yield chunk.slice(0, boundary);
+      chunk = chunk.slice(boundary);
+      bytes = encoder.encode(chunk).length;
+    }
+    chunk += character;
+    bytes += size;
+  }
+  if (chunk) yield chunk;
 }
 
 /* ========================================================================== */
@@ -241,89 +234,82 @@ const LIVE_DELEGATION_POLICY = [
   "",
   "Delegation policy:",
   "Backend tools:",
-  "- A backend model with code access to this iterate project: it can read and change the",
-  "  project, look things up, run scripts, use the line's own tools, and do real work.",
+  "- This project’s standard Agent processor: it can read and change the",
+  "  project, look things up, run scripts, and end this call after saying goodbye.",
+  "Ending the call:",
+  "- Always request a NEW client delegation when the user asks to end or hang up,",
+  "  or when the conversation is clearly over, even after earlier backend work completed.",
+  "- Only the backend closes the call. Saying goodbye does not close it: delegate",
+  "  BEFORE a goodbye, then wait for the backend's goodbye result.",
+  "- Do not stop conversing merely because you acknowledged ending. If the user still",
+  "  asks, respond and delegate again.",
   "Delegate to the backend when:",
-  "- The request needs looking up, working out, or doing — anything beyond conversation,",
-  "  including anything the line's tools do (ending the call, moving a face, and so on).",
-  "- A correction changes work already requested.",
+  "- The person asks for information, reasoning, a lookup, a change, device control, or",
+  "  ending the call. Delegate even trivial requests. When uncertain, delegate.",
+  "- The person repeats or corrects a request. Every newly spoken request needs a NEW",
+  "  client delegation, even if an identical request appears in prior conversation history.",
   "Do not delegate to the backend when:",
-  "- You can answer from the conversation or a result you already have.",
-  "- You need a brief clarification first.",
-  "You may delegate as soon as the request is clear; whatever the person says afterwards is",
-  "forwarded to the backend, so do not hold back replies or backchannels waiting for them to",
-  "finish. Every request to create, change, run or check something is its own delegation, however",
-  "small, and however similar to work already done.",
-  "Delegate before giving an answer that depends on backend work. Do not guess the result",
-  "while waiting: say you've handed it over and keep the conversation going. Backend progress",
-  "notes arrive as thinking: never narrate them step by step; use them only when the person",
-  "asks how it is going, or for one short honest update when the work runs long. Say a thing is",
+  "- It is social conversation, a brief clarifying question, or repeating a verified result.",
+  "Request client delegation IMMEDIATELY, BEFORE acknowledging an action or saying",
+  "you will check. Saying 'I'll check' does not start backend work. Only after delegating",
+  "may you say you've handed it over. Past acknowledgments in conversation history do not",
+  "mean a request in this new call has been delegated. Keep conversing while the Agent works.",
+  "Do not guess results or invent progress. Say a thing is",
   "done only when the backend has reported it done for THAT request. Relay backend results",
   "faithfully, read one out in full when the person wants the details, and correct yourself",
   "plainly if one contradicts something you said. If the backend reports a failure, SAY SO",
   "— never invent an explanation for a delay or a result you have not seen.",
 ].join("\n");
 
-/**
- * What the backend is told, before the certificate's own backend
- * instructions. The exec_typescript contract is the one the OS MCP server
- * hands every client, condensed: a phone-sized voice answer does not need
- * the whole discovery guide, and the docs are one script away.
- */
-const BACKEND_BRIEF = [
-  "## Voice conversation context",
-  "You are the backend of ONE assistant on a live voice call with a person who knows it",
-  "well; the frontend voice speaks your result. Transcripts can contain mistakes and later",
-  "corrections; use the latest context. Names, paths and identifiers arrive as SPOKEN words",
-  '("hello dot md inside the notes folder", "slash agents slash helper", "com dot example',
-  'slash report requested"): resolve them to the obvious literal form (notes/hello.md,',
-  "/agents/helper, com.example/report-requested) and proceed. When the platform rejects that",
-  "literal form and the fix is obvious (a plural, a hyphen, a known prefix such as /agents/),",
-  "apply it and continue. Ask for clarification only when two readings would lead to",
-  "materially different actions. The transcript can end",
-  "mid-request when the person is still talking: do whatever is unambiguous already, and",
-  "for the rest say plainly what you still need — the voice sends it on.",
-  "",
-  "## Task instructions",
-  "exec_typescript runs one TypeScript async arrow function, `async (itx) => { ... }`,",
-  "against this iterate project; its JSON return value is the tool result. `itx` is the",
-  "project's capability tree: docs, streams, repo, workspaces, agents, files, integrations,",
-  "and whatever this project mounted. Research before guessing: `await itx.docs.search({ q:",
-  '"several related words" })` finds proven examples and declarations, `await itx.__describe()`',
-  "(and `__describe()` on any child) inspects a live node, `await itx.docs.typecheck({ code })`",
-  "checks a script before a consequential call. Each call is a fresh isolate: fetch data and",
-  "RETURN it, look, then decide the next call. Prefer a few small data-first scripts. The",
-  "line's own tools (listed below when there are any) are faster than a script: call them",
-  "directly.",
-  "",
-  "## Return the result",
-  "Plain spoken sentences: the facts, whether it is done, and what comes next. Two or three",
-  "sentences by default; when the person asked for details or a full readout, give all of it",
-  "as prose the voice can read aloud. No bullet lists, no code, no URLs. Never claim an",
-  "action succeeded unless a tool proved it.",
-].join("\n");
+function agentVoiceProtocol(streamPath: string): string {
+  return [
+    "You are the project's ordinary Agent working with GPT-Live client delegation on this stream.",
+    "Voice delegation metadata is platform context, not user speech. Preserve each activation and delegationId with the work it describes; several delegations may be outstanding.",
+    "Voice transcripts can be incomplete or corrected; entries keyed `voice-agent/transcript:` record either a human or GPT-Live speaking, and GPT-Live speech (labelled `Voice agent (spoken transcript):` in new entries) is never your output, a task completion, or evidence an action happened. Use later context before acting, and let ordinary Agent work continue after a voice call ends.",
+    "To guide GPT-Live, append one of these plain-string events to this stream:",
+    "- events.iterate.com/voice-agent/instructions directs the live model's behaviour.",
+    "- events.iterate.com/voice-agent/thinking provides quiet facts or progress that the live model may use without saying immediately.",
+    "- events.iterate.com/voice-agent/commentary provides verified information for the live model to paraphrase aloud. Completing a task does not end a call: omit hangUp on ordinary results. Set hangUp: true only when the current user asks to end the call or clearly says goodbye, never merely because backend work finished; its content must be a short goodbye.",
+    "Each payload is { activation, delegationId, content }; delegationId may be null for general context. commentary alone does not complete a delegation. Do not derive voice commentary from raw assistant transcript or executable model output.",
+    "For example:",
+    `await itx.streams.get(${JSON.stringify(streamPath)}).append({`,
+    '  type: "events.iterate.com/voice-agent/thinking",',
+    '  idempotencyKey: "a-stable-key-for-this-update",',
+    '  payload: { activation, delegationId, content: "A verified progress fact." },',
+    "});",
+    "Keep content within 500 tokens and use a distinct stable idempotency key for each update.",
+  ].join("\n");
+}
 
-const EXEC_TYPESCRIPT_FUNCTION = {
-  type: "function",
-  name: "exec_typescript",
-  description:
-    "Execute TypeScript against this iterate project. Pass exactly one async arrow function " +
-    "as code: async (itx) => { ... }. Its JSON-serializable return value becomes the tool " +
-    "result; a thrown error becomes the tool error. Research unfamiliar calls with " +
-    'itx.docs.search({ q: "..." }) and __describe() before guessing a call shape.',
-  parameters: {
-    type: "object",
-    properties: {
-      code: {
-        type: "string",
-        description:
-          "One TypeScript async arrow function, e.g. async (itx) => { return await itx.__describe(); }",
+function agentSetupEvents(
+  streamPath: string,
+  model: string | undefined,
+  setupId: string,
+): AgentEventInput[] {
+  return [
+    ...(!model
+      ? []
+      : [
+          {
+            type: "events.iterate.com/agent/configured" as const,
+            idempotencyKey: `voice-agent/agent-model:${streamPath}:${setupId}`,
+            payload: {
+              config: { llm: { model: model.includes("/") ? model : `openai/${model}` } },
+            },
+          },
+        ]),
+    {
+      type: "events.iterate.com/agents/context-added" as const,
+      idempotencyKey: `voice-agent/agent-protocol:${streamPath}:${setupId}`,
+      payload: {
+        role: "system",
+        key: "voice-agent/protocol",
+        content: agentVoiceProtocol(streamPath),
+        llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
       },
     },
-    required: ["code"],
-    additionalProperties: false,
-  },
-} as const;
+  ];
+}
 
 /**
  * How much decoded microphone audio may be held while the provider completes
@@ -398,34 +384,19 @@ function peakOfBase64Pcm16(base64: string): number {
 /* CONTRACT                                                                   */
 /* ========================================================================== */
 
-/**
- * One tool the backend model may call, as data on the birth certificate.
- *
- * A certificate tool is a name this agent already knows how to be: `hang_up`
- * is the only one — one atomic terminal append, no itx.
- * Anything a project wants done goes through `exec_typescript`, which reaches
- * the same capabilities with types and without a persisted walk.
- */
-const VoiceTool = z
-  .strictObject({
-    name: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
-    description: z.string(),
-    parameters: z.looseObject({}).optional(),
-  })
-  .refine((tool) => tool.name === "hang_up", {
-    message: 'a certificate tool must be a name this agent knows; today that is "hang_up"',
-  });
-
 /** Backend overrides — see VoiceBackendInput in setup-options.ts. */
-const VoiceBackend = z.strictObject({
+const VoiceBackend = z.looseObject({
   model: z.string().optional(),
-  reasoningEffort: z.string().optional(),
-  serviceTier: z.string().optional(),
   instructions: z.string().optional(),
 });
 
 /** A client-local call identity; opaque to the backend and durable fold. */
 const Activation = z.string().min(1).max(64);
+
+/* Firmware holds at most two terminals while its ordered sender waits for
+ * stream capacity. Remember that exact bounded set, so either delayed
+ * terminal still fences its own queued microphone audio. */
+const RECENT_ENDED_ACTIVATIONS_CAPACITY = 2;
 
 /**
  * Everything that outlives the Durable Object holding the socket.
@@ -444,8 +415,6 @@ const VoiceState = z.object({
   visemes: z.boolean().default(false),
   /** Backend overrides; an empty object is the package's defaults. */
   backend: VoiceBackend.default({}),
-  /** Tools the backend may call — see {@link VoiceTool}. */
-  tools: z.array(VoiceTool).default([]),
   /**
    * The rolling recap: the newest finished turns, in words, both sides.
    * Folded from the durable transcript events and seeded as history into
@@ -454,8 +423,10 @@ const VoiceState = z.object({
   transcript: z
     .array(z.strictObject({ role: z.enum(["listener", "assistant"]), text: z.string() }))
     .default([]),
-  /** The most recently cancelled activation when there is no live call. */
+  /** Legacy single tombstone, read while old durable state is upgraded. */
   lastEndedActivation: Activation.nullable().default(null),
+  /** Recent client terminals, newest first; see RECENT_ENDED_ACTIVATIONS_CAPACITY. */
+  recentEndedActivations: z.array(Activation).max(RECENT_ENDED_ACTIVATIONS_CAPACITY).default([]),
   call: z
     .object({
       conversationId: z.string(),
@@ -478,7 +449,7 @@ export const VoiceAgentContract = defineProcessorContract({
    * the live subscription is named for it, and the device speaks these event
    * names already. */
   slug: "voice-agent",
-  version: "23.0.0",
+  version: "24.0.0",
   description:
     "Runs a GPT-Live voice call in the stream's own Durable Object, relaying audio both ways as it arrives.",
   stateSchema: VoiceState,
@@ -491,11 +462,12 @@ export const VoiceAgentContract = defineProcessorContract({
     },
     "events.iterate.com/voice-agent/configured": {
       description: "The agent configuration. An absent field resets to its default.",
-      payloadSchema: z.strictObject({
+      /* v23 accepted a tools array. Ignore that historic field while replaying
+       * an existing stream; v24 neither accepts it as setup nor emits it. */
+      payloadSchema: z.looseObject({
         instructions: z.string().optional(),
         visemes: z.boolean().optional(),
         backend: VoiceBackend.optional(),
-        tools: z.array(VoiceTool).optional(),
       }),
     },
     /*
@@ -561,34 +533,57 @@ export const VoiceAgentContract = defineProcessorContract({
      */
     "events.iterate.com/voice-agent/utterance-transcript": {
       description: "The provider's transcription of one finished listener turn.",
-      payloadSchema: z.looseObject({ conversationId: z.string(), text: z.string() }),
+      payloadSchema: z.looseObject({
+        conversationId: z.string(),
+        text: z.string(),
+        key: z.string().optional(),
+      }),
     },
     "events.iterate.com/voice-agent/answer-transcript": {
       description:
         "The provider's own transcript of one finished spoken answer — what was said, not " +
         "necessarily what was heard: the listener may have talked over it.",
-      payloadSchema: z.looseObject({ conversationId: z.string(), text: z.string() }),
+      payloadSchema: z.looseObject({
+        conversationId: z.string(),
+        text: z.string(),
+        key: z.string().optional(),
+      }),
     },
-    "events.iterate.com/voice-agent/backend-reply": {
-      description:
-        "The backend model's final text for one delegation, as the voice received it — the " +
-        "durable record of what the backend concluded (its function calls are on the " +
-        "mirrored provider events and the capability host's script record).",
-      payloadSchema: z.looseObject({ conversationId: z.string(), text: z.string() }),
+    "events.iterate.com/voice-agent/instructions": {
+      description: "A standard Agent instruction for the live model's behaviour.",
+      payloadSchema: z.object({
+        activation: Activation,
+        delegationId: z.string().nullable(),
+        content: z.string().min(1).max(8_000),
+      }),
+    },
+    "events.iterate.com/voice-agent/thinking": {
+      description: "A standard Agent factual update for the live model to use quietly.",
+      payloadSchema: z.object({
+        activation: Activation,
+        delegationId: z.string().nullable(),
+        content: z.string().min(1).max(8_000),
+      }),
+    },
+    "events.iterate.com/voice-agent/commentary": {
+      description: "A standard Agent fact for the live model to paraphrase aloud.",
+      payloadSchema: z.object({
+        activation: Activation,
+        delegationId: z.string().nullable(),
+        content: z.string().min(1).max(8_000),
+        hangUp: z.boolean().optional(),
+      }),
     },
     "events.iterate.com/voice-agent/session-configured": {
       description:
-        "The whole briefing one provider session was started with — instructions (bounded), " +
-        "the backend model, and its tools — recorded so the " +
-        "stream shows how the voice was initialized instead of that being invisible " +
-        "session state.",
+        "The whole briefing one provider session was started with — recorded so the stream shows how the voice was initialized.",
+      /* Loose for v23 rows that included backend fields. */
       payloadSchema: z.looseObject({
         activation: Activation,
         conversationId: z.string(),
         provider: z.string(),
         instructions: z.string(),
-        backendModel: z.string(),
-        tools: z.array(z.string()),
+        delegation: z.literal("client").optional(),
       }),
     },
 
@@ -623,6 +618,9 @@ export const VoiceAgentContract = defineProcessorContract({
   consumes: [
     "events.iterate.com/voice-agent/created",
     "events.iterate.com/voice-agent/configured",
+    "events.iterate.com/voice-agent/instructions",
+    "events.iterate.com/voice-agent/thinking",
+    "events.iterate.com/voice-agent/commentary",
     "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/conversation-ended",
     /* Consumed so the fold sees its own appends and the recap survives an
@@ -644,12 +642,29 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/provider-disconnected",
     "events.iterate.com/voice-agent/utterance-transcript",
     "events.iterate.com/voice-agent/answer-transcript",
-    "events.iterate.com/voice-agent/backend-reply",
     "events.iterate.com/voice-agent/session-configured",
     "events.iterate.com/voice-agent/spk-frame",
   ],
 });
 export type VoiceAgentContract = typeof VoiceAgentContract;
+
+type VoiceState = z.infer<typeof VoiceState>;
+
+function recentEndedActivations(state: VoiceState): string[] {
+  if (
+    !state.lastEndedActivation ||
+    state.recentEndedActivations.includes(state.lastEndedActivation)
+  ) {
+    return state.recentEndedActivations;
+  }
+  return [state.lastEndedActivation, ...state.recentEndedActivations];
+}
+
+function rememberEndedActivation(state: VoiceState, activation: string): string[] {
+  const recent = recentEndedActivations(state);
+  if (recent.includes(activation)) return recent;
+  return [activation, ...recent].slice(0, RECENT_ENDED_ACTIVATIONS_CAPACITY);
+}
 
 /**
  * Everything whose lifetime is ONE ANSWER — one run of speech on the
@@ -742,23 +757,12 @@ interface Dial {
   hangUpReason: string | null;
   /** Facet clock when the hang-up was decided — see HANG_UP_GOODBYE_GRACE_MS. */
   hangUpArmedAtFacetMs: number;
-  /** Facet clock when the last answer's end marker went out; 0 before any. */
-  answerEndedAtFacetMs: number;
-  /** This dial has created the stream's capability host (or found it). */
-  capabilityHostReady: boolean;
+  /** An acknowledgement already playing at the decision is not the goodbye. */
+  answerBeforeHangUp: Answer | null;
+  /** Bounded conversation context, including turns closed since the dial began. */
+  transcript: TranscriptTurn[];
   /** The answer in flight — replaced wholesale at the onset of speech. */
   answer: Answer;
-  /**
-   * Backend functions still running on this dial. Quiet input/output while
-   * awaiting a slow function must not count as an abandoned conversation.
-   */
-  openBackendCalls: number;
-  /** Backend function calls completed on this dial, for the progress notes. */
-  backendSteps: number;
-  /** Facet clock at the last progress note sent to the voice. */
-  lastProgressNoteAtFacetMs: number | null;
-  /** Every user transcript fragment of this dial, in order. */
-  userTranscript: string;
   /** Facet clock at the last user transcript fragment. */
   lastUserFragmentAtFacetMs: number | null;
   /** How far, on the facet clock, the device's forwarded audio reaches:
@@ -770,9 +774,6 @@ interface Dial {
   micAudioCoveredUntilFacetMs: number;
   /** Silence frames this dial has sent in the device's place. */
   silenceFillFrames: number;
-  /** How much of `userTranscript` the backend has been given — carried by
-   * the delegation itself at creation, forwarded with tool results after. */
-  forwardedUserChars: number;
   /**
    * The furthest point on the provider's SESSION TIMELINE seen so far —
    * transcript `end_ms`, delegation `offset_ms`, and the running total of
@@ -802,17 +803,12 @@ const freshDial = (conversationId: string, activation: string): Dial => ({
   face: null,
   hangUpReason: null,
   hangUpArmedAtFacetMs: 0,
-  answerEndedAtFacetMs: 0,
-  capabilityHostReady: false,
+  answerBeforeHangUp: null,
+  transcript: [],
   answer: freshAnswer(),
-  openBackendCalls: 0,
-  backendSteps: 0,
-  lastProgressNoteAtFacetMs: null,
-  userTranscript: "",
   lastUserFragmentAtFacetMs: null,
   micAudioCoveredUntilFacetMs: 0,
   silenceFillFrames: 0,
-  forwardedUserChars: 0,
   timelineMs: 0,
   turns: { user: null, assistant: null },
 });
@@ -838,7 +834,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
      * `env.ITX.get()` must not outlive the invocation that dialed them, so
      * every backend function opens its own — the SDK's own pattern.
      */
-    withProject<T>(fn: (project: unknown) => Promise<T>): Promise<T>;
+    withProject<T>(fn: (project: Project) => Promise<T>): Promise<T>;
   }
 > {
   readonly contract = VoiceAgentContract;
@@ -875,6 +871,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
   #lastDeviceInputAtStreamMsMirror = 0;
   /** The activation whose terminal event is still travelling through the log. */
   #endingActivation: string | null = null;
+  /** Closed rows still travelling to the Agent; see #closeTurn. */
+  #pendingTranscriptContexts = new Map<string, AgentTranscriptContext>();
+  /** Agent context writes share keys, so their invocation order is their overwrite order. */
+  #agentAppendTail: Promise<void> = Promise.resolve();
   /* ------------------------------------------------------------------ fold */
 
   reduce({ state, event }: ReduceArgs<VoiceAgentContract>) {
@@ -887,21 +887,21 @@ export class VoiceAgentProcessor extends StreamProcessor<
 
       case "events.iterate.com/voice-agent/configured":
         /* REPLACED WHOLESALE, defaults and all: an absent field resets rather
-         * than survives, so a rerun of setup with a shorter config cannot
-         * leave last week's tools armed. */
+         * than survives. */
         return {
           ...state,
           instructions: event.payload.instructions ?? "",
           visemes: event.payload.visemes ?? false,
           backend: event.payload.backend || {},
-          tools: event.payload.tools ?? [],
         };
 
       case "events.iterate.com/voice-agent/call-started":
         /* The id was minted INTO the event rather than here, so this is
          * deterministic under replay. The deadline starts here too: opening a
          * call IS the device saying something. */
-        if (state.call || state.lastEndedActivation === event.payload.activation) return state;
+        if (state.call || recentEndedActivations(state).includes(event.payload.activation)) {
+          return state;
+        }
         return {
           ...state,
           call: {
@@ -947,12 +947,24 @@ export class VoiceAgentProcessor extends StreamProcessor<
             };
 
       case "events.iterate.com/voice-agent/conversation-ended":
-        /* Terminal at the decision. A late terminal event must never poison
-         * a newer activation's one-element cancellation marker. */
-        if (!state.call) return { ...state, lastEndedActivation: event.payload.activation };
+        /* Retain both terminals the client can have in flight. A late A must
+         * not erase B's fence, and a B terminal before its first mic must
+         * still block that mic. */
+        if (!state.call) {
+          return {
+            ...state,
+            lastEndedActivation: null,
+            recentEndedActivations: rememberEndedActivation(state, event.payload.activation),
+          };
+        }
         return state.call.activation !== event.payload.activation
           ? state
-          : { ...state, call: null, lastEndedActivation: event.payload.activation };
+          : {
+              ...state,
+              call: null,
+              lastEndedActivation: null,
+              recentEndedActivations: rememberEndedActivation(state, event.payload.activation),
+            };
 
       case "events.iterate.com/voice-agent/utterance-transcript": {
         if (event.payload.text === "") return state;
@@ -1003,6 +1015,70 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (event === null) return;
 
     switch (event.type) {
+      case "events.iterate.com/voice-agent/utterance-transcript":
+      case "events.iterate.com/voice-agent/answer-transcript": {
+        const transcriptKey = event.payload.key || `voice-agent/transcript:${event.offset}`;
+        /* This is a per-event consequence: its stable key is the committed
+         * transcript row, not its text, so repeated words remain distinct. */
+        args.blockProcessorWhile(() =>
+          this.#appendAgentContext(() =>
+            this.deps.withProject(async (project) => {
+              await project.agents.get(this.path).append({
+                type: "events.iterate.com/agents/context-added",
+                idempotencyKey: this.idempotencyKey(`agent-observed-transcript:${event.offset}`),
+                payload: {
+                  ...agentTranscriptContext(
+                    event.type === "events.iterate.com/voice-agent/utterance-transcript"
+                      ? "user"
+                      : "assistant",
+                    event.payload.text,
+                  ),
+                  actor: { type: "integration", name: "voice-agent" },
+                  key: transcriptKey,
+                  llmRequestPolicy: { behaviour: "dont-trigger-request" },
+                },
+              });
+              this.#pendingTranscriptContexts.delete(transcriptKey);
+            }),
+          ),
+        );
+        return;
+      }
+
+      case "events.iterate.com/voice-agent/instructions":
+      case "events.iterate.com/voice-agent/thinking":
+      case "events.iterate.com/voice-agent/commentary": {
+        const dial = this.#dial;
+        const update = event.payload;
+        if (!dial || dial.activation !== update.activation) return;
+        const sessionType =
+          event.type === "events.iterate.com/voice-agent/instructions"
+            ? "instructions"
+            : event.type === "events.iterate.com/voice-agent/thinking"
+              ? "thinking"
+              : "commentary";
+        if (event.type === "events.iterate.com/voice-agent/commentary" && event.payload.hangUp) {
+          dial.hangUpReason = "the Agent hung up";
+          dial.hangUpArmedAtFacetMs = this.deps.nowAtFacetMs();
+          dial.answerBeforeHangUp = dial.answer;
+          runInBackground(async () => {
+            await this.deps.sleep(HANG_UP_GOODBYE_GRACE_MS);
+            if (this.#dial !== dial || dial.answer.phase === "speaking") return;
+            await this.#settleHangUp(dial, append);
+          });
+        }
+        let chunkIndex = 0;
+        for (const content of commentaryChunks(update.content)) {
+          this.#sendControl(dial, {
+            type: `session.${sessionType}.append`,
+            event_id: `agent_${event.offset}_${chunkIndex++}`,
+            delegation_id: update.delegationId,
+            content,
+          });
+        }
+        return;
+      }
+
       case "events.iterate.com/voice-agent/mic-frame": {
         /* NOT DECODED HERE, on purpose. The frame stays the device's own
          * base64 string all the way to the wire. */
@@ -1015,7 +1091,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * output is ordered, so a mic from an ended activation must not
          * arrive after its successor has itself ended. */
         if (state.call && state.call.activation !== activation) return;
-        if (!state.call && state.lastEndedActivation === activation) return;
+        if (!state.call && recentEndedActivations(state).includes(activation)) return;
         if (!state.call && this.#endingActivation === activation) return;
         if (!state.call && this.#callRequestedForActivation !== activation) {
           const conversationId = `conv_${crypto.randomUUID()}`;
@@ -1118,6 +1194,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     /* CREATED BEFORE THE AWAITED DIAL, so a second caller finds `#dial`
      * taken and the mic path queues for the whole handshake. */
     const dial = freshDial(conversationId, activation);
+    dial.transcript = state.transcript;
     if (state.visemes) dial.face = createFace();
     this.#dial = dial;
     const dialStartedAtFacetMs = this.deps.nowAtFacetMs();
@@ -1196,7 +1273,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
           type,
           receivedAtFacetMs,
           dialStartedAtFacetMs,
-          state,
           append,
           runInBackground,
         );
@@ -1256,12 +1332,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
         runInBackground(idleTick);
         return;
       }
-      /* Still running something the person asked for: not idle by any
-       * reading, whatever the clocks say. */
-      if (dial.openBackendCalls > 0) {
-        runInBackground(idleTick);
-        return;
-      }
       await this.#end(
         activation,
         `no input from the device for ${IDLE_TIMEOUT_MS / 1000}s`,
@@ -1308,38 +1378,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
           },
     );
 
-    const backendTools = [
-      EXEC_TYPESCRIPT_FUNCTION,
-      ...state.tools.map(({ name, description, parameters }) => ({
-        type: "function" as const,
-        name,
-        description,
-        parameters: parameters || { type: "object", properties: {} },
-      })),
-    ];
-    const backendModel = state.backend.model || BACKEND.model;
-    const delegation = {
-      type: "responses",
-      responses: {
-        model: backendModel,
-        instructions: [
-          BACKEND_BRIEF,
-          ...(state.tools.length > 0
-            ? [
-                "## Tools this line offers\n" +
-                  state.tools.map((tool) => `- ${tool.name}: ${tool.description}`).join("\n"),
-              ]
-            : []),
-          ...(state.backend.instructions ? [state.backend.instructions] : []),
-        ].join("\n\n"),
-        tools: backendTools,
-        tool_choice: "auto",
-        parallel_tool_calls: false,
-        reasoning: { effort: state.backend.reasoningEffort || BACKEND.reasoningEffort },
-        service_tier: state.backend.serviceTier || BACKEND.serviceTier,
-      },
-    };
-
     this.runInBackground(() =>
       append({
         type: "events.iterate.com/voice-agent/session-configured",
@@ -1349,8 +1387,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           conversationId: dial.conversationId,
           provider: "gpt-live",
           instructions: instructions.slice(0, 8_000),
-          backendModel,
-          tools: backendTools.map((tool) => tool.name),
+          delegation: "client",
         },
       }),
     );
@@ -1366,7 +1403,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
             format: { type: "audio/pcm", rate: LIVE.rate },
             output: { voice: LIVE.voice },
           },
-          delegation,
+          delegation: { type: "client" },
         },
       }),
     );
@@ -1379,7 +1416,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
     type: string,
     receivedAtFacetMs: number,
     dialStartedAtFacetMs: number,
-    state: ProcessEventArgs<VoiceAgentContract>["state"],
     append: ProcessEventArgs<VoiceAgentContract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
   ): void {
@@ -1421,7 +1457,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
         if (typeof live.delta !== "string") return;
         const speaker = type === "session.input_transcript.delta" ? "user" : "assistant";
         if (speaker === "user") {
-          dial.userTranscript += live.delta;
           dial.lastUserFragmentAtFacetMs = receivedAtFacetMs;
         }
         const startTimelineMs = typeof live.start_ms === "number" ? live.start_ms : dial.timelineMs;
@@ -1448,65 +1483,14 @@ export class VoiceAgentProcessor extends StreamProcessor<
         return;
       }
 
-      case "session.delegation.created":
-        /* The voice handed something to the backend; the provider runs it
-         * with the transcript so far. What the person says AFTER this goes
-         * with the tool results (see USER_STILL_TALKING_MS). */
-        dial.forwardedUserChars = dial.userTranscript.length;
-        if (typeof live.offset_ms === "number") {
-          dial.timelineMs = Math.max(dial.timelineMs, live.offset_ms);
-        }
-        return;
-
-      case "response.event": {
-        /*
-         * THE BACKEND'S STREAM, nested. Dispatch on the inner type and
-         * tolerate the rest: lifecycle snapshots arrive with `output: []`
-         * deliberately, so the function calls are read off
-         * `response.output_item.done`, whose finished item carries
-         * `call_id`, `name` and `arguments` together.
-         *
-         * The provider's JSON is untyped here (the message was parsed as a
-         * bare record); the assertions below only name the shape the code
-         * then checks field by field with typeof/Array.isArray, so a message
-         * that is not that shape is ignored rather than trusted.
-         */
-        const inner = (live.event ?? {}) as Record<string, unknown>;
-        if (String(inner.type ?? "") !== "response.output_item.done") return;
-        const item = (inner.item ?? {}) as Record<string, unknown>;
-        if (item.type === "function_call" && typeof item.call_id === "string") {
-          this.#runBackendFunction(
-            dial,
-            item.call_id,
-            String(item.name ?? ""),
-            String(item.arguments ?? "{}"),
-            state,
-            append,
-            runInBackground,
-          );
-          return;
-        }
-        if (item.type === "message") {
-          /* The backend's final words, on the record. The voice already has
-           * the text through the provider. */
-          const content = Array.isArray(item.content)
-            ? (item.content as Record<string, unknown>[])
-            : [];
-          const text = content
-            .map((part) => (typeof part.text === "string" ? part.text : ""))
-            .join("")
-            .trim();
-          if (text === "") return;
-          this.runInBackground(() =>
-            append({
-              type: "events.iterate.com/voice-agent/backend-reply",
-              idempotencyKey: this.idempotencyKey(
-                `backend-reply:${dial.dialId}:${String(item.id ?? crypto.randomUUID())}`,
-              ),
-              payload: { conversationId, text },
-            }),
-          );
-        }
+      case "session.delegation.created": {
+        const parsed = z
+          .object({
+            delegation: z.object({ id: z.string().min(1).max(128), target: z.literal("client") }),
+          })
+          .safeParse(live);
+        if (!parsed.success) return;
+        this.#delegate(dial, parsed.data.delegation.id, append);
         return;
       }
 
@@ -1633,12 +1617,16 @@ export class VoiceAgentProcessor extends StreamProcessor<
     append: ProcessEventArgs<VoiceAgentContract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
   ): void {
+    const endedAnswer = dial.answer;
     dial.answer = freshAnswer();
     dial.face?.answerAudioDone(nowAtFacetMs);
-    dial.answerEndedAtFacetMs = nowAtFacetMs;
     dial.speakerOutbox.push({ pcm: "", lastFrameOfAnswer: true });
     this.#startSpeakerSender(dial, append, runInBackground);
-    if (dial.hangUpReason && dial.answerEndedAtFacetMs >= dial.hangUpArmedAtFacetMs) {
+    if (
+      dial.hangUpReason &&
+      (endedAnswer !== dial.answerBeforeHangUp ||
+        nowAtFacetMs - dial.hangUpArmedAtFacetMs >= HANG_UP_GOODBYE_GRACE_MS)
+    ) {
       /* The goodbye has been handed over whole; the device holds at most its
        * own small buffer. */
       runInBackground(async () => {
@@ -1772,18 +1760,24 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (!row) return;
     const text = row.text.replace(/\s+/g, " ").trim();
     if (text === "") return;
+    dial.transcript = foldTranscriptTurn(dial.transcript, {
+      role: speaker === "user" ? "listener" : "assistant",
+      text,
+    });
     const key = `live-turn:${dial.dialId}:${speaker}:${String(row.startTimelineMs)}`;
+    const transcriptKey = `voice-agent/transcript:${dial.dialId}:${speaker}:${String(row.startTimelineMs)}`;
+    this.#pendingTranscriptContexts.set(transcriptKey, agentTranscriptContext(speaker, text));
     this.runInBackground(() =>
       speaker === "user"
         ? append({
             type: "events.iterate.com/voice-agent/utterance-transcript",
             idempotencyKey: this.idempotencyKey(key),
-            payload: { conversationId: dial.conversationId, text },
+            payload: { conversationId: dial.conversationId, text, key: transcriptKey },
           })
         : append({
             type: "events.iterate.com/voice-agent/answer-transcript",
             idempotencyKey: this.idempotencyKey(key),
-            payload: { conversationId: dial.conversationId, text },
+            payload: { conversationId: dial.conversationId, text, key: transcriptKey },
           }),
     );
   }
@@ -1876,186 +1870,100 @@ export class VoiceAgentProcessor extends StreamProcessor<
     }
   }
 
-  /* ----------------------------------------------------------- the backend */
+  /* ------------------------------------------------------------- Agent */
 
   /**
-   * Run one function the backend called, off the frame path, and ALWAYS
-   * answer it: a function call is a debt, and silence is the one forbidden
-   * result. `exec_typescript` runs on the project's own capability host and
-   * `hang_up` is the base case; there is no third kind.
-   * The output goes back as a Responses item and the response is continued —
-   * the documented two-step, which the provider does not do on its own.
+   * One client delegation becomes durable Agent context immediately. Its
+   * metadata is platform context, separate from untrusted spoken text; the
+   * Agent sees later completed transcript rows as additional context.
    */
-  #runBackendFunction(
+  #delegate(
     dial: Dial,
-    callId: string,
-    name: string,
-    rawArguments: string,
-    state: ProcessEventArgs<VoiceAgentContract>["state"],
+    delegationId: string,
     append: ProcessEventArgs<VoiceAgentContract>["append"],
-    runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
   ): void {
-    /* The backend's arguments are JSON text; parsed, they are whatever the
-     * model produced, so every read below narrows with typeof first and the
-     * assertions only spell the property being looked for. */
-    let modelArgs: unknown = rawArguments;
-    try {
-      modelArgs = JSON.parse(rawArguments === "" ? "{}" : rawArguments);
-    } catch {
-      /* Raw it is; the function decides what that means. */
-    }
-    dial.openBackendCalls += 1;
-    runInBackground(async () => {
-      let output: string;
-      const tool = state.tools.find((candidate) => candidate.name === name);
-      /* hang_up ends the delegation: its result is what lets the voice say
-       * goodbye inside HANG_UP_GOODBYE_GRACE_MS, so it is never held for the
-       * rest of a request and nothing is forwarded with it. */
-      const holdForTheRestOfTheRequest = !tool;
-      try {
-        const timedOut = Symbol("backend function deadline");
-        let work: Promise<unknown>;
-        if (name === EXEC_TYPESCRIPT_FUNCTION.name) {
-          const code =
-            typeof (modelArgs as { code?: unknown })?.code === "string"
-              ? (modelArgs as { code: string }).code
-              : String(modelArgs ?? "");
-          work = this.deps.withProject(async (project) => {
-            /* Asserted, not typed: withProject hands over the guest's itx
-             * untyped (the generated client type lives in apps/os and a
-             * package cannot import it); a wrong assertion fails loudly at
-             * the RPC boundary. The same runScript the OS MCP server's
-             * exec_typescript uses, on THIS STREAM's own capability host —
-             * the guest's itx is scoped to the voice stream, so the script
-             * runs are journaled beside the transcript. A voice stream is
-             * not an agent and nobody created its host, so the first run of
-             * each dial creates it first — idempotent (measured on preview:
-             * a second create is a no-op), one extra RPC per dial, and no
-             * retry that could run a failed script twice. */
-            const typed = project as {
-              capabilityHost: {
-                create(): Promise<unknown>;
-                runScript(code: string): Promise<{ result: unknown }>;
-              };
-            };
-            if (!dial.capabilityHostReady) {
-              await typed.capabilityHost.create();
-              dial.capabilityHostReady = true;
-            }
-            return (await typed.capabilityHost.runScript(code)).result;
-          });
-        } else if (tool) {
-          /* THE BASE CASE, NOT A REGISTRY: hanging up is one atomic append of
-           * conversation-ended, deferred until the goodbye — spoken
-           * AFTER this call returns — has gone out whole (its end marker
-           * settles it, see #endAnswer), or the grace runs out with the
-           * voice saying nothing. A goodbye still being spoken when the
-           * grace fires is left to its own marker. */
-          dial.hangUpReason = "the backend hung up";
-          dial.hangUpArmedAtFacetMs = this.deps.nowAtFacetMs();
-          runInBackground(async () => {
-            await this.deps.sleep(HANG_UP_GOODBYE_GRACE_MS);
-            if (this.#dial !== dial || dial.answer.phase === "speaking") return;
-            await this.#settleHangUp(dial, append);
-          });
-          work = Promise.resolve({ status: "hanging up once the goodbye finishes playing" });
-        } else {
-          work = Promise.reject(new Error(`no such function: ${name}`));
-        }
-        const result = await Promise.race([
-          work,
-          this.deps.sleep(BACKEND_FUNCTION_DEADLINE_MS).then(() => timedOut as unknown),
-        ]);
-        if (result === timedOut) {
-          void work.catch(() => {});
-          throw new Error(`took longer than ${BACKEND_FUNCTION_DEADLINE_MS}ms`);
-        }
-        const json = JSON.stringify(result ?? { status: "done" });
-        output =
-          json.length > FUNCTION_OUTPUT_MAX_CHARS
-            ? JSON.stringify({ truncated: json.slice(0, FUNCTION_OUTPUT_MAX_CHARS) })
-            : json;
-      } catch (error) {
-        /* The backend HEARS the failure and can say so. */
-        output = JSON.stringify({ error: String(error).slice(0, 1_000) });
-      }
-      dial.openBackendCalls = Math.max(0, dial.openBackendCalls - 1);
-      /* The fence every provider-side completion wears: a re-dialed call is
-       * a NEW session that never issued this call_id. */
-      if (this.#dial !== dial) return;
-      /*
-       * THE REST OF THE REQUEST. Held while the person is still talking (no
-       * hold for a person who has finished), then whatever they said since
-       * the delegation was raised goes to the backend as a developer message
-       * ahead of this result — the Responses delegation accepts the item
-       * (measured 2026-09-11) and the backend acts on it instead of asking.
-       */
-      const heldFromFacetMs = this.deps.nowAtFacetMs();
-      while (
-        holdForTheRestOfTheRequest &&
-        dial.lastUserFragmentAtFacetMs !== null &&
-        this.deps.nowAtFacetMs() - dial.lastUserFragmentAtFacetMs < USER_STILL_TALKING_MS &&
-        this.deps.nowAtFacetMs() - heldFromFacetMs < FORWARD_HOLD_MAX_MS
-      ) {
-        await this.deps.sleep(250);
-        if (this.#dial !== dial) return;
-      }
-      const saidSince = holdForTheRestOfTheRequest
-        ? dial.userTranscript.slice(dial.forwardedUserChars).replace(/\s+/g, " ").trim()
-        : "";
-      if (holdForTheRestOfTheRequest) dial.forwardedUserChars = dial.userTranscript.length;
-      if (saidSince !== "") {
-        this.#sendControl(dial, {
-          type: "response.item.create",
-          event_id: `heard_${callId}`,
-          item: {
-            type: "message",
-            role: "developer",
-            content: [
-              {
-                type: "input_text",
-                text: `The person has said more since this delegation was raised: "${saidSince}"`,
+    this.runInBackground(() =>
+      this.#appendAgentContext(async () => {
+        try {
+          await this.deps.withProject(async (project) => {
+            const transcriptSnapshots = this.#transcriptSnapshots(dial, delegationId);
+            await project.agents.get(this.path).append(...transcriptSnapshots, {
+              type: "events.iterate.com/agents/context-added",
+              idempotencyKey: this.idempotencyKey(
+                `agent-delegation:${dial.dialId}:${delegationId}`,
+              ),
+              payload: {
+                role: "developer",
+                content: [
+                  "Voice delegation metadata (platform context, not user speech):",
+                  JSON.stringify({ activation: dial.activation, delegationId }),
+                  "Handle the request in the conversation transcript for this client delegation. Send information back through the voice events explained above, preserving these IDs.",
+                  "Completed transcript context may arrive later.",
+                ].join("\n"),
+                llmRequestPolicy: { behaviour: "after-current-request" },
               },
-            ],
-          },
-        });
-      }
-      /*
-       * THE VOICE HEARS THE BACKEND WORK, one line per step. The backend's
-       * response reaches the voice only when it completes; until then the
-       * voice knows nothing, and asked "how is it going?" it makes something
-       * up (measured 2026-09-11: "started scanning, no summaries yet" while
-       * the backend had run eight scripts). With these notes it answered
-       * with the actual steps. General context, not a delegation's own
-       * (the Responses delegation refuses its id here).
-       */
-      dial.backendSteps += 1;
-      const nowForNoteMs = this.deps.nowAtFacetMs();
-      if (
-        dial.lastProgressNoteAtFacetMs === null ||
-        nowForNoteMs - dial.lastProgressNoteAtFacetMs >= PROGRESS_NOTE_MIN_GAP_MS
-      ) {
-        dial.lastProgressNoteAtFacetMs = nowForNoteMs;
-        this.#sendControl(dial, {
-          type: "session.thinking.append",
-          event_id: `progress_${callId}`,
-          delegation_id: null,
-          /* Status only, never the output: a docs snippet in a note came
-           * back out of the voice as a question to the person. */
-          content:
-            `Backend progress note, for your own awareness only — do not read it out. ` +
-            `Step ${String(dial.backendSteps)}: ran ${name}` +
-            `(${rawArguments.replace(/\s+/g, " ").slice(0, 160)}) → ` +
-            `${output.startsWith('{"error"') ? "error" : "ok"}`,
-        });
-      }
-      this.#sendControl(dial, {
-        type: "response.item.create",
-        event_id: `result_${callId}`,
-        item: { type: "function_call_output", call_id: callId, output },
-      });
-      this.#sendControl(dial, { type: "response.create", event_id: `continue_${callId}` });
-    });
+            });
+            if (this.#dial === dial) {
+              this.#sendControl(dial, {
+                type: "session.thinking.append",
+                delegation_id: delegationId,
+                content: "The request was handed to the backend; the conversation may continue.",
+              });
+            }
+          });
+        } catch (error) {
+          if (this.#dial !== dial) return;
+          await this.#end(
+            dial.activation,
+            `the Agent handoff could not be recorded: ${String(error).slice(0, 200)}`,
+            append,
+          );
+        }
+      }),
+    );
+  }
+
+  #transcriptSnapshots(dial: Dial, delegationId: string): AgentEventInput[] {
+    return [
+      ...Array.from(this.#pendingTranscriptContexts, ([key, { role, content }]) =>
+        this.#transcriptSnapshot(key, role, content, delegationId),
+      ),
+      ...(["user", "assistant"] as const).flatMap((speaker) => {
+        const row = dial.turns[speaker];
+        const content = row?.text.replace(/\s+/g, " ").trim() ?? "";
+        if (!row || content === "") return [];
+        const key = `voice-agent/transcript:${dial.dialId}:${speaker}:${String(row.startTimelineMs)}`;
+        const transcript = agentTranscriptContext(speaker, content);
+        return [this.#transcriptSnapshot(key, transcript.role, transcript.content, delegationId)];
+      }),
+    ];
+  }
+
+  #transcriptSnapshot(
+    key: string,
+    role: AgentTranscriptContext["role"],
+    content: string,
+    delegationId: string,
+  ): AgentEventInput {
+    return {
+      type: "events.iterate.com/agents/context-added",
+      idempotencyKey: this.idempotencyKey(`agent-delegation-transcript:${key}:${delegationId}`),
+      payload: {
+        role,
+        actor: { type: "integration", name: "voice-agent" },
+        key,
+        content,
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+      },
+    };
+  }
+
+  #appendAgentContext(work: () => Promise<void>): Promise<void> {
+    const next = this.#agentAppendTail.then(work);
+    /* This catch only releases the next queued write; callers still receive
+     * `next` and their runner/background policy records its rejection. */
+    this.#agentAppendTail = next.catch(() => {});
+    return next;
   }
 
   /**
@@ -2242,6 +2150,14 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint implem
       }
     }
 
+    /* The ordinary Agent shares this stream with the VoiceAgent. Its durable
+     * protocol is installed once; a model changes only when setup explicitly
+     * asks for one, leaving the normal Agent configuration intact otherwise. */
+    const setupId = crypto.randomUUID();
+    const agent = project.agents.get(streamPath);
+    await agent.create();
+    await agent.append(...agentSetupEvents(streamPath, options.backend?.model, setupId));
+
     const stream = project.streams.get(streamPath);
     try {
       /*
@@ -2250,7 +2166,6 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint implem
        * ordinary event, keyed per SETUP RUN so every run applies.
        */
       const { streamPath: _streamPath, reinstall: _reinstall, ...configPayload } = options;
-      const setupId = crypto.randomUUID();
       const subscriptionPayload = {
         name: VoiceAgentContract.slug,
         description: "Wake the voice-agent facet in this stream's own Durable Object.",
@@ -2348,8 +2263,8 @@ export class VoiceAgentFacet extends StreamProcessorFacet {
        * here happens inside a `runInBackground` closure the keepalive holds. */
       sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
       dialProvider: dialProviderSocket,
-      withProject: async <T>(fn: (project: unknown) => Promise<T>): Promise<T> => {
-        const project = await this.env.ITX.get();
+      withProject: async <T>(fn: (project: Project) => Promise<T>): Promise<T> => {
+        const project = (await this.env.ITX.get()) as Project;
         try {
           return await fn(project);
         } finally {

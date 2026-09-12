@@ -10,6 +10,12 @@ tags:
 
 # One voice path, five boards
 
+The backend delegation choice below is superseded by
+[the GPT-Live event-interface research](2026-09-12-gpt-live-event-interface-research.md):
+the ordinary Agent and VoiceAgent share one stream, using client delegation
+and plain-string instructions, thinking, and commentary. The device work and
+its evidence remain applicable.
+
 Implementation and the scoped silent proofs are complete on `futurehomes-gpt-live`, based on PR #2624 at
 `9dd9aea7225cf0818eb508d63736d54fbfb7c8f6`. The original Futurehomes work is
 preserved on `backup/futurehomes-before-gpt-live-integration`; unrelated backend

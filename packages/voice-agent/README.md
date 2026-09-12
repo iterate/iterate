@@ -2,8 +2,9 @@
 
 The server side of an Iterate voice line. Boards, the host CLI, and mobile
 clients share one stream with a GPT-Live-1 session. GPT-Live listens and
-speaks; it delegates project work to the configured backend model, which has
-`exec_typescript` and the setup's `hang_up` tool.
+speaks; client delegation adds context to the normal OS Agent processor
+running on that same stream. The Agent uses its standard capabilities and can
+decide to end the call after a short goodbye.
 
 The package runs as a guest worker in a project's config repository. The
 stateless entrypoint installs a stream subscription, and one Durable Object
@@ -40,12 +41,6 @@ const voice = VoiceAgentApp.create(env);
 const line = await voice.setup({
   streamPath: "/agents/voice/kitchen",
   instructions: "You are a concise, helpful home assistant.",
-  tools: [
-    {
-      name: "hang_up",
-      description: "Say goodbye, then end the call when the conversation is over.",
-    },
-  ],
 });
 ```
 
@@ -53,14 +48,13 @@ The voice endpoint, model, and voice are fixed: OpenAI GPT-Live-1 at
 `https://api.openai.com/v1/live/sessions`, using `marin` at 16 kHz PCM16.
 Setup requires `/secrets/openai` with egress for `https://api.openai.com`.
 
-| Setup option   | Meaning                                                                     |
-| -------------- | --------------------------------------------------------------------------- |
-| `streamPath`   | Absolute conversation stream path; a fresh voice path when omitted.         |
-| `instructions` | Voice persona and tone.                                                     |
-| `backend`      | Optional backend model, reasoning, service-tier, and instruction overrides. |
-| `tools`        | Backend tools. `hang_up` is the only tool the facet implements directly.    |
-| `visemes`      | Publish face state for a rendering client.                                  |
-| `reinstall`    | Force a new subscription key.                                               |
+| Setup option    | Meaning                                                             |
+| --------------- | ------------------------------------------------------------------- |
+| `streamPath`    | Absolute conversation stream path; a fresh voice path when omitted. |
+| `instructions`  | Voice persona and tone.                                             |
+| `backend.model` | Optional explicit standard-Agent model override.                    |
+| `visemes`       | Publish face state for a rendering client.                          |
+| `reinstall`     | Force a new subscription key.                                       |
 
 ## Stream protocol
 
@@ -87,12 +81,43 @@ Either limit ends the activation with a classified reason; audio is never
 silently truncated. A provider disconnection also ends the activation rather
 than replaying an uncertain session.
 
+## Same-stream Agent interface
+
+GPT-Live delegates client work to the standard OS Agent on this same stream.
+The Agent owns the work, its normal capabilities, and its normal model
+configuration. Setup may override that model only with `backend.model`.
+
+The processors communicate through three durable, plain-content events. Agent
+LLM work tracks the activation and an applicable delegation id, or `null`.
+The ordinary Agent owns expiry and retries; VoiceAgent adds no work deadline
+and has no external reply Agent.
+
+There are two separate Agent inputs. Every completed user and assistant
+transcript projects as `agents/context-added` with `dont-trigger-request`, so
+the Agent has the conversation without treating a transcript as a request.
+Human speech remains user context; Live speech is labelled as an observed voice
+transcript, so the ordinary Agent does not mistake it for its own output.
+Only a GPT-Live client delegation appends its delegation-id metadata as
+triggering `context-added`, with `after-current-request`; it does not
+interrupt Agent work already in progress.
+
+| Event          | Payload                                          | Voice action                                                             |
+| -------------- | ------------------------------------------------ | ------------------------------------------------------------------------ |
+| `instructions` | `{ activation, delegationId, content }`          | Append the content to GPT-Live session instructions.                     |
+| `thinking`     | `{ activation, delegationId, content }`          | Append quiet useful facts or progress.                                   |
+| `commentary`   | `{ activation, delegationId, content, hangUp? }` | Append speakable outcome; if `hangUp`, end only after the goodbye plays. |
+
+The voice facet accepts only events for its current activation. These appends
+convey information to GPT-Live; they do not guarantee a particular response.
+Terminal state fences late events. Capture and playback continue while the
+Agent works.
+
 ## Durable record
 
-The stream keeps configuration, call lifecycle, transcripts, backend replies,
-session configuration, and provider errors/disconnections. Raw provider
-traffic and audio are not mirrored. Speaker frames and microphone frames are
-ephemeral.
+The stream keeps configuration, call lifecycle, transcripts, Agent
+instructions/thinking/commentary, session configuration, and provider
+errors/disconnections. Raw provider traffic and audio are not mirrored.
+Speaker frames and microphone frames are ephemeral.
 
 ## Verification
 

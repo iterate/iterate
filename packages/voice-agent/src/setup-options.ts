@@ -8,55 +8,21 @@
  * `implements` VoiceAgentRpc, so the two cannot drift.
  */
 
-/**
- * One tool the backend model may call, as data on the birth certificate.
- *
- * A certificate tool is a name the agent already knows how to be: `hang_up`
- * is the only one. Everything else a project wants done goes through the
- * backend's `exec_typescript` against this project's capability host.
- *
- * The voice model itself has no tools — GPT-Live delegates — so every tool
- * here reaches the BACKEND model, which calls it in a second or two.
- */
-export interface VoiceToolInput {
-  name: string;
-  /** What the model is shown; usage guidance lives here, not in
-   * `instructions` — "say goodbye BEFORE calling this" rides the tool. */
-  description: string;
-  /** JSON Schema for the arguments, handed to the provider verbatim.
-   * Absent means a no-argument tool. */
-  parameters?: Record<string, unknown>;
-}
-
-/**
- * The backend the voice delegates to (GPT-Live's Responses delegation): a
- * hosted model armed with `exec_typescript` against this project plus the
- * certificate's tools. Every field is an override of the package's defaults
- * — `gpt-6-astra`, reasoning effort `low`, the `priority` (Fast) tier.
- */
+/** Configuration for the standard OS Agent that handles work during a call. */
 export interface VoiceBackendInput {
-  /** The Responses model, e.g. `gpt-6-astra`, `gpt-5.6-terra`. */
+  /** Standard Agent model identifier; defaults to openai/gpt-6-astra. */
   model?: string;
-  /** `reasoning.effort` for that model. */
-  reasoningEffort?: string;
-  /** `service_tier`; `priority` is OpenAI's Fast mode. */
-  serviceTier?: string;
-  /** Extra backend instructions, appended to the package's own brief. */
-  instructions?: string;
 }
 
 export interface SetupVoiceAgentOptions {
   /** The conversation stream. A fresh /agents/voice/* path is generated when omitted. */
   streamPath?: string;
-  /** What the voice is told it is — persona and tone. The delegation
-   * policy is appended by the agent; keep this short. */
+  /** What GPT-Live is told it is — persona and tone. */
   instructions?: string;
   /** Classify the answer into mouth shapes for a face-rendering client. */
   visemes?: boolean;
-  /** Backend overrides — see {@link VoiceBackendInput}. */
+  /** Explicit standard-Agent model override; otherwise the Agent's normal configuration applies. */
   backend?: VoiceBackendInput;
-  /** Tools the backend may call — see {@link VoiceToolInput}. */
-  tools?: VoiceToolInput[];
   /** Install the subscription under a fresh key even if an identical one exists. */
   reinstall?: boolean;
 }

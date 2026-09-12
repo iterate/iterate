@@ -18,6 +18,7 @@ struct fixture {
   size_t captured_length;
   size_t captured_count;
   bool open;
+  bool fail_next_append;
 };
 
 static enum capnweb_status capture(
@@ -25,6 +26,10 @@ static enum capnweb_status capture(
   struct fixture *fixture = context;
   if (kind == CAPNWEB_TEXT_BEGIN) {
     if (fixture->open) return CAPNWEB_E_STATE;
+    if (fixture->fail_next_append) {
+      fixture->fail_next_append = false;
+      return CAPNWEB_E_STATE;
+    }
     fixture->open = true;
     if (fixture->captured_count == CAPTURE_CAPACITY) return CAPNWEB_E_LIMIT;
     fixture->captured_length = 0U;
@@ -108,16 +113,26 @@ static void remount_does_not_replace_the_bridge_acknowledgement(void) {
   iterate_kit_cli_main_test_poll_hangup(&runtime, clock);
   assert(runtime.hangup_deadline_ms == 3500U);
   const size_t before = fixture.captured_count;
-  iterate_kit_cli_main_test_reconcile_call(&runtime, 3U);
+  fixture.fail_next_append = true;
+  iterate_kit_cli_main_test_reconcile_call(&runtime, clock, 3U);
+  assert(fixture.captured_count == before);
+  assert(!runtime.hangup_terminal_sent);
+  assert(runtime.hangup_terminal_retry_at_ms == 750U);
+  /* A failed writer remounts before the paced retry uses a fresh session. */
+  mount_ready(&runtime, &fixture, &clock);
+  iterate_kit_cli_main_test_reconcile_call(&runtime, clock + 249U, 3U);
+  assert(!captured_terminal(&fixture, ACTIVATION));
+  iterate_kit_cli_main_test_reconcile_call(&runtime, clock + 250U, 3U);
   assert(fixture.captured_count > before);
   assert(captured_terminal(&fixture, ACTIVATION));
+  assert(runtime.hangup_terminal_sent);
   assert(!runtime.stop_requested);
 
   const size_t after_first = fixture.captured_count;
-  iterate_kit_cli_main_test_reconcile_call(&runtime, 3U);
+  iterate_kit_cli_main_test_reconcile_call(&runtime, clock + 250U, 3U);
   assert(fixture.captured_count == after_first);
   runtime.connection.generation = 8U;
-  iterate_kit_cli_main_test_reconcile_call(&runtime, 3U);
+  iterate_kit_cli_main_test_reconcile_call(&runtime, clock + 250U, 3U);
   assert(fixture.captured_count > after_first);
   assert(captured_terminal(&fixture, ACTIVATION));
 

@@ -972,6 +972,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           afterOffset: args.afterOffset,
           beforeOffset: args.beforeOffset,
           limit: args.limit,
+          byteLimit: args.byteLimit,
           includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
@@ -2389,6 +2390,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     beforeOffset: number;
     eventTypes?: readonly string[];
     limit: number;
+    byteLimit?: number;
     includeEphemeral: boolean;
   }): SizedStreamEvent[] {
     const durableEvents = this.#log.getRangeSized({
@@ -2396,12 +2398,20 @@ export class StreamDurableObject extends DurableObject<Env> {
       beforeOffset: args.beforeOffset,
       eventTypes: args.eventTypes,
       limit: args.limit,
+      byteLimit: args.byteLimit,
     });
     if (!args.includeEphemeral) return durableEvents;
 
+    // A byte-capped durable prefix may stop before a later durable body. Do
+    // not merge a farther ephemeral row into that prefix: callers advance a
+    // single shared offset cursor, so doing so would silently skip the omitted
+    // durable event. The next read starts after this retained durable prefix.
     const ephemeralEvents = this.#ephemeralEvents.getRangeSized({
       afterOffset: args.afterOffset,
-      beforeOffset: args.beforeOffset,
+      beforeOffset:
+        args.byteLimit !== undefined && durableEvents.length > 0
+          ? Math.min(args.beforeOffset, durableEvents.at(-1)!.event.offset + 1)
+          : args.beforeOffset,
       eventTypes: args.eventTypes,
       limit: args.limit,
     });

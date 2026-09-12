@@ -1,5 +1,5 @@
 // Prove one GPT-Live call from the wire: ready session, continuous mic,
-// speaker output, interruption, durable transcripts, and a backend reply.
+// speaker output, interruption, durable transcripts, and Agent commentary.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -109,25 +109,30 @@ export async function duplex(options: DuplexOptions): Promise<void> {
       `barge stopped ${String(stoppedAfterBargeMs)}ms after speech; answers ended ${String(watch.answersEnded)}`,
     );
 
-  let backendReplyAtMs: number | null = null;
+  let commentaryAtMs: number | null = null;
   if (options.skipDelegation !== true) {
     await call.waitFor(() => call.quietFor(1_500), 15_000);
-    const repliesBefore = watch.backendReplies.length;
+    const commentaryBefore = watch.commentary.length;
     const answersBefore = watch.answersEnded;
     const askedAtMs = call.clock();
     console.log("  asking for backend work…");
     void call.speak(delegatedRequest);
-    const repliedFromBackend = await call.waitFor(
-      () => watch.backendReplies.length > repliesBefore,
+    const receivedCommentary = await call.waitFor(
+      () => watch.commentary.length > commentaryBefore,
       delegationTimeoutMs,
     );
-    if (repliedFromBackend) backendReplyAtMs = watch.backendReplies.at(-1)!.atMs - askedAtMs;
-    const spoken = await call.waitFor(
-      () => watch.answersEnded > answersBefore && call.quietFor(1_500),
-      delegationTimeoutMs,
-    );
-    verdict.delegation = repliedFromBackend && spoken;
-    if (!verdict.delegation) fail("the backend reply was not durably recorded and spoken");
+    if (receivedCommentary) commentaryAtMs = watch.commentary.at(-1)!.atMs - askedAtMs;
+    const spoken = await call.waitFor(() => {
+      const commentary = watch.commentary.at(-1);
+      if (!commentary) return false;
+      return (
+        watch.answers.some((answer) => answer.atMs >= commentary.atMs) &&
+        watch.answersEnded > answersBefore &&
+        call.quietFor(1_500)
+      );
+    }, delegationTimeoutMs);
+    verdict.delegation = receivedCommentary && spoken;
+    if (!verdict.delegation) fail("Agent commentary was not durably recorded and spoken");
   }
 
   await call.stop();
@@ -162,7 +167,7 @@ export async function duplex(options: DuplexOptions): Promise<void> {
   console.log(`    answer audio delivered     ${String(Math.round(watch.answerDeliveredMs))}ms`);
   console.log(`    barge stop                 ${String(stoppedAfterBargeMs)}ms`);
   console.log(
-    `    backend reply              ${backendReplyAtMs === null ? "not tested" : `${String(backendReplyAtMs)}ms`}`,
+    `    Agent commentary           ${commentaryAtMs === null ? "not tested" : `${String(commentaryAtMs)}ms`}`,
   );
   console.log(
     `    provider diagnostics       ${String(watch.providerErrors.length)} errors, ${String(watch.providerDisconnects.length)} disconnects`,
@@ -188,7 +193,8 @@ export async function duplex(options: DuplexOptions): Promise<void> {
       .join(" ")
       .slice(0, 600)}`,
   );
-  for (const reply of watch.backendReplies) console.log(`  backend: ${reply.text.slice(0, 300)}`);
+  for (const commentary of watch.commentary)
+    console.log(`  outcome: ${commentary.text.slice(0, 300)}`);
   for (const diagnostic of [...watch.providerErrors, ...watch.providerDisconnects])
     console.log(`  provider: ${diagnostic.text.slice(0, 300)}`);
   console.log(`\n  verdict ${JSON.stringify(verdict)}`);

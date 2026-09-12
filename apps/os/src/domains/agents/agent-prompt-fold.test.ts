@@ -42,6 +42,129 @@ test("the standing document is ONE system message — and un-sent keyed re-adds 
   expect(messages.at(-1)!.content).toBe(`Requested at: ${isoAt(5)}`);
 });
 
+test("leading keyed user, developer, and assistant context retain their roles", () => {
+  const events = [
+    keyedSystem(1, "identity", "You are the test agent."),
+    keyedContext(2, "user", "voice/user", "The person asked for a title."),
+    keyedContext(3, "developer", "voice/delegation", "Handle the voice delegation."),
+    keyedContext(4, "assistant", "voice/answer", "I am checking that."),
+  ];
+
+  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 4 });
+
+  expect(messages.map((message) => message.role)).toEqual([
+    "system", // protocol
+    "system", // standing system sections only
+    "user",
+    "developer",
+    "assistant",
+  ]);
+  expect(messages[1]!.content).toBe(
+    '<section key="identity">\nYou are the test agent.\n</section>',
+  );
+  expect(messages[2]!.content).toBe(
+    '<section key="voice/user">\nThe person asked for a title.\n</section>',
+  );
+  expect(messages[3]!.content).toBe(
+    '<section key="voice/delegation">\nHandle the voice delegation.\n</section>',
+  );
+  expect(messages[4]!.content).toBe(
+    '<section key="voice/answer">\nI am checking that.\n</section>',
+  );
+});
+
+test("compaction replaces keyed non-system history and keeps a post-barrier correction", () => {
+  const oldVoiceContexts = Array.from({ length: 12 }, (_, index) =>
+    keyedContext(
+      index + 2,
+      (["user", "developer", "assistant"] as const)[index % 3]!,
+      `voice/old-${index}`,
+      `old voice context ${index}`,
+    ),
+  );
+  const events = [
+    keyedSystem(1, "identity", "You are the test agent."),
+    ...oldVoiceContexts,
+    requested(20),
+    keyedContext(21, "user", "voice/open-turn", "the unfinished prefix"),
+    keyedContext(22, "user", "voice/open-turn", "the corrected live transcript"),
+    compaction(23, 20, "Summary through the first request."),
+  ];
+
+  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 23 });
+  const contents = messages.map((message) => message.content);
+  const summaryIndex = contents.findIndex((content) =>
+    content.includes("Summary through the first request."),
+  );
+  const liveIndex = contents.indexOf(
+    '<section key="voice/open-turn">\nthe corrected live transcript\n</section>',
+  );
+
+  expect(contents.some((content) => content.includes("old voice context"))).toBe(false);
+  expect(contents).not.toContain(
+    '<section key="voice/open-turn">\nthe unfinished prefix\n</section>',
+  );
+  expect(summaryIndex).toBeGreaterThanOrEqual(0);
+  expect(liveIndex).toBeGreaterThan(summaryIndex);
+});
+
+test("compaction does not resurrect a system section after its key becomes user context", () => {
+  const events = [
+    keyedSystem(1, "identity", "You are the test agent."),
+    keyedSystem(2, "voice/turn", "Obsolete trusted turn text."),
+    userMessage(3, "Start the first request."),
+    requested(4),
+    keyedContext(5, "user", "voice/turn", "The person's current request."),
+    compaction(6, 4, "Summary through the first request."),
+  ];
+
+  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 6 });
+  const contents = messages.map((message) => message.content);
+  const summaryIndex = contents.findIndex((content) =>
+    content.includes("Summary through the first request."),
+  );
+  const currentTurnIndex = contents.findIndex((content) =>
+    content.includes("The person's current request."),
+  );
+
+  expect(messages[1]!.content).toBe(
+    '<section key="identity">\nYou are the test agent.\n</section>',
+  );
+  expect(contents).not.toContain(
+    '<section key="voice/turn">\nObsolete trusted turn text.\n</section>',
+  );
+  expect(currentTurnIndex).toBeGreaterThan(summaryIndex);
+  expect(messages[currentTurnIndex]!.role).toBe("user");
+});
+
+test("compaction does not retain user context superseded by a later system section", () => {
+  const events = [
+    keyedSystem(1, "identity", "You are the test agent."),
+    userMessage(2, "Start the first request."),
+    requested(3),
+    keyedContext(4, "user", "voice/turn", "The person's stale request."),
+    keyedSystem(5, "voice/turn", "The platform's current instruction."),
+    compaction(6, 3, "Summary through the first request."),
+  ];
+
+  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 6 });
+
+  expect(messages[1]!.content).toBe(
+    [
+      '<section key="identity">',
+      "You are the test agent.",
+      "</section>",
+      "",
+      '<section key="voice/turn">',
+      "The platform's current instruction.",
+      "</section>",
+    ].join("\n"),
+  );
+  expect(messages.some((message) => message.content.includes("The person's stale request."))).toBe(
+    false,
+  );
+});
+
 test("a sent section's re-add lands at the tail with supersedes; the standing document stays byte-identical", () => {
   const base = [
     keyedSystem(1, "identity", "You are the test agent."),
@@ -292,6 +415,20 @@ function keyedSystem(offset: number, key: string, content: string): StreamEvent 
   });
 }
 
+function keyedContext(
+  offset: number,
+  role: "user" | "developer" | "assistant",
+  key: string,
+  content: string,
+): StreamEvent {
+  return contextAdded(offset, {
+    role,
+    key,
+    content,
+    llmRequestPolicy: { behaviour: "dont-trigger-request" },
+  });
+}
+
 function userMessage(offset: number, content: string): StreamEvent {
   return contextAdded(offset, {
     role: "user",
@@ -309,6 +446,15 @@ function settled(offset: number, requestOffset: number): StreamEvent {
   return streamEvent(offset, "events.iterate.com/agent/llm-request-settled", {
     requestOffset,
     result: { status: "succeeded", text: "ok" },
+  });
+}
+
+function compaction(offset: number, replacesHistoryThrough: number, content: string): StreamEvent {
+  return contextAdded(offset, {
+    role: "developer",
+    content,
+    compaction: { replacesHistoryThrough },
+    llmRequestPolicy: { behaviour: "dont-trigger-request" },
   });
 }
 

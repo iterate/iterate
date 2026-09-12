@@ -15,6 +15,7 @@ export {
   removeLegacyGuest,
   VOICE_AGENT_GUEST_SOURCE,
   VOICE_AGENT_GUEST_SOURCE_FROM_REPO,
+  voiceAgentGuestSourceFromRepo,
   VOICE_AGENT_PACKAGE_NAME,
   VOICE_AGENT_PACKAGE_SPEC,
   VOICE_AGENT_SOURCE_DIR,
@@ -36,5 +37,4 @@ export type {
   VoiceAgentHealth,
   VoiceAgentRpc,
   VoiceBackendInput,
-  VoiceToolInput,
 } from "./setup-options.ts";

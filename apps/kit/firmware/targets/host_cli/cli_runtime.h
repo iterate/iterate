@@ -139,9 +139,10 @@ struct cli_runtime {
   /** A hang-up is in progress: the call is being ended before the process is. */
   bool hanging_up;
   /** The activation owns its pending terminal across remounts until the bridge
-   * confirms it ended. One idempotent append is attempted per generation. */
-  bool hangup_terminal_attempted;
+   * confirms it ended. One append is sent per generation after it succeeds. */
+  bool hangup_terminal_sent;
   uint32_t hangup_terminal_generation;
+  uint64_t hangup_terminal_retry_at_ms;
   uint64_t hangup_deadline_ms;
   bool wants_talk;
   /** Capture remains on while this locally owned conversation is active. */

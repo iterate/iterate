@@ -69,6 +69,11 @@ export const VOICE_AGENT_GUEST_SOURCE_FROM_REPO = `// The voice agent guest work
 export { default, VoiceAgentFacet } from "./${VOICE_AGENT_SOURCE_DIR}/worker.ts";
 `;
 
+/** A source-backed guest under a caller-owned filename and directory. */
+export function voiceAgentGuestSourceFromRepo(sourceDirectory: string): string {
+  return `export { default, VoiceAgentFacet } from "./${sourceDirectory}/worker.ts";\n`;
+}
+
 export const LEGACY_GUEST_PATHS = [
   "face.ts",
   "pcm.ts",
@@ -238,14 +243,23 @@ export async function legacyGuestPaths(
  * still gets fetched on every build, and on a preview it is pinned to a
  * commit whose package may not be published yet.
  */
-export function withVoiceAgentSourceDependencies(packageJson: string): {
+export function withVoiceAgentSourceDependencies(
+  packageJson: string,
+  options: { preservePublishedVoiceAgentDependency?: boolean } = {},
+): {
   content: string;
   changed: boolean;
 } {
   const { manifest, dependencies } = parseManifest(packageJson);
   const { [VOICE_AGENT_PACKAGE_NAME]: published, ...rest } = dependencies;
-  const next = { ...rest, zod: dependencies.zod || VOICE_AGENT_ZOD_SPEC };
-  if (!published && next.zod === dependencies.zod) {
+  const next = {
+    ...(options.preservePublishedVoiceAgentDependency ? dependencies : rest),
+    zod: dependencies.zod || VOICE_AGENT_ZOD_SPEC,
+  };
+  if (
+    (options.preservePublishedVoiceAgentDependency || !published) &&
+    next.zod === dependencies.zod
+  ) {
     return { content: packageJson, changed: false };
   }
   const content = JSON.stringify({ ...manifest, dependencies: next }, null, 2);
@@ -261,29 +275,40 @@ export function withVoiceAgentSourceDependencies(packageJson: string): {
 export async function installVoiceAgentFromSource(
   repo: VoiceAgentConfigRepo,
   files: Record<(typeof VOICE_AGENT_SOURCE_FILES)[number], string>,
-  options: { message?: string } = {},
+  options: {
+    message?: string;
+    sourceDirectory?: string;
+    guestFile?: string;
+    preservePublishedVoiceAgentDependency?: boolean;
+  } = {},
 ): Promise<InstallVoiceAgentResult> {
-  const spec = `${VOICE_AGENT_SOURCE_DIR}/ (this checkout's source)`;
+  const sourceDirectory = options.sourceDirectory || VOICE_AGENT_SOURCE_DIR;
+  const guestFile = options.guestFile || VOICE_AGENT_GUEST_FILE;
+  const guestSource =
+    sourceDirectory === VOICE_AGENT_SOURCE_DIR
+      ? VOICE_AGENT_GUEST_SOURCE_FROM_REPO
+      : voiceAgentGuestSourceFromRepo(sourceDirectory);
+  const spec = `${sourceDirectory}/ (this checkout's source)`;
   const [manifest, guest, ...current] = await Promise.all([
     repo.readFile({ path: "package.json" }),
-    repo.readFile({ path: VOICE_AGENT_GUEST_FILE }),
+    repo.readFile({ path: guestFile }),
     ...VOICE_AGENT_SOURCE_FILES.map((file) =>
-      repo.readFile({ path: `${VOICE_AGENT_SOURCE_DIR}/${file}` }),
+      repo.readFile({ path: `${sourceDirectory}/${file}` }),
     ),
   ]);
   if (!manifest) {
     throw new Error("The config repo has no package.json, so nothing can declare the voice agent.");
   }
-  const dependency = withVoiceAgentSourceDependencies(manifest.content);
+  const dependency = withVoiceAgentSourceDependencies(manifest.content, {
+    preservePublishedVoiceAgentDependency: options.preservePublishedVoiceAgentDependency,
+  });
   const changes: { path: string; content: string }[] = [
     ...(dependency.changed ? [{ path: "package.json", content: dependency.content }] : []),
-    ...(guest?.content === VOICE_AGENT_GUEST_SOURCE_FROM_REPO
-      ? []
-      : [{ path: VOICE_AGENT_GUEST_FILE, content: VOICE_AGENT_GUEST_SOURCE_FROM_REPO }]),
+    ...(guest?.content === guestSource ? [] : [{ path: guestFile, content: guestSource }]),
     ...VOICE_AGENT_SOURCE_FILES.flatMap((file, index) =>
       current[index]?.content === files[file]
         ? []
-        : [{ path: `${VOICE_AGENT_SOURCE_DIR}/${file}`, content: files[file] }],
+        : [{ path: `${sourceDirectory}/${file}`, content: files[file] }],
     ),
   ];
   if (changes.length === 0) {

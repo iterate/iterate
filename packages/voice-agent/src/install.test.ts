@@ -265,6 +265,32 @@ describe("installVoiceAgentFromSource", () => {
     expect(edited.changedPaths).toEqual(["voice-agent/face.ts"]);
   });
 
+  it("can install an isolated source guest without changing the project's package guest", async () => {
+    const customGuest = "export { CustomVoice } from './custom.ts';\n";
+    const { repo, files } = fakeRepo({
+      "package.json": manifest({
+        iterate: ITERATE,
+        [VOICE_AGENT_PACKAGE_NAME]: PINNED,
+        zod: "4.5.4",
+      }),
+      "voice-agent.ts": customGuest,
+    });
+    const result = await installVoiceAgentFromSource(repo, source, {
+      guestFile: "kit-voice-agent.ts",
+      sourceDirectory: "kit-voice-agent",
+      preservePublishedVoiceAgentDependency: true,
+    });
+    expect(result.changedPaths).toEqual([
+      "kit-voice-agent.ts",
+      ...VOICE_AGENT_SOURCE_FILES.map((file) => `kit-voice-agent/${file}`),
+    ]);
+    expect(files["voice-agent.ts"]).toBe(customGuest);
+    expect(JSON.parse(files["package.json"]!).dependencies[VOICE_AGENT_PACKAGE_NAME]).toBe(PINNED);
+    expect(files["kit-voice-agent.ts"]).toBe(
+      'export { default, VoiceAgentFacet } from "./kit-voice-agent/worker.ts";\n',
+    );
+  });
+
   it("a from-source repo is left alone by the package install's keep mode and cleaned by prune", async () => {
     const { repo, files } = fakeRepo({
       "package.json": manifest({ iterate: ITERATE, zod: "4.5.4" }),

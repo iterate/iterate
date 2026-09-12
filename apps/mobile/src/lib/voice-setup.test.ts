@@ -89,7 +89,7 @@ test("a missing marker runs setup with the full config, then records the marker"
     streamPath: "/agents/voice/chat/mobile/device-1",
     instructions: MOBILE_VOICE_SETUP.instructions,
   });
-  expect(calls[0].tools.map((tool: any) => tool.name)).toEqual(["hang_up"]);
+  expect(calls[0]).not.toHaveProperty("tools");
   expect(written).toEqual([[streamPath, setupMarker(streamPath, voiceSetupConfig())]]);
 });
 

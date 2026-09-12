@@ -185,6 +185,32 @@ describe("ITX observability", () => {
     });
   });
 
+  it("classifies an owned outer client disconnect without hiding business failures", async () => {
+    const events: WideLogEvent[] = [];
+    const log = vi
+      .spyOn(console, "log")
+      .mockImplementation((event) => void events.push(event as WideLogEvent));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const session = createItxRpcSessionOptions({
+      transport: "websocket",
+      sessionId: "itx_session_client_disconnect",
+      parentLogId: "log_handshake",
+    });
+
+    await expect(
+      session.onCall!({ path: ["health"], target: {} }, async () => {
+        throw new Error("itx-client-disconnected: outer WebSocket closed");
+      }),
+    ).rejects.toThrow("itx-client-disconnected: outer WebSocket closed");
+
+    expect(log).toHaveBeenCalledOnce();
+    expect(error).not.toHaveBeenCalled();
+    expect(events[0]).toMatchObject({ outcome: "client_disconnected" });
+    expect(recordedSpans[0]).toMatchObject({
+      attributes: { "itx.outcome": "client_disconnected" },
+    });
+  });
+
   it.each([
     {
       label: "a frozen pre-tagged Error",

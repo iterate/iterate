@@ -13,6 +13,7 @@
 import fs from "node:fs";
 import { openStream } from "./probe-audio.ts";
 import type { VoicelabConnectOptions } from "./connect.ts";
+import { closeAndDisposeRpcHandle } from "./rpc-ownership.ts";
 
 /** Options for `pnpm cli voicelab tap`. */
 export interface TapOptions extends VoicelabConnectOptions {
@@ -58,7 +59,8 @@ export async function tap(options: TapOptions): Promise<void> {
     throw new Error(`--path must be absolute; received ${JSON.stringify(options.path)}`);
   }
   const minutes = options.minutes ?? 3;
-  const stream = await openStream({ ...options, streamPath: options.path });
+  const openedStream = await openStream({ ...options, streamPath: options.path });
+  const { stream } = openedStream;
   const file = fs.openSync(options.out, "w");
   const openedAt = Date.now();
   let rows = 0;
@@ -103,7 +105,8 @@ export async function tap(options: TapOptions): Promise<void> {
     /* The subscription closes BEFORE the file: batches keep arriving until the
      * live stream hears the close, and a write after closeSync would throw. */
     closed = true;
-    connection.close();
+    closeAndDisposeRpcHandle(connection);
+    openedStream.close();
     fs.closeSync(file);
   }
   console.log(`${rows} rows`);

@@ -64,8 +64,17 @@ const BOARDS: readonly Board[] = [
   { label: "StackChan CoreS3", name: "stackchan" },
   { label: "M5StickS3", name: "m5stick-s3" },
   { label: "HA Voice PE", name: "home-assistant-voice-preview-edition" },
+  { label: "Future Home Satellite", name: "satellite1" },
   { label: "Waveshare AMOLED", name: "waveshare" },
 ];
+
+/** Resolve `--only` exactly as every device command does: aliases and client
+ * paths name one canonical client, while this table is only the default run. */
+export function selectBoards(only?: string): readonly Board[] {
+  if (!only) return BOARDS;
+  const selectedPath = deviceClientPath(only);
+  return BOARDS.filter((board) => deviceClientPath(board.name) === selectedPath);
+}
 
 /** What one board's attempt produced. Written out whole, pass or fail. */
 interface BoardResult {
@@ -116,7 +125,7 @@ async function healthWithRetry(
 export async function boards(options: BoardsOptions) {
   const prompt = options.prompt ?? "Hello there. Please reply with the single word banana.";
   const expect = (options.expect ?? "banana").toLowerCase();
-  const chosen = options.only ? BOARDS.filter((board) => board.name === options.only) : BOARDS;
+  const chosen = selectBoards(options.only);
   if (chosen.length === 0) {
     throw new Error(
       `no board named ${options.only}; known: ${BOARDS.map((b) => b.name).join(", ")}`,
