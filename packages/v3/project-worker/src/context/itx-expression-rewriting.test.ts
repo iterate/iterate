@@ -453,7 +453,7 @@ describe("`@` round-trips the codec (targets only): parse → print → parse; t
 // ───────────────────────────── the door ─────────────────────────────
 
 describe("rewrite-rule-configured — ONE event, both halves canonical, loud at the append boundary", () => {
-  test("AT REST: the match is the printed prefix (a short canonical key), the target THE PARSED FORM (it may carry a whole source as data)", () => {
+  test("AT REST: BOTH halves are the PARSED form (either codec half in, the parsed form out) — the reduce keys the table by printing the match, so a canonical match over the codec cap never re-parses", () => {
     expect(
       normalizeControlEvent({
         type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -461,17 +461,17 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
       }),
     ).toEqual({
       type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: "itx.db", target: ["itx", "facets", ["get", "tab-1"]] },
+      payload: { match: ["itx", "db"], target: ["itx", "facets", ["get", "tab-1"]] },
     });
-    // either codec half on either side
+    // either codec half on either side, parsed once at the door
     expect(
       normalizeControlEvent({
         type: "events.iterate.com/itx/rewrite-rule-configured",
         payload: { match: ["itx", "db"], target: "itx.facets.get('tab-1')" },
       }).payload,
     ).toEqual({
-      match: "itx.db",
-      target: ["itx", "facets", ["get", "tab-1"]], // a string target is parsed once, at the door
+      match: ["itx", "db"],
+      target: ["itx", "facets", ["get", "tab-1"]],
     });
   });
 
@@ -483,7 +483,7 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
       }),
     ).toEqual({
       type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: "itx.db", target: null },
+      payload: { match: ["itx", "db"], target: null },
     });
   });
 
@@ -494,7 +494,7 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
         payload: { match: "itx.kv", target: restoreRuleTarget("itx.kv") },
       }).payload,
     ).toEqual({
-      match: "itx.kv",
+      match: ["itx", "kv"],
       target: ["itx", "builtins", "kv"], // the parsed form at rest
     });
     expect(
@@ -503,7 +503,7 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
         payload: { match: "itx.ai.run('gpt-5')", target: restoreRuleTarget("itx.ai.run('gpt-5')") },
       }).payload,
     ).toEqual({
-      match: "itx.ai.run('gpt-5')",
+      match: ["itx", "ai", ["run", "gpt-5"]],
       target: ["itx", "builtins", "ai", ["run", "gpt-5"]],
     });
     expect(
@@ -512,7 +512,7 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
         payload: { match: "itx", target: restoreRuleTarget("itx") },
       }).payload,
     ).toEqual({
-      match: "itx",
+      match: ["itx"],
       target: ["itx", "builtins"],
     });
   });
@@ -567,29 +567,29 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
       ).toThrow(throws);
     });
 
-  // …and what the door ACCEPTS, stored canonical: `{ match, target, payload }`.
+  // …and what the door ACCEPTS: both halves the PARSED form (either codec half in), `{ match, target, payload }`.
   const doorAccepts: { match: ItxExpressionInput; target: ItxExpressionInput; payload: unknown }[] =
     [
       {
         match: "itx.db",
         target: "itx.builtins.kv",
-        payload: { match: "itx.db", target: ["itx", "builtins", "kv"] },
+        payload: { match: ["itx", "db"], target: ["itx", "builtins", "kv"] },
       }, // a target may name the physical spelling
       {
         match: "itx.archive",
         target: "itx.cd('/archive')",
-        payload: { match: "itx.archive", target: ["itx", ["cd", "/archive"]] },
+        payload: { match: ["itx", "archive"], target: ["itx", ["cd", "/archive"]] },
       }, // …and a proxy verb (a built-in root in an expression)
       {
         match: "itx.ai.run('gpt-5')",
         target: "itx.kv",
-        payload: { match: "itx.ai.run('gpt-5')", target: ["itx", "kv"] },
-      }, // pinned args in the match, stored canonical; the target the parsed form
+        payload: { match: ["itx", "ai", ["run", "gpt-5"]], target: ["itx", "kv"] },
+      }, // pinned args in the match, parsed once at the door
       {
         match: ["itx", "ok", ["get", 1]],
         target: "itx.kv",
-        payload: { match: "itx.ok.get(1)", target: ["itx", "kv"] },
-      }, // the ARRAY half of a match lands as its printed canonical key
+        payload: { match: ["itx", "ok", ["get", 1]], target: ["itx", "kv"] },
+      }, // the ARRAY half of a match passes through as the parsed form
     ];
   for (const { match, target, payload } of doorAccepts)
     test(`ACCEPTED: ${JSON.stringify(match)} ⇒ ${JSON.stringify(target)}`, () => {
@@ -921,7 +921,7 @@ describe("the rule table — a MAP by match: set replaces, null masks or deletes
     const { events, provide } = setup();
     provide("itx.cam", { shot: () => "frame" });
     expect(events.at(-1)!.payload).toEqual({
-      match: "itx.cam",
+      match: ["itx", "cam"],
       target: ["itx", "builtins", "rpcStubs", ["get", "itx.cam"]],
     });
   });
@@ -977,7 +977,7 @@ describe("the rule table — a MAP by match: set replaces, null masks or deletes
     const { rewrite, invoke, resolve, events } = setup();
     rewrite("itx.fable", "itx.ai.run('@cf/meta/llama-3.2-1b-instruct', @)");
     expect(events.at(-1)!.payload).toEqual({
-      match: "itx.fable",
+      match: ["itx", "fable"],
       target: ["itx", "ai", ["run", "@cf/meta/llama-3.2-1b-instruct", { "@": true }]], // `@` at rest is the reserved literal
     });
     expect(await invoke("itx.fable({ prompt: 'hi' })")).toEqual({

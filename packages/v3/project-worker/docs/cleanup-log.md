@@ -524,3 +524,33 @@ Gates: unit 543 | 6 xfail · workers 77 | 13 xfail | 2 skip · typecheck · oxli
 Remaining parked (see the round-11 tail list): A3 double-parse (pinned), A4 WS-relay race (pinned),
 A5 dispose-during-pause, the B decisions (token systems, path-mask, MCP lifecycle), C1 library split,
 and the D nice-to-haves.
+
+## Round 13 — D5 (prologue trim) + A3 (double-parse match) + D1 research
+
+Working the parked list smallest-first, per the owner's calls.
+
+- **D5 (prologue trim) — near-no-op, done.** The prologues codex flagged as "essays" are actually
+  gotcha/wiring content the owner wants (the DO's door/effect map, processor.ts's 5-rule concurrency
+  contract + push-delivery semantics, library.ts's layering litmus + memoized-connection rationale).
+  The only genuinely-roadmap prose was library.ts's "`connectToGraphql` is the obvious next member …
+  does not exist yet" — cut. Everything else kept.
+- **A3 (double-parse match crossing the codec cap) — FIXED, `test.fails` flipped to a passing test.**
+  A rule match was stored as a STRING and parsed TWICE (boundary `print` canonicalizes, reduce
+  re-parses); `print` can expand a value (`1e99`→`1e+99`) past the 2048-char string-codec cap, so the
+  boundary accepted an event the reduce then threw on (rule silently skipped). Fix (design-aligned —
+  the cap's error already says "pass the parsed form instead", and the TARGET was already stored
+  parsed): `normalizeRewriteRuleConfigured` returns the match as the PARSED prefix (not `print`ed), and
+  the reduce reads it in place, deriving the table key with `print` (printing has no cap). So a match is
+  parsed ONCE, at the door, and a large match passed as an array flows through uncapped — matching the
+  target's handling. Payload shape change: `payload.match` is now the parsed array (like `payload.target`
+  already was); ~a dozen test assertions updated to the array form. Human string input over 2048 is
+  still refused at the door (correct — strings are for what a person types).
+- **D1 (OpenAPI `$ref`) — RESEARCHED, awaiting owner's call.** oRPC's OpenAPI lib is the WRONG direction
+  (it GENERATES/serves a spec from an oRPC router; it can't parse a foreign spec). The consumed surface
+  is tiny — `connectToOpenApi` reads only operationId, param name/in/required, and `hasRequestBody` as a
+  BOOLEAN (the request-body schema is never read) — so the only refs that matter are internal (`#/…`)
+  parameter refs. Recommendation: a ~20-line internal `$ref` resolver (zero deps, Worker-safe, matches
+  the file's small-surface design), reaching for `@scalar/openapi-parser` only if full external/schema
+  dereferencing is ever needed. Owner to decide dep vs. hand-roll before implementing.
+
+Gates: unit 544 | 5 xfail · workers 77 | 13 xfail | 2 skip · typecheck · oxlint 0/0 · knip clean.

@@ -348,7 +348,7 @@ export function resolveItxExpression(
 export function normalizeRewriteRuleConfigured(payload: {
   match: ItxExpressionInput;
   target: ItxExpressionInput | null;
-}): { match: string; target: ItxExpression | null } {
+}): { match: ItxExpression; target: ItxExpression | null } {
   const matchPrefix = parseItxExpressionPrefix(payload.match);
   if (matchPrefix[0] !== "itx")
     throw new Error(
@@ -387,7 +387,10 @@ export function normalizeRewriteRuleConfigured(payload: {
     throw new Error(
       `\`@\` (the caller's input) is legal only in the target's FINAL step — ${JSON.stringify(print(targetExpression, { holes: true }))} holds it earlier (rule 7)`,
     );
-  return { match: print(matchPrefix), target: targetExpression };
+  // The match is the PARSED prefix, never re-stringified: a target may carry a whole source as data,
+  // and a canonical match can itself exceed the string codec's cap even when the input did not — the
+  // reduce keys the table with `print` (no cap on printing), never a second parse.
+  return { match: matchPrefix, target: targetExpression };
 }
 
 /** The platform-equivalent target for a match (`itx.ai ⇒ itx.builtins.ai`, `itx ⇒ itx.builtins`) — a

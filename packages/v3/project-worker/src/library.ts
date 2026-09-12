@@ -34,8 +34,7 @@ import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/e
 // `itx.fetch` (egress: `getSecret("/secrets/NAME")` placeholders in headers substitute for free; a user
 // rule shadowing `itx.fetch` redirects the library too, which is how a test fakes a remote). The
 // other direction — this deployment as an MCP server — is not a library member: the control plane
-// serves ONE `/mcp` for every project (control-plane.ts). `connectToGraphql` is the obvious next
-// member of the family and does not exist yet.
+// serves ONE `/mcp` for every project (control-plane.ts).
 //
 // LIVE CONNECTIONS ARE MEMOIZED per context: a connector reached THROUGH a rewrite rule
 // (`provide('itx.tools', "itx.connectToMcp(url)")`, the documented composition) is a connect per

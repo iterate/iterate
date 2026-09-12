@@ -342,8 +342,11 @@ export function reduceCoreEvent(
       // A no-op is `undefined`, not a fresh object: the inline host detects change by identity, and
       // a benign double-delete or double-mask must not rewrite the checkpoint or publish a
       // live-state delta.
-      const matchString = payload.match as string;
-      const matchPrefix = parseItxExpressionPrefix(matchString);
+      // The append boundary stores the match as the PARSED prefix (like the target), so this reads it
+      // in place — never a second string parse that a canonical match over the codec cap would throw
+      // on. `print` derives the table key (printing has no cap).
+      const matchPrefix = parseItxExpressionPrefix(payload.match as ItxExpressionInput);
+      const matchString = print(matchPrefix);
       const existing = state.itxExpressionRewriteRules[matchString];
       // THE COMPARE-AND-SET of a handle's undo (`ifTarget`): the removal applies only while the row's
       // target is still the one the handle wrote — a replacement owns the match now and a stale undo

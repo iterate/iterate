@@ -161,21 +161,18 @@ describe("the rewrite-rule table — a MAP by match", () => {
     expect(Object.keys(s.itxExpressionRewriteRules)).toEqual(["itx.fine"]);
   });
 
-  // EXPECTED-TO-FAIL — pins a known, pre-existing bug (docs/cleanup-log.md round 9). A rule match is
-  // stored as a STRING and parsed TWICE: once at the append boundary (`normalizeControlEvent`, which
-  // canonicalizes via `print`) and again in THIS reduce. `print` can EXPAND a value (`1e99`→`1e+99`),
-  // so a match under the 2048-char codec cap on input can exceed it once canonicalized: the boundary
-  // ACCEPTS the event but the reduce THROWS `EXPRESSION_TOO_LONG`, committing the event while silently
-  // skipping its rule (and replay re-throws). Boundary and reduce must AGREE on validity. Fix (a
-  // decision, logged): carry the parsed match through storage so the reduce never re-parses — the table
-  // key is `print`ed once (no cap on printing). Remove `.fails` when the double-parse is gone.
-  test.fails("a well-formed match the boundary accepts must reduce, not throw once its canonical form crosses the codec cap", () => {
+  // A rule match whose CANONICAL form crosses the string codec cap still reduces (the round-9
+  // double-parse bug, fixed round 12). The boundary stores the match as the PARSED prefix (not a
+  // re-stringified canonical that `print` could expand past 2048 — `1e99`→`1e+99`), so the reduce
+  // reads it in place and only `print`s it for the table key (printing has no cap). Boundary and
+  // reduce now agree: the boundary accepts it, the reduce stores it.
+  test("a well-formed match the boundary accepts reduces even when its canonical form crosses the codec cap", () => {
     const longMatch = "itx.foo(" + Array(400).fill("1e99").join(",") + ")";
     const normalized = normalizeControlEvent({
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: longMatch, target: "itx.kv" },
     });
-    // the boundary accepted it (no throw above); the reduce must store the rule, not throw
+    expect(Array.isArray((normalized.payload as { match: unknown }).match)).toBe(true); // parsed, not re-stringified
     const reduced = reduceCoreEvent({
       event: at(1, normalized.type, normalized.payload as Record<string, unknown>),
       state: CoreContract.initialState(),
