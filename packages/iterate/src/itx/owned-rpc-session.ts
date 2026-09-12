@@ -16,6 +16,10 @@ export function withOwnedRpcSession<T extends object>(stub: T, ...owned: Disposa
   let disposed = false;
   return new Proxy(stub, {
     get(target, key, receiver) {
+      // A scoped handle is a settled ownership boundary. Keeping Cap'n Web's
+      // promise assimilation here would let an async function unwrap this
+      // proxy and lose its parent and transport disposers before returning it.
+      if (key === "then") return undefined;
       if (key === Symbol.dispose) {
         return () => {
           if (disposed) return;

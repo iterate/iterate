@@ -27,7 +27,7 @@ static uint8_t overlay_class(
   return 6U;
 }
 
-bool iterate_kit_conversation_needs_attention(
+static bool needs_attention(
     const struct iterate_kit_conversation_visual_state *state) {
   if (state == NULL) return true;
   return state->media_failed ||
@@ -55,7 +55,9 @@ void iterate_kit_conversation_lights_animate(
     uint32_t now_ms,
     struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]) {
   iterate_kit_conversation_lights_render(state, pixels);
-  if (!iterate_kit_conversation_needs_attention(state)) return;
+  /* A hardware mute is steady even while connecting; only a fault moves. */
+  if (state != NULL && state->microphone_muted && !state->media_failed) return;
+  if (!needs_attention(state)) return;
   {
     /*
      * The chase overwrites the whole ring rather than decorating a sector,

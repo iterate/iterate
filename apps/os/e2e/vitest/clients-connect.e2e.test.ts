@@ -3,6 +3,7 @@ import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import WebSocket from "ws";
 import type { UnauthenticatedOs } from "../../src/itx-api.generated.ts";
+import { SubscriptionConfiguredPayload } from "../../src/domains/streams/core-processor-contract.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
 // The clients proof: `projects.connect` = `get` + presence, built entirely on
@@ -67,6 +68,18 @@ test("projects.connect registers a connected client whose live capability is inv
   // where expect.poll loses the vitest test context.
   const chrome = await settleClient(callerProject, "/clients/chrome", (client) => client.connected);
   expect(chrome).toMatchObject({ path: "/clients/chrome", connected: true });
+
+  const clientEvents = await callerProject.streams
+    .get("/clients/chrome")
+    .subscriptions.get("clients-to-root")
+    .describe();
+  expect(clientEvents).not.toBeNull();
+  const clientEventsConfiguration = SubscriptionConfiguredPayload.parse(
+    clientEvents!.configuration,
+  );
+  expect(clientEventsConfiguration.filter?.eventTypes).toContain(
+    "events.iterate.com/capability-host/capability-provided",
+  );
 
   // The call door: the scope's capability host invokes the live capability
   // mounted at "capabilities" — a cross-session call into the provider's

@@ -232,6 +232,28 @@ static void fragmented_control_is_dropped_without_poisoning_the_peer(void) {
 }
 
 /*
+ * A peer CLOSE is the only normal terminal path that had no retained cause.
+ * Its code must survive the reconnect so a five-minute healthy session does
+ * not become an unexplained local disconnect in field diagnostics.
+ */
+static void peer_close_status_code_is_decoded_from_the_complete_control_payload(
+    void) {
+  static const uint8_t normal[] = {0x03U, 0xe8U};
+  static const uint8_t going_away_with_reason[] = {
+    0x03U, 0xe9U, 'b', 'y', 'e'
+  };
+  static const uint8_t malformed[] = {0x03U};
+
+  CHECK(iterate_kit_websocket_close_status_code(
+      normal, sizeof(normal)) == 1000);
+  CHECK(iterate_kit_websocket_close_status_code(
+      going_away_with_reason, sizeof(going_away_with_reason)) == 1001);
+  CHECK(iterate_kit_websocket_close_status_code(NULL, 0U) == 0);
+  CHECK(iterate_kit_websocket_close_status_code(
+      malformed, sizeof(malformed)) == 0);
+}
+
+/*
  * A nonblocking TLS read can report that a frame is in progress while yielding
  * zero new payload bytes. Treating that as a data chunk sends an empty fragment
  * into the message consumer and causes a reconnect; resetting the offset makes the
@@ -279,6 +301,7 @@ int main(void) {
   an_empty_binary_frame_is_dropped_without_a_restart();
   an_empty_text_frame_is_dropped_without_a_restart();
   fragmented_control_is_dropped_without_poisoning_the_peer();
+  peer_close_status_code_is_decoded_from_the_complete_control_payload();
   a_zero_byte_payload_stall_preserves_data_offset();
   return 0;
 }

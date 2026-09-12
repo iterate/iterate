@@ -3,13 +3,11 @@ import type { DynamicWorkerRef } from "../../src/domains/workers/schemas.ts";
 import { inlineJsSource } from "./itx-test-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-// Every dynamic worker sees its own build identity as
-// env.ITERATE_WORKER_VERSION — the content-addressed key the loader caches
-// by, so it changes exactly when the worker's source does. That contract is
-// what makes it usable as a hosted processor registry's deploy version (a
-// change resets the keepalive's crash-loop budget), so assert both halves:
-// present and stable for one source, different for different source.
-test("a dynamic worker's env carries its content-addressed build version", async () => {
+// Every dynamic worker sees its own runtime identity as
+// env.ITERATE_WORKER_VERSION — the content-addressed identity of what Worker
+// Loader executes. It stays stable across an artifact rebuild with identical
+// runtime modules, and changes for an executable or compatibility change.
+test("a dynamic worker's env carries its content-addressed runtime version", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
   using project = await itx.projects
@@ -22,12 +20,11 @@ test("a dynamic worker's env carries its content-addressed build version", async
     path: "/",
     source: inlineJsSource("probe.js", {
       "probe.js": `
-          // ${marker}
           import { WorkerEntrypoint } from "cloudflare:workers";
 
           export class VersionProbe extends WorkerEntrypoint {
             async version() {
-              return this.env.ITERATE_WORKER_VERSION;
+              return [this.env.ITERATE_WORKER_VERSION, ${JSON.stringify(marker)}].join(":");
             }
           }
         `,
@@ -36,20 +33,27 @@ test("a dynamic worker's env carries its content-addressed build version", async
   });
   const probe = (marker: string) =>
     project.workers.get(probeRef(marker)) as unknown as {
-      version(): Promise<unknown>;
+      version(): Promise<string>;
     } & Disposable;
 
   using probeA = probe("source a");
   const versionA = await probeA.version();
-  expect(versionA).toEqual(expect.stringMatching(/.+/));
+  expect(versionA).toBe("" + versionA);
+  const [runtimeVersionA, markerA] = versionA.split(":");
+  expect(runtimeVersionA).toMatch(/^[0-9a-f]{64}$/);
+  expect(markerA).toBe("source a");
 
-  // Same source, same identity — the version is a pure function of the build.
+  // Same executable source, same runtime identity.
   using probeARepeat = probe("source a");
   expect(await probeARepeat.version()).toBe(versionA);
 
-  // A one-comment source change is a new build and a new version.
+  // An executable string-literal change is a new runtime identity. A comment
+  // would be dropped by bundling and would not prove this contract.
   using probeB = probe("source b");
   const versionB = await probeB.version();
-  expect(versionB).toEqual(expect.stringMatching(/.+/));
-  expect(versionB).not.toBe(versionA);
+  expect(versionB).toBe("" + versionB);
+  const [runtimeVersionB, markerB] = versionB.split(":");
+  expect(runtimeVersionB).toMatch(/^[0-9a-f]{64}$/);
+  expect(markerB).toBe("source b");
+  expect(runtimeVersionB).not.toBe(runtimeVersionA);
 });

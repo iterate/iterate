@@ -84,32 +84,76 @@ test("a nameless alarm wake recovers the stream address from its committed birth
 
 test("a failed facet alarm replay rejects the alarm invocation and re-merges the bounded retry desire", async () => {
   const harness = await bootStreamWithAgentFacet();
-  harness.facet.handleAlarmError = new Error("Durable Object reset because its code was updated");
+  const failure = new Error("facet alarm failed");
+  const info = vi.spyOn(console, "info").mockImplementation(() => {});
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  harness.facet.handleAlarmError = failure;
 
-  const before = Date.now();
-  harness.stream.proxySetAlarm(before - 1);
+  try {
+    const before = Date.now();
+    harness.stream.proxySetAlarm(before - 1);
 
-  // The replay failure must reject the WHOLE alarm invocation — a resolved
-  // alarm is a consumed alarm, and the platform only re-owes the fire when
-  // the handler fails.
-  await expect(harness.stream.alarm()).rejects.toThrow(
-    /facet alarm replay failed for agent; failing the alarm invocation keeps the platform's alarm retry owed/,
-  );
-  expect(harness.facet.handleAlarmCalls).toBe(1);
+    // The replay failure must reject the WHOLE alarm invocation — a resolved
+    // alarm is a consumed alarm, and the platform only re-owes the fire when
+    // the handler fails.
+    await expect(harness.stream.alarm()).rejects.toThrow(
+      /facet alarm replay failed for agent; failing the alarm invocation keeps the platform's alarm retry owed/,
+    );
+    expect(harness.facet.handleAlarmCalls).toBe(1);
+    expect(info).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith("facet alarm replay failed; re-arming a bounded retry", {
+      facet: "agent",
+      failures: 1,
+      error: failure,
+    });
 
-  // The bounded self-retry stays armed too (the fast path when the write
-  // survives): the shared facet slot holds a future desire and the native
-  // alarm was re-armed for it.
-  const merged = harness.stream.proxyGetAlarm();
-  expect(merged).not.toBeNull();
-  expect(merged!).toBeGreaterThan(before);
-  // toContain, not at(-1): the halted wake delivery's own retry may arm a
-  // nearer alarm after the merge; the merged desire's native write is what
-  // matters.
-  expect(harness.context.alarms).toContain(merged);
+    // The bounded self-retry stays armed too (the fast path when the write
+    // survives): the shared facet slot holds a future desire and the native
+    // alarm was re-armed for it.
+    const merged = harness.stream.proxyGetAlarm();
+    expect(merged).not.toBeNull();
+    expect(merged!).toBeGreaterThan(before);
+    // toContain, not at(-1): the halted wake delivery's own retry may arm a
+    // nearer alarm after the merge; the merged desire's native write is what
+    // matters.
+    expect(harness.context.alarms).toContain(merged);
+  } finally {
+    info.mockRestore();
+    error.mockRestore();
+    await harness.context.settle();
+    harness.context.close();
+  }
+});
 
-  await harness.context.settle();
-  harness.context.close();
+test("an availability replay failure is informational and still re-arms the bounded retry", async () => {
+  const harness = await bootStreamWithAgentFacet();
+  const reset = Object.assign(new Error("Durable Object reset because its code was updated"), {
+    durableObjectReset: true,
+    retryable: true,
+  });
+  const info = vi.spyOn(console, "info").mockImplementation(() => {});
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  harness.facet.handleAlarmError = reset;
+
+  try {
+    const before = Date.now();
+    harness.stream.proxySetAlarm(before - 1);
+
+    await expect(harness.stream.alarm()).rejects.toThrow(/facet alarm replay failed for agent/);
+    expect(info).toHaveBeenCalledWith("facet alarm replay unavailable; re-arming a bounded retry", {
+      facet: "agent",
+      failures: 1,
+      error: reset,
+      outcome: "unavailable",
+    });
+    expect(error).not.toHaveBeenCalled();
+    expect(harness.stream.proxyGetAlarm()).toBeGreaterThan(before);
+  } finally {
+    info.mockRestore();
+    error.mockRestore();
+    await harness.context.settle();
+    harness.context.close();
+  }
 });
 
 test("a successful facet alarm replay resolves the alarm and leaves the facet slot clear", async () => {

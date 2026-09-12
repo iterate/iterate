@@ -148,7 +148,7 @@ static enum capnweb_status dispatch_static_path(
  * before it reaches this peer. That host preserves the complete nested method
  * route as data:
  *
- *   invokeCapability({ path: ["pushToTalk", "start"], args: [] })
+ *   invokeCapability({ path: ["conversation", "start"], args: [] })
  *
  * Reconstructing a borrowed capnweb_call view lets the normal generated method
  * table remain the only dispatcher. Copying strings into a second routing
@@ -219,7 +219,7 @@ static enum capnweb_status dispatch(
   }
   /*
    * Count arrival, not successful business outcome. An unknown method or a
-   * driver-level error still proves the server found this live provider and
+   * driver-level error still proves the server found this live capability and
    * delivered an RPC through its mount. Conversely, WebSocket/Cap'n Web ping
    * traffic never enters capability dispatch and therefore cannot disguise a
    * server-side mount that has gone offline.

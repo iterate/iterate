@@ -7,7 +7,7 @@
 // (agent-processor-implementation.ts).
 
 import { isIdempotencyConflict } from "iterate/processors";
-import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
+import type { EmittedInput, StreamEvent } from "iterate/processors";
 import type { ConfigRepoFileMentionTarget } from "@iterate-com/shared/message";
 import type { ProjectAiInterceptorInput } from "../../lib/model-interception.ts";
 import type { AgentMentionReadResult } from "./agent-mention-materialization.ts";
@@ -50,12 +50,6 @@ export type AgentLlmTransport = (args: {
  * - `readRepoFile` resolves a bounded prefix of one semantic config-repo
  *   mention at latest HEAD. The processor commits that source material
  *   before scheduling a turn.
- * - `writeWorkspaceFile` writes one file into THIS agent's own workspace
- *   directory (the filesystem `itx.workspace` resolves to; the given path is
- *   relative to that directory) so oversized script results can spill to a
- *   file the model pages through with plain TypeScript. Returns the
- *   fully-qualified workspace path it wrote. Optional: without it, oversized
- *   results fall back to inline truncation.
  * - `callLlm` overrides the whole Workers AI path when provided — the test
  *   seam (see AgentLlmTransport).
  * - `consultAiInterceptor` serves `intercepted/*` model attempts through the
@@ -74,10 +68,6 @@ export type AgentProcessorDeps = {
     target: ConfigRepoFileMentionTarget,
     maximumBytes: number,
   ) => Promise<AgentMentionReadResult | null>;
-  writeWorkspaceFile?: (input: {
-    content: string;
-    path: string;
-  }) => Promise<{ absolutePath: string }>;
   callLlm?: AgentLlmTransport;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -96,6 +86,7 @@ export type AgentHost = {
   /** Page reader over the home stream (prompt building, compaction guards). */
   readEvents: (input: {
     afterOffset: number;
+    byteLimit?: number;
     eventTypes?: readonly string[];
     limit: number;
   }) => AsyncEventPager;
@@ -121,7 +112,7 @@ export type AsyncEventPager = {
  * the reduce sorts out whose fact counts.
  */
 export async function appendUnlessLostIdempotencyRace(
-  append: ProcessEventArgs<AgentProcessorContract>["append"],
+  append: (...events: EmittedInput<AgentProcessorContract>[]) => Promise<unknown>,
   events: EmittedInput<AgentProcessorContract>[],
 ): Promise<void> {
   try {
