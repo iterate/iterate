@@ -264,7 +264,7 @@ export class IterateContextRpcTarget extends RpcTarget {
         type: "events.iterate.com/itx/rewrite-rule-configured",
         payload: { match: matchString, target: expectedTarget },
       };
-      this.#refuseAnOverrideNamingItsOwnContext(matchString, event);
+      this.#refuseAnOverrideNamingItsOwnContext(matchString, expectedTarget);
       await this.#append(event);
       this.#sessionTeardown.dispose(sessionTeardownKey);
       return new RewriteRuleHandle(() => this.#removeRuleInBackground(matchString, expectedTarget));
@@ -402,9 +402,8 @@ export class IterateContextRpcTarget extends RpcTarget {
   /** A whole-context override (a bare `itx` row) whose target is `cd` of THIS context is a loop no
    *  depth budget can see — every hop is a fresh resolve — so it is refused here, where the path is
    *  known. Two contexts overriding each other stays a trusted-client misconfiguration. */
-  #refuseAnOverrideNamingItsOwnContext(matchString: string, event: StreamEventInput): void {
+  #refuseAnOverrideNamingItsOwnContext(matchString: string, steps: ItxExpression | null): void {
     if (matchString !== "itx") return;
-    const steps = (event.payload as { target: ItxExpression | null }).target; // the PARSED form
     if (steps === null) return;
     const cdStep = steps[1] === "builtins" ? steps[2] : steps[1];
     if (!Array.isArray(cdStep) || cdStep[0] !== "cd" || typeof cdStep[1] !== "string") return;

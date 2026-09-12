@@ -174,7 +174,16 @@ export function projectScopedRepos(input: {
     const commit = objects.get(tip);
     if (commit?.type !== "commit")
       throw new Error(`itx.repos: the pack omitted the tip commit ${tip} of ${REF}`);
-    const tree = objects.get(parseCommit(commit.payload).tree);
+    // A commit's tree oid is its `tree <oid>` header — read from the header block (before the blank
+    // line), never a body line that happens to start "tree ".
+    const header = textDecoder.decode(commit.payload).split("\n\n", 1)[0]!;
+    const treeOid = header
+      .split("\n")
+      .find((line) => line.startsWith("tree "))
+      ?.slice(5);
+    if (treeOid === undefined)
+      throw new Error(`itx.repos: the tip commit ${tip} of ${REF} has no tree header`);
+    const tree = objects.get(treeOid);
     if (tree?.type !== "tree")
       throw new Error(`itx.repos: the pack omitted the tree of the tip commit ${tip}`);
     return { entries: parseTree(tree.payload), objects };
@@ -402,25 +411,6 @@ function encodeTree(entries: TreeEntry[]): Uint8Array {
       concat([textEncoder.encode(`${entry.mode} ${entry.name}\0`), fromHex(entry.oid)]),
     ),
   );
-}
-
-interface CommitFields {
-  message: string;
-  parents: string[];
-  tree: string;
-}
-
-function parseCommit(payload: Uint8Array): CommitFields {
-  const raw = textDecoder.decode(payload);
-  const headerEnd = raw.indexOf("\n\n");
-  const headers = (headerEnd < 0 ? raw : raw.slice(0, headerEnd)).split("\n");
-  const tree = headers.find((line) => line.startsWith("tree "))?.slice(5);
-  if (tree === undefined) throw new Error("commit without a tree header");
-  return {
-    message: headerEnd < 0 ? "" : raw.slice(headerEnd + 2),
-    parents: headers.filter((line) => line.startsWith("parent ")).map((line) => line.slice(7)),
-    tree,
-  };
 }
 
 function encodeCommit(input: {

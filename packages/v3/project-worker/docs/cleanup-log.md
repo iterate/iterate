@@ -467,3 +467,30 @@ injected into the vitest worker thread — a harness gap; session's MCP personal
 identically before this refactor.
 
 Remaining logged item: library.ts protocol split (a cohesion decision).
+
+## Round 11 — post-refactor cleanup pass (codex xhigh + a fork subagent, both fresh)
+
+A codex full-room review plus an independent fork subagent, both told what already landed. Both agreed
+the room is otherwise clean (knip clean; the large files — processor.ts, rpc-stubs.ts, repos.ts,
+stream.ts, subscription-delivery.ts — are cohesive with no worthwhile merges; repeated literal event-type
+strings are the no-indirection taste, kept). Applied the concrete wins:
+
+- **Reuse the facet-memo writer** (iterate-context-durable-object.ts). The config-refresh loop
+  hand-rolled the normalize → compare → persist that `#facetStartupMemoFor` already does; it now calls
+  that method, so ONE place writes a facet startup memo (~10 lines gone).
+- **Delete the dead reserved-rule try/catch** (`#unsetWhatNamesRpcStub`). It guarded `restoreRuleTarget`
+  throwing on a match rooted at `itx.builtins` — but the append boundary now refuses such rows at set
+  time, so they can't be in the table, and the async `append()` refusal never reached the sync catch
+  anyway. Each removal already catches its own async refusal.
+- **Delete dead commit parsing** (context/repos.ts). `parseCommit`/`CommitFields` built `message` and
+  `parents` its one caller never read; `tipSnapshot` now reads just the `tree` header inline.
+- **Pass the parsed target, not the event** (`#refuseAnOverrideNamingItsOwnContext`). It re-cast the
+  event payload to recover the target the caller already had; it now takes `ItxExpression | null`.
+- **Inline the single-use pager-refusal response** (context/rpc-stubs.ts), computing `errorCode` once.
+- KEPT `loadStartServerEntry` (control-plane.ts): a named, memoized dynamic import reads clearer than a
+  `??=` mutation inlined into an `await`, and its comment explains why the import must stay dynamic.
+
+Gates: unit 543 | 6 xfail · workers 77 | 13 xfail | 2 skip · typecheck · oxlint 0/0 · knip clean.
+
+Both reviewers CONFIRMED the two remaining parked bugs are still live (see the parked list below):
+idempotency-echo effects (LOW–MED) and library-WebSocket idle cleanup (MED).

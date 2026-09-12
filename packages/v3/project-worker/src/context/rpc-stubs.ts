@@ -52,17 +52,6 @@ function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAttachRequ
     throw new Error("expected { rpcStubKey: string, appendEvents: [] }");
   return { rpcStubKey: decoded.rpcStubKey, appendEvents: decoded.appendEvents };
 }
-/** A refused attach, as the upgrade's answer: the error's CODE (lib.ts) and message as JSON,
- *  so the relay re-throws the same coded error to the caller. 409 = the DO refused (a coded refusal
- *  such as STREAM_PAUSED); 500 = something uncoded. */
-const rpcStubPagerRefusalResponse = (error: unknown): Response =>
-  Response.json(
-    {
-      code: errorCode(error) ?? null,
-      message: error instanceof Error ? error.message : String(error),
-    },
-    { status: errorCode(error) ? 409 : 500 },
-  );
 const RPC_STUB_PAGER_WEBSOCKET_TAG = "itx-rpc-stub-pager-websocket";
 /** The pager keepalive pair — one shared definition for the edge sender and the DO's
  *  setWebSocketAutoResponse. DELIBERATELY distinctive literals: the auto-response is DO-WIDE
@@ -243,7 +232,14 @@ export class RpcStubDirectory {
       } catch {
         /* already closing */
       }
-      return rpcStubPagerRefusalResponse(error);
+      // The refusal IS the upgrade's answer — the error's code + message as JSON, so the relay
+      // re-throws the same coded error to the caller. 409 = the DO refused (a coded refusal such as
+      // STREAM_PAUSED); 500 = something uncoded.
+      const code = errorCode(error);
+      return Response.json(
+        { code: code ?? null, message: error instanceof Error ? error.message : String(error) },
+        { status: code ? 409 : 500 },
+      );
     }
     // ONE pager per key, enforced when a pager becomes VISIBLE (a CONCURRENT provide at the same key
     // may still be opening its own, invisible to any earlier scan): drop every OTHER same-key socket

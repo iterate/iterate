@@ -155,23 +155,18 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #unsetWhatNamesRpcStub(rpcStubKey: string): void {
     // ONE frozen census BEFORE any append (`rowsNamingRpcStub`): the answer never depends on the
     // order the rows were configured in or on a row removed a moment earlier. Then appended one by
-    // one, so a row the removal spelling cannot express (a raw-appended match at `itx.builtins.…`)
-    // stops none of the others. A rule is REMOVED (back to the platform row beneath, if any — a
-    // dead fake `itx.ai` restores the real one), never masked: `null` is the caller's deliberate deny.
+    // one, each catching its own async refusal so one failure stops none of the others. A rule is
+    // REMOVED (back to the platform row beneath, if any — a dead fake `itx.ai` restores the real
+    // one), never masked: `null` is the caller's deliberate deny.
     const { ruleMatches, subscriptionNames } = rowsNamingRpcStub({
       rpcStubKey,
       ...this.#rowsForRpcStubCensus(),
     });
-    for (const match of ruleMatches) {
-      try {
-        void this.append({
-          type: "events.iterate.com/itx/rewrite-rule-configured",
-          payload: { match, target: restoreRuleTarget(match) },
-        }).catch(() => undefined);
-      } catch {
-        /* a match the removal spelling cannot express — the other rows still go */
-      }
-    }
+    for (const match of ruleMatches)
+      void this.append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match, target: restoreRuleTarget(match) },
+      }).catch(() => undefined);
     for (const name of subscriptionNames)
       void this.append({
         type: "events.iterate.com/stream/subscription-configured",
@@ -297,14 +292,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           this.#itxExpressionResolver.resolve(normalizedItxExpression(target)).at(-1)!,
         );
         if (!spec) continue;
-        const storedSpec = facetSpecOf(spec as FacetSpec);
-        const facetStartupMemo =
-          this.#facetStartupMemoByName.get(spec.name) ??
-          (this.ctx.storage.kv.get(`facet:${spec.name}`) as FacetSpec | undefined);
-        if (facetStartupMemo && JSON.stringify(facetStartupMemo) === JSON.stringify(storedSpec))
-          continue;
-        this.ctx.storage.kv.put(`facet:${spec.name}`, storedSpec);
-        this.#facetStartupMemoByName.set(spec.name, storedSpec);
+        // The same normalize → compare → persist materialization does — reuse it so ONE method writes
+        // the memo (it no-ops when unchanged, keeping the loader's identity-keyed hash).
+        this.#facetStartupMemoFor(spec.name, spec as FacetSpec);
       } catch (error) {
         // The row landed; a memo that cannot be written now (a source over the cell cap, a target
         // that does not resolve yet) is the next call's to recover or refuse — never the append's.
