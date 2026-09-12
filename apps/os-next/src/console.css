@@ -1,0 +1,339 @@
+/* console.css — the ONE stylesheet of the console (src/routes/**): the string console's rules, verbatim. */
+:root {
+  color-scheme: light dark;
+}
+body {
+  font:
+    15px/1.5 ui-sans-serif,
+    system-ui,
+    sans-serif;
+  max-width: 56rem;
+  margin: 4rem auto;
+  padding: 0 1.25rem;
+}
+h1 {
+  font-size: 1.25rem;
+  margin: 0 0 1rem;
+}
+h2 {
+  font-size: 1rem;
+  margin: 1.4rem 0 0.4rem;
+}
+form {
+  margin: 1rem 0;
+}
+fieldset {
+  border: 1px solid color-mix(in oklab, currentColor 25%, transparent);
+  border-radius: 6px;
+  margin: 0.8rem 0;
+}
+legend {
+  padding: 0 0.4rem;
+  opacity: 0.7;
+  font-size: 0.85em;
+}
+input[type="email"],
+input[type="text"] {
+  font: inherit;
+  padding: 0.5rem 0.6rem;
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 0.6rem;
+}
+label {
+  display: block;
+  margin: 0.25rem 0;
+}
+button {
+  font: inherit;
+  padding: 0.5rem 0.9rem;
+  cursor: pointer;
+}
+.muted {
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+ul {
+  padding-left: 1.1rem;
+}
+code {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+[role="alert"] {
+  color: color-mix(in oklab, currentColor 70%, red);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+th,
+td {
+  padding: 0.65rem 0.4rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid color-mix(in oklab, currentColor 20%, transparent);
+  overflow-wrap: anywhere;
+}
+td form {
+  margin: 0;
+}
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.6rem;
+  font: inherit;
+}
+
+/* Consent keeps the auth app's card layout with native form controls. */
+body:has(.consent-card) {
+  max-width: none;
+  min-height: 100dvh;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 2rem 1rem;
+  display: grid;
+  place-items: center;
+  background: light-dark(#fafafa, #111113);
+}
+.consent-card {
+  --line: light-dark(#e4e4e7, #343438);
+  --soft: light-dark(#f6f6f7, #232326);
+  width: min(100%, 36rem);
+  background: light-dark(#fff, #18181b);
+  color: light-dark(#18181b, #f4f4f5);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 2px 6px #00000005;
+  overflow: hidden;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+
+  > header,
+  > footer,
+  > form,
+  > details {
+    padding: 1.5rem;
+  }
+  > form,
+  > footer,
+  > details {
+    border-top: 1px solid var(--line);
+  }
+  h1 {
+    font-size: 1.25rem;
+    margin: 0.4rem 0 0;
+  }
+  h2 {
+    font-size: 0.9rem;
+    margin: 0;
+  }
+  p {
+    margin: 0.5rem 0 0;
+  }
+  form {
+    margin: 0;
+  }
+  strong {
+    font-weight: 600;
+  }
+  .muted {
+    opacity: 1;
+    color: light-dark(#71717a, #a1a1aa);
+    font-size: 0.85em;
+  }
+  button,
+  .consent-actions a {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    text-decoration: none;
+    text-align: center;
+    font-weight: 500;
+    padding: 0.5rem 0.8rem;
+  }
+  button:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  button:not(:disabled):hover,
+  .consent-actions a:hover {
+    background: var(--soft);
+  }
+  .consent-quiet {
+    border-color: transparent;
+    padding: 0.4rem 0.5rem;
+  }
+  :focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: 3px;
+  }
+  input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: light-dark(#18181b, #f4f4f5);
+    flex-shrink: 0;
+  }
+  input[type="text"],
+  select {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    padding: 0.5rem;
+    margin: 0.3rem 0 0.6rem;
+    box-sizing: border-box;
+    width: 100%;
+  }
+}
+.consent-app,
+.consent-account {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+.consent-avatar {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--soft);
+  font-weight: 600;
+}
+.consent-badge {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0.1rem 0.4rem;
+  font-size: 11px;
+}
+.consent-account {
+  margin: 0 1.5rem 1.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+
+  .consent-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+  }
+  > div {
+    flex: 1;
+    min-width: 0;
+  }
+  strong {
+    display: block;
+  }
+  button {
+    font-size: 12px;
+  }
+}
+.consent-project-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.consent-card form > p + .consent-project-heading {
+  margin-top: 1.25rem;
+}
+.consent-projects {
+  padding: 0;
+  margin: 1rem 0;
+  border: 0;
+  min-width: 0;
+}
+.consent-org {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-top: 0.75rem;
+
+  h3 {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    font-size: 13px;
+    font-weight: 500;
+    margin: 0;
+    padding: 0.6rem 0.8rem;
+    background: var(--soft);
+  }
+  h3 span {
+    flex-shrink: 0;
+  }
+}
+.consent-project {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.8rem;
+  margin: 0;
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+
+  &:has(input:checked),
+  &:hover {
+    background: var(--soft);
+  }
+}
+.consent-future {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  margin: 1rem 0;
+  cursor: pointer;
+}
+.consent-future .muted {
+  display: block;
+  margin-top: 0.2rem;
+}
+.consent-create {
+  summary {
+    cursor: pointer;
+  }
+  summary h2 {
+    display: inline;
+  }
+  form {
+    margin-top: 1rem;
+  }
+}
+.consent-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+.consent-actions > * {
+  flex: 1;
+}
+.consent-card .consent-actions button {
+  background: light-dark(#18181b, #f4f4f5);
+  color: light-dark(#fff, #18181b);
+}
+.consent-card footer p {
+  margin: 0 0 1rem;
+}
+@media (max-width: 420px) {
+  .consent-card > header,
+  .consent-card > form,
+  .consent-card > details,
+  .consent-card > footer {
+    padding: 1rem;
+  }
+  .consent-account {
+    margin: 0 1rem 1rem;
+    gap: 0.5rem;
+  }
+  .consent-account .consent-avatar {
+    display: none;
+  }
+}

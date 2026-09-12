@@ -205,10 +205,56 @@ function makeWorkspaceDocumentsWorkspace(): WorkspaceConfig {
   };
 }
 
+function makeOsNextWorkspace(): WorkspaceConfig {
+  // The clean-room platform worker (wip/kernel-wayfinder). Entries: the worker, the SDK bundle's
+  // source (build-sdk.mjs bundles src/sdk/index.ts + src/client/demo.tsx into src/generated and
+  // public/), the ONE vitest config (four projects) + its global setup, and the Playwright specs.
+  return {
+    entry: [
+      "src/worker.ts!",
+      "src/sdk/index.ts",
+      "src/client/**/*.{ts,tsx}",
+      // build-sdk.mjs bundles this facet entry (the account processor's durable-object host) into
+      // src/generated; reached only through the build (the presence twin, src/client/presence/
+      // durable-object.ts, is covered by the src/client/** entry above).
+      "src/account/durable-object.ts",
+      "build-sdk.mjs",
+      "vitest.config.ts",
+      "vitest.global-setup.ts",
+      // the e2e lane's test files and the two vitest hooks are entries; e2e/support/** is project code,
+      // so an unused support export is reported
+      "e2e/**/*.e2e.test.ts",
+      "e2e/support/global-setup.ts",
+      "e2e/support/setup.ts",
+      "__workers-tests__/**/*.ts",
+      "bench/**/*.ts",
+      "playwright.config.ts",
+      "specs/**/*.ts",
+      "src/**/*.test.ts",
+    ],
+    project: [
+      "src/**/*.{ts,tsx}!",
+      "e2e/**/*.ts",
+      "__workers-tests__/**/*.ts",
+      "bench/**/*.ts",
+      "specs/**/*.ts",
+      "!src/generated/**",
+    ],
+    // src/generated is the SDK bundle (gitignored).
+    ignore: ["src/generated/**"],
+    // `cloudflare:workers` parses as the "cloudflare" package; wrangler backs the deploy script.
+    ignoreDependencies: ["cloudflare", "wrangler"],
+    ignoreBinaries: ["playwright"],
+  };
+}
+
 const config: KnipConfig = {
   // Keep the config honest in CI/local runs: if Knip thinks our patterns or
   // workspace setup drifted, fail instead of silently warning.
   treatConfigHintsAsErrors: true,
+  // A TYPE exported for a holder's benefit and used in its own file (a connector's option or result
+  // type, a config shape) is not dead; a VALUE export still needs an importer.
+  ignoreExportsUsedInFile: { interface: true, type: true },
   include: [
     "files",
     "dependencies",
@@ -285,6 +331,7 @@ const config: KnipConfig = {
       project: ["src/**/*.ts", "src/**/*.cjs", "tsdown.config.ts"],
     },
     "packages/workspace-documents": makeWorkspaceDocumentsWorkspace(),
+    "apps/os-next": makeOsNextWorkspace(),
   },
 };
 

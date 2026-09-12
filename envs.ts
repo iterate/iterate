@@ -607,3 +607,51 @@ export const docsEnvs = {
   },
   ...mapDeployedPreviewEnvs((env) => docsPreviewSlot(previewEnvironmentSlotNumber(env))),
 } satisfies Record<EnvName, DocsEnv>;
+
+/** The clean-room OAuth deployment is isolated from apps/os and the earlier experiments. */
+export interface OsNextEnv {
+  cloudflareAccountId: string;
+  dopplerConfig: string;
+  workerName: string;
+  baseUrl: string;
+  mcpBaseUrl: string;
+  projectHostnameBase: string;
+  artifactsNamespace: string;
+  /** The name the Cloudflare resources were CREATED under (D1 `<prefix>-directory`, KV `<prefix>-oauth|-secrets|-itx`) —
+   *  pinned apart from `workerName` because the worker was renamed after they existed; `ensure-resources` and
+   *  the wrangler generator derive names from this, never from the worker name. */
+  resourceNamePrefix: string;
+  /** Unverified email sign-in for this isolated test deployment. Never enable for real user data. */
+  testEmailLogin?: boolean;
+  resources: { directoryDbId: string; oauthKvId: string; secretsKvId: string; itxKvId: string };
+}
+export const osNextEnvs: Record<string, OsNextEnv> = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "os-next-prd",
+    baseUrl: "https://os.iterate2.com",
+    mcpBaseUrl: "https://mcp.iterate2.com",
+    projectHostnameBase: "iterate2.app",
+    artifactsNamespace: "project-worker-prd-repos",
+    resourceNamePrefix: "project-worker-prd",
+    testEmailLogin: true,
+    resources: {
+      directoryDbId: "be6a3789-726a-4786-8b50-ef150c583b4e",
+      oauthKvId: "a1a12d1cf1c342f8a389e5bf9dc5b760",
+      secretsKvId: "20fb83b6648440f0bcdc5a9938abdfab",
+      itxKvId: "02d9483f71b84a9f9fae588f0ad9b3bd",
+    },
+  },
+};
+export const notesEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "notes",
+    // Its own workers.dev subdomain — NOT a custom domain. iterate2.com is reserved to become a
+    // project custom hostname (the iterate project in iterate.iterate2.app), mirroring production
+    // where os.iterate.com maps to a project. A workers.dev baseUrl adds no custom route (below).
+    baseUrl: "https://notes.iterate.workers.dev",
+  },
+};

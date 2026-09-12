@@ -43,7 +43,7 @@ const ACCOUNTS = [
     dopplerConfig: "prd",
     label: "prd",
     // Pre-incident baseline ~100 DO-hours/hour. Since 2026-09-03 11:00 the
-    // standalone project-worker/IterateContextDurableObject sits ~540 on top
+    // standalone os-next/IterateContextDurableObject sits ~540 on top
     // (not this repo's; routed to its owner) — ≈ $3/hour, visible in the
     // headline every hour without a reply. ≈ $3.40/hour ceiling.
     maxAccountDoHours: 600,

@@ -1,0 +1,323 @@
+{
+  "account": "04b3b57291ef2626c6a8daa9d47065a7",
+  "queries": {
+    "stableLevels": {
+      "queryId": "iterate2-stable-version-levels",
+      "timeframe": {
+        "from": 1789080390000,
+        "to": 1789080680916
+      },
+      "view": "calculations",
+      "ignoreSeries": true,
+      "limit": 50,
+      "parameters": {
+        "datasets": [],
+        "filters": [
+          {
+            "key": "$metadata.service",
+            "operation": "regex",
+            "type": "string",
+            "value": "^(project-worker-prd|notes-prd)$"
+          }
+        ],
+        "calculations": [
+          {
+            "operator": "count"
+          }
+        ],
+        "groupBys": [
+          {
+            "value": "$metadata.service",
+            "type": "string"
+          },
+          {
+            "value": "$metadata.level",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "notesWrite": {
+      "queryId": "iterate2-notes-write-trace",
+      "timeframe": {
+        "from": 1789080390000,
+        "to": 1789080707367
+      },
+      "view": "events",
+      "limit": 500,
+      "parameters": {
+        "datasets": [],
+        "filters": [
+          {
+            "key": "$metadata.traceId",
+            "operation": "eq",
+            "type": "string",
+            "value": "7cf1cd8022433dc244d76b7a39dd3859"
+          }
+        ]
+      }
+    }
+  },
+  "levels": [
+    {
+      "groups": [
+        {
+          "key": "$metadata.service",
+          "value": "project-worker-prd"
+        },
+        {
+          "key": "$metadata.level",
+          "value": "info"
+        }
+      ],
+      "groupKey": "project-worker-prd \u2b24 info",
+      "value": 1960,
+      "interval": 1,
+      "sampleInterval": 1,
+      "count": 1960
+    },
+    {
+      "groups": [
+        {
+          "key": "$metadata.service",
+          "value": "notes-prd"
+        },
+        {
+          "key": "$metadata.level",
+          "value": "info"
+        }
+      ],
+      "groupKey": "notes-prd \u2b24 info",
+      "value": 170,
+      "interval": 1,
+      "sampleInterval": 1,
+      "count": 170
+    }
+  ],
+  "notesWrite": {
+    "events": 21,
+    "spans": [
+      {
+        "name": "kv_put",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "255e4bef0d93586b",
+        "parentSpanId": "3d44eac6dec96c8e",
+        "startTime": 1789080405344,
+        "endTime": 1789080405379,
+        "durationMS": 35,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": null,
+        "error": null
+      },
+      {
+        "name": "jsrpc",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "3d44eac6dec96c8e",
+        "parentSpanId": "1cd788e079153c2f",
+        "startTime": 1789080405344,
+        "endTime": 1789080405379,
+        "durationMS": 35,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": "ok",
+        "error": null
+      },
+      {
+        "name": "durable_object_subrequest",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "1cd788e079153c2f",
+        "parentSpanId": "2a5aa2caab9ccc29",
+        "startTime": 1789080405303,
+        "endTime": 1789080405368,
+        "durationMS": 64,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": null,
+        "error": null
+      },
+      {
+        "name": "d1_all",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "cf4bd7a0a7f85ec2",
+        "parentSpanId": "2a5aa2caab9ccc29",
+        "startTime": 1789080405283,
+        "endTime": 1789080405293,
+        "durationMS": 9,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": null,
+        "error": null
+      },
+      {
+        "name": "kv_get",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "fdb56f8b4e04a1f9",
+        "parentSpanId": "53e7aa892864a52d",
+        "startTime": 1789080404973,
+        "endTime": 1789080404976,
+        "durationMS": 3,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": null,
+        "error": null
+      },
+      {
+        "name": "jsrpc",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "53e7aa892864a52d",
+        "parentSpanId": "0890a3c83dd6c85f",
+        "startTime": 1789080404973,
+        "endTime": 1789080404976,
+        "durationMS": 3,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": "ok",
+        "error": null
+      },
+      {
+        "name": "durable_object_subrequest",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "0890a3c83dd6c85f",
+        "parentSpanId": "2a5aa2caab9ccc29",
+        "startTime": 1789080404929,
+        "endTime": 1789080404958,
+        "durationMS": 28,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": null,
+        "error": null
+      },
+      {
+        "name": "d1_all",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "200eff50327e478a",
+        "parentSpanId": "2a5aa2caab9ccc29",
+        "startTime": 1789080404907,
+        "endTime": 1789080404916,
+        "durationMS": 8,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": null,
+        "error": null
+      },
+      {
+        "name": "d1_all",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "edd2b59d69620efe",
+        "parentSpanId": "2a5aa2caab9ccc29",
+        "startTime": 1789080404885,
+        "endTime": 1789080404896,
+        "durationMS": 11,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": null,
+        "error": null
+      },
+      {
+        "name": "d1_run",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "4953089f780a493f",
+        "parentSpanId": "2a5aa2caab9ccc29",
+        "startTime": 1789080404863,
+        "endTime": 1789080404873,
+        "durationMS": 10,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": null,
+        "error": null
+      },
+      {
+        "name": "durable_object_storage_get",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "af02e0bdf052ae7a",
+        "parentSpanId": "da9d8f429ef55d3e",
+        "startTime": 1789080404852,
+        "endTime": 1789080404852,
+        "durationMS": 0,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": null,
+        "error": null
+      },
+      {
+        "name": "jsrpc",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "da9d8f429ef55d3e",
+        "parentSpanId": "00f6c4703de0039e",
+        "startTime": 1789080404852,
+        "endTime": 1789080407825,
+        "durationMS": 2972,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": "ok",
+        "error": null
+      },
+      {
+        "name": "d1_first",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "86702bdcb6d29224",
+        "parentSpanId": "2a5aa2caab9ccc29",
+        "startTime": 1789080404849,
+        "endTime": 1789080404863,
+        "durationMS": 13,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": null,
+        "error": null
+      },
+      {
+        "name": "kv_get",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "83fe0607bdc0ef28",
+        "parentSpanId": "2a5aa2caab9ccc29",
+        "startTime": 1789080404848,
+        "endTime": 1789080404849,
+        "durationMS": 1,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": null,
+        "error": null
+      },
+      {
+        "name": "durable_object_subrequest",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "00f6c4703de0039e",
+        "parentSpanId": "2a5aa2caab9ccc29",
+        "startTime": 1789080404833,
+        "endTime": 1789080404863,
+        "durationMS": 30,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": null,
+        "error": null
+      },
+      {
+        "name": "d1_first",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "671c1d9073903e23",
+        "parentSpanId": "2a5aa2caab9ccc29",
+        "startTime": 1789080404822,
+        "endTime": 1789080404833,
+        "durationMS": 10,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": null,
+        "error": null
+      },
+      {
+        "name": "GET",
+        "traceId": "7cf1cd8022433dc244d76b7a39dd3859",
+        "spanId": "2a5aa2caab9ccc29",
+        "parentSpanId": null,
+        "startTime": 1789080404646,
+        "endTime": 1789080405503,
+        "durationMS": 856,
+        "service": "project-worker-prd",
+        "scriptVersion": "d2d067bf-ebe7-4788-8276-5dda7b6bc223",
+        "outcome": "ok",
+        "error": null
+      }
+    ]
+  }
+}

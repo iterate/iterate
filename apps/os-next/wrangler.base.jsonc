@@ -1,0 +1,119 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "os-next",
+  // THE BUILD IS VITE's (vite.config.ts): this file is the Cloudflare Vite plugin's input — `vite dev`
+  // runs the worker in workerd, `vite build` bundles it (with the console's routes and their server
+  // functions) to dist/server/index.js beside a resolved copy of this config,
+  // dist/server/wrangler.json, which `pnpm deploy` and the local lanes consume. The processor
+  // SDK bundle (src/generated/*, gitignored) and public/demo.html are built by build-sdk.mjs at Vite
+  // config load.
+  "main": "src/worker.ts",
+  // nodejs_compat, spelled out: the DO's AsyncLocalStorage (node:async_hooks) and the console's Start
+  // server (node:async_hooks, node:stream) need it, and the Vite plugin externalizes `node:*` for
+  // workerd only when it sees the flag (the default-on date is newer than its wrangler). Loaded
+  // userspace isolates are the pure-play half — context/worker-loader.ts mints them with
+  // no_nodejs_compat, so what runs inside a context stays portable across workerd builds.
+  "compatibility_date": "2026-09-01",
+  // allow_irrevocable_stub_storage (experimental, undocumented): lets loaded code STORE its env.ITX
+  // stub in its own durable storage and replay it (e2e/workers-and-facets.e2e.test.ts pins it); every worker
+  // in the chain needs it, so the loaded isolates carry it too (context/worker-loader.ts).
+  // global_fetch_strictly_public: the OAuth provider's Client ID Metadata Documents (control-plane.ts
+  // `clientIdMetadataDocumentEnabled`) — its fetch of a client's metadata URL must reach the public
+  // internet only, never same-zone routing; without the flag the provider advertises no CIMD.
+  "compatibility_flags": [
+    "nodejs_compat",
+    "allow_irrevocable_stub_storage",
+    "global_fetch_strictly_public",
+  ],
+  "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
+  "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } },
+  "workers_dev": true,
+  // PROJECT HOSTS (src/worker.ts `projectHostOf`): `<app>--<project>.<base>`, `<app>.<project>.<base>` and
+  // the apex `<project>.<base>` under the wildcard. The wildcard DNS record (`*.project-worker.iterate.com` AAAA 100::,
+  // proxied — originless, the route terminates it) lives in the zone; the route is this line.
+  "routes": [{ "pattern": "*.project-worker.iterate.com/*", "zone_name": "iterate.com" }],
+
+  // subrequests: a capnweb WebSocket session is pumped by ONE long-lived stateless invocation, and
+  // every edge->DO `invoke` it makes is a subrequest counted against that one invocation for the
+  // session's whole life — the 10,000 paid default is hit by an ordinary long-lived client
+  // (3 appends/s for ~1 h). cpu_ms: a cold re-reduce over a long log, or a large per-commit fan-out,
+  // is CPU-bound on the DO's single thread; 5 min (the paid max) gives 10x the 30 s default before a
+  // CPU-limit abort. Neither is billed until used.
+  "limits": { "subrequests": 1000000, "cpu_ms": 300000 },
+
+  // THE STATIC ASSETS: the console's client bundle (Vite's dist/client) plus public/ verbatim — the
+  // hosted /demo page build-sdk.mjs writes there (255 KiB kept out of every /api and DO isolate). The
+  // Vite plugin sets the directory. `run_worker_first: true`, on purpose: the patterns are paths, never
+  // hostnames, and a project host (`<app>--<project>.<base>`) must never answer with a platform asset —
+  // so src/worker.ts asks the ASSETS binding itself, on the platform host only, after the project
+  // hosts; a miss falls through to the console's SSR (`not_found_handling: "none"` — the SSR is the
+  // fallback, not an index.html: the Start build emits none).
+  "assets": { "binding": "ASSETS", "not_found_handling": "none", "run_worker_first": true },
+
+  // The Worker Loader that runs each project's confined config worker / agents.
+  "worker_loaders": [{ "binding": "LOADER" }],
+  // Workers AI, exposed VERBATIM as the built-in root `itx.ai` (context/built-ins.ts).
+  "ai": { "binding": "AI" },
+  // Cloudflare Artifacts ("git for agents", beta) — the ONE bound namespace, project-scoped as the
+  // built-in root `itx.cfArtifacts` (context/built-ins.ts forces every repo name under `${projectId}.`).
+  // repo-create auto-provisions the namespace; APP_CONFIG_ARTIFACTS_ACCOUNT_ID/NAMESPACE (vars, below)
+  // build the git remotes.
+  "artifacts": [{ "binding": "ARTIFACTS", "namespace": "project-worker-repos" }],
+
+  // Deploy identity. Loader isolates are cached ACROSS deployments, but a DO is durable and
+  // survives redeploys — so a facet built from an isolate minted by a PRIOR deployment can't be
+  // called from the new parent ("Durable Object Facet stubs cannot be transferred between Workers").
+  // apps/os folds workerVersion(env)=CF_VERSION_METADATA.id into its loader cacheKey to prevent
+  // exactly this; the clean room does the same (see confinedWorker in context/worker-loader.ts).
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+
+  // THE context DO: one per {projectId, path}, codec-named — the stream, the routing table, and
+  // every hibernatable socket in one addressable parent.
+  "durable_objects": {
+    "bindings": [
+      { "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" },
+      { "name": "BROWSER_SESSION", "class_name": "BrowserSession" },
+    ],
+  },
+  // The DO's lifecycle, declaratively: one SQLite-backed class, no migration history to replay.
+  "exports": {
+    "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "BrowserSession": { "type": "durable-object", "storage": "sqlite" },
+  },
+
+  // The in-process control plane's directory (src/control-plane.sql: users, orgs,
+  // org_members, projects — a project's id IS its slug).
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "control-plane-directory",
+      "database_id": "fb3502bf-da4c-42e7-8e70-6f75765f7a4d",
+    },
+  ],
+
+  // SECRETS_KV = the per-project secret store egress substitutes from (secret:<projectId>:<name>).
+  // OAUTH_KV = the in-process OAuth AS's provider store (grants/tokens/DCR clients).
+  "kv_namespaces": [
+    { "binding": "SECRETS_KV", "id": "6df3b8c18a624d078d1a1da66f3251c0" },
+    // itx.kv backing — project-prefixed (the D8 portability proof point).
+    { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },
+    { "binding": "OAUTH_KV", "id": "b8efbdc3253840fa95331a80efbeb03d" },
+  ],
+
+  // Configuration (src/worker.ts `parseAppConfig`): `APP_CONFIG_*` vars — the ONE door, parsed once per isolate,
+  // loud on a bad or unknown one. Bindings are declared above; a var is what differs between
+  // deployments of the same code. The three secrets — APP_CONFIG_PROJECT_TOKEN_SECRET,
+  // APP_CONFIG_SESSION_SECRET (the control plane's session cookie) and APP_CONFIG_ADMIN_API_SECRET
+  // (the admin secret: `authenticate({ type: "admin-secret" })`, the lanes' admin bearer) — are
+  // wrangler secrets, never committed vars; all three are required.
+  "vars": {
+    "APP_CONFIG_ENVIRONMENT_NAME": "poc",
+    "APP_CONFIG_PLATFORM_ORIGIN": "https://os.iterate2.com",
+    "APP_CONFIG_MCP_ORIGIN": "https://mcp.iterate2.com",
+    "APP_CONFIG_PROJECT_HOSTNAME_BASE": "project-worker.iterate.com",
+    // The Artifacts git remote is `https://<ACCOUNT_ID>.artifacts.cloudflare.net/git/<NAMESPACE>/<repo>.git`
+    // — the `itx.repos` layer builds it from these when it does git over HTTPS.
+    "APP_CONFIG_ARTIFACTS_ACCOUNT_ID": "04b3b57291ef2626c6a8daa9d47065a7",
+    "APP_CONFIG_ARTIFACTS_NAMESPACE": "project-worker-repos",
+  },
+}
