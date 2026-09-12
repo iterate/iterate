@@ -13,9 +13,6 @@
 
 enum {
   CLI_CONVERSATION_MS_PER_MINUTE = 60000,
-  /* Match the interactive hang-up grace: leave only after the server has had
-   * a bounded chance to acknowledge the owned call's end. */
-  CLI_CONVERSATION_HANGUP_GRACE_MS = 3000,
 };
 
 #define CLI_CONVERSATION_WAV_SUFFIX ".wav"
@@ -375,10 +372,8 @@ static void cli_conversation_finish_run(
     struct cli_runtime *runtime, uint64_t now_ms)
 {
   assert(runtime != NULL);
-  if (cli_device_controls_request_talk(
-          &runtime->device_controls,
-          false,
-          ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM) != ITERATE_KIT_OK) {
+  if (!cli_runtime_begin_hangup(
+          runtime, now_ms, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM)) {
     cli_runtime_log("error", "scripted shutdown exceeded device event bound");
   }
   if (runtime->conversation.current_turn != NULL) {
@@ -403,8 +398,6 @@ static void cli_conversation_finish_run(
    * client append speech into an already-active call without an acceptance
    * event of its own. Follow the same bounded end/acknowledgement protocol as
    * an interactive q, so each unattended run leaves an owned stream idle. */
-  runtime->hanging_up = true;
-  runtime->hangup_deadline_ms = now_ms + CLI_CONVERSATION_HANGUP_GRACE_MS;
   cli_runtime_log("info", "unattended run ending: waiting for call end acknowledgement");
 }
 

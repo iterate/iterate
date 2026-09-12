@@ -66,6 +66,13 @@ replacement during playback, `spkOverflow` for queue admission loss, and
 `spkStarvedMs`/`spkStarveEvents` for hardware starvation. Compare before/after
 deltas; lifetime codec counters can include startup activity.
 
+`playbackQueueOverflows` counts ESP-IDF TX completion-notification queue
+overflows, not rejected voice PCM. HAVPE also writes silence while idle to keep
+the XMOS AEC reference running, so this counter can advance between calls.
+The driver replaces an already-completed descriptor notification; interpret
+the delta alongside actual speaker writes, discards, playback failures, and
+starvation. A counter increment alone does not establish audible data loss.
+
 Opening a serial monitor reboots many boards. Resolve MAC to USB port passively
 with `ioreg`; `esptool read_mac` resets the board. Any early return after
 `esp_task_wdt_add(NULL)` causes an unobserved watchdog reboot: park and expose

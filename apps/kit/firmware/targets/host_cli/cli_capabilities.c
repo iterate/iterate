@@ -349,14 +349,13 @@ static enum capnweb_status cli_capabilities_hang_up(
   (void)call;
   struct cli_capabilities *capabilities = context;
   assert(capabilities != NULL && capabilities->runtime != NULL);
-  if (cli_device_controls_request_talk(
-          &capabilities->runtime->device_controls,
-          false,
-          ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE) != ITERATE_KIT_OK) {
+  if (!cli_runtime_begin_hangup(
+          capabilities->runtime,
+          0U,
+          ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE)) {
     return capnweb_reply_set_error(
         reply, "Error", "device control queue is full");
   }
-  capabilities->runtime->hanging_up = true;
   return cli_capabilities_reply_true(reply);
 }
 

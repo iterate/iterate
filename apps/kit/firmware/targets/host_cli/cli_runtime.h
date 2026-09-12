@@ -195,6 +195,13 @@ struct cli_runtime {
   bool mounted_once;
 };
 
+/* The one local-end transition shared by physical, remote, and unattended
+ * callers. A zero timestamp lets the polling owner arm the grace deadline. */
+bool cli_runtime_begin_hangup(
+    struct cli_runtime *runtime,
+    uint64_t now_ms,
+    enum iterate_kit_device_event_source source);
+
 /** The transport's clock hook, so its deadlines share the process's clock. */
 int64_t cli_runtime_transport_now_us(void *context);
 

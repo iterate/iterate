@@ -1282,6 +1282,9 @@ static void end_local_activation(const char *reason, const char *status) {
   /* A terminal is required only after this activation reached the stream. */
   queued = !runtime.activation_live ||
       runtime.first_mic_append_at_ms == 0U || queue_terminal(reason);
+  /* `pending_terminals` owns the ID now. Do not let a delayed acceptance or
+   * speaker frame match an activation the person has already ended. */
+  runtime.activation[0] = '\0';
   runtime.activation_live = false;
   atomic_store_explicit(&runtime.speaker_peak, 0U, memory_order_relaxed);
   atomic_store_explicit(&runtime.speaker_peak_at_ms, 0U, memory_order_release);

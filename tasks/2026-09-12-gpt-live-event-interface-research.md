@@ -559,7 +559,7 @@ Cloudflare window. No broad suppression was introduced. Native proof artifacts:
 `/tmp/pager-disconnect-preview-proof/result.json`, `narrow-trace-audit.json`,
 and `errors-window.json` in the same directory.
 
-Final local checks passed: 4,554 JavaScript tests and 72 firmware host tests,
+Final local checks passed: 4,555 JavaScript tests and 72 firmware host tests,
 typecheck, lint, unused-code analysis, and formatting. The JavaScript suite
 also reports 21 expected failures and one skipped test.
 
@@ -667,6 +667,50 @@ deployment eliminated that separate lifecycle defect. The rows lack enough
 mount identity to prove their cleanup state. Evidence:
 `/tmp/feed-prod-final-ordered-replay-audit.log` and
 `/tmp/feed-prod-trace-errors-aeab234f.json`.
+
+### CI follow-up regressions
+
+CI's Node 24 runtime exposed an HTTP bridge cancellation race that local Node
+26 did not: aborting the owned input pump could error the response reader
+before `reader.cancel()` ran. The bridge now accepts only that exact private
+abort as successful cleanup; a new negative test preserves unrelated reader
+failures. Both runtimes pass the focused controls, and the full Node 24 root
+suite passes 4,555 JavaScript tests. Native preview `d4cf8f0f` passes the five
+request-body controls and a real network cancellation after a 6,491,625-byte
+upload and a 713-byte response prefix, without worker errors. Evidence:
+`/tmp/preview12-body-bridge-native-controls.json` and
+`/tmp/preview12-body-bridge-slow-consumer-disconnect.json`.
+The HTTP fix then deployed to production as
+`a1baef0c-9e0d-4314-97a0-0fb6f746402d`; the normal Node 24 deployment pipeline
+passed all smoke checks (`/tmp/os-body-cancel-node24-prd-deploy.log`).
+
+The former expected-failure eviction test now passes as an ordinary regression.
+It requires six successful 14 MB appends, evicts the stream, verifies the wake
+facts, and reads each body separately to check its length and SHA-256. It passed
+on preview `d4cf8f0f` in 19.26 seconds, run
+`os-vitest-run-20260912-132455`. No rejected append can satisfy the test.
+
+A review also caught delayed acceptance and speaker frames after an early local
+hang-up. ESP32 now clears the active ID immediately after copying any required
+terminal into the existing pending queue. A regression injects the delayed
+acceptance and audio through the actual callback path and verifies the call
+stays ended and no sound is queued. The old code fails that regression.
+The CLI has a separate loop: its physical, capability, and unattended paths
+now share `cli_runtime_begin_hangup`, which clears playback while retaining the
+activation for its bounded terminal retry and acknowledgement. Its regression
+dispatches the actual capability and delayed wire events through the parser,
+then proves the acknowledgement still completes. All 72 host tests pass with
+both fixes; independent review found no remaining blocker in these changes.
+
+After the last OS rollout, all eleven HAVPE subscriptions settled with zero lag
+and no error, and the device remained ready and idle. Its
+`playbackQueueOverflows` counter advanced once, 13 to 14, during the idle
+deployment interval. Source inspection classifies that as the ESP-IDF TX
+completion-notification queue, not rejected voice PCM: HAVPE continuously
+writes idle silence for AEC, and all response-audio writes, plays, discards,
+failures, and starvation counters stayed flat. This interpretation is now in
+the firmware bench notes. Evidence: `/tmp/havpe-post-a1baef-device-health.json`
+and `/tmp/havpe-posthog-settled-read.json`.
 
 ### Provider concurrency probes
 

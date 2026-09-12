@@ -87,6 +87,27 @@ test("cancels a live inbound request when the response consumer disconnects", as
   expect(cancel).toHaveBeenCalledOnce();
 });
 
+test("surfaces a response reader cancellation failure that the bridge does not own", async () => {
+  const cancel = vi.fn();
+  const bridge = bridgeProjectRequestBody(
+    requestWithBody(new ReadableStream<Uint8Array>({ cancel })),
+  );
+  const response = await bridge.finish(
+    new Response(
+      new ReadableStream<Uint8Array>({
+        cancel() {
+          throw new Error("response reader failed");
+        },
+      }),
+    ),
+  );
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Expected a streaming response body.");
+
+  await expect(reader.cancel("consumer disconnected")).rejects.toThrow("response reader failed");
+  expect(cancel).toHaveBeenCalledOnce();
+});
+
 test("surfaces an inbound request failure instead of treating it as cleanup", async () => {
   const bridge = bridgeProjectRequestBody(
     requestWithBody(

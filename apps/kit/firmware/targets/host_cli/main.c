@@ -210,7 +210,7 @@ static void cli_main_apply_key(
     uint64_t now_ms);
 
 /* Ends the call, then the process, giving the far end a bounded chance. */
-static void cli_main_begin_hangup(
+bool cli_runtime_begin_hangup(
     struct cli_runtime *runtime,
     uint64_t now_ms,
     enum iterate_kit_device_event_source source);
@@ -440,6 +440,17 @@ void iterate_kit_cli_main_test_reconcile_call(
 void iterate_kit_cli_main_test_on_control(
     struct cli_runtime *runtime, enum iterate_kit_voicelab_control control) {
   cli_main_on_control(runtime, control);
+}
+
+void iterate_kit_cli_main_test_on_speaker(
+    struct cli_runtime *runtime, const uint8_t *pcm, size_t length) {
+  cli_main_on_speaker(runtime, pcm, length);
+}
+
+void iterate_kit_cli_main_test_begin_hangup(
+    struct cli_runtime *runtime, uint64_t now_ms) {
+  (void)cli_runtime_begin_hangup(
+      runtime, now_ms, ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL);
 }
 #endif
 
@@ -1006,6 +1017,9 @@ static void cli_main_on_speaker(
     if (runtime != NULL) ++runtime->speaker_bad_frames;
     return;
   }
+  /* Local hang-up still owns `activation` until its terminal reaches the
+   * bridge. That identity must not admit a late accepted-answer frame. */
+  if (runtime->hanging_up) return;
   if (runtime->conversation.current_turn != NULL &&
       runtime->conversation.current_turn->first_speaker_packet_ms == 0U) {
     struct cli_report_turn *turn = runtime->conversation.current_turn;
@@ -1075,6 +1089,7 @@ static void cli_main_on_control(
     runtime->answer_done = true;
     iterate_kit_voice_playback_clock_answer_done(&runtime->playout.clock);
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED) {
+    if (runtime->hanging_up) return;
     runtime->opening_pending = false;
     cli_runtime_log("info", "call accepted");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
@@ -2070,7 +2085,7 @@ static void cli_main_apply_key(
   assert(runtime != NULL);
   switch (event) {
     case CLI_KEYBOARD_HANG_UP:
-      cli_main_begin_hangup(
+      (void)cli_runtime_begin_hangup(
           runtime, now_ms, ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL);
       break;
     case CLI_KEYBOARD_NONE:
@@ -2079,20 +2094,29 @@ static void cli_main_apply_key(
   }
 }
 
-static void cli_main_begin_hangup(
+bool cli_runtime_begin_hangup(
     struct cli_runtime *runtime,
     uint64_t now_ms,
     enum iterate_kit_device_event_source source)
 {
   assert(runtime != NULL);
-  if (runtime->hanging_up) return;
+  if (runtime->hanging_up) return true;
   runtime->hanging_up = true;
   runtime->hangup_terminal_sent = false;
   runtime->hangup_terminal_generation = 0U;
   runtime->hangup_terminal_retry_at_ms = 0U;
-  (void)cli_main_request_talk(runtime, false, source);
-  runtime->hangup_deadline_ms = now_ms + CLI_MAIN_HANGUP_GRACE_MS;
+  runtime->opening_pending = false;
+  /* Discard local audio once. The activation remains for the bounded terminal
+   * retry, while a late matching downlink is refused by the hang-up fence. */
+  iterate_kit_darwin_audio_codec_set_playback_expected(&runtime->audio_codec, false);
+  cli_speaker_clear(&runtime->speaker);
+  (void)iterate_kit_darwin_audio_codec_discard_playback(&runtime->audio_codec);
+  iterate_kit_voice_playback_clock_reprime(&runtime->playout.clock);
+  if (!cli_main_request_talk(runtime, false, source)) return false;
+  runtime->hangup_deadline_ms =
+      now_ms == 0U ? 0U : now_ms + CLI_MAIN_HANGUP_GRACE_MS;
   cli_runtime_log("info", "hanging up");
+  return true;
 }
 
 static void cli_main_poll_interactive(
@@ -2125,7 +2149,7 @@ static void cli_main_poll_interactive(
   }
   if (runtime->finish_at_ms != 0U && now_ms >= runtime->finish_at_ms) {
     cli_runtime_log("info", "session time is up");
-    cli_main_begin_hangup(
+    (void)cli_runtime_begin_hangup(
         runtime, now_ms, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
     return;
   }

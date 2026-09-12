@@ -666,6 +666,22 @@ static void ending_a_call_discards_queued_audio_before_the_next_call(void) {
   end_local_call();
 }
 
+/* A local end invalidates its ID before delayed bridge delivery can revive it. */
+static void local_end_rejects_late_acceptance_and_speaker_audio(void) {
+  const uint32_t written_before = frames_written;
+
+  assert(!board.last_view.wants_call);
+  assert(!board.last_view.call_active);
+  deliver_accepted();
+  deliver_chunk(true, true, CHUNK_FRAMES);
+  step();
+  play_out();
+
+  assert(!board.last_view.wants_call);
+  assert(!board.last_view.call_active);
+  assert(frames_written == written_before);
+}
+
 int main(void) {
   iterate_kit_fake_esp_idf_reset();
   iterate_kit_fake_platform_reset();
@@ -688,6 +704,7 @@ int main(void) {
   audio_with_no_clear_at_all_still_plays();
   speaker_peak_is_fresh_only_while_local_playout_is_feeding();
   ending_a_call_discards_queued_audio_before_the_next_call();
+  local_end_rejects_late_acceptance_and_speaker_audio();
 
   assert(!iterate_kit_fake_esp_idf_restart_requested());
   return 0;

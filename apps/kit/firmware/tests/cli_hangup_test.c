@@ -2,6 +2,7 @@
 #include "cli_runtime.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <string.h>
 
 enum { CALL_CAPACITY = 8, TOKEN_CAPACITY = 256, OUTPUT_CAPACITY = 64, MESSAGE_CAPACITY = 2048, CAPTURE_CAPACITY = 32 };
@@ -66,6 +67,17 @@ static void receive(struct fixture *fixture, const char *message) {
   assert(capnweb_session_receive(&fixture->session, message, strlen(message)) == CAPNWEB_OK);
 }
 
+/* The stream invokes these mounted callbacks; tests never call the CLI fences
+ * directly when asserting a delayed wire delivery. */
+static void deliver_speaker(void *context, const uint8_t *pcm, size_t length) {
+  iterate_kit_cli_main_test_on_speaker(context, pcm, length);
+}
+
+static void deliver_control(
+    void *context, enum iterate_kit_voicelab_control control) {
+  iterate_kit_cli_main_test_on_control(context, control);
+}
+
 static void mount_ready(struct cli_runtime *runtime, struct fixture *fixture, uint64_t *clock) {
   memset(fixture, 0, sizeof(*fixture));
   const struct capnweb_session_options session_options = {
@@ -79,11 +91,14 @@ static void mount_ready(struct cli_runtime *runtime, struct fixture *fixture, ui
     .session = &fixture->session, .project_id = "prj_test", .project_api_key = "secret",
     .stream_path = "/test", .activation = runtime->activation,
     .now_ms = now_ms, .clock_context = clock,
+    .on_speaker = deliver_speaker, .on_control = deliver_control,
+    .downlink_context = runtime,
   };
   assert(iterate_kit_voicelab_start(&runtime->voicelab, &options) == CAPNWEB_OK);
   receive(fixture, "[\"resolve\",1,[\"export\",-10]]");
   receive(fixture, "[\"resolve\",2,[\"export\",-11]]");
   receive(fixture, "[\"resolve\",3,[\"export\",-12]]");
+  receive(fixture, "[\"resolve\",4,[\"export\",-13]]");
   assert(runtime->voicelab.state == ITERATE_KIT_VOICELAB_READY);
 }
 
@@ -153,8 +168,72 @@ static void grace_deadline_stops_a_hung_terminal(void) {
   assert(runtime.stop_requested);
 }
 
+static void local_hangup_fences_late_acceptance_and_audio(void) {
+  struct cli_runtime runtime;
+  struct fixture fixture;
+  uint64_t clock = 500U;
+  const uint8_t queued_pcm[] = {1U, 2U, 3U, 4U};
+  char delayed_delivery[MESSAGE_CAPACITY];
+  struct capnweb_reply reply = {0};
+  memset(&runtime, 0, sizeof(runtime));
+  memcpy(runtime.activation, ACTIVATION, sizeof(ACTIVATION));
+  runtime.activation_active = true;
+  runtime.opening_pending = true;
+  assert(cli_device_controls_init(&runtime.device_controls, &runtime) == ITERATE_KIT_OK);
+  mount_ready(&runtime, &fixture, &clock);
+  runtime.connection.generation = 7U;
+  runtime.voicelab_generation = 7U;
+  /* The stream still owns this observed call until the terminal is acknowledged. */
+  runtime.voicelab.call_active = true;
+  assert(runtime.voicelab.call_active);
+  assert(cli_speaker_write(&runtime.speaker, queued_pcm, sizeof(queued_pcm)) == CLI_SPEAKER_OK);
+
+  const struct iterate_kit_module module =
+      cli_capabilities_module(&runtime.capabilities, &runtime);
+  assert(module.method_count > 1U);
+  assert(module.methods[1].dispatch(module.context, NULL, &reply) == CAPNWEB_OK);
+  assert(reply.kind == CAPNWEB_REPLY_BOOLEAN);
+  assert(runtime.hanging_up);
+  assert(runtime.activation_active);
+  assert(runtime.hangup_deadline_ms == 0U);
+  assert(!runtime.opening_pending);
+  assert(runtime.speaker.used == 0U);
+
+  /* A remote endpoint has no local clock; the polling owner starts its grace. */
+  iterate_kit_cli_main_test_poll_hangup(&runtime, clock);
+  assert(runtime.hangup_deadline_ms == 3500U);
+
+  /* Deliver an actual callback batch after the local end. The core may still
+   * report its server-side call live, but the CLI must not reopen or queue it. */
+  (void)snprintf(
+      delayed_delivery, sizeof(delayed_delivery),
+      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
+      "\"offset\":39,\"payload\":{\"activation\":\"" ACTIVATION "\",\"conversationId\":\"wsdev\"}},"
+      "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":40,"
+      "\"payload\":{\"activation\":\"" ACTIVATION "\",\"pcm\":\"AQIDBA==\"}}"
+      "]],\"scannedThroughOffset\":40,\"state\":null}]]]" );
+  receive(&fixture, delayed_delivery);
+  receive(&fixture, "[\"release\",1,1]");
+  assert(runtime.hanging_up);
+  assert(runtime.voicelab.call_active);
+  assert(runtime.voicelab.spk_frames_received == 1U);
+  assert(!runtime.opening_pending);
+  assert(runtime.speaker.used == 0U);
+
+  /* The retained activation still sends and receives the terminal acknowledgement. */
+  iterate_kit_cli_main_test_reconcile_call(&runtime, clock, 3U);
+  assert(captured_terminal(&fixture, ACTIVATION));
+  iterate_kit_cli_main_test_on_control(
+      &runtime, ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED);
+  assert(runtime.calls_lost == 0U);
+  assert(!runtime.activation_active);
+  iterate_kit_cli_main_test_poll_hangup(&runtime, clock + 1U);
+  assert(runtime.stop_requested);
+}
 int main(void) {
   remount_does_not_replace_the_bridge_acknowledgement();
   grace_deadline_stops_a_hung_terminal();
+  local_hangup_fences_late_acceptance_and_audio();
   return 0;
 }

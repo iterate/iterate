@@ -58,6 +58,8 @@ export function bridgeProjectRequestBody(request: Request): {
           const cleanup = finish();
           try {
             await reader.cancel(cancellation);
+          } catch (error) {
+            if (error !== cancellation) throw error;
           } finally {
             await cleanup;
           }
