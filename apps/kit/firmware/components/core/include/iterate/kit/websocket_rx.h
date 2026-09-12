@@ -82,6 +82,14 @@ struct iterate_kit_websocket_rx {
   bool initialized;
 };
 
+/**
+ * Decodes an RFC 6455 CLOSE status code from one complete control payload.
+ * A zero return means the peer sent no code (or an invalid one-byte payload),
+ * which has no on-wire status code to retain.
+ */
+int32_t iterate_kit_websocket_close_status_code(
+    const uint8_t *payload, size_t payload_size);
+
 enum iterate_kit_status iterate_kit_websocket_rx_init(
     struct iterate_kit_websocket_rx *rx);
 

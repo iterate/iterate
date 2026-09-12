@@ -26,7 +26,7 @@ static void saturating_increment(uint32_t *value) {
 }
 
 static bool valid_type(enum iterate_kit_device_event_type type) {
-  return type >= ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED &&
+  return type >= ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED &&
       type < ITERATE_KIT_DEVICE_EVENT_TYPE_COUNT;
 }
 
@@ -172,10 +172,6 @@ void iterate_kit_device_event_queue_metrics(
 const char *iterate_kit_device_event_type_name(
     enum iterate_kit_device_event_type type) {
   switch (type) {
-    case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED:
-      return "pushToTalk.started";
-    case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED:
-      return "pushToTalk.stopped";
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
       return "conversation.started";
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED:

@@ -31,8 +31,8 @@ export const RETAINED_SCRIPT_RESULTS_LIMIT = 20;
 
 /** Serialized-JSON size up to which a result embeds inline as a literal
  * (typed by the literal, via `as const`). Larger results contribute their
- * inferred type plus an async loader instead — mirroring the render-side
- * spill threshold's small-vs-large split without inventing a new one. */
+ * inferred type plus an async loader instead. The settlement renderer uses
+ * this same split to name the correct preamble result member. */
 export const INLINE_RESULT_PREAMBLE_LIMIT = 16_000;
 
 /** Retained error text cap — errors are context, not payload. */

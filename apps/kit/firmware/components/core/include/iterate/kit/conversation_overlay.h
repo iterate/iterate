@@ -45,23 +45,6 @@ extern "C" {
  * caller passes the time so the animation is reproducible in a host test.
  */
 
-enum {
-  /** The banner's breathing period, in milliseconds. */
-  ITERATE_KIT_OVERLAY_PULSE_PERIOD_MS = 1400,
-};
-
-
-/**
- * Reports whether this state is one the person has to be told about.
- *
- * True means "this device cannot hold a conversation right now" — offline,
- * still connecting, or with broken audio. It is what raises the banner, and
- * adapters without a screen may use it to decide that dim is not good enough.
- */
-bool iterate_kit_conversation_needs_attention(
-    const struct iterate_kit_conversation_visual_state *state);
-
-
 /**
  * Reports whether two snapshots produce the same overlay.
  *

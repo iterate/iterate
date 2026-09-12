@@ -20,7 +20,7 @@ type ConnectItxBaseInput = {
   /** Observe every decoded ws frame (e.g. the e2e suite's frame recorder). */
   onWebSocketMessage?: (message: ItxWebSocketMessage) => void;
   /**
-   * Observe the underlying socket closing, however it closes.
+   * Observe the returned connection closing. Failed pre-ready dials use onRetry.
    *
    * A client whose job is to stay connected (a device, a long-lived agent)
    * reconnects from HERE — the moment the transport dies — not lazily when
@@ -94,9 +94,7 @@ function createSocket(
   // upgrade lands in a few seconds — 15s is headroom, not a hang budget.
   const socket = new WebSocket(url, { handshakeTimeout: 15_000, headers });
 
-  if (onWebSocketClose) {
-    socket.once("close", (code, reason) => onWebSocketClose({ code, reason: reason.toString() }));
-  }
+  observeSocketClose(socket, onWebSocketClose);
 
   if (onWebSocketMessage) {
     const start = Date.now();
@@ -114,9 +112,23 @@ function createSocket(
   return socket;
 }
 
+function observeSocketClose(
+  socket: WebSocket,
+  onWebSocketClose: ConnectItxBaseInput["onWebSocketClose"],
+): void {
+  if (onWebSocketClose) {
+    socket.once("close", (code, reason) => onWebSocketClose({ code, reason: reason.toString() }));
+  }
+}
+
 type RpcSessionStub<T extends object> = CapnRpcStub<T> & {
   [Symbol.dispose]?(): void;
   dup(): RpcSessionStub<T>;
+};
+
+type SocketOwner = {
+  [Symbol.dispose](): void;
+  dup(): SocketOwner;
 };
 
 export function connectItx(input: ConnectAgentItxInput): CapnRpcStub<Agent>;
@@ -134,7 +146,7 @@ export function connectItx(
   | CapnRpcStub<Project>
   | CapnRpcStub<Session>
   | CapnRpcStub<UnauthenticatedOs> {
-  return createItxConnection(input, createItxSocket(input));
+  return createItxConnection(input, createItxSocket(input, input.onWebSocketClose));
 }
 
 export function connectItxReady(
@@ -172,7 +184,9 @@ export async function connectItxReady(
     const socket = createItxSocket(input);
     try {
       await waitForOpen(socket);
-      return createItxConnection(input, socket);
+      const connection = createItxConnection(input, socket);
+      observeSocketClose(socket, input.onWebSocketClose);
+      return connection;
     } catch (error) {
       if (attempt !== 1 || retryOptions === undefined) throw asError(error);
       await retryOptions.onRetry?.({
@@ -196,12 +210,13 @@ function createItxSocket(
     | ConnectItxAuthenticatedInput
     | ConnectItxBaseInput
     | ConnectProjectItxInput,
+  onWebSocketClose?: ConnectItxBaseInput["onWebSocketClose"],
 ): WebSocket {
   return createSocket(
     apiWebSocketUrl(input.baseUrl).toString(),
     input.headers,
     input.onWebSocketMessage,
-    input.onWebSocketClose,
+    onWebSocketClose,
   );
 }
 
@@ -217,26 +232,87 @@ function createItxConnection(
   | CapnRpcStub<Project>
   | CapnRpcStub<Session>
   | CapnRpcStub<UnauthenticatedOs> {
-  const session = newWebSocketRpcSession<UnauthenticatedOs>(
-    socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
-  );
-  if (!("auth" in input)) return session;
+  try {
+    // Node ws implements the WebSocket operations Cap'n Web uses; its DOM type
+    // declaration differs, so adapt that library boundary here.
+    const session = newWebSocketRpcSession<UnauthenticatedOs>(
+      socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
+    );
+    const socketOwner = createSocketOwner(socket, session);
+    if (!("auth" in input)) {
+      return createSocketOwnedSession<UnauthenticatedOs>(session, socketOwner);
+    }
 
-  const root = session.authenticate(input.auth) as CapnRpcStub<Session>;
-  if (!("projectId" in input)) return withOwnedRpcSession(root, session);
+    // The generated API describes remote return values. Cap'n Web pipelines
+    // those calls into stubs, retaining their dispose/dup ownership operations.
+    const root = session.authenticate(input.auth) as CapnRpcStub<Session>;
+    if (!("projectId" in input)) return withOwnedRpcSession(root, socketOwner);
 
-  const project = root.projects.get(input.projectId) as RpcSessionStub<Project>;
-  if (!("agentPath" in input)) return withOwnedRpcSession(project, root, session);
+    // Project lookup is another pipelined RPC stub with the same ownership API.
+    const project = root.projects.get(input.projectId) as RpcSessionStub<Project>;
+    if (!("agentPath" in input)) return withOwnedRpcSession(project, root, socketOwner);
 
-  // An "agent itx" reached from outside `/api` is just this agent's `Agent`
-  // handle. It already carries the agent's own control surface plus the dynamic
-  // capability scope chain (agent scope → project scope), so
-  // `agent.someProvidedCapability()` resolves whether the capability was mounted
-  // on the agent or on the project. Inside a Worker, `env.ITX.get()` returns the
-  // richer full itx at the agent path; the external client keeps the narrower,
-  // serialization-friendly Agent surface.
-  const agent = project.agents.get(input.agentPath) as RpcSessionStub<Agent>;
-  return withOwnedRpcSession(agent, project, root, session);
+    // An "agent itx" reached from outside `/api` is just this agent's `Agent`
+    // handle. It already carries the agent's own control surface plus the dynamic
+    // capability scope chain (agent scope → project scope), so
+    // `agent.someProvidedCapability()` resolves whether the capability was mounted
+    // on the agent or on the project. Inside a Worker, `env.ITX.get()` returns the
+    // richer full itx at the agent path; the external client keeps the narrower,
+    // serialization-friendly Agent surface.
+    // Agent lookup likewise returns a pipelined stub, rather than a local Agent.
+    const agent = project.agents.get(input.agentPath) as RpcSessionStub<Agent>;
+    return withOwnedRpcSession(agent, project, root, socketOwner);
+  } catch (error) {
+    socket.close(1000);
+    throw error;
+  }
+}
+
+/**
+ * One returned scoped itx handle owns one reference to the physical socket.
+ * `withOwnedRpcSession()` duplicates every owned value, so each duplicated
+ * handle retains its own reference and the last disposal closes the transport.
+ */
+function createSocketOwner(
+  socket: WebSocket,
+  session: RpcSessionStub<UnauthenticatedOs>,
+): SocketOwner {
+  let references = 0;
+  const retain = () => {
+    references += 1;
+    let disposed = false;
+    return {
+      dup: retain,
+      [Symbol.dispose]: () => {
+        if (disposed) return;
+        disposed = true;
+        references -= 1;
+        if (references !== 0) return;
+        // Cap'n Web turns disposal of its bootstrap stub into a 3000 abort.
+        // Start the normal close first, then dispose the session so local
+        // pending imports are rejected without replacing the close code.
+        socket.close(1000);
+        session[Symbol.dispose]?.();
+      },
+    };
+  };
+  return retain();
+}
+
+function createSocketOwnedSession<T extends object>(
+  session: RpcSessionStub<T>,
+  socketOwner: SocketOwner,
+): RpcSessionStub<T> {
+  return new Proxy(session, {
+    get(target, key, receiver) {
+      if (key === "then") return undefined;
+      if (key === Symbol.dispose) return () => socketOwner[Symbol.dispose]?.();
+      if (key === "dup") {
+        return () => createSocketOwnedSession(session, socketOwner.dup());
+      }
+      return Reflect.get(target, key, receiver);
+    },
+  });
 }
 
 function waitForOpen(socket: WebSocket): Promise<void> {

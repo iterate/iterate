@@ -1443,9 +1443,9 @@ export interface Stream {
   /**
    * Read one bounded page of committed events (default from the stream's
    * start; filter with `eventTypes`, page forward with `afterOffset`). A full
-   * page (500 events) means MORE remain — page with
-   * `afterOffset: events.at(-1).offset`; reading a long stream without paging
-   * shows you the beginning, not the head.
+   * page (500 events), or any nonempty page capped by `byteLimit`, may have
+   * more events — page with `afterOffset: events.at(-1).offset`; reading a
+   * long stream without paging shows you the beginning, not the head.
    */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;
   /**
@@ -4004,6 +4004,14 @@ export type StreamEventReadInput = {
   eventTypes?: readonly string[];
   /** Page size, 1-500. Defaults to 500. */
   limit?: number;
+  /**
+   * Maximum serialized durable-event bytes in one page, from 1 through 8 MiB.
+   * It cannot be used with `includeEphemeral`. A shorter nonempty page may
+   * still have more matching events; advance from its last offset until an
+   * empty page confirms the current head. The first matching event is returned
+   * even when it alone exceeds this cap, so the cursor can make progress.
+   */
+  byteLimit?: number;
   /**
    * Include ephemeral events (default false). The Durable Object incarnation
    * keeps their bodies in a bounded memory buffer;

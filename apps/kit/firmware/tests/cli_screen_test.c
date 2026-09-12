@@ -26,11 +26,9 @@ static struct cli_screen_state baseline(void)
     .elapsed_ms = 20000U,
     .api_connected_at_ms = 8297U,
     .call_established_at_ms = 9730U,
-    .call_pending = false,
     .transport_state = "ready",
-    .space_held = true,
+    .capture_requested = true,
     .talking = true,
-    .flushing = false,
     .mic_captured = 412U,
     .mic_held = 3U,
     .mic_sent = 408U,
@@ -38,7 +36,9 @@ static struct cli_screen_state baseline(void)
     .spk_received = 1326U,
     .spk_played = 1310U,
     .spk_ring_ms = 240U,
-    .spk_conceal = 0U,
+    .spk_holes = 0U,
+    .spk_hole_ms = 0U,
+    .spk_dry_frames = 0U,
     .spk_underruns = 0U,
     .outbox_used = 2U,
     .outbox_slots = 64U,
@@ -58,8 +58,8 @@ static void both_timestamps_reach_the_frame(void)
   assert(strstr(screen.drawn, "11.7s ago") != NULL);
   assert(strstr(screen.drawn, "10.2s ago") != NULL);
   assert(strstr(screen.drawn, "/agents/voice2/ring1") != NULL);
-  assert(strstr(screen.drawn, "SPACE HELD") != NULL);
-  assert(strstr(screen.drawn, "TALKING") != NULL);
+  assert(strstr(screen.drawn, "CAPTURE ON") != NULL);
+  assert(strstr(screen.drawn, "UPLINKING") != NULL);
   cli_screen_enable(&screen, false);
 }
 
@@ -70,7 +70,7 @@ static void an_unknown_epoch_draws_as_absent(void)
   struct cli_screen_state state = baseline();
   state.api_connected_at_ms = 0U;
   state.call_established_at_ms = 0U;
-  state.space_held = false;
+  state.capture_requested = false;
   state.talking = false;
   cli_screen_draw(&screen, &state);
   /*
@@ -79,7 +79,7 @@ static void an_unknown_epoch_draws_as_absent(void)
    * connection made at startup.
    */
   assert(strstr(screen.drawn, "ago") == NULL);
-  assert(strstr(screen.drawn, "SPACE HELD") == NULL);
+  assert(strstr(screen.drawn, "CAPTURE ON") == NULL);
   cli_screen_enable(&screen, false);
 }
 

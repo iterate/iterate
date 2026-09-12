@@ -4,8 +4,8 @@
 // conversation. Slash commands (user text → script, no LLM), response
 // parsing (accepted assistant output → one script via the fenced-ts response
 // format, or corrective feedback), and settlement rendering (script result →
-// developer context that drives the next turn, spilling oversized results to
-// the agent's workspace). With `config.interpretResponses` off the processor
+// developer context that drives the next turn, with bounded oversized-result
+// previews). With `config.interpretResponses` off the processor
 // never calls this part — project code consumes the raw assistant output
 // events and appends these same consequences itself.
 
@@ -14,11 +14,7 @@ import { inferJsonType } from "../../lib/infer-json-type.ts";
 import { stringifyScriptResult, truncateScriptResult } from "../../lib/script-result-render.ts";
 import { previewJson } from "../../lib/truncate-json.ts";
 import { INLINE_RESULT_PREAMBLE_LIMIT } from "../capability-host/capability-host-preamble.ts";
-import {
-  appendUnlessLostIdempotencyRace,
-  type AgentHost,
-  type AgentProcessorDeps,
-} from "./agent-host.ts";
+import { appendUnlessLostIdempotencyRace, type AgentHost } from "./agent-host.ts";
 import type { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { fencedTsResponseFormat } from "./agent-response-format.ts";
 import { resolveSlashCommand, SLASH_COMMAND_EXECUTION_PREFIX } from "./slash-commands.ts";
@@ -167,15 +163,10 @@ export class AgentCodemode {
         if (execution === undefined) break;
         // Per-event render (blocked): the settlement is delivered once, and a
         // lost render would silently drop the script's result from the
-        // conversation. Rendering may first spill an oversized result into
-        // the agent's workspace (a durable write that can wait on the
-        // checkout's first-use clone), so the whole render-then-append runs
-        // inside the blocking section — the input must not land before the
-        // file it references. Race-tolerant: a truncation-limit config change
+        // conversation. Race-tolerant: a truncation-limit config change
         // between redeliveries alters the rendered body under the same key.
         blockProcessorWhile(async () => {
-          const content = await renderScriptSettlement({
-            executionId,
+          const content = renderScriptSettlement({
             settlement,
             // How long the script ran, derived from the requested and settled
             // events' own journaled createdAt — deterministic across
@@ -185,7 +176,6 @@ export class AgentCodemode {
               Date.parse(event.createdAt) - Date.parse(execution.requestedAt),
             ),
             historyLimit: state.config.scriptResultHistoryLimit,
-            writeWorkspaceFile: this.#host.deps.writeWorkspaceFile,
           });
           if (content === null) return;
           await appendUnlessLostIdempotencyRace(append, [
@@ -219,8 +209,7 @@ export class AgentCodemode {
 //   filters by the `agent-output:` prefix before ever calling this);
 // - a script that returned undefined and did not throw produces nothing.
 //   Returning no value is how an agent ends its turn.
-async function renderScriptSettlement(input: {
-  executionId: string;
+function renderScriptSettlement(input: {
   settlement: {
     status: "succeeded" | "failed";
     result?: unknown;
@@ -234,9 +223,8 @@ async function renderScriptSettlement(input: {
    * to the model. */
   durationMs: number;
   historyLimit: number;
-  writeWorkspaceFile: AgentProcessorDeps["writeWorkspaceFile"];
-}): Promise<string | null> {
-  const { executionId, settlement, historyLimit, writeWorkspaceFile } = input;
+}): string | null {
+  const { settlement, historyLimit } = input;
   const ranIn = formatScriptDuration(input.durationMs);
   if (settlement.status === "failed") {
     // Advertise the recovery tools at the moment of failure — a wrong call
@@ -257,9 +245,9 @@ async function renderScriptSettlement(input: {
   const text = stringifyScriptResult(settlement.result);
   // The preamble binding this exact result got: the SAME compact-JSON split
   // the capability host applies when deriving the `results` array. NOT the
-  // spill decision below — that keys on pretty-printed length vs the
-  // configured historyLimit, so a result can spill to a file yet still be an
-  // inline `data` row (no `.load`); a recipe naming the wrong member fails
+  // bounded-preview decision below — that keys on pretty-printed length vs
+  // the configured historyLimit, so a result can need a preview yet still be
+  // an inline `data` row (no `.load`); a recipe naming the wrong member fails
   // typecheck in the very next script.
   const resultsAccess =
     JSON.stringify(settlement.result).length <= INLINE_RESULT_PREAMBLE_LIMIT ? "data" : "load";
@@ -267,95 +255,48 @@ async function renderScriptSettlement(input: {
     resultsAccess === "data"
       ? "\nThis result is available to your next script as `results[0].data` (the preamble `results` array, newest first)."
       : "\nThe full result is available to your next script via `await results[0].load(itx)` (the preamble `results` array, newest first).";
-  // String results are raw text, not JSON — the fence label, the spill
-  // file's extension, and the read-it-back recipe all say so honestly.
+  // String results are raw text, not JSON — the fence label and retrieval
+  // recipe say so honestly.
   const isRawText = typeof settlement.result === "string";
   const fence = isRawText ? "```" : "```json";
-  if (text.length > historyLimit && writeWorkspaceFile !== undefined) {
-    try {
-      const spilledPath = await spillScriptResult({
-        executionId,
-        extension: isRawText ? "txt" : "json",
-        text,
-        writeWorkspaceFile,
-      });
-      // Once the full result is safely on disk, the inline copy stops trying
-      // to be the data and becomes a map of it: shrink hard (well under
-      // historyLimit) and spend the space on shape instead of payload.
-      if (isRawText) {
-        const shownChars = Math.min(OVERSIZED_RAW_TEXT_PREVIEW_CHARS, historyLimit);
-        return [
-          `Your script returned (in ${ranIn}):`,
-          "```",
-          text.slice(0, shownChars),
-          "```",
-          rawTextSpillNotice({
-            path: spilledPath,
-            resultsAccess,
-            shownChars,
-            totalChars: text.length,
-          }),
-        ].join("\n");
-      }
-      return renderOversizedJsonResult({
-        historyLimit,
-        path: spilledPath,
-        ranIn,
-        result: settlement.result,
-        resultsAccess,
-        text,
-      });
-    } catch (error) {
-      // Spilling is best effort: a workspace that cannot clone or write must
-      // not lose the result entirely — fall through to inline truncation.
-      console.error("[agent] failed to spill oversized script result to workspace", {
-        error,
-        executionId,
-      });
+  if (text.length > historyLimit) {
+    if (isRawText) {
+      const shownChars = Math.min(OVERSIZED_RAW_TEXT_PREVIEW_CHARS, historyLimit);
+      return [
+        `Your script returned (in ${ranIn}):`,
+        "```",
+        text.slice(0, shownChars),
+        "```",
+        rawTextResultNotice({ resultsAccess, shownChars, totalChars: text.length }),
+      ].join("\n");
     }
+    return renderOversizedJsonResult({
+      historyLimit,
+      ranIn,
+      result: settlement.result,
+      resultsAccess,
+      text,
+    });
   }
-  return `Your script returned (in ${ranIn}):\n${fence}\n${truncateScriptResult(text, historyLimit)}\n\`\`\`${preambleNote}`;
+  return `Your script returned (in ${ranIn}):\n${fence}\n${text}\n\`\`\`${preambleNote}`;
 }
 
-/**
- * Where oversized script results land, relative to the agent's own workspace
- * directory: private scratch files for the model to page through with
- * itx.workspace, under no mount and therefore never committable. One file per
- * execution, so replays overwrite idempotently. Size is no concern —
- * workspace files past the inline threshold are stored in R2 transparently.
- */
-const SCRIPT_RESULT_SPILL_DIR = "script-results";
-
-/** Writes the full result text into the agent's workspace directory; returns
- * the fully-qualified workspace path. */
-async function spillScriptResult(input: {
-  executionId: string;
-  extension: "json" | "txt";
-  text: string;
-  writeWorkspaceFile: NonNullable<AgentProcessorDeps["writeWorkspaceFile"]>;
-}): Promise<string> {
-  const path = `${SCRIPT_RESULT_SPILL_DIR}/${input.executionId.replace(/[^A-Za-z0-9._-]+/g, "-")}.${input.extension}`;
-  const written = await input.writeWorkspaceFile({ content: input.text, path });
-  return written.absolutePath;
-}
-
-/** Inline budgets for an oversized result once the full copy is spilled: the
- * inferred type and shape-preserving preview replace raw payload — the model
- * reads the spill file when it needs actual data, so keep history lean. */
+/** Inline budgets for an oversized result: the inferred type and
+ * shape-preserving preview replace raw payload, while the durable preamble
+ * result supplies the full data. */
 const OVERSIZED_RAW_TEXT_PREVIEW_CHARS = 10_000;
 const OVERSIZED_TYPE_MAX_CHARS = 3_000;
 const OVERSIZED_JSON_PREVIEW_MAX_BYTES = 8_000;
 
 /**
- * Oversized JSON result, spilled successfully: render an inferred TypeScript
- * type (the whole shape, cheap) plus an aggressively elided preview (a few
- * items per array, capped strings/depth) plus the read-it-back recipe. Both
+ * Oversized JSON result: render an inferred TypeScript type (the whole shape,
+ * cheap) plus an aggressively elided preview (a few items per array, capped
+ * strings/depth) plus the durable-result recipe. Both
  * smart parts degrade independently — a value that defeats inference or
  * previewing still renders the other, or falls back to a plain slice.
  */
 function renderOversizedJsonResult(input: {
   historyLimit: number;
-  path: string;
   result: unknown;
   /** Which member the preamble `results` row for THIS result actually has —
    * `data` (inline literal) or `load` (typed async loader); the recipe must
@@ -402,18 +343,15 @@ function renderOversizedJsonResult(input: {
     "  // filter/pick with plain TypeScript and return only what you need",
     "}",
     "```",
-    `(The full copy is also saved in your workspace at ${JSON.stringify(input.path)} — use itx.workspace to page a slice if that suits better.)`,
   ].join("\n");
 }
 
 /**
- * The model-facing text after a truncated raw-text preview: where the full
- * result lives and a concrete next-script recipe for paging it, so the model
- * reads the file with plain TypeScript instead of re-running the expensive
- * fetch.
+ * The model-facing text after a truncated raw-text preview: a concrete
+ * next-script recipe for paging the durable result instead of re-running the
+ * expensive fetch.
  */
-function rawTextSpillNotice(input: {
-  path: string;
+function rawTextResultNotice(input: {
   /** See renderOversizedJsonResult: the member this result's preamble row has. */
   resultsAccess: "data" | "load";
   shownChars: number;
@@ -429,7 +367,6 @@ function rawTextSpillNotice(input: {
     `  return text.slice(${input.shownChars}, ${input.shownChars * 4}); // page/regex to return only what you need`,
     "}",
     "```",
-    `(The full copy is also saved in your workspace at ${JSON.stringify(input.path)}.)`,
   ].join("\n");
 }
 

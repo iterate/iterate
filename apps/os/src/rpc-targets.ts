@@ -119,6 +119,7 @@ import {
 import { applySurface, parseItxSurface, type ItxSurface } from "./domains/itx/surface.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { projectCreationEvents } from "./domains/projects/project-defaults.ts";
+import { ItxProspectiveProjectError } from "./itx/prospective-project-error.ts";
 import {
   normalizeProjectCustomDomain,
   primeDirectProjectCustomDomain,
@@ -784,9 +785,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /**
    * Read one bounded page of committed events (default from the stream's
    * start; filter with `eventTypes`, page forward with `afterOffset`). A full
-   * page (500 events) means MORE remain — page with
-   * `afterOffset: events.at(-1).offset`; reading a long stream without paging
-   * shows you the beginning, not the head.
+   * page (500 events), or any nonempty page capped by `byteLimit`, may have
+   * more events — page with `afterOffset: events.at(-1).offset`; reading a
+   * long stream without paging shows you the beginning, not the head.
    */
   async getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
     const result = await this.#read("getEvents", () =>
@@ -6085,14 +6086,30 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     return this.#props.path;
   }
 
-  /** The scope's facet-hosted capability-host processor facade on its stream
-   * — the durable capability table's doors live behind it. */
-  #facade(): PromiseLike<StreamProcessorFacadeStub> {
-    return streamProcessorFacade({
+  /** Each capability-host call owns its fresh facet facade stub. */
+  async #withFacade<Result>(
+    operation: (facade: StreamProcessorFacadeStub) => Promise<Result>,
+  ): Promise<Result> {
+    const facade = await streamProcessorFacade({
       name: CapabilityHostProcessorContract.slug,
       path: this.#props.path,
       projectId: this.#props.projectId,
     });
+    try {
+      return await operation(facade);
+    } finally {
+      try {
+        disposeIgnoredRpcResult(facade);
+      } catch (error) {
+        // The operation has already settled. Surface a cleanup failure without
+        // replacing its authoritative result or error.
+        console.warn("capability-host facade RPC stub dispose failed", {
+          error,
+          path: this.#props.path,
+          projectId: this.#props.projectId,
+        });
+      }
+    }
   }
 
   get #stream(): StreamRpcTarget {
@@ -6183,7 +6200,9 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         revoke: provision.revoke,
       });
     }
-    const provision = await (await this.#facade()).provideCapability(input);
+    const provision = detachPlainRpcResult(
+      await this.#withFacade((facade) => facade.provideCapability(input)),
+    );
     // The facet facade returns the durable mount coordinates. The public RPC
     // surface returns an ownership handle that can revoke that exact mount on
     // explicit revoke or disposal.
@@ -6191,13 +6210,14 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       ctx: this.#props.ctx,
       path: input.path,
       providedAtOffset: provision.providedAtOffset,
-      revoke: async (revokeInput) => await (await this.#facade()).revokeCapability(revokeInput),
+      revoke: async (revokeInput) =>
+        await this.#withFacade((facade) => facade.revokeCapability(revokeInput)),
     });
   }
 
   /** Remove the current mount at a path, or one exact mount by its offset. */
   async revokeCapability(input: RevokeCapabilityInput): Promise<void> {
-    await (await this.#facade()).revokeCapability(input);
+    await this.#withFacade((facade) => facade.revokeCapability(input));
   }
 
   /**
@@ -6209,12 +6229,12 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
    * that would break later scripts' checks rejects here instead.
    */
   async setPreamble(input: SetPreambleInput): Promise<void> {
-    await (await this.#facade()).setPreamble(input);
+    await this.#withFacade((facade) => facade.setPreamble(input));
   }
 
   /** Remove one preamble entry by key (platform-derived `results` is not an entry and cannot be removed). */
   async removePreamble(input: { key: string }): Promise<void> {
-    await (await this.#facade()).removePreamble(input);
+    await this.#withFacade((facade) => facade.removePreamble(input));
   }
 
   /**
@@ -6226,7 +6246,8 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     text: string;
     entries: { key: string; code: string }[];
   } | null> {
-    return await (await this.#facade()).describePreamble();
+    const preamble = await this.#withFacade((facade) => facade.describePreamble());
+    return preamble ? detachPlainRpcResult(preamble) : null;
   }
 
   /**
@@ -6236,7 +6257,9 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
    * for unknown executions and for scripts that failed.
    */
   async getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }> {
-    return await (await this.#facade()).getScriptResult(executionId);
+    return detachPlainRpcResult(
+      await this.#withFacade((facade) => facade.getScriptResult(executionId)),
+    );
   }
 
   /**
@@ -6388,14 +6411,16 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
   async invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown> {
     const { args = [], path } = call;
-    return await (await this.#facade()).invokeCapability({ args, path });
+    return await this.#withFacade((facade) => facade.invokeCapability({ args, path }));
   }
 
   /** Includes `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */
   async __describe(): Promise<
     Description & { capabilities: CapabilityDescription[]; path: string }
   > {
-    const capabilities = await (await this.#facade()).describeCapabilities();
+    const capabilities = detachPlainRpcResult(
+      await this.#withFacade((facade) => facade.describeCapabilities()),
+    );
     // (DO method name: describeCapabilities — it returns the raw array; the
     // Description envelope is assembled here, where the scope context lives.)
     return describeNode({
@@ -6774,9 +6799,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   get #existingProps(): ExistingProjectRpcTargetProps {
     if (!("projectId" in this.#props)) {
-      throw new Error(
-        `project "${this.#props.prospectiveSlug}" does not exist — create it with session.projects.get(${JSON.stringify(this.#props.prospectiveSlug)}).create({})`,
-      );
+      throw new ItxProspectiveProjectError(this.#props.prospectiveSlug);
     }
     return this.#props;
   }
@@ -8924,7 +8947,9 @@ export class ProcessorRelayRpcTarget<
   async snapshot() {
     let snapshot: ProcessorSnapshot<State>;
     try {
-      snapshot = await this.#callProcessor((processor) => processor.snapshot());
+      snapshot = detachPlainRpcResult(
+        await this.#callProcessor((processor) => processor.snapshot()),
+      );
     } catch (error) {
       if (
         this.#initialStateWhenUnconfigured === undefined ||
@@ -8940,7 +8965,9 @@ export class ProcessorRelayRpcTarget<
   }
 
   async getRuntimeState() {
-    const runtimeState = await this.#callProcessor((processor) => processor.getRuntimeState());
+    const runtimeState = detachPlainRpcResult(
+      await this.#callProcessor((processor) => processor.getRuntimeState()),
+    );
     return {
       ...runtimeState,
       snapshot: {

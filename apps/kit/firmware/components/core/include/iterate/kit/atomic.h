@@ -31,14 +31,16 @@ extern "C" {
  * other core.
  */
 
+/** Sample an independent diagnostic counter with relaxed ordering. */
 static inline uint32_t iterate_kit_atomic_load_relaxed_u32(
-    const uint32_t *value) {
+    const volatile uint32_t *value) {
   return __atomic_load_n(value, __ATOMIC_RELAXED);
 }
 
+/** Add one without wrapping; no payload or ownership is published. */
 static inline void
 iterate_kit_atomic_saturating_increment_relaxed_u32(
-    uint32_t *value) {
+    volatile uint32_t *value) {
   uint32_t current =
       iterate_kit_atomic_load_relaxed_u32(value);
   while (current != UINT32_MAX &&
@@ -52,8 +54,9 @@ iterate_kit_atomic_saturating_increment_relaxed_u32(
   }
 }
 
+/** Retain the largest independently sampled value, with relaxed ordering. */
 static inline void iterate_kit_atomic_update_max_relaxed_u32(
-    uint32_t *value, uint32_t candidate) {
+    volatile uint32_t *value, uint32_t candidate) {
   uint32_t current =
       iterate_kit_atomic_load_relaxed_u32(value);
   while (candidate > current &&
@@ -64,6 +67,21 @@ static inline void iterate_kit_atomic_update_max_relaxed_u32(
              false,
              __ATOMIC_RELAXED,
              __ATOMIC_RELAXED)) {
+  }
+}
+
+/** Add an amount, saturating at UINT32_MAX. Same relaxed CAS as increment;
+ * moved from the CoreS3 capture reserve and avatar diagnostics. Volatile
+ * storage is accepted so existing ISR-facing counter layouts stay unchanged.
+ */
+static inline void iterate_kit_atomic_saturating_add_relaxed_u32(
+    volatile uint32_t *value, uint32_t amount) {
+  uint32_t current = iterate_kit_atomic_load_relaxed_u32(value);
+  while (current != UINT32_MAX) {
+    const uint32_t next = amount > UINT32_MAX - current
+        ? UINT32_MAX : current + amount;
+    if (__atomic_compare_exchange_n(value, &current, next, false,
+            __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return;
   }
 }
 

@@ -116,7 +116,22 @@ static void diagnostic_counter_saturation_never_wraps(void) {
   CHECK(counter == UINT32_MAX);
 }
 
+static void diagnostic_add_table(void) {
+  const struct { uint32_t before, amount, after; } rows[] = {
+    {0, 0, 0}, {0, 12, 12}, {20, 5, 25},
+    {UINT32_MAX - 1, 1, UINT32_MAX}, {UINT32_MAX - 1, 2, UINT32_MAX},
+    {UINT32_MAX, 0, UINT32_MAX}, {UINT32_MAX, 5, UINT32_MAX},
+    {10, UINT32_MAX, UINT32_MAX},
+  };
+  for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
+    volatile uint32_t counter = rows[i].before;
+    iterate_kit_atomic_saturating_add_relaxed_u32(&counter, rows[i].amount);
+    CHECK(iterate_kit_atomic_load_relaxed_u32(&counter) == rows[i].after);
+  }
+}
+
 int main(void) {
+  diagnostic_add_table();
   diagnostic_counters_remain_atomic_under_parallel_sampling();
   diagnostic_counter_saturation_never_wraps();
   return 0;
