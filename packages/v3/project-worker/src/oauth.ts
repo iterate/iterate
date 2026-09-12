@@ -191,8 +191,6 @@ export function oauthHelpers(env: Env) {
   return getOAuthApi(providerOptions(env), env);
 }
 
-export { authorizationCodeRequest } from "./client/oauth.ts";
-
 /** The browser adapter asks the same provider gate to admit its server-held token
  * at the API resource. No public validation endpoint or second token verifier. */
 export async function authorizationForToken(env: Env, ctx: ExecutionContext, token: string) {
@@ -243,11 +241,6 @@ SET revoked_at = COALESCE(oauth_activity.revoked_at, excluded.revoked_at), clean
 }
 
 const notFound: Handler = { fetch: () => new Response("Not found", { status: 404 }) };
-
-/** Personal token minting uses the provider in process; browser apps use its public endpoint. */
-export function exchangeToken(request: Request, env: Env, ctx: ExecutionContext) {
-  return new OAuthProvider(providerOptions(env)).fetch(request, env, ctx);
-}
 
 /** All issued grants last at most thirty days. Keep completed revocation markers
  * another day beyond their last possible authority; failed cleanup stays visible.

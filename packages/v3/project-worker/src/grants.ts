@@ -1,20 +1,20 @@
 import { z } from "zod";
-import type { GrantSummary } from "@cloudflare/workers-oauth-provider";
+import { OAuthProvider, type GrantSummary } from "@cloudflare/workers-oauth-provider";
 import { RpcTarget } from "capnweb";
 import type { Env } from "./control-plane.ts";
 import { codedError } from "./lib.ts";
 import { directory } from "./directory.ts";
 import {
-  authorizationCodeRequest,
   authorizationOf,
-  exchangeToken,
   oauthAddresses,
   oauthHelpers,
   parseAuthorization,
+  providerOptions,
   revokeGrant,
   type GrantProps,
   type Authorization,
 } from "./oauth.ts";
+import { authorizationCodeRequest } from "./client/oauth.ts";
 
 const DisplayMetadata = z.object({
   clientName: z.string().optional(),
@@ -183,7 +183,9 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     });
     const code = new URL(approved.redirectTo).searchParams.get("code");
     if (!code) throw new Error("The token authorization did not produce a code.");
-    const response = await exchangeToken(
+    // Personal token minting runs the code→token exchange through the SAME provider gate in process
+    // (browser apps hit its public endpoint instead).
+    const response = await new OAuthProvider(providerOptions(env)).fetch(
       new Request(`${issuer}/oauth/token`, {
         method: "POST",
         body: new URLSearchParams({

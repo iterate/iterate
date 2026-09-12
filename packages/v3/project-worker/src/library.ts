@@ -430,9 +430,6 @@ export const MCPServerInfo = z.object({
 });
 export type MCPServerInfo = z.infer<typeof MCPServerInfo>;
 
-const MCP_PROTOCOL_VERSION = "2025-03-26";
-const CLIENT_INFO = { name: "iterate-context", version: "1" };
-
 /** Connect: initialize, announce, list the tools, and hand back a connection whose prototype carries
  *  one method per tool (a tool named like one of the connection's own members — `callTool`, `close`,
  *  `then`… — is reachable through `callTool` only; index.ts `subclassWithMethods`). */
@@ -561,9 +558,9 @@ class McpJsonRpcClient {
     // until it commits, so a concurrent handshake (a re-open racing a close) can neither clobber the
     // live session nor be clobbered by ours.
     const initialized = await this.#send("initialize", {
-      protocolVersion: MCP_PROTOCOL_VERSION,
+      protocolVersion: "2025-03-26",
       capabilities: {},
-      clientInfo: CLIENT_INFO,
+      clientInfo: { name: "iterate-context", version: "1" },
     });
     const sessionId = initialized.sessionId; // OUR session id, from the initialize response
     try {

@@ -43,12 +43,6 @@ async function projectOfToolCall(
 
 const validator = new CfWorkerJsonSchemaValidator();
 
-const PROJECT_INPUT = {
-  type: "string",
-  description:
-    "The project (its id/slug). Optional when this token reaches exactly one; required for the admin secret.",
-};
-
 /** A tool's input schema as `fromJsonSchema` takes it — the SDK's own JSON-Schema type. */
 type JsonSchema = Parameters<typeof fromJsonSchema>[0];
 
@@ -69,7 +63,11 @@ function buildServer(env: Env, authorization: Authorization): McpServer {
           additionalProperties: false,
           required: ["script"],
           properties: {
-            project: PROJECT_INPUT,
+            project: {
+              type: "string",
+              description:
+                "The project (its id/slug). Optional when this token reaches exactly one; required for the admin secret.",
+            },
             script: {
               type: "string",
               minLength: 1,

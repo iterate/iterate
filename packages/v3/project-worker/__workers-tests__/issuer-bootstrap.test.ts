@@ -6,7 +6,8 @@ import type { IterateRpcTarget } from "../src/session.ts";
 import { directory } from "../src/directory.ts";
 import { appSession } from "../src/client/app-auth.ts";
 import { startIssuerSession } from "../src/issuer-session.ts";
-import { authorizationCodeRequest, oauthHelpers } from "../src/oauth.ts";
+import { oauthHelpers } from "../src/oauth.ts";
+import { authorizationCodeRequest } from "../src/client/oauth.ts";
 import { applyDirectorySchema } from "./support.ts";
 
 const bindings = env as unknown as Env;

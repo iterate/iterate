@@ -64,10 +64,8 @@ function Demo() {
 
   // A failed append (a dropped socket, a paused stream) must surface on the page, not vanish as an
   // unhandled rejection while the status still says "live".
-  const append = (event: Record<string, unknown>) =>
-    void itx?.invoke(["itx", ["append", event]]).catch((e: unknown) => {
-      setConnectError(`append failed: ${e instanceof Error ? e.message : String(e)}`);
-    });
+  const showAppendError = (e: unknown) =>
+    setConnectError(`append failed: ${e instanceof Error ? e.message : String(e)}`);
 
   return (
     <main
@@ -114,13 +112,22 @@ function Demo() {
       </section>
 
       <div style={{ display: "flex", gap: "0.75rem" }}>
-        <button type="button" disabled={!itx} onClick={() => append({ type: "tick" })} style={btn}>
+        <button
+          type="button"
+          disabled={!itx}
+          onClick={() => void Promise.resolve(itx?.append({ type: "tick" })).catch(showAppendError)}
+          style={btn}
+        >
           append tick (reduced +1)
         </button>
         <button
           type="button"
           disabled={!itx}
-          onClick={() => append({ type: "poke", ephemeral: true })}
+          onClick={() =>
+            void Promise.resolve(itx?.append({ type: "poke", ephemeral: true })).catch(
+              showAppendError,
+            )
+          }
           style={btn}
         >
           poke (runtime)

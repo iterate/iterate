@@ -49,19 +49,9 @@ export type TokenRevoke = z.infer<typeof TokenRevoke>;
 // ── the view ──
 
 export const AccountView = z.object({
-  authentications: z
-    .array(z.object({ credential: z.string(), at: z.number(), operationId: z.string() }))
-    .default([]),
-  tokens: z
-    .array(
-      z.object({
-        requestId: z.string(),
-        name: z.string(),
-        value: z.string(),
-        requestedAt: z.number(),
-      }),
-    )
-    .default([]),
+  // Each list IS the event it is folded from — no re-spelling of the payload shape.
+  authentications: z.array(AuthenticationFact).default([]),
+  tokens: z.array(TokenCreateRequest).default([]),
 });
 /** The account view a client reads (through live state): the user's authentications and tokens. */
 export type AccountView = z.infer<typeof AccountView>;
@@ -109,30 +99,9 @@ export class AccountProcessor extends StreamProcessor<
     state,
   }: ReduceArgs<AccountView, ConsumedEvent<typeof AccountContract>>): AccountView | undefined {
     if (event.type === "events.iterate.com/account/authenticated")
-      return {
-        ...state,
-        authentications: [
-          ...state.authentications,
-          {
-            credential: event.payload.credential,
-            at: event.payload.at,
-            operationId: event.payload.operationId,
-          },
-        ],
-      };
+      return { ...state, authentications: [...state.authentications, event.payload] };
     if (event.type === "events.iterate.com/account/token-create-requested")
-      return {
-        ...state,
-        tokens: [
-          ...state.tokens,
-          {
-            requestId: event.payload.requestId,
-            name: event.payload.name,
-            value: event.payload.value,
-            requestedAt: event.payload.requestedAt,
-          },
-        ],
-      };
+      return { ...state, tokens: [...state.tokens, event.payload] };
     if (event.type === "events.iterate.com/account/token-revoked")
       return {
         ...state,
