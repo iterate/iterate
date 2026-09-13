@@ -48,6 +48,11 @@ const LIVE = {
  */
 export const MAX_SPEAKER_PAYLOAD_BYTES = 3_200;
 
+/** One stream append carries no more than half a second of queued output. */
+const SPEAKER_APPEND_BATCH_MAX_FRAMES = 5;
+/** Match the device's bounded ten-second speaker capacity when an append stalls. */
+const SPEAKER_OUTBOX_MAX_BYTES = 10_000 * 32;
+
 /** 16 kHz mono PCM16: two bytes per sample, sixteen samples per millisecond. */
 const PCM16_BYTES_PER_MS = 32;
 
@@ -691,6 +696,10 @@ interface Dial {
    * duration of one append.
    */
   speakerOutbox: { pcm: string; receivedAtFacetMs?: number; lastFrameOfAnswer?: true }[];
+  /** Decoded PCM presently queued for the speaker sender. Markers cost nothing. */
+  speakerOutboxBytes: number;
+  /** Once this queue overflows, ignore later provider deltas while the terminal is appended. */
+  speakerOutboxOverflowed: boolean;
   /**
    * ONE sender per live dial, started with its first output and waiting while
    * the outbox is empty. One keepalive registration per dial: registering it
@@ -731,9 +740,9 @@ interface Dial {
   /** The answer in flight — replaced wholesale at the onset of speech. */
   answer: Answer;
   /** How far, on the facet clock, the device's forwarded audio reaches:
-   * each forwarded chunk extends it by its own duration (from now, if it had
-   * fallen behind), so a burst of 500 ms sent in one append covers the next
-   * 500 ms and the silence fill starts only past it — filling INSIDE a
+   * each forwarded chunk extends it by its own duration, so a burst of 500 ms
+   * sent in one append covers the next 500 ms and the silence fill starts
+   * only past it — filling INSIDE a
    * burst chops the person's words with silence (measured: "count to sixty"
    * reached the model as "count to six"). */
   micAudioCoveredUntilFacetMs: number;
@@ -760,6 +769,8 @@ const freshDial = (conversationId: string, activation: string): Dial => ({
   micQueue: [],
   micQueueBytes: 0,
   speakerOutbox: [],
+  speakerOutboxBytes: 0,
+  speakerOutboxOverflowed: false,
   sending: false,
   wakeSender: null,
   lastSpeakerFrameAtFacetMs: 0,
@@ -1098,10 +1109,12 @@ export class VoiceAgentProcessor extends StreamProcessor<
 
         const dial = this.#dial;
         if (dial && dial.activation === activation && dial.ready && dial.socket) {
-          const nowAtFacetMs = this.deps.nowAtFacetMs();
-          dial.micAudioCoveredUntilFacetMs =
-            Math.max(dial.micAudioCoveredUntilFacetMs, nowAtFacetMs) +
-            base64ByteLength(micB64) / PCM16_BYTES_PER_MS;
+          /* Capture duration is the only credit.  Anchoring each frame to
+           * its arrival time silently counts a slow transport gap as audio:
+           * 50 ms frames every 55 ms then keep the provider clock five ms
+           * behind on every frame.  The silence clock accumulates those gaps
+           * into its next 100 ms fill instead. */
+          dial.micAudioCoveredUntilFacetMs += base64ByteLength(micB64) / PCM16_BYTES_PER_MS;
           this.#sendMicAudio(dial.socket, micB64);
         } else {
           const micBytes = base64ByteLength(micB64);
@@ -1143,7 +1156,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
         const dial = this.#dial;
         if (dial && dial.activation === event.payload.activation) {
           this.#flushTurns(dial, append, true);
-          this.#clearDeviceSpeaker(dial, this.deps.nowAtFacetMs(), append);
           this.#hangUp();
         }
         return;
@@ -1593,9 +1605,23 @@ export class VoiceAgentProcessor extends StreamProcessor<
     append: ProcessEventArgs<VoiceAgentContract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
   ): void {
+    if (dial.speakerOutboxOverflowed) return;
+    const pcmBytes = base64ByteLength(pcm);
+    if (dial.speakerOutboxBytes + pcmBytes > SPEAKER_OUTBOX_MAX_BYTES) {
+      dial.speakerOutboxOverflowed = true;
+      runInBackground(() =>
+        this.#end(
+          dial.activation,
+          "the device speaker append stalled with more than ten seconds of queued audio",
+          append,
+        ),
+      );
+      return;
+    }
     dial.face?.audio(base64ToBytes(pcm), nowAtFacetMs);
     dial.lastSpeakerFrameAtFacetMs = nowAtFacetMs;
     dial.speakerOutbox.push({ pcm, receivedAtFacetMs: nowAtFacetMs });
+    dial.speakerOutboxBytes += pcmBytes;
     this.#startSpeakerSender(dial, append, runInBackground);
   }
 
@@ -1661,11 +1687,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
     runInBackground(async () => {
       try {
         while (this.#dial === dial) {
-          const frame = dial.speakerOutbox.shift();
-          if (!frame) {
-            /* ONE REGISTRATION PER DIAL, NOT PER DELTA. An append finishes in
-             * a millisecond and the next delta comes a hundred later, so a
-             * sender that let go when the outbox drained re-registered for
+          const frames = dial.speakerOutbox.splice(0, SPEAKER_APPEND_BATCH_MAX_FRAMES);
+          if (frames.length === 0) {
+            /* Keep one background registration for the dial. A sender
+             * that let go whenever the outbox drained re-registered for
              * nearly every frame — ten storage writes and alarm arms a
              * second inside the Durable Object. Measured on preview-7
              * (2026-09-11 afternoon, `voicelab duplex`): provider→facet gaps
@@ -1680,24 +1705,30 @@ export class VoiceAgentProcessor extends StreamProcessor<
             dial.wakeSender = null;
             continue;
           }
+          dial.speakerOutboxBytes -= frames.reduce(
+            (total, frame) => total + base64ByteLength(frame.pcm),
+            0,
+          );
           const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
           dial.clearSpeakerBufferBeforeNextFrame = false;
           try {
-            await append({
-              type: "events.iterate.com/voice-agent/spk-frame",
-              payload: {
-                activation: dial.activation,
-                conversationId: dial.conversationId,
-                deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
-                pcm: frame.pcm,
-                ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
-                ...(frame.lastFrameOfAnswer && { lastFrameOfAnswer: true }),
-                ...(typeof frame.receivedAtFacetMs === "number" && {
-                  receivedAtFacetMs: frame.receivedAtFacetMs,
-                }),
-                sentAtFacetMs: this.deps.nowAtFacetMs(),
-              },
-            });
+            await append(
+              ...frames.map((frame, index) => ({
+                type: "events.iterate.com/voice-agent/spk-frame" as const,
+                payload: {
+                  activation: dial.activation,
+                  conversationId: dial.conversationId,
+                  deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
+                  pcm: frame.pcm,
+                  ...(clearFirst && index === 0 && { clearSpeakerBufferBeforeFrame: true }),
+                  ...(frame.lastFrameOfAnswer && { lastFrameOfAnswer: true }),
+                  ...(typeof frame.receivedAtFacetMs === "number" && {
+                    receivedAtFacetMs: frame.receivedAtFacetMs,
+                  }),
+                  sentAtFacetMs: this.deps.nowAtFacetMs(),
+                },
+              })),
+            );
           } catch {
             await this.#end(
               dial.activation,
@@ -1838,7 +1869,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
     const dial = this.#dial;
     if (dial?.activation === activation) {
       this.#flushTurns(dial, append, true);
-      this.#clearDeviceSpeaker(dial, this.deps.nowAtFacetMs(), append);
       this.#hangUp();
     }
     try {
@@ -1996,40 +2026,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
         now: this.deps.nowAtFacetMs(),
       },
     };
-  }
-
-  /* ------------------------------------------------------------ the floor */
-
-  /**
-   * Tell the device to empty its speaker: the call is over and it is holding
-   * dead audio. THE CLEAR RIDES ON A FRAME, and an empty one is still a
-   * frame — it carries the next sequence number, so the device orders it
-   * after everything it cancels.
-   */
-  #clearDeviceSpeaker(
-    dial: Dial,
-    decidedAtFacetMs: number,
-    append: ProcessEventArgs<VoiceAgentContract>["append"],
-  ): void {
-    /* Frames still waiting here would play AFTER the clear; they go first.
-     * Numbered at the send, so dropping them leaves no hole. */
-    dial.speakerOutbox = [];
-    /* Sent directly, not through the sender: the obituary path clears and
-     * then buries the dial in the same breath, and the clear must still go. */
-    const clearFrameSeq = ++dial.lastDeviceSpeakerFrameSeq;
-    this.runInBackground(() =>
-      append({
-        type: "events.iterate.com/voice-agent/spk-frame",
-        payload: {
-          activation: dial.activation,
-          conversationId: dial.conversationId,
-          deviceSpeakerFrameSeq: clearFrameSeq,
-          pcm: "",
-          clearSpeakerBufferBeforeFrame: true,
-          sentAtFacetMs: decidedAtFacetMs,
-        },
-      }),
-    );
   }
 
   /**

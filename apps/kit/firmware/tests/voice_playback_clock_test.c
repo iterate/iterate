@@ -36,15 +36,12 @@ static void play_frame(
  * real prefill.  Starting one byte early recreates the zero-margin opening
  * that made every answer starve at its first network hiccup.
  */
-/* The WAN budget starts on the fourth 100 ms provider delta. */
-static void four_provider_deltas_start_playback(void) {
+/* The measured budget starts on the second 100 ms provider delta. */
+static void two_provider_deltas_start_playback(void) {
   struct iterate_kit_voice_playback_clock clock;
   iterate_kit_voice_playback_clock_init(&clock);
   assert(!iterate_kit_voice_playback_clock_ready(&clock, ONE_CHUNK_BYTES, 1000U));
-  assert(!iterate_kit_voice_playback_clock_ready(
-      &clock, 3U * ONE_CHUNK_BYTES, 1200U));
-  assert(iterate_kit_voice_playback_clock_ready(
-      &clock, 4U * ONE_CHUNK_BYTES, 1300U));
+  assert(iterate_kit_voice_playback_clock_ready(&clock, 2U * ONE_CHUNK_BYTES, 1100U));
 }
 
 static void opening_prefill_is_exact(void) {
@@ -407,7 +404,7 @@ static void a_starve_older_than_a_second_is_not_an_underrun(void)
 
 int main(void) {
   opening_prefill_is_exact();
-  four_provider_deltas_start_playback();
+  two_provider_deltas_start_playback();
   a_starve_older_than_a_second_is_not_an_underrun();
   a_short_answer_starts_at_the_prime_wait();
   a_jitter_gap_during_priming_does_not_start_early();

@@ -248,12 +248,6 @@ function speakerFrames(h: Harness) {
     );
 }
 
-function speakerClears(h: Harness) {
-  return speakerFrames(h).filter(
-    (frame) => frame.clearSpeakerBufferBeforeFrame === true && frame.pcm === "",
-  );
-}
-
 function eventsOfType(h: Harness, type: string) {
   return h.events().filter((event) => event.type === `events.iterate.com/voice-agent/${type}`);
 }
@@ -486,6 +480,28 @@ describe("opening a call", () => {
     expect(h.provider.sentOfType("session.input_audio.append").length).toBeGreaterThan(
       before + burst.length,
     );
+  });
+
+  it("fills the accumulated gaps when 50 ms microphone frames arrive every 55 ms", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    const sentAtStart = h.provider.sentOfType("session.input_audio.append").length;
+    /* The provider clock still advances in 100 ms ticks while a real capture
+     * source delivers 50 ms of PCM every 55 ms.  The five-millisecond gaps
+     * must accumulate into 100 ms silence frames rather than being credited
+     * as captured audio. */
+    for (let index = 0; index < 40; index++) {
+      await h.advanceTime(55);
+      await h.append(openingMicFrame(ACTIVATION, speechDelta(50, index)));
+      await h.settle();
+    }
+    const sent = h.provider.sentOfType("session.input_audio.append").slice(sentAtStart);
+    const sentMs = sent.reduce(
+      (total, event) =>
+        total + Buffer.from(String(event.audio), "base64").length / PCM16_BYTES_PER_MS,
+      0,
+    );
+    expect(sentMs).toBe(2_200);
   });
 
   it("ends rather than truncating microphone audio beyond the opening budget", async () => {
@@ -784,19 +800,22 @@ describe("speaker playback", () => {
     expect(speakerFrames(h)).toHaveLength(0);
   });
 
-  it("preserves the provider arrival time while a speaker append is backpressured", async () => {
+  it("drains queued speaker frames in one ordered batch after an append stalls", async () => {
     const h = makeHarness();
     await callIsLive(h);
 
     let releaseAppend: (() => void) | undefined;
     let heldFirstAppend = false;
+    const speakerAppendBatches: Array<readonly { payload?: unknown }[]> = [];
     h.stream.holdAppend = (events) => {
-      if (
-        heldFirstAppend ||
-        !events.some((event) => event.type === "events.iterate.com/voice-agent/spk-frame")
-      ) {
+      const frames = events.filter(
+        (event) => event.type === "events.iterate.com/voice-agent/spk-frame",
+      );
+      if (frames.length === 0) {
         return undefined;
       }
+      speakerAppendBatches.push(frames);
+      if (heldFirstAppend) return undefined;
       heldFirstAppend = true;
       return new Promise<void>((resolve) => {
         releaseAppend = resolve;
@@ -808,23 +827,44 @@ describe("speaker playback", () => {
     await h.settle();
     expect(releaseAppend).toBeTypeOf("function");
 
-    /* A later provider callback queues behind the still-blocked first append. */
+    /* Four later callbacks queue behind the still-blocked first append. */
     h.clock.now += 100;
-    h.provider.speech(100);
+    h.provider.speech(400);
     h.clock.now += 150;
     releaseAppend?.();
     await h.settle();
 
-    expect(speakerFrames(h)).toMatchObject([
-      {
-        receivedAtFacetMs,
-        sentAtFacetMs: receivedAtFacetMs,
-      },
-      {
-        receivedAtFacetMs: receivedAtFacetMs + 100,
-        sentAtFacetMs: receivedAtFacetMs + 250,
-      },
-    ]);
+    expect(speakerAppendBatches.map((batch) => batch.length)).toEqual([1, 4]);
+    expect(
+      speakerAppendBatches.flatMap((batch) =>
+        batch.map(
+          (frame) => (frame.payload as { deviceSpeakerFrameSeq: number }).deviceSpeakerFrameSeq,
+        ),
+      ),
+    ).toEqual([1, 2, 3, 4, 5]);
+    expect(speakerFrames(h)).toMatchObject(
+      [0, 1, 2, 3, 4].map((index) => ({
+        receivedAtFacetMs: index === 0 ? receivedAtFacetMs : receivedAtFacetMs + 100,
+        sentAtFacetMs: index === 0 ? receivedAtFacetMs : receivedAtFacetMs + 250,
+      })),
+    );
+  });
+
+  it("ends visibly instead of retaining more speaker PCM than the device can hold", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+
+    h.stream.holdAppend = (events) =>
+      events.some((event) => event.type === "events.iterate.com/voice-agent/spk-frame")
+        ? new Promise<void>(() => {})
+        : undefined;
+    h.provider.speech(10_200);
+    await h.settle();
+
+    expect(h.provider.closed).toBe(true);
+    expect(eventsOfType(h, "conversation-ended")[0]?.payload).toMatchObject({
+      reason: "the device speaker append stalled with more than ten seconds of queued audio",
+    });
   });
 
   it("numbers every frame contiguously from one and delivers every millisecond of speech", async () => {
@@ -1856,7 +1896,14 @@ describe("ending a call", () => {
       payload: { activation: ACTIVATION, reason: "button" },
     });
     await h.settle();
-    expect(speakerClears(h)).toHaveLength(1);
+    /* The durable obituary is the one terminal authority. The device's
+     * CALL_ENDED control abandons speaker PCM; a separate cleanup frame could
+     * race an in-flight speaker append on a different RPC session. */
+    expect(
+      speakerFrames(h).filter(
+        (frame) => frame.clearSpeakerBufferBeforeFrame === true && frame.pcm === "",
+      ),
+    ).toEqual([]);
     expect(h.provider.sentOfType("session.close")).toHaveLength(1);
     expect(h.provider.closed).toBe(true);
     /* The next frame, past the dying-breath guard, mints a fresh call on a
@@ -1866,6 +1913,45 @@ describe("ending a call", () => {
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(2);
     expect(h.sockets).toHaveLength(2);
+  });
+
+  it("lets the durable terminal fence a delayed speaker append without a competing clear", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+
+    let releaseSpeakerAppend: (() => void) | undefined;
+    h.stream.holdAppend = (events) =>
+      events.some((event) => event.type === "events.iterate.com/voice-agent/spk-frame")
+        ? new Promise<void>((resolve) => {
+            releaseSpeakerAppend = resolve;
+          })
+        : undefined;
+    h.provider.speech(100);
+    await h.settle();
+
+    await h.append({
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { activation: ACTIVATION, reason: "button" },
+    });
+    await h.settle();
+    const terminal = eventsOfType(h, "conversation-ended")[0]!;
+    expect(h.provider.closed).toBe(true);
+    expect(speakerFrames(h)).toEqual([]);
+
+    releaseSpeakerAppend?.();
+    await h.settle();
+    const delayedSpeakerEvent = h
+      .events()
+      .find((event) => event.type === "events.iterate.com/voice-agent/spk-frame")!;
+    const delayedFrame = delayedSpeakerEvent.payload as {
+      clearSpeakerBufferBeforeFrame?: boolean;
+    };
+    expect(delayedFrame.clearSpeakerBufferBeforeFrame).toBe(true);
+    /* This is the dial's initial clear attached to its first audio frame, not
+     * a post-terminal cleanup frame. The device sees the durable terminal
+     * before this late ephemeral frame,
+     * then its activation fence rejects the frame. */
+    expect(terminal.offset).toBeLessThan(delayedSpeakerEvent.offset);
   });
 
   it("a frame in the last call's dying breath mints no zombie; one after it opens the next call", async () => {
