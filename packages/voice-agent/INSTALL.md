@@ -15,7 +15,7 @@ In the project config repository, add the voice package and `zod`:
 Create `voice-agent.ts` at the repository root:
 
 ```ts
-export { default, VoiceAgentFacet } from "@iterate-com/voice-agent/worker";
+export { default, VoiceAgentFacet, VoiceDeviceFacet } from "@iterate-com/voice-agent/worker";
 ```
 
 The worker refs require that file name and exports. Existing older committed

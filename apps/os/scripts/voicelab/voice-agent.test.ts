@@ -13,7 +13,11 @@
  * nothing after a flush's watermark is ever lost.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeMemoryProgressStore, makeProcessorHarness } from "iterate/processors/testing";
+import {
+  makeMemoryProgressStore,
+  makeProcessorHarness,
+  MemoryStreamNetwork,
+} from "iterate/processors/testing";
 import type { StreamEvent } from "iterate/processors";
 import type { Project } from "iterate/sdk";
 import {
@@ -2051,5 +2055,108 @@ describe("eviction", () => {
     await h.settle();
     await answer(h, 200);
     expect(speakerMsDelivered(h)).toBeGreaterThan(0);
+  });
+});
+
+/* ========================================================================== */
+/* PER-CONVERSATION CHILD STREAMS                                              */
+/* ========================================================================== */
+
+describe("per-conversation child streams", () => {
+  it("mirrors a child's public output to its fixed device transport", async () => {
+    const clock = { now: Date.parse("2026-09-13T12:00:00.000Z") };
+    const network = new MemoryStreamNetwork(() => clock.now);
+    const childPath = "/agents/voice/device/20260913120000-3";
+    const transportPath = "/clients/home-assistant-voice-preview-edition";
+    const h = makeHarness(VoiceAgentProcessor, {
+      clock,
+      stream: network.get(childPath),
+      progress: makeMemoryProgressStore(VoiceAgentContract),
+    });
+
+    await callIsLive(h, { transportStreamPath: transportPath, activation: ACTIVATION });
+    h.provider.speech(100);
+    await h.settle();
+
+    const childOutput = h
+      .events()
+      .filter((event) =>
+        [
+          "events.iterate.com/voice-agent/call-started",
+          "events.iterate.com/voice-agent/conversation-accepted",
+          "events.iterate.com/voice-agent/session-configured",
+          "events.iterate.com/voice-agent/spk-frame",
+        ].includes(event.type),
+      );
+    const transportOutput = network.eventsAt(transportPath);
+
+    expect(transportOutput.map((event) => event.type)).toEqual(
+      childOutput.map((event) => event.type),
+    );
+    expect(transportOutput.map((event) => event.payload)).toEqual(
+      childOutput.map((event) => event.payload),
+    );
+    expect(transportOutput).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "events.iterate.com/voice-agent/call-started",
+          payload: expect.objectContaining({ activation: ACTIVATION, streamPath: childPath }),
+        }),
+      ]),
+    );
+  });
+
+  it("accepts only its assigned activation, including after that activation ends", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { activation: ACTIVATION },
+    });
+    await h.append(micFrame(1, "test-activation-b"));
+    await h.settle();
+    expect(eventsOfType(h, "call-started")).toEqual([]);
+
+    await callIsLive(h, { activation: ACTIVATION });
+    await h.append({
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { activation: ACTIVATION, reason: "done" },
+    });
+    await h.append(micFrame(2, "test-activation-b"));
+    await h.settle();
+
+    expect(eventsOfType(h, "call-started")).toHaveLength(1);
+    expect(h.state().call).toBeNull();
+    expect(h.state().recentEndedActivations).toEqual([ACTIVATION]);
+  });
+
+  it("keeps sibling child transcripts and Agent work separate", async () => {
+    const clock = { now: Date.parse("2026-09-13T12:00:00.000Z") };
+    const network = new MemoryStreamNetwork(() => clock.now);
+    const first = makeHarness(VoiceAgentProcessor, {
+      clock,
+      stream: network.get("/agents/voice/device/20260913120000-3"),
+      progress: makeMemoryProgressStore(VoiceAgentContract),
+    });
+    await callIsLive(first, { activation: ACTIVATION });
+    await first.append({
+      type: "events.iterate.com/voice-agent/utterance-transcript",
+      payload: { conversationId: "conv_first", text: "first conversation only" },
+    });
+    await first.settle();
+
+    const second = makeHarness(VoiceAgentProcessor, {
+      clock,
+      stream: network.get("/agents/voice/device/20260913120100-8"),
+      progress: makeMemoryProgressStore(VoiceAgentContract),
+    });
+    await second.settle();
+
+    expect(first.state().transcript).toEqual([
+      { role: "listener", text: "first conversation only" },
+    ]);
+    expect(second.state().transcript).toEqual([]);
+    expect(second.state().call).toBeNull();
+    expect(second.agentAppends).toEqual([]);
+    expect(network.eventsAt("/agents/voice/device/20260913120100-8")).toEqual([]);
   });
 });

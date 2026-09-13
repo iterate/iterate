@@ -5,6 +5,7 @@ import {
 } from "@iterate-com/voice-agent";
 import { configureIterateSession, connectItx, disconnectIterateSession } from "iterate/client";
 import { z } from "zod";
+import deviceSource from "../../../packages/voice-agent/src/device.ts?raw";
 import faceSource from "../../../packages/voice-agent/src/face.ts?raw";
 import refConfigSource from "../../../packages/voice-agent/src/ref-config.ts?raw";
 import refSource from "../../../packages/voice-agent/src/ref.ts?raw";
@@ -29,7 +30,7 @@ const VoiceSetupInput = z.object({
 const ExistingVoiceState = z.object({
   instructions: z.string().default(""),
   call: z
-    .object({ activation: z.string().min(1), conversationId: z.string().min(1) })
+    .looseObject({ activation: z.string().min(1) })
     .nullable()
     .default(null),
 });
@@ -37,6 +38,7 @@ const ExistingVoiceState = z.object({
 const kitVoiceAgentSources = {
   "worker.ts": workerSource,
   "voice-agent.ts": voiceAgentSource,
+  "device.ts": deviceSource,
   "face.ts": faceSource,
   "ref.ts": refSource,
   "ref-config.ts": refConfigSource,
@@ -102,7 +104,7 @@ export async function prepareDeviceVoice(input: {
     /* `workers.get` is dynamically typed by the platform. This local entrypoint
      * is written above from the same current source, so its RPC contract is VoiceAgentRpc. */
     const voiceAgent = project.workers.get(install.entrypointRef) as unknown as VoiceAgentRpc;
-    const result = await voiceAgent.setupVoiceAgent({
+    const result = await voiceAgent.setupVoiceDevice({
       streamPath,
       instructions: existing.instructions,
       visemes: findFirmwareDevice(prepared.deviceId)?.remoteVisemes === true,

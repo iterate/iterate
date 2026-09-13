@@ -25,13 +25,13 @@ function project(
   input: { state?: unknown; secret?: { created?: boolean; hasMaterial?: boolean } } = {},
 ) {
   const commits: unknown[] = [];
-  const setup = vi.fn(async (options: unknown) => ({
+  const setupDevice = vi.fn(async (options: unknown) => ({
     streamPath: (options as { streamPath: string }).streamPath,
     warmMs: 1,
   }));
   return {
     commits,
-    setup,
+    setupDevice,
     value: {
       identity: async () => ({ projectId: "prj_home", slug: "home" }),
       secrets: {
@@ -62,7 +62,7 @@ function project(
           return { commitOid: "a", changedPaths: [], noChanges: false };
         },
       },
-      workers: { get: () => ({ setupVoiceAgent: setup }) },
+      workers: { get: () => ({ setupVoiceDevice: setupDevice }) },
     },
   };
 }
@@ -84,7 +84,7 @@ test("sets up the canonical board stream from the browser project credential", a
     baseUrl: input.baseUrl,
     credentials: { type: "project-secret", projectSlug: "home", secret: "itxk_test" },
   });
-  expect(fixture.setup).toHaveBeenCalledWith({
+  expect(fixture.setupDevice).toHaveBeenCalledWith({
     streamPath: "/agents/voice/v23/satellite1",
     instructions: "",
     visemes: false,
@@ -111,7 +111,7 @@ test("preserves configured instructions and enables visemes only on Waveshare", 
 
   await prepareDeviceVoice({ ...input, deviceId: "waveshare" });
 
-  expect(fixture.setup).toHaveBeenCalledWith({
+  expect(fixture.setupDevice).toHaveBeenCalledWith({
     streamPath: "/agents/voice/v23/waveshare",
     instructions: "Be brief.",
     visemes: true,
@@ -121,7 +121,7 @@ test("preserves configured instructions and enables visemes only on Waveshare", 
 test("refuses setup while a call is active and still releases browser authority", async () => {
   const fixture = project({
     state: {
-      call: { activation: "a", conversationId: "c" },
+      call: { activation: "a" },
     },
   });
   client.connect.mockResolvedValue(fixture.value);
@@ -129,7 +129,7 @@ test("refuses setup while a call is active and still releases browser authority"
   await expect(prepareDeviceVoice(input)).rejects.toThrow(/active call/);
 
   expect(fixture.commits).toEqual([]);
-  expect(fixture.setup).not.toHaveBeenCalled();
+  expect(fixture.setupDevice).not.toHaveBeenCalled();
   expect(client.disconnect).toHaveBeenCalledOnce();
 });
 
