@@ -438,6 +438,25 @@ describe("the BYOK gateway lane", () => {
     };
   };
 
+  it("uses low reasoning and Fast service for Astra Agent requests", async () => {
+    const fake = byokAi(
+      () => new Response(sseBody(okFrames), { headers: { "content-type": "text/event-stream" } }),
+    );
+    await runWorkersAiAttempt({
+      ai: fake.ai,
+      deadlineMs: 1_000,
+      messages: [{ role: "user", content: "hi" }],
+      model: "openai/gpt-6-astra",
+      onChunk: async () => {},
+      transport: { kind: "byok", gatewayId: "default", openaiApiKey: "sk-test" },
+    });
+    expect(fake.requests[0]?.query).toMatchObject({
+      model: "gpt-6-astra",
+      reasoning_effort: "low",
+      service_tier: "fast",
+    });
+  });
+
   it("dials the universal endpoint with our key, strips the model prefix, and pins the prompt cache key", async () => {
     const fake = byokAi(
       () =>

@@ -193,14 +193,14 @@ export async function runWorkersAiAttempt(input: {
 }
 
 /**
- * Extra chat-completions params for OpenAI reasoning models served through
- * Workers AI (`openai/gpt-5.6`, o-series, codex): pin reasoning effort to
- * medium (the pre-#1808 openai-ws posture) and ask streamed responses to
- * carry usage in their final chunk. Gated by model family — non-OpenAI
- * models reject unknown params with a whole-request failure, the same reason
- * the old processor gated its `reasoning` options.
+ * OpenAI request policy for ordinary Agent turns and compaction. Astra uses
+ * low reasoning and Fast service to keep delegation responsive. Gate these
+ * provider-specific fields by model so other providers never receive them.
  */
 function openAiReasoningExtras(model: string): Record<string, unknown> {
+  if (model === "openai/gpt-6-astra") {
+    return { reasoning_effort: "low", service_tier: "fast" };
+  }
   if (!/(^|\/)(gpt-5|o[1-9]|codex)/.test(model)) return {};
   return { reasoning_effort: "medium", stream_options: { include_usage: true } };
 }
