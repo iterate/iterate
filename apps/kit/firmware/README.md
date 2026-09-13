@@ -3,8 +3,8 @@
 Every ESP board and the host CLI use the same GPT-Live-1 stream. A board owns
 physical audio, controls and display; shared components own the conversation.
 The backend owns the OpenAI session and the ordinary Agent. A new board should
-therefore be small and mostly data. One `device_name` means one client path,
-one voice stream and no per-board model choice.
+therefore be small and mostly data. One `device_name` means one stable client
+path and a namespace for fresh conversations, with no per-board model choice.
 
 ## Where code belongs
 
@@ -49,7 +49,7 @@ Reuse the shared I2S codec, session grammar, LED ring, playout and health path.
 Confirm from vendor source, then measure: microphone slot and sample shape,
 clock master/MCLK, GPIO polarity, amplifier polarity, gain, DMA sizes, and AEC
 reference. Give a new board a stable `facts.device_name`; firmware derives its
-client `/clients/<device_name>` and voice stream
+client `/clients/<device_name>` and conversation namespace
 `/agents/voice/v23/<device_name>` from it.
 
 Register the board once in `apps/kit/src/firmware/catalog.ts`: device identity,
@@ -78,15 +78,37 @@ pnpm firmware:test:host
 ```
 
 Kit Flasher prepares the project before it enables USB install: it installs this
-Kit build's isolated VoiceAgent guest, verifies `/secrets/openai`, and creates
-or verifies `/agents/voice/v23/<device_name>`. It returns the canonical project
-ID and stream before flashing. The browser then writes Wi-Fi, OS URL, canonical project
+Kit build's isolated VoiceAgent guest, verifies `/secrets/openai`, builds the
+guest through its health check and durably mounts its setup capability. It
+returns the canonical project ID and conversation namespace before flashing.
+The browser then writes Wi-Fi, OS URL, canonical project
 ID and project API key into the versioned `iterate_kit` partition on the
 connected board. Credentials never enter the Kit worker or a URL.
 
 At boot, firmware rejects a missing or invalid partition, joins Wi-Fi,
 authenticates with the project key and mounts `/clients/<device_name>`. Health
 classifies provisioning, Wi-Fi/authentication, mount and audio failures.
+
+The device keeps one authenticated WebSocket and Cap'n Web session. Stream
+`openConnection()` and live-state `subscribe()` create independent subscription
+handles on that session; neither means opening another WebSocket. Releasing a
+subscription must leave the session, device mount and other subscriptions alive.
+
+Shared C clients use `components/core/include/iterate/kit/stream_subscription.h`:
+`iterate_kit_stream_get()` borrows the mounted project, and each stream or
+live-state subscription has its own caller-owned handle and callback. Close
+only the handle you own. Keep its storage until `reclaimable()` says both the
+pending RPC and remote callback references have finished. The generic layer
+does not choose a stream path or manage the socket. Available concurrency is
+bounded by the device's configured Cap'n Web tables; exhaustion is an explicit
+error. The voice loop reserves two call slots so a new call can open while the
+previous call finishes releasing its resources.
+
+A button press or wake word starts capture immediately and chooses a fresh
+`/agents/voice/v23/<device_name>/<UTC timestamp>-<activation>` path. Setup puts
+the ordinary Agent and voice processor on that stream. Opening PCM stays in
+the device's bounded FIFO until setup and the direct stream subscription are
+ready. Microphone and speaker events travel directly through that stream.
 
 ## Release and proof
 

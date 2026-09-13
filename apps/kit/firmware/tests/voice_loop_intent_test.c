@@ -201,9 +201,9 @@ static int64_t next_inbound_call_id = 1;
 
 static void deliver(
     struct iterate_kit_itx_connection *connection, const char *message) {
-  assert(
-      iterate_kit_itx_connection_receive_text(
-          connection, message, strlen(message)) == CAPNWEB_OK);
+  const enum capnweb_status status = iterate_kit_itx_connection_receive_text(
+      connection, message, strlen(message));
+  assert(status == CAPNWEB_OK);
 }
 
 static void remote_call(const char *first, const char *second) {
@@ -239,10 +239,16 @@ static void fill_outbox_during_board_poll(void) {
   iterate_kit_fake_platform_fill_control_outbox();
 }
 
+static bool sent_after_contains(size_t from, const char *needle);
+static void pump(void);
+
 /** Back to idle, and prove it, so the next scenario starts from nothing. */
 static void quiescent(void) {
   remote_call("conversation", "end");
   step();
+  /* Drain setup replies and callback releases even when no PCM reached the
+   * stream. Those RPC contexts remain owned until the fake server replies. */
+  pump();
   assert(!board.last_view.wants_call);
 }
 
@@ -256,9 +262,151 @@ static void quiescent(void) {
  * chain's length is the device's business, not this test's.
  */
 static size_t answered;
+static bool defer_voice_setup;
+static struct {
+  long id;
+  char stream_path[160];
+} deferred_voice_setups[2];
+static size_t deferred_voice_setup_count;
+struct open_connection {
+  long capability;
+  long callback;
+  char stream_path[160];
+};
+static struct open_connection open_connections[8];
+static struct {
+  long callback;
+  char stream_path[160];
+} pending_open_connections[8];
+static size_t pending_open_connection_count;
+/* Cap'n Web emits each call's push before its pull, preserving this FIFO even
+ * while setup replies for separate activations overlap. */
+static struct {
+  long capability;
+  char stream_path[160];
+} stream_capabilities[8];
+static char pending_stream_paths[8][160];
+static size_t pending_stream_path_count;
+
+static bool copy_pipeline_target(const char *message, long *out) {
+  const char *target = strstr(message, "[\"pipeline\",");
+  if (target == NULL) return false;
+  target += strlen("[\"pipeline\",");
+  *out = strtol(target, NULL, 10);
+  return true;
+}
+
+static const char *stream_path_for_capability(long capability) {
+  for (size_t slot = 0U; slot < 8U; ++slot) {
+    if (stream_capabilities[slot].capability == capability) {
+      return stream_capabilities[slot].stream_path;
+    }
+  }
+  return NULL;
+}
+
+static void remember_stream_capability(long capability, const char *stream_path) {
+  for (size_t slot = 0U; slot < 8U; ++slot) {
+    if (stream_capabilities[slot].capability == 0L) {
+      stream_capabilities[slot].capability = capability;
+      (void)snprintf(stream_capabilities[slot].stream_path,
+          sizeof(stream_capabilities[slot].stream_path), "%s", stream_path);
+      return;
+    }
+  }
+  assert(false);
+}
+
+static void enqueue_open_connection(long callback, const char *stream_path) {
+  assert(pending_open_connection_count <
+         sizeof(pending_open_connections) / sizeof(pending_open_connections[0]));
+  pending_open_connections[pending_open_connection_count].callback = callback;
+  (void)snprintf(
+      pending_open_connections[pending_open_connection_count].stream_path,
+      sizeof(pending_open_connections[pending_open_connection_count].stream_path),
+      "%s", stream_path != NULL ? stream_path : "");
+  ++pending_open_connection_count;
+}
+
+static void remember_open_connection(long capability) {
+  size_t slot;
+  assert(pending_open_connection_count > 0U);
+  for (slot = 0U; slot < 8U; ++slot) {
+    if (open_connections[slot].capability == 0L) break;
+  }
+  assert(slot < 8U);
+  open_connections[slot].capability = capability;
+  open_connections[slot].callback = pending_open_connections[0].callback;
+  (void)snprintf(open_connections[slot].stream_path,
+      sizeof(open_connections[slot].stream_path), "%s",
+      pending_open_connections[0].stream_path);
+  memmove(&pending_open_connections[0], &pending_open_connections[1],
+      (pending_open_connection_count - 1U) * sizeof(pending_open_connections[0]));
+  --pending_open_connection_count;
+}
+
+static bool copy_setup_stream_path(const char *message, char *out, size_t capacity) {
+  const char *field = strstr(message, "\"streamPath\":\"");
+  size_t length;
+  if (field == NULL) return false;
+  field += strlen("\"streamPath\":\"");
+  length = strcspn(field, "\"");
+  if (length == 0U || length >= capacity) return false;
+  memcpy(out, field, length);
+  out[length] = '\0';
+  return true;
+}
+
+static bool copy_stream_get_path(const char *message, char *out, size_t capacity) {
+  const char *call = strstr(message, "[\"streams\",\"get\"]");
+  const char *path;
+  size_t length;
+  if (call == NULL) return false;
+  path = strstr(call, ",[\"");
+  if (path == NULL) return false;
+  path += strlen(",[\"");
+  length = strcspn(path, "\"");
+  if (length == 0U || length >= capacity) return false;
+  memcpy(out, path, length);
+  out[length] = '\0';
+  return true;
+}
+
+static void enqueue_stream_get(const char *stream_path) {
+  assert(pending_stream_path_count <
+         sizeof(pending_stream_paths) / sizeof(pending_stream_paths[0]));
+  (void)snprintf(pending_stream_paths[pending_stream_path_count],
+      sizeof(pending_stream_paths[pending_stream_path_count]), "%s", stream_path);
+  ++pending_stream_path_count;
+}
+
+static void remember_pending_stream_capability(long capability) {
+  assert(pending_stream_path_count > 0U);
+  remember_stream_capability(capability, pending_stream_paths[0]);
+  memmove(&pending_stream_paths[0], &pending_stream_paths[1],
+      (pending_stream_path_count - 1U) * sizeof(pending_stream_paths[0]));
+  --pending_stream_path_count;
+}
+
+static void resolve_deferred_voice_setup(size_t index) {
+  char reply[256];
+  struct iterate_kit_itx_connection *connection =
+      iterate_kit_fake_platform_connection();
+  assert(index < deferred_voice_setup_count);
+  assert(connection != NULL);
+  (void)snprintf(
+      reply,
+      sizeof(reply),
+      "[\"resolve\",%ld,{\"streamPath\":\"%s\",\"warmMs\":0}]",
+      deferred_voice_setups[index].id,
+      deferred_voice_setups[index].stream_path);
+  deliver(connection, reply);
+}
 
 static void pump(void) {
   int round;
+  char setup_stream_path[160] = "";
+  char stream_get_path[160] = "";
   for (round = 0; round < 40; ++round) {
     struct iterate_kit_itx_connection *connection =
         iterate_kit_fake_platform_connection();
@@ -267,13 +415,78 @@ static void pump(void) {
       const char *message = iterate_kit_fake_platform_sent(answered);
       const char *pull = strstr(message, "[\"pull\",");
       ++answered;
+      if (strstr(message, "\"openConnection\"") != NULL) {
+        const char *exported = strstr(message, "[\"export\",");
+        long target;
+        assert(exported != NULL);
+        assert(copy_pipeline_target(message, &target));
+        enqueue_open_connection(
+            strtol(exported + strlen("[\"export\","), NULL, 10),
+            stream_path_for_capability(target));
+      }
+      if (strncmp(message, "[\"release\",", sizeof("[\"release\",") - 1U) == 0) {
+        const long released = strtol(message + sizeof("[\"release\",") - 1U, NULL, 10);
+        for (size_t slot = 0U; slot < 8U; ++slot) {
+          if (open_connections[slot].capability == released) {
+            char release[64];
+            (void)snprintf(release, sizeof(release), "[\"release\",%ld,1]", open_connections[slot].callback);
+            deliver(connection, release);
+            open_connections[slot].capability = 0L;
+            open_connections[slot].callback = 0L;
+            open_connections[slot].stream_path[0] = '\0';
+          }
+          if (stream_capabilities[slot].capability == released) {
+            stream_capabilities[slot].capability = 0L;
+            stream_capabilities[slot].stream_path[0] = '\0';
+          }
+        }
+      }
+      if (strstr(message, "setupVoiceAgent") != NULL) {
+        assert(copy_setup_stream_path(
+            message, setup_stream_path, sizeof(setup_stream_path)));
+      }
+      if (strstr(message, "[\"streams\",\"get\"]") != NULL) {
+        assert(copy_stream_get_path(
+            message, stream_get_path, sizeof(stream_get_path)));
+      }
       if (pull == NULL) continue;
       {
-        char reply[128];
+        char reply[256];
         const long id = strtol(pull + strlen("[\"pull\","), NULL, 10);
-        (void)snprintf(
-            reply, sizeof(reply), "[\"resolve\",%ld,[\"export\",%ld]]", id,
-            -(id + 10));
+        if (setup_stream_path[0] != '\0') {
+          if (defer_voice_setup) {
+            assert(deferred_voice_setup_count <
+                   sizeof(deferred_voice_setups) / sizeof(deferred_voice_setups[0]));
+            deferred_voice_setups[deferred_voice_setup_count].id = id;
+            (void)snprintf(
+                deferred_voice_setups[deferred_voice_setup_count].stream_path,
+                sizeof(deferred_voice_setups[deferred_voice_setup_count].stream_path),
+                "%s", setup_stream_path);
+            ++deferred_voice_setup_count;
+            setup_stream_path[0] = '\0';
+            continue;
+          }
+          (void)snprintf(
+              reply,
+              sizeof(reply),
+              "[\"resolve\",%ld,{\"streamPath\":\"%s\",\"warmMs\":0}]",
+              id,
+              setup_stream_path);
+          setup_stream_path[0] = '\0';
+        } else {
+          const long capability = -(id + 10);
+          (void)snprintf(
+              reply, sizeof(reply), "[\"resolve\",%ld,[\"export\",%ld]]", id, capability);
+          if (stream_get_path[0] != '\0') {
+            enqueue_stream_get(stream_get_path);
+            stream_get_path[0] = '\0';
+          }
+          if (pending_stream_path_count > 0U) {
+            remember_pending_stream_capability(capability);
+          } else if (pending_open_connection_count > 0U) {
+            remember_open_connection(capability);
+          }
+        }
         assert(
             iterate_kit_itx_connection_receive_text(
                 connection, reply, strlen(reply)) == CAPNWEB_OK);
@@ -314,6 +527,40 @@ static size_t first_sent_after_containing(size_t from, const char *needle) {
     }
   }
   return iterate_kit_fake_platform_sent_count();
+}
+
+static size_t sent_after_count(size_t from, const char *needle) {
+  size_t count = 0U;
+  for (size_t index = from; index < iterate_kit_fake_platform_sent_count(); ++index) {
+    if (strstr(iterate_kit_fake_platform_sent(index), needle) != NULL) ++count;
+  }
+  return count;
+}
+
+static size_t collect_setup_paths(
+    size_t from, char paths[][160], size_t capacity) {
+  size_t count = 0U;
+  for (size_t index = from; index < iterate_kit_fake_platform_sent_count(); ++index) {
+    const char *message = iterate_kit_fake_platform_sent(index);
+    if (message == NULL || strstr(message, "setupVoiceAgent") == NULL) continue;
+    assert(count < capacity);
+    assert(copy_setup_stream_path(message, paths[count], sizeof(paths[count])));
+    ++count;
+  }
+  return count;
+}
+
+static bool sent_microphone_to_stream(size_t from, const char *stream_path) {
+  for (size_t index = from; index < iterate_kit_fake_platform_sent_count(); ++index) {
+    long target;
+    const char *message = iterate_kit_fake_platform_sent(index);
+    const char *actual_path;
+    if (message == NULL || strstr(message, "\"pcm\":\"") == NULL ||
+        !copy_pipeline_target(message, &target)) continue;
+    actual_path = stream_path_for_capability(target);
+    if (actual_path != NULL && strcmp(actual_path, stream_path) == 0) return true;
+  }
+  return false;
 }
 
 static const char *current_activation(void) {
@@ -378,18 +625,14 @@ static int16_t collected_sample(const uint8_t *pcm, size_t frame) {
   return (int16_t)((uint16_t)pcm[offset] | ((uint16_t)pcm[offset + 1U] << 8));
 }
 
-/** One speaker chunk for the accepted call: 30 bytes of PCM, optionally `last`. */
-/** The callback export of the NEWEST connection this device opened. */
+/** The callback held by the currently open connection, never a closed one. */
 static long latest_callback_export_id(void) {
-  size_t index = iterate_kit_fake_platform_sent_count();
-  while (index-- > 0U) {
-    const char *sent = iterate_kit_fake_platform_sent(index);
-    const char *field = sent == NULL ? NULL : strstr(sent, "\"processEventBatch\":");
-    const char *marker = field == NULL ? NULL : strstr(field, "[\"export\",");
-    if (marker != NULL) return strtol(marker + strlen("[\"export\","), NULL, 10);
+  long latest = 0L;
+  for (size_t slot = 0U; slot < 8U; ++slot) {
+    if (open_connections[slot].callback < latest) latest = open_connections[slot].callback;
   }
-  assert(!"no openConnection on the recorder");
-  return 0;
+  assert(latest != 0L);
+  return latest;
 }
 
 /*
@@ -535,12 +778,14 @@ static void same_pass_end_then_start_creates_a_new_activation(void) {
   remote_call("conversation", "end");
   remote_call("conversation", "start");
   step();
+  pump();
   speak_frames(1U);
   run_ms(50U);
 
   assert(board.last_view.wants_call);
   assert(strcmp(current_activation(), activation_a) != 0);
-  assert(sent_after_contains(before, "conversation-ended"));
+  assert(sent_after_contains(
+      before, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
   quiescent();
 }
 
@@ -562,11 +807,13 @@ static void accepted_call_end_then_start_creates_b_after_a_terminal(void) {
   remote_call("conversation", "end");
   remote_call("conversation", "start");
   step();
+  pump();
   assert(board.last_view.wants_call);
   speak_frames(1U);
   run_ms(50U);
   assert(strcmp(current_activation(), activation_a) != 0);
-  assert(sent_after_contains(before, "conversation-ended"));
+  assert(sent_after_contains(
+      before, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
   assert(sent_after_contains(before, "\"pcm\":"));
   quiescent();
 }
@@ -586,11 +833,13 @@ static void terminal_waits_for_outbox_headroom(void) {
   remote_call("conversation", "end");
   board_poll_hook = fill_outbox_during_board_poll;
   step();
-  assert(!sent_after_contains(before, "conversation-ended"));
+  assert(!sent_after_contains(
+      before, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
 
   iterate_kit_fake_platform_drain_control_outbox();
   step();
-  assert(sent_after_contains(before, "conversation-ended"));
+  assert(sent_after_contains(
+      before, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
   assert(!iterate_kit_fake_esp_idf_restart_requested());
   quiescent();
 }
@@ -624,6 +873,130 @@ static void failed_microphone_append_ends_the_activation(void) {
   assert(strcmp(board.last_view.status, "microphone append failed") == 0);
 }
 
+/* A setup reply belongs to the press that made it, even if a later press is
+ * already opening when that old reply arrives. */
+static void delayed_a_setup_cannot_cancel_or_mount_b(void) {
+  char paths[2][160];
+  size_t after_b_setup;
+  quiescent();
+  const size_t before = iterate_kit_fake_platform_sent_count();
+  defer_voice_setup = true;
+  remote_call("conversation", "start");
+  step();
+  pump();
+  assert(deferred_voice_setup_count == 1U);
+
+  remote_call("conversation", "end");
+  step();
+  remote_call("conversation", "start");
+  step();
+  defer_voice_setup = false;
+  pump();
+  assert(board.last_view.wants_call);
+  assert(collect_setup_paths(before, paths, 2U) == 2U);
+  assert(strcmp(paths[0], paths[1]) != 0);
+
+  after_b_setup = iterate_kit_fake_platform_sent_count();
+  resolve_deferred_voice_setup(0U);
+  step();
+  pump();
+  speak_frames(1U);
+  run_ms(100U);
+
+  assert(board.last_view.wants_call);
+  assert(strcmp(board.last_view.status, "voice setup failed") != 0);
+  assert(sent_after_contains(before, "\"pcm\":"));
+  assert(sent_microphone_to_stream(after_b_setup, paths[1]));
+  assert(!sent_after_contains(after_b_setup, "openConnection"));
+  deferred_voice_setup_count = 0U;
+  quiescent();
+}
+
+/* A terminal that missed its old socket reopens that exact child after a
+ * reconnect, then leaves the next press free to open its own child. */
+static void queued_terminal_survives_session_loss_before_b(void) {
+  size_t after_reconnect;
+  quiescent();
+  const size_t before = iterate_kit_fake_platform_sent_count();
+  remote_call("conversation", "start");
+  step();
+  pump();
+  speak_frames(1U);
+  run_ms(100U);
+
+  remote_call("conversation", "end");
+  board_poll_hook = fill_outbox_during_board_poll;
+  step();
+  assert(!sent_after_contains(
+      before, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
+
+  iterate_kit_itx_connection_lost(iterate_kit_fake_platform_connection());
+  iterate_kit_fake_platform_drain_control_outbox();
+  next_inbound_call_id = 1;
+  pending_open_connection_count = 0U;
+  pending_stream_path_count = 0U;
+  memset(open_connections, 0, sizeof(open_connections));
+  memset(stream_capabilities, 0, sizeof(stream_capabilities));
+  iterate_kit_fake_platform_connect();
+  after_reconnect = iterate_kit_fake_platform_sent_count();
+  pump();
+  step();
+  assert(sent_after_count(
+      after_reconnect, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\"") == 1U);
+
+  remote_call("conversation", "start");
+  step();
+  pump();
+  speak_frames(1U);
+  run_ms(100U);
+  assert(board.last_view.wants_call);
+  assert(sent_after_contains(after_reconnect, "\"pcm\":"));
+  quiescent();
+}
+
+/* B may already have captured while A's terminal waits for outbox space, but
+ * that PCM waits for B's own newly opened child rather than using A's stub. */
+static void b_pcm_waits_for_its_own_child_after_a_terminal(void) {
+  char paths[2][160];
+  size_t before;
+  size_t after_b_capture;
+  size_t b_open;
+  size_t b_microphone;
+
+  quiescent();
+  before = iterate_kit_fake_platform_sent_count();
+  remote_call("conversation", "start");
+  step();
+  pump();
+  speak_frames(1U);
+  run_ms(100U);
+
+  remote_call("conversation", "end");
+  remote_call("conversation", "start");
+  board_poll_hook = fill_outbox_during_board_poll;
+  step();
+  speak_frames(2U);
+  after_b_capture = iterate_kit_fake_platform_sent_count();
+  run_ms(100U);
+  assert(!sent_after_contains(after_b_capture, "\"pcm\":"));
+
+  iterate_kit_fake_platform_drain_control_outbox();
+  step();
+  pump();
+  run_ms(100U);
+  b_open = first_sent_after_containing(after_b_capture, "openConnection");
+  b_microphone = first_sent_after_containing(after_b_capture, "\"pcm\":");
+  assert(sent_after_contains(
+      after_b_capture, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
+  assert(b_open < iterate_kit_fake_platform_sent_count());
+  assert(b_microphone < iterate_kit_fake_platform_sent_count());
+  assert(b_open < b_microphone);
+  assert(collect_setup_paths(before, paths, 2U) == 2U);
+  assert(strcmp(paths[0], paths[1]) != 0);
+  assert(sent_microphone_to_stream(after_b_capture, paths[1]));
+  quiescent();
+}
+
 /*
  * Wake detection reaches the app after audio has already crossed the codec.
  * The first, middle and following frames must therefore survive the mount
@@ -632,8 +1005,8 @@ static void failed_microphone_append_ends_the_activation(void) {
  */
 static void pre_mount_speech_is_preserved_and_sent_immediately(void) {
   uint8_t pcm[6U * ITERATE_KIT_VOICE_FRAME_BYTES];
-  const size_t before = iterate_kit_fake_platform_sent_count();
   quiescent();
+  const size_t before = iterate_kit_fake_platform_sent_count();
   capture_frame_value = 1000;
 
   remote_call("conversation", "start");
@@ -641,7 +1014,7 @@ static void pre_mount_speech_is_preserved_and_sent_immediately(void) {
   speak_frames(1U); /* prefix */
   speak_frames(4U); /* middle */
   speak_frames(1U); /* following frame */
-  step();
+  run_ms(3000U); /* Backend setup can take seconds; opening words remain queued. */
 
   assert(!sent_after_contains(before, "mic-frame"));
   pump();
@@ -672,31 +1045,38 @@ static void ending_a_never_sends_its_tail_as_b(void) {
 
   remote_call("conversation", "start");
   step();
+  pump();
   speak_frames(1U);
   run_ms(50U);
   assert(strcmp(current_activation(), activation_a) != 0);
 }
 
-/* A cancellation before mount is durable and ordered ahead of B's microphone. */
+/* A ends after uploading PCM but before acceptance; its terminal still reaches
+ * its own stream before B uploads to the new child. */
 static void ending_before_acceptance_terminates_a_before_b(void) {
-  const size_t before = iterate_kit_fake_platform_sent_count();
   size_t terminal;
   size_t microphone;
   quiescent();
+  const size_t before = iterate_kit_fake_platform_sent_count();
   remote_call("conversation", "start");
   step();
+  pump();
   speak_frames(1U);
+  run_ms(50U);
+  assert(sent_after_contains(before, "\"pcm\":"));
   remote_call("conversation", "end");
   step();
 
+  const size_t after_end = iterate_kit_fake_platform_sent_count();
   remote_call("conversation", "start");
   step();
   speak_frames(1U);
   pump();
   run_ms(50U);
 
-  terminal = first_sent_after_containing(before, "conversation-ended");
-  microphone = first_sent_after_containing(before, "\"pcm\":");
+  terminal = first_sent_after_containing(
+      before, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\"");
+  microphone = first_sent_after_containing(after_end, "\"pcm\":");
   assert(terminal < iterate_kit_fake_platform_sent_count());
   assert(microphone < iterate_kit_fake_platform_sent_count());
   assert(terminal < microphone);
@@ -723,6 +1103,13 @@ static void server_end_discards_a_tail_before_b(void) {
   after_end = iterate_kit_fake_platform_sent_count();
   remote_call("conversation", "start");
   step();
+  defer_voice_setup = true;
+  pump();
+  assert(deferred_voice_setup_count == 1U);
+  defer_voice_setup = false;
+  resolve_deferred_voice_setup(0U);
+  deferred_voice_setup_count = 0U;
+  pump();
   capture_frame_value = 5000;
   speak_frames(1U);
   speak_frames(1U);
@@ -746,6 +1133,7 @@ static void an_idle_accepted_call_is_not_recycled_for_silence(void) {
   after_accept = iterate_kit_fake_platform_sent_count();
   remote_call("conversation", "start");
   run_ms(1500U);
+  pump();
   speak_frames(10U);
   run_ms(200U);
   step();
@@ -774,6 +1162,7 @@ static void a_lane_silent_mid_answer_is_recycled(void) {
   after_accept = iterate_kit_fake_platform_sent_count();
   remote_call("conversation", "start");
   run_ms(1500U);
+  pump();
   speak_frames(10U);
   run_ms(200U);
   step();
@@ -824,7 +1213,8 @@ static void an_unaccepted_activation_times_out_once(void) {
   step();
   assert(!board.last_view.wants_call);
   assert(strcmp(board.last_view.status, "opening timed out") == 0);
-  assert(sent_after_contains(before, "conversation-ended"));
+  assert(sent_after_contains(
+      before, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
   assert(sent_after_contains(before, "opening-timeout"));
 }
 
@@ -848,6 +1238,12 @@ int main(void) {
   a_lane_silent_mid_answer_is_recycled();
   activation_during_codec_read_keeps_idle_pre_roll();
   an_unaccepted_activation_times_out_once();
+  delayed_a_setup_cannot_cancel_or_mount_b();
+  /* Every activation above used the same authenticated WebSocket session. */
+  assert(sent_after_count(0U, "\"authenticate\"") == 1U);
+  assert(iterate_kit_fake_platform_connection()->generation == 1U);
+  queued_terminal_survives_session_loss_before_b();
+  b_pcm_waits_for_its_own_child_after_a_terminal();
   failed_microphone_append_ends_the_activation();
   return 0;
 }

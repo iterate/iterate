@@ -310,7 +310,7 @@ describe("installVoiceAgentFromSource", () => {
     expect(files["voice-agent.ts"]).toBe(customGuest);
     expect(JSON.parse(files["package.json"]!).dependencies[VOICE_AGENT_PACKAGE_NAME]).toBe(PINNED);
     expect(files["kit-voice-agent.ts"]).toBe(
-      'export { default, VoiceAgentFacet, VoiceDeviceFacet } from "./kit-voice-agent/worker.ts";\n',
+      'export { default, VoiceAgentFacet } from "./kit-voice-agent/worker.ts";\n',
     );
   });
 

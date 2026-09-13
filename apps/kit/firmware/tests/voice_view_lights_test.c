@@ -13,7 +13,10 @@ struct voice_lights_case {
 int main(void) {
   const struct voice_lights_case cases[] = {
     {{0}, {.network = ITERATE_KIT_NETWORK_CONNECTING}},
-    {{.api_ready = true}, {.reach = ITERATE_KIT_REACH_API}},
+    /* Idle direct-stream boards are ready after their project mount. */
+    {{.api_ready = true, .link_ready = true},
+     {.network = ITERATE_KIT_NETWORK_CONNECTED, .reach = ITERATE_KIT_REACH_API,
+      .media_ready = true}},
     {{.api_ready = true, .stream_ready = true, .link_ready = true},
      {.network = ITERATE_KIT_NETWORK_CONNECTED, .reach = ITERATE_KIT_REACH_STREAM,
       .media_ready = true}},

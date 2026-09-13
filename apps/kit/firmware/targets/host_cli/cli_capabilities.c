@@ -180,14 +180,11 @@ void cli_capabilities_session_ended(void *context)
 {
   struct cli_runtime *runtime = context;
   if (runtime == NULL) return;
-  runtime->voicelab.state = ITERATE_KIT_VOICELAB_FAILED;
+  iterate_kit_stream_session_ended(&runtime->voice_stream);
+  iterate_kit_stream_subscription_session_ended(&runtime->voice_subscription);
+  iterate_kit_stream_subscription_session_ended(&runtime->recycled_voice_subscription);
+  (void)iterate_kit_voicelab_close(&runtime->voicelab);
   runtime->voicelab.failure = ITERATE_KIT_VOICELAB_FAILURE_SESSION_ENDED;
-  runtime->voicelab.has_session_capability = false;
-  runtime->voicelab.has_project_capability = false;
-  runtime->voicelab.has_stream_capability = false;
-  runtime->voicelab.has_connection_capability = false;
-  runtime->voicelab.has_previous_connection_capability = false;
-  runtime->voicelab.has_callback_capability = false;
   runtime->voicelab_generation = 0U;
 }
 

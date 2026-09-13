@@ -1102,9 +1102,58 @@ describe("the Agent bridge", () => {
               llmRequestPolicy: { behaviour: "dont-trigger-request" },
             }),
           }),
+          {
+            type: "events.iterate.com/agent/configured",
+            idempotencyKey: "voice-agent/backend:/agents/voice/test",
+            payload: { config: { llm: { model: "openai/gpt-6-astra" } } },
+          },
         ],
       },
     ]);
+  });
+
+  it("warms the voice facet while the ordinary Agent is still bootstrapping", async () => {
+    let releaseAgentCreate: (() => void) | undefined;
+    let voiceBarrierReached = false;
+    const project = {
+      secrets: {
+        get: () => ({
+          __describe: async () => ({ created: true, hasMaterial: true }),
+          [Symbol.dispose]: () => {},
+        }),
+      },
+      agents: {
+        get: () => ({
+          create: async () =>
+            await new Promise<void>((resolve) => {
+              releaseAgentCreate = resolve;
+            }),
+          append: async () => {},
+        }),
+      },
+      streams: {
+        get: () => ({
+          append: async () => [{ offset: 3 }],
+          subscriptions: {
+            get: () => ({
+              waitUntilProcessed: async () => {
+                voiceBarrierReached = true;
+                releaseAgentCreate?.();
+              },
+              [Symbol.dispose]: () => {},
+            }),
+          },
+          [Symbol.dispose]: () => {},
+        }),
+      },
+    };
+    const entrypoint = { itx: project } as unknown as VoiceAgentEntrypoint;
+
+    await VoiceAgentEntrypoint.prototype.setupVoiceAgent.call(entrypoint, {
+      streamPath: "/agents/voice/parallel-setup",
+    });
+
+    expect(voiceBarrierReached).toBe(true);
   });
 
   it("puts passive open-transcript snapshots before each queued delegation request", async () => {
@@ -2063,72 +2112,6 @@ describe("eviction", () => {
 /* ========================================================================== */
 
 describe("per-conversation child streams", () => {
-  it("mirrors a child's public output to its fixed device transport", async () => {
-    const clock = { now: Date.parse("2026-09-13T12:00:00.000Z") };
-    const network = new MemoryStreamNetwork(() => clock.now);
-    const childPath = "/agents/voice/device/20260913120000-3";
-    const transportPath = "/clients/home-assistant-voice-preview-edition";
-    const h = makeHarness(VoiceAgentProcessor, {
-      clock,
-      stream: network.get(childPath),
-      progress: makeMemoryProgressStore(VoiceAgentContract),
-    });
-
-    await callIsLive(h, { transportStreamPath: transportPath, activation: ACTIVATION });
-    h.provider.speech(100);
-    await h.settle();
-
-    const childOutput = h
-      .events()
-      .filter((event) =>
-        [
-          "events.iterate.com/voice-agent/call-started",
-          "events.iterate.com/voice-agent/conversation-accepted",
-          "events.iterate.com/voice-agent/session-configured",
-          "events.iterate.com/voice-agent/spk-frame",
-        ].includes(event.type),
-      );
-    const transportOutput = network.eventsAt(transportPath);
-
-    expect(transportOutput.map((event) => event.type)).toEqual(
-      childOutput.map((event) => event.type),
-    );
-    expect(transportOutput.map((event) => event.payload)).toEqual(
-      childOutput.map((event) => event.payload),
-    );
-    expect(transportOutput).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "events.iterate.com/voice-agent/call-started",
-          payload: expect.objectContaining({ activation: ACTIVATION, streamPath: childPath }),
-        }),
-      ]),
-    );
-  });
-
-  it("accepts only its assigned activation, including after that activation ends", async () => {
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/configured",
-      payload: { activation: ACTIVATION },
-    });
-    await h.append(micFrame(1, "test-activation-b"));
-    await h.settle();
-    expect(eventsOfType(h, "call-started")).toEqual([]);
-
-    await callIsLive(h, { activation: ACTIVATION });
-    await h.append({
-      type: "events.iterate.com/voice-agent/conversation-ended",
-      payload: { activation: ACTIVATION, reason: "done" },
-    });
-    await h.append(micFrame(2, "test-activation-b"));
-    await h.settle();
-
-    expect(eventsOfType(h, "call-started")).toHaveLength(1);
-    expect(h.state().call).toBeNull();
-    expect(h.state().recentEndedActivations).toEqual([ACTIVATION]);
-  });
-
   it("keeps sibling child transcripts and Agent work separate", async () => {
     const clock = { now: Date.parse("2026-09-13T12:00:00.000Z") };
     const network = new MemoryStreamNetwork(() => clock.now);

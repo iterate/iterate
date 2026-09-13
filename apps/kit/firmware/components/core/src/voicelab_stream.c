@@ -7,10 +7,13 @@
 #include <stdio.h>
 #include <string.h>
 
-static const char *const authenticate_path[] = {"authenticate"};
-static const char *const streams_get_path[] = {"streams", "get"};
-static const char *const project_path[] = {"projects", "get"};
-static const char *const append_path[] = {"append"};
+static const char *const direct_event_types[] = {
+  "events.iterate.com/voice-agent/spk-frame",
+  "events.iterate.com/voice-agent/conversation-ended",
+  "events.iterate.com/voice-agent/conversation-accepted",
+  "events.iterate.com/voice-agent/call-started",
+};
+
 
 static bool nonempty(const char *value) {
   return value != NULL && value[0] != '\0';
@@ -31,6 +34,13 @@ static bool valid_activation(const char *value) {
   return true;
 }
 
+static bool valid_stream_options(
+    const struct iterate_kit_voicelab_options *options) {
+  return options != NULL && nonempty(options->stream_path) &&
+      valid_activation(options->activation) &&
+      options->now_ms != NULL;
+}
+
 static bool payload_matches_activation(
     const struct iterate_kit_voicelab *voicelab,
     const struct capnweb_value *payload) {
@@ -44,16 +54,6 @@ static bool payload_matches_activation(
       strcmp(activation, voicelab->options.activation) == 0;
 }
 
-static bool valid_options(
-    const struct iterate_kit_voicelab_options *options) {
-  return options != NULL &&
-      options->session != NULL &&
-      nonempty(options->project_id) &&
-      nonempty(options->project_api_key) &&
-      nonempty(options->stream_path) &&
-      options->now_ms != NULL;
-}
-
 static enum capnweb_status fail(
     struct iterate_kit_voicelab *voicelab,
     enum iterate_kit_voicelab_failure failure,
@@ -64,29 +64,6 @@ static enum capnweb_status fail(
   return status;
 }
 
-static enum capnweb_status release_remote(
-    struct iterate_kit_voicelab *voicelab,
-    struct capnweb_remote_capability *capability,
-    bool *owned) {
-  enum capnweb_status status;
-  if (!*owned) {
-    return CAPNWEB_OK;
-  }
-  status = capnweb_session_release_remote(
-      voicelab->options.session, *capability);
-  if (status == CAPNWEB_OK) {
-    *owned = false;
-  }
-  return status;
-}
-
-static bool take_result_capability(
-    const struct capnweb_result *result,
-    struct capnweb_remote_capability *capability) {
-  return result->kind == CAPNWEB_RESULT_VALUE &&
-      result->status == CAPNWEB_OK &&
-      capnweb_value_get_remote_capability(&result->value, capability);
-}
 
 /* --- base64 (RFC 4648; the uplink pads, see append_frames) -------------- */
 
@@ -366,12 +343,9 @@ static void handle_spk_frame(
   }
 }
 
-static enum capnweb_status batch_dispatch(
-    void *context,
-    const struct capnweb_call *call,
-    struct capnweb_reply *reply) {
-  struct iterate_kit_voicelab *voicelab = context;
-  struct capnweb_value batch;
+static void process_batch(
+    struct iterate_kit_voicelab *voicelab,
+    const struct capnweb_value *batch) {
   struct capnweb_value events_wrapper;
   struct capnweb_value events;
   size_t event_count;
@@ -385,14 +359,11 @@ static enum capnweb_status batch_dispatch(
    */
   voicelab->last_batch_ms =
       voicelab->options.now_ms(voicelab->options.clock_context);
-  if (!call->has_arguments ||
-      !capnweb_value_array_at(&call->arguments, 0U, &batch)) {
-    return capnweb_reply_set_null(reply);
-  }
+  if (voicelab == NULL || batch == NULL) return;
   /* Application arrays ride the wire escaped as [[item, ...]]. */
-  if (!capnweb_value_object_get(&batch, "events", &events_wrapper) ||
+  if (!capnweb_value_object_get(batch, "events", &events_wrapper) ||
       !capnweb_value_get_expression_array(&events_wrapper, &events)) {
-    return capnweb_reply_set_null(reply);
+    return;
   }
   event_count = capnweb_value_array_size(&events);
   for (index = 0U; index < event_count; ++index) {
@@ -481,473 +452,115 @@ static enum capnweb_status batch_dispatch(
       }
     }
   }
-  return capnweb_reply_set_null(reply);
 }
 
-/* --- live connection open / recycle --------------------------------------- */
 
-static void connection_opened(
-    void *context, const struct capnweb_result *result) {
-  struct iterate_kit_voicelab *voicelab = context;
-  enum capnweb_status status;
-  if (voicelab->state == ITERATE_KIT_VOICELAB_CLOSED) {
-    return;
-  }
-  voicelab->recycle_pending = false;
-  if (result->kind == CAPNWEB_RESULT_SESSION_ENDED) {
-    (void)fail(
-        voicelab,
-        ITERATE_KIT_VOICELAB_FAILURE_SESSION_ENDED,
-        result->status);
-    return;
-  }
-  if (result->kind == CAPNWEB_RESULT_REJECTION) {
-    (void)fail(
-        voicelab, ITERATE_KIT_VOICELAB_FAILURE_OPEN_REJECTED, CAPNWEB_OK);
-    return;
-  }
-  if (voicelab->has_connection_capability) {
-    /* Make-before-break: the incumbent becomes the outgoing generation. */
-    voicelab->previous_connection_capability =
-        voicelab->connection_capability;
-    voicelab->has_previous_connection_capability = true;
-    voicelab->has_connection_capability = false;
-  }
-  if (!take_result_capability(result, &voicelab->connection_capability)) {
-    (void)fail(
-        voicelab,
-        ITERATE_KIT_VOICELAB_FAILURE_OPEN_RESULT,
-        CAPNWEB_E_INVALID_MESSAGE);
-    return;
-  }
-  voicelab->has_connection_capability = true;
-  voicelab->batches_on_connection = 0U;
-  voicelab->recycle_pending = false;
-  /* A fresh lane starts its deadline now, not from whenever it last spoke. */
-  voicelab->last_batch_ms =
-      voicelab->options.now_ms(voicelab->options.clock_context);
-  status = release_remote(
-      voicelab,
-      &voicelab->previous_connection_capability,
-      &voicelab->has_previous_connection_capability);
-  if (status != CAPNWEB_OK) {
-    (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_RELEASE, status);
-    return;
-  }
-  voicelab->state = ITERATE_KIT_VOICELAB_READY;
-  voicelab->failure = ITERATE_KIT_VOICELAB_FAILURE_NONE;
-  voicelab->capnweb_status = CAPNWEB_OK;
+void iterate_kit_voicelab_on_subscription_update(
+    void *owner,
+    uint32_t owner_epoch,
+    const struct capnweb_value *batch) {
+  struct iterate_kit_voicelab *const voicelab = owner;
+  if (voicelab == NULL || owner_epoch != voicelab->subscription_epoch) return;
+  process_batch(voicelab, batch);
 }
 
-bool iterate_kit_voicelab_downlink_expected(
-    const struct iterate_kit_voicelab *voicelab) {
-  if (voicelab == NULL) return false;
-  return !voicelab->call_active || voicelab->answer_open;
-}
 
-enum capnweb_status iterate_kit_voicelab_recycle_connection(
-    struct iterate_kit_voicelab *voicelab) {
-  static const char *const open_path[] = {"openConnection"};
-  struct capnweb_expression event_type_items[4];
-  struct capnweb_expression event_types;
-  struct capnweb_expression connection_key;
-  struct capnweb_expression max_events;
-  struct capnweb_expression max_bytes;
-  struct capnweb_expression no_state;
-  struct capnweb_expression callback;
-  struct capnweb_object_field fields[6];
-  struct capnweb_expression argument;
-  char key_text[64];
+enum capnweb_status iterate_kit_voicelab_bind(
+    struct iterate_kit_voicelab *voicelab,
+    const struct iterate_kit_voicelab_options *options,
+    struct iterate_kit_stream *stream,
+    struct iterate_kit_stream_subscription *subscription) {
+  char key[96];
   int key_length;
   enum capnweb_status status;
-
-  if (voicelab == NULL) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
+  uint32_t next_epoch;
+  if (voicelab == NULL || voicelab->face_poll_pending ||
+      (voicelab->state != ITERATE_KIT_VOICELAB_IDLE &&
+       voicelab->state != ITERATE_KIT_VOICELAB_CLOSED) ||
+      !valid_stream_options(options) || stream == NULL || subscription == NULL ||
+      stream->state != ITERATE_KIT_STREAM_READY || !stream->has_capability ||
+      !iterate_kit_stream_subscription_reclaimable(subscription)) return CAPNWEB_E_STATE;
+  next_epoch = voicelab->connection_generation + 1U;
+  if (next_epoch == 0U) return CAPNWEB_E_LIMIT;
+  memset(voicelab, 0, sizeof(*voicelab));
+  voicelab->connection_generation = next_epoch;
+  voicelab->options = *options;
+  voicelab->stream = stream;
+  voicelab->subscription = subscription;
+  voicelab->state = ITERATE_KIT_VOICELAB_OPENING_CONNECTION;
+  voicelab->last_event_offset = -1;
+  voicelab->subscription_epoch = voicelab->connection_generation;
+  key_length = snprintf(key, sizeof(key), "kit-voice-%s-%" PRIu32,
+      options->activation, voicelab->subscription_epoch);
+  if (key_length < 0 || (size_t)key_length >= sizeof(key)) {
+    return fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL, CAPNWEB_E_LIMIT);
   }
-  if (voicelab->state != ITERATE_KIT_VOICELAB_READY &&
-      voicelab->state != ITERATE_KIT_VOICELAB_OPENING_CONNECTION) {
+  status = iterate_kit_stream_subscription_open(subscription, stream, key,
+      direct_event_types, sizeof(direct_event_types) / sizeof(direct_event_types[0]),
+      16, 13000, iterate_kit_voicelab_on_subscription_update, voicelab,
+      voicelab->subscription_epoch);
+  if (status != CAPNWEB_OK) {
+    return fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL, status);
+  }
+  return CAPNWEB_OK;
+}
+
+void iterate_kit_voicelab_update(struct iterate_kit_voicelab *voicelab) {
+  if (voicelab == NULL || voicelab->subscription == NULL ||
+      voicelab->state == ITERATE_KIT_VOICELAB_CLOSED ||
+      voicelab->state == ITERATE_KIT_VOICELAB_FAILED) return;
+  if (voicelab->subscription->state == ITERATE_KIT_SUBSCRIPTION_OPEN) {
+    if (voicelab->previous_subscription != NULL) {
+      const enum capnweb_status status = iterate_kit_stream_subscription_close(
+          voicelab->previous_subscription);
+      if (status != CAPNWEB_OK) {
+        (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_RELEASE, status);
+        return;
+      }
+      voicelab->previous_subscription = NULL;
+    }
+    voicelab->state = ITERATE_KIT_VOICELAB_READY;
+  } else if (voicelab->subscription->state == ITERATE_KIT_SUBSCRIPTION_FAILED ||
+      voicelab->subscription->state == ITERATE_KIT_SUBSCRIPTION_CLOSED) {
+    (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_OPEN_RESULT,
+        voicelab->subscription->status);
+  }
+}
+
+
+enum capnweb_status iterate_kit_voicelab_recycle_subscription(
+    struct iterate_kit_voicelab *voicelab,
+    struct iterate_kit_stream_subscription *fresh_subscription) {
+  char key[96];
+  int key_length;
+  enum capnweb_status status;
+  if (voicelab == NULL || voicelab->stream == NULL ||
+      voicelab->state != ITERATE_KIT_VOICELAB_READY ||
+      fresh_subscription == NULL ||
+      !iterate_kit_stream_subscription_reclaimable(fresh_subscription)) {
     return CAPNWEB_E_STATE;
   }
-  if (!voicelab->has_callback_capability) {
-    const struct capnweb_capability dispatch = {
-      batch_dispatch,
-      voicelab,
-      NULL,
-    };
-    status = capnweb_session_export_capability(
-        voicelab->options.session, dispatch, &voicelab->callback_capability);
-    if (status != CAPNWEB_OK) {
-      return fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_EXPORT, status);
-    }
-    voicelab->has_callback_capability = true;
-  }
-
   ++voicelab->connection_generation;
-  key_length = snprintf(
-      key_text,
-      sizeof(key_text),
-      "kit-cb-g%" PRIu32,
-      voicelab->connection_generation);
-  if (key_length < 0 || (size_t)key_length >= sizeof(key_text)) {
-    return CAPNWEB_E_LIMIT;
-  }
-
-  event_type_items[0] = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {
-      "events.iterate.com/voice-agent/spk-frame",
-      sizeof("events.iterate.com/voice-agent/spk-frame") - 1U,
-    }},
-  };
-  event_type_items[1] = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {
-      "events.iterate.com/voice-agent/conversation-ended",
-      sizeof("events.iterate.com/voice-agent/conversation-ended") - 1U,
-    }},
-  };
-  event_type_items[2] = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {
-      "events.iterate.com/voice-agent/conversation-accepted",
-      sizeof("events.iterate.com/voice-agent/conversation-accepted") - 1U,
-    }},
-  };
-  event_type_items[3] = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {
-      "events.iterate.com/voice-agent/call-started",
-      sizeof("events.iterate.com/voice-agent/call-started") - 1U,
-    }},
-  };
-  event_types = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_ARRAY,
-    {.array = {event_type_items, 4U}},
-  };
-  connection_key = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {key_text, (size_t)key_length}},
-  };
-  /*
-   * SIXTEEN events per batch, because delivery is one batch at a time and
-   * the batch is therefore the unit of BANDWIDTH, not just of memory.
-   *
-   * Measured: 5.7 batches a second, so four events per batch carried 80 ms
-   * of speech every 175 ms. Under half realtime. The device played 94 of the
-   * 200 frames in one answer and concealed 122 — heard as speech that breaks
-   * up and then stops. Twelve carried 1.37x realtime at the same rate; now
-   * that viseme events (~10/s during speech, tiny) share the lane with the
-   * 50/s of audio, sixteen keeps the audio at ~1.5x realtime so the mouth
-   * track never costs the voice its cushion.
-   *
-   * The floor on this is the inbox slot (16 KiB) — sixteen mu-law frames are
-   * ~10 KiB of batch, still inside it; the ceiling is politeness to the
-   * platform's own read budget.
-   */
-  max_events = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_INT64,
-    {.integer = 16},
-  };
-  max_bytes = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_INT64,
-    {.integer = 13000},
-  };
-  no_state = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_BOOLEAN,
-    {.boolean = false},
-  };
-  callback = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_CAPABILITY,
-    {.capability = voicelab->callback_capability},
-  };
-  fields[0] = (struct capnweb_object_field){
-    {"connectionKey", sizeof("connectionKey") - 1U},
-    &connection_key,
-  };
-  fields[1] = (struct capnweb_object_field){
-    {"eventTypes", sizeof("eventTypes") - 1U},
-    &event_types,
-  };
-  fields[2] = (struct capnweb_object_field){
-    {"maxDeliveryEvents", sizeof("maxDeliveryEvents") - 1U},
-    &max_events,
-  };
-  fields[3] = (struct capnweb_object_field){
-    {"maxDeliveryBytes", sizeof("maxDeliveryBytes") - 1U},
-    &max_bytes,
-  };
-  fields[4] = (struct capnweb_object_field){
-    {"state", sizeof("state") - 1U},
-    &no_state,
-  };
-  fields[5] = (struct capnweb_object_field){
-    {"processEventBatch", sizeof("processEventBatch") - 1U},
-    &callback,
-  };
-  argument = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_OBJECT,
-    {.object = {fields, 6U}},
-  };
-  status = capnweb_session_call_expressions(
-      voicelab->options.session,
-      voicelab->stream_capability,
-      open_path,
-      sizeof(open_path) / sizeof(open_path[0]),
-      &argument,
-      1U,
-      connection_opened,
-      voicelab);
-  if (status == CAPNWEB_OK) {
-    voicelab->recycle_pending = true;
+  if (voicelab->connection_generation == 0U) return CAPNWEB_E_LIMIT;
+  key_length = snprintf(key, sizeof(key), "kit-voice-%s-%" PRIu32,
+      voicelab->options.activation, voicelab->connection_generation);
+  if (key_length < 0 || (size_t)key_length >= sizeof(key)) return CAPNWEB_E_LIMIT;
+  voicelab->previous_subscription = voicelab->subscription;
+  voicelab->subscription = fresh_subscription;
+  voicelab->state = ITERATE_KIT_VOICELAB_OPENING_CONNECTION;
+  status = iterate_kit_stream_subscription_open(fresh_subscription, voicelab->stream,
+      key, direct_event_types, sizeof(direct_event_types) / sizeof(direct_event_types[0]),
+      16, 13000, iterate_kit_voicelab_on_subscription_update, voicelab,
+      voicelab->subscription_epoch);
+  if (status != CAPNWEB_OK) {
+    (void)iterate_kit_stream_subscription_close(fresh_subscription);
+    voicelab->subscription = voicelab->previous_subscription;
+    voicelab->previous_subscription = NULL;
+    voicelab->state = ITERATE_KIT_VOICELAB_READY;
   }
   return status;
 }
 
-static void stream_completed(
-    void *context, const struct capnweb_result *result) {
-  struct iterate_kit_voicelab *voicelab = context;
-  enum capnweb_status status;
-  if (voicelab->state == ITERATE_KIT_VOICELAB_CLOSED) {
-    return;
-  }
-  if (result->kind == CAPNWEB_RESULT_SESSION_ENDED) {
-    (void)fail(
-        voicelab,
-        ITERATE_KIT_VOICELAB_FAILURE_SESSION_ENDED,
-        result->status);
-    return;
-  }
-  if (result->kind == CAPNWEB_RESULT_REJECTION) {
-    (void)fail(
-        voicelab, ITERATE_KIT_VOICELAB_FAILURE_STREAM_REJECTED, CAPNWEB_OK);
-    return;
-  }
-  if (!take_result_capability(result, &voicelab->stream_capability)) {
-    (void)fail(
-        voicelab,
-        ITERATE_KIT_VOICELAB_FAILURE_STREAM_RESULT,
-        CAPNWEB_E_INVALID_MESSAGE);
-    return;
-  }
-  voicelab->has_stream_capability = true;
-  /* The project capability remains until close because the common session
-   * teardown releases imported stubs in reverse acquisition order. Call
-   * control itself now rides this stream capability. */
-  if (voicelab->options.on_speaker == NULL) {
-    voicelab->state = ITERATE_KIT_VOICELAB_READY;
-    voicelab->failure = ITERATE_KIT_VOICELAB_FAILURE_NONE;
-    voicelab->capnweb_status = CAPNWEB_OK;
-    return;
-  }
-  voicelab->state = ITERATE_KIT_VOICELAB_OPENING_CONNECTION;
-  status = iterate_kit_voicelab_recycle_connection(voicelab);
-  /*
-   * KEEP THE SPECIFIC FAILURE. `recycle_connection` fails through `fail()`
-   * itself for the causes it can name — a full export table is
-   * FAILURE_EXPORT — and overwriting that here relabelled every one of them
-   * "open-call". Which is how a leaked capability spent an evening looking
-   * like a networking problem.
-   */
-  if (status != CAPNWEB_OK && voicelab->state != ITERATE_KIT_VOICELAB_FAILED) {
-    (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL, status);
-  }
-}
-
-static void project_completed(
-    void *context, const struct capnweb_result *result) {
-  struct iterate_kit_voicelab *voicelab = context;
-  struct capnweb_expression stream_path;
-  enum capnweb_status status;
-  if (voicelab->state == ITERATE_KIT_VOICELAB_CLOSED) {
-    return;
-  }
-  if (result->kind == CAPNWEB_RESULT_SESSION_ENDED) {
-    (void)fail(
-        voicelab,
-        ITERATE_KIT_VOICELAB_FAILURE_SESSION_ENDED,
-        result->status);
-    return;
-  }
-  if (result->kind == CAPNWEB_RESULT_REJECTION) {
-    (void)fail(
-        voicelab, ITERATE_KIT_VOICELAB_FAILURE_PROJECT_REJECTED, CAPNWEB_OK);
-    return;
-  }
-  if (!take_result_capability(result, &voicelab->project_capability)) {
-    (void)fail(
-        voicelab,
-        ITERATE_KIT_VOICELAB_FAILURE_PROJECT_RESULT,
-        CAPNWEB_E_INVALID_MESSAGE);
-    return;
-  }
-  voicelab->has_project_capability = true;
-  status = release_remote(
-      voicelab,
-      &voicelab->session_capability,
-      &voicelab->has_session_capability);
-  if (status != CAPNWEB_OK) {
-    (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_RELEASE, status);
-    return;
-  }
-  stream_path = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {
-      voicelab->options.stream_path,
-      strlen(voicelab->options.stream_path),
-    }},
-  };
-  voicelab->state = ITERATE_KIT_VOICELAB_GETTING_STREAM;
-  status = capnweb_session_call_expressions(
-      voicelab->options.session,
-      voicelab->project_capability,
-      streams_get_path,
-      sizeof(streams_get_path) / sizeof(streams_get_path[0]),
-      &stream_path,
-      1U,
-      stream_completed,
-      voicelab);
-  if (status != CAPNWEB_OK) {
-    (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_STREAM_CALL, status);
-  }
-}
-
-static void authenticated(
-    void *context, const struct capnweb_result *result) {
-  struct iterate_kit_voicelab *voicelab = context;
-  struct capnweb_expression project_id;
-  enum capnweb_status status;
-  if (voicelab->state == ITERATE_KIT_VOICELAB_CLOSED) {
-    return;
-  }
-  if (result->kind == CAPNWEB_RESULT_SESSION_ENDED) {
-    (void)fail(
-        voicelab,
-        ITERATE_KIT_VOICELAB_FAILURE_SESSION_ENDED,
-        result->status);
-    return;
-  }
-  if (result->kind == CAPNWEB_RESULT_REJECTION) {
-    (void)fail(
-        voicelab, ITERATE_KIT_VOICELAB_FAILURE_AUTH_REJECTED, CAPNWEB_OK);
-    return;
-  }
-  if (!take_result_capability(result, &voicelab->session_capability)) {
-    (void)fail(
-        voicelab,
-        ITERATE_KIT_VOICELAB_FAILURE_AUTH_RESULT,
-        CAPNWEB_E_INVALID_MESSAGE);
-    return;
-  }
-  voicelab->has_session_capability = true;
-  project_id = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {
-      voicelab->options.project_id,
-      strlen(voicelab->options.project_id),
-    }},
-  };
-  voicelab->state = ITERATE_KIT_VOICELAB_GETTING_PROJECT;
-  status = capnweb_session_call_expressions(
-      voicelab->options.session,
-      voicelab->session_capability,
-      project_path,
-      sizeof(project_path) / sizeof(project_path[0]),
-      &project_id,
-      1U,
-      project_completed,
-      voicelab);
-  if (status != CAPNWEB_OK) {
-    (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_PROJECT_CALL, status);
-  }
-}
-
-enum capnweb_status iterate_kit_voicelab_start(
-    struct iterate_kit_voicelab *voicelab,
-    const struct iterate_kit_voicelab_options *options) {
-  static const struct capnweb_expression project_secret = {
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {"project-secret", sizeof("project-secret") - 1U}},
-  };
-  struct capnweb_expression project_id;
-  struct capnweb_expression secret;
-  struct capnweb_object_field auth_fields[3];
-  struct capnweb_expression auth;
-  enum capnweb_status status;
-
-  if (voicelab == NULL) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  /*
-   * HAND BACK WHAT THE LAST MOUNT HELD, BEFORE FORGETTING IT.
-   *
-   * The memset below is what a fresh mount needs and what made re-mounting
-   * leak: it threw away `callback_capability` and its `has_` flag while the
-   * SESSION still held that export slot, so every re-mount burned one. The
-   * export table holds four and a healthy board already uses two — so the
-   * second re-mount filled it, `capnweb_session_export_capability` refused,
-   * and the voicelab latched failed with a ready transport and a ready
-   * connection under it. Measured on the HA Voice PE: exports 4/4, imports
-   * 0/16, nothing delivered, every call request ignored for the three minutes
-   * it took the liveness watchdog to restart the whole chip.
-   *
-   * A zeroed struct — a static on its first mount — has no session and no
-   * `has_` flags set, so this is a no-op there rather than a release of
-   * whatever the stack happened to hold.
-   */
-  if (voicelab->options.session != NULL) {
-    (void)iterate_kit_voicelab_close(voicelab);
-  }
-  memset(voicelab, 0, sizeof(*voicelab));
-  if (!valid_options(options)) {
-    voicelab->state = ITERATE_KIT_VOICELAB_FAILED;
-    voicelab->failure = ITERATE_KIT_VOICELAB_FAILURE_INVALID_OPTIONS;
-    voicelab->capnweb_status = CAPNWEB_E_INVALID_ARGUMENT;
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  voicelab->options = *options;
-  voicelab->last_event_offset = -1;
-  voicelab->state = ITERATE_KIT_VOICELAB_AUTHENTICATING;
-  project_id = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {options->project_id, strlen(options->project_id)}},
-  };
-  secret = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {
-      options->project_api_key,
-      strlen(options->project_api_key),
-    }},
-  };
-  auth_fields[0] = (struct capnweb_object_field){
-    {"type", sizeof("type") - 1U},
-    &project_secret,
-  };
-  auth_fields[1] = (struct capnweb_object_field){
-    {"projectId", sizeof("projectId") - 1U},
-    &project_id,
-  };
-  auth_fields[2] = (struct capnweb_object_field){
-    {"secret", sizeof("secret") - 1U},
-    &secret,
-  };
-  auth = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_OBJECT,
-    {.object = {auth_fields, 3U}},
-  };
-  status = capnweb_session_call_expressions(
-      options->session,
-      (struct capnweb_remote_capability){0},
-      authenticate_path,
-      sizeof(authenticate_path) / sizeof(authenticate_path[0]),
-      &auth,
-      1U,
-      authenticated,
-      voicelab);
-  if (status != CAPNWEB_OK) {
-    return fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_AUTH_CALL, status);
-  }
-  return CAPNWEB_OK;
-}
 
 /* --- appends -------------------------------------------------------------- */
 
@@ -1041,13 +654,8 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
   offset += 3U;
   voicelab->args_buffer[offset++] = ']';
 
-  status = capnweb_session_call_oneway_path(
-      voicelab->options.session,
-      voicelab->stream_capability,
-      append_path,
-      1U,
-      voicelab->args_buffer,
-      offset);
+  status = iterate_kit_stream_append(
+      voicelab->stream, voicelab->args_buffer, offset);
   if (status == CAPNWEB_OK) {
     voicelab->frames_sent += (uint32_t)frame_count;
     voicelab->last_presence_at_ms =
@@ -1068,13 +676,8 @@ enum capnweb_status iterate_kit_voicelab_append_raw(
   if (voicelab->state != ITERATE_KIT_VOICELAB_READY) {
     return CAPNWEB_E_STATE;
   }
-  return capnweb_session_call_oneway_path(
-      voicelab->options.session,
-      voicelab->stream_capability,
-      append_path,
-      1U,
-      events_json_array,
-      length);
+  return iterate_kit_stream_append(
+      voicelab->stream, events_json_array, length);
 }
 
 
@@ -1091,7 +694,8 @@ static const char *const runtime_state_path[] = {"getProcessorRuntimeState"};
  */
 static void face_poll_completed(
     void *context, const struct capnweb_result *result) {
-  struct iterate_kit_voicelab *voicelab = context;
+  const struct iterate_kit_voicelab_face_request *const request = context;
+  struct iterate_kit_voicelab *const voicelab = request != NULL ? request->voicelab : NULL;
   struct capnweb_value runtime_bag = {0};
   struct capnweb_value face = {0};
   struct capnweb_value field = {0};
@@ -1101,6 +705,8 @@ static void face_poll_completed(
   int64_t confidence = 0;
   int64_t at = 0;
 
+  if (voicelab == NULL || !voicelab->face_poll_pending ||
+      request->subscription_epoch != voicelab->subscription_epoch) return;
   voicelab->face_poll_pending = false;
   if (result->kind != CAPNWEB_RESULT_VALUE || result->status != CAPNWEB_OK) {
     return;
@@ -1152,19 +758,22 @@ enum capnweb_status iterate_kit_voicelab_poll_face(
   enum capnweb_status status;
   if (voicelab == NULL) return CAPNWEB_E_INVALID_ARGUMENT;
   if (voicelab->state != ITERATE_KIT_VOICELAB_READY ||
-      !voicelab->has_stream_capability || voicelab->face_poll_pending) {
+      voicelab->stream == NULL || !voicelab->stream->has_capability ||
+      voicelab->face_poll_pending) {
     return CAPNWEB_E_STATE;
   }
   status = capnweb_session_call_path(
-      voicelab->options.session,
-      voicelab->stream_capability,
+      voicelab->stream->session,
+      voicelab->stream->capability,
       runtime_state_path,
       sizeof(runtime_state_path) / sizeof(runtime_state_path[0]),
       args,
       sizeof(args) - 1U,
       face_poll_completed,
-      voicelab);
+      &voicelab->face_request);
   if (status == CAPNWEB_OK) {
+    voicelab->face_request.voicelab = voicelab;
+    voicelab->face_request.subscription_epoch = voicelab->subscription_epoch;
     voicelab->face_poll_pending = true;
     ++voicelab->face_polls;
   }
@@ -1190,18 +799,18 @@ static enum capnweb_status iterate_kit_voicelab_send_keepalive(
   static const char args[] =
       "[{\"type\":\"events.iterate.com/voice-agent/keepalive\",\"ephemeral\":true,"
       "\"payload\":{}}]";
-  const enum capnweb_status status = capnweb_session_call_oneway_path(
-      voicelab->options.session,
-      voicelab->stream_capability,
-      append_path,
-      1U,
-      args,
-      sizeof(args) - 1U);
+  const enum capnweb_status status = iterate_kit_stream_append(
+      voicelab->stream, args, sizeof(args) - 1U);
   if (status == CAPNWEB_OK) {
     voicelab->last_presence_at_ms =
         voicelab->options.now_ms(voicelab->options.clock_context);
   }
   return status;
+}
+
+bool iterate_kit_voicelab_downlink_expected(
+    const struct iterate_kit_voicelab *voicelab) {
+  return voicelab != NULL && (!voicelab->call_active || voicelab->answer_open);
 }
 
 enum capnweb_status iterate_kit_voicelab_keepalive_if_due(
@@ -1220,39 +829,19 @@ enum capnweb_status iterate_kit_voicelab_keepalive_if_due(
 }
 
 enum capnweb_status iterate_kit_voicelab_end_activation(
-    struct iterate_kit_voicelab *voicelab,
+    const struct iterate_kit_stream *stream,
     const char *activation,
     const char *reason) {
+  char arguments[256];
   int length;
-  if (voicelab == NULL) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  if (!valid_activation(activation)) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  if (voicelab->state != ITERATE_KIT_VOICELAB_READY) {
-    return CAPNWEB_E_STATE;
-  }
-  if (!json_literal_contents_are_safe(reason)) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  length = snprintf(
-      voicelab->args_buffer,
-      sizeof(voicelab->args_buffer),
+  if (stream == NULL || !valid_activation(activation) ||
+      !json_literal_contents_are_safe(reason)) return CAPNWEB_E_INVALID_ARGUMENT;
+  length = snprintf(arguments, sizeof(arguments),
       "[{\"type\":\"events.iterate.com/voice-agent/conversation-ended\",\"payload\":{"
       "\"activation\":\"%s\",\"reason\":\"%s\"}}]",
-      activation,
-      reason != NULL ? reason : "hangup");
-  if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
-    return CAPNWEB_E_LIMIT;
-  }
-  return capnweb_session_call_oneway_path(
-      voicelab->options.session,
-      voicelab->stream_capability,
-      append_path,
-      1U,
-      voicelab->args_buffer,
-      (size_t)length);
+      activation, reason != NULL ? reason : "hangup");
+  if (length < 0 || (size_t)length >= sizeof(arguments)) return CAPNWEB_E_LIMIT;
+  return iterate_kit_stream_append(stream, arguments, (size_t)length);
 }
 
 enum capnweb_status iterate_kit_voicelab_end_call(
@@ -1260,7 +849,7 @@ enum capnweb_status iterate_kit_voicelab_end_call(
   enum capnweb_status status;
   if (voicelab == NULL) return CAPNWEB_E_INVALID_ARGUMENT;
   status = iterate_kit_voicelab_end_activation(
-      voicelab, voicelab->options.activation, reason);
+      voicelab->stream, voicelab->options.activation, reason);
   if (status != CAPNWEB_OK) return status;
   voicelab->call_active = false;
   voicelab->answer_open = false;
@@ -1271,66 +860,29 @@ enum capnweb_status iterate_kit_voicelab_end_call(
 
 enum capnweb_status iterate_kit_voicelab_close(
     struct iterate_kit_voicelab *voicelab) {
-  enum capnweb_status first_error = CAPNWEB_OK;
-  enum capnweb_status status;
-  if (voicelab == NULL) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
+  enum capnweb_status status = CAPNWEB_OK;
+  enum capnweb_status previous_status;
+  if (voicelab == NULL) return CAPNWEB_E_INVALID_ARGUMENT;
+  if (voicelab->subscription != NULL) {
+    status = iterate_kit_stream_subscription_close(voicelab->subscription);
+    if (status == CAPNWEB_OK) voicelab->subscription = NULL;
   }
-  status = release_remote(
-      voicelab,
-      &voicelab->connection_capability,
-      &voicelab->has_connection_capability);
-  if (status != CAPNWEB_OK && first_error == CAPNWEB_OK) {
-    first_error = status;
-  }
-  status = release_remote(
-      voicelab,
-      &voicelab->previous_connection_capability,
-      &voicelab->has_previous_connection_capability);
-  if (status != CAPNWEB_OK && first_error == CAPNWEB_OK) {
-    first_error = status;
-  }
-  if (voicelab->has_callback_capability) {
-    status = capnweb_session_release_local_capability(
-        voicelab->options.session, voicelab->callback_capability);
-    if (status == CAPNWEB_OK) {
-      voicelab->has_callback_capability = false;
-    } else if (first_error == CAPNWEB_OK) {
-      first_error = status;
-    }
-  }
-  status = release_remote(
-      voicelab,
-      &voicelab->stream_capability,
-      &voicelab->has_stream_capability);
-  if (status != CAPNWEB_OK && first_error == CAPNWEB_OK) {
-    first_error = status;
-  }
-  status = release_remote(
-      voicelab,
-      &voicelab->project_capability,
-      &voicelab->has_project_capability);
-  if (status != CAPNWEB_OK && first_error == CAPNWEB_OK) {
-    first_error = status;
-  }
-  status = release_remote(
-      voicelab,
-      &voicelab->session_capability,
-      &voicelab->has_session_capability);
-  if (status != CAPNWEB_OK && first_error == CAPNWEB_OK) {
-    first_error = status;
+  if (voicelab->previous_subscription != NULL) {
+    previous_status = iterate_kit_stream_subscription_close(
+        voicelab->previous_subscription);
+    if (previous_status == CAPNWEB_OK) voicelab->previous_subscription = NULL;
+    if (status == CAPNWEB_OK) status = previous_status;
   }
   voicelab->state = ITERATE_KIT_VOICELAB_CLOSED;
-  return first_error;
+  voicelab->call_active = false;
+  voicelab->answer_open = false;
+  return status;
 }
 
 const char *iterate_kit_voicelab_state_name(
     enum iterate_kit_voicelab_state state) {
   switch (state) {
     case ITERATE_KIT_VOICELAB_IDLE: return "idle";
-    case ITERATE_KIT_VOICELAB_AUTHENTICATING: return "authenticating";
-    case ITERATE_KIT_VOICELAB_GETTING_PROJECT: return "getting-project";
-    case ITERATE_KIT_VOICELAB_GETTING_STREAM: return "getting-stream";
     case ITERATE_KIT_VOICELAB_OPENING_CONNECTION: return "opening-connection";
     case ITERATE_KIT_VOICELAB_READY: return "ready";
     case ITERATE_KIT_VOICELAB_FAILED: return "failed";
@@ -1345,22 +897,9 @@ const char *iterate_kit_voicelab_failure_name(
     case ITERATE_KIT_VOICELAB_FAILURE_NONE: return "none";
     case ITERATE_KIT_VOICELAB_FAILURE_INVALID_OPTIONS:
       return "invalid-options";
-    case ITERATE_KIT_VOICELAB_FAILURE_AUTH_CALL: return "auth-call";
-    case ITERATE_KIT_VOICELAB_FAILURE_AUTH_REJECTED: return "auth-rejected";
-    case ITERATE_KIT_VOICELAB_FAILURE_AUTH_RESULT: return "auth-result";
-    case ITERATE_KIT_VOICELAB_FAILURE_PROJECT_CALL: return "project-call";
-    case ITERATE_KIT_VOICELAB_FAILURE_PROJECT_REJECTED:
-      return "project-rejected";
-    case ITERATE_KIT_VOICELAB_FAILURE_PROJECT_RESULT:
-      return "project-result";
-    case ITERATE_KIT_VOICELAB_FAILURE_STREAM_CALL: return "stream-call";
-    case ITERATE_KIT_VOICELAB_FAILURE_STREAM_REJECTED:
-      return "stream-rejected";
-    case ITERATE_KIT_VOICELAB_FAILURE_STREAM_RESULT: return "stream-result";
     case ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL: return "open-call";
     case ITERATE_KIT_VOICELAB_FAILURE_OPEN_REJECTED: return "open-rejected";
     case ITERATE_KIT_VOICELAB_FAILURE_OPEN_RESULT: return "open-result";
-    case ITERATE_KIT_VOICELAB_FAILURE_EXPORT: return "export";
     case ITERATE_KIT_VOICELAB_FAILURE_RELEASE: return "release";
     case ITERATE_KIT_VOICELAB_FAILURE_SESSION_ENDED:
       return "session-ended";

@@ -8,7 +8,6 @@ const device: FirmwareDevice = {
   name: "Test device",
   description: "Test ESP32-S3",
   proofLabel: "Test device",
-  remoteVisemes: false,
   releases: [],
 };
 

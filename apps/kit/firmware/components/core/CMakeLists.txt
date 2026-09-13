@@ -13,6 +13,7 @@ set(ITERATE_KIT_CORE_SOURCES
   src/retry_gate.c
   src/session_grammar.c
   src/spsc_ring.c
+  src/stream_subscription.c
   src/touch_tap.c
   src/voice_playback_clock.c
   src/voice_playout.c

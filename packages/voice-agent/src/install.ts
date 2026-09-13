@@ -39,7 +39,7 @@ export const VOICE_AGENT_ZOD_SPEC = "4.5.4";
 export const VOICE_AGENT_GUEST_SOURCE = `// The voice agent guest worker. The platform builds this file (see
 // @iterate-com/voice-agent/INSTALL.md); the agent lives in the package and
 // this repo holds its name. Subclass here if the project needs to.
-export { default, VoiceAgentFacet, VoiceDeviceFacet } from "${VOICE_AGENT_PACKAGE_NAME}/worker";
+export { default, VoiceAgentFacet } from "${VOICE_AGENT_PACKAGE_NAME}/worker";
 `;
 
 /** The files a pre-package deploy committed beside voice-agent.ts. Nothing builds from them any more. */
@@ -63,7 +63,6 @@ export const VOICE_AGENT_SOURCE_DIR = "voice-agent";
 export const VOICE_AGENT_SOURCE_FILES = [
   "worker.ts",
   "voice-agent.ts",
-  "device.ts",
   "face.ts",
   "ref.ts",
   "ref-config.ts",
@@ -76,12 +75,12 @@ type VoiceAgentSourceFiles = Record<(typeof VOICE_AGENT_SOURCE_FILES)[number], s
 export const VOICE_AGENT_GUEST_SOURCE_FROM_REPO = `// The voice agent guest worker, built from this repo's own copy of the
 // agent's source in ${VOICE_AGENT_SOURCE_DIR}/ (committed by \`voicelab talk\` from a
 // checkout). \`voicelab deploy\` replaces this with the published package.
-export { default, VoiceAgentFacet, VoiceDeviceFacet } from "./${VOICE_AGENT_SOURCE_DIR}/worker.ts";
+export { default, VoiceAgentFacet } from "./${VOICE_AGENT_SOURCE_DIR}/worker.ts";
 `;
 
 /** A source-backed guest under a caller-owned filename and directory. */
 export function voiceAgentGuestSourceFromRepo(sourceDirectory: string): string {
-  return `export { default, VoiceAgentFacet, VoiceDeviceFacet } from "./${sourceDirectory}/worker.ts";\n`;
+  return `export { default, VoiceAgentFacet } from "./${sourceDirectory}/worker.ts";\n`;
 }
 
 export const LEGACY_GUEST_PATHS = [
