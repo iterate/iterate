@@ -245,12 +245,12 @@ test("prepare resolves the identity without asking the loader; load() is the one
     deployId: "deploy-1",
     itxEntrypoint: {} as Fetcher,
     kind: "facet",
-    owner: facetLoaderOwner("prj_u.iterate/", "Door"),
-    source: { "cap.js": "export default class Door {}" },
+    owner: facetLoaderOwner("prj_u.iterate/", "Counter"),
+    source: { "cap.js": "export default class Counter {}" },
     invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
-    where: 'facet "door"',
+    where: 'facet "counter"',
   });
-  expect(keys).toEqual([]); // the facet door stores this identity before any isolate exists
+  expect(keys).toEqual([]); // `IterateContextDurableObject#invokeFacet` stores this identity before any isolate exists
   prepared.load();
   expect(keys).toEqual([prepared.loaderId]);
   prepared.load();
