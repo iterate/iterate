@@ -24,7 +24,6 @@ import type {
   SetupVoiceAgentOptions,
   SetupVoiceAgentResult,
   VoiceAgentHealth,
-  VoiceAgentRpc,
 } from "./setup-options.ts";
 
 /* ========================================================================== */
@@ -388,6 +387,10 @@ const VoiceState = z.object({
    * Certificate data because it is a fact about the CLIENT.
    */
   visemes: z.boolean().default(false),
+  /** A device stays connected here while its conversation runs on this stream. */
+  transportStreamPath: z.string().nullable().default(null),
+  /** Device conversation streams belong to exactly one local activation. */
+  activation: Activation.nullable().default(null),
   /**
    * The rolling recap: the newest finished turns, in words, both sides.
    * Folded from the durable transcript events and seeded as history into
@@ -438,6 +441,8 @@ export const VoiceAgentContract = defineProcessorContract({
       payloadSchema: z.looseObject({
         instructions: z.string().optional(),
         visemes: z.boolean().optional(),
+        transportStreamPath: z.string().optional(),
+        activation: Activation.optional(),
       }),
     },
     /*
@@ -467,7 +472,11 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/call-started": {
       description:
         "The server opened a client activation and assigned its authoritative conversation id.",
-      payloadSchema: z.looseObject({ activation: Activation, conversationId: z.string() }),
+      payloadSchema: z.looseObject({
+        activation: Activation,
+        conversationId: z.string(),
+        streamPath: z.string().optional(),
+      }),
     },
     "events.iterate.com/voice-agent/conversation-accepted": {
       description: "The provider started the session; the call is live.",
@@ -846,6 +855,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
           ...state,
           instructions: event.payload.instructions ?? "",
           visemes: event.payload.visemes ?? false,
+          transportStreamPath: event.payload.transportStreamPath || null,
+          activation: event.payload.activation || null,
         };
 
       case "events.iterate.com/voice-agent/call-started":
@@ -947,7 +958,25 @@ export class VoiceAgentProcessor extends StreamProcessor<
   /* ----------------------------------------------------------------- react */
 
   processEvent(args: ProcessEventArgs<VoiceAgentContract>): undefined {
-    const { state, event, delivery, append, runInBackground } = args;
+    const { state, event, delivery, runInBackground } = args;
+    // The conversation owns the events. A fixed device connection receives a
+    // second copy of the public voice output, including ephemeral PCM, directly.
+    const append: ProcessEventArgs<VoiceAgentContract>["append"] = async (...events) => {
+      if (!state.transportStreamPath) return args.append(...events);
+      const [committed] = await Promise.all([
+        args.append(...events),
+        args.appendTo(
+          state.transportStreamPath,
+          ...events.map((output) => ({
+            ...output,
+            ...(output.idempotencyKey && {
+              idempotencyKey: `voice-agent/from:${this.path}:${output.idempotencyKey}`,
+            }),
+          })),
+        ),
+      ]);
+      return committed;
+    };
 
     /* The log has caught up with an opening append we were remembering. */
     if (state.call !== null) {
@@ -1049,6 +1078,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * base64 string all the way to the wire. */
         const micB64 = event.payload.pcm;
         const activation = event.payload.activation;
+        if (state.activation && state.activation !== activation) return;
         /* An empty frame is a client bug, not audio: the provider rejects
          * "audio/pcm audio must not be empty" and it can open no call. */
         if (micB64 === "") return;
@@ -1072,7 +1102,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
             append({
               type: "events.iterate.com/voice-agent/call-started",
               idempotencyKey: this.idempotencyKey(`call:${activation}`),
-              payload: { activation, conversationId },
+              payload: { activation, conversationId, streamPath: this.path },
             }).catch((error: unknown) => {
               if (this.#callRequestedForActivation === activation) {
                 this.#callRequestedForActivation = null;
@@ -2076,7 +2106,7 @@ export async function dialProviderSocket(): Promise<WebSocket | null> {
 /* ========================================================================== */
 
 /** A stable short digest, so re-running setup with identical input appends nothing. */
-function contentHash(value: unknown): string {
+export function contentHash(value: unknown): string {
   const json = JSON.stringify(value);
   let hash = 0x811c9dc5;
   for (let index = 0; index < json.length; index++) {
@@ -2087,7 +2117,7 @@ function contentHash(value: unknown): string {
 }
 
 /** Release an RPC wrapper whose contents have already been read. */
-function disposeRpcStub(value: unknown, label: string): void {
+export function disposeRpcStub(value: unknown, label: string): void {
   try {
     disposeIgnoredRpcResult(value);
   } catch (error) {
@@ -2098,8 +2128,143 @@ function disposeRpcStub(value: unknown, label: string): void {
 /** How long setup's fold-through barrier waits. A cold facet build is most of it. */
 const WARMUP_DEADLINE_MS = 90_000;
 
+/** Both device installation and direct conversation setup require usable OpenAI credentials. */
+export async function assertVoiceProviderSecret(project: Project): Promise<void> {
+  const providerSecret = project.secrets.get(OPENAI_SECRET);
+  let secretReady = false;
+  try {
+    const description = await providerSecret.__describe();
+    try {
+      secretReady = description.created === true && description.hasMaterial === true;
+    } finally {
+      disposeRpcStub(description, "setup secret description result");
+    }
+  } finally {
+    disposeRpcStub(providerSecret, "setup secret");
+  }
+  if (!secretReady) {
+    throw new Error(
+      `voice-agent setup requires secret "${OPENAI_SECRET}" with material. Create it with ` +
+        `await itx.secrets.get("${OPENAI_SECRET}").create({ egress: { urls: ["${new URL(LIVE.url).origin}"] }, ` +
+        `material: "<API key>" }); then rerun. This agent never creates or copies credentials.`,
+    );
+  }
+}
+
+/** Set up a single conversation. Device routing supplies its fixed transport path. */
+export async function setupVoiceAgent(
+  project: Project,
+  options: SetupVoiceAgentOptions & { transportStreamPath?: string; activation?: string } = {},
+): Promise<SetupVoiceAgentResult> {
+  const streamPath = options.streamPath || `/agents/voice/${crypto.randomUUID()}`;
+  if (!streamPath.startsWith("/")) {
+    throw new Error(
+      `voice-agent streamPath must be absolute; received ${JSON.stringify(streamPath)}`,
+    );
+  }
+
+  await assertVoiceProviderSecret(project);
+
+  /* The ordinary Agent shares this stream with the VoiceAgent. Its durable
+   * protocol is installed once. Fresh device conversations select the fast
+   * backend model through the ordinary Agent configuration event. */
+  const setupId = crypto.randomUUID();
+  const agent = project.agents.get(streamPath);
+  try {
+    disposeRpcStub(await agent.create(), "setup agent create result");
+    disposeRpcStub(
+      await agent.append(
+        ...agentSetupEvents(streamPath, setupId),
+        ...(options.transportStreamPath
+          ? [
+              {
+                // The conditional batch must retain this known event-name literal.
+                type: "events.iterate.com/agent/configured" as const,
+                idempotencyKey: `voice-agent/backend:${streamPath}`,
+                payload: { config: { llm: { model: "openai/gpt-6-astra" } } },
+              },
+            ]
+          : []),
+      ),
+      "setup agent append result",
+    );
+  } finally {
+    disposeRpcStub(agent, "setup agent");
+  }
+
+  const stream = project.streams.get(streamPath);
+  try {
+    /*
+     * BIRTH AND CONFIGURATION, SPLIT. `created` is existence only, under a
+     * key with nothing but the stream path in it. The configuration is an
+     * ordinary event, keyed per SETUP RUN so every run applies.
+     */
+    const { streamPath: _streamPath, reinstall: _reinstall, ...configPayload } = options;
+    const subscriptionPayload = {
+      name: VoiceAgentContract.slug,
+      description: "Wake the voice-agent facet in this stream's own Durable Object.",
+      /* DERIVED from the contract, never hand-written: delivery is this
+       * filter INTERSECTED with `consumes`. */
+      filter: { eventTypes: [...VoiceAgentContract.consumes] },
+      receiver: {
+        action: "facet-processor",
+        source: { kind: "userspace", worker: voiceAgentFacetRef(streamPath) },
+      },
+    };
+    const subscriptionKeyPrefix = `voice-agent/subscription:${streamPath}`;
+    const committed = await stream.append(
+      {
+        type: "events.iterate.com/voice-agent/created",
+        idempotencyKey: `voice-agent/created:${streamPath}`,
+        payload: {},
+      },
+      {
+        type: "events.iterate.com/voice-agent/configured",
+        idempotencyKey: `voice-agent/configured:${streamPath}:setup:${setupId}`,
+        payload: configPayload,
+      },
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        idempotencyKey: options.reinstall
+          ? `${subscriptionKeyPrefix}:reinstall:${crypto.randomUUID()}`
+          : `${subscriptionKeyPrefix}:${contentHash(subscriptionPayload)}`,
+        payload: subscriptionPayload,
+      },
+    );
+    /* The batch's HIGHEST offset is the barrier target. */
+    let setupBatchMaxOffset = 0;
+    try {
+      for (const event of committed) {
+        setupBatchMaxOffset = Math.max(setupBatchMaxOffset, event.offset);
+      }
+    } finally {
+      disposeRpcStub(committed, "setup stream append result");
+    }
+
+    /*
+     * THE PLATFORM'S OWN BARRIER: `waitUntilProcessed` resolves once the
+     * facet subscription has durably folded through the batch above —
+     * forcing the cold build and proving the fold has REACHED the birth
+     * certificate. ENFORCED by the throw inside the barrier's timeout.
+     */
+    const warmStartedAt = Date.now();
+    const subscription = stream.subscriptions.get(VoiceAgentContract.slug);
+    try {
+      await subscription.waitUntilProcessed({
+        offset: setupBatchMaxOffset,
+        timeoutMs: WARMUP_DEADLINE_MS,
+      });
+    } finally {
+      disposeRpcStub(subscription, "setup subscription");
+    }
+    return { streamPath, warmMs: Date.now() - warmStartedAt };
+  } finally {
+    disposeRpcStub(stream, "setup stream");
+  }
+}
+
 /** What setup needs to know to put this agent on a stream. */
-export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint implements VoiceAgentRpc {
+export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
   /**
    * Prove this guest is built, running, and can reach its own project. A
    * dynamic worker is built lazily on the first call into it; a call whose
@@ -2118,113 +2283,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint implem
   }
 
   async setupVoiceAgent(options: SetupVoiceAgentOptions = {}): Promise<SetupVoiceAgentResult> {
-    const streamPath = options.streamPath ?? `/agents/voice/${crypto.randomUUID()}`;
-    if (!streamPath.startsWith("/")) {
-      throw new Error(
-        `voice-agent streamPath must be absolute; received ${JSON.stringify(streamPath)}`,
-      );
-    }
-
-    const project = await this.itx;
-    {
-      const providerSecret = project.secrets.get(OPENAI_SECRET);
-      let secretReady = false;
-      try {
-        const description = await providerSecret.__describe();
-        try {
-          secretReady = description.created === true && description.hasMaterial === true;
-        } finally {
-          disposeRpcStub(description, "setup secret description result");
-        }
-      } finally {
-        disposeRpcStub(providerSecret, "setup secret");
-      }
-      if (!secretReady) {
-        throw new Error(
-          `voice-agent setup requires secret "${OPENAI_SECRET}" with material. Create it with ` +
-            `await itx.secrets.get("${OPENAI_SECRET}").create({ egress: { urls: ["${new URL(LIVE.url).origin}"] }, ` +
-            `material: "<API key>" }); then rerun. This agent never creates or copies credentials.`,
-        );
-      }
-    }
-
-    /* The ordinary Agent shares this stream with the VoiceAgent. Its durable
-     * protocol is installed once. The ordinary Agent retains its own model
-     * configuration. */
-    const setupId = crypto.randomUUID();
-    const agent = project.agents.get(streamPath);
-    await agent.create();
-    await agent.append(...agentSetupEvents(streamPath, setupId));
-
-    const stream = project.streams.get(streamPath);
-    try {
-      /*
-       * BIRTH AND CONFIGURATION, SPLIT. `created` is existence only, under a
-       * key with nothing but the stream path in it. The configuration is an
-       * ordinary event, keyed per SETUP RUN so every run applies.
-       */
-      const { streamPath: _streamPath, reinstall: _reinstall, ...configPayload } = options;
-      const subscriptionPayload = {
-        name: VoiceAgentContract.slug,
-        description: "Wake the voice-agent facet in this stream's own Durable Object.",
-        /* DERIVED from the contract, never hand-written: delivery is this
-         * filter INTERSECTED with `consumes`. */
-        filter: { eventTypes: [...VoiceAgentContract.consumes] },
-        receiver: {
-          action: "facet-processor",
-          source: { kind: "userspace", worker: voiceAgentFacetRef(streamPath) },
-        },
-      };
-      const subscriptionKeyPrefix = `voice-agent/subscription:${streamPath}`;
-      const committed = await stream.append(
-        {
-          type: "events.iterate.com/voice-agent/created",
-          idempotencyKey: `voice-agent/created:${streamPath}`,
-          payload: {},
-        },
-        {
-          type: "events.iterate.com/voice-agent/configured",
-          idempotencyKey: `voice-agent/configured:${streamPath}:setup:${setupId}`,
-          payload: configPayload,
-        },
-        {
-          type: "events.iterate.com/stream/subscription-configured",
-          idempotencyKey: options.reinstall
-            ? `${subscriptionKeyPrefix}:reinstall:${crypto.randomUUID()}`
-            : `${subscriptionKeyPrefix}:${contentHash(subscriptionPayload)}`,
-          payload: subscriptionPayload,
-        },
-      );
-      /* The batch's HIGHEST offset is the barrier target. */
-      let setupBatchMaxOffset = 0;
-      try {
-        for (const event of committed) {
-          setupBatchMaxOffset = Math.max(setupBatchMaxOffset, event.offset);
-        }
-      } finally {
-        disposeRpcStub(committed, "setup stream append result");
-      }
-
-      /*
-       * THE PLATFORM'S OWN BARRIER: `waitUntilProcessed` resolves once the
-       * facet subscription has durably folded through the batch above —
-       * forcing the cold build and proving the fold has REACHED the birth
-       * certificate. ENFORCED by the throw inside the barrier's timeout.
-       */
-      const warmStartedAt = Date.now();
-      const subscription = stream.subscriptions.get(VoiceAgentContract.slug);
-      try {
-        await subscription.waitUntilProcessed({
-          offset: setupBatchMaxOffset,
-          timeoutMs: WARMUP_DEADLINE_MS,
-        });
-      } finally {
-        disposeRpcStub(subscription, "setup subscription");
-      }
-      return { streamPath, warmMs: Date.now() - warmStartedAt };
-    } finally {
-      disposeRpcStub(stream, "setup stream");
-    }
+    return setupVoiceAgent(await this.itx, options);
   }
 
   /** Take the subscription off a stream, so the facet stops waking. */

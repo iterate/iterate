@@ -2,7 +2,7 @@
  * The file in a project's config repo that the platform builds as the voice
  * guest worker. It is three lines, written by the installer:
  *
- *   export { default, VoiceAgentFacet } from "@iterate-com/voice-agent/worker";
+ *   export { default, VoiceAgentFacet, VoiceDeviceFacet } from "@iterate-com/voice-agent/worker";
  *
  * The platform bundles it the way it bundles worker.ts — resolving the
  * package from the repo's package.json — so the repo holds a name, not a copy.
@@ -92,4 +92,9 @@ export const voiceAgentEntrypointRef = voiceAgentRefs().entrypoint;
  */
 export function voiceAgentFacetRef(streamPath: string): VoiceAgentFacetRef {
   return voiceAgentRefs().facet(streamPath);
+}
+
+/** The fixed device transport; its conversations each get their own VoiceAgentFacet. */
+export function voiceDeviceFacetRef(streamPath: string): VoiceAgentFacetRef {
+  return { ...voiceAgentFacetRef(streamPath), className: "VoiceDeviceFacet" };
 }
