@@ -20,6 +20,16 @@ project take `--project <slug>`.
 doppler run --config dev -- pnpm cli voicelab live-probe --save-wav out.wav
 doppler run --config dev -- pnpm cli voicelab live-probe --barge-after-ms 4000 --say2 "Stop. What was the last number?"
 
+# One controlled commentary passage through GPT-Live directly and through a
+# stream. The report keeps local first-response timings separate from the
+# facet's provider-receipt-to-stream-send timing; it never subtracts clocks
+# across those boundaries.
+doppler run --config preview_15 -- pnpm cli voicelab compare --project <slug>
+# Add --setup only to install this checkout's voice source first.
+# For every latency or stutter change, compare repeated direct/stream runs,
+# then verify device underrun counters and a recorded call. A larger buffer
+# alone is not evidence that relay latency improved.
+
 # Full duplex through a deployed stream, with transcript and Agent commentary.
 doppler run --config prd -- pnpm cli voicelab duplex --project <slug> --setup
 

@@ -101,6 +101,51 @@ describe("openWireCall", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  test("keeps last-frame markers separate from PCM when grouping answers", async () => {
+    let processEventBatch:
+      | ((batch: { events?: { type: string; payload?: unknown }[] }) => void)
+      | undefined;
+    let connectionKey = "";
+    const stream = {
+      append: vi.fn(async () => {}),
+      openConnection: vi.fn(async (input) => {
+        connectionKey = input.connectionKey;
+        processEventBatch = input.processEventBatch;
+        return { close: vi.fn(), [Symbol.dispose]: vi.fn() };
+      }),
+    };
+    vi.mocked(openStream).mockResolvedValueOnce({ stream, close: vi.fn() } as never);
+
+    const call = await openWireCall({ project: "proof", streamPath: "/voice" });
+    const activation = connectionKey.replace("wire-call-", "");
+    const pcm = Buffer.from([1, 0]).toString("base64");
+    processEventBatch?.({
+      events: [
+        {
+          type: "events.iterate.com/voice-agent/call-started",
+          payload: { activation, conversationId: "conv-proof" },
+        },
+        {
+          type: "events.iterate.com/voice-agent/session-configured",
+          payload: { activation, instructions: "exact live policy" },
+        },
+        { type: "events.iterate.com/voice-agent/spk-frame", payload: { activation, pcm } },
+        {
+          type: "events.iterate.com/voice-agent/spk-frame",
+          payload: { activation, pcm: "", lastFrameOfAnswer: true },
+        },
+        { type: "events.iterate.com/voice-agent/spk-frame", payload: { activation, pcm } },
+      ],
+    });
+
+    expect(call.watch.answerEnds).toHaveLength(1);
+    expect(call.watch.instructions).toEqual([
+      expect.objectContaining({ text: "exact live policy" }),
+    ]);
+    expect(call.watch.spkArrivals.map((frame) => frame.answerIndex)).toEqual([0, 1]);
+    await call.stop();
+  });
+
   test("releases the project session when opening the callback fails", async () => {
     const close = vi.fn();
     const stream = { openConnection: vi.fn(async () => Promise.reject(new Error("open failed"))) };
