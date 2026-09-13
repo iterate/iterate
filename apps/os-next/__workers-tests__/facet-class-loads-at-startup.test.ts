@@ -1,15 +1,16 @@
-// __workers-tests__/facet-door-loads-at-startup.test.ts — the facet door (`#invokeFacet`,
-// src/iterate-context-durable-object.ts) mints a facet's class ONLY inside the facet runtime's
-// startup callback, so a facet that is already RUNNING never touches the Worker Loader (Cloudflare's
+// __workers-tests__/facet-class-loads-at-startup.test.ts — `IterateContextDurableObject#invokeFacet`
+// (the one method every `itx.facets.get(...)` call lands in) mints a facet's class ONLY for a facet
+// that STARTS, so a facet that is already RUNNING never touches the Worker Loader (Cloudflare's
 // facet lifecycle; the shape apps/os took in PR #2631 after measuring the alternative — one isolate
 // lookup per warm call, and a running facet unreachable for as long as the loader is unhealthy).
 //
-// Pinned in the workers lane because it needs the real LOADER, the real `ctx.facets` and the DO's
-// LIVE instance: the door reads `this.env` at call time and `env` is the DurableObject base class's
-// plain field, so inside `runInDurableObject` the test replaces `instance.env` with a copy whose
-// `LOADER` COUNTS (a plain delegating object — a Proxy would hand the native method a foreign `this`):
-// every `LOADER.get`, every `getDurableObjectClass`, every `getCode` (= an isolate actually minted),
-// and a hook that can REFUSE a get. The bundle the lane runs cannot be `vi.mock`ed; this can.
+// Pinned in the `workers` vitest project (it runs inside workerd) because it needs the real LOADER,
+// the real `ctx.facets` and the DO's LIVE instance: `#invokeFacet` reads `this.env` at call time
+// and `env` is the DurableObject base class's plain field, so inside `runInDurableObject` the test
+// replaces `instance.env` with a copy whose `LOADER` COUNTS (a plain delegating object — a Proxy
+// would hand the native method a foreign `this`): every `LOADER.get`, every
+// `getDurableObjectClass`, every `getCode` (= an isolate actually minted), and a hook that can
+// REFUSE a get. The bundle this project runs cannot be `vi.mock`ed; this can.
 //
 //   • RPC path: hosting a facet is ONE `LOADER.get` + ONE `getDurableObjectClass`; 20 warm calls add
 //     NONE. The idle quiesce (support.ts) aborts it; the next call re-materializes it — one more of
@@ -62,7 +63,7 @@ type LoaderTap = {
 };
 
 /** Install the counting LOADER on the context DO's live instance (see the header). Returns the tap
- *  the door writes into from then on — same isolate, same heap. */
+ *  `#invokeFacet` writes into from then on — same isolate, same heap. */
 async function tapLoader(ctx: string): Promise<LoaderTap> {
   const tap: LoaderTap = { gets: [], classGets: 0, codeCallbacks: 0, refuseAfterFirst: undefined };
   await runInDurableObject(stub(ctx), (instance) => {
@@ -173,7 +174,7 @@ test("20 durable events pushed to a hosted facet's processEventBatch add no LOAD
   const enableClassGets = tap.classGets;
 
   // 20 durable events, one at a time, each awaited (committed). Every one is delivered — pushed,
-  // awaited, in order — to the running tally facet through the door.
+  // awaited, in order — to the running tally facet through `#invokeFacet`.
   for (let i = 0; i < 20; i++) await stub(ctx).append({ type: `pin/${i}` });
   await untilLoaderQuiet(tap);
   const stats = (await stub(ctx).invoke("itx.facets.get('tally').stats()")) as {
@@ -198,10 +199,11 @@ test("a RUNNING facet is not coupled to loader availability: with the loader ref
   expect(tap.gets.length).toBe(1); // never asked
 
   // After the quiesce the facet must start again — THAT needs the loader, and gets its refusal,
-  // on this call and the next: a startup callback that threw is aborted by the door, so every
+  // on this call and the next: a startup callback that threw is aborted by `#invokeFacet`, so every
   // attempt asks the loader again instead of replaying the first failure from a broken container.
   await quiesce(ctx);
-  // A rejected RPC promise consumed through `expect(…).rejects` is reported UNHANDLED by this lane
+  // A rejected RPC promise consumed through `expect(…).rejects` is reported UNHANDLED by the workers
+  // vitest project
   // (the handler attaches a tick late); a plain rejection handler is not.
   const refused = async () =>
     warmHello(ctx).then(

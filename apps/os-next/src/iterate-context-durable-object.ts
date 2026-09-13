@@ -635,7 +635,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#facetWorkInFlight++;
     try {
       // THE LOADED IDENTITY, resolved — not loaded: `load` runs only for a facet that starts (below;
-      // __workers-tests__/facet-door-loads-at-startup.test.ts). The one await is a dead id's
+      // __workers-tests__/facet-class-loads-at-startup.test.ts). The one await is a dead id's
       // recovery (worker-loader.ts).
       const { loaderId, load } = await prepareConfinedWorker({
         env: this.env,
