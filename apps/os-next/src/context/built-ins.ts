@@ -18,7 +18,7 @@ import { resolveContextPath } from "../iterate-context.ts";
 import {
   assertFacetSourceWithinCeiling,
   facetSpecOf,
-  loadConfinedWorker,
+  prepareConfinedWorker,
   type FacetSpec,
   type WorkerCacheKey,
   type WorkerSource,
@@ -459,7 +459,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               `workers.get(spec).${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
             );
           const [method, ...args] = call;
-          const { worker } = await loadConfinedWorker({
+          const { load } = await prepareConfinedWorker({
             env,
             deployId: deps.deployId,
             itxEntrypoint: deps.itxEntrypoint,
@@ -470,7 +470,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             invoke: deps.invoke,
             where: "workers.get",
           });
-          const entrypoint = worker.getEntrypoint(
+          const entrypoint = load().getEntrypoint(
             spec.className,
             spec.props === undefined ? undefined : { props: spec.props },
           ) as Fetcher & Record<string, (...a: unknown[]) => Promise<unknown>>;

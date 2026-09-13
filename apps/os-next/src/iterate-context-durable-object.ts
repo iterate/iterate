@@ -22,7 +22,7 @@ import {
   assertFacetSourceWithinCeiling,
   facetLoaderOwner,
   facetSpecOf,
-  loadConfinedWorker,
+  prepareConfinedWorker,
   type FacetSpec,
 } from "./context/worker-loader.ts";
 import {
@@ -600,8 +600,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** THE facet door — `itx.facets.get(name).m()` (address a running facet) and
    *  `itx.facets.get(name, { source, className }).m()` (load and host) both land here; facet stubs
    *  are non-transferable, so the walk happens where the stub lives. Top to bottom: the startup memo
-   *  → the load → the racing-delete check → the class + loaded identity → the call under the
-   *  watchdog → copy + dispose the answer. */
+   *  → the loaded identity (resolved, not loaded) → the racing-delete/reconfigure check → the restart
+   *  marker → the facet, its class minted only when it STARTS (a running one never touches the
+   *  loader) → the call under the watchdog → copy + dispose the answer. */
   async #invokeFacet(
     name: string,
     spec: FacetSpec | undefined,
@@ -633,7 +634,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const facetStartupMemo = this.#facetStartupMemoFor(name, spec);
     this.#facetWorkInFlight++;
     try {
-      const { worker, loaderId } = await loadConfinedWorker({
+      // THE LOADED IDENTITY, resolved — not loaded: `load` runs only for a facet that starts (below;
+      // __workers-tests__/facet-door-loads-at-startup.test.ts). The one await is a dead id's
+      // recovery (worker-loader.ts).
+      const { loaderId, load } = await prepareConfinedWorker({
         env: this.env,
         deployId: this.#appConfig.deployId,
         itxEntrypoint: this.#itxEntrypoint,
@@ -644,33 +648,57 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         invoke: (call) => this.invoke(call),
         where: `facet "${name}"`,
       });
-      // A removal may have deleted this facet while the load awaited: materializing now would
-      // resurrect it as an orphan this actor never quiesces. Refuse; the caller's row is gone too.
-      const desiredSpec = this.ctx.storage.kv.get(`facet:${name}`);
-      if (!desiredSpec)
-        throw codedError("NO_FACET", `no facet "${name}" — deleted while its source loaded`);
-      // Or RECONFIGURED (not just deleted) while the load awaited — a newer spec/source was stored and
-      // may already be running. This stale load must not abort the newer facet and install old code:
-      // bail so the newer load stands. (`facet:<name>` is the desired spec; #facetStartupMemoFor wrote
-      // OURS before the await, so a mismatch means a newer configure landed meanwhile.)
-      if (JSON.stringify(desiredSpec) !== JSON.stringify(facetStartupMemo))
-        throw codedError("NO_FACET", `facet "${name}" was reconfigured while its source loaded`);
-      // THE LOADED IDENTITY (`facet:<name>:loader-id`): when it moves — a source change, a deploy,
-      // a workaround generation after a dead load (worker-loader.ts) — the facet restarts in place,
-      // its storage surviving. The abort matters for the dead-load case too: workerd hands back the
-      // SAME facet container on every `facets.get`, even one whose class never started, and only an
-      // abort clears it.
-      const klass = worker.getDurableObjectClass(facetStartupMemo.className, {
-        props: { iterateContextName: this.#durableObjectAddress.name, name },
-      });
+      // A removal or a RECONFIGURE may have landed while that awaited: this name's memo is then gone
+      // (#deleteFacet) or a newer object (#facetStartupMemoFor replaces a changed spec). Bail — a
+      // stale call must neither resurrect a deleted facet as an orphan this actor never quiesces, nor
+      // abort the newer facet to install old code. The memo object's identity IS the check: the memo
+      // is per incarnation, and so is this await.
+      if (this.#facetStartupMemoByName.get(name) !== facetStartupMemo)
+        throw codedError(
+          "NO_FACET",
+          `facet "${name}" was deleted or reconfigured while its source resolved`,
+        );
+      // `facet:<name>:loader-id`, the restart marker: when the identity moves — a source change, a
+      // deploy, a workaround generation after a dead load (worker-loader.ts) — the facet restarts in
+      // place, its storage surviving. The abort matters for the dead-load case too: workerd hands
+      // back the SAME facet container on every `facets.get`, even one whose startup callback
+      // rejected, and only an abort clears it.
       const previousLoaderId = this.ctx.storage.kv.get(`facet:${name}:loader-id`) as
         | string
         | undefined;
-      if (previousLoaderId && previousLoaderId !== loaderId)
+      if (previousLoaderId && previousLoaderId !== loaderId) {
         this.#abortFacetIfRunning(name, "loaded identity changed");
+        this.#liveFacetNames.delete(name); // cold from here: it starts afresh below
+      }
       if (previousLoaderId !== loaderId)
         this.ctx.storage.kv.put(`facet:${name}:loader-id`, loaderId);
-      const facet = this.ctx.facets.get(name, () => ({ class: klass }));
+      // THE CLASS. A facet this actor holds LIVE (#liveFacetNames) is running: `facets.get` reuses
+      // its container and never runs the startup callback — no loader lookup, no class minted for
+      // nothing, and a loader hiccup cannot fail the call. A COLD facet's class is minted here,
+      // before `facets.get`: a loader that refuses is then this call's own rejection, with no
+      // container left behind (a startup callback that throws leaves workerd's container broken
+      // until an abort, and the runtime logs the throw as uncaught). The callback still mints for
+      // the one gap between the two — a container the runtime dropped under a name still held live
+      // (a constructor that threw is erased by workerd) — and a throw there is aborted in the catch
+      // below, so the next call starts cold and clean.
+      const mintClass = () =>
+        load().getDurableObjectClass(facetStartupMemo.className, {
+          props: { iterateContextName: this.#durableObjectAddress.name, name },
+        });
+      let startupClass = mintClass; // live: the callback mints, if it ever runs
+      if (!this.#liveFacetNames.has(name)) {
+        const minted = mintClass(); // cold: minted now
+        startupClass = () => minted;
+      }
+      let startupFailed = false;
+      const facet = this.ctx.facets.get(name, () => {
+        try {
+          return { class: startupClass() };
+        } catch (error) {
+          startupFailed = true;
+          throw error;
+        }
+      });
       this.#liveFacetNames.add(name); // live from here
       // A top-level `.fetch` rides the facet's own fetch — the one channel that carries a 101
       // natively (context/rpc-stubs.ts doctrine, points 1 & 4); a method walks
@@ -695,6 +723,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       } catch (error) {
         if (errorCode(error) === "TIMEOUT") {
           this.#abortFacetIfRunning(name, "call timed out");
+          this.#liveFacetNames.delete(name);
+        } else if (startupFailed) {
+          this.#abortFacetIfRunning(name, "startup failed");
           this.#liveFacetNames.delete(name);
         }
         throw error;

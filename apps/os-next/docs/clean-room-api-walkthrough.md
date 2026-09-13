@@ -166,7 +166,7 @@ packages/v3/project-worker/
                                  upgrade, presence events); edge side lendRpcStubOverPager (the DON'T-PIN
                                  relay), LentRpcStub; fetch-shaped calls — the x-itx-expression lane and the
                                  101 tunnel on a lent stub (fenced WORKAROUND, delete-day checklist inside)
-      worker-loader.ts           loadConfinedWorker, facetLoaderOwner, WorkerSource
+      worker-loader.ts           prepareConfinedWorker, facetLoaderOwner, WorkerSource
       repos.ts                   itx.repos (readFile / writeFile, one file at a time), itx.cfArtifacts
                                  (ArtifactsScope), and the git-over-HTTPS engine beneath them
     stream/                      chapter 3 — the log and what reduces it
@@ -1516,7 +1516,7 @@ The route `*.project-worker.iterate.com/*` (a wildcard DNS record in the zone) i
 The loader cacheKey is the JSON array `[kind, deploy, owner, cacheKey ?? contentHash]` (never a `:`-joined string — an owner or a key may contain `:`): the caller's
 `cacheKey` when the source is a producer expression (required there — the producer runs only
 inside Cloudflare's `getCode`, on a cold isolate), else the modules' content hash. Every
-distinct key is a billed dynamic worker, so nothing per request may ever enter it. Loaded isolates run under one compatibility block (inline in `loadConfinedWorker`): the same
+distinct key is a billed dynamic worker, so nothing per request may ever enter it. Loaded isolates run under one compatibility block (inline in `prepareConfinedWorker`): the same
 compatibility date, `no_nodejs_compat` and `no_nodejs_compat_v2` (userspace stays pure-play), and
 `allow_irrevocable_stub_storage` (loaded code may store its `env.ITX` stub and
 replay it; the parent config carries the same flag). The DO's lifecycle is the
