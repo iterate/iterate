@@ -209,6 +209,44 @@ function harness(args: {
 }
 
 describe("StreamEventSender hosted processor delivery", () => {
+  it("replaces a hosted callback by clearing its matching watchdog and immediately redelivering", async () => {
+    const deliveries: DeliveryCall[] = [];
+    const disposals = [vi.fn(), vi.fn()];
+    let wakeCount = 0;
+    const h = harness({
+      events: [event(2, "a", { keep: true })],
+      wakeProcessor: async () => ({
+        streamId: SOURCE_STREAM_ID,
+        checkpointOffset: 0,
+        processEventBatch: recordingProcessEventBatch(deliveries, disposals[wakeCount++]!),
+      }),
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+    expect(deliveries).toHaveLength(1);
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      inFlightConnectionGeneration: 1,
+    });
+
+    h.eventSender.replaceHostedConnection(PROCESSOR_KEY);
+    await h.settle();
+
+    expect(disposals[0]).toHaveBeenCalledOnce();
+    expect(deliveries).toHaveLength(2);
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      attempt: 0,
+      lastError: null,
+      inFlightConnectionGeneration: 2,
+    });
+    deliveries[1]!.report("ok");
+    await flushMicrotasks();
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      inFlightDeadlineAt: null,
+      inFlightConnectionGeneration: null,
+    });
+  });
+
   it("backs off without publishing when recording the hosted open is interrupted", async () => {
     const disposed = vi.fn();
     const h = harness({

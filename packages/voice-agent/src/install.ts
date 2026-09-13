@@ -9,7 +9,13 @@
  * every project, and each copy then aged on its own.
  */
 import { z } from "zod";
-import { VOICE_AGENT_GUEST_FILE } from "./ref.ts";
+import {
+  VOICE_AGENT_GUEST_FILE,
+  voiceAgentRefConfigSource,
+  voiceAgentRefs,
+  type VoiceAgentEntrypointRef,
+} from "./ref.ts";
+import { voiceAgentRefConfig } from "./ref-config.ts";
 
 export const VOICE_AGENT_PACKAGE_NAME = "@iterate-com/voice-agent";
 
@@ -37,6 +43,46 @@ export { default, VoiceAgentFacet } from "${VOICE_AGENT_PACKAGE_NAME}/worker";
 `;
 
 /** The files a pre-package deploy committed beside voice-agent.ts. Nothing builds from them any more. */
+/**
+ * A FROM-SOURCE INSTALL: THE REPO HOLDS THE AGENT, NOT A NAME FOR IT.
+ *
+ * The agent is userspace code, and a project's config repo is its
+ * deployment unit — so a checkout can commit the package's own source files
+ * into the repo and re-export the worker from there, and the platform builds
+ * the agent from the repo on the next call, with nothing pinned or published
+ * in between. `voicelab talk` does this on every run, so an edit to the
+ * facet is live on the next call from the same checkout. `voicelab deploy`
+ * is the other way round: it names the published package and leaves the
+ * committed copy to `--prune-legacy`.
+ *
+ * The files are the worker's import graph inside the package, nothing more:
+ * worker → voice-agent → face, ref, setup-options; face → viseme → the
+ * generated model. `ref` reads the generated ref-config module.
+ */
+export const VOICE_AGENT_SOURCE_DIR = "voice-agent";
+export const VOICE_AGENT_SOURCE_FILES = [
+  "worker.ts",
+  "voice-agent.ts",
+  "face.ts",
+  "ref.ts",
+  "ref-config.ts",
+  "setup-options.ts",
+  "viseme.ts",
+  "viseme-model.generated.ts",
+] as const;
+
+type VoiceAgentSourceFiles = Record<(typeof VOICE_AGENT_SOURCE_FILES)[number], string>;
+export const VOICE_AGENT_GUEST_SOURCE_FROM_REPO = `// The voice agent guest worker, built from this repo's own copy of the
+// agent's source in ${VOICE_AGENT_SOURCE_DIR}/ (committed by \`voicelab talk\` from a
+// checkout). \`voicelab deploy\` replaces this with the published package.
+export { default, VoiceAgentFacet } from "./${VOICE_AGENT_SOURCE_DIR}/worker.ts";
+`;
+
+/** A source-backed guest under a caller-owned filename and directory. */
+export function voiceAgentGuestSourceFromRepo(sourceDirectory: string): string {
+  return `export { default, VoiceAgentFacet } from "./${sourceDirectory}/worker.ts";\n`;
+}
+
 export const LEGACY_GUEST_PATHS = [
   "face.ts",
   "pcm.ts",
@@ -190,12 +236,136 @@ export async function installVoiceAgent(
 export async function legacyGuestPaths(
   repo: Pick<VoiceAgentConfigRepo, "readFile">,
 ): Promise<string[]> {
+  const candidates = [
+    ...LEGACY_GUEST_PATHS,
+    ...VOICE_AGENT_SOURCE_FILES.map((file) => `${VOICE_AGENT_SOURCE_DIR}/${file}`),
+  ];
   const present = await Promise.all(
-    LEGACY_GUEST_PATHS.map(async (path) =>
-      (await repo.readFile({ path })) === null ? null : path,
-    ),
+    candidates.map(async (path) => ((await repo.readFile({ path })) === null ? null : path)),
   );
   return present.filter((path) => path !== null);
+}
+
+/**
+ * package.json for a from-source install: zod present (the agent imports
+ * it), and no dependency on the published package — an unused dependency
+ * still gets fetched on every build, and on a preview it is pinned to a
+ * commit whose package may not be published yet.
+ */
+export function withVoiceAgentSourceDependencies(
+  packageJson: string,
+  options: { preservePublishedVoiceAgentDependency?: boolean } = {},
+): {
+  content: string;
+  changed: boolean;
+} {
+  const { manifest, dependencies } = parseManifest(packageJson);
+  const { [VOICE_AGENT_PACKAGE_NAME]: published, ...rest } = dependencies;
+  const next = {
+    ...(options.preservePublishedVoiceAgentDependency ? dependencies : rest),
+    zod: dependencies.zod || VOICE_AGENT_ZOD_SPEC,
+  };
+  if (
+    (options.preservePublishedVoiceAgentDependency || !published) &&
+    next.zod === dependencies.zod
+  ) {
+    return { content: packageJson, changed: false };
+  }
+  const content = JSON.stringify({ ...manifest, dependencies: next }, null, 2);
+  return { content: `${content}\n`, changed: true };
+}
+
+/**
+ * Commit this checkout's copy of the agent into the repo (see
+ * VOICE_AGENT_SOURCE_DIR) and point voice-agent.ts at it. `files` maps each
+ * of VOICE_AGENT_SOURCE_FILES to its content. Only what differs is committed;
+ * a repo that already carries this exact copy gets no commit.
+ */
+interface InstallVoiceAgentFromSourceResult extends InstallVoiceAgentResult {
+  /** The stateless ref addressing exactly the guest source just committed. */
+  entrypointRef: VoiceAgentEntrypointRef;
+}
+
+export async function installVoiceAgentFromSource(
+  repo: VoiceAgentConfigRepo,
+  files: VoiceAgentSourceFiles,
+  options: {
+    message?: string;
+    sourceDirectory?: string;
+    guestFile?: string;
+    facetKeyPrefix?: string;
+    preservePublishedVoiceAgentDependency?: boolean;
+  } = {},
+): Promise<InstallVoiceAgentFromSourceResult> {
+  const sourceDirectory = options.sourceDirectory || VOICE_AGENT_SOURCE_DIR;
+  const guestFile = options.guestFile || VOICE_AGENT_GUEST_FILE;
+  const sourceIdentity = JSON.stringify({
+    files: VOICE_AGENT_SOURCE_FILES.map((file) => [file, files[file]]),
+    guestFile,
+    sourceDirectory,
+  });
+  const durableWorkerKey = options.facetKeyPrefix
+    ? `${options.facetKeyPrefix}-${Array.from(
+        new Uint8Array(
+          await crypto.subtle.digest("SHA-256", new TextEncoder().encode(sourceIdentity)),
+        ),
+        (byte) => byte.toString(16).padStart(2, "0"),
+      )
+        .join("")
+        .slice(0, 32)}`
+    : voiceAgentRefConfig.durableWorkerKey;
+  const preparedFiles: VoiceAgentSourceFiles = {
+    ...files,
+    "ref-config.ts": voiceAgentRefConfigSource({ guestFile, durableWorkerKey }),
+  };
+  const refs = voiceAgentRefs({ guestFile, durableWorkerKey });
+  const guestSource =
+    sourceDirectory === VOICE_AGENT_SOURCE_DIR
+      ? VOICE_AGENT_GUEST_SOURCE_FROM_REPO
+      : voiceAgentGuestSourceFromRepo(sourceDirectory);
+  const spec = `${sourceDirectory}/ (this checkout's source)`;
+  const [manifest, guest, ...current] = await Promise.all([
+    repo.readFile({ path: "package.json" }),
+    repo.readFile({ path: guestFile }),
+    ...VOICE_AGENT_SOURCE_FILES.map((file) =>
+      repo.readFile({ path: `${sourceDirectory}/${file}` }),
+    ),
+  ]);
+  if (!manifest) {
+    throw new Error("The config repo has no package.json, so nothing can declare the voice agent.");
+  }
+  const dependency = withVoiceAgentSourceDependencies(manifest.content, {
+    preservePublishedVoiceAgentDependency: options.preservePublishedVoiceAgentDependency,
+  });
+  const changes: { path: string; content: string }[] = [
+    ...(dependency.changed ? [{ path: "package.json", content: dependency.content }] : []),
+    ...(guest?.content === guestSource ? [] : [{ path: guestFile, content: guestSource }]),
+    ...VOICE_AGENT_SOURCE_FILES.flatMap((file, index) =>
+      current[index]?.content === preparedFiles[file]
+        ? []
+        : [{ path: `${sourceDirectory}/${file}`, content: preparedFiles[file] }],
+    ),
+  ];
+  if (changes.length === 0) {
+    return {
+      changed: false,
+      commitOid: manifest.commitOid,
+      spec,
+      changedPaths: [],
+      entrypointRef: refs.entrypoint,
+    };
+  }
+  const commit = await repo.commitFiles({
+    message: options.message || "voice-agent: this checkout's source, built from the repo",
+    changes,
+  });
+  return {
+    changed: !commit.noChanges,
+    commitOid: commit.commitOid,
+    spec,
+    changedPaths: changes.map((change) => change.path),
+    entrypointRef: refs.entrypoint,
+  };
 }
 
 /**

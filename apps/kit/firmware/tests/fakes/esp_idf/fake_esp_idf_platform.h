@@ -63,19 +63,15 @@ size_t iterate_kit_fake_platform_sent_count(void);
 const char *iterate_kit_fake_platform_sent(size_t index);
 /** The first sent message containing `needle`, or NULL. */
 const char *iterate_kit_fake_platform_find_sent(const char *needle);
+/** Make the next transport write fail before it accepts any bytes. */
+void iterate_kit_fake_platform_fail_next_send(void);
+/** Occupy every control-outbox slot until the next transport poll drains it. */
+void iterate_kit_fake_platform_fill_control_outbox(void);
+/** Drain the synthetic control backlog so the app may append again. */
+void iterate_kit_fake_platform_drain_control_outbox(void);
 
-/** Probes and restarts the loop asked the transport for. */
-size_t iterate_kit_fake_platform_probes_requested(void);
+/** Restarts the loop asked the transport for. */
 size_t iterate_kit_fake_platform_restarts_requested(void);
-
-/**
- * Answer the next PONG, or stop answering them.
- *
- * The press probe's whole question is whether `websocket_pongs_received` moves.
- * A fake hop that always answered could not fail, and one that never answered
- * could not succeed, so the test says which hop it is testing.
- */
-void iterate_kit_fake_platform_set_hop_answers(bool answers);
 
 #ifdef __cplusplus
 }

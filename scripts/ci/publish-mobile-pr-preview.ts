@@ -179,7 +179,7 @@ async function publishMobilePrPreview() {
     pull_number: pullRequest.number,
   });
   const body = markdownAnnotator(freshPr.body || "", bodySectionLabel).update(section);
-  await github.rest.pulls.update({ ...repo, pull_number: pullRequest.number, body });
+  await github.rest.issues.update({ ...repo, issue_number: pullRequest.number, body });
   console.log(`updated mobile preview section in PR #${pullRequest.number} body`);
 }
 

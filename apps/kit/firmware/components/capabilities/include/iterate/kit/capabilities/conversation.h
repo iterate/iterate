@@ -13,7 +13,7 @@ extern "C" {
 
 /**
  * Remote call control for a device-owned event queue, in exactly the shape
- * of push_to_talk: RPC dispatch only publishes an event, and the device main
+ * of the physical call control: RPC dispatch only publishes an event, and the device main
  * loop owns the intent transition. This is the same path a physical button
  * or touch tap uses, which keeps remote and local edges ordered — and it is
  * what lets an unattended lab drive a physical conversation proof without a

@@ -61,11 +61,21 @@ test.each([
     );
     const project = {
       agents: {
-        get: vi.fn(() => ({ append, create })),
+        get: vi.fn(() => ({
+          append,
+          create,
+          stream: {
+            getEvent: vi.fn(async ({ idempotencyKey }: { idempotencyKey: string }) =>
+              idempotencyKey === "iterate/config/onboarding-instructions:v1" ? {} : undefined,
+            ),
+          },
+        })),
       },
       clients: {
         get: vi.fn((path: string) => ({
-          __describe: vi.fn(async () => ({ capabilities: [{ path: ["capabilities"] }] })),
+          __describe: vi.fn(async () => ({
+            capabilities: [{ path: ["capabilities"], scope: path, type: "live" }],
+          })),
           invokeCapability:
             path === "/clients/os-app/landing-tab" ? landingTabCapability : busyTabCapability,
         })),
@@ -138,7 +148,7 @@ test.each([
         }),
       }),
     );
-    expect(project.clients.get).toHaveBeenCalledTimes(name === "with-voice" ? 4 : 2);
+    expect(project.clients.get).toHaveBeenCalledTimes(2);
     expect(project.clients.get).toHaveBeenCalledWith("/clients/os-app/landing-tab");
     expect(project.clients.get).toHaveBeenCalledWith("/clients/os-app/busy-tab");
     expect(landingTabCapability).toHaveBeenNthCalledWith(1, {
@@ -151,6 +161,117 @@ test.each([
     expect(busyTabCapability).toHaveBeenCalledExactlyOnceWith({
       path: ["capabilities", "browser", "url"],
     });
+  },
+);
+
+test.each([
+  {
+    name: "default",
+    worker: (env: never) => new ProjectWorker({} as never, env),
+  },
+  {
+    name: "with-voice",
+    worker: (env: never) => new VoiceProjectWorker({} as never, env),
+  },
+])(
+  "$name template delivers pending onboarding when the browser client connects after project creation",
+  async ({ worker: makeWorker }) => {
+    const clientPath = "/clients/os-app/landing-tab";
+    let instructionsDelivered = false;
+    let onboardingDelivered = false;
+    let receiptFailsOnce = true;
+    let currentUrl = "https://os.iterate.test/projects/new-project";
+    let sourceFolded = false;
+    const waitUntilProcessed = vi.fn(async ({ offset }: { offset: number }) => {
+      expect(offset).toBe(7);
+      sourceFolded = true;
+    });
+    const navigate = vi.fn(async () => {
+      currentUrl = "https://os.iterate.test/projects/new-project/agents/streams/agents/onboarding";
+      return { navigated: currentUrl };
+    });
+    const append = vi.fn(async (...events: unknown[]) => {
+      for (const event of events) {
+        if (typeof event !== "object" || !event || !("idempotencyKey" in event)) continue;
+        if (event.idempotencyKey === "iterate/config/onboarding-instructions:v1") {
+          instructionsDelivered = true;
+        }
+        if (event.idempotencyKey === "iterate/config/onboarding-navigation-delivered:v1") {
+          if (receiptFailsOnce) {
+            receiptFailsOnce = false;
+            throw new Error("receipt append interrupted after navigation");
+          }
+          onboardingDelivered = true;
+        }
+      }
+      return events;
+    });
+    const project = {
+      agents: {
+        get: vi.fn(() => ({
+          append,
+          create: vi.fn(async () => undefined),
+          stream: {
+            getEvent: vi.fn(async ({ idempotencyKey }: { idempotencyKey: string }) => {
+              if (idempotencyKey === "iterate/config/onboarding-instructions:v1") {
+                return instructionsDelivered ? {} : undefined;
+              }
+              if (idempotencyKey === "iterate/config/onboarding-navigation-delivered:v1") {
+                return onboardingDelivered ? {} : undefined;
+              }
+              return undefined;
+            }),
+          },
+        })),
+      },
+      clients: {
+        get: vi.fn(() => ({
+          __describe: vi.fn(async () => ({
+            capabilities: sourceFolded
+              ? [{ path: ["capabilities"], scope: clientPath, type: "live" }]
+              : [],
+          })),
+          processor: { waitUntilProcessed },
+          invokeCapability: vi.fn(async (call: { path: string[] }) =>
+            call.path.at(-1) === "url" ? currentUrl : navigate(),
+          ),
+        })),
+        list: vi.fn(async () => []),
+      },
+      identity: vi.fn(async () => ({ slug: "new-project" })),
+      repo: { readFile: vi.fn(async () => ({ content: "Onboarding" })) },
+      [Symbol.dispose]: vi.fn(),
+    };
+    const instance = makeWorker({
+      ITERATE_WORKER_VERSION: "test",
+      ITX: { get: vi.fn(() => pipelinedProject(project)) },
+    } as never);
+
+    await deliver(instance, {
+      type: "events.iterate.com/project/created",
+      path: "/",
+      payload: {},
+    });
+    expect(navigate).not.toHaveBeenCalled();
+
+    const providedBrowserEvent = {
+      type: "events.iterate.com/capability-host/capability-provided",
+      path: "/",
+      source: { copiedFrom: [{ offset: 7, path: clientPath }] },
+      payload: {
+        type: "live",
+        path: ["capabilities"],
+        providerPager: { connectedAtOffset: 1 },
+      },
+    };
+    await expect(deliver(instance, providedBrowserEvent)).rejects.toThrow(
+      "receipt append interrupted after navigation",
+    );
+    expect(navigate).toHaveBeenCalledOnce();
+    expect(waitUntilProcessed).toHaveBeenCalledExactlyOnceWith({ offset: 7 });
+
+    await deliver(instance, providedBrowserEvent);
+    expect(navigate).toHaveBeenCalledOnce();
   },
 );
 

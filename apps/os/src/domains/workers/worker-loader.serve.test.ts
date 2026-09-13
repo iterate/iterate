@@ -20,6 +20,7 @@ const h = vi.hoisted(() => {
   const kv = new FakeKv();
   const state = {
     artifactDisposals: 0,
+    assets: {} as Record<string, string>,
     buildCalls: [] as string[],
     buildGate: undefined as Promise<void> | undefined,
     buildOperations: [] as Promise<unknown>[],
@@ -30,6 +31,7 @@ const h = vi.hoisted(() => {
     head: { branch: "main", commitOid: "c1", contentHash: "h1" },
     headDisposals: 0,
     loaderCalls: [] as Array<{ config: Record<string, unknown>; key: string }>,
+    mainModule: "worker.js",
     oneOffLoaderCalls: [] as Array<Record<string, unknown>>,
     repoDisposals: 0,
     snapshotDisposals: 0,
@@ -52,9 +54,9 @@ const h = vi.hoisted(() => {
       ok: true as const,
       output: {
         assetManifest: {},
-        assets: {},
-        mainModule: "worker.js",
-        modules: { "worker.js": `// build of ${input.files["worker.ts"]}` },
+        assets: state.assets,
+        mainModule: state.mainModule,
+        modules: { [state.mainModule]: `// build of ${input.files["worker.ts"]}` },
         warnings: [],
         wranglerConfig: state.wranglerConfig,
       },
@@ -166,6 +168,7 @@ beforeEach(async () => {
   await Promise.allSettled(h.state.buildOperations.splice(0));
   h.kv.data.clear();
   h.state.artifactDisposals = 0;
+  h.state.assets = {};
   h.state.buildCalls.splice(0);
   h.state.buildGate = undefined;
   h.state.coordinatorBudgets.splice(0);
@@ -173,6 +176,7 @@ beforeEach(async () => {
   h.state.failRuntime = false;
   h.state.headDisposals = 0;
   h.state.loaderCalls.splice(0);
+  h.state.mainModule = "worker.js";
   h.state.oneOffLoaderCalls.splice(0);
   h.state.repoDisposals = 0;
   h.state.snapshotDisposals = 0;
@@ -219,6 +223,87 @@ describe("resolveWorkerSource", () => {
 
     expect(second.cacheKey).toBe(first.cacheKey);
     expect(h.state.buildCalls).toEqual(["SHARED"]);
+  });
+
+  test("rebuilds an unrelated repo revision without replacing the loaded worker runtime", async () => {
+    const source = repoSource("/repos/voice-agent");
+    setCommit("c1", "voice-source-before", "VOICE_AGENT");
+    const before = sourceFrom(await resolveWorkerSource({ projectId: "prj_voice", source }));
+    h.state.assets = { "/FREQUENTLY_BOUGHT_ITEMS.md": "milk\neggs\n" };
+    setCommit("c2", "voice-source-after-unrelated-markdown", "VOICE_AGENT");
+    const after = sourceFrom(await resolveWorkerSource({ projectId: "prj_voice", source }));
+
+    expect(h.state.buildCalls).toEqual(["VOICE_AGENT", "VOICE_AGENT"]);
+    expect(after.assets).toEqual(h.state.assets);
+    expect(after.cacheKey).toBe(before.cacheKey);
+    const load = (resolved: typeof before) =>
+      loadResolvedWorker({
+        bindings: {},
+        globalOutbound: {} as Fetcher,
+        loaderInstanceNonce: undefined,
+        mode: "cached",
+        projectId: "prj_voice",
+        resolved,
+        scopePath: "/agents/voice",
+        streamContext: { kind: "scope", scopePath: "/agents/voice" },
+      });
+    load(before);
+    load(after);
+    expect(h.state.loaderCalls.map((call) => call.key)).toEqual([
+      h.state.loaderCalls[0]?.key,
+      h.state.loaderCalls[0]?.key,
+    ]);
+    expect(h.state.loaderCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          config: expect.objectContaining({
+            env: expect.objectContaining({ ITERATE_WORKER_VERSION: before.cacheKey }),
+          }),
+        }),
+        expect.objectContaining({
+          config: expect.objectContaining({
+            env: expect.objectContaining({ ITERATE_WORKER_VERSION: after.cacheKey }),
+          }),
+        }),
+      ]),
+    );
+
+    h.state.wranglerConfig = {
+      compatibilityDate: "2026-08-01",
+      compatibilityFlags: ["nodejs_compat_v2"],
+    };
+    setCommit("c3", "voice-source-after-compatibility", "VOICE_AGENT");
+    const compatibilityChanged = sourceFrom(
+      await resolveWorkerSource({ projectId: "prj_voice", source }),
+    );
+    expect(compatibilityChanged.cacheKey).not.toBe(before.cacheKey);
+    load(compatibilityChanged);
+    const compatibilityLoader = h.state.loaderCalls.at(-1);
+    expect(compatibilityLoader?.key).not.toBe(h.state.loaderCalls[0]?.key);
+    expect(compatibilityLoader?.config).toMatchObject({
+      compatibilityDate: "2026-08-01",
+      compatibilityFlags: ["nodejs_compat_v2"],
+      env: { ITERATE_WORKER_VERSION: compatibilityChanged.cacheKey },
+    });
+
+    setCommit("c4", "voice-source-after-code", "VOICE_AGENT_CHANGED");
+    const changed = sourceFrom(await resolveWorkerSource({ projectId: "prj_voice", source }));
+    expect(changed.cacheKey).not.toBe(compatibilityChanged.cacheKey);
+    load(changed);
+    const changedLoader = h.state.loaderCalls.at(-1);
+    expect(changedLoader?.key).not.toBe(compatibilityLoader?.key);
+    expect(changedLoader?.config).toMatchObject({
+      env: { ITERATE_WORKER_VERSION: changed.cacheKey },
+    });
+
+    h.state.mainModule = "entry.js";
+    setCommit("c5", "voice-source-after-entrypoint", "VOICE_AGENT_CHANGED");
+    const entrypointChanged = sourceFrom(
+      await resolveWorkerSource({ projectId: "prj_voice", source }),
+    );
+    expect(entrypointChanged.cacheKey).not.toBe(changed.cacheKey);
+    load(entrypointChanged);
+    expect(h.state.loaderCalls.at(-1)?.key).not.toBe(changedLoader?.key);
   });
 
   test("loads a one-off script without retaining a cache identity", async () => {

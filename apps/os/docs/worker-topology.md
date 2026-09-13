@@ -23,6 +23,15 @@ container-backed CloudflareSandbox class per supported instance size
 sharded by immutable build key and holds only live single-flight state; build
 artifacts remain in KV.
 
+Dynamic builds and running workers have separate identities. The build cache
+includes the repository snapshot, so a commit can request a rebuild. Worker
+Loader and stateful facets use the compiled modules, entry module, and effective
+compatibility settings instead: an unrelated Markdown or asset edit must not
+restart an unchanged voice processor. Changes to executable code still replace
+its running facet while preserving storage. A `processor-revived` journal event
+records a recovery check, not proof that a crash occurred or that a live
+connection survived.
+
 ## Compiler sidecars (the "+2")
 
 `itx.docs.typecheck` runs in a
