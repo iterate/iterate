@@ -78,11 +78,6 @@ function rememberEnded(state: DeviceState, activation: string) {
     ? state.recentEndedActivations
     : [activation, ...state.recentEndedActivations].slice(0, 2);
 }
-function bytes(value: string) {
-  return (
-    Math.floor(value.length / 4) * 3 - (value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0)
-  );
-}
 
 export class VoiceDeviceProcessor extends StreamProcessor<
   Contract,
@@ -99,15 +94,18 @@ export class VoiceDeviceProcessor extends StreamProcessor<
         instructions: event.payload.instructions || "",
         visemes: event.payload.visemes ?? false,
       };
-    if (event.type === Created)
-      return state.call || state.recentEndedActivations.includes(event.payload.activation)
-        ? state
-        : { ...state, call: { ...event.payload, conversationId: null } };
+    if (event.type === Created) {
+      if (state.call || state.recentEndedActivations.includes(event.payload.activation))
+        return state;
+      return { ...state, call: { ...event.payload, conversationId: null } };
+    }
     if (event.type === "events.iterate.com/voice-agent/call-started") {
-      return state.call?.activation === event.payload.activation &&
+      if (
+        state.call?.activation === event.payload.activation &&
         event.source?.processor?.stream.path === state.call.childStreamPath
-        ? { ...state, call: { ...state.call, conversationId: event.payload.conversationId } }
-        : state;
+      )
+        return { ...state, call: { ...state.call, conversationId: event.payload.conversationId } };
+      return state;
     }
     if (event.type !== "events.iterate.com/voice-agent/conversation-ended") return state;
     if (state.call?.activation !== event.payload.activation)
@@ -121,8 +119,8 @@ export class VoiceDeviceProcessor extends StreamProcessor<
 
   processEvent(args: ProcessEventArgs<Contract>): undefined {
     const { event, state } = args;
-    this.#activeChildPath = state.call?.childStreamPath ?? null;
-    if (args.delivery.caughtUp && state.call && this.#opening === null) {
+    this.#activeChildPath = state.call?.childStreamPath || null;
+    if (args.delivery.caughtUp && state.call && !this.#opening) {
       args.blockProcessorWhile(() =>
         this.#endBoth(
           args,
@@ -133,12 +131,9 @@ export class VoiceDeviceProcessor extends StreamProcessor<
       );
       return;
     }
-    if (event === null || event.type === Created) return;
+    if (!event || event.type === Created) return;
     if (event.type === "events.iterate.com/voice-agent/mic-frame") {
-      if (
-        event.payload.pcm === "" ||
-        state.recentEndedActivations.includes(event.payload.activation)
-      )
+      if (!event.payload.pcm || state.recentEndedActivations.includes(event.payload.activation))
         return;
       if (state.call && state.call.activation !== event.payload.activation) return;
       if (!state.call) {
@@ -202,7 +197,8 @@ export class VoiceDeviceProcessor extends StreamProcessor<
       opening.micBytes = 0;
       opening.endReason = event.payload.reason;
       this.#opening = null;
-      if (opening.ready) this.#forwardTerminal(args, opening, event.payload.reason);
+      if (opening.ready)
+        args.blockProcessorWhile(() => this.#endChild(args, opening, event.payload.reason));
       return;
     }
     if (!call) return;
@@ -239,6 +235,8 @@ export class VoiceDeviceProcessor extends StreamProcessor<
           opening.micBytes = 0;
           await args.appendTo(
             opening.childStreamPath,
+            // Keep literal event discriminants: Array.map would otherwise widen
+            // these known protocol values beyond the processor's event union.
             ...frames.map((pcm) => ({
               type: "events.iterate.com/voice-agent/mic-frame" as const,
               ephemeral: true as const,
@@ -282,7 +280,9 @@ export class VoiceDeviceProcessor extends StreamProcessor<
       );
       return;
     }
-    const length = bytes(pcm);
+    // Count decoded PCM bytes without allocating another audio buffer.
+    const length =
+      Math.floor(pcm.length / 4) * 3 - (pcm.endsWith("==") ? 2 : pcm.endsWith("=") ? 1 : 0);
     if (opening.micBytes + length <= MAX_HELD_MIC_BYTES) {
       opening.micFrames.push(pcm);
       opening.micBytes += length;
@@ -301,9 +301,6 @@ export class VoiceDeviceProcessor extends StreamProcessor<
         "the fresh voice conversation was not ready before 21000ms of microphone audio accumulated",
       ),
     );
-  }
-  #forwardTerminal(args: ProcessEventArgs<Contract>, opening: Opening, reason: string) {
-    args.blockProcessorWhile(() => this.#endChild(args, opening, reason));
   }
   #endChild(args: ProcessEventArgs<Contract>, opening: Opening, reason: string) {
     return args.appendTo(opening.childStreamPath, {
@@ -337,7 +334,7 @@ export class VoiceDeviceProcessor extends StreamProcessor<
       try {
         const runtime = await stream.getProcessorRuntimeState({ name: "voice-agent" });
         try {
-          return { runtime: { face: runtime?.runtime?.face ?? null } };
+          return { runtime: { face: runtime?.runtime?.face || null } };
         } finally {
           disposeRpcStub(runtime, "device face runtime");
         }
@@ -363,6 +360,7 @@ export async function setupVoiceDevice(
       name: VoiceDeviceContract.slug,
       description: "Route this Kit device stream to a fresh voice conversation per activation.",
       filter: { eventTypes: [...VoiceDeviceContract.consumes] },
+      // Preserve the SDK receiver union's literal discriminants across this variable.
       receiver: {
         action: "facet-processor" as const,
         source: { kind: "userspace" as const, worker: voiceDeviceFacetRef(options.streamPath) },

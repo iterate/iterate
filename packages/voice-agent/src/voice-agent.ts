@@ -2178,6 +2178,7 @@ export async function setupVoiceAgent(
         ...(options.transportStreamPath
           ? [
               {
+                // The conditional batch must retain this known event-name literal.
                 type: "events.iterate.com/agent/configured" as const,
                 idempotencyKey: `voice-agent/backend:${streamPath}`,
                 payload: { config: { llm: { model: "openai/gpt-6-astra" } } },
