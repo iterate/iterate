@@ -14,6 +14,11 @@ on:
       - scripts/lib/**
       - apps/kit/**
       - packages/ui/**
+      - packages/voice-agent/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - patches/**
   workflow_dispatch:
     inputs:
       ref:
@@ -24,9 +29,9 @@ on:
 jobs:
   deploy:
     runs-on:
-      size: 2x8
+      size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -39,11 +44,36 @@ jobs:
         run: doppler setup --config prd --project kit
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Install ESP-IDF 5.4.2
+        env:
+          IDF_PATH: /tmp/esp-idf
+          IDF_TOOLS_PATH: /tmp/.espressif
+        run: |-
+          set -euo pipefail
+          git clone --depth 1 --recursive --branch v5.4.2 https://github.com/espressif/esp-idf.git "$IDF_PATH"
+          test "$(git -C "$IDF_PATH" rev-parse HEAD)" = "f5c3654a1c2d2a01f7f67def7a0dc48e691f63c0"
+          "$IDF_PATH/install.sh" esp32s3
+          source "$IDF_PATH/export.sh"
+          idf.py --version
+      - name: Build Kit firmware releases
+        working-directory: apps/kit
+        env:
+          IDF_PATH: /tmp/esp-idf
+          IDF_TOOLS_PATH: /tmp/.espressif
+        run: |-
+          set -euo pipefail
+          source "$IDF_PATH/export.sh"
+          pnpm run firmware:release
       - name: Deploy apps/kit
         working-directory: apps/kit
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm run-script deploy
+          IDF_PATH: /tmp/esp-idf
+          IDF_TOOLS_PATH: /tmp/.espressif
+        run: |-
+          set -euo pipefail
+          source "$IDF_PATH/export.sh"
+          doppler run -- pnpm run-script deploy
   notify:
     needs:
       - deploy

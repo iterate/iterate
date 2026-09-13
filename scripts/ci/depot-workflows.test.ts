@@ -53,6 +53,14 @@ const deploymentWorkflows = [
     },
   },
   {
+    file: ".depot/workflows/deploy-kit.yml",
+    group: "deploy-kit-production",
+    jobs: {
+      deploy: { size: "4x16", timeoutMinutes: 30 },
+      notify: { size: "2x8", timeoutMinutes: 10 },
+    },
+  },
+  {
     file: ".depot/workflows/deploy-os.yml",
     group: "deploy-auth-os-production",
     jobs: {
@@ -113,6 +121,30 @@ describe("Depot deployment safety", () => {
     const workflow = loadWorkflow(".depot/workflows/deploy-tunnels.yml");
 
     expect(workflow.on?.push?.paths).toContain(".depot/workflows/deploy-tunnels.yml");
+  });
+
+  it("installs the pinned ESP-IDF release before preparing Kit firmware", () => {
+    const workflow = loadWorkflow(".depot/workflows/deploy-kit.yml");
+    const deploy = workflow.jobs.deploy;
+    const install = deploy.steps?.find((step) => step.name === "Install ESP-IDF 5.4.2");
+    const build = deploy.steps?.find((step) => step.name === "Build Kit firmware releases");
+    const deployKit = deploy.steps?.find((step) => step.name === "Deploy apps/kit");
+
+    expect(install?.run).toContain("--recursive --branch v5.4.2");
+    expect(install?.run).toContain("f5c3654a1c2d2a01f7f67def7a0dc48e691f63c0");
+    expect(install?.run).toContain('"$IDF_PATH/install.sh" esp32s3');
+    expect(build?.run).toContain('source "$IDF_PATH/export.sh"');
+    expect(build?.run).toContain("pnpm run firmware:release");
+    expect(deployKit?.run).toContain('source "$IDF_PATH/export.sh"');
+    expect(workflow.on?.push?.paths).toEqual(
+      expect.arrayContaining([
+        "packages/voice-agent/**",
+        "package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "patches/**",
+      ]),
+    );
   });
 
   it("redeploys OS when its iterate/sdk/itx/react workspace dependency changes", () => {
