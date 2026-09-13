@@ -154,12 +154,17 @@ export class VoiceDeviceProcessor extends StreamProcessor<
         this.#opening = opening;
         this.#queueMic(args, opening, event.payload.pcm);
         args.blockProcessorWhile(async () => {
-          await args.append({
-            type: Created,
-            idempotencyKey: this.idempotencyKey(`child:${event.offset}`),
-            payload: { activation: opening.activation, childStreamPath: opening.childStreamPath },
-          });
-          this.#startChild(args, state, opening);
+          try {
+            await args.append({
+              type: Created,
+              idempotencyKey: this.idempotencyKey(`child:${event.offset}`),
+              payload: { activation: opening.activation, childStreamPath: opening.childStreamPath },
+            });
+            this.#startChild(args, state, opening);
+          } catch (error) {
+            if (this.#opening === opening) this.#opening = null;
+            throw error;
+          }
         });
         return;
       }

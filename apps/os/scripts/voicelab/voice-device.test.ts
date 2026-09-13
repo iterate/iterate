@@ -104,6 +104,36 @@ describe("VoiceDeviceProcessor", () => {
     ]);
   });
 
+  it("releases an opening whose child assignment append failed so the retried frame can start it", async () => {
+    setupVoiceAgent.mockResolvedValue({ streamPath: "ignored", warmMs: 0 });
+    const h = makeHarness();
+    await configure(h);
+    h.stream.failAppendsOfType = "events.iterate.com/voice-device/conversation-created";
+
+    await expect(h.append(micFrame())).rejects.toThrow("injected append failure");
+    expect(setupVoiceAgent).not.toHaveBeenCalled();
+
+    h.stream.failAppendsOfType = undefined;
+    await h.append(micFrame(ACTIVATION, "BQYHCA=="));
+    await h.settle();
+
+    expect(setupVoiceAgent).toHaveBeenCalledTimes(1);
+    const childStreamPath = (setupVoiceAgent.mock.calls[0]![1] as { streamPath: string })
+      .streamPath;
+    expect(
+      h.network.eventsAt(childStreamPath).map((event) => ({
+        type: event.type,
+        payload: event.payload,
+      })),
+    ).toEqual([
+      { type: "events.iterate.com/voice-agent/mic-frame", payload: micFrame().payload },
+      {
+        type: "events.iterate.com/voice-agent/mic-frame",
+        payload: micFrame(ACTIVATION, "BQYHCA==").payload,
+      },
+    ]);
+  });
+
   it("keeps the inherited microphone event ephemeral at runtime", () => {
     expect(VoiceDeviceContract.events["events.iterate.com/voice-agent/mic-frame"].ephemeral).toBe(
       true,
