@@ -120,7 +120,7 @@ export const append = (itx: any, ...events: unknown[]): Promise<any[]> =>
 /** A rewrite-rule event's `match` AT REST is the parsed prefix (the append boundary canonicalizes
  *  it the way it does the target); the keys these tests provide are plain dotted names, so joining
  *  the segments spells the key back. */
-export const ruleMatchAtRest = (event: { payload?: { match?: unknown } }): string => {
+export const ruleMatchAtRest = (event: { payload?: { match?: unknown } }) => {
   const match = event.payload?.match;
   return Array.isArray(match) ? match.join(".") : "";
 };
