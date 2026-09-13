@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   makeMemoryProgressStore,
   makeProcessorHarness,
   MemoryStreamNetwork,
 } from "iterate/processors/testing";
 import { SubscriptionConfiguredPayload } from "../../src/domains/streams/core-processor-contract.ts";
+import { AgentPath } from "../../src/domains/agents/agent-presence.ts";
 
 const setupVoiceAgent = vi.hoisted(() => vi.fn());
 
@@ -19,7 +20,7 @@ import {
   VoiceDeviceProcessor,
 } from "../../../../packages/voice-agent/src/device.ts";
 
-const PARENT_PATH = "/clients/home-assistant-voice-preview-edition";
+const PARENT_PATH = "/agents/voice/v23/home-assistant-voice-preview-edition";
 const ACTIVATION = "activation-a";
 
 function micFrame(activation = ACTIVATION, pcm = "AQIDBA==") {
@@ -63,6 +64,12 @@ describe("VoiceDeviceProcessor", () => {
     vi.clearAllMocks();
   });
 
+  afterEach(() => {
+    for (const [, options] of setupVoiceAgent.mock.calls) {
+      expect(AgentPath.safeParse(options.streamPath).success).toBe(true);
+    }
+  });
+
   it("creates one child for a same-batch opening and forwards every held frame", async () => {
     setupVoiceAgent.mockResolvedValue({ streamPath: "ignored", warmMs: 0 });
     const h = makeHarness();
@@ -78,6 +85,7 @@ describe("VoiceDeviceProcessor", () => {
       activation: string;
     };
     expect(options).toMatchObject({ transportStreamPath: PARENT_PATH, activation: ACTIVATION });
+    expect(options.streamPath).toBe(`${PARENT_PATH}/2026-09-13t12-00-00-000z-3`);
     expect(
       h
         .events()
@@ -309,6 +317,12 @@ describe("VoiceDeviceProcessor", () => {
     };
     await setupVoiceDevice(
       {
+        agents: {
+          get: (path: string) => {
+            AgentPath.parse(path);
+            return { [Symbol.dispose]: () => {} };
+          },
+        },
         secrets: {
           get: () => ({
             __describe: async () => ({ created: true, hasMaterial: true }),
@@ -335,6 +349,32 @@ describe("VoiceDeviceProcessor", () => {
     const subscription = appends[0]![0] as { payload: unknown };
     expect(SubscriptionConfiguredPayload.safeParse(subscription.payload).success).toBe(true);
     expect(waited).toEqual([{ offset: 3, timeoutMs: 90_000 }]);
+  });
+
+  it("rejects a non-Agent parent before it can inspect or mutate its stream", async () => {
+    let streamRequested = false;
+
+    await expect(
+      setupVoiceDevice(
+        {
+          agents: {
+            get: (path: string) => {
+              AgentPath.parse(path);
+              return { [Symbol.dispose]: () => {} };
+            },
+          },
+          streams: {
+            get: () => {
+              streamRequested = true;
+              throw new Error("stream lookup must not run for an invalid parent path");
+            },
+          },
+        } as never,
+        { streamPath: "/clients/home-assistant-voice-preview-edition" },
+      ),
+    ).rejects.toThrow("agent path must be canonical");
+
+    expect(streamRequested).toBe(false);
   });
 
   it("replays legacy voice history without assigning a child until a fresh microphone frame", async () => {

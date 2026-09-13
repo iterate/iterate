@@ -144,7 +144,7 @@ export class VoiceDeviceProcessor extends StreamProcessor<
         if (this.#opening) return;
         const opening: Opening = {
           activation: event.payload.activation,
-          childStreamPath: `${this.path}/${new Date(event.createdAt).toISOString().replace(/[:.]/g, "-")}-${event.offset}`,
+          childStreamPath: `${this.path}/${new Date(event.createdAt).toISOString().toLowerCase().replace(/[:.]/g, "-")}-${event.offset}`,
           micFrames: [],
           micBytes: 0,
           ready: false,
@@ -354,6 +354,8 @@ export async function setupVoiceDevice(
       `voice-device streamPath must be absolute; received ${JSON.stringify(options.streamPath)}`,
     );
   }
+  // Validate through the ordinary Agent API without creating a parent Agent.
+  disposeRpcStub(await project.agents.get(options.streamPath), "device parent agent path");
   const stream = project.streams.get(options.streamPath);
   try {
     const payload = {
