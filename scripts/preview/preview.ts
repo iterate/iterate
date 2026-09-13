@@ -3393,12 +3393,13 @@ async function writePullRequestBody(params: {
     auth: params.githubToken,
   });
   const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
-  await withGithubRetry("pulls.update", () =>
-    octokit.rest.pulls.update({
+  // Body-only changes use the pull request's Issue representation.
+  await withGithubRetry("issues.update", () =>
+    octokit.rest.issues.update({
       body: params.body,
       owner,
       repo,
-      pull_number: params.pullRequestNumber,
+      issue_number: params.pullRequestNumber,
     }),
   );
 }

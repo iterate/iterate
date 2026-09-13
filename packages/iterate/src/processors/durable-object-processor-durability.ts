@@ -79,9 +79,31 @@ export function durableObjectProgressStore<State>(args: {
   name: string;
   /** Synchronously clear related projections when the source stream is replaced. */
   resetForStream?: () => void;
+  /**
+   * An optional bounded reduction cache. Processing cursors always remain
+   * durable; a cold runner refolds reduce-only from initialState when the
+   * predicate declines a large cache.
+   */
+  reductionCache?: {
+    shouldCacheReduction(state: State): boolean;
+    initialState(): State;
+  };
 }): ProcessorProgressStore<State> {
   const { storage, name } = args;
   const progressKey = processorProgressKey(name);
+  const cachedProgress = (progress: ProcessorProgress<State>): ProcessorProgress<State> => {
+    const reductionCache = args.reductionCache;
+    if (!reductionCache || reductionCache.shouldCacheReduction(progress.reduction.state))
+      return progress;
+    return {
+      ...progress,
+      reduction: {
+        ...progress.reduction,
+        reducedThroughOffset: 0,
+        state: reductionCache.initialState(),
+      },
+    };
+  };
 
   return {
     read: () => storage.kv.get<ProcessorProgress<State>>(progressKey),
@@ -123,7 +145,7 @@ export function durableObjectProgressStore<State>(args: {
             `a stale incarnation is rolling the cursor back`,
         );
       }
-      storage.kv.put(progressKey, progress);
+      storage.kv.put(progressKey, cachedProgress(progress));
     },
     replaceForStream: (progress, opts) => {
       const persisted = storage.kv.get<ProcessorProgress<State>>(progressKey);
@@ -141,7 +163,7 @@ export function durableObjectProgressStore<State>(args: {
       // recreated stream. A new obligation will arm a fresh record.
       args.resetForStream?.();
       storage.kv.delete(processorKeepaliveKey(name));
-      storage.kv.put(progressKey, progress);
+      storage.kv.put(progressKey, cachedProgress(progress));
     },
   };
 }

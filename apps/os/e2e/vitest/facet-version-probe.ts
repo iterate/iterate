@@ -11,6 +11,7 @@
 
 export const PING = "events.iterate.test/facet-version/ping";
 export const SEEN = "events.iterate.test/facet-version/seen";
+export const HELD = "events.iterate.test/facet-version/held";
 
 export const PROBE_PATH = "version-probe.js";
 
@@ -59,9 +60,13 @@ export const VersionProbeContract = defineProcessorContract({
         revision: z.string(),
       }),
     },
+    "${HELD}": {
+      description: "The probe accepted a deliberately unacknowledged batch.",
+      payloadSchema: z.object({ id: z.string() }),
+    },
   },
   consumes: ["${PING}"],
-  emits: ["${SEEN}"],
+  emits: ["${SEEN}", "${HELD}"],
 });
 
 class VersionProbeProcessor extends StreamProcessor {
@@ -79,6 +84,15 @@ class VersionProbeProcessor extends StreamProcessor {
     const id = event.payload.id;
     const bootId = this.bootId;
     const buildKey = this.buildKey;
+    // This fixture-only event keeps the old callback in flight while a source
+    // commit exercises parent-side facet replacement.
+    if ("${revision}" === "v4" && id.startsWith("hold-")) {
+      blockProcessorWhile(async () => {
+        await append({ type: "${HELD}", idempotencyKey: "held@" + id, payload: { id } });
+        await new Promise(() => {});
+      });
+      return;
+    }
     // Per-event work the cursor must not outrun: the answer IS the measurement.
     blockProcessorWhile(async () => {
       await append({
@@ -100,7 +114,7 @@ export class VersionProbeFacet extends StreamProcessorFacet {
   createProcessor(deps) {
     const processor = new VersionProbeProcessor(deps);
     processor.bootId = this.#bootId;
-    // The build key the Stream DO resolved for this load — verbatim the
+    // The Worker Loader runtime identity for this load — verbatim the
     // cacheKey half of the facetSourceVersion marker that drives the abort.
     processor.buildKey = String(this.env.ITERATE_WORKER_VERSION ?? "missing");
     return processor;
