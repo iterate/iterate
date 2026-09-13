@@ -1499,8 +1499,7 @@ static void start_voice_setup(struct voice_setup_ticket *ticket) {
   };
   enum capnweb_status status;
   const size_t index = (size_t)(ticket - runtime.setup);
-  if (runtime.streams[index].state == ITERATE_KIT_STREAM_FREE ||
-      runtime.streams[index].state == ITERATE_KIT_STREAM_CLOSED) {
+  if (iterate_kit_stream_reclaimable(&runtime.streams[index])) {
     status = iterate_kit_stream_get(
         &runtime.streams[index], &runtime.connection.session,
         runtime.connection.mount.project_capability, ticket->stream_path);

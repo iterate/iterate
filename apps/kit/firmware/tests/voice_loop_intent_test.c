@@ -263,6 +263,8 @@ static void quiescent(void) {
  */
 static size_t answered;
 static bool defer_voice_setup;
+static bool defer_stream_get;
+static long deferred_stream_get_id;
 static struct {
   long id;
   char stream_path[160];
@@ -474,6 +476,13 @@ static void pump(void) {
               setup_stream_path);
           setup_stream_path[0] = '\0';
         } else {
+          if (stream_get_path[0] != '\0' && defer_stream_get) {
+            assert(deferred_stream_get_id == 0L);
+            deferred_stream_get_id = id;
+            stream_get_path[0] = '\0';
+            answered_any = true;
+            continue;
+          }
           const long capability = -(id + 10);
           (void)snprintf(
               reply, sizeof(reply), "[\"resolve\",%ld,[\"export\",%ld]]", id, capability);
@@ -997,6 +1006,39 @@ static void b_pcm_waits_for_its_own_child_after_a_terminal(void) {
   quiescent();
 }
 
+/* Reclaimable FAILED handles must be opened again for the next child path. */
+static void rejected_stream_can_be_reused_by_an_immediate_new_activation(void) {
+  char reply[160];
+  char activation_a[65];
+  quiescent();
+  const size_t before = iterate_kit_fake_platform_sent_count();
+  defer_stream_get = true;
+  remote_call("conversation", "start");
+  step();
+  pump();
+  assert(deferred_stream_get_id != 0L);
+  (void)snprintf(activation_a, sizeof(activation_a), "%s", current_activation());
+  (void)snprintf(reply, sizeof(reply),
+      "[\"reject\",%ld,[\"error\",\"Error\",\"stream denied\"]]",
+      deferred_stream_get_id);
+  deliver(iterate_kit_fake_platform_connection(), reply);
+  deferred_stream_get_id = 0L;
+  defer_stream_get = false;
+
+  /* Reuse FAILED storage before idle housekeeping has closed it. */
+  remote_call("conversation", "end");
+  remote_call("conversation", "start");
+  step();
+  pump();
+  speak_frames(1U);
+  run_ms(50U);
+  assert(board.last_view.wants_call);
+  assert(strcmp(activation_a, current_activation()) != 0);
+  assert(sent_after_count(before, "[\"streams\",\"get\"]") == 2U);
+  assert(sent_after_contains(before, "\"pcm\":"));
+  quiescent();
+}
+
 /*
  * Wake detection reaches the app after audio has already crossed the codec.
  * The first, middle and following frames must therefore survive the mount
@@ -1225,6 +1267,7 @@ int main(void) {
   nothing_physical_was_involved();
 
   pre_mount_speech_is_preserved_and_sent_immediately();
+  rejected_stream_can_be_reused_by_an_immediate_new_activation();
   same_pass_end_then_start_creates_a_new_activation();
   accepted_call_end_then_start_creates_b_after_a_terminal();
   terminal_waits_for_outbox_headroom();

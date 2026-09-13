@@ -345,21 +345,24 @@ static void handle_spk_frame(
 
 static void process_batch(
     struct iterate_kit_voicelab *voicelab,
-    const struct capnweb_value *batch) {
+    const struct capnweb_value *batch,
+    bool counts_for_current_subscription) {
   struct capnweb_value events_wrapper;
   struct capnweb_value events;
   size_t event_count;
   size_t index;
-  ++voicelab->batches_on_connection;
+  if (voicelab == NULL || batch == NULL) return;
   /*
    * Stamped for the BATCH, before its contents are inspected and regardless
    * of what it holds: this is the proof that the delivery lane still exists,
    * which is a different question from whether anything interesting was on
    * it. An empty batch proves the lane; a dropped duplicate proves it too.
    */
-  voicelab->last_batch_ms =
-      voicelab->options.now_ms(voicelab->options.clock_context);
-  if (voicelab == NULL || batch == NULL) return;
+  if (counts_for_current_subscription) {
+    ++voicelab->batches_on_connection;
+    voicelab->last_batch_ms =
+        voicelab->options.now_ms(voicelab->options.clock_context);
+  }
   /* Application arrays ride the wire escaped as [[item, ...]]. */
   if (!capnweb_value_object_get(batch, "events", &events_wrapper) ||
       !capnweb_value_get_expression_array(&events_wrapper, &events)) {
@@ -372,6 +375,10 @@ static void process_batch(
     struct capnweb_value type_value;
     struct capnweb_value payload;
     int64_t offset = -1;
+    /* A terminal's owner can synchronously fence this call while handling
+     * the preceding event. Nothing later in the same delivery belongs to it. */
+    if (voicelab->state != ITERATE_KIT_VOICELAB_OPENING_CONNECTION &&
+        voicelab->state != ITERATE_KIT_VOICELAB_READY) break;
     if (!capnweb_value_array_at(&events, index, &event)) {
       continue;
     }
@@ -460,8 +467,15 @@ void iterate_kit_voicelab_on_subscription_update(
     uint32_t owner_epoch,
     const struct capnweb_value *batch) {
   struct iterate_kit_voicelab *const voicelab = owner;
-  if (voicelab == NULL || owner_epoch != voicelab->subscription_epoch) return;
-  process_batch(voicelab, batch);
+  const bool current = voicelab != NULL && voicelab->subscription != NULL &&
+      owner_epoch == voicelab->subscription->owner_epoch;
+  const bool previous = voicelab != NULL &&
+      voicelab->previous_subscription != NULL &&
+      owner_epoch == voicelab->previous_subscription->owner_epoch;
+  if (voicelab == NULL || (!current && !previous) ||
+      (voicelab->state != ITERATE_KIT_VOICELAB_OPENING_CONNECTION &&
+       voicelab->state != ITERATE_KIT_VOICELAB_READY)) return;
+  process_batch(voicelab, batch, current);
 }
 
 
@@ -498,7 +512,7 @@ enum capnweb_status iterate_kit_voicelab_bind(
   status = iterate_kit_stream_subscription_open(subscription, stream, key,
       direct_event_types, sizeof(direct_event_types) / sizeof(direct_event_types[0]),
       16, 13000, iterate_kit_voicelab_on_subscription_update, voicelab,
-      voicelab->subscription_epoch);
+      voicelab->connection_generation);
   if (status != CAPNWEB_OK) {
     return fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL, status);
   }
@@ -540,18 +554,21 @@ enum capnweb_status iterate_kit_voicelab_recycle_subscription(
       !iterate_kit_stream_subscription_reclaimable(fresh_subscription)) {
     return CAPNWEB_E_STATE;
   }
+  if (voicelab->connection_generation == UINT32_MAX) return CAPNWEB_E_LIMIT;
   ++voicelab->connection_generation;
-  if (voicelab->connection_generation == 0U) return CAPNWEB_E_LIMIT;
   key_length = snprintf(key, sizeof(key), "kit-voice-%s-%" PRIu32,
       voicelab->options.activation, voicelab->connection_generation);
   if (key_length < 0 || (size_t)key_length >= sizeof(key)) return CAPNWEB_E_LIMIT;
   voicelab->previous_subscription = voicelab->subscription;
   voicelab->subscription = fresh_subscription;
   voicelab->state = ITERATE_KIT_VOICELAB_OPENING_CONNECTION;
+  voicelab->batches_on_connection = 0U;
+  voicelab->last_batch_ms =
+      voicelab->options.now_ms(voicelab->options.clock_context);
   status = iterate_kit_stream_subscription_open(fresh_subscription, voicelab->stream,
       key, direct_event_types, sizeof(direct_event_types) / sizeof(direct_event_types[0]),
       16, 13000, iterate_kit_voicelab_on_subscription_update, voicelab,
-      voicelab->subscription_epoch);
+      voicelab->connection_generation);
   if (status != CAPNWEB_OK) {
     (void)iterate_kit_stream_subscription_close(fresh_subscription);
     voicelab->subscription = voicelab->previous_subscription;

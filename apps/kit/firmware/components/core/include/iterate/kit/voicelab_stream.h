@@ -188,10 +188,11 @@ struct iterate_kit_voicelab {
   uint64_t last_bridge_ms;
   /** Last delivery batch time; the voice loop uses it for downlink recovery. */
   uint64_t last_batch_ms;
-  /** Unique connection-key sequence; advances on each subscription renewal. */
+  /** Unique connection-key and generic callback-owner sequence per renewal. */
   uint32_t connection_generation;
   /** A speaker answer has started and has not yet delivered its last frame. */
   bool answer_open;
+  /** Batches from the current subscription only; predecessor overlap is audio. */
   uint32_t batches_on_connection;
   uint32_t spk_frames_received;
   uint32_t spk_decode_failures;
@@ -231,8 +232,8 @@ enum capnweb_status iterate_kit_voicelab_recycle_subscription(
     struct iterate_kit_voicelab *voicelab,
     struct iterate_kit_stream_subscription *fresh_subscription);
 
-/** Generic-subscription callback for a bound call. The owner is the voicelab
- * and its epoch is the activation token supplied by the caller. */
+/** Generic-subscription callback for a bound call. The owner is the voicelab;
+ * its epoch identifies one current or overlapping predecessor subscription. */
 void iterate_kit_voicelab_on_subscription_update(
     void *owner,
     uint32_t owner_epoch,
