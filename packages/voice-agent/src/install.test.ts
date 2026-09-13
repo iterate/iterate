@@ -150,6 +150,9 @@ describe("installVoiceAgent", () => {
     expect(first).toEqual({
       changed: true,
       commitOid: "commit-1".padEnd(40, "0"),
+      entrypointRef: expect.objectContaining({
+        props: { voiceAgentSourceCommitOid: "commit-1".padEnd(40, "0") },
+      }),
       spec: VOICE_AGENT_PACKAGE_SPEC,
       changedPaths: ["package.json", "voice-agent.ts"],
     });
@@ -161,6 +164,9 @@ describe("installVoiceAgent", () => {
     expect(second).toEqual({
       changed: false,
       commitOid: "head".padEnd(40, "0"),
+      entrypointRef: expect.objectContaining({
+        props: { voiceAgentSourceCommitOid: "head".padEnd(40, "0") },
+      }),
       spec: VOICE_AGENT_PACKAGE_SPEC,
       changedPaths: [],
     });
@@ -240,6 +246,12 @@ describe("installVoiceAgentFromSource", () => {
     ]);
     expect(files["voice-agent.ts"]).toBe(VOICE_AGENT_GUEST_SOURCE_FROM_REPO);
     expect(files["voice-agent/worker.ts"]).toBe("// worker.ts\n");
+    expect(result.entrypointRef.source.createWorker.files).toMatchObject({
+      ref: { commitOid: "commit-1".padEnd(40, "0") },
+    });
+    expect(result.entrypointRef.props).toEqual({
+      voiceAgentSourceCommitOid: "commit-1".padEnd(40, "0"),
+    });
     const dependencies = JSON.parse(files["package.json"]!).dependencies;
     expect(dependencies[VOICE_AGENT_PACKAGE_NAME]).toBeUndefined();
     expect(dependencies.zod).toBe("4.5.4");
@@ -261,11 +273,16 @@ describe("installVoiceAgentFromSource", () => {
     };
     const first = await installVoiceAgentFromSource(repo, source, options);
     expect(first.entrypointRef.source.createWorker.entryPoint).toBe("kit-voice-agent.ts");
+    expect(first.entrypointRef.source.createWorker.files).toMatchObject({
+      ref: { commitOid: "commit-1".padEnd(40, "0") },
+    });
     expect(commits).toHaveLength(1);
 
     const same = await installVoiceAgentFromSource(repo, source, options);
     expect(same.changed).toBe(false);
-    expect(same.entrypointRef).toEqual(first.entrypointRef);
+    expect(same.entrypointRef.source.createWorker.files.ref).toEqual({
+      commitOid: "head".padEnd(40, "0"),
+    });
     expect(commits).toHaveLength(1);
 
     const reordered = Object.fromEntries(

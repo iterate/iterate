@@ -38,6 +38,8 @@ export interface WireWatch {
   clearsSeen: number;
   utterances: TimedText[];
   answers: TimedText[];
+  /** Immutable initial session prompt, distinct from later instruction appends. */
+  sessionInstructions: TimedText | null;
   instructions: TimedText[];
   thinking: TimedText[];
   commentary: TimedText[];
@@ -109,6 +111,7 @@ export async function openWireCall(
     clearsSeen: 0,
     utterances: [],
     answers: [],
+    sessionInstructions: null,
     instructions: [],
     thinking: [],
     commentary: [],
@@ -178,7 +181,9 @@ export async function openWireCall(
           if (event.type === "events.iterate.com/voice-agent/session-configured") {
             watch.sessionConfiguredAtMs = clock();
             if (typeof payload.instructions === "string") {
-              watch.instructions.push({ atMs: clock(), text: payload.instructions });
+              const configured = { atMs: clock(), text: payload.instructions };
+              watch.sessionInstructions = configured;
+              watch.instructions.push(configured);
             }
             continue;
           }

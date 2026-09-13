@@ -19,7 +19,7 @@ import { createFace } from "./face.ts";
  * caller that addresses it: the package build inside node_modules, never a
  * file in the config repo. The key names the durable worker, so it is
  * load-bearing rather than cosmetic. */
-import { voiceAgentFacetRef } from "./ref.ts";
+import { voiceAgentRefs } from "./ref.ts";
 import type {
   SetupVoiceAgentOptions,
   SetupVoiceAgentResult,
@@ -803,12 +803,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
     /** The only way this processor waits, injected so tests use a fake clock. */
     sleep(ms: number): Promise<void>;
     dialProvider(): Promise<WebSocket | null>;
-    /**
-     * Open a fresh project itx session, use it, dispose it. Stubs from
-     * `env.ITX.get()` must not outlive the invocation that dialed them, so
-     * every backend function opens its own — the SDK's own pattern.
-     */
-    withProject<T>(fn: (project: Project) => Promise<T>): Promise<T>;
   }
 > {
   readonly contract = VoiceAgentContract;
@@ -989,25 +983,23 @@ export class VoiceAgentProcessor extends StreamProcessor<
         /* This is a per-event consequence: its stable key is the committed
          * transcript row, not its text, so repeated words remain distinct. */
         args.blockProcessorWhile(() =>
-          this.#appendAgentContext(() =>
-            this.deps.withProject(async (project) => {
-              await project.agents.get(this.path).append({
-                type: "events.iterate.com/agents/context-added",
-                idempotencyKey: this.idempotencyKey(`agent-observed-transcript:${event.offset}`),
-                payload: {
-                  ...agentTranscriptContext(
-                    event.type === "events.iterate.com/voice-agent/utterance-transcript"
-                      ? "user"
-                      : "assistant",
-                    event.payload.text,
-                  ),
-                  actor: { type: "integration", name: "voice-agent" },
-                  llmRequestPolicy: { behaviour: "dont-trigger-request" },
-                },
-              });
-              this.#pendingTranscriptContexts.delete(transcriptKey);
-            }),
-          ),
+          this.#appendAgentContext(async () => {
+            await this.stream.append({
+              type: "events.iterate.com/agents/context-added",
+              idempotencyKey: this.idempotencyKey(`agent-observed-transcript:${event.offset}`),
+              payload: {
+                ...agentTranscriptContext(
+                  event.type === "events.iterate.com/voice-agent/utterance-transcript"
+                    ? "user"
+                    : "assistant",
+                  event.payload.text,
+                ),
+                actor: { type: "integration", name: "voice-agent" },
+                llmRequestPolicy: { behaviour: "dont-trigger-request" },
+              },
+            });
+            this.#pendingTranscriptContexts.delete(transcriptKey);
+          }),
         );
         return;
       }
@@ -1898,32 +1890,28 @@ export class VoiceAgentProcessor extends StreamProcessor<
     this.runInBackground(() =>
       this.#appendAgentContext(async () => {
         try {
-          await this.deps.withProject(async (project) => {
-            const transcriptSnapshots = this.#transcriptSnapshots(dial, delegationId);
-            await project.agents.get(this.path).append(...transcriptSnapshots, {
-              type: "events.iterate.com/agents/context-added",
-              idempotencyKey: this.idempotencyKey(
-                `agent-delegation:${dial.dialId}:${delegationId}`,
-              ),
-              payload: {
-                role: "developer",
-                content: [
-                  "Voice delegation metadata (platform context, not user speech):",
-                  JSON.stringify({ activation: dial.activation, delegationId }),
-                  "Handle the request in the conversation transcript for this client delegation. To reply, read this metadata event at its @offset and parse the JSON on its second content line; use the returned IDs in the voice events explained above, without retyping them.",
-                  "Completed transcript context may arrive later.",
-                ].join("\n"),
-                llmRequestPolicy: { behaviour: "after-current-request" },
-              },
-            });
-            if (this.#dial === dial) {
-              this.#sendControl(dial, {
-                type: "session.thinking.append",
-                delegation_id: delegationId,
-                content: "The request was handed to the backend; the conversation may continue.",
-              });
-            }
+          const transcriptSnapshots = this.#transcriptSnapshots(dial, delegationId);
+          await this.stream.append(...transcriptSnapshots, {
+            type: "events.iterate.com/agents/context-added",
+            idempotencyKey: this.idempotencyKey(`agent-delegation:${dial.dialId}:${delegationId}`),
+            payload: {
+              role: "developer",
+              content: [
+                "Voice delegation metadata (platform context, not user speech):",
+                JSON.stringify({ activation: dial.activation, delegationId }),
+                "Handle the request in the conversation transcript for this client delegation. To reply, read this metadata event at its @offset and parse the JSON on its second content line; use the returned IDs in the voice events explained above, without retyping them.",
+                "Completed transcript context may arrive later.",
+              ].join("\n"),
+              llmRequestPolicy: { behaviour: "after-current-request" },
+            },
           });
+          if (this.#dial === dial) {
+            this.#sendControl(dial, {
+              type: "session.thinking.append",
+              delegation_id: delegationId,
+              content: "The request was handed to the backend; the conversation may continue.",
+            });
+          }
         } catch (error) {
           if (this.#dial !== dial) return;
           await this.#end(
@@ -1977,23 +1965,21 @@ export class VoiceAgentProcessor extends StreamProcessor<
     event: { offset: number; type: string };
     content: string;
   }): Promise<void> {
-    return this.#appendAgentContext(() =>
-      this.deps.withProject(async (project) => {
-        await project.agents.get(this.path).append({
-          type: "events.iterate.com/agents/context-added",
-          idempotencyKey: this.idempotencyKey(`agent-observed-fact:${event.offset}`),
-          payload: {
-            role: "developer",
-            content,
-            actor: { type: "integration", name: "voice-agent" },
-            refs: [
-              { type: "event", streamPath: this.path, offset: event.offset, eventType: event.type },
-            ],
-            llmRequestPolicy: { behaviour: "dont-trigger-request" },
-          },
-        });
-      }),
-    );
+    return this.#appendAgentContext(async () => {
+      await this.stream.append({
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: this.idempotencyKey(`agent-observed-fact:${event.offset}`),
+        payload: {
+          role: "developer",
+          content,
+          actor: { type: "integration", name: "voice-agent" },
+          refs: [
+            { type: "event", streamPath: this.path, offset: event.offset, eventType: event.type },
+          ],
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        },
+      });
+    });
   }
 
   #appendAgentContext(work: () => Promise<void>): Promise<void> {
@@ -2129,6 +2115,7 @@ async function assertVoiceProviderSecret(project: Project): Promise<void> {
 async function setupVoiceAgent(
   project: Project,
   options: SetupVoiceAgentOptions = {},
+  sourceCommitOid?: string,
 ): Promise<SetupVoiceAgentResult> {
   const streamPath = options.streamPath || `/agents/voice/${crypto.randomUUID()}`;
   if (!streamPath.startsWith("/")) {
@@ -2176,7 +2163,10 @@ async function setupVoiceAgent(
         filter: { eventTypes: [...VoiceAgentContract.consumes] },
         receiver: {
           action: "facet-processor",
-          source: { kind: "userspace", worker: voiceAgentFacetRef(streamPath) },
+          source: {
+            kind: "userspace",
+            worker: voiceAgentRefs({ sourceCommitOid }).facet(streamPath),
+          },
         },
       };
       const subscriptionKeyPrefix = `voice-agent/subscription:${streamPath}`;
@@ -2257,7 +2247,15 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
   }
 
   async setupVoiceAgent(options: SetupVoiceAgentOptions = {}): Promise<SetupVoiceAgentResult> {
-    return setupVoiceAgent(await this.itx, options);
+    const sourceCommitOid = z
+      .object({
+        voiceAgentSourceCommitOid: z
+          .string()
+          .regex(/^[0-9a-f]{40}$/)
+          .optional(),
+      })
+      .parse(this.ctx?.props ?? {}).voiceAgentSourceCommitOid;
+    return setupVoiceAgent(await this.itx, options, sourceCommitOid);
   }
 
   /** Take the subscription off a stream, so the facet stops waking. */
@@ -2294,18 +2292,6 @@ export class VoiceAgentFacet extends StreamProcessorFacet {
        * here happens inside a `runInBackground` closure the keepalive holds. */
       sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
       dialProvider: dialProviderSocket,
-      withProject: async <T>(fn: (project: Project) => Promise<T>): Promise<T> => {
-        const project = (await this.env.ITX.get()) as Project;
-        try {
-          return await fn(project);
-        } finally {
-          try {
-            (project as Partial<Disposable>)[Symbol.dispose]?.();
-          } catch {
-            /* Already gone. */
-          }
-        }
-      },
     });
   }
 }

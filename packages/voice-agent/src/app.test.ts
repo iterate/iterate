@@ -1,21 +1,28 @@
 import { describe, expect, it } from "vitest";
 import { VoiceAgentApp } from "./app.ts";
-import { voiceAgentEntrypointRef } from "./ref.ts";
+
+const SOURCE_COMMIT = "a".repeat(40);
 
 /** A project handle that records what was dialed and whether it was released. */
 function fakeEnv(guest: Partial<Record<"setupVoiceAgent" | "removeVoiceAgent", unknown>>) {
   const log: string[] = [];
+  const refs: unknown[] = [];
   const env = {
     ITX: {
       get: async () => ({
         [Symbol.dispose]: () => {
           log.push("project disposed");
         },
+        repo: {
+          readFile: async () => {
+            log.push("repo.readFile");
+            return { commitOid: SOURCE_COMMIT };
+          },
+        },
         workers: {
           get: (ref: unknown) => {
-            log.push(
-              `workers.get ${ref === voiceAgentEntrypointRef ? "entrypoint ref" : "something else"}`,
-            );
+            refs.push(ref);
+            log.push("workers.get");
             return {
               ...guest,
               [Symbol.dispose]: () => {
@@ -27,7 +34,7 @@ function fakeEnv(guest: Partial<Record<"setupVoiceAgent" | "removeVoiceAgent", u
       }),
     },
   };
-  return { env, log };
+  return { env, log, refs };
 }
 
 const request = (app: string | null) =>
@@ -49,8 +56,8 @@ describe("VoiceAgentApp", () => {
     expect((await renamed.fetch(request("talk")))?.status).toBe(501);
   });
 
-  it("dials the guest through the entrypoint ref and releases both handles", async () => {
-    const { env, log } = fakeEnv({
+  it("dials a snapshot entrypoint and releases both handles", async () => {
+    const { env, log, refs } = fakeEnv({
       setupVoiceAgent: async (options: { streamPath?: string }) => ({
         streamPath: options.streamPath ?? "/agents/voice/fresh",
         warmMs: 12,
@@ -67,7 +74,10 @@ describe("VoiceAgentApp", () => {
       streamPath: "/agents/voice/x",
     });
     expect(log).toEqual(
-      Array(3).fill(["workers.get entrypoint ref", "guest disposed", "project disposed"]).flat(),
+      Array(3).fill(["repo.readFile", "workers.get", "guest disposed", "project disposed"]).flat(),
+    );
+    expect(refs).toMatchObject(
+      Array(3).fill({ source: { createWorker: { files: { ref: { commitOid: SOURCE_COMMIT } } } } }),
     );
   });
 
@@ -78,6 +88,6 @@ describe("VoiceAgentApp", () => {
       },
     });
     await expect(VoiceAgentApp.create(env).setup()).rejects.toThrow(/requires secret/);
-    expect(log).toEqual(["workers.get entrypoint ref", "guest disposed", "project disposed"]);
+    expect(log).toEqual(["repo.readFile", "workers.get", "guest disposed", "project disposed"]);
   });
 });

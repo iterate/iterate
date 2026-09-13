@@ -116,7 +116,7 @@ export async function compare(options: VoiceCompareOptions): Promise<void> {
         () =>
           call.watch.conversationAcceptedAtMs !== null &&
           call.watch.sessionConfiguredAtMs !== null &&
-          call.watch.instructions.length > 0,
+          Boolean(call.watch.sessionInstructions),
         30_000,
       );
       requireReady(ready, "stream session did not become ready with durable live instructions");
@@ -125,7 +125,7 @@ export async function compare(options: VoiceCompareOptions): Promise<void> {
         !call.watch.spkArrivals.some((frame) => frame.hasSignal),
         "stream spoke before the controlled commentary",
       );
-      instructions = call.watch.instructions.at(-1)!.text;
+      instructions = call.watch.sessionInstructions!.text;
       requireReady(
         instructions.length < 8_000,
         "stream instructions reached the durable 8000-character cap; exact direct comparison is unavailable",

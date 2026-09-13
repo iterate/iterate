@@ -129,6 +129,10 @@ describe("openWireCall", () => {
           type: "events.iterate.com/voice-agent/session-configured",
           payload: { activation, instructions: "exact live policy" },
         },
+        {
+          type: "events.iterate.com/voice-agent/instructions",
+          payload: { activation, content: "later incremental update" },
+        },
         { type: "events.iterate.com/voice-agent/spk-frame", payload: { activation, pcm } },
         {
           type: "events.iterate.com/voice-agent/spk-frame",
@@ -141,7 +145,11 @@ describe("openWireCall", () => {
     expect(call.watch.answerEnds).toHaveLength(1);
     expect(call.watch.instructions).toEqual([
       expect.objectContaining({ text: "exact live policy" }),
+      expect.objectContaining({ text: "later incremental update" }),
     ]);
+    expect(call.watch.sessionInstructions).toEqual(
+      expect.objectContaining({ text: "exact live policy" }),
+    );
     expect(call.watch.spkArrivals.map((frame) => frame.answerIndex)).toEqual([0, 1]);
     await call.stop();
   });

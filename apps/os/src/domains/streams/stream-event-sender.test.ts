@@ -3015,6 +3015,75 @@ describe("StreamConnections hosted delivery watchdog", () => {
     });
   });
 
+  it("resumes suppressing an unmatched ephemeral tail after a pipelined caught-up pass", async () => {
+    const events = [streamEvent(1, "events.example.com/matching")];
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, _beforeOffset, limit) =>
+        events
+          .filter((candidate) => candidate.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+    });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      filter: compileEventFilter({ eventTypes: ["events.example.com/matching"] }),
+    });
+
+    // Settle the single-flight greeting, then create a non-greeting pipeline.
+    connection.sendQueued();
+    calls[0]!.report("ok");
+    await flushMicrotasks();
+
+    events.push(
+      streamEvent(2, "events.example.com/matching"),
+      streamEvent(3, "events.example.com/matching"),
+      ...Array.from({ length: 100 }, (_, index) => ({
+        ...streamEvent(index + 4, "events.example.com/mic-frame"),
+        ephemeral: true as const,
+      })),
+    );
+    h.state.maxOffset = 103;
+    connection.sendQueued();
+    await flushMicrotasks();
+
+    // Each durable event stops at its own acknowledgement boundary. The
+    // following empty frame is still required to settle both batches at head.
+    expect(calls.slice(1).map((call) => call.batch)).toMatchObject([
+      {
+        events: [{ offset: 2 }],
+        scannedAfterOffset: 1,
+        scannedThroughOffset: 2,
+        streamMaxOffset: 103,
+      },
+      {
+        events: [{ offset: 3 }],
+        scannedAfterOffset: 2,
+        scannedThroughOffset: 102,
+        streamMaxOffset: 103,
+      },
+      { events: [], scannedAfterOffset: 102, scannedThroughOffset: 103, streamMaxOffset: 103 },
+    ]);
+
+    for (const call of calls.slice(1)) call.report("ok");
+    await flushMicrotasks();
+
+    // `caughtUpOwed` must clear when the empty frame reaches head: subsequent
+    // unrelated microphone frames again require no hosted callback.
+    events.push(
+      { ...streamEvent(104, "events.example.com/mic-frame"), ephemeral: true },
+      { ...streamEvent(105, "events.example.com/mic-frame"), ephemeral: true },
+    );
+    h.state.maxOffset = 105;
+    connection.sendQueued();
+    await flushMicrotasks();
+    expect(calls).toHaveLength(4);
+  });
+
   it("settles a previously non-caught-up batch across an unmatched ephemeral tail", async () => {
     const events = [streamEvent(1, "events.example.com/matching")];
     for (let offset = 2; offset <= 101; offset++) {

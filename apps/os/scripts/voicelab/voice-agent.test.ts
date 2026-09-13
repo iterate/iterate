@@ -19,7 +19,6 @@ import {
   MemoryStreamNetwork,
 } from "iterate/processors/testing";
 import type { StreamEvent } from "iterate/processors";
-import type { Project } from "iterate/sdk";
 import {
   buildAgentLlmRequestBody,
   reduceAgentEvents,
@@ -185,23 +184,6 @@ function makeHarness(
     return { webSocket: socket } as unknown as Response;
   });
 
-  const agentCreates: string[] = [];
-  const agentAppends: { path: string; events: unknown[] }[] = [];
-  const projectRoot: { current: unknown } = {
-    current: {
-      agents: {
-        get: (path: string) => ({
-          create: async () => {
-            agentCreates.push(path);
-          },
-          append: async (...events: unknown[]) => {
-            agentAppends.push({ path, events });
-          },
-        }),
-      },
-    },
-  };
-
   const harness = makeProcessorHarness<VoiceAgentContract, VoiceAgentProcessor>({
     path: "/agents/voice/test",
     substrate,
@@ -211,19 +193,23 @@ function makeHarness(
         nowAtFacetMs: deps.now,
         buildCacheKey: "test-build",
         dialProvider: dialProviderSocket,
-        withProject: (fn) => fn(projectRoot.current as Project),
       }),
   });
   return {
     ...harness,
     sockets,
+    /** Context is now appended to the home stream itself: assert the durable
+     * rows the ordinary Agent will consume, never a mock Agent facade call. */
+    get agentAppends() {
+      return harness
+        .events()
+        .filter((event) => event.type === "events.iterate.com/agents/context-added")
+        .map((event) => ({ path: event.path, events: [event] }));
+    },
     get provider() {
       return sockets[sockets.length - 1]!;
     },
     dialled,
-    projectRoot,
-    agentCreates,
-    agentAppends,
   };
 }
 
@@ -719,6 +705,25 @@ describe("opening a call", () => {
     expect(contexts[0]!.payload.content).toContain("Be concise and kind.");
     expect(contexts[1]!.payload.content).toContain("has no voice-specific instructions");
     expect(new Set(contexts.map((event) => event.idempotencyKey)).size).toBe(2);
+  });
+
+  it("writes passive context to its home stream before any ordinary Agent exists", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { instructions: "A voice-only startup fact." },
+    });
+    await h.settle();
+
+    expect(h.events("events.iterate.com/agents/context-added")).toEqual([
+      expect.objectContaining({
+        path: "/agents/voice/test",
+        payload: expect.objectContaining({
+          content: expect.stringContaining("A voice-only startup fact."),
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        }),
+      }),
+    ]);
   });
 
   it("seeds the session with the fold's transcript as typed history", async () => {
@@ -1249,28 +1254,35 @@ describe("the Agent bridge", () => {
     h.provider.delegationCreated("delegate-b");
     await h.settle();
 
-    const delegationAppends = h.agentAppends.filter((append) =>
-      (append.events as { payload: Record<string, unknown> }[]).some(
-        (event) =>
-          (event.payload.llmRequestPolicy as { behaviour?: string } | undefined)?.behaviour ===
-          "after-current-request",
-      ),
+    const contexts = h.events("events.iterate.com/agents/context-added") as {
+      idempotencyKey?: string;
+      payload: Record<string, unknown>;
+    }[];
+    const metadataEvents = contexts.filter(
+      (event) =>
+        (event.payload.llmRequestPolicy as { behaviour?: string } | undefined)?.behaviour ===
+        "after-current-request",
     );
-    expect(delegationAppends).toHaveLength(2);
-    for (const [index, append] of delegationAppends.entries()) {
-      const [snapshot, metadata] = append.events as { payload: Record<string, unknown> }[];
+    expect(metadataEvents).toHaveLength(2);
+    for (const [index, metadata] of metadataEvents.entries()) {
+      const delegationId = `delegate-${index === 0 ? "a" : "b"}`;
+      const snapshot = contexts.find(
+        (event) =>
+          event.idempotencyKey?.includes(`agent-delegation-transcript:`) &&
+          event.idempotencyKey.endsWith(`:${delegationId}`),
+      );
       expect(snapshot!.payload).toMatchObject({
         role: "user",
         content: "Create a note.",
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
       });
-      expect(metadata!.payload).toMatchObject({
+      expect(metadata.payload).toMatchObject({
         role: "developer",
         llmRequestPolicy: { behaviour: "after-current-request" },
       });
       // The Agent's published example reads the original event and parses
       // this line, so IDs need not be copied through generated source code.
-      const content = metadata!.payload.content as string;
+      const content = metadata.payload.content as string;
       expect(JSON.parse(content.split("\n")[1]!)).toEqual({
         activation: ACTIVATION,
         delegationId: `delegate-${index === 0 ? "a" : "b"}`,
@@ -1281,17 +1293,18 @@ describe("the Agent bridge", () => {
   it("ends the matching call when an Agent handoff cannot be recorded", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    let agentAppendAttempts = 0;
-    h.projectRoot.current = {
-      agents: {
-        get: () => ({
-          append: async () => {
-            agentAppendAttempts += 1;
-            if (agentAppendAttempts === 1) throw new Error("injected Agent append failure");
-          },
-        }),
-      },
-    };
+    const append = h.stream.append.bind(h.stream);
+    let failHandoff = true;
+    vi.spyOn(h.stream, "append").mockImplementation(async (...events) => {
+      if (
+        failHandoff &&
+        events.some((event) => event.type === "events.iterate.com/agents/context-added")
+      ) {
+        failHandoff = false;
+        throw new Error("injected Agent append failure");
+      }
+      return append(...events);
+    });
     h.provider.delegationCreated("delegate-a");
     await h.settle();
 
@@ -1311,23 +1324,29 @@ describe("the Agent bridge", () => {
     h.provider.assistantSays("Okay", 1_000, 1_200);
     h.provider.delegationCreated("delegate-a");
     await h.settle();
-    const delegationAppend = h.agentAppends.find((append) =>
-      (append.events as { payload: Record<string, unknown> }[]).some(
-        (event) =>
-          (event.payload.llmRequestPolicy as { behaviour?: string } | undefined)?.behaviour ===
+    const contextsBeforeFinal = h.events("events.iterate.com/agents/context-added") as {
+      offset: number;
+      payload: Record<string, unknown>;
+    }[];
+    const snapshots = contextsBeforeFinal.filter(
+      (event) =>
+        event.payload.content === "Make" ||
+        event.payload.content === "Voice agent (spoken transcript): Okay" ||
+        (event.payload.llmRequestPolicy as { behaviour?: string } | undefined)?.behaviour ===
           "after-current-request",
-      ),
-    )!;
-    const snapshots = delegationAppend.events as { payload: Record<string, unknown> }[];
+    );
     expect(snapshots).toHaveLength(3);
 
     h.provider.userSays(" it private.", 1_200, 1_500);
     h.provider.assistantSays("; I will.", 1_200, 1_500);
     h.provider.silence(2_000);
     await h.settle();
-    const finalized = h.agentAppends
-      .filter((append) => append !== delegationAppend)
-      .flatMap((append) => append.events) as { payload: Record<string, unknown> }[];
+    const contextOffsetsBeforeFinal = new Set(contextsBeforeFinal.map((event) => event.offset));
+    const finalized = h
+      .events("events.iterate.com/agents/context-added")
+      .filter((event) => !contextOffsetsBeforeFinal.has(event.offset)) as {
+      payload: Record<string, unknown>;
+    }[];
     for (const [role, content] of [
       ["user", "Make it private."],
       ["developer", "Voice agent (spoken transcript): Okay; I will."],
@@ -1348,23 +1367,12 @@ describe("the Agent bridge", () => {
     const snapshotStarted = new Promise<void>((resolve) => {
       markSnapshotStarted = resolve;
     });
-    const completedContents: string[] = [];
-    h.projectRoot.current = {
-      agents: {
-        get: () => ({
-          create: async () => {},
-          append: async (...events: { payload?: { content?: unknown; key?: unknown } }[]) => {
-            const context = events.find((event) => event.payload?.content === "prefix")?.payload;
-            if (context) {
-              markSnapshotStarted!();
-              await new Promise<void>((resolve) => {
-                releaseSnapshot = resolve;
-              });
-            }
-            completedContents.push(String(events[0]?.payload?.content));
-          },
-        }),
-      },
+    h.stream.holdAppend = async (events) => {
+      if (!events.some((event) => event.payload?.content === "prefix")) return;
+      markSnapshotStarted!();
+      await new Promise<void>((resolve) => {
+        releaseSnapshot = resolve;
+      });
     };
     await callIsLive(h);
     h.provider.userSays("prefix", 1_000, 1_200);
@@ -1381,7 +1389,9 @@ describe("the Agent bridge", () => {
     await h.settle();
 
     expect(
-      completedContents.filter((content) => content === "prefix" || content === "final"),
+      (h.events("events.iterate.com/agents/context-added") as { payload: { content?: unknown } }[])
+        .map((event) => event.payload.content)
+        .filter((content) => content === "prefix" || content === "final"),
     ).toEqual(["prefix", "final"]);
   });
 

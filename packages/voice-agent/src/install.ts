@@ -116,6 +116,8 @@ export interface InstallVoiceAgentOptions {
 export interface InstallVoiceAgentResult {
   /** Head after the install: the new commit, or the one already there. */
   commitOid: string;
+  /** The installed guest, frozen to this repo revision for setup calls. */
+  entrypointRef: VoiceAgentEntrypointRef;
   changed: boolean;
   /** The spec package.json names now. */
   spec: string;
@@ -216,6 +218,7 @@ export async function installVoiceAgent(
     return {
       changed: false,
       commitOid: manifest.commitOid,
+      entrypointRef: voiceAgentRefs({ sourceCommitOid: manifest.commitOid }).entrypoint,
       spec: dependency.spec,
       changedPaths: [],
     };
@@ -227,6 +230,7 @@ export async function installVoiceAgent(
   return {
     changed: !commit.noChanges,
     commitOid: commit.commitOid,
+    entrypointRef: voiceAgentRefs({ sourceCommitOid: commit.commitOid }).entrypoint,
     spec: dependency.spec,
     changedPaths: changes.map((change) => change.path),
   };
@@ -281,11 +285,6 @@ export function withVoiceAgentSourceDependencies(
  * of VOICE_AGENT_SOURCE_FILES to its content. Only what differs is committed;
  * a repo that already carries this exact copy gets no commit.
  */
-interface InstallVoiceAgentFromSourceResult extends InstallVoiceAgentResult {
-  /** The stateless ref addressing exactly the guest source just committed. */
-  entrypointRef: VoiceAgentEntrypointRef;
-}
-
 export async function installVoiceAgentFromSource(
   repo: VoiceAgentConfigRepo,
   files: VoiceAgentSourceFiles,
@@ -296,7 +295,7 @@ export async function installVoiceAgentFromSource(
     facetKeyPrefix?: string;
     preservePublishedVoiceAgentDependency?: boolean;
   } = {},
-): Promise<InstallVoiceAgentFromSourceResult> {
+): Promise<InstallVoiceAgentResult> {
   if (options.facetKeyPrefix && !/^[a-z][a-z0-9-]{0,29}$/.test(options.facetKeyPrefix)) {
     throw new Error(
       "facetKeyPrefix must start with a lowercase letter and contain at most 30 lowercase letters, digits, or hyphens.",
@@ -323,7 +322,8 @@ export async function installVoiceAgentFromSource(
     ...files,
     "ref-config.ts": voiceAgentRefConfigSource({ guestFile, durableWorkerKey }),
   };
-  const refs = voiceAgentRefs({ guestFile, durableWorkerKey });
+  const refs = (sourceCommitOid: string) =>
+    voiceAgentRefs({ guestFile, durableWorkerKey, sourceCommitOid });
   const guestSource =
     sourceDirectory === VOICE_AGENT_SOURCE_DIR
       ? VOICE_AGENT_GUEST_SOURCE_FROM_REPO
@@ -357,7 +357,7 @@ export async function installVoiceAgentFromSource(
       commitOid: manifest.commitOid,
       spec,
       changedPaths: [],
-      entrypointRef: refs.entrypoint,
+      entrypointRef: refs(manifest.commitOid).entrypoint,
     };
   }
   const commit = await repo.commitFiles({
@@ -369,7 +369,7 @@ export async function installVoiceAgentFromSource(
     commitOid: commit.commitOid,
     spec,
     changedPaths: changes.map((change) => change.path),
-    entrypointRef: refs.entrypoint,
+    entrypointRef: refs(commit.commitOid).entrypoint,
   };
 }
 
