@@ -1,8 +1,9 @@
-// worker-loader.ts — THE loader: `loadConfinedWorker` turns a SOURCE into a loaded worker through
-// Cloudflare's `env.LOADER` — pick the cache key, mint the confined isolate under it — and stops at
-// the `WorkerStub`. The CALLER then chooses the host: `worker.getEntrypoint(name?)` for a stateless
-// `WorkerEntrypoint` (`itx.workers.get`), or `worker.getDurableObjectClass(name)` hosted as a durable
-// facet of the context (`itx.facets.get(name, spec)`).
+// worker-loader.ts — THE loader: `prepareConfinedWorker` turns a SOURCE into its loaded IDENTITY
+// (the cache key) and a `load` thunk that mints the confined isolate under it through Cloudflare's
+// `env.LOADER`, stopping at the `WorkerStub`. The CALLER then chooses the host — and WHEN to load:
+// `load().getEntrypoint(name?)` at once for a stateless `WorkerEntrypoint` (`itx.workers.get`), or
+// `load().getDurableObjectClass(name)` only when a durable facet of the context STARTS
+// (`itx.facets.get(name, spec)`).
 //
 // THE CACHE KEY, Cloudflare's own contract (developers.cloudflare.com/dynamic-workers/api-reference):
 // `LOADER.get(id, getCode)` runs `getCode` only when no isolate is warm under `id` — "although it is
@@ -119,8 +120,8 @@ function contentHashOfWorkerModules(modules: WorkerModules): string {
   return hash;
 }
 
-/** What `loadConfinedWorker` needs. */
-type LoadConfinedWorkerOptions = {
+/** What `prepareConfinedWorker` needs. */
+type PrepareConfinedWorkerOptions = {
   env: { LOADER: WorkerLoader };
   /** The deploy identity every loader id folds in (worker.ts `AppConfig.deployId`: CF_VERSION_METADATA.id,
    *  "unversioned" locally) — a facet built from an isolate a PRIOR deployment minted cannot be called
@@ -144,9 +145,15 @@ type LoadConfinedWorkerOptions = {
 };
 
 /**
- * THE one loading step: source → the cache key → the confined worker. It stops at the loaded
- * `worker` handle — "load the code" and "choose the host" are visibly separate. `loaderId` is the
- * LOADED IDENTITY the facet door stores as its restart marker.
+ * THE one loading step, in two halves. RESOLVE, now: source → the cache key → `loaderId`, the
+ * LOADED IDENTITY the facet door stores as its restart marker (the one await is a dead id's
+ * recovery, which produces the modules OUTSIDE the loader so a failure poisons nothing). LOAD, when
+ * the caller says: `load()` mints or reuses the confined isolate under that identity and stops at
+ * the `worker` handle. "Name the code", "load the code" and "choose the host" are visibly separate:
+ * `itx.workers.get` calls `load()` at once (a stateless entrypoint per call; the loader caches by
+ * key); the facet door calls it only for a facet that STARTS — a call to a RUNNING facet never
+ * touches the loader (Cloudflare's facet lifecycle; apps/os PR #2631 measured the alternative: one
+ * isolate lookup per warm call).
  *
  * ⚠️  THE cacheKey IS A DOLLAR AMOUNT. Cloudflare bills EVERY DISTINCT value ever passed to
  * `LOADER.get` as a Dynamic Worker at $0.002/worker/day. apps/os PR #2504: a per-request random
@@ -159,9 +166,9 @@ type LoadConfinedWorkerOptions = {
  * worker's WHOLE world — `env.ITX` and every global fetch — is its owning context, so sibling calls
  * and egress route through the host's dispatch with no second path.
  */
-export async function loadConfinedWorker(
-  opts: LoadConfinedWorkerOptions,
-): Promise<{ worker: WorkerStub; loaderId: string }> {
+export async function prepareConfinedWorker(
+  opts: PrepareConfinedWorkerOptions,
+): Promise<{ loaderId: string; load: () => WorkerStub }> {
   const { where, source, cacheKey } = opts;
   const requireMainModule = (modules: unknown): WorkerModules => {
     if (!isWorkerModules(modules) || typeof modules["cap.js"] !== "string")
@@ -205,36 +212,39 @@ export async function loadConfinedWorker(
     modulesForWorkerCode = () => modules;
   }
   const loaderId = generation ? `${loaderIdBase}#${generation}` : loaderIdBase;
-  const worker = opts.env.LOADER.get(loaderId, async () => {
-    let modules: WorkerModules;
-    try {
-      modules = await modulesForWorkerCode();
-    } catch (error) {
-      loaderIdGenerations.set(loaderIdBase, { generation, dead: true });
-      throw error;
-    }
-    // The processor SDK ("processor.js", ~370 KB — ~40× a typical fixture) is injected only when a
-    // module IMPORTS it. The failure mode is loud: a forgotten import fails at module link, by name.
-    const importsProcessorSdk = Object.values(modules).some((code) =>
-      /["']\.\/processor\.js["']/.test(code),
-    );
-    return {
-      // PURE-PLAY: no node:*, so userspace code stays portable across workerd builds.
-      // `allow_irrevocable_stub_storage` (experimental) lets loaded code store its `env.ITX` stub
-      // and replay it (workers-and-facets.e2e pins it) — every worker in the chain needs it, so
-      // the parent config carries it too. No `limits`: trusted clients. The platform bounds a DO to
-      // 10 distinct dynamic workers with in-flight requests — the idle quiesce keeps a context under it.
-      compatibilityDate: "2026-09-01",
-      compatibilityFlags: [
-        "no_nodejs_compat",
-        "no_nodejs_compat_v2",
-        "allow_irrevocable_stub_storage",
-      ],
-      mainModule: "cap.js",
-      modules: importsProcessorSdk ? { ...modules, "processor.js": PROCESSOR_SDK_MODULE } : modules,
-      env: { ITX: opts.itxEntrypoint },
-      globalOutbound: opts.itxEntrypoint,
-    };
-  });
-  return { worker, loaderId };
+  const load = () =>
+    opts.env.LOADER.get(loaderId, async () => {
+      let modules: WorkerModules;
+      try {
+        modules = await modulesForWorkerCode();
+      } catch (error) {
+        loaderIdGenerations.set(loaderIdBase, { generation, dead: true });
+        throw error;
+      }
+      // The processor SDK ("processor.js", ~370 KB — ~40× a typical fixture) is injected only when a
+      // module IMPORTS it. The failure mode is loud: a forgotten import fails at module link, by name.
+      const importsProcessorSdk = Object.values(modules).some((code) =>
+        /["']\.\/processor\.js["']/.test(code),
+      );
+      return {
+        // PURE-PLAY: no node:*, so userspace code stays portable across workerd builds.
+        // `allow_irrevocable_stub_storage` (experimental) lets loaded code store its `env.ITX` stub
+        // and replay it (workers-and-facets.e2e pins it) — every worker in the chain needs it, so
+        // the parent config carries it too. No `limits`: trusted clients. The platform bounds a DO to
+        // 10 distinct dynamic workers with in-flight requests — the idle quiesce keeps a context under it.
+        compatibilityDate: "2026-09-01",
+        compatibilityFlags: [
+          "no_nodejs_compat",
+          "no_nodejs_compat_v2",
+          "allow_irrevocable_stub_storage",
+        ],
+        mainModule: "cap.js",
+        modules: importsProcessorSdk
+          ? { ...modules, "processor.js": PROCESSOR_SDK_MODULE }
+          : modules,
+        env: { ITX: opts.itxEntrypoint },
+        globalOutbound: opts.itxEntrypoint,
+      };
+    });
+  return { loaderId, load };
 }
