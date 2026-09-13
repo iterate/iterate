@@ -1,9 +1,9 @@
 // worker-loader.ts — THE loader: `prepareConfinedWorker` turns a SOURCE into its loaded IDENTITY
-// (the cache key) and a `load` thunk that mints the confined isolate under it through Cloudflare's
-// `env.LOADER`, stopping at the `WorkerStub`. The CALLER then chooses the host — and WHEN to load:
-// `load().getEntrypoint(name?)` at once for a stateless `WorkerEntrypoint` (`itx.workers.get`), or
-// `load().getDurableObjectClass(name)` only when a durable facet of the context STARTS
-// (`itx.facets.get(name, spec)`).
+// (the cache key) and a `load` thunk that mints the confined isolate under it through
+// Cloudflare's `env.LOADER`, stopping at the `WorkerStub`. The CALLER then chooses the host — and
+// WHEN to load: `load().getEntrypoint(name?)` at once for a stateless `WorkerEntrypoint`
+// (`itx.workers.get`), or `load().getDurableObjectClass(name)` only when a durable facet of the
+// context STARTS (`itx.facets.get(name, spec)`).
 //
 // THE CACHE KEY, Cloudflare's own contract (developers.cloudflare.com/dynamic-workers/api-reference):
 // `LOADER.get(id, getCode)` runs `getCode` only when no isolate is warm under `id` — "although it is
@@ -146,14 +146,15 @@ type PrepareConfinedWorkerOptions = {
 
 /**
  * THE one loading step, in two halves. RESOLVE, now: source → the cache key → `loaderId`, the
- * LOADED IDENTITY the facet door stores as its restart marker (the one await is a dead id's
- * recovery, which produces the modules OUTSIDE the loader so a failure poisons nothing). LOAD, when
- * the caller says: `load()` mints or reuses the confined isolate under that identity and stops at
- * the `worker` handle. "Name the code", "load the code" and "choose the host" are visibly separate:
- * `itx.workers.get` calls `load()` at once (a stateless entrypoint per call; the loader caches by
- * key); the facet door calls it only for a facet that STARTS — a call to a RUNNING facet never
- * touches the loader (Cloudflare's facet lifecycle; apps/os PR #2631 measured the alternative: one
- * isolate lookup per warm call).
+ * LOADED IDENTITY `IterateContextDurableObject#invokeFacet` stores as the facet's restart marker
+ * (the one await is a dead id's recovery, which produces the modules OUTSIDE the loader so a
+ * failure poisons nothing). LOAD, when the caller says: `load()` mints or reuses the confined
+ * isolate under that identity and stops at the `worker` handle. "Name the code", "load the code"
+ * and "choose the host" are visibly separate: `itx.workers.get` calls `load()` at once (a stateless
+ * entrypoint per call; the loader caches by key); `IterateContextDurableObject#invokeFacet` calls
+ * it only for a facet that STARTS — a call to a RUNNING facet never touches the loader
+ * (Cloudflare's facet lifecycle; apps/os PR #2631 measured the alternative: one isolate lookup per
+ * warm call).
  *
  * ⚠️  THE cacheKey IS A DOLLAR AMOUNT. Cloudflare bills EVERY DISTINCT value ever passed to
  * `LOADER.get` as a Dynamic Worker at $0.002/worker/day. apps/os PR #2504: a per-request random
