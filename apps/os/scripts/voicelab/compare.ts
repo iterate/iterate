@@ -7,7 +7,6 @@ import { percentiles } from "./audio.ts";
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 import { gapStatsOfGaps, liveProbe } from "./live-probe.ts";
 import { openStream, sleep } from "./probe-audio.ts";
-import { talk } from "./talk.ts";
 import { openWireCall } from "./wire-call.ts";
 
 const RATE = 16_000;
@@ -25,8 +24,6 @@ type AudioFrame = {
 export interface VoiceCompareOptions extends VoicelabConnectOptions {
   /** Fresh stream to create and install before comparing. */
   streamPath?: string;
-  /** Install the current voice source before the stream leg. */
-  setup?: boolean;
   /** Voice persona; the stream's durable session event supplies the full policy to the direct leg. */
   instructions?: string;
   /** Fixed commentary passed verbatim to both legs. */
@@ -82,19 +79,7 @@ export async function compare(options: VoiceCompareOptions): Promise<void> {
   const passage =
     options.passage ||
     "Take a slow breath and notice the small sounds around you. The room can be calm without being silent: a kettle cooling, rain at the window, footsteps in another room. Keep a steady pace as you speak, leave a little space between each sentence, and finish this whole passage before you stop.";
-  if (options.setup === true) {
-    await talk({
-      project: options.project,
-      baseUrl: options.baseUrl,
-      streamPath,
-      setupOnly: true,
-      auto: true,
-      instructions: options.instructions || "Speak the supplied commentary clearly and naturally.",
-    });
-  }
-
-  /* `--setup` refreshes source. Every run then invokes the project's mounted
-   * voice capability, which installs the facet on this fresh stream. */
+  /* The benchmark measures the project's mounted voice capability. */
   using itx = (await connectProject(options)) as unknown as {
     voice: Pick<VoiceAgentRpc, "setupVoiceAgent">;
     [Symbol.dispose](): void;
@@ -141,6 +126,10 @@ export async function compare(options: VoiceCompareOptions): Promise<void> {
         "stream spoke before the controlled commentary",
       );
       instructions = call.watch.instructions.at(-1)!.text;
+      requireReady(
+        instructions.length < 8_000,
+        "stream instructions reached the durable 8000-character cap; exact direct comparison is unavailable",
+      );
       const commentaryRequestedAtMs = call.clock();
       await publisher.stream.append({
         type: "events.iterate.com/voice-agent/commentary",

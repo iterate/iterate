@@ -25,7 +25,6 @@ doppler run --config dev -- pnpm cli voicelab live-probe --barge-after-ms 4000 -
 # facet's provider-receipt-to-stream-send timing; it never subtracts clocks
 # across those boundaries.
 doppler run --config preview_15 -- pnpm cli voicelab compare --project <slug>
-# Add --setup only to install this checkout's voice source first.
 # For every latency or stutter change, compare repeated direct/stream runs,
 # then verify device underrun counters and a recorded call. A larger buffer
 # alone is not evidence that relay latency improved.
