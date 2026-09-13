@@ -583,6 +583,8 @@ export const VoiceAgentContract = defineProcessorContract({
         lastFrameOfAnswer: z.boolean().optional(),
         /** Facet clock, at the moment this frame was handed to the stream. */
         sentAtFacetMs: z.number(),
+        /** Facet clock when the provider callback delivered this PCM. */
+        receivedAtFacetMs: z.number().optional(),
       }),
     },
   },
@@ -688,7 +690,7 @@ interface Dial {
    * in the numbering. In the ordinary course this holds one frame for the
    * duration of one append.
    */
-  speakerOutbox: { pcm: string; lastFrameOfAnswer?: true }[];
+  speakerOutbox: { pcm: string; receivedAtFacetMs?: number; lastFrameOfAnswer?: true }[];
   /**
    * ONE sender per live dial, started with its first output and waiting while
    * the outbox is empty. One keepalive registration per dial: registering it
@@ -1593,7 +1595,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
   ): void {
     dial.face?.audio(base64ToBytes(pcm), nowAtFacetMs);
     dial.lastSpeakerFrameAtFacetMs = nowAtFacetMs;
-    dial.speakerOutbox.push({ pcm });
+    dial.speakerOutbox.push({ pcm, receivedAtFacetMs: nowAtFacetMs });
     this.#startSpeakerSender(dial, append, runInBackground);
   }
 
@@ -1690,6 +1692,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
                 pcm: frame.pcm,
                 ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
                 ...(frame.lastFrameOfAnswer && { lastFrameOfAnswer: true }),
+                ...(typeof frame.receivedAtFacetMs === "number" && {
+                  receivedAtFacetMs: frame.receivedAtFacetMs,
+                }),
                 sentAtFacetMs: this.deps.nowAtFacetMs(),
               },
             });
@@ -2267,7 +2272,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
       const removed = await stream.append({
         type: "events.iterate.com/stream/subscription-removed",
         idempotencyKey: `voice-agent/subscription-removed:${options.streamPath}:${crypto.randomUUID()}`,
-        payload: { name: VoiceAgentContract.slug },
+        payload: { name: VoiceAgentContract.slug, reason: "requested" },
       });
       disposeRpcStub(removed, "remove append result");
       return { streamPath: options.streamPath };

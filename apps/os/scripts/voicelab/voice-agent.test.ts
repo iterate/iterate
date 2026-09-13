@@ -242,6 +242,8 @@ function speakerFrames(h: Harness) {
           pcm: string;
           clearSpeakerBufferBeforeFrame?: boolean;
           lastFrameOfAnswer?: boolean;
+          receivedAtFacetMs?: number;
+          sentAtFacetMs: number;
         },
     );
 }
@@ -780,6 +782,49 @@ describe("speaker playback", () => {
     h.provider.silence(5_000);
     await playOutEverything(h, 6_000);
     expect(speakerFrames(h)).toHaveLength(0);
+  });
+
+  it("preserves the provider arrival time while a speaker append is backpressured", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+
+    let releaseAppend: (() => void) | undefined;
+    let heldFirstAppend = false;
+    h.stream.holdAppend = (events) => {
+      if (
+        heldFirstAppend ||
+        !events.some((event) => event.type === "events.iterate.com/voice-agent/spk-frame")
+      ) {
+        return undefined;
+      }
+      heldFirstAppend = true;
+      return new Promise<void>((resolve) => {
+        releaseAppend = resolve;
+      });
+    };
+
+    const receivedAtFacetMs = h.clock.now;
+    h.provider.speech(100);
+    await h.settle();
+    expect(releaseAppend).toBeTypeOf("function");
+
+    /* A later provider callback queues behind the still-blocked first append. */
+    h.clock.now += 100;
+    h.provider.speech(100);
+    h.clock.now += 150;
+    releaseAppend?.();
+    await h.settle();
+
+    expect(speakerFrames(h)).toMatchObject([
+      {
+        receivedAtFacetMs,
+        sentAtFacetMs: receivedAtFacetMs,
+      },
+      {
+        receivedAtFacetMs: receivedAtFacetMs + 100,
+        sentAtFacetMs: receivedAtFacetMs + 250,
+      },
+    ]);
   });
 
   it("numbers every frame contiguously from one and delivers every millisecond of speech", async () => {
