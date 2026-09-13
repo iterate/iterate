@@ -422,6 +422,8 @@ export class VoiceDeviceFacet extends StreamProcessorFacet {
     return new VoiceDeviceProcessor({
       ...deps,
       withProject: async <T>(fn: (project: Project) => Promise<T>) => {
+        // ITX is injected with this facet's project scope. Its dynamic RPC
+        // binding cannot expose the Project type, so assert that SDK contract here.
         const project = (await this.env.ITX.get()) as Project;
         try {
           return await fn(project);
