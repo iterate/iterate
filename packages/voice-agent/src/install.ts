@@ -297,6 +297,14 @@ export async function installVoiceAgentFromSource(
     preservePublishedVoiceAgentDependency?: boolean;
   } = {},
 ): Promise<InstallVoiceAgentFromSourceResult> {
+  if (
+    options.facetKeyPrefix !== undefined &&
+    !/^[a-z][a-z0-9-]{0,29}$/.test(options.facetKeyPrefix)
+  ) {
+    throw new Error(
+      "facetKeyPrefix must start with a lowercase letter and contain at most 30 lowercase letters, digits, or hyphens.",
+    );
+  }
   const sourceDirectory = options.sourceDirectory || VOICE_AGENT_SOURCE_DIR;
   const guestFile = options.guestFile || VOICE_AGENT_GUEST_FILE;
   const sourceIdentity = JSON.stringify({

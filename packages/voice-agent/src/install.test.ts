@@ -288,6 +288,22 @@ describe("installVoiceAgentFromSource", () => {
     ]);
   });
 
+  it("rejects an invalid facet prefix before changing the repo", async () => {
+    const { repo, commits } = fakeRepo({
+      "package.json": manifest({ iterate: ITERATE, zod: "4.5.4" }),
+    });
+    await expect(
+      installVoiceAgentFromSource(repo, source, { facetKeyPrefix: "a".repeat(31) }),
+    ).rejects.toThrow(/facetKeyPrefix/);
+    await expect(
+      installVoiceAgentFromSource(repo, source, { facetKeyPrefix: "Invalid" }),
+    ).rejects.toThrow(/facetKeyPrefix/);
+    await expect(
+      installVoiceAgentFromSource(repo, source, { facetKeyPrefix: "a".repeat(30) }),
+    ).resolves.toMatchObject({ changed: true });
+    expect(commits).toHaveLength(1);
+  });
+
   it("can install an isolated source guest without changing the project's package guest", async () => {
     const customGuest = "export { CustomVoice } from './custom.ts';\n";
     const { repo, files } = fakeRepo({
