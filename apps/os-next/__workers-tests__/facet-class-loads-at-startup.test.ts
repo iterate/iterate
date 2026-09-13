@@ -102,7 +102,8 @@ const hostHello = (ctx: string) =>
 const warmHello = (ctx: string) =>
   stub(ctx).invoke("itx.facets.get('x').hello()") as Promise<Hello>;
 
-/** `gets.length` unchanged for `quietMs` — the push path has drained (nothing else calls the door). */
+/** `gets.length` unchanged for `quietMs` — the push path has drained (nothing else calls
+ *  `#invokeFacet`). */
 async function untilLoaderQuiet(tap: LoaderTap, quietMs = 400, timeoutMs = 8_000): Promise<void> {
   let last = tap.gets.length;
   let quietSince = Date.now();
