@@ -109,6 +109,16 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 2.8.0~1
+  espressif/led_strip:
+    component_hash: 28c6509a727ef74925b372ed404772aeedf11cce10b78c3f69b3c66799095e2d
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.5.5
   idf:
     source:
       type: idf
@@ -177,8 +187,9 @@ dependencies:
 direct_dependencies:
 - capnweb
 - espressif/esp_codec_dev
+- espressif/led_strip
 - idf
 - waveshare/esp32_s3_touch_amoled_1_8
-manifest_hash: 4444b9170438369cfb4f2cafca6c7ec2662f0e0f9d4eca41749d0d3e5341163d
+manifest_hash: 27fd8f2f3df31d7c62c7b8bccc481b1dec57d16b5b6c65b0c4b55a4537a5e85f
 target: esp32s3
 version: 2.0.0

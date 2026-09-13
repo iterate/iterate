@@ -3,10 +3,18 @@ import {
   type ProcessorFacetHost,
   type ProcessorFacetIdentity,
 } from "iterate/processors/cloudflare";
+import { createJsonByteLength } from "@iterate-com/shared/json-byte-length";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { createFeedPublicationStore, FeedProcessor } from "./feed-processor.ts";
+import { FeedProcessorContract } from "./feed-contract.ts";
+
+const feedStateByteLength = createJsonByteLength();
+const feedReductionCache = {
+  shouldCacheReduction: (state: unknown) => feedStateByteLength(state) <= 512 * 1024,
+  initialState: () => FeedProcessorContract.stateSchema.parse({}),
+};
 
 /** One presentation owner per stream, independent of the stream's domain processors. */
 export class FeedFacet extends ProcessorFacet<Env> {
@@ -33,10 +41,15 @@ export class FeedFacet extends ProcessorFacet<Env> {
           stream,
           projectId: identity.projectId,
           path: identity.path,
-          publications: createFeedPublicationStore(this.ctx.storage.sql),
+          publications: createFeedPublicationStore(this.ctx.storage.sql, (closure) =>
+            this.ctx.storage.transactionSync(closure),
+          ),
           refreshLive: () => registry.refreshLive(),
         });
-        registry.register(processor, { resetForStream: () => processor.resetForStream() });
+        registry.register(processor, {
+          resetForStream: () => processor.resetForStream(),
+          reductionCache: feedReductionCache,
+        });
         const reads = registry.reads(processor);
         presentation = () =>
           processor.presentation(reads.currentState, reads.currentStreamId ?? null);

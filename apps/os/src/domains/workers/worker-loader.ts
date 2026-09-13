@@ -13,6 +13,7 @@ import {
 import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
 import { WORKER_COMPATIBILITY_DATE, WORKER_COMPATIBILITY_FLAGS } from "./build-backend.ts";
 import { coordinateWorkerBuild, type WorkerBuildRequest } from "./worker-build-capability.ts";
+import { stableSha256 } from "./utils.ts";
 
 /** Name-based because the error crosses Workers RPC. */
 export function isWorkerBuildInProgressError(error: unknown): boolean {
@@ -24,6 +25,7 @@ export type ResolvedWorkerSource = {
   assetConfig: WorkerBuildArtifact["assetConfig"];
   assetManifest: WorkerBuildArtifact["assetManifest"];
   assets: Record<string, string>;
+  /** Runtime identity: the Worker Loader code and compatibility settings, not the build cache key. */
   cacheKey: string;
   commitOid?: string;
   mainModule: string;
@@ -106,7 +108,7 @@ async function resolveArtifact(
 ): Promise<ResolvedWorkerSourceResult> {
   const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
   const artifact = await store.get(buildKey);
-  if (artifact !== null) return { ok: true, source: memoizeArtifact(artifact) };
+  if (artifact) return { ok: true, source: await memoizeArtifact(artifact) };
 
   const request: WorkerBuildRequest = {
     buildKey,
@@ -121,7 +123,7 @@ async function resolveArtifact(
   try {
     built = await operation;
     return built.ok
-      ? { ok: true, source: memoizeArtifact(built.artifact) }
+      ? { ok: true, source: await memoizeArtifact(built.artifact) }
       : { failure: built.failure, ok: false };
   } finally {
     // RPC adds a disposal group to object results even when they contain only
@@ -130,12 +132,20 @@ async function resolveArtifact(
   }
 }
 
-function memoizeArtifact(artifact: WorkerBuildArtifact): ResolvedWorkerSource {
+async function memoizeArtifact(artifact: WorkerBuildArtifact): Promise<ResolvedWorkerSource> {
   const resolved: ResolvedWorkerSource = {
     assetConfig: artifact.assetConfig,
     assetManifest: artifact.assetManifest,
     assets: artifact.assets,
-    cacheKey: artifact.buildKey,
+    // The build key is intentionally conservative: any repo change gets a
+    // fresh artifact request. Runtime and facet replacement must instead
+    // follow what Worker Loader actually executes.
+    cacheKey: await stableSha256({
+      ...effectiveCompatibility(artifact.wranglerConfig),
+      mainModule: artifact.mainModule,
+      modules: artifact.modules,
+      type: "worker-runtime-v1",
+    }),
     mainModule: artifact.mainModule,
     modules: artifact.modules,
     wranglerConfig: artifact.wranglerConfig,
@@ -146,6 +156,13 @@ function memoizeArtifact(artifact: WorkerBuildArtifact): ResolvedWorkerSource {
   }
   resolvedArtifactMemo.set(artifact.buildKey, resolved);
   return resolved;
+}
+
+function effectiveCompatibility(wranglerConfig: WorkerBuildArtifact["wranglerConfig"]) {
+  return {
+    compatibilityDate: wranglerConfig?.compatibilityDate || WORKER_COMPATIBILITY_DATE,
+    compatibilityFlags: wranglerConfig?.compatibilityFlags || WORKER_COMPATIBILITY_FLAGS,
+  };
 }
 
 /** Pin a branch to a commit before hashing or reading its file snapshot. */
@@ -225,8 +242,7 @@ export function loadResolvedWorker({
   streamContext: StreamContext;
 }): WorkerStub {
   const workerCode: WorkerLoaderWorkerCode = {
-    compatibilityDate: resolved.wranglerConfig?.compatibilityDate || WORKER_COMPATIBILITY_DATE,
-    compatibilityFlags: resolved.wranglerConfig?.compatibilityFlags || WORKER_COMPATIBILITY_FLAGS,
+    ...effectiveCompatibility(resolved.wranglerConfig),
     env: { ...bindings, ITERATE_WORKER_VERSION: resolved.cacheKey },
     globalOutbound,
     mainModule: resolved.mainModule,

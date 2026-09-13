@@ -24,6 +24,7 @@ import { readDevServerInfo } from "./lib/dev-server-info.ts";
 
 const ASSISTANT_RESPONSE_TYPE = "events.iterate.com/agents/web-message-sent";
 export const ITX_INITIAL_CONNECTION_RETRY_PREFIX = "[itx-initial-connection-retry] ";
+const ITX_CLOSE_TIMEOUT_MS = 5_000;
 
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]
@@ -58,24 +59,55 @@ export async function run(options: RunOptions) {
   // The script body becomes an async function body, so `return` works and
   // `await` is available throughout — same wrapping as every other runtime.
   const script = new AsyncFunction("itx", "vars", "RpcTarget", code);
-
-  using itx = options.context
+  const closed = Promise.withResolvers<void>();
+  const itx = options.context
     ? await connectItxReady(
-        { ...connection, projectId: options.context },
+        { ...connection, onWebSocketClose: () => closed.resolve(), projectId: options.context },
         initialConnectionRetryOptions(),
       )
-    : await connectItxReady(connection, initialConnectionRetryOptions());
+    : await connectItxReady(
+        { ...connection, onWebSocketClose: () => closed.resolve() },
+        initialConnectionRetryOptions(),
+      );
+
   let result: unknown;
   try {
-    result = await script(itx, vars, RpcTarget);
-  } catch (error) {
-    process.stderr.write(formatScriptError(error));
-    process.exitCode = 1;
-    return;
+    using scopedItx = itx;
+    try {
+      result = await script(scopedItx, vars, RpcTarget);
+    } catch (error) {
+      process.stderr.write(formatScriptError(error));
+      process.exitCode = 1;
+      return;
+    }
+    // Exactly one JSON document on stdout — scripts and the e2e suite parse it.
+    // Emit it before disposal: a close timeout must not hide completed work.
+    process.stdout.write(`${JSON.stringify(result ?? null, null, 2)}\n`);
+  } finally {
+    await waitForItxClose(closed.promise);
   }
+}
 
-  // Exactly one JSON document on stdout — scripts and the e2e suite parse it.
-  process.stdout.write(`${JSON.stringify(result ?? null, null, 2)}\n`);
+async function waitForItxClose(closed: Promise<void>): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      closed,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `Timed out after ${ITX_CLOSE_TIMEOUT_MS}ms waiting for itx WebSocket close.`,
+              ),
+            ),
+          ITX_CLOSE_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 /**

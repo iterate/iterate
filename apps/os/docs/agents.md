@@ -69,6 +69,24 @@ bumping the revision and appending a new occurrence. `key` identifies the
 logical model-context slot, so that new occurrence supersedes only the prior
 value of the same slot while every real update remains in the journal.
 
+## Share Useful Event Facts Automatically
+
+Integrations build on the existing Agent processor. Keep their translation of
+events into `context-added` in the integration; do not change Agent scheduling,
+prompt folding, compaction, or script execution to support it. When an event
+already records information the Agent needs, share that fact rather than make
+the model discover it by polling. Use `dont-trigger-request` for observations;
+existing task and delegation events own the requests to start work.
+
+Include the source event reference, give the context append an idempotency key
+derived from that event, and retain the original scope and identifiers. Report
+the observed outcome precisely: forwarding voice context does not prove the
+person heard it, and revoking a local capability does not remove a root-scope
+fallback. External text remains attributed data, not new system instructions.
+Keep observations unkeyed and reserve standing keyed context for trusted
+system instructions. PCM, heartbeats, duplicate state notifications, and an
+Agent's own outbound updates do not need another context copy.
+
 ## Projection And Publication
 
 Reduced agent state keeps the complete provider-neutral projection:

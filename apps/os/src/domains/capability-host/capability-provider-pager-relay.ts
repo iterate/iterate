@@ -44,6 +44,10 @@ type MountedProvider = {
   provider: LiveCapability;
 };
 
+const RetryableDurableObjectResetError = z
+  .object({ durableObjectReset: z.literal(true), overloaded: z.literal(false).optional() })
+  .passthrough();
+
 const CapabilityProviderPage = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("activate"), providedAtOffset: z.number().int().nonnegative() }),
   z.strictObject({ type: z.literal("idle"), providedAtOffset: z.number().int().nonnegative() }),
@@ -85,7 +89,8 @@ type CapabilityHostStreamStub = {
 
 /** One client-given Pager shared by every live provider mounted through this relay. */
 export class CapabilityProviderPagerRelay {
-  readonly #durableObject: CapabilityHostStreamStub;
+  readonly #newDurableObject: () => CapabilityHostStreamStub;
+  #durableObject: CapabilityHostStreamStub;
   readonly #waitUntil: (promise: Promise<unknown>) => void;
   readonly #onPagerLost: (() => void) | undefined;
   readonly #mounts = new Map<number, MountedProvider>();
@@ -110,14 +115,18 @@ export class CapabilityProviderPagerRelay {
     onPagerLost?: () => void;
   }) {
     const path = normalizePath(input.scope.path);
+    const durableObjectName = DurableObjectNameCodec.stringify({
+      path,
+      projectId: input.scope.projectId,
+    });
     // Safe: the STREAM stub's generated RPC surface carries exactly these
     // capability doors (plus much more this relay never dials); the
     // hand-declared CapabilityHostStreamStub swaps the deep generated
     // DurableObjectStub type for the plain subset, the same seam pattern as
     // the facet relays' ParentStreamStub.
-    this.#durableObject = input.env.STREAM.getByName(
-      DurableObjectNameCodec.stringify({ path, projectId: input.scope.projectId }),
-    ) as unknown as CapabilityHostStreamStub;
+    this.#newDurableObject = () =>
+      input.env.STREAM.getByName(durableObjectName) as unknown as CapabilityHostStreamStub;
+    this.#durableObject = this.#newDurableObject();
     this.#waitUntil = input.waitUntil;
     this.#onPagerLost = input.onPagerLost;
   }
@@ -199,6 +208,17 @@ export class CapabilityProviderPagerRelay {
       revoke: (input) =>
         this.#enqueue(async () => {
           try {
+            await this.#durableObject.revokeCapability(input);
+          } catch (error) {
+            if (!RetryableDurableObjectResetError.safeParse(error).success) throw error;
+            // A thrown DO stub can remain broken. The exact-offset revoke is
+            // idempotent, so retry it once through a newly acquired binding.
+            console.info("live capability revoke retrying after Durable Object reset", {
+              error,
+              path: input.path,
+              providedAtOffset: input.providedAtOffset,
+            });
+            this.#durableObject = this.#newDurableObject();
             await this.#durableObject.revokeCapability(input);
           } finally {
             this.#retireMount(mounted.providedAtOffset);

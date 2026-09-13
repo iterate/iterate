@@ -1,6 +1,5 @@
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { Alert, AlertDescription, AlertTitle } from "@iterate-com/ui/components/alert";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Field,
@@ -18,14 +17,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@iterate-com/ui/components/select";
-import { CircleAlertIcon, UsbIcon } from "lucide-react";
+import { UsbIcon } from "lucide-react";
 import { FirmwareInstallButton } from "../components/firmware-install-button.tsx";
 import {
   DEFAULT_DEVICE_ID,
   DEFAULT_FIRMWARE_VERSION,
   findFirmwareDevice,
   firmwareCatalog,
-  isEspWebToolsRelease,
   resolveFirmwareRelease,
 } from "../firmware/catalog.ts";
 import { normalizeOsBaseUrl, type DeviceConfiguration } from "../firmware/config-image.ts";
@@ -81,10 +79,10 @@ function KitPage() {
   // stable during the redirect render.
   const device = findFirmwareDevice(params.deviceId) ?? firmwareCatalog[0]!;
 
-  const release = resolveFirmwareRelease(device, params.firmwareVersion);
+  const release = resolveFirmwareRelease(device, params.firmwareVersion) ?? device.releases[0]!;
   const versionItems = [
     {
-      label: release ? `Latest (${device.releases[0]?.version ?? release.version})` : "Latest",
+      label: `Latest (${device.releases[0]?.version ?? release.version})`,
       value: DEFAULT_FIRMWARE_VERSION,
     },
     ...device.releases.map((candidate) => ({
@@ -92,28 +90,25 @@ function KitPage() {
       value: candidate.version,
     })),
   ];
-  const preparedConfiguration = useMemo<
-    | { configuration: DeviceConfiguration; error?: undefined }
-    | { configuration?: undefined; error: string }
-  >(() => {
-    try {
-      return {
-        configuration: {
-          schemaVersion: 1,
+  const preparationKey = JSON.stringify([search.host, search.project, projectApiKey, device.id]);
+  const [preparing, setPreparing] = useState(false);
+  const [prepared, setPrepared] = useState<{
+    key: string;
+    projectId: string;
+    baseUrl: string;
+  }>();
+  const [preparationError, setPreparationError] = useState<{ key: string; message: string }>();
+  const configuration: DeviceConfiguration | undefined =
+    prepared?.key === preparationKey
+      ? {
           wifi: { ssid: wifiSsid, password: wifiPassword },
           iterate: {
-            baseUrl: normalizeOsBaseUrl(search.host || DEFAULT_OS_BASE_HOST),
-            projectSlug: search.project,
+            baseUrl: prepared.baseUrl,
+            projectId: prepared.projectId,
             projectApiKey,
           },
-        },
-      };
-    } catch (error: unknown) {
-      return {
-        error: error instanceof Error ? error.message : "OS base host is invalid.",
-      };
-    }
-  }, [projectApiKey, search.host, search.project, wifiPassword, wifiSsid]);
+        }
+      : undefined;
 
   return (
     <div className="grid w-full gap-10 lg:grid-cols-[minmax(0,0.8fr)_minmax(28rem,1.2fr)] lg:gap-16">
@@ -124,18 +119,30 @@ function KitPage() {
         </header>
         <div className="flex flex-col gap-3 text-sm leading-relaxed text-muted-foreground">
           <p>
-            Connect an ESP32-S3 device to this computer over USB, choose its firmware, and enter the
-            details alongside.
+            Open this page in Chrome or Edge on a computer. Connect your device with a USB data
+            cable, choose its model, and enter your Wi-Fi and project details.
           </p>
           <p>
-            Kit writes the Wi-Fi and Iterate credentials directly from this browser before flashing
-            the device. Secrets never enter the page URL or the Kit Worker.
+            Prepare device connects to your project and sets up voice. Your project needs an OpenAI
+            key saved as <span className="font-mono">/secrets/openai</span>.
+          </p>
+          <p>
+            Flash device opens the USB port chooser. Select your device and keep it connected until
+            installation finishes. It will restart and join your project.
+          </p>
+          <p>
+            Wi-Fi stays in this browser until flashing. Your project key is sent only to your OS
+            host and device.
           </p>
         </div>
       </section>
 
       <section aria-label="Device configuration">
-        <form ref={formRef} className="flex flex-col gap-6">
+        <form
+          ref={formRef}
+          className="flex flex-col gap-6"
+          onSubmit={(event) => event.preventDefault()}
+        >
           <Field className={horizontalFieldClassName}>
             <FieldLabel htmlFor="device" className="sm:pt-2">
               Device
@@ -235,8 +242,8 @@ function KitPage() {
                 value={wifiPassword}
                 onChange={(event) => setWifiPassword(event.target.value)}
                 autoComplete="new-password"
-                required
               />
+              <FieldDescription>Leave empty for an open network.</FieldDescription>
             </FieldContent>
           </Field>
 
@@ -304,43 +311,55 @@ function KitPage() {
             </FieldContent>
           </Field>
 
-          {!release && (
-            <div className="grid sm:grid-cols-[8.5rem_minmax(0,1fr)] sm:gap-4">
-              <div className="sm:col-start-2">
-                <Alert>
-                  <CircleAlertIcon />
-                  <AlertTitle>Firmware not published yet</AlertTitle>
-                  <AlertDescription>
-                    The installer is wired, but an Iterate-aware build for this device still needs
-                    to be added to the firmware catalog.
-                  </AlertDescription>
-                </Alert>
-              </div>
-            </div>
-          )}
-
           <div className="grid sm:grid-cols-[8.5rem_minmax(0,1fr)] sm:gap-4">
             <div className="flex flex-col gap-2 sm:col-start-2">
-              {release && isEspWebToolsRelease(release) && preparedConfiguration.configuration ? (
+              {configuration ? (
                 <FirmwareInstallButton
                   key={`${device.id}:${release.version}`}
-                  configuration={preparedConfiguration.configuration}
+                  configuration={configuration}
                   device={device}
                   formRef={formRef}
                   release={release}
                 />
               ) : (
-                <>
-                  <Button className="w-full" type="button" disabled>
-                    <UsbIcon data-icon="inline-start" />
-                    Flash device
-                  </Button>
-                  {preparedConfiguration.error && (
-                    <p role="alert" className="text-xs text-destructive">
-                      {preparedConfiguration.error}
-                    </p>
-                  )}
-                </>
+                <Button
+                  className="w-full"
+                  type="button"
+                  disabled={preparing}
+                  aria-busy={preparing}
+                  onClick={async () => {
+                    if (!formRef.current?.reportValidity()) return;
+                    setPreparing(true);
+                    setPreparationError(undefined);
+                    try {
+                      const baseUrl = normalizeOsBaseUrl(search.host || DEFAULT_OS_BASE_HOST);
+                      const { prepareDeviceVoice } = await import("../voice-setup.ts");
+                      const result = await prepareDeviceVoice({
+                        baseUrl,
+                        projectSlug: search.project,
+                        projectApiKey,
+                        deviceId: device.id,
+                      });
+                      setPrepared({ key: preparationKey, projectId: result.projectId, baseUrl });
+                    } catch (error: unknown) {
+                      setPreparationError({
+                        key: preparationKey,
+                        message:
+                          error instanceof Error ? error.message : "Could not prepare your device.",
+                      });
+                    } finally {
+                      setPreparing(false);
+                    }
+                  }}
+                >
+                  <UsbIcon data-icon="inline-start" />
+                  {preparing ? "Preparing your project…" : "Prepare device"}
+                </Button>
+              )}
+              {preparationError?.key === preparationKey && (
+                <p role="alert" className="text-xs text-destructive">
+                  {preparationError.message}
+                </p>
               )}
               <p className="text-xs text-muted-foreground">
                 The link saves device, firmware, host, and project slug. Credentials stay private.

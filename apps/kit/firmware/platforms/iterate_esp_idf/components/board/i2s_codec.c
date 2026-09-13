@@ -1,0 +1,848 @@
+#include "iterate/kit/platforms/i2s_codec.h"
+#include "iterate/kit/platforms/wake_word.h"
+#include "iterate/kit/starvation_ledger.h"
+#include "iterate/kit/capabilities/health.h"
+#include <stdatomic.h>
+#include <string.h>
+#include "esp_timer.h"
+#include "esp_attr.h"
+#include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
+
+static size_t channel_health(char *out, size_t capacity, size_t used);
+static void table_amplifier_phase(enum iterate_kit_voice_phase phase);
+#if !ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
+static void table_amplifier_sound(uint32_t bytes);
+#endif
+
+/** One complete 20 ms wire frame; the only queued storage in either direction. */
+struct iterate_kit_i2s_codec_frame {
+  int16_t samples[320];
+  size_t sample_count;
+};
+
+static QueueHandle_t capture_mailbox;
+static QueueHandle_t playback_mailbox;
+static atomic_bool capture_consumer_started;
+/*
+ * Table boards deliberately start I2S before `open_codec()`: Satellite1 needs
+ * the XMOS clocks while its TAS2780 calibrates, and the other board scripts
+ * also require their normal, timeout-bounded chip startup interval. DMA data
+ * overwritten before the first capture transfer or complete playback-ring
+ * refill is therefore calibration traffic, never promised capture or playout.
+ * Keep it visible separately from an overwrite after runtime audio starts.
+ */
+static DRAM_ATTR atomic_bool runtime_capture_queue_overflow_tracking;
+static DRAM_ATTR atomic_bool runtime_playback_queue_overflow_tracking;
+static uint16_t playback_ring_ms;
+static uint32_t capture_overruns;
+static uint32_t capture_driver_failures;
+static uint32_t playback_driver_failures;
+static portMUX_TYPE codec_lock = portMUX_INITIALIZER_UNLOCKED;
+static struct iterate_kit_starvation_ledger ledger;
+static enum iterate_kit_status (*hardware_read)(void *, int16_t *, size_t);
+static enum iterate_kit_status (*hardware_write)(void *, const int16_t *, size_t);
+static void *hardware_context;
+static void (*before_write)(void *);
+static bool (*playback_ready)(void *);
+static void (*playback_observed)(void *, const int16_t *, size_t, bool);
+static void (*playback_idle)(void *);
+
+/* A diagnostic build must make it impossible for an audible sample to reach
+ * any table-owned I2S writer. The static frame is also the physical XMOS
+ * reference: clocks and timing remain representative while AUDIO_PA_EN stays
+ * low. Keep the counters in the codec rather than a board UI path, because
+ * chimes and streamed PCM meet only here. */
+#if ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
+static const int16_t silent_output_frame[320];
+static uint32_t silent_output_attempts;
+static uint32_t silent_output_suppressed_samples;
+static uint32_t silent_output_written_samples;
+
+static void note_silent_output_attempt(size_t samples) {
+  portENTER_CRITICAL(&codec_lock);
+  if (silent_output_attempts != UINT32_MAX) ++silent_output_attempts;
+  if (samples > UINT32_MAX - silent_output_suppressed_samples) {
+    silent_output_suppressed_samples = UINT32_MAX;
+  } else {
+    silent_output_suppressed_samples += (uint32_t)samples;
+  }
+  portEXIT_CRITICAL(&codec_lock);
+}
+
+static void note_silent_output_write(size_t samples) {
+  portENTER_CRITICAL(&codec_lock);
+  if (samples > UINT32_MAX - silent_output_written_samples) {
+    silent_output_written_samples = UINT32_MAX;
+  } else {
+    silent_output_written_samples += (uint32_t)samples;
+  }
+  portEXIT_CRITICAL(&codec_lock);
+}
+#endif
+
+static enum iterate_kit_status codec_hardware_write(
+    const int16_t *samples, size_t sample_count) {
+#if ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
+  (void)samples;
+  const enum iterate_kit_status status = hardware_write(
+      hardware_context, silent_output_frame, sample_count);
+  if (status == ITERATE_KIT_OK) note_silent_output_write(sample_count);
+  return status;
+#else
+  return hardware_write(hardware_context, samples, sample_count);
+#endif
+}
+
+void iterate_kit_i2s_codec_set_playback_callbacks(
+    bool (*ready)(void *),
+    void (*observed)(void *, const int16_t *, size_t, bool),
+    void (*idle)(void *)) {
+  playback_ready = ready;
+  playback_observed = observed;
+  playback_idle = idle;
+}
+
+void iterate_kit_i2s_codec_note_failure(bool capture) {
+  portENTER_CRITICAL(&codec_lock);
+  if (capture) ++capture_driver_failures;
+  else ++playback_driver_failures;
+  portEXIT_CRITICAL(&codec_lock);
+}
+
+/** Install the table amplifier wait before hardware tasks start. The playback
+ * task waits outside the codec lock and before reserving deadline credit.
+ */
+static void iterate_kit_i2s_codec_set_before_write(void (*wait)(void *)) {
+  before_write = wait;
+}
+
+static enum iterate_kit_status codec_read(
+    void *context,
+    int16_t *capture,
+    int16_t *reference,
+    size_t capacity_samples,
+    size_t *sample_count) {
+  struct iterate_kit_i2s_codec_frame frame;
+  (void)context;
+  (void)reference;
+  if (capture_mailbox == NULL ||
+      capacity_samples < 320) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  atomic_store_explicit(
+      &capture_consumer_started, true, memory_order_release);
+  if (xQueueReceive(capture_mailbox, &frame, 0) != pdTRUE) {
+    return ITERATE_KIT_UNAVAILABLE;
+  }
+  memcpy(capture, frame.samples, frame.sample_count * sizeof(*capture));
+  *sample_count = frame.sample_count;
+  return ITERATE_KIT_OK;
+}
+
+static enum iterate_kit_status codec_write(
+    void *context, const int16_t *playback, size_t sample_count) {
+  struct iterate_kit_i2s_codec_frame frame;
+  (void)context;
+  if (playback_mailbox == NULL || sample_count == 0U ||
+      sample_count > 320) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+#if ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
+  note_silent_output_attempt(sample_count);
+  (void)playback;
+  memset(frame.samples, 0, sample_count * sizeof(*frame.samples));
+#else
+  memcpy(frame.samples, playback, sample_count * sizeof(*playback));
+#endif
+  frame.sample_count = sample_count;
+  return xQueueSend(playback_mailbox, &frame, 0) == pdTRUE
+      ? ITERATE_KIT_OK
+      : ITERATE_KIT_BACKPRESSURE;
+}
+
+static const struct iterate_kit_audio_codec_ops codec_ops = {
+  .read = codec_read,
+  .write = codec_write,
+};
+
+static const struct iterate_kit_audio_codec_properties codec_properties = {
+  .capture_sample_rate_hz = 16000,
+  .playback_sample_rate_hz = 16000,
+  .capture_channels = 1,
+  .playback_channels = 1,
+  .has_reference_channel = false,
+  .has_output_gain_control = false,
+  .output_gain_ceiling_centi_db = 0,
+};
+
+void iterate_kit_i2s_codec_init_ledger(uint16_t ring_ms) {
+  portENTER_CRITICAL(&codec_lock);
+  iterate_kit_starvation_ledger_init(&ledger, ring_ms);
+  portEXIT_CRITICAL(&codec_lock);
+}
+
+void iterate_kit_i2s_codec_reserve_write(uint32_t ms) {
+  portENTER_CRITICAL(&codec_lock);
+  iterate_kit_starvation_ledger_reserve_write(&ledger, ms, esp_timer_get_time());
+  portEXIT_CRITICAL(&codec_lock);
+}
+
+void iterate_kit_i2s_codec_rollback_write(uint32_t ms) {
+  portENTER_CRITICAL(&codec_lock);
+  iterate_kit_starvation_ledger_rollback_write(&ledger, ms);
+  portEXIT_CRITICAL(&codec_lock);
+}
+
+uint32_t iterate_kit_i2s_codec_written_ms(void) {
+  struct iterate_kit_starvation_ledger_metrics metrics;
+  portENTER_CRITICAL(&codec_lock);
+  iterate_kit_starvation_ledger_metrics(&ledger, &metrics);
+  portEXIT_CRITICAL(&codec_lock);
+  return metrics.written_ms;
+}
+
+void iterate_kit_i2s_codec_phase(enum iterate_kit_voice_phase phase) {
+  portENTER_CRITICAL(&codec_lock);
+  iterate_kit_starvation_ledger_phase(&ledger, phase, esp_timer_get_time());
+  portEXIT_CRITICAL(&codec_lock);
+  table_amplifier_phase(phase);
+}
+
+bool iterate_kit_i2s_codec_speaker_is_playing(void) {
+  portENTER_CRITICAL(&codec_lock);
+  const bool playing = iterate_kit_starvation_ledger_speaker_is_playing(
+      &ledger, esp_timer_get_time(), 1500U);
+  portEXIT_CRITICAL(&codec_lock);
+  return playing;
+}
+
+/* --- local sounds ---------------------------------------------------------- */
+
+/*
+ * THE BOARD'S OWN VOICE: chimes and mode announcements, straight from flash.
+ *
+ * Everything else this speaker plays arrives over the stream, paced by the
+ * server, seconds after the gesture that asked for it — which is exactly the
+ * problem these solve: a press that answers within a frame instead of after a
+ * dial. So they bypass the stream entirely and cut in at the last seam before
+ * the DAC, where the playback hardware task drains them BEFORE it looks at
+ * the mailbox. Preemption, not mixing, on purpose: a chime stepping on the
+ * first milliseconds of an answer is acceptable and a mixer is not simpler
+ * than this. The stream's frames are not lost — the depth-one mailbox holds
+ * one and the portable playback task absorbs the rest as backpressure it
+ * already knows how to wait out.
+ *
+ * Allocation-free: the PCM lives in .rodata (flash), the cursor walks it in
+ * 20 ms slices, and the lock is held only to move three words — the flash
+ * read itself happens outside the critical section.
+ */
+static const uint8_t *sound_pcm; /* NULL when idle; guarded by codec_lock */
+static uint32_t sound_bytes;
+static uint32_t sound_cursor;
+
+void iterate_kit_i2s_codec_play_sound(const uint8_t *pcm, uint32_t bytes) {
+  if (pcm == NULL || bytes < 2U) return;
+#if ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
+  note_silent_output_attempt(bytes / 2U);
+  return;
+#else
+  table_amplifier_sound(bytes);
+  portENTER_CRITICAL(&codec_lock);
+  sound_pcm = pcm;
+  sound_bytes = bytes & ~1U; /* whole PCM16 samples only */
+  sound_cursor = 0U;
+  portEXIT_CRITICAL(&codec_lock);
+#endif
+}
+
+void iterate_kit_i2s_codec_drop_pending_sound(void) {
+  portENTER_CRITICAL(&codec_lock);
+  sound_pcm = NULL;
+  portEXIT_CRITICAL(&codec_lock);
+}
+
+bool iterate_kit_i2s_codec_sound_active(void) {
+  portENTER_CRITICAL(&codec_lock);
+  const bool active = sound_pcm != NULL;
+  portEXIT_CRITICAL(&codec_lock);
+  return active;
+}
+
+static void capture_hardware_task(void *argument) {
+  static struct iterate_kit_i2s_codec_frame frame = {.sample_count = 320};
+  (void)argument;
+  for (;;) {
+    const enum iterate_kit_status status = hardware_read(hardware_context, frame.samples, 320);
+    if (status != ITERATE_KIT_OK) {
+      if (status != ITERATE_KIT_UNAVAILABLE) {
+        portENTER_CRITICAL(&codec_lock);
+        ++capture_driver_failures;
+        portEXIT_CRITICAL(&codec_lock);
+      }
+      /* A fenced board is asked to sleep inside its read; this tick is the
+       * insurance that priority 19 never spins core 1 if one does not. */
+      vTaskDelay(1U);
+      continue;
+    }
+    atomic_store_explicit(
+        &runtime_capture_queue_overflow_tracking, true, memory_order_release);
+#ifdef CONFIG_ITERATE_KIT_WAKE_WORD
+    if (iterate_kit_wake_word_enabled()) iterate_kit_wake_word_feed(frame.samples, frame.sample_count);
+#endif
+    if (atomic_load_explicit(&capture_consumer_started, memory_order_acquire) &&
+        uxQueueMessagesWaiting(capture_mailbox) > 0U) {
+      portENTER_CRITICAL(&codec_lock);
+      ++capture_overruns;
+      portEXIT_CRITICAL(&codec_lock);
+    }
+    (void)xQueueOverwrite(capture_mailbox, &frame);
+  }
+}
+
+/** Set by the table path when its TX is a DSP's AEC reference (no gated
+ * amplifier); boards that bring their own channels leave it false. */
+static bool idle_silence_wanted;
+
+static void playback_hardware_task(void *argument) {
+  static struct iterate_kit_i2s_codec_frame frame;
+  static const struct iterate_kit_i2s_codec_frame idle_silence = {
+      .sample_count = 320U,
+  };
+  (void)argument;
+  /*
+   * I2S ran while the codec calibrated, so every descriptor may be free when
+   * this task first runs. The ordinary idle pass waits 20 ms and writes one
+   * 20 ms frame, which leaves a 60 ms Satellite1 ring partly empty long
+   * enough for one more TX queue overwrite. Refill the entire known ring now
+   * before waiting for mailbox work. Gated boards intentionally do not keep
+   * their TX ring full while the amplifier is off.
+  */
+  if (idle_silence_wanted) {
+    while (playback_ready != NULL && !playback_ready(hardware_context)) {
+      vTaskDelay(1U);
+    }
+    uint32_t primed_ms = 0U;
+    while (primed_ms < playback_ring_ms) {
+      if (before_write != NULL) before_write(hardware_context);
+      const enum iterate_kit_status status = codec_hardware_write(
+          idle_silence.samples, idle_silence.sample_count);
+      if (status != ITERATE_KIT_OK) {
+        if (status != ITERATE_KIT_UNAVAILABLE) {
+          portENTER_CRITICAL(&codec_lock);
+          ++playback_driver_failures;
+          portEXIT_CRITICAL(&codec_lock);
+        }
+        break;
+      }
+      primed_ms += 20U;
+    }
+    /* A failed initial write is itself observable below; do not keep later
+     * queue overwrites in the calibration class after that failure. */
+    atomic_store_explicit(
+        &runtime_playback_queue_overflow_tracking,
+        true, memory_order_release);
+  }
+  for (;;) {
+    if (playback_ready != NULL && !playback_ready(hardware_context)) {
+      vTaskDelay(1U);
+      continue;
+    }
+    /*
+     * A local sound outranks the mailbox — see the note at `sound_pcm`. The
+     * slice bounds are taken under the lock and the flash copy happens
+     * outside it; if the app task replaces the sound mid-slice, this frame
+     * finishes from the superseded PCM and the next one starts the new
+     * sound, which is the preemption behaving as specified.
+     */
+    const uint8_t *sound = NULL;
+    uint32_t sound_offset = 0U;
+    uint32_t sound_take = 0U;
+    portENTER_CRITICAL(&codec_lock);
+    if (sound_pcm != NULL) {
+      const uint32_t remaining = sound_bytes - sound_cursor;
+      sound = sound_pcm;
+      sound_offset = sound_cursor;
+      sound_take = remaining < sizeof(frame.samples)
+          ? remaining
+          : (uint32_t)sizeof(frame.samples);
+      sound_cursor += sound_take;
+      if (sound_cursor >= sound_bytes) sound_pcm = NULL;
+    }
+    portEXIT_CRITICAL(&codec_lock);
+    if (sound != NULL) {
+      memcpy(frame.samples, sound + sound_offset, sound_take);
+      frame.sample_count = sound_take / sizeof(frame.samples[0]);
+    } else if (
+        /*
+         * One frame period instead of portMAX_DELAY, so a chime requested
+         * while the stream is silent starts within 20 ms. An idle wake that
+         * finds neither sound nor frame costs one queue peek.
+         */
+        xQueueReceive(playback_mailbox, &frame, pdMS_TO_TICKS(20)) !=
+        pdTRUE) {
+      if (playback_idle != NULL) playback_idle(hardware_context);
+      /*
+       * KEEP THE TX RING FED WHEN THERE IS NOTHING TO SAY.
+       *
+       * Between answers this task used to write nothing, and on a bus the
+       * DSP masters the DMA ring drained in 60 ms and the hardware auto-clear
+       * clocked out zeros with a descriptor-boundary hiccup every 10 ms:
+       * playbackQueueOverflows climbed ~95/s while idle on the HA Voice PE,
+       * before and after the consolidation. The XMOS reads its AEC reference
+       * off that same TX stream, and the 2026-08-11 bench tied exactly this
+       * idle underrun to the canceller collapsing from -9.9 dB to -0.4 dB by
+       * the third turn (the 2026-09-09 first table bench measured +0.8 dB,
+       * i.e. no cancellation). The vendor's own ESPHome speaker component
+       * never lets the stream stop (`timeout: never`, zero-fill every pass).
+       * So: one 20 ms frame of silence per idle wake, uncredited in the
+       * ledger (it is not audio the listener is owed) and not observed as
+       * playout (a face must not mouth silence). A board whose write is
+       * fenced returns UNAVAILABLE and nothing happens, as before.
+       */
+      /* Only where TX must never stop (a DSP reads its AEC reference off it,
+       * i.e. no gated amplifier). A board that gates its amp between answers
+       * (Waveshare) has nothing listening to the ring while idle, and the
+       * hovering-full ring would only add one ring of latency to every chime. */
+      if (!idle_silence_wanted) continue;
+      if (before_write != NULL) before_write(hardware_context);
+      const enum iterate_kit_status status = codec_hardware_write(
+          idle_silence.samples, idle_silence.sample_count);
+      if (status != ITERATE_KIT_OK && status != ITERATE_KIT_UNAVAILABLE) {
+        portENTER_CRITICAL(&codec_lock);
+        ++playback_driver_failures;
+        portEXIT_CRITICAL(&codec_lock);
+      }
+      continue;
+    }
+    if (before_write != NULL) before_write(hardware_context);
+#if !ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
+    const uint32_t frame_ms = (uint32_t)(frame.sample_count * 1000U / 16000U);
+    iterate_kit_i2s_codec_reserve_write(frame_ms);
+#endif
+    const enum iterate_kit_status status = codec_hardware_write(
+        frame.samples, frame.sample_count);
+    if (status != ITERATE_KIT_OK) {
+      portENTER_CRITICAL(&codec_lock);
+#if !ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
+      iterate_kit_starvation_ledger_rollback_write(&ledger, frame_ms);
+#endif
+      if (status != ITERATE_KIT_UNAVAILABLE) ++playback_driver_failures;
+      portEXIT_CRITICAL(&codec_lock);
+    } else {
+      atomic_store_explicit(
+          &runtime_playback_queue_overflow_tracking,
+          true, memory_order_release);
+      if (playback_observed != NULL &&
+          !ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED) {
+        playback_observed(hardware_context, frame.samples, frame.sample_count, sound != NULL);
+      }
+    }
+  }
+}
+
+struct iterate_kit_audio_codec iterate_kit_i2s_codec(void) {
+  return (struct iterate_kit_audio_codec){&codec_ops, &codec_properties, NULL};
+}
+
+bool iterate_kit_i2s_codec_start_over(
+    enum iterate_kit_status (*read)(void *, int16_t *, size_t),
+    enum iterate_kit_status (*write)(void *, const int16_t *, size_t),
+    void *context, uint16_t ring_ms, struct iterate_kit_audio_codec *out) {
+  if (read == NULL || write == NULL || out == NULL || capture_mailbox != NULL) return false;
+  hardware_read = read;
+  hardware_write = write;
+  hardware_context = context;
+  playback_ring_ms = ring_ms;
+  atomic_store_explicit(
+      &runtime_capture_queue_overflow_tracking, false, memory_order_release);
+  atomic_store_explicit(
+      &runtime_playback_queue_overflow_tracking, false, memory_order_release);
+  iterate_kit_i2s_codec_init_ledger(ring_ms);
+  capture_mailbox = xQueueCreate(1U, sizeof(struct iterate_kit_i2s_codec_frame));
+  playback_mailbox = xQueueCreate(1U, sizeof(struct iterate_kit_i2s_codec_frame));
+  TaskHandle_t capture_task = NULL;
+  if (capture_mailbox == NULL || playback_mailbox == NULL ||
+      xTaskCreatePinnedToCore(capture_hardware_task, "audio-hw-capture", 4096U,
+          NULL, 19U, &capture_task, 1) != pdPASS ||
+      xTaskCreatePinnedToCore(playback_hardware_task, "audio-hw-playback", 4096U,
+          NULL, 20U, NULL, 1) != pdPASS) {
+    if (capture_task != NULL) vTaskDelete(capture_task);
+    if (capture_mailbox != NULL) vQueueDelete(capture_mailbox);
+    if (playback_mailbox != NULL) vQueueDelete(playback_mailbox);
+    capture_mailbox = NULL;
+    playback_mailbox = NULL;
+    return false;
+  }
+  *out = (struct iterate_kit_audio_codec){&codec_ops, &codec_properties, NULL};
+  return true;
+}
+
+size_t iterate_kit_i2s_codec_health(char *out, size_t capacity) {
+  struct iterate_kit_starvation_ledger_metrics metrics;
+  portENTER_CRITICAL(&codec_lock);
+  iterate_kit_starvation_ledger_metrics(&ledger, &metrics);
+  const struct iterate_kit_health_field fields[] = {
+    {"spkStarvedMs", metrics.starved_ms},
+    {"spkStarveEvents", metrics.starve_events},
+    {"codecCaptureOverruns", capture_overruns},
+    {"codecCaptureFailures", capture_driver_failures},
+    {"codecPlaybackFailures", playback_driver_failures},
+    {"speakerPlaying", iterate_kit_starvation_ledger_speaker_is_playing(
+        &ledger, esp_timer_get_time(), 1500U) ? 1U : 0U},
+  };
+  portEXIT_CRITICAL(&codec_lock);
+  /* A board-owned TDM task publishes its own capture/playback counters in
+   * extra->health. Only the ledger is shared there: never emit duplicate keys
+   * or invent mailbox counters for hardware that has no shared mailbox. */
+  const size_t count = hardware_read == NULL ? 2U : sizeof(fields) / sizeof(fields[0]);
+  size_t used = iterate_kit_health_append_fields(out, capacity, fields, count);
+#if ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
+  if (used == 0U) return 0U;
+  portENTER_CRITICAL(&codec_lock);
+  const struct iterate_kit_health_field silent_fields[] = {
+    {"silentOutput", 1U},
+    {"silentOutputAttempts", silent_output_attempts},
+    {"silentOutputSuppressedSamples", silent_output_suppressed_samples},
+    {"silentOutputWrittenSamples", silent_output_written_samples},
+  };
+  portEXIT_CRITICAL(&codec_lock);
+  const size_t silent_used = iterate_kit_health_append_fields(
+      out + used, capacity - used, silent_fields,
+      sizeof(silent_fields) / sizeof(silent_fields[0]));
+  if (silent_used == 0U) return 0U;
+  used += silent_used;
+#endif
+  return channel_health(out, capacity, used);
+}
+
+/* --- channels from hardware facts ----------------------------------------- */
+
+static struct iterate_kit_i2s_codec_facts channel_facts;
+static i2s_chan_handle_t table_playback_channel;
+static i2s_chan_handle_t table_capture_channel;
+static bool table_started;
+static bool playback_overflows_observed;
+static volatile uint32_t capture_queue_overflows;
+static volatile uint32_t playback_queue_overflows;
+static volatile uint32_t capture_warmup_overwritten_buffers;
+static volatile uint32_t playback_warmup_overwritten_buffers;
+static uint32_t capture_gain_clipped;
+static uint32_t mic_raw_peak;
+static uint32_t mic_clean_peak;
+static uint32_t echo_raw_peak;
+static uint32_t echo_clean_peak;
+static bool amplifier_configured;
+static bool amplifier_on;
+static int64_t amplifier_settled_at_us;
+static int64_t amplifier_sound_hold_until_us;
+
+static bool IRAM_ATTR note_playback_queue_overflow(
+    i2s_chan_handle_t handle, i2s_event_data_t *event, void *context) {
+  (void)handle;
+  (void)event;
+  (void)context;
+  if (atomic_load_explicit(
+          &runtime_playback_queue_overflow_tracking, memory_order_acquire)) {
+    (void)__atomic_fetch_add(
+        &playback_queue_overflows, 1U, __ATOMIC_RELAXED);
+  } else {
+    (void)__atomic_fetch_add(
+        &playback_warmup_overwritten_buffers, 1U, __ATOMIC_RELAXED);
+  }
+  return false;
+}
+
+static bool IRAM_ATTR note_capture_queue_overflow(
+    i2s_chan_handle_t handle, i2s_event_data_t *event, void *context) {
+  (void)handle;
+  (void)event;
+  (void)context;
+  if (atomic_load_explicit(
+          &runtime_capture_queue_overflow_tracking, memory_order_acquire)) {
+    (void)__atomic_fetch_add(
+        &capture_queue_overflows, 1U, __ATOMIC_RELAXED);
+  } else {
+    (void)__atomic_fetch_add(
+        &capture_warmup_overwritten_buffers, 1U, __ATOMIC_RELAXED);
+  }
+  return false;
+}
+
+/** Preserve the proven difference: slave TX clears after callbacks (HAVPE),
+ * master TX before (M5); interrupt priorities remain 3 and 2 respectively.
+ */
+static i2s_chan_config_t playback_config(const struct iterate_kit_i2s_codec_facts *facts) {
+  i2s_chan_config_t config = I2S_CHANNEL_DEFAULT_CONFIG(facts->playback_port, facts->role);
+  config.dma_frame_num = facts->dma_frames;
+  config.dma_desc_num = facts->dma_descriptors;
+  config.auto_clear_after_cb = facts->role == I2S_ROLE_SLAVE;
+  config.auto_clear_before_cb = facts->role == I2S_ROLE_MASTER;
+  config.allow_pd = false;
+  config.intr_priority = facts->role == I2S_ROLE_SLAVE ? 3 : 2;
+  return config;
+}
+
+/** Preload complete descriptors before enable: the XMOS must never hear
+ * uninitialized memory while its AEC reference starts clocking.
+ */
+static bool initialize_playback(
+    const struct iterate_kit_i2s_codec_facts *facts, i2s_chan_handle_t channel) {
+  if (i2s_channel_init_std_mode(channel, &facts->playback) != ESP_OK) return false;
+  const i2s_event_callbacks_t callbacks = {.on_send_q_ovf = note_playback_queue_overflow};
+  if (i2s_channel_register_event_callback(channel, &callbacks, NULL) != ESP_OK) return false;
+  static const int32_t silence[1023] = {0}; /* the 4092-byte DMA ceiling */
+  const size_t descriptor_bytes = iterate_kit_pcm_bytes_for_frames(
+      &facts->playback_shape, facts->dma_frames);
+  const size_t total_bytes = descriptor_bytes * facts->dma_descriptors;
+  size_t total_loaded = 0U;
+  while (total_loaded < total_bytes) {
+    size_t loaded = 0U;
+    const size_t remaining = total_bytes - total_loaded;
+    const size_t requested = remaining < descriptor_bytes ? remaining : descriptor_bytes;
+    if (i2s_channel_preload_data(channel, silence, requested, &loaded) != ESP_OK) return false;
+    if (loaded == 0U) break; /* driver says the ring is full; never spin */
+    total_loaded += loaded;
+  }
+  playback_overflows_observed = true;
+  return true;
+}
+
+bool iterate_kit_i2s_codec_open_playback(
+    const struct iterate_kit_i2s_codec_facts *facts, i2s_chan_handle_t *out) {
+  if (facts == NULL || out == NULL ||
+      (facts->role != I2S_ROLE_MASTER && facts->role != I2S_ROLE_SLAVE) ||
+      !iterate_kit_i2s_codec_valid_channel(facts->playback_port, &facts->playback, &facts->playback_shape,
+          facts->dma_frames, facts->dma_descriptors) || facts->playback.gpio_cfg.dout < 0) return false;
+  *out = NULL;
+  i2s_chan_config_t config = playback_config(facts);
+  i2s_chan_handle_t channel = NULL;
+  if (i2s_new_channel(&config, &channel, NULL) != ESP_OK) return false;
+  if (!initialize_playback(facts, channel)) {
+    (void)i2s_del_channel(channel);
+    return false;
+  }
+  *out = channel;
+  return true;
+}
+
+static bool set_table_amplifier(bool on) {
+#if ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
+  /* Keep every table amp low on boot completion, phase changes and local
+   * sounds. HAVPE's board fact is GPIO47, labelled AUDIO_PA_EN in its
+   * schematic; the same rule makes this diagnostic safe for new table boards. */
+  on = false;
+#endif
+  if (channel_facts.amplifier_gpio < 0 || on == amplifier_on) return true;
+  if (gpio_set_level(channel_facts.amplifier_gpio, on ? 1 : 0) != ESP_OK) return false;
+  amplifier_on = on;
+  if (on) {
+    portENTER_CRITICAL(&codec_lock);
+    amplifier_settled_at_us = esp_timer_get_time() + (int64_t)channel_facts.amplifier_settle_ms * 1000;
+    portEXIT_CRITICAL(&codec_lock);
+  }
+  return true;
+}
+
+static void wait_for_table_amplifier(void *context) {
+  (void)context;
+  portENTER_CRITICAL(&codec_lock);
+  const int64_t remaining = amplifier_settled_at_us - esp_timer_get_time();
+  portEXIT_CRITICAL(&codec_lock);
+  if (remaining > 0) vTaskDelay(pdMS_TO_TICKS((uint32_t)((remaining + 999) / 1000)));
+}
+
+static void table_amplifier_phase(enum iterate_kit_voice_phase phase) {
+  if (!amplifier_configured || !channel_facts.amplifier_gated) return;
+  if (phase == ITERATE_KIT_VOICE_PHASE_ARRIVED) {
+    if (!set_table_amplifier(true)) iterate_kit_i2s_codec_note_failure(false);
+  } else if (phase == ITERATE_KIT_VOICE_PHASE_QUIET) {
+    portENTER_CRITICAL(&codec_lock);
+    const bool holding = sound_pcm != NULL || esp_timer_get_time() < amplifier_sound_hold_until_us;
+    portEXIT_CRITICAL(&codec_lock);
+    if (!holding && !set_table_amplifier(false)) iterate_kit_i2s_codec_note_failure(false);
+  }
+}
+
+#if !ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
+static void table_amplifier_sound(uint32_t bytes) {
+  if (!amplifier_configured || !channel_facts.amplifier_gated) return;
+  if (!set_table_amplifier(true)) iterate_kit_i2s_codec_note_failure(false);
+  const uint32_t ring_ms = (uint32_t)((uint64_t)channel_facts.dma_frames *
+      channel_facts.dma_descriptors * 1000U / channel_facts.playback.clk_cfg.sample_rate_hz);
+  portENTER_CRITICAL(&codec_lock);
+  amplifier_sound_hold_until_us = esp_timer_get_time() + (int64_t)(bytes / 2U) * 1000000 / 16000 +
+      (int64_t)(ring_ms + channel_facts.amplifier_settle_ms) * 1000;
+  portEXIT_CRITICAL(&codec_lock);
+}
+#endif
+
+/** The two same-time taps are measured BEFORE fixed make-up gain. A loudness
+ * gate cannot distinguish a quiet person from residual echo; never blank or
+ * duck uplink PCM based on the speaker. Echo maxima accumulate during the
+ * shared 1500 ms speaker window because RPC sampling misses short answers.
+ */
+static enum iterate_kit_status read_channels(void *context, int16_t *samples, size_t count) {
+  (void)context;
+  static int32_t words[320 * 6];
+  static int16_t raw[320];
+  const size_t frames = count * channel_facts.capture_shape.ratio;
+  const size_t bytes = iterate_kit_pcm_bytes_for_frames(&channel_facts.capture_shape, frames);
+  size_t read = 0U;
+  if (i2s_channel_read(table_capture_channel, words, bytes, &read, 40U) != ESP_OK || read != bytes) {
+    return ITERATE_KIT_IO_ERROR;
+  }
+  size_t extracted = 0U;
+  struct iterate_kit_pcm_capture_metrics capture_metrics;
+  if (iterate_kit_pcm_extract_capture(&channel_facts.capture_shape, words, frames,
+          channel_facts.capture_gain, samples, raw, count, &extracted,
+          &capture_metrics) != ITERATE_KIT_OK || extracted != count) return ITERATE_KIT_IO_ERROR;
+  const bool playing = iterate_kit_i2s_codec_speaker_is_playing();
+  portENTER_CRITICAL(&codec_lock);
+  mic_raw_peak = capture_metrics.diagnostic_peak;
+  mic_clean_peak = capture_metrics.processed_peak;
+  capture_gain_clipped += capture_metrics.processed_clipped;
+  if (playing) {
+    if (capture_metrics.diagnostic_peak > echo_raw_peak) echo_raw_peak = capture_metrics.diagnostic_peak;
+    if (capture_metrics.processed_peak > echo_clean_peak) echo_clean_peak = capture_metrics.processed_peak;
+  }
+  portEXIT_CRITICAL(&codec_lock);
+  return ITERATE_KIT_OK;
+}
+
+static enum iterate_kit_status write_channels(void *context, const int16_t *samples, size_t count) {
+  (void)context;
+  static int32_t words[320 * 6];
+  static struct iterate_kit_pcm_playback_resampler resampler;
+  size_t bytes = 0U;
+  if (iterate_kit_pcm_expand_playback_shape(&channel_facts.playback_shape, &resampler,
+          samples, count, words, sizeof(words), &bytes) != ITERATE_KIT_OK) return ITERATE_KIT_IO_ERROR;
+  size_t written = 0U;
+  return i2s_channel_write(table_playback_channel, words, bytes, &written, 1000U) == ESP_OK
+      ? ITERATE_KIT_OK : ITERATE_KIT_IO_ERROR;
+}
+
+bool iterate_kit_i2s_codec_prepare_amplifier(const struct iterate_kit_i2s_codec_facts *facts) {
+  if (facts == NULL || facts->amplifier_gpio < -1 || facts->amplifier_gpio >= GPIO_NUM_MAX ||
+      facts->playback.clk_cfg.sample_rate_hz == 0U) return false;
+  channel_facts = *facts;
+  idle_silence_wanted = !facts->amplifier_gated;
+  if (facts->amplifier_gpio >= 0) {
+    const gpio_config_t config = {
+      .pin_bit_mask = UINT64_C(1) << facts->amplifier_gpio,
+      .mode = GPIO_MODE_OUTPUT,
+      .pull_up_en = GPIO_PULLUP_DISABLE,
+      .pull_down_en = GPIO_PULLDOWN_DISABLE,
+      .intr_type = GPIO_INTR_DISABLE,
+    };
+    if (gpio_config(&config) != ESP_OK || gpio_set_level(facts->amplifier_gpio, 0) != ESP_OK) return false;
+  }
+  amplifier_configured = true;
+  iterate_kit_i2s_codec_set_before_write(wait_for_table_amplifier);
+  return true;
+}
+
+bool iterate_kit_i2s_codec_start(
+    const struct iterate_kit_i2s_codec_facts *facts, struct iterate_kit_audio_codec *out) {
+  if (facts == NULL || out == NULL || capture_mailbox != NULL || !iterate_kit_i2s_codec_valid(facts)) return false;
+  const uint64_t ring_ms = (uint64_t)facts->dma_frames * facts->dma_descriptors * 1000U /
+      facts->playback.clk_cfg.sample_rate_hz;
+  if (ring_ms == 0U || ring_ms > UINT16_MAX) return false;
+  channel_facts = *facts;
+  bool tx_enabled = false;
+  bool rx_enabled = false;
+  if (!iterate_kit_i2s_codec_prepare_amplifier(facts)) return false;
+  if (facts->capture_port == facts->playback_port) {
+    i2s_chan_config_t config = playback_config(facts);
+    if (i2s_new_channel(&config, &table_playback_channel, &table_capture_channel) != ESP_OK ||
+        !initialize_playback(facts, table_playback_channel)) goto failed;
+  } else {
+    if (!iterate_kit_i2s_codec_open_playback(facts, &table_playback_channel)) goto failed;
+    i2s_chan_config_t config = I2S_CHANNEL_DEFAULT_CONFIG(facts->capture_port, facts->role);
+    config.dma_frame_num = facts->capture_dma_frames;
+    config.dma_desc_num = facts->capture_dma_descriptors;
+    config.intr_priority = facts->role == I2S_ROLE_SLAVE ? 3 : 2;
+    if (i2s_new_channel(&config, NULL, &table_capture_channel) != ESP_OK) goto failed;
+  }
+  if (i2s_channel_init_std_mode(table_capture_channel, &facts->capture) != ESP_OK) goto failed;
+  const i2s_event_callbacks_t callbacks = {.on_recv_q_ovf = note_capture_queue_overflow};
+  if (i2s_channel_register_event_callback(table_capture_channel, &callbacks, NULL) != ESP_OK) goto failed;
+  if (i2s_channel_enable(table_playback_channel) != ESP_OK) goto failed;
+  tx_enabled = true;
+  if (i2s_channel_enable(table_capture_channel) != ESP_OK) goto failed;
+  rx_enabled = true;
+  *out = (struct iterate_kit_audio_codec){.ops = &codec_ops, .properties = &codec_properties};
+  return true;
+failed:
+  (void)set_table_amplifier(false);
+  if (rx_enabled) (void)i2s_channel_disable(table_capture_channel);
+  if (tx_enabled) (void)i2s_channel_disable(table_playback_channel);
+  if (table_capture_channel != NULL) (void)i2s_del_channel(table_capture_channel);
+  if (table_playback_channel != NULL) (void)i2s_del_channel(table_playback_channel);
+  table_capture_channel = NULL;
+  table_playback_channel = NULL;
+  return false;
+}
+
+/** Raise an ungated amplifier before tasks; prepare_amplifier already installed
+ * iterate_kit_i2s_codec_set_before_write, so the wait has exactly one owner.
+ */
+bool iterate_kit_i2s_codec_finish(struct iterate_kit_audio_codec *out) {
+  if (out == NULL || table_playback_channel == NULL || table_capture_channel == NULL || table_started) return false;
+  const uint16_t ring_ms = (uint16_t)((uint64_t)channel_facts.dma_frames *
+      channel_facts.dma_descriptors * 1000U / channel_facts.playback.clk_cfg.sample_rate_hz);
+  if (!channel_facts.amplifier_gated && !set_table_amplifier(true)) return false;
+  if (!iterate_kit_i2s_codec_start_over(read_channels, write_channels, NULL, ring_ms, out)) return false;
+  table_started = true;
+  return true;
+}
+
+void iterate_kit_i2s_codec_abort(void) {
+  if (table_started) return;
+  (void)set_table_amplifier(false);
+  if (table_capture_channel != NULL) {
+    (void)i2s_channel_disable(table_capture_channel);
+    (void)i2s_del_channel(table_capture_channel);
+    table_capture_channel = NULL;
+  }
+  if (table_playback_channel != NULL) {
+    (void)i2s_channel_disable(table_playback_channel);
+    (void)i2s_del_channel(table_playback_channel);
+    table_playback_channel = NULL;
+  }
+}
+
+void iterate_kit_i2s_codec_reset_echo_peaks(void) {
+  portENTER_CRITICAL(&codec_lock);
+  echo_raw_peak = 0U;
+  echo_clean_peak = 0U;
+  portEXIT_CRITICAL(&codec_lock);
+}
+
+static size_t channel_health(char *out, size_t capacity, size_t used) {
+  if (used == 0U || !playback_overflows_observed) return used;
+  portENTER_CRITICAL(&codec_lock);
+  /* Own-read codecs share TX only; the remaining facts belong to table RX. */
+  const struct iterate_kit_health_field fields[] = {
+    {"playbackQueueOverflows", __atomic_load_n(
+        &playback_queue_overflows, __ATOMIC_RELAXED)},
+    {"playbackWarmupOverwrittenBuffers", __atomic_load_n(
+        &playback_warmup_overwritten_buffers, __ATOMIC_RELAXED)},
+    {"captureQueueOverflows", __atomic_load_n(
+        &capture_queue_overflows, __ATOMIC_RELAXED)},
+    {"captureWarmupOverwrittenBuffers", __atomic_load_n(
+        &capture_warmup_overwritten_buffers, __ATOMIC_RELAXED)},
+    {"captureGainClipped", capture_gain_clipped},
+    {"micRawPeak", mic_raw_peak},
+    {"micCleanPeak", mic_clean_peak},
+    {"echoRawPeak", echo_raw_peak},
+    {"echoCleanPeak", echo_clean_peak},
+  };
+  portEXIT_CRITICAL(&codec_lock);
+  const size_t count = table_started ? sizeof(fields) / sizeof(fields[0]) : 2U;
+  const size_t added = iterate_kit_health_append_fields(
+      out + used, capacity - used, fields, count);
+  return added == 0U ? 0U : used + added;
+}

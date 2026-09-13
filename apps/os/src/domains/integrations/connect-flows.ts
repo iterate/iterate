@@ -23,6 +23,7 @@
 // These run with the itx bindings (SECRET_ENCRYPTION_KEY + the DO bindings).
 // The dashboard's /api/integrations/* routes reach them via itx (rpc-targets.ts).
 
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
@@ -2011,21 +2012,29 @@ export async function listIntegrationConnections(
   const facade = await itxEnv.STREAM.getByName(
     DurableObjectNameCodec.stringify({ projectId, path: "/" }),
   ).processorFacade({ name: ProjectProcessorContract.slug });
-  const snapshot = await facade.snapshot();
-  // Safe: the root stream's facet composition registers the ProjectProcessor
-  // under ProjectProcessorContract.slug, so the facade selected by that name
-  // snapshots the project contract's fold. The facade's snapshot type is
-  // untyped per name (the name is a runtime string), hence the assertion.
-  const state = snapshot.state as ProjectProcessorState;
-  const entries: { connection: string; integration: string; path: string }[] = [];
-  for (const stream of state.streams) {
-    const coordinates = integrationCoordinatesFromStreamPath(stream.path);
-    if (coordinates === null) continue;
-    entries.push({
-      connection: coordinates.connection,
-      integration: coordinates.slug,
-      path: stream.path,
-    });
+  try {
+    const snapshot = await facade.snapshot();
+    try {
+      // Safe: the root stream's facet composition registers the ProjectProcessor
+      // under ProjectProcessorContract.slug, so the facade selected by that name
+      // snapshots the project contract's fold. The facade's snapshot type is
+      // untyped per name (the name is a runtime string), hence the assertion.
+      const state = snapshot.state as ProjectProcessorState;
+      const entries: { connection: string; integration: string; path: string }[] = [];
+      for (const stream of state.streams) {
+        const coordinates = integrationCoordinatesFromStreamPath(stream.path);
+        if (!coordinates) continue;
+        entries.push({
+          connection: coordinates.connection,
+          integration: coordinates.slug,
+          path: stream.path,
+        });
+      }
+      return entries;
+    } finally {
+      disposeIgnoredRpcResult(snapshot);
+    }
+  } finally {
+    disposeIgnoredRpcResult(facade);
   }
-  return entries;
 }

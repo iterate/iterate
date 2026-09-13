@@ -4,10 +4,8 @@
 /*
  * cli_microphone: frames captured but not yet sent.
  *
- * The device's microphone never stops; the talk button decides whether what
- * it hears is wanted. So this queue is always being written and only
- * sometimes drained, and its interesting behaviour is what it does when the
- * uplink cannot keep up.
+ * Input is read continuously. An active conversation admits frames to this
+ * queue, which retains bounded current audio while the uplink cannot keep up.
  *
  * IT DROPS THE OLDEST, and counts it. The alternative — refusing the newest —
  * keeps a queue full of speech from a second ago and sends it late for the
@@ -27,8 +25,6 @@
 enum cli_microphone_status {
   CLI_MICROPHONE_OK = 0,
   CLI_MICROPHONE_ERR_ARG,
-  /** Nothing captured yet. */
-  CLI_MICROPHONE_ERR_EMPTY,
 };
 
 /**
@@ -47,9 +43,6 @@ struct cli_microphone {
   uint32_t dropped;
 };
 
-/** Human-readable status name, for logs and test failure messages. */
-const char *cli_microphone_status_name(enum cli_microphone_status status);
-
 /** Empty the queue, keeping the drop count. Used when a turn ends. */
 void cli_microphone_clear(struct cli_microphone *microphone);
 
@@ -64,9 +57,5 @@ size_t cli_microphone_queued(const struct cli_microphone *microphone);
  */
 enum cli_microphone_status cli_microphone_push(
     struct cli_microphone *microphone, const uint8_t *frame, size_t length);
-
-/** Take the oldest frame. Fails with ERR_EMPTY. */
-enum cli_microphone_status cli_microphone_pop(
-    struct cli_microphone *microphone, uint8_t *out, size_t length);
 
 #endif /* ITERATE_KIT_CLI_MICROPHONE_H */

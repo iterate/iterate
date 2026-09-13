@@ -46,7 +46,7 @@ import type { z } from "zod";
 import type { ProcessorStream } from "./stream-handle.ts";
 import type { ProcessorState } from "./processor-contracts.ts";
 import type { StreamEvent } from "./schemas.ts";
-import type { StreamEventBatch } from "./rpc-types.ts";
+import { MAX_STREAM_EVENT_READ_BYTE_LIMIT, type StreamEventBatch } from "./rpc-types.ts";
 import {
   awaitKeepAliveBacked,
   StreamProcessor,
@@ -1139,6 +1139,7 @@ export class StreamProcessorRunner<
         const page = await this.stream.getEventPage({
           afterOffset,
           beforeOffset: throughOffset + 1,
+          byteLimit: MAX_STREAM_EVENT_READ_BYTE_LIMIT,
           limit: this.readPageSize,
         });
         this.#assertReadStreamId(page.streamId, streamId);
@@ -1181,21 +1182,26 @@ export class StreamProcessorRunner<
   async #selfCatchUp(): Promise<void> {
     const streamId = this.#requireProgress().streamId;
     let scannedAfterOffset = this.#requireProgress().processing.acknowledgedThroughOffset;
+    let targetOffset: number | undefined;
     for (;;) {
       const page = await this.stream.getEventPage({
         afterOffset: scannedAfterOffset,
+        ...(targetOffset === undefined ? {} : { beforeOffset: targetOffset + 1 }),
+        byteLimit: MAX_STREAM_EVENT_READ_BYTE_LIMIT,
         limit: this.readPageSize,
       });
       this.#assertReadStreamId(page.streamId, streamId);
-      const isFinalPage = page.events.length < this.readPageSize;
-      const scannedThroughOffset = isFinalPage ? page.streamMaxOffset : page.events.at(-1)!.offset;
+      targetOffset ??= page.streamMaxOffset;
+      const lastEventOffset = page.events.at(-1)?.offset;
+      const isFinalPage = lastEventOffset === undefined || lastEventOffset >= targetOffset;
+      const scannedThroughOffset = isFinalPage ? targetOffset : lastEventOffset;
       if (scannedThroughOffset <= scannedAfterOffset) return;
       await this.#processBatch({
         streamId,
         events: page.events,
         scannedAfterOffset,
         scannedThroughOffset,
-        streamMaxOffset: page.streamMaxOffset,
+        streamMaxOffset: targetOffset,
       });
       scannedAfterOffset = scannedThroughOffset;
       if (isFinalPage) return;

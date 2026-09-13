@@ -1,15 +1,5 @@
-// Server-side provisioning for the phone's voice stream — the app-owned
-// slice of what `pnpm cli voicelab talk` does: call the voice-agent guest
-// entrypoint's setupVoiceAgent for OUR stream, but only when a local marker
-// says the config this app would send has never been asserted (grill Q4:
-// setup pays an occurrence-keyed append plus a warm barrier, dead latency on
-// every tap if repeated; a content-hash marker is the cheap idempotence).
-//
-// No posture-flip guard, deliberately: each line owns its path and only
-// ever sends one posture. The agent DOES auto-install now (absent only —
-// see ensureVoiceAgentInstalled): a project that has never seen voice gets
-// @iterate-com/voice-agent declared in its config repo during the ring,
-// instead of an eternal ring ending in a "needs setup" caption.
+// Provision the phone's voice stream once per setup payload. A local marker
+// avoids an install and setup barrier on every call.
 
 import {
   installVoiceAgent,
@@ -22,9 +12,8 @@ export { voiceAgentEntrypointRef };
 /**
  * Where a CHAT's calls live: one line per chat, shared by every device —
  * the chat's phone number, not the phone's. `/agents/mobile/173…` →
- * `/agents/voice/chat/mobile/173…`; the certificate's `colleaguePath` (the
- * chat itself) is what makes the chat agent the backend, so the derived
- * voice-notes path never comes into play.
+ * `/agents/voice/chat/mobile/173…`. The chat supplies the stream path and
+ * call UI; it is not a party on the voice wire.
  */
 export function chatVoiceStreamPath(chatPath: string): string {
   const suffix = chatPath.startsWith("/agents/")
@@ -34,56 +23,27 @@ export function chatVoiceStreamPath(chatPath: string): string {
 }
 
 /**
- * The birth certificate this app asserts. Push-to-talk (clientTakesTurns:
- * the phone segments turns with the hold-to-talk button — the first
- * on-device session showed open-mic needs AEC tuning this demo hasn't
- * earned yet), colleague on, and the same hang_up tool talk.ts arms — the
- * model saying goodbye is one of the three ways a call ends (tap, hang_up,
- * 60s idle).
+ * The birth certificate this app asserts. GPT-Live listens continuously; the
+ * standard Agent can request a hang-up after its goodbye. Physical mute,
+ * explicit hang-up, and idle closure remain local call controls.
  */
 export const MOBILE_VOICE_SETUP = {
   instructions:
-    "You are Iterate, on a phone call with a colleague who knows you well. Casual, " +
+    "You are Iterate, on a phone call with someone who knows you well. Casual, " +
     "direct, brief — never customer-service polish. Greet in a couple of words ('hey', " +
     "'hi again'), answer in plain short sentences, acknowledge in two or three words.",
-  clientTakesTurns: true,
-  colleague: true,
-  /** The phone rings, so the other end picks up (facet 17.0.0): the model
-   * greets first — "hi again" on a stream with history, via the recap. */
-  greeting: true,
-  tools: [
-    {
-      name: "hang_up",
-      description:
-        "End this call when the user says goodbye or the conversation is " +
-        "clearly over. Say a short goodbye BEFORE calling this; the call " +
-        "ends after you finish speaking.",
-    },
-  ],
 };
 
-/**
- * The certificate for one call target. The per-device line takes the base
- * config; a per-chat line adds `colleaguePath` (facet 18.0.0), which is
- * what flips the arrangement to "this chat's agent is the backend".
- */
-export function voiceSetupConfig(colleaguePath: string | null): Record<string, unknown> {
-  return colleaguePath === null
-    ? { ...MOBILE_VOICE_SETUP }
-    : { ...MOBILE_VOICE_SETUP, colleaguePath };
-}
-
 /** Bump to force one re-setup on every device after changing the setup
- * semantics in a way the config hash alone would not capture. v7: the
- * transcript transform stamps `kind` on spoken turns — only a setup rerun
- * replaces the installed subscription. */
-const SETUP_MARKER_VERSION = 7;
+ * semantics in a way the config hash alone would not capture. v9 removes
+ * the frontend greeting request: GPT-Live starts by listening. */
+const SETUP_MARKER_VERSION = 9;
 
 /** FNV-1a over the exact payload we would send — pure, no crypto import, and
  * two devices/app-versions agree iff they would send identical setups. */
-export function setupMarker(streamPath: string, config: Record<string, unknown>): string {
+export function setupMarker(streamPath: string): string {
   const material = JSON.stringify({
-    config,
+    config: MOBILE_VOICE_SETUP,
     streamPath,
     version: SETUP_MARKER_VERSION,
   });
@@ -102,26 +62,6 @@ export interface VoiceSetupWorkers {
   };
 }
 
-/** The slice of the config-repo handle the auto-install dials. */
-export type VoiceSetupRepo = VoiceAgentConfigRepo;
-
-/**
- * Declare @iterate-com/voice-agent in the project's config repo when it is
- * not there — the fresh/recycled-project case that used to be an eternal
- * ring ending in "the project may need voice set up" (Misha, on-device,
- * 2026-08-28). ABSENT ONLY: a declaration that is already there is left
- * alone whatever it pins — `voicelab deploy` owns upgrades, and an app must
- * never move a project off a version somebody chose. Which build then runs
- * is the platform's: it pins every such spec to the ref it deployed with,
- * so the app no longer ships (or chooses) a copy of the agent.
- */
-export async function ensureVoiceAgentInstalled(repo: VoiceSetupRepo): Promise<void> {
-  await installVoiceAgent(repo, {
-    existing: "keep",
-    message: "mobile: depend on @iterate-com/voice-agent (first call)",
-  });
-}
-
 /**
  * Assert the stream's certificate unless the stored marker says this exact
  * config already was. A failed setup NEVER writes the marker — the next tap
@@ -129,21 +69,19 @@ export async function ensureVoiceAgentInstalled(repo: VoiceSetupRepo): Promise<v
  */
 export async function ensureVoiceAgentSetup(deps: {
   workers: VoiceSetupWorkers;
-  repo: VoiceSetupRepo;
+  repo: VoiceAgentConfigRepo;
   streamPath: string;
-  /** The chat this line calls (per-chat mode), or null for the device's own line. */
-  colleaguePath: string | null;
   readMarker: (streamPath: string) => Promise<string | null>;
   writeMarker: (streamPath: string, marker: string) => Promise<void>;
 }): Promise<void> {
-  const config = voiceSetupConfig(deps.colleaguePath);
-  const marker = setupMarker(deps.streamPath, config);
+  const marker = setupMarker(deps.streamPath);
   if ((await deps.readMarker(deps.streamPath)) === marker) return;
-  /* Inside the marker miss on purpose: one repo read per config change,
-   * not per call — and the ring covers the install when it does happen. */
-  await ensureVoiceAgentInstalled(deps.repo);
+  await installVoiceAgent(deps.repo, {
+    existing: "keep",
+    message: "mobile: depend on @iterate-com/voice-agent (first call)",
+  });
   await deps.workers
     .get(voiceAgentEntrypointRef)
-    .setupVoiceAgent({ streamPath: deps.streamPath, ...config });
+    .setupVoiceAgent({ streamPath: deps.streamPath, ...MOBILE_VOICE_SETUP });
   await deps.writeMarker(deps.streamPath, marker);
 }
