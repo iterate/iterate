@@ -223,6 +223,50 @@ static void an_arriving_answer_still_primes_to_the_prefill(void) {
   assert(playout.stats.waits_priming > 0U);
 }
 
+/* Drive a paced DAC on its own 20 ms clock while provider chunks arrive
+ * between ticks. This is a condensed model of the direct HAVPE trace from
+ * 2026-09-13: its first four 100 ms chunks arrived at 0/105/216/350 ms, then
+ * an otherwise paced stream contained a measured 385 ms gap. The scheduler is
+ * outside playout; it only supplies arrival times and drains at real time. */
+static void condensed_direct_havpe_trace_drains_without_a_hole(void) {
+  static const uint32_t arrivals_ms[] = {
+    0U, 105U, 216U, 350U, 450U, 550U, 650U,
+    750U, 850U, 950U, 1335U, 1435U, 1535U,
+  };
+  uint64_t next_dac_ms = 0U;
+  size_t arrival;
+  const uint32_t expected_frames =
+      (uint32_t)(sizeof(arrivals_ms) / sizeof(arrivals_ms[0])) * 5U;
+
+  reset(0U);
+  for (arrival = 0U; arrival < sizeof(arrivals_ms) / sizeof(arrivals_ms[0]);
+       ++arrival) {
+    while (next_dac_ms < arrivals_ms[arrival]) {
+      sink_state.now_ms = next_dac_ms;
+      (void)step(&hardware_sink);
+      next_dac_ms += FRAME_MS;
+    }
+    sink_state.now_ms = arrivals_ms[arrival];
+    ring_deliver(5U); /* Every recorded nonterminal PCM delta was 100 ms. */
+    if (next_dac_ms == arrivals_ms[arrival]) {
+      (void)step(&hardware_sink);
+      next_dac_ms += FRAME_MS;
+    }
+  }
+  iterate_kit_voice_playback_clock_answer_done(&playout.clock);
+  while (playout.stats.frames_played < expected_frames) {
+    sink_state.now_ms = next_dac_ms;
+    assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_PLAYED);
+    next_dac_ms += FRAME_MS;
+  }
+  sink_state.now_ms = next_dac_ms;
+  assert(step(&hardware_sink) == ITERATE_KIT_VOICE_PLAYOUT_SETTLED);
+  assert(playout.stats.conceal_frames == 0U);
+  assert(playout.stats.waits_dry == 1U); /* The declared end settles once. */
+  assert(playout.stats.catchup_frames == 0U);
+  assert(playout.stats.frames_played == expected_frames);
+}
+
 static void an_answer_plays_whole_then_settles(void) {
   uint32_t index;
   reset(1000U);
@@ -405,6 +449,7 @@ int main(void) {
   a_short_answer_plays_at_the_prime_wait();
   a_jitter_gap_during_priming_does_not_start_early();
   an_arriving_answer_still_primes_to_the_prefill();
+  condensed_direct_havpe_trace_drains_without_a_hole();
   an_answer_plays_whole_then_settles();
   a_hole_mid_answer_is_concealed_only_by_a_sink_that_can();
   an_answer_after_a_long_silence_is_on_time();

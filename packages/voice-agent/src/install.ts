@@ -297,10 +297,7 @@ export async function installVoiceAgentFromSource(
     preservePublishedVoiceAgentDependency?: boolean;
   } = {},
 ): Promise<InstallVoiceAgentFromSourceResult> {
-  if (
-    options.facetKeyPrefix !== undefined &&
-    !/^[a-z][a-z0-9-]{0,29}$/.test(options.facetKeyPrefix)
-  ) {
+  if (options.facetKeyPrefix && !/^[a-z][a-z0-9-]{0,29}$/.test(options.facetKeyPrefix)) {
     throw new Error(
       "facetKeyPrefix must start with a lowercase letter and contain at most 30 lowercase letters, digits, or hyphens.",
     );

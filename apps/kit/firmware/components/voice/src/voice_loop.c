@@ -156,72 +156,18 @@ enum {
   /* Covers WakeNet plus board-poll handoff without retaining idle room audio. */
   MIC_PRE_ROLL_FRAMES = 25,
   MIC_FRAMES_PER_APPEND = ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND,
-  /*
-   * The speaker buffer holds JITTER, never an answer. A 1 MiB (32 s) buffer
-   * was the single worst defect here: the bridge paced above realtime, so
-   * every answer accumulated until the buffer filled, and then
-   * xStreamBufferSend committed the HEAD of a frame and discarded the tail —
-   * a click at an arbitrary waveform phase every 20 ms, heard as static that
-   * got worse the longer the answer ran. 1 s is ample for network jitter now
-   * that the bridge paces at ~1.05x, and whole frames are dropped rather
-   * than split.
-   */
-  /*
-   * 900ms, in INTERNAL RAM. Two constraints meet here: it must exceed the
-   * bridge's 600ms opening burst plus jitter (at 750ms it did not, and 36
-   * frames were dropped on arrival), and it must not rob the TLS handshake
-   * (at 40000 the connection could not be established at all). 900ms clears
-   * the burst with room and leaves the network stack its working set. (PSRAM is unreachable while the cache is off, and
-   * a flash write would otherwise stall the audio ring as well as the tasks).
-   * Deep buffers were the wrong lever: they cannot fix a recovery path that
-   * under-fills the DMA, and they raise the ceiling that playout lag ratchets
-   * toward. Concealment plus drop-debt bounds the lag instead.
-   *
-   * (Was four seconds, in PSRAM.) One second could not hold the bridge's 600ms
-   * opening burst plus network jitter, so the buffer both OVERFLOWED (22
-   * frames dropped) and later ran dry (minimum margin 0ms) in the same
-   * answer — the classic too-small-for-the-burst signature.
-   *
-   * Unbounded growth is not a risk any more: the bridge paces at realtime
-   * after its burst, so occupancy is bounded by burst + jitter rather than
-   * by the length of the answer. (A 32s buffer WAS wrong, but only because
-   * pacing was then 2x realtime and accumulated for the whole answer.)
-   */
-  /*
-   * 1500 ms, not 900. The cushion a listener actually hears is the bridge's
-   * opening lead PLUS this device's prefill, and they stack: 390 ms of
-   * prefill against a 900 ms ring left only ~500 ms for the lead, so the
-   * lead was cut to 250 ms to stop the ring overflowing — and then the ring
-   * sat at a measured 384 ms maximum margin with MORE frames concealed than
-   * played. Choppy in one direction was traded for choppy in the other.
-   *
-   * The ring is the cheap side of that trade: 19 KiB more internal RAM buys
-   * a 600 ms lead with 500 ms of headroom still spare.
-   */
+  /* Capacity absorbs bursts; the shared prefill alone sets opening latency. */
   SPEAKER_BUFFER_BYTES = ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES,
   /* Whole-frame queueing makes replacement atomic at frame boundaries. */
   SPEAKER_QUEUE_DEPTH = SPEAKER_BUFFER_BYTES / FRAME_BYTES,
-  /* Shared measured opening budget; capacity above is not a playback delay. */
   SPEAKER_PREFILL_BYTES = ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES,
-  /*
-   * Recovering from a starve does NOT re-buy the full opening prefill. It
-   * used to, so a single late frame cost 160 ms of inserted silence —
-   * measured at 45 starves per 3099 frames, roughly 7 s of stutter per
-   * minute of speech. Mid-answer the bridge is already streaming, so a much
-   * smaller cushion is enough to carry on.
-   */
-  /*
-   * Beyond this much silence the answer is simply over: settle back to
-   * priming rather than concealing an empty stream indefinitely.
-   */
+  /* Longer source silence settles the answer back to priming. */
   SPEAKER_CONCEAL_LIMIT_MS = ITERATE_KIT_VOICE_SPEAKER_CONCEAL_LIMIT_MS,
   /*
    * How long the speaker must stay dry before the amplifier is powered down.
    * Long enough that a network hiccup mid-answer never power-cycles it.
    */
   SPEAKER_IDLE_POWERDOWN_MS = ITERATE_KIT_VOICE_SPEAKER_IDLE_POWERDOWN_MS,
-  /* Longest a released turn waits for the uplink before committing anyway. */
-  /* Longest a single spoken turn may run before it is closed regardless. */
   /* Control scan cadence; on one board each scan costs an I2C transaction. */
   CONTROL_POLL_MS = ITERATE_KIT_VOICE_CONTROL_POLL_MS,
   /* How long the transport may stay FAILED before the device reboots itself. */

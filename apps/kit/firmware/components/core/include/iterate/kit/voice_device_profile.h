@@ -48,9 +48,9 @@ enum {
   /* Ten seconds of bounded incoming jitter; this is capacity, not a delay. */
   ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES = 320000,
 
-  /* Two 100 ms GPT-Live deltas: 110 ms cushion plus 90 ms DMA lead.
-   * Seven file-backed turns stayed continuous at 200 ms; 100 ms starved. */
-  ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES = 110 * 32 + 2880,
+  /* Four 100 ms GPT-Live deltas. The direct HAVPE trace on 2026-09-13 had a
+   * 385 ms delta gap; the trace-model regression requires this 400 ms floor. */
+  ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES = 400 * 32,
 
   /* Short answers start at the same deadline without waiting for an end marker. */
   ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS =

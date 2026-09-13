@@ -141,10 +141,10 @@ const HANG_UP_GOODBYE_GRACE_MS = 8_000;
 /**
  * Once the goodbye's end marker has gone out, how long the device is given
  * to play what it still holds before the call is ended. The relay hands
- * frames over as they arrive, so the device holds at most its own small
- * playout buffer (the firmware prefills 150 ms) plus one frame in flight.
+ * frames over as they arrive. The device now prefills 400 ms and production
+ * one-way delivery can add roughly 300 ms, so one second preserves the tail.
  */
-const GOODBYE_PLAYOUT_ALLOWANCE_MS = 500;
+const GOODBYE_PLAYOUT_ALLOWANCE_MS = 1_000;
 /**
  * How much conversation the fold remembers, and so how much a fresh provider
  * session is seeded with. Turns beyond the newest TRANSCRIPT_MAX_TURNS fall
@@ -1617,8 +1617,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
       (endedAnswer !== dial.answerBeforeHangUp ||
         nowAtFacetMs - dial.hangUpArmedAtFacetMs >= HANG_UP_GOODBYE_GRACE_MS)
     ) {
-      /* The goodbye has been handed over whole; the device holds at most its
-       * own small buffer. */
+      /* The goodbye has been handed over whole; leave room for delivery and playout. */
       runInBackground(async () => {
         await this.deps.sleep(GOODBYE_PLAYOUT_ALLOWANCE_MS);
         await this.#settleHangUp(dial, append);

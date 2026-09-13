@@ -1661,7 +1661,7 @@ describe("the Agent bridge", () => {
     });
     h.provider.silence(700); /* ends the pre-existing acknowledgement */
     await h.settle();
-    await playOutEverything(h, 500);
+    await playOutEverything(h, 1_000);
     expect(eventsOfType(h, "conversation-ended")).toEqual([]);
 
     h.provider.speech(200);
@@ -1669,7 +1669,7 @@ describe("the Agent bridge", () => {
     await h.settle();
     expect(speakerFrames(h).some((frame) => frame.pcm !== "")).toBe(true);
     expect(speakerFrames(h).at(-1)?.lastFrameOfAnswer).toBe(true);
-    await playOutEverything(h, 499);
+    await playOutEverything(h, 999);
     expect(eventsOfType(h, "conversation-ended")).toEqual([]);
     await playOutEverything(h, 1);
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
