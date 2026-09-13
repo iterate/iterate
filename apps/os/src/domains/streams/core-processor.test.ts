@@ -6,6 +6,7 @@ import {
   MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM,
   type CoreProcessorState,
   type SubscriptionConfiguredPayload,
+  type SubscriptionReceiver,
 } from "./core-processor-contract.ts";
 import {
   assertCoreProcessorCheckpointGrowthFits,
@@ -492,7 +493,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     );
   });
 
-  test.each([
+  test.each<[string, SubscriptionReceiver]>([
     ["a built-in facet", { action: "facet-processor", source: { kind: "builtin" } }],
     [
       "a wake processor",
