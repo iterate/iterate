@@ -35,6 +35,7 @@ import {
   openItx,
   readAll,
   rejection,
+  ruleMatchAtRest,
   session,
   sleep,
   until,
@@ -345,7 +346,7 @@ test("the table is a MAP under concurrency: 5 concurrent re-sets of ONE match le
   // five concurrent re-sets of itx.race — one event each, one row survives: the LAST committed
   await Promise.all(Array.from({ length: 5 }, (_, i) => itx.provide("itx.race", `itx.probe${i}`)));
   const configured = (await readAll(itx)).filter(
-    (e) => e.type === REWRITE_RULE_CONFIGURED && e.payload?.match === "itx.race",
+    (e) => e.type === REWRITE_RULE_CONFIGURED && ruleMatchAtRest(e) === "itx.race",
   );
   expect(configured).toHaveLength(5); // every re-set appended exactly one event
   const lastTarget = (configured.at(-1)!.payload.target as string[]).join("."); // at rest the parsed form; `get()` prints

@@ -117,6 +117,14 @@ export const append = (itx: any, ...events: unknown[]): Promise<any[]> =>
 
 /** EVERY durable row of the log — paged on `scannedThroughOffset` until the page says it reached the
  *  head (a page is bounded by rows AND by bytes, so one page is not the log). */
+/** A rewrite-rule event's `match` AT REST is the parsed prefix (the append boundary canonicalizes
+ *  it the way it does the target); the keys these tests provide are plain dotted names, so joining
+ *  the segments spells the key back. */
+export const ruleMatchAtRest = (event: { payload?: { match?: unknown } }): string => {
+  const match = event.payload?.match;
+  return Array.isArray(match) ? match.join(".") : "";
+};
+
 export const readAll = async (itx: any): Promise<any[]> => {
   const all: any[] = [];
   for (let after = 0; ; ) {

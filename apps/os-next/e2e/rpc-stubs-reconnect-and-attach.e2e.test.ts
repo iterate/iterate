@@ -33,6 +33,7 @@ import {
   readAll,
   rejection,
   rpcStubRewriteRuleMatches,
+  ruleMatchAtRest,
   sleep,
   subscriptions,
   until,
@@ -204,7 +205,7 @@ test("provide(match, stub): the rule is appended INSIDE the pager attach — its
     attachedOffsetOf("itx.pinned"),
   );
   const ruleEvent = (await readAll(observer)).find(
-    (e) => e.type === RULE_CONFIGURED && e.payload?.match === "itx.pinned",
+    (e) => e.type === RULE_CONFIGURED && ruleMatchAtRest(e) === "itx.pinned",
   );
   expect(ruleEvent?.payload.target).toEqual(["itx", "builtins", "rpcStubs", ["get", "itx.pinned"]]);
   // THE PIN: the DO appended the rule while accepting the pager, before it announced presence.
