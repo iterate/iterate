@@ -1,4 +1,4 @@
-import { voiceAgentEntrypointRef } from "./ref.ts";
+import { VOICE_AGENT_GUEST_FILE, voiceAgentRefs } from "./ref.ts";
 import type {
   SetupVoiceAgentOptions,
   SetupVoiceAgentResult,
@@ -13,6 +13,9 @@ import type {
  */
 type VoiceAgentProject = {
   [Symbol.dispose](): void;
+  repo: {
+    readFile(input: { path: string }): Promise<{ commitOid: string } | null>;
+  };
   workers: { get(ref: unknown): unknown };
 };
 
@@ -48,12 +51,20 @@ export const VoiceAgentApp = {
     const dial = async <T>(run: (guest: VoiceAgentRpc) => Promise<T>): Promise<T> => {
       const project = await env.ITX.get();
       try {
+        const snapshot = await project.repo.readFile({ path: VOICE_AGENT_GUEST_FILE });
+        if (!snapshot) {
+          throw new Error(
+            `voice-agent setup requires ${VOICE_AGENT_GUEST_FILE} in the config repo.`,
+          );
+        }
         /* The platform hands back a generic dynamic-worker handle, since it
          * cannot know a guest's own methods. Those methods are this
          * package's contract — VoiceAgentRpc, which the entrypoint class
          * implements — so this is the one place a handle is typed as the
          * guest, instead of every caller doing it. */
-        const guest = project.workers.get(voiceAgentEntrypointRef) as VoiceAgentRpc & {
+        const guest = project.workers.get(
+          voiceAgentRefs({ sourceCommitOid: snapshot.commitOid }).entrypoint,
+        ) as VoiceAgentRpc & {
           [Symbol.dispose](): void;
         };
         try {

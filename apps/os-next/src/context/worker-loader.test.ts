@@ -1,8 +1,8 @@
 // context/worker-loader.test.ts — the Worker Loader cacheKey is an AUTHORITY boundary: the
 // isolate's whole world (its env.ITX host stub, its globalOutbound) is baked in at first
-// materialization, so two callers who compose the same key SHARE an isolate. loadConfinedWorker
+// materialization, so two callers who compose the same key SHARE an isolate. prepareConfinedWorker
 // mints the JSON array `[kind, deploy, owner, sourceVersion]` (the caller's cacheKey, else the modules'
-// content hash); a facet's owner is (context name, class name), and either half may contain ":" (a
+// content hash) WITHOUT asking the loader — `load()` is the one call that does (the last-but-one row); a facet's owner is (context name, class name), and either half may contain ":" (a
 // context path is any string; ES2022 allows `export { X as "y:Door" }`). `facetLoaderOwner`
 // length-prefixes the context so the split is unambiguous whatever either half contains. The second
 // half pins Cloudflare's `get(id, getCode)` contract as we use it: a PRODUCER expression runs inside
@@ -26,7 +26,7 @@ import {
   assertFacetSourceWithinCeiling,
   FACET_SOURCE_MAX_CHARS,
   facetLoaderOwner,
-  loadConfinedWorker,
+  prepareConfinedWorker,
 } from "./worker-loader.ts";
 
 /** A fake `env.LOADER` that records every key and — like workerd — runs `getCode` once per NEW key
@@ -47,15 +47,23 @@ const fakeLoaderEnv = () => {
         return {};
       },
     },
-  } as unknown as Parameters<typeof loadConfinedWorker>[0]["env"];
+  } as unknown as Parameters<typeof prepareConfinedWorker>[0]["env"];
   return { env, keys, warm };
+};
+
+/** Prepare AND load at once — the shape `itx.workers.get` takes; the rows below count what reached
+ *  `env.LOADER`, and only `load()` reaches it. */
+const loadConfined = async (opts: Parameters<typeof prepareConfinedWorker>[0]) => {
+  const prepared = await prepareConfinedWorker(opts);
+  prepared.load();
+  return prepared;
 };
 
 test("two literal sources whose djb2 hashes collide never share one Worker Loader cacheKey", async () => {
   // djb2("Aa") === djb2("B@") — one 32-bit hash, two sources, and until the v4 review one isolate.
   const { env, keys } = fakeLoaderEnv();
   const load = (main: string) =>
-    loadConfinedWorker({
+    loadConfined({
       env,
       deployId: "deploy-1",
       itxEntrypoint: {} as Fetcher,
@@ -74,7 +82,7 @@ test("an owner and a caller's cacheKey that concatenate alike never share one Wo
   // owner "…/x" + key "y:z" vs owner "…/x:y" + key "z": joined with ":" they would spell ONE id.
   const { env, keys } = fakeLoaderEnv();
   const load = (owner: string, cacheKey: string) =>
-    loadConfinedWorker({
+    loadConfined({
       env,
       deployId: "deploy-1",
       itxEntrypoint: {} as Fetcher,
@@ -98,7 +106,7 @@ test("two DIFFERENT facet identities never share one Worker Loader cacheKey", as
   const { env, keys } = fakeLoaderEnv();
   const modules = { "cap.js": "export default class Door {}" };
   const load = (iterateContextName: string, className: string) =>
-    loadConfinedWorker({
+    loadConfined({
       env,
       deployId: "deploy-1",
       itxEntrypoint: {} as Fetcher,
@@ -122,7 +130,7 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
     return { "cap.js": "export default class Built {}" };
   };
   const load = (cacheKey?: string) =>
-    loadConfinedWorker({
+    loadConfined({
       env,
       deployId: "deploy-1",
       itxEntrypoint: {} as Fetcher,
@@ -165,10 +173,10 @@ test("literal modules: the key is their content hash unless the caller names a c
     invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
     where: "workers.get",
   };
-  const a = await loadConfinedWorker({ ...base, source: { "cap.js": "export default 1" } });
-  const b = await loadConfinedWorker({ ...base, source: { "cap.js": "export default 2" } });
+  const a = await loadConfined({ ...base, source: { "cap.js": "export default 1" } });
+  const b = await loadConfined({ ...base, source: { "cap.js": "export default 2" } });
   expect(a.loaderId).not.toBe(b.loaderId); // content decides
-  const named = await loadConfinedWorker({
+  const named = await loadConfined({
     ...base,
     source: { "cap.js": "export default 1" },
     cacheKey: "v7",
@@ -176,7 +184,7 @@ test("literal modules: the key is their content hash unless the caller names a c
   expect(named.loaderId).toBe(JSON.stringify(["worker", "deploy-1", "prj_u.iterate/", "v7"]));
   expect(keys.at(-1)).toBe(named.loaderId);
   await expect(
-    loadConfinedWorker({ ...base, source: { "index.js": "export default 1" } }),
+    loadConfined({ ...base, source: { "index.js": "export default 1" } }),
   ).rejects.toThrow(/"cap.js" main module/);
 });
 
@@ -190,7 +198,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
     return { "cap.js": "export default class Built {}" };
   };
   const load = () =>
-    loadConfinedWorker({
+    loadConfined({
       env,
       deployId: "deploy-1",
       itxEntrypoint: {} as Fetcher,
@@ -228,6 +236,26 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   await load();
   expect(produced).toBe(4);
   expect(new Set(keys).size).toBe(2); // the dead id and its one recovered generation
+});
+
+test("prepare resolves the identity without asking the loader; load() is the one call that does, and a repeat is the loader's cache to answer", async () => {
+  const { env, keys, warm } = fakeLoaderEnv();
+  const prepared = await prepareConfinedWorker({
+    env,
+    deployId: "deploy-1",
+    itxEntrypoint: {} as Fetcher,
+    kind: "facet",
+    owner: facetLoaderOwner("prj_u.iterate/", "Counter"),
+    source: { "cap.js": "export default class Counter {}" },
+    invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
+    where: 'facet "counter"',
+  });
+  expect(keys).toEqual([]); // `IterateContextDurableObject#invokeFacet` stores this identity before any isolate exists
+  prepared.load();
+  expect(keys).toEqual([prepared.loaderId]);
+  prepared.load();
+  expect(keys).toEqual([prepared.loaderId, prepared.loaderId]);
+  expect(warm.size).toBe(1); // one isolate under the id, however often it is asked for
 });
 
 test("a facet's literal source over the ceiling is refused, coded; a producer expression is never measured", () => {

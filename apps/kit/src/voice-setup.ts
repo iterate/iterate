@@ -5,7 +5,6 @@ import {
 } from "@iterate-com/voice-agent";
 import { configureIterateSession, connectItx, disconnectIterateSession } from "iterate/client";
 import { z } from "zod";
-import deviceSource from "../../../packages/voice-agent/src/device.ts?raw";
 import faceSource from "../../../packages/voice-agent/src/face.ts?raw";
 import refConfigSource from "../../../packages/voice-agent/src/ref-config.ts?raw";
 import refSource from "../../../packages/voice-agent/src/ref.ts?raw";
@@ -27,18 +26,9 @@ const VoiceSetupInput = z.object({
     .regex(/^[a-z0-9][a-z0-9-]*$/)
     .refine((deviceId) => findFirmwareDevice(deviceId) !== undefined, "Unsupported voice device."),
 });
-const ExistingVoiceState = z.object({
-  instructions: z.string().default(""),
-  call: z
-    .looseObject({ activation: z.string().min(1) })
-    .nullable()
-    .default(null),
-});
-
 const kitVoiceAgentSources = {
   "worker.ts": workerSource,
   "voice-agent.ts": voiceAgentSource,
-  "device.ts": deviceSource,
   "face.ts": faceSource,
   "ref.ts": refSource,
   "ref-config.ts": refConfigSource,
@@ -52,7 +42,7 @@ interface PreparedDeviceVoice {
   streamPath: string;
 }
 
-/** Install this build's isolated guest and prove its board stream is ready. */
+/** Install this build's isolated guest and durably mount its setup RPC for the board. */
 export async function prepareDeviceVoice(input: {
   baseUrl: string;
   projectSlug: string;
@@ -80,19 +70,6 @@ export async function prepareDeviceVoice(input: {
       throw new Error("This project needs /secrets/openai before a voice device can be prepared.");
     }
 
-    const stream = project.streams.get(streamPath);
-    const subscription = stream.subscriptions.get("voice-agent");
-    const configured = await subscription.describe();
-    const existing =
-      configured === null
-        ? ExistingVoiceState.parse({})
-        : ExistingVoiceState.parse((await subscription.processor.getRuntimeState()).snapshot.state);
-    if (existing.call) {
-      throw new Error(
-        "This device stream has an active call. End it before changing its voice setup.",
-      );
-    }
-
     const install = await installVoiceAgentFromSource(project.repo, kitVoiceAgentSources, {
       guestFile: kitGuestFile,
       sourceDirectory: kitSourceDirectory,
@@ -101,15 +78,26 @@ export async function prepareDeviceVoice(input: {
       message: "kit: install this build's isolated voice agent",
     });
 
-    /* `workers.get` is dynamically typed by the platform. This local entrypoint
-     * is written above from the same current source, so its RPC contract is VoiceAgentRpc. */
+    // `workers.get` is dynamically typed by the platform. The entrypoint was
+    // just written from this build's source, whose stateless RPC surface is VoiceAgentRpc.
     const voiceAgent = project.workers.get(install.entrypointRef) as unknown as VoiceAgentRpc;
-    const result = await voiceAgent.setupVoiceDevice({
-      streamPath,
-      instructions: existing.instructions,
-      visemes: findFirmwareDevice(prepared.deviceId)?.remoteVisemes === true,
+    const health = await voiceAgent.health();
+    if (health.ok !== true || health.projectId !== identity.projectId) {
+      throw new Error("The installed voice agent did not pass its project health check.");
+    }
+
+    const [mounted] = await project.streams.get("/").append({
+      type: "events.iterate.com/capability-host/capability-provided",
+      payload: {
+        type: "itx-call",
+        path: ["voice"],
+        expression: ["workers", ["get", install.entrypointRef]],
+        flattenNestedPaths: true,
+        instructions: "Set up a fresh voice conversation stream for a Kit device.",
+      },
     });
-    return { projectId: identity.projectId, streamPath: result.streamPath };
+    await project.capabilityHosts.get("/").processor.waitUntilProcessed({ offset: mounted.offset });
+    return { projectId: identity.projectId, streamPath };
   } finally {
     disconnectIterateSession();
   }

@@ -26,7 +26,7 @@ Add these dependencies and guest file to the config repository:
 
 ```ts
 // voice-agent.ts
-export { default, VoiceAgentFacet, VoiceDeviceFacet } from "@iterate-com/voice-agent/worker";
+export { default, VoiceAgentFacet } from "@iterate-com/voice-agent/worker";
 ```
 
 `pnpm cli voicelab deploy --project <slug>` makes the same changes. See
@@ -55,24 +55,17 @@ Setup requires `/secrets/openai` with egress for `https://api.openai.com`.
 | `visemes`      | Publish face state for a rendering client.                          |
 | `reinstall`    | Force a new subscription key.                                       |
 
-## Device conversations
+## Conversations
 
-Kit installs `setupVoiceDevice({ streamPath, instructions?, visemes? })` on the
-fixed connection path, such as `/agents/voice/v23/home-assistant-voice-preview-edition`.
-Each activation creates a timestamped child beneath it. That child contains its
-own voice processor and ordinary Agent, using Astra with low reasoning and Fast
-service. Previous transcripts, pending work, and provider history are never
-copied into a new conversation. Project instructions and capabilities still apply.
+Callers create a fresh child stream for each activation, then invoke
+`setupVoiceAgent({ streamPath, instructions?, visemes? })` before sending its
+first microphone frame. Setup installs the ordinary Agent and voice subscription
+on that stream, pins the Agent backend to Astra, and waits until the voice facet
+is ready. A new stream starts with no prior transcript, pending work, or provider
+history; project instructions and capabilities still apply.
 
-The fixed parent transports audio and call lifecycle events; it does not run
-an LLM. Capture starts on the device immediately, and opening audio is held in
-order while the child becomes ready. Downlink events still identify the local
-activation, so late output from an older conversation cannot affect a new one.
-`call-started.streamPath` identifies the child for tools and the stream browser.
-The talking face reads the current child's runtime state through the parent.
-
-`setupVoiceAgent` remains the direct setup for a caller that already owns a
-conversation stream, including chat-backed mobile calls.
+`call-started.streamPath` identifies that conversation for tools and the stream
+browser. The device’s local activation still fences late input and output.
 
 ## Stream protocol
 

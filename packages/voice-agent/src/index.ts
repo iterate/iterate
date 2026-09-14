@@ -3,7 +3,6 @@ export {
   VOICE_AGENT_GUEST_FILE,
   voiceAgentEntrypointRef,
   voiceAgentFacetRef,
-  voiceDeviceFacetRef,
   type VoiceAgentEntrypointRef,
   type VoiceAgentFacetRef,
   type VoiceAgentWorkerSource,
@@ -34,7 +33,6 @@ export {
 // enable and reach it.
 export type {
   SetupVoiceAgentOptions,
-  SetupVoiceDeviceOptions,
   SetupVoiceAgentResult,
   VoiceAgentHealth,
   VoiceAgentRpc,

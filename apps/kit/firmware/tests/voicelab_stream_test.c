@@ -1,6 +1,6 @@
 /*
  * voicelab_stream: single-WebSocket device end of the voicelab protocol —
- * authenticate -> projects.get -> streams.get, then one-way mic-frame
+ * caller-owned streams.get -> bind -> openConnection, then one-way mic-frame
  * appends (base64 PCM16, ephemeral).
  */
 #include "iterate/kit/voicelab_stream.h"
@@ -17,7 +17,7 @@ enum {
   TOKEN_CAPACITY = 256,
   CALL_CAPACITY = 8,
   OUTPUT_CAPACITY = 64,
-  CAPTURE_CAPACITY = 32,
+  CAPTURE_CAPACITY = 128,
   MESSAGE_CAPACITY = 2048,
 };
 
@@ -51,6 +51,9 @@ struct fixture {
   bool message_open;
   uint64_t clock_ms;
   struct iterate_kit_voicelab voicelab;
+  struct iterate_kit_stream stream;
+  struct iterate_kit_stream_subscription subscription;
+  struct iterate_kit_stream_subscription replacement_subscription;
 };
 
 struct observed_face {
@@ -62,6 +65,12 @@ struct observed_face {
 };
 
 static struct observed_face observed_face;
+static void record_speaker(void *context, const uint8_t *pcm, size_t pcm_length);
+static void record_control(void *context, enum iterate_kit_voicelab_control control);
+static void accept_call(
+    struct fixture *fixture, int callback, int release, int64_t offset);
+static void release_server_callback(struct fixture *fixture, int callback);
+
 
 static void record_face(
     void *context,
@@ -170,52 +179,23 @@ static void receive(struct fixture *fixture, const char *message) {
 
 static void start_and_mount(struct fixture *fixture) {
   const struct iterate_kit_voicelab_options options = {
-    .session = &fixture->session,
-    .project_id = "prj_test",
-    .project_api_key = "itxk_secret-never-log",
     .stream_path = "/voice-agent/dev-test",
     .activation = TEST_ACTIVATION,
     .now_ms = fixture_now_ms,
     .clock_context = fixture,
     .on_face = record_face,
+    .on_speaker = record_speaker,
+    .on_control = record_control,
   };
-  assert(
-      iterate_kit_voicelab_start(&fixture->voicelab, &options) ==
-      CAPNWEB_OK);
-  assert(
-      fixture->voicelab.state == ITERATE_KIT_VOICELAB_AUTHENTICATING);
-  assert(fixture->captured_count == 2U);
-  assert(strcmp(
-      fixture->captured[0],
-      "[\"push\",[\"pipeline\",0,[\"authenticate\"],"
-      "[{\"type\":\"project-secret\",\"projectId\":\"prj_test\","
-      "\"secret\":\"itxk_secret-never-log\"}]]]") == 0);
-  assert(strcmp(fixture->captured[1], "[\"pull\",1]") == 0);
-
-  receive(fixture, "[\"resolve\",1,[\"export\",-10]]");
-  assert(
-      fixture->voicelab.state == ITERATE_KIT_VOICELAB_GETTING_PROJECT);
-  assert(strcmp(
-      fixture->captured[3],
-      "[\"push\",[\"pipeline\",-10,[\"projects\",\"get\"],"
-      "[\"prj_test\"]]]") == 0);
-
-  receive(fixture, "[\"resolve\",2,[\"export\",-11]]");
-  assert(
-      fixture->voicelab.state == ITERATE_KIT_VOICELAB_GETTING_STREAM);
-  /* release of import 2, release of session cap -10, then streams.get */
-  assert(strcmp(
-      fixture->captured[7],
-      "[\"push\",[\"pipeline\",-11,[\"streams\",\"get\"],"
-      "[\"/voice-agent/dev-test\"]]]") == 0);
-  assert(strcmp(fixture->captured[8], "[\"pull\",3]") == 0);
-
-  receive(fixture, "[\"resolve\",3,[\"export\",-12]]");
+  assert(iterate_kit_stream_get(&fixture->stream, &fixture->session,
+      (struct capnweb_remote_capability){-77}, options.stream_path) == CAPNWEB_OK);
+  receive(fixture, "[\"resolve\",1,[\"export\",-12]]");
+  assert(fixture->stream.state == ITERATE_KIT_STREAM_READY);
+  assert(iterate_kit_voicelab_bind(&fixture->voicelab, &options,
+      &fixture->stream, &fixture->subscription) == CAPNWEB_OK);
+  receive(fixture, "[\"resolve\",2,[\"export\",-13]]");
+  iterate_kit_voicelab_update(&fixture->voicelab);
   assert(fixture->voicelab.state == ITERATE_KIT_VOICELAB_READY);
-  assert(fixture->voicelab.has_stream_capability);
-  /* Kept until the common close path releases the session's imported stubs. */
-  assert(fixture->voicelab.has_project_capability);
-  assert(!fixture->voicelab.has_session_capability);
 }
 
 static uint8_t spoken[ITERATE_KIT_VOICELAB_CHUNK_BYTES];
@@ -224,6 +204,7 @@ static size_t spoken_length;
 static size_t spoken_bytes;
 static int speech_started_count;
 static int response_done_count;
+static struct iterate_kit_voicelab *fence_on_call_ended;
 /*
  * WHAT HAPPENED IN WHICH ORDER, not just how often.
  *
@@ -284,8 +265,9 @@ static const char *frames_b64(size_t frames, uint8_t fill) {
 }
 
 /** Deliver one `spk-frame` event, with whatever extra payload keys it needs. */
-static void push_spk(
+static void push_spk_to(
     struct fixture *fixture,
+    int callback_id,
     int release_id,
     int64_t offset,
     const char *flags,
@@ -293,17 +275,23 @@ static void push_spk(
   static char message[16384];
   (void)snprintf(
       message, sizeof(message),
-      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "[\"push\",[\"pipeline\",%d,[],[{\"events\":[["
       "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":%lld,"
       "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",%s\"pcm\":\"%s\"}}"
       "]],\"scannedThroughOffset\":%lld,\"state\":null}]]]",
-      (long long)offset, flags, pcm_b64, (long long)offset);
+      callback_id, (long long)offset, flags, pcm_b64, (long long)offset);
   receive(fixture, message);
   {
     char release[64];
     (void)snprintf(release, sizeof(release), "[\"release\",%d,1]", release_id);
     receive(fixture, release);
   }
+}
+
+static void push_spk(
+    struct fixture *fixture, int release_id, int64_t offset,
+    const char *flags, const char *pcm_b64) {
+  push_spk_to(fixture, -1, release_id, offset, flags, pcm_b64);
 }
 
 /** How many whole 640-byte frames the module handed over. */
@@ -342,6 +330,10 @@ static void record_control(
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE) {
     ++response_done_count;
     note_order('l');
+  } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED &&
+             fence_on_call_ended != NULL) {
+    /* Matches the loop's immediate fence; subscription cleanup is deferred. */
+    fence_on_call_ended->state = ITERATE_KIT_VOICELAB_CLOSED;
   }
 }
 
@@ -353,32 +345,8 @@ static void record_control(
  */
 static void downlink_flow(void) {
   static struct fixture fixture;
-  static const char long_stream_path[] =
-      "/agents/voice/v23/havpe-diagnostic-stream-name-longer-than-sixty-four-characters";
   fixture_init(&fixture);
-  {
-    const struct iterate_kit_voicelab_options options = {
-      .session = &fixture.session,
-      .project_id = "prj_test",
-      .project_api_key = "itxk_secret-never-log",
-      .stream_path = long_stream_path,
-      .activation = TEST_ACTIVATION,
-      .now_ms = fixture_now_ms,
-      .clock_context = &fixture,
-      .on_speaker = record_speaker,
-      .on_control = record_control,
-      .downlink_context = NULL,
-    };
-    assert(
-        iterate_kit_voicelab_start(&fixture.voicelab, &options) ==
-        CAPNWEB_OK);
-  }
-  receive(&fixture, "[\"resolve\",1,[\"export\",-10]]");
-  receive(&fixture, "[\"resolve\",2,[\"export\",-11]]");
-  receive(&fixture, "[\"resolve\",3,[\"export\",-12]]");
-  assert(
-      fixture.voicelab.state == ITERATE_KIT_VOICELAB_OPENING_CONNECTION);
-
+  start_and_mount(&fixture);
   /* The open call rides the wire with the caps and the exported callback. */
   {
     const char *open_message = NULL;
@@ -390,7 +358,7 @@ static void downlink_flow(void) {
     }
     assert(open_message != NULL);
     assert(strstr(open_message,
-        "\"connectionKey\":\"kit-cb-g1\"") != NULL);
+        "\"connectionKey\":\"kit-voice-") != NULL);
     /*
      * The subscription IS the wire contract, so it is pinned literally rather
      * than checked for membership: a type quietly added or dropped upstream
@@ -415,10 +383,6 @@ static void downlink_flow(void) {
     assert(strstr(open_message, "\"state\":false") != NULL);
     assert(strstr(open_message, "\"processEventBatch\":[\"export\",-1]") != NULL);
   }
-  receive(&fixture, "[\"resolve\",4,[\"export\",-13]]");
-  assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_READY);
-  assert(fixture.voicelab.has_connection_capability);
-
   /* The platform invokes the exported callback exactly like the live wire:
    * a push with an EMPTY path, followed by a release of the result import
    * (the zero-return-frame lane never pulls). */
@@ -603,22 +567,6 @@ static void downlink_flow(void) {
     assert(occupied == 0U);
   }
 
-  /* A failure-driven reconnect (the downlink deadline's recovery): the
-   * successor opens under g2, the incumbent is released after. No batch
-   * count triggers this any more — see the note in voicelab_stream.h. */
-  fixture.voicelab.batches_on_connection = 600U;
-  assert(
-      iterate_kit_voicelab_recycle_connection(&fixture.voicelab) ==
-      CAPNWEB_OK);
-  {
-    const char *second_open = fixture.captured[fixture.captured_count - 2U];
-    assert(strstr(second_open, "\"connectionKey\":\"kit-cb-g2\"") != NULL);
-  }
-  receive(&fixture, "[\"resolve\",5,[\"export\",-14]]");
-  assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_READY);
-  assert(fixture.voicelab.batches_on_connection < 2U);
-  assert(!fixture.voicelab.has_previous_connection_capability);
-
   assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
 }
 
@@ -637,7 +585,7 @@ static void face_runtime_state_is_polled_and_deduped(void) {
   assert(fixture.voicelab.face_poll_pending);
   receive(
       &fixture,
-      "[\"resolve\",4,{\"runtime\":{\"face\":{\"answer\":7,\"playoutSamples\":1600,\"viseme\":9,\"confidence\":200,\"at\":100}}}]");
+      "[\"resolve\",3,{\"runtime\":{\"face\":{\"answer\":7,\"playoutSamples\":1600,\"viseme\":9,\"confidence\":200,\"at\":100}}}]");
   assert(!fixture.voicelab.face_poll_pending);
   assert(observed_face.count == 1U);
   assert(observed_face.answer == 7U);
@@ -649,20 +597,20 @@ static void face_runtime_state_is_polled_and_deduped(void) {
   assert(iterate_kit_voicelab_poll_face(&fixture.voicelab) == CAPNWEB_OK);
   receive(
       &fixture,
-      "[\"resolve\",5,{\"runtime\":{\"face\":{\"answer\":7,\"playoutSamples\":1600,\"viseme\":9,\"confidence\":200,\"at\":100}}}]");
+      "[\"resolve\",4,{\"runtime\":{\"face\":{\"answer\":7,\"playoutSamples\":1600,\"viseme\":9,\"confidence\":200,\"at\":100}}}]");
   assert(observed_face.count == 1U);
 
   /* A malformed shape is harmless and does not poison the next valid value. */
   assert(iterate_kit_voicelab_poll_face(&fixture.voicelab) == CAPNWEB_OK);
   receive(
       &fixture,
-      "[\"resolve\",6,{\"runtime\":{\"face\":{\"answer\":7,\"playoutSamples\":1700,\"viseme\":99,\"at\":101}}}]");
+      "[\"resolve\",5,{\"runtime\":{\"face\":{\"answer\":7,\"playoutSamples\":1700,\"viseme\":99,\"at\":101}}}]");
   assert(observed_face.count == 1U);
 
   assert(iterate_kit_voicelab_poll_face(&fixture.voicelab) == CAPNWEB_OK);
   receive(
       &fixture,
-      "[\"resolve\",7,{\"runtime\":{\"face\":{\"answer\":7,\"playoutSamples\":1700,\"viseme\":14,\"at\":101}}}]");
+      "[\"resolve\",6,{\"runtime\":{\"face\":{\"answer\":7,\"playoutSamples\":1700,\"viseme\":14,\"at\":101}}}]");
   assert(observed_face.count == 2U);
   assert(observed_face.offset_samples == 1700U);
   assert(observed_face.viseme == 14U);
@@ -674,67 +622,6 @@ static void face_runtime_state_is_polled_and_deduped(void) {
 }
 
 
-/** Occupied slots in the fixture session's export table. */
-static size_t exports_in_use(const struct fixture *fixture) {
-  size_t index;
-  size_t used = 0U;
-  for (index = 0U; index < CALL_CAPACITY; ++index) {
-    if (fixture->exports[index].occupied) used++;
-  }
-  return used;
-}
-
-/**
- * One complete mount with a downlink, answering each of its four calls.
- *
- * Ids are counted rather than written down: a second mount on the SAME session
- * continues the numbering, and that is the whole point of the test below.
- */
-static void mount_with_downlink(struct fixture *fixture, int *next_id) {
-  const struct iterate_kit_voicelab_options options = {
-    .session = &fixture->session,
-    .project_id = "prj_test",
-    .project_api_key = "itxk_secret-never-log",
-    .stream_path = "/voice-agent/dev-test",
-    .activation = TEST_ACTIVATION,
-    .now_ms = fixture_now_ms,
-    .clock_context = fixture,
-    .on_speaker = record_speaker,
-    .on_control = record_control,
-    .downlink_context = NULL,
-  };
-  char message[64];
-  int index;
-
-  assert(iterate_kit_voicelab_start(&fixture->voicelab, &options) == CAPNWEB_OK);
-  for (index = 0; index < 4; ++index) {
-    (void)snprintf(
-        message, sizeof(message), "[\"resolve\",%d,[\"export\",-%d]]",
-        *next_id, 10 + *next_id);
-    receive(fixture, message);
-    (*next_id)++;
-  }
-  assert(fixture->voicelab.state == ITERATE_KIT_VOICELAB_READY);
-}
-
-/*
- * RE-MOUNTING MUST HAND BACK WHAT THE LAST MOUNT HELD.
- *
- * `iterate_kit_voicelab_start` memsets the struct, and for a long time it did
- * that while the SESSION still held the capabilities the last mount had taken:
- * the exported callback, and the imported connection whose reference is what
- * keeps that callback alive at the platform. So every re-mount burned an export
- * slot. A real board's table holds four and a healthy one already uses two, so
- * the second re-mount filled it — the export was refused, the voicelab latched
- * failed underneath a perfectly ready transport and connection, and nothing
- * recovered it but the 180-second liveness restart of the whole chip. Measured
- * on the HA Voice PE at exports 4/4, imports 0/16, nothing delivered.
- *
- * What is asserted is what this side controls: a re-mount says `release` for
- * the previous mount before it asks for anything new. Whether the peer then
- * drops its own reference is the peer's half of the contract, and no fixture
- * here can stand in for it.
- */
 /*
  * THE SECOND VOICE AGENT'S DIALECT.
  *
@@ -752,26 +639,7 @@ static void mount_with_downlink(struct fixture *fixture, int *next_id) {
 static void the_second_agents_dialect(void) {
   static struct fixture fixture;
   fixture_init(&fixture);
-  {
-    const struct iterate_kit_voicelab_options options = {
-      .session = &fixture.session,
-      .project_id = "prj_test",
-      .project_api_key = "itxk_secret-never-log",
-      .stream_path = "/voice-agent/dev-test",
-      .activation = TEST_ACTIVATION,
-      .now_ms = fixture_now_ms,
-      .clock_context = &fixture,
-      .on_speaker = record_speaker,
-      .on_control = record_control,
-      .downlink_context = NULL,
-    };
-    assert(
-        iterate_kit_voicelab_start(&fixture.voicelab, &options) == CAPNWEB_OK);
-  }
-  receive(&fixture, "[\"resolve\",1,[\"export\",-10]]");
-  receive(&fixture, "[\"resolve\",2,[\"export\",-11]]");
-  receive(&fixture, "[\"resolve\",3,[\"export\",-12]]");
-  receive(&fixture, "[\"resolve\",4,[\"export\",-13]]");
+  start_and_mount(&fixture);
 
   speech_started_count = 0;
   spoken_frames = 0U;
@@ -886,194 +754,341 @@ static void the_second_agents_dialect(void) {
   (void)iterate_kit_voicelab_close(&fixture.voicelab);
 }
 
-static void remounting_releases_the_previous_mount(void) {
-  static struct fixture fixture;
-  int next_id = 1;
-  size_t before;
-  size_t index;
-  size_t releases = 0U;
 
+
+static void recycle_keeps_call_epoch_and_fences_closed_predecessor(void) {
+  struct fixture fixture;
+  size_t batches;
+  size_t frames;
   fixture_init(&fixture);
-  mount_with_downlink(&fixture, &next_id);
-  assert(exports_in_use(&fixture) > 0U);
+  start_and_mount(&fixture);
+  accept_call(&fixture, -1, 1, 1);
+  push_spk_to(&fixture, -1, 2, 2, "", frames_b64(1U, 0x41));
+  assert(fixture.voicelab.batches_on_connection > 0U);
+  fixture.clock_ms = 100U;
+  assert(iterate_kit_voicelab_recycle_subscription(
+      &fixture.voicelab, &fixture.replacement_subscription) == CAPNWEB_OK);
+  assert(fixture.voicelab.previous_subscription == &fixture.subscription);
+  assert(fixture.voicelab.batches_on_connection == 0U);
+  assert(fixture.voicelab.last_batch_ms == fixture.clock_ms);
+  /* Make-before-break means A still plays while B is opening, but A cannot
+   * certify B's delivery lane or retain its old batch count. */
+  frames = spoken_frames;
+  push_spk_to(&fixture, -1, 3, 3, "", frames_b64(1U, 0x42));
+  assert(spoken_frames == frames + 1U);
+  assert(fixture.voicelab.batches_on_connection == 0U);
+  /* B's callback exists before its open reply. Its duplicate of A's offset is
+   * deduped for audio, yet still proves the newly opening subscription lives. */
+  push_spk_to(&fixture, -2, 4, 3, "", frames_b64(1U, 0x43));
+  assert(spoken_frames == frames + 1U);
+  assert(fixture.voicelab.batches_on_connection == 1U);
+  receive(&fixture, "[\"resolve\",3,[\"export\",-14]]");
+  iterate_kit_voicelab_update(&fixture.voicelab);
+  assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_READY);
+  assert(fixture.voicelab.previous_subscription == NULL);
+  push_spk_to(&fixture, -2, 5, 4, "", frames_b64(1U, 0x44));
+  assert(spoken_frames == frames + 2U);
+  assert(fixture.voicelab.batches_on_connection == 2U);
+  batches = fixture.voicelab.batches_on_connection;
+  /* The predecessor was closed once -2 opened, so a late -1 delivery cannot
+   * advance the call's watermark or invoke its audio/control callbacks. */
+  push_spk_to(&fixture, -1, 6, 5, "", frames_b64(1U, 0x45));
+  assert(fixture.voicelab.batches_on_connection == batches);
+}
 
-  /*
-   * The connection stub of the first mount, named exactly. `mount_with_downlink`
-   * answers the fourth call — openConnection — with export -(10 + id), and the
-   * ids start at 1, so the first mount's connection is -14. A re-mount that
-   * forgets it never sends this, and the platform goes on holding the callback
-   * that reference keeps alive.
-   */
-  before = fixture.captured_count;
-  mount_with_downlink(&fixture, &next_id);
-  for (index = before; index < fixture.captured_count; ++index) {
-    if (strstr(fixture.captured[index], "[\"release\",-14") != NULL) releases++;
+/* A rejected renewal returns to A's subscription, but its old successful
+ * batches must not certify recovery again. Only a new A delivery can do that. */
+static void failed_renewal_requires_a_fresh_incumbent_batch(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+  start_and_mount(&fixture);
+  push_spk_to(&fixture, -1, 1, 1, "", frames_b64(1U, 0x41));
+  assert(fixture.voicelab.batches_on_connection == 1U);
+  fixture.replacement_subscription.epoch = UINT32_MAX;
+  fixture.clock_ms = 100U;
+  assert(iterate_kit_voicelab_recycle_subscription(
+      &fixture.voicelab, &fixture.replacement_subscription) == CAPNWEB_E_LIMIT);
+  assert(fixture.voicelab.subscription == &fixture.subscription);
+  assert(fixture.voicelab.previous_subscription == NULL);
+  assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_READY);
+  assert(fixture.voicelab.batches_on_connection == 0U);
+  assert(fixture.voicelab.last_batch_ms == fixture.clock_ms);
+  push_spk_to(&fixture, -1, 2, 2, "", frames_b64(1U, 0x42));
+  assert(fixture.voicelab.batches_on_connection == 1U);
+}
+
+/* Repeated silent renewals must not inherit the predecessor's evidence. */
+static void repeated_silent_renewals_start_with_no_batches(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+  start_and_mount(&fixture);
+  push_spk_to(&fixture, -1, 1, 1, "", frames_b64(1U, 0x41));
+  assert(fixture.voicelab.batches_on_connection == 1U);
+  assert(iterate_kit_voicelab_recycle_subscription(
+      &fixture.voicelab, &fixture.replacement_subscription) == CAPNWEB_OK);
+  receive(&fixture, "[\"resolve\",3,[\"export\",-14]]");
+  iterate_kit_voicelab_update(&fixture.voicelab);
+  assert(fixture.voicelab.batches_on_connection == 0U);
+  release_server_callback(&fixture, -1);
+  assert(iterate_kit_stream_subscription_reclaimable(&fixture.subscription));
+  assert(iterate_kit_voicelab_recycle_subscription(
+      &fixture.voicelab, &fixture.subscription) == CAPNWEB_OK);
+  assert(fixture.voicelab.batches_on_connection == 0U);
+}
+
+
+static int latest_callback_id(const struct fixture *fixture) {
+  size_t index;
+  for (index = fixture->captured_count; index > 0U; --index) {
+    const char *at = strstr(fixture->captured[index - 1U],
+        "\"processEventBatch\":[\"export\",");
+    if (at != NULL) {
+      return atoi(at + sizeof("\"processEventBatch\":[\"export\",") - 1U);
+    }
   }
-  assert(releases > 0U);
+  assert(false);
+  return 0;
+}
+
+static int latest_pull_id(const struct fixture *fixture) {
+  size_t index;
+  for (index = fixture->captured_count; index > 0U; --index) {
+    const char *at = strstr(fixture->captured[index - 1U], "[\"pull\",");
+    if (at != NULL) return atoi(at + sizeof("[\"pull\",") - 1U);
+  }
+  assert(false);
+  return 0;
+}
+
+static void resolve_latest_pull(struct fixture *fixture, const char *value) {
+  char message[128];
+  const int length = snprintf(message, sizeof(message),
+      "[\"resolve\",%d,%s]", latest_pull_id(fixture), value);
+  assert(length > 0 && (size_t)length < sizeof(message));
+  receive(fixture, message);
+}
+
+static void release_server_callback(struct fixture *fixture, int callback) {
+  char message[64];
+  const int length = snprintf(message, sizeof(message),
+      "[\"release\",%d,1]", callback);
+  assert(length > 0 && (size_t)length < sizeof(message));
+  receive(fixture, message);
+}
+
+static void accept_call(
+    struct fixture *fixture, int callback, int release, int64_t offset) {
+  char message[768];
+  char release_message[64];
+  const int length = snprintf(message, sizeof(message),
+      "[\"push\",[\"pipeline\",%d,[],[{\"events\":[["
+      "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
+      "\"offset\":%lld,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\","
+      "\"conversationId\":\"test\"}}"
+      "]],\"scannedThroughOffset\":%lld,\"state\":null}]]]",
+      callback, (long long)offset, (long long)offset);
+  assert(length > 0 && (size_t)length < sizeof(message));
+  receive(fixture, message);
+  assert(snprintf(release_message, sizeof(release_message),
+      "[\"release\",%d,1]", release) > 0);
+  receive(fixture, release_message);
+}
+
+/* A local end fences the voicelab before its generic callback can be released.
+ * A late delivery must not resurrect the call or advance its dedupe watermark. */
+static void fenced_voicelab_ignores_late_callback(void) {
+  struct fixture fixture;
+  size_t frames;
+  fixture_init(&fixture);
+  start_and_mount(&fixture);
+  frames = spoken_frames;
+  fixture.voicelab.state = ITERATE_KIT_VOICELAB_CLOSED;
+  receive(&fixture,
+      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
+      "\"offset\":1,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\","
+      "\"conversationId\":\"late\"}},"
+      "{\"type\":\"events.iterate.com/voice-agent/spk-frame\","
+      "\"offset\":2,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\","
+      "\"pcm\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}}"
+      "]],\"scannedThroughOffset\":2,\"state\":null}]]]");
+  receive(&fixture, "[\"release\",1,1]");
+  assert(fixture.voicelab.batches_on_connection == 0U);
+  assert(fixture.voicelab.last_event_offset == -1);
+  assert(!fixture.voicelab.call_active);
+  assert(spoken_frames == frames);
+  assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
+  release_server_callback(&fixture, latest_callback_id(&fixture));
+  assert(iterate_kit_stream_subscription_reclaimable(&fixture.subscription));
+}
+
+/* A delivery can race the open result. OPENING is still the current call and
+ * must accept it; CLOSED is the only lifecycle fence. */
+static void opening_voicelab_accepts_current_callback(void) {
+  struct fixture fixture;
+  const struct iterate_kit_voicelab_options options = {
+    .stream_path = "/voice-agent/dev-test",
+    .activation = TEST_ACTIVATION,
+    .now_ms = fixture_now_ms,
+    .clock_context = &fixture,
+    .on_control = record_control,
+  };
+  fixture_init(&fixture);
+  assert(iterate_kit_stream_get(&fixture.stream, &fixture.session,
+      (struct capnweb_remote_capability){-77}, options.stream_path) == CAPNWEB_OK);
+  receive(&fixture, "[\"resolve\",1,[\"export\",-12]]");
+  assert(iterate_kit_voicelab_bind(&fixture.voicelab, &options,
+      &fixture.stream, &fixture.subscription) == CAPNWEB_OK);
+  assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_OPENING_CONNECTION);
+  accept_call(&fixture, -1, 1, 1);
+  assert(fixture.voicelab.call_active);
+  receive(&fixture, "[\"resolve\",2,[\"export\",-13]]");
+  iterate_kit_voicelab_update(&fixture.voicelab);
+  assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_READY);
+  assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
+  release_server_callback(&fixture, latest_callback_id(&fixture));
+}
+
+/* The terminal callback can synchronously fence the call. Audio later in its
+ * batch is already obsolete and must not get as far as the speaker callback. */
+static void terminal_fence_stops_later_events_in_its_batch(void) {
+  struct fixture fixture;
+  size_t frames;
+  fixture_init(&fixture);
+  start_and_mount(&fixture);
+  accept_call(&fixture, -1, 1, 1);
+  frames = spoken_frames;
+  fence_on_call_ended = &fixture.voicelab;
+  receive(&fixture,
+      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "{\"type\":\"events.iterate.com/voice-agent/conversation-ended\","
+      "\"offset\":2,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\","
+      "\"reason\":\"button\"}},"
+      "{\"type\":\"events.iterate.com/voice-agent/spk-frame\","
+      "\"offset\":3,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\","
+      "\"pcm\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}}"
+      "]],\"scannedThroughOffset\":3,\"state\":null}]]]");
+  receive(&fixture, "[\"release\",2,1]");
+  fence_on_call_ended = NULL;
+  assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_CLOSED);
+  assert(!fixture.voicelab.call_active);
+  assert(fixture.voicelab.last_event_offset == 2);
+  assert(spoken_frames == frames);
+  assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
+  release_server_callback(&fixture, latest_callback_id(&fixture));
+  assert(iterate_kit_stream_subscription_reclaimable(&fixture.subscription));
+}
+
+static void close_waits_for_server_callback_before_slot_reuse(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+  start_and_mount(&fixture);
+  assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
+  assert(!iterate_kit_stream_subscription_reclaimable(&fixture.subscription));
+  release_server_callback(&fixture, latest_callback_id(&fixture));
+  assert(iterate_kit_stream_subscription_reclaimable(&fixture.subscription));
+  /* Repeating this across more than the old four-export ceiling proves each
+   * close/rebind hands its callback slot back before it is reused. */
+  for (int cycle = 0; cycle < 5; ++cycle) {
+    assert(iterate_kit_voicelab_bind(&fixture.voicelab,
+        &(const struct iterate_kit_voicelab_options){
+          .stream_path = "/voice-agent/dev-test", .activation = TEST_ACTIVATION,
+          .now_ms = fixture_now_ms, .clock_context = &fixture,
+        }, &fixture.stream, &fixture.subscription) == CAPNWEB_OK);
+    resolve_latest_pull(&fixture, "[\"export\",-13]");
+    iterate_kit_voicelab_update(&fixture.voicelab);
+    assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_READY);
+    assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
+    assert(!iterate_kit_stream_subscription_reclaimable(&fixture.subscription));
+    release_server_callback(&fixture, latest_callback_id(&fixture));
+    assert(iterate_kit_stream_subscription_reclaimable(&fixture.subscription));
+  }
+}
+
+static void face_poll_blocks_rebind_until_its_completion(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+  start_and_mount(&fixture);
+  assert(iterate_kit_voicelab_poll_face(&fixture.voicelab) == CAPNWEB_OK);
+  assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
+  assert(iterate_kit_voicelab_bind(&fixture.voicelab,
+      &(const struct iterate_kit_voicelab_options){
+        .stream_path = "/voice-agent/dev-test", .activation = TEST_ACTIVATION,
+        .now_ms = fixture_now_ms, .clock_context = &fixture,
+      }, &fixture.stream, &fixture.replacement_subscription) == CAPNWEB_E_STATE);
+  resolve_latest_pull(&fixture, "{\"runtime\":{}}");
+  assert(!fixture.voicelab.face_poll_pending);
+  assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
+  release_server_callback(&fixture, latest_callback_id(&fixture));
+  assert(iterate_kit_stream_subscription_reclaimable(&fixture.subscription));
+}
+
+static void append_frames_keeps_one_padded_base64_body(void) {
+  struct fixture fixture;
+  const uint8_t pcm[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'};
+  size_t before;
+  fixture_init(&fixture);
+  start_and_mount(&fixture);
+  before = fixture.captured_count;
+  assert(iterate_kit_voicelab_append_frames(
+      &fixture.voicelab, pcm, 2U, 4U, TEST_ACTIVATION) == CAPNWEB_OK);
+  assert(fixture.captured_count == before + 2U);
+  /* Two four-byte capture frames must be encoded as one padded PCM body. */
+  assert(strstr(fixture.captured[before], "\"pcm\":\"QUJDREVGR0g=\"") != NULL);
+  assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
+}
+
+static void keepalive_is_quiet_for_twenty_seconds_after_success(void) {
+  struct fixture fixture;
+  size_t before;
+  fixture_init(&fixture);
+  start_and_mount(&fixture);
+  accept_call(&fixture, -1, 1, 1);
+  fixture.clock_ms = 100U;
+  before = fixture.captured_count;
+  assert(iterate_kit_voicelab_keepalive_if_due(&fixture.voicelab) == CAPNWEB_OK);
+  assert(fixture.captured_count == before + 2U);
+  assert(strstr(fixture.captured[before], "voice-agent/keepalive") != NULL);
+  fixture.clock_ms += ITERATE_KIT_VOICE_CALL_KEEPALIVE_MS - 1U;
+  assert(iterate_kit_voicelab_keepalive_if_due(&fixture.voicelab) == CAPNWEB_OK);
+  assert(fixture.captured_count == before + 2U);
+  ++fixture.clock_ms;
+  assert(iterate_kit_voicelab_keepalive_if_due(&fixture.voicelab) == CAPNWEB_OK);
+  assert(fixture.captured_count == before + 4U);
+  assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
+}
+
+static void terminal_rejects_unsafe_reason_without_an_ephemeral_append(void) {
+  struct fixture fixture;
+  size_t before;
+  fixture_init(&fixture);
+  start_and_mount(&fixture);
+  before = fixture.captured_count;
+  assert(iterate_kit_voicelab_end_activation(
+      &fixture.stream, TEST_ACTIVATION, "bad\"reason") == CAPNWEB_E_INVALID_ARGUMENT);
+  assert(fixture.captured_count == before);
+  assert(iterate_kit_voicelab_end_activation(
+      &fixture.stream, TEST_ACTIVATION, "hangup") == CAPNWEB_OK);
+  assert(fixture.captured_count == before + 2U);
+  assert(strstr(fixture.captured[before], "conversation-ended") != NULL);
+  assert(strstr(fixture.captured[before], "\"ephemeral\"") == NULL);
+  assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
 }
 
 int main(void) {
-  static struct fixture fixture;
-  /* "ABCD" + 0x00 0x01: exercises multi-chunk + 2-byte-tail base64. */
-  static const uint8_t pcm[6] = {0x41U, 0x42U, 0x43U, 0x44U, 0x00U, 0x01U};
-  /* Two 4-byte frames: every base64 group straddles the seam between them. */
-  static const uint8_t seam[8] = {
-    0x41U, 0x42U, 0x43U, 0x44U, 0x45U, 0x46U, 0x47U, 0x48U};
-  size_t before;
-
-  remounting_releases_the_previous_mount();
-
-  fixture_init(&fixture);
-  start_and_mount(&fixture);
-
-  /* Frame appends are one-way: push + release, no pull, no import held. */
-  before = fixture.captured_count;
-  fixture.clock_ms = 1234U;
-  assert(
-      iterate_kit_voicelab_append_frames(
-          &fixture.voicelab,
-          pcm,
-          1U,
-          sizeof(pcm), "0123456789abcdef0123456789abcdef") == CAPNWEB_OK);
-  assert(fixture.captured_count == before + 2U);
-  assert(strstr(fixture.captured[before],
-      "\"activation\":\"0123456789abcdef0123456789abcdef\"") != NULL);
-  /* THE BODY, BYTE FOR BYTE. One encode over the whole flush. */
-  assert(strstr(fixture.captured[before], "\"pcm\":\"QUJDRAAB\"") != NULL);
-  /* "p": the uplink is PCM16. It was "u" and the transcode is gone — see the
-   * note where the encoder used to be for what that cost and might cost
-   * again. */
-  /* No codec field on the wire: the lane carries PCM16 and nothing else. */
-  assert(strstr(fixture.captured[before], "\"enc\"") == NULL);
-  assert(strstr(fixture.captured[before + 1U], "[\"release\",") != NULL);
-  assert(fixture.voicelab.frames_sent == 1U);
-  assert(fixture.voicelab.frame_send_failures == 0U);
-
-  /*
-   * A MULTI-FRAME FLUSH IS ONE CONTINUOUS BODY, PADDED. Eight bytes is not a
-   * whole number of base64 groups and 4 is not a multiple of 3, so a frame
-   * encoded on its own would leave a broken group at the seam.
-   */
-  before = fixture.captured_count;
-  assert(
-      iterate_kit_voicelab_append_frames(
-          &fixture.voicelab, seam, 2U, 4U,
-          "0123456789abcdef0123456789abcdef") == CAPNWEB_OK);
-  assert(strstr(fixture.captured[before], "\"pcm\":\"QUJDREVGR0g=\"") != NULL);
-
-  /* A full 640-byte frame fits the args buffer and one outbox slot. */
-  {
-    static uint8_t full_frame[ITERATE_KIT_VOICELAB_FRAME_BYTES];
-    size_t index;
-    for (index = 0U; index < sizeof(full_frame); ++index) {
-      full_frame[index] = (uint8_t)(index & 0xffU);
-    }
-    before = fixture.captured_count;
-    assert(
-        iterate_kit_voicelab_append_frames(
-            &fixture.voicelab,
-            full_frame,
-            1U,
-            sizeof(full_frame), "0123456789abcdef0123456789abcdef") == CAPNWEB_OK);
-    assert(fixture.captured_count == before + 2U);
-    assert(
-        fixture.captured_lengths[before] < MESSAGE_CAPACITY);
-  }
-
-  /* Call control is entirely stream-owned: a pulled append requests setup,
-   * and hangup is a durable one-way append the bridge is subscribed to. */
-  {
-    const char *end_message = NULL;
-    size_t index;
-    assert(
-        iterate_kit_voicelab_end_call(&fixture.voicelab, "not\\json") ==
-        CAPNWEB_E_INVALID_ARGUMENT);
-    fixture.voicelab.call_active = true;
-    fixture.clock_ms = 100U;
-    before = fixture.captured_count;
-    /* A quiet accepted call gets exactly one ephemeral presence append. */
-    assert(
-        iterate_kit_voicelab_keepalive_if_due(&fixture.voicelab) == CAPNWEB_OK);
-    assert(fixture.captured_count == before + 2U);
-    {
-      const char *keepalive_message = NULL;
-      for (index = before; index < fixture.captured_count; ++index) {
-        if (strstr(fixture.captured[index], "voice-agent/keepalive") != NULL) {
-          keepalive_message = fixture.captured[index];
-        }
-      }
-      assert(keepalive_message != NULL);
-      assert(strstr(keepalive_message, "\"ephemeral\":true") != NULL);
-      assert(strstr(keepalive_message, "\"payload\":{}") != NULL);
-      assert(strstr(keepalive_message, "conversationId") == NULL);
-    }
-    /* Polling during the 20-second quiet interval adds no second append. */
-    fixture.clock_ms += ITERATE_KIT_VOICE_CALL_KEEPALIVE_MS - 1U;
-    before = fixture.captured_count;
-    assert(
-        iterate_kit_voicelab_keepalive_if_due(&fixture.voicelab) == CAPNWEB_OK);
-    assert(fixture.captured_count == before);
-    /* A microphone append restarts the same quiet interval. */
-    assert(
-        iterate_kit_voicelab_append_frames(
-            &fixture.voicelab, pcm, 1U, sizeof(pcm),
-            "0123456789abcdef0123456789abcdef") == CAPNWEB_OK);
-    fixture.clock_ms += ITERATE_KIT_VOICE_CALL_KEEPALIVE_MS - 1U;
-    before = fixture.captured_count;
-    assert(
-        iterate_kit_voicelab_keepalive_if_due(&fixture.voicelab) == CAPNWEB_OK);
-    assert(fixture.captured_count == before);
-    fixture.clock_ms += 1U;
-    assert(
-        iterate_kit_voicelab_keepalive_if_due(&fixture.voicelab) == CAPNWEB_OK);
-    assert(fixture.captured_count == before + 2U);
-
-    before = fixture.captured_count;
-    assert(
-        iterate_kit_voicelab_end_call(&fixture.voicelab, "button") ==
-        CAPNWEB_OK);
-    assert(!fixture.voicelab.call_active);
-    for (index = before; index < fixture.captured_count; ++index) {
-      if (strstr(fixture.captured[index], "conversation-ended") != NULL) {
-        end_message = fixture.captured[index];
-      }
-    }
-    assert(end_message != NULL);
-    assert(strstr(end_message,
-        "\"activation\":\"0123456789abcdef0123456789abcdef\"") != NULL);
-    assert(strstr(end_message, "\"reason\":\"button\"") != NULL);
-    /* Durable: no ephemeral marker, or the bridge would still see it but
-     * nothing would record that the call was hung up. */
-    assert(strstr(end_message, "ephemeral") == NULL);
-    assert(
-        iterate_kit_voicelab_keepalive_if_due(&fixture.voicelab) ==
-        CAPNWEB_E_STATE);
-    /* A subsequent accepted activation has a fresh quiet-presence budget. */
-    fixture.voicelab.call_active = true;
-    before = fixture.captured_count;
-    assert(
-        iterate_kit_voicelab_keepalive_if_due(&fixture.voicelab) == CAPNWEB_OK);
-    assert(fixture.captured_count == before + 2U);
-
-  }
-
-  /* Raw diagnostics appends share the one-way lane. */
-  {
-    static const char stats[] =
-        "[{\"type\":\"events.iterate.com/voice-agent/dev-stats\",\"ephemeral\":true,"
-        "\"payload\":{\"heapFree\":123456}}]";
-    assert(
-        iterate_kit_voicelab_append_raw(
-            &fixture.voicelab, stats, sizeof(stats) - 1U) == CAPNWEB_OK);
-  }
-
-  assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
-  assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_CLOSED);
-
   downlink_flow();
   face_runtime_state_is_polled_and_deduped();
   the_second_agents_dialect();
-
-  printf("voicelab stream test passed\n");
+  recycle_keeps_call_epoch_and_fences_closed_predecessor();
+  failed_renewal_requires_a_fresh_incumbent_batch();
+  repeated_silent_renewals_start_with_no_batches();
+  fenced_voicelab_ignores_late_callback();
+  opening_voicelab_accepts_current_callback();
+  terminal_fence_stops_later_events_in_its_batch();
+  close_waits_for_server_callback_before_slot_reuse();
+  face_poll_blocks_rebind_until_its_completion();
+  append_frames_keeps_one_padded_base64_body();
+  keepalive_is_quiet_for_twenty_seconds_after_success();
+  terminal_rejects_unsafe_reason_without_an_ephemeral_append();
   return 0;
 }

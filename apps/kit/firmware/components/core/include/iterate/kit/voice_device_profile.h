@@ -9,7 +9,9 @@ enum {
 
   /* Bounded Cap’n Web arenas; exhaustion is a session failure. */
   ITERATE_KIT_VOICE_PENDING_CALL_CAPACITY = 16,
-  ITERATE_KIT_VOICE_EXPORT_CAPACITY = 4,
+  /* Mount provision plus two overlapping stream subscriptions and one
+   * live-state subscription; leave four explicit recovery slots. */
+  ITERATE_KIT_VOICE_EXPORT_CAPACITY = 8,
   ITERATE_KIT_VOICE_IMPORT_CAPACITY = 16,
   ITERATE_KIT_VOICE_TOKEN_CAPACITY = 1024,
   ITERATE_KIT_VOICE_OUTPUT_CAPACITY = 128,

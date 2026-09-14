@@ -7,6 +7,7 @@ import {
   deliveredMsOf,
   FRAME_BYTES,
   FRAME_MS,
+  hasAudibleSignal,
   openStream,
   sleep,
   type StreamHandle,
@@ -30,11 +31,15 @@ export interface WireWatch {
   heldMicFrames: number | null;
   spkFrames: number;
   answersEnded: number;
+  /** `lastFrameOfAnswer` markers, including terminal frames with no PCM. */
+  answerEnds: { atMs: number; answerIndex: number }[];
   answerDeliveredMs: number;
   lastAudioFrameAtMs: number | null;
   clearsSeen: number;
   utterances: TimedText[];
   answers: TimedText[];
+  /** Immutable initial session prompt, distinct from later instruction appends. */
+  sessionInstructions: TimedText | null;
   instructions: TimedText[];
   thinking: TimedText[];
   commentary: TimedText[];
@@ -45,7 +50,9 @@ export interface WireWatch {
     atMs: number;
     payloadMs: number;
     batchAudioFrames: number;
+    receivedAtFacetMs: number | null;
     sentAtFacetMs: number | null;
+    hasSignal: boolean;
     answerIndex: number;
   }[];
   micAppendLatenciesMs: number[];
@@ -98,11 +105,13 @@ export async function openWireCall(
     heldMicFrames: null,
     spkFrames: 0,
     answersEnded: 0,
+    answerEnds: [],
     answerDeliveredMs: 0,
     lastAudioFrameAtMs: null,
     clearsSeen: 0,
     utterances: [],
     answers: [],
+    sessionInstructions: null,
     instructions: [],
     thinking: [],
     commentary: [],
@@ -171,6 +180,11 @@ export async function openWireCall(
           }
           if (event.type === "events.iterate.com/voice-agent/session-configured") {
             watch.sessionConfiguredAtMs = clock();
+            if (typeof payload.instructions === "string") {
+              const configured = { atMs: clock(), text: payload.instructions };
+              watch.sessionInstructions = configured;
+              watch.instructions.push(configured);
+            }
             continue;
           }
           if (event.type === "events.iterate.com/voice-agent/utterance-transcript") {
@@ -215,7 +229,11 @@ export async function openWireCall(
           watch.spkFrames += 1;
           const pcm = typeof payload.pcm === "string" ? payload.pcm : "";
           if (payload.clearSpeakerBufferBeforeFrame === true && pcm === "") watch.clearsSeen += 1;
-          if (payload.lastFrameOfAnswer === true) watch.answersEnded += 1;
+          const answerIndex = watch.answersEnded;
+          if (payload.lastFrameOfAnswer === true) {
+            watch.answerEnds.push({ atMs: clock(), answerIndex });
+            watch.answersEnded += 1;
+          }
           if (pcm === "") continue;
           watch.answerDeliveredMs += deliveredMsOf(pcm);
           watch.lastAudioFrameAtMs = clock();
@@ -223,8 +241,11 @@ export async function openWireCall(
             atMs: clock(),
             payloadMs: deliveredMsOf(pcm),
             batchAudioFrames,
+            receivedAtFacetMs:
+              typeof payload.receivedAtFacetMs === "number" ? payload.receivedAtFacetMs : null,
             sentAtFacetMs: typeof payload.sentAtFacetMs === "number" ? payload.sentAtFacetMs : null,
-            answerIndex: watch.answersEnded,
+            hasSignal: hasAudibleSignal(Buffer.from(pcm, "base64")),
+            answerIndex,
           });
         }
       },

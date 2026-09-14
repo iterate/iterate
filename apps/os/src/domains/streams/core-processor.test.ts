@@ -6,6 +6,7 @@ import {
   MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM,
   type CoreProcessorState,
   type SubscriptionConfiguredPayload,
+  type SubscriptionReceiver,
 } from "./core-processor-contract.ts";
 import {
   assertCoreProcessorCheckpointGrowthFits,
@@ -492,7 +493,16 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     );
   });
 
-  test("hosted processor subscriptions cannot be removed", () => {
+  test.each<[string, SubscriptionReceiver]>([
+    ["a built-in facet", { action: "facet-processor", source: { kind: "builtin" } }],
+    [
+      "a wake processor",
+      {
+        action: "wake-processor",
+        expression: ["agents", ["get", "/agents/reviewer"], "processor", "wakeStreamProcessor"],
+      },
+    ],
+  ])("does not remove %s", (_description, receiver) => {
     const { processor } = harness(SOURCE_PATH);
     const state = reduce(
       processor,
@@ -502,7 +512,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
         "events.iterate.com/stream/subscription-configured",
         streamSubscription({
           name: "agent",
-          receiver: { action: "facet-processor", source: { kind: "builtin" } },
+          receiver,
         }),
         { path: SOURCE_PATH },
       ),
@@ -513,8 +523,56 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     };
 
     expect(() => processor.validate({ event: removal, state, authority: "public" })).toThrow(
-      "hosted processor subscriptions cannot be removed",
+      "built-in and wake processor subscriptions cannot be removed",
     );
+  });
+
+  test("removes a userspace facet subscription", () => {
+    const { processor } = harness(SOURCE_PATH);
+    const configured = reduce(
+      processor,
+      coreState(SOURCE_PATH),
+      committed(
+        2,
+        "events.iterate.com/stream/subscription-configured",
+        streamSubscription({
+          name: "voice-agent",
+          receiver: {
+            action: "facet-processor",
+            source: {
+              kind: "userspace",
+              worker: {
+                type: "stateful",
+                path: SOURCE_PATH,
+                className: "VoiceAgentFacet",
+                durableWorkerKey: "voice-agent",
+                source: {
+                  createWorker: {
+                    entryPoint: "apps/voice/voice-agent.ts",
+                    files: { type: "repo", repoPath: "/repos/config" },
+                  },
+                },
+              },
+            },
+          },
+        }),
+        { path: SOURCE_PATH },
+      ),
+    );
+    const removal: StreamEventInput = {
+      type: "events.iterate.com/stream/subscription-removed",
+      payload: { name: "voice-agent", reason: "requested" },
+    };
+
+    expect(() =>
+      processor.validate({ event: removal, state: configured, authority: "public" }),
+    ).not.toThrow();
+    const removed = reduce(
+      processor,
+      configured,
+      committed(3, removal.type, removal.payload, { path: SOURCE_PATH }),
+    );
+    expect(removed.subscriptions.outbound.byName["voice-agent"]).toBeUndefined();
   });
 
   test("a paused receiver rejects copied product appends as unavailable", () => {

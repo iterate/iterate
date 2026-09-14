@@ -18,6 +18,16 @@ import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 export const FRAME_MS = 20;
 export const PCM16_BYTES_PER_MS = 32;
 export const FRAME_BYTES = FRAME_MS * PCM16_BYTES_PER_MS;
+/** Voice output under this PCM16 peak is silence, including natural edge noise. */
+export const SPEECH_PEAK = 100;
+
+/** Whether a PCM16 output payload contains audible speech for voice-lab metrics. */
+export function hasAudibleSignal(pcm: Buffer): boolean {
+  for (let offset = 0; offset + 1 < pcm.length; offset += 2) {
+    if (Math.abs(pcm.readInt16LE(offset)) >= SPEECH_PEAK) return true;
+  }
+  return false;
+}
 
 /** Synthesize one utterance to PCM16 mono 16 kHz frames, via macOS `say`. */
 export function synthesizeFrames(dir: string, name: string, text: string): string[] {

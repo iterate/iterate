@@ -37,8 +37,6 @@ export interface FirmwareDevice {
   description: string;
   /** Compact label for the hardware proof command's output. */
   proofLabel: string;
-  /** This board consumes provider-generated mouth shapes, not local avatar timing. */
-  remoteVisemes: boolean;
   releases: readonly EspWebToolsFirmwareRelease[];
 }
 
@@ -98,7 +96,6 @@ export const firmwareCatalog: readonly FirmwareDevice[] = [
     name: "Home Assistant Voice Preview Edition",
     description: "ESP32-S3 voice satellite",
     proofLabel: "HA Voice PE",
-    remoteVisemes: false,
     releases: [
       release({
         target: "havpe",
@@ -114,7 +111,6 @@ export const firmwareCatalog: readonly FirmwareDevice[] = [
     name: "FutureProofHomes Satellite1",
     description: "ESP32-S3 XMOS voice satellite",
     proofLabel: "Future Home Satellite",
-    remoteVisemes: false,
     releases: [
       release({
         target: "satellite1",
@@ -130,7 +126,6 @@ export const firmwareCatalog: readonly FirmwareDevice[] = [
     name: "M5StickS3",
     description: "ESP32-S3 pocket voice companion",
     proofLabel: "M5StickS3",
-    remoteVisemes: false,
     releases: [
       release({
         target: "m5sticks3",
@@ -145,7 +140,6 @@ export const firmwareCatalog: readonly FirmwareDevice[] = [
     name: "StackChan",
     description: "M5Stack CoreS3 desktop companion",
     proofLabel: "StackChan CoreS3",
-    remoteVisemes: false,
     releases: [
       release({
         target: "stackchan",
@@ -160,7 +154,6 @@ export const firmwareCatalog: readonly FirmwareDevice[] = [
     name: "Waveshare ESP32-S3 Touch AMOLED",
     description: "ESP32-S3 screen voice companion",
     proofLabel: "Waveshare AMOLED",
-    remoteVisemes: true,
     releases: [
       release({
         target: "waveshare_s3_amoled",

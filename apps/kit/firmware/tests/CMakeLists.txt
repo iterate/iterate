@@ -334,3 +334,5 @@ iterate_kit_add_test(iterate-kit-xmos-spi-registers-test xmos_spi_registers_test
   "${ITERATE_KIT_BOARD_CHIPS}/codecs/xmos_spi_registers.c"
   INCLUDES "${ITERATE_KIT_BOARD_CHIPS}/include"
   LINK iterate-kit-core iterate-kit-capabilities)
+
+iterate_kit_add_core_test(iterate-kit-itx-multiplex-test itx_multiplex_test.c)

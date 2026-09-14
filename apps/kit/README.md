@@ -11,11 +11,12 @@ then flashes a checked source-built release and its private configuration direct
 Choose a board release, enter Wi-Fi, the OS URL, project slug and that project's
 API key, then click **Prepare device** and **Flash device**. The prepare step installs
 this Kit build's isolated VoiceAgent guest, checks `/secrets/openai`, resolves
-the canonical project ID, and keeps the board connected at
-`/agents/voice/v23/<device_id>`. Each activation is routed into a new child
-conversation stream below that stable device path, named with its UTC start
-time. It requires a valid OS host, project slug/key and no active call before
-writing.
+the canonical project ID, and mounts the voice setup capability. On each
+activation the board chooses a fresh `/agents/voice/v23/<device_id>/<timestamp>-<activation>`
+path and starts the installed voice agent there. Capture begins immediately;
+buffered audio is sent directly to that stream once setup completes.
+It requires a valid OS host and project
+slug/key before writing.
 
 Wi-Fi stays in browser memory until it is written to the connected board's
 `iterate_kit` partition. The project key authenticates directly to the chosen OS

@@ -2453,6 +2453,15 @@ export class StreamConnections {
     let greetingToken: symbol | null = null;
     /** Start of the un-reported scan window; null once a batch reported it. */
     let scanWindowStartOffset: number | null = null;
+    /** Whether the un-reported scan window includes a durable event. */
+    let scanWindowContainsDurable = false;
+    /**
+     * A previously dispatched batch stopped short of its observed head, so its
+     * processor still needs one later caught-up pass. This survives that
+     * batch's acknowledgement: a microphone-only tail may otherwise be
+     * skipped before the queued send gets a chance to settle the obligation.
+     */
+    let caughtUpOwed = false;
     let connection!: StreamConnection;
 
     const sendQueuedBatches = async () => {
@@ -2494,6 +2503,7 @@ export class StreamConnections {
         while (open) {
           let events: StreamEvent[] = [];
           let deliveredBytes = 0;
+          let unmatchedEphemeralOnly = false;
           /*
            * THE SCAN WINDOW IS PINNED ACROSS SKIPPED PASSES. The runner
            * throws on `scannedAfterOffset > committedThroughOffset`, so a
@@ -2502,7 +2512,10 @@ export class StreamConnections {
            * the window's START — the next dispatched batch simply spans
            * every window skipped before it, contiguous by construction.
            */
-          if (scanWindowStartOffset === null) scanWindowStartOffset = deliveredThroughOffset;
+          if (scanWindowStartOffset === null) {
+            scanWindowStartOffset = deliveredThroughOffset;
+            scanWindowContainsDurable = false;
+          }
           const scannedAfterOffset = scanWindowStartOffset;
           const cursorBeforeScan = deliveredThroughOffset;
           if (deliverEvents) {
@@ -2511,6 +2524,9 @@ export class StreamConnections {
               Number.MAX_SAFE_INTEGER,
               kind === "hosted" ? HOSTED_SCAN_EVENT_LIMIT : DELIVERY_BATCH_LIMIT,
             );
+            if (readEvents.some((entry) => entry.event.ephemeral !== true)) {
+              scanWindowContainsDurable = true;
+            }
             const lastOffset = readEvents.at(-1)?.event.offset;
             if (lastOffset === undefined) {
               const currentMaxOffset = this.#hooks.coreState().maxOffset;
@@ -2528,6 +2544,10 @@ export class StreamConnections {
                 args.filter === undefined
                   ? visible
                   : visible.filter((entry) => args.filter!.matches(entry.event));
+              unmatchedEphemeralOnly =
+                visible.length > 0 &&
+                matched.length === 0 &&
+                visible.every((entry) => entry.event.ephemeral === true);
               const delivered =
                 kind === "hosted"
                   ? matched.slice(0, hostedDeliveryLimit(matched))
@@ -2569,7 +2589,8 @@ export class StreamConnections {
             events.length === 0 &&
             !initialBatchPending &&
             deliveredThroughOffset > cursorBeforeScan &&
-            deliveredThroughOffset < this.#hooks.coreState().maxOffset
+            (deliveredThroughOffset < this.#hooks.coreState().maxOffset ||
+              (unmatchedEphemeralOnly && !scanWindowContainsDurable && !caughtUpOwed))
           ) {
             /*
              * AN INTERMEDIATE ALL-FILTERED WINDOW IS NOT A DELIVERY, so stop
@@ -2578,13 +2599,13 @@ export class StreamConnections {
              * consumed — and each cost the full acknowledgement cycle. On a
              * voice stream the processor's OWN OUTPUT fills such windows: the
              * answer streaming down starved the microphone lane of its round
-             * trips (measured: 225 batches for 194 events). The window that
-             * REACHES THE HEAD still always dispatches, empty or not: it is
-             * the only carrier of `scannedThroughOffset` across a filtered
-             * tail and of the runner's eventless caught-up pass — withhold it
-             * and obligations strand (the late-agent regression). The pinned
-             * scanWindowStartOffset above keeps that batch contiguous over
-             * everything skipped here.
+             * trips (measured: 225 batches for 194 events). A nonmatching
+             * ephemeral-only tail is equally safe to skip once this processor
+             * already caught up: it cannot carry a durable fact or an opted-in
+             * live event. Every other head window still dispatches because it
+             * carries `scannedThroughOffset` and the runner's eventless
+             * caught-up pass. The pinned scanWindowStartOffset keeps the next
+             * real batch contiguous over everything skipped here.
              */
             await Promise.resolve();
             continue;
@@ -2618,7 +2639,9 @@ export class StreamConnections {
             // opts out of the reduced-state snapshot riding every batch.
             state: args.includeState === false ? null : currentState,
           } satisfies StreamEventBatch;
+          caughtUpOwed = batch.scannedThroughOffset < batch.streamMaxOffset;
           scanWindowStartOffset = null;
+          scanWindowContainsDurable = false;
           if (kind === "hosted") {
             const expectedDelivery = args.expectedHostedDelivery!;
             const deliveryToken = Symbol("hosted stream delivery");

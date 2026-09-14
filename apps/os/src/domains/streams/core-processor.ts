@@ -325,15 +325,17 @@ export class StreamCoreProcessor {
       if (configured === undefined) {
         throw new Error(`subscription "${event.payload.name}" does not exist`);
       }
-      // A hosted processor's subscription is part of its birth contract. Its
-      // configured event is idempotency-keyed, so removing the row would make
-      // a later create retry dedupe without restoring the processor. Push
-      // subscriptions remain removable through their owning domain doors.
+      // Built-in and remote hosted processors own their birth contracts. Their
+      // configured events are idempotency-keyed, so removing their rows would
+      // make a later create retry dedupe without restoring the processor.
+      // A userspace facet's owner instead has an explicit remove/reinstall
+      // lifecycle, so it may retire its own subscription.
       if (
-        configured.configuration.receiver.action === "facet-processor" ||
-        configured.configuration.receiver.action === "wake-processor"
+        configured.configuration.receiver.action === "wake-processor" ||
+        (configured.configuration.receiver.action === "facet-processor" &&
+          configured.configuration.receiver.source.kind === "builtin")
       ) {
-        throw new Error("hosted processor subscriptions cannot be removed");
+        throw new Error("built-in and wake processor subscriptions cannot be removed");
       }
     }
 

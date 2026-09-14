@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 
 import { connectProject } from "./connect.ts";
-import { openStream, type StreamHandle } from "./probe-audio.ts";
+import { hasAudibleSignal, openStream, type StreamHandle } from "./probe-audio.ts";
 
 vi.mock("./connect.ts", () => ({ connectProject: vi.fn() }));
 
@@ -32,4 +32,14 @@ describe("openStream", () => {
     expect(disposeStream).toHaveBeenCalledTimes(1);
     expect(disposeProject).toHaveBeenCalledTimes(1);
   });
+});
+
+test("uses the voice output threshold for direct and stream PCM metrics", () => {
+  const quiet = Buffer.alloc(2);
+  quiet.writeInt16LE(99);
+  const speech = Buffer.alloc(2);
+  speech.writeInt16LE(100);
+
+  expect(hasAudibleSignal(quiet)).toBe(false);
+  expect(hasAudibleSignal(speech)).toBe(true);
 });

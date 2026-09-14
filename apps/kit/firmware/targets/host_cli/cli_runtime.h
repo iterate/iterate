@@ -81,6 +81,9 @@ struct cli_runtime {
   struct cli_capabilities capabilities;
   struct cli_device_controls device_controls;
   struct iterate_kit_voicelab voicelab;
+  struct iterate_kit_stream voice_stream;
+  struct iterate_kit_stream_subscription voice_subscription;
+  struct iterate_kit_stream_subscription recycled_voice_subscription;
   uint32_t voicelab_generation;
   /* The connection borrows this buffer until process shutdown. */
   char client_path[96];
@@ -151,6 +154,7 @@ struct cli_runtime {
   bool restart_requested;
   uint64_t restart_requested_at_ms;
   bool stop_requested;
+  bool startup_failed;
   bool source_finished;
   /**
    * When this turn's answer last made progress — a frame played or arrived.

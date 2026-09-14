@@ -18,7 +18,7 @@ import process from "node:process";
 
 import WebSocket from "ws";
 
-import { FRAME_BYTES, FRAME_MS, sleep, synthesizeFrames } from "./probe-audio.ts";
+import { FRAME_BYTES, FRAME_MS, hasAudibleSignal, sleep, synthesizeFrames } from "./probe-audio.ts";
 
 /** Options for `pnpm cli voicelab live-probe`. */
 export interface LiveProbeOptions {
@@ -51,6 +51,10 @@ export interface LiveProbeOptions {
   instructions?: string;
   /** What the probe says back for a client delegation. */
   commentary?: string;
+  /** Send this commentary after the opening microphone-check audio, without delegation. */
+  fixedCommentary?: string;
+  /** Pre-rendered 16 kHz PCM frames, for a byte-identical input-control experiment. */
+  initialFrames?: string[];
   /** How long after the delegation the commentary is appended. */
   commentaryDelayMs?: number;
   /** Write every received output sample to this WAV file. */
@@ -61,13 +65,15 @@ export interface LiveProbeOptions {
   settleMs?: number;
   /** Print every non-audio wire event as it arrives. */
   verbose?: boolean;
+  /** Print the probe summary when invoked as a CLI command. */
+  emitSummary?: boolean;
 }
 
 const SILENCE_FRAME = Buffer.alloc(FRAME_BYTES);
-/** An answer is a run of SPEAKING output deltas with no silence this long inside it. */
-const ANSWER_GAP_MS = 1_200;
-/** A delta whose loudest sample is under this is silence (idle deltas are exact zero). */
-const SPEECH_PEAK = 300;
+/** The stream leg's trailing PCM-silence boundary, applied without wall-clock inference. */
+const ANSWER_TAIL_SILENCE_MS = 700;
+/** Transcript fragments have a separate provider-timeline grouping threshold. */
+const TRANSCRIPT_GAP_MS = 1_200;
 const DEFAULT_INSTRUCTIONS = [
   "You are Iterate, a calm voice assistant on a small speaker. Speak briefly and naturally.",
   "Backchannel policy: Use moderate backchannels.",
@@ -114,7 +120,7 @@ interface DelegationRecord {
   firstTranscriptAfterMs: number | null;
 }
 
-export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
+export async function liveProbe(options: LiveProbeOptions = {}) {
   const apiKey =
     process.env.OPENAI_API_KEY?.trim() ?? process.env.APP_CONFIG_OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("OPENAI_API_KEY is required (run inside doppler run --config dev).");
@@ -128,7 +134,9 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
   const verbose = options.verbose ?? true;
 
   const dir = mkdtempSync(path.join(tmpdir(), "live-probe-"));
-  const utterance1 = synthesizeFrames(dir, "say1", say).map((b64) => Buffer.from(b64, "base64"));
+  const utterance1 = (options.initialFrames || synthesizeFrames(dir, "say1", say)).map((b64) =>
+    Buffer.from(b64, "base64"),
+  );
   const utterance2 = !options.say2
     ? null
     : synthesizeFrames(dir, "say2", options.say2).map((b64) => Buffer.from(b64, "base64"));
@@ -220,6 +228,15 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
   let zeroDeltas = 0;
   /** Probe clock at every output delta, for the arrival cadence. */
   const deltaArrivalsMs: number[] = [];
+  const outputFrames: {
+    arrivedAtMs: number;
+    audioMs: number;
+    hasSignal: boolean;
+    answerIndex: number;
+  }[] = [];
+  let outputAnswerIndex = 0;
+  let outputSawSpeech = false;
+  let outputTrailingSilenceMs = 0;
   let echoedBytes = 0;
   const noteAnswerAudio = (pcm: Buffer) => {
     deltaArrivalsMs.push(clock());
@@ -241,20 +258,34 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
     const bytes = pcm.length;
     outputDeltas += 1;
     const peak = peakOf(pcm);
+    const audioMs = bytes / ((rate * 2) / 1000);
+    const hasOutputSignal = hasAudibleSignal(pcm);
+    if (hasOutputSignal && outputSawSpeech && outputTrailingSilenceMs >= ANSWER_TAIL_SILENCE_MS) {
+      outputAnswerIndex += 1;
+    }
+    outputFrames.push({
+      arrivedAtMs: now,
+      audioMs,
+      hasSignal: hasOutputSignal,
+      answerIndex: outputAnswerIndex,
+    });
     if (peak === 0) zeroDeltas += 1;
-    if (peak < SPEECH_PEAK) {
+    if (!hasOutputSignal) {
       silentDeltas += 1;
+      if (outputSawSpeech) outputTrailingSilenceMs += audioMs;
       return;
     }
+    const startsNewAnswer = outputTrailingSilenceMs >= ANSWER_TAIL_SILENCE_MS;
+    outputSawSpeech = true;
+    outputTrailingSilenceMs = 0;
     lastSpeechAtMs = now;
     for (const record of delegations.values()) {
       if (record.firstSpeechAfterMs === null && now > record.createdAtMs) {
         record.firstSpeechAfterMs = now - record.createdAtMs;
       }
     }
-    const audioMs = bytes / ((rate * 2) / 1000);
     const current = answers.at(-1);
-    if (current && now - current.lastAudioAtMs < ANSWER_GAP_MS) {
+    if (current && !startsNewAnswer) {
       current.lastAudioAtMs = now;
       current.audioMs += audioMs;
       current.deltas += 1;
@@ -487,6 +518,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
     return predicate();
   };
   const answerSettled = () => lastSpeechAtMs !== null && clock() - lastSpeechAtMs > settleMs;
+  let commentarySentAtMs: number | null = null;
 
   /* -------------------------------------------------------------- script */
 
@@ -496,6 +528,31 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
       return;
     }
     await sleep(1_000);
+    if (options.fixedCommentary) {
+      await speak(utterance1, "opening microphone check");
+      commentarySentAtMs = clock();
+      send({
+        type: "session.commentary.append",
+        event_id: "fixed-commentary",
+        delegation_id: null,
+        content: options.fixedCommentary,
+      });
+      if (
+        !(await waitFor(
+          () =>
+            outputFrames.some(
+              (frame) => frame.arrivedAtMs >= commentarySentAtMs! && frame.hasSignal,
+            ),
+          45_000,
+        ))
+      ) {
+        errors.push("no answer audio within 45s of fixed commentary");
+      }
+      if (!(await waitFor(() => answerSettled(), 120_000))) {
+        errors.push("fixed commentary never reached the PCM-silence answer boundary");
+      }
+      return;
+    }
     if (options.stopAfterUtteranceMs !== undefined) {
       /* Pause microphone frames the instant the words end. */
       const speaking = speak(utterance1, "utterance 1");
@@ -620,6 +677,7 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
       zeroDeltas,
       speechMs: Math.round(answers.reduce((total, answer) => total + answer.audioMs, 0)),
     },
+    outputFrames,
     answers: answers.map((answer) => ({
       firstAudioAtMs: answer.firstAudioAtMs,
       audioMs: Math.round(answer.audioMs),
@@ -658,11 +716,13 @@ export async function liveProbe(options: LiveProbeOptions = {}): Promise<void> {
           },
     usageSeconds,
     contextRatio,
+    commentarySentAtMs,
     closedReason,
     errors,
   };
-  console.log(JSON.stringify(summary, null, 2));
+  if (options.emitSummary !== false) console.log(JSON.stringify(summary, null, 2));
   if (errors.length > 0) process.exitCode = 1;
+  return summary;
 }
 
 /* ================================================================ helpers */
@@ -746,7 +806,7 @@ function groupTurns(fragments: TranscriptFragment[]) {
     if (
       last &&
       last.speaker === fragment.speaker &&
-      fragment.startMs - last.endMs < ANSWER_GAP_MS
+      fragment.startMs - last.endMs < TRANSCRIPT_GAP_MS
     ) {
       last.text += fragment.text;
       last.endMs = Math.max(last.endMs, fragment.endMs);

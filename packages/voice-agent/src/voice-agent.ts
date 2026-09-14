@@ -19,7 +19,7 @@ import { createFace } from "./face.ts";
  * caller that addresses it: the package build inside node_modules, never a
  * file in the config repo. The key names the durable worker, so it is
  * load-bearing rather than cosmetic. */
-import { voiceAgentFacetRef } from "./ref.ts";
+import { voiceAgentRefs } from "./ref.ts";
 import type {
   SetupVoiceAgentOptions,
   SetupVoiceAgentResult,
@@ -47,6 +47,11 @@ const LIVE = {
  * decoded chunk, 6,912-byte base64 buffer and 7,600-byte message envelope.
  */
 export const MAX_SPEAKER_PAYLOAD_BYTES = 3_200;
+
+/** One stream append carries no more than half a second of queued output. */
+const SPEAKER_APPEND_BATCH_MAX_FRAMES = 5;
+/** Match the device's bounded ten-second speaker capacity when an append stalls. */
+const SPEAKER_OUTBOX_MAX_BYTES = 10_000 * 32;
 
 /** 16 kHz mono PCM16: two bytes per sample, sixteen samples per millisecond. */
 const PCM16_BYTES_PER_MS = 32;
@@ -141,10 +146,10 @@ const HANG_UP_GOODBYE_GRACE_MS = 8_000;
 /**
  * Once the goodbye's end marker has gone out, how long the device is given
  * to play what it still holds before the call is ended. The relay hands
- * frames over as they arrive, so the device holds at most its own small
- * playout buffer (the firmware prefills 150 ms) plus one frame in flight.
+ * frames over as they arrive. The device now prefills 400 ms and production
+ * one-way delivery can add roughly 300 ms, so one second preserves the tail.
  */
-const GOODBYE_PLAYOUT_ALLOWANCE_MS = 500;
+const GOODBYE_PLAYOUT_ALLOWANCE_MS = 1_000;
 /**
  * How much conversation the fold remembers, and so how much a fresh provider
  * session is seeded with. Turns beyond the newest TRANSCRIPT_MAX_TURNS fall
@@ -387,10 +392,6 @@ const VoiceState = z.object({
    * Certificate data because it is a fact about the CLIENT.
    */
   visemes: z.boolean().default(false),
-  /** A device stays connected here while its conversation runs on this stream. */
-  transportStreamPath: z.string().nullable().default(null),
-  /** Device conversation streams belong to exactly one local activation. */
-  activation: Activation.nullable().default(null),
   /**
    * The rolling recap: the newest finished turns, in words, both sides.
    * Folded from the durable transcript events and seeded as history into
@@ -441,8 +442,6 @@ export const VoiceAgentContract = defineProcessorContract({
       payloadSchema: z.looseObject({
         instructions: z.string().optional(),
         visemes: z.boolean().optional(),
-        transportStreamPath: z.string().optional(),
-        activation: Activation.optional(),
       }),
     },
     /*
@@ -589,6 +588,8 @@ export const VoiceAgentContract = defineProcessorContract({
         lastFrameOfAnswer: z.boolean().optional(),
         /** Facet clock, at the moment this frame was handed to the stream. */
         sentAtFacetMs: z.number(),
+        /** Facet clock when the provider callback delivered this PCM. */
+        receivedAtFacetMs: z.number().optional(),
       }),
     },
   },
@@ -694,7 +695,11 @@ interface Dial {
    * in the numbering. In the ordinary course this holds one frame for the
    * duration of one append.
    */
-  speakerOutbox: { pcm: string; lastFrameOfAnswer?: true }[];
+  speakerOutbox: { pcm: string; receivedAtFacetMs?: number; lastFrameOfAnswer?: true }[];
+  /** Decoded PCM presently queued for the speaker sender. Markers cost nothing. */
+  speakerOutboxBytes: number;
+  /** Once this queue overflows, ignore later provider deltas while the terminal is appended. */
+  speakerOutboxOverflowed: boolean;
   /**
    * ONE sender per live dial, started with its first output and waiting while
    * the outbox is empty. One keepalive registration per dial: registering it
@@ -735,9 +740,9 @@ interface Dial {
   /** The answer in flight — replaced wholesale at the onset of speech. */
   answer: Answer;
   /** How far, on the facet clock, the device's forwarded audio reaches:
-   * each forwarded chunk extends it by its own duration (from now, if it had
-   * fallen behind), so a burst of 500 ms sent in one append covers the next
-   * 500 ms and the silence fill starts only past it — filling INSIDE a
+   * each forwarded chunk extends it by its own duration, so a burst of 500 ms
+   * sent in one append covers the next 500 ms and the silence fill starts
+   * only past it — filling INSIDE a
    * burst chops the person's words with silence (measured: "count to sixty"
    * reached the model as "count to six"). */
   micAudioCoveredUntilFacetMs: number;
@@ -764,6 +769,8 @@ const freshDial = (conversationId: string, activation: string): Dial => ({
   micQueue: [],
   micQueueBytes: 0,
   speakerOutbox: [],
+  speakerOutboxBytes: 0,
+  speakerOutboxOverflowed: false,
   sending: false,
   wakeSender: null,
   lastSpeakerFrameAtFacetMs: 0,
@@ -796,12 +803,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
     /** The only way this processor waits, injected so tests use a fake clock. */
     sleep(ms: number): Promise<void>;
     dialProvider(): Promise<WebSocket | null>;
-    /**
-     * Open a fresh project itx session, use it, dispose it. Stubs from
-     * `env.ITX.get()` must not outlive the invocation that dialed them, so
-     * every backend function opens its own — the SDK's own pattern.
-     */
-    withProject<T>(fn: (project: Project) => Promise<T>): Promise<T>;
   }
 > {
   readonly contract = VoiceAgentContract;
@@ -855,8 +856,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
           ...state,
           instructions: event.payload.instructions ?? "",
           visemes: event.payload.visemes ?? false,
-          transportStreamPath: event.payload.transportStreamPath || null,
-          activation: event.payload.activation || null,
         };
 
       case "events.iterate.com/voice-agent/call-started":
@@ -959,24 +958,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
 
   processEvent(args: ProcessEventArgs<VoiceAgentContract>): undefined {
     const { state, event, delivery, runInBackground } = args;
-    // The conversation owns the events. A fixed device connection receives a
-    // second copy of the public voice output, including ephemeral PCM, directly.
-    const append: ProcessEventArgs<VoiceAgentContract>["append"] = async (...events) => {
-      if (!state.transportStreamPath) return args.append(...events);
-      const [committed] = await Promise.all([
-        args.append(...events),
-        args.appendTo(
-          state.transportStreamPath,
-          ...events.map((output) => ({
-            ...output,
-            ...(output.idempotencyKey && {
-              idempotencyKey: `voice-agent/from:${this.path}:${output.idempotencyKey}`,
-            }),
-          })),
-        ),
-      ]);
-      return committed;
-    };
+    const append = args.append;
 
     /* The log has caught up with an opening append we were remembering. */
     if (state.call !== null) {
@@ -1001,25 +983,23 @@ export class VoiceAgentProcessor extends StreamProcessor<
         /* This is a per-event consequence: its stable key is the committed
          * transcript row, not its text, so repeated words remain distinct. */
         args.blockProcessorWhile(() =>
-          this.#appendAgentContext(() =>
-            this.deps.withProject(async (project) => {
-              await project.agents.get(this.path).append({
-                type: "events.iterate.com/agents/context-added",
-                idempotencyKey: this.idempotencyKey(`agent-observed-transcript:${event.offset}`),
-                payload: {
-                  ...agentTranscriptContext(
-                    event.type === "events.iterate.com/voice-agent/utterance-transcript"
-                      ? "user"
-                      : "assistant",
-                    event.payload.text,
-                  ),
-                  actor: { type: "integration", name: "voice-agent" },
-                  llmRequestPolicy: { behaviour: "dont-trigger-request" },
-                },
-              });
-              this.#pendingTranscriptContexts.delete(transcriptKey);
-            }),
-          ),
+          this.#appendAgentContext(async () => {
+            await this.stream.append({
+              type: "events.iterate.com/agents/context-added",
+              idempotencyKey: this.idempotencyKey(`agent-observed-transcript:${event.offset}`),
+              payload: {
+                ...agentTranscriptContext(
+                  event.type === "events.iterate.com/voice-agent/utterance-transcript"
+                    ? "user"
+                    : "assistant",
+                  event.payload.text,
+                ),
+                actor: { type: "integration", name: "voice-agent" },
+                llmRequestPolicy: { behaviour: "dont-trigger-request" },
+              },
+            });
+            this.#pendingTranscriptContexts.delete(transcriptKey);
+          }),
         );
         return;
       }
@@ -1078,7 +1058,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * base64 string all the way to the wire. */
         const micB64 = event.payload.pcm;
         const activation = event.payload.activation;
-        if (state.activation && state.activation !== activation) return;
         /* An empty frame is a client bug, not audio: the provider rejects
          * "audio/pcm audio must not be empty" and it can open no call. */
         if (micB64 === "") return;
@@ -1122,10 +1101,12 @@ export class VoiceAgentProcessor extends StreamProcessor<
 
         const dial = this.#dial;
         if (dial && dial.activation === activation && dial.ready && dial.socket) {
-          const nowAtFacetMs = this.deps.nowAtFacetMs();
-          dial.micAudioCoveredUntilFacetMs =
-            Math.max(dial.micAudioCoveredUntilFacetMs, nowAtFacetMs) +
-            base64ByteLength(micB64) / PCM16_BYTES_PER_MS;
+          /* Capture duration is the only credit.  Anchoring each frame to
+           * its arrival time silently counts a slow transport gap as audio:
+           * 50 ms frames every 55 ms then keep the provider clock five ms
+           * behind on every frame.  The silence clock accumulates those gaps
+           * into its next 100 ms fill instead. */
+          dial.micAudioCoveredUntilFacetMs += base64ByteLength(micB64) / PCM16_BYTES_PER_MS;
           this.#sendMicAudio(dial.socket, micB64);
         } else {
           const micBytes = base64ByteLength(micB64);
@@ -1167,7 +1148,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
         const dial = this.#dial;
         if (dial && dial.activation === event.payload.activation) {
           this.#flushTurns(dial, append, true);
-          this.#clearDeviceSpeaker(dial, this.deps.nowAtFacetMs(), append);
           this.#hangUp();
         }
         return;
@@ -1617,9 +1597,23 @@ export class VoiceAgentProcessor extends StreamProcessor<
     append: ProcessEventArgs<VoiceAgentContract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
   ): void {
+    if (dial.speakerOutboxOverflowed) return;
+    const pcmBytes = base64ByteLength(pcm);
+    if (dial.speakerOutboxBytes + pcmBytes > SPEAKER_OUTBOX_MAX_BYTES) {
+      dial.speakerOutboxOverflowed = true;
+      runInBackground(() =>
+        this.#end(
+          dial.activation,
+          "the device speaker append stalled with more than ten seconds of queued audio",
+          append,
+        ),
+      );
+      return;
+    }
     dial.face?.audio(base64ToBytes(pcm), nowAtFacetMs);
     dial.lastSpeakerFrameAtFacetMs = nowAtFacetMs;
-    dial.speakerOutbox.push({ pcm });
+    dial.speakerOutbox.push({ pcm, receivedAtFacetMs: nowAtFacetMs });
+    dial.speakerOutboxBytes += pcmBytes;
     this.#startSpeakerSender(dial, append, runInBackground);
   }
 
@@ -1643,8 +1637,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
       (endedAnswer !== dial.answerBeforeHangUp ||
         nowAtFacetMs - dial.hangUpArmedAtFacetMs >= HANG_UP_GOODBYE_GRACE_MS)
     ) {
-      /* The goodbye has been handed over whole; the device holds at most its
-       * own small buffer. */
+      /* The goodbye has been handed over whole; leave room for delivery and playout. */
       runInBackground(async () => {
         await this.deps.sleep(GOODBYE_PLAYOUT_ALLOWANCE_MS);
         await this.#settleHangUp(dial, append);
@@ -1686,11 +1679,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
     runInBackground(async () => {
       try {
         while (this.#dial === dial) {
-          const frame = dial.speakerOutbox.shift();
-          if (!frame) {
-            /* ONE REGISTRATION PER DIAL, NOT PER DELTA. An append finishes in
-             * a millisecond and the next delta comes a hundred later, so a
-             * sender that let go when the outbox drained re-registered for
+          const frames = dial.speakerOutbox.splice(0, SPEAKER_APPEND_BATCH_MAX_FRAMES);
+          if (frames.length === 0) {
+            /* Keep one background registration for the dial. A sender
+             * that let go whenever the outbox drained re-registered for
              * nearly every frame — ten storage writes and alarm arms a
              * second inside the Durable Object. Measured on preview-7
              * (2026-09-11 afternoon, `voicelab duplex`): provider→facet gaps
@@ -1705,21 +1697,30 @@ export class VoiceAgentProcessor extends StreamProcessor<
             dial.wakeSender = null;
             continue;
           }
+          dial.speakerOutboxBytes -= frames.reduce(
+            (total, frame) => total + base64ByteLength(frame.pcm),
+            0,
+          );
           const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
           dial.clearSpeakerBufferBeforeNextFrame = false;
           try {
-            await append({
-              type: "events.iterate.com/voice-agent/spk-frame",
-              payload: {
-                activation: dial.activation,
-                conversationId: dial.conversationId,
-                deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
-                pcm: frame.pcm,
-                ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
-                ...(frame.lastFrameOfAnswer && { lastFrameOfAnswer: true }),
-                sentAtFacetMs: this.deps.nowAtFacetMs(),
-              },
-            });
+            await append(
+              ...frames.map((frame, index) => ({
+                type: "events.iterate.com/voice-agent/spk-frame" as const,
+                payload: {
+                  activation: dial.activation,
+                  conversationId: dial.conversationId,
+                  deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
+                  pcm: frame.pcm,
+                  ...(clearFirst && index === 0 && { clearSpeakerBufferBeforeFrame: true }),
+                  ...(frame.lastFrameOfAnswer && { lastFrameOfAnswer: true }),
+                  ...(typeof frame.receivedAtFacetMs === "number" && {
+                    receivedAtFacetMs: frame.receivedAtFacetMs,
+                  }),
+                  sentAtFacetMs: this.deps.nowAtFacetMs(),
+                },
+              })),
+            );
           } catch {
             await this.#end(
               dial.activation,
@@ -1860,7 +1861,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
     const dial = this.#dial;
     if (dial?.activation === activation) {
       this.#flushTurns(dial, append, true);
-      this.#clearDeviceSpeaker(dial, this.deps.nowAtFacetMs(), append);
       this.#hangUp();
     }
     try {
@@ -1890,32 +1890,28 @@ export class VoiceAgentProcessor extends StreamProcessor<
     this.runInBackground(() =>
       this.#appendAgentContext(async () => {
         try {
-          await this.deps.withProject(async (project) => {
-            const transcriptSnapshots = this.#transcriptSnapshots(dial, delegationId);
-            await project.agents.get(this.path).append(...transcriptSnapshots, {
-              type: "events.iterate.com/agents/context-added",
-              idempotencyKey: this.idempotencyKey(
-                `agent-delegation:${dial.dialId}:${delegationId}`,
-              ),
-              payload: {
-                role: "developer",
-                content: [
-                  "Voice delegation metadata (platform context, not user speech):",
-                  JSON.stringify({ activation: dial.activation, delegationId }),
-                  "Handle the request in the conversation transcript for this client delegation. To reply, read this metadata event at its @offset and parse the JSON on its second content line; use the returned IDs in the voice events explained above, without retyping them.",
-                  "Completed transcript context may arrive later.",
-                ].join("\n"),
-                llmRequestPolicy: { behaviour: "after-current-request" },
-              },
-            });
-            if (this.#dial === dial) {
-              this.#sendControl(dial, {
-                type: "session.thinking.append",
-                delegation_id: delegationId,
-                content: "The request was handed to the backend; the conversation may continue.",
-              });
-            }
+          const transcriptSnapshots = this.#transcriptSnapshots(dial, delegationId);
+          await this.stream.append(...transcriptSnapshots, {
+            type: "events.iterate.com/agents/context-added",
+            idempotencyKey: this.idempotencyKey(`agent-delegation:${dial.dialId}:${delegationId}`),
+            payload: {
+              role: "developer",
+              content: [
+                "Voice delegation metadata (platform context, not user speech):",
+                JSON.stringify({ activation: dial.activation, delegationId }),
+                "Handle the request in the conversation transcript for this client delegation. To reply, read this metadata event at its @offset and parse the JSON on its second content line; use the returned IDs in the voice events explained above, without retyping them.",
+                "Completed transcript context may arrive later.",
+              ].join("\n"),
+              llmRequestPolicy: { behaviour: "after-current-request" },
+            },
           });
+          if (this.#dial === dial) {
+            this.#sendControl(dial, {
+              type: "session.thinking.append",
+              delegation_id: delegationId,
+              content: "The request was handed to the backend; the conversation may continue.",
+            });
+          }
         } catch (error) {
           if (this.#dial !== dial) return;
           await this.#end(
@@ -1969,23 +1965,21 @@ export class VoiceAgentProcessor extends StreamProcessor<
     event: { offset: number; type: string };
     content: string;
   }): Promise<void> {
-    return this.#appendAgentContext(() =>
-      this.deps.withProject(async (project) => {
-        await project.agents.get(this.path).append({
-          type: "events.iterate.com/agents/context-added",
-          idempotencyKey: this.idempotencyKey(`agent-observed-fact:${event.offset}`),
-          payload: {
-            role: "developer",
-            content,
-            actor: { type: "integration", name: "voice-agent" },
-            refs: [
-              { type: "event", streamPath: this.path, offset: event.offset, eventType: event.type },
-            ],
-            llmRequestPolicy: { behaviour: "dont-trigger-request" },
-          },
-        });
-      }),
-    );
+    return this.#appendAgentContext(async () => {
+      await this.stream.append({
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: this.idempotencyKey(`agent-observed-fact:${event.offset}`),
+        payload: {
+          role: "developer",
+          content,
+          actor: { type: "integration", name: "voice-agent" },
+          refs: [
+            { type: "event", streamPath: this.path, offset: event.offset, eventType: event.type },
+          ],
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        },
+      });
+    });
   }
 
   #appendAgentContext(work: () => Promise<void>): Promise<void> {
@@ -2018,40 +2012,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
         now: this.deps.nowAtFacetMs(),
       },
     };
-  }
-
-  /* ------------------------------------------------------------ the floor */
-
-  /**
-   * Tell the device to empty its speaker: the call is over and it is holding
-   * dead audio. THE CLEAR RIDES ON A FRAME, and an empty one is still a
-   * frame — it carries the next sequence number, so the device orders it
-   * after everything it cancels.
-   */
-  #clearDeviceSpeaker(
-    dial: Dial,
-    decidedAtFacetMs: number,
-    append: ProcessEventArgs<VoiceAgentContract>["append"],
-  ): void {
-    /* Frames still waiting here would play AFTER the clear; they go first.
-     * Numbered at the send, so dropping them leaves no hole. */
-    dial.speakerOutbox = [];
-    /* Sent directly, not through the sender: the obituary path clears and
-     * then buries the dial in the same breath, and the clear must still go. */
-    const clearFrameSeq = ++dial.lastDeviceSpeakerFrameSeq;
-    this.runInBackground(() =>
-      append({
-        type: "events.iterate.com/voice-agent/spk-frame",
-        payload: {
-          activation: dial.activation,
-          conversationId: dial.conversationId,
-          deviceSpeakerFrameSeq: clearFrameSeq,
-          pcm: "",
-          clearSpeakerBufferBeforeFrame: true,
-          sentAtFacetMs: decidedAtFacetMs,
-        },
-      }),
-    );
   }
 
   /**
@@ -2106,7 +2066,7 @@ export async function dialProviderSocket(): Promise<WebSocket | null> {
 /* ========================================================================== */
 
 /** A stable short digest, so re-running setup with identical input appends nothing. */
-export function contentHash(value: unknown): string {
+function contentHash(value: unknown): string {
   const json = JSON.stringify(value);
   let hash = 0x811c9dc5;
   for (let index = 0; index < json.length; index++) {
@@ -2117,7 +2077,7 @@ export function contentHash(value: unknown): string {
 }
 
 /** Release an RPC wrapper whose contents have already been read. */
-export function disposeRpcStub(value: unknown, label: string): void {
+function disposeRpcStub(value: unknown, label: string): void {
   try {
     disposeIgnoredRpcResult(value);
   } catch (error) {
@@ -2129,7 +2089,7 @@ export function disposeRpcStub(value: unknown, label: string): void {
 const WARMUP_DEADLINE_MS = 90_000;
 
 /** Both device installation and direct conversation setup require usable OpenAI credentials. */
-export async function assertVoiceProviderSecret(project: Project): Promise<void> {
+async function assertVoiceProviderSecret(project: Project): Promise<void> {
   const providerSecret = project.secrets.get(OPENAI_SECRET);
   let secretReady = false;
   try {
@@ -2151,10 +2111,11 @@ export async function assertVoiceProviderSecret(project: Project): Promise<void>
   }
 }
 
-/** Set up a single conversation. Device routing supplies its fixed transport path. */
-export async function setupVoiceAgent(
+/** Set up one voice conversation and wait until its subscription is ready. */
+async function setupVoiceAgent(
   project: Project,
-  options: SetupVoiceAgentOptions & { transportStreamPath?: string; activation?: string } = {},
+  options: SetupVoiceAgentOptions = {},
+  sourceCommitOid?: string,
 ): Promise<SetupVoiceAgentResult> {
   const streamPath = options.streamPath || `/agents/voice/${crypto.randomUUID()}`;
   if (!streamPath.startsWith("/")) {
@@ -2165,102 +2126,105 @@ export async function setupVoiceAgent(
 
   await assertVoiceProviderSecret(project);
 
-  /* The ordinary Agent shares this stream with the VoiceAgent. Its durable
-   * protocol is installed once. Fresh device conversations select the fast
-   * backend model through the ordinary Agent configuration event. */
+  /* The Agent and voice facet have independent durable setup paths. Start both
+   * after credential preflight, then wait for both: callers receive a ready
+   * voice facet only once its backend protocol and model are also durable. */
   const setupId = crypto.randomUUID();
-  const agent = project.agents.get(streamPath);
-  try {
-    disposeRpcStub(await agent.create(), "setup agent create result");
-    disposeRpcStub(
-      await agent.append(
-        ...agentSetupEvents(streamPath, setupId),
-        ...(options.transportStreamPath
-          ? [
-              {
-                // The conditional batch must retain this known event-name literal.
-                type: "events.iterate.com/agent/configured" as const,
-                idempotencyKey: `voice-agent/backend:${streamPath}`,
-                payload: { config: { llm: { model: "openai/gpt-6-astra" } } },
-              },
-            ]
-          : []),
-      ),
-      "setup agent append result",
-    );
-  } finally {
-    disposeRpcStub(agent, "setup agent");
-  }
-
-  const stream = project.streams.get(streamPath);
-  try {
-    /*
-     * BIRTH AND CONFIGURATION, SPLIT. `created` is existence only, under a
-     * key with nothing but the stream path in it. The configuration is an
-     * ordinary event, keyed per SETUP RUN so every run applies.
-     */
-    const { streamPath: _streamPath, reinstall: _reinstall, ...configPayload } = options;
-    const subscriptionPayload = {
-      name: VoiceAgentContract.slug,
-      description: "Wake the voice-agent facet in this stream's own Durable Object.",
-      /* DERIVED from the contract, never hand-written: delivery is this
-       * filter INTERSECTED with `consumes`. */
-      filter: { eventTypes: [...VoiceAgentContract.consumes] },
-      receiver: {
-        action: "facet-processor",
-        source: { kind: "userspace", worker: voiceAgentFacetRef(streamPath) },
-      },
-    };
-    const subscriptionKeyPrefix = `voice-agent/subscription:${streamPath}`;
-    const committed = await stream.append(
-      {
-        type: "events.iterate.com/voice-agent/created",
-        idempotencyKey: `voice-agent/created:${streamPath}`,
-        payload: {},
-      },
-      {
-        type: "events.iterate.com/voice-agent/configured",
-        idempotencyKey: `voice-agent/configured:${streamPath}:setup:${setupId}`,
-        payload: configPayload,
-      },
-      {
-        type: "events.iterate.com/stream/subscription-configured",
-        idempotencyKey: options.reinstall
-          ? `${subscriptionKeyPrefix}:reinstall:${crypto.randomUUID()}`
-          : `${subscriptionKeyPrefix}:${contentHash(subscriptionPayload)}`,
-        payload: subscriptionPayload,
-      },
-    );
-    /* The batch's HIGHEST offset is the barrier target. */
-    let setupBatchMaxOffset = 0;
+  const agentReady = (async () => {
+    const agent = project.agents.get(streamPath);
     try {
-      for (const event of committed) {
-        setupBatchMaxOffset = Math.max(setupBatchMaxOffset, event.offset);
+      disposeRpcStub(await agent.create(), "setup agent create result");
+      disposeRpcStub(
+        await agent.append(...agentSetupEvents(streamPath, setupId), {
+          type: "events.iterate.com/agent/configured" as const,
+          idempotencyKey: `voice-agent/backend:${streamPath}`,
+          payload: { config: { llm: { model: "openai/gpt-6-astra" } } },
+        }),
+        "setup agent append result",
+      );
+    } finally {
+      disposeRpcStub(agent, "setup agent");
+    }
+  })();
+  const voiceReady = (async (): Promise<SetupVoiceAgentResult> => {
+    const stream = project.streams.get(streamPath);
+    try {
+      /*
+       * BIRTH AND CONFIGURATION, SPLIT. `created` is existence only, under a
+       * key with nothing but the stream path in it. The configuration is an
+       * ordinary event, keyed per SETUP RUN so every run applies.
+       */
+      const { streamPath: _streamPath, reinstall: _reinstall, ...configPayload } = options;
+      const subscriptionPayload = {
+        name: VoiceAgentContract.slug,
+        description: "Wake the voice-agent facet in this stream's own Durable Object.",
+        /* DERIVED from the contract, never hand-written: delivery is this
+         * filter INTERSECTED with `consumes`. */
+        filter: { eventTypes: [...VoiceAgentContract.consumes] },
+        receiver: {
+          action: "facet-processor",
+          source: {
+            kind: "userspace",
+            worker: voiceAgentRefs({ sourceCommitOid }).facet(streamPath),
+          },
+        },
+      };
+      const subscriptionKeyPrefix = `voice-agent/subscription:${streamPath}`;
+      const committed = await stream.append(
+        {
+          type: "events.iterate.com/voice-agent/created",
+          idempotencyKey: `voice-agent/created:${streamPath}`,
+          payload: {},
+        },
+        {
+          type: "events.iterate.com/voice-agent/configured",
+          idempotencyKey: `voice-agent/configured:${streamPath}:setup:${setupId}`,
+          payload: configPayload,
+        },
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          idempotencyKey: options.reinstall
+            ? `${subscriptionKeyPrefix}:reinstall:${crypto.randomUUID()}`
+            : `${subscriptionKeyPrefix}:${contentHash(subscriptionPayload)}`,
+          payload: subscriptionPayload,
+        },
+      );
+      /* The batch's HIGHEST offset is the barrier target. */
+      let setupBatchMaxOffset = 0;
+      try {
+        for (const event of committed) {
+          setupBatchMaxOffset = Math.max(setupBatchMaxOffset, event.offset);
+        }
+      } finally {
+        disposeRpcStub(committed, "setup stream append result");
       }
-    } finally {
-      disposeRpcStub(committed, "setup stream append result");
-    }
 
-    /*
-     * THE PLATFORM'S OWN BARRIER: `waitUntilProcessed` resolves once the
-     * facet subscription has durably folded through the batch above —
-     * forcing the cold build and proving the fold has REACHED the birth
-     * certificate. ENFORCED by the throw inside the barrier's timeout.
-     */
-    const warmStartedAt = Date.now();
-    const subscription = stream.subscriptions.get(VoiceAgentContract.slug);
-    try {
-      await subscription.waitUntilProcessed({
-        offset: setupBatchMaxOffset,
-        timeoutMs: WARMUP_DEADLINE_MS,
-      });
+      /*
+       * THE PLATFORM'S OWN BARRIER: `waitUntilProcessed` resolves once the
+       * facet subscription has durably folded through the batch above —
+       * forcing the cold build and proving the fold has REACHED the birth
+       * certificate. ENFORCED by the throw inside the barrier's timeout.
+       */
+      const warmStartedAt = Date.now();
+      const subscription = stream.subscriptions.get(VoiceAgentContract.slug);
+      try {
+        await subscription.waitUntilProcessed({
+          offset: setupBatchMaxOffset,
+          timeoutMs: WARMUP_DEADLINE_MS,
+        });
+      } finally {
+        disposeRpcStub(subscription, "setup subscription");
+      }
+      return { streamPath, warmMs: Date.now() - warmStartedAt };
     } finally {
-      disposeRpcStub(subscription, "setup subscription");
+      disposeRpcStub(stream, "setup stream");
     }
-    return { streamPath, warmMs: Date.now() - warmStartedAt };
-  } finally {
-    disposeRpcStub(stream, "setup stream");
-  }
+  })();
+
+  const [agentResult, voiceResult] = await Promise.allSettled([agentReady, voiceReady]);
+  if (agentResult.status === "rejected") throw agentResult.reason;
+  if (voiceResult.status === "rejected") throw voiceResult.reason;
+  return voiceResult.value;
 }
 
 /** What setup needs to know to put this agent on a stream. */
@@ -2283,7 +2247,15 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
   }
 
   async setupVoiceAgent(options: SetupVoiceAgentOptions = {}): Promise<SetupVoiceAgentResult> {
-    return setupVoiceAgent(await this.itx, options);
+    const sourceCommitOid = z
+      .object({
+        voiceAgentSourceCommitOid: z
+          .string()
+          .regex(/^[0-9a-f]{40}$/)
+          .optional(),
+      })
+      .parse(this.ctx?.props ?? {}).voiceAgentSourceCommitOid;
+    return setupVoiceAgent(await this.itx, options, sourceCommitOid);
   }
 
   /** Take the subscription off a stream, so the facet stops waking. */
@@ -2294,7 +2266,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
       const removed = await stream.append({
         type: "events.iterate.com/stream/subscription-removed",
         idempotencyKey: `voice-agent/subscription-removed:${options.streamPath}:${crypto.randomUUID()}`,
-        payload: { name: VoiceAgentContract.slug },
+        payload: { name: VoiceAgentContract.slug, reason: "requested" },
       });
       disposeRpcStub(removed, "remove append result");
       return { streamPath: options.streamPath };
@@ -2320,18 +2292,6 @@ export class VoiceAgentFacet extends StreamProcessorFacet {
        * here happens inside a `runInBackground` closure the keepalive holds. */
       sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
       dialProvider: dialProviderSocket,
-      withProject: async <T>(fn: (project: Project) => Promise<T>): Promise<T> => {
-        const project = (await this.env.ITX.get()) as Project;
-        try {
-          return await fn(project);
-        } finally {
-          try {
-            (project as Partial<Disposable>)[Symbol.dispose]?.();
-          } catch {
-            /* Already gone. */
-          }
-        }
-      },
     });
   }
 }
