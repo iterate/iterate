@@ -292,9 +292,9 @@ export async function removeWorkerSecrets(
   // The secret list is eventually consistent: a re-list right after the DELETE has answered the
   // pre-deletion set (os-next-prd, 2026-09-14 — a deploy went red on a secret that was gone a
   // second later). Re-list until the retired names are absent, within a bounded budget.
-  const backoffMs = options.backoffMs ?? [1_000, 2_000, 4_000, 8_000, 15_000];
+  const backoffMs = options.backoffMs || [1_000, 2_000, 4_000, 8_000, 15_000];
   const sleep =
-    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    options.sleep || ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   let stale: string[] = [];
   for (let attempt = 0; ; attempt++) {
     const remaining = SecretBindings.parse(await input.cf(scriptPath));
