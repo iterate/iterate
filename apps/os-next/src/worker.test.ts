@@ -21,11 +21,10 @@ import type { Env } from "./control-plane.ts";
 // ── app config ── THE TABLE for the app config: what the vars become, what is refused (by name),
 // and the per-env memo. Each row is `{ vars, becomes | throws }`.
 
-/** The smallest valid configuration: the name and the three required secrets. */
+/** The smallest valid configuration: the name, the origin and the two required secrets. */
 const MINIMAL = {
   APP_CONFIG_ENVIRONMENT_NAME: "poc",
   APP_CONFIG_PLATFORM_ORIGIN: "https://control.test",
-  APP_CONFIG_PROJECT_TOKEN_SECRET: "token-secret",
   APP_CONFIG_SESSION_SECRET: "cookie-secret",
   APP_CONFIG_ADMIN_API_SECRET: "admin-secret",
 };
@@ -38,7 +37,6 @@ const MINIMAL_CONFIG = {
   mcpOrigin: "",
   environmentName: "poc",
   projectHostnameBase: "",
-  projectTokenSecret: "token-secret",
   artifactsAccountId: "",
   artifactsNamespace: "",
   sessionSecret: "cookie-secret",
@@ -50,7 +48,6 @@ const MINIMAL_CONFIG = {
  *  strings above. */
 const expose = (config: AppConfig) => ({
   ...config,
-  projectTokenSecret: config.projectTokenSecret.exposeSecret(),
   sessionSecret: config.sessionSecret.exposeSecret(),
   adminApiSecret: config.adminApiSecret.exposeSecret(),
   googleClientSecret: config.googleClientSecret.exposeSecret(),
@@ -88,7 +85,6 @@ describe("parseAppConfig", () => {
       vars: {
         ...MINIMAL,
         APP_CONFIG_PROJECT_HOSTNAME_BASE: "iterate.app",
-        APP_CONFIG_PROJECT_TOKEN_SECRET: "s3",
         APP_CONFIG_ARTIFACTS_ACCOUNT_ID: "acct",
         APP_CONFIG_ARTIFACTS_NAMESPACE: "repos",
         LOADER: {},
@@ -97,7 +93,6 @@ describe("parseAppConfig", () => {
       becomes: {
         ...MINIMAL_CONFIG,
         projectHostnameBase: "iterate.app",
-        projectTokenSecret: "s3",
         artifactsAccountId: "acct",
         artifactsNamespace: "repos",
       },
@@ -108,17 +103,8 @@ describe("parseAppConfig", () => {
       vars: { ...MINIMAL, APP_CONFIG_ENVIRONMENT_NAME: "   " },
       throws: /^APP_CONFIG_ENVIRONMENT_NAME: required, but unset or blank$/,
     },
-    // the token secret signs project tokens (`mintToken`, the console's project links): a blank one
-    // would sign none (a zero-length HMAC key throws) and verify none (principal.ts)
-    {
-      vars: { ...MINIMAL, APP_CONFIG_PROJECT_TOKEN_SECRET: undefined },
-      throws: /^APP_CONFIG_PROJECT_TOKEN_SECRET: required, but unset or blank$/,
-    },
-    {
-      vars: { ...MINIMAL, APP_CONFIG_PROJECT_TOKEN_SECRET: " " },
-      throws: /^APP_CONFIG_PROJECT_TOKEN_SECRET: required, but unset or blank$/,
-    },
-    // the session secret signs the cookie, the same way — refused at first use, not a silent lock-out
+    // the session secret signs the login flow's cookie: a blank one would sign none (a zero-length
+    // HMAC key throws) and verify none (principal.ts) — refused at first use, not a silent lock-out
     {
       vars: { ...MINIMAL, APP_CONFIG_SESSION_SECRET: undefined },
       throws: /^APP_CONFIG_SESSION_SECRET: required, but unset or blank$/,
@@ -142,10 +128,15 @@ describe("parseAppConfig", () => {
       vars: { ...MINIMAL, APP_CONFIG_ENVIRONMENT_NAME: { not: "a string" } },
       throws: /^APP_CONFIG_ENVIRONMENT_NAME: required, but unset or blank$/,
     },
-    // an APP_CONFIG_* variable this worker does not name (a typo, or the deleted login mode) is not
-    // consumed: the shared parser WARNS loudly and ignores it, the rest parses
+    // an APP_CONFIG_* variable this worker does not name (a typo, the deleted login mode, the
+    // retired token secret a deployed worker may still carry) is not consumed: the shared parser
+    // WARNS loudly and ignores it, the rest parses
     {
       vars: { ...MINIMAL, APP_CONFIG_LOGIN_MODE: "open" },
+      becomes: MINIMAL_CONFIG,
+    },
+    {
+      vars: { ...MINIMAL, APP_CONFIG_PROJECT_TOKEN_SECRET: "retired" },
       becomes: MINIMAL_CONFIG,
     },
   ];

@@ -1,5 +1,4 @@
-// Verified attribution, the signed-claims codec, and operator-only project credentials.
-import { z } from "zod";
+// Verified attribution, the signed-claims codec (the login flow's cookie) and the admin secret's compare.
 
 /** Who is acting: a stable actor id (the control plane's user id) and, when known, an email. */
 export type Principal = { actor: string; email?: string };
@@ -27,15 +26,6 @@ export function stampPrincipal<E extends { source?: Record<string, unknown> }>(
     ? { ...event, source }
     : (({ source: _dropped, ...rest }) => rest as E)(event);
 }
-/** The claims a project token carries: the principal, for ONE project, until `expiresAt` (ms). */
-export const ProjectTokenClaims = z.object({
-  actor: z.string(),
-  email: z.string().optional(),
-  projectId: z.string(),
-  expiresAt: z.number(),
-});
-export type ProjectTokenClaims = z.infer<typeof ProjectTokenClaims>;
-
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const base64url = (bytes: Uint8Array): string =>
@@ -64,7 +54,7 @@ async function hmacKey(secret: string, usage: "sign" | "verify"): Promise<Crypto
   );
 }
 
-/** Sign JSON claims: operator project credentials and the bounded Google login flow. */
+/** Sign JSON claims: the bounded Google login flow's cookie (identity.ts). */
 export async function signClaims(claims: unknown, secret: string): Promise<string> {
   const payload = base64url(encoder.encode(JSON.stringify(claims)));
   const signature = await crypto.subtle.sign(
@@ -100,36 +90,11 @@ export async function verifyClaims(token: string, secret: string): Promise<unkno
   return valid ? claims : null;
 }
 
-/** The claims of a project token that verifies (`verifyClaims`), has the claims' shape and is not
- *  yet expired — else null. */
-export async function verifyProjectToken(
-  token: string,
-  secret: string,
-  now = Date.now(),
-): Promise<ProjectTokenClaims | null> {
-  const claims = ProjectTokenClaims.safeParse(await verifyClaims(token, secret));
-  if (!claims.success || claims.data.expiresAt <= now) return null;
-  return claims.data;
-}
-
-/** A project token: `claims` — the principal, for ONE project — signed with `secret`, expiring
- *  `ttlMs` from now (a past expiry, `ttlMs ≤ 0`, mints a token that never verifies). */
-export function signProjectToken(
-  claims: Omit<ProjectTokenClaims, "expiresAt">,
-  ttlMs: number,
-  secret: string,
-): Promise<string> {
-  return signClaims(
-    { ...claims, expiresAt: Date.now() + ttlMs } satisfies ProjectTokenClaims,
-    secret,
-  );
-}
-
 const sha256 = async (text: string): Promise<Uint8Array> =>
   new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(text)));
 
 /** Whether two digests are the same bytes — every byte compared, no early exit, so neither a
- *  matching prefix nor its length leaks by timing (both secret checks below go through here). */
+ *  matching prefix nor its length leaks by timing. */
 const digestsEqual = (a: Uint8Array, b: Uint8Array): boolean => {
   if (a.length !== b.length) return false;
   let difference = 0;
@@ -148,50 +113,6 @@ export async function verifyAdminSecret(
   if (!secret) return null;
   const [candidateDigest, secretDigest] = await Promise.all([sha256(candidate), sha256(secret)]);
   return digestsEqual(candidateDigest, secretDigest) ? { actor: "admin" } : null;
-}
-
-// ── the project secret ── the project's own long-lived key, kept as a HASH in SECRETS_KV.
-
-/** The SECRETS_KV key a project's API-key hash sits under — OUTSIDE the `secret:<projectId>:` prefix
- *  egress substitutes from (iterate-context-durable-object.ts `#egress`, context/built-ins.ts
- *  `secretKey`): no `getSecret("/secrets/NAME")` placeholder can spell it, so the key that
- *  authenticates AS the project can never be substituted into an outbound request by the project's
- *  own code. */
-const projectApiKeyHashKey = (projectId: string): string => `project-api-key:${projectId}`;
-
-/** Mint `projectId`'s API key — 32 random bytes as base64url — and store its SHA-256 hash under
- *  `project-api-key:<projectId>`, REPLACING the previous one: the previous key stops verifying at
- *  once where the rotation was made (KV's other locations follow within 60 s, its cache TTL). The
- *  key itself is returned ONCE and never stored, so a "reveal" IS a rotation
- *  (`IterateContextRpcTarget.rotateApiKey`). A project has no key until its first rotation. */
-export async function rotateProjectApiKey(
-  projectId: string,
-  secretsKv: KVNamespace,
-): Promise<string> {
-  const apiKey = base64url(crypto.getRandomValues(new Uint8Array(32)));
-  await secretsKv.put(projectApiKeyHashKey(projectId), base64url(await sha256(apiKey)));
-  return apiKey;
-}
-
-/** The principal a project secret grants — `{ actor: "project:<project>" }`, for exactly `project`
- *  — when `secret`'s SHA-256 is the hash stored for it (`rotateProjectApiKey`); else null, whatever
- *  is wrong: no key stored (never rotated, or no such project), a wrong or superseded key, another
- *  project's key. The digests are compared in constant time. At `authenticate({ type:
- *  "project-secret" })` (session.ts) and as a lane's bearer for the lane's own project (worker.ts). */
-export async function verifyProjectSecret(
-  project: string,
-  secret: string,
-  secretsKv: KVNamespace,
-): Promise<Principal | null> {
-  const storedHash = await secretsKv.get(projectApiKeyHashKey(project));
-  if (!storedHash) return null;
-  let storedDigest: Uint8Array;
-  try {
-    storedDigest = bytesFromBase64url(storedHash);
-  } catch {
-    return null;
-  }
-  return digestsEqual(await sha256(secret), storedDigest) ? { actor: `project:${project}` } : null;
 }
 
 /** The value of the cookie `name` in a `Cookie` header, or null. */

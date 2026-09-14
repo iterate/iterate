@@ -3,6 +3,15 @@ import { fileURLToPath } from "node:url";
 import { createCli } from "trpc-cli";
 import { osNextEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
+import { removeWorkerSecrets } from "../../../scripts/lib/deploy-helpers.ts";
+
+/** Worker secrets earlier deploys wrote that this code no longer reads. `wrangler deploy
+ *  --secrets-file` preserves a secret it does not name, so a deploy removes these from the live
+ *  Worker first (deploy-helpers.ts `removeWorkerSecrets`) and the rollout converges on one step.
+ *  APP_CONFIG_PROJECT_TOKEN_SECRET signed the deleted project tokens — OAuth grants are the one
+ *  credential now; an unknown APP_CONFIG_* var is only warned about at boot (src/app-config.ts), so
+ *  a straggler would not break the worker, it would merely linger. */
+const RETIRED_WORKER_SECRETS = ["APP_CONFIG_PROJECT_TOKEN_SECRET"] as const;
 
 export default async function deploy(options: { env?: string } = {}) {
   await deployApp({
@@ -14,13 +23,14 @@ export default async function deploy(options: { env?: string } = {}) {
     workerName: (env) => env.workerName,
     servingUrl: (env) => env.baseUrl,
     resources: (env) => env.resources,
-    requiredSecrets: [
-      "APP_CONFIG_ADMIN_API_SECRET",
-      "APP_CONFIG_SESSION_SECRET",
-      "APP_CONFIG_PROJECT_TOKEN_SECRET",
-    ],
+    requiredSecrets: ["APP_CONFIG_ADMIN_API_SECRET", "APP_CONFIG_SESSION_SECRET"],
     optionalSecrets: ["APP_CONFIG_GOOGLE_CLIENT_ID", "APP_CONFIG_GOOGLE_CLIENT_SECRET"],
     async prepare(ctx) {
+      await removeWorkerSecrets({
+        cf: ctx.cf,
+        workerName: ctx.env.workerName,
+        secretNames: RETIRED_WORKER_SECRETS,
+      });
       const sql = readFileSync(new URL("../src/control-plane.sql", import.meta.url), "utf8");
       await ctx.cf(`/d1/database/${ctx.env.resources.directoryDbId}/query`, {
         method: "POST",

@@ -53,10 +53,10 @@ export type { ItxExpression, ItxExpressionInput } from "./context/expression.ts"
 // `authenticate(credentials)` takes a `SessionCredentials`: the browser hands `{ type:
 // "from-server-cookie" }` (the OAuth gate already resolved the caller from the request), an operator
 // hands `{ type: "admin-secret", secret }`. The resolved actor is a `Principal` (a stable `actor` id
-// and, for a human, an `email`); `ProjectTokenClaims` is what a signed project token carries.
+// and, for a human, an `email`).
 // ─────────────────────────────────────────────────────────────────────────────
 export type { SessionCredentials, SessionPrincipal } from "./session.ts";
-export type { Principal, ProjectTokenClaims } from "./principal.ts";
+export type { Principal } from "./principal.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. ROUTING — how a hostname resolves to a project + app.
@@ -92,9 +92,9 @@ export type { ProjectIdOrSlug } from "./session.ts";
 // so the type string and payload are visible — there are no builder helpers.
 //
 //   await ctx.append({
-//     type: "events.iterate.com/account/token-revoked",
-//     payload: { requestId },
-//     idempotencyKey: `token-revoke/${requestId}`,
+//     type: "note",
+//     payload: { n: 1 },
+//     idempotencyKey: `note/${requestId}`,
 //   });
 // ─────────────────────────────────────────────────────────────────────────────
 export type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
@@ -127,19 +127,14 @@ export type {
   ProcessEventArgs,
 } from "./stream/processor.ts";
 export { AccountContract } from "./account/contract.ts";
-export type {
-  AccountView,
-  AuthenticationFact,
-  TokenCreateRequest,
-  TokenRevoke,
-} from "./account/contract.ts";
+export type { AccountView, AuthenticationFact } from "./account/contract.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 7. LIVE STATE — a processor's view, pushed to the client as it changes.
 //
 // A processor projects its reduced state to a live view; a client subscribes and receives the seed
 // then deltas. `connectLiveState` (os-next/client) drives it; `useLiveState` (React) wraps it.
-// The account/sessions pages are built entirely on this — create a token, the row appears at once.
+// The account page is built entirely on this — sign in again, the row appears at once.
 // ─────────────────────────────────────────────────────────────────────────────
 export type {
   LiveStateConnection,

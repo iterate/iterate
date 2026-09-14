@@ -11,9 +11,7 @@
 // addressing), `invoke` (the landing door of the prototype hop at the bottom, plus the one fetch-lane
 // fork), `provide` and `subscribe` (declared here because their target may be a client's rpc stub,
 // which must live in this stateless worker and never in the DO — the DON'T-PIN rule,
-// context/rpc-stubs.ts), the two processor verbs, and the two PROJECT doors a session carries on the
-// root context it vends — `mintToken` (a project token as this session's principal) and
-// `rotateApiKey` (the project's own secret) — which touch no DO at all. Each verb builds ONE event and appends it;
+// context/rpc-stubs.ts) and the two processor verbs. Each verb builds ONE event and appends it;
 // every built-in root rides the hop with ZERO code here. `provide` and `subscribe` hand back a
 // DISPOSABLE handle, so what they make is SESSION-SCOPED (capnweb disposes every exported handle at
 // session end); the raw event — `itx.append({ type: "…/rewrite-rule-configured", payload: { match, target } })` — is the verb
@@ -45,13 +43,8 @@ import {
   restoreRuleTarget,
 } from "./context/itx-expression-rewriting.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
-import { SessionTeardown, type ProjectDoorsInput } from "./session.ts";
-import {
-  ITX_PRINCIPAL_HEADER,
-  rotateProjectApiKey,
-  signProjectToken,
-  type Principal,
-} from "./principal.ts";
+import { SessionTeardown } from "./session.ts";
+import { ITX_PRINCIPAL_HEADER, type Principal } from "./principal.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
 import { codedError } from "./lib.ts";
 
@@ -108,11 +101,6 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  session, a loaded worker's `env.ITX`). Every dispatch runs under it, so every event it appends
    *  carries `source.principal`. */
   readonly #principal: Principal | null;
-  /** What the two project doors sign and write with — `mintToken` signs with the configuration's
-   *  token secret, `rotateApiKey` writes the key hash to `SECRETS_KV` — or null for a handle that
-   *  carries neither door: one no session vended (a loaded worker's `env.ITX`), or a project-token
-   *  session's (a delegation, minutes long, never a minter of tokens or keys — session.ts). */
-  readonly #projectDoors: ProjectDoorsInput | null;
 
   constructor(
     contextNamespace: IterateContextNamespace,
@@ -120,7 +108,6 @@ export class IterateContextRpcTarget extends RpcTarget {
     sessionTeardown: SessionTeardown,
     waitUntil: WaitUntil,
     principal: Principal | null = null,
-    projectDoors: ProjectDoorsInput | null = null,
   ) {
     super();
     this.#contextNamespace = contextNamespace;
@@ -128,7 +115,6 @@ export class IterateContextRpcTarget extends RpcTarget {
     this.#sessionTeardown = sessionTeardown;
     this.#waitUntil = waitUntil;
     this.#principal = principal;
-    this.#projectDoors = projectDoors;
   }
 
   /** The context DO's stub, minted PER CALL (a stub is a cheap handle onto one shared connection):
@@ -161,7 +147,6 @@ export class IterateContextRpcTarget extends RpcTarget {
       this.#sessionTeardown,
       this.#waitUntil,
       this.#principal,
-      this.#projectDoors,
     );
   }
 
@@ -185,48 +170,6 @@ export class IterateContextRpcTarget extends RpcTarget {
       return this.#durableObject.fetch(new Request(terminalFetch.request, { headers }));
     }
     return this.#invokeOnDurableObject(itxExpression, args);
-  }
-
-  // ── the project doors: what the session that vended this context may do FOR THE PROJECT, no DO touched ──
-
-  /** A PROJECT TOKEN for this project as this context's principal — `ProjectTokenClaims`
-   *  (principal.ts) signed with `APP_CONFIG_PROJECT_TOKEN_SECRET`: what `/.itx/session?token=` on a
-   *  project host turns into its cookie (the console links a project host through it), what a script
-   *  presents as `Authorization: Bearer`, what `authenticate({ type: "project-token" })` takes.
-   *  The door is a member's, the admin's, or the project-secret session's for its own project (then
-   *  the token's actor is `project:<projectId>`) — the session that vended this handle carries it
-   *  (session.ts). `ttlSeconds` defaults to 15 minutes; 24 hours is the most. A handle without the
-   *  project doors — a loaded worker's `env.ITX`, a project-token session's — is FORBIDDEN. */
-  async mintToken({ ttlSeconds = 15 * 60 }: { ttlSeconds?: number } = {}): Promise<string> {
-    if (!this.#projectDoors || !this.#principal)
-      throw codedError(
-        "FORBIDDEN",
-        "mintToken(): this handle carries no project doors — a loaded worker's env.ITX speaks for the project, never for a person, and a project-token session is a delegation that mints no further token",
-      );
-    if (!(Number.isFinite(ttlSeconds) && ttlSeconds > 0 && ttlSeconds <= 24 * 60 * 60))
-      throw new Error(
-        `mintToken({ ttlSeconds }): a token lives between 1 second and 24 hours, got ${JSON.stringify(ttlSeconds)}`,
-      );
-    return signProjectToken(
-      { projectId: this.#durableObjectAddress.projectId, ...this.#principal },
-      ttlSeconds * 1000,
-      this.#projectDoors.appConfig.projectTokenSecret.exposeSecret(),
-    );
-  }
-
-  /** The project's API KEY — its own long-lived secret (`authenticate({ type: "project-secret" })`;
-   *  the bearer a device or a headless app presents on a project host), minted fresh and answered
-   *  ONCE: only its SHA-256 hash is stored (principal.ts `rotateProjectApiKey`), so a reveal IS a
-   *  rotation and the previous key stops verifying at once (a project has no key until the first
-   *  call). The same door as `mintToken`'s; the key is the PROJECT's, so any context of it (`cd`)
-   *  rotates the same key. A handle without the project doors is FORBIDDEN. */
-  async rotateApiKey(): Promise<string> {
-    if (!this.#projectDoors)
-      throw codedError(
-        "FORBIDDEN",
-        "rotateApiKey(): this handle carries no project doors — a loaded worker's env.ITX cannot rotate the project's key, and a project-token session is a delegation that reaches no key",
-      );
-    return rotateProjectApiKey(this.#durableObjectAddress.projectId, this.#projectDoors.secretsKv);
   }
 
   // ── THE ONE FRONT DOOR: make `match` mean `target` — (a) a lent rpc stub or (b) a pure rewrite ──

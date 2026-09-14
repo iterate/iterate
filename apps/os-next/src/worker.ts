@@ -41,8 +41,8 @@ type ProjectHostIdentity = { principal: Principal | null; platformBearer: boolea
  *  WebSocket upgrade intact, with the headers made the platform's: every inbound `x-itx-*` gone (a
  *  pager or fetch-upgrade header from outside would enter the DO's internal protocol), the cookie
  *  header replaced by `appCookies` (null ⇒ none — what the capability may see), a platform bearer
- *  (this project's token, the admin secret, this project's secret) removed (an app's own bearer
- *  scheme passes through untouched), then the expression the host names — `itx.apps.<app>`, or the
+ *  (an OAuth access token, the admin secret) removed (an app's own bearer scheme passes through
+ *  untouched), then the expression the host names — `itx.apps.<app>`, or the
  *  config worker `itx.worker` for a host with no app label (its `fetch` routes by hostname,
  *  sdk/index.ts `ConfigWorker`) — the hop count and the principal's stamp. The app label the app
  *  sees (`x-iterate-app`) is not written here: the DO's fetch lane derives it from the expression,
@@ -122,7 +122,6 @@ export default {
       waitUntil: (promise) => ctx.waitUntil(promise),
       directory: directory(env.DB),
       appConfig,
-      secretsKv: env.SECRETS_KV,
     };
     const projectHost = projectHostOf(url.hostname, projectHostnameBase);
     if (projectHost) {

@@ -148,14 +148,12 @@ review the class's TYPE also carries every built-in root (section 5) by declarat
 (`export interface IterateContext extends Omit<BuiltInScope, "cd"> {}`): zero runtime, but a
 reader of the file sees the whole surface, and `env.ITX.get().append(…)` typechecks in loaded code.
 
-| Method                                                                                               | Returns                           | What physically happens                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ---------------------------------------------------------------------------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cd(path)`                                                                                           | `IterateContext`                  | Pure addressing. Absolute by convention, relative resolves. Returns an EDGE context so a later `provide` lends in this session.                                                                                                                                                                                                                                                                                                                                             |
-| `invoke(call: ItxExpressionInput, ...args)`                                                          | `Promise<unknown>`                | THE door (live args fold into a name-final call BEFORE the rules). `durableObject.invoke(expression)`. One fork: a terminal `fetch(Request)` rides `durableObject.fetch` with the expression in `x-itx-expression`.                                                                                                                                                                                                                                                         |
-| `provide(match, target: ClientRpcStub \| ItxExpressionInput \| null)`                                | `RewriteRuleHandle`               | THE ONE FRONT DOOR: make `match` mean `target`. A live stub is lent to the DO through a pager owned here (DON'T-PIN) under the key = the canonical match; the rule `match ⇒ itx.builtins.rpcStubs.get('<match>')` RIDES the pager upgrade and the DO appends it as it accepts the pager (one round trip); an expression is the rule alone, appended from here; `null` un-sets.                                                                                              |
-| `subscribe({ name?, target: ItxExpressionInput \| ClientRpcStub \| null, consumes?, afterOffset? })` | `SubscriptionHandle` (has `name`) | A live target is lent under the key `subscription:<name>`, its row (target `itx.builtins.rpcStubs.get('subscription:<name>')`) riding the same pager upgrade; an expression target is `append(subscriptionConfiguredEvent(…))` from here. `afterOffset` is where the cursor lane starts (0 = the whole log; absent = from now); a push target ignores it.                                                                                                                   |
-| `mintToken({ ttlSeconds? })`                                                                         | `Promise<string>`                 | A PROJECT TOKEN for this project as this context's principal — `ProjectTokenClaims` signed with `APP_CONFIG_PROJECT_TOKEN_SECRET` (`signClaims`), 15 minutes by default, 24 hours at most. No DO touched. The door is a member's, the admin's, or the project-secret session's for its own project (then the actor is `project:<projectId>`); a project-token session's handle (a delegation) and a handle no session vended (a loaded worker's `env.ITX`) are `FORBIDDEN`. |
-| `rotateApiKey()`                                                                                     | `Promise<string>`                 | The project's API KEY, minted fresh (32 random bytes, base64url) and answered ONCE: only its SHA-256 hash is stored, in `SECRETS_KV` under `project-api-key:<projectId>` (`rotateProjectApiKey`), so a reveal IS a rotation and the previous key stops verifying at once; a project has no key until the first call. No DO touched; the same door as `mintToken`'s; the key is the project's, so a `cd` child rotates the same one.                                         |
+| Method                                                                                               | Returns                           | What physically happens                                                                                                                                                                                                                                                                                                                                                        |
+| ---------------------------------------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cd(path)`                                                                                           | `IterateContext`                  | Pure addressing. Absolute by convention, relative resolves. Returns an EDGE context so a later `provide` lends in this session.                                                                                                                                                                                                                                                |
+| `invoke(call: ItxExpressionInput, ...args)`                                                          | `Promise<unknown>`                | THE door (live args fold into a name-final call BEFORE the rules). `durableObject.invoke(expression)`. One fork: a terminal `fetch(Request)` rides `durableObject.fetch` with the expression in `x-itx-expression`.                                                                                                                                                            |
+| `provide(match, target: ClientRpcStub \| ItxExpressionInput \| null)`                                | `RewriteRuleHandle`               | THE ONE FRONT DOOR: make `match` mean `target`. A live stub is lent to the DO through a pager owned here (DON'T-PIN) under the key = the canonical match; the rule `match ⇒ itx.builtins.rpcStubs.get('<match>')` RIDES the pager upgrade and the DO appends it as it accepts the pager (one round trip); an expression is the rule alone, appended from here; `null` un-sets. |
+| `subscribe({ name?, target: ItxExpressionInput \| ClientRpcStub \| null, consumes?, afterOffset? })` | `SubscriptionHandle` (has `name`) | A live target is lent under the key `subscription:<name>`, its row (target `itx.builtins.rpcStubs.get('subscription:<name>')`) riding the same pager upgrade; an expression target is `append(subscriptionConfiguredEvent(…))` from here. `afterOffset` is where the cursor lane starts (0 = the whole log; absent = from now); a push target ignores it.                      |
 
 The two handles (`RewriteRuleHandle`, `SubscriptionHandle`) are server-side RpcTargets with one
 member, `[Symbol.dispose]`, plus a `name` getter on `SubscriptionHandle`. Disposing undoes the act. capnweb disposes every
@@ -177,52 +175,35 @@ the slug IS the id, globally unique — `PROJECT_NAME_TAKEN` names another org's
 secret, in `org_admin`. Nothing here touches a DO: `get` is addressing plus the directory's
 membership answer.
 
-**Who** (`src/principal.ts`, `src/session.ts`). `SessionCredentials` is a union of four kinds;
-`verifyCredentials(credentials, input)` is THE ONE verifier — it answers the principal or null, no
-reason — shared by `/api` (`authenticate`, which names the refusal per kind, coded), both lanes into
-a context (`src/worker.ts` `projectHostIdentityOf`: the kinds read off a request and tried in order, the
-first that verifies for the project wins) and `/mcp` (`resolveExternalToken`). What a session
-reaches is its `Reach` (`src/control-plane.ts`): `"every"` (the admin secret), `{ userId }` (a
-user: the cookie, the admin's `as`) or `{ projectIds }` (a token, the secret, an OAuth grant that
-chose) — `directory.reachableProjects(reach)` is `list()`, `directory.reachesProject(reach, id)` is
-`get`'s admission, `directory.createProject(reach, name)` is every create door. `from-server-cookie`:
-the control plane's session cookie the request carried — a browser cannot set a header on a
-WebSocket, so the cookie rides the handshake and the call names it; honoured only when the request's
-`Origin` is this origin or absent (`isSameOriginBrowserRequest`, `src/lib.ts`), else
-`UNAUTHENTICATED`, as is no cookie.
-`project-token`: a PROJECT TOKEN — `{ projectId, actor, email?, expiresAt }` signed HMAC-SHA256 with
-`APP_CONFIG_PROJECT_TOKEN_SECRET` (the one signed-claims codec; the control plane's session cookie is
-the same codec under `APP_CONFIG_SESSION_SECRET`), minted by whoever fronts the users after their
-membership check, or by `projects.get(project).mintToken({ ttlSeconds? })` — a session that knows
-who it is and is BOUND to that one project: `session.whoami()` → `{ actor, email?, projectId }`,
-`projects.get` refuses any other project (`FORBIDDEN`), `list()` is that project's directory row,
-`create()` refuses (`FORBIDDEN`: a bound session has no catalog writer), and its contexts carry
-neither project door — a token is a delegation, minutes long, never a minter of tokens or keys; a
-token that does not verify is `INVALID_CREDENTIALS`, whatever is wrong with it. `admin-secret`:
-`APP_CONFIG_ADMIN_API_SECRET`
-compared in constant time (`verifyAdminSecret`, both SHA-256 hashed) — `{ actor: "admin" }` on every
-project, or with `as: { email }` that user's session without a login (the directory row upserted
-as `/login` does — its id, `user_<email>`, is the actor); a wrong secret is `INVALID_CREDENTIALS`. `project-secret`: the project's OWN
-long-lived key — `projects.get(project).rotateApiKey()` mints 32 random bytes as base64url and stores
-ONLY the SHA-256 hash in `SECRETS_KV` under `project-api-key:<projectId>` (outside the
-`secret:<projectId>:` prefix egress substitutes from, so no `getSecret("/secrets/…")` placeholder can
-ever spell it); a reveal IS a rotation, the previous key stops verifying at once, and a project has
-no key until the first call. `verifyProjectSecret(project, secret, kv)` hashes the candidate and
-compares in constant time ⇒ `{ actor: "project:<projectId>" }`: a session bound to that one project
-exactly like a token's — the project speaking as itself (a device, a headless app); a wrong, stale
-or foreign key is `INVALID_CREDENTIALS`. Both project doors ride the root `IterateContext` that
-`get` vends (section 4), so `get`'s admission is their gate — for a member, the admin and the
-project's own session; not for a token's. A user's `projects.get` admits members of the owning org
-only (`FORBIDDEN` otherwise). The principal rides every dispatch the session makes
-(`IterateContextDurableObject.invokeAs`, a DO-only Workers-RPC verb, or the `x-itx-principal` header
-on a terminal fetch), and the built-in append root stamps it as `source.principal` on every event —
-the DO's field: a client's own `source.principal` is overwritten, a loaded worker's `env.ITX` (the
-entrypoint stub) has no such door. The platform's own rows (a `provide`, a `subscribe`) carry it too.
-On a project host the same token becomes the host-scoped cookie through `/.itx/session`, or rides as
-`Authorization: Bearer` (section 10); the admin secret is a bearer there too, and so is the
-project's own secret — the device lane: `{ actor: "project:<projectId>" }` on the Request the app
-sees, the bearer stripped; another project's secret is nobody there and passes through as the app's
-own bearer would.
+**Who** (`src/principal.ts`, `src/session.ts`, `src/oauth.ts`, `src/grants.ts`). `SessionCredentials`
+is a union of two kinds. `from-server-cookie`: the OAuth grant the transport already resolved — the
+OAuth gate (`src/api.ts`) admitted the request's bearer or the browser adapter's cookie before capnweb
+ever opened, so the call only says "hand me that session"; a transport that carries none is
+`UNAUTHENTICATED`. `admin-secret`: `APP_CONFIG_ADMIN_API_SECRET` compared in constant time
+(`verifyAdminSecret`, both SHA-256 hashed) — `{ actor: "admin" }` on every project, or with
+`as: { email }` that user's session without a login (the directory row upserted as `/login` does —
+its id, `user_<email>`, is the actor); a wrong secret is `INVALID_CREDENTIALS`. OAuth grants are the
+ONE credential for every other principal (`src/oauth.ts` `GrantProps`: `issuer` — the console's own
+login, `app` — a connected client, `personal` — a PERSONAL ACCESS TOKEN): `session.grants.mint({
+name, projects })` (`src/grants.ts`) mints one finite `personal` grant of the user's — 30 days, scoped
+to the projects named (each one the user reaches), no refresh credential, its access token answered
+ONCE and never stored readable — listed by `session.grants.list()` (kind "Personal access token")
+and ended by `session.grants.end(grantId)` like any grant; minting needs an HTTPS issuer or the local
+worker (`isLocalOrigin`, `src/lib.ts`). What a session reaches is its `Reach` (`src/directory.ts`):
+`"every"` (the admin secret), `{ userId }` (a user: the login cookie, the admin's `as`) or
+`{ userId, projectIds }` (a grant that chose projects — a personal access token always does) —
+`directory.reachableProjects(reach)` is `list()`, `directory.reachesProject(reach, id)` is `get`'s
+admission, `directory.createProject(reach, name)` is every create door (`FORBIDDEN` on a narrowed
+grant). A user's `projects.get` admits members of the owning org only (`FORBIDDEN` otherwise). The
+principal rides every dispatch the session makes (`IterateContextDurableObject.invoke`, a DO-only
+Workers-RPC verb, or the `x-itx-principal` header on a terminal fetch), and the built-in append root
+stamps it as `source.principal` on every event — the DO's field: a client's own `source.principal`
+is overwritten, a loaded worker's `env.ITX` (the entrypoint stub) has no such door. The platform's own
+rows (a `provide`, a `subscribe`) carry it too. On a project host the same bearer (an access token —
+a personal access token included — or the admin secret) is verified by the edge (`src/worker.ts`:
+`authorizationForToken`, then `reachesProject` — 401 for a bad or ended bearer, 403 for a project the
+grant does not cover), stamps `x-itx-principal` on the Request the app sees, and is stripped; an
+app's own bearer scheme passes through untouched.
 
 ---
 
@@ -635,13 +616,12 @@ the admin secret every project and a user the projects of their orgs. The admin 
 **Configuration** (`src/worker.ts`). ONE typed object per isolate, parsed once from the
 `APP_CONFIG_*` wrangler vars (the apps/os shape, without its schema library) plus the version-metadata
 binding, loud on a bad variable: the error names it and the shape it wanted, at the first request or
-the first DO construction. An `APP_CONFIG_*` variable the module does not name is refused, so a typo
-cannot configure nothing silently. Configuration is what differs between deployments of the same
+the first DO construction. An `APP_CONFIG_*` variable the module does not name is warned about at
+boot and ignored, so a typo cannot configure something silently. Configuration is what differs between deployments of the same
 code; a constant is a property of the code — the inventory is the module's header. The vars:
 `APP_CONFIG_ENVIRONMENT_NAME` (`environmentName`, required: "poc" on workers.dev, "test" in the
 workers lane, "e2e" in the e2e lane), `APP_CONFIG_PROJECT_HOSTNAME_BASE` (`projectHostnameBase`,
-blank ⇒ no project-host ingress), `APP_CONFIG_PROJECT_TOKEN_SECRET` (`projectTokenSecret`, a wrangler
-secret on a deployment, a var in the e2e lane; blank ⇒ no token verifies), `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`
+blank ⇒ no project-host ingress), `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`
 
 - `APP_CONFIG_ARTIFACTS_NAMESPACE` (`itx.repos`' git remotes), `APP_CONFIG_SESSION_SECRET`
   (`sessionSecret`, the control plane's cookie; required), `APP_CONFIG_ADMIN_API_SECRET`

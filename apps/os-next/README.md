@@ -18,11 +18,14 @@ const itx = await session.projects.create({ project: "my-project" }); // → the
 await itx.append({ type: "note", payload: { n: 1 } });
 ```
 
-`authenticate(credentials)` takes one of four kinds (`src/session.ts` `SessionCredentials`):
-`from-server-cookie` (a browser — same origin only), `project-token` (one user on one project),
-`admin-secret` (every project; with `as` a user's session without a login — the e2e lane, tooling),
-`project-secret` (the project itself — a device, a headless app; `projects.get(project).rotateApiKey()`
-mints the key, `.mintToken()` a project token).
+`authenticate(credentials)` takes one of two kinds (`src/session.ts` `SessionCredentials`):
+`from-server-cookie` (the transport already carries a resolved OAuth grant — a browser's cookie on a
+same-origin request, or an `Authorization: Bearer` access token) and `admin-secret` (every project;
+with `as` a user's session without a login — the e2e lane, tooling). OAuth grants are the ONE
+credential for every other principal: a browser session, a connected app, and a PERSONAL ACCESS
+TOKEN — `session.grants.mint({ name, projects })` on the console's sessions page: one finite grant
+(30 days, scoped to the projects named, shown once, revocable from `session.grants.list()`/`end`)
+whose bearer opens `/api`, `/mcp` and a covered project host as the user.
 
 An MCP client connects to `https://<worker>/mcp` through the same login: the OAuth 2.1 AS is the
 worker itself (`/authorize`, `/oauth/token`, `/oauth/register`, `/.well-known/*`), the consent page
@@ -44,16 +47,15 @@ admin secret and a project's own secret (`/mcp?project=<id>`) are bearers on `/m
 
 ## Configuration
 
-`APP_CONFIG_*` vars, parsed once per isolate by `src/worker.ts` `parseAppConfig` (an unknown one is
-refused). The three secrets are wrangler secrets on a deployment (`wrangler secret put <name>`),
-plain vars in the test lanes:
+`APP_CONFIG_*` vars, parsed once per isolate by `src/app-config.ts` `parseAppConfig` (an unknown
+one is warned about at boot and ignored). The two secrets are wrangler secrets on a deployment
+(`wrangler secret put <name>`), plain vars in the test lanes:
 
 | Var                                                                 | Required | What                                                                                         |
 | ------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------- |
 | `APP_CONFIG_ENVIRONMENT_NAME`                                       | yes      | the deployment's name at `/version` ("poc", "test", "e2e")                                   |
 | `APP_CONFIG_SESSION_SECRET`                                         | yes      | signs the ten-minute Google login flow (secret)                                              |
 | `APP_CONFIG_ADMIN_API_SECRET`                                       | yes      | the admin secret: `authenticate({ type: "admin-secret" })`, the lanes' admin bearer (secret) |
-| `APP_CONFIG_PROJECT_TOKEN_SECRET`                                   | yes      | signs operator-only project credentials (secret)                                             |
 | `APP_CONFIG_PROJECT_HOSTNAME_BASE`                                  | no       | the base project hosts hang under; blank ⇒ no project-host ingress                           |
 | `APP_CONFIG_TEST_EMAIL_LOGIN`                                       | no       | `true` permits unverified email sign-in; disabled remotely by default                        |
 | `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`, `APP_CONFIG_ARTIFACTS_NAMESPACE` | no       | `itx.repos`' git remotes                                                                     |
@@ -94,7 +96,7 @@ than this worker's compatibility date, so local dev is the built worker under th
 
 ```bash
 pnpm dev -- --port 8788         # vite build, the directory schema into the local D1, wrangler dev on dist/server/wrangler.json
-                                # (project hosts under `<project>.localhost:8788`; dev values for the three secrets — scripts/dev.ts)
+                                # (project hosts under `<project>.localhost:8788`; dev values for the two secrets — scripts/dev.ts)
 pnpm build                      # dist/client + dist/server
 pnpm run typecheck              # routes:check, then the three tsconfigs (worker · console · tests)
 pnpm test                       # every lane: unit (node), workers (workerd, the BUILT worker), e2e (one real worker), bench

@@ -8,7 +8,7 @@
 // which would make a project host on localhost look like the platform host to src/worker.ts —
 // with the local configuration the lanes also use: project hosts under `localhost`
 // (`<project>.localhost:<port>` — Chromium resolves them to loopback) and plain dev values for the
-// three secrets a deployment keeps in wrangler. Local state persists in .wrangler/state (the
+// two secrets a deployment keeps in wrangler. Local state persists in .wrangler/state (the
 // package's, not dist's — a build wipes dist). Extra arguments go to `wrangler dev`:
 // `pnpm dev -- --port 8788`.
 import { spawnSync } from "node:child_process";
@@ -54,8 +54,6 @@ run("pnpm", [
   `APP_CONFIG_PLATFORM_ORIGIN:http://localhost:${port}`,
   "--var",
   "APP_CONFIG_MCP_ORIGIN:",
-  "--var",
-  "APP_CONFIG_PROJECT_TOKEN_SECRET:dev-project-token-secret",
   "--var",
   "APP_CONFIG_SESSION_SECRET:dev-session-secret",
   "--var",

@@ -22,7 +22,6 @@ export async function rpcResponse(
     waitUntil: (promise) => ctx.waitUntil(promise),
     directory: directory(env.DB),
     appConfig: appConfigOf(env),
-    secretsKv: env.SECRETS_KV,
     onProjectAccess: (projectId) => projects.add(projectId),
   };
   // The transport already carries a resolved authorization (the OAuth gate ran in api.ts); the root
@@ -30,7 +29,6 @@ export async function rpcResponse(
   const root = new IterateRpcTarget(input, teardown, {
     principal: auth.principal,
     reach: auth.reach,
-    projectDoors: auth.grant ? null : input,
     grants: new Grants(env, ctx, auth),
     scopes: auth.grant?.scope,
     ...(auth.grant?.kind === "issuer" && { consent: new Consent(env, auth.grant) }),
