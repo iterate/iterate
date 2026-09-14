@@ -325,7 +325,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const onRootContext = <T>(call: ItxExpressionStep, here: () => Promise<T>): Promise<T> =>
     path === owner.rootPath
       ? here()
-      : (deps
+      : // The owner root runs the SAME secrets verb `here` would run (the one built-in, the same
+        // arguments), so its answer has `here`'s type; `invoke` is untyped across the DO hop.
+        (deps
           .context(owner.rootPath)
           .invoke(["itx", "builtins", "secrets", call], [], deps.caller()) as Promise<T>);
 
