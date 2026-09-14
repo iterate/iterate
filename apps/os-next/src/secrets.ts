@@ -21,10 +21,12 @@ export type SecretMaterial = string | Record<string, unknown>;
  *  host, and on first use when the placeholder's field is not there yet (the mint-on-first-use). */
 export type SecretRefresh =
   /** RFC 6749 §6, the refresh_token grant: `refreshToken` + `clientId` (+ `clientSecret` for a
-   *  confidential client, HTTP Basic; a public client sends `client_id` in the body) from the
-   *  material → `accessToken` (+ the newest `refreshToken`). Google, GitHub OAuth apps, an MCP
-   *  server's authorization server, the petshop fixture. */
-  | { kind: "oauth-refresh-token"; tokenEndpoint: string }
+   *  confidential client) from the material → `accessToken` (+ the newest `refreshToken`). Google,
+   *  GitHub, an MCP server's authorization server, the petshop fixture. `clientAuth` is how the
+   *  token endpoint wants the client credential (RFC 6749 §2.3.1 allows both): `"basic"` (the
+   *  default — HTTP Basic; Google, Slack, the petshop) or `"body"` (`client_id` + `client_secret`
+   *  as form fields — GitHub, Linear). A public client (no secret) always sends `client_id` in the body. */
+  | { kind: "oauth-refresh-token"; tokenEndpoint: string; clientAuth?: "basic" | "body" }
   /** The username/password → session-token archetype, Waitrose's login: POST the app's `NewSession`
    *  GraphQL mutation with `username`/`password` from the material → `accessToken`. Waitrose has no
    *  refresh grant — re-login IS the refresh — so one strategy covers the first-use mint and the
@@ -103,7 +105,11 @@ export function normalizeSecretRecord(
       );
     refresh =
       kind === "oauth-refresh-token"
-        ? { kind, tokenEndpoint: endpoint.href }
+        ? {
+            kind,
+            tokenEndpoint: endpoint.href,
+            ...(options.refresh.clientAuth === "body" && { clientAuth: "body" as const }),
+          }
         : { kind, graphqlUrl: endpoint.href };
   }
   return { material, urls, refresh };
@@ -299,6 +305,48 @@ async function jsonRecordOf(response: Response): Promise<Record<string, unknown>
   return isRecord(body) ? body : {};
 }
 
+/** ONE request to an OAuth token endpoint — the refresh grant here, the authorization-code grant in
+ *  secret-connect.ts — with the client credential the way the endpoint wants it: HTTP Basic, or
+ *  `client_id` + `client_secret` in the form body; a public client (no secret) identifies itself with
+ *  `client_id` in the body either way (RFC 6749 §2.3.1, §6). */
+export function oauthTokenRequest(input: {
+  tokenEndpoint: string;
+  clientId: string;
+  clientSecret: string;
+  clientAuth: "basic" | "body";
+  params: Record<string, string>;
+}): Request {
+  const body = new URLSearchParams(input.params);
+  const basic = input.clientAuth === "basic" && !!input.clientSecret;
+  if (!basic) body.set("client_id", input.clientId);
+  if (!basic && input.clientSecret) body.set("client_secret", input.clientSecret);
+  return new Request(input.tokenEndpoint, {
+    method: "POST",
+    headers: {
+      ...(basic && { authorization: `Basic ${btoa(`${input.clientId}:${input.clientSecret}`)}` }),
+      "content-type": "application/x-www-form-urlencoded",
+      accept: "application/json",
+    },
+    body,
+  });
+}
+
+/** The tokens a token endpoint answered with — `accessToken`, and `refreshToken` when it issued (or
+ *  rotated) one. A refusal or a bodyless answer throws, naming the grant, never a credential. */
+export async function oauthTokensOf(
+  response: Response,
+  grant: string,
+): Promise<{ accessToken: string; refreshToken?: string }> {
+  if (!response.ok) throw new Error(`${grant}: the token endpoint answered ${response.status}`);
+  const data = await jsonRecordOf(response);
+  if (typeof data.access_token !== "string")
+    throw new Error(`${grant}: the token endpoint returned no access_token`);
+  return {
+    accessToken: data.access_token,
+    ...(typeof data.refresh_token === "string" && { refreshToken: data.refresh_token }),
+  };
+}
+
 export async function refreshSecretMaterial(
   refresh: SecretRefresh,
   material: SecretMaterial | null,
@@ -309,34 +357,17 @@ export async function refreshSecretMaterial(
     const refreshToken = stringField(record, "refreshToken", refresh.kind);
     const clientId = stringField(record, "clientId", refresh.kind);
     const clientSecret = typeof record.clientSecret === "string" ? record.clientSecret : "";
-    const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken });
-    // A confidential client authenticates with HTTP Basic; a public client (no secret) identifies
-    // itself with client_id in the body (RFC 6749 §6).
-    if (!clientSecret) body.set("client_id", clientId);
     const response = await fetchFn(
-      new Request(refresh.tokenEndpoint, {
-        method: "POST",
-        headers: {
-          ...(clientSecret && {
-            authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
-          }),
-          "content-type": "application/x-www-form-urlencoded",
-          accept: "application/json",
-        },
-        body,
+      oauthTokenRequest({
+        tokenEndpoint: refresh.tokenEndpoint,
+        clientId,
+        clientSecret,
+        clientAuth: refresh.clientAuth || "basic",
+        params: { grant_type: "refresh_token", refresh_token: refreshToken },
       }),
     );
-    if (!response.ok)
-      throw new Error(`oauth-refresh-token: the token endpoint answered ${response.status}`);
-    const data = await jsonRecordOf(response);
-    if (typeof data.access_token !== "string")
-      throw new Error("oauth-refresh-token: the token endpoint returned no access_token");
-    return {
-      ...record,
-      accessToken: data.access_token,
-      // A provider may rotate the refresh token on use; keep the newest.
-      ...(typeof data.refresh_token === "string" && { refreshToken: data.refresh_token }),
-    };
+    // A provider may rotate the refresh token on use; keep the newest.
+    return { ...record, ...(await oauthTokensOf(response, refresh.kind)) };
   }
   const username = stringField(record, "username", refresh.kind);
   const password = stringField(record, "password", refresh.kind);
