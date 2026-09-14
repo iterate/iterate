@@ -9,7 +9,7 @@
 // Pinned in the `workers` vitest project (inside workerd) because the refusal must be seen on the
 // production route — a project host `<app>--<project>.projects.test`, the edge's `x-itx-expression:
 // itx.apps.<app>`, the rewrite rule provided at `itx.apps.<app>` whose target is the hosting
-// spelling — and at the DO's own `invoke` door, where a caller passes the Request itself.
+// spelling — and at the DO's own `invoke` method, where a caller passes the Request itself.
 
 import { SELF } from "cloudflare:test";
 import { beforeAll, expect, test } from "vitest";
@@ -19,7 +19,7 @@ import { adminCredentials, applyDirectorySchema, openSession, stub } from "./sup
 beforeAll(applyDirectorySchema);
 
 /** A stateful app hosted as a facet: `fetch()` serves plain HTTP AND would upgrade a WebSocket if
- *  asked — so the refusal below is the platform's, not the class's. `hits()` is the RPC door. */
+ *  asked — so the refusal below is the platform's, not the class's. `hits()` is its RPC method. */
 const SRC_APP_FACET = /* js */ `
 import { DurableObject } from "cloudflare:workers";
 export class AppFacetDurableObject extends DurableObject {
@@ -68,7 +68,7 @@ test("a project host reaches a facet-hosted app over plain HTTP and RPC; a WebSo
   expect(await stub(ctx).invoke("itx.facets.get('app').hits()")).toBe(1);
 });
 
-test("the DO's invoke door refuses the same upgrade, coded, on a facet it has never started", async () => {
+test("the DO's invoke method refuses the same upgrade, coded, on a facet it has never started", async () => {
   const ctx = "prj_facet_no_upgrade_door";
   const upgrade = new Request("https://facet.internal/live", { headers: { Upgrade: "websocket" } });
   const outcome = await (
@@ -89,7 +89,7 @@ test("the DO's invoke door refuses the same upgrade, coded, on a facet it has ne
     (error: unknown) => errorCode(error),
   );
   expect(bare).toBe("NO_FACET");
-  // A plain fetch through the door hosts it and answers — the ordinary method walk.
+  // A plain fetch through `#invokeFacet` hosts it and answers — the ordinary method walk.
   const plain = (await stub(ctx).invoke([
     "itx",
     "facets",

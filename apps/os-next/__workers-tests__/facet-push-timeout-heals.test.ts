@@ -79,7 +79,7 @@ test(
   async () => {
     const ctx = "prj_facet_push_timeout_heals";
     const name = "slowcounter";
-    // `itx.processors.enable(name, { source, className })` spelled raw at the DO door
+    // `itx.processors.enable(name, { source, className })` spelled raw at the DO's `append` method
     // (alarm-quiesce.test.ts): ONE subscription-configured whose target is the facet's
     // processEventBatch through the load chain.
     await stub(ctx).append({
@@ -123,7 +123,7 @@ test(
 
     // Nothing else is appended. The watchdog fires at 60 s and aborts the facet; the delivery loop's
     // catch-up re-materializes it and it reads the owed span from the log (`catchUpFromLog` — no
-    // `seen` row: that is the push door's) — the checkpoint reaches the owed offset well before
+    // `seen` row: only `processEventBatch` writes one) — the checkpoint reaches the owed offset well before
     // anything else would have touched it.
     const healed = await until(
       "the restarted facet caught up past the timed-out batch",
