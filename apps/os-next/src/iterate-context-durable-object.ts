@@ -217,27 +217,24 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
       ),
     );
-    // The wake record, before any door opens (Stream.appendCreatedAndWokenEvents).
-    this.#stream.appendCreatedAndWokenEvents();
-    // EVERY STREAM SUBSCRIBES THE "/" CONTEXT'S CONFIG WORKER: `itx.worker.processEventBatch` is
-    // delivered every committed event, cross-context, at-least-once. `consumes: ["*"]` is honest —
-    // the config worker sees everything, `woken` included. A DOWN config worker cannot wake-loop
-    // forever: the ladder is bounded and the self-wake breaker (stream.ts SELF_WAKE_HALT_STREAK)
-    // halts arming regardless; `itx.worker` always resolves (a bundled no-op default,
-    // itx-expression-rewriting.ts), so a config-less project never halts. Idempotent — one row per
-    // context whatever the incarnation.
-    // The birth append bypasses the DO's append boundary, so normalize this literal here.
-    this.#stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: {
-          name: "config",
-          target: "itx.cd('/').worker.processEventBatch",
-          consumes: ["*"],
-        },
-        idempotencyKey: "config-subscription",
-      }),
-    );
+    // Keep constructor-time delivery from replacing the alarm that woke this incarnation.
+    this.ctx.blockConcurrencyWhile(async () => {
+      this.#stream.alarms.restore(await this.ctx.storage.getAlarm());
+      // Initialize the log before accepting requests. The root config worker subscribes once;
+      // its idempotency key preserves that subscription across incarnations.
+      this.#stream.appendCreatedAndWokenEvents();
+      this.#stream.append(
+        normalizeControlEvent({
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            name: "config",
+            target: "itx.cd('/').worker.processEventBatch",
+            consumes: ["*"],
+          },
+          idempotencyKey: "config-subscription",
+        }),
+      );
+    });
   }
 
   /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,
@@ -429,6 +426,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       get: (name, spec) =>
         new FacetHandle((itxExpressionSteps) => this.#invokeFacet(name, spec, itxExpressionSteps)),
     },
+    schedules: {
+      list: () => Object.values(this.#stream.coreReducedState.schedules),
+      get: (key) => this.#stream.coreReducedState.schedules[key] ?? null,
+    },
     subscriptions: {
       list: () => this.#subscriptionList(),
       get: (name) => this.#subscriptionList().find((s) => s.name === name) ?? null,
@@ -517,7 +518,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       !this.#library.hasOpenConnections()
     )
       return;
-    this.#stream.armAlarmNoLaterThan(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS);
+    this.#stream.alarms.request("idle", this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS);
   }
 
   /** The self-wake breaker's other half (stream.ts SELF_WAKE_HALT_STREAK holds the durable streak):
@@ -545,7 +546,74 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #facetWorkInFlight = 0;
 
   async alarm(): Promise<void> {
-    this.#stream.noteAlarmFired();
+    this.#stream.alarms.fired();
+    // Append each occurrence locally before awaiting subscriber RPC. A completion in the SAME
+    // transaction removes the obligation, so eviction or duplicate alarm delivery cannot repeat it.
+    const now = Date.now();
+    const due = Object.values(this.#stream.coreReducedState.schedules)
+      .filter((row) => !row.failure && Date.parse(row.nextAt) <= now)
+      .sort(
+        (a, b) =>
+          Date.parse(a.nextAt) - Date.parse(b.nextAt) || a.scheduledAtOffset - b.scheduledAtOffset,
+      )
+      .slice(0, 32);
+    let scheduledProgress = false;
+    this.#stream.alarms.batch(() => {
+      for (const row of due) {
+        if (this.#stream.coreReducedState.paused) break;
+        if (
+          this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
+          row.scheduledAtOffset
+        )
+          continue;
+        const payload = { key: row.key, scheduledAtOffset: row.scheduledAtOffset, at: row.nextAt };
+        try {
+          this.#appendAndRunCommittedEffects([
+            ...row.events.map((event) => ({
+              ...event,
+              source: {
+                schedule: {
+                  ...payload,
+                  ...((row.source?.processor || row.source?.principal) && {
+                    definedBy: {
+                      ...(row.source?.processor && { processor: row.source.processor }),
+                      ...(row.source?.principal && { principal: row.source.principal }),
+                    },
+                  }),
+                },
+              },
+            })),
+            { type: "events.iterate.com/stream/append-schedule-completed", payload },
+          ]);
+          scheduledProgress = true;
+          console.log({
+            event: "scheduled-append.completed",
+            namespace: "iterate-context",
+            ...payload,
+            count: row.events.length,
+            latenessMs: now - Date.parse(row.nextAt),
+          });
+        } catch (error) {
+          // If the commit succeeded but a subsequent effect threw, preserve the completion and let
+          // the platform retry recovery. Otherwise park this definition visibly, without a loop.
+          if (
+            this.#stream.coreReducedState.schedules[row.key]?.nextAt !== row.nextAt ||
+            this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
+              row.scheduledAtOffset
+          ) {
+            reportIssue("scheduled-append.effect-failed", error, payload);
+            throw error;
+          }
+          this.#appendAndRunCommittedEffects([
+            {
+              type: "events.iterate.com/stream/append-schedule-failed",
+              payload: { ...payload, error: String(error).slice(0, 2000) },
+            },
+          ]);
+          reportIssue("scheduled-append.failed", error, payload);
+        }
+      }
+    });
     // The cursor lane's due retries, and anything an eviction left mid-delivery — AWAITED so a
     // re-arm for a later retry lands before this actor hibernates. A cursor delivery pins nothing
     // local (a facet it calls into is counted by #facetWorkInFlight), so the quiesce below needs no
@@ -556,7 +624,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // touched this incarnation is a self-wake. Recorded once, when the streak first crosses. A
     // halted context FALLS THROUGH to the quiesce below: it will not wake itself again, so it must
     // not stay pinned (billed for duration) by what this wake materialized.
-    if (!this.#publicDoorTouched) {
+    // An obsolete early wake can count here; the breaker never suppresses durable schedules.
+    if (!this.#publicDoorTouched && !scheduledProgress) {
       const { streak, justHalted } = this.#stream.noteSelfWake();
       if (justHalted) {
         console.warn({
@@ -599,7 +668,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // minute would otherwise re-fire this alarm in a tight, billed loop). With NOTHING to quiesce
       // there is no re-arm (the #recordActivityForQuietClock rule): re-arming regardless was the
       // every-minute `woken` loop the breaker was measured on.
-      this.#stream.armAlarmNoLaterThan(
+      this.#stream.alarms.request(
+        "idle",
         Math.max(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS, Date.now() + 10_000),
       );
     }

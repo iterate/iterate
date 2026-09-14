@@ -143,3 +143,10 @@ export type {
   LiveStateSeed,
   LiveStateStore,
 } from "./client/live-state.ts";
+
+export type {
+  ScheduleKey,
+  ScheduleReceipt,
+  ScheduledAppendInput,
+  ScheduledAppend,
+} from "./stream/scheduled-appends.ts";

@@ -17,9 +17,11 @@
 // (a facet's checkpoint, a subscription cursor) can name an offset a later incarnation could hand
 // to a durable. Pushes still carry the full head in their ranges; only the log's own proof is capped.
 
+import { AlarmCoordinator } from "../alarm-coordinator.ts";
 import { codedError, errorCode, reportIssue } from "../lib.ts";
 import type { ItxExpressionInput } from "../context/expression.ts";
 import type { Caller } from "../principal.ts";
+import { reduceScheduledAppends } from "./scheduled-appends.ts";
 import { CoreContract, reduceCoreEventBatch, type CoreState } from "./core-processor.ts";
 import {
   idempotencyConflictMessage,
@@ -63,7 +65,7 @@ const READ_PAGE_MAX_EVENTS = 1000;
  *  deliver it, that alarm found nothing due and the DO's alarm() re-armed its quiet clock with
  *  nothing to quiesce, the isolate was evicted in between, the alarm re-created it every minute —
  *  is closed at its root: alarm() re-arms only while a facet is live or a stub is borrowed.) Past
- *  this, `armAlarmNoLaterThan` stops arming (below) — one billed wake per minute becomes zero —
+ *  this, `alarms.request` stops arming (below) — one billed wake per minute becomes zero —
  *  until a real request clears the streak. Low, because each self-wake is a billed wake and a durable
  *  row: five is a few minutes of a loop, not hours. A live retry ladder is self-limiting anyway (≤ 15
  *  attempts, then it halts on its own); this bounds the UNBOUNDED case. The durable count lives in
@@ -119,9 +121,9 @@ export class Stream {
   #highestDurableOffset: number;
   /** FIFO; resolved from `freshEvents` in append's step 5. */
   readonly #waitForEventWaiters: WaitForEventWaiter[] = [];
-  #alarmArmedForMs: number | null = null;
+  readonly alarms: AlarmCoordinator;
   /** The self-wake streak (SELF_WAKE_HALT_STREAK), durable in `stream_meta` and loaded once at
-   *  construction so `armAlarmNoLaterThan` can gate on it synchronously; the host DO drives it. */
+   *  construction so `alarms.request` can gate on it synchronously; the host DO drives it. */
   #selfWakeStreak = 0;
 
   // ── THE CORE REDUCE's state: rehydrated by the constructor from the versioned checkpoint and caught
@@ -134,6 +136,11 @@ export class Stream {
 
   constructor(deps: StreamDeps) {
     this.storage = new StreamStorage(deps.storage);
+    this.alarms = new AlarmCoordinator({
+      setAlarm: (at) => deps.storage.setAlarm(at),
+      scheduledAt: () => this.nextScheduledAppendAt(),
+      recoveryHalted: () => this.selfWakeHalted(),
+    });
     this.#selfWakeStreak = this.storage.readSelfWakeStreak(); // durable across incarnations
     this.#path = deps.path;
     this.#projectId = deps.projectId;
@@ -306,6 +313,7 @@ export class Stream {
       "events.iterate.com/stream/woken",
       "events.iterate.com/stream/paused",
       "events.iterate.com/stream/resumed",
+      "events.iterate.com/stream/append-schedule-cancelled",
       // the delivery loop's own record of a halted row — a paused stream's ladder must still end
       "events.iterate.com/stream/subscription-delivery-halted",
     ];
@@ -360,6 +368,30 @@ export class Stream {
       freshEvents.push(committedEvent);
     }
     if (freshEvents.length === 0) return committedEvents; // every event deduped to an existing one
+    // Only definitions can grow the projection. Completion/cancellation shrink it or advance a
+    // fixed-width nextAt; bounded failure diagnostics are excluded from the definition budget.
+    if (freshEvents.some((event) => event.type === "events.iterate.com/stream/append-scheduled")) {
+      const scheduledAppends = freshEvents.reduce(
+        reduceScheduledAppends,
+        this.#coreReducedState.schedules,
+      );
+      if (
+        Object.keys(scheduledAppends).length > 100 ||
+        JSON.stringify(
+          Object.fromEntries(
+            Object.entries(scheduledAppends).map(([key, { failure: _failure, ...definition }]) => [
+              key,
+              definition,
+            ]),
+          ),
+        ).length >
+          1024 * 1024
+      )
+        throw codedError(
+          "SCHEDULE_LIMIT",
+          "a context may retain at most 100 schedules and 1,048,576 serialized characters; cancel failed definitions before adding more",
+        );
+    }
     // 3 + 4. reduce and commit
     let coreReducedStateChanged = false;
     if (freshEvents.every((event) => event.ephemeral)) {
@@ -408,6 +440,7 @@ export class Stream {
     }
     // 5. after the commit
     this.#resolveWaitForEventWaiters(freshEvents); // waiters first: onCommit may append again (a nested commit)
+    this.alarms.reconcile();
     this.#onCommit(freshEvents, afterOffset, throughOffset);
     // Core's live-state delta rides this stream's own append (a nested commit). LOSSY BY CONTRACT:
     // LiveState.set contains every refusal (a PAUSED stream refuses the delta) as a revision-chain
@@ -521,26 +554,20 @@ export class Stream {
 
   // ── the alarm armer ──
 
-  /** ONE alarm write per quiet-period start, never per append (an ephemeral flood arms once).
-   *  Memo-only: a fresh incarnation writes one redundant setAlarm and a later target may overwrite
-   *  an earlier one, which is safe because every alarm() pass re-derives its obligations and re-arms. */
-  armAlarmNoLaterThan(atMs: number): void {
-    // The single chokepoint every arm site goes through, so a halted context (SELF_WAKE_HALT_STREAK)
-    // cannot re-arm from anywhere. A real request clears the streak before its work, so this only
-    // ever suppresses an ALARM-driven arm.
-    if (this.selfWakeHalted()) return;
-    if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
-    this.#alarmArmedForMs = atMs;
-    // Not awaited: the native output gate owns the write and turns an async failure into an
-    // invocation failure — and a lost memo just re-arms on the next alarm() pass.
-    void this.storage.setAlarm(atMs);
+  /** The earliest outstanding scheduled batch is durable; always include it when another
+   *  subsystem arms, including during reconstruction before the platform alarm is read. */
+  nextScheduledAppendAt(): number | null {
+    if (this.#coreReducedState.paused) return null;
+    let earliest: number | null = null;
+    for (const row of Object.values(this.#coreReducedState.schedules)) {
+      if (row.failure) continue;
+      const at = Date.parse(row.nextAt);
+      earliest = earliest === null ? at : Math.min(earliest, at);
+    }
+    return earliest;
   }
 
-  noteAlarmFired(): void {
-    this.#alarmArmedForMs = null;
-  }
-
-  /** True once the self-wake streak has hit its ceiling — `armAlarmNoLaterThan` is a no-op until a
+  /** True once the self-wake streak has hit its ceiling — `alarms.request` is a no-op until a
    *  public door clears it. */
   selfWakeHalted(): boolean {
     return this.#selfWakeStreak >= SELF_WAKE_HALT_STREAK;
@@ -660,10 +687,6 @@ class StreamStorage {
 
   transactionSync<T>(closure: () => T): T {
     return this.#storage.transactionSync(closure);
-  }
-
-  setAlarm(atMs: number): Promise<void> {
-    return this.#storage.setAlarm(atMs);
   }
 
   /** The self-wake streak (stream.ts SELF_WAKE_HALT_STREAK): one `stream_meta` row, read once at

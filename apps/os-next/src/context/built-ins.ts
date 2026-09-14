@@ -10,6 +10,12 @@
 // Dynamic code has two doors, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
+import {
+  ScheduleKey,
+  ScheduleReceipt,
+  type ScheduledAppendInput,
+  type ScheduledAppend,
+} from "../stream/scheduled-appends.ts";
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import { stampPrincipal, type Caller } from "../principal.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/processor.ts";
@@ -143,6 +149,19 @@ export interface BuiltInScope extends LibraryRoots {
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
    *  RpcTarget exactly: `itx.append({...})` is one spelling on every hop. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
+  /** Durable batches appended after a deadline or on a fixed interval (missed ticks coalesce). Setting a key
+   *  replaces it; cancelling cannot retract an occurrence already committed. Pause holds work
+   *  until resume; set is refused while paused, while cancel remains available. Failure remains
+   *  visible until replacement or cancellation. */
+  schedules: {
+    set(
+      input: ScheduledAppendInput,
+      options?: { idempotencyKey?: string },
+    ): Promise<ScheduleReceipt>;
+    cancel(schedule: ScheduleKey | ScheduleReceipt): Promise<StreamEvent[]>;
+    list(): ScheduledAppend[];
+    get(key: ScheduleKey): ScheduledAppend | null;
+  };
   /** Read a page of the durable log — `itx.readEvents(afterOffset?, limit?)`, the twin of `append`
    *  (non-minting: a probe never wakes storage). */
   readEvents(afterOffset?: number, limit?: number): Promise<StreamPage>;
@@ -281,6 +300,10 @@ interface BuildBuiltInsDeps {
   /** The rpcStubs view — closures over the DO's transport table (the pager sockets can never move). */
   rpcStubs: BuiltInScope["rpcStubs"];
   subscriptions: BuiltInScope["subscriptions"];
+  schedules: {
+    get(key: string): ScheduledAppend | null;
+    list(): ScheduledAppend[];
+  };
   rewriteRules: BuiltInScope["rewriteRules"];
   /** The own context's — a wait never crosses a hop. */
   waitForEvent: BuiltInScope["waitForEvent"];
@@ -435,6 +458,30 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       namespaceName: deps.artifactsNamespace,
     }),
     append,
+    schedules: {
+      ...deps.schedules,
+      get: (key) => deps.schedules.get(ScheduleKey.parse(key)),
+      set: async (input, options) => {
+        const [definition] = await append({
+          type: "events.iterate.com/stream/append-scheduled",
+          payload: input,
+          idempotencyKey: options?.idempotencyKey,
+        });
+        return ScheduleReceipt.parse({
+          key: definition.payload?.key,
+          scheduledAtOffset: definition.offset,
+        });
+      },
+      cancel: (schedule) => {
+        const receipt = ScheduleReceipt.safeParse(schedule);
+        return append({
+          type: "events.iterate.com/stream/append-schedule-cancelled",
+          payload: receipt.success
+            ? { key: receipt.data.key, ifScheduledAtOffset: receipt.data.scheduledAtOffset }
+            : { key: ScheduleKey.parse(schedule) },
+        });
+      },
+    },
     readEvents: (afterOffset?: number, limit?: number) => ownContext().read(afterOffset, limit),
     waitForEvent: deps.waitForEvent,
     // WHO crosses with the call: a sibling context runs it under the caller's principal (a Workers-RPC

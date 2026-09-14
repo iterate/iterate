@@ -37,13 +37,14 @@ const reduceAll = (events: StreamEvent[], initial = CoreContract.initialState())
   events.reduce((s, e) => reduceCoreEvent({ event: e, state: s }) ?? s, initial);
 
 describe("the contract", () => {
-  test("slug `core` v8.0.0; the every-field-defaulted initial state", () => {
+  test("slug `core` v10.0.0; the every-field-defaulted initial state", () => {
     expect(CoreContract.slug).toBe("core");
-    expect(CoreContract.version).toBe("8.0.0");
+    expect(CoreContract.version).toBe("10.0.0");
     expect(CoreContract.initialState()).toEqual({
       paused: null,
       itxExpressionRewriteRules: {},
       subscriptions: {},
+      schedules: {},
       secrets: {},
     });
   });
