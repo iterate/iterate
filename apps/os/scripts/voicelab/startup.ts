@@ -133,245 +133,277 @@ export async function startup(options: StartupOptions) {
   if (!prefix.startsWith("/"))
     throw new Error(`--stream-prefix must be absolute; received ${prefix}`);
 
+  const projectSocketClosed = deferred<{ code: number; reason: string }>();
   // The installed voice capability is supplied by project source and is absent
   // from the static SDK type. Narrow to the surfaces this benchmark exercises.
-  using itx = (await connectProject(options)) as unknown as {
+  const itx = (await connectProject(options, {
+    onWebSocketClose: ({ code, reason }) => projectSocketClosed.resolve({ code, reason }),
+  })) as unknown as {
     voice: Pick<VoiceAgentRpc, "setupVoiceAgent">;
     streams: { get(path: string): StreamHandle };
     [Symbol.dispose](): void;
   };
   const activateOnSetup = options.activateOnSetup ?? true;
   const results: StartupResult[] = [];
-  for (let index = 1; index <= runs; index += 1) {
-    const streamPath = `${prefix}/${String(index).padStart(2, "0")}-${crypto.randomUUID().slice(0, 8)}`;
-    const stream = itx.streams.get(streamPath);
-    const activation = crypto.randomUUID();
-    const beganAt = Date.now();
-    const clock = () => Date.now() - beganAt;
-    const deadlineAt = beganAt + maxStartupMs;
-    const configured = deferred<void>();
-    const accepted = deferred<void>();
-    const speaking = deferred<void>();
-    const setupFailed = deferred<unknown>();
-    const malformedEvent = deferred<Error>();
-    const watch: StartupWatch = {
-      conversationId: null,
-      callStartedMs: null,
-      sessionConfiguredMs: null,
-      conversationAcceptedMs: null,
-      handshakeTookMs: null,
-      firstNonSilentPcmMs: null,
-      errors: [],
-    };
-    const subscriptionState: { value: { close(): void } | null } = { value: null };
-    let closing = false;
-    const subscriptionResult = Promise.resolve(
-      stream.openConnection({
-        connectionKey: `voicelab-startup-${activation}`,
-        // Setup races this RPC deliberately. Durable replay prevents a fast
-        // initial `call-started` from being invisible to the subscriber.
-        replayAfterOffset: 0,
-        eventTypes: [...STARTUP_EVENTS],
-        processEventBatch: (batch) => {
-          for (const event of batch.events || []) {
-            // StreamHandle erases event-specific payload types. Reject malformed
-            // selected events instead of reporting a plausible startup timeout.
-            const parsed = StartupVoicePayload.safeParse(event.payload);
-            if (!parsed.success) {
-              const failure = new Error(
-                `malformed ${event.type} payload: ${parsed.error.issues[0]?.message ?? parsed.error.message}`,
-              );
-              watch.errors.push(failure.message);
-              malformedEvent.resolve(failure);
-              continue;
+  let projectSocketClose: { code: number; reason: string } | null = null;
+  let projectSocketCloseFailure: string | null = null;
+  try {
+    for (let index = 1; index <= runs; index += 1) {
+      const streamPath = `${prefix}/${String(index).padStart(2, "0")}-${crypto.randomUUID().slice(0, 8)}`;
+      const stream = itx.streams.get(streamPath);
+      const activation = crypto.randomUUID();
+      const beganAt = Date.now();
+      const clock = () => Date.now() - beganAt;
+      const deadlineAt = beganAt + maxStartupMs;
+      const configured = deferred<void>();
+      const accepted = deferred<void>();
+      const speaking = deferred<void>();
+      const setupFailed = deferred<unknown>();
+      const malformedEvent = deferred<Error>();
+      const watch: StartupWatch = {
+        conversationId: null,
+        callStartedMs: null,
+        sessionConfiguredMs: null,
+        conversationAcceptedMs: null,
+        handshakeTookMs: null,
+        firstNonSilentPcmMs: null,
+        errors: [],
+      };
+      const subscriptionState: { value: { close(): void } | null } = { value: null };
+      let closing = false;
+      const subscriptionResult = Promise.resolve(
+        stream.openConnection({
+          connectionKey: `voicelab-startup-${activation}`,
+          // Setup races this RPC deliberately. Durable replay prevents a fast
+          // initial `call-started` from being invisible to the subscriber.
+          replayAfterOffset: 0,
+          eventTypes: [...STARTUP_EVENTS],
+          processEventBatch: (batch) => {
+            for (const event of batch.events || []) {
+              // StreamHandle erases event-specific payload types. Reject malformed
+              // selected events instead of reporting a plausible startup timeout.
+              const parsed = StartupVoicePayload.safeParse(event.payload);
+              if (!parsed.success) {
+                const failure = new Error(
+                  `malformed ${event.type} payload: ${parsed.error.issues[0]?.message ?? parsed.error.message}`,
+                );
+                watch.errors.push(failure.message);
+                malformedEvent.resolve(failure);
+                continue;
+              }
+              const payload = parsed.data;
+              if (event.type === "events.iterate.com/voice-agent/call-started") {
+                if (payload.activation !== activation) continue;
+                watch.conversationId = payload.conversationId;
+                watch.callStartedMs ??= clock();
+                continue;
+              }
+              if (
+                payload.activation !== activation &&
+                payload.conversationId !== watch.conversationId
+              )
+                continue;
+              if (event.type === "events.iterate.com/voice-agent/session-configured") {
+                watch.sessionConfiguredMs ??= clock();
+                configured.resolve();
+                continue;
+              }
+              if (event.type === "events.iterate.com/voice-agent/conversation-accepted") {
+                watch.conversationAcceptedMs ??= clock();
+                watch.handshakeTookMs ??= payload.handshakeTookMs ?? null;
+                accepted.resolve();
+                continue;
+              }
+              if (event.type === "events.iterate.com/voice-agent/provider-error") {
+                watch.errors.push(payload.message || payload.text || "provider error");
+                continue;
+              }
+              if (event.type !== "events.iterate.com/voice-agent/provider-disconnected") {
+                if (event.type !== "events.iterate.com/voice-agent/spk-frame") continue;
+                const pcm = payload.pcm || "";
+                if (pcm === "" || !hasAudibleSignal(Buffer.from(pcm, "base64"))) continue;
+                watch.firstNonSilentPcmMs ??= clock();
+                speaking.resolve();
+                continue;
+              }
+              watch.errors.push(payload.reason || "provider disconnected");
             }
-            const payload = parsed.data;
-            if (event.type === "events.iterate.com/voice-agent/call-started") {
-              if (payload.activation !== activation) continue;
-              watch.conversationId = payload.conversationId;
-              watch.callStartedMs ??= clock();
-              continue;
-            }
-            if (
-              payload.activation !== activation &&
-              payload.conversationId !== watch.conversationId
-            )
-              continue;
-            if (event.type === "events.iterate.com/voice-agent/session-configured") {
-              watch.sessionConfiguredMs ??= clock();
-              configured.resolve();
-              continue;
-            }
-            if (event.type === "events.iterate.com/voice-agent/conversation-accepted") {
-              watch.conversationAcceptedMs ??= clock();
-              watch.handshakeTookMs ??= payload.handshakeTookMs ?? null;
-              accepted.resolve();
-              continue;
-            }
-            if (event.type === "events.iterate.com/voice-agent/provider-error") {
-              watch.errors.push(payload.message || payload.text || "provider error");
-              continue;
-            }
-            if (event.type !== "events.iterate.com/voice-agent/provider-disconnected") {
-              if (event.type !== "events.iterate.com/voice-agent/spk-frame") continue;
-              const pcm = payload.pcm || "";
-              if (pcm === "" || !hasAudibleSignal(Buffer.from(pcm, "base64"))) continue;
-              watch.firstNonSilentPcmMs ??= clock();
-              speaking.resolve();
-              continue;
-            }
-            watch.errors.push(payload.reason || "provider disconnected");
-          }
-        },
-      }),
-    ).then(
-      (opened) => {
-        if (closing) closeAndDisposeRpcHandle(opened);
-        else subscriptionState.value = opened;
-        return { opened, error: null };
-      },
-      (error: unknown) => ({ opened: null, error }),
-    );
-    const result: StartupResult = {
-      streamPath,
-      activation,
-      setupStartedMs: clock(),
-      setupResolvedMs: null,
-      micAppendSentMs: null,
-      micAppendAcknowledgedMs: null,
-      commentaryAppendSentMs: null,
-      commentaryAppendAcknowledgedMs: null,
-      failure: null,
-      ...watch,
-    };
-    let setup: Promise<{ error: unknown | null }> | null = null;
-    try {
-      setup = Promise.resolve(
-        itx.voice.setupVoiceAgent({
-          streamPath,
-          instructions: "Speak supplied commentary briefly.",
-          ...(activateOnSetup && { activation }),
+          },
         }),
       ).then(
-        (setupResult) => {
-          try {
-            result.setupResolvedMs = clock();
-            return { error: null };
-          } finally {
-            disposeIgnoredRpcResult(setupResult);
-          }
+        (opened) => {
+          if (closing) closeAndDisposeRpcHandle(opened);
+          else subscriptionState.value = opened;
+          return { opened, error: null };
         },
-        (error: unknown) => {
-          setupFailed.resolve(error);
-          return { error };
-        },
+        (error: unknown) => ({ opened: null, error }),
       );
-      if (activateOnSetup) {
-        // `conversation-accepted` is delivered by the active subscription, so
-        // it proves the callback is receiving this stream even if the RPC which
-        // returned its disposable connection handle still has bookkeeping to
-        // finish. Do not place that tail on the microphone critical path.
-        const acceptedOrSetupFailure = Promise.race([
-          accepted.promise,
-          setupFailed.promise.then((error) => Promise.reject(error)),
-          malformedEvent.promise.then((error) => Promise.reject(error)),
-          subscriptionResult.then(({ error }) =>
-            error === null ? new Promise<never>(() => {}) : Promise.reject(error),
-          ),
-        ]);
-        await waitForEvent(
-          acceptedOrSetupFailure,
-          Math.max(0, deadlineAt - Date.now()),
-          "conversation-accepted did not arrive",
+      const result: StartupResult = {
+        streamPath,
+        activation,
+        setupStartedMs: clock(),
+        setupResolvedMs: null,
+        micAppendSentMs: null,
+        micAppendAcknowledgedMs: null,
+        commentaryAppendSentMs: null,
+        commentaryAppendAcknowledgedMs: null,
+        failure: null,
+        ...watch,
+      };
+      let setup: Promise<{ error: unknown | null }> | null = null;
+      try {
+        setup = Promise.resolve(
+          itx.voice.setupVoiceAgent({
+            streamPath,
+            instructions: "Speak supplied commentary briefly.",
+            ...(activateOnSetup && { activation }),
+          }),
+        ).then(
+          (setupResult) => {
+            try {
+              result.setupResolvedMs = clock();
+              return { error: null };
+            } finally {
+              disposeIgnoredRpcResult(setupResult);
+            }
+          },
+          (error: unknown) => {
+            setupFailed.resolve(error);
+            return { error };
+          },
         );
-      } else {
+        if (activateOnSetup) {
+          // `conversation-accepted` is delivered by the active subscription, so
+          // it proves the callback is receiving this stream even if the RPC which
+          // returned its disposable connection handle still has bookkeeping to
+          // finish. Do not place that tail on the microphone critical path.
+          const acceptedOrSetupFailure = Promise.race([
+            accepted.promise,
+            setupFailed.promise.then((error) => Promise.reject(error)),
+            malformedEvent.promise.then((error) => Promise.reject(error)),
+            subscriptionResult.then(({ error }) =>
+              error === null ? new Promise<never>(() => {}) : Promise.reject(error),
+            ),
+          ]);
+          await waitForEvent(
+            acceptedOrSetupFailure,
+            Math.max(0, deadlineAt - Date.now()),
+            "conversation-accepted did not arrive",
+          );
+        } else {
+          const setupResult = await waitForEvent(
+            setup,
+            Math.max(0, deadlineAt - Date.now()),
+            "voice-agent setup did not resolve",
+          );
+          if (setupResult.error !== null) throw setupResult.error;
+        }
+        result.micAppendSentMs = clock();
+        await waitForEvent(
+          discardRpcResult(
+            stream.append({
+              type: "events.iterate.com/voice-agent/mic-frame",
+              ephemeral: true,
+              payload: { activation, pcm: Buffer.alloc(FRAME_BYTES).toString("base64") },
+            }),
+          ),
+          Math.max(0, deadlineAt - Date.now()),
+          "microphone append did not resolve",
+        );
+        result.micAppendAcknowledgedMs = clock();
+        const remainingMs = () => Math.max(0, deadlineAt - Date.now());
+        if (options.audio === true) {
+          result.commentaryAppendSentMs = clock();
+          await waitForEvent(
+            discardRpcResult(
+              stream.append({
+                type: "events.iterate.com/voice-agent/commentary",
+                payload: { activation, delegationId: null, content: "Say: ready." },
+              }),
+            ),
+            remainingMs(),
+            "commentary append did not resolve",
+          );
+          result.commentaryAppendAcknowledgedMs = clock();
+        }
+        await waitForEvent(configured.promise, remainingMs(), "session-configured did not arrive");
+        await waitForEvent(accepted.promise, remainingMs(), "conversation-accepted did not arrive");
+        if (watch.conversationAcceptedMs === null || watch.conversationAcceptedMs > maxStartupMs) {
+          throw new Error(
+            `conversation-accepted exceeded ${String(maxStartupMs)}ms: ${String(watch.conversationAcceptedMs)}`,
+          );
+        }
+        const opened = await waitForEvent(
+          subscriptionResult,
+          remainingMs(),
+          "stream subscription did not resolve",
+        );
+        if (opened.error !== null) throw opened.error;
         const setupResult = await waitForEvent(
           setup,
-          Math.max(0, deadlineAt - Date.now()),
+          remainingMs(),
           "voice-agent setup did not resolve",
         );
         if (setupResult.error !== null) throw setupResult.error;
-      }
-      result.micAppendSentMs = clock();
-      await waitForEvent(
-        discardRpcResult(
-          stream.append({
-            type: "events.iterate.com/voice-agent/mic-frame",
-            ephemeral: true,
-            payload: { activation, pcm: Buffer.alloc(FRAME_BYTES).toString("base64") },
-          }),
-        ),
-        Math.max(0, deadlineAt - Date.now()),
-        "microphone append did not resolve",
-      );
-      result.micAppendAcknowledgedMs = clock();
-      const remainingMs = () => Math.max(0, deadlineAt - Date.now());
-      if (options.audio === true) {
-        result.commentaryAppendSentMs = clock();
-        await waitForEvent(
-          discardRpcResult(
-            stream.append({
-              type: "events.iterate.com/voice-agent/commentary",
-              payload: { activation, delegationId: null, content: "Say: ready." },
-            }),
-          ),
-          remainingMs(),
-          "commentary append did not resolve",
-        );
-        result.commentaryAppendAcknowledgedMs = clock();
-      }
-      await waitForEvent(configured.promise, remainingMs(), "session-configured did not arrive");
-      await waitForEvent(accepted.promise, remainingMs(), "conversation-accepted did not arrive");
-      if (watch.conversationAcceptedMs === null || watch.conversationAcceptedMs > maxStartupMs) {
-        throw new Error(
-          `conversation-accepted exceeded ${String(maxStartupMs)}ms: ${String(watch.conversationAcceptedMs)}`,
-        );
-      }
-      const opened = await waitForEvent(
-        subscriptionResult,
-        remainingMs(),
-        "stream subscription did not resolve",
-      );
-      if (opened.error !== null) throw opened.error;
-      const setupResult = await waitForEvent(
-        setup,
-        remainingMs(),
-        "voice-agent setup did not resolve",
-      );
-      if (setupResult.error !== null) throw setupResult.error;
-      if (options.audio === true) {
-        await waitForEvent(speaking.promise, remainingMs(), "first non-silent PCM did not arrive");
-      }
-    } catch (error) {
-      result.failure = error instanceof Error ? error.message : String(error);
-      watch.errors.push(result.failure);
-    } finally {
-      closing = true;
-      const subscription = subscriptionState.value;
-      if (subscription) closeAndDisposeRpcHandle(subscription);
-      // This terminal is a durable activation fence: if setup is still queued,
-      // its later call-started event is ignored; if a dial already exists, the
-      // facet hangs it up. Never leave a late setup un-fenced.
-      try {
-        await waitForEvent(
-          discardRpcResult(
-            stream.append({
-              type: "events.iterate.com/voice-agent/conversation-ended",
-              payload: { activation, reason: "voicelab startup benchmark complete" },
-            }),
-          ),
-          CLEANUP_TIMEOUT_MS,
-          "terminal append did not resolve",
-        );
+        if (options.audio === true) {
+          await waitForEvent(
+            speaking.promise,
+            remainingMs(),
+            "first non-silent PCM did not arrive",
+          );
+        }
       } catch (error) {
-        watch.errors.push(
-          `terminal cleanup: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        result.failure = error instanceof Error ? error.message : String(error);
+        watch.errors.push(result.failure);
+      } finally {
+        closing = true;
+        const subscription = subscriptionState.value;
+        if (subscription) closeAndDisposeRpcHandle(subscription);
+        // This terminal is a durable activation fence: if setup is still queued,
+        // its later call-started event is ignored; if a dial already exists, the
+        // facet hangs it up. Never leave a late setup un-fenced.
+        try {
+          await waitForEvent(
+            discardRpcResult(
+              stream.append({
+                type: "events.iterate.com/voice-agent/conversation-ended",
+                payload: { activation, reason: "voicelab startup benchmark complete" },
+              }),
+            ),
+            CLEANUP_TIMEOUT_MS,
+            "terminal append did not resolve",
+          );
+        } catch (error) {
+          watch.errors.push(
+            `terminal cleanup: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        disposeIgnoredRpcResult(stream);
+        Object.assign(result, watch);
+        results.push(result);
+        console.log(JSON.stringify({ type: "voicelab-startup-run", result }, null, 2));
       }
-      disposeIgnoredRpcResult(stream);
-      Object.assign(result, watch);
-      results.push(result);
-      console.log(JSON.stringify({ type: "voicelab-startup-run", result }, null, 2));
+    }
+  } finally {
+    // trpc-cli calls process.exit() when this command resolves. Wait for the
+    // requested close handshake so process exit cannot turn it into a loss.
+    try {
+      itx[Symbol.dispose]();
+    } catch (error) {
+      projectSocketCloseFailure =
+        error instanceof Error ? error.message : `dispose failed: ${String(error)}`;
+    }
+    try {
+      projectSocketClose = await waitForEvent(
+        projectSocketClosed.promise,
+        CLEANUP_TIMEOUT_MS,
+        "project WebSocket close did not arrive",
+      );
+    } catch (error) {
+      projectSocketCloseFailure ||= error instanceof Error ? error.message : String(error);
+    }
+    if (projectSocketClose?.code !== 1000) {
+      projectSocketCloseFailure ||= `project WebSocket closed ${String(projectSocketClose?.code)}`;
     }
   }
   const summary = {
@@ -385,6 +417,10 @@ export async function startup(options: StartupOptions) {
       maxStartupMs,
     },
     results,
+    teardown: {
+      projectSocketClose,
+      projectSocketCloseFailure,
+    },
     metricsMs: {
       micAppendAcknowledged: metric(results.map((result) => result.micAppendAcknowledgedMs)),
       commentaryAppendAcknowledged: metric(
@@ -402,6 +438,9 @@ export async function startup(options: StartupOptions) {
   };
   const failures = results.filter((result) => result.errors.length > 0);
   console.log(JSON.stringify(summary, null, 2));
+  if (projectSocketCloseFailure) {
+    throw new Error(`project WebSocket cleanup failed: ${projectSocketCloseFailure}`);
+  }
   if (failures.length > 0)
     throw new Error(`${String(failures.length)} startup run(s) emitted provider diagnostics`);
 }

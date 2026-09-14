@@ -70,7 +70,7 @@ was not measured.
 ## Correctness evidence and remaining limits
 
 The clean native preview version is
-`49ea2864-f1d0-4d86-bf7c-cb0b035afb09`. Two-child append/read/subscription
+`0c87aed9-c59d-4969-96df-85e855bcfc1c`. Two-child append/read/subscription
 isolation passed. A full child retained its durable marker across killing the
 native host; a new connection/subscription then received a new event.
 Hosted reset is explicitly unsupported: clearing child storage cannot atomically
@@ -93,11 +93,13 @@ whether commentary was sent. Ten exact matching direct calls and ten later
 instrumented hosted calls produced audio. Those successes do not explain or
 resolve the failure. Treat it as a release blocker, not a discarded sample.
 
-The final instrumented probe also logged two `stream core background work failed`
-errors at 14:39:10 UTC, mapped to ancestor `child-stream-created` announcements.
-The logs omit the failed ancestor path and remote rejection details. Audio
-success does not resolve those failures; their cause and resulting index state
-must be accounted for before release.
+During source installation/mounting, two `stream core background work failed`
+errors at 14:39:10 UTC mapped to ancestor `child-stream-created` announcements.
+They preceded the first measured leaf announcement by 37 seconds. All 20 expected
+leaf-to-ancestor rows and all six native ancestor hierarchy rows were subsequently
+verified, with durable offsets/timestamps: no index entries were missing. The
+logs omit the failed ancestor path and remote rejection details, so the exact
+cause remains unresolved even though the tested index state is intact.
 
 Cold-host readiness, long idle periods, simultaneous calls, and resource use
 with many children need further evidence before this becomes a general
@@ -149,6 +151,22 @@ provider intervals. The configuration context append remains awaited so its
 failure cannot silently lose required Agent context. No credential audit was
 made fire-and-forget, no keepalive was added, and all timing instrumentation is
 excluded from the runtime diff.
+
+On the final clean deployment, with the uninstrumented source restored, five
+further calls all produced audio. Client-ready times were
+6,400/1,988/2,314/1,997/2,009 ms (median 2,009). The first followed deployment and
+an explicit host restart; it is retained as a cold-start limit. First PCM was
+7,458/3,413/3,374/2,790/3,424 ms. Host-restart persistence/subscription recovery
+and rejected-reset state preservation also passed on this deployment. The
+session's eventual `/api` teardown logged `Network connection lost`. A separate
+one-call probe explicitly awaited socket closure after disposing its handles:
+it received close code 1000 after 26 ms, with no error-level preview logs in
+that interval. The CLI framework calls `process.exit(0)` after a command
+returns, so the benchmark now explicitly disposes its connection and awaits
+the close acknowledgement (bounded to one second) before returning. A fresh
+audio call through the corrected CLI reached readiness at 2,679 ms and PCM
+at 3,550 ms, then closed with code 1000 and no teardown failure. The preview
+error query covering both close checks returned no error-level entries.
 
 ## Reproduce
 
