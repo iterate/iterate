@@ -9,7 +9,9 @@ export async function handleFilterAssetRequest(request: Request, bucket: R2Bucke
     "x-content-type-options": "nosniff",
   });
   const path = new URL(request.url).pathname;
-  const match = /^\/filter-assets\/([a-f0-9]{64})\.(png|jpeg|wasm\.gz|task\.gz)$/.exec(path);
+  // New names have readable prefixes; keep hash-only URLs for older apps.
+  const match =
+    /^\/filter-assets\/(?:[a-z0-9]+-)*([a-f0-9]{64})\.(png|jpeg|wasm\.gz|task\.gz)$/.exec(path);
   if (!match) return new Response("not found", { status: 404, headers });
   if (request.method !== "GET" && request.method !== "HEAD") {
     headers.set("allow", "GET, HEAD");

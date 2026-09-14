@@ -10,7 +10,7 @@ export async function publishFilterAssets(ctx: EnvContext<typeof mobileWebsiteEn
   const directory = new URL("../filter-assets/", import.meta.url);
   const assets = await Promise.all(
     (await readdir(directory)).map(async (filename) => {
-      const match = /^([a-f0-9]{64})\.(png|jpeg|wasm\.gz|task\.gz)$/.exec(filename);
+      const match = /^(?:[a-z0-9]+-)*([a-f0-9]{64})\.(png|jpeg|wasm\.gz|task\.gz)$/.exec(filename);
       if (!match) throw new Error(`Unexpected filter asset: ${filename}`);
       const bytes = await readFile(new URL(filename, directory));
       if (createHash("sha256").update(bytes).digest("hex") !== match[1]) {

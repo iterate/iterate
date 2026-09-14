@@ -1,7 +1,7 @@
 # Filter assets
 
 JavaScript stays in the Expo DOM bundle. Artwork, the pinned MediaPipe WASM,
-and the face model live at `https://mobile.iterate.com/filter-assets/<sha256>.<ext>`.
+and the face model live at `https://mobile.iterate.com/filter-assets/<slug>-<sha256>.<ext>`.
 The existing mobile website worker serves only that public prefix from its
 R2 bucket. No new runtime dependency or OS service is involved.
 
@@ -10,6 +10,11 @@ when the current filter/card draws them. A spinner stays outside the captured
 canvas. The normal shutter waits for those images; failed downloads expose
 Retry, with a 30-second download limit. Browser HTTP caching and decoded image
 reuse help repeat use; a fresh install or evicted cache needs a connection.
+
+Prefixes describe the art (`animal-cat`, `backdrop-potato-dirt`,
+`cartoon-dog`, `encyclopaedia-dog`) or tracker (`mediapipe-vision`,
+`face-landmarker`). The full SHA-256 remains the version identifier.
+Hash-only URLs from older app builds stay served.
 
 URLs never change their contents. The worker sends anonymous CORS headers so
 file-origin WebViews can fetch data and save canvases containing remote images.

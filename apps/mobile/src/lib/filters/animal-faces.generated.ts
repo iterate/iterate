@@ -3,20 +3,20 @@
 // Deploy the mobile website before publishing an app update with new URLs.
 
 export const ANIMAL_FACE_IMAGES: Record<string, string> = {
-  cat: "https://mobile.iterate.com/filter-assets/7c56f2296a6b1c0932caca0d014a221ea4ba5dbc0e63bc3c082d03a68ac9a552.png",
-  dog: "https://mobile.iterate.com/filter-assets/d4619376d48c801d4cd982575664e50cbb2263f1159931d065b2b415d9320383.png",
-  goat: "https://mobile.iterate.com/filter-assets/3963066c5db555e68a9064971b817ab8fab1fdf75b58231012936cd0c5b3791a.png",
+  cat: "https://mobile.iterate.com/filter-assets/animal-cat-7c56f2296a6b1c0932caca0d014a221ea4ba5dbc0e63bc3c082d03a68ac9a552.png",
+  dog: "https://mobile.iterate.com/filter-assets/animal-dog-d4619376d48c801d4cd982575664e50cbb2263f1159931d065b2b415d9320383.png",
+  goat: "https://mobile.iterate.com/filter-assets/animal-goat-3963066c5db555e68a9064971b817ab8fab1fdf75b58231012936cd0c5b3791a.png",
   tiger:
-    "https://mobile.iterate.com/filter-assets/50c8dbe3b3c85cb354678d9a1ce36db582f499c89aef9b1cfe3255c42e851249.png",
-  bear: "https://mobile.iterate.com/filter-assets/5889249d9988e7a7d18002f1ac7db42a67c76b4f064c015ab4337f952af8c357.png",
+    "https://mobile.iterate.com/filter-assets/animal-tiger-50c8dbe3b3c85cb354678d9a1ce36db582f499c89aef9b1cfe3255c42e851249.png",
+  bear: "https://mobile.iterate.com/filter-assets/animal-bear-5889249d9988e7a7d18002f1ac7db42a67c76b4f064c015ab4337f952af8c357.png",
   monkey:
-    "https://mobile.iterate.com/filter-assets/91d7f07a20c57daf35acb71ff08247ae003b64d8efe654533e1f0ee83b45e469.png",
+    "https://mobile.iterate.com/filter-assets/animal-monkey-91d7f07a20c57daf35acb71ff08247ae003b64d8efe654533e1f0ee83b45e469.png",
   gorilla:
-    "https://mobile.iterate.com/filter-assets/9c968da6a95263b4f43ee5a4cfb69c8105f026a00d2d8b650f7dd91b05c77bad.png",
-  lion: "https://mobile.iterate.com/filter-assets/75dcf5f18bf6ad976a3b353eb6d8ac5b3b3a5a1974947024731f3bf567ccd684.png",
+    "https://mobile.iterate.com/filter-assets/animal-gorilla-9c968da6a95263b4f43ee5a4cfb69c8105f026a00d2d8b650f7dd91b05c77bad.png",
+  lion: "https://mobile.iterate.com/filter-assets/animal-lion-75dcf5f18bf6ad976a3b353eb6d8ac5b3b3a5a1974947024731f3bf567ccd684.png",
   horse:
-    "https://mobile.iterate.com/filter-assets/ee4d57f76bf6494ae5f57580342539653613248e521c30f0ea6703b46ceeea9d.png",
-  fox: "https://mobile.iterate.com/filter-assets/03cef76abbe34d6602a3faa0d479032fafdc2aa905a750b9ec316c52e6cc8873.png",
+    "https://mobile.iterate.com/filter-assets/animal-horse-ee4d57f76bf6494ae5f57580342539653613248e521c30f0ea6703b46ceeea9d.png",
+  fox: "https://mobile.iterate.com/filter-assets/animal-fox-03cef76abbe34d6602a3faa0d479032fafdc2aa905a750b9ec316c52e6cc8873.png",
   mouse:
-    "https://mobile.iterate.com/filter-assets/15ae8e5012ee8dfab4ddacf8296f3e50984353baf29bf2d034c558f44ceb6d5e.png",
+    "https://mobile.iterate.com/filter-assets/animal-mouse-15ae8e5012ee8dfab4ddacf8296f3e50984353baf29bf2d034c558f44ceb6d5e.png",
 };

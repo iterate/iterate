@@ -22,9 +22,9 @@ if (!response.ok) throw new Error(`Model download failed: ${response.status}`);
 const model = Buffer.from(await response.arrayBuffer());
 const assetDir = new URL("../website/filter-assets/", import.meta.url);
 mkdirSync(assetDir, { recursive: true });
-const remoteEntry = (name, buffer, extension) => {
+const remoteEntry = (name, slug, buffer, extension) => {
   const bytes = gzipSync(buffer, { level: 9 });
-  const filename = `${createHash("sha256").update(bytes).digest("hex")}.${extension}.gz`;
+  const filename = `${slug}-${createHash("sha256").update(bytes).digest("hex")}.${extension}.gz`;
   writeFileSync(new URL(filename, assetDir), bytes);
   return `export const ${name}_URL = "https://mobile.iterate.com/filter-assets/${filename}";`;
 };
@@ -49,9 +49,9 @@ export const MEDIAPIPE_TASKS_VISION_VERSION = "${version}";
 
 ${entry("MEDIAPIPE_WASM_LOADER_JS_GZ", loaderJs)}
 
-${remoteEntry("MEDIAPIPE_WASM_GZ", wasm, "wasm")}
+${remoteEntry("MEDIAPIPE_WASM_GZ", "mediapipe-vision", wasm, "wasm")}
 
-${remoteEntry("FACE_LANDMARKER_MODEL_GZ", model, "task")}
+${remoteEntry("FACE_LANDMARKER_MODEL_GZ", "face-landmarker", model, "task")}
 `,
 );
 console.log(`wrote ${outPath}`);

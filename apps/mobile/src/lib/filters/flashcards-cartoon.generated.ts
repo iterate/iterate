@@ -3,153 +3,153 @@
 // Deploy the mobile website before publishing an app update with new URLs.
 
 export const FLASHCARD_IMAGES_CARTOON: Record<string, string> = {
-  dog: "https://mobile.iterate.com/filter-assets/0300af8648b492efabfde36382c4f167cab624921eae37f796587b2e34233f3f.jpeg",
-  cat: "https://mobile.iterate.com/filter-assets/93afe0abd18d7c0cac37ada6322ad11d2c814a816da654ee6a6ccabe1e5392b1.jpeg",
-  ball: "https://mobile.iterate.com/filter-assets/b19a80f36869310814584f078e67bfb09a0a4da0d1879dfdbe1374e003f7da6e.jpeg",
+  dog: "https://mobile.iterate.com/filter-assets/cartoon-dog-0300af8648b492efabfde36382c4f167cab624921eae37f796587b2e34233f3f.jpeg",
+  cat: "https://mobile.iterate.com/filter-assets/cartoon-cat-93afe0abd18d7c0cac37ada6322ad11d2c814a816da654ee6a6ccabe1e5392b1.jpeg",
+  ball: "https://mobile.iterate.com/filter-assets/cartoon-ball-b19a80f36869310814584f078e67bfb09a0a4da0d1879dfdbe1374e003f7da6e.jpeg",
   banana:
-    "https://mobile.iterate.com/filter-assets/bcf9202794d25b8fdeaf96e1a4aadecf6a352477d50a4d68d91afa3a7ebb4fee.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-banana-bcf9202794d25b8fdeaf96e1a4aadecf6a352477d50a4d68d91afa3a7ebb4fee.jpeg",
   apple:
-    "https://mobile.iterate.com/filter-assets/e0624d59c3dd4504c8746b6232149cb7d6266d3522adb8e566ac047c6ff50c5f.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-apple-e0624d59c3dd4504c8746b6232149cb7d6266d3522adb8e566ac047c6ff50c5f.jpeg",
   water:
-    "https://mobile.iterate.com/filter-assets/0f75b6fbac49bb00a280b0cb964bf11031e1986be3adfc494d5a59cc487438cc.jpeg",
-  milk: "https://mobile.iterate.com/filter-assets/c93c4d299f8090b403d586a04641f8a68f557a8de03ab56c4d300bb0a7da69bf.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-water-0f75b6fbac49bb00a280b0cb964bf11031e1986be3adfc494d5a59cc487438cc.jpeg",
+  milk: "https://mobile.iterate.com/filter-assets/cartoon-milk-c93c4d299f8090b403d586a04641f8a68f557a8de03ab56c4d300bb0a7da69bf.jpeg",
   tomato:
-    "https://mobile.iterate.com/filter-assets/486b0cdd0c46993ca4fa647a29724cdfba0b0b642342be943ae5ac5b2617e8ed.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-tomato-486b0cdd0c46993ca4fa647a29724cdfba0b0b642342be943ae5ac5b2617e8ed.jpeg",
   cucumber:
-    "https://mobile.iterate.com/filter-assets/8e3b31e8f07f2e33fd8dcd25783d81a464e4d61c6483743b888834f8407e14c0.jpeg",
-  door: "https://mobile.iterate.com/filter-assets/179a13526f7a0d234aae9a85108853a12dd2b79b0b13cf6ead501628b14cd3a6.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-cucumber-8e3b31e8f07f2e33fd8dcd25783d81a464e4d61c6483743b888834f8407e14c0.jpeg",
+  door: "https://mobile.iterate.com/filter-assets/cartoon-door-179a13526f7a0d234aae9a85108853a12dd2b79b0b13cf6ead501628b14cd3a6.jpeg",
   chair:
-    "https://mobile.iterate.com/filter-assets/99b205b496a488a3bf1d7bd98d5a145ce8ccc4d2d34d8e13f87fe0b528fb0fb6.jpeg",
-  bed: "https://mobile.iterate.com/filter-assets/a74d49a54f088364d5055d75ffdb64c40ae52242bfc030a920d1c7e261b8cdc8.jpeg",
-  cow: "https://mobile.iterate.com/filter-assets/8884ce87f28632af698cc0bdf09361bfb39a8fcc6d0e204072749ba4a76c692c.jpeg",
-  pig: "https://mobile.iterate.com/filter-assets/823f8b34f8381a7282e216d7bd777fdc3ff23e5bdcc6f6ef9ffcd14964bb497b.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-chair-99b205b496a488a3bf1d7bd98d5a145ce8ccc4d2d34d8e13f87fe0b528fb0fb6.jpeg",
+  bed: "https://mobile.iterate.com/filter-assets/cartoon-bed-a74d49a54f088364d5055d75ffdb64c40ae52242bfc030a920d1c7e261b8cdc8.jpeg",
+  cow: "https://mobile.iterate.com/filter-assets/cartoon-cow-8884ce87f28632af698cc0bdf09361bfb39a8fcc6d0e204072749ba4a76c692c.jpeg",
+  pig: "https://mobile.iterate.com/filter-assets/cartoon-pig-823f8b34f8381a7282e216d7bd777fdc3ff23e5bdcc6f6ef9ffcd14964bb497b.jpeg",
   horse:
-    "https://mobile.iterate.com/filter-assets/0712c756c2465608b727ef922c2d752be56a9b872de8398e5e34fd1f6b10f9a0.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-horse-0712c756c2465608b727ef922c2d752be56a9b872de8398e5e34fd1f6b10f9a0.jpeg",
   sheep:
-    "https://mobile.iterate.com/filter-assets/1a22e2b406fc3a02822f1ec534694d29822cb1ba40a8a646701bb4e169a3e5e2.jpeg",
-  duck: "https://mobile.iterate.com/filter-assets/df7d18214902264779378d9431045b28dda90dc881a104b85f9a04da90ed19fc.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-sheep-1a22e2b406fc3a02822f1ec534694d29822cb1ba40a8a646701bb4e169a3e5e2.jpeg",
+  duck: "https://mobile.iterate.com/filter-assets/cartoon-duck-df7d18214902264779378d9431045b28dda90dc881a104b85f9a04da90ed19fc.jpeg",
   chicken:
-    "https://mobile.iterate.com/filter-assets/e4ef7a4198607e5b916be1f3db6175b8a85b1ecdb954833128a78a843150310e.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-chicken-e4ef7a4198607e5b916be1f3db6175b8a85b1ecdb954833128a78a843150310e.jpeg",
   carrot:
-    "https://mobile.iterate.com/filter-assets/8d7c8994999a9e763c0c3a5b7dbe5cbba4f9ff0add4f70f25d8eaba7be6fd19a.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-carrot-8d7c8994999a9e763c0c3a5b7dbe5cbba4f9ff0add4f70f25d8eaba7be6fd19a.jpeg",
   pasta:
-    "https://mobile.iterate.com/filter-assets/fa567333443890b14ce414be41ae3a0a8596d8970ca3c7f84bef85203b7c407f.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-pasta-fa567333443890b14ce414be41ae3a0a8596d8970ca3c7f84bef85203b7c407f.jpeg",
   bread:
-    "https://mobile.iterate.com/filter-assets/8de29887adcf0e4df1fe5ea0a6f3b8cb6b0b24a7cf74020061f2ede44835ca4f.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-bread-8de29887adcf0e4df1fe5ea0a6f3b8cb6b0b24a7cf74020061f2ede44835ca4f.jpeg",
   cheese:
-    "https://mobile.iterate.com/filter-assets/49dc6030a13344036752ca0adcb5a0b06c961c5f5d793954261cd749ea4f3fa3.jpeg",
-  egg: "https://mobile.iterate.com/filter-assets/21031ef90ec4dc2c0156f50b172929f0102fb671f952bf2abffee6e1c0986bfc.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-cheese-49dc6030a13344036752ca0adcb5a0b06c961c5f5d793954261cd749ea4f3fa3.jpeg",
+  egg: "https://mobile.iterate.com/filter-assets/cartoon-egg-21031ef90ec4dc2c0156f50b172929f0102fb671f952bf2abffee6e1c0986bfc.jpeg",
   strawberry:
-    "https://mobile.iterate.com/filter-assets/19c844b67889a4f228e028de9798128c94b374b5f46fd22e3b121ae58a5105cc.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-strawberry-19c844b67889a4f228e028de9798128c94b374b5f46fd22e3b121ae58a5105cc.jpeg",
   grapes:
-    "https://mobile.iterate.com/filter-assets/b53c9b6c6e227af824fd0400b7b767e7a6139475f32d98ab36b01ff570cc5423.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-grapes-b53c9b6c6e227af824fd0400b7b767e7a6139475f32d98ab36b01ff570cc5423.jpeg",
   orange:
-    "https://mobile.iterate.com/filter-assets/cf0b7401364a1fe7dc059a60d072d9cd25d5c4466e8de144dcb7a9ecdbd34fda.jpeg",
-  car: "https://mobile.iterate.com/filter-assets/9705692eacc675dcf57512b3a891870e723b44cb7cf7617db4fe138aa6dd8649.jpeg",
-  bus: "https://mobile.iterate.com/filter-assets/dc09f2a7ec06d49ef3d8dcaa188f14fddc3c248a44c3d75628ce3a70615bac8c.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-orange-cf0b7401364a1fe7dc059a60d072d9cd25d5c4466e8de144dcb7a9ecdbd34fda.jpeg",
+  car: "https://mobile.iterate.com/filter-assets/cartoon-car-9705692eacc675dcf57512b3a891870e723b44cb7cf7617db4fe138aa6dd8649.jpeg",
+  bus: "https://mobile.iterate.com/filter-assets/cartoon-bus-dc09f2a7ec06d49ef3d8dcaa188f14fddc3c248a44c3d75628ce3a70615bac8c.jpeg",
   train:
-    "https://mobile.iterate.com/filter-assets/6838497d9ac7a7894e7e680ca0f993187344926bd9be5318a50ba44ebae9ddf3.jpeg",
-  book: "https://mobile.iterate.com/filter-assets/0f85238dd074626517826e583f87e792f341e88362718cc6ee74fa3855f77787.jpeg",
-  star: "https://mobile.iterate.com/filter-assets/4d6ea4f880759db8434025aa654428f1777404b575047f911720b5866e06b0ef.jpeg",
-  moon: "https://mobile.iterate.com/filter-assets/a7a6c7b2069f93f2ee168ac6daa3ce5b64fea4c38f09684fbedc824e98df50c3.jpeg",
-  sun: "https://mobile.iterate.com/filter-assets/94a692d11ebff85a5e62938f98fa0920dc73f3a5bc6550e7ad70d2731d7acc5c.jpeg",
-  tree: "https://mobile.iterate.com/filter-assets/36e4267c10f2b882026447e0b0c3acc5e97f0ccc781551bdedb61a4d0fd42dc2.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-train-6838497d9ac7a7894e7e680ca0f993187344926bd9be5318a50ba44ebae9ddf3.jpeg",
+  book: "https://mobile.iterate.com/filter-assets/cartoon-book-0f85238dd074626517826e583f87e792f341e88362718cc6ee74fa3855f77787.jpeg",
+  star: "https://mobile.iterate.com/filter-assets/cartoon-star-4d6ea4f880759db8434025aa654428f1777404b575047f911720b5866e06b0ef.jpeg",
+  moon: "https://mobile.iterate.com/filter-assets/cartoon-moon-a7a6c7b2069f93f2ee168ac6daa3ce5b64fea4c38f09684fbedc824e98df50c3.jpeg",
+  sun: "https://mobile.iterate.com/filter-assets/cartoon-sun-94a692d11ebff85a5e62938f98fa0920dc73f3a5bc6550e7ad70d2731d7acc5c.jpeg",
+  tree: "https://mobile.iterate.com/filter-assets/cartoon-tree-36e4267c10f2b882026447e0b0c3acc5e97f0ccc781551bdedb61a4d0fd42dc2.jpeg",
   flower:
-    "https://mobile.iterate.com/filter-assets/b685a70c4768f433939e187e775eb2929e27aea587abe09106e86e128c4e1d44.jpeg",
-  fish: "https://mobile.iterate.com/filter-assets/003246f9b5211ae0dfab515ca35366b4e97daaa06331ff98526742f5209e4776.jpeg",
-  bird: "https://mobile.iterate.com/filter-assets/eaa07f337d6e69d6dc740b8983b236e9c1ad9b469dc07d07ec9bf2163fc21931.jpeg",
-  shoe: "https://mobile.iterate.com/filter-assets/6673da74e7ae15438c91199555c8b9a83e914dbc8a00db4c2fed0443b8b40398.jpeg",
-  hat: "https://mobile.iterate.com/filter-assets/5a72fee74569d8b247a460501e81771d33ed53b32c760377893fd540cda3d006.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-flower-b685a70c4768f433939e187e775eb2929e27aea587abe09106e86e128c4e1d44.jpeg",
+  fish: "https://mobile.iterate.com/filter-assets/cartoon-fish-003246f9b5211ae0dfab515ca35366b4e97daaa06331ff98526742f5209e4776.jpeg",
+  bird: "https://mobile.iterate.com/filter-assets/cartoon-bird-eaa07f337d6e69d6dc740b8983b236e9c1ad9b469dc07d07ec9bf2163fc21931.jpeg",
+  shoe: "https://mobile.iterate.com/filter-assets/cartoon-shoe-6673da74e7ae15438c91199555c8b9a83e914dbc8a00db4c2fed0443b8b40398.jpeg",
+  hat: "https://mobile.iterate.com/filter-assets/cartoon-hat-5a72fee74569d8b247a460501e81771d33ed53b32c760377893fd540cda3d006.jpeg",
   spoon:
-    "https://mobile.iterate.com/filter-assets/26dc90ad2cff4652bf385c048df3d3657e0cf736768bfa4514cb3d57fc3f8ca4.jpeg",
-  nose: "https://mobile.iterate.com/filter-assets/335d70fb0dfffdeaeb74514a17e533f19793ec294bcab3b298b4b5ba1546ca5a.jpeg",
-  ear: "https://mobile.iterate.com/filter-assets/e135802621598e45fbd3be35384a03a7f5286258c7f0d2d039add7e40ff84aa9.jpeg",
-  hand: "https://mobile.iterate.com/filter-assets/4ba4feeb699b2f6ac7a0b7d7956af58bdfe2f38783777f2202786bf3807697ce.jpeg",
-  foot: "https://mobile.iterate.com/filter-assets/6c3375d9996e2053ba3b62b6aad247f3903a4bff570ba30da7cd811670465ec7.jpeg",
-  sock: "https://mobile.iterate.com/filter-assets/cd741b8e4adcf258a2a0cbb901afc6305d077ea6376896f38aabb49f5b93fc74.jpeg",
-  cup: "https://mobile.iterate.com/filter-assets/9dd0c203b594145366e5fd8c6198815cc3bdd67fc0c64db5c2ebe338e6f6d46f.jpeg",
-  bowl: "https://mobile.iterate.com/filter-assets/9ef8ed2acfda8c1151ac91e7811974423e196525e8ec9d5945fbfea50b821790.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-spoon-26dc90ad2cff4652bf385c048df3d3657e0cf736768bfa4514cb3d57fc3f8ca4.jpeg",
+  nose: "https://mobile.iterate.com/filter-assets/cartoon-nose-335d70fb0dfffdeaeb74514a17e533f19793ec294bcab3b298b4b5ba1546ca5a.jpeg",
+  ear: "https://mobile.iterate.com/filter-assets/cartoon-ear-e135802621598e45fbd3be35384a03a7f5286258c7f0d2d039add7e40ff84aa9.jpeg",
+  hand: "https://mobile.iterate.com/filter-assets/cartoon-hand-4ba4feeb699b2f6ac7a0b7d7956af58bdfe2f38783777f2202786bf3807697ce.jpeg",
+  foot: "https://mobile.iterate.com/filter-assets/cartoon-foot-6c3375d9996e2053ba3b62b6aad247f3903a4bff570ba30da7cd811670465ec7.jpeg",
+  sock: "https://mobile.iterate.com/filter-assets/cartoon-sock-cd741b8e4adcf258a2a0cbb901afc6305d077ea6376896f38aabb49f5b93fc74.jpeg",
+  cup: "https://mobile.iterate.com/filter-assets/cartoon-cup-9dd0c203b594145366e5fd8c6198815cc3bdd67fc0c64db5c2ebe338e6f6d46f.jpeg",
+  bowl: "https://mobile.iterate.com/filter-assets/cartoon-bowl-9ef8ed2acfda8c1151ac91e7811974423e196525e8ec9d5945fbfea50b821790.jpeg",
   plate:
-    "https://mobile.iterate.com/filter-assets/6d7fc54e3da9da5650adb96a417ec77068b3ee06d2ed970f5b7d9e8e81b4de69.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-plate-6d7fc54e3da9da5650adb96a417ec77068b3ee06d2ed970f5b7d9e8e81b4de69.jpeg",
   bottle:
-    "https://mobile.iterate.com/filter-assets/887561739206e4dc1641ceaa408364a766c0c7607f9c340f30d82a6b406cb243.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-bottle-887561739206e4dc1641ceaa408364a766c0c7607f9c340f30d82a6b406cb243.jpeg",
   phone:
-    "https://mobile.iterate.com/filter-assets/1f74fdc03b0e38f224bbbdf895e21a203375b047c267b858c7edb9f98c3fff43.jpeg",
-  keys: "https://mobile.iterate.com/filter-assets/ee5c6db138e57e5358d2cfd90796e6d719bcc5a4d402f26232caa0358656c377.jpeg",
-  bath: "https://mobile.iterate.com/filter-assets/bcaf4a689bcf35fea0de860da5d5afb15bf0c4fdb8cc936c845019e0f813c775.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-phone-1f74fdc03b0e38f224bbbdf895e21a203375b047c267b858c7edb9f98c3fff43.jpeg",
+  keys: "https://mobile.iterate.com/filter-assets/cartoon-keys-ee5c6db138e57e5358d2cfd90796e6d719bcc5a4d402f26232caa0358656c377.jpeg",
+  bath: "https://mobile.iterate.com/filter-assets/cartoon-bath-bcaf4a689bcf35fea0de860da5d5afb15bf0c4fdb8cc936c845019e0f813c775.jpeg",
   brush:
-    "https://mobile.iterate.com/filter-assets/ea836de0047c6ccf81029a0a6401fa1021ce6b7140f945d97dace1f9448db6c0.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-brush-ea836de0047c6ccf81029a0a6401fa1021ce6b7140f945d97dace1f9448db6c0.jpeg",
   cookie:
-    "https://mobile.iterate.com/filter-assets/3efc6816921b43a25ccc70e1598a1c85d638c55d438b3f41b2d5df2787d35d51.jpeg",
-  cake: "https://mobile.iterate.com/filter-assets/d0563008228cf50e4edace236148bdd6448fd60bbac69ea6c201c13fd6dd6018.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-cookie-3efc6816921b43a25ccc70e1598a1c85d638c55d438b3f41b2d5df2787d35d51.jpeg",
+  cake: "https://mobile.iterate.com/filter-assets/cartoon-cake-d0563008228cf50e4edace236148bdd6448fd60bbac69ea6c201c13fd6dd6018.jpeg",
   juice:
-    "https://mobile.iterate.com/filter-assets/efd494da7e62103b3d52958a36eba5dd51594e912b549d7cd2af919bb35fbae4.jpeg",
-  corn: "https://mobile.iterate.com/filter-assets/78a58d98679dbe807375d3b2c227160c5a2f5ad182110231a78949ad1d74009d.jpeg",
-  peas: "https://mobile.iterate.com/filter-assets/923478cfa365b947f3a59aa0051fbce325e9a54a2d5240837d1ee7d91def4a99.jpeg",
-  bear: "https://mobile.iterate.com/filter-assets/12d0bf14ee571de91047162dc441c9d29e0f313162b246ca4ac4ddadac975528.jpeg",
-  lion: "https://mobile.iterate.com/filter-assets/717cb3319af093ad6652fbe193caddda587114b0ebec1c7405858e4ba07460db.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-juice-efd494da7e62103b3d52958a36eba5dd51594e912b549d7cd2af919bb35fbae4.jpeg",
+  corn: "https://mobile.iterate.com/filter-assets/cartoon-corn-78a58d98679dbe807375d3b2c227160c5a2f5ad182110231a78949ad1d74009d.jpeg",
+  peas: "https://mobile.iterate.com/filter-assets/cartoon-peas-923478cfa365b947f3a59aa0051fbce325e9a54a2d5240837d1ee7d91def4a99.jpeg",
+  bear: "https://mobile.iterate.com/filter-assets/cartoon-bear-12d0bf14ee571de91047162dc441c9d29e0f313162b246ca4ac4ddadac975528.jpeg",
+  lion: "https://mobile.iterate.com/filter-assets/cartoon-lion-717cb3319af093ad6652fbe193caddda587114b0ebec1c7405858e4ba07460db.jpeg",
   elephant:
-    "https://mobile.iterate.com/filter-assets/c604f0ec0e7612b9321a167d2442d3576235e87acaef359f29dfd00296686387.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-elephant-c604f0ec0e7612b9321a167d2442d3576235e87acaef359f29dfd00296686387.jpeg",
   monkey:
-    "https://mobile.iterate.com/filter-assets/f258bbb884ddde2af0682b426d23067b471ca0f233790b69ae83f24ad4461820.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-monkey-f258bbb884ddde2af0682b426d23067b471ca0f233790b69ae83f24ad4461820.jpeg",
   rabbit:
-    "https://mobile.iterate.com/filter-assets/44889e518edd0a18a76b01117ed9462ee9810b2f84665b79ab980c9a73a99320.jpeg",
-  frog: "https://mobile.iterate.com/filter-assets/70dd134d41bac8bb1747cccdbfa16b091020d870b32663e1d311a016f0c463c7.jpeg",
-  bee: "https://mobile.iterate.com/filter-assets/70ace38a2f40466d94796954cd9797a4adf506f0e10a25b2947999af97fffb1a.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-rabbit-44889e518edd0a18a76b01117ed9462ee9810b2f84665b79ab980c9a73a99320.jpeg",
+  frog: "https://mobile.iterate.com/filter-assets/cartoon-frog-70dd134d41bac8bb1747cccdbfa16b091020d870b32663e1d311a016f0c463c7.jpeg",
+  bee: "https://mobile.iterate.com/filter-assets/cartoon-bee-70ace38a2f40466d94796954cd9797a4adf506f0e10a25b2947999af97fffb1a.jpeg",
   mouse:
-    "https://mobile.iterate.com/filter-assets/7de37cfcb082e0503fb4efe37e411352b718cb88b1393a3013aae5f20ebe250e.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-mouse-7de37cfcb082e0503fb4efe37e411352b718cb88b1393a3013aae5f20ebe250e.jpeg",
   butterfly:
-    "https://mobile.iterate.com/filter-assets/d9b0ef346d6d8b8361606e08020fcfa3fe7a60cdc4f4f7530c93d90726afbfc5.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-butterfly-d9b0ef346d6d8b8361606e08020fcfa3fe7a60cdc4f4f7530c93d90726afbfc5.jpeg",
   snail:
-    "https://mobile.iterate.com/filter-assets/78077e1377671cfb02208ce2a01fe98a3ee8a7f0990d761e45fbb9b322f06bc5.jpeg",
-  worm: "https://mobile.iterate.com/filter-assets/b35863d8f377a3dd0bae92733d5fb89345f36e3487afc46f02a29d6302a7325a.jpeg",
-  bike: "https://mobile.iterate.com/filter-assets/309b3805f4dcd61382ef0778222ffaf2f741c0aa9eacdecddab47fecc90504ae.jpeg",
-  boat: "https://mobile.iterate.com/filter-assets/977d6de0323bec02241709c0164409b7cc7b06857bb8c7b81b203f32446ad153.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-snail-78077e1377671cfb02208ce2a01fe98a3ee8a7f0990d761e45fbb9b322f06bc5.jpeg",
+  worm: "https://mobile.iterate.com/filter-assets/cartoon-worm-b35863d8f377a3dd0bae92733d5fb89345f36e3487afc46f02a29d6302a7325a.jpeg",
+  bike: "https://mobile.iterate.com/filter-assets/cartoon-bike-309b3805f4dcd61382ef0778222ffaf2f741c0aa9eacdecddab47fecc90504ae.jpeg",
+  boat: "https://mobile.iterate.com/filter-assets/cartoon-boat-977d6de0323bec02241709c0164409b7cc7b06857bb8c7b81b203f32446ad153.jpeg",
   plane:
-    "https://mobile.iterate.com/filter-assets/275ef1238cb2d935f76d7f645e38f6b54f5c8cd7470ac718495eb2a93645c5b3.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-plane-275ef1238cb2d935f76d7f645e38f6b54f5c8cd7470ac718495eb2a93645c5b3.jpeg",
   truck:
-    "https://mobile.iterate.com/filter-assets/e140d9e8c2298e67197377f365d64664746a950a71f27d47dda9d6719f28324d.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-truck-e140d9e8c2298e67197377f365d64664746a950a71f27d47dda9d6719f28324d.jpeg",
   tractor:
-    "https://mobile.iterate.com/filter-assets/e97fd65adecbf2eb6c9b587152232bfa4f696b9cd4130cbc62ac9f3bf2695e67.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-tractor-e97fd65adecbf2eb6c9b587152232bfa4f696b9cd4130cbc62ac9f3bf2695e67.jpeg",
   balloon:
-    "https://mobile.iterate.com/filter-assets/5e60e12113708e8d88ab501ed1b20def35f73fa306ea3098ff94f062e91e80b3.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-balloon-5e60e12113708e8d88ab501ed1b20def35f73fa306ea3098ff94f062e91e80b3.jpeg",
   "teddy bear":
-    "https://mobile.iterate.com/filter-assets/69839ab646b0131d6fa3644daedbb62a53909f5c30fde0f3c74e444d24999539.jpeg",
-  doll: "https://mobile.iterate.com/filter-assets/d4da36ee094c2a56a2db5ea1e1092a1b3d80e9f3521beb21fb537d9ad3c4f6ee.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-teddy-bear-69839ab646b0131d6fa3644daedbb62a53909f5c30fde0f3c74e444d24999539.jpeg",
+  doll: "https://mobile.iterate.com/filter-assets/cartoon-doll-d4da36ee094c2a56a2db5ea1e1092a1b3d80e9f3521beb21fb537d9ad3c4f6ee.jpeg",
   blocks:
-    "https://mobile.iterate.com/filter-assets/7e0a2d3806e50a39af2531acfc4ad8c4168d209e08845a8bbb20a8e44da5ceab.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-blocks-7e0a2d3806e50a39af2531acfc4ad8c4168d209e08845a8bbb20a8e44da5ceab.jpeg",
   cloud:
-    "https://mobile.iterate.com/filter-assets/680be9855e6633cf35674544a9864e4a51e1ef0bd38612cbbbee29064bc17baa.jpeg",
-  snow: "https://mobile.iterate.com/filter-assets/b6813f1f8fc2e52245166977a2a3ea378584321b91dc76dc74bf0a995870b923.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-cloud-680be9855e6633cf35674544a9864e4a51e1ef0bd38612cbbbee29064bc17baa.jpeg",
+  snow: "https://mobile.iterate.com/filter-assets/cartoon-snow-b6813f1f8fc2e52245166977a2a3ea378584321b91dc76dc74bf0a995870b923.jpeg",
   honey:
-    "https://mobile.iterate.com/filter-assets/cd1fdf284889471da5aa430edb171b9d9c5e444bcbe5ba3d9d584bd896a7043a.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-honey-cd1fdf284889471da5aa430edb171b9d9c5e444bcbe5ba3d9d584bd896a7043a.jpeg",
   toast:
-    "https://mobile.iterate.com/filter-assets/8ec81567816fdfc66be523d05f45a5f263287382cb191d7f8839ed219287ecf2.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-toast-8ec81567816fdfc66be523d05f45a5f263287382cb191d7f8839ed219287ecf2.jpeg",
   "peanut butter":
-    "https://mobile.iterate.com/filter-assets/51f00f2215dab52bf119fe7bd9139f865dfc63fe3ac08419a223c67564470b54.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-peanut-butter-51f00f2215dab52bf119fe7bd9139f865dfc63fe3ac08419a223c67564470b54.jpeg",
   broccoli:
-    "https://mobile.iterate.com/filter-assets/cb32f94523741f82171b4a34219467b2c9d4d9fdd374aa72ecf0d5f81ecdf51e.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-broccoli-cb32f94523741f82171b4a34219467b2c9d4d9fdd374aa72ecf0d5f81ecdf51e.jpeg",
   "ice lolly":
-    "https://mobile.iterate.com/filter-assets/46b92adae03aad8b1cc8ec190073c8e7ced4f06856c6b18c6632f28a3fc967a4.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-ice-lolly-46b92adae03aad8b1cc8ec190073c8e7ced4f06856c6b18c6632f28a3fc967a4.jpeg",
   "ice cream":
-    "https://mobile.iterate.com/filter-assets/f48c331309285495083ce3b878ce91e9a9c0959de639a818e413da867f5fa4fd.jpeg",
-  pear: "https://mobile.iterate.com/filter-assets/0d2f0d063e3589897e0404391303920bc8968706327d0be26bc5b2958f159b17.jpeg",
-  kiwi: "https://mobile.iterate.com/filter-assets/78a26a2e965a908df8ec3ff140e0729d35693d9e173f9c5db30e336f094e0be4.jpeg",
-  eye: "https://mobile.iterate.com/filter-assets/aff29316ef314cf208848efe00c4451d984be9955c5a8d25e7487cb14f3dba0f.jpeg",
-  chin: "https://mobile.iterate.com/filter-assets/0c2e1673343e3de34179a15c89b71c48dd1bfb60e170e75d9bc47cb39254f7f0.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-ice-cream-f48c331309285495083ce3b878ce91e9a9c0959de639a818e413da867f5fa4fd.jpeg",
+  pear: "https://mobile.iterate.com/filter-assets/cartoon-pear-0d2f0d063e3589897e0404391303920bc8968706327d0be26bc5b2958f159b17.jpeg",
+  kiwi: "https://mobile.iterate.com/filter-assets/cartoon-kiwi-78a26a2e965a908df8ec3ff140e0729d35693d9e173f9c5db30e336f094e0be4.jpeg",
+  eye: "https://mobile.iterate.com/filter-assets/cartoon-eye-aff29316ef314cf208848efe00c4451d984be9955c5a8d25e7487cb14f3dba0f.jpeg",
+  chin: "https://mobile.iterate.com/filter-assets/cartoon-chin-0c2e1673343e3de34179a15c89b71c48dd1bfb60e170e75d9bc47cb39254f7f0.jpeg",
   penguin:
-    "https://mobile.iterate.com/filter-assets/d529d7719aea88502ec8bc1a921c9a0ef19822479bb00a672aacfb8430446375.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-penguin-d529d7719aea88502ec8bc1a921c9a0ef19822479bb00a672aacfb8430446375.jpeg",
   giraffe:
-    "https://mobile.iterate.com/filter-assets/7203e05b8aacaecd59d736378b0cc242616b839837fac1654921043e758f9617.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-giraffe-7203e05b8aacaecd59d736378b0cc242616b839837fac1654921043e758f9617.jpeg",
   piano:
-    "https://mobile.iterate.com/filter-assets/8b3b25396ba3ba8e108e7f24076fdc57897eff5d3c17fb2471dda8b1e3621e94.jpeg",
-  taxi: "https://mobile.iterate.com/filter-assets/b4162bc8bc13ba27e8a522756656030787bedff63a3dfdcdc7859a93fadfc97a.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-piano-8b3b25396ba3ba8e108e7f24076fdc57897eff5d3c17fb2471dda8b1e3621e94.jpeg",
+  taxi: "https://mobile.iterate.com/filter-assets/cartoon-taxi-b4162bc8bc13ba27e8a522756656030787bedff63a3dfdcdc7859a93fadfc97a.jpeg",
   scooter:
-    "https://mobile.iterate.com/filter-assets/cb287d8a6e9f61d9b1d137d40fa9e7efc0a880843004dfadba4f429b870b8a2f.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-scooter-cb287d8a6e9f61d9b1d137d40fa9e7efc0a880843004dfadba4f429b870b8a2f.jpeg",
   digger:
-    "https://mobile.iterate.com/filter-assets/292575b675c956672442b3d36c12abfdbc665c93ea0c6fdaa533c7dac036595a.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-digger-292575b675c956672442b3d36c12abfdbc665c93ea0c6fdaa533c7dac036595a.jpeg",
   "fire engine":
-    "https://mobile.iterate.com/filter-assets/089ae0ca88352315147a0693fea87fe565adbd085c9430ad78a101000076cea5.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-fire-engine-089ae0ca88352315147a0693fea87fe565adbd085c9430ad78a101000076cea5.jpeg",
   motorbike:
-    "https://mobile.iterate.com/filter-assets/4d44a30a33bc0fd264c5f387947fed95a68e64be3861b31ae3f975aef17c7407.jpeg",
+    "https://mobile.iterate.com/filter-assets/cartoon-motorbike-4d44a30a33bc0fd264c5f387947fed95a68e64be3861b31ae3f975aef17c7407.jpeg",
 };

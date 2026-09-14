@@ -42,6 +42,7 @@ export async function backdrops() {
   };
   return generateImageRecord({
     file: "backdrops.generated.ts",
+    assetPrefix: "backdrop",
     exportName: "FILTER_BACKDROPS",
     mime: "jpeg",
     header: "AI-generated backdrop images for the camera filters.",
@@ -213,6 +214,7 @@ export async function flashcards(options: {
   };
   return generateImageRecord({
     file: `flashcards-${style}.generated.ts`,
+    assetPrefix: style,
     exportName: `FLASHCARD_IMAGES_${style.toUpperCase()}`,
     mime: "jpeg",
     header: `Toddler flashcard pictures, ${style} style.`,
@@ -247,6 +249,7 @@ const ANIMAL_EXPRESSIONS: Record<string, string> = {
 export async function animals() {
   return generateImageRecord({
     file: "animal-faces.generated.ts",
+    assetPrefix: "animal",
     exportName: "ANIMAL_FACE_IMAGES",
     mime: "png",
     header:
@@ -345,7 +348,7 @@ function generatedHeader(what: string) {
 
 function assetEntryPattern() {
   // Tolerates formatter drift; restrict filenames before using them on disk.
-  return /(?:"([^"]+)"|([A-Za-z]\w*)):\s*"https:\/\/mobile\.iterate\.com\/filter-assets\/([a-f0-9]{64}\.(?:png|jpeg))"/g;
+  return /(?:"([^"]+)"|([A-Za-z]\w*)):\s*"https:\/\/mobile\.iterate\.com\/filter-assets\/((?:[a-z0-9]+-)*[a-f0-9]{64}\.(?:png|jpeg))"/g;
 }
 
 async function openaiImage(
@@ -402,6 +405,7 @@ async function unsplashImage(query: string) {
  * generate a few at a time. */
 async function generateImageRecord(input: {
   file: string;
+  assetPrefix: string;
   exportName: string;
   mime: "jpeg" | "png";
   header: string;
@@ -426,7 +430,11 @@ async function generateImageRecord(input: {
         const base64 = await input.generate(id);
         console.log(`${id}: ${Math.round((base64.length * 3) / 4 / 1024)}KB`);
         const bytes = Buffer.from(base64, "base64");
-        const filename = `${createHash("sha256").update(bytes).digest("hex")}.${input.mime}`;
+        const slug = id
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-|-$/g, "");
+        const filename = `${input.assetPrefix}-${slug}-${createHash("sha256").update(bytes).digest("hex")}.${input.mime}`;
         writeFileSync(join(ASSETS_DIR, filename), bytes);
         // Fixed pair consumed by Map below.
         return [id, filename] as [string, string];

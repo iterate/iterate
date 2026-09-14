@@ -442,3 +442,7 @@ this follow-up; those behaviors remain unchanged.
   typechecks, mobile lint, and iOS export pass. Merged latest main
   `9c588ad55` without conflicts. All four artwork generator commands preserve
   existing art with zero generation requests.
+
+- Asset names now start with short descriptive slugs (for example,
+  `animal-cat-<sha256>.png`). Generators preserve these names, hash validation
+  still checks the bytes, and previously published hash-only URLs stay valid.
