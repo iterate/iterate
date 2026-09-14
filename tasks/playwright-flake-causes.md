@@ -7,7 +7,7 @@ base: a85434f645
 
 # Fix the recurring Playwright failures
 
-Initial fixes are committed; the first preview batch passed 12/14 executions. Both failures exposed a selection bug in the new shopping-list helper, now corrected for the next batch. Larger reruns and final cleanup remain. The deliverable is a pushed branch and GitHub compare link; **do not open a pull request**.
+The targeted fixes are implemented and pushed. Controlled browser regressions pass; larger zero-retry preview batches and the server-error audit are running. Final validation and preview cleanup remain. **Do not open a pull request**; deliver GitHub compare links.
 
 ## Request and assumptions
 
@@ -42,3 +42,7 @@ Fix the six failure groups investigated in the CI design jam, with repeated indi
 - Corrected-batch investigation: a peer edit could arrive between measuring its text offset and selecting the word. Wait for the peer to display the local edit before selecting. Cursor-name decorations also split visible phrases in DOM text; compare rendered document lines with cursor decorations removed. These were defects in the new test, not demonstrated undo failures.
 - Todo ordering: the subscription can arrive before the Add response. Allocate the row ID in the browser and send it with Add, so either arrival order retires the same optimistic row. Three DOM regressions cover both orderings and a rejected save; 16 starter-app tests pass.
 - Added a real-browser pending-send test: hold client WebSocket frames after initial subscriptions are ready, require Sending before releasing them, hold the fake model response, and verify backend progress takes over before displaying its reply. A trial click establishes readiness before the transport gate; gating during initial setup otherwise deadlocks the test itself.
+
+- Final behavior deployment: SDK/source `cfe9055be60db07554adb1ccc6a7e060f9436e31`, OS `040f7d7a-aeeb-4039-adee-2141d4b6fb62` (uploaded 22:51:50 UTC). Three consecutive runs each of shopping-list undo and controlled Sending passed before the 20-repeat/eight-worker batch.
+- The real conditional-edit probe preserved newer file contents and returned the expected stale-edit rejection, but its ITX span/log called it a server error (`log_058f026e58ec41e3892cd4590a064f4f`, trace `ece820338859304f9b23492a65e47314`). Classify only Workspace.edit's missing old text/deleted file as `client_error`; keep transport errors and failures from other methods as errors. The two expected-conflict regressions failed before this change.
+- Cloudflare audit found a brief platform reset burst at 22:54:41–47 UTC: internal DO storage resets followed by code-reset errors and eight rejected delivery batches whose preceding batch had been lost. There was no intervening deployment in Cloudflare's history. Recovery checks at 22:57:14–15 showed both affected project subscriptions caught up (100/100 and 94/94), and the affected agent subscription caught up (151/151), all active with no pending retry or last error. These are shared reset/recovery observations, not evidence that this branch fixes Cloudflare storage resets.

@@ -73,10 +73,21 @@ function correlatedItxError(error: unknown, callId: string, outcome: ItxErrorOut
   return correlated;
 }
 
-function itxErrorOutcome(error: unknown): ItxErrorOutcome {
+function itxErrorOutcome(error: unknown, method: string): ItxErrorOutcome {
   try {
     if (error instanceof ItxAuthenticationError) return "client_error";
     if (error instanceof ItxProspectiveProjectError) return "client_error";
+    // Conditional workspace edits reject stale contents or a deleted file.
+    // Notes analysis deliberately uses this precondition to preserve a user's
+    // newer edit. Keep the rejected call observable without calling it a
+    // server defect. Other methods and transport/storage errors stay errors.
+    if (
+      method === "Workspace.edit" &&
+      error instanceof Error &&
+      /^(Edit oldString was not found in|Workspace file does not exist:) "/.test(error.message)
+    ) {
+      return "client_error";
+    }
     if (isItxClientDisconnectedError(error)) return "client_disconnected";
     if (isWorkerBuildInProgressError(error)) return "worker_building";
     // Stream incarnation loss is an explicit, retryable availability outcome
@@ -125,7 +136,7 @@ export function createItxRpcSessionOptions(options: {
           {
             kind: "itx_rpc",
             parentId: options.parentLogId,
-            classifyError: (error) => itxErrorOutcome(error),
+            classifyError: (error) => itxErrorOutcome(error, method),
           },
           async () => {
             const callId = wideLogger.id();
@@ -149,7 +160,7 @@ export function createItxRpcSessionOptions(options: {
               span.setAttribute("itx.outcome", "ok");
               return result;
             } catch (error) {
-              const outcome = itxErrorOutcome(error);
+              const outcome = itxErrorOutcome(error, method);
               span.setAttribute("itx.outcome", outcome);
               // Cap'n Web v0.8.0 copies enumerable Error properties across
               // the wire: https://github.com/cloudflare/capnweb/blob/v0.8.0/src/serialize.ts

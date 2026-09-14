@@ -115,6 +115,36 @@ describe("ITX observability", () => {
     });
   });
 
+  it.each([
+    ["edit", 'Edit oldString was not found in "/workspace/note.md".', "client_error"],
+    ["edit", 'Workspace file does not exist: "/workspace/note.md".', "client_error"],
+    ["edit", "Network connection lost.", "error"],
+    ["writeFile", 'Workspace file does not exist: "/workspace/note.md".', "error"],
+  ])("classifies Workspace.%s rejecting %s as %s", async (method, message, outcome) => {
+    class WorkspaceRpcTarget {
+      edit() {}
+      writeFile() {}
+    }
+    const events: WideLogEvent[] = [];
+    vi.spyOn(console, "log").mockImplementation((event) => void events.push(event as WideLogEvent));
+    const errors = vi
+      .spyOn(console, "error")
+      .mockImplementation((event) => void events.push(event as WideLogEvent));
+    const session = createItxRpcSessionOptions({
+      transport: "websocket",
+      sessionId: "itx_session_conditional_edit",
+      parentLogId: "log_handshake",
+    });
+    await expect(
+      session.onCall!({ path: [method!], target: new WorkspaceRpcTarget() }, async () => {
+        throw new Error(message);
+      }),
+    ).rejects.toMatchObject({ message });
+    expect(events).toMatchObject([{ outcome, itx: { method: `Workspace.${method}` } }]);
+    expect(recordedSpans).toMatchObject([{ attributes: { "itx.outcome": outcome } }]);
+    expect(errors).toHaveBeenCalledTimes(outcome === "error" ? 1 : 0);
+  });
+
   it("classifies rejected credentials as a client error without polluting server-error logs", async () => {
     const events: WideLogEvent[] = [];
     const log = vi
