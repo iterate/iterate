@@ -7,11 +7,11 @@
 // Two pure functions of (options, fetch): `beginSecretConnect` builds the pending record and the
 // authorize URL; `completeSecretConnect` turns the pending record and a code into a `SecretRecord`.
 // The host (secret-durable-object.ts) signs the `state`, keeps the pending record and runs these;
-// the callback route (`secretConnectCallback`, below) is the platform's one door back in.
+// the callback route (`secretConnectCallback`, below) is where the provider sends the human back.
 
 import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
 import { verifyClaims } from "./principal.ts";
-import { oauthTokenRequest, oauthTokensOf, type SecretRecord } from "./secrets.ts";
+import { isRecord, oauthTokenRequest, oauthTokensOf, type SecretRecord } from "./secrets.ts";
 import type { SecretDurableObject } from "./secret-durable-object.ts";
 
 /** What `itx.secrets.connect(name, options)` takes: the provider's two endpoints, the project's own
@@ -58,8 +58,8 @@ export function normalizeSecretConnect(options: unknown): SecretConnectOptions &
   urls: string[];
   clientAuth: "basic" | "body";
 } {
-  if (!(typeof options === "object" && options)) throw new Error("secrets.connect: options");
-  const o = options as Record<string, unknown>;
+  if (!isRecord(options)) throw new Error("secrets.connect: options is an object");
+  const o = options;
   const endpoint = (key: "authorizationEndpoint" | "tokenEndpoint") => {
     const url = new URL(String(o[key]));
     if (url.protocol !== "http:" && url.protocol !== "https:")
@@ -97,7 +97,7 @@ export function normalizeSecretConnect(options: unknown): SecretConnectOptions &
   };
 }
 
-const base64url = (bytes: Uint8Array): string =>
+const base64url = (bytes: Uint8Array) =>
   btoa(String.fromCharCode(...bytes))
     .replaceAll("+", "-")
     .replaceAll("/", "_")
@@ -221,13 +221,14 @@ export async function secretConnectCallback(
   );
 }
 
+/** The signed claims, shape-checked field by field — the signature proved WHO wrote them, this
+ *  proves WHAT they are before a project id or a name reaches a Durable Object name. */
 function isSecretConnectState(claims: unknown): claims is SecretConnectState {
   return (
-    typeof claims === "object" &&
-    !!claims &&
-    typeof (claims as SecretConnectState).projectId === "string" &&
-    typeof (claims as SecretConnectState).name === "string" &&
-    typeof (claims as SecretConnectState).nonce === "string" &&
-    typeof (claims as SecretConnectState).exp === "number"
+    isRecord(claims) &&
+    typeof claims.projectId === "string" &&
+    typeof claims.name === "string" &&
+    typeof claims.nonce === "string" &&
+    typeof claims.exp === "number"
   );
 }

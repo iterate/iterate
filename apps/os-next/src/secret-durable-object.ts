@@ -31,9 +31,11 @@ import {
   type SecretRecord,
 } from "./secrets.ts";
 
-/** What sits in storage: the record and a revision `set` bumps — a refresh commits only against the
- *  revision it read, so a `set` racing a refresh never has its new material overwritten by a mint
- *  from the old. */
+/** What sits in storage. `stored` is the record with the revision it was written at; `revision` is
+ *  THE WRITE COUNTER every change to this object bumps (`set`, `beginConnect`; `clear` resets it with
+ *  everything else) — a refresh commits only against the revision it read, and a code exchange only
+ *  against the counter it started at, so a `set` or `clear` racing either never has its outcome
+ *  overwritten by a mint or an exchange from before it. `pending` is the connect attempt in flight. */
 type Stored = { record: SecretRecord; revision: number };
 
 export class SecretDurableObject extends DurableObject<AppConfigEnv> {
@@ -46,11 +48,17 @@ export class SecretDurableObject extends DurableObject<AppConfigEnv> {
   /** Replace the record whole — material always travels with its complete policy (apps/os's
    *  `update` rule), so a value never inherits a pin or a strategy it was not set with. */
   async set(record: SecretRecord): Promise<void> {
-    const current = await this.ctx.storage.get<Stored>("stored");
-    await this.ctx.storage.put<Stored>("stored", {
-      record,
-      revision: (current?.revision ?? 0) + 1,
-    });
+    const revision = await this.#bump();
+    await this.ctx.storage.put<Stored>("stored", { record, revision });
+    // A set supersedes any connect attempt in flight: its callback must not overwrite this material.
+    await this.ctx.storage.delete("pending");
+  }
+
+  /** The write counter, bumped: the number the write that follows is fenced by. */
+  async #bump(): Promise<number> {
+    const revision = ((await this.ctx.storage.get<number>("revision")) ?? 0) + 1;
+    await this.ctx.storage.put("revision", revision);
+    return revision;
   }
 
   async clear(): Promise<void> {
@@ -74,24 +82,33 @@ export class SecretDurableObject extends DurableObject<AppConfigEnv> {
         nonce,
       },
     );
+    await this.#bump(); // a new attempt is a write: an exchange started before it will not land
     await this.ctx.storage.put<PendingSecretConnect>("pending", pending);
     return { authorizationUrl };
   }
 
   /** THE CONNECT HALF, step two (the callback): the code for the pending attempt the nonce names →
-   *  the exchange → the record, as a `set`. Once: the pending attempt is consumed either way. */
+   *  the exchange → the record, as a `set`. The attempt is consumed once its nonce matched — a stale
+   *  or foreign callback (a back button, an older authorize URL) fails without touching the live
+   *  attempt — and the exchange lands only if nothing else wrote this object while the provider was
+   *  answering: a `set` or `clear` in that window wins and the tokens are discarded. */
   async completeConnect(input: { code: string; nonce: string }): Promise<void> {
     const pending = await this.ctx.storage.get<PendingSecretConnect>("pending");
-    await this.ctx.storage.delete("pending");
     if (!pending || pending.nonce !== input.nonce)
       throw new Error("no pending connection matches this callback — start the connection again");
+    await this.ctx.storage.delete("pending");
     if (pending.until <= Date.now())
       throw new Error("the connection attempt expired — start the connection again");
+    const started = await this.ctx.storage.get<number>("revision");
     const record = await completeSecretConnect(pending, input.code, (exchange) => {
       if (!originPinned(exchange.url, pending.urls))
         throw new Error(`the token endpoint ${new URL(exchange.url).origin} is outside the pin`);
       return dispatch(exchange);
     });
+    if ((await this.ctx.storage.get<number>("revision")) !== started)
+      throw new Error(
+        "the secret was changed while the provider was answering — the tokens were discarded; connect again",
+      );
     await this.set(record);
   }
 

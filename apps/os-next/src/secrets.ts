@@ -57,7 +57,7 @@ export function assertSecretName(name: string): string {
 }
 
 /** A plain JSON object, as `typeof` sees it (an array is one too; a field read on it is undefined). */
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && !!value;
 }
 
