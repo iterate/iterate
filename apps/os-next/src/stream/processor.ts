@@ -588,7 +588,13 @@ export type StreamEventInput = {
    *  root from the session's project token and never taken from a client. */
   source?: {
     /** The durable schedule definition responsible for this occurrence. */
-    schedule?: { key: string; scheduledAtOffset: number; at: string };
+    schedule?: {
+      key: string;
+      scheduledAtOffset: number;
+      at: string;
+      /** Attribution of the definition, distinct from the platform writing the occurrence. */
+      definedBy?: Omit<NonNullable<StreamEventInput["source"]>, "schedule">;
+    };
     processor?: {
       slug: string;
       version: string;

@@ -55,17 +55,20 @@ retries must retain the original definition.
   late but never intentionally early. Offsets and `createdAt` are assigned at the actual append.
 - `events` contains 1–100 durable event bodies (`type`, optional JSON `payload` and `metadata`).
   Identity, source, explicit offsets and ephemeral flags are not accepted inside a definition.
-  Nested scheduling control events are refused. A definition is limited to 64 KiB in serialized JS
-  characters, with at most 100 retained pending/failed definitions per context.
+  Nested scheduling, pause/resume, and runtime lifecycle/recovery events are refused. A definition is limited to 64 KiB in serialized JS
+  characters, with at most 100 retained pending/failed definitions and 1,048,576 serialized characters
+  in definitions per context. Failure diagnostics are separately capped at 2,000 characters each.
 - `get(key)` returns the current definition or null. `list()` returns all pending/failed definitions.
   The defining event's offset is `scheduledAtOffset`.
 - `cancel(key, ifScheduledAtOffset?)` appends `…/append-schedule-cancelled`. Omit the offset to cancel
   whatever currently owns the key. Cancellation is allowed while the stream is paused.
 - The whole occurrence and `…/append-schedule-completed` commit in one SQLite transaction. Duplicate
   alarm delivery cannot append it again. The payload events carry `source.schedule` with the key,
-  defining offset and intended time, plus the definition's provenance. Downstream external effects
+  defining offset and intended time. Its `definedBy` records the definition's processor/principal
+  attribution; the occurrence itself is written by the platform, not that processor or session. Downstream external effects
   still require the consumer's own idempotency.
-- Pause retains due work without repeatedly arming its deadline; resume rearms it. Normal delivery
+- Pause retains due work without repeatedly arming its deadline; resume rearms it. Setting a new
+  definition is refused while paused; cancellation remains available. Normal delivery
   recovery may still have its own bounded alarms. The delivery self-wake breaker cannot suppress
   explicit scheduled work.
 - A refused occurrence commits no prefix. It records `…/append-schedule-failed` and stays inspectable
@@ -78,7 +81,9 @@ retries must retain the original definition.
 ## Executable examples and verification
 
 - `e2e/scheduled-appends.e2e.test.ts`: a real userspace facet schedules and consumes a two-event timeout;
-  independent keyed deadlines, cancellation on completion, and stale cancellation after replacement.
+  independent keyed deadlines, cancellation on completion, stale cancellation after replacement,
+  processor-emitted intent, pause/resume, client-visible refusals, past deadlines, and a disconnected
+  facet whose deadline fires after the real idle quiesce.
 - `e2e/support/scheduled-append-facet.ts`: the complete facet source used by those examples. It has no
   alarm handler and never accesses native alarm storage.
 - `__workers-tests__/scheduled-appends.test.ts`: quiesce/evict/fire, duplicate delivery, paused recovery,

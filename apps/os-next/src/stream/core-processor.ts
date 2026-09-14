@@ -2,6 +2,7 @@
 // point. Its reduced state is everything the DO needs SYNCHRONOUSLY at its doors, event-sourced from
 // the context's own control events and nothing else:
 //
+//   future event batches     stream/append-scheduled · append-schedule-{cancelled,completed,failed} → schedules
 //   who this context is       stream/created { projectId, path }            → projectId · path · createdAt
 //   which incarnation runs    stream/woken { incarnation }                  → incarnation
 //   may appends land          stream/paused { reason } · stream/resumed     → paused        (one `if` in Stream.append)

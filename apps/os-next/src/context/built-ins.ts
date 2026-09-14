@@ -1,4 +1,3 @@
-import type { ScheduledAppendInput, ScheduledAppend } from "../stream/scheduled-appends.ts";
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (the one list
 // is context/itx-expression-rewriting.ts). Three kinds of key, one record: the AXIOMS (the log, the stub
 // registry, the rule table, the two hosts, addressing), the BINDINGS (`kv`, `secrets`, `ai`,
@@ -11,6 +10,7 @@ import type { ScheduledAppendInput, ScheduledAppend } from "../stream/scheduled-
 // Dynamic code has two doors, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
+import type { ScheduledAppendInput, ScheduledAppend } from "../stream/scheduled-appends.ts";
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import { stampPrincipal, type Caller } from "../principal.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/processor.ts";
@@ -135,7 +135,8 @@ export interface BuiltInScope extends LibraryRoots {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   /** One-shot durable batches appended in this context at or after an ISO instant. Setting a key
    *  replaces it; cancelling cannot retract an occurrence already committed. Pause holds work
-   *  until resume. Failure remains visible until replacement or cancellation. */
+   *  until resume; set is refused while paused, while cancel remains available. Failure remains
+   *  visible until replacement or cancellation. */
   schedules: {
     set(input: ScheduledAppendInput): Promise<StreamEvent[]>;
     cancel(key: string, ifScheduledAtOffset?: number): Promise<StreamEvent[]>;

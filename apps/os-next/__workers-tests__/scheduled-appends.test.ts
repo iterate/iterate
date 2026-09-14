@@ -115,3 +115,24 @@ test("more than one alarm budget of due work drains in bounded batches", async (
   );
   expect(await s.invoke("itx.schedules.list()")).toEqual([]);
 });
+
+test("a two-due plus one-future pass leaves only the future alarm", async () => {
+  const ctx = "prj_scheduled_no_empty_wake";
+  const s = stub(ctx);
+  // Remove the default subscriber so this checks the scheduler's own alarm, without delivery work.
+  await s.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: { name: "config", target: null },
+  });
+  const future = "2035-01-01T01:00:00Z";
+  await s.append(
+    ...[at, at, future].map((deadline, i) => ({
+      type: "events.iterate.com/stream/append-scheduled",
+      payload: { key: `s${i}`, when: { at: deadline }, events: [{ type: "quiet/due" }] },
+    })),
+  );
+  expect(await fire(ctx)).toBe(true);
+  expect(
+    await runInDurableObject(s, async (_instance, state) => await state.storage.getAlarm()),
+  ).toBe(Date.parse(future));
+});

@@ -571,8 +571,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             ...row.events.map((event) => ({
               ...event,
               source: {
-                ...row.source,
-                schedule: { ...payload, at: row.when.at },
+                schedule: {
+                  ...payload,
+                  at: row.when.at,
+                  ...((row.source?.processor || row.source?.principal) && {
+                    definedBy: {
+                      processor: row.source?.processor,
+                      principal: row.source?.principal,
+                    },
+                  }),
+                },
               },
             })),
             { type: "events.iterate.com/stream/append-schedule-completed", payload },
@@ -580,6 +588,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           scheduledProgress = true;
           console.log({
             event: "scheduled-append.completed",
+            namespace: "iterate-context",
             ...payload,
             count: row.events.length,
             latenessMs: now - Date.parse(row.when.at),
@@ -590,8 +599,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           if (
             this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
             row.scheduledAtOffset
-          )
+          ) {
+            reportIssue("scheduled-append.effect-failed", error, payload);
             throw error;
+          }
           this.#appendAndRunCommittedEffects([
             {
               type: "events.iterate.com/stream/append-schedule-failed",

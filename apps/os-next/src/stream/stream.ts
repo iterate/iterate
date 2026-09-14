@@ -365,15 +365,28 @@ export class Stream {
       freshEvents.push(committedEvent);
     }
     if (freshEvents.length === 0) return committedEvents; // every event deduped to an existing one
-    // Bound the entire batch before committing; the pure core reducer cannot reject a write.
+    // Bound definitions before committing; terminal failure diagnostics have their own size cap
+    // and must remain writable even when definitions have filled their budget.
     const scheduledAppends = freshEvents.reduce(
       reduceScheduledAppends,
       this.#coreReducedState.schedules,
     );
-    if (Object.keys(scheduledAppends).length > 100)
+    if (
+      scheduledAppends !== this.#coreReducedState.schedules &&
+      (Object.keys(scheduledAppends).length > 100 ||
+        JSON.stringify(
+          Object.fromEntries(
+            Object.entries(scheduledAppends).map(([key, { failure: _failure, ...definition }]) => [
+              key,
+              definition,
+            ]),
+          ),
+        ).length >
+          1024 * 1024)
+    )
       throw codedError(
         "SCHEDULE_LIMIT",
-        "a context may retain at most 100 schedules; cancel completed failures before adding more",
+        "a context may retain at most 100 schedules and 1,048,576 serialized characters; cancel failed definitions before adding more",
       );
     // 3 + 4. reduce and commit
     let coreReducedStateChanged = false;

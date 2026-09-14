@@ -6,11 +6,26 @@ const key = z
   .min(1)
   .max(200)
   .refine((value) => !(value in Object.prototype));
+// Lifecycle and recovery facts belong to their runtime transitions. In particular a scheduled
+// resume cannot release a paused stream: pause deliberately holds every scheduled append.
+const runtimeEvents = new Set([
+  "events.iterate.com/stream/created",
+  "events.iterate.com/stream/woken",
+  "events.iterate.com/stream/paused",
+  "events.iterate.com/stream/resumed",
+  "events.iterate.com/stream/self-wake-halted",
+  "events.iterate.com/stream/subscription-delivery-halted",
+  "events.iterate.com/stream/subscription-delivery-resumed",
+]);
 const EventBody = z.strictObject({
   type: z
     .string()
     .min(1)
-    .refine((value) => !value.startsWith("events.iterate.com/stream/append-schedule")),
+    .refine(
+      (value) =>
+        !value.startsWith("events.iterate.com/stream/append-schedule") && !runtimeEvents.has(value),
+      "runtime scheduling/lifecycle events cannot be scheduled",
+    ),
   payload: z.record(z.string(), z.json()).optional(),
   metadata: z.record(z.string(), z.json()).optional(),
 });
@@ -27,7 +42,10 @@ export const ScheduledAppendInput = z
     }),
     events: z.array(EventBody).min(1).max(100),
   })
-  .refine((value) => JSON.stringify(value).length <= 64 * 1024, "schedule exceeds 64 KiB");
+  .refine(
+    (value) => JSON.stringify(value).length <= 64 * 1024,
+    "schedule exceeds 65,536 serialized characters",
+  );
 export type ScheduledAppendInput = z.infer<typeof ScheduledAppendInput>;
 
 export const ScheduledAppendCancelled = z.strictObject({
@@ -37,7 +55,7 @@ export const ScheduledAppendCancelled = z.strictObject({
 export const ScheduledAppendSettled = z.strictObject({
   key,
   scheduledAtOffset: z.number().int().positive(),
-  error: z.string().optional(),
+  error: z.string().max(2000).optional(),
 });
 
 export type ScheduledAppend = ScheduledAppendInput & {

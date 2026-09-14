@@ -163,3 +163,65 @@ test("a due-work pass arms once for its final obligations, preserving another su
   expect(alarms).toEqual([retryAt]);
   expect(alarms).not.toContain(Date.parse("2030-01-01T00:00:00Z"));
 });
+
+test.each([
+  "paused",
+  "resumed",
+  "created",
+  "woken",
+  "self-wake-halted",
+  "subscription-delivery-halted",
+  "subscription-delivery-resumed",
+])("runtime control %s cannot be scheduled", (type) => {
+  const input = scheduled();
+  expect(() =>
+    normalizeControlEvent({
+      ...input,
+      payload: { ...input.payload, events: [{ type: `events.iterate.com/stream/${type}` }] },
+    }),
+  ).toThrow();
+});
+
+test("aggregate definition size is bounded before the batch commits", () => {
+  const { stream } = setup();
+  const definitions = Array.from({ length: 17 }, (_, i) =>
+    normalizeControlEvent({
+      type: "events.iterate.com/stream/append-scheduled",
+      payload: {
+        key: `large${i}`,
+        when: { at: "2035-01-01T00:00:00Z" },
+        events: [{ type: "large", payload: { body: "x".repeat(63_000) } }],
+      },
+    }),
+  );
+  expect(() => stream.append(...definitions)).toThrow("1,048,576 serialized characters");
+  expect(stream.coreReducedState.schedules).toEqual({});
+  expect(stream.highestDurableOffset()).toBe(0);
+});
+
+test("a nearly full definition budget still permits bounded terminal failure diagnostics", () => {
+  const { stream } = setup();
+  const definitions = stream.append(
+    ...Array.from({ length: 16 }, (_, i) =>
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/append-scheduled",
+        payload: {
+          key: `large${i}`,
+          when: { at: "2035-01-01T00:00:00Z" },
+          events: [{ type: "large", payload: { body: "x".repeat(64_900) } }],
+        },
+      }),
+    ),
+  );
+  stream.append(
+    ...definitions.map((definition) => ({
+      type: "events.iterate.com/stream/append-schedule-failed",
+      payload: {
+        key: definition.payload!.key,
+        scheduledAtOffset: definition.offset,
+        error: "e".repeat(2000),
+      },
+    })),
+  );
+  expect(Object.values(stream.coreReducedState.schedules).every((row) => row.failure)).toBe(true);
+});
