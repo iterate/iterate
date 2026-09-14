@@ -151,6 +151,15 @@ describe("account — foundation shape (passing)", () => {
 });
 
 describe("security requirements — the global namespace is not navigable", () => {
+  test("organizations.get refuses a path in place of an id — the admin reaches every org, so the id must be one segment", async () => {
+    const admin = await (await openSession()).authenticate(adminCredentials());
+    const b = await userSession("traverse-b@sec.test");
+    const bId = (await b.whoami()).actor;
+    await refuses(() => admin.organizations.get(`../users/${bId}`));
+    await refuses(() => admin.organizations.get(".."));
+    await refuses(() => admin.organizations.get(`x/../users/${bId}`));
+  });
+
   test("a user cannot READ another user's context", async () => {
     const a = await userSession("read-a@sec.test");
     const b = await userSession("read-b@sec.test");
