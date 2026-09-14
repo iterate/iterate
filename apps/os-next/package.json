@@ -25,7 +25,8 @@
     "bench": "vitest bench --configLoader runner --run --project bench",
     "db:schema:remote": "wrangler d1 execute control-plane-directory --remote --file src/control-plane.sql",
     "gen:wrangler": "tsx scripts/generate-wrangler-config.ts",
-    "ensure-resources": "tsx scripts/ensure-resources.ts"
+    "ensure-resources": "tsx scripts/ensure-resources.ts",
+    "erase-data": "tsx scripts/erase-data.ts"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "0.10.3",
