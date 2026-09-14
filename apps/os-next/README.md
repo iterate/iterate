@@ -21,7 +21,7 @@ await itx.append({ type: "note", payload: { n: 1 } });
 `authenticate(credentials)` takes one of two kinds (`src/session.ts` `SessionCredentials`):
 `from-server-cookie` (the transport already carries a resolved OAuth grant — a browser's cookie on a
 same-origin request, or an `Authorization: Bearer` access token) and `admin-secret` (every project;
-with `as` a user's session without a login — the e2e lane, tooling). OAuth grants are the ONE
+with `as` a user's session without a login — the e2e project, tooling). OAuth grants are the ONE
 credential for every other principal: a browser session, a connected app, and a PERSONAL ACCESS
 TOKEN — `session.grants.mint({ name, projects })` on the console's sessions page: one finite grant
 (30 days, scoped to the projects named, shown once, revocable from `session.grants.list()`/`end`)
@@ -49,7 +49,7 @@ admin secret and a project's own secret (`/mcp?project=<id>`) are bearers on `/m
 
 `APP_CONFIG_*` vars, parsed once per isolate by `src/app-config.ts` `parseAppConfig` (an unknown
 one is warned about at boot and ignored). The two secrets are wrangler secrets on a deployment
-(`wrangler secret put <name>`), plain vars in the test lanes:
+(`wrangler secret put <name>`), plain vars in the test configs:
 
 | Var                                                                 | Required | What                                                                                         |
 | ------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------- |
