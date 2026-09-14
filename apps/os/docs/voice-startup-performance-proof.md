@@ -1236,6 +1236,39 @@ Experiment version: `6cfb1b5f-722f-4327-bb0b-e152efd400d4`. Evidence:
 PCM still waited for durable `conversation-accepted` at the client. Clean restore
 `a5931082-83c8-4c76-8dec-7c6ca13dfef0` passed all deployment smokes.
 
+## Egress policy overlap control (excluded)
+
+A Preview 17 control started the existing ProjectDO policy read concurrently
+with normal setup, inside the button timer. Both arms retained ordinary policy
+matching, secret authorization and audit. Ten calls used counterbalanced pairs
+and a six-second gap outside each timer to expire the unchanged five-second
+policy cache. All five treatment prewarms refreshed policy before actual egress,
+which then reported a cache hit. The ordinary requests refreshed policy in
+34 / 32 / 27 / 29 / 28 ms. Fifteen untruncated records confirmed these outcomes.
+
+All ten returned audio and ended cleanly, with zero subscription lag, no pending
+delegations and unchanged runtime identity. Targeted parent and ProjectDO error
+queries returned no records. Later-four readiness medians were **2,003 ms with
+prewarm / 1,826.5 ms ordinary**; all-five medians were 2,079 / 1,846 ms. The
+first prewarm call took 5,353 ms. A later prewarm call still took 3,902 ms,
+including a 3,117 ms provider-handshake interval. No attribution within that
+interval was established. The control removes the policy read from the actual
+fetch path but offers no demonstrated readiness improvement, so it was removed.
+
+Experiment version: `dc7bcdde-c19d-4d6e-90e9-6a2796e68063`. Seven guard tests,
+21 egress tests (plus one previously expected failure), and OS typecheck passed.
+Evidence under `/tmp/voice-startup-pr`: `policy-prewarm-result.json`,
+`policy-prewarm-classified.json`, its terminal audit and
+`policy-prewarm-applied.patch`. Clean restore
+`92087858-1654-4e29-8ee8-3085797e3122` passed all deployment smokes.
+
+A separate isolated microphone experiment passed delayed-wake ordering and
+firmware terminal-fencing tests, but confirmed that early ephemeral opening PCM
+can be lost if the source stream is evicted before delivery. It was not adopted:
+it increases the loss window compared with retaining opening speech on the
+device until durable acceptance. `heldMicFrames` is not a sequence receipt.
+Evidence and patch: `/tmp/voice-early-mic-proof/README.md`.
+
 ## Reproduce
 
 From `apps/os`, with the current voice source installed in a disposable
