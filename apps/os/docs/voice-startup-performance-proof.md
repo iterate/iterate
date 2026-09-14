@@ -1187,8 +1187,9 @@ readiness medians were **1,889 ms eager / 1,850 ms scheduled**; all-five medians
 were **1,916 / 1,812 ms**. The first eager call took 5,808 ms to readiness and
 7,053 ms to first PCM. One scheduled call had readiness at 1,888 ms but first
 PCM at 5,654 ms. Its retained transcript timing and durable events do not locate
-that extra audio delay: ephemeral PCM was no longer available to the subsequent
-read. This remains an unexplained sample, not attributed to OpenAI.
+that extra audio delay. That subsequent read used the default durable-only
+filter, so it provides no evidence about ephemeral PCM delivery or retention.
+This remains an unexplained sample, not attributed to OpenAI.
 
 The eager control does not establish an end-to-end improvement and introduces
 a callback-cycle risk that unit doubles cannot resolve. It was removed along
@@ -1268,6 +1269,60 @@ can be lost if the source stream is evicted before delivery. It was not adopted:
 it increases the loss window compared with retaining opening speech on the
 device until durable acceptance. `heldMicFrames` is not a sequence receipt.
 Evidence and patch: `/tmp/voice-early-mic-proof/README.md`.
+
+## Initial callback and setup barrier controls (excluded)
+
+A five-call phase probe used one source StreamDO clock from public append
+through receiver wake, initial callback invocation and callback acknowledgement.
+The existing initial watchdog barrier took 0 / 0 / 3 / 6 / 36 ms. The first
+`created` callback took 29 / 219 / 45 / 32 / 22 ms to acknowledge. Subsequent
+`configured` and `call-started` callbacks can overlap: the sender pipelines
+later durable batches, so this is not three serialized acknowledgement trips.
+The configured handler also appends passive Agent context before processing the
+call. A concurrent setup `waitUntilProcessed` can drive the processor's own
+catch-up read, making callback duration insufficient to attribute processing.
+All five calls returned audio and ended cleanly; the first readiness sample
+remained 4,639 ms. Version: `522f783d-7952-4475-ab55-86c6ceb32963`.
+
+A separate 20-call counterbalanced factorial varied the first callback between
+one event and the three contiguous setup events (bounded to 64 KiB), and varied
+normal setup waiting against a diagnostic no-op of that wait. The latter is
+not a valid implementation of the public wait contract and cannot ship.
+Readiness still means observing durable `conversation-accepted`, never setup
+RPC return. All calls used the same installed source, prompt and secret, one
+established project WebSocket, and newly created conversation paths.
+
+| Initial callback | Setup wait | Readiness samples (ms)                | Median (ms) | Calls with PCM |
+| ---------------- | ---------- | ------------------------------------- | ----------- | -------------- |
+| One event        | Normal     | 5,704 / 1,744 / 2,404 / 1,915 / 1,712 | 1,915       | 5/5            |
+| Three events     | Normal     | 1,999 / 1,575 / 2,123 / 1,740 / 1,796 | 1,796       | 4/5            |
+| One event        | Skipped    | 1,777 / 1,758 / 2,042 / 2,318 / 1,616 | 1,777       | 5/5            |
+| Three events     | Skipped    | 1,670 / 1,834 / 1,526 / 1,761 / 1,588 | 1,670       | 5/5            |
+
+The combined arm suggests a 245 ms median reduction, but **the run failed**:
+`coalesced/barrier/16-9d2d2534` became ready at 1,740 ms and acknowledged the
+commentary append at 2,000 ms, yet produced no non-silent PCM within the deadline
+and no answer transcript. Cleanup ended it at approximately ten seconds. The
+cause remains unexplained; neither delivery loss nor provider silence has been
+established. Later explicit `includeEphemeral: true` reads returned no ephemeral
+frames in any of the twenty calls, including the nineteen that returned audio;
+those reads therefore cannot establish where this call stopped producing audio.
+
+Twenty untruncated phase records matched all paths and actual initial batch
+contents; ten skip records matched exactly the intended arms. All had version
+`70b4c505-438c-4b09-a0b5-9789fa51b85b`. Every terminal audit found a closed call,
+matching activation, no pending delegations, zero subscription lag, no last error
+and unchanged voice runtime identity. Targeted parent and ProjectDO error queries
+returned no records. These checks do not explain the audio failure. All 133
+focused sender/runner tests and OS typecheck passed. The controls and probes were
+archived and removed; neither optimization is adopted. Clean restore
+`40efb971-0200-4af2-a3b2-42a877118514` passed deployment smokes.
+
+Evidence under `/tmp/voice-startup-pr`: `initial-batch-phase-result.json`,
+`initial-batch-factorial-result.json`, `initial-batch-factorial-classified.json`,
+`initial-batch-factorial-terminal-audit.json`,
+`initial-batch-factorial-events-with-ephemeral.json`, and
+`initial-batch-factorial-applied.patch`.
 
 ## Reproduce
 
