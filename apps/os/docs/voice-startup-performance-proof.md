@@ -727,12 +727,87 @@ pre-append delay is unsegmented. Evidence:
 
 Fable's additional review proposed overlapping watchdog persistence and facet
 configuration, but the probe already observes that overlap in several calls;
-its possible gain needs a narrower control. Its per-isolate bundle-size idea
-remains untested. A proposed RPC-future disposal concern was checked directly
+its possible gain needs a narrower control. Its per-isolate bundle-size idea is tested below; latency attribution
+remains incomplete. A proposed RPC-future disposal concern was checked directly
 in Preview 17: native `env.ITX.get()` reports `Symbol.dispose in future` true,
 the member is callable, and explicit disposal succeeds after a benign read.
 Evidence: `native-itx-dispose-probe-result.json`. No authority relaxation or
 new delivery scheduler was adopted from the review.
+
+## Minification control and manifest SQL failure (Sep 14)
+
+The first A/B/A attempt used native version
+`526f45e2-5708-4338-bded-7495393ff608`, SDK `055337b142`, the same
+2,096-byte prompt and five fresh hosted conversations per arm. Root worker
+health prewarming happened outside each arm's timings. A and B each completed
+five calls with audio and no call errors; all receiver refs independently
+confirmed their expected `minify` setting. A2 did not run: restoring its source
+failed, as did one bounded restoration attempt. The project remained mounted
+to B. This is an **incomplete A/B/A**, not a demonstrated latency improvement.
+
+| Measurement                                    | A, unminified | B, minified |
+| ---------------------------------------------- | ------------: | ----------: |
+| Worker module bytes                            |     1,075,714 |     614,784 |
+| Serialized KV artifact bytes                   |     1,138,022 |     649,579 |
+| First call accepted, ms                        |         6,471 |       8,203 |
+| Remaining four accepted median, ms             |       2,033.5 |     1,868.5 |
+| Remaining four provider-handshake median, ms   |         1,039 |       917.5 |
+| Remaining four first non-silent PCM median, ms |       3,071.5 |       2,875 |
+
+Module size fell 42.849%, independently of timing. Most of the small warm
+readiness difference coincides with provider-handshake variance; neither that
+nor the single cache-write duration per arm establishes a latency gain.
+Evidence: `minify-aba-results/`, `minify-ab-artifact-traces.json`, and
+`minify-aba-derived.json` under the temporary proof directory.
+
+Restoration exposed a native repository defect: manifest queries chunked 100
+paths but also bound the branch, exceeding Durable Object SQLite's
+[100-variable limit](https://developers.cloudflare.com/durable-objects/platform/limits/).
+Failure logs `log_79117fb8bec54e3f96c360e47085f59b` and
+`log_d6279af114d54e208dba348d199d7cee` report `too many SQL variables`.
+Commit `58c49b522` reserves one binding for the branch in manifest reads and
+removals; OID-only batches remain 100. Regression tests enforce the remote
+limit while reading 100 paths and removing 101. All 35 focused tests and the
+full OS typecheck pass. Native preview version
+`3e4b707a-0cf1-48bb-bb40-3e3112ad0ab8` passed deployment smokes and restored
+the unminified root at offset 983, pinned to current repo head
+`e88da8aa4f6be6a5de244f1479adaccf5d24149d`. Its source install reported no
+new change: the earlier failed operation had already committed the source,
+but had not mounted it. The successful recovery proves the previously failing
+read path with the existing repository size. Evidence:
+`deploy-sql-binding-fix.log` and `minify-aba-post-sql-fix-restore.json`.
+
+## Completed minification A/B/A after the SQL fix
+
+The repeat used the same fixed native version and SDK for all three arms,
+with fresh source directories and five fresh hosted child streams each. All
+**15/15** calls returned non-silent PCM before the deadline, with no recorded
+call errors. Root prewarming remained outside the measured call. Local source
+checks and every receiver ref confirm A/A2 unminified and B minified.
+
+| Measurement, ms                      |       A | B, minified |      A2 |
+| ------------------------------------ | ------: | ----------: | ------: |
+| First call accepted                  |   5,705 |       6,402 |   5,563 |
+| First call handshake interval        |   1,806 |       5,097 |   2,482 |
+| First call non-silent PCM            |   6,629 |       7,470 |   6,593 |
+| Remaining four accepted median       | 1,883.5 |     1,920.5 | 1,812.5 |
+| Remaining four handshake median      |     919 |         988 |   846.5 |
+| Remaining four non-silent PCM median |   2,865 |       3,049 |   2,875 |
+
+**No warm-start latency benefit is established.** B was slightly slower than
+both controls for readiness and PCM. The independently proven bundle-size
+reduction remains valid, but minification is not adopted in this PR. B's
+5.097-second handshake outlier is retained: this interval includes platform
+egress and provider session establishment, not pure OpenAI latency. A simple
+subtraction from client readiness is not an independently measured native
+phase or a causal overhead estimate.
+
+The final A2 baseline is mounted at root offset 1093, pinned to current repo
+head `697b132af26cc88f996de0aa0bfc0cba63027ff2`; its root and all five receiver
+refs have minification absent/false. A separate post-run read verifies the
+mount and repository head. Evidence: `minify-aba-repeat-results/summary.json`,
+all arm logs and receiver records, and `minify-aba-repeat-mounted-state.json`.
+The failed first attempt remains separately preserved.
 
 ## Reproduce
 
