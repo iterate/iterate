@@ -69,6 +69,10 @@ import {
   parseLiveStatePagerLaneTag,
 } from "../live-state-pager.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
+import {
+  VOICE_HANDSHAKE_OVERLAP_PREFIX,
+  VOICE_HANDSHAKE_OVERLAP_PROJECT_ID,
+} from "../projects/voice-handshake-overlap-control.ts";
 import { DynamicWorkerRunner, isWorkerRpcCloneVersionError } from "../workers/worker-runner.ts";
 import { isWorkerBuildInProgressError } from "../workers/worker-loader.ts";
 import { isWorkerBuildFailedError, WorkerBuildFailedError } from "../workers/artifact-store.ts";
@@ -2678,6 +2682,24 @@ export class StreamDurableObject extends StreamDurableObjectBase {
         }
       }
 
+      // This control claims by trusted stream scope. A treatment path therefore
+      // permits only one activation for its entire durable stream lifetime.
+      if (
+        this.env.DEPLOYMENT_ENV === "preview_17" &&
+        this.name.projectId === VOICE_HANDSHAKE_OVERLAP_PROJECT_ID &&
+        this.name.path.startsWith(VOICE_HANDSHAKE_OVERLAP_PREFIX) &&
+        body.type === "events.iterate.com/voice-agent/call-started" &&
+        (newEvents.some((event) => event.type === body.type) ||
+          this.#log.getRangeSized({
+            afterOffset: 0,
+            beforeOffset: Number.MAX_SAFE_INTEGER,
+            eventTypes: [body.type],
+            limit: 1,
+          }).length > 0)
+      ) {
+        throw new Error("voice handshake overlap requires a new stream for every activation");
+      }
+
       this.#coreProcessor.validate({
         event: body,
         state: workingState,
@@ -2766,6 +2788,18 @@ export class StreamDurableObject extends StreamDurableObjectBase {
       justCommittedEvents.reduce((sum, entry) => sum + entry.byteLength, 0),
     );
     this.#refreshLiveState();
+
+    // Start the narrowly-scoped provider upgrade after the call-started fact
+    // is durable and before delivery can construct the voice facet. This is
+    // intentionally outside the synchronous append transaction.
+    try {
+      this.#startCommittedVoiceHandshakeOverlap(justCommittedEvents);
+    } catch (error) {
+      console.error("voice handshake overlap post-commit registration failed", {
+        error,
+        streamPath: this.name.path,
+      });
+    }
 
     // 3. Reconcile every mutable/runtime projection from the committed state.
     // Each operation is isolated so one defect cannot skip its siblings. Any
@@ -2919,6 +2953,66 @@ export class StreamDurableObject extends StreamDurableObjectBase {
 
   #ancestorsAnnouncedThisIncarnation = false;
   #ancestorAnnouncementInFlight = false;
+
+  #startCommittedVoiceHandshakeOverlap(events: readonly SizedStreamEvent[]) {
+    if (
+      this.env.DEPLOYMENT_ENV !== "preview_17" ||
+      this.name.projectId !== VOICE_HANDSHAKE_OVERLAP_PROJECT_ID ||
+      !this.name.path.startsWith(VOICE_HANDSHAKE_OVERLAP_PREFIX)
+    ) {
+      return;
+    }
+    const project = this.env.PROJECT.getByName(
+      DurableObjectNameCodec.stringify({ path: "/", projectId: this.name.projectId }),
+    );
+    // PROJECT is declared against ProjectDurableObject, but StreamDO's Env is
+    // structurally shared across builds. This narrow native RPC surface is
+    // checked by the receiving DO and cannot alter ordinary stream delivery.
+    const overlapProject = project as unknown as {
+      prepareVoiceHandshakeOverlap(input: {
+        streamPath: string;
+        activation: string;
+      }): Promise<unknown>;
+      cancelVoiceHandshakeOverlap(input: {
+        streamPath: string;
+        activation: string;
+      }): Promise<unknown>;
+    };
+    for (const { event } of events) {
+      if (
+        event.type !== "events.iterate.com/voice-agent/call-started" &&
+        event.type !== "events.iterate.com/voice-agent/conversation-ended"
+      ) {
+        continue;
+      }
+      const parsed = z
+        .object({ activation: z.string().uuid() })
+        .passthrough()
+        .safeParse(event.payload);
+      if (!parsed.success) {
+        console.error("voice handshake overlap activation payload was invalid", {
+          eventType: event.type,
+          streamPath: this.name.path,
+        });
+        continue;
+      }
+      const input = { streamPath: this.name.path, activation: parsed.data.activation };
+      const operation =
+        event.type === "events.iterate.com/voice-agent/call-started"
+          ? overlapProject.prepareVoiceHandshakeOverlap(input)
+          : overlapProject.cancelVoiceHandshakeOverlap(input);
+      this.ctx.waitUntil(
+        operation.catch((error) => {
+          console.error("voice handshake overlap registration failed", {
+            error,
+            eventType: event.type,
+            streamPath: this.name.path,
+            activation: parsed.data.activation,
+          });
+        }),
+      );
+    }
+  }
 
   /**
    * Bring every mutable delivery projection into line with current reduced

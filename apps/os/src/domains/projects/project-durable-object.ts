@@ -43,11 +43,39 @@ import {
 import { isOpenAiPublicApiRequest, routeOpenAiViaGateway } from "./openai-ai-gateway-egress.ts";
 import { takeStreamContext, type StreamContext } from "./stream-context.ts";
 import {
+  assertVoiceHandshakeOverlapScope,
+  isVoiceHandshakeOverlapRequest,
+  VoiceHandshakeOverlapInput,
+  VOICE_HANDSHAKE_OVERLAP_PROJECT_ID,
+  VOICE_HANDSHAKE_OVERLAP_PREFIX,
+  VOICE_HANDSHAKE_OVERLAP_TTL_MS,
+  VOICE_HANDSHAKE_OVERLAP_URL,
+  type VoiceHandshakeOverlapInput as VoiceHandshakeOverlapInputValue,
+} from "./voice-handshake-overlap-control.ts";
+import {
   ProjectProcessorContract,
   type ProjectProcessorState,
 } from "./project-processor-contract.ts";
 import { StreamDatabase, type TouchInput } from "./stream-database.ts";
 import type { ProjectLiveState } from "./project-live-state.ts";
+
+type VoiceHandshakeOverlapEntry = {
+  activation: string;
+  response: Response | null;
+  failure: string | null;
+  completion: Promise<void>;
+  resolveCompletion(): void;
+  expiry: ReturnType<typeof setTimeout> | number;
+};
+
+function closeUnacceptedWebSocket(socket: WebSocket, reason: string) {
+  try {
+    socket.accept();
+    socket.close(1000, reason);
+  } catch (error) {
+    console.error("voice handshake overlap cleanup failed", { error, reason });
+  }
+}
 
 export class ProjectDurableObject extends DurableObject<Env> {
   /** Report this incarnation's code version for the deployment rollout gate. */
@@ -59,6 +87,13 @@ export class ProjectDurableObject extends DurableObject<Env> {
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
   // Last time #egressRules paid a facade snapshot — bounds rules staleness to ~5s.
   #egressRulesFreshAt = 0;
+  /** One unaccepted provider upgrade per experimental stream path. */
+  #voiceHandshakeOverlaps = new Map<string, VoiceHandshakeOverlapEntry>();
+  #voiceHandshakeOverlapRegistrations = new Map<
+    string,
+    { promise: Promise<void>; resolve(): void; timeout: ReturnType<typeof setTimeout> }
+  >();
+  #cancelledVoiceHandshakeActivations = new Map<string, ReturnType<typeof setTimeout> | number>();
   // Demo (stateful live state): a counter every watcher of `itx.liveState` sees
   // update, mutated by `itx.liveDemo.increment()`. Proves the DO-backed,
   // shared-engine case — and dogfoods the composite fold the streams index uses.
@@ -214,12 +249,240 @@ export class ProjectDurableObject extends DurableObject<Env> {
     const liveStateUpgrade = await this.#liveStatePagers.acceptUpgrade(request);
     if (liveStateUpgrade !== undefined) return liveStateUpgrade;
     const taken = takeStreamContext(request);
+    const overlap = this.#claimVoiceHandshakeOverlap(taken.request, taken.streamContext);
+    if (overlap !== null) return await overlap;
     if (this.#egressInterceptor !== undefined) {
       // Egress interceptors run before secret substitution. They must never
       // receive raw secret material, only getSecret(...) placeholders.
       return await this.#egressInterceptor.value(taken.request);
     }
     return this.#egressWithApprovalGate(taken.request, taken.streamContext);
+  }
+
+  /**
+   * Register the one provider upgrade that a committed voice call may claim.
+   * It returns after registration, while the normal policy/secret/upstream
+   * work continues in this Project DO. A later ordinary fetch claims only the
+   * stored 101; it never falls back to another provider request.
+   */
+  prepareVoiceHandshakeOverlap(rawInput: unknown) {
+    const input = VoiceHandshakeOverlapInput.parse(rawInput);
+    assertVoiceHandshakeOverlapScope({
+      deploymentEnv: this.env.DEPLOYMENT_ENV,
+      projectId: this.#name.projectId,
+      streamPath: input.streamPath,
+    });
+    if (this.#egressInterceptor !== undefined) {
+      throw new Error(
+        "voice handshake overlap control cannot run while an egress interceptor is installed",
+      );
+    }
+    this.#resolveVoiceHandshakeOverlapRegistration(input.streamPath);
+    if (this.#voiceHandshakeOverlaps.has(input.streamPath)) {
+      throw new Error("voice handshake overlap already has a pending activation for this stream");
+    }
+    if (
+      this.#cancelledVoiceHandshakeActivations.has(`${input.streamPath}\u0000${input.activation}`)
+    ) {
+      return { accepted: true };
+    }
+    if (this.#voiceHandshakeOverlaps.size >= 8) {
+      throw new Error("voice handshake overlap control reached its eight-upgrade capacity");
+    }
+    const registeredAtMs = Date.now();
+    console.info("voice handshake overlap registered", {
+      activation: input.activation,
+      streamPath: input.streamPath,
+      registeredAtMs,
+    });
+    let resolveCompletion: () => void;
+    const completion = new Promise<void>((resolve) => {
+      resolveCompletion = resolve;
+    });
+    const entry: VoiceHandshakeOverlapEntry = {
+      activation: input.activation,
+      response: null,
+      failure: null,
+      completion,
+      resolveCompletion: resolveCompletion!,
+      expiry: setTimeout(
+        () => this.#expireVoiceHandshakeOverlap(input.streamPath),
+        VOICE_HANDSHAKE_OVERLAP_TTL_MS,
+        VOICE_HANDSHAKE_OVERLAP_URL,
+      ),
+    };
+    this.#voiceHandshakeOverlaps.set(input.streamPath, entry);
+    this.ctx.waitUntil(this.#runVoiceHandshakeOverlap(input, entry));
+    return { accepted: true };
+  }
+
+  cancelVoiceHandshakeOverlap(rawInput: unknown) {
+    const input = VoiceHandshakeOverlapInput.parse(rawInput);
+    assertVoiceHandshakeOverlapScope({
+      deploymentEnv: this.env.DEPLOYMENT_ENV,
+      projectId: this.#name.projectId,
+      streamPath: input.streamPath,
+    });
+    const activationKey = `${input.streamPath}\u0000${input.activation}`;
+    const existingCancellation = this.#cancelledVoiceHandshakeActivations.get(activationKey);
+    if (existingCancellation !== undefined) clearTimeout(existingCancellation);
+    this.#cancelledVoiceHandshakeActivations.set(
+      activationKey,
+      setTimeout(
+        () => this.#cancelledVoiceHandshakeActivations.delete(activationKey),
+        VOICE_HANDSHAKE_OVERLAP_TTL_MS,
+        VOICE_HANDSHAKE_OVERLAP_URL,
+      ),
+    );
+    const entry = this.#voiceHandshakeOverlaps.get(input.streamPath);
+    if (entry !== undefined && entry.activation === input.activation) {
+      this.#expireVoiceHandshakeOverlap(input.streamPath, "cancelled after conversation end");
+    }
+    console.info("voice handshake overlap cancellation settled", {
+      activation: input.activation,
+      streamPath: input.streamPath,
+      pendingUpgrades: this.#voiceHandshakeOverlaps.size,
+      pendingRegistrations: this.#voiceHandshakeOverlapRegistrations.size,
+    });
+    return { cancelled: true };
+  }
+
+  async #runVoiceHandshakeOverlap(
+    input: VoiceHandshakeOverlapInputValue,
+    entry: VoiceHandshakeOverlapEntry,
+  ) {
+    try {
+      const egressStartedAtMs = Date.now();
+      // Policy remains authoritative. Requiring an empty policy is intentional:
+      // a later claim cannot safely repeat a hold/deny decision without another
+      // provider upgrade, so this is not a policy-bypass experiment.
+      if ((await this.#egressRules()).length !== 0) {
+        throw new Error("voice handshake overlap control requires no configured egress rules");
+      }
+      const request = new Request(VOICE_HANDSHAKE_OVERLAP_URL, {
+        headers: { Upgrade: "websocket", Authorization: 'Bearer getSecret("/secrets/openai")' },
+      });
+      if (this.#egressInterceptor !== undefined) {
+        throw new Error("voice handshake overlap interceptor appeared before egress");
+      }
+      const response = await this.#egressWithApprovalGate(request, {
+        kind: "scope",
+        scopePath: input.streamPath,
+      });
+      if (response.status !== 101 || response.webSocket === null) {
+        await response.body?.cancel();
+        throw new Error("voice handshake overlap provider upgrade was refused");
+      }
+      if (this.#voiceHandshakeOverlaps.get(input.streamPath) !== entry) {
+        closeUnacceptedWebSocket(response.webSocket, "no longer claimable");
+        return;
+      }
+      entry.response = response;
+      console.info("voice handshake overlap prepared", {
+        activation: input.activation,
+        streamPath: input.streamPath,
+        egressStartedAtMs,
+        upgradeReadyAtMs: Date.now(),
+      });
+    } catch (error) {
+      entry.failure = String(error).slice(0, 300);
+      console.error("voice handshake overlap prepare failed", {
+        error,
+        streamPath: input.streamPath,
+      });
+    } finally {
+      entry.resolveCompletion();
+    }
+  }
+
+  #claimVoiceHandshakeOverlap(request: Request, streamContext: StreamContext) {
+    if (
+      this.env.DEPLOYMENT_ENV !== "preview_17" ||
+      this.#name.projectId !== VOICE_HANDSHAKE_OVERLAP_PROJECT_ID ||
+      streamContext.kind !== "scope" ||
+      !streamContext.scopePath.startsWith(VOICE_HANDSHAKE_OVERLAP_PREFIX) ||
+      !isVoiceHandshakeOverlapRequest(request)
+    ) {
+      return null;
+    }
+    assertVoiceHandshakeOverlapScope({
+      deploymentEnv: this.env.DEPLOYMENT_ENV,
+      projectId: this.#name.projectId,
+      streamPath: streamContext.scopePath,
+    });
+    if (this.#egressInterceptor !== undefined) {
+      return Promise.resolve(
+        new Response("voice handshake overlap interceptor conflict", { status: 409 }),
+      );
+    }
+    return this.#takeVoiceHandshakeOverlap(streamContext.scopePath);
+  }
+
+  async #takeVoiceHandshakeOverlap(streamPath: string) {
+    const claimEnteredAtMs = Date.now();
+    let entry = this.#voiceHandshakeOverlaps.get(streamPath);
+    if (entry === undefined) {
+      // The native registration RPC is issued before receiver delivery but may
+      // reach this actor one turn later. Wait briefly for registration; never
+      // issue a second provider request if it does not arrive.
+      await this.#waitForVoiceHandshakeOverlapRegistration(streamPath);
+      entry = this.#voiceHandshakeOverlaps.get(streamPath);
+    }
+    if (entry === undefined)
+      return new Response("voice handshake overlap was not prepared", { status: 409 });
+    await entry.completion;
+    if ((await this.#egressRules()).length !== 0) {
+      this.#expireVoiceHandshakeOverlap(streamPath, "egress policy changed before claim");
+      return new Response("voice handshake overlap policy changed before claim", { status: 409 });
+    }
+    if (this.#voiceHandshakeOverlaps.get(streamPath) !== entry || entry.response === null) {
+      return new Response(`voice handshake overlap failed: ${entry.failure ?? "expired"}`, {
+        status: 409,
+      });
+    }
+    clearTimeout(entry.expiry);
+    this.#voiceHandshakeOverlaps.delete(streamPath);
+    console.info("voice handshake overlap claimed", {
+      activation: entry.activation,
+      streamPath,
+      claimEnteredAtMs,
+      claimedAtMs: Date.now(),
+    });
+    return entry.response;
+  }
+
+  #waitForVoiceHandshakeOverlapRegistration(streamPath: string) {
+    let waiter = this.#voiceHandshakeOverlapRegistrations.get(streamPath);
+    if (waiter !== undefined) return waiter.promise;
+    let resolve: () => void;
+    const promise = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const timeout = setTimeout(
+      () => this.#resolveVoiceHandshakeOverlapRegistration(streamPath),
+      250,
+    );
+    waiter = { promise, resolve: resolve!, timeout };
+    this.#voiceHandshakeOverlapRegistrations.set(streamPath, waiter);
+    return promise;
+  }
+
+  #resolveVoiceHandshakeOverlapRegistration(streamPath: string) {
+    const waiter = this.#voiceHandshakeOverlapRegistrations.get(streamPath);
+    if (waiter === undefined) return;
+    clearTimeout(waiter.timeout);
+    this.#voiceHandshakeOverlapRegistrations.delete(streamPath);
+    waiter.resolve();
+  }
+
+  #expireVoiceHandshakeOverlap(streamPath: string, reason = "expired without claim") {
+    const entry = this.#voiceHandshakeOverlaps.get(streamPath);
+    if (entry === undefined) return;
+    clearTimeout(entry.expiry);
+    this.#voiceHandshakeOverlaps.delete(streamPath);
+    if (entry.response !== null) closeUnacceptedWebSocket(entry.response.webSocket!, reason);
+    entry.failure ??= reason;
+    entry.resolveCompletion();
   }
 
   /** Live State Pagers are one-way (this DO → relay); inbound frames are ignored. */

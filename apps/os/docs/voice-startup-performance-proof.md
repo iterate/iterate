@@ -1305,8 +1305,10 @@ commentary append at 2,000 ms, yet produced no non-silent PCM within the deadlin
 and no answer transcript. Cleanup ended it at approximately ten seconds. The
 cause remains unexplained; neither delivery loss nor provider silence has been
 established. Later explicit `includeEphemeral: true` reads returned no ephemeral
-frames in any of the twenty calls, including the nineteen that returned audio;
-those reads therefore cannot establish where this call stopped producing audio.
+frames in any of the twenty calls, including the nineteen that returned audio.
+Each read coincided with a second `stream/woken` event, confirming a fresh
+incarnation with an empty memory-only ephemeral buffer. The read therefore
+cannot establish where this call stopped producing audio.
 
 Twenty untruncated phase records matched all paths and actual initial batch
 contents; ten skip records matched exactly the intended arms. All had version
@@ -1323,6 +1325,87 @@ Evidence under `/tmp/voice-startup-pr`: `initial-batch-phase-result.json`,
 `initial-batch-factorial-terminal-audit.json`,
 `initial-batch-factorial-events-with-ephemeral.json`, and
 `initial-batch-factorial-applied.patch`.
+
+## Refreshed direct Node control before handshake overlap
+
+A fresh five-call direct Node control at 23:43 UTC used the same in-memory
+credential just written to the proof project's `/secrets/openai` (offset 514),
+the same 2,096-byte prompt and `gpt-live-1` configuration. All five returned
+non-silent PCM without errors. Upgrade timings were 1,326.866 / 502.261 /
+485.859 / 431.128 / 421.243 ms; readiness was 1,894.238 / 1,003.203 / 1,227.651 /
+715.828 / 746.835 ms. Medians were **485.859 ms to upgrade**, **1,003.203 ms
+to `session.started`**, and **1,922.066 ms to received non-silent PCM**.
+The first sample remains included. This is software receipt, not physical
+speaker onset. Evidence: `/tmp/voice-startup-pr/direct-same-key-handshake-overlap/`.
+
+## Provider upgrade overlap control (retained preview experiment)
+
+After the authoritative `call-started` append commits, the source stream starts
+one native ProjectDO registration before normal receiver delivery. The ProjectDO
+opens the ordinary policy/SecretDO-backed provider upgrade and retains its
+unaccepted 101 response. The unchanged voice facet's ordinary fetch claims that
+response through the native fetch path; the facet still sends `session.start`,
+the prompt, and all audio. No provider session or future conversation is opened
+before the activation event. There is no second socket or polling.
+
+This is a narrow control, not a production design: it accepts only Preview 17,
+proof project `prj_56cbca83186a40019f5792b2463c81fa`, treatment paths under
+`/agents/voice/startup-colocated/handshake-overlap/overlap/`, an empty egress
+policy and no interceptor. Normal authorization, secret substitution and audit
+still run. A treatment stream permits one activation for its durable lifetime,
+so the unchanged fetch's trusted stream scope identifies its pending activation.
+A claim can wait up to 250 ms for registration. Pending upgrades are capped at
+eight and expire after ten seconds; terminal events cancel unclaimed upgrades,
+including those still opening. Failed/missing claims return a non-upgrade
+response instead of opening another connection. These restrictions and the
+native voice-specific commit hook must be reconsidered before production use.
+
+Ten counterbalanced calls over one established project WebSocket all returned
+non-silent PCM. Source commit `ebb0a42dc2b1a44ae5cee36f87eee448a914b664`, runtime
+identity, prompt, and credential (secret offset 514) were unchanged between arms.
+Each fresh path was created inside the timer. The first sample in each arm is
+retained; the later-four view is shown separately, not substituted for it.
+
+| Measurement                             | Ordinary                              | Upgrade overlap                       |
+| --------------------------------------- | ------------------------------------- | ------------------------------------- |
+| Readiness samples (ms)                  | 5,724 / 2,298 / 1,820 / 2,259 / 1,889 | 1,888 / 1,315 / 1,467 / 1,926 / 1,396 |
+| All-five readiness median (ms)          | 2,259                                 | 1,467                                 |
+| Later-four readiness median (ms)        | 2,074                                 | 1,431.5                               |
+| All-five first received PCM median (ms) | 3,208                                 | 2,561                                 |
+| Calls with PCM                          | 5/5                                   | 5/5                                   |
+
+The same-credential direct Node control immediately above measured 1,003.203 ms
+median readiness. The preview treatment therefore approaches that reference,
+but does not eliminate the gap or prove physical speaker latency. The ordinary
+voice facet's reported handshake interval starts at its own dial and excludes
+the earlier prepared upgrade: its treatment median of 380 ms is **not** the
+whole OpenAI setup time.
+
+Twenty untruncated records on deployment `b0e5ea3e-0469-4514-86b6-fd3c813125f4`
+matched exactly one registration, prepared upgrade, claim and cancellation for
+each treatment path/activation; ordinary paths had none. The ProjectDO egress
+intervals were 473 / 574 / 459 / 468 / 449 ms, including policy and secret work.
+The already-open socket then waited 453 / 174 / 480 / 784 / 409 ms for its claim.
+Those same-actor timings identify the next remaining opportunity: completing
+voice processor startup earlier. Four claims had no local wait; one spent 23 ms
+inside claim, which also rechecks policy. All cancellations reported zero
+pending upgrades and registration waiters. Every terminal audit found a closed
+call, matching activation, no delegations, zero subscription lag, no last error,
+and the same voice runtime key. Targeted parent and ProjectDO error queries
+returned no records. Earlier silent-call failures remain unresolved.
+
+Validation: 115 focused tests passed, plus one previously expected failure, and
+OS typecheck passed. Deployment smokes passed. Local same-DO workerd experiments
+also proved delayed response handoff and both accept-then-close cleanup cases
+(cancel before claim and cancel before upstream completion). Those local tests
+are runtime-mechanics evidence, not a substitute for preview lifecycle proof.
+The temporary CLI comparison helper is excluded from the branch.
+
+Evidence under `/tmp/voice-startup-pr`: `handshake-overlap-result.json`,
+`handshake-overlap-classified.json`, `handshake-overlap-terminal-audit.json`,
+`handshake-overlap-preflight.json`, and `handshake-overlap-applied.patch`.
+Local cleanup evidence: `/tmp/workerd-handshake-cleanup-20260915/result.json`.
+This preview result does not authorize a production deployment or HAVPE flash.
 
 ## Reproduce
 
