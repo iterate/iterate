@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "capnweb/capnweb.h"
+#include "iterate/kit/stream_subscription.h"
 #include "iterate/kit/voice_device_profile.h"
 
 #ifdef __cplusplus
@@ -30,9 +31,6 @@ enum {
 
 enum iterate_kit_voicelab_state {
   ITERATE_KIT_VOICELAB_IDLE = 0,
-  ITERATE_KIT_VOICELAB_AUTHENTICATING,
-  ITERATE_KIT_VOICELAB_GETTING_PROJECT,
-  ITERATE_KIT_VOICELAB_GETTING_STREAM,
   ITERATE_KIT_VOICELAB_OPENING_CONNECTION,
   ITERATE_KIT_VOICELAB_READY,
   ITERATE_KIT_VOICELAB_FAILED,
@@ -98,19 +96,9 @@ typedef void (*iterate_kit_voicelab_seen_fn)(
 enum iterate_kit_voicelab_failure {
   ITERATE_KIT_VOICELAB_FAILURE_NONE = 0,
   ITERATE_KIT_VOICELAB_FAILURE_INVALID_OPTIONS,
-  ITERATE_KIT_VOICELAB_FAILURE_AUTH_CALL,
-  ITERATE_KIT_VOICELAB_FAILURE_AUTH_REJECTED,
-  ITERATE_KIT_VOICELAB_FAILURE_AUTH_RESULT,
-  ITERATE_KIT_VOICELAB_FAILURE_PROJECT_CALL,
-  ITERATE_KIT_VOICELAB_FAILURE_PROJECT_REJECTED,
-  ITERATE_KIT_VOICELAB_FAILURE_PROJECT_RESULT,
-  ITERATE_KIT_VOICELAB_FAILURE_STREAM_CALL,
-  ITERATE_KIT_VOICELAB_FAILURE_STREAM_REJECTED,
-  ITERATE_KIT_VOICELAB_FAILURE_STREAM_RESULT,
   ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL,
   ITERATE_KIT_VOICELAB_FAILURE_OPEN_REJECTED,
   ITERATE_KIT_VOICELAB_FAILURE_OPEN_RESULT,
-  ITERATE_KIT_VOICELAB_FAILURE_EXPORT,
   ITERATE_KIT_VOICELAB_FAILURE_RELEASE,
   ITERATE_KIT_VOICELAB_FAILURE_SESSION_ENDED,
 };
@@ -131,12 +119,8 @@ typedef void (*iterate_kit_voicelab_face_fn)(
     uint8_t confidence);
 
 struct iterate_kit_voicelab_options {
-  struct capnweb_session *session;
-  const char *project_id;
-  const char *project_api_key;
   /** Stream path for the call, e.g. "/agents/voice/v23/waveshare". */
   const char *stream_path;
-  /** Device client path, e.g. "/clients/stackchan"; NULL disables presence. */
   /** Client-owned, RAM-only activation for the local microphone edge. */
   const char *activation;
   /** Monotonic clock in milliseconds; stamps every frame and every deadline. */
@@ -156,9 +140,12 @@ struct iterate_kit_voicelab_options {
   void *downlink_context;
 };
 
+struct iterate_kit_voicelab;
+
+
 /**
  * The device end of the voicelab stream protocol over ONE Cap'n Web session:
- * authenticate(project-secret) -> projects.get -> streams.get(path), then
+ * a caller-owned child `streams.get(path)` and logical subscription, then
  * one-way `append` calls carrying ephemeral
  * `events.iterate.com/voice-agent/mic-frame` events (base64 PCM16, one event
  * per wall-clock flush, any even byte length).
@@ -173,22 +160,15 @@ struct iterate_kit_voicelab_options {
  */
 struct iterate_kit_voicelab {
   struct iterate_kit_voicelab_options options;
+  /* Borrowed logical child resources. They share the permanent mount session. */
+  struct iterate_kit_stream *stream;
+  struct iterate_kit_stream_subscription *subscription;
+  struct iterate_kit_stream_subscription *previous_subscription;
+  /** Stable for the call, including overlapping subscription renewals. */
+  uint32_t subscription_epoch;
   enum iterate_kit_voicelab_state state;
   enum iterate_kit_voicelab_failure failure;
   enum capnweb_status capnweb_status;
-  struct capnweb_remote_capability session_capability;
-  struct capnweb_remote_capability project_capability;
-  struct capnweb_remote_capability stream_capability;
-  struct capnweb_remote_capability connection_capability;
-  /* Make-before-break: the outgoing connection lives until its successor opens. */
-  struct capnweb_remote_capability previous_connection_capability;
-  struct capnweb_local_capability callback_capability;
-  bool has_session_capability;
-  bool has_project_capability;
-  bool has_stream_capability;
-  bool has_connection_capability;
-  bool has_previous_connection_capability;
-  bool has_callback_capability;
   uint32_t frames_sent;
   uint32_t frame_send_failures;
   /* Last successful microphone or presence append on this device clock. */
@@ -196,6 +176,10 @@ struct iterate_kit_voicelab {
   bool call_active;
   /** One face poll in flight at a time; see iterate_kit_voicelab_poll_face. */
   bool face_poll_pending;
+  struct iterate_kit_voicelab_face_request {
+    struct iterate_kit_voicelab *voicelab;
+    uint32_t subscription_epoch;
+  } face_request;
   uint32_t face_polls;
   uint32_t face_updates;
   /** Last forwarded face timestamp; unchanged poll results are ignored. */
@@ -204,12 +188,11 @@ struct iterate_kit_voicelab {
   uint64_t last_bridge_ms;
   /** Last delivery batch time; the voice loop uses it for downlink recovery. */
   uint64_t last_batch_ms;
-  /* Downlink accounting (single-owner: dispatch runs on the session task). */
+  /** Unique connection-key and generic callback-owner sequence per renewal. */
   uint32_t connection_generation;
-  /** A failure-driven connection recycle is already in flight. */
-  bool recycle_pending;
   /** A speaker answer has started and has not yet delivered its last frame. */
   bool answer_open;
+  /** Batches from the current subscription only; predecessor overlap is audio. */
   uint32_t batches_on_connection;
   uint32_t spk_frames_received;
   uint32_t spk_decode_failures;
@@ -224,9 +207,37 @@ struct iterate_kit_voicelab {
   uint8_t chunk_buffer[ITERATE_KIT_VOICELAB_CHUNK_BYTES];
 };
 
-enum capnweb_status iterate_kit_voicelab_start(
+/**
+ * Bind a call to an already-ready child stream and open its logical downlink
+ * subscription. Both objects are caller-owned and must remain allocated until
+ * `iterate_kit_voicelab_close()` and their respective reclaimable predicates
+ * succeed. Close detaches only the subscription: the caller closes the
+ * borrowed stream after any queued terminal has been appended. This does not
+ * touch the permanent WebSocket or mount.
+ */
+enum capnweb_status iterate_kit_voicelab_bind(
     struct iterate_kit_voicelab *voicelab,
-    const struct iterate_kit_voicelab_options *options);
+    const struct iterate_kit_voicelab_options *options,
+    struct iterate_kit_stream *stream,
+    struct iterate_kit_stream_subscription *subscription);
+
+/** Mirrors the borrowed subscription state into the call state. Call from the
+ * owner loop before deciding whether capture may flush. */
+void iterate_kit_voicelab_update(struct iterate_kit_voicelab *voicelab);
+
+/** Make-before-break downlink recovery on the same borrowed stream. The fresh
+ * caller-owned slot is opened first; `update()` closes the predecessor only
+ * once the successor is open. */
+enum capnweb_status iterate_kit_voicelab_recycle_subscription(
+    struct iterate_kit_voicelab *voicelab,
+    struct iterate_kit_stream_subscription *fresh_subscription);
+
+/** Generic-subscription callback for a bound call. The owner is the voicelab;
+ * its epoch identifies one current or overlapping predecessor subscription. */
+void iterate_kit_voicelab_on_subscription_update(
+    void *owner,
+    uint32_t owner_epoch,
+    const struct capnweb_value *batch);
 
 /**
  * One-way append of up to MAX_FRAMES_PER_APPEND consecutive mic frames as
@@ -271,7 +282,7 @@ enum capnweb_status iterate_kit_voicelab_end_call(
  * it does not alter a later activation's local call state.
  */
 enum capnweb_status iterate_kit_voicelab_end_activation(
-    struct iterate_kit_voicelab *voicelab,
+    const struct iterate_kit_stream *stream,
     const char *activation,
     const char *reason);
 
@@ -296,16 +307,12 @@ enum capnweb_status iterate_kit_voicelab_keepalive_if_due(
 bool iterate_kit_voicelab_downlink_expected(
     const struct iterate_kit_voicelab *voicelab);
 
-/** Open the successor connection; the old one is released on success. */
 /**
  * Ask the voice-agent processor what its face is doing, once.
  * The caller polls only while queued speaker audio can animate an avatar.
  * At most one poll is in flight; a second returns CAPNWEB_E_STATE.
  */
 enum capnweb_status iterate_kit_voicelab_poll_face(
-    struct iterate_kit_voicelab *voicelab);
-
-enum capnweb_status iterate_kit_voicelab_recycle_connection(
     struct iterate_kit_voicelab *voicelab);
 
 enum capnweb_status iterate_kit_voicelab_close(

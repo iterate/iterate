@@ -22,8 +22,6 @@ import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import {
   installVoiceAgentFromSource,
   VOICE_AGENT_SOURCE_FILES,
-  voiceAgentEntrypointRef,
-  voiceAgentFacetRef,
   type VoiceAgentRpc,
 } from "@iterate-com/voice-agent";
 import {
@@ -151,7 +149,7 @@ export async function talk(options: TalkOptions = {}) {
   console.log(`openai secret ${await ensureOpenaiSecret(itx)}`);
 
   using voiceAgent = itx.workers.get(
-    voiceAgentEntrypointRef,
+    install.entrypointRef,
   ) as unknown as DynamicWorkerCapability<VoiceAgentSetup>;
   const health = await waitForVoiceAgent(voiceAgent);
   console.log(`voice-agent healthy for ${health.projectId}`);
@@ -163,19 +161,6 @@ export async function talk(options: TalkOptions = {}) {
       : await promptWithDefault("Stream", defaultStreamPath()));
   if (!streamPath.startsWith("/")) {
     throw new Error(`stream path must be absolute; received ${JSON.stringify(streamPath)}`);
-  }
-  /* Stateful guests retain their loaded bundle until restarted. */
-  if (install.changed) {
-    /* kill() is the platform's RPC on every stateful dynamic worker handle;
-     * the generated capability type carries only the guest's own exported
-     * methods, so the platform verb has to be asserted on. */
-    using facetWorker = itx.workers.get(voiceAgentFacetRef(streamPath)) as unknown as {
-      kill(): Promise<void>;
-    } & Disposable;
-    /* The abort takes the killing RPC down with the incarnation — "kill
-     * requested" IS the success signal, so the rejection is swallowed. */
-    await facetWorker.kill().catch(() => {});
-    console.log(`restarted voice-agent facet worker for the new build`);
   }
   const setup = await withRpcResult(
     voiceAgent.setupVoiceAgent({

@@ -54,6 +54,7 @@ static bool clock_slug(char *out, size_t capacity);
  * loop; defined once, beside the runtime it acts on.
  */
 static uint32_t abandon_speaker_audio(void);
+static void end_local_activation(const char *reason, const char *status);
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/itx_connection.h"
 #include "iterate/kit/microphone_flush.h"
@@ -61,6 +62,7 @@ static uint32_t abandon_speaker_audio(void);
 #include "iterate/kit/platforms/esp_idf_configuration.h"
 #include "iterate/kit/platforms/esp_idf_itx_transport.h"
 #include "iterate/kit/spsc_ring.h"
+#include "iterate/kit/stream_subscription.h"
 #include "iterate/kit/voicelab_stream.h"
 #include "iterate/kit/voice_device_profile.h"
 #include "iterate/kit/voice/loop.h"
@@ -154,72 +156,18 @@ enum {
   /* Covers WakeNet plus board-poll handoff without retaining idle room audio. */
   MIC_PRE_ROLL_FRAMES = 25,
   MIC_FRAMES_PER_APPEND = ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND,
-  /*
-   * The speaker buffer holds JITTER, never an answer. A 1 MiB (32 s) buffer
-   * was the single worst defect here: the bridge paced above realtime, so
-   * every answer accumulated until the buffer filled, and then
-   * xStreamBufferSend committed the HEAD of a frame and discarded the tail —
-   * a click at an arbitrary waveform phase every 20 ms, heard as static that
-   * got worse the longer the answer ran. 1 s is ample for network jitter now
-   * that the bridge paces at ~1.05x, and whole frames are dropped rather
-   * than split.
-   */
-  /*
-   * 900ms, in INTERNAL RAM. Two constraints meet here: it must exceed the
-   * bridge's 600ms opening burst plus jitter (at 750ms it did not, and 36
-   * frames were dropped on arrival), and it must not rob the TLS handshake
-   * (at 40000 the connection could not be established at all). 900ms clears
-   * the burst with room and leaves the network stack its working set. (PSRAM is unreachable while the cache is off, and
-   * a flash write would otherwise stall the audio ring as well as the tasks).
-   * Deep buffers were the wrong lever: they cannot fix a recovery path that
-   * under-fills the DMA, and they raise the ceiling that playout lag ratchets
-   * toward. Concealment plus drop-debt bounds the lag instead.
-   *
-   * (Was four seconds, in PSRAM.) One second could not hold the bridge's 600ms
-   * opening burst plus network jitter, so the buffer both OVERFLOWED (22
-   * frames dropped) and later ran dry (minimum margin 0ms) in the same
-   * answer — the classic too-small-for-the-burst signature.
-   *
-   * Unbounded growth is not a risk any more: the bridge paces at realtime
-   * after its burst, so occupancy is bounded by burst + jitter rather than
-   * by the length of the answer. (A 32s buffer WAS wrong, but only because
-   * pacing was then 2x realtime and accumulated for the whole answer.)
-   */
-  /*
-   * 1500 ms, not 900. The cushion a listener actually hears is the bridge's
-   * opening lead PLUS this device's prefill, and they stack: 390 ms of
-   * prefill against a 900 ms ring left only ~500 ms for the lead, so the
-   * lead was cut to 250 ms to stop the ring overflowing — and then the ring
-   * sat at a measured 384 ms maximum margin with MORE frames concealed than
-   * played. Choppy in one direction was traded for choppy in the other.
-   *
-   * The ring is the cheap side of that trade: 19 KiB more internal RAM buys
-   * a 600 ms lead with 500 ms of headroom still spare.
-   */
+  /* Capacity absorbs bursts; the shared prefill alone sets opening latency. */
   SPEAKER_BUFFER_BYTES = ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES,
   /* Whole-frame queueing makes replacement atomic at frame boundaries. */
   SPEAKER_QUEUE_DEPTH = SPEAKER_BUFFER_BYTES / FRAME_BYTES,
-  /* Shared measured opening budget; capacity above is not a playback delay. */
   SPEAKER_PREFILL_BYTES = ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES,
-  /*
-   * Recovering from a starve does NOT re-buy the full opening prefill. It
-   * used to, so a single late frame cost 160 ms of inserted silence —
-   * measured at 45 starves per 3099 frames, roughly 7 s of stutter per
-   * minute of speech. Mid-answer the bridge is already streaming, so a much
-   * smaller cushion is enough to carry on.
-   */
-  /*
-   * Beyond this much silence the answer is simply over: settle back to
-   * priming rather than concealing an empty stream indefinitely.
-   */
+  /* Longer source silence settles the answer back to priming. */
   SPEAKER_CONCEAL_LIMIT_MS = ITERATE_KIT_VOICE_SPEAKER_CONCEAL_LIMIT_MS,
   /*
    * How long the speaker must stay dry before the amplifier is powered down.
    * Long enough that a network hiccup mid-answer never power-cycles it.
    */
   SPEAKER_IDLE_POWERDOWN_MS = ITERATE_KIT_VOICE_SPEAKER_IDLE_POWERDOWN_MS,
-  /* Longest a released turn waits for the uplink before committing anyway. */
-  /* Longest a single spoken turn may run before it is closed regardless. */
   /* Control scan cadence; on one board each scan costs an I2C transaction. */
   CONTROL_POLL_MS = ITERATE_KIT_VOICE_CONTROL_POLL_MS,
   /* How long the transport may stay FAILED before the device reboots itself. */
@@ -247,8 +195,8 @@ EXT_RAM_BSS_ATTR static uint8_t
 EXT_RAM_BSS_ATTR static uint8_t
     outbox_storage_psram[CONTROL_OUTBOX_SLOTS][CONTROL_OUTBOX_SLOT_CAPACITY];
 
-/* Mutable paths used while mounting the board's stream. */
-static char stream_path[96];
+/* One fresh child stream per activation; the client mount itself is stable. */
+static char stream_path[160];
 static char client_path[96];
 
 enum opening_outcome {
@@ -365,7 +313,11 @@ EXT_RAM_BSS_ATTR static struct {
       [ITERATE_KIT_VOICE_DEVICE_EVENT_CAPACITY];
   struct iterate_kit_device_event_queue device_events;
   struct iterate_kit_conversation_control conversation_control;
-  struct iterate_kit_voicelab voicelab;
+  struct iterate_kit_voicelab voicelabs[2];
+  struct iterate_kit_voicelab *voicelab;
+  struct iterate_kit_stream streams[2];
+  struct iterate_kit_stream_subscription subscriptions[4];
+  struct iterate_kit_stream terminal_stream;
   /* Local answer epoch for the face timeline. */
   uint32_t answers_started;
   /** Answers that replaced speaker audio not yet heard. */
@@ -464,9 +416,18 @@ EXT_RAM_BSS_ATTR static struct {
   atomic_uint capture_activation_overflows;
   char activation[33];
   bool activation_live;
+  struct voice_setup_ticket {
+    bool pending;
+    bool ready;
+    uint32_t generation;
+    char activation[33];
+    char stream_path[sizeof(stream_path)];
+  } setup[2];
   struct {
     char activation[33];
+    char stream_path[sizeof(stream_path)];
     const char *reason;
+    struct iterate_kit_stream *stream;
   } pending_terminals[TERMINAL_PENDING_CAPACITY];
   size_t pending_terminal_head;
   size_t pending_terminal_count;
@@ -551,14 +512,18 @@ static uint32_t speaker_queued_bytes(void) {
 
 static void on_session_ended(void *context) {
   (void)context;
-  runtime.voicelab.state = ITERATE_KIT_VOICELAB_FAILED;
-  runtime.voicelab.failure = ITERATE_KIT_VOICELAB_FAILURE_SESSION_ENDED;
-  runtime.voicelab.has_session_capability = false;
-  runtime.voicelab.has_project_capability = false;
-  runtime.voicelab.has_stream_capability = false;
-  runtime.voicelab.has_connection_capability = false;
-  runtime.voicelab.has_previous_connection_capability = false;
-  runtime.voicelab.has_callback_capability = false;
+  for (size_t index = 0U; index < 4U; ++index) {
+    iterate_kit_stream_subscription_session_ended(&runtime.subscriptions[index]);
+  }
+  for (size_t index = 0U; index < 2U; ++index) {
+    iterate_kit_stream_session_ended(&runtime.streams[index]);
+    (void)iterate_kit_voicelab_close(&runtime.voicelabs[index]);
+    runtime.setup[index].ready = false;
+  }
+  iterate_kit_stream_session_ended(&runtime.terminal_stream);
+  for (size_t index = 0U; index < TERMINAL_PENDING_CAPACITY; ++index) {
+    runtime.pending_terminals[index].stream = NULL;
+  }
   runtime.voicelab_generation = 0U;
 }
 
@@ -1234,6 +1199,7 @@ static uint32_t activation_random(void) {
 }
 
 static void begin_activation(uint64_t now) {
+  bool prepared = false;
   const uint32_t first = activation_random();
   const uint32_t second = activation_random();
   const uint32_t third = activation_random();
@@ -1244,9 +1210,48 @@ static void begin_activation(uint64_t now) {
       first, second, third, fourth);
   runtime.activation_started_at_ms = now;
   runtime.activation_live = true;
+  runtime.voicelab_generation = 0U;
+  for (size_t index = 0U; index < sizeof(runtime.setup) / sizeof(runtime.setup[0]); ++index) {
+    struct voice_setup_ticket *const ticket = &runtime.setup[index];
+    bool callbacks_released = true;
+    for (size_t sub = 0U; sub < 4U; ++sub) {
+      if (runtime.subscriptions[sub].owner == &runtime.voicelabs[index] &&
+          !iterate_kit_stream_subscription_reclaimable(&runtime.subscriptions[sub])) {
+        callbacks_released = false;
+      }
+    }
+    if (!ticket->pending && callbacks_released &&
+        !runtime.voicelabs[index].face_poll_pending &&
+        iterate_kit_stream_reclaimable(&runtime.streams[index])) {
+      char clock[20];
+      const char *const name = clock_slug(clock, sizeof(clock)) ? clock : "unclocked";
+      int written;
+      ticket->generation = runtime.connection.generation;
+      ticket->ready = false;
+      (void)snprintf(ticket->activation, sizeof(ticket->activation), "%s", runtime.activation);
+      written = snprintf(
+          ticket->stream_path,
+          sizeof(ticket->stream_path),
+          "/agents/voice/v23/%s/%s-%s",
+          runtime.facts->device_name,
+          name,
+          runtime.activation);
+      if (written < 0 || (size_t)written >= sizeof(ticket->stream_path)) {
+        ticket->stream_path[0] = '\0';
+      } else {
+        prepared = true;
+        runtime.voicelab = &runtime.voicelabs[index];
+        (void)snprintf(stream_path, sizeof(stream_path), "%s", ticket->stream_path);
+      }
+      break;
+    }
+  }
   runtime.first_mic_append_at_ms = 0U;
   runtime.opening_started_at_ms = now;
   runtime.opening_outcome = OPENING_WAITING;
+  if (!prepared) {
+    end_local_activation("opening-failed", "voice setup unavailable");
+  }
 }
 
 static bool queue_terminal(const char *reason) {
@@ -1268,9 +1273,23 @@ static bool queue_terminal(const char *reason) {
       runtime.pending_terminals[slot].activation,
       runtime.activation,
       sizeof(runtime.pending_terminals[slot].activation));
+  memcpy(
+      runtime.pending_terminals[slot].stream_path,
+      stream_path,
+      sizeof(runtime.pending_terminals[slot].stream_path));
   runtime.pending_terminals[slot].reason = reason;
+  runtime.pending_terminals[slot].stream = runtime.voicelab->stream;
   ++runtime.pending_terminal_count;
   return true;
+}
+
+static void fence_activation(void) {
+  for (size_t index = 0U; index < 2U; ++index) {
+    if (strcmp(runtime.setup[index].activation, runtime.activation) != 0) continue;
+    /* Fence callbacks immediately; cleanup waits for control-outbox room. */
+    runtime.voicelabs[index].state = ITERATE_KIT_VOICELAB_CLOSED;
+  }
+  runtime.voicelab_generation = 0U;
 }
 
 static void end_local_activation(const char *reason, const char *status) {
@@ -1281,9 +1300,11 @@ static void end_local_activation(const char *reason, const char *status) {
   /* A terminal is required only after this activation reached the stream. */
   queued = !runtime.activation_live ||
       runtime.first_mic_append_at_ms == 0U || queue_terminal(reason);
+  fence_activation();
   /* `pending_terminals` owns the ID now. Do not let a delayed acceptance or
    * speaker frame match an activation the person has already ended. */
   runtime.activation[0] = '\0';
+  stream_path[0] = '\0';
   runtime.activation_live = false;
   atomic_store_explicit(&runtime.speaker_peak, 0U, memory_order_relaxed);
   atomic_store_explicit(&runtime.speaker_peak_at_ms, 0U, memory_order_release);
@@ -1292,9 +1313,9 @@ static void end_local_activation(const char *reason, const char *status) {
   /* A queued terminal fences later microphone appends, so the old call must
    * stop governing new local intent immediately. */
   runtime.view.call_active = false;
-  runtime.voicelab.call_active = false;
-  runtime.voicelab.answer_open = false;
-  runtime.voicelab.last_presence_at_ms = 0U;
+  runtime.voicelab->call_active = false;
+  runtime.voicelab->answer_open = false;
+  runtime.voicelab->last_presence_at_ms = 0U;
   runtime.opening_started_at_ms = 0U;
   runtime.opening_outcome = OPENING_IDLE;
   atomic_fetch_add_explicit(
@@ -1310,15 +1331,18 @@ static void end_local_activation(const char *reason, const char *status) {
 /* The server has already accepted the terminal; fence only local audio. */
 static void end_authoritative_activation(const char *status) {
   if (!runtime.activation_live) return;
+  fence_activation();
+  runtime.activation[0] = '\0';
+  stream_path[0] = '\0';
   runtime.activation_live = false;
   atomic_store_explicit(&runtime.speaker_peak, 0U, memory_order_relaxed);
   atomic_store_explicit(&runtime.speaker_peak_at_ms, 0U, memory_order_release);
   runtime.view.wants_call = false;
   runtime.view.listening = false;
   runtime.view.call_active = false;
-  runtime.voicelab.call_active = false;
-  runtime.voicelab.answer_open = false;
-  runtime.voicelab.last_presence_at_ms = 0U;
+  runtime.voicelab->call_active = false;
+  runtime.voicelab->answer_open = false;
+  runtime.voicelab->last_presence_at_ms = 0U;
   runtime.opening_started_at_ms = 0U;
   runtime.opening_outcome = OPENING_IDLE;
   atomic_fetch_add_explicit(
@@ -1330,24 +1354,148 @@ static void end_authoritative_activation(const char *status) {
   runtime.view.status = status;
 }
 
-static void flush_pending_terminal(size_t outbox_free) {
+static const char *const setup_voice_path[] = {"voice", "setupVoiceAgent"};
+static void bind_voice_if_ready(struct voice_setup_ticket *ticket) {
+  const size_t index = (size_t)(ticket - runtime.setup);
+  struct iterate_kit_stream *const stream = &runtime.streams[index];
+  struct iterate_kit_stream_subscription *subscription = NULL;
+  if (!runtime.activation_live || strcmp(ticket->activation, runtime.activation) != 0 ||
+      runtime.voicelab_generation == runtime.connection.generation ||
+      runtime.voicelabs[index].face_poll_pending) return;
+  if (stream->state == ITERATE_KIT_STREAM_FAILED) {
+    ESP_LOGE(tag, "voice stream get failed: %d", stream->status);
+    end_local_activation("opening-failed", "voice stream failed");
+    return;
+  }
+  if (stream->state != ITERATE_KIT_STREAM_READY) return;
+  for (size_t slot = 0U; slot < 4U; ++slot) {
+    if (iterate_kit_stream_subscription_reclaimable(&runtime.subscriptions[slot])) {
+      subscription = &runtime.subscriptions[slot];
+      break;
+    }
+  }
+  if (subscription == NULL) {
+    end_local_activation("opening-failed", "voice subscriptions full");
+    return;
+  }
+  const struct iterate_kit_voicelab_options options = {
+    .stream_path = ticket->stream_path,
+    .activation = ticket->activation, .now_ms = now_ms, .clock_context = NULL,
+    .on_speaker = on_speaker_pcm, .on_control = on_control,
+    .on_face = runtime.board->observe_answer != NULL ? on_face : NULL,
+  };
+  if (iterate_kit_voicelab_bind(runtime.voicelab, &options, stream, subscription) != CAPNWEB_OK) {
+    end_local_activation("opening-failed", "voice stream failed");
+    return;
+  }
+  runtime.voicelab_generation = runtime.connection.generation;
+}
+
+static bool current_voice_setup_ready(void) {
+  for (size_t index = 0U; index < sizeof(runtime.setup) / sizeof(runtime.setup[0]); ++index) {
+    if (runtime.setup[index].ready &&
+        runtime.setup[index].generation == runtime.connection.generation &&
+        strcmp(runtime.setup[index].activation, runtime.activation) == 0) return true;
+  }
+  return false;
+}
+
+static void setup_voice_completed(
+    void *context, const struct capnweb_result *result) {
+  struct voice_setup_ticket *const ticket = context;
+  struct capnweb_value path;
+  char configured_path[sizeof(stream_path)];
+  size_t length = 0U;
+  const bool current = ticket != NULL && ticket->pending &&
+      runtime.activation_live &&
+      ticket->generation == runtime.connection.generation &&
+      strcmp(ticket->activation, runtime.activation) == 0;
+  if (ticket == NULL) return;
+  ticket->pending = false;
+  if (!current || result->kind == CAPNWEB_RESULT_SESSION_ENDED) return;
+  if (result->kind != CAPNWEB_RESULT_VALUE ||
+      !capnweb_value_object_get(&result->value, "streamPath", &path) ||
+      capnweb_value_copy_string(
+          &path, configured_path, sizeof(configured_path), &length) != CAPNWEB_OK ||
+      strcmp(configured_path, ticket->stream_path) != 0) {
+    end_local_activation("opening-failed", "voice setup failed");
+    return;
+  }
+  ticket->ready = true;
+}
+
+static void start_voice_setup(struct voice_setup_ticket *ticket) {
+  if (!runtime.activation_live || ticket == NULL || ticket->pending || ticket->ready ||
+      ticket->stream_path[0] == '\0') return;
+  struct capnweb_expression path = {
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {ticket->stream_path, strlen(ticket->stream_path)}},
+  };
+  const struct capnweb_expression visemes = {
+    CAPNWEB_EXPRESSION_BOOLEAN,
+    {.boolean = runtime.board->observe_answer != NULL},
+  };
+  const struct capnweb_object_field fields[] = {
+    {{"streamPath", sizeof("streamPath") - 1U}, &path},
+    {{"visemes", sizeof("visemes") - 1U}, &visemes},
+  };
+  const struct capnweb_expression args = {
+    CAPNWEB_EXPRESSION_OBJECT,
+    {.object = {fields, sizeof(fields) / sizeof(fields[0])}},
+  };
   enum capnweb_status status;
+  const size_t index = (size_t)(ticket - runtime.setup);
+  if (iterate_kit_stream_reclaimable(&runtime.streams[index])) {
+    status = iterate_kit_stream_get(
+        &runtime.streams[index], &runtime.connection.session,
+        runtime.connection.mount.project_capability, ticket->stream_path);
+    if (status != CAPNWEB_OK) {
+      end_local_activation("opening-failed", "voice stream failed");
+      return;
+    }
+  }
+  ticket->generation = runtime.connection.generation;
+  ticket->pending = true;
+  status = capnweb_session_call_expressions(
+      &runtime.connection.session,
+      runtime.connection.mount.project_capability,
+      setup_voice_path,
+      sizeof(setup_voice_path) / sizeof(setup_voice_path[0]),
+      &args,
+      1U,
+      setup_voice_completed,
+      ticket);
+  if (status != CAPNWEB_OK) {
+    ticket->pending = false;
+    end_local_activation("opening-failed", "voice setup failed");
+  }
+}
+
+static void flush_pending_terminal(size_t outbox_free) {
   const size_t slot = runtime.pending_terminal_head;
-  if (runtime.pending_terminal_count == 0U) return;
-  /* A full outbox makes a Cap'n Web append session-fatal. Keep the terminal
-   * pending until its one control slot is available. */
-  if (outbox_free == 0U) return;
-  status = iterate_kit_voicelab_end_activation(
-      &runtime.voicelab,
-      runtime.pending_terminals[slot].activation,
-      runtime.pending_terminals[slot].reason);
-  if (status != CAPNWEB_OK) return;
-  /* The pending terminal owns the old stream call. `runtime.activation` may
-   * already name a new local capture, which has not appended while terminals
-   * are pending. */
-  runtime.voicelab.call_active = false;
-  runtime.voicelab.answer_open = false;
-  runtime.voicelab.last_presence_at_ms = 0U;
+  struct iterate_kit_stream *stream;
+  if (runtime.pending_terminal_count == 0U || outbox_free < 3U) return;
+  stream = runtime.pending_terminals[slot].stream;
+  if (stream == NULL) {
+    stream = &runtime.terminal_stream;
+    if (iterate_kit_stream_reclaimable(stream)) {
+      const enum capnweb_status status = iterate_kit_stream_get(
+          stream, &runtime.connection.session,
+          runtime.connection.mount.project_capability,
+          runtime.pending_terminals[slot].stream_path);
+      if (status != CAPNWEB_OK) {
+        ESP_LOGE(tag, "terminal stream open failed: %d", status);
+        return;
+      }
+    }
+    runtime.pending_terminals[slot].stream = stream;
+  }
+  if (stream->state != ITERATE_KIT_STREAM_READY) return;
+  if (iterate_kit_voicelab_end_activation(
+          stream, runtime.pending_terminals[slot].activation,
+          runtime.pending_terminals[slot].reason) != CAPNWEB_OK) return;
+  (void)iterate_kit_stream_close(stream);
+  runtime.pending_terminals[slot].stream = NULL;
   runtime.pending_terminal_head =
       (runtime.pending_terminal_head + 1U) % TERMINAL_PENDING_CAPACITY;
   --runtime.pending_terminal_count;
@@ -1838,7 +1986,7 @@ static size_t health_json(char *out, size_t capacity) {
    * is reported rather than inferred.
    */
   const bool gate_open =
-      (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY) &&
+      (runtime.voicelab->state == ITERATE_KIT_VOICELAB_READY) &&
       transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
       runtime.voicelab_generation == runtime.connection.generation;
 
@@ -1854,8 +2002,8 @@ static size_t health_json(char *out, size_t capacity) {
          ? 0U
          : (uint32_t)(uxQueueMessagesWaiting(runtime.mic_queue) * FRAME_MS)},
     {"seq", runtime.stats_sequence++},
-    {"framesSent", runtime.voicelab.frames_sent},
-    {"frameFailures", runtime.voicelab.frame_send_failures},
+    {"framesSent", runtime.voicelab->frames_sent},
+    {"frameFailures", runtime.voicelab->frame_send_failures},
     {"micCaptured", runtime.mic_frames_captured},
     {"micDropped", runtime.mic_frames_dropped},
     {"micProcessFailures", runtime.mic_process_failures},
@@ -1890,7 +2038,7 @@ static size_t health_json(char *out, size_t capacity) {
      atomic_load_explicit(&runtime.mic_peak, memory_order_relaxed)},
     {"micPeakMax",
      atomic_load_explicit(&runtime.mic_peak_max, memory_order_relaxed)},
-    {"spkFrames", runtime.voicelab.spk_frames_received},
+    {"spkFrames", runtime.voicelab->spk_frames_received},
     {"spkPlayed", runtime.playout.stats.frames_played},
     {"spkOverflow",
      atomic_load_explicit(
@@ -1921,7 +2069,7 @@ static size_t health_json(char *out, size_t capacity) {
      * carries a call or an answer any more, so there is nothing for the
      * device to refuse.
      */
-    {"spkDecodeFailures", runtime.voicelab.spk_decode_failures},
+    {"spkDecodeFailures", runtime.voicelab->spk_decode_failures},
     {"spkDiscarded",
      atomic_load_explicit(
          &runtime.speaker_discarded_frames, memory_order_relaxed)},
@@ -1949,8 +2097,8 @@ static size_t health_json(char *out, size_t capacity) {
      * being asked and has no face to report. A frozen mouth was diagnosed from
      * source once because there was no counter to look at.
      */
-    {"facePolls", runtime.voicelab.face_polls},
-    {"faceUpdates", runtime.voicelab.face_updates},
+    {"facePolls", runtime.voicelab->face_polls},
+    {"faceUpdates", runtime.voicelab->face_updates},
     /*
      * THE FACE, AND THE ONE NUMBER THAT SAYS IT IS ALIVE.
      *
@@ -1960,23 +2108,23 @@ static size_t health_json(char *out, size_t capacity) {
      * apart. The frozen-pose bug was diagnosed from source because there was no
      * counter to look at; there is one now.
      */
-    {"batches", runtime.voicelab.batches_on_connection},
-    {"connGeneration", runtime.voicelab.connection_generation},
+    {"batches", runtime.voicelab->batches_on_connection},
+    {"connGeneration", runtime.voicelab->connection_generation},
     /* Hop liveness only — never application delivery credit. */
     {"wsPongs", metrics.websocket_pongs_received},
     /* Inbound capability dispatches served — the reachability proof. */
     {"servedDispatches", iterate_kit_peer_served_dispatches(&runtime.peer)},
     {"bridgeAgeMs",
-     runtime.voicelab.last_bridge_ms == 0U
+     runtime.voicelab->last_bridge_ms == 0U
          ? 0U
          : (uint32_t)iterate_kit_voice_elapsed_ms(
-               now, runtime.voicelab.last_bridge_ms)},
+               now, runtime.voicelab->last_bridge_ms)},
     {"downlinkRecycles", runtime.downlink_recycles},
     {"batchAgeMs",
-     runtime.voicelab.last_batch_ms == 0U
+     runtime.voicelab->last_batch_ms == 0U
          ? 0U
          : (uint32_t)iterate_kit_voice_elapsed_ms(
-               now, runtime.voicelab.last_batch_ms)},
+               now, runtime.voicelab->last_batch_ms)},
     /*
      * THE THREE FIXED TABLES. Sized at boot and never grown; when one fills,
      * the next call fails with a status that names no table and the device
@@ -2057,8 +2205,8 @@ static size_t health_json(char *out, size_t capacity) {
       ",\"firstMicAppendOffsetMs\":%" PRId64 ",\"t\":%" PRIu64
       ",\"uptimeMs\":%" PRIu64,
       iterate_kit_esp_idf_itx_transport_state_name(transport.state),
-      iterate_kit_voicelab_state_name(runtime.voicelab.state),
-      iterate_kit_voicelab_failure_name(runtime.voicelab.failure),
+      iterate_kit_voicelab_state_name(runtime.voicelab->state),
+      iterate_kit_voicelab_failure_name(runtime.voicelab->failure),
       stream_path,
       runtime.opening_outcome == OPENING_WAITING ? "waiting"
       : runtime.opening_outcome == OPENING_ACCEPTED ? "accepted"
@@ -2067,9 +2215,9 @@ static size_t health_json(char *out, size_t capacity) {
       iterate_kit_esp_reset_reason_name(),
       iterate_kit_esp_last_restart_note(),
       iterate_kit_itx_connection_state_name(runtime.connection.state),
-      runtime.voicelab.call_active ? "true" : "false",
+      runtime.voicelab->call_active ? "true" : "false",
       runtime.view.wants_call ? "true" : "false",
-      runtime.voicelab.has_stream_capability ? "true" : "false",
+      (runtime.voicelab->stream != NULL && runtime.voicelab->stream->has_capability) ? "true" : "false",
       (unsigned)(CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots),
       gate_open ? "true" : "false",
       runtime.activation_started_at_ms,
@@ -2304,6 +2452,8 @@ bool iterate_kit_voice_loop_init(
       ops->present == NULL) {
     return false;
   }
+  /* PSRAM BSS is zeroed at boot; pointer initializers belong here. */
+  runtime.voicelab = &runtime.voicelabs[0];
   atomic_store_explicit(
       &runtime.speaker_answer_done_generation, UINT32_MAX, memory_order_release);
   runtime.board = ops;
@@ -2312,13 +2462,9 @@ bool iterate_kit_voice_loop_init(
   if (facts->device_name == NULL || facts->device_name[0] == '\0') {
     return false;
   }
-  const int stream_path_length = snprintf(
-      stream_path, sizeof(stream_path), "/agents/voice/v23/%s", facts->device_name);
   const int client_path_length = snprintf(
       client_path, sizeof(client_path), "/clients/%s", facts->device_name);
-  if (stream_path_length < 0 ||
-      (size_t)stream_path_length >= sizeof(stream_path) ||
-      client_path_length < 0 ||
+  if (client_path_length < 0 ||
       (size_t)client_path_length >= sizeof(client_path)) {
     return false;
   }
@@ -2440,10 +2586,9 @@ bool iterate_kit_voice_loop_init(
        * transport's static task stack, which is the only part of this loop
        * that competes with TLS, Wi-Fi and DMA.
        */
-      "voicelab voice client ready: psram_bytes=%u internal_bytes=%u stream=%s",
+      "voicelab voice client ready: psram_bytes=%u internal_bytes=%u",
       (unsigned int)sizeof(runtime),
-      (unsigned int)sizeof(transport),
-      stream_path);
+      (unsigned int)sizeof(transport));
   return true;
 }
 
@@ -2486,32 +2631,21 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
     (void)iterate_kit_device_event_poll(
         &runtime.device_events, ITERATE_KIT_VOICE_DEVICE_EVENT_POLL_BUDGET);
     /*
-     * WHETHER THIS DEVICE CAN DO ANYTHING, published every time it changes.
-     *
-     * The same gate every producer sits behind and that `health()` reports as
-     * `gateOpen`: transport ready, stream mounted, generations agreed. The
-     * screen needs it continuously rather than at one transition, because the UI
-     * state it used to be folded into is written from nine places and any of
-     * them would erase it — which is exactly how the board came to read "ready"
-     * while the server was refusing it every three seconds.
-     *
-     * On change only: publishing marks the snapshot dirty, and doing that on
-     * every pass would repaint the whole screen at the app loop's rate.
+     * Publish the mounted project connection at idle. A direct child stream is
+     * deliberately per-call, so requiring one here would leave an idle board
+     * permanently connecting. Once a call is live, readiness also requires its
+     * current child stream.
      */
     {
       static bool published_link_ready = true;
-      /*
-       * THE SAME PREDICATE, SPLIT INTO ITS RUNGS. `link_ready` is unchanged —
-       * it is the whole chain, and every producer still sits behind it. What
-       * is new is publishing the two halves separately, so the lights can say
-       * WHICH one is missing instead of showing one undifferentiated amber.
-       */
       const bool api_ready =
-          transport.state == ITERATE_KIT_ESP_IDF_ITX_READY;
+          transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
+          runtime.connection.state == ITERATE_KIT_ITX_CONNECTION_READY;
       const bool stream_ready =
-          runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
+          runtime.voicelab->state == ITERATE_KIT_VOICELAB_READY &&
           runtime.voicelab_generation == runtime.connection.generation;
-      const bool ready = api_ready && stream_ready;
+      const bool ready = api_ready &&
+                         (!runtime.view.call_active || stream_ready);
       runtime.view.api_ready = api_ready;
       runtime.view.stream_ready = stream_ready;
       if (ready != published_link_ready) {
@@ -2545,7 +2679,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       ESP_LOGI(tag, "control: ending call");
     }
     if (runtime.intent.start_call && !runtime.intent.microphone_muted &&
-        !runtime.voicelab.call_active &&
+        !runtime.voicelab->call_active &&
         runtime.pending_terminal_count < TERMINAL_PENDING_CAPACITY) {
       runtime.view.wants_call = true;
       ESP_LOGI(tag, "control: starting call");
@@ -2624,7 +2758,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
          * the UI state, and a one-shot "offline" survived only until the next of
          * them ran.
          */
-        runtime.view.status = (iterate_kit_voicelab_failure_name(runtime.voicelab.failure));
+        runtime.view.status = (iterate_kit_voicelab_failure_name(runtime.voicelab->failure));
         iterate_kit_esp_idf_itx_transport_metrics(&transport, &metrics);
         ESP_LOGE(
             tag,
@@ -2651,7 +2785,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
 
     /* Each activation has one bounded opening deadline and one capture FIFO. */
     if (runtime.opening_started_at_ms != 0U &&
-        !runtime.voicelab.call_active &&
+        !runtime.voicelab->call_active &&
         iterate_kit_voice_elapsed_ms(now, runtime.opening_started_at_ms) >=
             OPENING_DEADLINE_MS) {
       end_local_activation("opening-timeout", "opening timed out");
@@ -2803,92 +2937,65 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        * is the evidence the gate exists to wait for, and it is the same
        * signal both transport gates already reset themselves on.
        */
-      if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY) {
+      if (runtime.voicelab->state == ITERATE_KIT_VOICELAB_READY) {
         iterate_kit_retry_gate_reset(&remount_gate);
       } else if (
-          runtime.voicelab.state == ITERATE_KIT_VOICELAB_FAILED &&
+          runtime.voicelab->state == ITERATE_KIT_VOICELAB_FAILED &&
           remount_gate_ready &&
           iterate_kit_retry_gate_ready(&remount_gate, (int64_t)now * 1000)) {
         iterate_kit_retry_gate_defer(&remount_gate, (int64_t)now * 1000);
         ESP_LOGW(
             tag,
             "voicelab failed (%s) with a ready connection — re-mounting",
-            iterate_kit_voicelab_failure_name(runtime.voicelab.failure));
-        (void)iterate_kit_voicelab_close(&runtime.voicelab);
+            iterate_kit_voicelab_failure_name(runtime.voicelab->failure));
+        (void)iterate_kit_voicelab_close(runtime.voicelab);
         runtime.voicelab_generation = 0U;
       }
     }
 
     if (transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
-        runtime.connection.state == ITERATE_KIT_ITX_CONNECTION_READY &&
-        runtime.voicelab_generation != runtime.connection.generation) {
-      /*
-       * Designated on purpose: this init used to be positional, and the
-       * voicelab options struct grows fields — a silent mis-binding here is
-       * exactly the hazard the header warns about.
-       */
-      const struct iterate_kit_voicelab_options options = {
-        .session = &runtime.connection.session,
-        .project_id = runtime.configuration.project_id,
-        .project_api_key = runtime.configuration.project_api_key,
-        .stream_path = stream_path,
-        .activation = runtime.activation,
-        .now_ms = now_ms,
-        .clock_context = NULL,
-        .on_speaker = on_speaker_pcm,
-        .on_control = on_control,
-        /*
-         * Only where there is a mouth. A board with no `observe_answer` has
-         * nowhere to put a viseme, and offering the callback would make the
-         * poll below look worth doing on a board that can never use it.
-         */
-        .on_face =
-            runtime.board->observe_answer != NULL ? on_face : NULL,
-        .downlink_context = NULL,
-      };
-      const enum capnweb_status started =
-          iterate_kit_voicelab_start(&runtime.voicelab, &options);
-      if (started != CAPNWEB_OK) {
-        /*
-         * Rate-limited, but never silent. This retries every 5 ms, and a
-         * start that keeps failing leaves the device answering RPCs while
-         * doing nothing else — the single most confusing state it has, and
-         * previously the only one it never said a word about.
-         */
-        static uint64_t next_complaint_at;
-        if (now >= next_complaint_at) {
-          next_complaint_at = now + 5000U;
-          ESP_LOGE(tag, "voicelab mount will not start (status %d)", (int)started);
+        runtime.connection.state == ITERATE_KIT_ITX_CONNECTION_READY) {
+      struct iterate_kit_spsc_ring_metrics outbox_metrics;
+      iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
+      flush_pending_terminal(CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots);
+      for (size_t index = 0U; index < 2U; ++index) {
+        bool terminal_owns_stream = false;
+        if (runtime.activation_live &&
+            strcmp(runtime.setup[index].activation, runtime.activation) == 0) continue;
+        iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
+        if (CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots < 8U) break;
+        (void)iterate_kit_voicelab_close(&runtime.voicelabs[index]);
+        for (size_t terminal = 0U; terminal < TERMINAL_PENDING_CAPACITY; ++terminal) {
+          if (runtime.pending_terminals[terminal].stream == &runtime.streams[index]) {
+            terminal_owns_stream = true;
+          }
         }
+        if (!terminal_owns_stream) (void)iterate_kit_stream_close(&runtime.streams[index]);
       }
-      if (started == CAPNWEB_OK) {
-        runtime.voicelab_generation = runtime.connection.generation;
-        /*
-         * NOTHING TO FORGET ABOUT THE SENDER ANY MORE.
-         *
-         * A classifier reset belonged here, because it ignored any frame
-         * numbered below the highest answer it had played: a restarted bridge
-         * numbered its first answer 0, every frame was then "stale", and the
-         * device stayed silent for the rest of the boot while the transport
-         * reported ready and the batches kept climbing. A new sender can no
-         * longer arrive numerically behind the old one, because no frame
-         * carries a number.
-         */
-        ESP_LOGI(
-            tag,
-            "voicelab mount started (generation %" PRIu32 ")",
-            runtime.connection.generation);
+      if (runtime.activation_live) {
+        iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
+        if (CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots >= 6U) {
+          for (size_t index = 0U; index < 2U; ++index) {
+            struct voice_setup_ticket *ticket = &runtime.setup[index];
+            if (strcmp(ticket->activation, runtime.activation) == 0) {
+              start_voice_setup(ticket);
+              bind_voice_if_ready(ticket);
+              break;
+            }
+          }
+        }
       }
     }
 
-    if (runtime.voicelab.state != runtime.last_voicelab_state) {
+    iterate_kit_voicelab_update(runtime.voicelab);
+    if (runtime.voicelab->state != runtime.last_voicelab_state) {
       ESP_LOGI(
           tag,
           "voicelab state=%s failure=%s",
-          iterate_kit_voicelab_state_name(runtime.voicelab.state),
-          iterate_kit_voicelab_failure_name(runtime.voicelab.failure));
-      runtime.last_voicelab_state = runtime.voicelab.state;
-      if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY) {
+          iterate_kit_voicelab_state_name(runtime.voicelab->state),
+          iterate_kit_voicelab_failure_name(runtime.voicelab->failure));
+      runtime.last_voicelab_state = runtime.voicelab->state;
+      if (runtime.voicelab->state == ITERATE_KIT_VOICELAB_READY) {
         runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
         /*
          * NOTHING. The menu's headline is the path and its context line already
@@ -2897,15 +3004,15 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
          * "call ended" — and being empty is the honest steady state.
          */
         runtime.view.status = ("");
-      } else if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_FAILED) {
+      } else if (runtime.voicelab->state == ITERATE_KIT_VOICELAB_FAILED) {
         /* A retry keeps the local activation and its FIFO intact. */
         runtime.view.call_active = (false);
         runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_CONNECTING;
-        runtime.view.status = (iterate_kit_voicelab_failure_name(runtime.voicelab.failure));
+        runtime.view.status = (iterate_kit_voicelab_failure_name(runtime.voicelab->failure));
       }
     }
 
-    if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
+    if (runtime.voicelab->state == ITERATE_KIT_VOICELAB_READY &&
         transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
         runtime.voicelab_generation == runtime.connection.generation) {
       /*
@@ -2924,13 +3031,10 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       static int16_t pcm_storage[MIC_FRAMES_PER_APPEND][FRAME_SAMPLES];
       static bool call_active_shown;
 
-      /* Terminals are ordered ahead of later activation audio. */
-      flush_pending_terminal(outbox_free);
       /* A terminal append consumes the same ring as mic frames. Refresh the
        * headroom before deciding whether another producer may append. */
       iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
       outbox_free = CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots;
-      const bool terminal_pending = runtime.pending_terminal_count != 0U;
 
       /*
        * One intent path for both sources: a physical button edge and an RPC
@@ -2949,7 +3053,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        */
       {
         static bool wanted_previously;
-        if (wants_call && !wanted_previously) runtime.voicelab.last_batch_ms = now;
+        if (wants_call && !wanted_previously) runtime.voicelab->last_batch_ms = now;
         wanted_previously = wants_call;
       }
       /*
@@ -3002,12 +3106,12 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        * round trip — and if three of those change nothing then it is not the
        * connection that is broken, it is the session under it.
        */
-      if (wants_call && runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
-          runtime.voicelab.has_connection_capability &&
-          iterate_kit_voicelab_downlink_expected(&runtime.voicelab) &&
-          !runtime.voicelab.recycle_pending && outbox_free >= 4U &&
-          runtime.voicelab.last_batch_ms != 0U &&
-          iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_batch_ms) > DOWNLINK_SILENCE_MS) {
+      if (wants_call && runtime.voicelab->state == ITERATE_KIT_VOICELAB_READY &&
+          runtime.voicelab->subscription != NULL &&
+          iterate_kit_voicelab_downlink_expected(runtime.voicelab) &&
+          runtime.voicelab->previous_subscription == NULL && outbox_free >= 4U &&
+          runtime.voicelab->last_batch_ms != 0U &&
+          iterate_kit_voice_elapsed_ms(now, runtime.voicelab->last_batch_ms) > DOWNLINK_SILENCE_MS) {
         ++runtime.downlink_recycles;
         if (runtime.downlink_recycles_running >= 3U) {
           ESP_LOGE(
@@ -3028,27 +3132,34 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
            * this poll runs 200 times a second; without it every iteration
            * until the successor resolves would open another connection.
            */
-          runtime.voicelab.last_batch_ms = now;
-          (void)iterate_kit_voicelab_recycle_connection(&runtime.voicelab);
+          runtime.voicelab->last_batch_ms = now;
+          for (size_t slot = 0U; slot < 4U; ++slot) {
+            if (iterate_kit_stream_subscription_reclaimable(&runtime.subscriptions[slot])) {
+              const enum capnweb_status status = iterate_kit_voicelab_recycle_subscription(
+                  runtime.voicelab, &runtime.subscriptions[slot]);
+              if (status != CAPNWEB_OK) ESP_LOGE(tag, "subscription recycle failed: %d", status);
+              break;
+            }
+          }
         }
       }
       /* Any delivery at all means the lane recovered; forget the escalation. */
       if (runtime.downlink_recycles_running > 0U &&
-          runtime.voicelab.batches_on_connection > 0U) {
+          runtime.voicelab->batches_on_connection > 0U) {
         runtime.downlink_recycles_running = 0U;
       }
 
-      if (!terminal_pending && wants_call && runtime.voicelab.call_active &&
+      if (wants_call && runtime.voicelab->call_active &&
           outbox_free >= 3U) {
-        (void)iterate_kit_voicelab_keepalive_if_due(&runtime.voicelab);
+        (void)iterate_kit_voicelab_keepalive_if_due(runtime.voicelab);
       }
-      if (runtime.voicelab.call_active &&
-          runtime.voicelab.call_active != call_active_shown) {
+      if (runtime.voicelab->call_active &&
+          runtime.voicelab->call_active != call_active_shown) {
         runtime.playout.stats.margin_min_ms = 0U;
         runtime.playout.stats.writes = 0U;
       }
-      if (runtime.voicelab.call_active != call_active_shown) {
-        call_active_shown = runtime.voicelab.call_active;
+      if (runtime.voicelab->call_active != call_active_shown) {
+        call_active_shown = runtime.voicelab->call_active;
         runtime.view.call_active = (call_active_shown);
         /*
          * Belt to on_control's braces: a call forgotten for lost liveness
@@ -3100,7 +3211,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         {
           static uint64_t drain_jammed_since;
           const bool jammed = runtime.view.wants_call &&
-              runtime.voicelab.call_active &&
+              runtime.voicelab->call_active &&
               queued >= (size_t)(MIC_QUEUE_DEPTH / 2) &&
               outbox_free < (size_t)MIC_OUTBOX_RESERVE;
           if (!jammed) {
@@ -3130,11 +3241,12 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
          * the facet holds later frames while it dials.
          */
         size_t take = iterate_kit_microphone_flush_frames(
-            discarding || terminal_pending ? 0U : queued,
+            discarding ? 0U : queued,
             runtime.view.wants_call,
             runtime.mic_flushed_at_ms, now);
         if (take != 0U &&
-            runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
+            runtime.voicelab->state == ITERATE_KIT_VOICELAB_READY &&
+            current_voice_setup_ready() &&
             outbox_free >= (size_t)MIC_OUTBOX_RESERVE) {
           /*
            * The stamp only advances on a flush that was actually sent, so a
@@ -3150,7 +3262,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
           /* `struct mic_frame` is exactly its samples, so the popped run is
            * one contiguous stretch of PCM. */
           if (iterate_kit_voicelab_append_frames(
-              &runtime.voicelab,
+              runtime.voicelab,
               (const uint8_t *)pcm_storage,
               take,
               sizeof(frame_storage[0].samples),
@@ -3173,11 +3285,11 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         static uint64_t next_face_poll_at;
         if (now >= next_face_poll_at) {
           next_face_poll_at = now + ITERATE_KIT_VOICE_FACE_POLL_MS;
-          (void)iterate_kit_voicelab_poll_face(&runtime.voicelab);
+          (void)iterate_kit_voicelab_poll_face(runtime.voicelab);
         }
       }
       /* Emit live playout counters while a call is active and briefly after. */
-      if (runtime.view.wants_call || runtime.voicelab.call_active ||
+      if (runtime.view.wants_call || runtime.voicelab->call_active ||
           iterate_kit_voice_elapsed_ms(now, runtime.last_pulse_ms) < 3000U) {
         if (iterate_kit_voice_elapsed_ms(now, runtime.last_pulse_ms) >= 1000U) {
           struct iterate_kit_esp_idf_itx_transport_metrics pulse;
@@ -3196,10 +3308,10 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
               pulse.control_inbox.messages_published,
               pulse.control_inbox.messages_consumed,
               pulse.control_messages_sent,
-              runtime.voicelab.frames_sent,
-              runtime.voicelab.batches_on_connection,
-              runtime.voicelab.spk_frames_received,
-              runtime.voicelab.spk_decode_failures,
+              runtime.voicelab->frames_sent,
+              runtime.voicelab->batches_on_connection,
+              runtime.voicelab->spk_frames_received,
+              runtime.voicelab->spk_decode_failures,
               runtime.playout.stats.frames_played,
               runtime.playout.stats.conceal_frames,
               runtime.speaker_underruns,

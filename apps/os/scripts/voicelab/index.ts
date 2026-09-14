@@ -1,6 +1,7 @@
 // Voice lab: instruments for the GPT-Live voice agent over the streams
 // abstraction. See README.md in this directory for the protocol and findings.
 export { bench } from "./bench.ts";
+export { compare } from "./compare.ts";
 export { boards } from "./boards.ts";
 export { deploy } from "./deploy.ts";
 export { device } from "./device.ts";

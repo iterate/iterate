@@ -8,6 +8,7 @@
 
 struct cli_runtime;
 
+void iterate_kit_cli_main_test_start_voicelab(struct cli_runtime *runtime);
 void iterate_kit_cli_main_test_poll_hangup(
     struct cli_runtime *runtime, uint64_t now_ms);
 void iterate_kit_cli_main_test_reconcile_call(

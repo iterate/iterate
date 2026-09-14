@@ -42,9 +42,9 @@ struct iterate_kit_voice_view {
   const char *status;
   /** The first rung: the Cap'n Web session to /api is up and this device is on it. */
   bool api_ready;
-  /** The middle rung: a conversation stream exists and this device is on it. */
+  /** The middle rung: the active call's direct conversation stream is ready. */
   bool stream_ready;
-  /** The whole chain, which is the gate every producer in the loop sits behind. */
+  /** The mounted project connection, plus the direct stream while a call is live. */
   bool link_ready;
   bool call_active;
   /**

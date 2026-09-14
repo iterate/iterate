@@ -420,13 +420,17 @@ int main(int argc, char **argv)
         "error", "failed to write report: %s", runtime->options.report_json);
     return CLI_MAIN_EXIT_RUNTIME;
   }
-  return audio_drained && audio_healthy
+  return audio_drained && audio_healthy && !runtime->startup_failed
       ? CLI_MAIN_EXIT_OK
       : CLI_MAIN_EXIT_RUNTIME;
 }
 #endif
 
 #ifdef ITERATE_KIT_CLI_MAIN_TEST
+void iterate_kit_cli_main_test_start_voicelab(struct cli_runtime *runtime) {
+  cli_main_start_voicelab(runtime);
+}
+
 void iterate_kit_cli_main_test_poll_hangup(
     struct cli_runtime *runtime, uint64_t now_ms) {
   cli_main_poll_interactive(runtime, now_ms);
@@ -935,13 +939,38 @@ static void cli_main_supervise_audio(struct cli_runtime *runtime)
 static void cli_main_start_voicelab(struct cli_runtime *runtime)
 {
   assert(runtime != NULL);
+  if (runtime->startup_failed) return;
   if (runtime->transport.state != ITERATE_KIT_POSIX_ITX_READY ||
-      runtime->connection.state != ITERATE_KIT_ITX_CONNECTION_READY ||
-      runtime->voicelab_generation == runtime->connection.generation) return;
+      runtime->connection.state != ITERATE_KIT_ITX_CONNECTION_READY) return;
+  if (runtime->voice_stream.state == ITERATE_KIT_STREAM_FREE ||
+      runtime->voice_stream.state == ITERATE_KIT_STREAM_CLOSED) {
+    const enum capnweb_status status = iterate_kit_stream_get(
+        &runtime->voice_stream, &runtime->connection.session,
+        runtime->connection.mount.project_capability, runtime->options.stream_path);
+    if (status != CAPNWEB_OK) {
+      cli_runtime_log("error", "voice stream get failed status=%d", status);
+      runtime->startup_failed = true;
+      runtime->stop_requested = true;
+    }
+    return;
+  }
+  if (runtime->voice_stream.state == ITERATE_KIT_STREAM_FAILED) {
+    cli_runtime_log("error", "voice stream get failed status=%d", runtime->voice_stream.status);
+    runtime->startup_failed = true;
+    runtime->stop_requested = true;
+    return;
+  }
+  if (runtime->voice_stream.state != ITERATE_KIT_STREAM_READY ||
+      runtime->voicelab_generation == runtime->connection.generation) {
+    iterate_kit_voicelab_update(&runtime->voicelab);
+    if (runtime->voicelab.state == ITERATE_KIT_VOICELAB_FAILED) {
+      cli_runtime_log("error", "voicelab subscription failed status=%d", runtime->voicelab.capnweb_status);
+      runtime->startup_failed = true;
+      runtime->stop_requested = true;
+    }
+    return;
+  }
   const struct iterate_kit_voicelab_options options = {
-    .session = &runtime->connection.session,
-    .project_id = runtime->configuration.project_id,
-    .project_api_key = runtime->configuration.project_api_key,
     .stream_path = runtime->options.stream_path,
     .activation = runtime->activation,
     .now_ms = cli_runtime_now_ms,
@@ -951,10 +980,12 @@ static void cli_main_start_voicelab(struct cli_runtime *runtime)
     .clock_context = NULL,
     .downlink_context = runtime,
   };
-  const enum capnweb_status status = iterate_kit_voicelab_start(
-      &runtime->voicelab, &options);
+  const enum capnweb_status status = iterate_kit_voicelab_bind(
+      &runtime->voicelab, &options, &runtime->voice_stream, &runtime->voice_subscription);
   if (status != CAPNWEB_OK) {
     cli_runtime_log("error", "voicelab start failed status=%d", status);
+    runtime->startup_failed = true;
+    runtime->stop_requested = true;
     return;
   }
   if (runtime->mounted_once) ++runtime->session_restarts;
@@ -1707,7 +1738,7 @@ static void cli_main_reconcile_call(
   if (now_ms < runtime->hangup_terminal_retry_at_ms) return;
 
   const enum capnweb_status status = iterate_kit_voicelab_end_activation(
-      &runtime->voicelab, runtime->activation, CLI_MAIN_CALL_END_REASON);
+      &runtime->voice_stream, runtime->activation, CLI_MAIN_CALL_END_REASON);
   if (status != CAPNWEB_OK) {
     if (runtime->hangup_terminal_retry_at_ms == 0U) {
       cli_runtime_log(
@@ -1771,8 +1802,7 @@ static void cli_main_supervise_downlink(
   const bool traffic_owed =
       (runtime->talking && !runtime->voicelab.call_active) || runtime->voicelab.answer_open;
   const bool silent = runtime->voicelab.state == ITERATE_KIT_VOICELAB_READY && traffic_owed &&
-      runtime->voicelab.has_connection_capability &&
-      !runtime->voicelab.recycle_pending &&
+      runtime->voicelab.previous_subscription == NULL &&
       outbox_free >= CLI_MAIN_RECYCLE_OUTBOX_SLOTS &&
       runtime->voicelab.last_batch_ms != 0U &&
       iterate_kit_voice_elapsed_ms(now_ms, runtime->voicelab.last_batch_ms) >
@@ -1787,7 +1817,14 @@ static void cli_main_supervise_downlink(
     } else {
       ++runtime->downlink_recycles_running;
       runtime->voicelab.last_batch_ms = now_ms;
-      (void)iterate_kit_voicelab_recycle_connection(&runtime->voicelab);
+      struct iterate_kit_stream_subscription *fresh =
+          iterate_kit_stream_subscription_reclaimable(&runtime->voice_subscription)
+              ? &runtime->voice_subscription : &runtime->recycled_voice_subscription;
+      const enum capnweb_status status = iterate_kit_voicelab_recycle_subscription(
+          &runtime->voicelab, fresh);
+      if (status != CAPNWEB_OK) {
+        cli_runtime_log("error", "voice subscription recycle failed status=%d", status);
+      }
     }
   }
   if (runtime->downlink_recycles_running > 0U &&

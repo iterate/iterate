@@ -1,13 +1,7 @@
 // Provision the phone's voice stream once per setup payload. A local marker
 // avoids an install and setup barrier on every call.
 
-import {
-  installVoiceAgent,
-  type VoiceAgentConfigRepo,
-  voiceAgentEntrypointRef,
-} from "@iterate-com/voice-agent";
-
-export { voiceAgentEntrypointRef };
+import { installVoiceAgent, type VoiceAgentConfigRepo } from "@iterate-com/voice-agent";
 
 /**
  * Where a CHAT's calls live: one line per chat, shared by every device —
@@ -76,12 +70,12 @@ export async function ensureVoiceAgentSetup(deps: {
 }): Promise<void> {
   const marker = setupMarker(deps.streamPath);
   if ((await deps.readMarker(deps.streamPath)) === marker) return;
-  await installVoiceAgent(deps.repo, {
+  const install = await installVoiceAgent(deps.repo, {
     existing: "keep",
     message: "mobile: depend on @iterate-com/voice-agent (first call)",
   });
   await deps.workers
-    .get(voiceAgentEntrypointRef)
+    .get(install.entrypointRef)
     .setupVoiceAgent({ streamPath: deps.streamPath, ...MOBILE_VOICE_SETUP });
   await deps.writeMarker(deps.streamPath, marker);
 }

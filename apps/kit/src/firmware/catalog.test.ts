@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { firmwareCatalog, supportedBoardProofTargets } from "./catalog.ts";
+import { supportedBoardProofTargets } from "./catalog.ts";
 
 describe("firmwareCatalog", () => {
   it("is the five-board source for installer and proof identities", () => {
@@ -10,11 +10,5 @@ describe("firmwareCatalog", () => {
       "stackchan",
       "waveshare",
     ]);
-  });
-
-  it("requests provider visemes only for Waveshare", () => {
-    expect(firmwareCatalog.filter((board) => board.remoteVisemes).map((board) => board.id)).toEqual(
-      ["waveshare"],
-    );
   });
 });

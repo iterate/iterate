@@ -19,13 +19,6 @@ export interface SetupVoiceAgentOptions {
   reinstall?: boolean;
 }
 
-/** A device's fixed connection path; every activation gets its own child conversation. */
-export interface SetupVoiceDeviceOptions {
-  streamPath: string;
-  instructions?: string;
-  visemes?: boolean;
-}
-
 /** What setup did, in enough detail for a caller to print it. */
 export interface SetupVoiceAgentResult {
   streamPath: string;
@@ -49,6 +42,5 @@ export interface VoiceAgentHealth {
 export interface VoiceAgentRpc {
   health: () => Promise<VoiceAgentHealth>;
   setupVoiceAgent: (options?: SetupVoiceAgentOptions) => Promise<SetupVoiceAgentResult>;
-  setupVoiceDevice: (options: SetupVoiceDeviceOptions) => Promise<SetupVoiceAgentResult>;
   removeVoiceAgent: (options: { streamPath: string }) => Promise<{ streamPath: string }>;
 }

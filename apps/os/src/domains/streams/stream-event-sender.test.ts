@@ -2862,6 +2862,267 @@ describe("StreamConnections hosted delivery watchdog", () => {
     });
   });
 
+  it("does not wake a hosted processor again for an unmatched ephemeral tail", async () => {
+    const events = [streamEvent(1, "events.example.com/matching")];
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, _beforeOffset, limit) =>
+        events
+          .filter((candidate) => candidate.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+    });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      filter: compileEventFilter({ eventTypes: ["events.example.com/matching"] }),
+    });
+
+    connection.sendQueued();
+    expect(calls).toHaveLength(1);
+    calls[0]!.report("ok");
+    await flushMicrotasks();
+
+    events.push(
+      { ...streamEvent(2, "events.example.com/mic-frame"), ephemeral: true },
+      { ...streamEvent(3, "events.example.com/mic-frame"), ephemeral: true },
+    );
+    h.state.maxOffset = 3;
+    connection.sendQueued();
+    await flushMicrotasks();
+
+    expect(calls).toHaveLength(1);
+
+    events.push(streamEvent(4, "events.example.com/matching"));
+    h.state.maxOffset = 4;
+    connection.sendQueued();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.batch).toMatchObject({
+      events: [{ offset: 4 }],
+      scannedAfterOffset: 1,
+      scannedThroughOffset: 4,
+      streamMaxOffset: 4,
+    });
+  });
+
+  it("does not suppress an ephemeral head after skipped durable windows", async () => {
+    const events: StreamEvent[] = [streamEvent(1, "events.example.com/matching")];
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, _beforeOffset, limit) =>
+        events
+          .filter((candidate) => candidate.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+    });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      filter: compileEventFilter({ eventTypes: ["events.example.com/matching"] }),
+    });
+
+    connection.sendQueued();
+    calls[0]!.report("ok");
+    await flushMicrotasks();
+
+    for (let offset = 2; offset <= 101; offset++) {
+      events.push(streamEvent(offset, "events.example.com/ignored"));
+    }
+    events.push({ ...streamEvent(102, "events.example.com/mic-frame"), ephemeral: true });
+    h.state.maxOffset = 102;
+    connection.sendQueued();
+    await flushMicrotasks();
+
+    expect(calls[1]!.batch).toMatchObject({
+      events: [],
+      scannedAfterOffset: 1,
+      scannedThroughOffset: 102,
+      streamMaxOffset: 102,
+    });
+  });
+
+  it("keeps an unmatched ephemeral prefix in the next matching ephemeral scan", async () => {
+    const events: StreamEvent[] = [
+      { ...streamEvent(1, "events.example.com/mic-frame"), ephemeral: true },
+      { ...streamEvent(2, "events.example.com/spk-frame"), ephemeral: true },
+    ];
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, _beforeOffset, limit) =>
+        events
+          .filter((candidate) => candidate.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+    });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      filter: compileEventFilter({ eventTypes: ["events.example.com/spk-frame"] }),
+    });
+
+    connection.sendQueued();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.batch).toMatchObject({
+      events: [{ offset: 2 }],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 2,
+    });
+  });
+
+  it("still sends an empty durable tail after skipped ephemeral frames", async () => {
+    const events: StreamEvent[] = [
+      { ...streamEvent(1, "events.example.com/mic-frame"), ephemeral: true },
+    ];
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, _beforeOffset, limit) =>
+        events
+          .filter((candidate) => candidate.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+    });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      filter: compileEventFilter({ eventTypes: ["events.example.com/matching"] }),
+    });
+
+    connection.sendQueued();
+    expect(calls).toHaveLength(1); // The initial greeting remains a delivery.
+    calls[0]!.report("ok");
+    await flushMicrotasks();
+
+    events.push(streamEvent(2, "events.example.com/ignored"));
+    h.state.maxOffset = 2;
+    connection.sendQueued();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.batch).toMatchObject({
+      events: [],
+      scannedAfterOffset: 1,
+      scannedThroughOffset: 2,
+    });
+  });
+
+  it("resumes suppressing an unmatched ephemeral tail after a pipelined caught-up pass", async () => {
+    const events = [streamEvent(1, "events.example.com/matching")];
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, _beforeOffset, limit) =>
+        events
+          .filter((candidate) => candidate.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+    });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      filter: compileEventFilter({ eventTypes: ["events.example.com/matching"] }),
+    });
+
+    // Settle the single-flight greeting, then create a non-greeting pipeline.
+    connection.sendQueued();
+    calls[0]!.report("ok");
+    await flushMicrotasks();
+
+    events.push(
+      streamEvent(2, "events.example.com/matching"),
+      streamEvent(3, "events.example.com/matching"),
+      ...Array.from({ length: 100 }, (_, index) => ({
+        ...streamEvent(index + 4, "events.example.com/mic-frame"),
+        ephemeral: true as const,
+      })),
+    );
+    h.state.maxOffset = 103;
+    connection.sendQueued();
+    await flushMicrotasks();
+
+    // Each durable event stops at its own acknowledgement boundary. The
+    // following empty frame is still required to settle both batches at head.
+    expect(calls.slice(1).map((call) => call.batch)).toMatchObject([
+      {
+        events: [{ offset: 2 }],
+        scannedAfterOffset: 1,
+        scannedThroughOffset: 2,
+        streamMaxOffset: 103,
+      },
+      {
+        events: [{ offset: 3 }],
+        scannedAfterOffset: 2,
+        scannedThroughOffset: 102,
+        streamMaxOffset: 103,
+      },
+      { events: [], scannedAfterOffset: 102, scannedThroughOffset: 103, streamMaxOffset: 103 },
+    ]);
+
+    for (const call of calls.slice(1)) call.report("ok");
+    await flushMicrotasks();
+
+    // `caughtUpOwed` must clear when the empty frame reaches head: subsequent
+    // unrelated microphone frames again require no hosted callback.
+    events.push(
+      { ...streamEvent(104, "events.example.com/mic-frame"), ephemeral: true },
+      { ...streamEvent(105, "events.example.com/mic-frame"), ephemeral: true },
+    );
+    h.state.maxOffset = 105;
+    connection.sendQueued();
+    await flushMicrotasks();
+    expect(calls).toHaveLength(4);
+  });
+
+  it("settles a previously non-caught-up batch across an unmatched ephemeral tail", async () => {
+    const events = [streamEvent(1, "events.example.com/matching")];
+    for (let offset = 2; offset <= 101; offset++) {
+      events.push({ ...streamEvent(offset, "events.example.com/mic-frame"), ephemeral: true });
+    }
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, _beforeOffset, limit) =>
+        events
+          .filter((candidate) => candidate.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+    });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      filter: compileEventFilter({ eventTypes: ["events.example.com/matching"] }),
+    });
+
+    connection.sendQueued();
+    expect(calls[0]!.batch).toMatchObject({
+      events: [{ offset: 1 }],
+      scannedThroughOffset: 100,
+      streamMaxOffset: 101,
+    });
+    calls[0]!.report("ok");
+    await flushMicrotasks();
+
+    expect(calls[1]!.batch).toMatchObject({
+      events: [],
+      scannedAfterOffset: 100,
+      scannedThroughOffset: 101,
+      streamMaxOffset: 101,
+    });
+  });
+
   it("delivers an all-ephemeral batch without the durable in-flight insurance", async () => {
     /*
      * An ephemeral event's body cannot be redelivered by anyone, so the

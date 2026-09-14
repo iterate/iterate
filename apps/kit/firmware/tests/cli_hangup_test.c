@@ -79,6 +79,13 @@ static void deliver_control(
 }
 
 static void mount_ready(struct cli_runtime *runtime, struct fixture *fixture, uint64_t *clock) {
+  if (runtime->voice_stream.session != NULL) {
+    (void)capnweb_session_close(runtime->voice_stream.session);
+    iterate_kit_stream_session_ended(&runtime->voice_stream);
+    iterate_kit_stream_subscription_session_ended(&runtime->voice_subscription);
+    iterate_kit_stream_subscription_session_ended(&runtime->recycled_voice_subscription);
+    (void)iterate_kit_voicelab_close(&runtime->voicelab);
+  }
   memset(fixture, 0, sizeof(*fixture));
   const struct capnweb_session_options session_options = {
     {dispatch, fixture, NULL}, capture, fixture,
@@ -88,24 +95,26 @@ static void mount_ready(struct cli_runtime *runtime, struct fixture *fixture, ui
   };
   assert(capnweb_session_init(&fixture->session, &session_options) == CAPNWEB_OK);
   const struct iterate_kit_voicelab_options options = {
-    .session = &fixture->session, .project_id = "prj_test", .project_api_key = "secret",
     .stream_path = "/test", .activation = runtime->activation,
     .now_ms = now_ms, .clock_context = clock,
     .on_speaker = deliver_speaker, .on_control = deliver_control,
     .downlink_context = runtime,
   };
-  assert(iterate_kit_voicelab_start(&runtime->voicelab, &options) == CAPNWEB_OK);
-  receive(fixture, "[\"resolve\",1,[\"export\",-10]]");
-  receive(fixture, "[\"resolve\",2,[\"export\",-11]]");
-  receive(fixture, "[\"resolve\",3,[\"export\",-12]]");
-  receive(fixture, "[\"resolve\",4,[\"export\",-13]]");
+  assert(iterate_kit_stream_get(&runtime->voice_stream, &fixture->session,
+      (struct capnweb_remote_capability){-10}, "/test") == CAPNWEB_OK);
+  receive(fixture, "[\"resolve\",1,[\"export\",-12]]");
+  assert(iterate_kit_voicelab_bind(&runtime->voicelab, &options,
+      &runtime->voice_stream, &runtime->voice_subscription) == CAPNWEB_OK);
+  receive(fixture, "[\"resolve\",2,[\"export\",-13]]");
+  iterate_kit_voicelab_update(&runtime->voicelab);
   assert(runtime->voicelab.state == ITERATE_KIT_VOICELAB_READY);
 }
 
 static bool captured_terminal(
     const struct fixture *fixture, const char *activation) {
   for (size_t i = 0U; i < fixture->captured_count; ++i) {
-    if (strstr(fixture->captured[i], "conversation-ended") != NULL &&
+    if (strstr(fixture->captured[i],
+            "\"type\":\"events.iterate.com/voice-agent/conversation-ended\"") != NULL &&
         strstr(fixture->captured[i], activation) != NULL) return true;
   }
   return false;
@@ -231,9 +240,50 @@ static void local_hangup_fences_late_acceptance_and_audio(void) {
   iterate_kit_cli_main_test_poll_hangup(&runtime, clock + 1U);
   assert(runtime.stop_requested);
 }
+/* Both asynchronous startup failures terminate the CLI instead of polling
+ * forever or returning a successful process status. */
+static void rejected_startup_stops_once(bool reject_subscription) {
+  struct cli_runtime runtime = {0};
+  struct fixture fixture = {0};
+  const struct capnweb_session_options session_options = {
+    {dispatch, &fixture, NULL}, capture, &fixture,
+    fixture.pending_calls, CALL_CAPACITY, fixture.exports, CALL_CAPACITY,
+    fixture.imports, CALL_CAPACITY, fixture.tokens, TOKEN_CAPACITY,
+    fixture.output, OUTPUT_CAPACITY,
+  };
+  assert(capnweb_session_init(&runtime.connection.session, &session_options) == CAPNWEB_OK);
+  runtime.transport.state = ITERATE_KIT_POSIX_ITX_READY;
+  runtime.connection.state = ITERATE_KIT_ITX_CONNECTION_READY;
+  runtime.connection.generation = 1U;
+  runtime.connection.mount.project_capability.id = -10;
+  runtime.options.stream_path = "/test";
+  memcpy(runtime.activation, ACTIVATION, sizeof(ACTIVATION));
+  iterate_kit_cli_main_test_start_voicelab(&runtime);
+  assert(runtime.voice_stream.state == ITERATE_KIT_STREAM_GETTING);
+  if (reject_subscription) {
+    const char *resolved = "[\"resolve\",1,[\"export\",-12]]";
+    assert(capnweb_session_receive(&runtime.connection.session, resolved, strlen(resolved)) == CAPNWEB_OK);
+    iterate_kit_cli_main_test_start_voicelab(&runtime);
+    assert(runtime.voicelab.state == ITERATE_KIT_VOICELAB_OPENING_CONNECTION);
+  }
+  const char *rejected = reject_subscription
+      ? "[\"reject\",2,[\"error\",\"Error\",\"subscription denied\"]]"
+      : "[\"reject\",1,[\"error\",\"Error\",\"stream denied\"]]";
+  assert(capnweb_session_receive(&runtime.connection.session, rejected, strlen(rejected)) == CAPNWEB_OK);
+  iterate_kit_cli_main_test_start_voicelab(&runtime);
+  assert(runtime.startup_failed);
+  assert(runtime.stop_requested);
+  const size_t sent = fixture.captured_count;
+  iterate_kit_cli_main_test_start_voicelab(&runtime);
+  assert(fixture.captured_count == sent);
+  capnweb_session_close(&runtime.connection.session);
+}
+
 int main(void) {
   remount_does_not_replace_the_bridge_acknowledgement();
   grace_deadline_stops_a_hung_terminal();
   local_hangup_fences_late_acceptance_and_audio();
+  rejected_startup_stops_once(false);
+  rejected_startup_stops_once(true);
   return 0;
 }

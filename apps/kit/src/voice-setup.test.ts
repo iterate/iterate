@@ -22,16 +22,20 @@ const input = {
 };
 
 function project(
-  input: { state?: unknown; secret?: { created?: boolean; hasMaterial?: boolean } } = {},
+  input: {
+    health?: { ok: boolean; projectId: string };
+    secret?: { created?: boolean; hasMaterial?: boolean };
+  } = {},
 ) {
   const commits: unknown[] = [];
-  const setupDevice = vi.fn(async (options: unknown) => ({
-    streamPath: (options as { streamPath: string }).streamPath,
-    warmMs: 1,
-  }));
+  const append = vi.fn(async () => [{ offset: 42 }]);
+  const health = vi.fn(async () => input.health || { ok: true, projectId: "prj_home" });
+  const waitUntilProcessed = vi.fn(async () => undefined);
   return {
     commits,
-    setupDevice,
+    append,
+    health,
+    waitUntilProcessed,
     value: {
       identity: async () => ({ projectId: "prj_home", slug: "home" }),
       secrets: {
@@ -39,16 +43,9 @@ function project(
           __describe: async () => input.secret || { created: true, hasMaterial: true },
         }),
       },
-      streams: {
-        get: () => ({
-          subscriptions: {
-            get: () => ({
-              describe: async () => (input.state === undefined ? null : {}),
-              processor: { getRuntimeState: async () => ({ snapshot: { state: input.state } }) },
-            }),
-          },
-        }),
-      },
+      capabilityHosts: { get: () => ({ processor: { waitUntilProcessed } }) },
+      streams: { get: () => ({ append }) },
+      workers: { get: () => ({ health }) },
       repo: {
         readFile: async ({ path }: { path: string }) =>
           path === "package.json"
@@ -62,7 +59,6 @@ function project(
           return { commitOid: "a", changedPaths: [], noChanges: false };
         },
       },
-      workers: { get: () => ({ setupVoiceDevice: setupDevice }) },
     },
   };
 }
@@ -71,7 +67,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-test("sets up the canonical board stream from the browser project credential", async () => {
+test("installs and durably mounts the setup worker from the browser project credential", async () => {
   const fixture = project();
   client.connect.mockResolvedValue(fixture.value);
 
@@ -84,11 +80,19 @@ test("sets up the canonical board stream from the browser project credential", a
     baseUrl: input.baseUrl,
     credentials: { type: "project-secret", projectSlug: "home", secret: "itxk_test" },
   });
-  expect(fixture.setupDevice).toHaveBeenCalledWith({
-    streamPath: "/agents/voice/v23/satellite1",
-    instructions: "",
-    visemes: false,
+  expect(fixture.append).toHaveBeenCalledWith({
+    type: "events.iterate.com/capability-host/capability-provided",
+    payload: {
+      type: "itx-call",
+      path: ["voice"],
+      expression: ["workers", ["get", expect.any(Object)]],
+      flattenNestedPaths: true,
+      instructions: "Set up a fresh voice conversation stream for a Kit device.",
+    },
   });
+  expect(fixture.health).toHaveBeenCalledOnce();
+  expect(fixture.health).toHaveBeenCalledBefore(fixture.append);
+  expect(fixture.waitUntilProcessed).toHaveBeenCalledWith({ offset: 42 });
   expect(fixture.commits).toHaveLength(1);
   const refConfigChange = (
     fixture.commits[0] as { changes: { path: string; content: string }[] }
@@ -100,36 +104,14 @@ test("sets up the canonical board stream from the browser project credential", a
   expect(client.disconnect).toHaveBeenCalledOnce();
 });
 
-test("preserves configured instructions and enables visemes only on Waveshare", async () => {
-  const fixture = project({
-    state: {
-      instructions: "Be brief.",
-      call: null,
-    },
-  });
+test("does not mount an unhealthy installed worker", async () => {
+  const fixture = project({ health: { ok: true, projectId: "prj_other" } });
   client.connect.mockResolvedValue(fixture.value);
 
-  await prepareDeviceVoice({ ...input, deviceId: "waveshare" });
+  await expect(prepareDeviceVoice(input)).rejects.toThrow(/health check/);
 
-  expect(fixture.setupDevice).toHaveBeenCalledWith({
-    streamPath: "/agents/voice/v23/waveshare",
-    instructions: "Be brief.",
-    visemes: true,
-  });
-});
-
-test("refuses setup while a call is active and still releases browser authority", async () => {
-  const fixture = project({
-    state: {
-      call: { activation: "a" },
-    },
-  });
-  client.connect.mockResolvedValue(fixture.value);
-
-  await expect(prepareDeviceVoice(input)).rejects.toThrow(/active call/);
-
-  expect(fixture.commits).toEqual([]);
-  expect(fixture.setupDevice).not.toHaveBeenCalled();
+  expect(fixture.health).toHaveBeenCalledOnce();
+  expect(fixture.append).not.toHaveBeenCalled();
   expect(client.disconnect).toHaveBeenCalledOnce();
 });
 

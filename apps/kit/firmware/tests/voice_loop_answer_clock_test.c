@@ -207,6 +207,20 @@ static void play_out(void) {
 }
 
 static size_t answered;
+static long pending_open_callback;
+static long open_connection_callback;
+
+static bool copy_setup_stream_path(const char *message, char *out, size_t capacity) {
+  const char *field = strstr(message, "\"streamPath\":\"");
+  size_t length;
+  if (field == NULL) return false;
+  field += strlen("\"streamPath\":\"");
+  length = strcspn(field, "\"");
+  if (length == 0U || length >= capacity) return false;
+  memcpy(out, field, length);
+  out[length] = '\0';
+  return true;
+}
 
 /*
  * ANSWER WHATEVER THE DEVICE ASKED, THE WAY A LIVE /api WOULD — the same pump
@@ -215,6 +229,7 @@ static size_t answered;
  */
 static void pump(void) {
   int round;
+  char setup_stream_path[160] = "";
   for (round = 0; round < 40; ++round) {
     struct iterate_kit_itx_connection *connection =
         iterate_kit_fake_platform_connection();
@@ -223,13 +238,38 @@ static void pump(void) {
       const char *message = iterate_kit_fake_platform_sent(answered);
       const char *pull = strstr(message, "[\"pull\",");
       ++answered;
+      if (strstr(message, "\"openConnection\"") != NULL) {
+        const char *exported = strstr(message, "[\"export\",");
+        assert(exported != NULL);
+        pending_open_callback =
+            strtol(exported + strlen("[\"export\","), NULL, 10);
+      }
+      if (strstr(message, "setupVoiceAgent") != NULL) {
+        assert(copy_setup_stream_path(
+            message, setup_stream_path, sizeof(setup_stream_path)));
+      }
       if (pull == NULL) continue;
       {
-        char reply[128];
+        char reply[256];
         const long id = strtol(pull + strlen("[\"pull\","), NULL, 10);
-        (void)snprintf(
-            reply, sizeof(reply), "[\"resolve\",%ld,[\"export\",%ld]]", id,
-            -(id + 10));
+        if (setup_stream_path[0] != '\0') {
+          (void)snprintf(
+              reply,
+              sizeof(reply),
+              "[\"resolve\",%ld,{\"streamPath\":\"%s\",\"warmMs\":0}]",
+              id,
+              setup_stream_path);
+          setup_stream_path[0] = '\0';
+        } else {
+          const long capability = -(id + 10);
+          (void)snprintf(
+              reply, sizeof(reply), "[\"resolve\",%ld,[\"export\",%ld]]", id,
+              capability);
+          if (pending_open_callback != 0L) {
+            open_connection_callback = pending_open_callback;
+            pending_open_callback = 0L;
+          }
+        }
         assert(
             iterate_kit_itx_connection_receive_text(
                 connection, reply, strlen(reply)) == CAPNWEB_OK);
@@ -251,16 +291,8 @@ static void pump(void) {
  * the export table happened to be in a particular order.
  */
 static long callback_export_id(void) {
-  const char *message =
-      iterate_kit_fake_platform_find_sent("processEventBatch");
-  const char *field;
-  const char *marker;
-  assert(message != NULL);
-  field = strstr(message, "\"processEventBatch\":");
-  assert(field != NULL);
-  marker = strstr(field, "[\"export\",");
-  assert(marker != NULL);
-  return strtol(marker + strlen("[\"export\","), NULL, 10);
+  assert(open_connection_callback != 0L);
+  return open_connection_callback;
 }
 
 /* --- the audio itself ----------------------------------------------------- */
@@ -689,6 +721,7 @@ static void ending_a_call_discards_queued_audio_before_the_next_call(void) {
   assert(frames_written == written_before);
 
   start_local_call();
+  pump();
   play_out();
   assert(frames_written == written_before);
   end_local_call();
@@ -721,6 +754,7 @@ int main(void) {
   iterate_kit_fake_platform_connect();
   pump();
   start_local_call();
+  pump();
   /* The call this whole file's audio belongs to; see deliver_accepted. */
   deliver_accepted();
 
