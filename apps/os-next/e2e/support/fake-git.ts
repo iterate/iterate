@@ -23,8 +23,9 @@ export class FakeGit extends RpcTarget {
   snapshots = 0;
   /** How many `create` calls still fail (the saga's failure story). */
   failCreates = 0;
-  /** A write from OUTSIDE that lands inside the next `commitFiles`, after the caller read the tip
-   *  and before the push — the race the repo facet's `expectedTip` guard exists for. */
+  /** A write from OUTSIDE that lands inside the next `commitFiles` — after the `expectedTip` guard
+   *  passed, before the push — so the compare-and-swapped push is what refuses it, as the real
+   *  adapter's does: the race the repo facet's refresh-and-retry exists for. */
   driftOnNextCommit: { path: string; content: string } | null = null;
 
   constructor(seed: Record<string, Record<string, string>>) {
@@ -86,18 +87,25 @@ export class FakeGit extends RpcTarget {
       this.create(repo);
       known = this.#repos.get(repo)!;
     }
+    const tipAtStart = known.commits.at(-1)?.oid ?? null;
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- the adapter's protocol: an absent expectedTip means no guard, null means "built on an unborn main"
+    const guarded = input.expectedTip !== undefined;
+    if (guarded && tipAtStart !== input.expectedTip)
+      throw Object.assign(new Error("itx.git.commitFiles: TIP_MOVED — refresh and retry"), {
+        code: "TIP_MOVED",
+      });
     if (this.driftOnNextCommit) {
       const drift = this.driftOnNextCommit;
       this.driftOnNextCommit = null;
       known.files.set(drift.path, drift.content);
-      known.commits.push(this.#commit("outside, mid-commit", [known.commits.at(-1)?.oid ?? ""]));
+      known.commits.push(this.#commit("outside, mid-commit", [tipAtStart || ""]));
     }
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- the adapter's protocol: an absent expectedTip means no guard, null means "built on an unborn main"
-    const guarded = input.expectedTip !== undefined;
-    if (guarded && (known.commits.at(-1)?.oid ?? null) !== input.expectedTip)
-      throw Object.assign(new Error("itx.git.commitFiles: TIP_MOVED — refresh and retry"), {
-        code: "TIP_MOVED",
-      });
+    // The compare-and-swapped push: `main` moved since the tip this batch was built on was read.
+    if ((known.commits.at(-1)?.oid ?? null) !== tipAtStart)
+      throw Object.assign(
+        new Error("itx.git.commitFiles: TIP_MOVED — main moved while the commit was built"),
+        { code: "TIP_MOVED" },
+      );
     const changedPaths: string[] = [];
     for (const change of input.changes) {
       if ("delete" in change && known.files.delete(change.path)) changedPaths.push(change.path);

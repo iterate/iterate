@@ -429,7 +429,19 @@ export function projectScopedGit(input: {
       ref: REF,
     });
     // oxlint-disable-next-line iterate/simple-truthiness-check -- push() returns null only on success; an empty-string refusal reason (an `ng <ref>` line with no message) is still a refusal and must throw
-    if (refused !== null) throw new Error(`itx.git: the commit to ${repo} was refused: ${refused}`);
+    if (refused !== null) {
+      // The push is compare-and-swapped on the tip read above: a refusal because `main` moved in
+      // the meantime (during the fetch, the encode, the push) is the SAME `TIP_MOVED` as the guard
+      // above — one code for "refresh and retry", whenever the move happened. Anything else (a
+      // permission, an unpack failure) is the refusal in the server's words.
+      const tipNow = (await transport.tipOf(REF)) || null;
+      if (tipNow !== (tip || null))
+        throw codedError(
+          "TIP_MOVED",
+          `itx.git.commitFiles: TIP_MOVED — ${repo}'s main moved to ${tipNow || "(unborn)"} while the commit was built on ${tip || "(unborn)"}; refresh and retry`,
+        );
+      throw new Error(`itx.git: the commit to ${repo} was refused: ${refused}`);
+    }
     return { commitOid, changedPaths };
   };
 

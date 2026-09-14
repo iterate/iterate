@@ -174,8 +174,9 @@ test("commits through the facet: commit-completed on the repo's path; the tip ca
     state: { creation: "created", tip: second.commitOid, commits: 2 },
   });
 
-  // A write from OUTSIDE that lands between the facet's refresh and its push: the adapter refuses
-  // the stale tip, the facet refreshes (one snapshot) and retries — the cache holds BOTH writes.
+  // A write from OUTSIDE that lands after the facet's guard passed and before its push: the
+  // compare-and-swapped push is refused as TIP_MOVED, the facet refreshes (one snapshot) and
+  // retries — the cache holds BOTH writes.
   git.driftOnNextCommit = { path: "d.txt", content: "drifted" };
   const third = await repo.writeFile("e.txt", "e");
   expect(third.changedPaths).toEqual(["e.txt"]);

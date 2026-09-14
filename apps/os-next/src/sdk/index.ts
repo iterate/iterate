@@ -193,12 +193,28 @@ async function followCommittedSource(event: StreamEvent, itx: ConfigWorkerItx): 
   if (typeof commitOid !== "string") return;
   const rule = await itx.rewriteRules.get("itx.worker");
   if (!rule || rule.origin !== "context" || !rule.target) return;
-  const [root, workers, get] = parse(rule.target);
-  if (root !== "itx" || workers !== "workers" || !Array.isArray(get) || get[0] !== "get") return;
-  const spec = get[1];
-  if (typeof spec !== "object" || !spec || !("source" in spec) || typeof spec.source !== "string")
+  // The rule's target and its `source` producer, spelled out — or NOT followed: a printed target past
+  // the codec's cap, a `@` hole, a `source` that is no expression. This runs ahead of the author's
+  // hook in every batch, so a rule's shape must never fail the batch (that would halt `/`'s worker).
+  let spec: Record<string, unknown>;
+  let source: ReturnType<typeof parse>;
+  try {
+    const [root, workers, get] = parse(rule.target);
+    if (root !== "itx" || workers !== "workers" || !Array.isArray(get) || get[0] !== "get") return;
+    const candidate = get[1];
+    if (
+      typeof candidate !== "object" ||
+      !candidate ||
+      !("source" in candidate) ||
+      typeof candidate.source !== "string"
+    )
+      return;
+    spec = candidate;
+    source = parse(candidate.source);
+  } catch {
     return;
-  const [, repos, repoGet] = parse(spec.source);
+  }
+  const [, repos, repoGet] = source;
   if (
     repos !== "repos" ||
     !Array.isArray(repoGet) ||

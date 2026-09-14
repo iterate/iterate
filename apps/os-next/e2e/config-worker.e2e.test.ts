@@ -197,6 +197,60 @@ test("a commit to the repo itx.worker reads from takes effect: the base ConfigWo
   );
 });
 
+test("a rule the commit-follow cannot spell out is skipped, never halting /'s worker: the old code keeps answering", async () => {
+  const itx = openItx(freshCtx("follow-skip"));
+  await itx.cd("/repos/config").provide("itx.git", new FakeGit({}));
+  const repo = itx.repos.get("/repos/config");
+  await repo.create();
+  await repo.writeFile("worker.ts", followSource("v1"));
+  // A spec whose PRINTED form is past the codec's string cap (a long `props` literal): the worker
+  // loads fine (props are just handed to the entrypoint), but the reader cannot parse the rule back.
+  await itx.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: {
+      match: "itx.worker",
+      target: [
+        "itx",
+        "workers",
+        [
+          "get",
+          {
+            source: "itx.repos.get('/repos/config').readFile('worker.ts')",
+            cacheKey: "v1",
+            props: { padding: "x".repeat(3000) },
+          },
+        ],
+      ],
+    },
+  });
+  const [first] = await append(itx, { type: FOLLOW_PING });
+  await until(
+    "v1 answered the first ping",
+    async () =>
+      (await readAll(itx)).some(
+        (e) =>
+          e.type === FOLLOW_PONG &&
+          e.payload?.pinged === first.offset &&
+          e.payload?.version === "v1",
+      ),
+    20_000,
+  );
+  await repo.writeFile("worker.ts", followSource("v2")); // the commit's follow is skipped, not fatal
+  const [second] = await append(itx, { type: FOLLOW_PING });
+  await until(
+    "v1 still answers — the rule was left alone and the worker was not halted",
+    async () =>
+      (await readAll(itx)).some(
+        (e) =>
+          e.type === FOLLOW_PONG &&
+          e.payload?.pinged === second.offset &&
+          e.payload?.version === "v1",
+      ),
+    20_000,
+  );
+  expect((await itx.rewriteRules.get("itx.worker")).target).toContain("cacheKey:'v1'");
+});
+
 // ── THE PAYOFF (deployed only): the source in a real Artifacts repo, the rewrite's producer swapped ──
 
 const REPO_PING = "repo-config-ping";
