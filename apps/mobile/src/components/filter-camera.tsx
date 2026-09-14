@@ -130,6 +130,8 @@ export default class FilterCamera extends Component<Props, State> {
   #trackerError: string | null = null;
   #raf = 0;
   #disposed = false;
+  #cameraRequest = 0;
+  #microphoneUnavailable = false;
   #backgroundIndex = 0;
   #modeIndex = 0;
   #modeIndex2 = 0;
@@ -186,7 +188,17 @@ export default class FilterCamera extends Component<Props, State> {
   componentDidUpdate(previous: Props) {
     if (previous.facing !== this.props.facing) void this.#start();
     if (previous.filterId !== this.props.filterId) this.#faceBaseline = null;
-    if (previous.dynamicFilters !== this.props.dynamicFilters) this.#dynamicCache.clear();
+    // Expo serializes these props across the bridge: new array identities
+    // (including recording-clock ticks) do not mean the source changed.
+    for (const previousFilter of previous.dynamicFilters) {
+      if (
+        !this.props.dynamicFilters.some(
+          ({ id, source }) => id === previousFilter.id && source === previousFilter.source,
+        )
+      ) {
+        this.#dynamicCache.delete(previousFilter.id);
+      }
+    }
     const command = this.props.command;
     if (command && command.seq !== this.#handledCommandSeq) {
       this.#handledCommandSeq = command.seq;
@@ -204,38 +216,56 @@ export default class FilterCamera extends Component<Props, State> {
   }
 
   async #start() {
+    const request = ++this.#cameraRequest;
     try {
       this.#stream?.getTracks().forEach((track) => track.stop());
+      this.#stream = null;
+      this.setState({ status: "starting", message: null });
       // Audio is requested up front so a recording started later already has
       // a live mic track to mix in. The voice-call processing getUserMedia
       // applies by default (echo cancellation, noise suppression, auto
       // gain) makes recordings sound pumpy and filtered next to the native
       // camera — turn it off for a natural mic. Tradeoff: the sing filter's
       // tap-tones can bleed faintly into a recording made while they play.
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: this.props.facing === "front" ? "user" : "environment",
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        },
-      });
-      if (this.#disposed) {
+      const video = {
+        facingMode: this.props.facing === "front" ? "user" : "environment",
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      };
+      const stream = await navigator.mediaDevices
+        .getUserMedia({
+          video,
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+          },
+        })
+        .catch((error: unknown) => {
+          if (!(error instanceof Error) || error.name !== "NotAllowedError") throw error;
+          // A denied combined request can mean only the microphone was
+          // refused. One video-only attempt preserves the sheet's photo-only
+          // permission mode; if the camera is denied too, that error surfaces.
+          if (this.#disposed || request !== this.#cameraRequest) throw error;
+          return navigator.mediaDevices.getUserMedia({ video, audio: false });
+        });
+      if (this.#disposed || request !== this.#cameraRequest) {
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
       this.#stream = stream;
+      this.#microphoneUnavailable = stream.getAudioTracks().length === 0;
       this.#setupPitchAnalysis(stream);
       this.#video.srcObject = stream;
       await this.#video.play();
+      if (this.#disposed || request !== this.#cameraRequest) return;
       this.setState({ status: "live", message: null });
       cancelAnimationFrame(this.#raf);
       this.#loop();
     } catch (error) {
+      if (this.#disposed || request !== this.#cameraRequest) return;
+      this.#stream?.getTracks().forEach((track) => track.stop());
+      this.#stream = null;
       this.setState({
         status: "error",
         message: `Camera unavailable in the filter pipeline: ${String(
@@ -252,8 +282,12 @@ export default class FilterCamera extends Component<Props, State> {
   // CDN-loading version of this hung forever on-device.
   #setupPitchAnalysis(stream: MediaStream) {
     try {
-      if (stream.getAudioTracks().length === 0) return;
       void this.#audioContext?.close();
+      this.#audioContext = null;
+      this.#audioSourceNode = null;
+      this.#audioAnalyser = null;
+      this.#audioSamples = null;
+      if (stream.getAudioTracks().length === 0) return;
       const context = new AudioContext();
       const analyser = context.createAnalyser();
       analyser.fftSize = 2048;
@@ -393,7 +427,7 @@ export default class FilterCamera extends Component<Props, State> {
       timeMs: performance.now(),
     });
     try {
-      this.#resolveDrawer()(args);
+      this.#draw(args);
       if (this.state.filterError !== null) this.setState({ filterError: null });
     } catch (error) {
       // A broken (likely project-authored) filter must not kill the camera:
@@ -405,14 +439,14 @@ export default class FilterCamera extends Component<Props, State> {
     this.#featureHits = featureHits;
   };
 
-  /** The active filter's draw function — built-in, or an evaluated project
-   * filter (cached; a bad source throws its evaluation error). */
-  #resolveDrawer(): (args: FilterFrameArgs) => void {
+  /** Invoke project methods with their definition as `this`, so their game
+   * state survives frames and bridge updates until the source changes. */
+  #draw(args: FilterFrameArgs) {
     const id = this.props.filterId;
-    if (FILTER_DRAWERS[id]) return FILTER_DRAWERS[id];
+    if (FILTER_DRAWERS[id]) return FILTER_DRAWERS[id](args);
     const dynamic = this.#dynamicDefinition(id);
     if (dynamic instanceof Error) throw dynamic;
-    if (dynamic) return dynamic.draw;
+    if (dynamic) return dynamic.draw(args);
     throw new Error(`Unknown filter: ${id}`);
   }
 
@@ -582,6 +616,9 @@ export default class FilterCamera extends Component<Props, State> {
     const canvas = this.#canvas;
     if (!canvas || this.state.status !== "live") throw new Error("The filter camera is not live");
     if (this.#recorder) return;
+    if (this.#microphoneUnavailable) {
+      throw new Error("Allow microphone access and reopen the camera to record a filtered video");
+    }
     const stream = canvas.captureStream(30);
     // Mix the mic through WebAudio instead of adding the raw track: a
     // processed track has continuous timestamps, and AVPlayer slaves video
@@ -720,6 +757,9 @@ export default class FilterCamera extends Component<Props, State> {
         ) : null}
         {this.state.filterError !== null ? (
           <div className="pill error">Filter error: {this.state.filterError}</div>
+        ) : null}
+        {this.state.status === "live" && this.#microphoneUnavailable ? (
+          <div className="pill">Photos only — allow microphone access for videos and singing.</div>
         ) : null}
         {!this.state.recording ? (
           <button

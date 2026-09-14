@@ -208,11 +208,13 @@ export function evaluateDynamicFilter(source: string): DynamicFilterDefinition {
   // return would otherwise turn it into a syntax error).
   const expression = source.trim().replace(/;$/, "");
   // eslint-disable-next-line no-new-func -- evaluating project-authored filter code is the feature
-  const definition = new Function(`"use strict"; return (
+  const definition: unknown = new Function(`"use strict"; return (
 ${expression}
-);`)() as DynamicFilterDefinition | undefined;
-  if (!definition || typeof definition.draw !== "function") {
-    throw new Error("A filter file must be one object expression with a draw(args) function");
+);`)();
+  if (!isDynamicFilterDefinition(definition)) {
+    throw new Error(
+      "A filter needs string label/emoji, a draw(args) function, and optional modes (strings) / actions ({id, label}) arrays",
+    );
   }
   return definition;
 }
@@ -1543,4 +1545,25 @@ function drawFeatureCutout(
     cy: dest.cy,
     radius: (Math.max(sw, sh) * scale) / 2,
   });
+}
+
+/** Validate the full project-code boundary before render uses its controls.
+ * Keep the original object: draw can use its own methods and state via this. */
+function isDynamicFilterDefinition(value: unknown): value is DynamicFilterDefinition {
+  if (typeof value !== "object" || !value) return false;
+  if (!("label" in value) || typeof value.label !== "string") return false;
+  if (!("emoji" in value) || typeof value.emoji !== "string") return false;
+  if (!("draw" in value) || typeof value.draw !== "function") return false;
+  if ("modes" in value && value.modes !== undefined) {
+    if (!Array.isArray(value.modes) || value.modes.some((mode) => typeof mode !== "string"))
+      return false;
+  }
+  if ("actions" in value && value.actions !== undefined) {
+    if (!Array.isArray(value.actions)) return false;
+    for (const action of value.actions) {
+      if (!action || typeof action !== "object") return false;
+      if (typeof action.id !== "string" || typeof action.label !== "string") return false;
+    }
+  }
+  return true;
 }

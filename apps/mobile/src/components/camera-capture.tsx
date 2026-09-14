@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { CameraView } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
+import { saveFilteredVideo } from "../lib/filter-video.ts";
 import { useCameraFacing } from "../lib/camera-facing.ts";
 import { getProjectItx } from "../lib/itx.ts";
 import { DEFAULT_SERVER } from "../lib/servers.ts";
@@ -28,10 +29,9 @@ export function CameraCaptureModal(props: {
   onCapture: (attachment: ComposerAttachment) => void;
 }) {
   const ref = useRef<CameraView>(null);
-  // Closing mid-recording must NOT attach the clip: unmounting the camera
-  // resolves recordAsync with the partial video, so without this flag the
-  // aborted recording would ride into the composer (review-caught).
-  const closeCancelledRecording = useRef(false);
+  // A canceled capture must not attach after native recording or cache
+  // persistence finishes. Each operation owns its cancellation signal.
+  const captureAbort = useRef<AbortController | null>(null);
   const { facing, setFacing } = useCameraFacing();
   // Project-authored filters: filters/<name>.filter.js files in any of the
   // project's repos, fetched here (native side holds the session) and
@@ -94,6 +94,8 @@ export function CameraCaptureModal(props: {
   const snap = useMutation({
     mutationFn: async () => {
       const now = Date.now();
+      const abort = new AbortController();
+      captureAbort.current = abort;
       if (filterId !== null) {
         const photo = await new Promise<{ base64: string; width: number; height: number }>(
           (resolve, reject) => {
@@ -101,11 +103,12 @@ export function CameraCaptureModal(props: {
             sendFilterCommand("snap");
           },
         );
+        if (abort.signal.aborted) return;
         props.onCapture({
           kind: "photo",
           image: {
             assetId: null,
-            filename: `filter-${filterId}-${now}.jpg`,
+            filename: `filter-${now}.jpg`,
             contentType: "image/jpeg",
             base64: photo.base64,
             previewUri: `data:image/jpeg;base64,${photo.base64}`,
@@ -117,6 +120,7 @@ export function CameraCaptureModal(props: {
         return;
       }
       const photo = await ref.current!.takePictureAsync({ quality: 0.8, base64: true });
+      if (abort.signal.aborted) return;
       if (!photo.base64) throw new Error("The camera returned no bytes");
       props.onCapture({
         kind: "photo",
@@ -136,7 +140,8 @@ export function CameraCaptureModal(props: {
 
   const record = useMutation({
     mutationFn: async () => {
-      closeCancelledRecording.current = false;
+      const abort = new AbortController();
+      captureAbort.current = abort;
       setRecordingStartedAt(Date.now());
       if (filterId !== null) {
         const video = await new Promise<{
@@ -147,31 +152,20 @@ export function CameraCaptureModal(props: {
           pendingFilterVideo.current = { resolve, reject };
           sendFilterCommand("start-recording");
         });
-        if (closeCancelledRecording.current) return;
-        const extension = video.mimeType.startsWith("video/mp4") ? "mp4" : "webm";
-        const now = Date.now();
-        const uri = `${FileSystem.cacheDirectory}filter-${filterId}-${now}.${extension}`;
-        await FileSystem.writeAsStringAsync(uri, video.base64, {
-          encoding: FileSystem.EncodingType.Base64,
+        const attachment = await saveFilteredVideo({
+          video,
+          capturedAt: Date.now(),
+          signal: abort.signal,
+          fileSystem: FileSystem,
         });
-        props.onCapture({
-          kind: "video",
-          assetId: null,
-          filename: `filter-${filterId}-${now}.${extension}`,
-          contentType: video.mimeType.split(";")[0],
-          uri,
-          previewUri: null,
-          durationSeconds: video.durationSeconds,
-          sizeBytes: null,
-          width: null,
-          height: null,
-        });
+        if (!attachment) return;
+        props.onCapture(attachment);
         props.onClose();
         return;
       }
       // Resolves when stopRecording() is called (or maxDuration hits).
       const video = await ref.current!.recordAsync({ maxDuration: 60 });
-      if (closeCancelledRecording.current) return;
+      if (abort.signal.aborted) return;
       if (!video) throw new Error("The camera returned no recording");
       const now = Date.now();
       props.onCapture({
@@ -200,10 +194,12 @@ export function CameraCaptureModal(props: {
   };
 
   const close = () => {
+    captureAbort.current?.abort();
+    pendingFilterPhoto.current?.reject(new Error("Photo capture canceled"));
+    pendingFilterPhoto.current = null;
     if (record.isPending) {
-      closeCancelledRecording.current = true;
       if (filterId !== null) {
-        // Settle the parked promise so the mutation ends; the flag above
+        // Settle the parked promise so the mutation ends; cancellation above
         // stops the clip from attaching.
         pendingFilterVideo.current?.resolve({
           base64: "",
@@ -309,7 +305,7 @@ export function CameraCaptureModal(props: {
               <Pressable
                 accessibilityLabel={filter === null ? "No filter" : `${filter.label} filter`}
                 accessibilityRole="button"
-                disabled={record.isPending}
+                disabled={snap.isPending || record.isPending}
                 key={id || "none"}
                 onPress={() => setFilterId(id)}
                 style={[styles.filterChip, selected && styles.filterChipSelected]}
@@ -326,7 +322,7 @@ export function CameraCaptureModal(props: {
           <Pressable
             accessibilityLabel="Flip camera"
             accessibilityRole="button"
-            disabled={record.isPending}
+            disabled={snap.isPending || record.isPending}
             onPress={() => setFacing(facing === "back" ? "front" : "back")}
             style={styles.roundControl}
           >

@@ -63,3 +63,17 @@ test("a formatter-added trailing semicolon does not break evaluation", () => {
 test("a malformed filter file throws a useful error instead of half-working", () => {
   expect(() => evaluateDynamicFilter(`({ label: "No draw" })`)).toThrow(/draw\(args\)/);
 });
+
+test.each([
+  "label: {}",
+  "emoji: []",
+  'modes: "One"',
+  "modes: [1]",
+  "actions: {}",
+  "actions: [null]",
+  'actions: [{id: 1, label: "Reset"}]',
+])("invalid project-filter metadata is rejected: %s", (invalid) => {
+  expect(() =>
+    evaluateDynamicFilter(`({ label: "Test", emoji: "T", draw() {}, ${invalid} })`),
+  ).toThrow(/filter needs/);
+});

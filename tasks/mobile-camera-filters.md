@@ -2,7 +2,7 @@
 status: in-progress
 size: medium
 branch: mobile-camera-filters
-base: mobile-chat-attachments (PR #2554 — retarget to main when it merges)
+base: main
 ---
 
 # Mobile: 2020-era Zoom filters for the camera
@@ -13,10 +13,12 @@ Picking a filter swaps the plain `expo-camera` preview for a live filtered
 pipeline. Photos and clips captured while a filter is active come back as
 normal composer attachments, filter baked in.
 
-High-level status: implemented and pushed — picker, pipeline, all four
-filters, both capture paths; typecheck/lint/knip/tests green. Remaining:
-Misha tries it on a real phone (the getUserMedia-in-DOM-component claim is
-the thing to verify first).
+High-level status: seven filters and project-authored filters are implemented;
+main is merged. The September 14 review fixes preserve project-filter state,
+validate settings, stop stale camera acquisitions, preserve photo-only
+permission mode, and make capture saving/cancellation safe. Regression tests
+pass locally. Current-build iPhone recording verification remains; playback
+controls and lazy asset hosting are separate recommendations under discussion.
 
 ## Why this shape (assumptions made while AFK)
 
@@ -385,3 +387,17 @@ MediaRecorder mechanisms, both hardened:
   merge run.
 - The ✨ toggle is gone: the filter chip row is always visible above the
   capture bar (None chip for a normal photo).
+
+
+## September 14 review fixes
+
+- [x] Keep project-filter method/closure state across bridge updates and reset it on source edits. _The host calls the definition's method and invalidates only changed/removed source; `filter-camera.test.ts` drives the serialized prop updates._
+- [x] Reject malformed filter settings before rendering controls. _A named definition validator checks metadata while preserving the original object and its state/methods._
+- [x] Stop superseded camera acquisitions and ignore stale results/errors. _Request generations in `filter-camera.tsx`; the test resolves device requests out of order._
+- [x] Keep filtered photos available when microphone permission is denied. _One explicit video-only acquisition after a permission rejection; recording explains that microphone permission is required._
+- [x] Keep repository paths out of captured media filenames. _Filtered photos/videos use capture timestamps; `filter-video.ts` owns persistence._
+- [x] Cancel captures through saving and remove canceled video files. _Per-capture AbortSignal; a real-filesystem test cancels while the native-write adapter is pending._
+- [ ] Verify the updated filtered photo/video flow on an iPhone. _Node tests cover host ownership and persistence, not WKWebView media quality._
+
+Playback controls and remote assets were requested as recommendations only in
+this follow-up; those behaviors remain unchanged.
