@@ -82,23 +82,24 @@ export class ProjectDurableObject extends DurableObject<Env> {
   /** The latest reduced project state this incarnation fetched. */
   #lastReduced: ProjectProcessorState | undefined;
 
-  async #processorFacade(): Promise<{
+  #processorFacade(): {
     snapshot(): Promise<{ offset: number; state: ProjectProcessorState }>;
-  }> {
+  } {
     // Safe: the root stream's facet composition registers the
     // ProjectProcessor under ProjectProcessorContract.slug on "/", so the
     // facade the Stream DO answers with for that name serves the project
     // contract's fold. The RPC-generated facade type is untyped per name
-    // (the name is a runtime string), hence the assertion.
-    return (await this.env.STREAM.getByName(
+    // (the name is a runtime string), hence the assertion. Keep the native
+    // future un-awaited so snapshot() pipelines with facade selection.
+    return this.env.STREAM.getByName(
       DurableObjectNameCodec.stringify({ path: "/", projectId: this.#name.projectId }),
-    ).processorFacade({ name: ProjectProcessorContract.slug })) as unknown as {
+    ).processorFacade({ name: ProjectProcessorContract.slug }) as unknown as {
       snapshot(): Promise<{ offset: number; state: ProjectProcessorState }>;
     };
   }
 
   async #refreshReducedState(): Promise<ProjectProcessorState> {
-    const facade = await this.#processorFacade();
+    const facade = this.#processorFacade();
     try {
       const snapshot = await facade.snapshot();
       try {

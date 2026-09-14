@@ -81,21 +81,22 @@ export class SecretDurableObject extends DurableObject<Env> {
   });
 
   /** The facet-hosted secret processor's read surface on the stream. */
-  async #processorFacade(): Promise<SecretProcessorFacade> {
+  #processorFacade(): SecretProcessorFacade {
     // Safe: the Stream DO's processorFacade(name) forwards to the facet
     // subclass registered for this path family, and the facet composition
     // registers the SecretProcessor under SecretProcessorContract.slug on
     // /secrets/* paths — so snapshot() serves the secret contract's fold.
     // The RPC-generated facade type is untyped per name (the name is a
-    // runtime string), hence the assertion instead of a typed boundary.
-    return (await this.env.STREAM.getByName(
+    // runtime string), hence the assertion instead of a typed boundary. Keep
+    // the native future un-awaited so callers pipeline their read with facade selection.
+    return this.env.STREAM.getByName(
       DurableObjectNameCodec.stringify({
         path: this.#name.path,
         projectId: this.#name.projectId,
       }),
     ).processorFacade({
       name: SecretProcessorContract.slug,
-    })) as unknown as SecretProcessorFacade;
+    }) as unknown as SecretProcessorFacade;
   }
 
   // In-flight refresh, shared across concurrent callers (single-flight): a
@@ -754,7 +755,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     // head — which keeps create()'s offset-bound encryption rider exactly
     // where the old catch-up snapshot put it.
     try {
-      const facade = await this.#processorFacade();
+      const facade = this.#processorFacade();
       try {
         const snapshot = await facade.snapshot();
         try {
@@ -783,7 +784,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     // self-pulls when the runner is behind. A separate catchUp here would put
     // an unbounded Stream RPC in front of the timeout and can orphan the
     // command even after the target Stream DO finished serving the read.
-    const facade = await this.#processorFacade();
+    const facade = this.#processorFacade();
     try {
       await facade.waitUntilProcessed({
         offset,
