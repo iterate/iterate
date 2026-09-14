@@ -18,7 +18,7 @@
 // `interface Name` (the string-literal type argument IS the published name —
 // no naming convention, no override table); classes extending
 // IterateRpcRelay<"Name"> instead publish the existing hand-authored contract
-// of that name. Named type aliases and interfaces referenced in signatures are
+// of that name. Named aliases, interfaces, and type-only namespaces referenced in signatures are
 // discovered wherever they live (their domain modules) and emitted once —
 // checker-expanded when the alias is a bare type-reference (`z.infer<…>`,
 // `ProcessorState<…>`, i.e. a derived type that would not be import-free
@@ -41,8 +41,11 @@ import {
   isConstructorDeclaration,
   isGetAccessorDeclaration,
   isInterfaceDeclaration,
+  isIdentifier,
   isLiteralTypeNode,
   isMethodDeclaration,
+  isModuleDeclaration,
+  isModuleBlock,
   isPrivateIdentifier,
   isPropertyDeclaration,
   isStringLiteral,
@@ -54,6 +57,7 @@ import type {
   ClassDeclaration,
   ExpressionWithTypeArguments,
   InterfaceDeclaration,
+  ModuleDeclaration,
   Node,
   ParameterDeclaration,
   SourceFile,
@@ -74,6 +78,8 @@ const graphOutPath = path.join(projectDir, "src/itx-api-graph.generated.ts");
 /** The opt-in roots in rpc-targets.ts (see their docstrings there). */
 const ITERATE_ROOT = "IterateRpcTarget";
 const RELAY_ROOT = "IterateRpcRelay";
+
+type NamedDeclaration = TypeAliasDeclaration | InterfaceDeclaration | ModuleDeclaration;
 
 /** The native API's typeToString flags (numeric TypeFormatFlags, same values as tsc). */
 const NO_TRUNCATION = 1;
@@ -236,8 +242,8 @@ function collectClasses(rpcTargetsFile: { statements: Iterable<Node> }): ClassRe
   return { allClasses, classByPublicName, relayContracts, renameMap };
 }
 
-export function generateItxApi(): string {
-  using session = openProject();
+export function generateItxApi(fsOverlay?: Map<string, string>): string {
+  using session = openProject(fsOverlay);
   const { project } = session;
   const checker = project.checker;
   const rpcTargetsFile = project.program.getSourceFile(rpcTargetsPath);
@@ -250,20 +256,23 @@ export function generateItxApi(): string {
   const { classByPublicName, relayContracts, renameMap } = collectClasses(rpcTargetsFile);
 
   /**
-   * Every named type (alias or interface) in the app, by name, keyed to all its
+   * Every named type (alias, interface, or namespace) in the app, keyed to all its
    * declarations. Public derived aliases can structurally retain private helper
    * names, so the demand-driven walker must be able to close over those helpers
    * without forcing them to become source-module exports merely for generation.
-   * A reached name with more than one declaration is a hard error (see
-   * `resolveNamedDecl`), so cross-module name clashes can never silently pick
-   * the wrong shape.
+   * Same-module namespaces can merge with a type. Cross-module name clashes
+   * remain hard errors (see `resolveNamedDecl`), never a silent choice of shape.
    */
-  const namedDecls = new Map<string, (TypeAliasDeclaration | InterfaceDeclaration)[]>();
+  const namedDecls = new Map<string, NamedDeclaration[]>();
   const exportedNamedDecls = new Set<string>();
   const collectNamedDecls = (sourceFile: SourceFile) => {
     for (const statement of sourceFile.statements) {
-      if (isTypeAliasDeclaration(statement) || isInterfaceDeclaration(statement)) {
-        const list = namedDecls.get(statement.name.text) ?? [];
+      if (
+        isTypeAliasDeclaration(statement) ||
+        isInterfaceDeclaration(statement) ||
+        (isModuleDeclaration(statement) && isIdentifier(statement.name))
+      ) {
+        const list = namedDecls.get(statement.name.text) || [];
         list.push(statement);
         namedDecls.set(statement.name.text, list);
         if (statement.modifierFlags & ModifierFlags.Export) {
@@ -318,34 +327,24 @@ export function generateItxApi(): string {
     }
   }
 
-  /** Resolve a reached named type to its single declaration, or throw if ambiguous. */
-  const resolveNamedDecl = (
-    name: string,
-  ): TypeAliasDeclaration | InterfaceDeclaration | undefined => {
+  /** A namespace may share a type's name in one module; cross-module clashes remain errors. */
+  const resolveNamedDecl = (name: string): NamedDeclaration[] | undefined => {
     const list = namedDecls.get(name);
     if (!list || list.length === 0) return undefined;
     const exported = list.filter((decl) => decl.modifierFlags & ModifierFlags.Export);
     const candidates = exported.length > 0 ? exported : list;
-    if (candidates.length > 1) {
+    if (
+      new Set(candidates.map((decl) => decl.getSourceFile().fileName)).size > 1 ||
+      candidates.filter((decl) => !isModuleDeclaration(decl)).length > 1
+    ) {
       const files = candidates.map((d) => path.relative(projectDir, d.getSourceFile().fileName));
       throw new Error(
         `itx api generation reached ambiguous type "${name}" — declared in ${files.length} ` +
           `modules (${files.join(", ")}). Give the itx-facing one a unique name.`,
       );
     }
-    return candidates[0];
+    return candidates;
   };
-
-  /**
-   * A hand-authored literal shape is copied verbatim (docstrings + generics
-   * preserved). A type alias whose right-hand side is a bare type reference
-   * (`z.infer<…>`, `ProcessorState<…>`) is a DERIVED type — copying it verbatim
-   * would drag in imports — so it is checker-expanded into structural form.
-   * Interfaces are always literal and copied verbatim.
-   */
-  const isDerivedAlias = (
-    decl: TypeAliasDeclaration | InterfaceDeclaration,
-  ): decl is TypeAliasDeclaration => isTypeAliasDeclaration(decl) && isTypeReferenceNode(decl.type);
 
   // ── Emission ───────────────────────────────────────────────────────────────
 
@@ -381,12 +380,17 @@ export function generateItxApi(): string {
       /import\(["'][^"']+["']\)\.[A-Z][A-Za-z0-9_]*/g,
       "",
     );
-    for (const match of codeOnly.matchAll(/\b[A-Z][A-Za-z0-9_]*\b/g)) {
-      const name = match[0];
+    // A qualified type depends on its root namespace, not its member names.
+    for (const match of codeOnly.matchAll(/\b([A-Za-z_$][\w$]*)(?:\s*\.\s*[A-Za-z_$][\w$]*)*/g)) {
+      const name = match[1]!;
       if (exclude?.has(name)) continue;
       if (classByPublicName.has(name) || namedDecls.has(name)) {
         enqueue(name);
-      } else if (!AMBIENT_NAMES.has(name) && !/^[A-Z][a-z]?$/.test(name)) {
+      } else if (
+        /\b[A-Z]/.test(match[0]) &&
+        !AMBIENT_NAMES.has(name) &&
+        !/^[A-Z][a-z]?$/.test(name)
+      ) {
         // Single letters (T, K…) are type params; everything else unknown is a
         // leak — an inferred type dragged in host-side plumbing. Collect for
         // the final error so the emitted file is guaranteed standalone.
@@ -524,32 +528,67 @@ export function generateItxApi(): string {
     );
   };
 
-  const emitNamedDecl = (name: string, decl: TypeAliasDeclaration | InterfaceDeclaration) => {
+  const renderNamedDecl = (name: string, decl: NamedDeclaration, inScope: Set<string>): string => {
     const doc = jsDocOf(decl);
     const from = path.relative(projectDir, decl.getSourceFile().fileName);
-    if (isDerivedAlias(decl)) {
+    if (isModuleDeclaration(decl)) {
+      if (!isIdentifier(decl.name) || !decl.body || !isModuleBlock(decl.body)) {
+        throw new Error(
+          `itx api generation requires a type-only namespace block: ${name} (${from})`,
+        );
+      }
+      const members: NamedDeclaration[] = [];
+      const localNames = new Set(inScope);
+      localNames.add(name);
+      // Exported members from another block of the same namespace are also in scope.
+      const symbol = checker.getSymbolAtLocation(decl.name);
+      if (!symbol) throw new Error(`could not resolve namespace ${name} (${from})`);
+      for (const member of symbol.getExports()) localNames.add(member.name);
+      for (const member of decl.body.statements) {
+        if (
+          !isTypeAliasDeclaration(member) &&
+          !isInterfaceDeclaration(member) &&
+          !(isModuleDeclaration(member) && isIdentifier(member.name))
+        ) {
+          throw new Error(
+            `itx api generation requires type-only members in namespace ${name} (${from})`,
+          );
+        }
+        members.push(member);
+        localNames.add(member.name.text);
+      }
+      const header = decl.getText().slice(0, decl.body.getStart() - decl.getStart());
+      return `${doc ? `${doc}\n` : ""}${header}{\n${members
+        .map((member) => renderNamedDecl(member.name.text, member, localNames))
+        .join("\n\n")}\n}`;
+    }
+    const typeParams = new Set([
+      ...inScope,
+      ...[...(decl.typeParameters || [])].map((tp) => tp.name.text),
+    ]);
+    if (
+      isTypeAliasDeclaration(decl) &&
+      isTypeReferenceNode(decl.type) &&
+      !typeParams.has(decl.type.typeName.getText().split(".")[0]!)
+    ) {
       // Derived alias (z.infer<…>, ProcessorState<…>): expand to structural form.
       const symbol = checker.getSymbolAtLocation(decl.name);
       const type = symbol && checker.getDeclaredTypeOfSymbol(symbol);
       if (!type) throw new Error(`could not resolve the declared type of ${name} (${from})`);
       const expanded = checker.typeToString(type, decl, typeFlags | IN_TYPE_ALIAS);
       const exportPrefix = decl.modifierFlags & ModifierFlags.Export ? "export " : "";
-      aliasChunks.push(
-        rewriteAndCollect(
-          `${doc ? `${doc}\n` : ""}${exportPrefix}type ${name} = ${expanded};`,
-          `derived alias ${name} (${from})`,
-        ),
+      return rewriteAndCollect(
+        `${doc ? `${doc}\n` : ""}${exportPrefix}type ${name} = ${expanded};`,
+        `derived alias ${name} (${from})`,
+        inScope,
       );
-      return;
     }
     // Hand-authored literal shape: copy verbatim, docstrings and generics intact.
-    const typeParams = new Set([...(decl.typeParameters ?? [])].map((tp) => tp.name.text));
-    const chunk = rewriteAndCollect(
+    return rewriteAndCollect(
       doc ? `${doc}\n${decl.getText()}` : decl.getText(),
       `${name} (${from})`,
       typeParams,
     );
-    (isInterfaceDeclaration(decl) ? interfaceChunks : aliasChunks).push(chunk);
   };
 
   enqueue("UnauthenticatedOs");
@@ -566,9 +605,10 @@ export function generateItxApi(): string {
       emitClass(name, cls);
       continue;
     }
-    const decl = resolveNamedDecl(name);
-    if (decl) {
-      emitNamedDecl(name, decl);
+    const decls = resolveNamedDecl(name);
+    if (decls) {
+      const chunk = decls.map((decl) => renderNamedDecl(name, decl, new Set())).join("\n\n");
+      (decls.some(isInterfaceDeclaration) ? interfaceChunks : aliasChunks).push(chunk);
       continue;
     }
     throw new Error(`itx api generation reached unknown type "${name}"`);
@@ -619,7 +659,7 @@ export function generateItxApi(): string {
 
 /**
  * The Itx Type Graph: parse the FORMATTED flat file back into one record per
- * declaration (see ItxApiDeclaration). Private helper declarations are part of
+ * name (see ItxApiDeclaration), grouping a type with its namespace. Private helper declarations are part of
  * the graph because exported shapes may reference them. Deriving the graph
  * from the emitted text — rather than collecting records during emission —
  * guarantees each record's `sourceText` is exactly the declaration's text in
@@ -657,12 +697,22 @@ export function buildItxApiGraph(flatFileSource: string): ItxApiDeclaration[] {
     return text.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? text;
   };
 
-  const declarations: Array<{
-    statement: InterfaceDeclaration | TypeAliasDeclaration;
-    record: ItxApiDeclaration;
-  }> = [];
+  const declarations = new Map<
+    string,
+    {
+      statements: NamedDeclaration[];
+      record: ItxApiDeclaration;
+    }
+  >();
+  const namesBySymbol = new Map<number, string>();
   for (const statement of sourceFile.statements) {
-    if (!isInterfaceDeclaration(statement) && !isTypeAliasDeclaration(statement)) continue;
+    if (
+      !isInterfaceDeclaration(statement) &&
+      !isTypeAliasDeclaration(statement) &&
+      !(isModuleDeclaration(statement) && isIdentifier(statement.name))
+    )
+      continue;
+    const name = statement.name.text;
     const jsDoc = ownJsDoc(statement);
     const memberSummaries: Record<string, string> = {};
     if (isInterfaceDeclaration(statement)) {
@@ -673,12 +723,46 @@ export function buildItxApiGraph(flatFileSource: string): ItxApiDeclaration[] {
         if (memberDoc) memberSummaries[memberName] = summaryOf(memberDoc);
       }
     }
-    declarations.push({
-      statement,
+    if (isModuleDeclaration(statement) && statement.body && isModuleBlock(statement.body)) {
+      for (const member of statement.body.statements) {
+        if (
+          isTypeAliasDeclaration(member) ||
+          isInterfaceDeclaration(member) ||
+          isModuleDeclaration(member)
+        ) {
+          memberSummaries[member.name.text] = summaryOf(ownJsDoc(member));
+        }
+      }
+    }
+    const sourceText = [jsDoc, statement.getText()].filter(Boolean).join("\n");
+    const existing = declarations.get(name);
+    if (existing) {
+      if (
+        !isModuleDeclaration(statement) &&
+        existing.statements.some((decl) => !isModuleDeclaration(decl))
+      ) {
+        throw new Error(`itx api graph has duplicate declaration names: ${name}`);
+      }
+      existing.statements.push(statement);
+      existing.record.sourceText += `\n\n${sourceText}`;
+      existing.record.kind = "namespace";
+      existing.record.summary ||= summaryOf(jsDoc);
+      Object.assign(existing.record.memberSummaries, memberSummaries);
+      continue;
+    }
+    const symbol = session.project.checker.getSymbolAtLocation(statement.name);
+    if (!symbol) throw new Error(`could not resolve graph declaration ${name}`);
+    namesBySymbol.set(symbol.id, name);
+    declarations.set(name, {
+      statements: [statement],
       record: {
-        name: statement.name.text,
-        kind: isInterfaceDeclaration(statement) ? "interface" : "typeAlias",
-        sourceText: [jsDoc, statement.getText()].filter(Boolean).join("\n"),
+        name,
+        kind: isModuleDeclaration(statement)
+          ? "namespace"
+          : isInterfaceDeclaration(statement)
+            ? "interface"
+            : "typeAlias",
+        sourceText,
         summary: summaryOf(jsDoc),
         memberSummaries,
         referencedTypeNames: [],
@@ -686,28 +770,22 @@ export function buildItxApiGraph(flatFileSource: string): ItxApiDeclaration[] {
     });
   }
 
-  // Reference edges: identifiers in the declaration's CODE (comments
-  // stripped) that name another declaration in this graph.
-  const allNames = new Set(declarations.map(({ record }) => record.name));
-  for (const { statement, record } of declarations) {
-    const codeOnly = stripComments(statement.getText());
+  // Resolve symbols so qualified members and namespace-local names cannot
+  // accidentally pull in an unrelated top-level declaration of the same name.
+  for (const { statements, record } of declarations.values()) {
     const referenced = new Set<string>();
-    for (const match of codeOnly.matchAll(/\b[A-Z][A-Za-z0-9_]*\b/g)) {
-      if (match[0] !== record.name && allNames.has(match[0])) referenced.add(match[0]);
-    }
+    const visit = (node: Node): void => {
+      if (isIdentifier(node)) {
+        const symbol = session.project.checker.getSymbolAtLocation(node);
+        const name = symbol && namesBySymbol.get(symbol.id);
+        if (name && name !== record.name) referenced.add(name);
+      }
+      node.forEachChild(visit);
+    };
+    for (const statement of statements) visit(statement);
     record.referencedTypeNames = [...referenced];
   }
-
-  const records = declarations.map(({ record }) => record);
-  const duplicates = records.filter(
-    (record, index) => records.findIndex((other) => other.name === record.name) !== index,
-  );
-  if (duplicates.length > 0) {
-    throw new Error(
-      `itx api graph has duplicate declaration names: ${duplicates.map((d) => d.name).join(", ")}`,
-    );
-  }
-  return records;
+  return [...declarations.values()].map(({ record }) => record);
 }
 
 /** The generated module carrying the Itx Type Graph, formatted for the repo. */

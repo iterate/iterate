@@ -17,12 +17,108 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 import { API } from "@typescript/native-preview/unstable/sync";
 import {
+  buildItxApiGraph,
   generateItxApi,
   generateItxApiGraphSource,
   verifyRpcTargetsSatisfyContract,
 } from "../scripts/generate-itx-api.ts";
+import { declarationsByName, typeSlice } from "./domains/itx/itx-api-graph.ts";
 
 const generatedPath = fileURLToPath(new URL("./itx-api.generated.ts", import.meta.url));
+
+test("namespace generation preserves local aliases, generics, and nested type declarations", () => {
+  const sourcePath = fileURLToPath(new URL("./lib/model-interception.ts", import.meta.url));
+  const source = readFileSync(sourcePath, "utf8").replace(
+    "export declare namespace ProjectAiInterceptor {",
+    `export declare namespace ProjectAiInterceptor {
+      export type Identity<Value> = Value;
+      export type Turn = AgentTurnInput;
+      export namespace Nested {
+        export interface Envelope { input: Input; options: CfAiRunOptions; }
+      }
+    `,
+  );
+  const generated = generateItxApi(
+    new Map([
+      [
+        sourcePath,
+        source +
+          `
+    export declare namespace ProjectAiInterceptor {
+      export type OtherTurn = Identity<AgentTurnInput>;
+    }
+  `,
+      ],
+    ]),
+  );
+  expect(generated).toContain("export type Identity<Value> = Value;");
+  expect(generated).toContain("export type Turn = AgentTurnInput;");
+  expect(generated).toContain("export type OtherTurn = Identity<AgentTurnInput>;");
+  const slice = typeSlice({
+    declarations: declarationsByName(buildItxApiGraph(generated)),
+    rootName: "ProjectAiInterceptor",
+    maxTokens: 4_000,
+  });
+  expect(slice.frontierNames).toEqual([]);
+  expect(slice.includedNames).toContain("CfAiRunOptions");
+  expect(slice.sourceText).toContain("export namespace Nested");
+});
+
+test("namespace generation rejects runtime members", () => {
+  const sourcePath = fileURLToPath(new URL("./lib/model-interception.ts", import.meta.url));
+  const source = readFileSync(sourcePath, "utf8").replace(
+    "export declare namespace ProjectAiInterceptor {",
+    "export declare namespace ProjectAiInterceptor { export const runtime: number;",
+  );
+  expect(() => generateItxApi(new Map([[sourcePath, source]]))).toThrow(
+    "requires type-only members in namespace ProjectAiInterceptor",
+  );
+});
+
+test("same-named namespaces from separate source modules remain ambiguous", () => {
+  const otherPath = fileURLToPath(new URL("./domains/itx/itx-api-graph.ts", import.meta.url));
+  const otherSource =
+    readFileSync(otherPath, "utf8") +
+    `
+    export declare namespace ProjectAiInterceptor { export type Extra = string; }
+  `;
+  expect(() => generateItxApi(new Map([[otherPath, otherSource]]))).toThrow(
+    'reached ambiguous type "ProjectAiInterceptor"',
+  );
+});
+
+test("graph groups same-named types and namespaces without confusing local and qualified members", () => {
+  const records = buildItxApiGraph(`
+    export type Handler = (input: Handler.Input) => Payload;
+    export declare namespace Handler {
+      export type Input = { payload: Payload; label: "Unrelated" };
+      export type Generic<Unrelated> = { value: Unrelated };
+    }
+    export interface Payload { value: string; }
+    export declare namespace Payload { export type Input = boolean; }
+    export type Use = Handler.Input | Payload.Input;
+    export type Input = { unrelated: true };
+    export type Unrelated = { unrelated: true };
+  `);
+  const declarations = declarationsByName(records);
+  expect(records.map((record) => record.name)).toEqual([
+    "Handler",
+    "Payload",
+    "Use",
+    "Input",
+    "Unrelated",
+  ]);
+  expect(declarations.get("Handler")).toMatchObject({
+    kind: "namespace",
+    referencedTypeNames: ["Payload"],
+  });
+  expect(declarations.get("Payload")).toMatchObject({ kind: "namespace", referencedTypeNames: [] });
+  expect(declarations.get("Use")).toMatchObject({ referencedTypeNames: ["Handler", "Payload"] });
+  expect(typeSlice({ declarations, rootName: "Use", maxTokens: 2_000 })).toMatchObject({
+    includedNames: ["Use", "Handler", "Payload"],
+    frontierNames: [],
+  });
+});
 
 test("itx-api.generated.ts is fresh (pnpm generate:itx-api)", () => {
   expect(readFileSync(generatedPath, "utf8")).toBe(generateItxApi());
@@ -61,8 +157,40 @@ test("the public Stream API excludes raw and test-only Durable Object controls",
 
 test("itx-api.generated.ts resolves its exact vendor types from iterate's dependencies", () => {
   const script = `
-    import type { Project, StreamEvent } from "./itx-api.generated.ts";
+    import type { Project, StreamEvent, ProjectAiInterceptor } from "./itx-api.generated.ts";
+    const agentTurn = (input: ProjectAiInterceptor.AgentTurnInput): Response => {
+      const messages: { role: "system" | "developer" | "user" | "assistant"; content: string }[] =
+        input.request.body.messages;
+      // @ts-expect-error agent turns always have typed messages
+      input.request.body.messages = [123];
+      return Response.json({ agentPath: input.agentPath, messages });
+    };
+    const aiRun = (input: ProjectAiInterceptor.AiRunInput): Response => {
+      input.request.body = { text: ["embeddings need no messages"], steps: 20 };
+      // @ts-expect-error arbitrary ai-run bodies do not promise typed messages
+      const messages: { content: string }[] = input.request.body.messages;
+      // @ts-expect-error only agent turns have an agent path
+      input.agentPath;
+      return Response.json(input.request.body);
+    };
+    const egress = (input: ProjectAiInterceptor.EgressInput): Response => {
+      input.request.body = { input: "outbound model input" };
+      // @ts-expect-error outbound requests do not promise typed agent messages
+      const messages: { content: string }[] = input.request.body.messages;
+      // @ts-expect-error only agent turns have an agent path
+      input.agentPath;
+      return Response.json(input.request.body);
+    };
+    const intercept: ProjectAiInterceptor = (input: ProjectAiInterceptor.Input) => {
+      if (input.source === "agent-turn") return agentTurn(input);
+      // @ts-expect-error the discriminator excludes the agent-turn variant here
+      agentTurn(input);
+      if (input.source === "ai-run") return aiRun(input);
+      return egress(input);
+    };
     export async function run(itx: Project): Promise<StreamEvent> {
+      const interception = await itx.ai.intercept(intercept);
+      await interception.release();
       const [event] = await itx.streams.get("/demo").append({ type: "demo/ping" });
       await itx.repo.edit({ message: "m", path: "a.ts", oldString: "x", newString: "y" });
       return event;

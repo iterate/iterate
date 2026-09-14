@@ -1399,12 +1399,18 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
   },
   {
     name: "ProjectAiInterceptor",
-    kind: "typeAlias",
+    kind: "namespace",
     sourceText:
-      "/** Replace only the provider call; response classification and decoding still run. */\nexport type ProjectAiInterceptor = (\n  input: ProjectAiInterceptorInput,\n) => Response | Promise<Response>;",
-    summary: "Replace only the provider call; response classification and decoding still run.",
-    memberSummaries: {},
-    referencedTypeNames: ["ProjectAiInterceptorInput"],
+      '/** Original model name and the complete credential-free request that would be dispatched. */\nexport declare namespace ProjectAiInterceptor {\n  /** An agent turn, with the messages prepared for its model. */\n  export type AgentTurnInput = {\n    source: "agent-turn";\n    agentPath: string;\n    model: string;\n    request: AiRequest & {\n      body: {\n        messages: {\n          role: "system" | "developer" | "user" | "assistant";\n          content: string;\n        }[];\n      };\n    };\n  };\n\n  /** A direct AI call, whose body can contain any model\'s inputs. */\n  export type AiRunInput = { source: "ai-run"; model: string; request: AiRequest };\n\n  /** An outbound AI request routed through the project\'s gateway. */\n  export type EgressInput = { source: "egress"; model: string; request: AiRequest };\n\n  /** Discriminated input shared by every interceptor callback. */\n  export type Input = AgentTurnInput | AiRunInput | EgressInput;\n}\n\n/** Replace only the provider call; response classification and decoding still run. */\nexport type ProjectAiInterceptor = (\n  input: ProjectAiInterceptor.Input,\n) => Response | Promise<Response>;',
+    summary:
+      "Original model name and the complete credential-free request that would be dispatched.",
+    memberSummaries: {
+      AgentTurnInput: "An agent turn, with the messages prepared for its model.",
+      AiRunInput: "A direct AI call, whose body can contain any model's inputs.",
+      EgressInput: "An outbound AI request routed through the project's gateway.",
+      Input: "Discriminated input shared by every interceptor callback.",
+    },
+    referencedTypeNames: ["AiRequest"],
   },
   {
     name: "CfMarkdownSupportedFormat",
@@ -2289,14 +2295,13 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "ProjectAiInterceptorInput",
+    name: "AiRequest",
     kind: "typeAlias",
     sourceText:
-      '/** Original model name and the complete credential-free request that would be dispatched. */\nexport type ProjectAiInterceptorInput =\n  | {\n      source: "agent-turn";\n      agentPath: string;\n      model: string;\n      request: AiRequest & {\n        body: {\n          messages: {\n            role: "system" | "developer" | "user" | "assistant";\n            content: string;\n          }[];\n        };\n      };\n    }\n  | { source: "ai-run"; model: string; request: AiRequest }\n  | { source: "egress"; model: string; request: AiRequest };',
-    summary:
-      "Original model name and the complete credential-free request that would be dispatched.",
+      "/** The two concrete outbound APIs, after host policy and request preparation. No credentials. */\nexport type AiRequest = OpenAiHttpRequest | WorkersAiRequest;",
+    summary: "The two concrete outbound APIs, after host policy and request preparation.",
     memberSummaries: {},
-    referencedTypeNames: ["AiRequest"],
+    referencedTypeNames: ["OpenAiHttpRequest", "WorkersAiRequest"],
   },
   {
     name: "WorkspaceMountOverlay",
@@ -2720,13 +2725,22 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["StreamEventBatch", "ReportStreamWakeDeliveryResult"],
   },
   {
-    name: "AiRequest",
+    name: "OpenAiHttpRequest",
     kind: "typeAlias",
     sourceText:
-      "/** The two concrete outbound APIs, after host policy and request preparation. No credentials. */\nexport type AiRequest = OpenAiHttpRequest | WorkersAiRequest;",
-    summary: "The two concrete outbound APIs, after host policy and request preparation.",
+      '/** Prepared OpenAI HTTP request, with authorization supplied only at dispatch. */\nexport type OpenAiHttpRequest = {\n  kind: "openai-http";\n  gatewayId: string;\n  endpoint: string;\n  headers: Record<string, string>;\n  body: Record<string, unknown>;\n};',
+    summary: "Prepared OpenAI HTTP request, with authorization supplied only at dispatch.",
     memberSummaries: {},
-    referencedTypeNames: ["OpenAiHttpRequest", "WorkersAiRequest"],
+    referencedTypeNames: [],
+  },
+  {
+    name: "WorkersAiRequest",
+    kind: "typeAlias",
+    sourceText:
+      '/** Prepared Workers AI binding invocation, including its raw-response option. */\nexport type WorkersAiRequest = {\n  kind: "workers-ai";\n  model: string;\n  body: Record<string, unknown>;\n  options: CfAiRunOptions & {\n    returnRawResponse: true;\n    gateway: { id: string; metadata: Record<string, string | number> };\n  };\n};',
+    summary: "Prepared Workers AI binding invocation, including its raw-response option.",
+    memberSummaries: {},
+    referencedTypeNames: ["CfAiRunOptions"],
   },
   {
     name: "WorkspaceConfig",
@@ -2912,24 +2926,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     summary: "One-shot acknowledgement capability owned by a single durable wake batch.",
     memberSummaries: {},
     referencedTypeNames: ["StreamWakeDeliveryResult"],
-  },
-  {
-    name: "OpenAiHttpRequest",
-    kind: "typeAlias",
-    sourceText:
-      '/** Prepared OpenAI HTTP request, with authorization supplied only at dispatch. */\nexport type OpenAiHttpRequest = {\n  kind: "openai-http";\n  gatewayId: string;\n  endpoint: string;\n  headers: Record<string, string>;\n  body: Record<string, unknown>;\n};',
-    summary: "Prepared OpenAI HTTP request, with authorization supplied only at dispatch.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "WorkersAiRequest",
-    kind: "typeAlias",
-    sourceText:
-      '/** Prepared Workers AI binding invocation, including its raw-response option. */\nexport type WorkersAiRequest = {\n  kind: "workers-ai";\n  model: string;\n  body: Record<string, unknown>;\n  options: CfAiRunOptions & {\n    returnRawResponse: true;\n    gateway: { id: string; metadata: Record<string, string | number> };\n  };\n};',
-    summary: "Prepared Workers AI binding invocation, including its raw-response option.",
-    memberSummaries: {},
-    referencedTypeNames: ["CfAiRunOptions"],
   },
   {
     name: "WorkspaceChange",

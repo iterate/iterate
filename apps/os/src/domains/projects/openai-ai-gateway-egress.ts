@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ProjectAiInterceptorInput } from "../../lib/model-interception.ts";
+import type { ProjectAiInterceptor } from "../../lib/model-interception.ts";
 import { aiGatewayMetadata } from "../agents/ai-gateway-metadata.ts";
 import type { Env } from "../../env.ts";
 import type { AppConfig } from "../../config.ts";
@@ -32,7 +32,7 @@ export async function routeOpenAiViaGateway(input: {
   ai: Env["AI"];
   projectId: string;
   streamContext: StreamContext;
-  consultInterceptor: ((request: ProjectAiInterceptorInput) => Promise<unknown>) | undefined;
+  consultInterceptor: ((request: ProjectAiInterceptor.Input) => Promise<unknown>) | undefined;
 }): Promise<Response | null> {
   const { request, config, streamContext } = input;
   // Preserve existing egress eligibility and credential substitution. Explicit

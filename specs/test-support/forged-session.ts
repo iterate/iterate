@@ -11,7 +11,6 @@ import {
   connectItxReady,
   type ItxInitialConnectionRetry,
   type ProjectAiInterceptor,
-  type ProjectAiInterceptorInput,
 } from "iterate/node";
 import dedent from "dedent";
 import { interceptor } from "@iterate-com/test-support";
@@ -356,13 +355,13 @@ export function createAgentHelper<
     class ResponseQueuer {
       responders: Array<{
         times: number;
-        fn: (call: Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>) => Promise<string>;
+        fn: (call: ProjectAiInterceptor.AgentTurnInput) => Promise<string>;
       }> = [];
 
       /** fingerprint -> script, so retries get the same script as last time */
       previous: Map<string, (typeof this)["responders"][number]["fn"]> = new Map();
 
-      lastUserMessage(call: ProjectAiInterceptorInput) {
+      lastUserMessage(call: ProjectAiInterceptor.Input) {
         if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
         return call.request.body.messages.findLast((m) => m.role === "user")?.content;
       }
@@ -396,7 +395,7 @@ export function createAgentHelper<
         this.responders.push({ times, fn });
       }
 
-      take(call: ProjectAiInterceptorInput) {
+      take(call: ProjectAiInterceptor.Input) {
         const fingerprint = JSON.stringify(call).replace(
           /Requested at: [:\w-.]+\b/,
           "Requested at: <timestamp>",
@@ -427,7 +426,7 @@ export function createAgentHelper<
       await addAgentTurnInterceptor(path, async (call) => {
         const next = responses.take(call);
         if (!next) throw new Error(`No responses available for agent ${path}`);
-        const s = await next(call as Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>);
+        const s = await next(call as ProjectAiInterceptor.AgentTurnInput);
         return interceptor.aiTextResponse(s, call);
       });
     }
