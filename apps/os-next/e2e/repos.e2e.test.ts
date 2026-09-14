@@ -151,15 +151,27 @@ test("commits through the facet: commit-completed on the repo's path; the tip ca
   expect(await itx.cd("/repos/config").facets.get("repo").snapshot()).toMatchObject({
     state: { creation: "created", tip: second.commitOid, commits: 2 },
   });
+  // A write from OUTSIDE that lands between the facet's refresh and its push: the adapter refuses
+  // the stale tip, the facet refreshes (one snapshot) and retries — the cache holds BOTH writes.
+  git.driftOnNextCommit = { path: "d.txt", content: "drifted" };
+  const third = await repo.writeFile("e.txt", "e");
+  expect(third.changedPaths).toEqual(["e.txt"]);
+  expect(git.snapshots).toBe(2);
+  expect(await repo.listFiles()).toEqual({
+    commitOid: third.commitOid,
+    paths: ["b.txt", "c.txt", "d.txt", "e.txt"],
+  });
+  expect(await repo.readFile("d.txt")).toBe("drifted");
+  expect(git.snapshots).toBe(2);
   // A batch that changes nothing commits nothing and appends nothing.
   expect(
     await repo.commitFiles({ message: "noop", changes: [{ path: "c.txt", content: "c" }] }),
   ).toEqual({
-    commitOid: second.commitOid,
+    commitOid: third.commitOid,
     changedPaths: [],
   });
   expect((await readAll(itx.cd("/repos/config"))).filter((e) => e.type === COMMITTED)).toHaveLength(
-    2,
+    3,
   );
 });
 

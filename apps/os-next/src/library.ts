@@ -37,7 +37,7 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 // pipelinable handle).
 //
 // The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `repos.get`/`list` ·
-// `workspaces.get`/`list`. `run` is sugar over `itx.workers.get` (the run section); the entity doors
+// `workspaces.get`/`list`. `run` is sugar over `itx.workers.get` (the run section); the entity handles
 // over `itx.cd(path).facets.get` (the entities section). The three connectors each
 // return a connection RpcTarget a caller can hold across calls, and each does ALL its HTTP through
 // `itx.fetch` (egress: `getSecret("/secrets/NAME")` placeholders in headers substitute for free; a user

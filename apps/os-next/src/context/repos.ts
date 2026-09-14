@@ -28,6 +28,7 @@
 
 import { RpcTarget } from "capnweb";
 import { deflate, Inflate } from "pako";
+import { codedError } from "../lib.ts";
 
 // ── `itx.cfArtifacts` — the raw binding, project-scoped ──
 
@@ -161,10 +162,18 @@ export interface GitScope {
   listFiles(repo: string): Promise<{ commitOid: string | null; paths: string[] }>;
   /** ONE commit on `main` applying `changes` (the repo is created on its first write) → the new
    *  commit and the paths it changed. Changes that leave the tree as it was commit nothing:
-   *  `changedPaths` is empty and `commitOid` the tip (null on an unborn repo). */
+   *  `changedPaths` is empty and `commitOid` the tip (null on an unborn repo). `expectedTip` is the
+   *  tip the caller built on (null for an unborn `main`): a `main` that moved past it is refused
+   *  with `TIP_MOVED` before anything is fetched or pushed — a cache that applies its own batch
+   *  onto what it read can never fold in a write it never saw. */
   commitFiles(
     repo: string,
-    input: { message: string; changes: RepoFileChange[]; author?: { name: string; email: string } },
+    input: {
+      message: string;
+      changes: RepoFileChange[];
+      author?: { name: string; email: string };
+      expectedTip?: string | null;
+    },
   ): Promise<{ commitOid: string | null; changedPaths: string[] }>;
   /** `commitFiles` for one file. */
   writeFile(
@@ -354,11 +363,20 @@ export function projectScopedGit(input: {
     return { tip, ...(await tipSnapshot(transport, tip)) };
   };
 
-  const commitFiles: GitScope["commitFiles"] = async (repo, { message, changes, author }) => {
+  const commitFiles: GitScope["commitFiles"] = async (
+    repo,
+    { message, changes, author, expectedTip },
+  ) => {
     if (!message.trim()) throw new Error("itx.git.commitFiles: message must be a non-empty string");
     if (changes.length === 0) throw new Error("itx.git.commitFiles: changes must name a file");
     const transport = await transportFor(repo, "write");
     const tip = await transport.tipOf(REF);
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- a protocol distinction: an ABSENT expectedTip means no guard, null means "I built on an unborn main"
+    if (expectedTip !== undefined && (tip || null) !== expectedTip)
+      throw codedError(
+        "TIP_MOVED",
+        `itx.git.commitFiles: TIP_MOVED — ${repo}'s main is at ${tip || "(unborn)"}, not the ${expectedTip || "(unborn)"} the changes were built on; refresh and retry`,
+      );
     // The tip's snapshot, or an unborn repo's empty one. (A tip whose commit or tree the pack omits
     // THROWS in tipSnapshot — never a fresh root commit that would repoint `main` at an orphan.)
     const { manifest, objects } = tip

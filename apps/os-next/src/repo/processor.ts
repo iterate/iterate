@@ -2,7 +2,8 @@
 // facts and the commits, plus THE SAGA'S EFFECT. `processEvent` on `repos/create-requested` — and on
 // the at-head pass while a request is still owed, which is how an attempt that died with its
 // incarnation is re-driven — provisions the Artifacts repo through the effects the host injects and
-// appends the terminal fact: `repos/created` (also cross-posted to `/`) or `repos/create-failed`.
+// appends the terminal fact: `repos/created` (cross-posted to `/` FIRST, then on the repo's own path,
+// so a failed cross-post leaves the request owed) or `repos/create-failed`.
 // The effect is idempotent end to end (provisioning tolerates an existing repo; the terminal facts
 // carry idempotency keys), so re-driving is always safe. Imports only the pure kernel: a unit test
 // constructs it with `new`, hands it fake effects, and drives it on the node harness
@@ -94,10 +95,12 @@ export class RepoProcessor extends StreamProcessor<
         });
         return;
       }
-      // Two fresh copies: the engine stamps its provenance onto what it appends, and the copy that
-      // crosses to `/` is attributed there, by that context's own append.
-      await append(repoCreatedEvent(identity));
+      // The cross-post FIRST, the own-path certificate LAST: the own-path fact is what closes the
+      // obligation, so a cross-post that fails leaves the request owed and re-driven — the catalog
+      // can never miss a repo that was born. (Two fresh copies: the engine stamps its provenance onto
+      // what it appends; the copy on `/` is attributed by that context's own append.)
       await this.#effects.crossPost(repoCreatedEvent(identity));
+      await append(repoCreatedEvent(identity));
     });
     return undefined;
   }

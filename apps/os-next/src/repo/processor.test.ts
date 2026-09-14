@@ -93,7 +93,7 @@ describe("RepoProcessor — the creation saga on the engine", () => {
     return { log, root, created, effects, engine, types };
   }
 
-  test("a request drives the effect: the certificate lands on the repo's path and on /", async () => {
+  test("a request drives the effect: the certificate lands on / first, then on the repo's path", async () => {
     const { log, root, created, engine, types } = world();
     log.stream.append({ ...requested, idempotencyKey: "repos/create-requested:/repos/config:0" });
     // The effect lands the terminal fact DURING the catch-up that reads the request, one page past
@@ -111,6 +111,30 @@ describe("RepoProcessor — the creation saga on the engine", () => {
         idempotencyKey: "repos/created:/repos/config",
       },
     ]);
+  });
+
+  test("a cross-post that fails leaves the request OWED: nothing lands on the repo's path, and the next head re-drives both", async () => {
+    const { log, root, created, effects, engine, types } = world();
+    let crossPostsLeftToFail = 1;
+    const crossPost = effects.crossPost;
+    effects.crossPost = async (event) => {
+      if (crossPostsLeftToFail > 0) {
+        crossPostsLeftToFail -= 1;
+        throw new Error("/ unreachable");
+      }
+      return crossPost(event);
+    };
+    log.stream.append({ ...requested, idempotencyKey: "repos/create-requested:/repos/config:0" });
+    const first = engine();
+    await expect(first.snapshot()).rejects.toThrow("/ unreachable"); // the blocking effect fails the batch
+    expect(types()).toEqual(["repos/create-requested"]); // no certificate anywhere: still owed
+    expect(root).toEqual([]);
+    await first.snapshot(); // the next catch-up re-drives at head
+    await first.snapshot();
+    expect((await first.snapshot()).state).toMatchObject({ creation: "created", attempts: 1 });
+    expect(created).toEqual(["config", "config"]); // provisioning ran twice — idempotent by design
+    expect(root).toHaveLength(1);
+    expect(types()).toEqual(["repos/create-requested", "repos/created"]);
   });
 
   test("a failing effect lands create-failed with the error; a new request is a new attempt that succeeds", async () => {

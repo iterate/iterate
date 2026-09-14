@@ -136,15 +136,30 @@ export class RepoDurableObject extends StreamProcessorDurableObject<RepoView> {
 
   /** ONE commit on `main` (`itx.git.commitFiles`) on a repo the saga has created (run first if not),
    *  the cache updated in place under the new tip, and `repo/commit-completed` on this repo's path.
-   *  A batch that changes nothing commits nothing. */
+   *  A batch that changes nothing commits nothing. The commit is built ON THE CACHED TIP and guarded
+   *  by it (`expectedTip`): a write from outside that lands between the refresh and the push is
+   *  refused by the adapter, the cache refreshed, and the commit retried once — the cache never
+   *  pins a tip whose content it did not read. */
   async commitFiles(input: {
     message: string;
     changes: RepoFileChange[];
     author?: { name: string; email: string };
   }): Promise<{ commitOid: string | null; changedPaths: string[] }> {
     const { name } = await this.create();
-    const parentOid = await this.#fresh();
-    const committed = await this.withItx((itx) => itx.git.commitFiles(name, input));
+    let parentOid = await this.#fresh();
+    let committed: { commitOid: string | null; changedPaths: string[] };
+    try {
+      committed = await this.withItx((itx) =>
+        itx.git.commitFiles(name, { ...input, expectedTip: parentOid }),
+      );
+    } catch (error) {
+      // The adapter's refusal crosses one Workers-RPC hop; its message carries the code either way.
+      if (!String(error).includes("TIP_MOVED")) throw error;
+      parentOid = await this.#fresh();
+      committed = await this.withItx((itx) =>
+        itx.git.commitFiles(name, { ...input, expectedTip: parentOid }),
+      );
+    }
     if (committed.changedPaths.length === 0 || !committed.commitOid) return committed;
     for (const change of input.changes) {
       if (!committed.changedPaths.includes(change.path)) continue;

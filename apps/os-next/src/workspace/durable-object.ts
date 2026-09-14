@@ -109,8 +109,10 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
   // ── birth ──
 
   #born = false;
-  /** The birth certificate, once: on this workspace's own path and cross-posted to `/` — the SAME
-   *  event under the SAME idempotency key, so a workspace at `/` itself would carry it once. */
+  /** The birth certificate, once: cross-posted to `/` FIRST, then on this workspace's own path —
+   *  the own-path fact is what marks the workspace born, so a cross-post that fails is retried on
+   *  the next use and the catalog can never miss a workspace that was born. The SAME event under
+   *  the SAME idempotency key both times, so a workspace at `/` itself carries it once. */
   async #ensureBorn(state: WorkspaceView): Promise<void> {
     if (this.#born) return;
     if (!state.created) {
@@ -120,8 +122,8 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
         payload: { path },
         idempotencyKey: `workspace/created:${path}`,
       };
-      await this.withItx((itx) => itx.append(birth));
       await this.withItx((itx) => itx.cd("/").append(birth));
+      await this.withItx((itx) => itx.append(birth));
     }
     this.#born = true;
   }
