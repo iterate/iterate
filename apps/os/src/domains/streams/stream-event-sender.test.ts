@@ -2332,6 +2332,7 @@ function connectionsHarness(
     subscriberPagerConnectionKeys?: () => ReadonlySet<string>;
     onSessionsIdleClosed?: (connectionKeys: readonly string[]) => void;
     facetWorkArmedAtMs?: () => number | null;
+    awaitAlarmWrite?: () => Promise<void>;
     readBatch?: ConstructorParameters<typeof StreamConnections>[0]["hooks"]["readBatch"];
     onAppend?: (args: {
       connections: StreamConnections;
@@ -2391,6 +2392,7 @@ function connectionsHarness(
       runtimeChanged: () => undefined,
       now: () => now,
       armAlarm: (atMs) => alarmTimes.push(atMs),
+      awaitAlarmWrite: options.awaitAlarmWrite,
       keepAlive: () => undefined,
       subscriberPagerConnectionKeys:
         options.subscriberPagerConnectionKeys ?? (() => new Set<string>()),
@@ -3265,6 +3267,42 @@ describe("StreamConnections hosted delivery watchdog", () => {
       h.connections.close("processor", "replaced");
       await vi.advanceTimersByTimeAsync(DEFAULT_DELIVERY_TIMEOUT_MS);
       expect(h.deliveryFailures).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not dispatch through a connection closed while an insured alarm waits", async () => {
+    vi.useFakeTimers();
+    const alarm = Promise.withResolvers<void>();
+    const calls: DeliveryCall[] = [];
+    const events = [{ ...streamEvent(1), ephemeral: true as const }, streamEvent(2)];
+    const h = connectionsHarness({
+      events,
+      awaitAlarmWrite: () => alarm.promise,
+      readBatch: (afterOffset, _beforeOffset, limit) =>
+        events
+          .filter((event) => event.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+    });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    try {
+      connection.sendQueued();
+      expect(calls).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_DELIVERY_TIMEOUT_MS);
+      await flushMicrotasks();
+      expect(h.connections.has("processor")).toBe(false);
+
+      alarm.resolve();
+      await flushMicrotasks();
+      expect(calls).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }

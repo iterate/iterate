@@ -1847,7 +1847,7 @@ type HostedInFlightBatch = {
   deadlineAtMs: number;
   insured: boolean;
   startedAtMs: number;
-  uninsuredTimer?: { resolve(): void; timer: ReturnType<typeof setTimeout> };
+  uninsuredTimer?: ReturnType<typeof setTimeout>;
 };
 
 /**
@@ -2665,9 +2665,9 @@ export class StreamConnections {
              * is either a run of ephemeral events or a single durable one, so
              * the check is the first event's flag; `every` keeps it honest.
              * The wake's first batch and every durable batch keep the full
-             * machinery. Liveness without the alarm: the wedge check at the
-             * top of this loop, plus rpc-broken detection when the isolate
-             * actually dies.
+             * machinery. An uninsured batch has a bounded in-memory timeout
+             * while this incarnation is alive; isolate death loses its body
+             * and surfaces through the retained callback transport.
              */
             const uninsuredEphemeral =
               events.length > 0
@@ -2689,20 +2689,24 @@ export class StreamConnections {
               // Ephemeral bodies cannot survive an eviction, so retain only a
               // bounded in-memory timeout. It preserves a final hung callback's
               // terminal outcome without a parent alarm RPC per PCM batch.
-              const timeout = Promise.withResolvers<void>();
+              // A live Durable Object remains active for its timer; see
+              // https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/.
               const timer = setTimeout(() => {
-                timeout.resolve();
                 if (hostedInFlight.get(deliveryToken) !== flight) return;
-                this.onHostedDeliveryError(
-                  connectionKey,
-                  new Error(
-                    `uninsured hosted batch acknowledgement timed out after ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`,
-                  ),
-                  expectedDelivery,
+                this.#hooks.keepAlive(
+                  Promise.resolve().then(() => {
+                    if (hostedInFlight.get(deliveryToken) !== flight) return;
+                    this.onHostedDeliveryError(
+                      connectionKey,
+                      new Error(
+                        `uninsured hosted batch acknowledgement timed out after ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`,
+                      ),
+                      expectedDelivery,
+                    );
+                  }),
                 );
               }, DEFAULT_DELIVERY_TIMEOUT_MS);
-              flight.uninsuredTimer = { resolve: timeout.resolve, timer };
-              this.#hooks.keepAlive(timeout.promise);
+              flight.uninsuredTimer = timer;
             }
             if (isInitialBatch) greetingToken = deliveryToken;
             if (insured && !insuredAlreadyOutstanding) {
@@ -2726,6 +2730,7 @@ export class StreamConnections {
               this.#hooks.armAlarm(batchDeadlineAtMs);
               const awaitAlarmWrite = this.#hooks.awaitAlarmWrite;
               if (awaitAlarmWrite) await awaitAlarmWrite();
+              if (!open) return;
             }
             (processEventBatch as unknown as RetainedProcessEventBatch<StreamWakeEventBatch>)({
               ...batch,
@@ -2736,9 +2741,8 @@ export class StreamConnections {
                 const settledFlight = hostedInFlight.get(deliveryToken);
                 if (!settledFlight) return;
                 hostedInFlight.delete(deliveryToken);
-                if (settledFlight.uninsuredTimer) {
-                  clearTimeout(settledFlight.uninsuredTimer.timer);
-                  settledFlight.uninsuredTimer.resolve();
+                if (settledFlight.uninsuredTimer !== undefined) {
+                  clearTimeout(settledFlight.uninsuredTimer);
                 }
                 if (greetingToken === deliveryToken) greetingToken = null;
                 const parsed = parseWakeDeliveryResult(deliveryResult);
@@ -2866,9 +2870,8 @@ export class StreamConnections {
         if (!open) return;
         open = false;
         for (const flight of hostedInFlight.values()) {
-          if (!flight.uninsuredTimer) continue;
-          clearTimeout(flight.uninsuredTimer.timer);
-          flight.uninsuredTimer.resolve();
+          if (flight.uninsuredTimer === undefined) continue;
+          clearTimeout(flight.uninsuredTimer);
         }
         hostedInFlight.clear();
         greetingToken = null;
