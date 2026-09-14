@@ -2741,9 +2741,7 @@ export class StreamConnections {
                 const settledFlight = hostedInFlight.get(deliveryToken);
                 if (!settledFlight) return;
                 hostedInFlight.delete(deliveryToken);
-                if (settledFlight.uninsuredTimer !== undefined) {
-                  clearTimeout(settledFlight.uninsuredTimer);
-                }
+                clearTimeout(settledFlight.uninsuredTimer);
                 if (greetingToken === deliveryToken) greetingToken = null;
                 const parsed = parseWakeDeliveryResult(deliveryResult);
                 if (
@@ -2870,7 +2868,6 @@ export class StreamConnections {
         if (!open) return;
         open = false;
         for (const flight of hostedInFlight.values()) {
-          if (flight.uninsuredTimer === undefined) continue;
           clearTimeout(flight.uninsuredTimer);
         }
         hostedInFlight.clear();
