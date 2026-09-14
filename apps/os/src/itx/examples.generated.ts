@@ -170,11 +170,18 @@ const [done] = await stream.append({
   payload: { result: "ok" },
 });
 
-const defaults = await stream.getEvents({ afterOffset: tick.offset - 1 });
-const raw = await stream.getEvents({ afterOffset: tick.offset - 1, includeEphemeral: true });
+const window = {
+  afterOffset: tick.offset - 1,
+  beforeOffset: done.offset + 1,
+  eventTypes: [tick.type, done.type],
+};
+const [defaults, raw] = await Promise.all([
+  stream.getEvents(window),
+  stream.getEvents({ ...window, includeEphemeral: true }),
+]);
 return {
   tickOffset: tick.offset, // memory-only events consume offsets like any commit
-  doneOffset: done.offset, // the durable event landed right after it
+  doneOffset: done.offset, // other stream writers may have appended between the two
   defaultOffsets: defaults.map((e) => e.offset), // [done.offset] — the tick is excluded
   rawOffsets: raw.map((e) => e.offset), // [tick.offset, done.offset]
 };
@@ -427,7 +434,7 @@ return {
     id: "workspace-edit-and-push",
     title: "Edit repo files in a workspace, then commit them to main",
     description:
-      "A workspace is your private working copy of the project's one path namespace — a mount-routed, copy-on-write filesystem in a Durable Object (no container, no clone, always warm). Address it with itx.workspaces.get(\"/workspaces/<name>\"), then call handle.create({}) explicitly; addressing alone never births it. Every project repo is mounted at its own /repos/** path (the config repo at \"/repos/config\"; freshly created repos just appear), so reads see each repo's latest main until a local write shadows a path. Changes stay private until git.commit({ message, scope }) — which commits ONE repo's changes straight to ITS main branch (config-repo commits redeploy the project worker/website automatically; no branches, no push step) and clears just that subtree. scope names the repo mount and is required when several are dirty. Files under the workspace's OWN path are private scratch, never committable; relative paths resolve there.",
+      'A workspace is your private working copy of the project\'s one path namespace — a mount-routed, copy-on-write filesystem in a Durable Object (no container, no clone, always warm). Address it with itx.workspaces.get("/workspaces/<name>"), then call handle.create({}) explicitly; addressing alone never births it. Every project repo is mounted at its own /repos/** path (the config repo at "/repos/config"; freshly created repos just appear), so reads see each repo\'s latest main until a local write shadows a path. Changes stay private until git.commit({ message, scope }) — which commits ONE repo\'s changes straight to ITS main branch (config-repo commits redeploy the project worker/website automatically; no branches, no push step) and clears just that subtree. scope names the repo mount and is required when several are dirty. Files under /workspace are private scratch, never committable; relative paths resolve there.',
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
@@ -488,8 +495,8 @@ await itx.files.get("/examples/transfer.txt").put({
   contentType: "text/plain",
 });
 const stored = await itx.files.get("/examples/transfer.txt").bytes();
-await workspace.writeFileBytes(workspacePath + "/imported/transfer.txt", stored);
-const inWorkspace = await workspace.readFile(workspacePath + "/imported/transfer.txt");
+await workspace.writeFileBytes("/workspace/imported/transfer.txt", stored);
+const inWorkspace = await workspace.readFile("/workspace/imported/transfer.txt");
 
 // workspace -> files: publish a repo file (the config repo's seeded
 // package.json, mounted at its /repos/** path) to project file storage

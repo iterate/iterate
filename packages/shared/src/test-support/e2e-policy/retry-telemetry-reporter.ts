@@ -1,3 +1,4 @@
+import { appendFlakeRecord, unknownFlakeRecordFromTelemetry } from "../flake-record.ts";
 import {
   ciTelemetrySourceFromEnvironment,
   normalizeTestTelemetryError,
@@ -28,6 +29,7 @@ export type { ModuleTelemetryRecord };
 interface ReportedTestCase {
   id?: string;
   fullName: string;
+  name?: string;
   location?: { line: number; column: number };
   options?: {
     fails?: boolean;
@@ -162,6 +164,7 @@ export class RetryTelemetryReporter {
   ): Promise<void> {
     try {
       const tests: TestTelemetryRecord[] = [];
+      const reportedNames: (string | undefined)[] = [];
       const modules: ModuleTelemetryRecord[] = [];
       for (const testModule of testModules) {
         const moduleDiagnostic = testModule.diagnostic?.();
@@ -216,6 +219,7 @@ export class RetryTelemetryReporter {
             normalizeTestTelemetryError(error, "Unknown test-attempt error"),
           );
           const firstFailure = compactRetryFailure(errors[0]);
+          reportedNames.push(test.name);
           tests.push({
             fullName: test.fullName,
             moduleId: testModule.moduleId,
@@ -276,6 +280,17 @@ export class RetryTelemetryReporter {
             ...(firstFailure && { firstFailure }),
           });
         }
+      }
+      // A plain test that passed only after a retry is an unclassified flake:
+      // record it for the test-health dashboard, error sample included, so it
+      // can be adopted into createFlake (see flake-record.ts). The bare test
+      // name keys the record so a later createFlake wrap keeps the same row.
+      for (const [index, telemetryRecord] of tests.entries()) {
+        const unknownFlake = unknownFlakeRecordFromTelemetry({
+          ...telemetryRecord,
+          leafName: reportedNames[index],
+        });
+        if (unknownFlake) await appendFlakeRecord(unknownFlake);
       }
       const retried = tests.filter((test) => test.retryCount > 0);
       const unhandled = unhandledErrors.map((error) =>

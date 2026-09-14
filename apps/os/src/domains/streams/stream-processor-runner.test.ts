@@ -147,7 +147,10 @@ class TaskProcessor extends StreamProcessor<
 
 type Journal = ReturnType<typeof makeJournal>;
 
-function makeJournal(homePath = HOME) {
+const NATIVE_RPC_BYTE_LIMIT = 32 * 1024 * 1024;
+const RUNNER_READ_BYTE_LIMIT = 8 * 1024 * 1024;
+
+function makeJournal(homePath = HOME, options: { pageRpcByteLimit?: number } = {}) {
   const rowsByPath = new Map<string, StreamEvent[]>();
   /** EVERY append attempt, deduped or not — the at-least-once evidence. */
   const attempts: { path: string; event: StreamEventInput; deduped: boolean }[] = [];
@@ -157,8 +160,15 @@ function makeJournal(homePath = HOME) {
   let createdAtClock = 0;
   let streamId = TEST_STREAM_ID;
   let eventPageReads = 0;
+  const eventPageInputs: Array<{
+    afterOffset?: number;
+    beforeOffset?: number | null;
+    byteLimit?: number;
+    limit?: number;
+  }> = [];
   let guardedAppendGate: ReturnType<typeof deferred> | undefined;
   let recreateAfterEventPage: { readNumber: number; nextStreamId: string } | undefined;
+  let appendAfterEventPage: { event: StreamEventInput; readNumber: number } | undefined;
 
   const rowsFor = (path: string): StreamEvent[] => {
     let rows = rowsByPath.get(path);
@@ -212,6 +222,7 @@ function makeJournal(homePath = HOME) {
       getEventPage: (args?: {
         afterOffset?: number;
         beforeOffset?: number | null;
+        byteLimit?: number;
         limit?: number;
       }) => {
         if (failNextRead !== undefined) {
@@ -221,18 +232,41 @@ function makeJournal(homePath = HOME) {
         }
         const afterOffset = args?.afterOffset ?? 0;
         const beforeOffset = args?.beforeOffset ?? Number.MAX_SAFE_INTEGER;
+        eventPageInputs.push({ ...args });
+        const events = rowsFor(path)
+          .filter((row) => row.offset > afterOffset && row.offset < beforeOffset)
+          .slice(0, args?.limit ?? 500);
+        const byteLimit = args?.byteLimit;
+        let bytes = 0;
+        const pageEvents =
+          byteLimit === undefined
+            ? events
+            : events.filter((event, index) => {
+                bytes += new TextEncoder().encode(JSON.stringify(event)).byteLength;
+                return bytes <= byteLimit || index === 0;
+              });
+        const pageBytes = new TextEncoder().encode(JSON.stringify(pageEvents)).byteLength;
+        if (options.pageRpcByteLimit !== undefined && pageBytes > options.pageRpcByteLimit) {
+          return Promise.reject(
+            new Error(
+              `Serialized RPC arguments or return values are limited to 32MiB, but the size of this value was: ${String(pageBytes)} bytes.`,
+            ),
+          );
+        }
         const page = {
           streamId,
           streamMaxOffset: rowsFor(path).at(-1)?.offset ?? 0,
-          events: rowsFor(path)
-            .filter((row) => row.offset > afterOffset && row.offset < beforeOffset)
-            .slice(0, args?.limit ?? 500),
+          events: pageEvents,
         };
         eventPageReads += 1;
         if (recreateAfterEventPage?.readNumber === eventPageReads) {
           rowsByPath.set(homePath, []);
           streamId = recreateAfterEventPage.nextStreamId;
           recreateAfterEventPage = undefined;
+        }
+        if (appendAfterEventPage?.readNumber === eventPageReads) {
+          commit(homePath, appendAfterEventPage.event);
+          appendAfterEventPage = undefined;
         }
         return Promise.resolve(page);
       },
@@ -277,6 +311,7 @@ function makeJournal(homePath = HOME) {
     head: () => rowsFor(homePath).at(-1)?.offset ?? 0,
     /** Total getEventPage reads — the runner's journal-replay storage cost. */
     eventPageReads: () => eventPageReads,
+    eventPageInputs: () => eventPageInputs,
     /** Seed a raw journal fact directly (no attempt logged — it's the fixture). */
     seed(event: { type: string; payload?: Record<string, unknown> }): StreamEvent {
       const rows = rowsFor(homePath);
@@ -314,6 +349,9 @@ function makeJournal(homePath = HOME) {
     },
     recreateAfterPage(readNumber: number, nextStreamId = RECREATED_STREAM_ID) {
       recreateAfterEventPage = { readNumber, nextStreamId };
+    },
+    appendAfterPage(readNumber: number, event: StreamEventInput) {
+      appendAfterEventPage = { event, readNumber };
     },
   };
 }
@@ -836,6 +874,8 @@ describe("StreamProcessorRunner side-effect ordering", () => {
         args.blockProcessorWhile(async () => {
           log.push(`block-start:${offset}`);
           await tick(); // a real async gap — ordering must survive macrotasks
+          // A live-state acknowledgement must never publish an in-flight fold.
+          expect(harness.runner.currentAcknowledgedThroughOffset).toBe(0);
           log.push(`block-end:${offset}`);
         });
       },
@@ -843,7 +883,9 @@ describe("StreamProcessorRunner side-effect ordering", () => {
     const harness = makeHarness({ hooks });
     for (const id of ["a", "b", "c"]) harness.journal.seed({ type: REQUESTED, payload: { id } });
 
+    expect(harness.runner.currentAcknowledgedThroughOffset).toBe(0);
     await harness.deliverBatches([harness.journal.rows().slice()]);
+    expect(harness.runner.currentAcknowledgedThroughOffset).toBe(3);
 
     expect(log).toEqual([
       "process:1",
@@ -1190,6 +1232,87 @@ describe("StreamProcessorRunner load-time reduction catch-up", () => {
       },
       processing: { acknowledgedThroughOffset: 3, cursorRevision: 0 },
     });
+  });
+
+  it("refolds a 500-event page beyond the native RPC ceiling in bounded pages without replaying effects", async () => {
+    const journal = makeJournal(HOME, { pageRpcByteLimit: NATIVE_RPC_BYTE_LIMIT });
+    for (let index = 0; index < 500; index += 1) {
+      journal.seed({
+        type: REQUESTED,
+        payload: { body: "x".repeat(80_000), id: `large-${String(index)}` },
+      });
+    }
+    const store = makeProgressStore();
+    store.plant({
+      streamId: TEST_STREAM_ID,
+      reduction: {
+        reducerVersion: "0.0.1",
+        reducedThroughOffset: 0,
+        state: { count: 0, open: [] },
+      },
+      processing: { acknowledgedThroughOffset: 500, cursorRevision: 0 },
+    });
+    let processEventCalls = 0;
+    const harness = makeHarness({
+      journal,
+      store,
+      hooks: { onProcess: () => void (processEventCalls += 1) },
+    });
+
+    await harness.runner.openEventBatchCallback(TEST_STREAM_ID);
+
+    await expect(harness.runner.snapshot()).resolves.toMatchObject({
+      offset: 500,
+      state: { count: 500, open: expect.arrayContaining(["large-0", "large-499"]) },
+    });
+    expect(processEventCalls).toBe(0);
+    expect(
+      journal
+        .eventPageInputs()
+        .filter((input) => input.afterOffset !== Number.MAX_SAFE_INTEGER)
+        .every((input) => input.byteLimit === RUNNER_READ_BYTE_LIMIT),
+    ).toBe(true);
+  });
+
+  it("finishes a byte-capped catch-up at its first observed head", async () => {
+    const journal = makeJournal(HOME, { pageRpcByteLimit: NATIVE_RPC_BYTE_LIMIT });
+    for (let index = 0; index < 500; index += 1) {
+      journal.seed({
+        type: REQUESTED,
+        payload: { body: "x".repeat(80_000), id: `large-${String(index)}` },
+      });
+    }
+    // The identity read is first, the first catch-up page second. Its page
+    // envelope has head 500; the later append must wait for the next catch-up.
+    journal.appendAfterPage(2, {
+      type: REQUESTED,
+      payload: { body: "tail", id: "written-after-target" },
+    });
+    let processEventCalls = 0;
+    const harness = makeHarness({
+      journal,
+      hooks: { onProcess: () => void (processEventCalls += 1) },
+    });
+
+    await harness.runner.catchUp();
+
+    await expect(harness.runner.snapshot()).resolves.toMatchObject({
+      offset: 500,
+      state: { count: 500, open: expect.not.arrayContaining(["written-after-target"]) },
+    });
+    expect(processEventCalls).toBe(500);
+    expect(
+      journal
+        .eventPageInputs()
+        .filter((input) => input.afterOffset !== Number.MAX_SAFE_INTEGER)
+        .every((input) => input.byteLimit === RUNNER_READ_BYTE_LIMIT),
+    ).toBe(true);
+    expect(
+      journal
+        .eventPageInputs()
+        .filter((input) => input.afterOffset !== 0 && input.afterOffset !== Number.MAX_SAFE_INTEGER)
+        .every((input) => input.beforeOffset === 501),
+    ).toBe(true);
   });
 
   it("a persisted fold AHEAD of the acknowledgement (invalid) is discarded and refolded through ack", async () => {

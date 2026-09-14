@@ -4,6 +4,7 @@
 // the fix is pinned by observable behaviour rather than by inspection.
 
 import { expect, test } from "vitest";
+import { isStreamOffsetConflictError } from "iterate/processors";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
@@ -120,33 +121,34 @@ test("append accepts an offset assertion on a subscription configuration event",
   using project = await itx.projects.get(`sec-offset-${RUN_SUFFIX}-${marker}`).create({});
   using stream = project.streams.get(streamPath);
 
-  // A brand-new project stream has committed created(1) + the birth-certificate
-  // project-worker subscription(2) + the PostHog subscription(3) +
-  // woken(4); the next append is 5. `offset` is the DO's optimistic-concurrency
-  // assertion. It rides on the append input at runtime but is intentionally
-  // absent from the narrow public `Stream` type, so it is cast in here exactly
-  // as a concurrency-sensitive caller would.
+  // Feed publications can advance the head between reading it and appending.
+  // Retry only the modeled concurrency conflict, with a strict attempt bound.
   const appendWithOffset = stream.append as unknown as (
     event: Record<string, unknown>,
   ) => Promise<{ offset: number }[]>;
-  const [configured] = await appendWithOffset({
-    type: "events.iterate.com/stream/subscription-configured",
-    offset: 5,
-    payload: {
-      name: `stream-${marker}`,
-      receiver: {
-        action: "copy-to-stream",
-        receivingStreamPath: `/e2e/security/offset-assert-target/${marker}`,
-        delivery: {
-          start: "now",
-          onFailingEvent: "halt",
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { streamMaxOffset } = await stream.getEventPage({ limit: 1 });
+    const offset = streamMaxOffset + 1;
+    try {
+      const [configured] = await appendWithOffset({
+        type: "events.iterate.com/stream/subscription-configured",
+        offset,
+        payload: {
+          name: `stream-${marker}`,
+          receiver: {
+            action: "copy-to-stream",
+            receivingStreamPath: `/e2e/security/offset-assert-target/${marker}`,
+            delivery: { start: "now", onFailingEvent: "halt" },
+          },
+          filter: { eventTypes: [STREAM_EVENT_TYPE] },
         },
-      },
-      filter: { eventTypes: [STREAM_EVENT_TYPE] },
-    },
-  });
-
-  expect(configured!).toMatchObject({ offset: 5 });
+      });
+      expect(configured!).toMatchObject({ offset });
+      return;
+    } catch (error) {
+      if (!isStreamOffsetConflictError(error) || attempt === 4) throw error;
+    }
+  }
 });
 
 // B6: openedBy supplied to openConnection() must be validated at the RPC

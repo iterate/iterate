@@ -10,7 +10,7 @@
 // guarantees pinned below. Each test is written as if the guarantee EXISTED:
 // it exercises the real system and asserts the desirable behavior, and it
 // genuinely fails today because the system does not provide it. Each is
-// wrapped in `failing(test, /TAG/)` — registered through vitest's own
+// wrapped in `createFailing(test, /TAG/)` — registered through vitest's own
 // `test.fails` underneath, so they report natively as expected fails — and
 // asserts its pinned expectation with that TAG as the message. The suite
 // stays green only while the guarantee is un-given FOR THE PINNED REASON;
@@ -19,7 +19,7 @@
 //
 // If a change makes one of these tests pass, it goes red with
 // delete-the-wrapper instructions in the log. Do not delete the test — drop
-// the `failing(...)` call and the TAG message, move it to the regular
+// the `createFailing(...)` call and the TAG message, move it to the regular
 // suites, and delete only its entry here.
 
 import { DatabaseSync } from "node:sqlite";
@@ -29,7 +29,7 @@ import type {
   StreamEvent,
   StreamEventInput,
 } from "iterate/processors";
-import { failing } from "@iterate-com/shared/test-support/failing-test";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -230,7 +230,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
   //   so the window closes within one delivery round.
   // RESTORE: the deleted receiver-side registry (membership checked at
   //   receive time), or any receiver-visible removal record.
-  failing(test, /NO ATOMIC UNSUBSCRIBE/)(
+  createFailing(test, /NO ATOMIC UNSUBSCRIBE/)(
     "removing a subscription atomically stops in-flight deliveries",
     async () => {
       const streams = new Map<string, StreamDurableObject>();
@@ -291,7 +291,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
   //   duplicate window is a single delivery round.
   // RESTORE: the deleted move-gating handshake (quiesce the old receiver
   //   before enabling the new one).
-  failing(test, /REPOINT DELIVERS TO BOTH/)(
+  createFailing(test, /REPOINT DELIVERS TO BOTH/)(
     "re-pointing a subscription key from one receiver to another never delivers the same event to both",
     async () => {
       const streams = new Map<string, StreamDurableObject>();
@@ -361,7 +361,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
   //   (resumeSubscription / a fresh setCopySubscription).
   // RESTORE: the deleted configure-time round-trip, or a probe call before
   //   committing the configuration.
-  failing(test, /NO RECEIVER VERIFICATION/)(
+  createFailing(test, /NO RECEIVER VERIFICATION/)(
     "configuring a copy subscription verifies the receiver end-to-end",
     async () => {
       const streams = new Map<string, StreamDurableObject>();
@@ -404,7 +404,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
   //   order, within one subscription; duplicates are bounded by one batch per
   //   lost acknowledgement.
   // RESTORE: nothing planned. This test documents the doctrine.
-  failing(test, /ITX DELIVERY NOT EXACTLY ONCE/)(
+  createFailing(test, /ITX DELIVERY NOT EXACTLY ONCE/)(
     "delivery to an itx-call receiver is exactly-once",
     async () => {
       vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -524,7 +524,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
   //   ever across sources, and each source still arrives gap-free.
   // RESTORE: cross-source sequencing (a receiver-side total order or source
   //   coordination) — deliberately out of scope.
-  failing(test, /NO GLOBAL APPEND ORDER/)(
+  createFailing(test, /NO GLOBAL APPEND ORDER/)(
     "events from two source streams arrive at a shared receiver in global append order",
     async () => {
       const streams = new Map<string, StreamDurableObject>();
@@ -601,7 +601,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
   // RESTORE: the deleted blocked/resend-request lane, or receiver-lifetime
   //   tracking on the source that rewinds the cursor on first contact with a
   //   new receiver lifetime.
-  failing(test, /NO AUTOMATIC HISTORY RESEND/)(
+  createFailing(test, /NO AUTOMATIC HISTORY RESEND/)(
     "a receiver that lost its data gets the source history automatically re-sent",
     async () => {
       const streams = new Map<string, StreamDurableObject>();
@@ -658,7 +658,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
   // BOUND: debug/introspection only — delivery itself never needed the record,
   //   and the source side lists the subscription immediately.
   // RESTORE: the deleted configure-time registration event on the receiver.
-  failing(test, /NO INBOUND ENUMERATION/)(
+  createFailing(test, /NO INBOUND ENUMERATION/)(
     "the receiver can enumerate its inbound subscriptions before the first event arrives",
     async () => {
       const streams = new Map<string, StreamDurableObject>();

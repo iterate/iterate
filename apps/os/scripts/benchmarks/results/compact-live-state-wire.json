@@ -1,0 +1,90 @@
+[
+  {
+    "size": 65536,
+    "chunkSize": 16,
+    "patchVersion": 2,
+    "bytes": 3450588,
+    "frames": 4097,
+    "meanFrameBytes": 842.2230900659018,
+    "p95FrameBytes": 1299,
+    "elapsedMs": 301.300833,
+    "firstPatch": "[\"push\",[\"pipeline\",-1,[],[{\"type\":\"patch\",\"from\":0,\"to\":1,\"patch\":{\"fields\":{\"agent\":{\"fields\":{\"live\":{\"fields\":{\"steps\":{\"array\":{\"length\":1,\"items\":[[[[0,{\"fields\":{\"responseText\":{\"fields\":{\"length\":{\"set\":16},\"blockCount\":{\"set\":1},\"groups\":{\"fields\":{\"0\":{\"set\":{\"0\":\"xxxxxxxxxxxxxxxx\"}}}}}}}}]]]]}}}}}}}}}]]]"
+  },
+  {
+    "size": 65536,
+    "chunkSize": 48,
+    "patchVersion": 2,
+    "bytes": 1194642,
+    "frames": 1367,
+    "meanFrameBytes": 873.9151426481346,
+    "p95FrameBytes": 1331,
+    "elapsedMs": 96.28387500000002,
+    "firstPatch": "[\"push\",[\"pipeline\",-1,[],[{\"type\":\"patch\",\"from\":0,\"to\":1,\"patch\":{\"fields\":{\"agent\":{\"fields\":{\"live\":{\"fields\":{\"steps\":{\"array\":{\"length\":1,\"items\":[[[[0,{\"fields\":{\"responseText\":{\"fields\":{\"length\":{\"set\":48},\"blockCount\":{\"set\":1},\"groups\":{\"fields\":{\"0\":{\"set\":{\"0\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}}}}}}}}]]]]}}}}}}}}}]]]"
+  },
+  {
+    "size": 65536,
+    "chunkSize": 128,
+    "patchVersion": 2,
+    "bytes": 460410,
+    "frames": 513,
+    "meanFrameBytes": 897.485380116959,
+    "p95FrameBytes": 1345,
+    "elapsedMs": 33.20554200000004,
+    "firstPatch": "[\"push\",[\"pipeline\",-1,[],[{\"type\":\"patch\",\"from\":0,\"to\":1,\"patch\":{\"fields\":{\"agent\":{\"fields\":{\"live\":{\"fields\":{\"steps\":{\"array\":{\"length\":1,\"items\":[[[[0,{\"fields\":{\"responseText\":{\"fields\":{\"length\":{\"set\":128},\"blockCount\":{\"set\":1},\"groups\":{\"fields\":{\"0\":{\"set\":{\"0\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}}}}}}}}]]]]}}}}}}}}}]]]"
+  },
+  {
+    "size": 65536,
+    "chunkSize": 1024,
+    "patchVersion": 2,
+    "bytes": 85994,
+    "frames": 65,
+    "meanFrameBytes": 1322.9846153846154,
+    "p95FrameBytes": 1342,
+    "elapsedMs": 4.608291000000008,
+    "firstPatch": "[\"push\",[\"pipeline\",-1,[],[{\"type\":\"patch\",\"from\":0,\"to\":1,\"patch\":{\"fields\":{\"agent\":{\"fields\":{\"live\":{\"fields\":{\"steps\":{\"array\":{\"length\":1,\"items\":[[[[0,{\"fields\":{\"responseText\":{\"fields\":{\"length\":{\"set\":1024},\"blockCount\":{\"set\":1},\"groups\":{\"fields\":{\"0\":{\"set\":{\"0\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}}}}}}}}]]]]}}}}}}}}}]]]"
+  },
+  {
+    "size": 65536,
+    "chunkSize": 16,
+    "patchVersion": 3,
+    "bytes": 580416,
+    "frames": 4097,
+    "meanFrameBytes": 141.66853795460094,
+    "p95FrameBytes": 143,
+    "elapsedMs": 248.13525000000004,
+    "firstPatch": "[\"push\",[\"pipeline\",-1,[],[{\"p\":[[0,1,{\"0\":{\"0\":{\"0\":{\"0\":{\"0\":{\"0\":1,\"1\":{\"+0\":[[{\"0\":\"xxxxxxxxxxxxxxxx\"}]]},\"2\":16}}}}}}]]}]]]"
+  },
+  {
+    "size": 65536,
+    "chunkSize": 48,
+    "patchVersion": 3,
+    "bytes": 236429,
+    "frames": 1367,
+    "meanFrameBytes": 172.95464520848574,
+    "p95FrameBytes": 175,
+    "elapsedMs": 80.77041599999995,
+    "firstPatch": "[\"push\",[\"pipeline\",-1,[],[{\"p\":[[0,1,{\"0\":{\"0\":{\"0\":{\"0\":{\"0\":{\"0\":1,\"1\":{\"+0\":[[{\"0\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}]]},\"2\":48}}}}}}]]}]]]"
+  },
+  {
+    "size": 65536,
+    "chunkSize": 128,
+    "patchVersion": 3,
+    "bytes": 129038,
+    "frames": 513,
+    "meanFrameBytes": 251.53606237816763,
+    "p95FrameBytes": 253,
+    "elapsedMs": 27.227916999999934,
+    "firstPatch": "[\"push\",[\"pipeline\",-1,[],[{\"p\":[[0,1,{\"0\":{\"0\":{\"0\":{\"0\":{\"0\":{\"0\":1,\"1\":{\"+0\":[[{\"0\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}]]},\"2\":128}}}}}}]]}]]]"
+  },
+  {
+    "size": 65536,
+    "chunkSize": 1024,
+    "patchVersion": 3,
+    "bytes": 73003,
+    "frames": 65,
+    "meanFrameBytes": 1123.123076923077,
+    "p95FrameBytes": 1139,
+    "elapsedMs": 3.4183750000000828,
+    "firstPatch": "[\"push\",[\"pipeline\",-1,[],[{\"p\":[[0,1,{\"0\":{\"0\":{\"0\":{\"0\":{\"0\":{\"0\":1,\"1\":{\"+0\":[[{\"0\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}]]},\"2\":1024}}}}}}]]}]]]"
+  }
+]

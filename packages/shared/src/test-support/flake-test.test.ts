@@ -21,7 +21,9 @@ test("vitest's real expected-fail machinery produces the contracted verdicts", a
     (JSON.parse(readFileSync(vitestPackagePath, "utf8")) as any).bin.vitest,
   );
   const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "flake-test-fixture");
-  const outputFile = join(mkdtempSync(join(tmpdir(), "flake-fixture-")), "results.json");
+  const scratchDir = mkdtempSync(join(tmpdir(), "flake-fixture-"));
+  const outputFile = join(scratchDir, "results.json");
+  const recordDir = join(scratchDir, "records");
 
   const result = spawnSync(
     process.execPath,
@@ -39,12 +41,16 @@ test("vitest's real expected-fail machinery produces the contracted verdicts", a
       timeout: 30_000,
       // Strip the parent runner's own variables: nested VITEST_* can make the
       // child collect no tests, and an inherited FLAKE_RECORD_DIR would leak
-      // the fixture's synthetic outcomes into real flake telemetry.
-      env: Object.fromEntries(
-        Object.entries(process.env).filter(
-          ([key]) => !key.startsWith("VITEST") && key !== "FLAKE_RECORD_DIR" && key !== "TEST",
+      // the fixture's synthetic outcomes into real flake telemetry — the
+      // child records into its own scratch dir instead.
+      env: {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(
+            ([key]) => !key.startsWith("VITEST") && key !== "GITHUB_WORKSPACE" && key !== "TEST",
+          ),
         ),
-      ),
+        FLAKE_RECORD_DIR: recordDir,
+      },
     },
   );
 
@@ -60,7 +66,24 @@ test("vitest's real expected-fail machinery produces the contracted verdicts", a
     "matched flake failure is green": "passed",
     "a pass is green": "passed",
     "an unexpected error is red": "failed",
+    "a pinned failure is green (createFailing)": "passed",
   });
+
+  // Exactly one record per case: the fixture config sets a suite-level
+  // `retry` (like the CI e2e suites), and without the wrapper's per-test
+  // retry pin each green case would execute — and record — twice.
+  const recorded = readdirSync(recordDir).flatMap((file) =>
+    readFileSync(join(recordDir, file), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => (JSON.parse(line) as any).name),
+  );
+  expect(recorded.toSorted()).toEqual([
+    "a pass is green",
+    "a pinned failure is green (createFailing)",
+    "an unexpected error is red",
+    "matched flake failure is green",
+  ]);
 });
 
 test("registration lands on the runner's own expected-fail variant", async () => {
@@ -80,7 +103,11 @@ test("registration lands on the runner's own expected-fail variant", async () =>
   });
 
   expect(plain).not.toHaveBeenCalled();
-  expect(registered).toMatchObject([{ args: ["name", { timeout: 123 }] }]);
+  // The registrar timeout is forced to the wrapper's deadline + 1s (a caller
+  // timeout of 123 is overridden) so the runner never fires before the
+  // wrapper's race resolves, and retry is pinned to zero — suite-level retry
+  // would double-run and double-record every green outcome.
+  expect(registered).toMatchObject([{ args: ["name", { timeout: 31_000, retry: 0 }] }]);
   // A matching throw passes through to satisfy the expected-fail machinery,
   // with playwright-style fixtures forwarded.
   await expect(registered[0]!.body({ page: "fake-page" })).rejects.toThrow(/flaked/);
@@ -93,11 +120,23 @@ test("registration lands on the runner's own expected-fail variant", async () =>
 
 test("a playwright-shaped test object registers through .fail", async () => {
   const registered: unknown[][] = [];
+  const configured: unknown[] = [];
+  // A faithful playwright shape: describe invokes its body synchronously and
+  // carries configure, exactly like the real test object — the wrapper calls
+  // both unconditionally rather than hedging on their presence.
   const fakePlaywright = Object.assign(vi.fn(), {
     fail: (...args: unknown[]) => registered.push(args),
+    setTimeout: vi.fn(),
+    describe: Object.assign((body: () => void) => body(), {
+      configure: (options: unknown) => configured.push(options),
+    }),
   });
   createFlake(fakePlaywright, /flaked/)("name", async () => {});
   expect(registered).toHaveLength(1);
+  // Registration happens inside a describe scope pinned to zero retries —
+  // playwright has no per-test retry option, and a retried RED outcome would
+  // double-record the run.
+  expect(configured).toEqual([{ retries: 0 }]);
 });
 
 test("a matching failure rethrows (green) and records a flake-fail line", async () => {

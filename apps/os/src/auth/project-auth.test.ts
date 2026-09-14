@@ -58,6 +58,7 @@ describe("project auth partial fetch", () => {
       }),
       vi.fn(async () => ({
         expiresAt: Math.floor(Date.now() / 1000) + 600,
+        loginAt: Math.floor(Date.now() / 1000) - 60,
         userId: "usr_one",
       })),
     );
@@ -71,6 +72,7 @@ describe("project auth partial fetch", () => {
   test("continues without consuming the request while the cookie remains valid", async () => {
     const validate = vi.fn(async () => ({
       expiresAt: Math.floor(Date.now() / 1000) + 600,
+      loginAt: Math.floor(Date.now() / 1000) - 60,
       userId: "usr_one",
     }));
     const request = new Request(`${appOrigin}/private`, {
@@ -88,14 +90,38 @@ describe("project auth partial fetch", () => {
       token: "signed-token",
     });
 
+    // A stale cookie on a navigation is a member who was here minutes ago:
+    // hand them straight back to the login start (silent while the OS
+    // session lives) instead of a sign-in page, and clear the dead cookie.
     const denied = await projectFetch(
-      new Request(`${appOrigin}/private`, {
+      new Request(`${appOrigin}/private?x=1`, {
         headers: { accept: "text/html", cookie: "iterate-project-auth=revoked" },
       }),
       vi.fn(async () => null),
     );
-    expect(denied?.status).toBe(200);
-    expect(denied?.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect(denied?.status).toBe(302);
+    expect(denied?.headers.get("location")).toBe(
+      "/_iterate/auth/login?return_to=%2Fprivate%3Fx%3D1",
+    );
+    const cleared = denied?.headers.getSetCookie() ?? [];
+    expect(
+      cleared.some((c) => c.startsWith("iterate-project-auth=;") && c.includes("Max-Age=0")),
+    ).toBe(true);
+    expect(cleared.some((c) => c.startsWith("iterate-project-auth-retry=1;"))).toBe(true);
+
+    // The one-shot guard breaks a loop: bounced back with a still-dead
+    // cookie, the sign-in page renders as before.
+    const bounced = await projectFetch(
+      new Request(`${appOrigin}/private?x=1`, {
+        headers: {
+          accept: "text/html",
+          cookie: "iterate-project-auth=revoked; iterate-project-auth-retry=1",
+        },
+      }),
+      vi.fn(async () => null),
+    );
+    expect(bounced?.status).toBe(200);
+    expect(await bounced?.text()).toContain("Continue with iterate");
   });
 
   test("rejects cross-origin and oversized callback posts", async () => {
@@ -125,6 +151,137 @@ describe("project auth partial fetch", () => {
   });
 });
 
+describe("project auth session refresh", () => {
+  const refreshPath = `${appOrigin}/_iterate/auth/refresh?return_to=%2Fevents%3Fkind%3Droot`;
+  const soon = Math.floor(Date.now() / 1000) + 300;
+  const signedInAt = Math.floor(Date.now() / 1000) - 3_600;
+
+  test("re-mints a fresh cookie for a still-valid session", async () => {
+    const renewedExpiry = Math.floor(Date.now() / 1000) + 900;
+    const mintSession = vi.fn(async () => ({ expiresAt: renewedExpiry, token: "fresh-token" }));
+    const response = await projectFetch(
+      new Request(refreshPath, {
+        headers: { cookie: "iterate-project-auth=signed-token", origin: appOrigin },
+        method: "POST",
+      }),
+      vi.fn(async () => ({
+        email: "one@example.com",
+        expiresAt: soon,
+        image: "https://img.example/one.png",
+        loginAt: signedInAt,
+        name: "One",
+        userId: "usr_one",
+      })),
+      mintSession,
+    );
+    expect(response?.status).toBe(200);
+    // The renewed token is minted for the SAME user, project, and origin,
+    // carrying the display identity the app shows and the ORIGINAL sign-in
+    // (so renewals never extend a session past its absolute age) — never widened.
+    expect(mintSession).toHaveBeenCalledWith({
+      audience: appOrigin,
+      email: "one@example.com",
+      image: "https://img.example/one.png",
+      loginAt: signedInAt,
+      name: "One",
+      projectId,
+      userId: "usr_one",
+    });
+    const cookies = response?.headers.getSetCookie() ?? [];
+    // The cookie outlives the token (30 days): a lapsed token still present
+    // is what lets a later navigation re-mint silently instead of showing
+    // the sign-in page.
+    expect(cookies[0]).toMatch(
+      /^iterate-project-auth=fresh-token; Path=\/; HttpOnly; SameSite=Strict; Max-Age=2592000; Secure$/,
+    );
+    // A successful renewal also retires any loop guard from an earlier bounce.
+    expect(cookies.some((c) => c.startsWith("iterate-project-auth-retry=;"))).toBe(true);
+    expect(response?.headers.get("cache-control")).toContain("no-store");
+    await expect(response?.json()).resolves.toEqual({ ok: true, expiresAt: renewedExpiry });
+  });
+
+  test("a session past its absolute age is not renewed, however valid its token", async () => {
+    const mintSession = vi.fn(async () => ({ expiresAt: soon, token: "never" }));
+    const response = await projectFetch(
+      new Request(refreshPath, {
+        headers: { cookie: "iterate-project-auth=old-but-valid", origin: appOrigin },
+        method: "POST",
+      }),
+      vi.fn(async () => ({
+        expiresAt: soon,
+        loginAt: Math.floor(Date.now() / 1000) - 8 * 24 * 60 * 60,
+        userId: "usr_one",
+      })),
+      mintSession,
+    );
+    expect(response?.status).toBe(401);
+    expect(mintSession).not.toHaveBeenCalled();
+  });
+
+  test("a renewal without an Origin is refused: it is only ever the page's own fetch", async () => {
+    const mintSession = vi.fn(async () => ({ expiresAt: soon, token: "never" }));
+    const response = await projectFetch(
+      new Request(refreshPath, {
+        headers: { cookie: "iterate-project-auth=signed-token" },
+        method: "POST",
+      }),
+      vi.fn(async () => ({ expiresAt: soon, loginAt: signedInAt, userId: "usr_one" })),
+      mintSession,
+    );
+    expect(response?.status).toBe(403);
+    expect(mintSession).not.toHaveBeenCalled();
+  });
+
+  test("a dead session gets the login handoff, never a new token", async () => {
+    const mintSession = vi.fn(async () => ({ expiresAt: soon, token: "never" }));
+    const response = await projectFetch(
+      new Request(refreshPath, {
+        headers: { cookie: "iterate-project-auth=expired", origin: appOrigin },
+        method: "POST",
+      }),
+      vi.fn(async () => null),
+      mintSession,
+    );
+    expect(response?.status).toBe(401);
+    expect(mintSession).not.toHaveBeenCalled();
+    expect(response?.headers.get("set-cookie")).toContain("Max-Age=0");
+    await expect(response?.json()).resolves.toEqual({
+      authenticated: false,
+      login: "/_iterate/auth/login?return_to=%2Fevents%3Fkind%3Droot",
+    });
+  });
+
+  test("refuses to renew for anything but a same-origin browser POST", async () => {
+    const validate = vi.fn(async () => ({
+      expiresAt: soon,
+      loginAt: signedInAt,
+      userId: "usr_one",
+    }));
+    const crossOrigin = await projectFetch(
+      new Request(refreshPath, {
+        headers: { cookie: "iterate-project-auth=signed-token", origin: "https://evil.example" },
+        method: "POST",
+      }),
+      validate,
+    );
+    expect(crossOrigin?.status).toBe(403);
+    const wrongMethod = await projectFetch(
+      new Request(refreshPath, { headers: { cookie: "iterate-project-auth=signed-token" } }),
+      validate,
+    );
+    expect(wrongMethod?.status).toBe(405);
+    expect(validate).not.toHaveBeenCalled();
+  });
+
+  test("a missing cookie is a plain 401 with the login pointer", async () => {
+    const response = await projectFetch(
+      new Request(refreshPath, { headers: { origin: appOrigin }, method: "POST" }),
+    );
+    expect(response?.status).toBe(401);
+    await expect(response?.json()).resolves.toMatchObject({ authenticated: false });
+  });
+});
+
 describe("project auth actor exchange", () => {
   test("rejects malformed policy as a caller authentication outcome", () => {
     expect(() => parseProjectAuthPolicy({ policy: "other" } as never)).toThrow(
@@ -143,6 +300,7 @@ describe("project auth actor exchange", () => {
     });
     const validateSession = vi.fn(async () => ({
       expiresAt: Math.floor(Date.now() / 1000) + 600,
+      loginAt: Math.floor(Date.now() / 1000) - 60,
       userId: "usr_one",
     }));
 
@@ -163,7 +321,7 @@ describe("project auth actor exchange", () => {
   });
 
   test("rejects missing or invalid sessions and non-exact origins", async () => {
-    const validateSession = vi.fn(async () => ({ expiresAt: 1, userId: "usr_one" }));
+    const validateSession = vi.fn(async () => ({ expiresAt: 1, loginAt: 0, userId: "usr_one" }));
     const invalidHeaders: HeadersInit[] = [
       { origin: appOrigin },
       { cookie: "iterate-project-auth=signed-token" },
@@ -233,13 +391,25 @@ describe("project auth start", () => {
 
 function projectFetch(
   request: Request,
-  validateSession: (input: {
+  validateSession: (input: { audience: string; projectId: string; token: string }) => Promise<{
+    email?: string;
+    expiresAt: number;
+    image?: string;
+    loginAt: number;
+    name?: string;
+    userId: string;
+  } | null> = vi.fn(async () => null),
+  mintSession: (input: {
     audience: string;
+    email?: string;
+    image?: string;
+    name?: string;
     projectId: string;
-    token: string;
-  }) => Promise<{ expiresAt: number; userId: string } | null> = vi.fn(async () => null),
+    userId: string;
+  }) => Promise<{ expiresAt: number; token: string } | null> = vi.fn(async () => null),
 ): Promise<Response | null> {
   return handleProjectAuthFetch({
+    mintSession,
     osBaseUrl: osOrigin,
     projectId,
     request,

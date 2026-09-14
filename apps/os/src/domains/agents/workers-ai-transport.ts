@@ -1,3 +1,10 @@
+import { z } from "zod";
+import type { CfAiRunOptions } from "../itx/cf-capabilities.ts";
+import * as modelInterception from "../../lib/model-interception.ts";
+
+import type { AgentLlmCompletion, AgentLlmUsage } from "./agent-processor-contract.ts";
+import type { AiGatewayMetadata } from "./ai-gateway-metadata.ts";
+
 // =============================================================================
 // Workers AI transport: how one LLM attempt talks to `env.AI`.
 // =============================================================================
@@ -6,17 +13,15 @@
 // SSE response, guessing assistant text/usage out of the shapes Workers AI
 // models actually return, and capping the whole attempt's lifetime.
 
-import { z } from "zod";
-
 /** The `env.AI` surface one attempt needs. `gateway` is optional so bare test
- * fakes stay two-line objects; the BYOK lane requires it and fails the attempt
+ * fakes stay two-line objects; the BYOK transport requires it and fails the attempt
  * loudly when the host's binding lacks it. */
 export type WorkersAiBinding = {
-  run(model: string, body: unknown): Promise<unknown>;
+  run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown>;
   gateway?(gatewayId: string): CloudflareAiGatewayBinding;
 };
 
-/** `env.AI.gateway(id)` — the universal-endpoint door used by the BYOK lane. */
+/** `env.AI.gateway(id)` — the universal endpoint used by the BYOK transport. */
 export type CloudflareAiGatewayBinding = {
   run(data: {
     provider: string;
@@ -27,7 +32,7 @@ export type CloudflareAiGatewayBinding = {
 };
 
 /**
- * How one attempt travels through the Cloudflare AI Gateway.
+ * Host billing preferences. resolveAiRoute selects the concrete outbound API per model.
  *
  * - `unified`: `env.AI.run` partner models on Cloudflare's unified billing.
  * - `byok`: the gateway's universal endpoint with OUR OpenAI key. Same
@@ -40,7 +45,7 @@ export type CloudflareAiGatewayBinding = {
  *   synthetic (e2e/preview), never prd.
  */
 export type CloudflareAiGatewayTransport =
-  | { kind: "unified" }
+  | { kind: "unified"; gatewayId?: string }
   | {
       kind: "byok";
       gatewayId: string;
@@ -51,12 +56,10 @@ export type CloudflareAiGatewayTransport =
       responseCacheTtlSeconds?: number;
     };
 
-type WorkersAiCompletion = {
-  /** Assistant text — concatenated across chunks for streamed responses. */
-  text: string;
-  /** JSON-safe response evidence for the journal (never a live object graph). */
-  rawResponse: unknown;
-  usage?: unknown;
+/** Host-resolved routing and attribution for one AI attempt. */
+export type AiGatewayOptions = {
+  transport: CloudflareAiGatewayTransport;
+  metadata: AiGatewayMetadata;
 };
 
 /** One provider-facing chat message. `containsFiles` is transport metadata,
@@ -104,39 +107,85 @@ export function adaptMessagesForModel(
  */
 export async function runWorkersAiAttempt(input: {
   ai: WorkersAiBinding;
+  metadata?: AiGatewayMetadata;
+  consultInterceptor?: (request: modelInterception.ProjectAiInterceptor.Input) => Promise<unknown>;
+  agentPath?: string;
   deadlineMs: number;
   messages: WorkersAiMessage[];
   model: string;
   onChunk: (chunk: unknown, index: number) => Promise<void>;
-  /** Defaults to unified billing when omitted (bare test hosts, non-OpenAI models). */
   transport?: CloudflareAiGatewayTransport;
-}): Promise<WorkersAiCompletion> {
+}): Promise<AgentLlmCompletion> {
   const deadline = startDeadline({
     deadlineMs: input.deadlineMs,
     message: `LLM attempt timed out after ${input.deadlineMs / 60_000} minutes.`,
   });
   try {
-    const transport = input.transport ?? { kind: "unified" };
-    // BYOK carries an OpenAI key, so only OpenAI models can ride it; other
-    // vendors' models fall back to unified billing rather than failing.
-    if (transport.kind === "byok" && input.model.startsWith("openai/")) {
-      return await runByokAttempt({ ...input, deadline, transport });
-    }
-    const messages = adaptMessagesForModel(input.messages, { supportsDeveloperRole: false });
-    const raw = await deadline.race(
-      input.ai.run(input.model, {
-        messages,
-        stream: true,
-        ...openAiReasoningExtras(input.model),
+    const route = resolveAiRoute(input.model, input.transport || { kind: "unified" });
+    const body = {
+      messages: adaptMessagesForModel(input.messages, {
+        supportsDeveloperRole: route.kind === "openai-http",
       }),
+      stream: true,
+      ...openAiReasoningExtras(route.providerModel),
+    };
+    const prepared =
+      route.kind === "openai-http"
+        ? await prepareOpenAiRequest({
+            model: route.model,
+            transport: route.transport,
+            metadata: input.metadata,
+            endpoint: "chat/completions",
+            body,
+            headers: new Headers(),
+            cache:
+              route.transport.responseCacheTtlSeconds !== undefined &&
+              !input.messages.some((message) => message.containsFiles)
+                ? { ttlSeconds: route.transport.responseCacheTtlSeconds }
+                : null,
+          })
+        : prepareWorkersAiRequest({
+            model: route.model,
+            gatewayId: route.gatewayId,
+            metadata: input.metadata,
+            body,
+            options: {},
+          });
+    const response = await deadline.race(
+      sendAiRequest(
+        {
+          ai: input.ai,
+          source: {
+            source: "agent-turn",
+            agentPath: input.agentPath || input.metadata?.streamPath || "/",
+          },
+          consultInterceptor: input.consultInterceptor,
+        },
+        prepared,
+      ),
     );
-    if (raw instanceof ReadableStream) {
-      return await drainSseResponse({ body: raw, deadline, onChunk: input.onChunk });
-    }
+    if (!response.ok)
+      throw new Error(
+        `AI request failed with status ${response.status}: ${(await deadline.race(response.text())).slice(0, 500)}`,
+      );
+    const completion =
+      response.headers.get("content-type")?.includes("text/event-stream") && response.body
+        ? await drainSseResponse({ body: response.body, deadline, onChunk: input.onChunk })
+        : await deadline.race(response.json()).then((value) => ({
+            text: extractAssistantText(value),
+            rawResponse: value,
+            usage: extractUsage(value),
+          }));
+    const cacheStatus = response.headers.get("cf-aig-cache-status");
     return {
-      text: extractAssistantText(raw),
-      rawResponse: jsonCompatible(raw),
-      usage: extractUsage(raw),
+      text: completion.text,
+      usage: normalizeLlmUsage(completion.usage),
+      rawResponse: cacheStatus
+        ? {
+            ...z.record(z.string(), z.unknown()).parse(completion.rawResponse),
+            cloudflareAiGatewayResponseCacheStatus: cacheStatus,
+          }
+        : completion.rawResponse,
     };
   } finally {
     deadline.clear();
@@ -144,134 +193,14 @@ export async function runWorkersAiAttempt(input: {
 }
 
 /**
- * The BYOK lane: dial the gateway's universal endpoint with our OpenAI key
- * and drain the SSE response. A response-cache HIT replays the recorded SSE
- * byte-identically, so the drain (and the caller's chunk journaling) is the
- * same code either way; the verdict rides `cloudflareAiGatewayResponseCacheStatus`
- * on the raw-response evidence.
- */
-async function runByokAttempt(input: {
-  ai: WorkersAiBinding;
-  deadline: { race<T>(work: Promise<T>): Promise<T> };
-  messages: WorkersAiMessage[];
-  model: string;
-  onChunk: (chunk: unknown, index: number) => Promise<void>;
-  transport: Extract<CloudflareAiGatewayTransport, { kind: "byok" }>;
-}): Promise<WorkersAiCompletion> {
-  const { transport } = input;
-  const gateway = input.ai.gateway?.(transport.gatewayId);
-  if (gateway === undefined) {
-    throw new Error("AI binding does not expose gateway(); BYOK transport unavailable.");
-  }
-  const containsFiles = input.messages.some((message) => message.containsFiles === true);
-  const body = {
-    model: input.model.replace(/^openai\//, ""),
-    messages: adaptMessagesForModel(input.messages, { supportsDeveloperRole: true }),
-    stream: true,
-    ...openAiReasoningExtras(input.model),
-    ...(transport.openaiPromptCacheKey === undefined
-      ? {}
-      : { prompt_cache_key: transport.openaiPromptCacheKey }),
-  };
-  const headers: Record<string, string> = {
-    authorization: `Bearer ${transport.openaiApiKey}`,
-    "cf-aig-collect-log": "true",
-    "cf-aig-collect-log-payload": "true",
-    "content-type": "application/json",
-  };
-  const ttlSeconds = transport.responseCacheTtlSeconds;
-  if (ttlSeconds !== undefined && !containsFiles) {
-    headers["cf-aig-cache-ttl"] = String(ttlSeconds);
-    headers["cf-aig-cache-key"] = await cloudflareAiGatewayResponseCacheKey(body);
-  } else {
-    // File-bearing requests carry short-lived signed URL capabilities and
-    // must never enter Gateway cache. No TTL configured likewise means this
-    // deployment must NEVER serve a cached reply (prd): the dashboard-level
-    // cache setting is account state this code cannot see.
-    headers["cf-aig-skip-cache"] = "true";
-  }
-  const response = await input.deadline.race(
-    gateway.run({ provider: "openai", endpoint: "chat/completions", headers, query: body }),
-  );
-  if (!response.ok || response.body === null) {
-    const detail = await input.deadline.race(response.text()).catch(() => "");
-    throw new Error(
-      `AI Gateway BYOK request failed with status ${response.status}: ${detail.slice(0, 500)}`,
-    );
-  }
-  const cacheStatus = response.headers.get("cf-aig-cache-status");
-  const completion = await drainSseResponse({
-    body: response.body,
-    deadline: input.deadline,
-    onChunk: input.onChunk,
-  });
-  if (cacheStatus === null) return completion;
-  return {
-    ...completion,
-    rawResponse: {
-      ...(completion.rawResponse as Record<string, unknown>),
-      cloudflareAiGatewayResponseCacheStatus: cacheStatus,
-    },
-  };
-}
-
-/** Bump to invalidate every cached response at once (prompt-format overhauls,
- * masking-rule changes). */
-const CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION = "cloudflare-ai-gateway-response-cache-v5";
-
-/**
- * The custom `cf-aig-cache-key` for one request body: a hash of the body with
- * fixture-specific identity masked out, so two e2e runs whose conversations
- * differ ONLY in minted ids replay each other's responses.
- *
- * Masking is deliberately narrow — id-shaped tokens only. Over-masking would
- * alias semantically different requests (wrong answers from cache);
- * under-masking is just a cache miss (costs money, never correctness).
- * Everything not masked — prompts, message text, model, sampling params —
- * stays in the hash, so any prompt change invalidates naturally.
- */
-export async function cloudflareAiGatewayResponseCacheKey(body: unknown): Promise<string> {
-  const masked = maskCloudflareAiGatewayResponseCacheEntropy(JSON.stringify(body));
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(`${CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION}:${masked}`),
-  );
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-/** The masking half of the cache key, separated for tests. Masks: project ids,
- * agent paths, journal-projection offset prefixes, signed-URL signature/expiry
- * params, and the OpenAI `prompt_cache_key` (which is per-agent BY DESIGN — see
- * LlmTransportConfig — and would otherwise defeat the cross-fixture cache it
- * rides inside). */
-export function maskCloudflareAiGatewayResponseCacheEntropy(serialized: string): string {
-  return (
-    serialized
-      .replace(/prj_[0-9a-f]{32}/g, "prj_MASKED")
-      // The permanent send stamps: every request embeds its own and all prior
-      // requests' timestamps, so they are per-run entropy exactly like the old
-      // render-time tail was.
-      .replace(/Requested at: [^"\\]*/g, "Requested at: MASKED")
-      .replace(
-        /- Project: \\"(?:[^"\\]|\\.)*?\\" \(slug [^)]*\)(?: — the project worker\/website serves [^"\\]*)?/g,
-        "- Project: MASKED",
-      )
-      .replace(/"content":"@\d+(?= |\\n)/g, '"content":"@OFFSET')
-      .replace(/\/agents\/[A-Za-z0-9._/-]*/g, "/agents/MASKED")
-      .replace(/([?&](?:signature|sig|expires|exp|token|key)=)[^"&\\\s]+/gi, "$1MASKED")
-      .replace(/"prompt_cache_key":"[^"]*"/g, '"prompt_cache_key":"MASKED"')
-  );
-}
-
-/**
- * Extra chat-completions params for OpenAI reasoning models served through
- * Workers AI (`openai/gpt-5.6`, o-series, codex): pin reasoning effort to
- * medium (the pre-#1808 openai-ws posture) and ask streamed responses to
- * carry usage in their final chunk. Gated by model family — non-OpenAI
- * models reject unknown params with a whole-request failure, the same reason
- * the old processor gated its `reasoning` options.
+ * OpenAI request policy for ordinary Agent turns and compaction. Astra uses
+ * low reasoning and Fast service to keep delegation responsive. Gate these
+ * provider-specific fields by model so other providers never receive them.
  */
 function openAiReasoningExtras(model: string): Record<string, unknown> {
+  if (model === "openai/gpt-6-astra") {
+    return { reasoning_effort: "low", service_tier: "fast" };
+  }
   if (!/(^|\/)(gpt-5|o[1-9]|codex)/.test(model)) return {};
   return { reasoning_effort: "medium", stream_options: { include_usage: true } };
 }
@@ -299,6 +228,14 @@ function startDeadline(input: { deadlineMs: number; message: string }): {
  * and accumulating the assistant text and last-seen usage. Every read races
  * the attempt deadline; on timeout the reader is cancelled so the source
  * stops producing. */
+type WorkersAiCompletion = {
+  /** Assistant text — concatenated across chunks for streamed responses. */
+  text: string;
+  /** JSON-safe response evidence for the journal (never a live object graph). */
+  rawResponse: unknown;
+  usage?: unknown;
+};
+
 async function drainSseResponse(input: {
   body: ReadableStream;
   deadline: { race<T>(work: Promise<T>): Promise<T> };
@@ -454,14 +391,7 @@ const LlmUsage = z.looseObject({
  * fields, or undefined when the shape carries no recognizable totals (report
  * nothing rather than zeros — a zero is a claim).
  */
-export function normalizeLlmUsage(usage: unknown):
-  | {
-      inputTokens: number;
-      outputTokens: number;
-      cachedInputTokens?: number;
-      reasoningOutputTokens?: number;
-    }
-  | undefined {
+function normalizeLlmUsage(usage: unknown): AgentLlmUsage | undefined {
   const parsed = LlmUsage.safeParse(usage);
   if (!parsed.success) return undefined;
   const inputTokens = parsed.data.prompt_tokens ?? parsed.data.input_tokens;
@@ -488,4 +418,208 @@ export function jsonCompatible(value: unknown): unknown {
   } catch {
     return String(value);
   }
+}
+
+/** Resolve billing once; callers use the result for both message preparation and sending. */
+function resolveAiRoute(model: string, transport: CloudflareAiGatewayTransport) {
+  const providerModel = model.replace(/^intercepted\//, "");
+  if (providerModel.startsWith("openai/") && transport.kind === "byok")
+    return { kind: "openai-http" as const, model, providerModel, transport };
+  return {
+    kind: "workers-ai" as const,
+    model,
+    providerModel,
+    gatewayId: transport.gatewayId || "default",
+  };
+}
+
+type PreparedAiRequest =
+  | (modelInterception.OpenAiHttpRequest & { sourceModel?: string; credential: string })
+  | (modelInterception.WorkersAiRequest & { sourceModel: string; credential: null });
+
+/** Complete OpenAI-native request preparation, including cache policy. */
+export async function prepareOpenAiRequest(input: {
+  model?: string;
+  transport: Extract<CloudflareAiGatewayTransport, { kind: "byok" }>;
+  metadata?: AiGatewayMetadata;
+  endpoint: string;
+  body: Record<string, unknown>;
+  headers: Headers;
+  cache: { ttlSeconds: number } | null;
+}): Promise<PreparedAiRequest> {
+  const { transport, model } = input;
+  const body = {
+    ...input.body,
+    ...openAiStreamingUsage(input.endpoint, input.body),
+    ...(model && { model: model.replace(/^intercepted\//, "").replace(/^openai\//, "") }),
+    prompt_cache_key: transport.openaiPromptCacheKey || input.body.prompt_cache_key,
+  };
+  const cacheHeaders: Record<string, string> = input.cache
+    ? {
+        "cf-aig-cache-ttl": String(input.cache.ttlSeconds),
+        "cf-aig-cache-key": await cloudflareAiGatewayResponseCacheKey(body),
+      }
+    : { "cf-aig-skip-cache": "true" };
+  return {
+    kind: "openai-http",
+    sourceModel: model,
+    credential: transport.openaiApiKey,
+    gatewayId: transport.gatewayId,
+    endpoint: input.endpoint,
+    body,
+    headers: {
+      ...Object.fromEntries(
+        [...input.headers].filter(([name]) => name.startsWith("openai-") || name === "accept"),
+      ),
+      "content-type": "application/json",
+      ...(input.metadata && { "cf-aig-metadata": JSON.stringify(input.metadata) }),
+      "cf-aig-collect-log": "true",
+      "cf-aig-collect-log-payload": "true",
+      ...cacheHeaders,
+    },
+  };
+}
+
+/** Complete Workers AI binding input. No HTTP endpoint, headers, or OpenAI credential. */
+export function prepareWorkersAiRequest(input: {
+  model: string;
+  gatewayId: string;
+  metadata?: AiGatewayMetadata;
+  body: unknown;
+  options: CfAiRunOptions;
+}): PreparedAiRequest {
+  const model = input.model.replace(/^intercepted\//, "");
+  const payload = z.record(z.string(), z.unknown()).parse(input.body);
+  const metadata = Object.fromEntries(
+    Object.entries(input.metadata || {}).filter(
+      (entry): entry is [string, string | number] => entry[1] !== undefined,
+    ),
+  );
+  return {
+    kind: "workers-ai",
+    sourceModel: input.model,
+    credential: null,
+    model,
+    body: model.startsWith("openai/")
+      ? { ...payload, ...openAiStreamingUsage("chat/completions", payload) }
+      : payload,
+    options: {
+      ...input.options,
+      returnRawResponse: true,
+      gateway: { ...input.options.gateway, id: input.gatewayId, metadata },
+    },
+  };
+}
+
+/** Send an already prepared request unchanged, or substitute the interceptor's response.
+ * Keep execution local to the caller so response streams do not cross another DO RPC hop. */
+export async function sendAiRequest(
+  host: {
+    ai: WorkersAiBinding;
+    source:
+      | { source: "agent-turn"; agentPath: string }
+      | { source: "ai-run" }
+      | { source: "egress" };
+    consultInterceptor:
+      | ((request: modelInterception.ProjectAiInterceptor.Input) => Promise<unknown>)
+      | undefined;
+  },
+  prepared: PreparedAiRequest,
+): Promise<Response> {
+  const { sourceModel, credential: _credential, ...request } = prepared;
+  if (sourceModel && modelInterception.isInterceptedModel(sourceModel)) {
+    if (!host.consultInterceptor) throw modelInterception.noAiInterceptorError(sourceModel);
+    // The only agent-turn caller is runWorkersAiAttempt, which builds body.messages
+    // with adaptMessagesForModel. Shared preparation erases that shape because
+    // ai-run and egress also accept arbitrary model inputs; restore the source/body correlation.
+    const intercepted = {
+      ...host.source,
+      model: sourceModel,
+      request,
+    } as modelInterception.ProjectAiInterceptor.Input;
+    const response = await host.consultInterceptor(intercepted);
+    if (!(response instanceof Response)) throw new Error("AI interceptor must return a Response");
+    if (response.bodyUsed || response.body?.locked)
+      throw new Error("AI interceptor must return a Response with an unused, unlocked body");
+    return response;
+  }
+  switch (prepared.kind) {
+    case "openai-http": {
+      const gateway = host.ai.gateway?.(prepared.gatewayId);
+      if (!gateway)
+        throw new Error("AI binding does not expose gateway(); BYOK transport unavailable.");
+      return gateway.run({
+        provider: "openai",
+        endpoint: prepared.endpoint,
+        headers: { ...prepared.headers, authorization: `Bearer ${prepared.credential}` },
+        query: prepared.body,
+      });
+    }
+    case "workers-ai": {
+      const response = await host.ai.run(prepared.model, prepared.body, prepared.options);
+      if (!(response instanceof Response))
+        throw new Error("Workers AI did not return the requested raw response");
+      return response;
+    }
+  }
+}
+
+function openAiStreamingUsage(endpoint: string, body: Record<string, unknown>) {
+  const path = endpoint.split("?")[0];
+  if (path !== "chat/completions" && path !== "completions") return {};
+  if (body.stream !== true) return {};
+  return {
+    stream_options: {
+      ...z.record(z.string(), z.unknown()).parse(body.stream_options || {}),
+      include_usage: true,
+    },
+  };
+}
+
+/** Bump to invalidate every cached response at once (prompt-format overhauls,
+ * masking-rule changes). */
+const CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION = "cloudflare-ai-gateway-response-cache-v5";
+
+/**
+ * The custom `cf-aig-cache-key` for one request body: a hash of the body with
+ * fixture-specific identity masked out, so two e2e runs whose conversations
+ * differ ONLY in minted ids replay each other's responses.
+ *
+ * Masking is deliberately narrow — id-shaped tokens only. Over-masking would
+ * alias semantically different requests (wrong answers from cache);
+ * under-masking is just a cache miss (costs money, never correctness).
+ * Everything not masked — prompts, message text, model, sampling params —
+ * stays in the hash, so any prompt change invalidates naturally.
+ */
+export async function cloudflareAiGatewayResponseCacheKey(body: unknown): Promise<string> {
+  const masked = maskCloudflareAiGatewayResponseCacheEntropy(JSON.stringify(body));
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION}:${masked}`),
+  );
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** The masking half of the cache key, separated for tests. Masks: project ids,
+ * agent paths, journal-projection offset prefixes, signed-URL signature/expiry
+ * params, and the OpenAI `prompt_cache_key` (which is per-agent BY DESIGN — see
+ * LlmTransportConfig — and would otherwise defeat the cross-fixture cache it
+ * rides inside). */
+export function maskCloudflareAiGatewayResponseCacheEntropy(serialized: string): string {
+  return (
+    serialized
+      .replace(/prj_[0-9a-f]{32}/g, "prj_MASKED")
+      // The permanent send stamps: every request embeds its own and all prior
+      // requests' timestamps, so they are per-run entropy exactly like the old
+      // render-time tail was.
+      .replace(/Requested at: [^"\\]*/g, "Requested at: MASKED")
+      .replace(
+        /- Project: \\"(?:[^"\\]|\\.)*?\\" \(slug [^)]*\)(?: — the project worker\/website serves [^"\\]*)?/g,
+        "- Project: MASKED",
+      )
+      .replace(/"content":"@\d+(?= |\\n)/g, '"content":"@OFFSET')
+      .replace(/\/agents\/[A-Za-z0-9._/-]*/g, "/agents/MASKED")
+      .replace(/([?&](?:signature|sig|expires|exp|token|key)=)[^"&\\\s]+/gi, "$1MASKED")
+      .replace(/"prompt_cache_key":"[^"]*"/g, '"prompt_cache_key":"MASKED"')
+  );
 }

@@ -5,9 +5,10 @@ COPY of the project's one path namespace, for agents and tooling.
 
 ## Shape
 
-- **Identity + configuration are stream facts.** A workspace lives at a
-  `/workspaces/**` path; that path is its Durable Object name AND its stream
-  path. `workspace/created` is the existence marker; `workspace/configured`
+- **Identity + configuration are stream facts.** An agent workspace shares its
+  agent’s `/agents/**` path; standalone workspaces use `/workspaces/**`. That
+  identity is its Durable Object name AND its stream path. Agent streams host
+  both agent and workspace processors with independently named state. `workspace/created` is the existence marker; `workspace/configured`
   patches the OVERLAY table. `WorkspaceProcessor` is a pure reducer — reduce
   only, no side effects — hosted by the DO under the standard registry/runner
   machinery.
@@ -23,14 +24,22 @@ COPY of the project's one path namespace, for agents and tooling.
   clears an overlay. `"/"` is never a mount.
 - **Birth is explicit.** `itx.workspaces.get(path)` only addresses a possibly
   nonexistent handle. `await handle.create({ mounts? })` appends one atomic
-  batch: the existence marker, an optional initial overlay patch, and the
-  Workspace processor subscription. Filesystem and configuration methods
-  reject loudly before creation; no read, write, or first touch can birth a
-  workspace. Agent creation explicitly creates the agent's own workspace
-  before the agent handle is returned.
-- **Private files live under the workspace's own path.** The workspace's
-  stream path doubles as its scratch directory: writable, never committable,
-  invisible to everyone else. RELATIVE paths resolve there. Writes anywhere
+  batch: the existence marker, an optional initial overlay patch, the
+  Workspace processor subscription, and a `workspace-catalog` subscription
+  that copies `workspace/created` to the project root `/`. Filesystem and
+  configuration methods reject loudly before creation; no read, write, or
+  first touch can birth a workspace. Agent creation explicitly creates the
+  agent's own workspace before the agent handle is returned.
+  `agent.workspace` is shorthand for `itx.workspaces.get(agentPath)`.
+- **`itx.workspaces.list()` reads the project catalog.** The project reducer
+  records each copied `workspace/created` under its source path (the same
+  `repo-catalog` shape repos use), so the list holds exactly the workspaces
+  that were born — a nested agent workspace never drags never-created
+  ancestor streams into it.
+- **Private files live under `/workspace`.** This directory belongs to the
+  selected workspace regardless of its stream identity: writable, never
+  committable, isolated from other workspaces. RELATIVE paths resolve there.
+  `/workspace` and its descendants are reserved and cannot be repo mounts. Writes anywhere
   outside the scratch directory and the mounted repos error loudly — a typo'd
   absolute path fails instead of silently becoming stray scratch. Reads try
   the private local layer (DO-SQLite via `@cloudflare/shell`, R2 spill past
@@ -68,7 +77,9 @@ namespace is simply dropped; only the class/binding names carry the scar.
 - **No branch mode.** `policy: "branch"` (workspace branch + auto-draft-PR on
   GitHub-linked repos, commit synthesis via GitHub's Git Database API) is the
   next policy value; today big imported repos deviate to `read-only`.
-- **`listAllFiles`/`glob` still enumerate every mount.** With many or huge
+- **`listAllFiles` still enumerates every mount** (`glob` no longer does: it
+  lists only the subtree its pattern's literal prefix can match, so a glob
+  under `/repos/config` never pulls a big sibling mount). With many or huge
   repos mounted that is a full `listFiles` per repo; per-mount lazy listing
   is the follow-up if it hurts. Status and commit inference already skip
   clean mounts.

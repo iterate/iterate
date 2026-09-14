@@ -158,6 +158,10 @@ export type RegisteredProcessorReads<State> = Omit<ProcessorReads<State>, "waitU
   ): Promise<void>;
   /** The runner's committed fold, synchronously (schema default until loaded). */
   readonly currentState: State;
+  /** Committed processing cursor, read atomically with currentState in live assembly. */
+  readonly currentAcknowledgedThroughOffset: number;
+  /** Source lifetime paired atomically with currentState and its cursor. */
+  readonly currentStreamId: string | undefined;
   /** Whether `currentState` is a real fold — gate live publishing on it. */
   readonly isLoaded: boolean;
   /**
@@ -185,7 +189,9 @@ type RegistryEntry = {
  * progress storage all already key by that name (see `reads`, `resolveProcessorName`,
  * and `durableObjectProgressStore`), so the instances stay independent.
  */
-export type RegisterProcessorOptions = {
+export type RegisterProcessorOptions<State = unknown> = {
+  /** Clear this processor's related projections synchronously with source-lifetime replacement. */
+  resetForStream?: () => void;
   /** Post-eviction keepalive recovery — REQUIRED for consequential
    * `runInBackground` work (see the module doc). */
   recovery?: boolean;
@@ -193,6 +199,11 @@ export type RegisterProcessorOptions = {
    * (name === slug, the identity-doctrine default). Supply a distinct name to
    * host two instances of one contract on one registry without colliding. */
   name?: string;
+  /** Persist a bounded reduction cache; a cold runner refolds when it is omitted. */
+  reductionCache?: {
+    shouldCacheReduction(state: State): boolean;
+    initialState(): State;
+  };
 };
 
 const WakeDeliveryThrowableFields = z.object({
@@ -282,7 +293,10 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
    * Duplicate names (and re-registering the same instance) throw. Returns the
    * processor, so DOs keep their `field = registry.register(new XProcessor(...))` shape.
    */
-  register<P extends RegisterableProcessor>(processor: P, opts?: RegisterProcessorOptions): P;
+  register<P extends RegisterableProcessor>(
+    processor: P,
+    opts?: RegisterProcessorOptions<RegisteredProcessorState<P>>,
+  ): P;
   /**
    * The runner-backed READ surface for one registered processor. The runner
    * owns both cursors and the fold — the processor instance holds no
@@ -580,6 +594,8 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
           progress: durableObjectProgressStore({
             storage: ctx.storage,
             name,
+            resetForStream: opts?.resetForStream,
+            reductionCache: opts?.reductionCache,
           }),
           ...(recovery === undefined ? {} : { recovery }),
         },
@@ -616,6 +632,12 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         waitUntilEvent: (input) =>
           "offset" in input ? runner.waitUntilEvent(input) : runner.waitUntilEvent(input),
         catchUp: () => runner.catchUp(),
+        get currentAcknowledgedThroughOffset() {
+          return runner.currentAcknowledgedThroughOffset;
+        },
+        get currentStreamId() {
+          return runner.currentStreamId;
+        },
         get currentState() {
           return runner.currentState;
         },

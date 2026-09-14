@@ -19,12 +19,10 @@ enum {
   "[{\"type\":\"events.iterate.com/voice-agent/dev-stats\",\"ephemeral\":true,\"payload\":"
 #define CLI_CAPABILITIES_DESCRIPTION \
   "{\"instructions\":\"The macOS execution target of the Iterate voice " \
-  "device. It has the device's bounded queues, manual push-to-talk call, " \
+  "device. It has the device's bounded queues, local capture control, " \
   "speaker playout policy, health and restart controls.\",\"children\":{" \
   "\"conversation\":{\"start\":\"Start a voice call.\"," \
-  "\"hangUp\":\"End the voice call.\"},\"pushToTalk\":{" \
-  "\"start\":\"Begin the configured WAV utterance.\"," \
-  "\"stop\":\"Commit the utterance and ask for an answer.\"}," \
+  "\"hangUp\":\"End the voice call.\"}," \
   "\"health\":\"Return device-compatible health JSON.\"," \
   "\"restart\":\"Re-exec this process.\"}}"
 
@@ -59,10 +57,6 @@ static void cli_capabilities_write_health_end(
     struct cli_capabilities_writer *writer,
     struct cli_runtime *runtime,
     const struct iterate_kit_spsc_ring_metrics *outbox);
-
-/* Replies true after a remote state mutation. */
-static enum capnweb_status cli_capabilities_reply_true(
-    struct capnweb_reply *reply);
 
 /* Capability methods mutate only the desired call and talk state. */
 static enum capnweb_status cli_capabilities_start_call(
@@ -229,7 +223,7 @@ static void cli_capabilities_write_health_start(
       writer,
       "{\"transport\":\"%s\",\"voicelab\":\"%s\","
       "\"voicelabFailure\":\"%s\",\"connectionState\":%d,"
-      "\"callActive\":%s,\"callPending\":%s,\"wantsCall\":%s,"
+      "\"callActive\":%s,\"wantsCall\":%s,"
       "\"talking\":%s,\"gateOpen\":%s,\"seq\":%u,\"t\":%" PRIu64
       ",\"framesSent\":%u,\"frameFailures\":%u,\"micCaptured\":%u,"
       "\"micDropped\":%u,\"micGated\":%u,\"spkFrames\":%u,"
@@ -239,13 +233,12 @@ static void cli_capabilities_write_health_start(
       iterate_kit_voicelab_failure_name(runtime->voicelab.failure),
       (int)runtime->connection.state,
       runtime->voicelab.call_active ? "true" : "false",
-      runtime->voicelab.call_pending ? "true" : "false",
       runtime->hanging_up ? "true" : "false",
       runtime->talking ? "true" : "false", gate ? "true" : "false",
       runtime->stats_sequence++, cli_runtime_now_ms(NULL),
       runtime->voicelab.frames_sent, runtime->voicelab.frame_send_failures,
       runtime->mic_frames_captured, mic_dropped, runtime->mic_frames_gated,
-      runtime->voicelab.spk_frames_received, runtime->speaker_frames_played,
+      runtime->voicelab.spk_frames_received, runtime->playout.stats.frames_played,
       runtime->speaker_overflow_drops);
 }
 
@@ -272,9 +265,9 @@ static void cli_capabilities_write_health_audio(
       "\"connGeneration\":%u,"
       "\"bridgeAgeMs\":%u,\"downlinkRecycles\":%u,\"batchAgeMs\":%u,"
       "\"uptimeMs\":%" PRIu64,
-      runtime->speaker_underruns, runtime->speaker_conceal_frames,
-      runtime->speaker_catchup_frames,
-      runtime->speaker_write_failures, runtime->speaker_margin_max_ms,
+      runtime->speaker_underruns, runtime->playout.stats.conceal_frames,
+      runtime->playout.stats.catchup_frames,
+      runtime->playout.stats.write_failures, runtime->playout.stats.margin_max_ms,
       runtime->speaker_bad_frames,
       runtime->voicelab.spk_decode_failures, runtime->barge_in_flushes,
       runtime->voicelab.batches_on_connection,
@@ -318,15 +311,8 @@ static void cli_capabilities_write_health_end(
       writer,
       ",\"spkMarginMinMs\":%u,\"spkMarginP10Ms\":%u,\"spkWrites\":%u,"
       "\"outboxUsed\":%u,\"outboxSlots\":%u}",
-      runtime->speaker_margin_min_ms, 0U, runtime->speaker_writes,
+      runtime->playout.stats.margin_min_ms, 0U, runtime->playout.stats.writes,
       outbox->current_slots, ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS);
-}
-
-static enum capnweb_status cli_capabilities_reply_true(
-    struct capnweb_reply *reply)
-{
-  assert(reply != NULL);
-  return capnweb_reply_set_boolean(reply, true);
 }
 
 static enum capnweb_status cli_capabilities_start_call(
@@ -343,7 +329,7 @@ static enum capnweb_status cli_capabilities_start_call(
    * wire contract other things call.
    */
   (void)capabilities;
-  return cli_capabilities_reply_true(reply);
+  return capnweb_reply_set_boolean(reply, true);
 }
 
 static enum capnweb_status cli_capabilities_hang_up(
@@ -352,15 +338,14 @@ static enum capnweb_status cli_capabilities_hang_up(
   (void)call;
   struct cli_capabilities *capabilities = context;
   assert(capabilities != NULL && capabilities->runtime != NULL);
-  if (cli_device_controls_request_talk(
-          &capabilities->runtime->device_controls,
-          false,
-          ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE) != ITERATE_KIT_OK) {
+  if (!cli_runtime_begin_hangup(
+          capabilities->runtime,
+          0U,
+          ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE)) {
     return capnweb_reply_set_error(
         reply, "Error", "device control queue is full");
   }
-  capabilities->runtime->hanging_up = true;
-  return cli_capabilities_reply_true(reply);
+  return capnweb_reply_set_boolean(reply, true);
 }
 
 static enum capnweb_status cli_capabilities_health(
@@ -386,5 +371,5 @@ static enum capnweb_status cli_capabilities_restart(
   assert(capabilities != NULL && capabilities->runtime != NULL);
   cli_capabilities_request_restart(
       capabilities->runtime, cli_runtime_now_ms(NULL));
-  return cli_capabilities_reply_true(reply);
+  return capnweb_reply_set_boolean(reply, true);
 }

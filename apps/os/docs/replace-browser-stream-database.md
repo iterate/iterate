@@ -1,5 +1,7 @@
 # Replacing the browser stream database with server reads and live state
 
+> Superseded by [OS without browser stream processors](../../../docs/research/no-browser-stream-processors.md), which retains the cross-tab SQLite event mirror and moves presentation to a server facet.
+
 The design for retiring the browser-hosted stream database/processor host so a
 stream feed is just `useLiveState` + `useItxQuery` like every other screen.
 Reviewed against the code 2026-07-16; companion to

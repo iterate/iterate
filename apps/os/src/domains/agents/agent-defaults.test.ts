@@ -61,6 +61,15 @@ describe("agentCreationForPath", () => {
     expect(mounts).toEqual([["workspace"]]);
   });
 
+  test("itx.workspace addresses the agent's own identity", () => {
+    const provision = defaultsFor("/agents/demo").events.find(
+      (event) => event.type === "events.iterate.com/capability-host/capability-provided",
+    );
+    expect(provision).toMatchObject({
+      payload: { path: ["workspace"], expression: ["workspaces", ["get", "/agents/demo"]] },
+    });
+  });
+
   test("does not infer agent policy or startup events from the stream path", () => {
     const paths = [
       "/agents/email/t42",

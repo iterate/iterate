@@ -7,6 +7,7 @@
 import { expect, test } from "vitest";
 import { makeProcessorHarness } from "iterate/processors/testing";
 import type { ConsumedInput } from "iterate/processors";
+import { interceptor } from "@iterate-com/test-support";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AgentProcessor, type AgentProcessorDeps } from "./agent-processor-implementation.ts";
 
@@ -15,9 +16,9 @@ const SETTLED = "events.iterate.com/agent/llm-request-settled";
 const RESPONSE_CHUNKS = "events.iterate.com/agent/llm-response-chunks";
 
 test("an intercepted/* turn is served by the interceptor: prompt in, text out, usage estimated, chunks journaled", async () => {
-  const seen: { source: string; model: string; body: { messages: { content: string }[] } }[] = [];
+  const seen: any[] = [];
   const h = makeInterceptedModelHarness(async (input) => {
-    seen.push(input as never);
+    seen.push(input);
     return "well well well, look who needs a deterministic model";
   });
 
@@ -26,8 +27,20 @@ test("an intercepted/* turn is served by the interceptor: prompt in, text out, u
     ["advanceTime", 10_000],
   );
 
-  expect(seen).toMatchObject([{ source: "agent-turn", model: "intercepted/main" }]);
-  expect(seen[0]!.body.messages.some((m) => m.content.includes("Hello fake model"))).toBe(true);
+  expect(seen).toMatchObject([
+    {
+      source: "agent-turn",
+      model: "intercepted/main",
+      request: {
+        kind: "workers-ai",
+        options: { gateway: { metadata: { projectId: "prj_test" } } },
+      },
+    },
+  ]);
+  expect(JSON.stringify(seen)).not.toContain("must-not-leak");
+  expect(
+    seen[0].request.body.messages.some((m: any) => m.content.includes("Hello fake model")),
+  ).toBe(true);
 
   const requested = h.events(REQUESTED)[0]!;
   expect(h.events(SETTLED)).toMatchObject([
@@ -128,6 +141,60 @@ test("callLlm outranks the interceptor: a scripted transport takes intercepted/*
   ]);
 });
 
+test("Gateway 429 responses exhaust ordinary retries without introducing a budget pause", async () => {
+  let calls = 0;
+  const h = makeProcessorHarness<AgentProcessorContract>({
+    path: "/agents/test",
+    createProcessor: (deps) =>
+      new AgentProcessor({
+        ...deps,
+        ai: {
+          run: async () => {
+            throw new Error("Interception must not dial a provider");
+          },
+        },
+        getAiGatewayOptions: (eventOffset) => ({
+          transport: { kind: "unified" },
+          metadata: {
+            environment: "test",
+            projectId: "prj_test",
+            streamPath: "/agents/test",
+            eventOffset,
+          },
+        }),
+        consultAiInterceptor: async () => {
+          calls++;
+          return Response.json(
+            {
+              name: "AiGatewayError",
+              internalCode: 2041,
+              message: "Spend limit exceeded",
+            },
+            { status: 429 },
+          );
+        },
+      }),
+  });
+  await h.play(
+    ["append", ...newFakeAgentEvents("intercepted/test"), userMessage("Hello")],
+    ["advanceTime", 600_000],
+  );
+  expect(calls).toBe(3);
+  expect(h.events(SETTLED)).toHaveLength(3);
+  for (const event of h.events(SETTLED)) {
+    expect(event).toMatchObject({
+      payload: { result: { status: "failed", errorMessage: expect.stringContaining("429") } },
+    });
+  }
+  expect(h.state()).toMatchObject({
+    paused: null,
+    openRequest: null,
+    pendingLlmRequestTrigger: null,
+  });
+  await h.play(["advanceTime", 600_000]);
+  expect(calls).toBe(3);
+});
+
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
@@ -169,7 +236,28 @@ function makeInterceptedModelHarness(
     createProcessor: (deps) =>
       new AgentProcessor({
         ...deps,
-        ...(consultAiInterceptor === undefined ? {} : { consultAiInterceptor }),
+        ai: {
+          run: async () => {
+            throw new Error("An intercepted model must never dial");
+          },
+        },
+        getAiGatewayOptions: () => ({
+          transport: {
+            kind: "byok",
+            gatewayId: "default",
+            openaiApiKey: "must-not-leak",
+          },
+          metadata: {
+            environment: "test",
+            projectId: "prj_test",
+            streamPath: "/agents/test",
+            eventOffset: undefined,
+          },
+        }),
+        ...(consultAiInterceptor && {
+          consultAiInterceptor: async (input) =>
+            interceptor.aiTextResponse((await consultAiInterceptor(input)) as any, input),
+        }),
       }),
     path: "/agents/test",
   });

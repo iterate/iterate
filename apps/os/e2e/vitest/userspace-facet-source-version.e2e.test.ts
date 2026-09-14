@@ -1,10 +1,11 @@
 import { expect, test } from "vitest";
-import { failing } from "@iterate-com/shared/test-support/failing-test";
+import { createFlake } from "@iterate-com/shared/test-support/flake-test";
 import type { StreamEventInput } from "iterate/processors";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
   type FacetProbeAnswer,
   PING,
+  HELD,
   PROBE_CONTRACT_SLUG,
   PROBE_PATH,
   probeFacetSource,
@@ -36,10 +37,10 @@ const WOKEN = "events.iterate.com/stream/woken";
 const ECHO_PATH = "version-echo.js";
 
 /*
- * A PINNED BUG, held by `failing(test, …)`: the body asserts the desired contract,
- * and while the bug exists it must fail with the SAME-BOOT STALENESS error
- * the wrapper matches. The moment somebody fixes the bug, the body succeeds
- * and the wrapper goes red with delete-me instructions.
+ * A measured flaky observation: the body asserts the desired contract, but
+ * unrelated facet recycling can satisfy it. Accept a pass or the exact
+ * SAME-BOOT STALENESS failure; every other error remains red. Evidence and
+ * restoration criteria: tasks/roughdraft-preview-flakes.md.
  *
  * What is broken, reproduced 5/5 against a real deployment: a RUNNING
  * userspace facet never picks up a source commit. `resolveWorkerSource` sees
@@ -70,8 +71,8 @@ const ECHO_PATH = "version-echo.js";
  * still demonstrates the old comparisons' blind spot by forcing a recycle.
  */
 // timeoutMs: the wrapper's own hang deadline, just below the runner ceiling —
-// the expected run is ~60-110s, well past failing()'s 60s default.
-failing(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
+// the expected run is ~60-110s, well past createFlake()'s 30s default.
+createFlake(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
   "a userspace facet rebuilds on a source commit and only on a source commit",
   // Ceiling for the cold build, the two stability kills, and up to three
   // 45s observation rounds. The expected run (bug present, no recycles)
@@ -217,7 +218,10 @@ failing(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
       expect((await project.repo.readFile({ path: PROBE_PATH }))?.content).toContain(
         `revision: "${committed}"`,
       );
-      expect(await resolvedRepoBuildKey()).not.toBe(repoKeyBefore);
+      // The stateless echo module did not change, so its own Worker Loader
+      // runtime identity stays stable. The probe's baked-in revision below is
+      // what makes its facet source version change.
+      expect(await resolvedRepoBuildKey()).toBe(repoKeyBefore);
 
       // Poll rather than ping once: a rebuild that merely LAGS the commit is
       // a different (and much milder) thing than one that never happens.
@@ -264,10 +268,154 @@ failing(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
     }
     // Every round ended with the running facet replaced by one serving the
     // just-committed revision — the fix's shape, three times in a row. The
-    // body succeeding here is what makes the failing() wrapper raise the
-    // delete-me alert. (Residual risk: three independent coincidental
-    // recycles in a row would masquerade as the fix — roughly the cube of an
-    // already-uncommon event, and the next run self-corrects.)
+    // body succeeding here is recorded as a pass. Without rebuild provenance,
+    // repeated coincidental recycling still cannot prove the bug was fixed.
+  },
+);
+
+test(
+  "a source replacement retires an in-flight facet callback before its acknowledgement watchdog",
+  { timeout: 180_000 },
+  async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+    using project = await itx.projects
+      .get(`facet-replacement-${crypto.randomUUID().slice(0, 8)}`)
+      .create({});
+    await project.projectId;
+
+    const streamPath = "/facet-replacement";
+    const subscriptionName = PROBE_CONTRACT_SLUG;
+    const stream = project.streams.get(streamPath);
+    await project.repo.commitFiles({
+      changes: [{ content: probeFacetSource("v4"), path: PROBE_PATH }],
+      message: "Install an in-flight callback probe",
+    });
+    await stream.append({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        name: subscriptionName,
+        receiver: {
+          action: "facet-processor",
+          source: {
+            kind: "userspace",
+            worker: {
+              type: "stateful",
+              path: streamPath,
+              className: "VersionProbeFacet",
+              durableWorkerKey: "version-probe",
+              source: {
+                createWorker: {
+                  entryPoint: PROBE_PATH,
+                  files: { type: "repo", repoPath: "/repos/config" },
+                },
+              },
+            },
+          },
+        },
+      },
+    } satisfies StreamEventInput);
+
+    const heldId = `hold-${crypto.randomUUID().slice(0, 8)}`;
+    await stream.append({
+      type: PING,
+      payload: { id: heldId },
+    } satisfies StreamEventInput);
+    await waitForCondition(
+      async () =>
+        (await stream.getEvents({ eventTypes: [HELD] })).some(
+          (event) => (event.payload as { id?: string }).id === heldId,
+        ),
+      { description: "the old facet callback to retain an in-flight batch", timeoutMs: 90_000 },
+    );
+    // The old callback's opened fact is now definitely behind this boundary.
+    const beforeReplacement = (await stream.runtimeState()).coreProcessorState.maxOffset;
+
+    await project.repo.commitFiles({
+      changes: [{ content: probeFacetSource("v5"), path: PROBE_PATH }],
+      message: "Replace an in-flight probe facet source",
+    });
+    // This dials the processor and compares its source without snapshot's
+    // catch-up pull; the held event must therefore come from sender delivery.
+    await stream.subscriptions.get(subscriptionName).processor.getRuntimeState();
+    const replacementDeadline = Date.now() + 15_000;
+    const replacementTimeout = () => Math.max(1, replacementDeadline - Date.now());
+    await waitForCondition(
+      async () =>
+        (
+          await stream.getEvents({
+            afterOffset: beforeReplacement,
+            eventTypes: ["events.iterate.com/stream/connection-closed"],
+            includeEphemeral: true,
+          })
+        ).some(
+          (event) =>
+            (event.payload as { connectionKey?: string; reason?: string }).connectionKey ===
+              subscriptionName && (event.payload as { reason?: string }).reason === "replaced",
+        ),
+      {
+        description: "the source-replaced callback to close without its watchdog",
+        timeoutMs: replacementTimeout(),
+      },
+    );
+    await waitForCondition(
+      async () =>
+        (
+          await stream.getEvents({
+            afterOffset: beforeReplacement,
+            eventTypes: ["events.iterate.com/stream/connection-opened"],
+            includeEphemeral: true,
+          })
+        ).some(
+          (event) =>
+            (event.payload as { connectionKey?: string }).connectionKey === subscriptionName,
+        ),
+      {
+        description: "the sender to open the replacement callback",
+        timeoutMs: replacementTimeout(),
+      },
+    );
+
+    // v5 accepts the held event instead of blocking again. This must arrive
+    // through the sender's replacement wake, well before the old callback's
+    // 20-second watchdog; a processor facade barrier would self-pull it.
+    await waitForCondition(
+      async () =>
+        (await stream.getEvents({ eventTypes: [SEEN] })).some(
+          (event) =>
+            (event.payload as FacetProbeAnswer).id === heldId &&
+            (event.payload as FacetProbeAnswer).revision === "v5",
+        ),
+      {
+        description: "the replacement sender to redeliver the held event",
+        timeoutMs: replacementTimeout(),
+      },
+    );
+    expect(Date.now()).toBeLessThanOrEqual(replacementDeadline);
+    expect(await stream.subscriptions.get(subscriptionName).describe()).toMatchObject({
+      attempt: 0,
+      lastError: null,
+    });
+    expect(
+      (
+        await stream.getEvents({
+          afterOffset: beforeReplacement,
+          eventTypes: ["events.iterate.com/stream/connection-closed"],
+          includeEphemeral: true,
+        })
+      ).some((event) => (event.payload as { reason?: string }).reason === "delivery-failed"),
+    ).toBe(false);
+    const replacementId = `replacement-${crypto.randomUUID().slice(0, 8)}`;
+    await stream.append({ type: PING, payload: { id: replacementId } } satisfies StreamEventInput);
+    await waitForCondition(
+      async () =>
+        (await stream.getEvents({ eventTypes: [SEEN] })).some(
+          (event) =>
+            (event.payload as FacetProbeAnswer).id === replacementId &&
+            (event.payload as FacetProbeAnswer).revision === "v5",
+        ),
+      { description: "the replacement facet to process new work", timeoutMs: 60_000 },
+    );
   },
 );
 

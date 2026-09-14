@@ -1,13 +1,9 @@
 /**
  * In-memory agent conversation feed for the chat TUI.
  *
- * This is the node-side sibling of the browser database's feed projector
- * (apps/os/src/domains/streams/client-libraries/processors/browser-feed):
- * both fold the SAME shared reducer (`reduceAgentUi` from @iterate-com/ui)
- * over agent stream events. The browser persists settled items into SQLite for
- * a virtual list; a terminal session is ephemeral and small, so this model
- * keeps the settled items in a plain array and the streaming live activity in
- * the reduced state — no database, no processor host.
+ * Shares the server Feed facet's reducer. A terminal session keeps settled
+ * items in an array and streaming activity in memory; OS browsers receive
+ * server publications and live state instead of running this reduction.
  */
 import {
   initialAgentUiState,

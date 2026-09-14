@@ -1,0 +1,242 @@
+[
+  {
+    "size": 65536,
+    "chunkSize": 16,
+    "patchVersion": 2,
+    "durationMs": 265.854959,
+    "links": [
+      {
+        "bytes": 3380621,
+        "frames": 4096
+      },
+      {
+        "bytes": 3380621,
+        "frames": 4096
+      },
+      {
+        "bytes": 3380621,
+        "frames": 4096
+      }
+    ]
+  },
+  {
+    "size": 65536,
+    "chunkSize": 48,
+    "patchVersion": 2,
+    "durationMs": 76.78558300000003,
+    "links": [
+      {
+        "bytes": 1187465,
+        "frames": 1366
+      },
+      {
+        "bytes": 1187465,
+        "frames": 1366
+      },
+      {
+        "bytes": 1187465,
+        "frames": 1366
+      }
+    ]
+  },
+  {
+    "size": 65536,
+    "chunkSize": 128,
+    "patchVersion": 2,
+    "durationMs": 30.351083000000074,
+    "links": [
+      {
+        "bytes": 472875,
+        "frames": 512
+      },
+      {
+        "bytes": 472875,
+        "frames": 512
+      },
+      {
+        "bytes": 472875,
+        "frames": 512
+      }
+    ]
+  },
+  {
+    "size": 65536,
+    "chunkSize": 1024,
+    "patchVersion": 2,
+    "durationMs": 4.297250000000076,
+    "links": [
+      {
+        "bytes": 108763,
+        "frames": 64
+      },
+      {
+        "bytes": 108763,
+        "frames": 64
+      },
+      {
+        "bytes": 108763,
+        "frames": 64
+      }
+    ]
+  },
+  {
+    "size": 1048576,
+    "chunkSize": 1024,
+    "patchVersion": 2,
+    "durationMs": 98.48850000000004,
+    "links": [
+      {
+        "bytes": 1380148,
+        "frames": 1024
+      },
+      {
+        "bytes": 1380148,
+        "frames": 1024
+      },
+      {
+        "bytes": 1380148,
+        "frames": 1024
+      }
+    ]
+  },
+  {
+    "size": 4194304,
+    "chunkSize": 1024,
+    "patchVersion": 2,
+    "durationMs": 588.7018330000001,
+    "links": [
+      {
+        "bytes": 5465748,
+        "frames": 4096
+      },
+      {
+        "bytes": 5465748,
+        "frames": 4096
+      },
+      {
+        "bytes": 5465748,
+        "frames": 4096
+      }
+    ]
+  },
+  {
+    "size": 65536,
+    "chunkSize": 16,
+    "patchVersion": 3,
+    "durationMs": 222.33520799999997,
+    "links": [
+      {
+        "bytes": 658179,
+        "frames": 4096
+      },
+      {
+        "bytes": 658179,
+        "frames": 4096
+      },
+      {
+        "bytes": 658179,
+        "frames": 4096
+      }
+    ]
+  },
+  {
+    "size": 65536,
+    "chunkSize": 48,
+    "patchVersion": 3,
+    "durationMs": 76.75420899999995,
+    "links": [
+      {
+        "bytes": 278618,
+        "frames": 1366
+      },
+      {
+        "bytes": 278618,
+        "frames": 1366
+      },
+      {
+        "bytes": 278618,
+        "frames": 1366
+      }
+    ]
+  },
+  {
+    "size": 65536,
+    "chunkSize": 128,
+    "patchVersion": 3,
+    "durationMs": 31.848833000000013,
+    "links": [
+      {
+        "bytes": 160209,
+        "frames": 512
+      },
+      {
+        "bytes": 160209,
+        "frames": 512
+      },
+      {
+        "bytes": 160209,
+        "frames": 512
+      }
+    ]
+  },
+  {
+    "size": 65536,
+    "chunkSize": 1024,
+    "patchVersion": 3,
+    "durationMs": 3.4729580000000624,
+    "links": [
+      {
+        "bytes": 98350,
+        "frames": 64
+      },
+      {
+        "bytes": 98350,
+        "frames": 64
+      },
+      {
+        "bytes": 98350,
+        "frames": 64
+      }
+    ]
+  },
+  {
+    "size": 1048576,
+    "chunkSize": 1024,
+    "patchVersion": 3,
+    "durationMs": 97.44949999999994,
+    "links": [
+      {
+        "bytes": 1211477,
+        "frames": 1024
+      },
+      {
+        "bytes": 1211477,
+        "frames": 1024
+      },
+      {
+        "bytes": 1211477,
+        "frames": 1024
+      }
+    ]
+  },
+  {
+    "size": 4194304,
+    "chunkSize": 1024,
+    "patchVersion": 3,
+    "durationMs": 533.2456249999998,
+    "links": [
+      {
+        "bytes": 4790360,
+        "frames": 4096
+      },
+      {
+        "bytes": 4790360,
+        "frames": 4096
+      },
+      {
+        "bytes": 4790360,
+        "frames": 4096
+      }
+    ]
+  }
+]

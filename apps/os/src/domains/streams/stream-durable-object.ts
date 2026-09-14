@@ -12,6 +12,7 @@ import type {
 import {
   idempotencyConflictMessage,
   jsonValuesEqual,
+  MAX_STREAM_EVENT_READ_BYTE_LIMIT,
   sameIdempotentEvent,
   StreamIdMismatchError,
   streamIdMismatchMessage,
@@ -21,8 +22,21 @@ import { StreamOffsetConflictError, streamOffsetConflictMessage } from "iterate/
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
 import { StreamRuntimeMetrics } from "iterate/processors";
-import { disposeIgnoredRpcResult, LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
-import type { LiveStateRpc, LiveStateSubscriptionHandle, LiveUpdate } from "iterate/sdk/capnweb";
+import {
+  createLiveStateStore,
+  isLiveStateSnapshot,
+  liveStateRevision,
+  disposeIgnoredRpcResult,
+  LiveState,
+  LiveStateRpcTarget,
+} from "iterate/sdk/capnweb";
+import type { LiveStateCursor, LiveStateRead } from "iterate/sdk/capnweb";
+import type {
+  LiveStateRpc,
+  LiveStateSubscriptionHandle,
+  LiveStateSubscriptionOptions,
+  LiveUpdate,
+} from "iterate/sdk/capnweb";
 import { streamDeliveryAuthContext } from "../../auth.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
@@ -92,6 +106,7 @@ import type { StreamRuntimeDebugState } from "./stream-runtime-state.ts";
 import { retainProcessorWakeResponse } from "./retained-event-callbacks.ts";
 import {
   isDurableObjectLifecycleError,
+  isRetryableDurableObjectAvailabilityError,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./stream-unavailable.ts";
 import {
@@ -105,7 +120,10 @@ import {
   type CoreProcessorState,
   type SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
-import { unconfiguredSubscriptionError } from "./utils.ts";
+import {
+  buildFacetProcessorSubscriptionConfiguredEvent,
+  unconfiguredSubscriptionError,
+} from "./utils.ts";
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
@@ -385,11 +403,16 @@ type ProcessorFacetStub = {
   getRuntimeState(args?: { name?: string }): Promise<ProcessorRuntimeState>;
   waitUntilProcessed(args: { offset: number; timeoutMs?: number; name?: string }): Promise<void>;
   liveState(): Promise<LiveStateRpc<Record<string, unknown>>>;
+  readLiveState(args: {
+    streamId: string;
+    cursor?: LiveStateCursor;
+    patchVersion?: 2 | 3;
+  }): Promise<LiveStateRead<Record<string, unknown>>>;
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   provideCapability(
     input: CapabilityProvidedPayload,
     options?: { afterAppend?(record: CapabilityRecord): void | Promise<void> },
-  ): Promise<{ path: string[]; providedAtOffset: number }>;
+  ): Promise<{ path: string[]; providedAtOffset: number } & Disposable>;
   revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void>;
   describeCapabilities(): Promise<unknown[]>;
   connectCapabilityProviderPager(options: {
@@ -645,12 +668,18 @@ class StreamProcessorFacadeRpcTarget extends RpcTarget {
   async snapshot(): Promise<ProcessorSnapshot<unknown>> {
     const facet = await this.#dial();
     await facet.catchUp({ name: this.#name });
-    return await facet.snapshot({ name: this.#name });
+    return detachPlainReadResult(
+      await facet.snapshot({ name: this.#name }),
+      "facet-processor-snapshot",
+    );
   }
 
   async getRuntimeState(): Promise<ProcessorRuntimeState> {
     const facet = await this.#dial();
-    return await facet.getRuntimeState({ name: this.#name });
+    return detachPlainReadResult(
+      await facet.getRuntimeState({ name: this.#name }),
+      "facet-processor-runtime-state",
+    );
   }
 
   /** Offset barrier against the named runner's confirmed fold (self-pulling). */
@@ -725,11 +754,17 @@ class StreamProcessorFacadeRpcTarget extends RpcTarget {
     text: string;
     entries: { key: string; code: string }[];
   } | null> {
-    return await (await this.#dial()).describePreamble();
+    return detachPlainReadResult(
+      await (await this.#dial()).describePreamble(),
+      "facet-processor-describe-preamble",
+    );
   }
 
   async getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }> {
-    return await (await this.#dial()).getScriptResult(executionId);
+    return detachPlainReadResult(
+      await (await this.#dial()).getScriptResult(executionId),
+      "facet-processor-script-result",
+    );
   }
 }
 
@@ -752,17 +787,48 @@ class FacetLiveStateRelayRpcTarget
   }
 
   async get(): Promise<Record<string, unknown>> {
-    return await (await this.#dialLive()).get();
+    const liveState = await this.#dialLive();
+    try {
+      return detachPlainReadResult(await liveState.get(), "facet-live-state-get");
+    } finally {
+      disposeAcknowledgedRpcResult(liveState, "facet-live-state-node");
+    }
   }
 
   async subscribe(
     onUpdate: (update: LiveUpdate<Record<string, unknown>>) => unknown,
+    options?: LiveStateSubscriptionOptions,
   ): Promise<LiveStateSubscriptionHandle> {
-    const handle = await (await this.#dialLive()).subscribe(onUpdate);
+    const liveState = await this.#dialLive();
+    let handle: LiveStateSubscriptionHandle;
+    try {
+      handle = await liveState.subscribe(onUpdate, options);
+    } catch (error) {
+      disposeAcknowledgedRpcResult(liveState, "facet-live-state-node");
+      throw error;
+    }
+    let closed = false;
+    const release = () => {
+      disposeAcknowledgedRpcResult(handle, "facet-live-state-subscription");
+      disposeAcknowledgedRpcResult(liveState, "facet-live-state-node");
+    };
+    const unsubscribe = () => {
+      if (closed) return;
+      closed = true;
+      try {
+        void Promise.resolve(handle.unsubscribe()).then(release, (error) => {
+          release();
+          console.error("facet live-state subscription close failed", { error });
+        });
+      } catch (error) {
+        release();
+        throw error;
+      }
+    };
     return {
       ping: () => handle.ping(),
-      unsubscribe: () => handle.unsubscribe(),
-      [Symbol.dispose]: () => handle.unsubscribe(),
+      unsubscribe,
+      [Symbol.dispose]: unsubscribe,
     };
   }
 }
@@ -779,12 +845,12 @@ type HostedProcessorReceiver = Extract<
 >;
 
 /**
- * Copy an expression-evaluation result into plain data and release the
- * original. The worker's processor node answers with plain JSON, but the
+ * Copy a processor read result into plain data and release the original.
+ * Hosted processors answer with plain JSON, but the
  * value reaching this DO may be a disposable-augmented RPC result whose
  * lifetime must not leak into the caller's Cap'n Web session.
  */
-function detachExpressionReadResult<T>(value: unknown, operation: string): T {
+function detachPlainReadResult<T>(value: unknown, operation: string): T {
   if (value === null || typeof value !== "object") return value as T;
   const detached: unknown = Array.isArray(value) ? [...value] : { ...value };
   Reflect.deleteProperty(detached as object, Symbol.dispose);
@@ -820,14 +886,14 @@ class ExpressionProcessorFacadeRpcTarget extends RpcTarget {
   }
 
   async snapshot(): Promise<ProcessorSnapshot<unknown>> {
-    return detachExpressionReadResult(
+    return detachPlainReadResult(
       await this.#callProcessorNode(["snapshot"]),
       "expression-processor-snapshot",
     );
   }
 
   async getRuntimeState(): Promise<ProcessorRuntimeState> {
-    return detachExpressionReadResult(
+    return detachPlainReadResult(
       await this.#callProcessorNode(["getRuntimeState"]),
       "expression-processor-runtime-state",
     );
@@ -910,7 +976,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #liveState!: LiveState<StreamRuntimeDebugState>;
   #liveStateRefreshScheduled = false;
-  readonly name = parseStreamDurableObjectName(this.ctx.id.name);
+  readonly name = readStreamDurableObjectName(this.ctx);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   /** Ephemeral event bodies scoped to this one Durable Object incarnation. */
   readonly #ephemeralEvents = new EphemeralEventBuffer();
@@ -950,6 +1016,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           afterOffset: args.afterOffset,
           beforeOffset: args.beforeOffset,
           limit: args.limit,
+          byteLimit: args.byteLimit,
           includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
@@ -1071,21 +1138,38 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (lane === undefined) {
       // The cache the flusher reads (readState must be synchronous — the
       // flusher sends what it read with no await in between). Pulls are
-      // chained so a slower OLDER pull can never overwrite a newer one — the
-      // wire has no revision guard by design, so cache monotonicity is the
-      // whole rewind defense.
-      let state: Record<string, unknown> = {};
+      // serialized so each pull starts at the previous pull's cursor. The
+      // mirror validates revisions and retains untouched object identities.
+      const mirror = createLiveStateStore<Record<string, unknown>>();
+      let cursor: LiveStateCursor | undefined;
       let chain: Promise<void> = Promise.resolve();
       const pull = async () => {
-        state = await this.#callProcessorFacet(name, async (facet) =>
-          (await facet.liveState()).get(),
+        const streamId = this.#coreProcessorState.streamId;
+        if (!streamId) {
+          throw new Error("stream identity is unavailable after stream creation");
+        }
+        const read = await this.#callProcessorFacet(name, (facet) =>
+          facet.readLiveState({ streamId, cursor, patchVersion: 3 }),
         );
+        try {
+          const { epoch, update } = read;
+          if (!update) return;
+          if (epoch !== cursor?.epoch && !isLiveStateSnapshot(update)) {
+            throw new Error("Facet live-state incarnation changed without a snapshot");
+          }
+          mirror.apply(update, () => {
+            throw new Error("Facet live-state revision gap");
+          });
+          cursor = { epoch, revision: liveStateRevision(update) };
+        } finally {
+          disposeAcknowledgedRpcResult(read, "facet-live-state");
+        }
       };
       const tag = liveStatePagerLaneTag(name);
       lane = new LiveStatePagers({
         getWebSockets: () => this.ctx.getWebSockets(tag),
         acceptWebSocket: (ws) => this.ctx.acceptWebSocket(ws, [tag]),
-        readState: () => state,
+        readState: () => mirror.getState() ?? {},
         refresh: () => {
           // Every refresh gets a FRESH pull that starts after its trigger
           // (sharing an in-flight pull could return state read before the
@@ -1222,6 +1306,19 @@ export class StreamDurableObject extends DurableObject<Env> {
         if ("APP_CONFIG_POSTHOG" in this.env) this.append(posthogSubscriptionEvent());
       }
     }
+    // The presentation facet is a platform subscription whose durable cursor
+    // starts at zero, so hosted delivery publishes the complete source history.
+    if (
+      "FeedFacet" in this.ctx.exports &&
+      !this.#coreProcessorState.subscriptions.outbound.byName.feed
+    ) {
+      this.#append({ authority: "core-event" }, [
+        buildFacetProcessorSubscriptionConfiguredEvent({
+          name: "feed",
+          idempotencyKey: "feed/subscription:v1",
+        }),
+      ]);
+    }
     if (this.#invalidCheckpointError !== undefined) {
       console.error("stream core-state checkpoint was invalid; rebuilt from the event log", {
         path: this.name.path,
@@ -1346,9 +1443,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       console.warn("stream facet clone-version skew; retiring the isolate and rebuilding", {
         name,
       });
+      this.#facetRecoveryNonce = crypto.randomUUID();
+      this.#eventSender.replaceHostedConnection(name);
       this.ctx.facets.abort(name, `clone-version skew for ${name}`);
       this.#configuredProcessorFacets.delete(name);
-      this.#facetRecoveryNonce = crypto.randomUUID();
       return await invoke(await this.#dialProcessorFacet(name));
     }
   }
@@ -1369,7 +1467,7 @@ export class StreamDurableObject extends DurableObject<Env> {
             receiver.source.worker,
             this.#facetRecoveryNonce,
           )
-        : this.#builtinFacetClass();
+        : this.#builtinFacetClass(name);
     // Rebuild the facet whenever its resolved class changed: ctx.facets.get
     // reuses an existing facet and IGNORES a new startup class, so a source
     // commit, a same-source className re-point, and a builtin<->userspace flip
@@ -1385,10 +1483,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       class: resolved.class,
     })) as unknown as ProcessorFacetStub;
     if (!this.#configuredProcessorFacets.has(name)) {
-      const parentName = this.ctx.id.name;
-      if (parentName === undefined) {
-        throw new Error("Stream Durable Object must be addressed by name.");
-      }
+      const parentName = DurableObjectNameCodec.stringify(this.name, { allowNullProjectId: true });
       await facet.configure({
         parentName,
         projectId: this.name.projectId,
@@ -1416,6 +1511,10 @@ export class StreamDurableObject extends DurableObject<Env> {
        * The versions are the whole story, so both are here.
        */
       console.info("stream facet source changed; aborting", { name, previous, version });
+      // The facet owns the callback, but the parent owns the delivery connection.
+      // Retire that old callback before its facet abort leaves an in-flight batch
+      // unacknowledged until the watchdog reports a false delivery failure.
+      this.#eventSender.replaceHostedConnection(name);
       this.ctx.facets.abort(name, `facet source changed for ${name}`);
       this.#configuredProcessorFacets.delete(name);
     }
@@ -1426,18 +1525,17 @@ export class StreamDurableObject extends DurableObject<Env> {
    * (the sibling `ProcessorFacet` export from `iterate/processors/cloudflare`).
    * Its version is a constant: the built-in class only changes on an OS deploy,
    * which evicts every DO anyway. */
-  #builtinFacetClass(): { class: DurableObjectClass; version: string } {
+  #builtinFacetClass(name: string): { class: DurableObjectClass; version: string } {
     // Loose lookup on purpose: ctx.exports carries every exported entrypoint by
     // name.
-    const facetClass = (this.ctx.exports as Record<string, unknown>).ProcessorFacet as
+    const entrypoint = name === "feed" ? "FeedFacet" : "ProcessorFacet";
+    const facetClass = (this.ctx.exports as Record<string, unknown>)[entrypoint] as
       | DurableObjectClass
       | undefined;
     if (facetClass === undefined) {
-      throw new Error(
-        'facet-processor subscriptions require the OS worker to export the "ProcessorFacet" entrypoint',
-      );
+      throw new Error(`facet-processor subscription ${name} requires the ${entrypoint} entrypoint`);
     }
-    return { class: facetClass, version: "builtin" };
+    return { class: facetClass, version: name === "feed" ? "builtin:FeedFacet" : "builtin" };
   }
 
   /** Lazily built loader for userspace facet sources. Shared scope: the
@@ -1587,11 +1685,20 @@ export class StreamDurableObject extends DurableObject<Env> {
         } catch (error) {
           const failures = (this.#facetAlarmFailures.get(facet) ?? 0) + 1;
           this.#facetAlarmFailures.set(facet, failures);
-          console.error("facet alarm replay failed; re-arming a bounded retry", {
-            facet,
-            failures,
-            error,
-          });
+          if (isRetryableDurableObjectAvailabilityError(error)) {
+            console.info("facet alarm replay unavailable; re-arming a bounded retry", {
+              facet,
+              failures,
+              error,
+              outcome: "unavailable",
+            });
+          } else {
+            console.error("facet alarm replay failed; re-arming a bounded retry", {
+              facet,
+              failures,
+              error,
+            });
+          }
           // Best effort: if this arming write itself fails, the rejection
           // reaches the alarm handler's await and the platform retry covers it.
           this.#mergeFacetAlarmDesire(
@@ -1681,11 +1788,15 @@ export class StreamDurableObject extends DurableObject<Env> {
   async #capabilityHostState(facet: ProcessorFacetStub): Promise<CapabilityHostFacetState> {
     await facet.catchUp({ name: CapabilityHostProcessorContract.slug });
     const snapshot = await facet.snapshot({ name: CapabilityHostProcessorContract.slug });
-    // Safe: every project-scoped facet composition registers the
-    // CapabilityHostProcessor under its contract slug, so this snapshot's
-    // state is that contract's fold; CapabilityHostFacetState is the narrow
-    // slice of it this wiring reads.
-    return snapshot.state as CapabilityHostFacetState;
+    try {
+      // Safe: every project-scoped facet composition registers the
+      // CapabilityHostProcessor under its contract slug, so this snapshot's
+      // state is that contract's fold; CapabilityHostFacetState is the narrow
+      // slice of it this wiring reads.
+      return snapshot.state as CapabilityHostFacetState;
+    } finally {
+      disposeAcknowledgedRpcResult(snapshot, "capability-host-facet-snapshot");
+    }
   }
 
   /**
@@ -1742,7 +1853,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       const replaced = state.capabilities.find((record) =>
         sameCapabilityPath(record.path, input.path),
       );
-      return await facet.provideCapability(input, {
+      using provision = await facet.provideCapability(input, {
         afterAppend: (record) => {
           // The append has already displaced this row. Retire its relay even
           // if binding the replacement fails; otherwise the old ownership
@@ -1762,6 +1873,9 @@ export class StreamDurableObject extends DurableObject<Env> {
           }
         },
       });
+      // Forwarding the facet's hidden disposer would keep this RPC context
+      // alive until the caller disposed it. Registration returns only data.
+      return { path: provision.path, providedAtOffset: provision.providedAtOffset };
     });
   }
 
@@ -2296,7 +2410,12 @@ export class StreamDurableObject extends DurableObject<Env> {
     const justCommittedEvents = newEvents.map((event) => sizedByOffset.get(event.offset)!);
 
     this.#coreProcessorState = workingState;
-    this.#checkpointCoreProcessorState(newEvents.length);
+    // Ephemeral events change no durable core state (they advance only
+    // `maxOffset`, whose floor is the SQL row above), so they do not count
+    // toward the checkpoint cadence: a voice stream appending sixty
+    // microphone and speaker frames a second otherwise serialized the whole
+    // core state to KV every second for nothing the rebuild could use.
+    this.#checkpointCoreProcessorState(durableEvents.length);
     this.#metrics.ingress.bump(
       Date.now(),
       newEvents.length,
@@ -2333,6 +2452,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     beforeOffset: number;
     eventTypes?: readonly string[];
     limit: number;
+    byteLimit?: number;
     includeEphemeral: boolean;
   }): SizedStreamEvent[] {
     const durableEvents = this.#log.getRangeSized({
@@ -2340,12 +2460,20 @@ export class StreamDurableObject extends DurableObject<Env> {
       beforeOffset: args.beforeOffset,
       eventTypes: args.eventTypes,
       limit: args.limit,
+      byteLimit: args.byteLimit,
     });
     if (!args.includeEphemeral) return durableEvents;
 
+    // A byte-capped durable prefix may stop before a later durable body. Do
+    // not merge a farther ephemeral row into that prefix: callers advance a
+    // single shared offset cursor, so doing so would silently skip the omitted
+    // durable event. The next read starts after this retained durable prefix.
     const ephemeralEvents = this.#ephemeralEvents.getRangeSized({
       afterOffset: args.afterOffset,
-      beforeOffset: args.beforeOffset,
+      beforeOffset:
+        args.byteLimit !== undefined && durableEvents.length > 0
+          ? Math.min(args.beforeOffset, durableEvents.at(-1)!.event.offset + 1)
+          : args.beforeOffset,
       eventTypes: args.eventTypes,
       limit: args.limit,
     });
@@ -2365,6 +2493,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       beforeOffset?: number | null;
       eventTypes?: readonly string[];
       limit?: number;
+      byteLimit?: number;
       includeEphemeral?: boolean;
     } = {},
   ): StreamEvent[] {
@@ -2375,11 +2504,22 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (limit !== undefined && limit > MAX_GET_EVENTS_LIMIT) {
       throw new Error(`getEvents limit must be at most ${MAX_GET_EVENTS_LIMIT}.`);
     }
+    const byteLimit = args.byteLimit;
+    if (byteLimit !== undefined && (!Number.isInteger(byteLimit) || byteLimit <= 0)) {
+      throw new Error("getEvents byteLimit must be a positive integer.");
+    }
+    if (byteLimit !== undefined && byteLimit > MAX_STREAM_EVENT_READ_BYTE_LIMIT) {
+      throw new Error(`getEvents byteLimit must be at most ${MAX_STREAM_EVENT_READ_BYTE_LIMIT}.`);
+    }
+    if (byteLimit !== undefined && args.includeEphemeral === true) {
+      throw new Error("getEvents byteLimit cannot include ephemeral events.");
+    }
     return this.#readEventsSized({
       afterOffset: args.afterOffset ?? 0,
       beforeOffset: args.beforeOffset ?? Number.MAX_SAFE_INTEGER,
       eventTypes: args.eventTypes,
       limit: limit ?? DEFAULT_GET_EVENTS_LIMIT,
+      byteLimit,
       includeEphemeral: args.includeEphemeral === true,
     }).map((entry) => entry.event);
   }
@@ -2395,6 +2535,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       beforeOffset?: number | null;
       eventTypes?: readonly string[];
       limit?: number;
+      byteLimit?: number;
       includeEphemeral?: boolean;
     } = {},
   ): { streamId: string; streamMaxOffset: number; events: StreamEvent[] } {
@@ -3268,6 +3409,8 @@ export class StreamDurableObject extends DurableObject<Env> {
    * Best-effort like every connection-close observation.
    */
   async webSocketClose(ws: WebSocket): Promise<void> {
+    // Complete the Pager handshake so the relay's WebSocket read loop can finish.
+    ws.close();
     // A closed Capability Provider Pager is its provider's real departure:
     // journal the disconnect so reduction retires every mount it owned.
     const connectedAtOffset = this.#capabilityProviderPagers.connectedAtOffset(ws);
@@ -3335,9 +3478,15 @@ const StreamAppendInput = StreamEventInputSchema.safeExtend({
   offset: z.number().int().nonnegative().optional(),
 }).strict();
 
-function parseStreamDurableObjectName(name: string | undefined) {
-  if (!name) {
-    throw new Error("Stream Durable Object must be addressed by name.");
-  }
-  return DurableObjectNameCodec.parse(name, { allowNullProjectId: true });
+function readStreamDurableObjectName(ctx: DurableObjectState) {
+  if (ctx.id.name) return DurableObjectNameCodec.parse(ctx.id.name, { allowNullProjectId: true });
+  // Alarm/hibernation wakes can arrive without the original getByName hint.
+  // The committed birth event is the durable identity of this stream.
+  const first = new StreamEventLog(ctx.storage.sql, "/").getByOffset(1);
+  if (!first) throw new Error("A new Stream Durable Object must be addressed by name.");
+  const created = parseCommittedCoreEvent(first, "events.iterate.com/stream/created");
+  return DurableObjectNameCodec.parse(
+    DurableObjectNameCodec.stringify(created.payload, { allowNullProjectId: true }),
+    { allowNullProjectId: true },
+  );
 }

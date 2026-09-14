@@ -37,16 +37,27 @@ export function requireAdminBearerToken() {
  * (no context) or a project itx (with context) — the same surfaces the
  * browser, REPL, and CLI use.
  */
-export function createAdminOsItx(input?: { baseUrl?: string }): RpcStub<Session>;
+type WebSocketCloseHook = (close: { code: number; reason: string }) => void;
+
+export function createAdminOsItx(input?: {
+  baseUrl?: string;
+  onWebSocketClose?: WebSocketCloseHook;
+}): RpcStub<Session>;
 export function createAdminOsItx(input: {
   baseUrl?: string;
   context: string;
+  onWebSocketClose?: WebSocketCloseHook;
 }): RpcStub<ProjectRpcTarget>;
-export function createAdminOsItx(input?: { baseUrl?: string; context?: string }) {
+export function createAdminOsItx(input?: {
+  baseUrl?: string;
+  context?: string;
+  onWebSocketClose?: WebSocketCloseHook;
+}) {
   const baseUrl = input?.baseUrl ?? requireBaseUrl();
   const auth = { type: "admin-secret" as const, secret: requireAdminBearerToken() };
   const headers = cloudflareWorkerVersionOverrideHeaders(process.env);
+  const onWebSocketClose = input?.onWebSocketClose;
   return input?.context
-    ? connectItx({ auth, baseUrl, headers, projectId: input.context })
-    : connectItx({ auth, baseUrl, headers });
+    ? connectItx({ auth, baseUrl, headers, projectId: input.context, onWebSocketClose })
+    : connectItx({ auth, baseUrl, headers, onWebSocketClose });
 }

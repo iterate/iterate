@@ -55,6 +55,19 @@ function relayOver(
   });
 }
 
+function relayOverSequentialStubs(...durableObjects: ReturnType<typeof makeDurableObject>[]) {
+  let next = 0;
+  return new CapabilityProviderPagerRelay({
+    env: {
+      STREAM: {
+        getByName: () => durableObjects[Math.min(next++, durableObjects.length - 1)],
+      },
+    } as never,
+    scope: { path: "/", projectId: "project" },
+    waitUntil: () => undefined,
+  });
+}
+
 describe("CapabilityProviderPagerRelay", () => {
   beforeEach(() => {
     dialPager.mockReset();
@@ -152,6 +165,98 @@ describe("CapabilityProviderPagerRelay", () => {
 
     await second.revoke({ path: second.path, providedAtOffset: second.providedAtOffset });
     expect(pager.closed).toEqual([{ code: 1000, reason: "no live capability mounts" }]);
+  });
+
+  it("retries an exact revoke once through a fresh stub after a Durable Object reset", async () => {
+    for (const overloaded of [undefined, false]) {
+      const pager = new FakePager();
+      dialPager.mockResolvedValue(pager);
+      const reset = Object.assign(new Error("deployment reset"), {
+        durableObjectReset: true,
+        overloaded,
+      });
+      const brokenStub = makeDurableObject({
+        revokeCapability: vi.fn(async () => Promise.reject(reset)),
+      });
+      const freshStub = makeDurableObject();
+      const relay = relayOverSequentialStubs(brokenStub, freshStub);
+      const provision = await relay.provide({ capability: {}, path: ["only"], type: "live" });
+
+      await provision.revoke({
+        path: provision.path,
+        providedAtOffset: provision.providedAtOffset,
+      });
+
+      expect(brokenStub.revokeCapability).toHaveBeenCalledExactlyOnceWith({
+        path: ["only"],
+        providedAtOffset: provision.providedAtOffset,
+      });
+      expect(freshStub.revokeCapability).toHaveBeenCalledExactlyOnceWith({
+        path: ["only"],
+        providedAtOffset: provision.providedAtOffset,
+      });
+      expect(provision.isActive()).toBe(false);
+    }
+  });
+
+  it("does not replay an ordinary revoke failure", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    const brokenStub = makeDurableObject({
+      revokeCapability: vi.fn(async () => Promise.reject(new Error("write failed"))),
+    });
+    const freshStub = makeDurableObject();
+    const relay = relayOverSequentialStubs(brokenStub, freshStub);
+    const provision = await relay.provide({ capability: {}, path: ["only"], type: "live" });
+
+    await expect(
+      provision.revoke({ path: provision.path, providedAtOffset: provision.providedAtOffset }),
+    ).rejects.toThrow("write failed");
+
+    expect(freshStub.revokeCapability).not.toHaveBeenCalled();
+  });
+
+  it("does not replay an overloaded reset", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    const overloadedReset = Object.assign(new Error("overloaded"), {
+      durableObjectReset: true,
+      overloaded: true,
+    });
+    const brokenStub = makeDurableObject({
+      revokeCapability: vi.fn(async () => Promise.reject(overloadedReset)),
+    });
+    const freshStub = makeDurableObject();
+    const relay = relayOverSequentialStubs(brokenStub, freshStub);
+    const provision = await relay.provide({ capability: {}, path: ["only"], type: "live" });
+
+    await expect(
+      provision.revoke({ path: provision.path, providedAtOffset: provision.providedAtOffset }),
+    ).rejects.toThrow("overloaded");
+
+    expect(freshStub.revokeCapability).not.toHaveBeenCalled();
+  });
+
+  it("keeps a second reset failure observable after one fresh-stub retry", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    const firstReset = Object.assign(new Error("first reset"), { durableObjectReset: true });
+    const secondReset = Object.assign(new Error("second reset"), { durableObjectReset: true });
+    const brokenStub = makeDurableObject({
+      revokeCapability: vi.fn(async () => Promise.reject(firstReset)),
+    });
+    const freshStub = makeDurableObject({
+      revokeCapability: vi.fn(async () => Promise.reject(secondReset)),
+    });
+    const relay = relayOverSequentialStubs(brokenStub, freshStub);
+    const provision = await relay.provide({ capability: {}, path: ["only"], type: "live" });
+
+    await expect(
+      provision.revoke({ path: provision.path, providedAtOffset: provision.providedAtOffset }),
+    ).rejects.toThrow("second reset");
+
+    expect(brokenStub.revokeCapability).toHaveBeenCalledOnce();
+    expect(freshStub.revokeCapability).toHaveBeenCalledOnce();
   });
 
   it("retires every mount when the shared Pager disconnects", async () => {

@@ -60,6 +60,16 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     match: "demo recording — run locally with DEMO_RECORDING=1",
     note: "env-gated: a demo RECORDING, never a CI test (drives a standing preview project)",
   },
+  {
+    file: "specs/workspace-tree-walkthrough.spec.ts",
+    match: "demo recording — run locally with DEMO_RECORDING=1",
+    note: "env-gated: a demo RECORDING, never a CI test (drives a preview slot's project)",
+  },
+  {
+    file: "apps/os-next/specs/auth.spec.ts",
+    match: "This acceptance case needs the independently deployed Notes worker",
+    note: "env-gated: needs NOTES_BASE_URL pointing at the independently deployed Notes worker (the os-next ↔ Notes acceptance case)",
+  },
   // -- Grandfathered parked markers (predate the convention, 2026-07-15).
   // Do NOT add entries here — date new parked markers instead. This list
   // only shrinks.

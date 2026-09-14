@@ -724,6 +724,60 @@ describe("ProjectProcessor catalogs", () => {
     expect(h.state()).not.toHaveProperty("agents");
     expect(h.network.eventsAt("/agents/slack")).toEqual([]);
   });
+
+  it("catalogs workspaces from their copied births only: once per path, never an ancestor", async () => {
+    // What the birth batch's workspace-catalog subscription copies onto `/`.
+    const copiedWorkspaceCreated = (path: string): ProjectEventInput => ({
+      type: "events.iterate.com/workspace/created",
+      payload: {},
+      source: {
+        copiedFrom: [
+          {
+            name: "workspace-catalog",
+            streamId: "11111111-1111-4111-8111-111111111111",
+            streamCreatedAt: new Date(1).toISOString(),
+            cursorChangedAtSourceOffset: 1,
+            createdAt: new Date(5).toISOString(),
+            offset: 1,
+            path,
+            projectId: "prj_test",
+            type: "events.iterate.com/workspace/created",
+          },
+        ],
+      },
+    });
+    const h = makeProjectHarness();
+    await h.play(
+      ["append", PROJECT_CREATE_REQUESTED, PROJECT_CREATED],
+      [
+        "append",
+        // A nested agent workspace announces its ancestors as physical
+        // streams; none of them was ever created as a workspace.
+        {
+          type: "events.iterate.com/stream/child-stream-created",
+          payload: { childPath: "/workspaces" },
+        },
+        {
+          type: "events.iterate.com/stream/child-stream-created",
+          payload: { childPath: "/agents/slack" },
+        },
+        copiedWorkspaceCreated("/workspaces/scratch"),
+        copiedWorkspaceCreated("/agents/slack/C123"),
+        // Creating the same workspace twice dedupes on the birth's
+        // idempotency key upstream; a redelivered copy must not double-list.
+        copiedWorkspaceCreated("/workspaces/scratch"),
+      ],
+    );
+
+    expect(h.state().workspaces.map((workspace) => workspace.path)).toEqual([
+      "/agents/slack/C123",
+      "/workspaces/scratch",
+    ]);
+    expect(h.state().streams.map((stream) => stream.path)).toEqual([
+      "/agents/slack",
+      "/workspaces",
+    ]);
+  });
 });
 
 // =============================================================================

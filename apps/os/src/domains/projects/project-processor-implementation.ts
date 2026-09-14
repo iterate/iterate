@@ -674,6 +674,8 @@ export class ProjectProcessor extends StreamProcessor<
         return recordDomainObject(state, "repos", event);
       case "events.iterate.com/secret/created":
         return recordDomainObject(state, "secrets", event);
+      case "events.iterate.com/workspace/created":
+        return recordDomainObject(state, "workspaces", event);
       // The clients catalog: copied off each client scope's stream by the
       // clients-to-root subscription that projects.connect's birth batch
       // configures. Source-hop coordinates carry the client's path, the fact's
@@ -804,8 +806,13 @@ type ProjectProcessorDeps = {
 // -----------------------------------------------------------------------------
 
 function recordDomainObject<
-  State extends { devices: StreamListItem[]; repos: StreamListItem[]; secrets: StreamListItem[] },
-  Key extends "devices" | "repos" | "secrets",
+  State extends {
+    devices: StreamListItem[];
+    repos: StreamListItem[];
+    secrets: StreamListItem[];
+    workspaces: StreamListItem[];
+  },
+  Key extends "devices" | "repos" | "secrets" | "workspaces",
 >(state: State, key: Key, event: StreamEvent): State {
   const path = event.source?.processor?.stream.path ?? event.source?.copiedFrom?.[0]?.path;
   if (path === undefined) return state;

@@ -12,9 +12,8 @@ import {
 // The agent processor never journals an LLM request's input — it REBUILDS it
 // from committed history on every attempt (buildAgentLlmRequestBody), keyed by
 // the llm-request-requested event's offset. That makes the exact wire request
-// a pure function of (events, llmRequestOffset), and the browser already
-// mirrors the events — so the UI replays the same fold locally instead of
-// storing a second copy of every prompt.
+// a pure function of (events, llmRequestOffset). The web inspector calls the
+// server to reconstruct it; native clients can also use this pure function.
 
 /**
  * The event types the replay needs from the local mirror: exactly what the
@@ -29,6 +28,7 @@ export const LLM_REPLAY_EVENT_TYPES: readonly string[] = AgentProcessorContract.
  */
 const LLM_RESPONSE_CHUNKS_EVENT_TYPE = "events.iterate.com/agent/llm-response-chunks";
 
+/** One model input message reconstructed from durable request history. */
 export type LlmRequestReplayMessage = {
   /** Stable identity: a message IS its position in the replayed request (the
    * journal is immutable, so the same offset always folds to the same list). */
@@ -38,6 +38,7 @@ export type LlmRequestReplayMessage = {
   content: string;
 };
 
+/** Committed response text or explicitly supplied transient chunks for one request. */
 export type LlmRequestReplayResponse = {
   /** The response text: the committed output when the turn settled with one,
    * else whatever streamed in before the request failed / was cancelled /
@@ -50,6 +51,7 @@ export type LlmRequestReplayResponse = {
   source: "output" | "chunks";
 };
 
+/** Token usage, timing, and gateway metadata recorded for one model request. */
 export type LlmRequestReplayStats = {
   /** Normalized counts from token-usage-reported; null until the turn
    * settled successfully (or when the vendor reported no parseable usage). */
@@ -80,6 +82,7 @@ export type LlmRequestReplayStats = {
   rawResponse: unknown;
 };
 
+/** Server-reconstructed model request, response, and lifecycle information. */
 export type LlmRequestReplay = {
   messages: LlmRequestReplayMessage[];
   /** From the llm-request-requested event at the replayed offset. */

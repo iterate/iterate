@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { connectItx, useLiveState } from "iterate/sdk/itx/react";
 import { AgentDetailsSheet } from "~/components/agents/agent-details-sheet.tsx";
@@ -10,6 +11,7 @@ import {
 } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
+import { configRepoFileMentionProvider } from "~/components/config-repo-file-mentions.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams/$")({
   staticData: streamPageStaticData(),
@@ -34,18 +36,17 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams
 function ProjectAgentDetailContent() {
   const { project } = Route.useLoaderData();
   const { _splat: streamPath } = Route.useParams();
+  const fileMentions = configRepoFileMentionProvider(project.id);
   const agents =
     useLiveState(
       (itx) => itx.agents.liveState,
       (state) => state.agents,
       [],
     ).value ?? {};
-  const agentRuntimeTransition = useLiveState(
-    (itx) => itx.agents.get(streamPath).liveState,
-    (state) => state.runtimeChange,
-    [streamPath],
-    { slug: project.id },
-  ).value;
+  const agentSource = useCallback(
+    async () => (await connectItx(project.id)).agents.get(streamPath),
+    [project.id, streamPath],
+  );
 
   // The stream view subscribes live, so a send needs no cache invalidation —
   // the new events arrive over the socket. Agent setup is represented by
@@ -53,22 +54,32 @@ function ProjectAgentDetailContent() {
   // input fact.
   // The socket is keyed by project ID (the provider pre-warmed it), and agents
   // are addressed by their stream path.
-  async function submitAgentMessage(message: string) {
+  async function submitAgentMessage({
+    content,
+    mentions,
+  }: import("@iterate-com/shared/message").Message) {
     const itx = await connectItx(project.id);
     // Returned so the composer can feed the committed offset into the
     // store's consume-own-append metric (real append→observed latency).
-    return await itx.agents.get(streamPath).message(message);
+    return await itx.agents.get(streamPath).message({
+      content,
+      ...(!mentions?.length ? {} : { mentions }),
+    });
   }
 
-  async function submitAgentFiles({ files, message }: { files: File[]; message: string }) {
+  async function submitAgentFiles({
+    files,
+    content,
+    mentions,
+  }: import("@iterate-com/shared/message").Message & { files: File[] }) {
     const itx = await connectItx(project.id);
-    // One addFiles call → ONE input event carrying every attachment, so the
-    // feed shows a single message and the agent gets one turn trigger.
-    const { event } = await itx.agents.get(streamPath).addFiles({
+    // The unified message call commits text, linked resources, and uploaded
+    // files as one input event, so resolution can gate exactly one turn.
+    return await itx.agents.get(streamPath).message({
       files: await filesToAgentPayload(files),
-      ...(message && { message }),
+      content,
+      ...(!mentions?.length ? {} : { mentions }),
     });
-    return event;
   }
 
   async function interruptAgentMessage() {
@@ -107,7 +118,6 @@ function ProjectAgentDetailContent() {
               path={streamPath}
               projectId={project.id}
               projectSlug={project.slug}
-              runtimeTransition={agentRuntimeTransition}
             />
           }
           emptyLabel={null}
@@ -116,10 +126,11 @@ function ProjectAgentDetailContent() {
             onSubmit: submitAgentMessage,
             onSubmitFiles: submitAgentFiles,
             placeholder: "Message this agent",
+            suggestionProviders: [fileMentions],
           }}
           projectId={project.id}
           projectSlug={project.slug}
-          agentRuntimeTransition={agentRuntimeTransition ?? null}
+          agentSource={agentSource}
           streamPath={streamPath}
         />
       </div>

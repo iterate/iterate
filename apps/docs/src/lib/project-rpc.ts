@@ -1,6 +1,5 @@
-import type { TasksWorkspace, WorkspaceListEntry } from "./tasks-api.ts";
-import type { DocsUser } from "./docs-api.ts";
-import type { BoardAddress } from "./board-shared.ts";
+import type { WorkspaceTransport } from "@iterate-com/workspace-documents/types";
+import type { DocsUser, DocsWorkspace, WorkspaceListEntry } from "./docs-api.ts";
 import { withDocsProject, withDocsProjectOnce } from "./docs-client.ts";
 
 /**
@@ -10,29 +9,32 @@ import { withDocsProject, withDocsProjectOnce } from "./docs-client.ts";
  * under everything.
  */
 export const withProject = withDocsProject;
-export const withProjectOnce = withDocsProjectOnce;
+const withProjectOnce = withDocsProjectOnce;
 
 /**
- * The board's workspace capability for one address, on a live project stub:
- * the lazily-creating door for the app's own board naming, the plain-`get`
- * lens door for an existing workspace path. (The stub is a capnweb Proxy;
- * the local cast just names the doors.)
+ * One workspace on a live project stub — the platform surface forwarded
+ * verbatim, plain get. The stub arrives untyped from the shared client (its
+ * type parameter is the vessel's DocsApi, whose `workspace` returns a
+ * DocsWorkspace): the two assertions only restate that method's declared
+ * shape, and no cast-free spelling exists for a capnweb Proxy's members.
  */
-export function workspaceFor(project: unknown, address: BoardAddress): TasksWorkspace {
-  const doors = project as {
-    board(boardId: string, repoPath?: string): unknown;
-    workspaceAt(workspacePath: string, repoPath?: string): unknown;
-  };
-  return (
-    address.boardId !== null
-      ? doors.board(address.boardId, address.repoPath)
-      : doors.workspaceAt(address.workspacePath, address.repoPath)
-  ) as TasksWorkspace;
+export function workspaceFor(project: unknown, workspacePath: string): DocsWorkspace {
+  return (project as { workspace(workspacePath: string): unknown }).workspace(
+    workspacePath,
+  ) as DocsWorkspace;
 }
 
-/** The project's repos, for the board home's per-repo sections. */
-export function listRepos(): Promise<string[]> {
-  return withProject((project) => project.repos());
+/**
+ * The shared workspace components' access to one workspace: reconnect-aware
+ * `run` for ordinary calls, quiet `runOnce` for teardown flushes that must
+ * never replace the shared session under live polls.
+ */
+export function workspaceTransport(workspacePath: string): WorkspaceTransport {
+  return {
+    run: (operation) => withProject((project) => operation(workspaceFor(project, workspacePath))),
+    runOnce: (operation) =>
+      withProjectOnce((project) => operation(workspaceFor(project, workspacePath))),
+  };
 }
 
 /** Every workspace stream in the project (the picker), newest first. */

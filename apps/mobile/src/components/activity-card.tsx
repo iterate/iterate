@@ -1,3 +1,4 @@
+import { sliceText } from "@iterate-com/shared/chunked-text";
 // One activity roll-up in the chat feed — the mobile rendering of the web's
 // "Ran code 2× · 3 requests · 7.4s" rows (packages/ui agent-ui-reducer items).
 // Collapsed (the default, live or settled): the one-line summary plus status
@@ -354,8 +355,8 @@ function liveSummary(activity: AgentUiActivity, liveStatus: AgentUiLiveStatus | 
   // steps-only fallback keeps the card honest.
   const current = activity.steps.findLast((step) => step.status === "running");
   if (current?.kind === "code") return "running code…";
-  if (current?.kind === "llm" && current.responseText !== "") return "writing code…";
-  if (current?.kind === "llm" && current.thinkingText !== "") return "thinking…";
+  if (current?.kind === "llm" && current.responseText.length > 0) return "writing code…";
+  if (current?.kind === "llm" && current.thinkingText.length > 0) return "thinking…";
   if (current?.kind === "llm") return "waiting for a response…";
   return "working…";
 }
@@ -366,7 +367,7 @@ function LlmStepView({ code, step }: { code: AgentUiCodeStep | null; step: Agent
   // bubbles, and the verbatim text in Meta → response. It renders only for
   // code-less moments — the live stream before a script lands, or a round
   // whose code half never arrived.
-  const responseText = code === null ? step.responseText : "";
+  const responseText = code === null ? sliceText(step.responseText) : "";
   return (
     <View style={styles.stepBody}>
       {/* Once the round has a code step, this stat line lives in its Meta
@@ -377,8 +378,8 @@ function LlmStepView({ code, step }: { code: AgentUiCodeStep | null; step: Agent
           {`llm${step.model ? ` · ${step.model}` : ""}${footerStats(step)}`}
         </Text>
       ) : null}
-      {step.thinkingText !== "" ? (
-        <Text style={styles.thinking}>{tail(step.thinkingText, 600)}</Text>
+      {step.thinkingText.length > 0 ? (
+        <Text style={styles.thinking}>{tail(sliceText(step.thinkingText), 600)}</Text>
       ) : null}
       {responseText === "" ? null : step.interpreted && !looksLikeCode(responseText) ? (
         // An interpreted prose response (a userland format extracted the real
@@ -590,7 +591,7 @@ function metaYaml(
     // The raw model response the round's consequences were derived from —
     // after the prompt, so the doc reads request → answer (parity with the
     // os feed's buildRoundMetaYaml).
-    ...(llm?.responseText && { response: llm.responseText }),
+    ...(llm && llm.responseText.length > 0 && { response: sliceText(llm.responseText) }),
   });
   visit(doc, {
     // Multiline strings as |- blocks: readable and highlightable, instead of

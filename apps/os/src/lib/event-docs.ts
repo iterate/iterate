@@ -9,8 +9,7 @@ import { ProjectProcessorContract } from "~/domains/projects/project-processor-c
 import { RepoProcessorContract } from "~/domains/repos/repo-processor-contract.ts";
 import { SandboxProcessorContract } from "~/domains/sandboxes/sandbox-processor-contract.ts";
 import { SecretProcessorContract } from "~/domains/secrets/secret-processor-contract.ts";
-import { BrowserFeedContract } from "~/domains/streams/client-libraries/processors/browser-feed/contract.ts";
-import { BrowserRawEventsContract } from "~/domains/streams/client-libraries/processors/browser-raw-events/contract.ts";
+import { FeedProcessorContract } from "~/domains/streams/feed-contract.ts";
 import { CoreProcessorContract } from "~/domains/streams/core-processor-contract.ts";
 import { WorkspaceProcessorContract } from "~/domains/workspaces/workspace-processor-contract.ts";
 
@@ -46,8 +45,7 @@ const processorContracts = [
   SlackAgentProcessorContract,
   TelegramProcessorContract,
   TelegramAgentProcessorContract,
-  BrowserRawEventsContract,
-  BrowserFeedContract,
+  FeedProcessorContract,
 ] as const satisfies readonly ProcessorContractForDocs[];
 
 export type EventDoc = {

@@ -31,6 +31,7 @@
 #include "freertos/task.h"
 #include "iterate/kit/conversation_overlay.h"
 #include "iterate/kit/face_wake.h"
+#include "iterate/kit/platforms/lcd_transfer.h"
 #include "waveshare_avatar.h"
 
 static const char tag[] = "waveshare-ui";
@@ -61,6 +62,7 @@ enum {
   LIGHTS_TOP = DISPLAY_HEIGHT - LIGHTS_HEIGHT,
   STATUS_CAPACITY = 64,
   REFRESH_PERIOD_MS = 100,
+  DISPLAY_TRANSFER_TIMEOUT_MS = 50,
   /* One bounded DMA strip, sized like the old flush buffer: 20 full rows. */
   STRIP_ROWS = 20,
 };
@@ -81,15 +83,15 @@ static struct {
   bool stream_ready;
   bool call_active;
   bool call_requested;
-  bool talk_held;
-  /* Unrecoverable start-up fault; latched by present() and never cleared. */
+  struct iterate_kit_voice_view view;
+  /* Startup or display-transfer fault; latched until reboot. */
   bool fault;
 } ui;
 
 static esp_lcd_panel_handle_t panel;
 static esp_lcd_panel_io_handle_t panel_io;
-/* Given by the trans-done ISR; taken before the strip buffer is rewritten. */
-static SemaphoreHandle_t strip_free;
+static StaticSemaphore_t strip_transfer_control;
+static struct iterate_kit_lcd_transfer strip_transfer;
 static uint16_t *strip_pixels;
 /* Panel-endian (byte-swapped) pixel stores; strips memcpy straight out. */
 static uint16_t *face_pixels;
@@ -122,7 +124,7 @@ void waveshare_display_present(const struct iterate_kit_voice_view *view) {
   ui.stream_ready = view->stream_ready;
   ui.call_active = view->call_active;
   ui.call_requested = view->wants_call;
-  ui.talk_held = view->talk_held;
+  ui.view = *view;
   /* Latching, not copied: nothing clears a fault but a reboot. */
   if (view->fault) ui.fault = true;
   xSemaphoreGive(ui.lock);
@@ -133,38 +135,28 @@ void waveshare_display_present(const struct iterate_kit_voice_view *view) {
 static struct iterate_kit_conversation_visual_state face_status(void) {
   struct iterate_kit_conversation_visual_state status = {0};
   xSemaphoreTake(ui.lock, portMAX_DELAY);
-  status.network = ui.link_ready ? ITERATE_KIT_NETWORK_CONNECTED
-                                 : ITERATE_KIT_NETWORK_CONNECTING;
-  status.reach =
-      iterate_kit_reach_from(ui.api_ready, ui.stream_ready, ui.call_active);
-  status.media_ready = ui.link_ready;
-  status.media_failed = ui.fault;
-  status.conversation_active = ui.call_active;
-  status.microphone_listening =
-      ui.talk_held || ui.state == ITERATE_KIT_VOICE_SCREEN_LISTENING;
-  status.speaker_peak = ui.state == ITERATE_KIT_VOICE_SCREEN_SPEAKING ? 4096U : 0U;
+  ui.view.fault = ui.fault;
+  iterate_kit_voice_view_lights(&ui.view, &status);
   xSemaphoreGive(ui.lock);
   return status;
 }
 
-static bool strip_done(
-    esp_lcd_panel_io_handle_t io,
-    esp_lcd_panel_io_event_data_t *event,
-    void *context) {
-  BaseType_t woke = pdFALSE;
-  (void)io;
-  (void)event;
-  (void)context;
-  xSemaphoreGiveFromISR(strip_free, &woke);
-  return woke == pdTRUE;
+static void note_display_transfer_failure(
+    enum iterate_kit_lcd_transfer_result result) {
+  xSemaphoreTake(ui.lock, portMAX_DELAY);
+  ui.fault = true;
+  xSemaphoreGive(ui.lock);
+  ESP_LOGE(
+      tag, "display transfer %s; display task stopped",
+      result == ITERATE_KIT_LCD_TRANSFER_TIMED_OUT ? "timed out" : "failed");
 }
 
 /*
  * Push one row-major, already panel-endian region in bounded strips. The
- * semaphore is taken BEFORE the strip buffer is rewritten, so the copy can
- * never race the DMA that is still reading the previous strip.
+ * shared transfer owner waits before the strip buffer is rewritten, so the
+ * copy can never race the DMA that is still reading the previous strip.
  */
-static void push_region(
+static bool push_region(
     int32_t left,
     int32_t top,
     int32_t width,
@@ -174,20 +166,21 @@ static void push_region(
   while (row < height) {
     int32_t rows = height - row;
     if (rows > STRIP_ROWS) rows = STRIP_ROWS;
-    xSemaphoreTake(strip_free, portMAX_DELAY);
     memcpy(
         strip_pixels,
         &pixels[(size_t)row * width],
         (size_t)rows * width * sizeof(*pixels));
-    if (esp_lcd_panel_draw_bitmap(
-            panel, left, top + row, left + width, top + row + rows,
-            strip_pixels) != ESP_OK) {
-      /* The transfer never started, so the ISR will never give it back. */
-      xSemaphoreGive(strip_free);
-      return;
+    const enum iterate_kit_lcd_transfer_result result =
+        iterate_kit_lcd_transfer_draw_and_wait(
+            &strip_transfer, panel, left, top + row, width, rows,
+            strip_pixels, pdMS_TO_TICKS(DISPLAY_TRANSFER_TIMEOUT_MS));
+    if (result != ITERATE_KIT_LCD_TRANSFER_OK) {
+      note_display_transfer_failure(result);
+      return false;
     }
     row += rows;
   }
+  return true;
 }
 
 /*
@@ -196,22 +189,22 @@ static void push_region(
  * copy of one fact. Status strings still reach the console log, where
  * somebody debugging actually reads them.
  */
-static void refresh_face(void) {
+static bool refresh_face(void) {
   int32_t source_y;
   static struct iterate_kit_face_wake wake;
   const struct iterate_kit_conversation_visual_state status = face_status();
   const uint64_t now = now_ms();
 
-  if (face_pixels == NULL || face_frame == NULL || face_shown == NULL) return;
+  if (face_pixels == NULL || face_frame == NULL || face_shown == NULL) return true;
   if (!waveshare_avatar_render(
           face_frame, (size_t)FACE_RENDER_PIXEL_COUNT,
           iterate_kit_face_awake(&wake, status.conversation_active, now))) {
-    return;
+    return true;
   }
   {
     const size_t card_bytes =
         (size_t)FACE_RENDER_WIDTH * CARD_SOURCE_HEIGHT * sizeof(*face_frame);
-    if (memcmp(face_frame, face_shown, card_bytes) == 0) return;
+    if (memcmp(face_frame, face_shown, card_bytes) == 0) return true;
     memcpy(face_shown, face_frame, card_bytes);
   }
   for (source_y = 0; source_y < CARD_SOURCE_HEIGHT; ++source_y) {
@@ -235,14 +228,14 @@ static void refresh_face(void) {
           (size_t)FACE_WIDTH * sizeof(*output));
     }
   }
-  push_region(FACE_LEFT, FACE_TOP, FACE_WIDTH, FACE_HEIGHT, face_pixels);
+  return push_region(FACE_LEFT, FACE_TOP, FACE_WIDTH, FACE_HEIGHT, face_pixels);
 }
 
 /*
  * The twelve lights across the foot of the panel. Colours from the one shared
  * renderer; only the geometry is this board's business.
  */
-static void refresh_lights(void) {
+static bool refresh_lights(void) {
   struct iterate_kit_rgb8 lights[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
   const struct iterate_kit_conversation_visual_state status = face_status();
   const int32_t pitch =
@@ -254,7 +247,7 @@ static void refresh_lights(void) {
       (size_t)LIGHTS_WIDTH * LIGHTS_HEIGHT * sizeof(*lights_pixels);
   int32_t index;
 
-  if (lights_pixels == NULL || lights_shown == NULL) return;
+  if (lights_pixels == NULL || lights_shown == NULL) return true;
   iterate_kit_conversation_lights_for_screen(
       &status, (uint32_t)now_ms(), lights);
   memset(lights_pixels, 0, strip_bytes);
@@ -272,17 +265,19 @@ static void refresh_lights(void) {
       for (column = 0; column < mark_width; ++column) out[column] = colour;
     }
   }
-  if (memcmp(lights_pixels, lights_shown, strip_bytes) == 0) return;
+  if (memcmp(lights_pixels, lights_shown, strip_bytes) == 0) return true;
   memcpy(lights_shown, lights_pixels, strip_bytes);
-  push_region(0, LIGHTS_TOP, LIGHTS_WIDTH, LIGHTS_HEIGHT, lights_pixels);
+  return push_region(0, LIGHTS_TOP, LIGHTS_WIDTH, LIGHTS_HEIGHT, lights_pixels);
 }
 
 static void ui_task(void *context) {
   (void)context;
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(REFRESH_PERIOD_MS));
-    refresh_face();
-    refresh_lights();
+    if (!refresh_face() || !refresh_lights()) {
+      vTaskDelete(NULL);
+      return;
+    }
   }
 }
 
@@ -312,36 +307,38 @@ static bool release_board_resets(void) {
 static bool start_panel(void) {
   const bsp_display_config_t panel_config = {0};
   const esp_lcd_panel_io_callbacks_t callbacks = {
-    .on_color_trans_done = strip_done,
+    .on_color_trans_done = iterate_kit_lcd_transfer_complete,
   };
   if (bsp_display_new(&panel_config, &panel, &panel_io) != ESP_OK) {
     return false;
   }
   if (esp_lcd_panel_io_register_event_callbacks(
-          panel_io, &callbacks, NULL) != ESP_OK) {
+          panel_io, &callbacks, &strip_transfer) != ESP_OK) {
     return false;
   }
   return bsp_display_brightness_set(90) == ESP_OK;
 }
 
 /* The whole panel painted black once, through the same bounded strip. */
-static void clear_panel(void) {
+static bool clear_panel(void) {
   int32_t row = 0;
   while (row < DISPLAY_HEIGHT) {
     int32_t rows = DISPLAY_HEIGHT - row;
     if (rows > STRIP_ROWS) rows = STRIP_ROWS;
-    xSemaphoreTake(strip_free, portMAX_DELAY);
     memset(
         strip_pixels, 0,
         (size_t)rows * DISPLAY_WIDTH * sizeof(*strip_pixels));
-    if (esp_lcd_panel_draw_bitmap(
-            panel, 0, row, DISPLAY_WIDTH, row + rows, strip_pixels) !=
-        ESP_OK) {
-      xSemaphoreGive(strip_free);
-      return;
+    const enum iterate_kit_lcd_transfer_result result =
+        iterate_kit_lcd_transfer_draw_and_wait(
+            &strip_transfer, panel, 0, row, DISPLAY_WIDTH, rows, strip_pixels,
+            pdMS_TO_TICKS(DISPLAY_TRANSFER_TIMEOUT_MS));
+    if (result != ITERATE_KIT_LCD_TRANSFER_OK) {
+      note_display_transfer_failure(result);
+      return false;
     }
     row += rows;
   }
+  return true;
 }
 
 bool waveshare_display_init(void) {
@@ -350,9 +347,8 @@ bool waveshare_display_init(void) {
   ui.state = ITERATE_KIT_VOICE_SCREEN_CONNECTING;
   (void)snprintf(ui.status, sizeof(ui.status), "starting");
 
-  strip_free = xSemaphoreCreateBinary();
-  if (strip_free == NULL) return false;
-  xSemaphoreGive(strip_free);
+  if (!iterate_kit_lcd_transfer_init(
+          &strip_transfer, &strip_transfer_control)) return false;
   strip_pixels = heap_caps_malloc(
       (size_t)DISPLAY_WIDTH * STRIP_ROWS * sizeof(*strip_pixels),
       MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
@@ -363,7 +359,7 @@ bool waveshare_display_init(void) {
     ESP_LOGE(tag, "panel bring-up failed");
     return false;
   }
-  clear_panel();
+  if (!clear_panel()) return false;
 
   lights_pixels = heap_caps_calloc(
       (size_t)LIGHTS_WIDTH * LIGHTS_HEIGHT, sizeof(*lights_pixels),

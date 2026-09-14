@@ -56,12 +56,6 @@ const RESULT_HISTORY_LIMIT = 30_000;
  * the data, not the data. */
 const RESULT_SPILL_PREVIEW_CHARS = 10_000;
 
-/** The agent's own workspace path: /workspaces + the agent stream path (the
- * platform's agentWorkspacePath convention). */
-function itxWorkspacePathForAgent(agentPath: string): string {
-  return `/workspaces${agentPath}`;
-}
-
 export default class ProjectWorker extends IterateWorkerEntrypoint {
   #docsApp = DocsApp.create(this.env, {
     auth: { policy: "project-member" },
@@ -524,13 +518,11 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     }
     try {
       // One file per execution, so replays overwrite idempotently. The agent
-      // workspace lives at /workspaces/<agent path>; relative paths in the
-      // agent's own scripts resolve there, so the recipe uses the relative
-      // form.
+      // workspace shares its /agents/** identity; relative file paths resolve
+      // under /workspace, so the recipe uses that relative form.
       const relativePath = `script-results/${executionId.replace(/[^A-Za-z0-9._-]+/g, "-")}.${isRawText ? "txt" : "json"}`;
-      const workspace = itxWorkspacePathForAgent(agentPath);
       const itx = this.itx;
-      await itx.workspaces.get(workspace).writeFile(`${workspace}/${relativePath}`, text);
+      await itx.agents.get(agentPath).workspace.writeFile(relativePath, text);
       const shown = text.slice(0, RESULT_SPILL_PREVIEW_CHARS);
       return [
         returnedHeader,

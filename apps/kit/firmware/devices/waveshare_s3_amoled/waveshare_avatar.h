@@ -95,17 +95,13 @@ void waveshare_avatar_tick(void);
  */
 void waveshare_avatar_note_abandoned(void);
 
-/** The person is holding the talk button: attend, and keep the mouth shut. */
+/** Enter or leave the user-facing listening pose, which keeps the mouth shut. */
 void waveshare_avatar_set_listening(bool listening);
 
 /*
- * ============================ THE VISEME LANE ==============================
- *
- * During a call the mouth is driven by the worker's viseme track — explicit
- * mouth shapes computed server-side from the same PCM, scheduled against
- * positions in each answer — and the envelope analyzer's guesses are gated
- * off. There is deliberately NO local fallback: an answer with no viseme
- * events plays with a resting mouth rather than an amplitude-flapping one.
+ * Optional remote visemes: mouth shapes computed from the same PCM and
+ * scheduled against local playout positions in each answer. The shared
+ * animator uses the local envelope when remote shapes are absent or expire.
  *
  * Everything below runs on the APP TASK (the voicelab callbacks and the tick
  * both live there), so the bookkeeping needs no atomics; the only values that
@@ -182,6 +178,11 @@ uint32_t waveshare_avatar_render_failures(void);
 uint32_t waveshare_avatar_dropped_samples(void);
 /** Analysis windows the engine has completed since boot. */
 uint32_t waveshare_avatar_frames_analysed(void);
+
+/** Actual descriptor debt used to align the face with physical playout.
+ * The audio owner retains this ISR observation, not a second starvation ledger.
+ */
+int32_t waveshare_audio_dma_owed_ms(void);
 
 #ifdef __cplusplus
 }

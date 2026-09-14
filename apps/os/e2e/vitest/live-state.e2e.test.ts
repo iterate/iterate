@@ -5,7 +5,7 @@
 // stateless one (`itx.liveDemo.ticker`, driven by a timer in the request
 // isolate with no DO).
 import { expect, test } from "vitest";
-import { applyPatch, type LiveUpdate } from "iterate/sdk/capnweb";
+import { createLiveStateStore, isLiveStateSnapshot, type LiveUpdate } from "iterate/sdk/capnweb";
 import { LIVE_STATE_PAGER_HEADER } from "../../src/domains/live-state-pager.ts";
 import type { AgentCollectionProcessorState } from "../../src/itx-api.generated.ts";
 import type { ProjectLiveState } from "../../src/domains/projects/project-live-state.ts";
@@ -22,7 +22,7 @@ test("itx.liveState pushes a snapshot then a minimal diff; the DO-backed counter
   await project.__describe();
 
   const track = trackLiveState<ProjectLiveState>();
-  using subscription = await project.liveState.subscribe(track.onUpdate);
+  using subscription = await project.liveState.subscribe(track.onUpdate, { patchVersion: 3 });
 
   // The subscribe-time frame is a full snapshot: current state IS the first paint.
   await waitForCondition(() => track.state() !== undefined, {
@@ -261,17 +261,16 @@ function trackLiveState<State>(): {
   state: () => State | undefined;
   patchCount: () => number;
 } {
-  let state: State | undefined;
+  const store = createLiveStateStore<State>();
   let patches = 0;
   return {
     onUpdate: (update) => {
-      if (update.type === "snapshot") state = update.state;
-      else {
-        patches += 1;
-        state = applyPatch(state as State, update.patch);
-      }
+      store.apply(update, () => {
+        throw new Error("Live-state e2e revision gap");
+      });
+      if (!isLiveStateSnapshot(update)) patches += 1;
     },
-    state: () => state,
+    state: store.getState,
     patchCount: () => patches,
   };
 }

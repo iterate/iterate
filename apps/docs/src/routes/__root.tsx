@@ -1,8 +1,10 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import { SidebarInset, SidebarProvider } from "@iterate-com/ui/components/sidebar";
+import { Toaster } from "@iterate-com/ui/components/sonner";
 import { TooltipProvider } from "@iterate-com/ui/components/tooltip";
 import appCss from "../styles.css?url";
+import { startBrowserProjectSessionKeepalive } from "../lib/project-session.ts";
 import { getAppShellContext } from "../lib/sidebar-state.ts";
 import { AppSidebar } from "../components/app-sidebar.tsx";
 
@@ -27,6 +29,9 @@ export const Route = createRootRoute({
 
 function RootComponent() {
   const { sidebarDefaultOpen } = Route.useLoaderData();
+  // The project-host session cookie lives 15 minutes; renewing it while
+  // the tab is open is what keeps the app signed in past that.
+  useEffect(() => startBrowserProjectSessionKeepalive(), []);
   return (
     <RootDocument>
       <TooltipProvider delay={0}>
@@ -39,6 +44,7 @@ function RootComponent() {
             <Outlet />
           </SidebarInset>
         </SidebarProvider>
+        <Toaster />
       </TooltipProvider>
     </RootDocument>
   );

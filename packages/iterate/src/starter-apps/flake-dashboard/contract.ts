@@ -15,10 +15,28 @@ const StreamOffset = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
  * `@iterate-com/shared/test-support/flake-test` — the wrapper writes these
  * lines to `FLAKE_RECORD_DIR` and CI ships them here verbatim.
  */
+export const FlakeOutcome = z.enum([
+  "pass",
+  "flake-fail",
+  "unexpected-error",
+  "pinned-fail",
+  "unexpected-pass",
+  "retried-pass",
+]);
+
+/**
+ * Which wrapper (or reporter) produced a record: createFlake, createFailing,
+ * or the telemetry reporters' retried-pass records for tests nobody has
+ * classified yet. Old events predate the field — they were all createFlake.
+ */
+export const FlakeKind = z.enum(["flake", "failing", "unknown"]);
+
 export const FlakeRecord = z.object({
   name: z.string().min(1).max(1_000),
-  outcome: z.enum(["pass", "flake-fail", "unexpected-error"]),
-  pattern: z.string().min(1).max(2_000),
+  kind: FlakeKind.default("flake"),
+  outcome: FlakeOutcome,
+  // Optional: kind "unknown" records carry error samples instead of a pattern.
+  pattern: z.string().min(1).max(2_000).optional(),
   durationMs: z.number().nonnegative(),
   at: z.string().min(1),
   error: z.string().max(4_000).optional(),
@@ -41,7 +59,7 @@ const FlakeRunRecorded = z.object({
   records: z.array(FlakeRecord).min(1).max(10_000),
 });
 
-export const FlakeTransition = z.enum(["unwrap", "switch-to-failing"]);
+export const FlakeTransition = z.enum(["unwrap", "switch-to-failing", "unwrap-failing"]);
 
 const FlakeTransitionProposed = z.object({
   testName: z.string().min(1),
@@ -72,23 +90,54 @@ const FlakeDashboardRenderResult = z.discriminatedUnion("status", [
  * than being recomputed from history.
  */
 const DefaultBranchStreak = z.object({
-  outcome: z.enum(["pass", "flake-fail"]),
+  // Any outcome except unexpected-error, which resets the streak instead.
+  outcome: FlakeOutcome,
   runs: z.number().int().positive(),
   firstAt: z.string().min(1),
   lastAt: z.string().min(1),
 });
 
 const TrackedTest = z.object({
-  pattern: z.string(),
+  /** Latest record's kind wins: adopting an unknown flake into createFlake migrates its row. */
+  kind: FlakeKind.default("flake"),
+  /** Empty for kind "unknown" — those rows show error samples instead. */
+  pattern: z.string().default(""),
   suites: z.array(z.string()).default([]),
-  counts: z
-    .object({
-      pass: z.number().int().nonnegative().default(0),
-      flakeFail: z.number().int().nonnegative().default(0),
-      unexpectedError: z.number().int().nonnegative().default(0),
-    })
-    .default({ pass: 0, flakeFail: 0, unexpectedError: 0 }),
+  /**
+   * Per suite, the offset of the newest run-recorded event (any branch) whose
+   * records included this test. Compared against the suite's
+   * `recentRunOffsets` window at render time: a test absent from all of its
+   * suite's last few ingested runs is retired from the table — hidden, not
+   * deleted, so a transient absence self-heals on the next record.
+   */
+  lastSeenOffset: z.record(z.string(), StreamOffset).default({}),
+  /**
+   * The last (up to) 10 recorded outcomes on any branch, oldest first — the
+   * render's emoji streak bar, each entry carrying the commit that produced
+   * it so the square can link straight to that commit's checks. All branches,
+   * like the counts: the specs and preview-e2e suites only run on pull
+   * requests, so a default-branch-only bar would stay empty forever for the
+   * suites where most flakes live. The numeric defaultBranchStreak below
+   * stays main-only and carries the transition-threshold counts past what 10
+   * entries can show.
+   */
+  recent: z
+    .array(z.object({ outcome: FlakeOutcome, commit: z.string().min(1).max(100) }))
+    .max(10)
+    .default([]),
+  /** Keyed by outcome value ("pass", "pinned-fail", …). */
+  counts: z.record(z.string(), z.number().int().nonnegative()).default({}),
+  /**
+   * The last few error samples worth showing (retried-pass and
+   * unexpected-error records) — for unknown flakes these are the copy-paste
+   * material for the createFlake pattern.
+   */
+  recentErrors: z
+    .array(z.object({ error: z.string().max(4_000), commit: z.string(), at: z.string() }))
+    .max(3)
+    .default([]),
   lastFlakeAt: z.string().nullable().default(null),
+  firstRecordedAt: z.string(),
   lastRecordedAt: z.string(),
   defaultBranchStreak: DefaultBranchStreak.nullable().default(null),
   /**
@@ -101,6 +150,19 @@ const TrackedTest = z.object({
 export const FlakeDashboardState = z.object({
   birthCertificate: z.object({ config: FlakeDashboardConfig }).nullable().default(null),
   tests: z.record(z.string(), TrackedTest).default({}),
+  /**
+   * Per suite, the offsets of its newest (up to 3) run-recorded events across
+   * ALL branches, oldest first — the reference window for retiring absent
+   * tests. All branches because the specs and preview-e2e suites only ever
+   * run on pull requests (cloudflare-previews.yml has no push trigger), so a
+   * default-branch reference point would never exist for them and their rows
+   * could never retire. A window of 3 rather than the single latest run so
+   * one PR push that deletes or renames a test — or a partial, push-cancelled
+   * run — cannot hide a row repo-wide by itself.
+   */
+  suites: z
+    .record(z.string(), z.object({ recentRunOffsets: z.array(StreamOffset).max(3).default([]) }))
+    .default({}),
   /**
    * Offset of the newest reduced DATA event (created / run-recorded /
    * transition-proposed). Render settlements deliberately do not bump it —
@@ -120,17 +182,50 @@ export const FlakeDashboardState = z.object({
 /**
  * Thresholds for the data-provable lifecycle transitions (grilled decision:
  * unwrap after 50 consecutive default-branch passes over >=5 days; propose
- * `failing` after 25 consecutive matched failures over >=2 days). Tunable
- * constants; the ~10% sentinel false-unwraps with probability 0.9^50 ~= 0.5%.
+ * `createFailing` after 25 consecutive matched failures over >=2 days).
+ * Tunable constants. Sentinel tests are excluded from proposals entirely —
+ * they are designed to flake.
  */
 export const flakeTransitionThresholds = {
   unwrap: { runs: 50, minSpanMs: 5 * 24 * 60 * 60 * 1000 },
   "switch-to-failing": { runs: 25, minSpanMs: 2 * 24 * 60 * 60 * 1000 },
+  // A pin that keeps passing unexpectedly looks fixed: propose deleting the
+  // createFailing wrapper after a sustained streak.
+  "unwrap-failing": { runs: 10, minSpanMs: 2 * 24 * 60 * 60 * 1000 },
 } as const;
+
+/**
+ * The exact shape of a delivered event this app ingests: a platform-verified
+ * GitHub webhook for a COMPLETED check_run on a connection stream. This
+ * repo's test suites run on Depot CI, whose jobs are GitHub check runs (NOT
+ * GitHub Actions workflow runs — `workflow_run` never fires for them). Zod
+ * strips the rest of GitHub's (huge) payload; only these fields are read.
+ */
+export const CheckRunWebhookEvent = z.object({
+  type: z.literal("events.iterate.com/github/webhook-received"),
+  path: z.string().regex(/^\/integrations\/github\/[^/]+$/),
+  payload: z.object({
+    delivery: z.object({ name: z.literal("check_run") }),
+    body: z.object({
+      action: z.literal("completed"),
+      check_run: z.object({
+        // Cancelled/skipped checks upload no fresh artifacts worth scanning.
+        conclusion: z.enum(["success", "failure"]),
+        head_sha: z.string().min(1),
+        check_suite: z.object({ head_branch: z.string().nullish() }).optional(),
+      }),
+      repository: z.object({
+        name: z.string().min(1),
+        owner: z.object({ login: z.string().min(1) }),
+        default_branch: z.string().nullish(),
+      }),
+    }),
+  }),
+});
 
 export const FlakeDashboardProcessorContract = defineProcessorContract({
   slug: "flake-dashboard",
-  version: "0.1.0",
+  version: "0.5.0",
   description:
     "Folds createFlake test outcomes reported by CI into per-test flake stats, renders the GitHub 'Flake dashboard' issue, and proposes data-provable lifecycle transitions.",
   stateSchema: FlakeDashboardState,

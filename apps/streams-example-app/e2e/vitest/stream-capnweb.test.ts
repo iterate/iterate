@@ -42,14 +42,13 @@ describe("stream capnweb protocol", () => {
       payload: { path },
     });
 
-    // The standalone playground has no project worker, so its birth
-    // certificate is only created + woken. It does not invent an event callback.
+    // Feed lifecycle facts may precede the caller's first append.
     expect(appended).toMatchObject({
       type: "test.stream.browser-client",
       payload: { path },
-      offset: 3,
       createdAt: expect.any(String),
     });
+    expect(appended.offset).toBeGreaterThan(0);
   });
 
   it("appends events after the stream-created event over capnweb", async () => {
@@ -83,9 +82,9 @@ describe("stream capnweb protocol", () => {
     expect(result.appended).toMatchObject({
       type: "test.stream.capnweb-append",
       payload: { path: result.path },
-      offset: 3, // after the standalone birth certificate (created, woken)
       createdAt: expect.any(String),
     });
+    expect(result.appended.offset).toBeGreaterThan(0);
   });
 
   it("appends, reads, and keeps running after event rows larger than 2 MiB", async () => {
@@ -107,9 +106,9 @@ describe("stream capnweb protocol", () => {
     if (appended === undefined) throw new Error("append returned no event");
     expect(appended).toMatchObject({
       type: "test.stream.capnweb-large-row",
-      offset: 3, // after the standalone birth certificate
       createdAt: expect.any(String),
     });
+    expect(appended.offset).toBeGreaterThan(0);
     expectLargePayload(appended, body.length);
 
     const byOffset = await stream.stream.getEvent({ offset: appended.offset });
@@ -128,9 +127,9 @@ describe("stream capnweb protocol", () => {
     });
     expect(afterLargeRow).toMatchObject({
       type: "test.stream.capnweb-after-large-row",
-      offset: appended.offset + 1,
       payload: { path },
     });
+    expect(afterLargeRow!.offset).toBeGreaterThan(appended.offset);
   });
 
   it("documents Cloudflare's 32 MiB inbound WebSocket frame ceiling for capnweb appends", async () => {
@@ -293,16 +292,16 @@ describe("stream capnweb protocol", () => {
     expect(batch).toMatchObject([
       {
         type: "test.stream.capnweb-batch-new",
-        offset: 4,
         payload: { n: 1 },
       },
       existing,
       {
         type: "test.stream.capnweb-batch-new",
-        offset: 5,
         payload: { n: 2 },
       },
     ]);
+    expect(batch[0]!.offset).toBeGreaterThan(existing!.offset);
+    expect(batch[2]!.offset).toBeGreaterThan(batch[0]!.offset);
   });
 
   it("deduplicates identical same-batch idempotency retries and rejects conflicts", async () => {
@@ -323,22 +322,15 @@ describe("stream capnweb protocol", () => {
         payload: { n: 2 },
       }),
     ).rejects.toSatisfy(isIdempotencyConflict);
-    await expect(
-      stream.stream
-        .getEvents({ afterOffset: 0 })
-        .then((events) => events.map((event) => event.type)),
-    ).resolves.toEqual([
-      "events.iterate.com/stream/created",
-      "events.iterate.com/stream/woken",
-      "test.stream.capnweb-same-batch-idempotency",
-    ]);
+    const events = await stream.stream.getEvents({ afterOffset: 0 });
+    expect(events.filter((item) => item.type === event.type)).toEqual([batch[0]]);
   });
 
   it("uses exclusive numeric cursors", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-cursors");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
-    await stream.stream.append(
+    const [first, second, third] = await stream.stream.append(
       {
         type: "test.stream.capnweb-cursor",
         payload: { n: 1 },
@@ -347,20 +339,22 @@ describe("stream capnweb protocol", () => {
         type: "test.stream.capnweb-cursor",
         payload: { n: 2 },
       },
+      { type: "test.stream.capnweb-cursor", payload: { n: 3 } },
     );
 
-    await expect(stream.stream.getEvents({ afterOffset: 0 })).resolves.toMatchObject([
-      { offset: 1 },
-      { offset: 2 },
-      { offset: 3 },
-      { offset: 4 },
-    ]);
-    await expect(
-      stream.stream.getEvents({ afterOffset: 1, beforeOffset: 4 }),
-    ).resolves.toMatchObject([{ offset: 2 }, { offset: 3 }]);
-    await expect(stream.stream.getEvents({ afterOffset: 3 })).resolves.toMatchObject([
-      { offset: 4 },
-    ]);
+    if (first === undefined || second === undefined || third === undefined)
+      throw new Error("append returned no cursor events");
+    expect(first.offset).toBeLessThan(second.offset);
+    const afterFirst = await stream.stream.getEvents({ afterOffset: first.offset });
+    expect(afterFirst).toContainEqual(second);
+    expect(afterFirst.every((item) => item.offset > first.offset)).toBe(true);
+    const between = await stream.stream.getEvents({
+      afterOffset: first.offset,
+      beforeOffset: third.offset,
+    });
+    expect(between).toEqual([second]);
+    const afterSecond = await stream.stream.getEvents({ afterOffset: second.offset });
+    expect(afterSecond.every((item) => item.offset > second.offset)).toBe(true);
   });
 
   it("replays earlier events and then sends new batches to an open callback", async () => {
@@ -378,52 +372,53 @@ describe("stream capnweb protocol", () => {
       processEventBatch: (batch) => callback.processEventBatch(batch),
       replayAfterOffset: 0,
     });
-    await waitFor(() => callback.batches.length === 1, 1_000);
+    await waitFor(() => callback.events.some((event) => event.offset === first!.offset), 1_000);
 
     const [second] = await stream.stream.append({
       type: "test.stream.capnweb-replay",
       payload: { n: 2 },
     });
-    await waitFor(() => callback.batches.length === 2, 1_000);
+    await waitFor(() => callback.events.some((event) => event.offset === second!.offset), 1_000);
     const runtime = await stream.stream.runtimeState();
     const coreProcessorState = runtime.coreProcessorState as {
       projectId: string | null;
       path: string;
     };
 
-    expect(callback.batches).toEqual([
-      [
-        expect.objectContaining({
-          type: "events.iterate.com/stream/created",
-          offset: 1,
-          payload: {
-            projectId: coreProcessorState.projectId,
-            path,
-            streamId: expect.any(String),
-          },
-        }),
-        expect.objectContaining({
-          type: "events.iterate.com/stream/woken",
-          offset: 2,
-          payload: {
-            incarnationId: expect.any(String),
-          },
-        }),
-        first,
-        // Opening the callback appends a presence fact (ephemeral, but session
-        // connections receive buffered ephemeral events) after the replay
-        // cursor is fixed, so it arrives at the end of the first batch.
-        expect.objectContaining({
-          type: "events.iterate.com/stream/connection-opened",
-          offset: 4,
-          payload: {
-            connectionKey: "replay",
-            kind: "session",
-          },
-        }),
-      ],
-      [second],
+    const replayed = callback.events;
+    expect(replayed).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/stream/created",
+        payload: {
+          projectId: coreProcessorState.projectId,
+          path,
+          streamId: expect.any(String),
+        },
+      }),
+    );
+    expect(replayed).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/stream/woken",
+        payload: { incarnationId: expect.any(String) },
+      }),
+    );
+    expect(
+      replayed.filter(
+        (event) =>
+          event.type === "events.iterate.com/stream/connection-opened" &&
+          event.payload?.connectionKey === "replay",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        ephemeral: true,
+        payload: expect.objectContaining({ connectionKey: "replay", kind: "session" }),
+      }),
     ]);
+    expect(replayed.filter((event) => event.offset === first!.offset)).toEqual([first]);
+    expect(replayed.filter((event) => event.offset === second!.offset)).toEqual([second]);
+    expect(replayed.map((event) => event.offset)).toEqual(
+      [...replayed].map((event) => event.offset).sort((a, b) => a - b),
+    );
     await connection.close();
   });
 
@@ -522,8 +517,11 @@ describe("stream capnweb protocol", () => {
     await callbackClient.stream.openConnection({
       connectionKey: "wire",
       processEventBatch: (batch) => callback.processEventBatch(batch),
-      // Skip the standalone birth certificate (created, woken).
-      replayAfterOffset: 2,
+      // The feed subscription and hosted connection can append their own
+      // lifecycle facts during birth. Replay only after the committed head
+      // observed before opening this browser callback.
+      replayAfterOffset:
+        (await callbackClient.stream.getEvents({ afterOffset: 0 })).at(-1)?.offset ?? 0,
     });
     const afterConnectionOpened = frames.length;
 
@@ -545,20 +543,13 @@ describe("stream capnweb protocol", () => {
     expect(appended).toMatchObject({
       type: input.type,
       payload: input.payload,
-      offset: 4,
       createdAt: expect.any(String),
     });
     // Batch boundaries race (initial push, presence fact commit timing), but
-    // the received EVENTS are exact: the callback connection's own opened fact,
-    // then the published event — each exactly once, in offset order.
+    // the published event arrives exactly once and later than every pre-open
+    // replayed event. The feed facet may contribute its own lifecycle facts.
     expect(callback.batches.at(-1)).toEqual([appended]);
-    expect(callback.batches.flat()).toEqual([
-      expect.objectContaining({
-        type: "events.iterate.com/stream/connection-opened",
-        offset: 3,
-      }),
-      appended,
-    ]);
+    expect(callback.events.filter((event) => event.offset === appended.offset)).toEqual([appended]);
     // These are server-initiated callback calls: the owner never originates a request
     // for them. Unlike the pre-itx-v4 implementation, the itx worker→DO bridge
     // observes each delivery's result, so the browser answers every push with
@@ -592,7 +583,7 @@ describe("stream capnweb protocol", () => {
                   {
                     type: input.type,
                     payload: input.payload,
-                    offset: 4,
+                    offset: appended.offset,
                     createdAt: expect.any(String),
                   },
                 ],

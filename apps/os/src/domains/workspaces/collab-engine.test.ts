@@ -357,6 +357,24 @@ describe("collab engine", () => {
     expect(engine.head(PATH)!.content).toBe(a.doc);
   });
 
+  test("minimalSplice preserves an unconfirmed edit between repeated replacements", async () => {
+    const source = "alpha middle alpha";
+    const { store } = fakeStore();
+    const engine = makeEngine(store);
+    const opened = await engine.open(PATH, async () => ({ content: source, epoch: EPOCH }));
+    const human = new Peer("human", opened.content, opened.version);
+    const middle = source.indexOf("middle") + "middle".length;
+    human.edit(middle, middle, " text");
+
+    await engine.applyExternal(PATH, (doc) =>
+      minimalSplice(doc, doc.toString().replaceAll("alpha", "beta")),
+    );
+    expect((await engine.push(human.sendable())).status).toBe("accepted");
+    await syncAll(engine, [human]);
+
+    expect(human.doc).toBe("beta middle text beta");
+  });
+
   test("dedupe identities are RETAINED for the session — idempotency is a guarantee", async () => {
     const { snapshots, store } = fakeStore();
     const engine = makeEngine(store);

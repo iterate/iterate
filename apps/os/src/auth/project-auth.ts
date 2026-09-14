@@ -20,14 +20,39 @@ export type ProjectAuthActor = Pick<ValidatedProjectAppSession, "userId">;
 type ProjectAuthRequest = Pick<Request, "body" | "headers" | "method" | "url">;
 
 const AUTH_COOKIE = "iterate-project-auth";
+/** One-shot marker set with the silent login handoff on a stale cookie: if
+ * the browser comes back still unauthenticated within its minute, the gate
+ * renders the sign-in page instead of bouncing again. */
+const RETRY_COOKIE = "iterate-project-auth-retry";
 const CALLBACK_PATH = "/_iterate/auth/callback";
 const LOGIN_PATH = "/_iterate/auth/login";
 const LOGOUT_PATH = "/_iterate/auth/logout";
+const REFRESH_PATH = "/_iterate/auth/refresh";
+/**
+ * How long the cookie jar keeps a session token: deliberately far longer
+ * than the token's own 15 minutes. A lapsed token still PRESENT is what lets
+ * a plain navigation re-mint silently; the moment the browser drops the
+ * cookie there is nothing to tell a returning member from a stranger, and
+ * the sign-in page becomes the only answer. Presence grants nothing — the
+ * token inside is verified on every request.
+ */
+const COOKIE_TTL_SECONDS = 30 * 24 * 60 * 60;
+/**
+ * The longest a session may live through renewals. Renewal proves a member
+ * with a valid token; it does not prove the platform sign-in that token
+ * descends from is still alive. Past this age the member signs in again.
+ */
+const MAX_SESSION_AGE_SECONDS = 7 * 24 * 60 * 60;
 const MAX_TOKEN_BYTES = 8192;
 
 type ValidateSession = (
   input: ValidateProjectAppSessionInput,
 ) => Promise<ValidatedProjectAppSession | null>;
+
+/** Re-mint a session for an actor validation already proved (the refresh route). */
+type MintSession = (
+  input: MintProjectAppSessionInput,
+) => Promise<{ expiresAt: number; token: string } | null>;
 
 /** Runtime-check policy values because project code crosses an RPC boundary. */
 export function parseProjectAuthPolicy(value: ProjectAuthPolicy): ProjectAuthPolicy {
@@ -85,12 +110,27 @@ export async function authenticateProjectRequest(input: {
  * path inspects metadata only and leaves the request body untouched.
  */
 export async function handleProjectAuthFetch(input: {
+  /** Absent only in callers that never serve the refresh route. */
+  mintSession?: MintSession;
   osBaseUrl: string | undefined;
   projectId: string;
   request: ProjectAuthRequest;
   validateSession: ValidateSession;
 }): Promise<Response | null> {
   const url = new URL(input.request.url);
+
+  if (url.pathname === REFRESH_PATH) {
+    if (input.request.method !== "POST") return methodNotAllowed("POST");
+    // A renewal is only ever the page's own fetch: an exact Origin, never a
+    // navigation or a request without one.
+    if (
+      input.request.headers.get("origin") === null ||
+      !isSameOriginBrowserRequest(input.request)
+    ) {
+      return forbiddenOrigin();
+    }
+    return await refreshSession(input, url);
+  }
 
   if (url.pathname === LOGIN_PATH) {
     if (input.request.method !== "GET") return methodNotAllowed("GET");
@@ -120,7 +160,8 @@ export async function handleProjectAuthFetch(input: {
     return new Response(null, { headers, status: 303 });
   }
 
-  const token = readCookie(input.request.headers.get("cookie"), AUTH_COOKIE);
+  const cookieHeader = input.request.headers.get("cookie");
+  const token = readCookie(cookieHeader, AUTH_COOKIE);
   if (token) {
     const validation = await validateOrDependencyResponse(input, token, url.origin);
     if (validation instanceof Response) return validation;
@@ -130,11 +171,89 @@ export async function handleProjectAuthFetch(input: {
   const login = `${LOGIN_PATH}?${new URLSearchParams({
     return_to: `${url.pathname}${url.search}`,
   })}`;
+  // A stale cookie on a navigation is a member who was here minutes ago:
+  // hand them straight back to the login start, which re-mints without a
+  // click while their OS session lives, instead of a sign-in page. The
+  // one-shot guard makes a second bounce render the page rather than loop.
+  if (
+    token &&
+    isHtmlNavigation(input.request) &&
+    input.osBaseUrl &&
+    readCookie(cookieHeader, RETRY_COOKIE) === null
+  ) {
+    const headers = noStoreHeaders();
+    headers.set("location", login);
+    headers.append("set-cookie", expiredCookie(url));
+    headers.append("set-cookie", retryGuardCookie(url));
+    return new Response(null, { headers, status: 302 });
+  }
   const response = isHtmlNavigation(input.request)
     ? loginPage(login)
     : Response.json({ authenticated: false, login }, { headers: noStoreHeaders(), status: 401 });
   if (token) response.headers.append("set-cookie", expiredCookie(url));
   return response;
+}
+
+/**
+ * Transparent renewal: while the cookie still proves a current member, mint a
+ * fresh token for the SAME user, project, and origin and set it back. The
+ * 15-minute token bounds revocation lag exactly as before — renewal needs a
+ * currently valid token, and both validation and the mint re-check access.
+ * A dead cookie answers like any other unauthenticated API call.
+ */
+async function refreshSession(
+  input: {
+    mintSession?: MintSession;
+    projectId: string;
+    request: ProjectAuthRequest;
+    validateSession: ValidateSession;
+  },
+  url: URL,
+): Promise<Response> {
+  let returnTo: string;
+  try {
+    returnTo = normalizeReturnPath(url.searchParams.get("return_to") ?? "/", url.origin);
+  } catch (error) {
+    return invalidRequest(error);
+  }
+  const login = `${LOGIN_PATH}?${new URLSearchParams({ return_to: returnTo })}`;
+  const signedOut = () => {
+    const headers = noStoreHeaders();
+    headers.append("set-cookie", expiredCookie(url));
+    return Response.json({ authenticated: false, login }, { headers, status: 401 });
+  };
+  const token = readCookie(input.request.headers.get("cookie"), AUTH_COOKIE);
+  if (!token) return signedOut();
+  const validation = await validateOrDependencyResponse(input, token, url.origin);
+  if (validation instanceof Response) return validation;
+  if (!validation) return signedOut();
+  if (validation.loginAt + MAX_SESSION_AGE_SECONDS <= Math.floor(Date.now() / 1000)) {
+    return signedOut();
+  }
+  if (input.mintSession === undefined) {
+    return unavailable("Project authentication is not configured.");
+  }
+  let issued: { expiresAt: number; token: string } | null;
+  try {
+    issued = await input.mintSession({
+      audience: url.origin,
+      ...(validation.email === undefined ? {} : { email: validation.email }),
+      ...(validation.image === undefined ? {} : { image: validation.image }),
+      loginAt: validation.loginAt,
+      ...(validation.name === undefined ? {} : { name: validation.name }),
+      projectId: input.projectId,
+      userId: validation.userId,
+    });
+  } catch (error) {
+    console.error("[project-auth] session renewal failed", error);
+    return unavailable("Project authentication is temporarily unavailable.");
+  }
+  // Access gone between validation and mint: no new token, same answer.
+  if (!issued) return signedOut();
+  const headers = noStoreHeaders();
+  headers.append("set-cookie", sessionCookie(issued.token, url));
+  headers.append("set-cookie", expiredRetryGuardCookie(url));
+  return Response.json({ ok: true, expiresAt: issued.expiresAt }, { headers });
 }
 
 export async function handleProjectAuthStart(input: {
@@ -224,7 +343,8 @@ async function redeemSession(input: {
   }
 
   const headers = noStoreHeaders();
-  headers.append("set-cookie", sessionCookie(token.trim(), validation.expiresAt, url));
+  headers.append("set-cookie", sessionCookie(token.trim(), url));
+  headers.append("set-cookie", expiredRetryGuardCookie(url));
   return Response.json({ ok: true, returnTo }, { headers });
 }
 
@@ -317,14 +437,13 @@ function readCookie(cookieHeader: string | null, name: string) {
   return null;
 }
 
-function sessionCookie(token: string, expiresAt: number, url: URL) {
-  const maxAge = Math.max(0, expiresAt - Math.floor(Date.now() / 1000));
+function sessionCookie(token: string, url: URL) {
   return [
     `${AUTH_COOKIE}=${token}`,
     "Path=/",
     "HttpOnly",
     "SameSite=Strict",
-    `Max-Age=${maxAge}`,
+    `Max-Age=${COOKIE_TTL_SECONDS}`,
     ...(url.protocol === "https:" ? ["Secure"] : []),
   ].join("; ");
 }
@@ -332,6 +451,28 @@ function sessionCookie(token: string, expiresAt: number, url: URL) {
 function expiredCookie(url: URL) {
   return [
     `${AUTH_COOKIE}=`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Strict",
+    "Max-Age=0",
+    ...(url.protocol === "https:" ? ["Secure"] : []),
+  ].join("; ");
+}
+
+function retryGuardCookie(url: URL) {
+  return [
+    `${RETRY_COOKIE}=1`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Strict",
+    "Max-Age=60",
+    ...(url.protocol === "https:" ? ["Secure"] : []),
+  ].join("; ");
+}
+
+function expiredRetryGuardCookie(url: URL) {
+  return [
+    `${RETRY_COOKIE}=`,
     "Path=/",
     "HttpOnly",
     "SameSite=Strict",

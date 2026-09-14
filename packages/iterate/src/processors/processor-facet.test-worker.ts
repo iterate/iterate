@@ -155,13 +155,15 @@ type FacetKv = {
 
 class KvStream implements ProcessorStream {
   readonly #kv: FacetKv;
-  readonly streamId: string;
   readonly path: string;
 
-  constructor(kv: FacetKv, streamId: string, path: string) {
+  constructor(kv: FacetKv, path: string) {
     this.#kv = kv;
-    this.streamId = streamId;
     this.path = path;
+  }
+
+  get streamId(): string {
+    return this.#kv.get<string>("fs:stream-id") ?? FACET_STREAM_ID;
   }
 
   #max(): number {
@@ -212,18 +214,29 @@ class KvStream implements ProcessorStream {
   getEventPage(
     args?: StreamEventReadInput,
   ): Promise<{ streamId: string; streamMaxOffset: number; events: StreamEvent[] }> {
+    this.#kv.put("event-page-reads", (this.#kv.get<number>("event-page-reads") ?? 0) + 1);
     const after = args?.afterOffset ?? 0;
     const before = args?.beforeOffset ?? null;
     const limit = args?.limit ?? 500;
     const max = this.#max();
     const events: StreamEvent[] = [];
+    let bytes = 0;
     const wantAll = args?.eventTypes === undefined || args.eventTypes.includes("*");
     for (let offset = Math.min(after, max) + 1; offset <= max && events.length < limit; offset++) {
       if (before !== null && before !== undefined && offset >= before) break;
       const event = this.#get(offset);
       if (event === undefined) continue;
       if (!wantAll && !args!.eventTypes!.includes(event.type)) continue;
+      const eventBytes = new TextEncoder().encode(JSON.stringify(event)).byteLength;
+      if (
+        args?.byteLimit !== undefined &&
+        events.length > 0 &&
+        bytes + eventBytes > args.byteLimit
+      ) {
+        break;
+      }
       events.push(event);
+      bytes += eventBytes;
     }
     return Promise.resolve({ streamId: this.streamId, streamMaxOffset: max, events });
   }
@@ -291,7 +304,7 @@ export class ProofProcessorFacet extends ProcessorFacet<Env> {
   }
 
   #stream(): KvStream {
-    return new KvStream(this.ctx.storage.kv, FACET_STREAM_ID, FACET_STREAM_PATH);
+    return new KvStream(this.ctx.storage.kv, FACET_STREAM_PATH);
   }
 
   #recordEffect(entry: string): void {
@@ -306,6 +319,11 @@ export class ProofProcessorFacet extends ProcessorFacet<Env> {
     return this.#stream().append(...args.events);
   }
 
+  replaceWithEmptyStream(args: { streamId: string }): void {
+    this.ctx.storage.kv.put("fs:stream-id", args.streamId);
+    this.ctx.storage.kv.put("fs:max", 0);
+  }
+
   getStreamInfo(args?: { includeEvents?: boolean }) {
     const max = this.ctx.storage.kv.get<number>("fs:max") ?? 0;
     const events: StreamEvent[] = [];
@@ -315,13 +333,14 @@ export class ProofProcessorFacet extends ProcessorFacet<Env> {
         if (event !== undefined) events.push(event);
       }
     }
-    return { streamId: FACET_STREAM_ID, maxOffset: max, events };
+    return { streamId: this.#stream().streamId, maxOffset: max, events };
   }
 
   /** R1's core read: the runner's ProcessorProgress under the NAME-keyed
    * standard key in the FACET's own storage.kv, plus keepalive + effect log. */
   readProof() {
     return {
+      eventPageReads: this.ctx.storage.kv.get<number>("event-page-reads") ?? 0,
       progressKey: processorProgressKey(FACET_TEST_SUBSCRIPTION_NAME),
       progress: this.ctx.storage.kv.get(processorProgressKey(FACET_TEST_SUBSCRIPTION_NAME)) ?? null,
       keepaliveKey: processorKeepaliveKey(FACET_TEST_SUBSCRIPTION_NAME),
@@ -348,6 +367,7 @@ export class ProofProcessorFacet extends ProcessorFacet<Env> {
 type FacetStub = {
   configure(identity: ProcessorFacetIdentity): Promise<unknown>;
   seed(args: { events: StreamEventInput[] }): Promise<StreamEvent[]>;
+  replaceWithEmptyStream(args: { streamId: string }): Promise<void>;
   getStreamInfo(args?: {
     includeEvents?: boolean;
   }): Promise<{ streamId: string; maxOffset: number; events: StreamEvent[] }>;
@@ -356,6 +376,11 @@ type FacetStub = {
   snapshot(args?: { name?: string }): Promise<ProcessorSnapshot<unknown>>;
   getRuntimeState(args?: { name?: string }): Promise<ProcessorRuntimeState>;
   liveState(): Promise<{ get(): Promise<unknown> } & Partial<Disposable>>;
+  readLiveState(args: {
+    streamId: string;
+    cursor?: import("../sdk/capnweb/live-state/protocol.ts").LiveStateCursor;
+    patchVersion?: 2 | 3;
+  }): Promise<unknown>;
   wakeStreamProcessor(request: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse>;
   handleAlarm(info?: AlarmInvocationInfo): Promise<void>;
 };
@@ -496,6 +521,22 @@ export class FacetTestParent extends DurableObject<Env> {
     }
   }
 
+  async facetLiveRead(args: {
+    cursor?: import("../sdk/capnweb/live-state/protocol.ts").LiveStateCursor;
+    patchVersion?: 2 | 3;
+  }) {
+    return await this.#facet().readLiveState({
+      streamId: this.ctx.storage.kv.get<string>("stream-id") ?? FACET_STREAM_ID,
+      cursor: args.cursor,
+      patchVersion: args.patchVersion,
+    });
+  }
+
+  async replaceWithEmptyStream(args: { streamId: string }) {
+    await this.#facet().replaceWithEmptyStream(args);
+    this.ctx.storage.kv.put("stream-id", args.streamId);
+  }
+
   /** R2: call the facet's wakeStreamProcessor and RETAIN processEventBatch in
    * an instance field across turns (retainCallback = dup, the stream sender's
    * retention shape). Also exercises the response's getRuntimeState capability
@@ -514,7 +555,7 @@ export class FacetTestParent extends DurableObject<Env> {
       stream: {
         projectId: null,
         path: FACET_STREAM_PATH,
-        streamId: FACET_STREAM_ID,
+        streamId: info.streamId,
         streamMaxOffset: info.maxOffset,
       },
       name: FACET_TEST_SUBSCRIPTION_NAME,

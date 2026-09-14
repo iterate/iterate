@@ -93,6 +93,14 @@ export function AgentDetailsSheet({
               }
               onRename={(title) => updateAgentSummary(projectId, path, { title })}
             />
+            <Link
+              to="/projects/$projectSlug/workspaces/$"
+              params={{ projectSlug, _splat: path.replace(/^\//, "") }}
+              search={{}}
+              className="inline-flex text-xs font-medium text-muted-foreground hover:text-foreground"
+            >
+              Open workspace
+            </Link>
             {descendantCount > 0 ? (
               <div className="flex flex-col gap-1" aria-label="Subagents">
                 <p className="text-xs font-medium text-muted-foreground">

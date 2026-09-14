@@ -4,37 +4,53 @@
   "version": "0.0.1",
   "type": "module",
   "exports": {
-    "./attribution": "./src/collab-attribution.ts",
+    "./text-edits": "./src/text-edits.ts",
     "./collab": "./src/collab.ts",
-    "./comments": "./src/document-comments.tsx",
     "./editor": "./src/workspace-document-editor.tsx",
     "./editor-api": "./src/collab-editor-api.ts",
     "./html-annotations": "./src/html-document-annotations.ts",
     "./identity": "./src/comment-identity.ts",
-    "./preview": "./src/markdown-document-preview.tsx",
     "./server": "./src/server.ts",
-    "./types": "./src/types.ts"
+    "./types": "./src/types.ts",
+    "./review": "./src/use-document-review.tsx",
+    "./change-gutter": "./src/change-gutter.ts",
+    "./change-summary": "./src/change-summary.ts",
+    "./commit-controls": "./src/commit-controls.tsx",
+    "./file-kinds": "./src/file-kinds.ts",
+    "./use-commit": "./src/use-commit.ts",
+    "./workspace-changes": "./src/workspace-changes.tsx",
+    "./workspace-file-diff": "./src/workspace-file-diff.tsx",
+    "./workspace-file-view": "./src/workspace-file-view.tsx",
+    "./workspace-files": "./src/workspace-files.ts",
+    "./workspace-tree": "./src/workspace-tree.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts"
   },
   "dependencies": {
+    "@atomic-editor/editor": "0.6.2",
     "@codemirror/collab": "^6.1.1",
     "@codemirror/commands": "^6.10.4",
     "@codemirror/lang-html": "^6.4.11",
+    "@codemirror/lang-javascript": "^6.2.5",
     "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.12.2",
+    "@codemirror/merge": "^6.12.2",
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.6",
     "@iterate-com/ui": "workspace:*",
+    "@lezer/common": "^1.5.1",
     "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
     "iterate": "workspace:*",
     "lucide-react": "^0.553.0",
-    "react": "^19.2.7"
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:cloudflare",
     "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "typescript": "^5.9.3",
     "vite": "^8.0.16",
     "vitest": "^4.1.10"

@@ -945,7 +945,7 @@ test("bare subscribeToEventsFrom generates an offset key, starts now, and copies
 // development. Reset deletes the source's storage and must then end that
 // incarnation, so this proof belongs on a real preview deployment.
 test.skipIf(deployedBaseUrl() === null)(
-  "a receiver accepts the same offsets again after its source is deleted and recreated",
+  "a receiver accepts lower offsets after its source is deleted and recreated",
   { timeout: 45_000 },
   async () => {
     const marker = crypto.randomUUID();
@@ -965,14 +965,20 @@ test.skipIf(deployedBaseUrl() === null)(
       start: "beginning" as const,
     };
     await receiver.subscribeToEventsFrom(desired);
-    const [firstSourceEvent] = await source.append({
-      type: MATCHING_EVENT_TYPE,
-      payload: { marker, sourceLifetime: 1 },
-    });
+    // Advance the receiver beyond the recreated source's startup events. Hosted
+    // connections may consume offsets concurrently, so matching one exact offset
+    // across independent lifetimes would make this recovery proof timing-dependent.
+    const firstSourceEvents = await source.append(
+      ...Array.from({ length: 32 }, (_, sequence) => ({
+        type: MATCHING_EVENT_TYPE,
+        payload: { marker, sourceLifetime: 1, sequence },
+      })),
+    );
+    const firstSourceEvent = firstSourceEvents.at(-1)!;
     const firstCopy = await receiver.waitForEvent({
       afterOffset: 0,
       eventTypes: [MATCHING_EVENT_TYPE],
-      predicate: (event) => event.payload?.marker === marker,
+      predicate: (event) => event.payload?.marker === marker && event.payload?.sequence === 31,
       timeoutMs: 15_000,
     });
     const firstSourceState = coreState(await source.runtimeState());
@@ -998,7 +1004,7 @@ test.skipIf(deployedBaseUrl() === null)(
       type: MATCHING_EVENT_TYPE,
       payload: { marker, sourceLifetime: 2 },
     });
-    expect(secondSourceEvent).toMatchObject({ offset: firstSourceEvent!.offset });
+    expect(secondSourceEvent!.offset).toBeLessThan(firstSourceEvent.offset);
 
     const secondCopy = await receiver.waitForEvent({
       afterOffset: firstCopy.offset,

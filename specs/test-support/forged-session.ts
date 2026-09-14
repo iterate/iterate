@@ -11,14 +11,11 @@ import {
   connectItxReady,
   type ItxInitialConnectionRetry,
   type ProjectAiInterceptor,
-  type ProjectAiInterceptorInput,
 } from "iterate/node";
 import dedent from "dedent";
+import { interceptor } from "@iterate-com/test-support";
 import { doppler, localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
-// Lazy circular import (function-call-time only): the helper dials its
-// dedicated session through connectAdminItx below.
-import { installResilientAiInterceptor } from "./resilient-ai-interceptor.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "./email-otp-signup.ts";
 
 type OsPlaywrightAuthConfig = {
@@ -310,11 +307,12 @@ export function createAgentHelper<
 }) {
   const resources = new AsyncDisposableStack();
 
+  // The churn-surviving handler dials its own dedicated admin session.
   const interceptAi = (handler: ProjectAiInterceptor) =>
-    installResilientAiInterceptor({
-      baseUrl: input.baseUrl,
+    interceptor.installResilientAiInterceptor({
       projectId: input.projectId,
       handler,
+      connect: (options) => connectAdminItx(input.baseUrl, options),
     });
 
   const agentTurnInterceptors: Map<string, ProjectAiInterceptor> = new Map();
@@ -357,15 +355,15 @@ export function createAgentHelper<
     class ResponseQueuer {
       responders: Array<{
         times: number;
-        fn: (call: Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>) => Promise<string>;
+        fn: (call: ProjectAiInterceptor.AgentTurnInput) => Promise<string>;
       }> = [];
 
       /** fingerprint -> script, so retries get the same script as last time */
       previous: Map<string, (typeof this)["responders"][number]["fn"]> = new Map();
 
-      lastUserMessage(call: ProjectAiInterceptorInput) {
+      lastUserMessage(call: ProjectAiInterceptor.Input) {
         if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
-        return call.body.messages.findLast((m) => m.role === "user")?.content;
+        return call.request.body.messages.findLast((m) => m.role === "user")?.content;
       }
 
       codemodify(script: string) {
@@ -397,7 +395,7 @@ export function createAgentHelper<
         this.responders.push({ times, fn });
       }
 
-      take(call: ProjectAiInterceptorInput) {
+      take(call: ProjectAiInterceptor.Input) {
         const fingerprint = JSON.stringify(call).replace(
           /Requested at: [:\w-.]+\b/,
           "Requested at: <timestamp>",
@@ -428,7 +426,8 @@ export function createAgentHelper<
       await addAgentTurnInterceptor(path, async (call) => {
         const next = responses.take(call);
         if (!next) throw new Error(`No responses available for agent ${path}`);
-        return await next(call as Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>);
+        const s = await next(call as ProjectAiInterceptor.AgentTurnInput);
+        return interceptor.aiTextResponse(s, call);
       });
     }
     const webUrl = `/projects/${input.projectSlug}/agents/streams${path}`;
@@ -436,6 +435,7 @@ export function createAgentHelper<
     // Cap'n Web stubs reject arbitrary property writes — proxy path/webUrl on.
     // `then: never` stops `await createAgent()` unwrapping through the stub's
     // Promise intersection and stripping path/webUrl from the type.
+    // oxlint-disable-next-line unicorn/no-thenable
     const extras = { path, webUrl, mobileUrl, responses, then: null as never };
     return new Proxy(agent as Agent & typeof extras, {
       get(target, prop, receiver) {
@@ -460,7 +460,7 @@ export function createAgentHelper<
  * append events and assert the browser repaints from the push). Dispose with
  * `using` — the handle owns its WebSocket. `onWebSocketClose` observes the
  * socket dying, however it dies — the hook a reconnect loop hangs off (see
- * resilient-ai-interceptor.ts).
+ * @iterate-com/test-support).
  */
 export async function connectAdminItx(
   baseUrl: string,

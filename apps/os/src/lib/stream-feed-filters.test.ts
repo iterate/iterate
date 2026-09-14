@@ -26,18 +26,18 @@ describe("buildFeedItemsFilter", () => {
         "events.iterate.com/agents/context-added",
         "events.iterate.com/agent/turn-ended",
       ],
-      components: ["raw.group", "raw.stream.woken"],
+      components: ["raw.event", "raw.stream.woken"],
       searchQuery: "hello",
       offsetFrom: 10,
       offsetTo: 99,
     });
     expect(filter?.whereSql).toMatchInlineSnapshot(
-      `"COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type')) IN (?, ?) AND kind IN (?, ?) AND json(data) LIKE ? AND last_offset >= ? AND first_offset <= ?"`,
+      `"json_extract(data, '$.type') IN (?, ?) AND kind IN (?, ?) AND json(data) LIKE ? AND last_offset >= ? AND first_offset <= ?"`,
     );
     expect(filter?.params).toEqual([
       "events.iterate.com/agents/context-added",
       "events.iterate.com/agent/turn-ended",
-      "raw.group",
+      "raw.event",
       "raw.stream.woken",
       "%hello%",
       10,
@@ -132,12 +132,12 @@ describe("buildStreamFeedWhere", () => {
   it("ORs the two kind families in Pretty+raw so raw filters never hide agent rows", () => {
     const { whereSql, params } = buildStreamFeedWhere({
       agent: { showDebug: true, searchQuery: "hello" },
-      raw: { ...unscopedRaw, components: ["raw.group"] },
+      raw: { ...unscopedRaw, components: ["raw.event"] },
     });
     expect(whereSql).toBe(
       `(kind LIKE 'agent.%' AND json(data) LIKE ?) OR (kind LIKE 'raw.%' AND kind IN (?))`,
     );
-    expect(params).toEqual(["%hello%", "raw.group"]);
+    expect(params).toEqual(["%hello%", "raw.event"]);
   });
 
   it("matches nothing when both sides are hidden", () => {
@@ -172,7 +172,7 @@ describe("feedFiltersActive", () => {
   it("signals raw filter deviations including components", () => {
     expect(feedFiltersActive({ mode: "raw", types: ["a"] }, agentPath)).toBe(true);
     expect(feedFiltersActive({ mode: "raw", q: "boom" }, agentPath)).toBe(true);
-    expect(feedFiltersActive({ mode: "pretty-raw", components: ["raw.group"] }, agentPath)).toBe(
+    expect(feedFiltersActive({ mode: "pretty-raw", components: ["raw.event"] }, agentPath)).toBe(
       true,
     );
     expect(feedFiltersActive({ types: ["a"] }, secretPath)).toBe(true);

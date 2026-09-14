@@ -68,8 +68,8 @@ export type CfMarkdownConversionArgs =
   | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];
 
 /** The Workers AI binding's per-call options (`env.AI.run`'s third argument),
- * published structurally so itx callers can route a call through a specific
- * AI Gateway configuration — e.g. `{ gateway: { id: "default", skipCache: true } }`. */
+ * published structurally for cache preferences. The host replaces gateway id
+ * and metadata with its trusted AI Gateway metadata; caller values cannot change billing. */
 export type CfAiRunOptions = {
   gateway?: {
     id: string;

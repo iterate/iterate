@@ -5,11 +5,7 @@ import { join } from "node:path";
 import type { Locator, Page } from "@playwright/test";
 import { e2eStreamPath, streamRoute } from "../helpers.ts";
 import { expect, test } from "./test.ts";
-import { BROWSER_STREAM_PROCESSORS } from "~/domains/streams/client-libraries/browser/browser-stream-processors.ts";
-import {
-  processorSchemaVersionKey,
-  streamDatabaseWriterLockName,
-} from "~/domains/streams/client-libraries/browser/stream-writer.ts";
+import { databasePathFor } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 
 // Local reproduction of CI conditions (slow runner + real network to a deployed worker).
 // Example: E2E_CPU_THROTTLE=6 E2E_NET_LATENCY_MS=100 WORKER_URL=https://... pnpm playwright.
@@ -139,14 +135,14 @@ test("event type filter uses the indexed SQLite type column", async ({ page }) =
     payload: { streamPath, value: crypto.randomUUID() },
   });
   await expect(eventMeta(page, primaryType)).toHaveCount(2);
-  // 5 = the standalone birth certificate (created + woken) and 3 appends —
+  // 7 = stream birth (created + feed subscription + woken + publication) and 3 appends —
   // connection presence facts are ephemeral and never land in the local table.
-  await expect(page.getByTestId("event-count")).toHaveText("5");
+  await expect(page.getByTestId("event-count")).toHaveText("7");
 
   await expect(page.getByLabel("Event type filter")).toContainText(primaryType);
   await page.getByLabel("Event type filter").selectOption(primaryType);
-  await expect(page.getByTestId("event-count")).toHaveText("5");
-  await expect(page.getByTestId("filter-count")).toHaveText("2 filtered events / 5 total events");
+  await expect(page.getByTestId("event-count")).toHaveText("7");
+  await expect(page.getByTestId("filter-count")).toHaveText("2 filtered events / 7 total events");
   await expect(eventMeta(page, primaryType)).toHaveCount(2);
   await expect(eventMeta(page, secondaryType)).toHaveCount(0);
   await expect(eventMeta(page, "events.iterate.com/stream/created")).toHaveCount(0);
@@ -155,15 +151,15 @@ test("event type filter uses the indexed SQLite type column", async ({ page }) =
     type: secondaryType,
     payload: { streamPath, value: crypto.randomUUID() },
   });
-  await expect(page.getByTestId("event-count")).toHaveText("6");
+  await expect(page.getByTestId("event-count")).toHaveText("8");
   await expect(eventMeta(page, secondaryType)).toHaveCount(0);
 
   await appendComposerEvent(page, {
     type: primaryType,
     payload: { streamPath, value: crypto.randomUUID() },
   });
-  await expect(page.getByTestId("event-count")).toHaveText("7");
-  await expect(page.getByTestId("filter-count")).toHaveText("3 filtered events / 7 total events");
+  await expect(page.getByTestId("event-count")).toHaveText("9");
+  await expect(page.getByTestId("filter-count")).toHaveText("3 filtered events / 9 total events");
   await expect(eventMeta(page, primaryType)).toHaveCount(3);
 
   const downloadPromise = page.waitForEvent("download");
@@ -211,9 +207,9 @@ test("random bulk insert creates multiple filterable event types and shows filte
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
-  // 82 = standalone birth certificate (2) + 80 random events (presence facts are ephemeral).
-  await expect(page.getByTestId("event-count")).toHaveText("82", { timeout: 30_000 });
-  await expect(page.getByTestId("filter-count")).toHaveText("82 total events");
+  // 84 = stream birth (4) + 80 random events (presence facts are ephemeral).
+  await expect(page.getByTestId("event-count")).toHaveText("84", { timeout: 30_000 });
+  await expect(page.getByTestId("filter-count")).toHaveText("84 total events");
 
   const generatedEventTypes = await page.getByLabel("Event type filter").evaluate((element) => {
     if (!(element instanceof HTMLSelectElement))
@@ -229,7 +225,7 @@ test("random bulk insert creates multiple filterable event types and shows filte
     throw new Error("random insert did not create a generated event type");
   await page.getByLabel("Event type filter").selectOption(selectedType);
   await expect(page.getByTestId("filter-count")).toHaveText(
-    /\d+ filtered events \/ 82 total events/,
+    /\d+ filtered events \/ 84 total events/,
   );
   await expect(eventMeta(page, selectedType).first()).toBeVisible();
 });
@@ -329,7 +325,7 @@ test("stream page reload starts at the bottom of an existing local event table",
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
 
-  const expectedCount = insertedCount + 2; // created + woken (presence facts are ephemeral)
+  const expectedCount = insertedCount + 4; // created + feed subscription + woken + woken publication
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
   await expect(page.getByTestId("event-count")).toHaveText(String(expectedCount), {
     timeout: 30_000,
@@ -458,29 +454,6 @@ test("simultaneous cold tabs converge and hand off the writer role", async ({ co
     payload: { streamPath, value: crypto.randomUUID() },
   });
   await expect(eventMeta(reader, afterHandoffType).first()).toBeVisible();
-});
-
-// Deploy/schema-change regression. This reproduces the browser symptom where normal tabs
-// got stuck on `connected`, `reader`, `Events: 0` after a deploy, while incognito worked.
-// Old tabs can keep holding the previous unversioned Web Lock after new JS deploys and
-// migrates the shared OPFS DB. A fresh runtime must not become a permanent reader behind
-// that stale lock; its versioned lock should let it take over and replay server history.
-test("fresh runtime takes over when a legacy writer lock is still held", async ({
-  context,
-  page,
-}) => {
-  const streamPath = `/e2e/${crypto.randomUUID()}`;
-  const legacyLockHolder = await context.newPage();
-  await legacyLockHolder.goto("/blank");
-  await holdLegacyWriterLock(legacyLockHolder, streamPath);
-
-  await page.goto(streamRoute({ path: streamPath }));
-  await expect(page.getByTestId("database-role")).toHaveText("writer");
-  // 2 = the standalone birth certificate (presence facts are ephemeral).
-  await expect(page.getByTestId("event-count")).toHaveText("2");
-  await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
-
-  await legacyLockHolder.close();
 });
 
 // If this tab is only a reader and its local SQLite database is empty, the page must say so
@@ -637,8 +610,8 @@ test("scroll to bottom affordance counts new events while away from tail", async
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
-  // 82 = standalone birth certificate (2) + 80 random events (presence facts are ephemeral).
-  await expect(page.getByTestId("event-count")).toHaveText("82", { timeout: 30_000 });
+  // 84 = stream birth (4) + 80 random events (presence facts are ephemeral).
+  await expect(page.getByTestId("event-count")).toHaveText("84", { timeout: 30_000 });
   await expectAtStreamEnd(page);
 
   await page.getByRole("button", { name: "Scroll to top" }).click();
@@ -672,8 +645,8 @@ test("scroll to bottom affordance keeps counting while scrolling older rows duri
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
-  // 102 = standalone birth certificate (2) + 100 random events (presence facts are ephemeral).
-  await expect(page.getByTestId("event-count")).toHaveText("102", { timeout: 30_000 });
+  // 104 = stream birth (4) + 100 random events (presence facts are ephemeral).
+  await expect(page.getByTestId("event-count")).toHaveText("104", { timeout: 30_000 });
   await expectAtStreamEnd(page);
 
   await scrollStreamBy(page, -500);
@@ -690,7 +663,7 @@ test("scroll to bottom affordance keeps counting while scrolling older rows duri
     expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 60_000 }),
   ]);
 
-  await expect(page.getByTestId("event-count")).toHaveText("5102", { timeout: 60_000 });
+  await expect(page.getByTestId("event-count")).toHaveText("5104", { timeout: 60_000 });
   await expect(
     page.getByRole("button", { name: "Scroll to bottom, 5000 new events" }),
   ).toBeVisible();
@@ -726,8 +699,8 @@ test("expanding the tail event row at stream end stays above the composer", asyn
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
-  // 122 = standalone birth certificate (2) + 120 random events (presence facts are ephemeral).
-  await expect(page.getByTestId("event-count")).toHaveText("122", { timeout: 30_000 });
+  // 124 = stream birth (4) + 120 random events (presence facts are ephemeral).
+  await expect(page.getByTestId("event-count")).toHaveText("124", { timeout: 30_000 });
   await expectAtStreamEnd(page);
 
   const tailRow = page.locator("[data-testid='virtual-row']").last().getByTestId("event-meta");
@@ -767,8 +740,8 @@ test("event row open and closed state survives virtual row unmounts", async ({ p
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
-  // 162 = standalone birth certificate (2) + 160 random events (presence facts are ephemeral).
-  await expect(page.getByTestId("event-count")).toHaveText("162", { timeout: 30_000 });
+  // 164 = stream birth (4) + 160 random events (presence facts are ephemeral).
+  await expect(page.getByTestId("event-count")).toHaveText("164", { timeout: 30_000 });
 
   await page.getByRole("button", { name: "Scroll to top" }).click();
   const firstRow = eventRowByOffset(page, 1);
@@ -864,7 +837,7 @@ test("large streams stay virtualized and can scroll from tail to earliest rows",
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
 
-  const expectedCount = insertedCount + 2; // created + woken (presence facts are ephemeral)
+  const expectedCount = insertedCount + 4; // created + feed subscription + woken + woken publication
   await expect(page.getByTestId("event-count")).toHaveText(String(expectedCount), {
     timeout: 30_000,
   });
@@ -912,8 +885,8 @@ test("downloaded SQLite file can be queried from disk", async ({ page }) => {
   try {
     const dbPath = join(tempDirectory, download.suggestedFilename());
     await download.saveAs(dbPath);
-    // 3 = standalone birth certificate (2) + 1 append (presence facts are ephemeral).
-    expect(sqliteScalar(dbPath, `SELECT COUNT(*) FROM events`)).toBe("3");
+    // 5 = stream birth (4) + 1 append (presence facts are ephemeral).
+    expect(sqliteScalar(dbPath, `SELECT COUNT(*) FROM events`)).toBe("5");
     expect(sqliteScalar(dbPath, `SELECT COUNT(*) FROM events WHERE type = '${type}'`)).toBe("1");
   } finally {
     rmSync(tempDirectory, { force: true, recursive: true });
@@ -925,16 +898,16 @@ test("downloaded SQLite file can be queried from disk", async ({ page }) => {
 test("kill reconnects and appends a new woken event", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath }));
-  // 2 = the standalone birth certificate (presence facts are ephemeral).
-  await expect(page.getByTestId("event-count")).toHaveText("2");
+  // 4 = stream birth (presence facts are ephemeral).
+  await expect(page.getByTestId("event-count")).toHaveText("4");
 
   await page.getByRole("button", { name: "Kill" }).click();
   await expect(page.getByTestId("stream-status")).toHaveText("receiving-events", {
     timeout: 30_000,
   });
   // The killed incarnation took every connection with it: the reboot appends a
-  // fresh durable woken fact (the reconnect's presence fact stays ephemeral).
-  await expect(page.getByTestId("event-count")).toHaveText("3", { timeout: 30_000 });
+  // fresh woken fact and its feed publication (presence stays ephemeral).
+  await expect(page.getByTestId("event-count")).toHaveText("6", { timeout: 30_000 });
   await expect(eventMeta(page, "events.iterate.com/stream/woken")).toHaveCount(2);
 });
 
@@ -1064,8 +1037,6 @@ test("cold open of a deep stream pull-pages history and converges exactly", asyn
   // Fresh context = fresh OPFS origin = checkpoint 0, thousands behind the head.
   const coldContext = await browser.newContext();
   const coldPage = await coldContext.newPage();
-  const consoleLines: string[] = [];
-  coldPage.on("console", (message) => consoleLines.push(message.text()));
   await coldPage.goto(streamRoute({ path: streamPath }));
   await expect(coldPage.getByTestId("stream-status")).toHaveText("receiving-events", {
     timeout: 60_000,
@@ -1082,12 +1053,8 @@ test("cold open of a deep stream pull-pages history and converges exactly", asyn
       { timeout: 120_000 },
     )
     .toBe(insertedCount);
-  // The client must page through durable history before opening its event callback.
-  expect(
-    consoleLines.some((line) =>
-      line.includes("durable historical offsets before opening the event callback"),
-    ),
-  ).toBe(true);
+  // The head exceeds the callback replay limit. Receiving all 5,000 rows in a
+  // fresh cache proves history paging without coupling this test to logging.
   await coldContext.close();
 });
 
@@ -1104,26 +1071,22 @@ test("reset discards stale local rows and shows a fresh stream", async ({ page }
     payload: { streamPath, value: crypto.randomUUID() },
   });
   await expect(eventMeta(page, type).first()).toBeVisible();
-  // 3 = the standalone birth certificate (2) + 1 append (presence facts are ephemeral).
-  await expect(page.getByTestId("event-count")).toHaveText("3");
+  // 5 = stream birth (4) + 1 append (presence facts are ephemeral).
+  await expect(page.getByTestId("event-count")).toHaveText("5");
 
   await page.getByRole("button", { name: "Reset", exact: true }).click();
   await expect(page.getByTestId("stream-status")).toHaveText("receiving-events", {
     timeout: 30_000,
   });
-  // The wiped stream births fresh (2 durable events); the reconnect's
+  // The wiped stream births fresh (4 durable events); the reconnect's
   // presence fact stays ephemeral.
-  await expect(page.getByTestId("event-count")).toHaveText("2", { timeout: 30_000 });
+  await expect(page.getByTestId("event-count")).toHaveText("4", { timeout: 30_000 });
   await expect(eventMeta(page, type)).toHaveCount(0);
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 });
 
-// The event-feed view hosts the unified browser-feed processor: specific-renderer events
-// (created/woken) render as their own raw.* rows; consecutive events of the same type
-// collapse into one raw.group row. A new type always starts a fresh row.
-test("event-feed view renders specific renderers as singletons and groups by type", async ({
-  page,
-}) => {
+// Raw history renders immutable events directly, with specialized lifecycle renderers.
+test("event-feed view renders lifecycle markers and one row per raw event", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath, view: "browser-feed" }));
 
@@ -1163,7 +1126,8 @@ test("event-feed view renders specific renderers as singletons and groups by typ
     .locator("[data-testid='feed-item'][data-event-type='events.iterate.com/debug/feed-a']")
     .last();
   await appendComposerEvent(page, { type: "events.iterate.com/debug/feed-a", payload: { v: 4 } });
-  await expect(lastGroupA).toHaveAttribute("data-event-count", "2");
+  await expect(groupA).toHaveCount(3);
+  await expect(lastGroupA).toHaveAttribute("data-event-count", "1");
 });
 
 // The state view has no processor or table: it reads the stream's reduced + runtime state
@@ -1211,6 +1175,8 @@ async function appendComposerEvent(
   event: unknown,
   expectedState: "appended" | "error" = "appended",
 ) {
+  // Wait for hydration before filling the server-rendered controlled input.
+  await expect(scope.getByTestId("database-role").first()).toHaveText(/writer|reader/);
   const composer = scope.getByTestId("stream-composer").first();
   await composer.getByLabel("Event JSON").fill(JSON.stringify(event, null, 2));
   await composer.getByRole("button", { name: "Append event" }).click();
@@ -1232,25 +1198,10 @@ async function isWriter(page: Page) {
   return (await page.getByTestId("database-role").innerText()) === "writer";
 }
 
-async function holdLegacyWriterLock(page: Page, streamPath: string) {
-  await page.evaluate(async (path) => {
-    await new Promise<void>((resolve) => {
-      void navigator.locks.request(`stream-writer:${path}`, async () => {
-        resolve();
-        await new Promise(() => {});
-      });
-    });
-  }, streamPath);
-}
-
 async function holdCurrentWriterLock(page: Page, streamPath: string) {
-  const lockName = streamDatabaseWriterLockName({
-    projectId: "default",
-    streamPath,
-    processorSchemaVersionKey: processorSchemaVersionKey(BROWSER_STREAM_PROCESSORS),
-  });
+  const lockName = `stream-event-sync:${databasePathFor("default", streamPath)}`;
   await page.evaluate(async (name) => {
-    // Derive this from the same processor set as the live browser database. A
+    // Derive this from the same cache path as the live browser database. A
     // stale lock name makes the test vacuous because the page elects itself.
     await new Promise<void>((resolve) => {
       void navigator.locks.request(name, async () => {

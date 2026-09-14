@@ -27,6 +27,8 @@ import type {
   RepoFileChange,
   RepoLogCommit,
   RepoLogResult,
+  SearchRepoFilesInput,
+  SearchRepoFilesResult,
 } from "./types.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import { replaceArtifactWithEmptyRepo } from "./artifact-replacement.ts";
@@ -69,9 +71,18 @@ import { importGithubArtifactWithInitialPushCapture } from "./artifact-import.ts
 import { getOrCreateArtifact, type GetOrCreateArtifactResult } from "./artifact-creation.ts";
 import { artifactWriteToken, seedArtifactRepo } from "./artifact-seeding.ts";
 import { downloadPublicGithubTemplate } from "./public-github-template.ts";
+import { searchRepoFilePaths } from "./repo-file-search.ts";
 
 const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
 const REPO_DIR = "/repo";
+const REPO_HEAD_FILE_PREFIX_MAX_BYTES = 64 * 1024;
+
+function isFilesystemErrorCode(error: unknown, expectedCode: string): boolean {
+  return (
+    typeof error === "object" && error !== null && "code" in error && error.code === expectedCode
+  );
+}
+
 // The durable GitHub link record: the mirror-push hot path (every commit)
 // reads it from KV instead of re-folding the stream. The link lifecycle events
 // on the repo stream are the record of TRUTH for inspection; this key is
@@ -699,7 +710,12 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   async #commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
     await this.#flushPendingCommitCompleted();
-    const parsed = parseCommitFilesInput(input);
+    let parsed = parseCommitFilesInput(input);
+    if (parsed.amendIfHead !== undefined && this.getGithubLink() !== null) {
+      // Never rewrite a GitHub-linked repo: the mirror push cannot force with
+      // a lease, so history stays append-only there and the commit stacks.
+      parsed = { ...parsed, amendIfHead: undefined };
+    }
     const repo = await this.gitAccess();
     const branch = parsed.branch ?? repo.defaultBranch;
     if (branch === REPO_DEFAULT_BRANCH) {
@@ -721,6 +737,8 @@ export class RepoDurableObject extends DurableObject<Env> {
       }
       console.warn(`lazy commit fell back to the clone lane (safe): ${attempt.detail}`);
     }
+    // The clone fallback never amends (its git wrapper cannot re-parent); an
+    // ordinary commit on top is the degraded outcome, reported as such.
     const result = await commitFilesToArtifactRepo({
       author: parsed.author,
       branch,
@@ -752,6 +770,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     await this.#flushPendingCommitCompleted();
 
     return {
+      amended: false,
       branch: result.branch,
       changedPaths: result.changedPaths,
       commitOid: result.commitOid,
@@ -776,6 +795,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const branch = REPO_DEFAULT_BRANCH;
     const reader = this.#lazyReader();
     const command = {
+      amendIfHead: parsed.amendIfHead,
       author: {
         date: new Date(),
         email: parsed.author?.email ?? ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
@@ -844,7 +864,13 @@ export class RepoDurableObject extends DurableObject<Env> {
     if (outcome.changedPaths.length === 0) {
       return {
         kind: "completed",
-        result: { branch, changedPaths: [], commitOid: outcome.commitOid, noChanges: true },
+        result: {
+          amended: false,
+          branch,
+          changedPaths: [],
+          commitOid: outcome.commitOid,
+          noChanges: true,
+        },
       };
     }
 
@@ -874,6 +900,9 @@ export class RepoDurableObject extends DurableObject<Env> {
     return {
       kind: "completed",
       result: {
+        // Amended exactly when the tip this commit superseded is the one the
+        // caller named.
+        amended: outcome.parentCommitOid === parsed.amendIfHead,
         branch,
         changedPaths: outcome.changedPaths,
         commitOid: outcome.commitOid,
@@ -924,6 +953,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     await this.#flushPendingCommitCompleted();
 
     return {
+      amended: false,
       branch: result.branch,
       changedPaths: result.changedPaths,
       commitOid: result.commitOid,
@@ -1083,6 +1113,77 @@ export class RepoDurableObject extends DurableObject<Env> {
     }
   }
 
+  async #readHeadFileBytes(
+    path: string,
+  ): Promise<{ bytes: Uint8Array; commitOid: string; path: string } | null> {
+    try {
+      await this.#lazyFreshHead();
+      const { bytes, head } = await this.#lazyReader().readHeadPaths([path]);
+      if (bytes[0] === null || bytes[0] === undefined) return null;
+      return { bytes: bytes[0], commitOid: head.commitOid, path };
+    } catch (error) {
+      console.warn(
+        `repo head read through the lazy reader failed; falling back to the tree cache: ${String(error)}`,
+      );
+    }
+    try {
+      return await this.#withHeadTree(async (commitOid) => {
+        const bytes = await this.#readHeadTreeBytesVerified(path);
+        return bytes === null ? null : { bytes, commitOid, path };
+      });
+    } catch (error) {
+      this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
+      console.warn(
+        `repo head read via the head-tree cache failed; falling back to a clone: ${String(error)}`,
+      );
+    }
+    const { filesystem, head } = await this.#checkout({});
+    const absolutePath = `${REPO_DIR}/${path}`;
+    try {
+      await filesystem.lstat(absolutePath);
+    } catch (error) {
+      if (isFilesystemErrorCode(error, "ENOENT")) return null;
+      throw error;
+    }
+    const bytes = await readCheckoutFileBytes(filesystem, absolutePath);
+    return { bytes, commitOid: head.oid, path };
+  }
+
+  /**
+   * A bounded raw prefix of one committed file at HEAD. This internal RPC
+   * keeps callers from transferring or retaining more than the requested
+   * bytes while preserving the full file length for truncation metadata.
+   */
+  async readHeadFilePrefix(input: { path: string; maximumBytes: number }): Promise<{
+    bytes: Uint8Array;
+    commitOid: string;
+    originalBytes: number;
+    path: string;
+    truncated: boolean;
+  } | null> {
+    if (
+      !Number.isSafeInteger(input.maximumBytes) ||
+      input.maximumBytes < 0 ||
+      input.maximumBytes > REPO_HEAD_FILE_PREFIX_MAX_BYTES
+    ) {
+      throw new RangeError(
+        `maximumBytes must be an integer from 0 through ${REPO_HEAD_FILE_PREFIX_MAX_BYTES}.`,
+      );
+    }
+    const path = normalizeRepoFilePath(input.path);
+    const result = await this.#readHeadFileBytes(path);
+    if (result === null) return null;
+    const originalBytes = result.bytes.byteLength;
+    const prefix = result.bytes.slice(0, input.maximumBytes);
+    return {
+      bytes: prefix,
+      commitOid: result.commitOid,
+      originalBytes,
+      path,
+      truncated: prefix.byteLength < originalBytes,
+    };
+  }
+
   /**
    * Committed file contents at HEAD — or, with `commitOid`, pinned to that
    * commit — null when the path does not exist there. `encoding: "base64"`
@@ -1098,39 +1199,13 @@ export class RepoDurableObject extends DurableObject<Env> {
     const path = normalizeRepoFilePath(input.path);
     if (input.commitOid !== undefined) assertCommitOid(input.commitOid);
     if (input.commitOid === undefined) {
-      // HEAD reads serve from the lazy snapshot: manifest lookup + verified
-      // store bytes, no clone anywhere. Failures fall through to the
-      // clone-backed byte-tree lane below, loudly.
-      try {
-        await this.#lazyFreshHead();
-        // Head label and bytes come from ONE reader observation — an
-        // interleaved install can never mix snapshots inside this response.
-        const { bytes, head } = await this.#lazyReader().readHeadPaths([path]);
-        if (bytes[0] === null || bytes[0] === undefined) return null;
-        const content =
-          input.encoding === "base64"
-            ? bytesToBase64(bytes[0])
-            : new TextDecoder().decode(bytes[0]);
-        return { commitOid: head.commitOid, content, path };
-      } catch (error) {
-        console.warn(
-          `repo head read via the lazy lane failed; falling back to the tree cache: ${String(error)}`,
-        );
-      }
-      try {
-        return await this.#withHeadTree(async (commitOid) => {
-          const bytes = await this.#readHeadTreeBytesVerified(path);
-          if (bytes === null) return null;
-          const content =
-            input.encoding === "base64" ? bytesToBase64(bytes) : new TextDecoder().decode(bytes);
-          return { commitOid, content, path };
-        });
-      } catch (error) {
-        this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
-        console.warn(
-          `repo head read via the head-tree cache failed; falling back to a clone: ${String(error)}`,
-        );
-      }
+      const result = await this.#readHeadFileBytes(path);
+      if (result === null) return null;
+      const content =
+        input.encoding === "base64"
+          ? bytesToBase64(result.bytes)
+          : new TextDecoder().decode(result.bytes);
+      return { commitOid: result.commitOid, content, path };
     }
     if (input.encoding === "base64") {
       const { filesystem, head } = await this.#checkout({ commitOid: input.commitOid });
@@ -1138,7 +1213,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       try {
         await filesystem.lstat(absolutePath);
       } catch (error) {
-        if ((error as { code?: unknown })?.code === "ENOENT") return null;
+        if (isFilesystemErrorCode(error, "ENOENT")) return null;
         throw error;
       }
       const bytes = await readCheckoutFileBytes(filesystem, absolutePath);
@@ -1177,6 +1252,12 @@ export class RepoDurableObject extends DurableObject<Env> {
     }
     const { commitOid, files } = await this.getFilesSnapshot();
     return { commitOid, paths: Object.keys(files).sort() };
+  }
+
+  /** Fuzzy-match committed paths at HEAD and return only a bounded result. */
+  async searchFiles(input: SearchRepoFilesInput): Promise<SearchRepoFilesResult> {
+    const { commitOid, paths } = await this.listFiles();
+    return { commitOid, paths: searchRepoFilePaths(paths, input) };
   }
 
   /**
@@ -2133,6 +2214,7 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
     const [head] = await git.log({ depth: 1 });
     if (!head) throw new Error("Repo has no commits.");
     return {
+      amended: false,
       branch: input.branch,
       changedPaths,
       commitOid: head.oid,
@@ -2164,6 +2246,7 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
   }
 
   return {
+    amended: false,
     branch: input.branch,
     changedPaths,
     commitOid: commit.oid,
@@ -2304,6 +2387,7 @@ function parseCommitFilesInput(input: CommitRepoFilesInput): CommitRepoFilesInpu
       throw new Error("commitFiles author must include non-empty name and email.");
     }
   }
+  if (input.amendIfHead !== undefined) assertCommitOid(input.amendIfHead);
 
   return {
     ...input,

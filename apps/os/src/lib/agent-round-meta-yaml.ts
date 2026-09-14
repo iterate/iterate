@@ -1,3 +1,4 @@
+import { sliceText } from "@iterate-com/shared/chunked-text";
 import { Document, Scalar, visit } from "yaml";
 import type {
   AgentUiCodeStep,
@@ -69,7 +70,7 @@ export function buildRoundMetaYaml(
       }),
     // The raw model response the round's consequences were derived from —
     // after the prompt, so the doc reads request → answer.
-    ...(llm?.responseText && { response: llm.responseText }),
+    ...(llm && llm.responseText.length > 0 && { response: sliceText(llm.responseText) }),
   });
   visit(doc, {
     // Multiline strings as |- blocks: readable and highlightable, instead of

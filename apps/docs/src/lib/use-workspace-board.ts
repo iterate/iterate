@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TaskChangeStatus, TaskChangeSummary } from "../state.ts";
 import { isTaskFilePath, parseTaskCard } from "../tasks-model.ts";
 import { withProject, workspaceFor } from "./project-rpc.ts";
-import type { TasksWorkspace, WorkspaceStreamEvent } from "./tasks-api.ts";
+import type { DocsWorkspace, WorkspaceStreamEvent } from "./docs-api.ts";
 import type { BoardAddress } from "./board-shared.ts";
 import { changeAfterDelete, changeAfterWrite, toBoardTask, type BoardTask } from "./board-model.ts";
 
@@ -17,12 +17,89 @@ import { changeAfterDelete, changeAfterWrite, toBoardTask, type BoardTask } from
 const POLL_MS = 3500;
 
 /** ONE key form for everything the board holds: repo-relative, no leading
- * slash — the same shape the Yjs lane's task paths and isTaskFilePath use.
- * The vessel already strips the repo mount prefix from everything it
- * returns; this guard drops stray leading slashes so mixed forms can't
- * silently split sessions or miss badges. */
+ * slash — the shape isTaskFilePath and the task model speak. This guard
+ * drops stray leading slashes so mixed forms can't silently split sessions
+ * or miss badges. */
 export function boardKey(path: string): string {
   return path.replace(/^\/+/, "");
+}
+
+/** A board key as the fully qualified platform path under the board's repo
+ * mount — with boardKeyUnderRepo, the ONLY join between the two. */
+export function qualifyBoardPath(repoPath: string, key: string): string {
+  return `${repoPath}/${boardKey(key)}`;
+}
+
+/** The board key of a platform path under the board's repo mount; null for
+ * anything outside it (another repo's files are not this board's). */
+export function boardKeyUnderRepo(repoPath: string, path: string): string | null {
+  const prefix = `${repoPath}/`;
+  return path.startsWith(prefix) ? boardKey(path.slice(prefix.length)) : null;
+}
+
+/** Head versions of the live sessions under this board's repo, keyed by board key. */
+export function versionsByBoardKey(
+  versions: Record<string, number>,
+  repoPath: string,
+): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(versions).flatMap(([path, version]) => {
+      const key = boardKeyUnderRepo(repoPath, path);
+      return key === null ? [] : [[key, version]];
+    }),
+  );
+}
+
+/** Caret presence per board key, from the platform's index-matched flat shape. */
+export function presenceByBoardKey(
+  flat: { clientIds: string[]; paths: string[] },
+  repoPath: string,
+): Map<string, string[]> {
+  const presence = new Map<string, string[]>();
+  flat.paths.forEach((path, index) => {
+    const clientId = flat.clientIds[index];
+    const key = boardKeyUnderRepo(repoPath, path);
+    if (clientId === undefined || key === null) return;
+    const clients = presence.get(key) ?? [];
+    clients.push(clientId);
+    presence.set(key, clients);
+  });
+  return presence;
+}
+
+/**
+ * Every task file under the board's repo mount, path → content, keyed by
+ * board key (the board seed). Batched reads: per-file reads collapse at
+ * thousands of tasks, and the platform caps one readFiles call at 10,000
+ * paths, so bigger boards read in chunks — two reads in flight keep the pipe
+ * full without stampeding the workspace. Null reads (vanished between glob and
+ * read, transient failure) are SKIPPED, never seeded as phantom empty cards.
+ */
+export async function readTaskFiles(
+  workspace: Pick<DocsWorkspace, "glob" | "readFiles">,
+  repoPath: string,
+): Promise<Record<string, string>> {
+  // Anchored under the repo mount: a relative pattern globs the workspace's
+  // private scratch, and other repos' mounts are not this board's business.
+  const paths = await workspace.glob(`${repoPath}/**/tasks/**/*.md`);
+  const CHUNK = 5_000;
+  const chunks: string[][] = [];
+  for (let index = 0; index < paths.length; index += CHUNK) {
+    chunks.push(paths.slice(index, index + CHUNK));
+  }
+  const contents: Record<string, string | null> = {};
+  for (let index = 0; index < chunks.length; index += 2) {
+    const pair = await Promise.all(
+      chunks.slice(index, index + 2).map((chunk) => workspace.readFiles(chunk)),
+    );
+    for (const part of pair) Object.assign(contents, part);
+  }
+  return Object.fromEntries(
+    Object.entries(contents).flatMap(([path, content]) => {
+      const key = boardKeyUnderRepo(repoPath, path);
+      return content === null || key === null ? [] : [[key, content]];
+    }),
+  );
 }
 
 type WorkspaceStatusShape = {
@@ -31,14 +108,19 @@ type WorkspaceStatusShape = {
 
 /** status() is workspace-wide — every project repo is a mount — but this
  * board is ONE repo: only the matching mount's changes count, and their
- * fully qualified paths become repo-relative board keys. */
-export function changeMap(status: unknown, repoPath: string): Map<string, TaskChangeStatus> {
+ * fully qualified paths become repo-relative board keys. `include` picks
+ * the files a lens cares about (task files here; documents for the tree). */
+export function changeMap(
+  status: unknown,
+  repoPath: string,
+  include: (key: string) => boolean = isTaskFilePath,
+): Map<string, TaskChangeStatus> {
   const map = new Map<string, TaskChangeStatus>();
   for (const mount of (status as WorkspaceStatusShape).mounts ?? []) {
     if (mount.path !== repoPath) continue;
     for (const entry of mount.changes ?? []) {
       const key = boardKey(entry.path.slice(repoPath.length));
-      if (!isTaskFilePath(key)) continue;
+      if (!include(key)) continue;
       const kind =
         entry.change === "added" ? "added" : entry.change === "deleted" ? "deleted" : "modified";
       map.set(key, kind);
@@ -48,7 +130,7 @@ export function changeMap(status: unknown, repoPath: string): Map<string, TaskCh
 }
 
 export function useWorkspaceBoard(address: BoardAddress) {
-  const { boardId, workspacePath, repoPath } = address;
+  const { workspacePath, repoPath } = address;
   const [files, setFiles] = useState<Record<string, string> | null>(null);
   const [changes, setChanges] = useState<Map<string, TaskChangeStatus>>(new Map());
   // Fresh caret presence per path — "who has this card open" (clientIds).
@@ -59,12 +141,10 @@ export function useWorkspaceBoard(address: BoardAddress) {
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
 
-  const lane = useCallback(
-    <T>(operation: (ws: TasksWorkspace) => Promise<T>) =>
-      withProject((project) =>
-        operation(workspaceFor(project, { boardId, workspacePath, repoPath })),
-      ),
-    [boardId, workspacePath, repoPath],
+  const withWorkspace = useCallback(
+    <T>(operation: (ws: DocsWorkspace) => Promise<T>) =>
+      withProject((project) => operation(workspaceFor(project, workspacePath))),
+    [workspacePath],
   );
 
   // Initial seed: the whole task file set + dirty state, in parallel.
@@ -72,12 +152,13 @@ export function useWorkspaceBoard(address: BoardAddress) {
     const mine = ++generation.current;
     setFiles(null);
     setError(null);
-    void Promise.all([lane((ws) => ws.files()), lane((ws) => ws.status())])
+    void Promise.all([
+      withWorkspace((ws) => readTaskFiles(ws, repoPath)),
+      withWorkspace((ws) => ws.git.status()),
+    ])
       .then(([seeded, status]) => {
         if (generation.current !== mine) return;
-        setFiles(
-          Object.fromEntries(Object.entries(seeded).map(([path, c]) => [boardKey(path), c])),
-        );
+        setFiles(seeded);
         setChanges(changeMap(status, repoPath));
       })
       .catch((cause: unknown) => {
@@ -87,7 +168,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
     return () => {
       generation.current++;
     };
-  }, [lane, repoPath]);
+  }, [withWorkspace, repoPath]);
 
   // Liveness: the collab VERSION map is the change cursor — a path whose
   // head advanced gets refetched even when its status kind is unchanged
@@ -126,17 +207,15 @@ export function useWorkspaceBoard(address: BoardAddress) {
       const epochBefore = mutationEpoch.current;
       const pathEpochsBefore = new Map(pathEpochs.current);
       void Promise.all([
-        lane((ws) => ws.versions()),
-        wantStatus ? lane((ws) => ws.status()) : Promise.resolve(null),
+        withWorkspace((ws) => ws.collab.versions()),
+        wantStatus ? withWorkspace((ws) => ws.git.status()) : Promise.resolve(null),
         // Cheap in-memory reads; failures just keep the previous dots.
-        lane((ws) => ws.presenceSummary()).catch(() => null),
-        lane((ws) => ws.boardViewers()).catch(() => null),
+        withWorkspace((ws) => ws.collab.presenceSummary()).catch(() => null),
+        withWorkspace((ws) => ws.collab.boardViewers()).catch(() => null),
       ])
         .then(async ([rawVersions, status, presence, board]) => {
           if (presence !== null && generation.current === mine) {
-            setViewers(
-              new Map(Object.entries(presence).map(([path, ids]) => [boardKey(path), ids])),
-            );
+            setViewers(presenceByBoardKey(presence, repoPath));
           }
           if (board !== null && generation.current === mine) {
             setBoardClients(Object.entries(board).map(([clientId, name]) => ({ clientId, name })));
@@ -144,9 +223,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
           if (generation.current !== mine) return;
           const changes = changesRef.current;
           const next = status === null ? changes : changeMap(status, repoPath);
-          const versions = Object.fromEntries(
-            Object.entries(rawVersions).map(([path, version]) => [boardKey(path), version]),
-          );
+          const versions = versionsByBoardKey(rawVersions, repoPath);
           const moved = new Set<string>();
           for (const [path, version] of Object.entries(versions)) {
             if (versionsRef.current[path] !== version) moved.add(path);
@@ -167,7 +244,10 @@ export function useWorkspaceBoard(address: BoardAddress) {
           const fetched = await Promise.all(
             [...moved].map(
               async (path) =>
-                [boardKey(path), await lane((ws) => ws.read(`/${boardKey(path)}`))] as const,
+                [
+                  boardKey(path),
+                  await withWorkspace((ws) => ws.readFile(qualifyBoardPath(repoPath, path))),
+                ] as const,
             ),
           );
           if (generation.current !== mine) return;
@@ -197,11 +277,11 @@ export function useWorkspaceBoard(address: BoardAddress) {
         );
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [lane, repoPath]);
+  }, [withWorkspace, repoPath]);
 
   // Board-viewer heartbeat: announce on join (and every 25s — the server
   // ages entries at 45s), clear on leave. Identity via whoami; the clientId
-  // wears the display slug so colors/labels match redlines and carets.
+  // wears the display slug so colors/labels match the carets.
   // react-doctor-disable-next-line react-doctor/effect-needs-cleanup
   useEffect(() => {
     // (The interval IS cleaned up: it is allocated inside the whoami .then,
@@ -228,7 +308,8 @@ export function useWorkspaceBoard(address: BoardAddress) {
             .slice(0, 24) || "someone";
         clientId = `u-${slug}-${Math.random().toString(36).slice(2, 8)}`;
         setSelf({ clientId, name });
-        const announce = () => void lane((ws) => ws.boardPresent(clientId!, name)).catch(() => {});
+        const announce = () =>
+          void withWorkspace((ws) => ws.collab.boardPresent(clientId!, name)).catch(() => {});
         announce();
         timer = setInterval(announce, 25_000);
       })
@@ -236,9 +317,10 @@ export function useWorkspaceBoard(address: BoardAddress) {
     return () => {
       stopped = true;
       if (timer !== null) clearInterval(timer);
-      if (clientId !== null) void lane((ws) => ws.boardPresent(clientId!, null)).catch(() => {});
+      if (clientId !== null)
+        void withWorkspace((ws) => ws.collab.boardPresent(clientId!, null)).catch(() => {});
     };
-  }, [lane]);
+  }, [withWorkspace]);
 
   // Per-file parse cache: a poll refetch or one live keystroke must cost
   // O(changed files), never a reparse of the whole board.
@@ -329,7 +411,9 @@ export function useWorkspaceBoard(address: BoardAddress) {
         });
         return current === null ? current : { ...current, [path]: content };
       });
-      return tracked(lane((ws) => ws.write(`/${path}`, content))).then(
+      return tracked(
+        withWorkspace((ws) => ws.writeFile(qualifyBoardPath(repoPath, path), content)),
+      ).then(
         () => {
           // Close the race window: a poll that STARTED during this RPC read
           // pre-write state — the landing bump makes its apply-time check
@@ -343,7 +427,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
         },
       );
     },
-    [lane, restoreOnFailure, tracked],
+    [withWorkspace, repoPath, restoreOnFailure, tracked],
   );
 
   const deleteTask = useCallback(
@@ -372,14 +456,14 @@ export function useWorkspaceBoard(address: BoardAddress) {
       });
       // The workspace still has the file on failure — put the card (and its
       // badge) back instead of pretending the delete happened.
-      void tracked(lane((ws) => ws.delete(`/${path}`))).then(
+      void tracked(withWorkspace((ws) => ws.deleteFile(qualifyBoardPath(repoPath, path)))).then(
         () => {
           mutationEpoch.current++; // see writeTask — cover the whole window
         },
         (cause: unknown) => restoreOnFailure(path, priorContent, priorChange)(cause),
       );
     },
-    [lane, restoreOnFailure, tracked],
+    [withWorkspace, repoPath, restoreOnFailure, tracked],
   );
 
   /** Live content from an open editor session — keeps the card current
@@ -407,7 +491,10 @@ export function useWorkspaceBoard(address: BoardAddress) {
   }, []);
 
   /** One file's merged-view content (the live head when a session is open). */
-  const readTask = useCallback((path: string) => lane((ws) => ws.read(`/${path}`)), [lane]);
+  const readTask = useCallback(
+    (path: string) => withWorkspace((ws) => ws.readFile(qualifyBoardPath(repoPath, path))),
+    [withWorkspace, repoPath],
+  );
 
   /**
    * Rename: NOTHING moves locally until the write RPC lands — the open
@@ -424,7 +511,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
       content: string,
       carry: (finalSource: string) => string = (source) => source,
       /** Runs once the write RPC landed — the moment navigation is safe.
-       * AWAITED before the carry read: lanes flush the old editor here so
+       * AWAITED before the carry read: hosts flush the old editor here so
        * the carry sees its final keystrokes. */
       onWritten?: () => void | Promise<void>,
     ): Promise<string | null> => {
@@ -432,9 +519,13 @@ export function useWorkspaceBoard(address: BoardAddress) {
       // session genuinely advanced after this point — comparing against our
       // written content would let an older server head overwrite unpushed
       // local text that exists nowhere else.
-      const baseline = await lane((ws) => ws.read(`/${fromPath}`)).catch(() => null);
+      const baseline = await withWorkspace((ws) =>
+        ws.readFile(qualifyBoardPath(repoPath, fromPath)),
+      ).catch(() => null);
       try {
-        await tracked(lane((ws) => ws.write(`/${toPath}`, content)));
+        await tracked(
+          withWorkspace((ws) => ws.writeFile(qualifyBoardPath(repoPath, toPath), content)),
+        );
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
         setError(message);
@@ -461,11 +552,15 @@ export function useWorkspaceBoard(address: BoardAddress) {
       try {
         await onWritten?.();
         try {
-          const final = await lane((ws) => ws.read(`/${fromPath}`));
+          const final = await withWorkspace((ws) =>
+            ws.readFile(qualifyBoardPath(repoPath, fromPath)),
+          );
           if (final !== null && final !== baseline) {
             const carried = carry(final);
             if (carried !== content) {
-              await lane((ws) => ws.write(`/${toPath}`, carried));
+              await withWorkspace((ws) =>
+                ws.writeFile(qualifyBoardPath(repoPath, toPath), carried),
+              );
               mutationEpoch.current++;
               setFiles((current) =>
                 current === null ? current : { ...current, [toPath]: carried },
@@ -476,7 +571,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
           // The carry is best-effort; the source still gets deleted below.
         }
         try {
-          await lane((ws) => ws.delete(`/${fromPath}`));
+          await withWorkspace((ws) => ws.deleteFile(qualifyBoardPath(repoPath, fromPath)));
           mutationEpoch.current++; // a poll mid-delete read fromPath alive
         } catch {
           // The delete failed — the server still HAS the source; the next
@@ -487,7 +582,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
       }
       return null;
     },
-    [lane, tracked],
+    [withWorkspace, repoPath, tracked],
   );
 
   /** Change summaries in the shape the commit controls speak. */
@@ -513,10 +608,10 @@ export function useWorkspaceBoard(address: BoardAddress) {
   const revertTask = useCallback(
     (path: string): Promise<boolean> => {
       mutationEpoch.current++;
-      return lane(async (ws) => {
-        await ws.revert(`/${path}`);
+      return withWorkspace(async (ws) => {
+        await ws.revert(qualifyBoardPath(repoPath, path));
         mutationEpoch.current++;
-        const content = await ws.read(`/${path}`);
+        const content = await ws.readFile(qualifyBoardPath(repoPath, path));
         setFiles((current) => {
           if (current === null) return current;
           const merged = { ...current };
@@ -537,7 +632,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
         return false;
       });
     },
-    [lane],
+    [withWorkspace, repoPath],
   );
 
   /** True only when EVERY revert landed. */
@@ -547,35 +642,35 @@ export function useWorkspaceBoard(address: BoardAddress) {
   }, [changes, revertTask]);
 
   /** Full reseed (files + status) — the fresh truth after a server-side
-   * mutation outside the board's own lanes (a commit, an agent assignment).
+   * mutation outside the board's own writes (a commit, an agent assignment).
    * The epoch bumps ensure a poll that started mid-mutation can't wipe it. */
   const refresh = useCallback(async (): Promise<void> => {
     mutationEpoch.current++;
     const [seeded, status] = await Promise.all([
-      lane((ws) => ws.files()),
-      lane((ws) => ws.status()),
+      withWorkspace((ws) => readTaskFiles(ws, repoPath)),
+      withWorkspace((ws) => ws.git.status()),
     ]);
     mutationEpoch.current++;
-    // Same key normalization as the seed — mixed-shape keys would orphan
-    // badges and duplicate cards after the first commit.
-    setFiles(Object.fromEntries(Object.entries(seeded).map(([path, c]) => [boardKey(path), c])));
+    setFiles(seeded);
     setChanges(changeMap(status, repoPath));
-  }, [lane, repoPath]);
+  }, [withWorkspace, repoPath]);
 
   const commit = useCallback(
     async (message: string) => {
       mutationEpoch.current++;
-      const result = await lane((ws) => ws.commit(message));
+      // scope pins the commit to this board's mount — commits never span
+      // mounts, and every project repo is one.
+      const result = await withWorkspace((ws) => ws.git.commit({ message, scope: repoPath }));
       await refresh();
       return result;
     },
-    [lane, refresh],
+    [withWorkspace, refresh, repoPath],
   );
 
   const subscribeEvents = useCallback(
     (onBatch: (events: WorkspaceStreamEvent[]) => void, afterOffset?: number) =>
-      lane((ws) => ws.subscribeEvents((batch) => onBatch(batch.events), afterOffset)),
-    [lane],
+      withWorkspace((ws) => ws.subscribeEvents((batch) => onBatch(batch.events), afterOffset)),
+    [withWorkspace],
   );
 
   return {

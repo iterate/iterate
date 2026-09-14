@@ -1,12 +1,33 @@
-import { failing } from "@iterate-com/shared/test-support/failing-test";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { expect, test, vi } from "vitest";
 import { replaceArtifactWithEmptyRepo } from "./artifact-replacement.ts";
+import { artifactWriteToken } from "./artifact-seeding.ts";
 
 function artifactsError(code: string): Error & { code: string } {
   return Object.assign(new Error(code), { code });
 }
 
-failing(test, /TEMP REPO HANDLE NOT DISPOSED/)(
+test("artifact write-token mint releases its repository handle and plain result", async () => {
+  const disposeRepo = vi.fn();
+  const disposeToken = vi.fn();
+  const token = { plaintext: "write-token?expires=123" };
+  Object.defineProperty(token, Symbol.dispose, { value: disposeToken });
+  const repo = {
+    createToken: vi.fn(async () => token),
+    [Symbol.dispose]: disposeRepo,
+  };
+  const artifacts = {
+    get: vi.fn(async () => repo),
+  };
+
+  await expect(artifactWriteToken(artifacts as unknown as Artifacts, "repo")).resolves.toBe(
+    "write-token",
+  );
+  expect(disposeToken).toHaveBeenCalledOnce();
+  expect(disposeRepo).toHaveBeenCalledOnce();
+});
+
+createFailing(test, /TEMP REPO HANDLE NOT DISPOSED/)(
   "DESIRED: deletion polling disposes each temporary repository handle",
   async () => {
     const calls: string[] = [];
@@ -50,7 +71,7 @@ failing(test, /TEMP REPO HANDLE NOT DISPOSED/)(
   },
 );
 
-failing(test, /CLEANUP MASQUERADES AS DELETION BARRIER/)(
+createFailing(test, /CLEANUP MASQUERADES AS DELETION BARRIER/)(
   "DESIRED: cleanup failure does not masquerade as the repository deletion barrier",
   async () => {
     const cleanupError = artifactsError("NOT_FOUND");

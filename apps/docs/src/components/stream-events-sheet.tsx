@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
-import type { WorkspaceStreamEvent } from "../lib/tasks-api.ts";
+import type { WorkspaceStreamEvent } from "../lib/docs-api.ts";
 
 // One shared formatter: constructing a locale formatter per event per render
 // is the slow path of toLocaleTimeString.

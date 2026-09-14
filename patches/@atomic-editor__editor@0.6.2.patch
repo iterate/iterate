@@ -1,0 +1,203 @@
+diff --git a/dist/inline-preview.js b/dist/inline-preview.js
+index 67f18b3d3f9856530dd5cda94bb18d900657c8ca..bda55c39bcbf00931ae2dffbce14eed8cfbbb8d1 100644
+--- a/dist/inline-preview.js
++++ b/dist/inline-preview.js
+@@ -13,6 +13,16 @@ function defaultOnLinkClick(url) {
+     }
+ }
+ const FREEZE_TAIL_MS = 100;
++const PREVIEW_VIEWPORT_BUFFER_LINES = 160;
++function previewRange(view) {
++    const { doc } = view.state;
++    const firstVisible = doc.lineAt(view.viewport.from).number;
++    const lastVisible = doc.lineAt(view.viewport.to).number;
++    return {
++        from: doc.line(Math.max(1, firstVisible - PREVIEW_VIEWPORT_BUFFER_LINES)).from,
++        to: doc.line(Math.min(doc.lines, lastVisible + PREVIEW_VIEWPORT_BUFFER_LINES)).to,
++    };
++}
+ // ---- freeze plumbing -----------------------------------------------------
+ const setFrozen = StateEffect.define();
+ const previewFrozenField = StateField.define({
+@@ -237,7 +247,7 @@ class BulletWidget extends WidgetType {
+ }
+ const BULLET_WIDGET = new BulletWidget();
+ class TaskCheckboxWidget extends WidgetType {
+-    constructor(checked) {
++    constructor(checked, disabled) {
+         super();
+         Object.defineProperty(this, "checked", {
+             enumerable: true,
+@@ -245,9 +255,15 @@ class TaskCheckboxWidget extends WidgetType {
+             writable: true,
+             value: checked
+         });
++        Object.defineProperty(this, "disabled", {
++            enumerable: true,
++            configurable: true,
++            writable: true,
++            value: disabled
++        });
+     }
+     eq(other) {
+-        return other.checked === this.checked;
++        return other.checked === this.checked && other.disabled === this.disabled;
+     }
+     toDOM(view) {
+         // The `.cm-atomic-list-marker` class provides the uniform
+@@ -259,6 +275,7 @@ class TaskCheckboxWidget extends WidgetType {
+         const input = document.createElement('input');
+         input.type = 'checkbox';
+         input.checked = this.checked;
++        input.disabled = this.disabled;
+         input.className = 'cm-atomic-list-marker cm-atomic-task-checkbox';
+         input.setAttribute('contenteditable', 'false');
+         input.addEventListener('mousedown', (e) => {
+@@ -268,6 +285,8 @@ class TaskCheckboxWidget extends WidgetType {
+         input.addEventListener('click', (e) => {
+             e.preventDefault();
+             e.stopPropagation();
++            if (view.state.readOnly)
++                return;
+             const pos = view.posAtDOM(input);
+             if (pos < 0)
+                 return;
+@@ -337,7 +356,7 @@ function listItemDepth(item) {
+ function sameListItem(a, b) {
+     return a?.name === 'ListItem' && a.from === b.from && a.to === b.to;
+ }
+-function buildInlineDecorations(view) {
++function buildInlineDecorations(view, preview) {
+     const { state } = view;
+     const { doc } = state;
+     const ranges = [];
+@@ -355,24 +374,11 @@ function buildInlineDecorations(view) {
+                 activeLines.add(n);
+         }
+     }
+-    // Decorate the whole parsed tree — not the current viewport — so
+-    // that scrolling never needs to rebuild the decoration set. Prior
+-    // design walked viewport-only and rebuilt on every scroll, which
+-    // on iOS caused scroll-up momentum halts whenever new decorations
+-    // were applied to lines at the top of the viewport (anchor
+-    // conflict with the scroll animation). Cost: a one-shot whole-doc
+-    // walk on every doc / selection / focus change instead of a
+-    // smaller walk on every scroll.
+-    //
+-    // `ensureSyntaxTree(..., doc.length, ...)` guarantees the tree
+-    // actually covers the whole doc before we walk it. Without this,
+-    // for moderately long atoms the incremental parser's initial
+-    // pass falls short of the end, we'd walk only a prefix, and
+-    // content past that point renders as raw `##`/`**` forever —
+-    // decorations don't rebuild on scroll anymore. Subsequent calls
+-    // are near-free because ensureSyntaxTree short-circuits once the
+-    // tree reaches the target.
+-    const tree = ensureSyntaxTree(state, state.doc.length, 200) ?? syntaxTree(state);
++    // Decorate the drawn viewport plus a generous line buffer. Selection changes
++    // scale with what the user can see. Rebuild only after the real viewport
++    // leaves that buffer, avoiding fresh decorations on each mobile scroll
++    // update. The parser-progress effect revisits this slice as parsing advances.
++    const tree = ensureSyntaxTree(state, preview.to, 200) ?? syntaxTree(state);
+     // `from` positions of Link nodes whose range overlaps a selection.
+     // Link children (LinkMark/URL/LinkTitle) hide unless their parent
+     // Link's `from` is in this set — i.e. the cursor has entered the
+@@ -395,18 +401,16 @@ function buildInlineDecorations(view) {
+     // traversal — meaningful because this runs on every cursor move and
+     // its cost scales with document size.)
+     tree.iterate({
++        from: preview.from,
++        to: preview.to,
+         enter: (node) => {
+             if (node.name === 'FencedCode') {
+-                const firstLine = doc.lineAt(node.from).number;
+-                const lastLine = doc.lineAt(node.to).number;
+-                let anyActive = false;
+-                for (let n = firstLine; n <= lastLine; n++) {
+-                    if (activeLines.has(n)) {
+-                        anyActive = true;
+-                        break;
+-                    }
+-                }
+-                if (anyActive) {
++                const active = view.hasFocus &&
++                    !readOnly &&
++                    state.selection.ranges.some((range) => range.from <= node.to && range.to >= node.from);
++                if (active) {
++                    const firstLine = doc.lineAt(Math.max(node.from, preview.from)).number;
++                    const lastLine = doc.lineAt(Math.min(node.to, preview.to)).number;
+                     for (let n = firstLine; n <= lastLine; n++)
+                         activeLines.add(n);
+                 }
+@@ -537,8 +541,8 @@ function buildInlineDecorations(view) {
+                 if (listItem) {
+                     const depth = listItemDepth(listItem);
+                     const padding = LIST_BASE_EM + LIST_ALCOVE_EM + depth * LIST_LEVEL_EM;
+-                    const firstLine = doc.lineAt(listItem.from);
+-                    const lastLine = doc.lineAt(listItem.to);
++                    const firstLine = doc.lineAt(Math.max(listItem.from, preview.from));
++                    const lastLine = doc.lineAt(Math.min(listItem.to, preview.to));
+                     for (let number = firstLine.number; number <= lastLine.number; number++) {
+                         const ownedLine = doc.line(number);
+                         const contentOffset = ownedLine.text.search(/\S/);
+@@ -643,7 +647,7 @@ function buildInlineDecorations(view) {
+                     doc.sliceString(node.to, node.to + 1) === ' ';
+                 const replaceTo = hasTrailingSpace ? node.to + 1 : node.to;
+                 pushReplace(ranges, doc, node.from, replaceTo, {
+-                    widget: new TaskCheckboxWidget(checked),
++                    widget: new TaskCheckboxWidget(checked, readOnly),
+                 });
+                 if (checked) {
+                     const lineNum = doc.lineAt(node.from).number;
+@@ -767,7 +771,14 @@ const inlinePreviewPlugin = ViewPlugin.fromClass(class {
+             writable: true,
+             value: void 0
+         });
+-        this.decorations = buildInlineDecorations(view);
++        Object.defineProperty(this, "preview", {
++            enumerable: true,
++            configurable: true,
++            writable: true,
++            value: void 0
++        });
++        this.preview = previewRange(view);
++        this.decorations = buildInlineDecorations(view, this.preview);
+     }
+     update(update) {
+         const prevFrozen = update.startState.field(previewFrozenField);
+@@ -799,27 +810,26 @@ const inlinePreviewPlugin = ViewPlugin.fromClass(class {
+             if (treeGrew)
+                 break;
+         }
+-        // Note: `update.viewportChanged` is intentionally NOT in this
+-        // list. Scrolling alone must not rebuild decorations — doing
+-        // so on iOS halts momentum whenever the rebuild produces new
+-        // decorations for lines at the top of a scroll-up viewport
+-        // (CM6 anchor conflict with the scroll animation). Walking
+-        // the whole parsed tree on the remaining triggers means
+-        // scroll-time cost is zero; the tree walk itself is
+-        // single-digit ms for typical atoms.
++        // Scrolling only rebuilds after it leaves the buffered decoration slice.
++        // That keeps normal mobile momentum free of decoration replacement.
+         // A read-only toggle (compartment reconfigure) changes neither
+         // doc nor selection nor focus, so detect the facet flip directly
+         // — otherwise reading mode wouldn't repaint into / out of the
+         // fully-rendered state.
+         const readOnlyChanged = update.startState.facet(readOnlyFacet) !==
+             update.state.facet(readOnlyFacet);
++        const nextPreview = previewRange(update.view);
++        const viewportEscaped = update.viewportChanged &&
++            (update.view.viewport.from < this.preview.from || update.view.viewport.to > this.preview.to);
+         if (justUnfroze ||
+             update.docChanged ||
+             update.selectionSet ||
+             update.focusChanged ||
+             treeGrew ||
+-            readOnlyChanged) {
+-            this.decorations = buildInlineDecorations(update.view);
++            readOnlyChanged ||
++            viewportEscaped) {
++            this.preview = nextPreview;
++            this.decorations = buildInlineDecorations(update.view, this.preview);
+         }
+     }
+ }, {

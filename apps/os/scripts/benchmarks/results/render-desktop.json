@@ -1,0 +1,218 @@
+[
+  {
+    "size": 65536,
+    "chunkSize": 1024,
+    "kind": "prose",
+    "collapsed": false,
+    "codePane": false,
+    "commits": {
+      "count": 71,
+      "total": 12.999998807907104,
+      "p50": 0.20000004768371582,
+      "p95": 0.3000001907348633,
+      "max": 0.40000009536743164
+    },
+    "updateAndLayout": {
+      "count": 64,
+      "total": 59.60000014305115,
+      "p50": 0.9000000953674316,
+      "p95": 1.2000000476837158,
+      "max": 2.5
+    },
+    "frames": {
+      "count": 64,
+      "total": 528,
+      "p50": 8.300000190734863,
+      "p95": 10.100000143051147,
+      "max": 10.299999952316284
+    },
+    "longTasks": {
+      "count": 0,
+      "total": 0
+    },
+    "codePanes": 0,
+    "animatedSpans": 1,
+    "elements": 44,
+    "displayedChars": 32831
+  },
+  {
+    "size": 65536,
+    "chunkSize": 1024,
+    "kind": "code",
+    "collapsed": false,
+    "codePane": false,
+    "commits": {
+      "count": 71,
+      "total": 9.699999332427979,
+      "p50": 0.10000014305114746,
+      "p95": 0.2999999523162842,
+      "max": 0.5
+    },
+    "updateAndLayout": {
+      "count": 64,
+      "total": 53.19999957084656,
+      "p50": 0.8999998569488525,
+      "p95": 1.2000000476837158,
+      "max": 2.700000047683716
+    },
+    "frames": {
+      "count": 64,
+      "total": 531.8000001907349,
+      "p50": 8.299999952316284,
+      "p95": 10.100000143051147,
+      "max": 10.299999952316284
+    },
+    "longTasks": {
+      "count": 0,
+      "total": 0
+    },
+    "codePanes": 1,
+    "animatedSpans": 0,
+    "elements": 44,
+    "displayedChars": 32831
+  },
+  {
+    "size": 1048576,
+    "chunkSize": 16384,
+    "kind": "prose",
+    "collapsed": false,
+    "codePane": false,
+    "commits": {
+      "count": 71,
+      "total": 15.899998426437378,
+      "p50": 0.20000004768371582,
+      "p95": 0.39999985694885254,
+      "max": 0.40000009536743164
+    },
+    "updateAndLayout": {
+      "count": 64,
+      "total": 91.89999890327454,
+      "p50": 1.4000000953674316,
+      "p95": 1.6000001430511475,
+      "max": 2.0999999046325684
+    },
+    "frames": {
+      "count": 64,
+      "total": 534.1999998092651,
+      "p50": 8.299999952316284,
+      "p95": 9.700000047683716,
+      "max": 10.299999952316284
+    },
+    "longTasks": {
+      "count": 0,
+      "total": 0
+    },
+    "codePanes": 0,
+    "animatedSpans": 1,
+    "elements": 44,
+    "displayedChars": 32831
+  },
+  {
+    "size": 1048576,
+    "chunkSize": 16384,
+    "kind": "code",
+    "collapsed": false,
+    "codePane": false,
+    "commits": {
+      "count": 71,
+      "total": 14.30000114440918,
+      "p50": 0.20000004768371582,
+      "p95": 0.3000001907348633,
+      "max": 0.40000009536743164
+    },
+    "updateAndLayout": {
+      "count": 64,
+      "total": 113.50000095367432,
+      "p50": 1.7999999523162842,
+      "p95": 1.9000000953674316,
+      "max": 2.5
+    },
+    "frames": {
+      "count": 64,
+      "total": 532.7999999523163,
+      "p50": 8.299999952316284,
+      "p95": 9.900000095367432,
+      "max": 10.199999809265137
+    },
+    "longTasks": {
+      "count": 0,
+      "total": 0
+    },
+    "codePanes": 1,
+    "animatedSpans": 0,
+    "elements": 44,
+    "displayedChars": 32831
+  },
+  {
+    "size": 1048576,
+    "chunkSize": 16384,
+    "kind": "prose",
+    "collapsed": true,
+    "codePane": false,
+    "commits": {
+      "count": 70,
+      "total": 4.999999284744263,
+      "p50": 0.09999990463256836,
+      "p95": 0.20000004768371582,
+      "max": 0.20000004768371582
+    },
+    "updateAndLayout": {
+      "count": 64,
+      "total": 11.699999332427979,
+      "p50": 0.20000004768371582,
+      "p95": 0.2999999523162842,
+      "max": 0.5999999046325684
+    },
+    "frames": {
+      "count": 64,
+      "total": 532.7000000476837,
+      "p50": 8.299999952316284,
+      "p95": 9.799999952316284,
+      "max": 10.200000047683716
+    },
+    "longTasks": {
+      "count": 0,
+      "total": 0
+    },
+    "codePanes": 0,
+    "animatedSpans": 0,
+    "elements": 5,
+    "displayedChars": 27
+  },
+  {
+    "size": 1048576,
+    "chunkSize": 1024,
+    "kind": "prose",
+    "collapsed": false,
+    "codePane": false,
+    "commits": {
+      "count": 1111,
+      "total": 237.5000011920929,
+      "p50": 0.20000004768371582,
+      "p95": 0.3000001907348633,
+      "max": 0.40000009536743164
+    },
+    "updateAndLayout": {
+      "count": 1024,
+      "total": 1032.4999995231628,
+      "p50": 1,
+      "p95": 1.2000000476837158,
+      "max": 2.4000000953674316
+    },
+    "frames": {
+      "count": 1024,
+      "total": 8533,
+      "p50": 8.299999952316284,
+      "p95": 9.900000095367432,
+      "max": 10.5
+    },
+    "longTasks": {
+      "count": 0,
+      "total": 0
+    },
+    "codePanes": 0,
+    "animatedSpans": 1,
+    "elements": 44,
+    "displayedChars": 32831
+  }
+]

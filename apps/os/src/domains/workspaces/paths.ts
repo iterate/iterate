@@ -12,6 +12,9 @@ import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.t
 // stringify/parse run.
 const ROUND_TRIP_PROJECT_ID = "prj_roundtrip";
 
+/** Private files inside every workspace, independent of its stream identity. */
+export const WORKSPACE_DIRECTORY = "/workspace";
+
 /**
  * Resolve `.`/`..` segments the way the shell's own path normalization does
  * (pop-based, cannot escape the root), so the `.git` write guard, whiteout
@@ -30,10 +33,15 @@ export function resolveAbsolutePath(path: string): string {
 /**
  * A canonical mount point: already in resolved absolute form (no `.`/`..`/
  * doubled slashes — so two spellings can never alias one subtree) and free of
- * the reserved `.git` segment.
+ * the reserved `.git` segment and `/workspace` subtree.
  */
 export function isCanonicalMountPath(path: string): boolean {
-  return path === resolveAbsolutePath(path) && !path.split("/").includes(".git");
+  return (
+    path === resolveAbsolutePath(path) &&
+    !path.split("/").includes(".git") &&
+    path !== WORKSPACE_DIRECTORY &&
+    !path.startsWith(`${WORKSPACE_DIRECTORY}/`)
+  );
 }
 
 /**

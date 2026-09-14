@@ -41,7 +41,13 @@ the vessel never sees an unauthenticated request.
 
 1. Read `x-itx-project-id` (stamped by platform ingress) and the
    `iterate-project-auth` cookie (the short-lived project-host session token
-   the auth worker minted at login — 15-minute TTL, refreshed transparently).
+   the auth worker minted at login — 15-minute TTL). Nothing renews it on
+   its own: a page that stays open longer than that must `POST
+/_iterate/auth/refresh` (same origin) before the token lapses, and the
+   gate re-mints it for the same member — `200 {expiresAt}`, or `401
+{login}` once the session is dead. A stale cookie on a plain navigation
+   is re-minted by a silent hop through the login route; only a member the
+   directory no longer knows sees the sign-in page.
 2. On each `/api` WebSocket connection, dial the platform back and present
    the token:
 

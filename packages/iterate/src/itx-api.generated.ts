@@ -93,7 +93,7 @@ export interface Project {
    * The durable-delivery subscriptions committed in the birth batch are what
    * guarantee the saga runs; create also nudges both root processors AFTER
    * this response, and a failed nudge is telemetry, not a create failure —
-   * the checklist's stall detector covers the rest. Either lane returns this
+   * the checklist's stall detector covers the rest. Either path returns this
    * same handle, and addressing an unknown slug is side-effect free.
    */
   create(
@@ -164,7 +164,7 @@ export interface Project {
   browser: CfBrowserCapability;
   /** This scope's agent control handle, when its address is under `/agents/`. */
   agent?: Agent;
-  /** THIS agent's web-chat door — present only on an agent-scoped itx. */
+  /** THIS agent's web chat — present only on an agent-scoped itx. */
   chat?: AgentChat;
   /**
    * This scope's own capability host: the durable capability table behind
@@ -184,6 +184,15 @@ export interface Project {
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   /** Project stream catalog: get(path), list(). */
   streams: ProjectStreamCollection;
+  /**
+   * A NARROWER itx for `path` — the one way to hand an itx to code that
+   * must not hold this scope's authority (a visitor's browser session, a
+   * helper that should only talk). The result exposes ONLY the listed
+   * built-in members, keeps `path`'s dynamic mounts, and runs with
+   * project-confined, non-admin authority. Never widens: it is minted from
+   * THIS project only.
+   */
+  scope(input: { path: string; surface: string[] }): Project;
   /** Agent catalog: get(path), list(). */
   agents: AgentCollection;
   /** Connected clients: the project processor's catalog plus each scope's capability host. */
@@ -192,7 +201,7 @@ export interface Project {
   egress: ProjectEgress;
   /** Project email: send(...) and the connection-scoped inbound address. */
   email: EmailCapability;
-  /** The docs door: `search({ q })` finds e2e-tested example scripts, type
+  /** The docs: `search({ q })` finds e2e-tested example scripts, type
    * declarations, and this scope's mounted capabilities; `get({ name })`
    * fetches one. Pass search MANY related words — matching is dumb word
    * overlap. */
@@ -336,7 +345,10 @@ export interface ProjectCollection {
 /** Read-only live value exposed across a Cap'n Web capability boundary. */
 export interface LiveStateRpc<State = unknown> {
   get(): Promise<State>;
-  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;
+  subscribe(
+    onUpdate: (update: LiveUpdate<State>) => unknown,
+    options?: LiveStateSubscriptionOptions,
+  ): Promise<LiveStateSubscriptionHandle>;
 }
 
 /**
@@ -388,20 +400,20 @@ export interface Ai {
    * Outputs are model-shaped: instantiate `run<T>` with the response shape you
    * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
    * `unknown`. The optional third argument is the binding's own options object
-   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
-   * to `env.AI.run`; its `gateway` wins over any constructor-provided one.
+   * — cache preferences are honored, but the host always owns the gateway
+   * ID and billing metadata. Callers cannot bypass company spending limits.
    * An `intercepted/*` model never reaches Cloudflare: the live interceptor installed
-   * with `intercept(handler)` serves it, and its return value comes back
-   * verbatim (no handler installed → a loud error). */
+   * with `intercept(handler)` supplies a provider response which follows the
+   * same decoding as a real call (no handler installed → a loud error). */
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
   /** Install a live handler for `intercepted/*` models (last writer wins); returns a
    * release handle. For deterministic testing: an agent configured with
    * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your
    * handler — an in-memory function on YOUR side of the connection — instead
    * of a real provider. The handler receives
-   * `{ source: "agent-turn" | "ai-run", model, body }`; for agent turns it
-   * returns assistant text (a string, or `{ text, usage? }`), for ai-run its
-   * return value is handed back verbatim. Live means session-bound, with the
+   * `{ source, model, request }`, including prepared body, safe headers and
+   * host-owned attribution. Return a `Response` with the provider's
+   * JSON or SSE response. The normal decoder handles it. Live means session-bound, with the
    * mount invariant: the interception lives exactly as long as your session
    * connection, and if the platform's half dies while your socket is open,
    * the socket closes (4901) — reconnect and intercept() again.
@@ -487,7 +499,7 @@ export interface CfBrowserCapability {
 export interface Agent {
   /**
    * The agent scope's own capability host (provide/revoke/runScript/
-   * __describe) — and the explicit dotted door to the scope's DYNAMIC
+   * __describe) — and the explicit dotted path to the scope's DYNAMIC
    * capabilities: `agents.get(path).capabilityHost.someTool(args)`. The
    * shorthand `agents.get(path).someTool(args)` resolves through the same
    * host via the handle's prototype-chain fallback; both pipeline over
@@ -499,6 +511,9 @@ export interface Agent {
   provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
   /** Shortcut for `capabilityHost.revokeCapability`. */
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
+  /** The workspace at this agent's path; equivalent to `itx.workspaces.get(agentPath)`.
+   * Addressing does not create it; `agent.create()` creates both. */
+  workspace: Workspace;
   /** The agent stream processor (snapshot/state) — facet-hosted on the agent stream. */
   processor: StreamProcessorRpc<AgentProcessorState>;
   /** The agent's transient runtime as a push-driven live-state surface. */
@@ -516,7 +531,7 @@ export interface Agent {
    * outside the Agent vocabulary or for an intentionally ephemeral event.
    */
   append(...events: AgentEventInput[]): Promise<StreamEvent[]>;
-  /** The agent's web-chat door (what the user sees). */
+  /** The agent's web chat: what the user sees. */
   chat: AgentChat;
   /**
    * Create the generic agent machinery on this stream and wait until the
@@ -530,21 +545,38 @@ export interface Agent {
    * Identical-payload retries dedupe on the birth idempotency keys; a create
    * over an existing agent with a different payload fails loudly.
    */
-  create(payload?: AgentCreateInput): Promise<Agent>;
+  create(
+    payload?: AgentCreateInput,
+    options?: {
+      /**
+       * The agent scope's capability-host birth certificate — how a
+       * RESTRICTED agent is born: `{ config: { surface: ["chat"] }, fallback: null }`
+       * gives its scripts only `itx.chat` plus this scope's own mounts, with
+       * project-confined authority and no inheritance from the root host.
+       * Fixed at birth: the certificate lands once under a fixed key.
+       */
+      capabilityHost?: CapabilityHostCreateInput;
+    },
+  ): Promise<Agent>;
   /**
-   * Send a message to this agent — THE inbound door for every caller. The
+   * Send a message to this agent — the canonical entry point for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
    * (itx scoped to an agent path), the message is stamped
    * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
    * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
    * (web UI, CLI, MCP session) it is a user message. The agent must already
-   * have been created explicitly. Optional files
-   * are stored in project file storage and ride the message as attachments
-   * (images stay visible to vision-capable models).
+   * have been created explicitly. `mentions` are typed resources addressed
+   * from `content` with Markdown-like links such as
+   * `[@AGENTS.md](mention://config-repo/AGENTS.md)`. Optional files are stored
+   * in project file storage and ride the same event (images stay visible to
+   * vision-capable models).
    */
   message(
     input:
       | string
+      | (Message & {
+          files?: Array<{ contentType: string; data: FileData; filename: string }>;
+        })
       | {
           message: string;
           files?: Array<{ contentType: string; data: FileData; filename: string }>;
@@ -1243,6 +1275,8 @@ export interface Repo {
   edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }>;
+  /** Fuzzy-search committed paths at HEAD without returning the full manifest. */
+  searchFiles(input: SearchRepoFilesInput): Promise<SearchRepoFilesResult>;
   /**
    * Commit history of a branch, newest first — oid, message, author,
    * timestamp (epoch ms), parent oids. Deliberately without per-commit file
@@ -1340,11 +1374,10 @@ export interface DynamicWorkerCollection {
 /**
  * Catalog of durable workspaces within one project: EVENT-SOURCED,
  * MOUNT-ROUTED workspace filesystems (Durable-Object-hosted, no container,
- * always warm). Every workspace is addressed by its FULL path under
- * `/workspaces/` — the same domain-prefix convention as `/sandboxes/...` and
- * `/repos/...`: an agent's workspace is the agent path under the prefix
- * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
- * scope), and standalone workspaces live under `/workspaces/<anything>`.
+ * always warm). Agent workspaces share their agent's FULL path under `/agents/`
+ * (exposed as `itx.workspace` in that agent's scope). Standalone workspaces
+ * live under `/workspaces/<anything>`. These identities address streams;
+ * private files inside either kind of workspace live under `/workspace/`.
  *
  * A workspace's identity + configuration are stream facts. `get(path)` only
  * addresses a handle; `get(path).create({ mounts? })` appends the atomic birth
@@ -1354,6 +1387,8 @@ export interface WorkspaceCollection {
   __describe(): Promise<Description>;
   /** A workspace handle at a path. Addressing never creates it. */
   get(path: string): Workspace;
+  /** Known workspaces, read from the project processor's reduced state. */
+  list(): Promise<StreamListItem[]>;
 }
 
 /**
@@ -1408,9 +1443,9 @@ export interface Stream {
   /**
    * Read one bounded page of committed events (default from the stream's
    * start; filter with `eventTypes`, page forward with `afterOffset`). A full
-   * page (500 events) means MORE remain — page with
-   * `afterOffset: events.at(-1).offset`; reading a long stream without paging
-   * shows you the beginning, not the head.
+   * page (500 events), or any nonempty page capped by `byteLimit`, may have
+   * more events — page with `afterOffset: events.at(-1).offset`; reading a
+   * long stream without paging shows you the beginning, not the head.
    */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;
   /**
@@ -1418,6 +1453,8 @@ export interface Stream {
    * in the same Durable Object turn. Use this whenever offsets are persisted.
    */
   getEventPage(args?: StreamEventReadInput): Promise<StreamEventPage>;
+  /** Reconstruct a request on the server; rejects above 10,000 events or 16 MiB. */
+  inspectLlmRequest(llmRequestOffset: number): Promise<LlmRequestReplay | null>;
   /**
    * A stateful pager over a read window: repeated `next()` calls walk forward
    * through pages, `[]` means "caught up for now". Dispose it when finished
@@ -1461,6 +1498,8 @@ export interface Stream {
    * would pin the stream), and `runtimeState()` is the transient read.
    */
   liveState: LiveStateRpc<StreamRuntimeDebugState>;
+  /** Server-rendered current presentation; historical items are immutable stream events. */
+  feedLiveState: LiveStateRpc<FeedLiveState>;
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
   /** Arm the stream's shared facet-alarm slot, min-merged to the earliest desired ms. */
@@ -1609,6 +1648,66 @@ export interface StreamProcessorRpc<State = unknown> {
 /** Disposable handle for one live AI interception. */
 export interface ProjectAiIntercept extends Disposable {
   release(): Promise<void>;
+}
+
+/**
+ * One durable workspace: an event-sourced, mount-routed private working copy
+ * of the project's one path namespace. Every project repo is mounted at its
+ * own `/repos/**` stream path (derived from the project repo list — a fresh
+ * repo just appears); reads under a mount fall through to that repo's main at
+ * HEAD, writes land in a private copy-on-write local layer (large files spill
+ * to R2 transparently), and `git.commit({ scope })` turns ONE mount's changes
+ * into one commit on that repo's main (honoring the mount's policy). Private
+ * files live only under /workspace (relative paths resolve there); writes
+ * anywhere else error. The `.git` name is reserved (platform-managed).
+ */
+export interface Workspace {
+  __describe(): Promise<Description>;
+  /** Explicitly create this workspace and wait through its complete birth
+   * batch. Optional `mounts` are overlay DEVIATIONS from the derived table
+   * (every project repo at its own /repos/** path). */
+  create(input: { mounts?: Record<string, WorkspaceMountOverlay> }): Promise<Workspace>;
+  whoami(): Promise<string>;
+  /** Restart the workspace's server-side object; the next request boots it fresh. */
+  kill(): Promise<void>;
+  /** The workspace stream processor (snapshot/state) — facet-hosted on the workspace stream. */
+  processor: StreamProcessorRpc<WorkspaceProcessorState>;
+  /** The live configuration: the EFFECTIVE mount table (every project repo
+   * at its own /repos/** path, with stored overlay deviations merged in). */
+  getConfig(): Promise<WorkspaceEffectiveConfig>;
+  /** Patch mount overlays — deep-merged per mount point; null clears one
+   * back to the derived default (appends workspace/configured). */
+  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceEffectiveConfig>;
+  /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */
+  readFile(path: string): Promise<string | null>;
+  /** Collaborative editing sessions (rebase model, no Yjs) — workspace.collab. */
+  collab: WorkspaceCollab;
+  /** A path's mount content at HEAD — the base uncommitted work diffs against. */
+  readBase(path: string): Promise<string | null>;
+  /** Batched file reads (board seeds): one RPC, missing paths map to null. */
+  readFiles(paths: string[]): Promise<Record<string, string | null>>;
+  /** One file's raw bytes from the merged view; null when missing. */
+  readFileBytes(path: string): Promise<Uint8Array | null>;
+  /** Whether a path exists in the merged view. */
+  exists(path: string): Promise<boolean>;
+  /** Write one file into the private overlay. */
+  writeFile(path: string, content: string): Promise<void>;
+  /** Write raw bytes to one file in the private overlay. */
+  writeFileBytes(path: string, data: Uint8Array): Promise<void>;
+  /** Replace an exact string in one file (copies a mount file up first). */
+  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;
+  /** Delete one file (whiteouts a mount copy; false when it did not exist). */
+  deleteFile(path: string): Promise<boolean>;
+  /** Every file path in the merged view (local layer + every mount at HEAD, sorted). */
+  listAllFiles(): Promise<string[]>;
+  /** Merged file paths matching a glob pattern. */
+  glob(pattern: string): Promise<string[]>;
+  /** Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST. */
+  reset(): Promise<void>;
+  /** Un-pin ONE path: drop the local copy/deletion so it follows its mount again. */
+  revert(path: string): Promise<void>;
+  /** Per-mount git surface. */
+  git: WorkspaceGit;
 }
 
 /**
@@ -1791,67 +1890,6 @@ export interface Secret {
 }
 
 /**
- * One durable workspace: an event-sourced, mount-routed private working copy
- * of the project's one path namespace. Every project repo is mounted at its
- * own `/repos/**` stream path (derived from the project repo list — a fresh
- * repo just appears); reads under a mount fall through to that repo's main at
- * HEAD, writes land in a private copy-on-write local layer (large files spill
- * to R2 transparently), and `git.commit({ scope })` turns ONE mount's changes
- * into one commit on that repo's main (honoring the mount's policy). Private
- * files live only under the workspace's own path (relative paths resolve
- * there); writes anywhere else error. The `.git` name is reserved
- * (platform-managed).
- */
-export interface Workspace {
-  __describe(): Promise<Description>;
-  /** Explicitly create this workspace and wait through its complete birth
-   * batch. Optional `mounts` are overlay DEVIATIONS from the derived table
-   * (every project repo at its own /repos/** path). */
-  create(input: { mounts?: Record<string, WorkspaceMountOverlay> }): Promise<Workspace>;
-  whoami(): Promise<string>;
-  /** Restart the workspace's server-side object; the next request boots it fresh. */
-  kill(): Promise<void>;
-  /** The workspace stream processor (snapshot/state) — facet-hosted on the workspace stream. */
-  processor: StreamProcessorRpc<WorkspaceProcessorState>;
-  /** The live configuration: the EFFECTIVE mount table (every project repo
-   * at its own /repos/** path, with stored overlay deviations merged in). */
-  getConfig(): Promise<WorkspaceEffectiveConfig>;
-  /** Patch mount overlays — deep-merged per mount point; null clears one
-   * back to the derived default (appends workspace/configured). */
-  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceEffectiveConfig>;
-  /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */
-  readFile(path: string): Promise<string | null>;
-  /** The collaborative session lane (rebase model, no Yjs) — workspace.collab. */
-  collab: WorkspaceCollab;
-  /** A path's mount content at HEAD — the base uncommitted work diffs against. */
-  readBase(path: string): Promise<string | null>;
-  /** Batched file reads (board seeds): one RPC, missing paths map to null. */
-  readFiles(paths: string[]): Promise<Record<string, string | null>>;
-  /** One file's raw bytes from the merged view; null when missing. */
-  readFileBytes(path: string): Promise<Uint8Array | null>;
-  /** Whether a path exists in the merged view. */
-  exists(path: string): Promise<boolean>;
-  /** Write one file into the private overlay. */
-  writeFile(path: string, content: string): Promise<void>;
-  /** Write raw bytes to one file in the private overlay. */
-  writeFileBytes(path: string, data: Uint8Array): Promise<void>;
-  /** Replace an exact string in one file (copies a mount file up first). */
-  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;
-  /** Delete one file (whiteouts a mount copy; false when it did not exist). */
-  deleteFile(path: string): Promise<boolean>;
-  /** Every file path in the merged view (local layer + every mount at HEAD, sorted). */
-  listAllFiles(): Promise<string[]>;
-  /** Merged file paths matching a glob pattern. */
-  glob(pattern: string): Promise<string[]>;
-  /** Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST. */
-  reset(): Promise<void>;
-  /** Un-pin ONE path: drop the local copy/deletion so it follows its mount again. */
-  revert(path: string): Promise<void>;
-  /** Per-mount git surface. */
-  git: WorkspaceGit;
-}
-
-/**
  * Stateful page reader for one stream read window.
  *
  * A tiny object-capability cursor: it holds only the caller's read window and
@@ -1879,36 +1917,13 @@ export interface StreamSubscriptionCollection {
   get(name: string): StreamSubscription;
 }
 
-/** Cloudflare Images binding exposed through itx as one-call helpers. */
-export interface CfImagesCapability {
-  __describe(): Promise<Description>;
-  /** Inspect an image stream for format/dimensions/file size. */
-  info(image: ReadableStream<Uint8Array>): Promise<unknown>;
-  /** Apply ordered image transforms/draws and output a Response. */
-  transform(input: CfImageTransformInput): Promise<Response>;
-  /**
-   * `transform`, buffered: Response bodies (like streams and Blobs) cannot
-   * cross the RPC boundary back into a script sandbox, so scripts use this
-   * to get plain bytes — e.g. downscaling an oversized screenshot before a
-   * vision-model call.
-   */
-  transformBytes(input: CfImageTransformInput): Promise<{ bytes: Uint8Array; contentType: string }>;
-}
-
-/** Cloudflare Media Transformations binding exposed through itx as one-call helpers. */
-export interface CfVideosCapability {
-  __describe(): Promise<Description>;
-  /** Transform a video stream and return a Response (video, frame, spritesheet, or audio). */
-  transform(input: CfVideoTransformInput): Promise<Response>;
-}
-
 /**
- * The collaborative session lane of a workspace: server-authoritative
+ * The collaborative editing API of a workspace: server-authoritative
  * rebase-model editing (@codemirror/collab wire — per-file op logs, integer
  * versions, optimistic clients rebasing unconfirmed edits). Sessions are
  * durable; the workspace's ordinary filesystem RPC reads/writes route through
  * live sessions automatically, so this surface is only for LIVE participants
- * (editors) and redline consumers.
+ * (editors).
  */
 export interface WorkspaceCollab {
   __describe(): Promise<Description>;
@@ -1981,8 +1996,6 @@ export interface WorkspaceCollab {
   ): Promise<void>;
   /** Head versions of every live session (a cheap board change cursor). */
   versions(): Promise<Record<string, number>>;
-  /** Attributed tracked changes since the last commit (redline segments). */
-  changes(path: string): Promise<CollabChangesResult>;
   /** Fresh caret presence per live session — "who has this file open". */
   presenceSummary(): Promise<CollabPresenceFlat>;
   /** Everyone with the BOARD open (heartbeats): clientId -> display name. */
@@ -2009,6 +2022,29 @@ export interface WorkspaceGit {
   commit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult>;
   /** One mount's repo history, newest first. */
   log(input?: WorkspaceGitLogInput): Promise<WorkspaceGitLogEntry[]>;
+}
+
+/** Cloudflare Images binding exposed through itx as one-call helpers. */
+export interface CfImagesCapability {
+  __describe(): Promise<Description>;
+  /** Inspect an image stream for format/dimensions/file size. */
+  info(image: ReadableStream<Uint8Array>): Promise<unknown>;
+  /** Apply ordered image transforms/draws and output a Response. */
+  transform(input: CfImageTransformInput): Promise<Response>;
+  /**
+   * `transform`, buffered: Response bodies (like streams and Blobs) cannot
+   * cross the RPC boundary back into a script sandbox, so scripts use this
+   * to get plain bytes — e.g. downscaling an oversized screenshot before a
+   * vision-model call.
+   */
+  transformBytes(input: CfImageTransformInput): Promise<{ bytes: Uint8Array; contentType: string }>;
+}
+
+/** Cloudflare Media Transformations binding exposed through itx as one-call helpers. */
+export interface CfVideosCapability {
+  __describe(): Promise<Description>;
+  /** Transform a video stream and return a Response (video, frame, spritesheet, or audio). */
+  transform(input: CfVideoTransformInput): Promise<Response>;
 }
 
 /**
@@ -2038,17 +2074,6 @@ export interface StreamSubscription {
    * Stream DO's facade serves a facet row from its facet and replays the
    * read verbs onto an expression row's own `processor` node. */
   processor: StreamProcessorRpc;
-}
-
-/** Attributed tracked changes since the last commit: author-tagged inserted
- * spans and deleted-text markers in current-head coordinates, plus the ONE
- * baseline both redline layers render against. */
-export interface CollabChangesResult {
-  baseContent: string;
-  baseVersion: number;
-  deleted: { at: number; clientId: string; createdAt?: number; text: string }[];
-  headVersion: number;
-  inserted: { clientId: string; createdAt?: number; from: number; to: number }[];
 }
 
 /** Fresh caret presence as index-matched flat arrays (one entry per
@@ -2263,6 +2288,7 @@ export type ProjectProcessorState = {
   devices: { createdAt: string; path: string }[];
   repos: { createdAt: string; path: string }[];
   secrets: { createdAt: string; path: string }[];
+  workspaces: { createdAt: string; path: string }[];
   streams: { createdAt: string; path: string }[];
   clients: Record<
     string,
@@ -2551,7 +2577,12 @@ export type StreamProcessorWakeResponse = {
  */
 export type LiveUpdate<State = unknown> =
   | { type: "snapshot"; revision: number; state: State }
-  | { type: "patch"; from: number; to: number; patch: LiveStatePatch };
+  | { type: "patch"; from: number; to: number; patch: LiveStatePatch }
+  | { s: [revision: number, state: State] }
+  | { p: [from: number, to: number, patch: CompactLiveStatePatch] };
+
+/** Explicit codec negotiation keeps already-open clients valid across deploys. */
+export type LiveStateSubscriptionOptions = { patchVersion?: 2 | 3 };
 
 /** Owned handle for one live-state subscription. */
 export type LiveStateSubscriptionHandle = Disposable & {
@@ -2573,8 +2604,8 @@ export type StreamIndexRow = {
 };
 
 /** The Workers AI binding's per-call options (`env.AI.run`'s third argument),
- * published structurally so itx callers can route a call through a specific
- * AI Gateway configuration — e.g. `{ gateway: { id: "default", skipCache: true } }`. */
+ * published structurally for cache preferences. The host replaces gateway id
+ * and metadata with its trusted AI Gateway metadata; caller values cannot change billing. */
 export type CfAiRunOptions = {
   gateway?: {
     id: string;
@@ -2587,14 +2618,37 @@ export type CfAiRunOptions = {
   returnRawResponse?: boolean;
 };
 
-/**
- * Live replacement for intercepted/* model calls. For `source: "agent-turn"` the
- * return value must be assistant text — a plain string, or
- * `{ text, usage? }` to also report token usage (report inflated numbers to
- * drive compaction deterministically). For `source: "ai-run"` the return value
- * is handed back to the `itx.ai.run` caller verbatim.
- */
-export type ProjectAiInterceptor = (input: ProjectAiInterceptorInput) => Promise<unknown>;
+/** Original model name and the complete credential-free request that would be dispatched. */
+export declare namespace ProjectAiInterceptor {
+  /** An agent turn, with the messages prepared for its model. */
+  export type AgentTurnInput = {
+    source: "agent-turn";
+    agentPath: string;
+    model: string;
+    request: AiRequest & {
+      body: {
+        messages: {
+          role: "system" | "developer" | "user" | "assistant";
+          content: string;
+        }[];
+      };
+    };
+  };
+
+  /** A direct AI call, whose body can contain any model's inputs. */
+  export type AiRunInput = { source: "ai-run"; model: string; request: AiRequest };
+
+  /** An outbound AI request routed through the project's gateway. */
+  export type EgressInput = { source: "egress"; model: string; request: AiRequest };
+
+  /** Discriminated input shared by every interceptor callback. */
+  export type Input = AgentTurnInput | AiRunInput | EgressInput;
+}
+
+/** Replace only the provider call; response classification and decoding still run. */
+export type ProjectAiInterceptor = (
+  input: ProjectAiInterceptor.Input,
+) => Response | Promise<Response>;
 
 /** One file format the markdown converter accepts (extension plus MIME type);
  * `ai.toMarkdown()` with no arguments returns the full list. */
@@ -2682,6 +2736,7 @@ export type CfBrowserQuickActionOptions = Record<string, unknown> &
 
 /** The agent processor's reduced state, inferred from the contract's `stateSchema`. */
 export type AgentProcessorState = {
+  pendingInputConsequences: Record<string, number>;
   birthCertificate: { createdAtOffset: number } | null;
   config: {
     llm: { model: string };
@@ -2703,6 +2758,10 @@ export type AgentProcessorState = {
         payload: {
           role: "assistant" | "developer" | "system" | "user";
           content: string;
+          mentions?:
+            | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
+            | undefined;
+          mentionResolution?: unknown;
           key?: string | undefined;
           files?:
             | { contentType: string; filename: string; path: string; size: number; url: string }[]
@@ -2718,6 +2777,7 @@ export type AgentProcessorState = {
                 | { type: "user"; userId: string }
                 | { type: "file"; path: string }
                 | { type: "git-commit"; repoPath: string; commitOid: string }
+                | { type: "repo-file"; repoPath: string; path: string }
               )[]
             | undefined;
           actor?:
@@ -2756,6 +2816,10 @@ export type AgentProcessorState = {
         payload: {
           role: "assistant" | "developer" | "system" | "user";
           content: string;
+          mentions?:
+            | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
+            | undefined;
+          mentionResolution?: unknown;
           key?: string | undefined;
           files?:
             | { contentType: string; filename: string; path: string; size: number; url: string }[]
@@ -2771,6 +2835,7 @@ export type AgentProcessorState = {
                 | { type: "user"; userId: string }
                 | { type: "file"; path: string }
                 | { type: "git-commit"; repoPath: string; commitOid: string }
+                | { type: "repo-file"; repoPath: string; path: string }
               )[]
             | undefined;
           actor?:
@@ -2845,6 +2910,7 @@ export type AgentProcessorState = {
 
 /** The transient runtime state pushed by one Agent durable object. */
 export type AgentLiveState = {
+  inputAcknowledgedThroughOffset: number;
   runtimeChange?:
     | {
         runtime: {
@@ -2946,6 +3012,10 @@ export type AgentEventInput =
       {
         role: "assistant" | "developer" | "system" | "user";
         content: string;
+        mentions?:
+          | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
+          | undefined;
+        mentionResolution?: unknown;
         key?: string | undefined;
         files?:
           | { contentType: string; filename: string; path: string; size: number; url: string }[]
@@ -2961,6 +3031,7 @@ export type AgentEventInput =
               | { type: "user"; userId: string }
               | { type: "file"; path: string }
               | { type: "git-commit"; repoPath: string; commitOid: string }
+              | { type: "repo-file"; repoPath: string; path: string }
             )[]
           | undefined;
         actor?:
@@ -3092,6 +3163,18 @@ export type StreamEvent = {
  * object of caller-authored birth facts; `{}` is the norm). */
 export type AgentCreateInput = { [x: string]: unknown };
 
+/** The `capability-host/created` payload — the scope's birth certificate. */
+export type CapabilityHostCreateInput = {
+  config: { surface?: string[] | undefined };
+  fallback?: unknown;
+};
+
+/** Readable message content with optional resources addressed by inline mention:// links. */
+export type Message = {
+  content: string;
+  mentions?: Mention[];
+};
+
 /**
  * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
  * base64 (optionally a full `data:` URL) — that is what Workers AI image
@@ -3104,9 +3187,6 @@ export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream
  * file-storage path, size, and the signed public URL minted at attach time
  * (stored, not re-minted — it expires with its signature). */
 export type AgentFileAttachment = NonNullable<AgentContextAddedPayload["files"]>[number];
-
-/** The `capability-host/created` payload — the scope's birth certificate. */
-export type CapabilityHostCreateInput = { config: Record<string, never>; fallback?: unknown };
 
 /**
  * `setPreamble` recipe: one keyed entry of TypeScript injected above every
@@ -3619,6 +3699,13 @@ export type RepoCreateInput =
 
 /** Command object for committing a batch of repo file mutations. */
 export type CommitRepoFilesInput = {
+  /**
+   * When the branch head is exactly this commit oid, the new commit REPLACES
+   * it (same parents, this message) instead of stacking on top. If the head
+   * has moved on — or the repo is GitHub-linked, whose history stays
+   * append-only — an ordinary commit lands; the result's `amended` says which.
+   */
+  amendIfHead?: string;
   author?: { email: string; name: string };
   branch?: string;
   changes: RepoFileChange[];
@@ -3627,6 +3714,8 @@ export type CommitRepoFilesInput = {
 
 /** Result returned after a repo commit attempt, including no-op commits. */
 export type CommitRepoFilesResult = {
+  /** True when `amendIfHead` matched the head and the commit replaced it. */
+  amended: boolean;
   branch: string;
   changedPaths: string[];
   commitOid: string;
@@ -3648,6 +3737,19 @@ export type EditRepoFileInput = {
 export type EditRepoFileResult = CommitRepoFilesResult & {
   occurrenceCount: number;
   path: string;
+};
+
+/** Query for fuzzy matching committed paths without returning the full repo manifest. */
+export type SearchRepoFilesInput = {
+  query: string;
+  /** Defaults to 50 and is capped at 100. */
+  limit?: number;
+};
+
+/** Bounded fuzzy file matches at one committed repo head. */
+export type SearchRepoFilesResult = {
+  commitOid: string;
+  paths: string[];
 };
 
 /** What `repo.log` returns: newest-first commits on one branch. */
@@ -3930,6 +4032,14 @@ export type StreamEventReadInput = {
   /** Page size, 1-500. Defaults to 500. */
   limit?: number;
   /**
+   * Maximum serialized durable-event bytes in one page, from 1 through 8 MiB.
+   * It cannot be used with `includeEphemeral`. A shorter nonempty page may
+   * still have more matching events; advance from its last offset until an
+   * empty page confirms the current head. The first matching event is returned
+   * even when it alone exceeds this cap, so the cursor can make progress.
+   */
+  byteLimit?: number;
+  /**
    * Include ephemeral events (default false). The Durable Object incarnation
    * keeps their bodies in a bounded memory buffer;
    * this opt-in merges the events still buffered into the durable page.
@@ -3951,6 +4061,28 @@ export type StreamEventPage = {
   /** Highest assigned raw-log offset when this page was read. */
   streamMaxOffset: number;
   events: StreamEvent[];
+};
+
+/** Server-reconstructed model request, response, and lifecycle information. */
+export type LlmRequestReplay = {
+  messages: LlmRequestReplayMessage[];
+  /** From the llm-request-requested event at the replayed offset. */
+  model: string;
+  requestedAt: string;
+  /** True when the request was built by a DIFFERENT fold version than the one
+   * replaying it (the requested event's contractVersion stamp differs, or —
+   * for pre-stamp requests — is absent): the messages shown are a
+   * reconstruction under the current fold, not byte-exact. */
+  reconstructed: boolean;
+  /** Null when nothing has streamed or settled for this request yet. */
+  response: LlmRequestReplayResponse | null;
+  stats: LlmRequestReplayStats;
+  /** Null while the request is still in flight. */
+  outcome: {
+    status: "success" | "failure" | "cancelled";
+    durationMs: number | null;
+    errorMessage: string | null;
+  } | null;
 };
 
 /** Serializable snapshot plus optional live runtime debug state for a processor. */
@@ -3982,6 +4114,164 @@ export type StreamRuntimeDebugState = {
     storageSizeBytes: number;
   };
 };
+
+/** Current server-rendered activity, queued messages, presence, and agent runtime. */
+export type FeedLiveState =
+  | {
+      streamId: string | null;
+      publicationOffset: number;
+      runtimeChange?:
+        | {
+            runtime: {
+              triggers: { pending: number; runnable: number };
+              llmRequests: { scheduled: number; requested: number; started: number };
+              runningScripts: number;
+            };
+            sinceOffset: number;
+            since: string;
+          }
+        | undefined;
+      previewStatus: "available" | "shortened";
+      agent: {
+        live: {
+          kind: "activity";
+          id: string;
+          status: "done" | "running";
+          steps: (
+            | {
+                kind: "llm";
+                id: string;
+                llmRequestOffset: number;
+                status: "done" | "running";
+                model?: string | undefined;
+                thinkingText:
+                  | string
+                  | {
+                      length: number;
+                      blockCount: number;
+                      tailOffset: number;
+                      groups: Record<string, Record<string, string>>;
+                    };
+                responseText:
+                  | string
+                  | {
+                      length: number;
+                      blockCount: number;
+                      tailOffset: number;
+                      groups: Record<string, Record<string, string>>;
+                    };
+                previewTruncated?: boolean | undefined;
+                assistantEventOffset?: number | undefined;
+                interpreted?: boolean | undefined;
+                inputTokens?: number | undefined;
+                outputTokens?: number | undefined;
+                durationMs?: number | undefined;
+                outcome?: "cancelled" | "completed" | "failed" | undefined;
+                cancelReason?: "expired" | "interrupted-by-user-input" | undefined;
+                errorMessage?: string | undefined;
+                startedAtMs: number;
+              }
+            | {
+                kind: "code";
+                id: string;
+                executionId: string;
+                status: "done" | "running";
+                code: string;
+                result?: unknown;
+                errorMessage?: string | undefined;
+                durationMs?: number | undefined;
+                success?: boolean | undefined;
+                outcomeSource?: "durable" | "inferred" | undefined;
+                startedAtMs: number;
+                expiresAtMs: number;
+                activitySummary?: string | undefined;
+              }
+          )[];
+          startedAtMs: number;
+          endedAtMs?: number | undefined;
+        } | null;
+        queuedUserMessages: {
+          kind: "assistant" | "user";
+          id: string;
+          text: string;
+          timestampMs: number;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          mentions?:
+            | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
+            | undefined;
+          mentionResolutions?:
+            | Record<
+                string,
+                {
+                  status: "binary" | "missing" | "read-failed" | "resolved";
+                  truncated?: boolean | undefined;
+                }
+              >
+            | undefined;
+          via?:
+            | {
+                service: "agent" | "email" | "github" | "slack" | "telegram";
+                sender?: string | undefined;
+              }
+            | undefined;
+        }[];
+        presence: {
+          connectionKey: string;
+          connectionKind: "hosted" | "session";
+          connected: boolean;
+          description?: string | undefined;
+          user?:
+            | {
+                id?: string | undefined;
+                email: string;
+                name?: string | undefined;
+                picture?: string | undefined;
+              }
+            | undefined;
+          processor?:
+            | {
+                slug: string;
+                version: string;
+                description: string;
+                consumes: string[];
+                emits: string[];
+                ownedEvents: { type: string; description?: string | undefined }[];
+              }
+            | undefined;
+        }[];
+        tokenUsage: {
+          totalInputTokens: number;
+          totalOutputTokens: number;
+          totalCachedInputTokens: number;
+          totalReasoningOutputTokens: number;
+          lastReport: {
+            model: string;
+            maxContextTokens: number;
+            inputTokens: number;
+            outputTokens: number;
+          } | null;
+        };
+      };
+    }
+  | {
+      streamId: string | null;
+      publicationOffset: number;
+      runtimeChange?:
+        | {
+            runtime: {
+              triggers: { pending: number; runnable: number };
+              llmRequests: { scheduled: number; requested: number; started: number };
+              runningScripts: number;
+            };
+            sinceOffset: number;
+            since: string;
+          }
+        | undefined;
+      previewStatus: "omitted";
+      agent: null;
+    };
 
 /**
  * Callback invoked by the stream send loop for each delivered batch.
@@ -4546,39 +4836,101 @@ export type ProcessorSnapshot<State> = {
 export type ProcessStreamWakeEventBatch = (batch: StreamWakeEventBatch) => unknown;
 
 /**
- * A structural patch turning a previous JSON value into the next one. Two
- * shapes, discriminated by whether the `set` key is present:
- * - `{ set }` — replace this position wholesale. Used for primitives, arrays
- *   (treated as opaque leaves, never diffed positionally), `null`, type changes,
+ * A structural patch turning a previous JSON value into the next one. Three
+ * shapes, discriminated by `set`, `array`, or an object patch:
+ * - `{ set }` — replace this position wholesale. Used for primitives,
+ *   `null`, type changes,
  *   and newly-added object keys.
  * - `{ fields?, drop? }` — descend into a plain object: `fields` maps each
  *   changed key to its own patch; `drop` lists keys that disappeared. At least
  *   one is present (an empty descend never gets emitted).
+ * - `{ array }` — patch changed positions and set the resulting length. Kept
+ *   elements retain their identity, including immutable text blocks inside a
+ *   changed step. This form is sent only to subscribers requesting version 2.
  */
 export type LiveStatePatch =
   | { set: unknown }
+  | { array: { length: number; items: [number, LiveStatePatch][] } }
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
 /**
- * One intercepted/* invocation as the interceptor sees it. `source` discriminates the
- * two egress paths: an agent conversation turn carries the provider-neutral
- * chat projection, a direct `itx.ai.run` call carries the caller's body
- * argument verbatim (honestly `unknown` — the caller chose its shape).
+ * Version 3 addresses existing object fields by their sorted baseline position;
+ * new fields use `+name`. Arrays use indices and an optional `#` length.
+ * Primitives replace directly, `[value]` replaces other values, `[length, text]`
+ * appends to a string, and `[]` deletes an object field. No dictionary survives
+ * an update: every address refers to the acknowledged baseline of that patch.
  */
-export type ProjectAiInterceptorInput =
-  | {
-      source: "agent-turn";
-      agentPath: string;
-      model: string;
-      body: {
-        messages: { role: "system" | "developer" | "user" | "assistant"; content: string }[];
-      };
+export type CompactLiveStatePatch =
+  | string
+  | number
+  | boolean
+  | null
+  | []
+  | [unknown]
+  | [number, string]
+  | { [address: string]: CompactLiveStatePatch };
+
+/** The two concrete outbound APIs, after host policy and request preparation. No credentials. */
+export type AiRequest = OpenAiHttpRequest | WorkersAiRequest;
+
+/** One stored overlay: the fields it deviates from (or adds over) the derived table. */
+export type WorkspaceMountOverlay = WorkspaceConfig["mounts"][string];
+
+/** The workspace processor's reduced state: existence plus the merged overlays. */
+export type WorkspaceProcessorState = {
+  birthCertificate: { [x: string]: unknown } | null;
+  config: {
+    mounts: Record<
+      string,
+      { policy?: "commit-to-main" | "read-only" | undefined; repoPath?: string | undefined }
+    >;
+  };
+};
+
+/**
+ * The workspace's LIVE configuration: the effective mount table that routes
+ * reads and commits — every project repo at its own /repos/** stream path
+ * (commit-to-main), with the workspace's stored overlay deviations merged in.
+ */
+export type WorkspaceEffectiveConfig = {
+  mounts: Record<
+    string,
+    {
+      policy: "commit-to-main" | "read-only";
+      repoPath: string;
     }
-  | {
-      source: "ai-run";
-      model: string;
-      body: unknown;
-    };
+  >;
+};
+
+/** A configuration patch: deep-merged per mount point; null clears an overlay.
+ * (Spelled as one z.output<> reference — not an indexed access over it — so
+ * the itx-api generator expands it structurally instead of copying the
+ * expression verbatim into the generated public API.) */
+export type WorkspaceConfigPatch = {
+  mounts?:
+    | Record<
+        string,
+        {
+          policy?: "commit-to-main" | "read-only" | undefined;
+          repoPath?: string | undefined;
+        } | null
+      >
+    | undefined;
+};
+
+/** Input to `Workspace.edit` — a safe single-occurrence string replacement. */
+export type EditWorkspaceFileInput = {
+  newString: string;
+  oldString: string;
+  path: string;
+  replaceAll?: boolean;
+};
+
+/** Result of `Workspace.edit`. The change is in the working tree only — not committed. */
+export type EditWorkspaceFileResult = {
+  occurrenceCount: number;
+  path: string;
+};
 
 /**
  * A durable processor input. Wake processors never receive ephemeral events, so
@@ -4598,11 +4950,18 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+/** A typed resource identified by a mention:// link in message content. */
+export type Mention = { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string };
+
 /** One model-visible context item's payload — the wire contract for every
  * committed `agents/context-added` event. */
 export type AgentContextAddedPayload = {
   role: "assistant" | "developer" | "system" | "user";
   content: string;
+  mentions?:
+    | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
+    | undefined;
+  mentionResolution?: unknown;
   key?: string | undefined;
   files?:
     | { contentType: string; filename: string; path: string; size: number; url: string }[]
@@ -4613,6 +4972,7 @@ export type AgentContextAddedPayload = {
         | { type: "user"; userId: string }
         | { type: "file"; path: string }
         | { type: "git-commit"; repoPath: string; commitOid: string }
+        | { type: "repo-file"; repoPath: string; path: string }
       )[]
     | undefined;
   actor?:
@@ -4937,63 +5297,58 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
   durableWorkerKey: string;
 };
 
-/** One stored overlay: the fields it deviates from (or adds over) the derived table. */
-export type WorkspaceMountOverlay = WorkspaceConfig["mounts"][string];
-
-/** The workspace processor's reduced state: existence plus the merged overlays. */
-export type WorkspaceProcessorState = {
-  birthCertificate: { [x: string]: unknown } | null;
-  config: {
-    mounts: Record<
-      string,
-      { policy?: "commit-to-main" | "read-only" | undefined; repoPath?: string | undefined }
-    >;
-  };
+/** One model input message reconstructed from durable request history. */
+export type LlmRequestReplayMessage = {
+  /** Stable identity: a message IS its position in the replayed request (the
+   * journal is immutable, so the same offset always folds to the same list). */
+  id: string;
+  role: "system" | "developer" | "user" | "assistant";
+  /** Flattened exactly as sent: file attachments become their hint lines. */
+  content: string;
 };
 
-/**
- * The workspace's LIVE configuration: the effective mount table that routes
- * reads and commits — every project repo at its own /repos/** stream path
- * (commit-to-main), with the workspace's stored overlay deviations merged in.
- */
-export type WorkspaceEffectiveConfig = {
-  mounts: Record<
-    string,
-    {
-      policy: "commit-to-main" | "read-only";
-      repoPath: string;
-    }
-  >;
+/** Committed response text or explicitly supplied transient chunks for one request. */
+export type LlmRequestReplayResponse = {
+  /** The response text: the committed output when the turn settled with one,
+   * else whatever streamed in before the request failed / was cancelled /
+   * is still in flight. */
+  text: string;
+  /** Streamed reasoning ("thinking") text, where the model reported any. */
+  thinkingText: string;
+  /** "output" = the committed assistant context item; "chunks" = re-assembled
+   * from streamed deltas (partial or pre-settle). */
+  source: "output" | "chunks";
 };
 
-/** A configuration patch: deep-merged per mount point; null clears an overlay.
- * (Spelled as one z.output<> reference — not an indexed access over it — so
- * the itx-api generator expands it structurally instead of copying the
- * expression verbatim into the generated public API.) */
-export type WorkspaceConfigPatch = {
-  mounts?:
-    | Record<
-        string,
-        {
-          policy?: "commit-to-main" | "read-only" | undefined;
-          repoPath?: string | undefined;
-        } | null
-      >
-    | undefined;
-};
-
-/** Input to `Workspace.edit` — a safe single-occurrence string replacement. */
-export type EditWorkspaceFileInput = {
-  newString: string;
-  oldString: string;
-  path: string;
-  replaceAll?: boolean;
-};
-
-/** Result of `Workspace.edit`. The change is in the working tree only — not committed. */
-export type EditWorkspaceFileResult = {
-  occurrenceCount: number;
-  path: string;
+/** Token usage, timing, and gateway metadata recorded for one model request. */
+export type LlmRequestReplayStats = {
+  /** Normalized counts from token-usage-reported; null until the turn
+   * settled successfully (or when the vendor reported no parseable usage). */
+  tokens: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens: number | null;
+    reasoningOutputTokens: number | null;
+    maxContextTokens: number;
+  } | null;
+  /** The llm-request-requested event's own append time → the first streamed
+   * chunk landing. There is no separate dial event in this model, so the
+   * window includes any pre-dial delay (debounce leftovers, transport
+   * connect) before streaming began. */
+  timeToFirstChunkMs: number | null;
+  /** First chunk → settled — the generation window; falls back to the
+   * last chunk for requests that never settled. */
+  generationMs: number | null;
+  chunkCount: number;
+  /** Output tokens over the generation window. */
+  outputTokensPerSecond: number | null;
+  /** AI Gateway response-cache verdict (`cf-aig-cache-status`: HIT/MISS…)
+   * where the transport recorded one — a HIT means the whole response was
+   * served from the gateway's cache without touching the model. */
+  gatewayCacheStatus: string | null;
+  /** The settled event's verbatim result.rawResponse — whatever the
+   * transport recorded (usage dialects, gateway cache status, …). */
+  rawResponse: unknown;
 };
 
 /** Durable state reduced from the events in one stream. */
@@ -5309,6 +5664,90 @@ export type StreamWakeEventBatch = StreamEventBatch & {
   reportDeliveryResult: ReportStreamWakeDeliveryResult;
 };
 
+/** Prepared OpenAI HTTP request, with authorization supplied only at dispatch. */
+export type OpenAiHttpRequest = {
+  kind: "openai-http";
+  gatewayId: string;
+  endpoint: string;
+  headers: Record<string, string>;
+  body: Record<string, unknown>;
+};
+
+/** Prepared Workers AI binding invocation, including its raw-response option. */
+export type WorkersAiRequest = {
+  kind: "workers-ai";
+  model: string;
+  body: Record<string, unknown>;
+  options: CfAiRunOptions & {
+    returnRawResponse: true;
+    gateway: { id: string; metadata: Record<string, string | number> };
+  };
+};
+
+/** A workspace's stored configuration: the mount OVERLAY table, keyed by mount path. */
+export type WorkspaceConfig = WorkspaceProcessorState["config"];
+
+/** Ephemeral cursor presence for one session: who has a caret where, in the
+ * sender's head coordinates. In-memory only — an eviction loses it and
+ * clients re-announce on their next throttle tick — delivered on the wait()
+ * long-poll when the generation advanced past the client's cursor. */
+export type CollabPresence = {
+  clients: { anchor: number; at: number; clientId: string; head: number }[];
+  generation: number;
+};
+
+/** Per-mount changes plus the unmounted local scratch (never committable). */
+export type WorkspaceStatus = {
+  mounts: {
+    changes: WorkspaceChange[];
+    path: string;
+    policy: "commit-to-main" | "read-only";
+    repoPath: string;
+  }[];
+  unmounted: WorkspaceChange[];
+};
+
+/** Input to `WorkspaceGit.commit` — one mount's changes become one commit on its repo's main. */
+export type WorkspaceCommitInput = {
+  /** Replace the repo's head commit when it is exactly this oid instead of
+   * stacking on it — see the repo's `commitFiles`. The result's `amended`
+   * says which happened. */
+  amendIfHead?: string;
+  author?: { email: string; name: string };
+  message: string;
+  /** The mount to commit (its mount path). Optional when exactly one mount is dirty. */
+  scope?: string;
+};
+
+/** Result of `WorkspaceGit.commit` — the commit landed on the scoped mount's repo main. */
+export type WorkspaceCommitResult = {
+  /** True when `amendIfHead` matched the head and the commit replaced it. */
+  amended: boolean;
+  branch: string;
+  /** Committed paths, spelled as absolute WORKSPACE paths (mount point included). */
+  changedPaths: string[];
+  commitOid: string;
+  /** The mount the commit was scoped to (its workspace path). */
+  mount: string;
+  repoPath: string;
+};
+
+/** Input to `WorkspaceGit.log` — one mount's repo history. */
+export type WorkspaceGitLogInput = {
+  limit?: number;
+  /** The mount to read (its mount path). Optional when the table has exactly one mount. */
+  scope?: string;
+};
+
+/** One commit returned by `WorkspaceGit.log` (a mounted repo's main history). */
+export type WorkspaceGitLogEntry = {
+  author: { email: string; name: string };
+  message: string;
+  oid: string;
+  /** Epoch milliseconds. */
+  timestamp: number;
+};
+
 /** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */
 type TypedStreamEventInput<Type extends string = string, Payload = Record<string, unknown>> = Omit<
   StreamEventInput,
@@ -5417,64 +5856,6 @@ export type DynamicWorkerRefBase = {
   source: DynamicWorkerSource;
 };
 
-/** A workspace's stored configuration: the mount OVERLAY table, keyed by mount path. */
-export type WorkspaceConfig = WorkspaceProcessorState["config"];
-
-/** Ephemeral cursor presence for one session: who has a caret where, in the
- * sender's head coordinates. In-memory only — an eviction loses it and
- * clients re-announce on their next throttle tick — delivered on the wait()
- * long-poll when the generation advanced past the client's cursor. */
-export type CollabPresence = {
-  clients: { anchor: number; at: number; clientId: string; head: number }[];
-  generation: number;
-};
-
-/** Per-mount changes plus the unmounted local scratch (never committable). */
-export type WorkspaceStatus = {
-  mounts: {
-    changes: WorkspaceChange[];
-    path: string;
-    policy: "commit-to-main" | "read-only";
-    repoPath: string;
-  }[];
-  unmounted: WorkspaceChange[];
-};
-
-/** Input to `WorkspaceGit.commit` — one mount's changes become one commit on its repo's main. */
-export type WorkspaceCommitInput = {
-  author?: { email: string; name: string };
-  message: string;
-  /** The mount to commit (its mount path). Optional when exactly one mount is dirty. */
-  scope?: string;
-};
-
-/** Result of `WorkspaceGit.commit` — the commit landed on the scoped mount's repo main. */
-export type WorkspaceCommitResult = {
-  branch: string;
-  /** Committed paths, spelled as absolute WORKSPACE paths (mount point included). */
-  changedPaths: string[];
-  commitOid: string;
-  /** The mount the commit was scoped to (its workspace path). */
-  mount: string;
-  repoPath: string;
-};
-
-/** Input to `WorkspaceGit.log` — one mount's repo history. */
-export type WorkspaceGitLogInput = {
-  limit?: number;
-  /** The mount to read (its mount path). Optional when the table has exactly one mount. */
-  scope?: string;
-};
-
-/** One commit returned by `WorkspaceGit.log` (a mounted repo's main history). */
-export type WorkspaceGitLogEntry = {
-  author: { email: string; name: string };
-  message: string;
-  oid: string;
-  /** Epoch milliseconds. */
-  timestamp: number;
-};
-
 /** Delivery progress and retry details shared by every live callback connection. */
 type ConnectionRuntimeDetails = {
   startedAt: string;
@@ -5541,6 +5922,16 @@ export type StreamSubscriptionDescription = {
  */
 export type ReportStreamWakeDeliveryResult = (result: StreamWakeDeliveryResult) => unknown;
 
+/**
+ * One overlay change: a local file that shadows a mount file ("modified" —
+ * shadowed, not content-diffed), one the mount does not have ("added"), or a
+ * mount file hidden by a local delete ("deleted").
+ */
+export type WorkspaceChange = {
+  change: "added" | "deleted" | "modified";
+  path: string;
+};
+
 /** One Cloudflare Images transform step (width, height, fit, rotate, …),
  * passed through to the Images binding verbatim. */
 export type CfImageTransformOptions = { [x: string]: unknown };
@@ -5581,16 +5972,6 @@ export type PlatformCredsRef = { platform: string };
 export type DynamicWorkerSource =
   | { createApp: WorkerBundlerCreateAppOptions }
   | { createWorker: WorkerBundlerCreateWorkerOptions };
-
-/**
- * One overlay change: a local file that shadows a mount file ("modified" —
- * shadowed, not content-diffed), one the mount does not have ("added"), or a
- * mount file hidden by a local delete ("deleted").
- */
-export type WorkspaceChange = {
-  change: "added" | "deleted" | "modified";
-  path: string;
-};
 
 /** Serializable identity of the caller that opened a connection. */
 export type ConnectionOpenerDescriptor = {

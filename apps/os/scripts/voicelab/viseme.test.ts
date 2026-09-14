@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { visemeModelBytes } from "../../../../configs/voice-agent/viseme-model.generated.ts";
+import { visemeModelBytes } from "../../../../packages/voice-agent/src/viseme-model.generated.ts";
 import {
   computeVisemeFeatureVector,
   createAcousticVisemeClassifier,
@@ -11,7 +11,7 @@ import {
   visemeSampleRateHz,
   type VisemeChangeEvent,
   type VisemeHopClassification,
-} from "../../../../configs/voice-agent/viseme.ts";
+} from "../../../../packages/voice-agent/src/viseme.ts";
 
 /**
  * The deterministic golden signal shared with the C port's test and the
@@ -66,7 +66,9 @@ describe("feature extraction parity with upstream HeadAudio", () => {
 describe("model binary", () => {
   test("the embedded base64 module decodes to the exact committed binary", () => {
     const committed = new Uint8Array(
-      readFileSync(new URL("../../../../configs/voice-agent/viseme-model.bin", import.meta.url)),
+      readFileSync(
+        new URL("../../../../packages/voice-agent/src/viseme-model.bin", import.meta.url),
+      ),
     );
     expect(visemeModelBytes()).toEqual(committed);
   });

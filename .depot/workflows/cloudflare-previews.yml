@@ -131,6 +131,28 @@ jobs:
             --github-token "$GITHUB_TOKEN" \
             --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}" \
             ${{ github.event_name == 'workflow_dispatch' && '--all-apps' || '' }}
+      # The e2e leaves a population of test projects behind whose Durable
+      # Objects keep waking; erase them the moment the run is over instead of
+      # letting them burn until the next push or the lease expiry. Not
+      # red-making — the next deploy erases anyway. A run cancelled by a newer
+      # push never gets here: Depot kills the whole job, always() steps
+      # included (observed 2026-09-03), so that population is the next run's
+      # before-deploy erase to clean. --ran-head-sha is the guard for the case
+      # this step does run after the PR moved on (a human running it late):
+      # the newer push's run erases before it deploys, and racing it would
+      # tombstone a Worker it is deploying.
+      - name: Preview / erase slot data after e2e
+        if: always()
+        continue-on-error: true
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |-
+          set -euo pipefail
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview erase \
+            --github-token "$GITHUB_TOKEN" \
+            --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}" \
+            --ran-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
       - name: Normalize and send preview test telemetry
         if: always()
         env:
@@ -147,3 +169,22 @@ jobs:
           path: test-results
           include-hidden-files: true
           if-no-files-found: error
+      # flake-records-<suite> artifacts feed the flake dashboard's check_run
+      # ingestion (artifact-name-driven; #2582). ignore-when-empty: a lane
+      # that recorded nothing is normal; overwrite: a job retry re-uploads.
+      - name: Upload specs flake records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-records-specs
+          path: test-results/flake-records/specs
+          if-no-files-found: ignore
+          overwrite: true
+      - name: Upload preview e2e flake records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-records-preview-e2e
+          path: test-results/flake-records/preview-e2e
+          if-no-files-found: ignore
+          overwrite: true

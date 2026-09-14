@@ -5,8 +5,9 @@
  * module is text-in, text-out only — no storage, no network, no UI.
  */
 import { parseDocument, type Document } from "yaml";
-import { parseAnnotatedMarkdown } from "iterate/annotated-markdown";
-import { BOARD_COLUMNS, type TaskCard, type TaskChangeSummary } from "./state.ts";
+import { readReview } from "iterate/document-review";
+import { BOARD_COLUMNS, type TaskCard } from "./state.ts";
+import { DOCUMENT_REVIEW_INSTRUCTIONS } from "./lib/document-review-instructions.ts";
 
 const DEFAULT_TASK_STATE = BOARD_COLUMNS[0];
 const MAX_TASK_FILENAME_SLUG_LENGTH = 64;
@@ -23,42 +24,17 @@ export function isTaskFilePath(path: string): boolean {
  * `state: backlog` stays literal on disk but lands in the Todo column, so the
  * card's state is normalized here.
  *
- * The strict annotated-markdown codec is the primary parser: it also yields
- * the discussion threads (comment counts here; the sheet renders them). When
- * the codec refuses the file (fail-open plain), the card falls back to the
- * legacy lenient split so board metadata still renders — comments are then
- * unavailable for the file, never guessed at.
+ * RFM review markup is projected away before title inference, while the
+ * board's own frontmatter parser remains the source of task metadata.
  */
 export function parseTaskCard(path: string, source: string): TaskCard {
-  const parsed = parseAnnotatedMarkdown(source);
-  if (parsed.kind === "structured") {
-    const metadata = parsed.frontmatter?.data ?? {};
-    let commentCount = 0;
-    for (const thread of parsed.discussion?.threads ?? []) {
-      commentCount += thread.comments.filter((comment) => !comment.deleted).length;
-    }
-    return {
-      path,
-      // A task with no heading (and no title key) is named by its full path.
-      title: stringValue(metadata.title) ?? firstHeadingTitle(parsed.body) ?? path,
-      state: normalizeTaskState(stringValue(metadata.state)),
-      // `tags` is the canonical key; `labels` stays readable for apps/os
-      // compatibility and older files.
-      labels: uniqueStrings([...stringArray(metadata.tags), ...stringArray(metadata.labels)]),
-      agent: stringValue(metadata.agent) ?? null,
-      createdBy: stringValue(metadata["created-by"]) ?? null,
-      source,
-      frontmatterError: false,
-      commentCount,
-    };
-  }
   const frontmatter = parseMarkdownFrontmatter(source);
   if (frontmatter.exists && frontmatter.invalid) {
     // Broken YAML: the whole file is plain text — no state, no tags, and
     // the UI surfaces the breakage instead of guessing.
     return {
       path,
-      title: firstHeadingTitle(beforeDiscussionStore(source)) ?? path,
+      title: firstHeadingTitle(readReview(source).projection.markdown) ?? path,
       state: normalizeTaskState(undefined),
       labels: [],
       agent: null,
@@ -68,23 +44,18 @@ export function parseTaskCard(path: string, source: string): TaskCard {
       commentCount: 0,
     };
   }
-  // The codec refused for a non-YAML reason (restricted-YAML strictness, a
-  // malformed discussion store, …): keep board metadata via the lenient
-  // split; the sheet shows why comments are unavailable.
   const metadata = markdownFrontmatterRecord(frontmatter.document);
+  const review = readReview(source);
   return {
     path,
-    title:
-      stringValue(metadata.title) ??
-      firstHeadingTitle(beforeDiscussionStore(frontmatter.body)) ??
-      path,
+    title: stringValue(metadata.title) ?? firstHeadingTitle(review.projection.markdown) ?? path,
     state: normalizeTaskState(stringValue(metadata.state)),
     labels: uniqueStrings([...stringArray(metadata.tags), ...stringArray(metadata.labels)]),
     agent: stringValue(metadata.agent) ?? null,
     createdBy: stringValue(metadata["created-by"]) ?? null,
     source,
     frontmatterError: false,
-    commentCount: 0,
+    commentCount: review.threads.flatMap((thread) => thread.comments).length,
   };
 }
 
@@ -127,8 +98,8 @@ export function taskAssignmentInstructions(repoPath: string, taskPath: string): 
     "First, verify that the task frontmatter state is `in-progress`; set and commit it before doing any other work if it is not.",
     "Read the task Markdown before starting and treat it as the durable source of truth.",
     "Keep that task file current as you work. Commit implementation changes and task updates to the same repo.",
-    "Keep a lightweight work log in a final `## Comments` section. Add entries as `### <ISO timestamp> — <agent path>` followed by a short Markdown note; keep this section at the end of the file.",
-    "When the work is ready for human review, summarize the result in Comments and set the task frontmatter state to `in-review`.",
+    DOCUMENT_REVIEW_INSTRUCTIONS,
+    "Keep a lightweight work log as document comments. When the work is ready for human review, summarize the result in a document comment and set the task frontmatter state to `in-review`.",
   ].join("\n\n");
 }
 
@@ -184,23 +155,6 @@ export function taskPathForTitle(title: string, suffix?: string): string {
   return `tasks/${collisionBase}${suffixText}.md`;
 }
 
-/** Deterministic commit message when AI is unavailable or empty. */
-export function fallbackCommitMessage(changes: readonly TaskChangeSummary[]): string {
-  if (changes.length === 0) return "Update tasks";
-  const added = changes.filter((change) => change.status === "added");
-  const modified = changes.filter((change) => change.status === "modified");
-  const deleted = changes.filter((change) => change.status === "deleted");
-  const parts: string[] = [];
-  if (added.length === 1) parts.push(`add ${added[0]!.title}`);
-  else if (added.length > 1) parts.push(`add ${added.length} tasks`);
-  if (modified.length === 1) parts.push(`update ${modified[0]!.title}`);
-  else if (modified.length > 1) parts.push(`update ${modified.length} tasks`);
-  if (deleted.length === 1) parts.push(`delete ${deleted[0]!.title}`);
-  else if (deleted.length > 1) parts.push(`delete ${deleted.length} tasks`);
-  const body = parts.join(", ");
-  return body === "" ? "Update tasks" : `${body[0]!.toUpperCase()}${body.slice(1)}`;
-}
-
 /**
  * The four canonical columns in board order, then any custom states as
  * trailing columns. Assignment goes by normalized state, so `backlog` cards
@@ -242,16 +196,6 @@ function normalizeTaskState(state: string | undefined): string {
 function firstHeadingTitle(body: string): string | undefined {
   const match = /^#\s+(.+?)\s*#*\s*$/m.exec(body);
   return match?.[1]?.trim();
-}
-
-/**
- * On the codec's plain fallback the store may be malformed but still present;
- * headings inside it (comment prose) must never become the board title.
- */
-function beforeDiscussionStore(text: string): string {
-  if (text.startsWith("<!-- iterate-annotations:")) return "";
-  const at = text.indexOf("\n<!-- iterate-annotations:");
-  return at === -1 ? text : text.slice(0, at);
 }
 
 function parseMarkdownFrontmatter(content: string): {

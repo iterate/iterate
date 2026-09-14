@@ -7,12 +7,7 @@ import {
 } from "@codemirror/collab";
 import { ChangeSet, type Extension } from "@codemirror/state";
 import { ViewPlugin, type EditorView, type ViewUpdate } from "@codemirror/view";
-import type {
-  CollabChanges,
-  CollabPresence,
-  CollabWaitResult,
-  WorkspaceDocumentTransport,
-} from "./types.ts";
+import type { CollabPresence, CollabWaitResult, WorkspaceTransport } from "./types.ts";
 
 /**
  * The browser's end of the no-Yjs collab lane (PoC): @codemirror/collab's
@@ -58,29 +53,8 @@ export class CollabConnection {
    * cursor plugin's set/clear lifecycle cannot orphan the page's strip. */
   onPeers: ((clients: CollabPresence["clients"]) => void) | null = null;
   presenceGeneration = 0;
-  /** The raw ops of the delivery currently being dispatched, in canonical
-   * server order with true clientIds. receiveUpdates builds a finished
-   * Transaction (no annotation can be added), so the redline fold reads the
-   * delivery through this side channel DURING the dispatch — set just
-   * before, consumed once by takeDeliveredOps(), cleared after. */
-  #deliveredOps: { changes: unknown; clientId: string }[] | null = null;
-
-  stageDeliveredOps(ops: { changes: unknown; clientId: string }[]): void {
-    this.#deliveredOps = ops;
-  }
-
-  hasDeliveredOps(): boolean {
-    return this.#deliveredOps !== null;
-  }
-
-  takeDeliveredOps(): { changes: unknown; clientId: string }[] | null {
-    const ops = this.#deliveredOps;
-    this.#deliveredOps = null;
-    return ops;
-  }
-
   constructor(
-    readonly transport: WorkspaceDocumentTransport,
+    readonly transport: WorkspaceTransport,
     readonly filePath: string,
     readonly displayName = "someone",
   ) {
@@ -88,9 +62,9 @@ export class CollabConnection {
   }
 
   async open(): Promise<{ content: string; version: number }> {
-    // Identity first: the client id embeds the display name for attribution.
+    // Identity first: the client id embeds the display name for presence.
     this.clientId = freshClientId(this.displayName);
-    const opened = await this.transport.run((lane) => lane.open(this.filePath));
+    const opened = await this.transport.run((workspace) => workspace.collab.open(this.filePath));
     this.epoch = opened.epoch;
     this.confirmed = 0;
     return opened;
@@ -101,8 +75,8 @@ export class CollabConnection {
       changes: update.changes.toJSON(),
       clientSeq: this.confirmed + index,
     }));
-    return this.transport.run((lane) =>
-      lane.push({
+    return this.transport.run((workspace) =>
+      workspace.collab.push({
         baseVersion,
         clientId: this.clientId,
         epoch: this.epoch,
@@ -119,8 +93,8 @@ export class CollabConnection {
       changes: update.changes.toJSON(),
       clientSeq: this.confirmed + index,
     }));
-    return this.transport.runOnce((lane) =>
-      lane.push({
+    return this.transport.runOnce((workspace) =>
+      workspace.collab.push({
         baseVersion,
         clientId: this.clientId,
         epoch: this.epoch,
@@ -131,8 +105,14 @@ export class CollabConnection {
   }
 
   async wait(afterVersion: number): Promise<CollabWaitResult> {
-    const result = await this.transport.run((lane) =>
-      lane.wait(this.filePath, this.epoch, afterVersion, this.clientId, this.presenceGeneration),
+    const result = await this.transport.run((workspace) =>
+      workspace.collab.wait(
+        this.filePath,
+        this.epoch,
+        afterVersion,
+        this.clientId,
+        this.presenceGeneration,
+      ),
     );
     if (result.status === "ops" && result.presence !== undefined) {
       this.presenceGeneration = result.presence.generation;
@@ -149,12 +129,8 @@ export class CollabConnection {
    * (presence is decoration; a dropped update self-heals on the next move). */
   present(selection: { anchor: number; head: number } | null): void {
     void this.transport
-      .runOnce((lane) => lane.present(this.filePath, this.clientId, selection))
+      .runOnce((workspace) => workspace.collab.present(this.filePath, this.clientId, selection))
       .catch(() => {});
-  }
-
-  async changes(): Promise<CollabChanges> {
-    return this.transport.run((lane) => lane.changes(this.filePath));
   }
 
   /** Fold delivered ops into the confirmed baseline and count own ones. */
@@ -235,7 +211,9 @@ export function peerExtension(connection: CollabConnection, startVersion: number
           }
         } catch (error) {
           this.failures++;
-          connection.onStatus(`push retry ${this.failures}: ${message(error)}`);
+          connection.onStatus(
+            `push retry ${this.failures}: ${error instanceof Error ? error.message : String(error)}`,
+          );
           await sleep(backoff(this.failures));
         }
         this.pushing = false;
@@ -254,7 +232,12 @@ export function peerExtension(connection: CollabConnection, startVersion: number
             // react-doctor-disable-next-line react-doctor/js-cache-property-access
             const result = await connection.wait(getSyncedVersion(this.view.state));
             if (this.done) break;
-            this.failures = 0;
+            if (this.failures > 0) {
+              // Back after "reconnecting (n)…": say so, or the badge would
+              // report a dead session that is in fact syncing again.
+              this.failures = 0;
+              connection.onStatus(`live · v${getSyncedVersion(this.view.state)}`);
+            }
             if (result.status === "ended") {
               // The file was deleted/replaced/reset: the session is gone for
               // everyone. Surface it and stop — reopening is a page decision.
@@ -283,12 +266,7 @@ export function peerExtension(connection: CollabConnection, startVersion: number
               return;
             }
             if (result.ops.length === 0) continue;
-            connection.stageDeliveredOps(result.ops);
-            try {
-              this.view.dispatch(receiveUpdates(this.view.state, connection.absorb(result.ops)));
-            } finally {
-              connection.takeDeliveredOps(); // drop if no layer consumed it
-            }
+            this.view.dispatch(receiveUpdates(this.view.state, connection.absorb(result.ops)));
             if (this.recovering) {
               // History was intact after all — catching up via ops advanced
               // our base past the miss, so pushing can resume (the snapshot
@@ -296,15 +274,21 @@ export function peerExtension(connection: CollabConnection, startVersion: number
               this.recovering = false;
               void this.push();
             }
-          } catch (error) {
+          } catch {
             if (this.done) break;
+            // Reconnect for as long as the editor is open, the same way the
+            // push loop already does. A multi-hour multiplayer session
+            // outlives deploys, evictions, and laptop sleeps; the pull
+            // long-poll rides every one of them out rather than declaring the
+            // session dead after a fixed count. Recovery needs no reopen here:
+            // a session reset or eviction rotates the epoch, so the very next
+            // wait() returns a "snapshot" (handled above, with correct acked-op
+            // slicing), and a deleted or replaced file returns "ended". Only a
+            // genuine transport outage lands here, and retrying it is right —
+            // when the network returns, wait() answers again. Backoff is
+            // capped, so a sustained outage settles into one quiet retry every
+            // MAX_BACKOFF_MS.
             this.failures++;
-            if (this.failures > 8) {
-              this.done = true;
-              connection.dead = true;
-              connection.onStatus(`disconnected: ${message(error)}`);
-              return;
-            }
             connection.onStatus(`reconnecting (${this.failures})…`);
             await sleep(backoff(this.failures));
           }
@@ -315,8 +299,12 @@ export function peerExtension(connection: CollabConnection, startVersion: number
         // Best-effort final flush: unpushed edits still in the doc would die
         // with the view (the board may already show them via the live
         // reflector). Safe to fire even beside an in-flight push — the
-        // server dedupes by (clientId, clientSeq).
-        if (!this.done && !this.recovering) {
+        // server dedupes by (clientId, clientSeq). Deliberately also after
+        // the loops gave up (`done`): a Reconnect remount is exactly when
+        // those edits are worth one more try over the shared session, which
+        // may have been re-dialed since. Only a reseed in flight is skipped —
+        // its pending edits are positionally meaningless.
+        if (!this.recovering) {
           const pending = sendableUpdates(this.view.state);
           if (pending.length > 0) {
             // ONE quiet try on the live session: a failure here must never
@@ -333,4 +321,3 @@ export function peerExtension(connection: CollabConnection, startVersion: number
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const message = (error: unknown) => (error instanceof Error ? error.message : String(error));

@@ -4,6 +4,7 @@ import { Link, useMatches, useMatchRoute } from "@tanstack/react-router";
 import {
   ArrowLeft,
   Box,
+  FolderTree,
   Bug,
   CalendarClock,
   Check,
@@ -654,7 +655,8 @@ type ProjectStreamNavItemConfig = {
     | "/projects/$projectSlug/secrets"
     | "/projects/$projectSlug/repl"
     | "/projects/$projectSlug/repos"
-    | "/projects/$projectSlug/streams";
+    | "/projects/$projectSlug/streams"
+    | "/projects/$projectSlug/workspaces";
 };
 
 const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
@@ -700,6 +702,13 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
     label: "/sandboxes",
     streamPath: StreamPath.parse("/sandboxes"),
     to: "/projects/$projectSlug/sandboxes",
+  },
+  {
+    fuzzy: true,
+    icon: FolderTree,
+    label: "/workspaces",
+    streamPath: StreamPath.parse("/workspaces"),
+    to: "/projects/$projectSlug/workspaces",
   },
   {
     fuzzy: true,

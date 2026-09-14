@@ -31,17 +31,6 @@ export type BrowserStreamClientFactory = (args: {
   ) => void;
 }) => Promise<BrowserStreamClient>;
 
-/**
- * How a runtime opens (and, on suspicion, evicts) a server connection: the factory and
- * its evictor travel as ONE value so they can never come from two different
- * transports (a factory opening socket A while timeouts evict socket B would
- * re-arm the wedge the store exists to prevent).
- */
-export type BrowserStreamTransport = {
-  createStreamClient: BrowserStreamClientFactory;
-  resetTransport: (() => void) | undefined;
-};
-
 export function asBrowserStreamClient(
   stream: Stream,
   dispose: () => void,

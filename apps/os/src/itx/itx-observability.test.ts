@@ -4,6 +4,7 @@ import { ItxAuthenticationError } from "../auth.ts";
 import type { WideLogEvent } from "../observability/wide-log.ts";
 import { recordedSpans, resetRecordedSpans } from "../test/cloudflare-workers-shim.ts";
 import { createItxRpcSessionOptions, itxRpcMethod } from "./itx-observability.ts";
+import { ItxProspectiveProjectError } from "./prospective-project-error.ts";
 
 afterEach(() => {
   resetRecordedSpans();
@@ -154,6 +155,32 @@ describe("ITX observability", () => {
     });
   });
 
+  it("classifies a prospective project as a client error without polluting server-error logs", async () => {
+    const events: WideLogEvent[] = [];
+    const log = vi
+      .spyOn(console, "log")
+      .mockImplementation((event) => void events.push(event as WideLogEvent));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const session = createItxRpcSessionOptions({
+      transport: "websocket",
+      sessionId: "itx_session_prospective_project",
+      parentLogId: "log_handshake",
+    });
+
+    await expect(
+      session.onCall!({ path: ["identity"], target: {} }, async () => {
+        throw new ItxProspectiveProjectError("fresh-project");
+      }),
+    ).rejects.toThrow('project "fresh-project" does not exist');
+
+    expect(log).toHaveBeenCalledOnce();
+    expect(error).not.toHaveBeenCalled();
+    expect(events[0]).toMatchObject({ outcome: "client_error" });
+    expect(recordedSpans[0]).toMatchObject({
+      attributes: { "itx.outcome": "client_error" },
+    });
+  });
+
   it("classifies a modeled stream lifecycle loss as unavailable, not a server error", async () => {
     const events: WideLogEvent[] = [];
     const log = vi
@@ -182,6 +209,67 @@ describe("ITX observability", () => {
     });
     expect(recordedSpans[0]).toMatchObject({
       attributes: { "itx.outcome": "unavailable" },
+    });
+  });
+
+  it("classifies a cold dynamic worker build as expected through correlated RPC errors", async () => {
+    const events: WideLogEvent[] = [];
+    const log = vi
+      .spyOn(console, "log")
+      .mockImplementation((event) => void events.push(event as WideLogEvent));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const session = createItxRpcSessionOptions({
+      transport: "websocket",
+      sessionId: "itx_session_worker_building",
+      parentLogId: "log_handshake",
+    });
+    const building = new Error("This worker is still building.");
+    building.name = "WorkerBuildInProgressError";
+
+    const correlated = await session.onCall!(
+      { path: ["getRuntimeState"], target: {} },
+      async () => {
+        throw building;
+      },
+    ).catch((caught: unknown) => caught);
+    await expect(
+      session.onCall!({ path: ["getRuntimeState"], target: {} }, async () => {
+        throw correlated;
+      }),
+    ).rejects.toThrow("This worker is still building.");
+
+    expect(log).toHaveBeenCalledTimes(2);
+    expect(error).not.toHaveBeenCalled();
+    expect(events.map((event) => event.outcome)).toEqual(["worker_building", "worker_building"]);
+    expect(recordedSpans.map((span) => span.attributes["itx.outcome"])).toEqual([
+      "worker_building",
+      "worker_building",
+    ]);
+  });
+
+  it("classifies an owned outer client disconnect without hiding business failures", async () => {
+    const events: WideLogEvent[] = [];
+    const log = vi
+      .spyOn(console, "log")
+      .mockImplementation((event) => void events.push(event as WideLogEvent));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const session = createItxRpcSessionOptions({
+      transport: "websocket",
+      sessionId: "itx_session_client_disconnect",
+      parentLogId: "log_handshake",
+    });
+
+    await expect(
+      session.onCall!({ path: ["health"], target: {} }, async () => {
+        throw new Error("itx-client-disconnected: outer WebSocket closed");
+      }),
+    ).rejects.toThrow("itx-client-disconnected: outer WebSocket closed");
+
+    expect(log).toHaveBeenCalledOnce();
+    expect(error).not.toHaveBeenCalled();
+    expect(events[0]).toMatchObject({ outcome: "client_disconnected" });
+    expect(recordedSpans[0]).toMatchObject({
+      attributes: { "itx.outcome": "client_disconnected" },
     });
   });
 

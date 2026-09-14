@@ -2,7 +2,13 @@ import { minimatch } from "minimatch";
 import { describe, expect, test } from "vitest";
 import type { Workspace } from "@cloudflare/shell";
 import type { WorkspaceMount } from "./workspace-processor-contract.ts";
-import { reRoutedPaths, WorkspaceCore, type MountRepoAccess } from "./workspace-core.ts";
+import {
+  isPathUnder,
+  literalDirectoryOfGlob,
+  reRoutedPaths,
+  WorkspaceCore,
+  type MountRepoAccess,
+} from "./workspace-core.ts";
 
 /** The slice of `@cloudflare/shell`'s Workspace the core touches, in memory. */
 function fakeLocalLayer() {
@@ -58,7 +64,7 @@ function fakeKv() {
  * APPLY to the tree (content and deletions) exactly like production main, so
  * post-commit fall-through assertions test the real read-your-write shape. */
 function fakeRepo(tree: Record<string, string>) {
-  const commits: { changes: unknown[]; message: string }[] = [];
+  const commits: { amendIfHead?: string; changes: unknown[]; message: string }[] = [];
   const snapshotCalls: string[][] = [];
   const repo: MountRepoAccess = {
     readFile: async ({ encoding, path }) => {
@@ -88,13 +94,20 @@ function fakeRepo(tree: Record<string, string>) {
       return { commitOid: "head-oid", files };
     },
     commitFiles: async (input) => {
-      commits.push({ changes: input.changes, message: input.message });
+      commits.push({
+        amendIfHead: input.amendIfHead,
+        changes: input.changes,
+        message: input.message,
+      });
       for (const change of input.changes) {
         if ("delete" in change && change.delete) delete tree[change.path];
         else if ("content" in change) tree[change.path] = change.content;
         else if ("contentBase64" in change) tree[change.path] = atob(change.contentBase64);
       }
       return {
+        // The fake's head is always "head-oid"; matching it is what a real
+        // repo would call an amend.
+        amended: input.amendIfHead === "head-oid",
         branch: "main",
         changedPaths: input.changes.map((change) => change.path),
         commitOid: `commit-${commits.length}`,
@@ -115,9 +128,9 @@ function fakeRepo(tree: Record<string, string>) {
   return { commits, repo, snapshotCalls };
 }
 
-// The workspace's own directory (its stream path): the ONLY subtree where
+// The workspace's fixed /workspace directory: the ONLY subtree where
 // unmounted private scratch may be written.
-const SCRATCH_ROOT = "/workspaces/test";
+const SCRATCH_ROOT = "/workspace";
 
 const MOUNTS: Record<string, WorkspaceMount> = {
   "/config": { policy: "commit-to-main", repoPath: "/repos/config" },
@@ -136,7 +149,6 @@ function subject(mounts: Record<string, WorkspaceMount> = MOUNTS) {
       if (repoPath === "/repos/iterate") return iterate.repo;
       throw new Error(`unexpected repo "${repoPath}"`);
     },
-    scratchRoot: SCRATCH_ROOT,
     workspace,
   });
   return { config, core, iterate, localFiles: files };
@@ -179,6 +191,59 @@ describe("mount-routed reads", () => {
         minimatch(path, "**/tasks/**/*.md", { dot: true }),
       ),
     ).toEqual(["/config/tasks/one.md", "/iterate/tasks/two.md"]);
+  });
+
+  test("a scoped listing never enumerates a mount outside its subtree", async () => {
+    const { config, core, iterate } = subject();
+    let configListings = 0;
+    let iterateListings = 0;
+    const configList = config.repo.listFiles;
+    const iterateList = iterate.repo.listFiles;
+    config.repo.listFiles = () => {
+      configListings++;
+      return configList();
+    };
+    iterate.repo.listFiles = () => {
+      iterateListings++;
+      return iterateList();
+    };
+    await core.writeFile(`${SCRATCH_ROOT}/notes.txt`, "hi");
+
+    await expect(core.listAllFiles({ under: "/config" })).resolves.toEqual([
+      "/config/tasks/one.md",
+      "/config/worker.ts",
+    ]);
+    expect([configListings, iterateListings]).toEqual([1, 0]);
+
+    await expect(core.listAllFiles({ under: "/config/tasks" })).resolves.toEqual([
+      "/config/tasks/one.md",
+    ]);
+    await expect(core.listAllFiles({ under: SCRATCH_ROOT })).resolves.toEqual([
+      `${SCRATCH_ROOT}/notes.txt`,
+    ]);
+    expect([configListings, iterateListings]).toEqual([2, 0]);
+
+    // An ancestor of a mount still enumerates it (the subtree contains it).
+    await expect(core.listAllFiles({ under: "/" })).resolves.toHaveLength(5);
+    expect([configListings, iterateListings]).toEqual([3, 1]);
+  });
+
+  test.each([
+    ["/repos/config/**/*", "/repos/config"],
+    ["/repos/config/tasks/*.md", "/repos/config/tasks"],
+    ["/repos/config/README.md", "/repos/config"],
+    ["/**", "/"],
+    ["/*.md", "/"],
+    ["/repos/{config,other}/**", "/repos"],
+  ])("the literal directory of %s is %s", (pattern, directory) => {
+    expect(literalDirectoryOfGlob(pattern)).toBe(directory);
+  });
+
+  test("isPathUnder is inclusive of the ancestor and never fooled by a prefix", () => {
+    expect(isPathUnder("/repos/config/a.md", "/repos/config")).toBe(true);
+    expect(isPathUnder("/repos/config", "/repos/config")).toBe(true);
+    expect(isPathUnder("/repos/config-2/a.md", "/repos/config")).toBe(false);
+    expect(isPathUnder("/anything", "/")).toBe(true);
   });
 
   test("readFileBytes decodes the mount's base64 lane", async () => {
@@ -224,7 +289,6 @@ describe("batched mount reads", () => {
       kv: fakeKv(),
       mounts: async () => ({ "/repos/big": { policy: "commit-to-main", repoPath: "/repos/big" } }),
       repo: () => big.repo,
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await expect(core.readMountFiles(["/repos/big/tasks/board.md"])).resolves.toEqual({
@@ -307,6 +371,19 @@ describe("git status, commit, and log", () => {
     await expect(core.readFile(`${SCRATCH_ROOT}/notes.txt`)).resolves.toBe("survives");
     const statusAfter = await core.gitStatus();
     expect(statusAfter.mounts.find((mount) => mount.path === "/config")?.changes).toEqual([]);
+  });
+
+  test("commit forwards amendIfHead to the repo and reports whether it amended", async () => {
+    const { config, core } = subject();
+    await core.writeFile("/config/log.md", "## 2026-09-02\n- first\n");
+    const first = await core.gitCommit({ amendIfHead: "not-the-head", message: "log" });
+    expect(first.amended).toBe(false);
+    expect(config.commits[0]).toMatchObject({ amendIfHead: "not-the-head", message: "log" });
+
+    await core.writeFile("/config/log.md", "## 2026-09-02\n- first\n- second\n");
+    const second = await core.gitCommit({ amendIfHead: "head-oid", message: "log" });
+    expect(second.amended).toBe(true);
+    expect(config.commits[1]).toMatchObject({ amendIfHead: "head-oid" });
   });
 
   test("commit refuses to span mounts and names the scope choices", async () => {
@@ -392,7 +469,7 @@ describe("strict writes and private scratch", () => {
     // The rejection teaches where writes belong: the workspace's own
     // directory and the mounted repo subtrees.
     await expect(core.writeFile("/notes.md", "x")).rejects.toThrow(
-      /Private files live under your workspace directory \("\/workspaces\/test\//,
+      /Private files live under your workspace directory \("\/workspace\//,
     );
   });
 
@@ -433,7 +510,6 @@ describe("strict writes and private scratch", () => {
       kv: fakeKv(),
       mounts: async () => MOUNTS,
       repo: (repoPath) => (repoPath === "/repos/config" ? countingConfig : countingIterate),
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     // A fully clean workspace: with every project repo mounted by derivation,
@@ -474,7 +550,6 @@ describe("thermo regressions", () => {
       kv: fakeKv(),
       mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
       repo: () => failing,
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     failProbe = true;
@@ -496,7 +571,6 @@ describe("thermo regressions", () => {
       kv: fakeKv(),
       mounts: async () => nested,
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : iterate.repo),
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await core.deleteFile("/repos/config/side/note.md");
@@ -533,7 +607,6 @@ describe("thermo regressions", () => {
         "/iterate": { policy: "read-only", repoPath: "/repos/iterate" },
       }),
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : countingIterate),
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await core.writeFile("/config/a.md", "a");
@@ -551,7 +624,6 @@ describe("thermo regressions", () => {
       kv: fakeKv(),
       mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
       repo: () => config.repo,
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await crashCore.deleteFile("/config/only.md");
@@ -576,7 +648,6 @@ describe("thermo regressions", () => {
         "/repos/config/side": { policy: "commit-to-main", repoPath: "/repos/iterate" },
       }),
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : iterate.repo),
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     // An OUTER-mount .gitignore suppressing *.log must not hide the nested
@@ -615,7 +686,6 @@ describe("thermo round-two regressions", () => {
       kv: fakeKv(),
       mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
       repo: () => failing,
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await core.writeFile("/config/worker.ts", "precious local edits");
@@ -645,7 +715,6 @@ describe("thermo round-two regressions", () => {
       kv: fakeKv(),
       mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
       repo: () => config.repo,
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await core.deleteFile("/config/only.md");
@@ -675,7 +744,6 @@ describe("thermo round-three regressions", () => {
       kv: fakeKv(),
       mounts: async () => table,
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : vendorRepo.repo),
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     // Delete the FILE /repos/config/vendor from the outer repo...
@@ -708,7 +776,6 @@ describe("thermo round-three regressions", () => {
       kv: fakeKv(),
       mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
       repo: () => config.repo,
-      scratchRoot: SCRATCH_ROOT,
       workspace: failing,
     });
     await expect(core.deleteFile("/config/worker.ts")).rejects.toThrow(/injected local/);
@@ -729,7 +796,6 @@ describe("thermo round-four regressions", () => {
       kv: fakeKv(),
       mounts: async () => table,
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : vendorRepo.repo),
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await core.deleteFile("/repos/config/vendor");
@@ -747,7 +813,6 @@ describe("thermo round-four regressions", () => {
         "/repos/nested": { policy: "read-only", repoPath: "/repos/nested" },
       }),
       repo: () => nested.repo,
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await expect(core.writeFile("/repos", "not a file")).rejects.toThrow(/mount point/);
@@ -851,7 +916,6 @@ describe("post-merge follow-ups (Bugbot round)", () => {
         "/repos/config/a/b": { policy: "read-only", repoPath: "/repos/nested" },
       }),
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : nested.repo),
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     // "/repos/config/a" exists as a repo FILE in the outer mount but is also
@@ -881,7 +945,6 @@ describe("virtual directory coherence", () => {
         "/repos/config/a/b": { policy: "read-only", repoPath: "/repos/nested" },
       }),
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : nested.repo),
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     return { config, core, nested };

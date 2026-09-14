@@ -228,6 +228,7 @@ function makeRunner(args: {
   storage: DurableObjectStorage;
   hooks?: Hooks;
   recovery?: ProcessorRecovery;
+  reductionCache?: { shouldCacheReduction(state: State): boolean; initialState(): State };
 }) {
   const processor = new DurabilityProcessor({
     stream: args.journal.stream,
@@ -243,6 +244,7 @@ function makeRunner(args: {
       progress: durableObjectProgressStore<State>({
         storage: args.storage,
         name: SLUG,
+        reductionCache: args.reductionCache,
       }),
       ...(args.recovery === undefined ? {} : { recovery: args.recovery }),
     },
@@ -255,6 +257,26 @@ function makeRunner(args: {
 // =============================================================================
 
 describe("durableObjectProgressStore", () => {
+  it("clears related projections only after the stream replacement fence passes", () => {
+    const { storage } = makeStorage();
+    const resetForStream = vi.fn();
+    const store = durableObjectProgressStore<State>({ storage, name: SLUG, resetForStream });
+    store.commit(progressAt(20), { expectedCursorRevision: 0, expectedStreamId: undefined });
+    expect(() =>
+      store.replaceForStream!(progressAt(0, 1, RECREATED_STREAM_ID), {
+        expectedStreamId: "wrong",
+        expectedCursorRevision: 0,
+      }),
+    ).toThrow("stream replacement fenced");
+    expect(resetForStream).not.toHaveBeenCalled();
+    store.replaceForStream!(progressAt(0, 1, RECREATED_STREAM_ID), {
+      expectedStreamId: TEST_STREAM_ID,
+      expectedCursorRevision: 0,
+    });
+    expect(resetForStream).toHaveBeenCalledOnce();
+    expect(store.read()).toEqual(progressAt(0, 1, RECREATED_STREAM_ID));
+  });
+
   const progressKey = processorProgressKey(SLUG);
   const makeStore = () => {
     const { storage, map } = makeStorage();
@@ -334,6 +356,90 @@ describe("durableObjectProgressStore", () => {
       expectedStreamId: TEST_STREAM_ID,
     });
     expect(store.read()).toEqual(progressAt(4, 1));
+  });
+
+  it("drops an oversized fold cache but retains durable processing progress", () => {
+    const { storage, map } = makeStorage();
+    const store = durableObjectProgressStore<State>({
+      storage,
+      name: SLUG,
+      reductionCache: {
+        shouldCacheReduction: (state) =>
+          new TextEncoder().encode(JSON.stringify(state)).byteLength <= 512 * 1024,
+        initialState: () => ({ ids: [] }),
+      },
+    });
+    const large: ProcessorProgress<State> = {
+      streamId: TEST_STREAM_ID,
+      reduction: {
+        reducerVersion: VERSION,
+        reducedThroughOffset: 4,
+        state: { ids: ["x".repeat(600_000)] },
+      },
+      processing: { acknowledgedThroughOffset: 4, cursorRevision: 0 },
+    };
+    store.commit(large, { expectedCursorRevision: 0, expectedStreamId: undefined });
+
+    expect(store.read()).toEqual({
+      ...large,
+      reduction: { ...large.reduction, reducedThroughOffset: 0, state: { ids: [] } },
+    });
+    expect(map.get(progressKey)).toEqual(store.read());
+  });
+
+  it("cold-refolds an omitted cache without re-running effects, then restores a small cache", async () => {
+    const journal = makeJournal();
+    journal.seed({ type: REQUESTED, payload: { id: "x".repeat(600_000) } });
+    const { storage, map } = makeStorage();
+    const reductionCache = {
+      shouldCacheReduction: (state: State) =>
+        new TextEncoder().encode(JSON.stringify(state)).byteLength <= 512 * 1024,
+      initialState: (): State => ({ ids: [] }),
+    };
+    const firstEffects = vi.fn();
+    const first = makeRunner({
+      journal,
+      storage,
+      reductionCache,
+      hooks: { onProcess: () => firstEffects() },
+    });
+    const initial = await first.openEventBatchCallback();
+    await initial.processEventBatch({
+      streamId: TEST_STREAM_ID,
+      events: journal.rows,
+      scannedAfterOffset: initial.checkpointOffset,
+      scannedThroughOffset: 1,
+      streamMaxOffset: 1,
+    });
+    expect(firstEffects).toHaveBeenCalledOnce();
+    expect(
+      (map.get(processorProgressKey(SLUG)) as ProcessorProgress<State>).reduction,
+    ).toMatchObject({
+      reducedThroughOffset: 0,
+      state: { ids: [] },
+    });
+
+    const coldEffects = vi.fn();
+    const cold = makeRunner({
+      journal,
+      storage,
+      reductionCache,
+      hooks: { onProcess: () => coldEffects() },
+    });
+    const reopened = await cold.openEventBatchCallback();
+    expect(reopened.checkpointOffset).toBe(1);
+    expect(coldEffects).not.toHaveBeenCalled();
+    await expect(cold.snapshot()).resolves.toEqual({
+      offset: 1,
+      state: { ids: ["x".repeat(600_000)] },
+    });
+
+    const small = progressAt(1);
+    durableObjectProgressStore<State>({ storage, name: SLUG, reductionCache }).commit(small, {
+      expectedCursorRevision: 0,
+      expectedStreamId: TEST_STREAM_ID,
+    });
+    expect(map.get(processorProgressKey(SLUG))).toEqual(small);
   });
 });
 

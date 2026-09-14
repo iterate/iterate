@@ -304,7 +304,7 @@ function useComponentOptions(database: StreamBrowserDatabase) {
 function useEventTypeOptions(database: StreamBrowserDatabase) {
   const result = useStreamQuery(
     database,
-    `SELECT ${FEED_TYPE_EXPRESSION} AS event_type, SUM(event_count) AS total
+    `SELECT ${FEED_TYPE_EXPRESSION} AS event_type, COUNT(*) AS total
      FROM feed_items WHERE kind LIKE 'raw.%'
      GROUP BY event_type ORDER BY event_type`,
     [],

@@ -22,6 +22,7 @@
 
 import { z } from "zod";
 import { AgentRuntime } from "@iterate-com/shared/agent-events";
+import { MessageMentions, decodeMessageMentions } from "@iterate-com/shared/message";
 import {
   defineProcessorContract,
   type ConsumedInput,
@@ -31,15 +32,25 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { AgentBinding, AgentSummary, AgentSummaryUpdated } from "./agent-presence.ts";
 
+/** Normalized usage reported by an agent model invocation. */
+export type AgentLlmUsage = z.infer<ReturnType<typeof llmTokenUsageSchema>>;
+
+/** Successful model text and its optional provider evidence. Failures throw. */
+export type AgentLlmCompletion = { text: string; usage?: AgentLlmUsage; rawResponse?: unknown };
+
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "7.0.0",
+  version: "7.1.0",
   description:
     "Maintains model-visible history, schedules debounced offset-identified LLM turns, runs " +
     "them through the Workers AI transport, and executes scripts through the capability host. " +
     "Response interpretation is a config flag (interpretResponses) — off, project " +
     "code parses assistant output and appends the consequences itself.",
   stateSchema: z.object({
+    pendingInputConsequences: z.record(z.string(), z.number().int().positive()).default({}).meta({
+      description:
+        "Unresolved mention, slash-command, or script-result consequences, keyed by their expected result identity and carrying the original input offset. Removed when the processor reduces that result.",
+    }),
     birthCertificate: z
       .object({
         createdAtOffset: z
@@ -432,6 +443,11 @@ export const AgentProcessorContract = defineProcessorContract({
         "becomes offset order becomes document order. Without a key: one turn at its offset.",
       payloadSchema: agentContextItemSchema(),
     },
+    "events.iterate.com/agent/runtime-changed": {
+      description:
+        "The agent's committed runtime transition, used to finalize server-owned feed presentation.",
+      payloadSchema: agentRuntimeTransitionSchema(),
+    },
     "events.iterate.com/agents/context-rewritten": {
       description:
         "Deliberate HISTORY REWRITING — rare, audited, named to discourage casual use: it " +
@@ -756,6 +772,7 @@ export const AgentProcessorContract = defineProcessorContract({
     // platform revival fact, to find and re-run orphaned work after eviction.
   ],
   emits: [
+    "events.iterate.com/agent/runtime-changed",
     "events.iterate.com/agents/context-added",
     // Emitted by userland response interpreters through this vocabulary (the
     // platform components never emit it themselves today); listed so variant
@@ -805,7 +822,7 @@ export type AgentContextItem = AgentProcessorState["contextItems"][number];
 export type AgentFileAttachment = NonNullable<AgentContextAddedPayload["files"]>[number];
 
 /** Exact runtime plus the event which first established it in reduced state.
- * This is processor state exposed through live state, not a stream event. */
+ * Also journaled when it changes so the server feed can settle deterministically. */
 export const AgentRuntimeTransition = agentRuntimeTransitionSchema();
 export type AgentRuntimeTransition = z.infer<typeof AgentRuntimeTransition>;
 
@@ -813,6 +830,10 @@ export type AgentRuntimeTransition = z.infer<typeof AgentRuntimeTransition>;
  * behind `processor.snapshot()`; publishing context/history through live state
  * would duplicate the stream on every conversation update. */
 export const AgentLiveState = z.strictObject({
+  inputAcknowledgedThroughOffset: z.number().int().nonnegative().meta({
+    description:
+      "Inputs through this offset have committed processing and their immediate derived work is represented in this same runtime snapshot. Stops before unresolved mention or slash-command input.",
+  }),
   runtimeChange: AgentRuntimeTransition.optional(),
 });
 /** The transient runtime state pushed by one Agent durable object. */
@@ -835,6 +856,13 @@ function agentContextItemSchema() {
         .enum(["system", "developer", "user", "assistant"])
         .meta({ description: "The LLM message role this item renders as." }),
       content: z.string().meta({ description: "The model-visible text." }),
+      mentions: MessageMentions.optional().meta({
+        description: "Typed resources addressed by Markdown-like mention:// links in content.",
+      }),
+      mentionResolution: z.unknown().optional().meta({
+        description:
+          "Processor-authored, bounded resolution metadata for a prior message's mentions.",
+      }),
       key: z
         .string()
         .min(1)
@@ -880,6 +908,11 @@ function agentContextItemSchema() {
                 type: z.literal("git-commit"),
                 repoPath: z.string().meta({ description: "The repo's mount path." }),
                 commitOid: z.string().meta({ description: "The commit id." }),
+              }),
+              z.object({
+                type: z.literal("repo-file"),
+                repoPath: z.string().meta({ description: "The repo's mount path." }),
+                path: z.string().meta({ description: "The committed file path at latest HEAD." }),
               }),
             ])
             .meta({ description: "One coordinate for richer source material." }),
@@ -1003,6 +1036,16 @@ function agentContextItemSchema() {
         }),
     })
     .superRefine((payload, ctx) => {
+      if (
+        payload.mentions !== undefined &&
+        decodeMessageMentions(payload.content, payload.mentions) === null
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["mentions"],
+          message: "each mention must have a unique id and a matching inline mention:// link",
+        });
+      }
       if (payload.role !== "developer" || payload.compaction === undefined) return;
       if (payload.key !== undefined) {
         ctx.addIssue({

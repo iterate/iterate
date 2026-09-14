@@ -2,17 +2,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { getSyncedVersion, sendableUpdates } from "@codemirror/collab";
 import { EditorView } from "@codemirror/view";
+import { readOnlyExtension } from "@atomic-editor/editor";
+import { textEdits } from "./text-edits.ts";
 import { CollabConnection, peerExtension } from "./collab-client.ts";
-import { redlineExtension } from "./collab-redline.ts";
 import { remoteCursorsExtension } from "./collab-cursors.ts";
 import type { CollabEditorApi } from "./collab-editor-api.ts";
-import type { WorkspaceDocumentTransport } from "./types.ts";
+import type { WorkspaceTransport } from "./types.ts";
 
 /**
  * The ONE collaborative-editor state machine, shared by every surface that
  * hosts a live doc (the /collab page, the task sheet). Owns: connection
- * lifecycle, editor construction, the redline compartment (both layers share
- * `changes()`'s single baseline), and snapshot re-sync.
+ * lifecycle, editor construction, and snapshot re-sync.
  *
  * Snapshot recovery is HONEST: the acked prefix of local unconfirmed ops is
  * dropped exactly (the server tells us `ackedSeq`); if genuinely unacked
@@ -20,16 +20,17 @@ import type { WorkspaceDocumentTransport } from "./types.ts";
  * review — never silently merged into other people's text.
  */
 export function useCollabEditor(input: {
-  transport: WorkspaceDocumentTransport;
+  transport: WorkspaceTransport;
   displayName?: string;
   /** Host-facing document identifier used in callbacks and CollabEditorApi. */
   path: string;
-  /** Path sent to the workspace collab lane. Defaults to `path`. */
+  /** Path sent to the workspace collaboration session. Defaults to `path`. */
   workspacePath?: string;
   /** Extra extensions for the surface (keymaps, theme, listeners). */
   extensions: Extension;
-  /** Redline layers on at build time (kept in sync with toggle()). */
-  redline: boolean;
+  /** The in-place document presentation. Reconfigured without remounting the
+   * collab session, history, selection, or remote cursor state. */
+  presentation?: Extension;
   /** Place the caret on mount: select the `# headline` text (so typing
    * replaces it — the new-task flow), park at its end, or restore a body
    * offset (post-rename remount while the user typed in the body). */
@@ -48,11 +49,8 @@ export function useCollabEditor(input: {
   const host = useRef<HTMLDivElement | null>(null);
   const [status, setStatusState] = useState("connecting…");
   const [recovery, setRecovery] = useState<string | null>(null);
-  const redlineRef = useRef(input.redline);
-  const toggleRef = useRef<((on: boolean) => void) | null>(null);
-  // Same ref discipline as redline: the session effect must NOT depend on
-  // the callback's identity (an unstable prop would remount the editor),
-  // but the adapter must still call the LATEST one.
+  const presentationRef = useRef<Extension>(input.presentation ?? []);
+  const presentationToggleRef = useRef<((extension: Extension) => void) | null>(null);
   const onPeersRef = useRef(input.onPeers);
   const {
     transport,
@@ -67,12 +65,13 @@ export function useCollabEditor(input: {
   } = input;
   // Ref writes never happen during render — React may replay render work.
   useEffect(() => {
-    redlineRef.current = input.redline;
-    toggleRef.current?.(input.redline);
-  }, [input.redline]);
-  useEffect(() => {
     onPeersRef.current = input.onPeers;
   }, [input.onPeers]);
+  useEffect(() => {
+    const presentation = input.presentation ?? [];
+    presentationRef.current = presentation;
+    presentationToggleRef.current?.(presentation);
+  }, [input.presentation]);
   const setStatus = useCallback(
     (next: string) => {
       setStatusState(next);
@@ -88,7 +87,6 @@ export function useCollabEditor(input: {
     // while the new session is still seeding.
     setStatus("connecting…");
     const connection = new CollabConnection(transport, workspacePath, displayName);
-    connection.onStatus = setStatus;
     connection.onPeers = (clients) => {
       // Empty delivery = a dead session (the client fires [] on ended):
       // clear the strip rather than re-injecting a self that is not live.
@@ -102,13 +100,10 @@ export function useCollabEditor(input: {
             },
       );
     };
-    const redlineLayer = new Compartment();
+    const presentationLayer = new Compartment();
+    const editableLayer = new Compartment();
     let view: EditorView | null = null;
     let cancelled = false;
-
-    // Redlines are the attribution layer only: added-text highlights,
-    // deletion markers, who/when tooltips. No merge chunks, no accept/reject.
-    const redlines = (on: boolean): Extension => (on ? redlineExtension(connection) : []);
 
     let reflectTimer: ReturnType<typeof setTimeout> | null = null;
     const liveReflector =
@@ -121,29 +116,35 @@ export function useCollabEditor(input: {
             reflectTimer = setTimeout(() => onLiveContent(path, update.state.doc.toString()), 200);
           });
 
-    const buildState = (content: string, version: number, redlines: Extension) =>
+    const buildState = (content: string, version: number) =>
       EditorState.create({
         doc: content,
         extensions: [
           extensions,
           liveReflector,
           peerExtension(connection, version),
-          // Cursors are presence, not tracking — they stay on when the
-          // redline toggle is off.
           remoteCursorsExtension(connection),
-          redlineLayer.of(redlines),
+          presentationLayer.of(presentationRef.current),
+          editableLayer.of(readOnlyExtension(connection.dead)),
         ],
       });
 
-    toggleRef.current = (on: boolean) => {
-      view?.dispatch({ effects: redlineLayer.reconfigure(redlines(on)) });
+    presentationToggleRef.current = (presentation: Extension) => {
+      view?.dispatch({ effects: presentationLayer.reconfigure(presentation) });
+    };
+
+    connection.onStatus = (next) => {
+      view?.dispatch({ effects: editableLayer.reconfigure(readOnlyExtension(connection.dead)) });
+      setStatus(next);
     };
 
     connection.onReseed = (snapshot, unsynced) => {
       if (cancelled || view === null) return;
       connection.reseed(snapshot);
       // Layers ride the rebuilt state atomically — no undecorated frame.
-      view.setState(buildState(snapshot.content, snapshot.version, redlines(redlineRef.current)));
+      view.setState(buildState(snapshot.content, snapshot.version));
+      if (reflectTimer) clearTimeout(reflectTimer);
+      onLiveContent?.(path, snapshot.content);
       // Unacked local edits cannot be positionally rebased without the
       // server history that is gone — surface them, never guess a merge.
       setRecovery(unsynced);
@@ -157,33 +158,23 @@ export function useCollabEditor(input: {
         onLiveContent?.(path, opened.content);
         view = new EditorView({
           parent: host.current,
-          state: buildState(opened.content, opened.version, redlines(redlineRef.current)),
+          state: buildState(opened.content, opened.version),
         });
         if (apiRef !== undefined) {
           const live = view;
           apiRef.current = {
             applyTransform: (transform) => {
+              if (connection.dead) throw new Error("Reconnect before editing this document.");
               const current = live.state.doc.toString();
               const next = transform(current);
-              if (next === current) return;
-              // Minimal splice: only the changed region moves, so concurrent
-              // edits elsewhere survive and attribution stays honest.
-              let start = 0;
-              const maxStart = Math.min(current.length, next.length);
-              while (start < maxStart && current[start] === next[start]) start++;
-              let endCurrent = current.length;
-              let endNext = next.length;
-              while (
-                endCurrent > start &&
-                endNext > start &&
-                current[endCurrent - 1] === next[endNext - 1]
-              ) {
-                endCurrent--;
-                endNext--;
-              }
               live.dispatch({
-                changes: { from: start, insert: next.slice(start, endNext), to: endCurrent },
+                changes: textEdits(current, next),
+                filter: false,
+                userEvent: "transform",
               });
+              // Explicit actions update their controls immediately, unlike continuous typing.
+              if (reflectTimer) clearTimeout(reflectTimer);
+              onLiveContent?.(path, live.state.doc.toString());
             },
             flushPending: async () => {
               const pending = sendableUpdates(live.state);
@@ -235,7 +226,7 @@ export function useCollabEditor(input: {
           onLiveContent(path, view.state.doc.toString());
         }
       }
-      toggleRef.current = null;
+      presentationToggleRef.current = null;
       if (apiRef !== undefined) apiRef.current = null;
       view?.destroy();
     };
@@ -258,6 +249,5 @@ export function useCollabEditor(input: {
      * user to review/copy — null when recovery is clean. */
     recovery,
     status,
-    toggle: (on: boolean) => toggleRef.current?.(on),
   };
 }

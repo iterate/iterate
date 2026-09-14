@@ -11,7 +11,7 @@ import { AGENT_COLLECTION_PATH } from "./agents/agent-collection-processor-contr
 import { EMAIL_INTEGRATION_STREAM_PATH } from "./email/utils.ts";
 import { WORKSPACE_PATH_PREFIX } from "./workspaces/utils.ts";
 
-/** One arm of the facet composition — the processor family a stream path hosts. */
+/** One arm of the facet composition — the primary processor family a stream path hosts. */
 type FacetProcessorFamily =
   | "project-root"
   | "agent-collection"
@@ -25,7 +25,8 @@ type FacetProcessorFamily =
   | "repo";
 
 /**
- * Which processor family the facet composition registers at a stream path.
+ * Which primary processor family the facet composition registers at a stream path.
+ * Agent streams also register the workspace processor.
  * Repos are the ELSE arm, not a "/repos/" family: repos.get accepts any path
  * (the examples create repos under /examples/**), exactly as the retired Repo
  * Durable Object existed at every {projectId, path}. Only paths claimed by

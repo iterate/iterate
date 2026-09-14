@@ -9,7 +9,7 @@
     "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "zod": "4.3.6"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250620.0",

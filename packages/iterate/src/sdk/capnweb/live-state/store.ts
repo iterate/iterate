@@ -1,4 +1,5 @@
 import { applyPatch } from "./diff.ts";
+import { applyCompactPatch } from "./compact.ts";
 import type { LiveUpdate } from "./protocol.ts";
 
 /**
@@ -35,13 +36,21 @@ export function createLiveStateStore<State>(): LiveStateStore<State> {
       notify();
     },
     apply: (update: LiveUpdate<State>, resync: () => void) => {
-      if (update.type === "snapshot") {
+      if ("s" in update) {
+        held = { revision: update.s[0], state: update.s[1] };
+      } else if ("p" in update) {
+        if (update.p[0] !== held.revision) {
+          resync();
+          return;
+        }
+        held = { revision: update.p[1], state: applyCompactPatch(held.state, update.p[2]) };
+      } else if (update.type === "snapshot") {
         held = { revision: update.revision, state: update.state };
       } else if (update.from !== held.revision) {
         resync();
         return;
       } else {
-        held = { revision: update.to, state: applyPatch(held.state as State, update.patch) };
+        held = { revision: update.to, state: applyPatch(held.state, update.patch) };
       }
       notify();
     },

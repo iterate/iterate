@@ -26,6 +26,36 @@ const CLAIMS = {
   userId: "usr_1",
 };
 
+describe("localProjectAppSessionValidator", () => {
+  it("carries the display identity claims alongside the actor", async () => {
+    const validate = localProjectAppSessionValidator(SECRET);
+    const token = await sign({ ...CLAIMS, email: "one@example.com", name: "One" });
+    expect(
+      await validate({ audience: CLAIMS.audience, projectId: "prj_one", token }),
+    ).toMatchObject({
+      email: "one@example.com",
+      name: "One",
+      userId: "usr_1",
+    });
+  });
+
+  it("reports the sign-in a token descends from, or its issue time for a pre-rollout token", async () => {
+    const validate = localProjectAppSessionValidator(SECRET);
+    const renewed = await sign({ ...CLAIMS, loginAt: 1_700_000_000 });
+    expect(
+      (await validate({ audience: CLAIMS.audience, projectId: "prj_one", token: renewed }))
+        ?.loginAt,
+    ).toBe(1_700_000_000);
+    const before = Math.floor(Date.now() / 1000);
+    const legacy = await validate({
+      audience: CLAIMS.audience,
+      projectId: "prj_one",
+      token: await sign(CLAIMS),
+    });
+    expect(legacy?.loginAt).toBeGreaterThanOrEqual(before);
+  });
+});
+
 describe("verifyProjectAppSessionToken", () => {
   it("answers the claims for a well-signed unexpired token", async () => {
     const token = await sign(CLAIMS);

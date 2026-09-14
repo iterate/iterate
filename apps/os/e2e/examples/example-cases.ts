@@ -237,13 +237,15 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     assert: (result, _ctx, expect) => {
       const shaped = result as {
         tickOffset: number;
+        doneOffset: number;
         defaultOffsets: number[];
         rawOffsets: number[];
       };
-      // Consecutive offsets; the ephemeral tick is excluded from the default
-      // read and present (flagged position first) in the raw read.
-      expect(shaped.defaultOffsets).toEqual([shaped.tickOffset + 1]);
-      expect(shaped.rawOffsets).toEqual([shaped.tickOffset, shaped.tickOffset + 1]);
+      // Feed and connection writers may append between the two example events.
+      // The bounded reads still exclude the tick by default and retain it in raw.
+      expect(shaped.doneOffset).toBeGreaterThan(shaped.tickOffset);
+      expect(shaped.defaultOffsets).toEqual([shaped.doneOffset]);
+      expect(shaped.rawOffsets).toEqual([shaped.tickOffset, shaped.doneOffset]);
     },
   },
   "run-script": {

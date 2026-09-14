@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { appendText } from "@iterate-com/shared/chunked-text";
 import type { StreamEvent } from "iterate/sdk/itx/react";
 import {
   groupActivityRounds,
@@ -58,7 +59,15 @@ test("streaming response text lands on the live activity while working", () => {
   ]);
   expect(feed).toMatchObject({
     working: true,
-    live: { steps: [{ kind: "llm", status: "running", responseText: "const x = 1" }] },
+    live: {
+      steps: [
+        {
+          kind: "llm",
+          status: "running",
+          responseText: appendText(appendText("", "const x"), " = 1"),
+        },
+      ],
+    },
   });
   // The live activity is renderable as the last feed item.
   expect(feed.items.at(-1)).toBe(feed.live);

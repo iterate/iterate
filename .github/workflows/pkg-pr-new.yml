@@ -7,6 +7,7 @@
 #   https://pkg.pr.new/iterate/iterate/iterate@<sha>           (specific commit)
 #   https://pkg.pr.new/iterate/iterate/iterate@<pr>            (latest build of a PR)
 #   https://pkg.pr.new/iterate/iterate/@iterate-com/docs@main  (Docs config connector)
+#   https://pkg.pr.new/iterate/iterate/@iterate-com/voice-agent@main  (the voice agent guest worker)
 #
 # The seeded project-repo-template depends on the iterate @main URL — that's how
 # customer repos get `iterate/sdk` types without a manual npm release.
@@ -43,10 +44,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: pnpm install --frozen-lockfile --filter iterate-root --filter iterate... --filter @iterate-com/docs...
+      - run: pnpm install --frozen-lockfile --filter iterate-root --filter iterate... --filter @iterate-com/docs... --filter @iterate-com/voice-agent...
       - run: pnpm --dir packages/iterate build
       - run: pnpm --dir apps/docs build:package
+      - run: pnpm --dir packages/voice-agent build
       # --pnpm: pack with `pnpm pack` so publishConfig.exports (dist remap)
       # is applied — `npm pack` would ship the dev exports pointing at src/.
       # pkg.pr.new requires every monorepo package in one invocation.
-      - run: pnpm exec pkg-pr-new publish --pnpm ./packages/iterate ./apps/docs
+      - run: pnpm exec pkg-pr-new publish --pnpm ./packages/iterate ./apps/docs ./packages/voice-agent

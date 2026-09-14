@@ -20,8 +20,8 @@ Design decisions were grilled and approved 2026-09-01; see `tasks/create-flake.m
 
 ## Post-merge ops
 
-- [ ] Add `FLAKE_REPORT_BASE_URL`, `FLAKE_REPORT_PROJECT_SLUG`, `FLAKE_REPORT_PROJECT_API_KEY` to the `_shared/prd` Doppler config (project API key: dashboard → `/secrets` → `project-api-key` → Reveal on the target prd project)
-- [ ] Deploy the updated default config to the target project (confirm prd accepts the `flakes/*` event types — config templates run against deployed schemas)
+- [x] ~~Add `FLAKE_REPORT_*` secrets to `_shared/prd` Doppler~~ _(done 2026-09-02, then superseded the same day: `tasks/flake-webhook-ingestion.md` replaces the push lane with webhook-pull ingestion, so these secrets should be UNSET once that merges — and consider rotating the project API key, a fragment of which echoed into a local session transcript during setup)_
+- [x] Mount the app on the live iterate project _(done 2026-09-02: three `itx.repo.edit` commits to the project's config repo worker.ts)_
 - [ ] Confirm first dashboard render on a real CI run (sentinel should appear with a ~10% flake rate as data accumulates)
 
 ## Follow-ups

@@ -392,7 +392,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
       "    \"react\": \"19.2.4\",\n" +
       "    \"react-dom\": \"19.2.4\",\n" +
-      "    \"zod\": \"4.3.6\"\n" +
+      "    \"zod\": \"4.5.4\"\n" +
       "  },\n" +
       "  \"devDependencies\": {\n" +
       "    \"@cloudflare/workers-types\": \"^4.20250620.0\",\n" +
@@ -477,8 +477,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "- Two write doors, one rule: `await itx.repo.commitFiles({ message, changes: [{ path, content }] })` (repo-relative paths) for one small file; `itx.workspace` (workspace paths: \"/repos/config/worker.ts\") to read and change several files, shipped as ONE commit. ALWAYS read a file before editing it.\n" +
       "- In practice: \"update our homepage\" = edit worker.ts's default fetch handler and commit. \"Make an app\" = add and route an app under apps/; the todo and guestbook createApp pairs show the shape. \"When X happens, do Y\" = add a processEvent reaction. \"Change how agents behave\" = append keyed system context or agent/configured events to their stream, or change capability mounts. Each worker getter becomes an `itx.worker.<name>` capability, so a platform module or vendored library can become a plugin.\n" +
       "- \"Use the <name> skill\" = read and follow \"/repos/config/.agents/skills/<name>/SKILL.md\" (list them: `await itx.workspace.glob(\"/repos/config/.agents/skills/*/SKILL.md\")`).\n" +
-      "- DOCS REVIEW APP: share any existing workspace Markdown/HTML file with `const url = await itx.worker.docs.link({ workspace: \"/workspaces/agents/you\", path: \"review.md\" }); await itx.chat.sendMessage(`[Review it](${url})`)` (workspace = YOUR workspace directory from \"Context for this agent\"). Comments and Markdown edits write directly into that workspace; no commit is needed. This is not `itx.docs`, which searches API documentation.\n" +
-      "- TASKS BOARD VIEW: the same app shows your task files as a live board — `await itx.worker.docs.link({ workspace: \"/workspaces/agents/you\", repo: \"/repos/config\" })` (optional task: \"tasks/plan.md\" opens one card). Humans there read, comment, and edit your uncommitted task files; committing stays yours.\n" +
+      "- DOCS REVIEW APP: share any existing workspace Markdown/HTML file with `const url = await itx.worker.docs.link({ workspace: \"/agents/you\", path: \"review.md\" }); await itx.chat.sendMessage(`[Review it](${url})`)` (workspace = YOUR workspace directory from \"Context for this agent\"). Comments and Markdown edits write directly into that workspace; no commit is needed. This is not `itx.docs`, which searches API documentation.\n" +
+      "- TASKS BOARD VIEW: the same app shows your task files as a live board — `await itx.worker.docs.link({ workspace: \"/agents/you\", repo: \"/repos/config\" })` (optional task: \"tasks/plan.md\" opens one card). Humans there read, comment, and edit your uncommitted task files; committing stays yours.\n" +
       "</section>\n" +
       "\n" +
       "<section key=\"find-working-code\">\n" +
@@ -937,6 +937,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
       "import { parsePromptSections } from \"iterate/processors\";\n" +
       "import { TodoApp } from \"iterate/starter-apps/todo\";\n" +
+      "import { z } from \"zod\";\n" +
       "\n" +
       "const githubAiLinterRulePaths = [\n" +
       "  \"rules/structure/no-lame-helpers.md\",\n" +
@@ -958,6 +959,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// Hence, the essence of an iterate project can be expressed as two functions:\n" +
       "// { fetch, processEvent }\n" +
       "\n" +
+      "const BrowserCapabilityProvidedPayload = z.object({\n" +
+      "  path: z.tuple([z.literal(\"capabilities\")]),\n" +
+      "  type: z.literal(\"live\"),\n" +
+      "});\n" +
+      "\n" +
       "export default class ProjectWorker extends IterateWorkerEntrypoint {\n" +
       "  #aiLintApp = GithubAiLinter.create(this.env, {\n" +
       "    policyVersion: \"5\",\n" +
@@ -966,8 +972,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      repoPath: \"/repos/config\",\n" +
       "    },\n" +
       "  });\n" +
-      "  /** /flakes -> GitHub \"Flake dashboard\" issue. Inert if /flakes stream never receives events. */\n" +
-      "  #flakeDashboardApp = FlakeDashboardApp.create(this.env);\n" +
+      "  /** /flakes -> GitHub \"Flake dashboard\" issue. Inert if /flakes stream never receives events.\n" +
+      "   * `depot` is THIS project's CI artifact store — edit per project (or drop\n" +
+      "   * it to disable check_run ingestion). */\n" +
+      "  #flakeDashboardApp = FlakeDashboardApp.create(this.env, {\n" +
+      "    depot: { orgId: \"0p91s0lz49\", secretPath: \"/secrets/depot-ci-token\" },\n" +
+      "  });\n" +
       "  #docsApp = DocsApp.create(this.env, {\n" +
       "    auth: { policy: \"project-member\" },\n" +
       "    proxy: {\n" +
@@ -1159,8 +1169,58 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    );\n" +
       "  }\n" +
       "\n" +
-      "  // The base class delivers committed events on ANY stream here at least once and in\n" +
-      "  // per-stream order.\n" +
+      "  /** Navigate a browser client once the supplied live browser mount is ready. */\n" +
+      "  async #navigateOnboardingClient(clientPath: string): Promise<void> {\n" +
+      "    const onboardingAgent = this.itx.agents.get(\"/agents/onboarding\");\n" +
+      "    const [instructions, delivered] = await Promise.all([\n" +
+      "      onboardingAgent.stream.getEvent({\n" +
+      "        idempotencyKey: \"iterate/config/onboarding-instructions:v1\",\n" +
+      "      }),\n" +
+      "      onboardingAgent.stream.getEvent({\n" +
+      "        idempotencyKey: \"iterate/config/onboarding-navigation-delivered:v1\",\n" +
+      "      }),\n" +
+      "    ]);\n" +
+      "    if (!instructions || delivered) return;\n" +
+      "\n" +
+      "    const { slug } = await this.itx.identity();\n" +
+      "    const projectHomePath = `/projects/${slug}`;\n" +
+      "    const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;\n" +
+      "    const browserClient = this.itx.clients.get(clientPath);\n" +
+      "    const description = await browserClient.__describe();\n" +
+      "    if (\n" +
+      "      !description.capabilities.some(\n" +
+      "        (capability) =>\n" +
+      "          capability.scope === clientPath &&\n" +
+      "          capability.type === \"live\" &&\n" +
+      "          capability.path.length === 1 &&\n" +
+      "          capability.path[0] === \"capabilities\",\n" +
+      "      )\n" +
+      "    )\n" +
+      "      return;\n" +
+      "    const currentUrl = await browserClient.invokeCapability({\n" +
+      "      path: [\"capabilities\", \"browser\", \"url\"],\n" +
+      "    });\n" +
+      "    if (typeof currentUrl !== \"string\") return;\n" +
+      "    const currentPath = new URL(currentUrl).pathname.replace(/\\/$/, \"\");\n" +
+      "    if (currentPath !== onboardingUrl) {\n" +
+      "      if (currentPath !== projectHomePath) return;\n" +
+      "      await browserClient.invokeCapability({\n" +
+      "        path: [\"capabilities\", \"browser\", \"navigate\"],\n" +
+      "        args: [onboardingUrl],\n" +
+      "      });\n" +
+      "    }\n" +
+      "    await onboardingAgent.append({\n" +
+      "      type: \"events.iterate.com/agents/context-added\",\n" +
+      "      idempotencyKey: \"iterate/config/onboarding-navigation-delivered:v1\",\n" +
+      "      payload: {\n" +
+      "        role: \"developer\",\n" +
+      "        key: \"config/onboarding-navigation\",\n" +
+      "        content: \"The initial onboarding browser navigation was delivered.\",\n" +
+      "        llmRequestPolicy: { behaviour: \"dont-trigger-request\" },\n" +
+      "      },\n" +
+      "    });\n" +
+      "  }\n" +
+      "\n" +
       "  protected override async processEvent(event: StreamEvent): Promise<void> {\n" +
       "    switch (event.type) {\n" +
       "      case \"events.iterate.com/project/created\": {\n" +
@@ -1196,32 +1256,27 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          },\n" +
       "        );\n" +
       "\n" +
-      "        const [{ slug }, clients] = await Promise.all([\n" +
-      "          this.itx.identity(),\n" +
-      "          this.itx.clients.list(),\n" +
-      "        ]);\n" +
-      "        const projectHomePath = `/projects/${slug}`;\n" +
-      "        const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;\n" +
+      "        const clients = await this.itx.clients.list();\n" +
       "        await Promise.all(\n" +
       "          clients\n" +
       "            .filter((client) => client.connected && client.path.startsWith(\"/clients/os-app/\"))\n" +
-      "            .map(async (client) => {\n" +
-      "              const browserClient = this.itx.clients.get(client.path);\n" +
-      "              const currentUrl = await browserClient.invokeCapability({\n" +
-      "                path: [\"capabilities\", \"browser\", \"url\"],\n" +
-      "              });\n" +
-      "              if (\n" +
-      "                typeof currentUrl !== \"string\" ||\n" +
-      "                new URL(currentUrl).pathname.replace(/\\/$/, \"\") !== projectHomePath\n" +
-      "              ) {\n" +
-      "                return;\n" +
-      "              }\n" +
-      "              await browserClient.invokeCapability({\n" +
-      "                path: [\"capabilities\", \"browser\", \"navigate\"],\n" +
-      "                args: [onboardingUrl],\n" +
-      "              });\n" +
-      "            }),\n" +
+      "            .map(async (client) => await this.#navigateOnboardingClient(client.path)),\n" +
       "        );\n" +
+      "        break;\n" +
+      "      }\n" +
+      "      case \"events.iterate.com/capability-host/capability-provided\": {\n" +
+      "        const copiedFrom = event.source?.copiedFrom?.at(-1);\n" +
+      "        const payload = BrowserCapabilityProvidedPayload.safeParse(event.payload);\n" +
+      "        if (\n" +
+      "          event.path !== \"/\" ||\n" +
+      "          !copiedFrom?.path.startsWith(\"/clients/os-app/\") ||\n" +
+      "          !payload.success\n" +
+      "        )\n" +
+      "          break;\n" +
+      "        await this.itx.clients\n" +
+      "          .get(copiedFrom.path)\n" +
+      "          .processor.waitUntilProcessed({ offset: copiedFrom.offset });\n" +
+      "        await this.#navigateOnboardingClient(copiedFrom.path);\n" +
       "        break;\n" +
       "      }\n" +
       "      case \"events.iterate.com/agent/created\": {\n" +
@@ -1276,11 +1331,27 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        break;\n" +
       "    }\n" +
       "\n" +
-      "    await this.#aiLintApp.processEvent(event);\n" +
-      "    await this.#flakeDashboardApp.processEvent(event);\n" +
-      "    await this.#guestbookApp.processEvent(event);\n" +
-      "    await this.#mediaApp.processEvent(event);\n" +
-      "    await this.#notesApp.processEvent(event);\n" +
+      "    // Every app sees every event even when a sibling throws — one app must\n" +
+      "    // not starve the others within a delivery. Rejections are NOT swallowed:\n" +
+      "    // rethrowing after allSettled keeps the platform's at-least-once\n" +
+      "    // redelivery for the failing app (apps are idempotent), where a\n" +
+      "    // log-and-continue would silently lose its retry.\n" +
+      "    const results = await Promise.allSettled([\n" +
+      "      this.#aiLintApp.processEvent(event),\n" +
+      "      this.#flakeDashboardApp.processEvent(event),\n" +
+      "      this.#guestbookApp.processEvent(event),\n" +
+      "      this.#mediaApp.processEvent(event),\n" +
+      "      this.#notesApp.processEvent(event),\n" +
+      "    ]);\n" +
+      "    const failures = results.flatMap((result) =>\n" +
+      "      result.status === \"rejected\" ? [result.reason] : [],\n" +
+      "    );\n" +
+      "    if (failures.length > 0) {\n" +
+      "      throw new AggregateError(\n" +
+      "        failures,\n" +
+      "        `${failures.length} app(s) failed to process ${event.type}`,\n" +
+      "      );\n" +
+      "    }\n" +
       "  }\n" +
       "\n" +
       "  async fetch(req: Request): Promise<Response> {\n" +

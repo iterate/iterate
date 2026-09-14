@@ -13,39 +13,147 @@
 // (same shape as guarantees-not-given.test.ts) with a scripted facet.
 
 import { DatabaseSync } from "node:sqlite";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
+import type { LiveStateRead } from "iterate/sdk/capnweb";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { StreamDurableObject } from "./stream-durable-object.ts";
 
-test("a failed facet alarm replay rejects the alarm invocation and re-merges the bounded retry desire", async () => {
+test.each([false, true])(
+  "a watched facet releases its RPC reads without dropping watchers (dispose throws: %s)",
+  async (disposeThrows) => {
+    const harness = await bootStreamWithAgentFacet();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const disposalError = new Error("native read disposal failed");
+    const close = vi.fn();
+    let reads = 0;
+    let releases = 0;
+    harness.facet.stub.readLiveState = async () => {
+      reads += 1;
+      return {
+        epoch: "watched-facet",
+        update:
+          reads === 1 ? { type: "snapshot", revision: 0, state: { status: "running" } } : null,
+        [Symbol.dispose]: () => {
+          releases += 1;
+          if (disposeThrows) throw disposalError;
+        },
+      };
+    };
+    const socket = {
+      deserializeAttachment: () => 2,
+      send: () => {},
+      close,
+    } as unknown as WebSocket;
+    harness.context.ctx.getWebSockets = (tag) =>
+      !tag || tag === "live-state-pager:agent" ? [socket] : [];
+    harness.context.ctx.getTags = () => ["live-state-pager:agent"];
+    try {
+      new StreamDurableObject(harness.context.ctx, fakeEnv());
+      await harness.context.waitForInitialization();
+      await harness.context.settle();
+      expect(reads).toBeGreaterThan(0);
+      expect(releases).toBe(reads);
+      expect(close).not.toHaveBeenCalled();
+      if (disposeThrows) {
+        expect(warn).toHaveBeenCalledWith(
+          "stream internal RPC result dispose failed after acknowledgement",
+          { operation: "facet-live-state", error: disposalError },
+        );
+      } else {
+        expect(warn).not.toHaveBeenCalled();
+      }
+    } finally {
+      warn.mockRestore();
+      harness.context.close();
+    }
+  },
+);
+
+test("a nameless alarm wake recovers the stream address from its committed birth", async () => {
   const harness = await bootStreamWithAgentFacet();
-  harness.facet.handleAlarmError = new Error("Durable Object reset because its code was updated");
-
-  const before = Date.now();
-  harness.stream.proxySetAlarm(before - 1);
-
-  // The replay failure must reject the WHOLE alarm invocation — a resolved
-  // alarm is a consumed alarm, and the platform only re-owes the fire when
-  // the handler fails.
-  await expect(harness.stream.alarm()).rejects.toThrow(
-    /facet alarm replay failed for agent; failing the alarm invocation keeps the platform's alarm retry owed/,
-  );
-  expect(harness.facet.handleAlarmCalls).toBe(1);
-
-  // The bounded self-retry stays armed too (the fast path when the write
-  // survives): the shared facet slot holds a future desire and the native
-  // alarm was re-armed for it.
-  const merged = harness.stream.proxyGetAlarm();
-  expect(merged).not.toBeNull();
-  expect(merged!).toBeGreaterThan(before);
-  // toContain, not at(-1): the halted wake delivery's own retry may arm a
-  // nearer alarm after the merge; the merged desire's native write is what
-  // matters.
-  expect(harness.context.alarms).toContain(merged);
-
+  Object.defineProperty(harness.context.ctx, "id", { value: { name: undefined } });
+  const rebooted = new StreamDurableObject(harness.context.ctx, fakeEnv());
+  await harness.context.waitForInitialization();
+  expect(rebooted.name).toMatchObject({ projectId: PROJECT_ID, path: AGENT_PATH });
+  rebooted.proxySetAlarm(Date.now() - 1);
+  await expect(rebooted.alarm()).resolves.toBeUndefined();
   await harness.context.settle();
   harness.context.close();
+});
+
+test("a failed facet alarm replay rejects the alarm invocation and re-merges the bounded retry desire", async () => {
+  const harness = await bootStreamWithAgentFacet();
+  const failure = new Error("facet alarm failed");
+  const info = vi.spyOn(console, "info").mockImplementation(() => {});
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  harness.facet.handleAlarmError = failure;
+
+  try {
+    const before = Date.now();
+    harness.stream.proxySetAlarm(before - 1);
+
+    // The replay failure must reject the WHOLE alarm invocation — a resolved
+    // alarm is a consumed alarm, and the platform only re-owes the fire when
+    // the handler fails.
+    await expect(harness.stream.alarm()).rejects.toThrow(
+      /facet alarm replay failed for agent; failing the alarm invocation keeps the platform's alarm retry owed/,
+    );
+    expect(harness.facet.handleAlarmCalls).toBe(1);
+    expect(info).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith("facet alarm replay failed; re-arming a bounded retry", {
+      facet: "agent",
+      failures: 1,
+      error: failure,
+    });
+
+    // The bounded self-retry stays armed too (the fast path when the write
+    // survives): the shared facet slot holds a future desire and the native
+    // alarm was re-armed for it.
+    const merged = harness.stream.proxyGetAlarm();
+    expect(merged).not.toBeNull();
+    expect(merged!).toBeGreaterThan(before);
+    // toContain, not at(-1): the halted wake delivery's own retry may arm a
+    // nearer alarm after the merge; the merged desire's native write is what
+    // matters.
+    expect(harness.context.alarms).toContain(merged);
+  } finally {
+    info.mockRestore();
+    error.mockRestore();
+    await harness.context.settle();
+    harness.context.close();
+  }
+});
+
+test("an availability replay failure is informational and still re-arms the bounded retry", async () => {
+  const harness = await bootStreamWithAgentFacet();
+  const reset = Object.assign(new Error("Durable Object reset because its code was updated"), {
+    durableObjectReset: true,
+    retryable: true,
+  });
+  const info = vi.spyOn(console, "info").mockImplementation(() => {});
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  harness.facet.handleAlarmError = reset;
+
+  try {
+    const before = Date.now();
+    harness.stream.proxySetAlarm(before - 1);
+
+    await expect(harness.stream.alarm()).rejects.toThrow(/facet alarm replay failed for agent/);
+    expect(info).toHaveBeenCalledWith("facet alarm replay unavailable; re-arming a bounded retry", {
+      facet: "agent",
+      failures: 1,
+      error: reset,
+      outcome: "unavailable",
+    });
+    expect(error).not.toHaveBeenCalled();
+    expect(harness.stream.proxyGetAlarm()).toBeGreaterThan(before);
+  } finally {
+    info.mockRestore();
+    error.mockRestore();
+    await harness.context.settle();
+    harness.context.close();
+  }
 });
 
 test("a successful facet alarm replay resolves the alarm and leaves the facet slot clear", async () => {
@@ -124,6 +232,8 @@ async function bootStreamWithAgentFacet() {
     handleAlarmCalls: 0,
     stub: {
       configure: () => Promise.resolve(),
+      readLiveState: (): Promise<LiveStateRead<Record<string, unknown>> & Partial<Disposable>> =>
+        Promise.resolve({ epoch: "unused", update: null }),
       handleAlarm: () => {
         facet.handleAlarmCalls += 1;
         return facet.handleAlarmError === undefined

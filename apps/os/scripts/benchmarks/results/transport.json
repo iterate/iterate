@@ -1,0 +1,59 @@
+[
+  {
+    "size": 65536,
+    "chunkSize": 1024,
+    "durationMs": 4.380291,
+    "links": [
+      {
+        "bytes": 108763,
+        "frames": 64
+      },
+      {
+        "bytes": 108763,
+        "frames": 64
+      },
+      {
+        "bytes": 108763,
+        "frames": 64
+      }
+    ]
+  },
+  {
+    "size": 1048576,
+    "chunkSize": 1024,
+    "durationMs": 77.24433299999998,
+    "links": [
+      {
+        "bytes": 1380148,
+        "frames": 1024
+      },
+      {
+        "bytes": 1380148,
+        "frames": 1024
+      },
+      {
+        "bytes": 1380148,
+        "frames": 1024
+      }
+    ]
+  },
+  {
+    "size": 4194304,
+    "chunkSize": 1024,
+    "durationMs": 379.499542,
+    "links": [
+      {
+        "bytes": 5465748,
+        "frames": 4096
+      },
+      {
+        "bytes": 5465748,
+        "frames": 4096
+      },
+      {
+        "bytes": 5465748,
+        "frames": 4096
+      }
+    ]
+  }
+]

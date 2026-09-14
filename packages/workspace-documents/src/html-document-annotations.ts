@@ -1,53 +1,52 @@
-import { parseAnnotatedMarkdown } from "iterate/annotated-markdown";
-
-const ENVELOPE_OPEN = '<script type="application/json" data-iterate-annotations="v1">';
+const ENVELOPE_OPEN = '<script type="application/json" data-roughdraft="v1">';
 const ENVELOPE_CLOSE = "</script>";
 
 /**
- * Returns the annotated-document source consumed by the shared comments UI.
- * HTML keeps its discussion store in a non-rendering JSON script element so
- * opening the workspace file in any ordinary browser never paints Markdown
- * discussion headings after the document.
+ * Returns the RFM review payload for an HTML document. HTML has no Markdown
+ * body to annotate, so comments live in a non-rendering JSON script element.
  */
 export function annotationsSourceForHtmlDocument(source: string): string {
-  const open = source.lastIndexOf(ENVELOPE_OPEN);
-  if (open === -1) return source;
+  return parseHtmlReviewEnvelope(source).payload ?? "";
+}
 
-  const beforeOpen = source.slice(0, open);
+function parseHtmlReviewEnvelope(source: string): { body: string; payload: string | null } {
+  const open = source.lastIndexOf(ENVELOPE_OPEN);
+  if (open === -1) return { body: source, payload: null };
+
   const afterOpen = source.slice(open + ENVELOPE_OPEN.length);
   const close = afterOpen.indexOf(ENVELOPE_CLOSE);
-  if (close === -1 || afterOpen.slice(close + ENVELOPE_CLOSE.length).trim() !== "") return source;
-
-  const encoded = afterOpen.slice(0, close).trim();
-  try {
-    const annotations: unknown = JSON.parse(encoded);
-    return typeof annotations === "string" ? beforeOpen + annotations : source;
-  } catch {
-    return source;
+  if (close === -1)
+    throw new Error("Invalid Roughdraft review envelope: missing closing script tag.");
+  if (afterOpen.slice(close + ENVELOPE_CLOSE.length).trim() !== "") {
+    throw new Error("Invalid Roughdraft review envelope: it must be the final document content.");
   }
+  const encoded = afterOpen.slice(0, close).trim();
+  let payload: unknown;
+  try {
+    payload = JSON.parse(encoded);
+  } catch {
+    throw new Error("Invalid Roughdraft review envelope: payload is not valid JSON.");
+  }
+  if (typeof payload !== "string") {
+    throw new Error("Invalid Roughdraft review envelope: payload must be a JSON string.");
+  }
+  return { body: source.slice(0, open), payload };
 }
 
 /**
- * Applies an annotated-Markdown mutation to an HTML document, then stores the
- * resulting discussion as inert JSON while leaving the HTML body byte-for-byte
- * unchanged. Failed or no-op transforms preserve the complete original source.
- * Escaping `<` prevents a comment containing `</script>` from terminating the
- * envelope in an HTML parser.
+ * Applies an RFM-only mutation and stores the result as inert JSON while
+ * leaving the HTML body byte-for-byte unchanged.
  */
 export function transformHtmlDocumentAnnotations(
   source: string,
   transform: (annotatedSource: string) => string,
 ): string {
-  const annotatedSource = annotationsSourceForHtmlDocument(source);
-  const next = transform(annotatedSource);
-  if (next === annotatedSource) return source;
+  const envelope = parseHtmlReviewEnvelope(source);
+  const payload = envelope.payload ?? "";
+  const next = transform(payload);
+  if (next === payload) return source;
 
-  const parsed = parseAnnotatedMarkdown(next);
-  if (parsed.kind !== "structured") return source;
-  if (parsed.discussion === null) return next;
-
-  const body = next.slice(0, parsed.discussion.range.start);
-  const annotations = next.slice(parsed.discussion.range.start);
-  const encoded = JSON.stringify(annotations).replaceAll("<", "\\u003c");
-  return `${body}${ENVELOPE_OPEN}\n${encoded}\n${ENVELOPE_CLOSE}\n`;
+  if (next === "") return envelope.body;
+  const encoded = JSON.stringify(next).replaceAll("<", "\\u003c");
+  return `${envelope.body}${ENVELOPE_OPEN}\n${encoded}\n${ENVELOPE_CLOSE}\n`;
 }

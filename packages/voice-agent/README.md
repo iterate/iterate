@@ -1,0 +1,165 @@
+# @iterate-com/voice-agent
+
+The server side of an Iterate voice line. Each conversation shares a
+stream with a GPT-Live-1 session. GPT-Live listens and
+speaks; client delegation adds context to the normal OS Agent processor
+running on that same stream. The Agent uses its standard capabilities and can
+decide to end the call after a short goodbye.
+
+The package runs as a guest worker in a project's config repository. The
+stateless entrypoint installs a stream subscription, and one Durable Object
+facet per stream holds the live socket and folds the durable call record.
+
+## Install
+
+Add these dependencies and guest file to the config repository:
+
+```jsonc
+{
+  "dependencies": {
+    "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
+    "@iterate-com/voice-agent": "https://pkg.pr.new/iterate/iterate/@iterate-com/voice-agent@main",
+    "zod": "4.5.4",
+  },
+}
+```
+
+```ts
+// voice-agent.ts
+export { default, VoiceAgentFacet, VoiceDeviceFacet } from "@iterate-com/voice-agent/worker";
+```
+
+`pnpm cli voicelab deploy --project <slug>` makes the same changes. See
+[INSTALL.md](./INSTALL.md) for the complete installation note.
+
+## Setup
+
+```ts
+import { VoiceAgentApp } from "@iterate-com/voice-agent";
+
+const voice = VoiceAgentApp.create(env);
+const line = await voice.setup({
+  streamPath: "/agents/voice/kitchen",
+  instructions: "You are a concise, helpful home assistant.",
+});
+```
+
+The voice endpoint, model, and voice are fixed: OpenAI GPT-Live-1 at
+`https://api.openai.com/v1/live/sessions`, using `marin` at 16 kHz PCM16.
+Setup requires `/secrets/openai` with egress for `https://api.openai.com`.
+
+| Setup option   | Meaning                                                             |
+| -------------- | ------------------------------------------------------------------- |
+| `streamPath`   | Absolute conversation stream path; a fresh voice path when omitted. |
+| `instructions` | Voice persona and tone.                                             |
+| `visemes`      | Publish face state for a rendering client.                          |
+| `reinstall`    | Force a new subscription key.                                       |
+
+## Device conversations
+
+Kit installs `setupVoiceDevice({ streamPath, instructions?, visemes? })` on the
+fixed connection path, such as `/agents/voice/v23/home-assistant-voice-preview-edition`.
+Each activation creates a timestamped child beneath it. That child contains its
+own voice processor and ordinary Agent, using Astra with low reasoning and Fast
+service. Previous transcripts, pending work, and provider history are never
+copied into a new conversation. Project instructions and capabilities still apply.
+
+The fixed parent transports audio and call lifecycle events; it does not run
+an LLM. Capture starts on the device immediately, and opening audio is held in
+order while the child becomes ready. Downlink events still identify the local
+activation, so late output from an older conversation cannot affect a new one.
+`call-started.streamPath` identifies the child for tools and the stream browser.
+The talking face reads the current child's runtime state through the parent.
+
+`setupVoiceAgent` remains the direct setup for a caller that already owns a
+conversation stream, including chat-backed mobile calls.
+
+## Stream protocol
+
+Each local call has an opaque `activation`, generated in RAM and kept until
+the client ends it. Mic and terminal writes must be serialized by one local
+sender. The server owns the `conversationId`.
+
+| Event                   | Direction       | Payload                                                           |
+| ----------------------- | --------------- | ----------------------------------------------------------------- |
+| `mic-frame`             | client → server | `{ activation, pcm }`                                             |
+| `keepalive`             | client → server | `{}` about every 20 seconds while the call UI is open             |
+| `conversation-ended`    | either          | `{ activation, reason }`                                          |
+| `call-started`          | server → client | `{ activation, conversationId, streamPath }`                      |
+| `conversation-accepted` | server → client | `{ activation, conversationId, handshakeTookMs, heldMicFrames }`  |
+| `spk-frame`             | server → client | `{ activation, conversationId, deviceSpeakerFrameSeq, pcm, ... }` |
+
+Clients discard downlink events whose activation is no longer current. They
+play speaker frames in sequence, clear their buffer when requested, and treat
+`lastFrameOfAnswer` as an answer boundary.
+
+The opening budget is bounded: the facet holds at most 21 seconds of decoded
+microphone audio and the complete socket-plus-session opening has 15 seconds.
+Either limit ends the activation with a classified reason; audio is never
+silently truncated. A provider disconnection also ends the activation rather
+than replaying an uncertain session.
+
+## Same-stream Agent interface
+
+GPT-Live delegates client work to the standard OS Agent on this same stream.
+The Agent owns the work, its normal capabilities, and its own model
+configuration.
+
+The processors communicate through three durable, plain-content events. Agent
+LLM work tracks the activation and an applicable delegation id, or `null`.
+The ordinary Agent owns expiry and retries; VoiceAgent adds no work deadline
+and has no external reply Agent.
+
+There are two separate Agent inputs. Every completed user and assistant
+transcript projects as `agents/context-added` with `dont-trigger-request`, so
+the Agent has the conversation without treating a transcript as a request. An
+open-turn snapshot can precede its completed transcript; both are observations,
+and only delegation metadata requests work. Human speech remains user context;
+Live speech is labelled as an observed voice transcript, so the ordinary Agent
+does not mistake it for its own output.
+Only a GPT-Live client delegation appends its delegation-id metadata as
+triggering `context-added`, with `after-current-request`; it does not
+interrupt Agent work already in progress.
+
+Call endings, rejected voice updates, provider errors, and the live model's
+configured instructions are also shared as passive context. The Agent can
+therefore see why an update was not forwarded or that the call ended while it
+was working. These facts do not start another LLM request, cancel background
+work, or authorize sending an old reply to a new call.
+
+For each reply, the Agent reads the original delegation metadata event by its
+`@offset` with `stream.getEvent({ offset })` and parses the JSON on its second
+content line. It reuses those IDs instead of retyping them. Reading the latest
+call would retarget slow work after a new call starts; the original event keeps
+the reply bound to the call that requested it.
+
+| Event          | Payload                                          | Voice action                                                             |
+| -------------- | ------------------------------------------------ | ------------------------------------------------------------------------ |
+| `instructions` | `{ activation, delegationId, content }`          | Append the content to GPT-Live session instructions.                     |
+| `thinking`     | `{ activation, delegationId, content }`          | Append quiet useful facts or progress.                                   |
+| `commentary`   | `{ activation, delegationId, content, hangUp? }` | Append speakable outcome; if `hangUp`, end only after the goodbye plays. |
+
+The voice facet accepts only events for its current activation. These appends
+convey information to GPT-Live; they do not guarantee a particular response.
+Terminal state fences late events. Capture and playback continue while the
+Agent works.
+
+## Durable record
+
+The stream keeps configuration, call lifecycle, transcripts, Agent
+instructions/thinking/commentary, session configuration, and provider
+errors/disconnections. Raw provider traffic and audio are not mirrored.
+Speaker frames and microphone frames are ephemeral.
+
+## Verification
+
+```bash
+pnpm --dir packages/voice-agent typecheck
+pnpm --dir apps/os exec vitest run scripts/voicelab/voice-agent.test.ts
+```
+
+For a project integration check:
+
+```bash
+doppler run --config prd -- pnpm cli voicelab talk --project <slug> --setup-only
+```

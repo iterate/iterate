@@ -46,7 +46,7 @@ import type { z } from "zod";
 import type { ProcessorStream } from "./stream-handle.ts";
 import type { ProcessorState } from "./processor-contracts.ts";
 import type { StreamEvent } from "./schemas.ts";
-import type { StreamEventBatch } from "./rpc-types.ts";
+import { MAX_STREAM_EVENT_READ_BYTE_LIMIT, type StreamEventBatch } from "./rpc-types.ts";
 import {
   awaitKeepAliveBacked,
   StreamProcessor,
@@ -78,9 +78,7 @@ export type ReductionProgress<State> = {
  * effect-acknowledgement cursor. Unlike the reduction cache it is never
  * discarded — rewinding it re-runs side effects. `cursorRevision` is the CAS
  * fence for exactly those rewinds: every commit asserts it, and a bump makes
- * every in-flight continuation of the old cursor position stale (the browser
- * projection reset rewinds this way — see
- * browserProcessorProgressRewindStatements in processor-state-storage.ts).
+ * every in-flight continuation of the old cursor position stale.
  */
 export type ProcessingProgress = {
   /** Every effect at or below this offset is acknowledged (durably settled). */
@@ -112,9 +110,8 @@ export type ProcessorProgress<State> = {
  * (throws) if `expectedCursorRevision` no longer matches the persisted
  * revision — the fence that stops a stale incarnation (or a continuation
  * outliving a cursor rewind) from clobbering the rewound cursor.
- * An absent record reads as revision 0. Backends: DO KV, browser SQLite
- * (where the committer folds projection writes and this record into ONE
- * transaction), or a plain object in tests.
+ * An absent record reads as revision 0. Backends use DO KV or an in-memory
+ * store in tests. Related projections share the same commit boundary.
  */
 export type ProcessorProgressStore<State> = {
   read(): MaybePromise<ProcessorProgress<State> | undefined>;
@@ -167,7 +164,7 @@ export type ProcessorRecovery = {
 /**
  * The ONE optional durability adapter a hosting runtime hands the runner:
  * `progress` is required whenever the processor is durable at all (without the
- * adapter the runner keeps progress in memory — tests, ephemeral browser
+ * adapter the runner keeps progress in memory — tests, ephemeral
  * views); `recovery` is orthogonal and present only when the processor owns
  * background work that must survive eviction. This is deliberately where
  * every runtime-specific concern lives — no Cloudflare `ctx` in the runner.
@@ -455,6 +452,16 @@ export class StreamProcessorRunner<
    */
   get isLoaded(): boolean {
     return this.#hasLoaded;
+  }
+
+  /** Highest offset whose processing and blocking consequences have committed. */
+  get currentAcknowledgedThroughOffset(): number {
+    return this.#progress?.processing.acknowledgedThroughOffset ?? 0;
+  }
+
+  /** Source lifetime paired atomically with the current committed state and cursor. */
+  get currentStreamId(): string | undefined {
+    return this.#progress?.streamId;
   }
 
   /**
@@ -1132,6 +1139,7 @@ export class StreamProcessorRunner<
         const page = await this.stream.getEventPage({
           afterOffset,
           beforeOffset: throughOffset + 1,
+          byteLimit: MAX_STREAM_EVENT_READ_BYTE_LIMIT,
           limit: this.readPageSize,
         });
         this.#assertReadStreamId(page.streamId, streamId);
@@ -1174,21 +1182,26 @@ export class StreamProcessorRunner<
   async #selfCatchUp(): Promise<void> {
     const streamId = this.#requireProgress().streamId;
     let scannedAfterOffset = this.#requireProgress().processing.acknowledgedThroughOffset;
+    let targetOffset: number | undefined;
     for (;;) {
       const page = await this.stream.getEventPage({
         afterOffset: scannedAfterOffset,
+        ...(targetOffset === undefined ? {} : { beforeOffset: targetOffset + 1 }),
+        byteLimit: MAX_STREAM_EVENT_READ_BYTE_LIMIT,
         limit: this.readPageSize,
       });
       this.#assertReadStreamId(page.streamId, streamId);
-      const isFinalPage = page.events.length < this.readPageSize;
-      const scannedThroughOffset = isFinalPage ? page.streamMaxOffset : page.events.at(-1)!.offset;
+      targetOffset ??= page.streamMaxOffset;
+      const lastEventOffset = page.events.at(-1)?.offset;
+      const isFinalPage = lastEventOffset === undefined || lastEventOffset >= targetOffset;
+      const scannedThroughOffset = isFinalPage ? targetOffset : lastEventOffset;
       if (scannedThroughOffset <= scannedAfterOffset) return;
       await this.#processBatch({
         streamId,
         events: page.events,
         scannedAfterOffset,
         scannedThroughOffset,
-        streamMaxOffset: page.streamMaxOffset,
+        streamMaxOffset: targetOffset,
       });
       scannedAfterOffset = scannedThroughOffset;
       if (isFinalPage) return;

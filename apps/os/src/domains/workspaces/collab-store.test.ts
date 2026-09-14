@@ -68,7 +68,7 @@ if (sqlite !== null) {
 }
 
 describe.each(implementations)("collab store contract (%s)", (_name, makeStore) => {
-  test("birth: putSnapshot creates session + base idempotently", async () => {
+  test("birth: putSnapshot creates the session idempotently", async () => {
     const store = makeStore();
     await store.putSnapshot(
       PATH,
@@ -77,10 +77,9 @@ describe.each(implementations)("collab store contract (%s)", (_name, makeStore) 
     );
     expect(store.hasSession(PATH)).toBe(true);
     expect(store.sessions().map((s) => s.path)).toEqual([PATH]);
-    expect(store.getBase(PATH)).toEqual({ content: "seed", version: 0 });
-    // A later compaction snapshot must not reset the base or the session.
+    // A later compaction snapshot must not reset the session.
     await store.putSnapshot(PATH, { clientSeqs: {}, content: "later", epoch: EPOCH, version: 5 });
-    expect(store.getBase(PATH)).toEqual({ content: "seed", version: 0 });
+    expect(store.sessions().map((s) => [s.path, s.headVersion])).toEqual([[PATH, 0]]);
   });
 
   test("append round-trips ops and advances the dirty head", async () => {
@@ -108,7 +107,7 @@ describe.each(implementations)("collab store contract (%s)", (_name, makeStore) 
     ).toEqual([]);
   });
 
-  test("compaction prunes only BELOW the redline baseline", async () => {
+  test("compaction prunes exactly the ops the snapshot covers", async () => {
     const store = makeStore();
     await store.putSnapshot(
       PATH,
@@ -116,29 +115,13 @@ describe.each(implementations)("collab store contract (%s)", (_name, makeStore) 
       { birth: true },
     );
     await store.append(PATH, EPOCH, [op(0), op(1), op(2)]);
-    // Compaction snapshot at v3 — but the baseline is still v0, so every op
-    // stays reconstructable for the redline fold.
+    // Rehydration replays from the snapshot, so nothing below it is ever
+    // read again — the log holds exactly the ops since the snapshot.
     await store.putSnapshot(PATH, { clientSeqs: {}, content: "v3", epoch: EPOCH, version: 3 });
-    expect((await store.readOps(PATH, EPOCH, -1)).map((entry) => entry.version)).toEqual([0, 1, 2]);
-    // A commit advances the baseline — NOW the covered ops may go.
-    store.setBases([{ content: "v3", epoch: EPOCH, path: PATH, version: 3 }]);
     expect(await store.readOps(PATH, EPOCH, -1)).toEqual([]);
-    expect(store.getBase(PATH)).toEqual({ content: "v3", version: 3 });
-  });
-
-  test("commit-then-compact order also retains exactly the needed ops", async () => {
-    const store = makeStore();
-    await store.putSnapshot(
-      PATH,
-      { clientSeqs: {}, content: "seed", epoch: EPOCH, version: 0 },
-      { birth: true },
-    );
-    await store.append(PATH, EPOCH, [op(0), op(1)]);
-    store.setBases([{ content: "v2", epoch: EPOCH, path: PATH, version: 2 }]); // commit first
-    await store.append(PATH, EPOCH, [op(2), op(3)]);
+    await store.append(PATH, EPOCH, [op(3), op(4)]);
     await store.putSnapshot(PATH, { clientSeqs: {}, content: "v4", epoch: EPOCH, version: 4 });
-    // Baseline v2 keeps ops 2,3 (redline); snapshot v4 needs nothing below 4.
-    expect((await store.readOps(PATH, EPOCH, -1)).map((entry) => entry.version)).toEqual([2, 3]);
+    expect((await store.readOps(PATH, EPOCH, -1)).map((entry) => entry.version)).toEqual([4]);
   });
 
   test("endSession deletes everything durably", async () => {
@@ -152,14 +135,11 @@ describe.each(implementations)("collab store contract (%s)", (_name, makeStore) 
     store.endSession(PATH);
     expect(store.hasSession(PATH)).toBe(false);
     expect(store.sessions().map((s) => s.path)).toEqual([]);
-    expect(store.getBase(PATH)).toBeNull();
     expect(await store.getSnapshot(PATH)).toBeNull();
     expect(await store.readOps(PATH, EPOCH, -1)).toEqual([]);
   });
 });
 
-// Live DOs created before the created_at column existed must keep working:
-// the bootstrap has to ALTER old tables, CREATE TABLE IF NOT EXISTS won't.
 describe.each(implementations)("putSnapshot lifecycle (%s)", (_name, makeStore) => {
   test("compaction putSnapshot on an ended session throws and resurrects nothing", async () => {
     const store = makeStore();
@@ -177,7 +157,6 @@ describe.each(implementations)("putSnapshot lifecycle (%s)", (_name, makeStore) 
     ).rejects.toThrow(/stale/);
     expect(store.hasSession(PATH)).toBe(false);
     expect(await store.getSnapshot(PATH)).toBeNull();
-    expect(store.getBase(PATH)).toBeNull();
   });
 
   test("birth stays idempotent and compaction works while live", async () => {
@@ -204,29 +183,45 @@ describe.each(implementations)("putSnapshot lifecycle (%s)", (_name, makeStore) 
 });
 
 (sqlite === null ? describe.skip : describe)("sqlite schema migration", () => {
-  test("append works on a database born with the pre-created_at schema", async () => {
+  test("a database born with the tracked-changes schema is brought forward", async () => {
     const storage = nodeSqliteStorage();
     storage.sql.exec(
       `CREATE TABLE collab_ops(
          path TEXT NOT NULL, epoch TEXT NOT NULL, version INTEGER NOT NULL,
          client_id TEXT NOT NULL, client_seq INTEGER NOT NULL, changes TEXT NOT NULL,
+         created_at INTEGER NOT NULL DEFAULT 0,
          PRIMARY KEY (path, epoch, version))`,
     );
     storage.sql.exec(
-      `INSERT INTO collab_ops(path, epoch, version, client_id, client_seq, changes)
-         VALUES (?, ?, 1, 'a', 1, '[1,"x"]')`,
+      `CREATE TABLE collab_bases(
+         path TEXT PRIMARY KEY, version INTEGER NOT NULL, content TEXT NOT NULL)`,
+    );
+    storage.sql.exec(
+      `INSERT INTO collab_ops(path, epoch, version, client_id, client_seq, changes, created_at)
+         VALUES (?, ?, 1, 'a', 1, '[1,"x"]', 123)`,
       PATH,
       EPOCH,
     );
     const store = sqliteCollabStore(storage);
+    // The baseline table and the accept-time column are gone; the ops survive.
+    expect(
+      storage.sql
+        .exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'collab_bases'`)
+        .toArray(),
+    ).toEqual([]);
+    expect(
+      storage.sql
+        .exec(`PRAGMA table_info('collab_ops')`)
+        .toArray()
+        .map((row) => row.name),
+    ).not.toContain("created_at");
     await store.putSnapshot(
       PATH,
       { clientSeqs: {}, content: "", epoch: EPOCH, version: 0 },
       { birth: true },
     );
-    await store.append(PATH, EPOCH, [{ ...op(2), createdAt: 123 }]);
+    await store.append(PATH, EPOCH, [op(2)]);
     const ops = await store.readOps(PATH, EPOCH, 0);
     expect(ops.map((entry) => entry.version)).toEqual([1, 2]);
-    expect(ops[1]?.createdAt).toBe(123);
   });
 });

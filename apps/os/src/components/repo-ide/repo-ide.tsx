@@ -20,6 +20,7 @@ import {
 } from "@iterate-com/ui/components/resizable";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Spinner } from "@iterate-com/ui/components/spinner";
+import { RepoFileTree, type RepoTreeActions } from "@iterate-com/ui/components/repo-file-tree";
 import { useItx, useItxQuery } from "iterate/sdk/itx/react";
 import { isBinaryRepoPath } from "./repo-file-kinds.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
@@ -28,7 +29,6 @@ import { CommitHistoryPanel } from "./commit-history-panel.tsx";
 import { RepoEditorPane } from "./repo-editor-pane.tsx";
 import { discardRepoFile } from "./repo-file-discard.ts";
 import { RepoGithubPanel } from "./repo-github-panel.tsx";
-import { RepoFileTree, type RepoTreeActions } from "./repo-file-tree.tsx";
 import {
   commitPlan,
   effectiveEntry,
@@ -36,6 +36,7 @@ import {
   workingTreeStore,
   type FileEntry,
   type WorkingTreeChanges,
+  workingTreeGitStatus,
 } from "./staged-changes.ts";
 
 /**
@@ -376,7 +377,14 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
             <RepoFileTree
               className="h-full"
               headPaths={headPaths}
-              changes={changes}
+              changes={
+                new Map(
+                  workingTreeGitStatus(changes, headPathSet).map((entry) => [
+                    entry.path,
+                    entry.status,
+                  ]),
+                )
+              }
               selectedPath={selectedPath}
               onSelect={selectFile}
               actions={actions}

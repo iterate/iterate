@@ -33,17 +33,18 @@ import {
   type ProcessorFacetIdentity,
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
+import type { ProjectAiInterceptor } from "../lib/model-interception.ts";
 import { trustedInternalAuthContext } from "../auth.ts";
 import { parseConfig } from "../config.ts";
 import { workerVersion, type Env } from "../env.ts";
 import { itxForScope, StreamRpcTarget } from "../rpc-targets.ts";
 import { readProjectById } from "../project-directory.ts";
+import { aiGatewayMetadata } from "./agents/ai-gateway-metadata.ts";
 import { facetProcessorFamilyForPath } from "./processor-facet-families.ts";
 import { projectStub } from "./projects/egress.ts";
 import type { CapabilityDescription } from "./itx/describe.ts";
 import { DurableObjectNameCodec } from "./durable-object-names.ts";
 import { AgentProcessor } from "./agents/agent-processor-implementation.ts";
-import type { WorkersAiMessage } from "./agents/workers-ai-transport.ts";
 import {
   type AgentFileAttachment,
   type AgentLiveState,
@@ -88,7 +89,6 @@ import { describeSecretState } from "./secrets/secret-durable-object.ts";
 import { describeDeviceState } from "./devices/device-durable-object.ts";
 import { WorkspaceProcessor } from "./workspaces/workspace-processor-implementation.ts";
 import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "./files/project-files.ts";
-import { agentWorkspacePath } from "./workspaces/utils.ts";
 import { DynamicWorkerRunner } from "./workers/worker-runner.ts";
 
 const EXPO_PUSH_SEND_TIMEOUT_MS = 15_000;
@@ -116,7 +116,12 @@ type ParentStreamStub = ProcessorFacetAlarmProxy & {
 type ScriptExecutionEntrypointHandle = {
   run(
     code: string,
-    options: { emittedJs?: string; expiresAt: number; preambleJs?: string },
+    options: {
+      emittedJs?: string;
+      expiresAt: number;
+      preambleJs?: string;
+      surface?: readonly string[];
+    },
   ): Promise<ScriptExecutionSettlement>;
 };
 
@@ -324,6 +329,9 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         break;
       case "agent":
         this.#registerAgent(identity, stream, registry);
+        // Agent and workspace lifecycle facts share this stream; their
+        // subscriptions and reduced state remain independently named.
+        this.#registerWorkspace(identity, stream, registry);
         break;
       case "email-router":
         this.#registerEmailRouter(identity, stream, registry);
@@ -540,26 +548,32 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       // intercepted/* model turns are served by the project's live AI interceptor
       // (itx.ai.intercept); the slot lives on the Project DO so both egress
       // paths share one handler, and this hop only happens for intercepted/* models.
-      consultAiInterceptor: (input: {
-        source: "agent-turn";
-        agentPath: string;
-        model: string;
-        body: { messages: WorkersAiMessage[] };
-      }) => projectStub(this.env.PROJECT, projectId).consultAiInterceptor(input),
+      consultAiInterceptor: (input: ProjectAiInterceptor.Input) =>
+        projectStub(this.env.PROJECT, projectId).consultAiInterceptor(input),
       // Resolved per attempt (not at construction) so a config problem
       // fails the turn with a journaled error instead of bricking the host.
       // The OpenAI prompt_cache_key is per agent stream: repeated turns
       // grow a shared prefix, and a stable key routes them to the same
       // provider-side prompt-cache shard.
-      cloudflareAiGatewayTransport: () => {
-        const gateway = parseConfig(this.env).cloudflareAiGateway;
-        if (gateway.transport === "unified") return { kind: "unified" as const };
+      getAiGatewayOptions: (eventOffset: number) => {
+        const config = parseConfig(this.env);
+        const gateway = config.cloudflareAiGateway;
         return {
-          kind: "byok" as const,
-          gatewayId: gateway.id,
-          openaiApiKey: parseConfig(this.env).openAiApiKey.exposeSecret(),
-          openaiPromptCacheKey: `${projectId}:${path}`,
-          responseCacheTtlSeconds: gateway.responseCacheTtlSeconds,
+          transport:
+            gateway.transport === "unified"
+              ? { kind: "unified" as const, gatewayId: gateway.id }
+              : {
+                  kind: "byok" as const,
+                  gatewayId: gateway.id,
+                  openaiApiKey: config.openAiApiKey.exposeSecret(),
+                  openaiPromptCacheKey: `${projectId}:${path}`,
+                  responseCacheTtlSeconds: gateway.responseCacheTtlSeconds,
+                },
+          metadata: aiGatewayMetadata({
+            projectId,
+            environment: config.environmentName,
+            context: { kind: "agent-turn", streamPath: path, eventOffset },
+          }),
         };
       },
       resolveModelFileUrl: (file: AgentFileAttachment) =>
@@ -569,8 +583,28 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
           path: file.path,
           projectId,
         }),
+      readRepoFile: async (
+        target: {
+          type: "repo-file";
+          repoPath: "/repos/config";
+          path: string;
+        },
+        maximumBytes: number,
+      ) => {
+        const result = await this.env.REPO.getByName(
+          DurableObjectNameCodec.stringify({ projectId, path: target.repoPath }),
+        ).readHeadFilePrefix({ path: target.path, maximumBytes });
+        return result === null
+          ? null
+          : {
+              bytes: result.bytes,
+              commitOid: result.commitOid,
+              originalBytes: result.originalBytes,
+              truncated: result.truncated,
+            };
+      },
       // Oversized script results spill into the agent's OWN workspace
-      // directory (private scratch under its stream path — never
+      // directory (/workspace, private scratch — never
       // committable), so the model can page through the file instead of
       // blowing its context window.
       writeWorkspaceFile: async ({
@@ -580,10 +614,10 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         content: string;
         path: string;
       }) => {
-        const absolutePath = `${agentWorkspacePath(path)}/${filePath}`;
+        const absolutePath = `/workspace/${filePath}`;
         await this.env.WORKSPACE_V2.getByName(
           DurableObjectNameCodec.stringify({
-            path: agentWorkspacePath(path),
+            path,
             projectId,
           }),
         ).writeFile(absolutePath, content);
@@ -596,6 +630,12 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
     const agentProcessor = registry.register(new AgentProcessor(agentArgs), { recovery: true });
     const agentReads = registry.reads(agentProcessor);
     this.#getLiveState = (): AgentLiveState => ({
+      inputAcknowledgedThroughOffset: Math.min(
+        agentReads.currentAcknowledgedThroughOffset,
+        ...Object.values(agentReads.currentState.pendingInputConsequences).map(
+          (offset) => offset - 1,
+        ),
+      ),
       runtimeChange: agentReads.currentState.runtimeChange,
     });
 

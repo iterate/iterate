@@ -45,6 +45,8 @@ describe("budget ladder", () => {
   it("no inline per-test timeout under apps/os/e2e exceeds the heavy-test ceiling", () => {
     // Case-sensitive `timeout:` matches vitest's per-test `{ timeout: N }`
     // options without matching config-level testTimeout/hookTimeout.
+    // `timeoutMs:` is the createFailing()/createFlake() wrapper deadline, which
+    // becomes the per-test timeout (+1s) — it must obey the same ceiling.
     const offenders: string[] = [];
     const visit = (dir: string) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -52,7 +54,7 @@ describe("budget ladder", () => {
         if (entry.isDirectory()) {
           visit(path);
         } else if (entry.name.endsWith(".ts")) {
-          for (const match of readFileSync(path, "utf8").matchAll(/timeout:\s*([\d_]+)/g)) {
+          for (const match of readFileSync(path, "utf8").matchAll(/timeout(?:Ms)?:\s*([\d_]+)/g)) {
             const value = Number(match[1]!.replaceAll("_", ""));
             if (value > E2E_HEAVY_TEST_TIMEOUT_MS) {
               offenders.push(`${path}: timeout ${value}`);

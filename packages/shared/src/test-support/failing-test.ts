@@ -1,20 +1,27 @@
+import { appendFlakeRecord, type FlakeRecord } from "./flake-record.ts";
 /**
  * Pinned-bug tests: the body asserts the DESIRED behavior, and while the bug
  * exists it must fail with an error matching the given pattern.
  *
- * `failing` registers the test through the runner's own expected-fail variant
+ * `createFailing` registers the test through the runner's own expected-fail variant
  * — vitest spells it `test.fails`, playwright `test.fail` — so the pin is
  * native as far as reporting goes: it shows up in the "expected fail" summary
  * count, telemetry classifies it as expected-to-fail, and nothing downstream
  * needs to know the wrapper exists. The wrapper's only job is filtering WHICH
- * failure is allowed to satisfy that machinery:
+ * failure is allowed to satisfy that machinery.
+ *
+ * To use it, write a *normal* test body, and use a regex that you know the test (unfortunately) will fail with.
  *
  * ```ts
- * const fail = failing(test, /SAME-BOOT STALENESS/);
+ * const fail = createFailing(test, /SAME-BOOT STALENESS/);
  * fail("a userspace facet rebuilds on a source commit", { timeout: 240_000 }, async () => {
  *   // asserts the DESIRED behavior; today it throws the matched error
  * });
  * ```
+ *
+ * Try to write normal-looking assertions - `expect` lets you pass in a custom message if you want to
+ * tip the scales for a single assertion. Use "should" so you can write a truthful statement that remains
+ * true even when the test *stops* failing (the system really should not run out of memory!).
  *
  * Three outcomes:
  * - body fails matching the pattern → the error is rethrown, the runner's
@@ -46,7 +53,7 @@
  * apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts for the
  * worked example (its predecessor bare `test.fails` false-alarmed 7+ times).
  */
-export function failing<TestFn extends (...args: any[]) => any>(
+export function createFailing<TestFn extends (...args: any[]) => any>(
   test: TestFn,
   failure: RegExp,
   options?: { timeoutMs: number },
@@ -55,18 +62,23 @@ export function failing<TestFn extends (...args: any[]) => any>(
   const failer: unknown = "fails" in test ? test.fails : "fail" in test ? test.fail : undefined;
   if (typeof failer !== "function") {
     throw new Error(
-      "failing(test, pattern): test has neither .fails (vitest) nor .fail (playwright)",
+      "createFailing(test, pattern): test has neither .fails (vitest) nor .fail (playwright)",
     );
   }
   const register = (...args: any[]) => {
     const body = args.at(-1);
     if (typeof body !== "function") {
-      throw new Error("failing(test, pattern): the last argument must be the test body");
+      throw new Error("createFailing(test, pattern): the last argument must be the test body");
     }
+    const name = String(args[0]);
     // The body's own arguments pass through untouched — playwright fixtures
     // ({ page, ... }, testInfo), vitest context — whatever the wrapped test
     // function provides.
     const wrapped = async (...bodyArgs: any[]) => {
+      // playwright-like runners have no per-test `timeout` option; set the
+      // runner timeout here so it never fires before the wrapper's own deadline.
+      (test as any).setTimeout?.(timeoutMs + 1000);
+      const startedAt = Date.now();
       // Race the body against the wrapper's own deadline: a hung body must
       // fail as NOT-the-pinned-failure rather than letting the runner's test
       // timeout fire, which the expected-fail machinery would count as the
@@ -85,10 +97,29 @@ export function failing<TestFn extends (...args: any[]) => any>(
         }),
       ]).finally(() => clearTimeout(timer));
 
+      // Same telemetry channel as createFlake (see ./flake-record.ts): the
+      // dashboard's Failures section folds these — pinned-fail means the pin
+      // held, unexpected-pass means the bug looks fixed.
+      const record = async (result: FlakeRecord["outcome"], error?: unknown): Promise<void> => {
+        await appendFlakeRecord({
+          name,
+          kind: "failing",
+          outcome: result,
+          pattern: failure.source,
+          durationMs: Date.now() - startedAt,
+          at: new Date(startedAt).toISOString(),
+          ...(error === undefined ? {} : { error: String(error).split("\n")[0] }),
+        });
+      };
+
       if (outcome.kind === "failed") {
-        // The ONLY throw allowed out: the pinned failure, which satisfies the
-        // runner's expected-fail machinery.
-        if (failure.test(String(outcome.error))) throw outcome.error;
+        if (failure.test(String(outcome.error))) {
+          await record("pinned-fail", outcome.error);
+          // The ONLY throw allowed out: the pinned failure, which satisfies
+          // the runner's expected-fail machinery.
+          throw outcome.error;
+        }
+        await record("unexpected-error", outcome.error);
         console.error(
           `[failing-test] Expected failure to match /${failure.source}/, got a different failure — ` +
             `this run proves nothing about the pinned bug:`,
@@ -97,16 +128,18 @@ export function failing<TestFn extends (...args: any[]) => any>(
         return; // "success" here is what makes test.fails / test.fail go red
       }
       if (outcome.kind === "timed-out") {
+        await record("unexpected-error", `hung: still running after ${timeoutMs}ms`);
         console.error(
           `[failing-test] The body is still running after ${timeoutMs}ms — a hang is not the ` +
-            `pinned failure. Raise failing()'s options.timeoutMs (keeping it below the runner's ` +
+            `pinned failure. Raise createFailing()'s options.timeoutMs (keeping it below the runner's ` +
             `test timeout) if the pin legitimately needs longer.`,
         );
         return; // same inversion: success → the expected-fail machinery goes red
       }
+      await record("unexpected-pass");
       console.error(
         `[failing-test] The test should have failed with /${failure.source}/ but it succeeded. ` +
-          `If the pinned bug is fixed, delete the failing() wrapper and keep the body as a plain test.`,
+          `If the pinned bug is fixed, delete the createFailing() wrapper and keep the body as a plain test.`,
       );
       // Fall through to success for the same reason as above.
     };
@@ -116,7 +149,30 @@ export function failing<TestFn extends (...args: any[]) => any>(
     // the runner would instantiate none of them — so present the body's own
     // source when the runner looks.
     Object.defineProperty(wrapped, "toString", { value: () => body.toString() });
-    return failer(...args.slice(0, -1), wrapped);
+    if ("fails" in test) {
+      // vitest: pin per-test retry to zero, same as createFlake — a
+      // suite-level `retry` re-runs the body on the rethrown pinned failure
+      // (the retry fires before the `.fails` inversion), which would execute
+      // and record every pin twice per run. The cast states vitest's
+      // three-argument shape: with more than two arguments the middle one is
+      // the per-test options object.
+      const callerOptions = args.length > 2 ? (args[1] as object) : {};
+      // `timeout` is forced to the wrapper's own deadline + 1s for the same
+      // reason as the setTimeout call above: the runner must never fire first.
+      return failer(args[0], { ...callerOptions, retry: 0, timeout: timeoutMs + 1000 }, wrapped);
+    }
+    // playwright-like: pin retries structurally via an anonymous describe
+    // scope — same reasoning (and same cast) as createFlake, see
+    // ./flake-test.ts.
+    const playwrightLike = test as unknown as {
+      describe: ((body: () => void) => void) & {
+        configure: (options: { retries: number }) => void;
+      };
+    };
+    return playwrightLike.describe(() => {
+      playwrightLike.describe.configure({ retries: 0 });
+      failer(...args.slice(0, -1), wrapped);
+    });
   };
   // The cast restates the contract the wrapper keeps by construction: it
   // forwards every argument unchanged except the trailing body, which it
@@ -129,7 +185,7 @@ export function failing<TestFn extends (...args: any[]) => any>(
 
 /**
  * Assert that a body fails for exactly the given reason — the standalone
- * sibling of {@link failing} for use INSIDE a plain test, where throwing (not
+ * sibling of {@link createFailing} for use INSIDE a plain test, where throwing (not
  * inverted success) is the right failure signal.
  */
 export async function expectFailure(options: { failure: RegExp }, body: () => Promise<unknown>) {
@@ -147,6 +203,6 @@ export async function expectFailure(options: { failure: RegExp }, body: () => Pr
   // mistaken for a candidate failure.
   throw new Error(
     `The test should have failed with /${options.failure.source}/ but it succeeded. ` +
-      `If the pinned bug is fixed, delete the failing() wrapper and keep the body as a plain test.`,
+      `If the pinned bug is fixed, delete the createFailing() wrapper and keep the body as a plain test.`,
   );
 }

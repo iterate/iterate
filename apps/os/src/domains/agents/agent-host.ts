@@ -8,10 +8,17 @@
 
 import { isIdempotencyConflict } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
-import type { AgentFileAttachment, AgentProcessorContract } from "./agent-processor-contract.ts";
+import type { ConfigRepoFileMentionTarget } from "@iterate-com/shared/message";
+import type { ProjectAiInterceptor } from "../../lib/model-interception.ts";
+import type { AgentMentionReadResult } from "./agent-mention-materialization.ts";
+import type {
+  AgentFileAttachment,
+  AgentProcessorContract,
+  AgentLlmCompletion,
+} from "./agent-processor-contract.ts";
 import type {
   WorkersAiBinding,
-  CloudflareAiGatewayTransport,
+  AiGatewayOptions,
   WorkersAiMessage,
 } from "./workers-ai-transport.ts";
 
@@ -25,16 +32,7 @@ export type AgentLlmTransport = (args: {
   signal: AbortSignal;
   /** The transport awaits each result before delivering the next chunk. */
   onChunk?: (text: string) => Promise<void>;
-}) => Promise<{
-  text: string;
-  usage?: {
-    inputTokens: number;
-    outputTokens: number;
-    cachedInputTokens?: number;
-    reasoningOutputTokens?: number;
-  };
-  rawResponse?: unknown;
-}>;
+}) => Promise<AgentLlmCompletion>;
 
 /**
  * Host-provided deps beyond the stream plumbing.
@@ -42,14 +40,16 @@ export type AgentLlmTransport = (args: {
  * - `ai` is the Workers AI binding (`env.AI`) used for every LLM turn.
  *   Optional so a host without one fails requests with a recorded error
  *   instead of crashing at construction.
- * - `cloudflareAiGatewayTransport` resolves how attempts travel through the
- *   gateway (unified billing vs the BYOK lane — see
- *   CloudflareAiGatewayTransport). A function, not a value: it reads
- *   deployment config and the host's secrets, and a bad config must fail the
- *   ATTEMPT (recorded, retried) rather than DO construction.
+ * - `getAiGatewayOptions` resolves transport and request metadata together.
+ *   The host owns deployment config, credentials, and attribution. Resolution
+ *   happens per attempt so failures are recorded and retried rather than
+ *   preventing DO construction.
  * - `resolveModelFileUrl` remints a short-lived, immutable URL for a project
  *   file immediately before a model request. Production hosts provide it;
- *   bare tests without it retain the stored attachment URL.
+ *   bare tests without it retain the stored reference URL.
+ * - `readRepoFile` resolves a bounded prefix of one semantic config-repo
+ *   mention at latest HEAD. The processor commits that source material
+ *   before scheduling a turn.
  * - `writeWorkspaceFile` writes one file into THIS agent's own workspace
  *   directory (the filesystem `itx.workspace` resolves to; the given path is
  *   relative to that directory) so oversized script results can spill to a
@@ -67,14 +67,13 @@ export type AgentLlmTransport = (args: {
  */
 export type AgentProcessorDeps = {
   ai?: WorkersAiBinding;
-  cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
-  consultAiInterceptor?: (input: {
-    source: "agent-turn";
-    agentPath: string;
-    model: string;
-    body: { messages: WorkersAiMessage[] };
-  }) => Promise<unknown>;
+  getAiGatewayOptions?: (eventOffset: number) => AiGatewayOptions;
+  consultAiInterceptor?: (input: ProjectAiInterceptor.Input) => Promise<unknown>;
   resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
+  readRepoFile?: (
+    target: ConfigRepoFileMentionTarget,
+    maximumBytes: number,
+  ) => Promise<AgentMentionReadResult | null>;
   writeWorkspaceFile?: (input: {
     content: string;
     path: string;

@@ -1,11 +1,8 @@
-// The "feed" sibling view: feed_items from the unified browser-feed processor.
-// Raw rows: consecutive events of the same type collapse into one raw.group row;
-// specific-renderer types (created/woken/child-stream-created) always get their own
-// raw.* singleton row with custom UI. Agent rows (kind agent.*) render generically —
-// this debug app has no chat UI. Uses the same virtualized tail-following
-// scroll shell as the raw-events view.
+// The feed view reads server publications and one raw row per durable event.
+// It shares the event mirror and virtualized tail-following scroll behavior.
 
 import { Link } from "@tanstack/react-router";
+import { z } from "zod";
 import {
   useCallback,
   useLayoutEffect,
@@ -24,23 +21,20 @@ import {
   type StreamBrowserStore,
 } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { BROWSER_STREAM_PROCESSORS } from "~/domains/streams/client-libraries/browser/browser-stream-processors.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
-type FeedItemRow = {
-  local_index: number;
-  kind: string;
-  first_offset: number;
-  last_offset: number;
-  event_count: number;
-  data: Record<string, unknown>;
-};
-
-const SPECIFIC_RENDERER_TYPES: Record<string, string> = {
-  "raw.stream.created": "events.iterate.com/stream/created",
-  "raw.stream.woken": "events.iterate.com/stream/woken",
-  "raw.stream.child-stream-created": "events.iterate.com/stream/child-stream-created",
-};
+const FeedItemRow = z.object({
+  local_index: z.number(),
+  kind: z.string(),
+  first_offset: z.number(),
+  last_offset: z.number(),
+  data: z
+    .string()
+    .transform((json) => JSON.parse(json))
+    .pipe(z.record(z.string(), z.unknown())),
+});
+type FeedItemRow = z.infer<typeof FeedItemRow>;
+const ChildStreamPayload = z.object({ childPath: z.string().min(1) });
 
 export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) {
   const store = useMemo(
@@ -49,7 +43,6 @@ export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) 
         streamPath: streamView.path,
         projectId: streamView.projectId,
         createStreamClient: createCapnwebStreamClient,
-        processors: BROWSER_STREAM_PROCESSORS,
       }),
     [streamView.projectId, streamView.path],
   );
@@ -393,20 +386,18 @@ function FeedItemWindow({
   const lastIndex = virtualItems.at(-1)?.index ?? -1;
   const rowQueryResult = useStreamQuery(
     streamDatabase,
-    `SELECT local_index, kind, first_offset, last_offset, event_count, json(data) AS data
+    `SELECT local_index, kind, first_offset, last_offset, json(data) AS data
      FROM feed_items
-     WHERE local_index >= ? AND local_index < ?
-     ORDER BY local_index ASC`,
-    [firstIndex, lastIndex + 1],
+     ORDER BY local_index ASC, ordinal ASC LIMIT ? OFFSET ?`,
+    [lastIndex - firstIndex + 1, firstIndex],
   );
   const rowsByLocalIndex = useMemo(() => {
     const rows = new Map<number, FeedItemRow>();
-    for (const row of rowQueryResult.data) {
-      const parsed = parseFeedItem(row);
-      if (parsed !== undefined) rows.set(parsed.local_index, parsed);
+    for (const [index, row] of rowQueryResult.data.entries()) {
+      rows.set(firstIndex + index, FeedItemRow.parse(row));
     }
     return rows;
-  }, [rowQueryResult.data]);
+  }, [firstIndex, rowQueryResult.data]);
 
   return virtualItems.map((virtualItem) => {
     const row = rowsByLocalIndex.get(virtualItem.index);
@@ -503,11 +494,6 @@ function FeedItem({
     );
   }
 
-  const offsetLabel =
-    row.event_count === 1 ? String(row.first_offset) : `${row.first_offset}–${row.last_offset}`;
-  const detailLabel =
-    row.event_count === 1 ? "1 event" : `${row.event_count.toLocaleString()} events`;
-
   return (
     <article
       data-testid="feed-item"
@@ -515,7 +501,7 @@ function FeedItem({
       data-event-type={eventType}
       data-first-offset={row.first_offset}
       data-last-offset={row.last_offset}
-      data-event-count={row.event_count}
+      data-event-count={1}
       className={articleClass}
     >
       <button
@@ -525,9 +511,9 @@ function FeedItem({
         type="button"
         onClick={onToggle}
       >
-        <span>{offsetLabel}</span>
+        <span>{row.first_offset}</span>
         <span className="truncate">{eventType}</span>
-        <span className="whitespace-nowrap text-[#667085]">{detailLabel}</span>
+        <span className="whitespace-nowrap text-[#667085]">1 event</span>
       </button>
       {expanded ? <FeedItemJson row={row} /> : null}
     </article>
@@ -559,7 +545,7 @@ function StreamLifecycleMarker({
       data-event-type={feedItemEventType(row)}
       data-first-offset={row.first_offset}
       data-last-offset={row.last_offset}
-      data-event-count={row.event_count}
+      data-event-count={1}
     >
       <button
         aria-expanded={expanded}
@@ -599,7 +585,7 @@ function ChildStreamCreatedFeedItem({
   row: FeedItemRow;
   onToggle(): void;
 }) {
-  const childPath = childStreamPathFromRow(row);
+  const childPath = ChildStreamPayload.safeParse(row.data.payload).data?.childPath;
   const childSearch =
     childPath === undefined
       ? undefined
@@ -617,7 +603,7 @@ function ChildStreamCreatedFeedItem({
       data-event-type={eventType}
       data-first-offset={row.first_offset}
       data-last-offset={row.last_offset}
-      data-event-count={row.event_count}
+      data-event-count={1}
     >
       <div className="px-2.5 py-2">
         <div className="flex items-start gap-2.5 rounded-lg border border-violet-100 bg-violet-50/60 px-3 py-2.5">
@@ -670,66 +656,13 @@ function FeedItemJson({ row }: { row: FeedItemRow }) {
       className="m-0 overflow-auto whitespace-pre-wrap break-words p-2.5 font-mono text-[13px] leading-normal"
       data-testid="feed-item-json"
     >
-      {JSON.stringify(feedItemExpandedJson(row), null, 2)}
+      {JSON.stringify(row.data, null, 2)}
     </pre>
   );
 }
 
-function childStreamPathFromRow(row: FeedItemRow): string | undefined {
-  const event = feedItemEvents(row)[0];
-  if (event === undefined) return undefined;
-  const payload = event.payload;
-  if (payload === null || typeof payload !== "object") return undefined;
-  const childPath = (payload as Record<string, unknown>).childPath;
-  return typeof childPath === "string" && childPath.length > 0 ? childPath : undefined;
-}
-
 function feedItemEventType(row: FeedItemRow) {
-  if (typeof row.data.eventType === "string") return row.data.eventType;
-  const first = feedItemEvents(row)[0];
-  if (first !== undefined && typeof first.type === "string") return first.type;
-  return SPECIFIC_RENDERER_TYPES[row.kind] ?? row.kind;
-}
-
-function feedItemEvents(row: FeedItemRow): Record<string, unknown>[] {
-  if (!Array.isArray(row.data.events)) return [];
-  return row.data.events.flatMap((entry) =>
-    entry !== null && typeof entry === "object" ? [entry as Record<string, unknown>] : [],
-  );
-}
-
-function feedItemExpandedJson(row: FeedItemRow) {
-  const events = feedItemEvents(row);
-  return events.length === 0 ? row.data : events;
-}
-
-function parseFeedItem(row: Record<string, unknown>): FeedItemRow | undefined {
-  if (
-    typeof row.local_index !== "number" ||
-    typeof row.kind !== "string" ||
-    typeof row.first_offset !== "number" ||
-    typeof row.last_offset !== "number" ||
-    typeof row.event_count !== "number"
-  ) {
-    return undefined;
-  }
-  let data: Record<string, unknown> = {};
-  if (typeof row.data === "string") {
-    try {
-      const parsed: unknown = JSON.parse(row.data);
-      if (parsed !== null && typeof parsed === "object") data = parsed as Record<string, unknown>;
-    } catch {
-      data = {};
-    }
-  }
-  return {
-    local_index: row.local_index,
-    kind: row.kind,
-    first_offset: row.first_offset,
-    last_offset: row.last_offset,
-    event_count: row.event_count,
-    data,
-  };
+  return typeof row.data.type === "string" ? row.data.type : row.kind;
 }
 
 function FeedComposer({ streamStore }: { streamStore: StreamBrowserStore }) {

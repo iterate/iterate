@@ -26,6 +26,7 @@ import {
   subprotocolAuth,
 } from "./gateway.ts";
 import { verifyAppJwt } from "./github-app.ts";
+import { handleCapnwebRequest } from "./capnweb.ts";
 import { handleMcpRequest } from "./mcp.ts";
 import { type Pet, seedPets } from "./pets.ts";
 import { handlePetsRpcRequest, petshopOpenApiDocument } from "./rpc.ts";
@@ -194,6 +195,8 @@ const INDEX = dedent`
   POST /rpc/*               oRPC handler for the pets API (what an @orpc/client talks); bearer-protected
   GET|POST /api/v2/*        the same pets procedures served REST-shaped (per the OpenAPI doc)
   GET|POST /mcp             MCP server (streamable HTTP): tools list_pets, get_pet, create_pet; bearer-protected — an unauthorized call answers 401 + WWW-Authenticate pointing at the RFC 9728 metadata above (OAuth-protected MCP server)
+  POST /capnweb             capnweb HTTP batch: the same pets API as ONE RPC object (listPets, getPet, createPet); bearer-protected (Authorization header)
+  GET  /capnweb               (websocket) — the same capnweb API as a session; the bearer rides the Authorization UPGRADE header
   GET  /gateway               (websocket) — token in the first {op:identify, token} FRAME (Discord shape)
   GET  /gateway-header        (websocket) — token in the Authorization: Bearer UPGRADE header (OpenAI-Realtime shape)
   GET  /gateway-subprotocol   (websocket) — token in Sec-WebSocket-Protocol as "petshop.access-token.<token>" (browser-WS shape)
@@ -1119,6 +1122,14 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
       });
     }
     return handleMcpRequest(request, { owner: grant.sub, pets: deps.pets });
+  }
+  // The capnweb door (capnweb.ts): the same pets API as an RPC session — a
+  // batch POST or a WebSocket upgrade — behind the same bearer check; the token
+  // rides the Authorization header of the POST or of the upgrade request.
+  if (url.pathname === "/capnweb") {
+    const grant = await accessGrant(request, deps);
+    if (!grant) return json({ error: "invalid_token" }, 401);
+    return handleCapnwebRequest(request, { owner: grant.sub, pets: deps.pets });
   }
   // The WebSocket gateways (§9 D6). Three shapes, same sealed access token,
   // presented three ways — the OS side proves it can inject the credential into

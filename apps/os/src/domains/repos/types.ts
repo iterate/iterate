@@ -29,6 +29,13 @@ export type RepoFileChange =
 
 /** Command object for committing a batch of repo file mutations. */
 export type CommitRepoFilesInput = {
+  /**
+   * When the branch head is exactly this commit oid, the new commit REPLACES
+   * it (same parents, this message) instead of stacking on top. If the head
+   * has moved on — or the repo is GitHub-linked, whose history stays
+   * append-only — an ordinary commit lands; the result's `amended` says which.
+   */
+  amendIfHead?: string;
   author?: { email: string; name: string };
   branch?: string;
   changes: RepoFileChange[];
@@ -37,6 +44,8 @@ export type CommitRepoFilesInput = {
 
 /** Result returned after a repo commit attempt, including no-op commits. */
 export type CommitRepoFilesResult = {
+  /** True when `amendIfHead` matched the head and the commit replaced it. */
+  amended: boolean;
   branch: string;
   changedPaths: string[];
   commitOid: string;
@@ -58,6 +67,19 @@ export type EditRepoFileInput = {
 export type EditRepoFileResult = CommitRepoFilesResult & {
   occurrenceCount: number;
   path: string;
+};
+
+/** Query for fuzzy matching committed paths without returning the full repo manifest. */
+export type SearchRepoFilesInput = {
+  query: string;
+  /** Defaults to 50 and is capped at 100. */
+  limit?: number;
+};
+
+/** Bounded fuzzy file matches at one committed repo head. */
+export type SearchRepoFilesResult = {
+  commitOid: string;
+  paths: string[];
 };
 
 /** One commit in a repo's history, as returned by `repo.log`. */

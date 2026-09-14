@@ -6,5 +6,12 @@ import { defineConfig } from "vitest/config";
 // flake tests permanently in the main suite would clog the expected-fail
 // metrics the flake dashboard depends on.
 export default defineConfig({
-  test: { include: ["**/*.vitest-target.ts"], environment: "node" },
+  test: {
+    include: ["**/*.vitest-target.ts"],
+    environment: "node",
+    // Mirrors the CI e2e suites' retry policy. The wrapper must pin per-test
+    // retry to zero or every green outcome here would run (and record) twice
+    // — the parent test asserts exactly one record per case.
+    retry: { count: 1, delay: 10 },
+  },
 });

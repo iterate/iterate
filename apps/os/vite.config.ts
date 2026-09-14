@@ -116,7 +116,22 @@ export default defineConfig({
             { configPath: "./wrangler.worker-bundler.jsonc" },
           ],
     }),
-    tanstackStart(),
+    tanstackStart({
+      // The same header apps/docs stamps on its generated route tree: the
+      // one place the generated `as any` assertions can carry their reason.
+      // Mirrored in scripts/generate-route-tree.ts, which must produce
+      // byte-identical output.
+      router: {
+        routeTreeFileHeader: [
+          "/* eslint-disable */",
+          "// @ts-nocheck",
+          "// noinspection JSUnusedGlobalSymbols",
+          "// TanStack Router generates the `as any` route-update assertions below because",
+          "// the route IDs are registered by the later FileRoutesByPath declaration; the",
+          "// generated declaration makes those otherwise-unrepresentable assertions safe.",
+        ],
+      },
+    }),
     viteReact(),
     tailwindcss(),
     ...posthogSourceMaps(),

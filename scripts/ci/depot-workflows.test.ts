@@ -53,6 +53,14 @@ const deploymentWorkflows = [
     },
   },
   {
+    file: ".depot/workflows/deploy-kit.yml",
+    group: "deploy-kit-production",
+    jobs: {
+      deploy: { size: "4x16", timeoutMinutes: 30 },
+      notify: { size: "2x8", timeoutMinutes: 10 },
+    },
+  },
+  {
     file: ".depot/workflows/deploy-os.yml",
     group: "deploy-auth-os-production",
     jobs: {
@@ -115,10 +123,46 @@ describe("Depot deployment safety", () => {
     expect(workflow.on?.push?.paths).toContain(".depot/workflows/deploy-tunnels.yml");
   });
 
+  it("installs the pinned ESP-IDF release before preparing Kit firmware", () => {
+    const workflow = loadWorkflow(".depot/workflows/deploy-kit.yml");
+    const deploy = workflow.jobs.deploy;
+    const install = deploy.steps?.find((step) => step.name === "Install ESP-IDF 5.4.2");
+    const build = deploy.steps?.find((step) => step.name === "Build Kit firmware releases");
+    const deployKit = deploy.steps?.find((step) => step.name === "Deploy apps/kit");
+
+    expect(install?.run).toContain("--recursive --branch v5.4.2");
+    expect(install?.run).toContain("f5c3654a1c2d2a01f7f67def7a0dc48e691f63c0");
+    expect(install?.run).toContain('"$IDF_PATH/install.sh" esp32s3');
+    expect(build?.run).toContain('source "$IDF_PATH/export.sh"');
+    expect(build?.run).toContain("pnpm run firmware:release");
+    expect(deployKit?.run).toContain('source "$IDF_PATH/export.sh"');
+    expect(workflow.on?.push?.paths).toEqual(
+      expect.arrayContaining([
+        "packages/voice-agent/**",
+        "package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "patches/**",
+      ]),
+    );
+  });
+
   it("redeploys OS when its iterate/sdk/itx/react workspace dependency changes", () => {
     const workflow = loadWorkflow(".depot/workflows/deploy-os.yml");
 
     expect(workflow.on?.push?.paths).toContain("packages/iterate/**");
+  });
+
+  it("sha-pins prod config-repo package installs to the deployed commit", () => {
+    // Without this export, prod dynamic builds install the mutable (and
+    // host-cached) iterate@main — the 2026-09-02 iterate-config outage. The
+    // sha must be rev-parsed from the workspace, not github.sha: checkout
+    // honors inputs.ref on dispatch.
+    const workflow = loadWorkflow(".depot/workflows/deploy-os.yml");
+    const deployStep = (workflow.jobs.deploy?.steps ?? []).find(
+      (step) => step.name === "Deploy apps/os",
+    );
+    expect(deployStep?.run).toContain('PLATFORM_DEPLOY_HEAD_SHA="$(git rev-parse HEAD)"');
   });
 
   it.each([
@@ -338,7 +382,14 @@ describe("Depot validation capacity", () => {
     const finalizer = steps.find((step) =>
       step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
     );
-    const upload = steps.find((step) => step.uses === "actions/upload-artifact@v4");
+    // Select by payload, not position: the flake-records upload (a sibling
+    // artifact step with laxer if-no-files-found semantics) is not the
+    // telemetry retention step this guard is about.
+    const upload = steps.find(
+      (step) =>
+        step.uses === "actions/upload-artifact@v4" &&
+        !String((step.with as any)?.name).startsWith("flake-records"),
+    );
 
     expect(finalizer, `${file} must normalize and send telemetry`).toMatchObject({
       if: "always()",

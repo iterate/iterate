@@ -36,6 +36,55 @@ describe("project app sessions", () => {
     );
   });
 
+  it("carries the display identity through validation and reports the expiry it minted", async () => {
+    const userCanAccessProject = async () => true;
+    const before = Math.floor(Date.now() / 1000);
+    const issued = await mintProjectAppSession(
+      {
+        audience,
+        email: "one@example.com",
+        image: "https://img.example/one.png",
+        name: "One",
+        projectId,
+        userId: "usr_one",
+      },
+      { secret, userCanAccessProject },
+    );
+    assert.ok(issued);
+    // The mint result names its own expiry so a renewing gate can set the
+    // cookie's Max-Age without decoding the token.
+    assert.ok(issued.expiresAt >= before + 15 * 60 - 1 && issued.expiresAt <= before + 15 * 60 + 2);
+
+    const valid = await validateProjectAppSession(
+      { audience, projectId, token: issued.token },
+      { secret, userCanAccessProject },
+    );
+    assert.ok(valid);
+    // A fresh mint is its own sign-in: loginAt is stamped now.
+    assert.ok(valid.loginAt >= before && valid.loginAt <= before + 2);
+    assert.deepEqual(valid, {
+      email: "one@example.com",
+      expiresAt: issued.expiresAt,
+      image: "https://img.example/one.png",
+      loginAt: valid.loginAt,
+      name: "One",
+      userId: "usr_one",
+    });
+
+    // A renewal carries the ORIGINAL sign-in forward, so however often a
+    // session renews its total age stays bounded by that first login.
+    const renewed = await mintProjectAppSession(
+      { audience, loginAt: valid.loginAt - 3_600, projectId, userId: "usr_one" },
+      { secret, userCanAccessProject },
+    );
+    assert.ok(renewed);
+    const renewedClaims = await validateProjectAppSession(
+      { audience, projectId, token: renewed.token },
+      { secret, userCanAccessProject },
+    );
+    assert.equal(renewedClaims?.loginAt, valid.loginAt - 3_600);
+  });
+
   it("does not mint without project access", async () => {
     assert.equal(
       await mintProjectAppSession(

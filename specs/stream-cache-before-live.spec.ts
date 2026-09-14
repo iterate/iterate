@@ -23,7 +23,7 @@ test("empty agent feeds distinguish waiting from filtered zero matches", async (
           ).__streamRuntimeDebug;
           const entry = read?.()[key] as { connectionStatus?: string } | undefined;
           return entry?.connectionStatus;
-        }, `${fixture.project.id} ${agentPath} browser-stream-processors`),
+        }, `${fixture.project.id} ${agentPath}`),
       )
       .toBe("receiving-events");
 
@@ -60,6 +60,26 @@ test("a cold stream stays pending until its server history catches up", async ({
   using stream = project.streams.get(streamPath);
   await stream.append({ type: "events.iterate.com/spec/cold-history", payload: {} });
 
+  await page.addInitScript(() => {
+    let release = () => {};
+    const election = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    Object.assign(window, {
+      __releaseStreamWriter: release,
+      __streamWriterElection: "not-requested",
+    });
+    const request = navigator.locks.request;
+    // Preserve both Web Locks overloads while delaying only event-mirror election.
+    navigator.locks.request = (async (name: string, ...args: unknown[]) => {
+      if (name.startsWith("stream-event-sync:")) {
+        Object.assign(window, { __streamWriterElection: "waiting" });
+        await election;
+      }
+      return Reflect.apply(request, navigator.locks, [name, ...args]);
+    }) as typeof request;
+  });
+
   await page.routeWebSocket(
     (url) => url.pathname === "/api",
     (socket) => {
@@ -69,16 +89,32 @@ test("a cold stream stays pending until its server history catches up", async ({
     },
   );
 
-  await page.goto(`/projects/${fixture.project.slug}/streams${streamPath}`);
-  await page
-    .getByRole("button", { name: "Append events (⌘↵)", disabled: false })
-    .waitFor({ timeout: 30_000 }); // timeout: the spec throttles every WS frame by 1s on purpose — a real delay the spinner-waiter should not paper over
-  await page.getByText("Connecting to the stream", { exact: true }).waitFor();
-  await page.getByText("Nothing here yet").waitFor({ state: "hidden" });
-  await page
-    .getByTestId("stream-feed-inspect")
-    .filter({ hasText: "spec/cold-history" })
-    .waitFor({ timeout: 30_000 }); // timeout: same deliberate 1s-per-frame WS throttle, outside the spinner-waiter's remit
+  // Assert the loading state before waiting for synchronization to enable input.
+  // The loading indicator is under test, so the spinner-waiter must not skip it.
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await page.goto(`/projects/${fixture.project.slug}/streams${streamPath}`);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __streamWriterElection: string }).__streamWriterElection,
+        ),
+      )
+      .toBe("waiting");
+    await page.getByText("Connecting to the stream", { exact: true }).waitFor({ timeout: 30_000 }); // timeout: every WS frame is delayed by 1s; spinner-waiter is disabled because the loading state is under test
+    await page.getByRole("button", { name: "Append events (⌘↵)", disabled: true }).waitFor();
+    await page.getByText("Nothing here yet").waitFor({ state: "hidden" });
+    await page.evaluate(() =>
+      (window as unknown as { __releaseStreamWriter: () => void }).__releaseStreamWriter(),
+    );
+    await page
+      .getByTestId("stream-feed-inspect")
+      .filter({ hasText: "spec/cold-history" })
+      .waitFor({ timeout: 30_000 }); // timeout: deliberate 1s-per-frame throttle, outside the spinner-waiter's remit
+    await page
+      .getByRole("button", { name: "Append events (⌘↵)", disabled: false })
+      .waitFor({ timeout: 30_000 }); // timeout: the throttle delays readiness after history; spinner-waiter remains disabled while checking the loading transition
+    await page.getByText("Connecting to the stream", { exact: true }).waitFor({ state: "hidden" });
+  });
 });
 
 test("a cached stream opens before its live connection", async ({ helpers, page }) => {

@@ -351,6 +351,7 @@ type StreamEventSenderHooks = {
     afterOffset: number;
     beforeOffset: number;
     limit: number;
+    byteLimit?: number;
   }): SizedStreamEvent[];
   /** Current core reduced state, read in the same synchronous block as each delivery. */
   coreState(): CoreProcessorState;
@@ -575,6 +576,24 @@ export class StreamEventSender {
     this.connections.onAlarm();
     this.#failExpiredHostedDeliveries();
     return this.sendDue();
+  }
+
+  /**
+   * Retire one hosted callback because its facet source changed. This is not a
+   * generic connection close: an outstanding hosted batch owns a durable
+   * watchdog row, which must be cleared for precisely this generation before
+   * the unchanged cursor is redelivered to the replacement facet.
+   */
+  replaceHostedConnection(connectionKey: string): void {
+    const expectedDelivery = this.connections.closeHostedForReplacement(connectionKey);
+    if (expectedDelivery === undefined) return;
+    this.#hooks.store.clearInFlight(connectionKey, {
+      connectionGeneration: expectedDelivery.connectionGeneration,
+      cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
+    });
+    // This is the sender's ordinary, caught reconciliation path. It derives a
+    // new wake from the unchanged cursor without an unobserved follow-up task.
+    this.sendDue();
   }
 
   // ===========================================================================
@@ -1299,7 +1318,7 @@ export class StreamEventSender {
         ? this.#justCommittedEvents
             .filter((entry) => entry.event.offset < beforeOffset)
             .slice(0, limit)
-        : this.#hooks.readEvents({ afterOffset, beforeOffset, limit });
+        : this.#hooks.readEvents({ afterOffset, beforeOffset, limit, byteLimit });
     if (sized.length <= 1) return sized;
     let bytes = 0;
     for (let index = 0; index < sized.length; index += 1) {
@@ -2048,6 +2067,15 @@ export class StreamConnections {
 
   close(connectionKey: string, reason: ConnectionCloseReason): void {
     this.#connections.get(connectionKey)?.close(reason);
+  }
+
+  /** Close and identify a hosted callback whose durable watchdog its owner must settle. */
+  closeHostedForReplacement(connectionKey: string): ExpectedHostedDeliveryState | undefined {
+    const connection = this.#connections.get(connectionKey);
+    const expectedDelivery = connection?.expectedHostedDelivery;
+    if (connection?.kind !== "hosted" || expectedDelivery === undefined) return undefined;
+    connection.close("replaced");
+    return expectedDelivery;
   }
 
   has(connectionKey: string): boolean {

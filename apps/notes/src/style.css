@@ -1,0 +1,88 @@
+:root {
+  font:
+    16px/1.5 system-ui,
+    sans-serif;
+  color: #19362e;
+  background: #f4f6f1;
+}
+body {
+  margin: 0;
+}
+main {
+  max-width: 760px;
+  margin: 7vh auto;
+  padding: 0 24px;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+}
+h1 {
+  font-size: 2.2rem;
+  line-height: 1.1;
+  margin: 8px 0 20px;
+  font-weight: 600;
+}
+.eyebrow {
+  font-size: 0.72rem;
+  letter-spacing: 0.15em;
+  font-weight: 700;
+  margin: 0;
+}
+#identity,
+.muted {
+  color: #667970;
+  font-size: 0.9rem;
+}
+label {
+  display: block;
+  margin: 28px 0 10px;
+}
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 340px;
+  padding: 22px;
+  resize: vertical;
+  border: 1px solid #c5d0c6;
+  border-radius: 8px;
+  font: inherit;
+  color: inherit;
+  background: #fffefa;
+}
+textarea:focus {
+  outline: 2px solid #4d816c;
+  outline-offset: 2px;
+}
+button {
+  border: 1px solid #164c3a;
+  border-radius: 6px;
+  background: #164c3a;
+  color: white;
+  font: inherit;
+  padding: 9px 18px;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+header button {
+  color: #164c3a;
+  background: transparent;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin: 16px 0;
+}
+#status {
+  font-size: 0.9rem;
+}
+#error {
+  color: #a33423;
+  overflow-wrap: anywhere;
+}

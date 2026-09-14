@@ -1,5 +1,5 @@
 import type { StatefulDynamicWorkerRef, StreamEvent, StreamEventInput } from "../../sdk.ts";
-import { githubAiLinterEventTypes } from "./contract.ts";
+import { GithubAiLinterProcessorContract } from "./contract.ts";
 import type { GithubAiLinterRuleSource } from "./rules.ts";
 
 export type GithubAiLinterConfig = {
@@ -89,12 +89,11 @@ export async function pullRequestLinterSubscriptionEvent(
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       name: "github-ai-linter",
-      // The linter Durable Object reduces this explicit protocol, not the
-      // surrounding agent's tool calls, LLM bookkeeping, or conversation.
-      // Source-side filtering makes a restart proportional to analyses rather
-      // than to every durable event the generic agent has ever appended.
+      // The processor contract is the one vocabulary authority. In particular,
+      // it includes `agent/paused`, which turns an exhausted review into its
+      // durable terminal analysis settlement.
       filter: {
-        eventTypes: Object.values(githubAiLinterEventTypes),
+        eventTypes: GithubAiLinterProcessorContract.consumes,
       },
       receiver: {
         action: "wake-processor",
@@ -107,14 +106,17 @@ export async function pullRequestLinterSubscriptionEvent(
       },
     },
     // Every route coordinate which changes the worker ref is part of the key.
-    // `policyVersion` stands for the config body: policy/config changes must
-    // bump it, or same-key/different-body validation exposes the omission.
+    // Policy changes and delivery-shape changes have independent revisions:
+    // the latter prevents a persisted old filter from colliding with its
+    // replacement under same-key/different-body validation. `delivery:2` is
+    // the durable filter/receiver shape; bump it when either changes.
     idempotencyKey: [
       "github-ai-linter/subscription",
       input.connection,
       input.repositoryId,
       input.pullRequestNumber,
       `policy:${config.policyVersion}`,
+      "delivery:2",
       `stream:${input.streamPath}`,
     ].join(":"),
   };

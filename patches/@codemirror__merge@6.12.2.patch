@@ -1,0 +1,44 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index f3f9998639e0b29d8c6bfce1ff2f7914731b3b85..ba5b4016e57816b6d0d304deb56092cd81cb1505 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -242,6 +242,8 @@ function findMatch(a, fromA, toA, b, fromB, toB, size, divideTo) {
+         if (best || size < divideTo)
+             return best;
+         for (let start = fromA + size;;) {
++            if (timeout > 0 && Date.now() > timeout)
++                return best;
+             if (!validIndex(a, start))
+                 start++;
+             let end = start + size;
+@@ -252,6 +254,8 @@ function findMatch(a, fromA, toA, b, fromB, toB, size, divideTo) {
+             let seed = a.slice(start, end);
+             let found = -1;
+             while ((found = rangeB.indexOf(seed, found + 1)) != -1) {
++                if (timeout > 0 && Date.now() > timeout)
++                    return best;
+                 let prefixAfter = commonPrefix(a, end, toA, b, fromB + found + seed.length, toB);
+                 let suffixBefore = commonSuffix(a, fromA, start, b, fromB, fromB + found);
+                 let length = seed.length + prefixAfter + suffixBefore;
+diff --git a/dist/index.js b/dist/index.js
+index 8322cf9b1d463a8e6b4b0ccb4e36069e2de53bda..4866a5b8c93632776f6abc92834ed0d8e772fc21 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -240,6 +240,8 @@ function findMatch(a, fromA, toA, b, fromB, toB, size, divideTo) {
+         if (best || size < divideTo)
+             return best;
+         for (let start = fromA + size;;) {
++            if (timeout > 0 && Date.now() > timeout)
++                return best;
+             if (!validIndex(a, start))
+                 start++;
+             let end = start + size;
+@@ -250,6 +252,8 @@ function findMatch(a, fromA, toA, b, fromB, toB, size, divideTo) {
+             let seed = a.slice(start, end);
+             let found = -1;
+             while ((found = rangeB.indexOf(seed, found + 1)) != -1) {
++                if (timeout > 0 && Date.now() > timeout)
++                    return best;
+                 let prefixAfter = commonPrefix(a, end, toA, b, fromB + found + seed.length, toB);
+                 let suffixBefore = commonSuffix(a, fromA, start, b, fromB, fromB + found);
+                 let length = seed.length + prefixAfter + suffixBefore;
