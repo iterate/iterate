@@ -288,6 +288,34 @@ export class RepoDurableObject extends DurableObject<Env> {
     } = {},
   ): Promise<{ commitOid: string; files: Record<string, string> }> {
     const branch = input.branch ?? REPO_DEFAULT_BRANCH;
+    if (branch === REPO_DEFAULT_BRANCH && input.commitOid) {
+      const reader = this.#lazyReader();
+      if (reader.head()?.commitOid === input.commitOid) {
+        const { head: listedHead, paths } = await reader.listHead();
+        if (listedHead.commitOid === input.commitOid) {
+          // Match the checkout path exactly: masks select manifest paths before
+          // blob reads, then an optional explicit path set narrows that selection.
+          const selected = filterWorkerSnapshotPaths(paths.sort(), {
+            exclude: input.exclude,
+            include: input.include,
+          });
+          const wanted = input.paths ? new Set(input.paths) : undefined;
+          const selectedPaths = wanted ? selected.filter((path) => wanted.has(path)) : selected;
+          const { bytes, head } = await reader.readHeadPaths(selectedPaths);
+          // A lazy sync can interleave between the manifest and blob read.
+          // Only return bytes when both observations name the immutable pin.
+          if (head.commitOid === input.commitOid) {
+            const files: Record<string, string> = {};
+            const decoder = new TextDecoder();
+            selectedPaths.forEach((path, index) => {
+              const content = bytes[index];
+              if (content) files[path] = decoder.decode(content);
+            });
+            return { commitOid: input.commitOid, files };
+          }
+        }
+      }
+    }
     const cacheable =
       branch === REPO_DEFAULT_BRANCH &&
       input.commitOid === undefined &&

@@ -389,8 +389,10 @@ startup samples retained one cold acceptance timeout at 10 seconds, whose
 setup eventually resolved at 18,515 ms. The four succeeding calls reached
 acceptance at 8,483/1,658/1,812/1,587 ms, with first PCM at
 9,524/2,657/2,763/2,607 ms. The failed sample has no observed call-started or
-provider milestones; its pre-voice delay remains unattributed. Do not summarize
-only the last three as the distribution of all fresh calls.
+provider milestones. Correlated logs now identify cold artifact builds in this
+call's dependency chain, as detailed below; the complete delay is not yet
+explained. Do not summarize only the last three as the distribution of all
+fresh calls.
 
 The subsequent continuous test failed before audio while opening its
 subscription, with native storage-reset reference `1cvjbn8bp2mrbi7gdv5q7jbe`.
@@ -428,6 +430,64 @@ intermittent storage-reset fault. Raw artifacts are
 `startup-source-owned-ephemeral-clean.json`,
 `hosted-continuous-audio-source-owned-ephemeral-clean.json`, and
 `primitive-subscription-control.json` under the temporary artifact directory.
+
+### Cold build attribution and rejected context batching
+
+The first call's ITX log `log_07ee4e17bcaa46f1aeff0a18e191025f` confirms
+`Function.call` took 18,519 ms, from 17:40:11.447 to 17:40:29.966 UTC.
+Its trace is `780585d24b84a63f1a380f89609fe22a`; the original build also
+appears under `e44e8b200dd98682cefb1ef91a9df8ae`. The mounted voice
+entrypoint runs through a native StreamDO's ProcessorFacet, separate from
+the hosted conversation parent. The generic function label is not evidence
+that the whole delay was agent creation.
+
+The build coordinator recorded `voice-agent.ts` taking 8,408 ms, from
+17:40:15.140 to 17:40:23.548, and `worker.ts` taking 5,312 ms, settling at
+17:40:21.381 with 22 coalesced waiters. These operations overlap; their
+durations must not be added. They include source loading, compilation and
+cache persistence. The voice artifact's KV write alone has a 2,698 ms span;
+the build currently awaits that write before returning its artifact.
+
+This proves cold builds occurred, not that they recur for each new stream.
+The SDK pin participates in artifact identity and this run followed a new
+pin. Native span timestamps are inconsistent across actors, and the function
+finishes after the coordinator settlement, so this is still an incomplete
+breakdown of the 18.5 seconds. The storage reset in the subsequent test
+remains a separate unresolved fault. Raw queries and their limits are recorded
+in `clean-cold-attribution.md` under the temporary artifact directory.
+
+Fable's proposed initial persona-context batching was also tested with five
+calls before, five with the variant, and five after restoring the baseline.
+All 15 produced audio without diagnostics and all three sockets closed with
+code 1000. Median acceptance was 2,046/2,013/1,562 ms and first PCM was
+2,984/3,029/2,596 ms. The variant did not consistently improve either outcome,
+so it was rejected and the original source was restored. Evidence is in
+`persona-initial-batch-aba-20260914/summary.json`.
+
+An unchanged-source hosted idle control retained one authenticated project
+WebSocket across all four calls. The harness asserted the hosted path prefix
+before connecting and issued no keepalive, polling, health or setup traffic
+during its quiet intervals:
+
+| Quiet interval | Acceptance | Provider handshake | First PCM |
+| -------------- | ---------: | -----------------: | --------: |
+| Initial call   |   3,138 ms |           1,263 ms |  4,000 ms |
+| 30 seconds     |   2,144 ms |             756 ms |  3,204 ms |
+| 90 seconds     |   2,257 ms |           1,002 ms |  3,145 ms |
+| 180 seconds    |   2,250 ms |           1,336 ms |  3,136 ms |
+
+All four produced audio without diagnostics; the project socket closed with
+code 1000. This observed no progressive idle penalty through three minutes;
+one sample per interval does not establish a distribution or prove that the
+permanent socket prevents hibernation. An earlier run accidentally selected
+ordinary native paths; it remains a separate native control, never hosted
+evidence. Artifacts are `hosted-idle-decay-control.log` and
+`idle-decay-native-results.json` in the temporary directory.
+
+Fable's focused cold-build review recommends measuring background artifact
+persistence and using the existing entrypoint health call at client reconnect.
+Its proposed stale-while-revalidate policy reads remain unadopted: latency
+work must preserve the existing egress-policy enforcement guarantees.
 
 ## Reproduce
 
