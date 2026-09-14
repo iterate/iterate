@@ -509,7 +509,8 @@ hash correctly remains identical. All six calls succeed:
 | Repo snapshot native callee span | 1,615 / 348 / 244     | 0 / 0 / 0             |
 | Artifact KV write                | 1,618 / 1,268 / 2,092 | 1,255 / 1,120 / 988   |
 
-Zero is the reported span resolution, not literally zero CPU. The removed
+Zero is the recorded span duration, not literally zero work: Workers clocks
+advance on I/O, and native invocation wall time can be nonzero. The removed
 checkout is verified; n=3 and variable KV latency do not establish that the
 entire median health improvement (7.75 to 6.72 seconds) comes from that fix.
 Artifacts are `cold-pinned-worker-build-{before,after}.json`.
@@ -550,6 +551,64 @@ passing body and reports unexpected failures as `Expect test to fail`.
 Keep the existing expectations and investigate the reset. These traces do
 not identify its cause or establish a hosted-placement regression. Raw
 evidence is `c503-storage-reset-{observability,traces}-raw.json`.
+
+A subsequent four-call mic/filler control acknowledged 201/1/201/1 client
+mic appends and terminated all calls normally on one socket (close 1000).
+Single-frame arms used the processor's existing silence filler for the
+remaining 20-second input window, without input-clock-debt failures. Gaps
+remained in both modes; continuous-mic answers lasted 21.3/23.3 seconds while
+filler arms split into several shorter answers, with possible final-segment
+truncation at teardown. Do not pool those unequal answers or attribute the
+gaps specifically to SQLite. Evidence is
+`hosted-mic-fill-control-actual-20260914{,-stage-metrics}.json`. The earlier
+`run-20260914.json` contains only four harness prefix-validation failures,
+with no setup or provider calls; it is not an audio control.
+
+Runtime `85f8e58c1` starts the immutable artifact cache write before returning
+the compiled artifact, without awaiting its completion. Same-key callers still
+share the coordinator's in-memory result. Cache-write errors are logged once;
+interrupted persistence can require a later rebuild from the authoritative
+source. Source failures and durable queued-build ownership remain unchanged.
+The coordinator's settled duration now excludes cache persistence: a reduction
+in that metric alone is not a compilation speedup. Separate phase logs record
+cache read, source snapshot, compilation and cache-write elapsed times. Workers
+[timers advance on I/O](https://developers.cloudflare.com/workers/runtime-apis/performance/),
+so these are I/O-bounded phase measurements, not isolated CPU profiles.
+All 31 focused worker tests and app typecheck pass. Claude Fable 5.1 xhigh
+reviewed that exact commit and found no concrete correctness issue; its review
+did not run tests or claim preview proof.
+
+Preview version `a40c2411-887e-4bcc-a579-d95ac6964052`, still on SDK pin
+`055337b`, passed deployment smokes. The repeated three-row forced-cold
+control succeeded before and after (both sockets closed 1000):
+
+| Measurement (ms), three samples | Before background persistence | After                      |
+| ------------------------------- | ----------------------------- | -------------------------- |
+| Full health call                | 10,356 / 6,044 / 7,282        | 8,134 / 5,604 / 5,870      |
+| Coordinator settlement          | 6,105 / 3,703 / 5,181         | 2,473 / 2,034 / 2,139      |
+| Cache write                     | 1,404 / 2,183 / 1,579         | 2,345 / unobserved / 1,776 |
+| Source snapshot phase           | not instrumented              | 253 / 41 / 48              |
+| Compilation phase               | not instrumented              | 2,210 / 1,985 / 2,086      |
+
+Median full health-call time changed from 7.28 to 5.87 seconds. n=3 and
+variable source/compilation/cache timing limit causal attribution. The second
+after-row lacks a cache-completion log and native invocation span even in the
+extended query; an independent KV read verified its matching 1,138,058-byte
+artifact exists. Do not infer a lost write from missing telemetry, or claim
+the missing continuation's cause is known. Artifacts are
+`cold-build-background-cache-{before,after}{,-analysis}.json`; after trace
+`f4a931bb1f88f25605043ac3368ee4d2` carries the measured phases.
+
+The following five fresh hosted voice calls all produced audio without
+diagnostics and closed their shared socket with 1000. Acceptance was
+**5,800 / 1,817 / 2,534 / 1,934 / 1,901 ms**, with first PCM at
+**7,139 / 2,781 / 3,519 / 2,906 / 2,987 ms**. Retain the first cold call;
+the remaining median acceptance is 1,918 ms, still materially above the
+direct Node baseline. This control follows the forced-cold health experiment,
+so it is a first voice call after deployment, not the deployment's first
+request. Evidence is `hosted-background-cache-startup-control.json`.
+Every CI check passed on runtime commit `85f8e58c1`; this does not resolve the
+earlier storage faults or complete sustained-audio performance proof.
 
 ## Reproduce
 
