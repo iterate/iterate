@@ -13,7 +13,6 @@
 // THE SINGLE SOURCE: build-sdk.mjs bundles THIS module — pulling `RepoProcessor` from ./processor.ts —
 // into the generated REPO_PROCESSOR_SOURCE string; library.ts hands it to `facets.get` as the spec.
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
-import { requestCreation } from "../stream/creation-saga.ts";
 import type { RepoFileChange, RepoLogEntry } from "../context/repos.ts";
 import { repoArtifactName, type RepoIdentity, type RepoView } from "./contract.ts";
 import { RepoProcessor } from "./processor.ts";
@@ -82,17 +81,26 @@ export class RepoDurableObject extends StreamProcessorDurableObject<RepoView> {
 
   // ── the creation saga ──
 
-  /** Bring the repo into being — the saga, as apps/os runs it (stream/creation-saga.ts
-   *  `requestCreation`): the request on this repo's path, the processor's effect provisioning the
-   *  Artifacts repo and landing the terminal fact, then the certificate — or the recorded failure,
-   *  thrown; a later `create()` is a new attempt. Idempotent: a created repo answers at once. Every
-   *  other method refuses until the saga has completed. */
+  /** Bring the repo into being — the saga, as apps/os runs it: append `repos/create-requested`
+   *  unless a request is open or done (a new attempt after a failure, keyed by the attempt), let the
+   *  catch-up drive the processor's effect, re-read for the terminal fact (it lands one page past the
+   *  request), then answer with the identity — or throw the recorded failure. Idempotent: a created
+   *  repo answers at once. Every other method refuses until the saga has completed. */
   async create(): Promise<RepoIdentity> {
     const { path } = await this.#identity();
-    const state = await requestCreation("repos", path, {
-      snapshot: () => this.snapshot(),
-      append: (event) => this.withItx((itx) => itx.append(event)),
-    });
+    let { state } = await this.snapshot();
+    if (state.creation !== "requested" && state.creation !== "created") {
+      await this.withItx((itx) =>
+        itx.append({
+          type: "events.iterate.com/repos/create-requested",
+          payload: { path },
+          idempotencyKey: `repos/create-requested:${path}:${state.attempts}`,
+        }),
+      );
+      ({ state } = await this.snapshot()); // reduces the request and drives the effect
+    }
+    for (let reads = 0; reads < 5 && state.creation === "requested"; reads++)
+      ({ state } = await this.snapshot());
     if (state.creation === "created") return { path };
     if (state.creation === "failed")
       throw new Error(`repo ${path}: creation failed — ${state.error}`);

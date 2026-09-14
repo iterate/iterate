@@ -60,13 +60,11 @@ console.log(`processor.js: ${(sdk.outputFiles[0].text.length / 1024).toFixed(1)}
 const externalizeToProcessorJs = {
   name: "externalize-to-processor-js",
   setup(pluginBuild) {
-    // A facet entry imports the kernel (../stream/processor.ts), the creation saga
-    // (../stream/creation-saga.ts), zod, and/or the SDK host (../sdk/index.ts); every symbol they
-    // name is re-exported by the injected processor.js.
+    // A facet entry imports the kernel (../stream/processor.ts), zod, and/or the SDK host
+    // (../sdk/index.ts); every symbol they name is re-exported by the injected processor.js.
     pluginBuild.onResolve(
       {
-        filter:
-          /(^zod$)|(\/sdk\/index\.ts$)|(\/stream\/processor\.ts$)|(\/stream\/creation-saga\.ts$)/,
+        filter: /(^zod$)|(\/sdk\/index\.ts$)|(\/stream\/processor\.ts$)/,
       },
       () => ({ path: "./processor.js", external: true }),
     );

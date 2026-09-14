@@ -8,9 +8,9 @@
 // its own path (`itx.repos.list()`; the workspace is a view of the project's one path namespace) —
 // plus what `configure` adds, the reduce in processor.ts
 // folding `workspace/configured` into the view. A path under no mount is the workspace's own scratch
-// (`/workspace/…` by convention): writable, never committed. `create()` runs the creation saga
-// (stream/creation-saga.ts): the certificate (`workspace/created { path }`) crosses to `/`, where the
-// project processor keeps the catalog `itx.workspaces.list()` reads, and lands on this path.
+// (`/workspace/…` by convention): writable, never committed. `create()` runs the creation saga: the
+// certificate (`workspace/created { path }`) crosses to `/`, where the project processor keeps the
+// catalog `itx.workspaces.list()` reads, and lands on this path.
 //
 // Storage is this facet's own SQLite: `files` (the overlay) and `whiteouts`. Text only, one file at
 // most a mebibyte (a SQLite value holds 2 MB). ONE writer, no collab, no policies. The repo facets
@@ -21,7 +21,6 @@
 // ./processor.ts (the tested spec) — into the generated WORKSPACE_PROCESSOR_SOURCE string, the SDK
 // imports left external as "./processor.js"; library.ts hands that string to `facets.get` as the spec.
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
-import { requestCreation } from "../stream/creation-saga.ts";
 import type { RepoFileChange, RepoLogEntry } from "../context/repos.ts";
 import type { WorkspaceMount, WorkspaceView } from "./contract.ts";
 import { WorkspaceProcessor } from "./processor.ts";
@@ -117,16 +116,27 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
 
   // ── the creation saga ──
 
-  /** Bring the workspace into being — the saga, as apps/os runs it (stream/creation-saga.ts
-   *  `requestCreation`): the request on this path, the processor's effect landing the certificate
-   *  (nothing to provision yet), then the identity — or the recorded failure, thrown. Idempotent: a
-   *  created workspace answers at once. Every other method refuses until the saga has completed. */
+  /** Bring the workspace into being — the saga, as apps/os runs it: append
+   *  `workspace/create-requested` unless a request is open or done (a new attempt after a failure,
+   *  keyed by the attempt), let the catch-up drive the processor's effect (nothing to provision yet:
+   *  the certificate alone), re-read for the terminal fact (it lands one page past the request),
+   *  then answer with the identity — or throw the recorded failure. Idempotent: a created workspace
+   *  answers at once. Every other method refuses until the saga has completed. */
   async create(): Promise<{ path: string }> {
     const path = await this.#path();
-    const state = await requestCreation("workspace", path, {
-      snapshot: () => this.snapshot(),
-      append: (event) => this.withItx((itx) => itx.append(event)),
-    });
+    let { state } = await this.snapshot();
+    if (state.creation !== "requested" && state.creation !== "created") {
+      await this.withItx((itx) =>
+        itx.append({
+          type: "events.iterate.com/workspace/create-requested",
+          payload: { path },
+          idempotencyKey: `workspace/create-requested:${path}:${state.attempts}`,
+        }),
+      );
+      ({ state } = await this.snapshot()); // reduces the request and drives the effect
+    }
+    for (let reads = 0; reads < 5 && state.creation === "requested"; reads++)
+      ({ state } = await this.snapshot());
     if (state.creation === "created") return { path };
     if (state.creation === "failed")
       throw new Error(`workspace ${path}: creation failed — ${state.error}`);

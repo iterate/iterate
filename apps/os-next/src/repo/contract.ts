@@ -1,15 +1,13 @@
 // src/repo/contract.ts — a repo's vocabulary and view (the triplet's first: processor.ts is the pure
 // reduce and the saga's effect, durable-object.ts the loadable host). A repo is a domain object with
-// its OWN stream, the context at any path (`/repos/<name>` by convention). Its creation is THE SAGA
-// (stream/creation-saga.ts), as in apps/os:
-// `repos/create-requested` is the durable intent; the processor's effect provisions the Artifacts
-// repo and appends the terminal fact — `repos/created`, the birth certificate (cross-posted to `/`
-// for the project catalog), or `repos/create-failed`; an open request survives an eviction and is
-// re-driven by the at-head pass. Every commit that lands through the repo is `repo/commit-completed`.
+// its OWN stream, the context at any path (`/repos/<name>` by convention). Its creation is a SAGA, as
+// in apps/os: `repos/create-requested` is the durable intent; the processor's effect provisions the
+// Artifacts repo and appends the terminal fact — `repos/created`, the birth certificate (cross-posted
+// to `/` for the project catalog), or `repos/create-failed`; an open request survives an eviction and
+// is re-driven by the at-head pass. Every commit that lands through the repo is `repo/commit-completed`.
 // The bytes are not here — they are git, in Artifacts, behind `itx.git`; the host keeps the tip's
 // snapshot as a cache in its own storage.
 import { z } from "zod";
-import { CreationState } from "../stream/creation-saga.ts";
 import { defineProcessorContract } from "../stream/processor.ts";
 
 /** The repo's identity — the request's payload, the certificate's, and the failure's: its context
@@ -46,12 +44,21 @@ const RepoCommit = z.object({
   changedPaths: z.array(z.string()),
 });
 
-export const RepoView = CreationState.extend({
+export const RepoView = z.object({
+  /** The repo's context path, from the request; null before any request. */
+  path: z.string().nullable().default(null),
+  /** Where the saga stands: null before any request; "requested" while the effect is owed;
+   *  "created" (the certificate reduced) or "failed" (closed for this attempt) at a terminal. */
+  creation: z.enum(["requested", "created", "failed"]).nullable().default(null),
+  /** How many requests have been reduced — a request after a failure is a new attempt. */
+  attempts: z.number().int().default(0),
+  /** What the newest failed attempt reported. */
+  error: z.string().nullable().default(null),
   /** The newest commit that landed THROUGH this repo (a push from outside is not a fact here). */
   tip: z.string().nullable().default(null),
   commits: z.number().int().default(0),
 });
-/** The repo's reduced state: the saga's slice, and what landed through it. */
+/** The repo's reduced state: where its creation stands, and what landed through it. */
 export type RepoView = z.infer<typeof RepoView>;
 
 export const RepoContract = defineProcessorContract({

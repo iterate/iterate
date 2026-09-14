@@ -36,16 +36,6 @@ export {
   type StreamEventInput,
 } from "../stream/processor.ts";
 export { z } from "zod";
-// THE CREATION SAGA (stream/creation-saga.ts): the state slice, the reduce, the driver and the request
-// every entity born by request shares (the repo and the workspace hosts).
-export {
-  CreationState,
-  createdEvent,
-  creationEvents,
-  driveCreationSaga,
-  reduceCreation,
-  requestCreation,
-} from "../stream/creation-saga.ts";
 // capnweb's CLIENT constructors, so userspace can dial a remote capnweb API from inside its isolate
 // through the context's own egress, and `newWorkersRpcResponse`, the SERVER half, so a loaded worker
 // can serve a capnweb API over its `fetch`. The HTTP batch is exported ON PURPOSE beside the
