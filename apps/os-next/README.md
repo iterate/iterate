@@ -33,7 +33,7 @@ picks the projects the token may reach, and it exposes ONE tool, `run({ project?
 — the text of `async (itx) => …` evaluated in that project's context under the caller's
 principal (`run(script)` when the token reaches exactly one project). Whatever a caller might read —
 who it is, which projects — is a one-line script; a project is created on the console or over `/api`. The
-admin secret and a project's own secret (`/mcp?project=<id>`) are bearers on `/mcp` too.
+admin secret is a bearer on `/mcp` too (it reaches every project, so `run` must name one).
 
 ## Read next
 
@@ -83,8 +83,9 @@ permission through explicit consent, but cannot approve grants. All apps use the
 `/.auth/*` adapter, opaque HttpOnly cookie, public token exchange and `/api` proxy.
 
 See [the current OAuth design](docs/unified-oauth-architecture.md) for boundaries,
-revocation and the deferred impersonation design. The historical walkthroughs describe the
-pre-unification project-credential interface; they are not the public authorization contract.
+revocation and the deferred impersonation design. Dated design and review docs under `docs/`
+may still describe the pre-unification project credentials; they are history, not the public
+authorization contract.
 
 ## Build, run, deploy
 
