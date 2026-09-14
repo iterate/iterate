@@ -25,27 +25,27 @@ test("set / list / delete: names and origins are listed, values never are; each 
   expect(await itx.secrets.list()).toEqual([]);
   expect(await itx.secrets.set("api.key_v-2", "hunter2")).toEqual({ ok: true });
   expect(
-    await itx.secrets.set("stripe", "sk_live", { origin: "https://api.stripe.com/v1/x" }),
+    await itx.secrets.set("stripe", "sk_live", { urls: ["https://api.stripe.com/v1/x"] }),
   ).toEqual({
     ok: true,
   });
   expect(await itx.secrets.list()).toEqual([
     { name: "api.key_v-2" },
-    { name: "stripe", origin: "https://api.stripe.com" }, // the ORIGIN of the URL given, path dropped
+    { name: "stripe", urls: ["https://api.stripe.com"] }, // the ORIGIN of the URL given, path dropped
   ]);
   await itx.secrets.delete("api.key_v-2");
-  expect(await itx.secrets.list()).toEqual([{ name: "stripe", origin: "https://api.stripe.com" }]);
+  expect(await itx.secrets.list()).toEqual([{ name: "stripe", urls: ["https://api.stripe.com"] }]);
   const changes = (await readAll(itx)).filter((e) => e.type === CHANGED).map((e) => e.payload);
   expect(changes).toEqual([
     { name: "api.key_v-2" },
-    { name: "stripe", origin: "https://api.stripe.com" },
+    { name: "stripe", urls: ["https://api.stripe.com"] },
     { name: "api.key_v-2", deleted: true },
   ]);
   expect(JSON.stringify(changes)).not.toContain("hunter2");
   expect(JSON.stringify(changes)).not.toContain("sk_live");
   // a name the placeholder grammar cannot spell can never be substituted — refused at the door
   await expect(itx.secrets.set("has space", "x")).rejects.toThrow(/\[a-zA-Z0-9._-\]\+/);
-  await expect(itx.secrets.set("ok", "x", { origin: "not a url" })).rejects.toThrow();
+  await expect(itx.secrets.set("ok", "x", { urls: ["not a url"] })).rejects.toThrow();
 });
 
 test("an authenticated session's set is attributed — the change carries the principal, never the value", async () => {
@@ -63,7 +63,7 @@ test("an authenticated session's set is attributed — the change carries the pr
 
 test("origin binding at the egress door: a bound secret is refused, 502, for any other origin — naming the binding to the caller", async () => {
   const itx = openItx(freshCtx("secrets-origin"));
-  await itx.secrets.set("bound", "v", { origin: "https://api.example.com" });
+  await itx.secrets.set("bound", "v", { urls: ["https://api.example.com"] });
   const res = await itx.fetch(
     new Request("https://egress.invalid/", {
       headers: { authorization: 'getSecret("/secrets/bound")' },
@@ -151,18 +151,21 @@ export default class Echo extends WorkerEntrypoint {
       ],
     ]);
     const origin = `https://echo--${projectId}.${projectHostnameBase()}`;
-    await itx.secrets.set("arrives", "the-value", { origin });
-    await itx.secrets.set("arrives-json", JSON.stringify({ a: { b: "the-field" } }), { origin });
-    const res = await itx.fetch(
+    await itx.secrets.set("arrives", "the-value", { urls: [origin] });
+    await itx.secrets.set("arrives-json", { a: { b: "the-field" } }, { urls: [origin] });
+    // one request, one secret — the whole-string form, then the `{ field }` form of an object material
+    const plain = await itx.fetch(
+      new Request(`${origin}/`, { headers: { "x-secret": 'getSecret("/secrets/arrives")' } }),
+    );
+    expect(plain.status).toBe(200);
+    expect(await plain.text()).toBe("the-value (none)");
+    const field = await itx.fetch(
       new Request(`${origin}/`, {
-        headers: {
-          "x-secret": 'getSecret("/secrets/arrives")',
-          "x-field": 'getSecret("/secrets/arrives-json", { field: "a.b" })',
-        },
+        headers: { "x-field": 'getSecret("/secrets/arrives-json", { field: "a.b" })' },
       }),
     );
-    expect(res.status).toBe(200);
-    expect(await res.text()).toBe("the-value the-field");
+    expect(field.status).toBe(200);
+    expect(await field.text()).toBe("(none) the-field");
   },
   30_000,
 );
@@ -172,16 +175,16 @@ test("the catalog is the PROJECT's: a secret set from one context is listed from
   const root = openItx(projectId);
   const a = root.cd("/a");
   const b = root.cd("/b");
-  await a.secrets.set("shared", "v", { origin: "https://api.example.com" });
-  expect(await b.secrets.list()).toEqual([{ name: "shared", origin: "https://api.example.com" }]);
+  await a.secrets.set("shared", "v", { urls: ["https://api.example.com"] });
+  expect(await b.secrets.list()).toEqual([{ name: "shared", urls: ["https://api.example.com"] }]);
   expect(await root.secrets.list()).toEqual([
-    { name: "shared", origin: "https://api.example.com" },
+    { name: "shared", urls: ["https://api.example.com"] },
   ]);
   await b.secrets.delete("shared");
   expect(await a.secrets.list()).toEqual([]);
   // the change events live in the ROOT's log, whichever context wrote them
   expect((await readAll(root)).filter((e) => e.type === CHANGED).map((e) => e.payload)).toEqual([
-    { name: "shared", origin: "https://api.example.com" },
+    { name: "shared", urls: ["https://api.example.com"] },
     { name: "shared", deleted: true },
   ]);
 });

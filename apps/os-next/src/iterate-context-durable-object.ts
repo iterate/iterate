@@ -4,7 +4,7 @@
 // (stream/subscription-delivery.ts), the facets (`ctx.facets`, context/worker-loader.ts), the rpc
 // stubs (context/rpc-stubs.ts), and the fetch door (the pager upgrade, the fetch lane,
 // egress). Each module's header says what it does; this file is the wiring and the doors.
-//   egress — `substituteProjectSecrets`: `getSecret("/secrets/NAME")` substitution at the fetch door, WS-safe
+//   egress — `#egress`: a `getSecret("/secrets/NAME")` request is forwarded to its secret cell (secrets.ts)
 //
 // PURE WORKERS-RPC: capnweb never terminates here — the stateless `/api` worker relays. Dispatch is
 // ONE door, `invoke(call)`; every OTHER change to this context is an appended event (the edge's
@@ -58,6 +58,8 @@ import {
 import { buildLibrary, type LibraryItx } from "./library.ts";
 import { Stream, type StreamPage } from "./stream/stream.ts";
 import { DurableObjectNameCodec, itxEntrypointFor } from "./iterate-context.ts";
+import { secretNamesReferenced } from "./secrets.ts";
+import type { SecretDurableObject } from "./secret-durable-object.ts";
 import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
 import {
   CONFIG_WORKER_PLATFORM_ROW,
@@ -104,8 +106,9 @@ export interface Env extends AppConfigEnv {
   AI: Ai;
   /** Cloudflare Artifacts (beta) — the ONE bound namespace behind `itx.cfArtifacts`, project-scoped. */
   ARTIFACTS: ArtifactsNamespace;
-  /** The per-project secret store egress substitutes from (`secret:<projectId>:<name>`). */
-  SECRETS_KV: KVNamespace;
+  /** THE SECRET CELLS (secret-durable-object.ts): one per project secret, `<projectId>:<name>` —
+   *  egress forwards a placeholder-bearing request to its cell. */
+  SECRET: DurableObjectNamespace<SecretDurableObject>;
 }
 
 /** The app label an app sees — apps/os's header. Written at the fetch lane alone (`fetch` below),
@@ -939,43 +942,31 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#rpcStubs.rpcStubTransportState();
   }
 
-  /** EGRESS: substitute `getSecret("/secrets/NAME")` placeholders, then the terminal fetch. A
-   *  placeholder that survives substitution means no such secret is stored, so it FAILS here,
-   *  loudly: forwarding would leak the secret's NAME to the external destination and send a garbage
-   *  credential in its place. */
-  async #egress(request: Request): Promise<Response> {
-    let substitutedRequest: Request;
-    try {
-      // A secret stored with an origin (`itx.secrets.set(name, value, { origin })`) is sent to
-      // that origin ONLY — a mis-typed URL cannot mail a credential to a stranger.
-      const requestOrigin = new URL(request.url).origin;
-      substitutedRequest = await substituteProjectSecrets(request, async (name) => {
-        const { value, metadata } = await this.env.SECRETS_KV.getWithMetadata<{ origin?: string }>(
-          `secret:${this.#durableObjectAddress.projectId}:${name}`,
-        );
-        // oxlint-disable-next-line iterate/simple-truthiness-check -- a stored empty-string secret still exists; only null means unstored, and the origin binding must gate any stored value
-        if (value !== null && metadata?.origin && metadata.origin !== requestOrigin)
-          throw new ProjectSecretRefused(
-            `itx.fetch: project secret ${name} is bound to ${metadata.origin} — not sent to ${requestOrigin}`,
-          );
-        return value;
-      });
-    } catch (error) {
-      if (error instanceof ProjectSecretRefused)
-        return new Response(`${error.message}\n`, { status: 502 });
-      throw error;
-    }
-    // The platform's own headers never leave: the principal stamp (actor + email) and the
-    // expression would ride whatever an app forwards outbound. The hop counter stays — the edge's
-    // re-entry guard reads it when an app fetches its own host.
-    const headers = new Headers(substitutedRequest.headers);
+  /** EGRESS: a request that names a secret — `getSecret("/secrets/NAME")` in its URL or headers —
+   *  is FORWARDED to that secret's cell (secret-durable-object.ts), which substitutes, pins,
+   *  dispatches, and refreshes on a 401; one request, one secret (a second name is a 502 — no
+   *  cross-secret chaining). A request naming none goes straight to the terminal fetch. Either way
+   *  the platform's own headers never leave: the principal stamp (actor + email) and the expression
+   *  would ride whatever an app forwards outbound. The hop counter stays — the edge's re-entry guard
+   *  reads it when an app fetches its own host. WS-safe: only the headers are rewritten, so a 101
+   *  flows straight back either way. */
+  #egress(request: Request): Promise<Response> {
+    const headers = new Headers(request.headers);
     headers.delete(ITX_PRINCIPAL_HEADER);
     headers.delete(ITX_EXPRESSION_FETCH_HEADER);
-    // A substituted secret follows NO redirect: a 3xx to another origin would carry the credential
-    // there (the Fetch standard strips `Authorization` on a cross-origin redirect, not other headers).
-    return fetch(new Request(substitutedRequest, { headers }), {
-      ...(substitutedRequest !== request && { redirect: "manual" }),
-    }); // WS-safe: only the URL and headers were rewritten
+    const outbound = new Request(request, { headers });
+    const names = secretNamesReferenced(outbound);
+    if (names.length === 0) return fetch(outbound);
+    if (names.length > 1)
+      return Promise.resolve(
+        new Response(
+          `itx.fetch: one request, one secret — this one names ${names.map((name) => JSON.stringify(name)).join(", ")}\n`,
+          { status: 502 },
+        ),
+      );
+    return this.env.SECRET.getByName(`${this.#durableObjectAddress.projectId}:${names[0]}`).fetch(
+      outbound,
+    );
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
@@ -1003,115 +994,4 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       stub: input.stub as BorrowedRpcStub,
     });
   }
-}
-
-// ── egress ── `getSecret("/secrets/NAME")` substitution at the fetch door, WS-SAFE: it only
-// rebuilds the URL and the Headers and constructs `new Request(request, { headers })`, which preserves
-// the method, the `Upgrade` header and the body — so a 101 flows straight back through it.
-
-// THE PLACEHOLDER GRAMMAR — apps/os's (apps/os/src/domains/secrets/utils.ts) for a URL or a header:
-// `getSecret("/secrets/NAME")` is the whole stored value; `getSecret("/secrets/NAME", { field: "a.b" })`
-// is one dotted field of a JSON-valued secret. Double quotes, whitespace free inside the
-// parentheses; `/secrets/NAME` is the name `itx.secrets.set(NAME, …)` stored, `[a-zA-Z0-9._-]+`
-// (context/built-ins.ts `secretKey`). Matched as written in a header, and as the URL parser
-// percent-encodes it in a URL (`"` → %22, a space → %20, `{` → %7B, `}` → %7D) — the path and the
-// query alike; the value is spliced back into the URL as ONE component, `:` kept (Telegram's
-// `bot123:abc` path). Where this DIVERGES from apps/os: no peeling of a `Basic base64(user:getSecret(…))`
-// credential, no JSON-body template — the body is never scanned.
-const QUOTE = '(?:"|%22)';
-const SPACE = "(?:\\s|%20)*";
-const SECRET_PLACEHOLDER = new RegExp(
-  `getSecret\\(${SPACE}${QUOTE}/secrets/([a-zA-Z0-9._-]+)${QUOTE}${SPACE}` +
-    `(?:,${SPACE}(?:\\{|%7B)${SPACE}field${SPACE}:${SPACE}${QUOTE}([^"%\\s]+)${QUOTE}${SPACE}(?:\\}|%7D))?${SPACE}\\)`,
-  "g",
-);
-
-/** The placeholder as a caller wrote it, for a refusal that names it. */
-const placeholderOf = (name: string, field: string | undefined): string =>
-  !field ? `getSecret("/secrets/${name}")` : `getSecret("/secrets/${name}", { field: "${field}" })`;
-
-/** A placeholder whose secret is not stored, whose secret is bound to another origin (the DO's
- *  resolver throws it), or whose `field` the stored JSON has no string at — the egress door answers
- *  it with a 502, to the caller, never the destination. */
-export class ProjectSecretRefused extends Error {}
-
-/** The string `field` (a dotted path) selects in the JSON value `stored`; refused when the value is
- *  not JSON or the path does not land on a string. */
-function secretFieldOf(stored: string, field: string, placeholder: string, where: string): string {
-  let value: unknown;
-  try {
-    value = JSON.parse(stored);
-  } catch {
-    throw new ProjectSecretRefused(
-      `itx.fetch: ${placeholder} in ${where} names a field, but the secret is not a JSON value`,
-    );
-  }
-  for (const segment of field.split("."))
-    value =
-      typeof value === "object" && value ? (value as Record<string, unknown>)[segment] : undefined;
-  if (typeof value !== "string")
-    throw new ProjectSecretRefused(
-      `itx.fetch: ${placeholder} in ${where}: the secret has no string at field "${field}"`,
-    );
-  return value;
-}
-
-/**
- * Substitute every `getSecret("/secrets/<name>")` placeholder in the request URL AND headers. An
- * existing secret must never survive as a literal placeholder wherever it appears (a URL
- * `?access_token=getSecret("/secrets/token")` would otherwise send the credential's NAME to the
- * destination and the value nowhere); a placeholder with NO stored secret throws
- * `ProjectSecretRefused` naming the placeholder and where it sat — to the caller, never the
- * destination. `resolve(name)` answers the stored value; a `{ field }` placeholder then picks one
- * string out of it as JSON. In the URL the value is spliced as ONE component
- * (`encodeURIComponent`, with `:` kept — a Telegram bot token in the path), so a secret can never
- * add a query parameter or a fragment. Returns a NEW Request when anything changed, else the
- * original.
- *
- * NOTE: the BODY is not scanned (substituting a streaming body means buffering it and recomputing
- * content-length) — a secret spelled inside a request body forwards as a literal placeholder.
- */
-export async function substituteProjectSecrets(
-  request: Request,
-  resolve: (name: string) => Promise<string | null> | string | null,
-): Promise<Request> {
-  // Substitute the placeholders in one string; null = none in it (leave as-is).
-  const substitute = async (value: string, where: string, encode: boolean) => {
-    if (!value.includes("getSecret(")) return null;
-    let out = "";
-    let last = 0;
-    let any = false;
-    for (const m of value.matchAll(SECRET_PLACEHOLDER)) {
-      const [, name, field] = m as unknown as [string, string, string | undefined];
-      const placeholder = placeholderOf(name, field);
-      const stored = await resolve(name);
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- null means no secret is stored; a stored empty-string value is a real secret and must be substituted, not refused
-      if (stored == null)
-        throw new ProjectSecretRefused(
-          `itx.fetch: no stored project secret for ${placeholder} in ${where}`,
-        );
-      const secret = !field ? stored : secretFieldOf(stored, field, placeholder, where);
-      out +=
-        value.slice(last, m.index) +
-        (encode ? encodeURIComponent(secret).replaceAll("%3A", ":") : secret);
-      last = m.index + m[0].length;
-      any = true;
-    }
-    return any ? out + value.slice(last) : null;
-  };
-
-  // URL first: rebuild onto the new URL (carrying method/headers/body/upgrade), then headers on top.
-  const url = await substitute(request.url, "the request URL", true);
-  const base = url ? new Request(url, request) : request;
-  const headers = new Headers(base.headers);
-  let changed = false;
-  for (const [name, value] of base.headers) {
-    const substituted = await substitute(value, `header "${name}"`, false);
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- substitute() returns null for "no placeholder here"; a substituted-to-empty header ("") is a real change and must be written, not skipped
-    if (substituted !== null) {
-      headers.set(name, substituted);
-      changed = true;
-    }
-  }
-  return changed ? new Request(base, { headers }) : base;
 }
