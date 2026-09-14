@@ -1,0 +1,37 @@
+diff --git a/dist/plugin-system.d.ts b/dist/plugin-system.d.ts
+index a6a28b3733db940ac99a3fe126c7b0d20698fd59..18983065fa9fc85f4381373fe51a990910b13c80 100644
+--- a/dist/plugin-system.d.ts
++++ b/dist/plugin-system.d.ts
+@@ -2,7 +2,7 @@ import Emittery from "emittery";
+ import type { Locator, Page, TestInfo } from "@playwright/test";
+ declare const oneArgMethods: readonly ["fill", "type", "press"];
+ type OneArgMethod = (typeof oneArgMethods)[number];
+-declare const overrideableMethods: ("fill" | "type" | "press" | "blur" | "clear" | "click" | "dblclick" | "focus" | "hover" | "waitFor")[];
++declare const overrideableMethods: ("fill" | "type" | "press" | "blur" | "clear" | "click" | "dblclick" | "focus" | "hover" | "inputValue" | "waitFor")[];
+ type OverrideableMethod = (typeof overrideableMethods)[number];
+ export type LocatorWithOriginal = Locator & {
+     [K in OverrideableMethod as `${K}_original`]: Locator[K];
+diff --git a/dist/plugin-system.js b/dist/plugin-system.js
+index 74841e6628fb775d06454b3a6d610ebe006f0247..fa3738456ab841aa8f7a467907663cf79f1fe40b 100644
+--- a/dist/plugin-system.js
++++ b/dist/plugin-system.js
+@@ -22,6 +22,7 @@ const overrideableMethods = [
+     "blur",
+     "focus",
+     "hover",
++    "inputValue",
+     ...oneArgMethods,
+ ];
+ /**
+diff --git a/src/plugin-system.ts b/src/plugin-system.ts
+index 7788774d2217015778a226317f5b760b62038db7..4e99337e1704c0f3fe22247291ca9ac0c61e24d6 100644
+--- a/src/plugin-system.ts
++++ b/src/plugin-system.ts
+@@ -27,6 +27,7 @@ const overrideableMethods = [
+   "blur",
+   "focus",
+   "hover",
++    "inputValue",
+   ...oneArgMethods,
+ ] satisfies (keyof Locator)[];
+ type OverrideableMethod = (typeof overrideableMethods)[number];

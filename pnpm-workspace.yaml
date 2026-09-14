@@ -136,3 +136,5 @@ patchedDependencies:
   '@codemirror/merge@6.12.2': patches/@codemirror__merge@6.12.2.patch
   '@journeyapps/wa-sqlite@1.7.0': patches/@journeyapps__wa-sqlite@1.7.0.patch
   zod@4.5.4: patches/zod@4.5.4.patch
+  # Upstream fix: https://github.com/iterate/middlewright/compare/main...fix/input-value-loading
+  middlewright@0.1.0: patches/middlewright@0.1.0.patch

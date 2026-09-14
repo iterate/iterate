@@ -145,6 +145,17 @@ export function AgentPillComposer({
 
   return (
     <div className="w-full">
+      {isSubmitting && (
+        <p
+          className="mb-2 ml-4 flex items-center gap-2 text-xs text-muted-foreground"
+          role="status"
+          aria-live="polite"
+          data-spinner="true"
+        >
+          <Spinner className="size-3" />
+          Sending…
+        </p>
+      )}
       {error == null ? null : (
         <p className="mb-2 ml-4 truncate font-mono text-xs text-destructive" role="alert">
           {error}

@@ -88,15 +88,17 @@ export class TodoApp extends IterateDurableObject {
     return this.#load();
   }
 
-  add(title: string): void {
+  add(title: string): string {
     const trimmed = title.trim().slice(0, 200);
-    if (trimmed.length === 0) return;
+    if (trimmed.length === 0) throw new Error("Todo title must not be empty.");
+    const id = crypto.randomUUID();
     this.#db.insert({
       createdAt: new Date().toISOString(),
-      id: crypto.randomUUID(),
+      id,
       title: trimmed,
     });
     this.#refresh();
+    return id;
   }
 
   setDone(id: string, done: boolean): void {
@@ -172,8 +174,8 @@ export class TodoApi extends RpcTarget {
     return this.#liveState;
   }
 
-  async add(title: string): Promise<void> {
-    this.#app.add(title);
+  async add(title: string): Promise<string> {
+    return this.#app.add(title);
   }
 
   async setDone(id: string, done: boolean): Promise<void> {
