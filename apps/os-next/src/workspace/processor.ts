@@ -1,7 +1,7 @@
 // src/workspace/processor.ts — the workspace processor's PURE class (the triplet's middle): folds
 // `workspace/configured` patches into the configured-mounts view. Imports only the pure kernel, so
-// the node lane constructs it with `new` (processor.test.ts); the host (durable-object.ts) reduces
-// it on demand — a workspace facet is not subscribed, its `snapshot()` catches up from the log.
+// a unit test constructs it with `new` (processor.test.ts, in node); the host (durable-object.ts)
+// reduces it on demand — a workspace facet is not subscribed, its `snapshot()` catches up from the log.
 import {
   type ConsumedEvent,
   type ProcessorState,

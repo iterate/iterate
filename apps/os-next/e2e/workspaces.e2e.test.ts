@@ -218,6 +218,39 @@ test("configure mounts a repo at a second path — ONE workspace/configured even
   );
 });
 
+test("a nested mount wins beneath its path: the listing, reads and status all route to the longest mount", async () => {
+  const itx = openItx(freshCtx("ws"));
+  await itx
+    .cd("/workspaces/nested")
+    .provide(
+      "itx.repos",
+      new FakeRepos({
+        config: { "worker.ts": "w", "vendor/x.txt": "from config" },
+        lib: { "y.txt": "from lib" },
+      }),
+    );
+  const workspace = itx.workspaces.get("/workspaces/nested");
+  await workspace.configure({ mounts: { "/repos/config/vendor": { repo: "lib" } } });
+  expect(await workspace.listAllFiles()).toEqual([
+    "/repos/config/vendor/y.txt",
+    "/repos/config/worker.ts",
+    "/repos/lib/y.txt",
+  ]);
+  expect(await workspace.readFile("/repos/config/vendor/x.txt")).toBeNull(); // routes to lib, which has no x.txt
+  expect(await workspace.readFile("/repos/config/vendor/y.txt")).toBe("from lib");
+  await workspace.writeFile("/repos/config/vendor/z.txt", "z");
+  expect(
+    (await workspace.gitStatus()).mounts.map((m: { path: string; changes: { path: string }[] }) => [
+      m.path,
+      m.changes.map((c) => c.path),
+    ]),
+  ).toEqual([
+    ["/repos/config", []],
+    ["/repos/lib", []],
+    ["/repos/config/vendor", ["/repos/config/vendor/z.txt"]],
+  ]);
+});
+
 test("a workspace is its path: a second session opens the same overlay, uncommitted work included", async () => {
   const ctx = freshCtx("ws");
   const itx = openItx(ctx);

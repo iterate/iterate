@@ -195,7 +195,9 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
     this.#forget(absolutePath(path));
   }
 
-  /** Every file path of the merged view — the overlay plus every mount's tip, minus whiteouts — sorted. */
+  /** Every file path of the merged view — the overlay plus every mount's tip, minus whiteouts —
+   *  sorted. A tip path is listed only where it ROUTES to that mount: under a nested mount the
+   *  nested repo's files show, the parent repo's are hidden, as `readFile` and a commit see them. */
   async listAllFiles(): Promise<string[]> {
     const mounts = await this.mounts();
     const whiteouts = new Set(this.#whiteouts());
@@ -204,7 +206,8 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
       Object.entries(mounts).map(async ([mountPath, { repo }]) => {
         for (const relativePath of (await this.withItx((itx) => itx.repos.listFiles(repo))).paths) {
           const path = `${mountPath}/${relativePath}`;
-          if (!whiteouts.has(path)) paths.add(path);
+          if (!whiteouts.has(path) && routeMount(mounts, path)?.mountPath === mountPath)
+            paths.add(path);
         }
       }),
     );

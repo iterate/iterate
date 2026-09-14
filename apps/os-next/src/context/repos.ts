@@ -351,15 +351,22 @@ export function projectScopedRepos(input: {
     // THROWS in tipSnapshot — never a fresh root commit that would repoint `main` at an orphan.)
     const { manifest, objects } = tip
       ? await tipSnapshot(transport, tip)
-      : { manifest: new Map() as RepoManifest, objects: new Map<string, RawGitObject>() };
+      : {
+          manifest: new Map<string, { oid: string; mode: string }>(),
+          objects: new Map<string, RawGitObject>(),
+        };
     const toPush: { payload: Uint8Array; type: GitObjectType }[] = [];
     const changedPaths: string[] = [];
+    // Deletes first, whatever the order given: a batch is one tree, so a write may take a path a
+    // delete in the same batch frees (a directory replaced by a file, or the reverse).
     for (const change of changes) {
+      if (!("delete" in change)) continue;
       const path = repoPath(change.path);
-      if ("delete" in change) {
-        if (manifest.delete(path)) changedPaths.push(path);
-        continue;
-      }
+      if (manifest.delete(path)) changedPaths.push(path);
+    }
+    for (const change of changes) {
+      if ("delete" in change) continue;
+      const path = repoPath(change.path);
       // A file is never written where a directory is, nor under a file.
       for (const existing of manifest.keys())
         if (existing.startsWith(`${path}/`) || path.startsWith(`${existing}/`))
