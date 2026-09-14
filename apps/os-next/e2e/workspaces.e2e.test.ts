@@ -174,10 +174,19 @@ test("configure mounts a repo at a second path — ONE workspace/configured even
     { path: "/workspaces/four", createdAt: expect.any(String) },
   ]);
   expect((await itx.repos.list()).map((r: { path: string }) => r.path)).toEqual(["/repos/config"]);
-  // A workspace the saga has not created refuses.
-  expect((await rejection(itx.workspaces.get("/workspaces/never").readFile("/x"))).message).toMatch(
+  // A workspace the saga has not created refuses — a configure too, BEFORE it appends anything.
+  const never = itx.workspaces.get("/workspaces/never");
+  expect((await rejection(never.readFile("/x"))).message).toMatch(
     /not created — call create\(\) first/,
   );
+  expect(
+    (await rejection(never.configure({ mounts: { "/x": { repo: "/repos/config" } } }))).message,
+  ).toMatch(/not created/);
+  expect(
+    (await readAll(itx.cd("/workspaces/never"))).filter((e) =>
+      e.type.startsWith("events.iterate.com/workspace/"),
+    ),
+  ).toEqual([]);
 });
 
 test("a nested mount wins beneath its path: the listing, reads and status all route to the longest mount", async () => {

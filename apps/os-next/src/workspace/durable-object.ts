@@ -145,16 +145,21 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
 
   // ── the mount table ──
 
-  /** The EFFECTIVE mounts: every repo in the project catalog at its OWN path (derived — the
-   *  workspace is a view of the project's one path namespace), the configured ones over them. Every
-   *  method starts here: a workspace the saga has not completed refuses. */
-  async mounts(): Promise<Record<string, WorkspaceMount>> {
-    const [repos, { state }] = await Promise.all([
-      this.withItx((itx) => itx.repos.list()),
-      this.snapshot(),
-    ]);
+  /** Every method past `create()` starts here: a workspace the saga has not completed refuses. */
+  async #created(): Promise<WorkspaceView> {
+    const { state } = await this.snapshot();
     if (state.creation !== "created")
       throw new Error(`workspace ${await this.#path()}: not created — call create() first`);
+    return state;
+  }
+
+  /** The EFFECTIVE mounts: every repo in the project catalog at its OWN path (derived — the
+   *  workspace is a view of the project's one path namespace), the configured ones over them. */
+  async mounts(): Promise<Record<string, WorkspaceMount>> {
+    const [repos, state] = await Promise.all([
+      this.withItx((itx) => itx.repos.list()),
+      this.#created(),
+    ]);
     const mounts: Record<string, WorkspaceMount> = {};
     for (const { path } of repos) mounts[path] = { repo: path };
     return { ...mounts, ...state.mounts };
@@ -165,6 +170,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
   async configure(input: {
     mounts: Record<string, WorkspaceMount | null>;
   }): Promise<Record<string, WorkspaceMount>> {
+    await this.#created(); // refused BEFORE anything is appended: an uncreated workspace takes no patch
     const mounts: Record<string, WorkspaceMount | null> = {};
     for (const [path, mount] of Object.entries(input.mounts)) {
       const mountPath = absolutePath(path);
