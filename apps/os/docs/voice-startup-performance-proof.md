@@ -856,9 +856,8 @@ resolution before loader acquisition and 3,183 ms in the guest RPC, totaling
 synchronous CPU may still consume time. The full trace was subsequently retrieved in 35 bounded pages (2,227
 unique spans). The caller's artifact KV lookup took 25 ms. Its voice build
 recorded 221 ms source snapshot and 3,249 ms compilation; the coordinator
-invocation continued through a 1,767-ms background KV put. That persistence
-is a foreground-delay hypothesis until caller-response markers establish
-when the await resumed. The overlapping 2,221-ms default-worker build cannot
+invocation continued through a 1,767-ms background KV put. The subsequent controlled-delay experiment below rules out that
+background persistence as a caller-response gate. The overlapping 2,221-ms default-worker build cannot
 be subtracted from this caller's 8,164 ms without a dependency proof.
 Evidence: `setup-probe-v2-first-resolve-attribution.md` and its paged traces.
 
@@ -887,6 +886,80 @@ bytes were restored at mount offset 1247, pinned to
 `clean-cold-workers-setup-probe-v2-voice startup setup dispatch.json`, and
 `deploy-setup-phase-restore.log`. The failed first attempt and terminal audit
 are in `setup-probe-results/` and `setup-probe-first-attempt-failed-state.json`.
+
+## Controlled cache-persistence response boundary
+
+Preview version `26828627-7a93-4b37-bcab-ee891f51af47` temporarily instrumented
+two exact voice entrypoints. The delayed variant inserted a **10-second wait
+before KV persistence**, inside the existing background promise. A/B/A used
+the same full voice source and SDK `055337b`; each fresh source pin was
+mounted before timing `itx.voice.health()`. No OpenAI sessions were created.
+
+| Measurement, ms                  |     A | B, delayed persistence |    A2 |
+| -------------------------------- | ----: | ---------------------: | ----: |
+| Client health response           | 7,357 |                  6,147 | 5,126 |
+| Caller artifact-cache lookup     |    43 |                     34 |    31 |
+| Caller coordinator RPC await     | 5,389 |                  5,823 | 5,035 |
+| Overall native source resolution | 5,432 |                  5,857 | 5,066 |
+
+B's caller received the artifact, completed memoization, and disposed the
+RPC result at `20:41:13.059Z`. Its deliberate cache delay was released at
+`20:41:21.145Z`, and persistence completed 547 ms later. **Background cache
+persistence does not gate this caller response.** The ordinary RPC span
+lasting through a cache write is insufficient evidence to claim otherwise.
+This agrees with Cloudflare's [Durable Object state documentation](https://developers.cloudflare.com/durable-objects/api/state/).
+
+The B coordinator's own build work lasted 2,079 ms (28 cache read, 138 source
+snapshot, 1,913 compiler call), while the caller awaited its RPC for 5,823 ms.
+The remaining difference needs dispatch/materialization and artifact-transfer
+attribution; it is not all compiler CPU. Memoization/disposal showed no
+Workers-clock advance, which does not prove zero CPU.
+
+The temporary probe passed 17 focused build tests and OS typecheck. Original
+voice source was restored at offset 1302, pin
+`f26f59616e20770b82c3e790240bc1fa74334365`, then clean native version
+`dcd6eb90-0ba7-4706-b8d6-2308fe5e3e87` passed deployment smokes. Evidence:
+`cache-response-boundary-results/`, the `cache-boundary-*` telemetry queries,
+`cache-boundary-native-applied.patch`, and `deploy-cache-boundary-restore.log`.
+The patch is not part of the PR.
+
+## Controlled coordinator bypass
+
+Preview version `9fd7a021-1715-409d-a7e8-7cb7ceec3b92` compared fresh full-source
+builds through the usual coordinator with an exact-entrypoint direct build in
+the caller. SDK `055337b` and voice source bytes stayed constant. Both paths
+retained the caller KV read, second cache read, source snapshot, compiler RPC,
+and artifact shaping. The direct path deliberately omitted persistence,
+coalescing, caller budgets, and durable queuing. This is a lower-bound
+experiment, not a proposed production implementation. No OpenAI sessions ran.
+
+| Measurement, ms                      | A, coordinator | B, direct | A2, coordinator |
+| ------------------------------------ | -------------: | --------: | --------------: |
+| Client health response               |          7,151 |     5,092 |           7,000 |
+| Native source resolution             |          5,309 |     2,706 |           6,975 |
+| Caller artifact-cache lookup         |             87 |        37 |             105 |
+| Coordinator RPC / direct build await |          5,222 |     2,669 |           6,870 |
+| Build's second cache read            |              4 |         4 |               4 |
+| Source snapshot                      |            228 |       114 |             119 |
+| Compiler call                        |          2,339 |     2,551 |           3,351 |
+
+The direct result localizes a substantial cost to the coordinated path, while
+its compiler call remains comparable to the controls. It does not identify the
+entire difference as network transfer: native actor activation, placement,
+scheduling, and moving the artifact may contribute. Client health also includes
+work outside native source resolution; those intervals varied across arms.
+One B sample cannot establish a distribution or a safe production design.
+
+All three health responses succeeded. The direct persistence-skipped record
+and its phase log came from the same root `ProcessorFacet` parent as the loader;
+the control builds came from separate coordinator Durable Objects. Fresh source
+pins prevented an artifact cache hit. The ordinary voice source was restored
+at offset 1348, pin `ebb0a42dc2b1a44ae5cee36f87eee448a914b664`, with a successful
+health response. Temporary native code passed 20 focused tests and full OS
+typecheck, then was removed. Clean native version
+`0d77628f-725c-4d87-8e61-ea61c5084dd2` passed deployment smokes. Evidence: `direct-boundary-results/phase-summary.json`,
+its raw arm/restore files, `clean-cold-workers-direct-boundary-*`, and
+`direct-boundary-native-applied.patch`.
 
 ## Reproduce
 
