@@ -587,6 +587,8 @@ export type StreamEventInput = {
    *  `append` — and WHO: the session's verified principal (src/principal.ts), set by the DO's append
    *  root from the session's project token and never taken from a client. */
   source?: {
+    /** The durable schedule definition responsible for this occurrence. */
+    schedule?: { key: string; scheduledAtOffset: number; at: string };
     processor?: {
       slug: string;
       version: string;

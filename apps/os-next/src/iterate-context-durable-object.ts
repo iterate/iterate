@@ -422,6 +422,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       get: (name, spec) =>
         new FacetHandle((itxExpressionSteps) => this.#invokeFacet(name, spec, itxExpressionSteps)),
     },
+    schedules: {
+      list: () => Object.values(this.#stream.coreReducedState.schedules),
+      get: (key) =>
+        Object.values(this.#stream.coreReducedState.schedules).find((row) => row.key === key) ??
+        null,
+    },
     subscriptions: {
       list: () => this.#subscriptionList(),
       get: (name) => this.#subscriptionList().find((s) => s.name === name) ?? null,
@@ -539,6 +545,63 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   async alarm(): Promise<void> {
     this.#stream.noteAlarmFired();
+    // Append each occurrence locally before awaiting subscriber RPC. A completion in the SAME
+    // transaction removes the obligation, so eviction or duplicate alarm delivery cannot repeat it.
+    const now = Date.now();
+    const due = Object.values(this.#stream.coreReducedState.schedules)
+      .filter((row) => !row.failure && Date.parse(row.when.at) <= now)
+      .sort(
+        (a, b) =>
+          Date.parse(a.when.at) - Date.parse(b.when.at) ||
+          a.scheduledAtOffset - b.scheduledAtOffset,
+      )
+      .slice(0, 32);
+    let scheduledProgress = false;
+    this.#stream.deferAlarmWrites(() => {
+      for (const row of due) {
+        if (this.#stream.coreReducedState.paused) break;
+        if (
+          this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
+          row.scheduledAtOffset
+        )
+          continue;
+        const payload = { key: row.key, scheduledAtOffset: row.scheduledAtOffset };
+        try {
+          this.#appendAndRunCommittedEffects([
+            ...row.events.map((event) => ({
+              ...event,
+              source: {
+                ...row.source,
+                schedule: { ...payload, at: row.when.at },
+              },
+            })),
+            { type: "events.iterate.com/stream/append-schedule-completed", payload },
+          ]);
+          scheduledProgress = true;
+          console.log({
+            event: "scheduled-append.completed",
+            ...payload,
+            count: row.events.length,
+            latenessMs: now - Date.parse(row.when.at),
+          });
+        } catch (error) {
+          // If the commit succeeded but a subsequent effect threw, preserve the completion and let
+          // the platform retry recovery. Otherwise park this definition visibly, without a loop.
+          if (
+            this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
+            row.scheduledAtOffset
+          )
+            throw error;
+          this.#appendAndRunCommittedEffects([
+            {
+              type: "events.iterate.com/stream/append-schedule-failed",
+              payload: { ...payload, error: String(error).slice(0, 2000) },
+            },
+          ]);
+          reportIssue("scheduled-append.failed", error, payload);
+        }
+      }
+    });
     // The cursor lane's due retries, and anything an eviction left mid-delivery — AWAITED so a
     // re-arm for a later retry lands before this actor hibernates. A cursor delivery pins nothing
     // local (a facet it calls into is counted by #facetWorkInFlight), so the quiesce below needs no
@@ -549,7 +612,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // touched this incarnation is a self-wake. Recorded once, when the streak first crosses. A
     // halted context FALLS THROUGH to the quiesce below: it will not wake itself again, so it must
     // not stay pinned (billed for duration) by what this wake materialized.
-    if (!this.#publicDoorTouched) {
+    if (!this.#publicDoorTouched && !scheduledProgress) {
       const { streak, justHalted } = this.#stream.noteSelfWake();
       if (justHalted) {
         console.warn({

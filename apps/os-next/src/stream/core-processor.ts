@@ -39,6 +39,13 @@ import {
   type ItxExpressionRewriteRule,
 } from "../context/itx-expression-rewriting.ts";
 import { jsonEqual } from "../lib.ts";
+import {
+  ScheduledAppendInput,
+  ScheduledAppendCancelled,
+  ScheduledAppendSettled,
+  reduceScheduledAppends,
+  type ScheduledAppend,
+} from "./scheduled-appends.ts";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "./processor.ts";
 
 /** A hosting spec, read off a RESOLVED target. */
@@ -245,6 +252,7 @@ export type CoreState = {
   itxExpressionRewriteRules: Record<string, ItxExpressionRewriteRule>;
   /** THE SUBSCRIPTIONS TABLE, by name. */
   subscriptions: Record<string, Subscription>;
+  schedules: Record<string, ScheduledAppend>;
   /** THE SECRETS CATALOG, by name — the origins a secret is pinned to and its refresh strategy's
    *  kind, never a value (the value is physical, in the secret's own Durable Object):
    *  `itx.secrets.list()` reads this, strongly consistent. */
@@ -269,11 +277,12 @@ function parseSubscriptionName(name: string): string {
  *  state. The reduce below is the one list of the types it consumes. */
 export const CoreContract = {
   slug: "core",
-  version: "8.0.0",
+  version: "9.0.0",
   initialState: (): CoreState => ({
     paused: null,
     itxExpressionRewriteRules: {},
     subscriptions: {},
+    schedules: {},
     secrets: {},
   }),
 };
@@ -316,6 +325,13 @@ export function reduceCoreEvent(
     return { ...state, subscriptions };
   };
   switch (event.type) {
+    case "events.iterate.com/stream/append-scheduled":
+    case "events.iterate.com/stream/append-schedule-cancelled":
+    case "events.iterate.com/stream/append-schedule-completed":
+    case "events.iterate.com/stream/append-schedule-failed": {
+      const schedules = reduceScheduledAppends(state.schedules, event);
+      return schedules === state.schedules ? undefined : { ...state, schedules };
+    }
     case "events.iterate.com/secrets/changed": {
       const name = payload.name as string;
       const next = payload.deleted
@@ -508,6 +524,24 @@ function normalizeSubscriptionConfigured(input: {
  *  committing a durable no-op. Every other event passes through untouched. The DO runs this on every
  *  append (iterate-context-durable-object.ts). */
 export function normalizeControlEvent(event: StreamEventInput): StreamEventInput {
+  if (event.type.startsWith("events.iterate.com/stream/append-schedule")) {
+    if (event.ephemeral) throw new Error("scheduled append control events must be durable");
+    if (event.type === "events.iterate.com/stream/append-scheduled") {
+      const payload = ScheduledAppendInput.parse(event.payload);
+      return {
+        ...event,
+        payload: { ...payload, events: payload.events.map(normalizeControlEvent) },
+      };
+    }
+    if (event.type === "events.iterate.com/stream/append-schedule-cancelled")
+      return { ...event, payload: ScheduledAppendCancelled.parse(event.payload) };
+    if (
+      event.type === "events.iterate.com/stream/append-schedule-completed" ||
+      event.type === "events.iterate.com/stream/append-schedule-failed"
+    )
+      return { ...event, payload: ScheduledAppendSettled.parse(event.payload) };
+    throw new Error(`unknown scheduled append control event: ${event.type}`);
+  }
   if (event.type === "events.iterate.com/stream/subscription-configured")
     return {
       ...event,

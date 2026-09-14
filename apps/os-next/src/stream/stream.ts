@@ -20,6 +20,7 @@
 import { codedError, errorCode, reportIssue } from "../lib.ts";
 import type { ItxExpressionInput } from "../context/expression.ts";
 import type { Caller } from "../principal.ts";
+import { reduceScheduledAppends } from "./scheduled-appends.ts";
 import { CoreContract, reduceCoreEventBatch, type CoreState } from "./core-processor.ts";
 import {
   idempotencyConflictMessage,
@@ -120,6 +121,8 @@ export class Stream {
   /** FIFO; resolved from `freshEvents` in append's step 5. */
   readonly #waitForEventWaiters: WaitForEventWaiter[] = [];
   #alarmArmedForMs: number | null = null;
+  #alarmWritesDeferred = false;
+  #deferredAlarmAtMs: number | null = null;
   /** The self-wake streak (SELF_WAKE_HALT_STREAK), durable in `stream_meta` and loaded once at
    *  construction so `armAlarmNoLaterThan` can gate on it synchronously; the host DO drives it. */
   #selfWakeStreak = 0;
@@ -306,6 +309,8 @@ export class Stream {
       "events.iterate.com/stream/woken",
       "events.iterate.com/stream/paused",
       "events.iterate.com/stream/resumed",
+      "events.iterate.com/stream/append-schedule-cancelled",
+      "events.iterate.com/stream/append-schedule-failed",
       // the delivery loop's own record of a halted row — a paused stream's ladder must still end
       "events.iterate.com/stream/subscription-delivery-halted",
     ];
@@ -360,6 +365,16 @@ export class Stream {
       freshEvents.push(committedEvent);
     }
     if (freshEvents.length === 0) return committedEvents; // every event deduped to an existing one
+    // Bound the entire batch before committing; the pure core reducer cannot reject a write.
+    const scheduledAppends = freshEvents.reduce(
+      reduceScheduledAppends,
+      this.#coreReducedState.schedules,
+    );
+    if (Object.keys(scheduledAppends).length > 100)
+      throw codedError(
+        "SCHEDULE_LIMIT",
+        "a context may retain at most 100 schedules; cancel completed failures before adding more",
+      );
     // 3 + 4. reduce and commit
     let coreReducedStateChanged = false;
     if (freshEvents.every((event) => event.ephemeral)) {
@@ -408,6 +423,7 @@ export class Stream {
     }
     // 5. after the commit
     this.#resolveWaitForEventWaiters(freshEvents); // waiters first: onCommit may append again (a nested commit)
+    this.armScheduledAppends();
     this.#onCommit(freshEvents, afterOffset, throughOffset);
     // Core's live-state delta rides this stream's own append (a nested commit). LOSSY BY CONTRACT:
     // LiveState.set contains every refusal (a PAUSED stream refuses the delta) as a revision-chain
@@ -521,18 +537,57 @@ export class Stream {
 
   // ── the alarm armer ──
 
-  /** ONE alarm write per quiet-period start, never per append (an ephemeral flood arms once).
-   *  Memo-only: a fresh incarnation writes one redundant setAlarm and a later target may overwrite
-   *  an earlier one, which is safe because every alarm() pass re-derives its obligations and re-arms. */
+  /** The earliest outstanding scheduled batch is durable; always include it when another
+   *  subsystem arms, including during reconstruction before the platform alarm is read. */
+  nextScheduledAppendAt(): number | null {
+    if (this.#coreReducedState.paused) return null;
+    let earliest: number | null = null;
+    for (const row of Object.values(this.#coreReducedState.schedules)) {
+      if (row.failure) continue;
+      const at = Date.parse(row.when.at);
+      earliest = earliest === null ? at : Math.min(earliest, at);
+    }
+    return earliest;
+  }
+
+  /** Explicit user work remains eligible even when delivery's self-wake breaker has halted. */
+  armScheduledAppends(): void {
+    if (this.#alarmWritesDeferred) return;
+    const at = this.nextScheduledAppendAt();
+    if (at !== null) this.#armAlarm(at);
+  }
+
   armAlarmNoLaterThan(atMs: number): void {
-    // The single chokepoint every arm site goes through, so a halted context (SELF_WAKE_HALT_STREAK)
-    // cannot re-arm from anywhere. A real request clears the streak before its work, so this only
-    // ever suppresses an ALARM-driven arm.
     if (this.selfWakeHalted()) return;
+    if (this.#alarmWritesDeferred) {
+      this.#deferredAlarmAtMs = Math.min(this.#deferredAlarmAtMs ?? atMs, atMs);
+      return;
+    }
+    const scheduledAt = this.nextScheduledAppendAt();
+    this.#armAlarm(scheduledAt === null ? atMs : Math.min(atMs, scheduledAt));
+  }
+
+  /** A synchronous due-work pass reconciles once against its FINAL state. Otherwise completing
+   *  the first of two due rows rearms for the second, leaving a redundant immediate wake after
+   *  both completed. Other subsystems' requested deadlines are retained throughout the pass. */
+  deferAlarmWrites(work: () => void): void {
+    this.#alarmWritesDeferred = true;
+    try {
+      work();
+    } finally {
+      this.#alarmWritesDeferred = false;
+      const at = this.#deferredAlarmAtMs;
+      this.#deferredAlarmAtMs = null;
+      if (at !== null && !this.selfWakeHalted()) this.armAlarmNoLaterThan(at);
+      else this.armScheduledAppends();
+    }
+  }
+
+  #armAlarm(atMs: number): void {
+    atMs = Math.max(atMs, Date.now()); // overdue instants request an immediate wake, including pre-epoch dates
     if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
     this.#alarmArmedForMs = atMs;
-    // Not awaited: the native output gate owns the write and turns an async failure into an
-    // invocation failure — and a lost memo just re-arms on the next alarm() pass.
+    // The native output gate makes a failed alarm write fail the invocation.
     void this.storage.setAlarm(atMs);
   }
 

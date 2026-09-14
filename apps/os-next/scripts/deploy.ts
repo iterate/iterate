@@ -42,7 +42,7 @@ export default async function deploy(options: { env?: string } = {}) {
         ok: (status) => status === 200,
         label: "OAuth discovery",
       },
-      { url: `${env.mcpBaseUrl}/`, ok: (status) => status === 401, label: "MCP bearer challenge" },
+      { url: env.mcpBaseUrl, ok: (status) => status === 401, label: "MCP bearer challenge" },
       {
         url: `${env.baseUrl}/api`,
         ok: (status) => status === 401,
