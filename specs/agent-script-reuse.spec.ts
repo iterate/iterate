@@ -188,11 +188,6 @@ test("run() return values are typed from the reused row's data, through the real
 
   const agent = await fixture.createAgent();
 
-  const warmAgent = await fixture.createAgent({ infix: "warm" });
-
-  warmAgent.responses.setOnce(`async (itx) => {await itx.chat.sendMessage("warmed")}`);
-  await warmAgent.ask({ message: "warm up", timeoutMs: 90_000 }).catch(() => {});
-
   await page.goto(agent.webUrl);
 
   const composer = page.getByPlaceholder("Message this agent");
@@ -256,5 +251,4 @@ test("run() return values are typed from the reused row's data, through the real
   });
 
   expect(agent.responses).toMatchObject({ responders: [] }); // make sure we consumed all responses
-  expect(warmAgent.responses).toMatchObject({ responders: [] }); // make sure we consumed all responses
 });

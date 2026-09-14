@@ -30,6 +30,8 @@ on:
   push:
     branches:
       - main
+      # Temporary: this investigation needs exact SDK tarballs before opening a PR.
+      - fix/playwright-flake-causes
   pull_request:
 jobs:
   publish:
