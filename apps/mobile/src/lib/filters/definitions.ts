@@ -4,10 +4,12 @@
 // filters from userland streams through this same interface.
 //
 // ONLY import this module from the filter-camera DOM component (and its
-// test harness): keep the canvas runtime out of the native Hermes bundle. The native picker reads picker.ts.
+// test harness): keep the canvas runtime out of the native Hermes bundle.
+// The native picker reads picker.ts.
 //
 // Backdrops and flashcard pictures are AI-generated or stock images (the
-// scripts/generate-filters.ts script, hosted on mobile.iterate.com). The "real eyes and lips" effect samples the live video through
+// scripts/generate-filters.ts script, hosted on mobile.iterate.com).
+// The "real eyes and lips" effect samples the live video through
 // cutouts whose shape IS your tracked feature's landmark ring (feathered,
 // user-adjustable looseness) — drawn in place (a mask following your face),
 // remapped onto a character (the buried potato), or pinned to a screen

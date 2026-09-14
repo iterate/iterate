@@ -437,3 +437,8 @@ this follow-up; those behaviors remain unchanged.
 - First use now needs a network connection (~6.6 MB for tracking plus selected
   artwork). HTTP caching helps reuse; persistent offline availability is not
   promised. Real iPhone/WebKit video and Photos checks remain manual.
+
+- Final validation: 270 mobile tests and 20 website tests pass; both
+  typechecks, mobile lint, and iOS export pass. Merged latest main
+  `9c588ad55` without conflicts. All four artwork generator commands preserve
+  existing art with zero generation requests.
