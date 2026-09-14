@@ -51,11 +51,10 @@ agent at that tab only with explicit current-task permission.
 
 ```bash
 npm i -g playwriter@latest
-npx skills add remorses/playwriter --skill playwriter -g -y --copy
 playwriter skill   # once per session — read in full
 ```
 
-Personal installs of the skill live under `~/.agents/skills/playwriter`. Do
+The CLI provides its current instructions through `playwriter skill`; a separate skill install is optional. Personal skills belong in the user's canonical skill tree, with links rather than tool-specific copies. Do
 **not** vendor third-party browser CLI skill packs into this monorepo.
 
 ## Actual Chrome is exceptional

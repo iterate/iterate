@@ -1,7 +1,6 @@
 ---
 name: creating-an-app
 description: Create a new Cloudflare app in this repo with the expected package scripts, Doppler shape, and CI workflow wiring.
-publish: false
 ---
 
 # Creating An App
@@ -57,7 +56,7 @@ Do not add preview logic back into `apps/<app>/scripts/router.ts` just to satisf
 
 ## Doppler
 
-Use the `new-doppler-project` skill for the project/config setup.
+For a new Doppler project or config inheritance, read [Doppler setup](references/doppler.md).
 
 The app package should work with:
 
