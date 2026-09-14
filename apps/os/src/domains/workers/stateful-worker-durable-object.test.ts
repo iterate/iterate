@@ -35,13 +35,20 @@ const ref = {
 function host() {
   const storage = new Map<string, unknown>();
   const running = new Map<string, object>();
+  // workerd keeps a facet whose startup callback threw in the parent's facet
+  // map with its rejected start promise: every later call under that name
+  // replays the failure until ctx.facets.abort erases the entry.
+  const failed = new Map<string, unknown>();
   const target = {
     fetch: vi.fn(async () => new Response("notes")),
     invokeCapability: vi.fn(),
     listNotes: vi.fn(async () => ["saved note"]),
   };
   const start = vi.fn();
-  const abort = vi.fn((name: string) => running.delete(name));
+  const abort = vi.fn((name: string) => {
+    running.delete(name);
+    failed.delete(name);
+  });
   const ctx = {
     exports: {},
     id: {
@@ -61,10 +68,16 @@ function host() {
           Object.entries(target).map(([method, invoke]) => [
             method,
             async () => {
+              if (failed.has(name)) throw failed.get(name);
               if (!running.has(name)) {
-                const options = startup();
-                start(options);
-                running.set(name, options.class);
+                try {
+                  const options = startup();
+                  start(options);
+                  running.set(name, options.class);
+                } catch (error) {
+                  failed.set(name, error);
+                  throw error;
+                }
               }
               return await invoke();
             },
@@ -107,6 +120,42 @@ it("propagates a startup failure without retrying it through the user request", 
   await expect(app.fetch()).rejects.toBe(failure);
   expect(h.loadResolvedWorker).toHaveBeenCalledTimes(1);
   expect(app.target.fetch).not.toHaveBeenCalled();
+});
+
+it("aborts a facet whose startup callback threw so the next request restarts it", async () => {
+  const app = host();
+  const outage = new Error("loader unavailable");
+  h.loadResolvedWorker.mockImplementationOnce(() => {
+    throw outage;
+  });
+
+  await expect(app.fetch()).rejects.toBe(outage);
+  expect(app.abort).toHaveBeenCalledWith("target", "facet startup failed");
+
+  // The loader is healthy again: the aborted facet starts afresh and loads
+  // its class a second time instead of replaying the rejected startup.
+  await expect(app.fetch()).resolves.toBeInstanceOf(Response);
+  expect(h.loadResolvedWorker).toHaveBeenCalledTimes(2);
+  expect(app.start).toHaveBeenCalledTimes(1);
+  expect(app.target.fetch).toHaveBeenCalledTimes(1);
+});
+
+it("replays the startup failure on every later request when the abort does not land", async () => {
+  // The negative control for the fake's workerd semantics: without the abort
+  // the broken facet answers every request with the same rejection and never
+  // asks for a class again — the wedge this abort exists to clear.
+  const app = host();
+  const outage = new Error("loader unavailable");
+  h.loadResolvedWorker.mockImplementationOnce(() => {
+    throw outage;
+  });
+  app.abort.mockImplementationOnce(() => {});
+
+  await expect(app.fetch()).rejects.toBe(outage);
+  await expect(app.fetch()).rejects.toBe(outage);
+  expect(app.abort).toHaveBeenCalledTimes(1);
+  expect(h.loadResolvedWorker).toHaveBeenCalledTimes(1);
+  expect(app.start).not.toHaveBeenCalled();
 });
 
 it("reuses a warm facet without loading another worker for HTTP or RPC requests", async () => {
