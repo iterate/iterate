@@ -14,7 +14,8 @@ import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream
 import { stampPrincipal, type Caller } from "../principal.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/processor.ts";
 import type { LibraryRoots } from "../library.ts";
-import { resolveContextPath } from "../iterate-context.ts";
+import { GLOBAL_PROJECT_ID, resolveContextPath } from "../iterate-context.ts";
+import { codedError } from "../lib.ts";
 import {
   assertSecretName,
   normalizeSecretRecord,
@@ -33,6 +34,7 @@ import {
   type WorkerSource,
 } from "./worker-loader.ts";
 import {
+  itxExpressionStepName,
   print,
   type ItxExpression,
   type ItxExpressionInput,
@@ -269,7 +271,8 @@ interface BuildBuiltInsDeps {
   egress: (request: Request) => Promise<Response>;
   /** WHO is calling right now — the `Caller` the DO runs this call under (the fetch lane's header,
    *  or the edge's stamp), `{ principal: null }` for an anonymous session, a processor, a loaded
-   *  worker. Carried across sibling `cd` hops; the path-mask that reads it is not yet enforced. */
+   *  worker and the KERNEL's own delivery loop. Carried across sibling `cd` hops; in the global
+   *  namespace `cd` reads it to tell the kernel's config funnel from a person's path. */
   caller: () => Caller;
   /** The rpcStubs view — closures over the DO's transport table (the pager sockets can never move). */
   rpcStubs: BuiltInScope["rpcStubs"];
@@ -427,9 +430,32 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     // hop, where the ambient store does not reach), so an event appended there is attributed too.
     cd: (contextPath: string) =>
       new InvokeHandle((itxExpressionSteps) => {
-        const context = deps.context(resolveContextPath(path, contextPath)); // a ReachableContext
+        const siblingPath = resolveContextPath(path, contextPath);
+        // THE GLOBAL NAMESPACE IS NOT NAVIGABLE (iterate-context.ts `cd`): a person's expression —
+        // a rule or subscription written into their own context, run under their principal — may
+        // not name another global path. The ONE hop that exists here is the kernel's config funnel,
+        // `itx.cd('/').worker…` (the birth row every context carries), which the delivery loop runs
+        // under NO principal — so a user's row that spells the same hop can only feed the funnel.
+        // Stamped `retryable: false`: a subscription row naming another path can only repeat this
+        // refusal, so the delivery loop halts it at once instead of climbing its ladder.
+        if (
+          projectId === GLOBAL_PROJECT_ID &&
+          !(
+            deps.caller().principal === null &&
+            siblingPath === "/" &&
+            itxExpressionStepName(itxExpressionSteps[0]) === "worker"
+          )
+        )
+          throw Object.assign(
+            codedError(
+              "FORBIDDEN",
+              "a global context is reached by identity (session.user, session.organizations), never by path",
+            ),
+            { retryable: false },
+          );
+        const context = deps.context(siblingPath); // a ReachableContext
         // The caller crosses with the call: the sibling runs it under the same Caller, so an event
-        // appended there is attributed too. (No path-mask check here yet — carried, not enforced.)
+        // appended there is attributed too.
         return context.invoke(["itx", ...itxExpressionSteps], [], deps.caller());
       }),
     fetch: (request: Request) => deps.egress(request),

@@ -241,13 +241,20 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,
-   *  `onCommit`, is the post-commit fan-out — the delivery loop. */
+   *  `onCommit`, is the post-commit fan-out — the delivery loop, run as THE KERNEL: under
+   *  `{ principal: null }` explicitly, whatever the committing call's caller was. The commit lands
+   *  inside that call's `#callerStorage.run`, and the async store would otherwise ride every
+   *  continuation the loop schedules — so a user's append would deliver their config funnel under
+   *  THEIR principal, which the global namespace's `cd` (built-ins.ts) rightly refuses. The kernel
+   *  hop is told from a person's by exactly this null. */
   readonly #stream = new Stream({
     storage: this.ctx.storage,
     path: this.#durableObjectAddress.path,
     projectId: this.#durableObjectAddress.projectId,
     onCommit: (freshEvents, afterOffset, throughOffset) =>
-      this.#subscriptionDelivery.onCommit(freshEvents, afterOffset, throughOffset),
+      this.#callerStorage.run({ principal: null }, () =>
+        this.#subscriptionDelivery.onCommit(freshEvents, afterOffset, throughOffset),
+      ),
   });
 
   /** The append door — a thin wrapper over Stream.append. The activity note runs on every LANDED
@@ -849,9 +856,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** THE ONE DISPATCH DOOR. `caller` is WHO is calling (and, later, what they may reach) — carried
    *  for the whole call so every append it makes stamps `source.principal`, and threaded across each
    *  sibling `cd` hop. A DO-only Workers-RPC verb (never capnweb-exposed), so a client cannot forge
-   *  the caller. `args`/`caller` default, so a bare `invoke(call)` is an anonymous probe. NOTE: the
-   *  path-mask authority that would READ `caller` to allow/refuse the call is not yet enforced (its
-   *  requirements are the control-plane security spec's expected-fails). */
+   *  the caller. `args`/`caller` default, so a bare `invoke(call)` is an anonymous probe. What READS
+   *  the caller: `append` (the stamp) and, in the global namespace, `cd` (built-ins.ts — a person's
+   *  path hop is refused there; the append type-gate is the security spec's remaining expected-fail). */
   async invoke(
     call: ItxExpressionInput,
     args: unknown[] = [],

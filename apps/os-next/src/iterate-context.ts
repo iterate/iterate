@@ -135,8 +135,18 @@ export class IterateContextRpcTarget extends RpcTarget {
   /** Another context of THIS project. Absolute by convention (`cd("/agents/support")`); relative
    *  (`"agents/support"`, `"../inbox"`) resolves against this context's path — one resolver, shared
    *  with the built-in `itx.cd(...)` root. Returns an EDGE context, so `provide` on it lends in this
-   *  same session. Pure addressing. */
+   *  same session. Pure addressing — and, the projectId being kept, a project's `cd` can never spell
+   *  the global namespace. THE GLOBAL NAMESPACE IS NOT NAVIGABLE: a global context is reached by
+   *  IDENTITY only (`session.user`, `session.organizations.get`), so its `cd` is refused for everyone
+   *  — the admin included; the one path hop the platform needs there is the kernel's own, inside the
+   *  DO (built-ins.ts `cd`). This is the whole path mask: with no way to name another user's path,
+   *  there is no policy to get wrong. */
   cd(path: string): IterateContextRpcTarget {
+    if (this.#durableObjectAddress.projectId === GLOBAL_PROJECT_ID)
+      throw codedError(
+        "FORBIDDEN",
+        "a global context is reached by identity (session.user, session.organizations), never by path",
+      );
     const durableObjectAddress = DurableObjectNameCodec.address({
       projectId: this.#durableObjectAddress.projectId,
       path: resolveContextPath(this.#durableObjectAddress.path, path),
@@ -390,9 +400,10 @@ const PROJECT_ID = /^[A-Za-z0-9_-]+$/;
 /** The reserved projectId of the deployment-global namespace: the control plane's own contexts —
  *  `/users/<id>`, `/organizations/<id>`, and `/projects/<id>` records — live here. A global context
  *  is an ORDINARY context at this projectId: same codec, same built-ins, same surface as a project's
- *  (`session.user` is exactly `session.projects.get(...)` one namespace over). Real projects are
- *  addressed by their `prj_`-prefixed id, so a slug can never spell `global`; until project ids carry
- *  that prefix the collision is a known gap, captured as a failing test, not a runtime check. */
+ *  (`session.user` is exactly `session.projects.get(...)` one namespace over) — except that it is NOT
+ *  NAVIGABLE: `cd` is refused on a global edge handle (IterateContextRpcTarget.cd) and, for a
+ *  principal, inside a global DO (built-ins.ts `cd`). A project's id is its slug, so the word is
+ *  RESERVED at the project catalog (session.ts `projects.create` / `projects.get`). */
 export const GLOBAL_PROJECT_ID = "global";
 
 /** A parsed DO address. `name` is its own canonical string form — parse once, carry both
