@@ -1203,6 +1203,39 @@ and CLI use that durable, replayable event to release opening microphone audio.
 Changing its retention would require a new subscriber/reconnect contract.
 Clean restore `db7657d5-0a30-48e5-80a0-510d5423ab98` passed all deployment smokes.
 
+## Stateless setup root control (excluded)
+
+A ten-call alternating control moved only `setupVoiceAgent` from its mounted
+stateless worker to the native project RPC root. It used a fixture read from
+exact deployed source commit `ebb0a42dc2b1a44ae5cee36f87eee448a914b664`;
+all substantive source files were byte-identical to the checkout, and its
+generated durable-worker key was retained. The voice facet, ordinary Agent
+configuration, prompt and credential stayed the same. Static SDK imports were
+resolved by the OS bundle in the native arm. This tests the setup root boundary,
+not arbitrary equivalence between native and userspace packages.
+
+All ten returned audio. Native readiness was 3,727 / 1,753 / 2,034 / 1,624 /
+1,572 ms; dynamic readiness was 3,146 / 1,845 / 1,665 / 1,677 / 1,693 ms.
+Later-four medians were **1,688.5 ms native / 1,685 ms dynamic**, with all-five
+medians of 1,753 / 1,693 ms. This offers no established warm-call improvement;
+the first cold samples remain included and do not establish a cold difference.
+
+All ten initial voice batches and full Agent configuration sequences matched
+after normalizing only stream paths and activation IDs. Each initial voice
+batch was contiguous. Terminal audits found ended calls, matching activation
+IDs, no pending delegations, zero subscription lag and no last error, with the
+same dynamic voice runtime identity. Five native selection logs confirmed the
+expected source, helper hash and deployment version. Targeted parent and
+ProjectDO error queries returned no records. Six focused tests and OS typecheck
+passed. The adapter, source fixture and CLI helper were removed.
+
+Experiment version: `6cfb1b5f-722f-4327-bb0b-e152efd400d4`. Evidence:
+`native-root-setup-result.json`, `native-root-setup-terminal-audit.json`,
+`native-root-setup-semantic-proof.json` and the archived temporary sources under
+`/tmp/voice-startup-pr`. This control did not change microphone gating; opening
+PCM still waited for durable `conversation-accepted` at the client. Clean restore
+`a5931082-83c8-4c76-8dec-7c6ca13dfef0` passed all deployment smokes.
+
 ## Reproduce
 
 From `apps/os`, with the current voice source installed in a disposable
