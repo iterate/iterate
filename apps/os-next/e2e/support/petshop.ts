@@ -40,6 +40,21 @@ export const petshopExpireTokens = (
     body: JSON.stringify({ clientId }),
   });
 
+/** Revoke one refresh token at the provider — the next refresh grant with it is `invalid_grant`. */
+export const petshopRevokeRefreshToken = (refreshToken: string): Promise<unknown> =>
+  petshopJson("/__backdoor/revoke-refresh-token", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    body: JSON.stringify({ refreshToken }),
+  });
+
+/** RFC 8414 discovery: the authorization server's metadata, where a connect flow learns the token
+ *  endpoint it will later configure as the secret's refresh strategy. */
+export const petshopAuthorizationServer = (): Promise<{
+  token_endpoint: string;
+  authorization_endpoint: string;
+}> => petshopJson("/.well-known/oauth-authorization-server");
+
 /** The connect half a trusted party runs ONCE: the consent-free authorize (`approve=1`, the test
  *  lane) → the code → the token exchange with HTTP Basic client auth. What lands in the secret. */
 export async function petshopConnect(client: {
