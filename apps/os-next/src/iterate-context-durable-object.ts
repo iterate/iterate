@@ -57,7 +57,7 @@ import {
 } from "./context/rpc-stubs.ts";
 import { buildLibrary, type LibraryItx } from "./library.ts";
 import { Stream, type StreamPage } from "./stream/stream.ts";
-import { DurableObjectNameCodec, itxEntrypointFor } from "./iterate-context.ts";
+import { DurableObjectNameCodec, itxEntrypointFor, resourceScope } from "./iterate-context.ts";
 import { secretNamesReferenced } from "./secrets.ts";
 import type { SecretDurableObject } from "./secret-durable-object.ts";
 import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
@@ -971,9 +971,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           { status: 502 },
         ),
       );
-    return this.env.SECRET.getByName(`${this.#durableObjectAddress.projectId}:${names[0]}`).fetch(
-      outbound,
+    // The cell is the RESOURCE OWNER's (iterate-context.ts `resourceScope`) — the one derivation
+    // `itx.secrets` keys it by, so a user's placeholder reaches the user's own cell, never a shared one.
+    const owner = resourceScope(
+      this.#durableObjectAddress.projectId,
+      this.#durableObjectAddress.path,
     );
+    return this.env.SECRET.getByName(`${owner.id}:${names[0]}`).fetch(outbound);
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {

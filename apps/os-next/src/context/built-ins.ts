@@ -14,7 +14,7 @@ import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream
 import { stampPrincipal, type Caller } from "../principal.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/processor.ts";
 import type { LibraryRoots } from "../library.ts";
-import { GLOBAL_PROJECT_ID, resolveContextPath } from "../iterate-context.ts";
+import { GLOBAL_PROJECT_ID, resolveContextPath, resourceScope } from "../iterate-context.ts";
 import { codedError } from "../lib.ts";
 import {
   assertSecretName,
@@ -88,14 +88,17 @@ export interface BuiltInScope extends LibraryRoots {
   builtins: Omit<BuiltInScope, "builtins">;
   /** Identify this context. */
   whoami(): { projectId: string; path: string };
-  /** Project-prefixed durable key/value (the `${projectId}:` prefix IS the isolation). */
+  /** Durable key/value prefixed with the RESOURCE OWNER's id (iterate-context.ts `resourceScope`:
+   *  a project's id, or a global user's/organization's subtree) — the `${owner.id}:` prefix IS the
+   *  isolation. */
   kv: {
     get(key: string): Promise<string | null>;
     put(key: string, value: string): Promise<{ ok: true }>;
     delete(key: string): Promise<{ ok: true }>;
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
-  /** Project secrets for egress — THE SECRET CELL (secrets.ts, secret-durable-object.ts): a
+  /** The resource owner's secrets for egress (a project's; a global user's or organization's own —
+   *  never a catalog shared across users) — THE SECRET CELL (secrets.ts, secret-durable-object.ts): a
    *  `getSecret("/secrets/NAME")` placeholder in an outbound request's URL (path or query) or
    *  headers substitutes to the value at egress (`fetch`), and `getSecret("/secrets/NAME",
    *  { field: "a.b" })` to one string field of a JSON material — apps/os's placeholder grammar for
@@ -248,7 +251,8 @@ interface BuildBuiltInsDeps {
   env: {
     LOADER: WorkerLoader;
     ITX_KV: KVNamespace;
-    /** The secret cells (secret-durable-object.ts): one per project secret, `<projectId>:<name>`. */
+    /** The secret cells (secret-durable-object.ts): one per secret, `<owner.id>:<name>` — the
+     *  resource owner's id (iterate-context.ts `resourceScope`). */
     SECRET: DurableObjectNamespace<SecretDurableObject>;
     AI: Ai;
     ARTIFACTS: ArtifactsNamespace;
@@ -296,34 +300,39 @@ interface BuildBuiltInsDeps {
 export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> {
   const { projectId, path, iterateContextName, env } = deps;
 
-  const kvPrefix = `${projectId}:`;
+  // THE RESOURCE OWNER (iterate-context.ts `resourceScope`): the project itself, or — in the global
+  // namespace — the user's or organization's subtree. Every resource key below is prefixed with
+  // `owner.id`; the secrets catalog lives in the log at `owner.rootPath`.
+  const owner = resourceScope(projectId, path);
+  const kvPrefix = `${owner.id}:`;
   const ownContext = () => deps.context(path);
-  // A project secret's cell is the Durable Object `<projectId>:<name>` — the one the context DO's
-  // `#egress` forwards a placeholder-bearing request to (a project id never holds a `:`).
+  // A secret's cell is the Durable Object `<owner.id>:<name>` — the one the context DO's `#egress`
+  // forwards a placeholder-bearing request to, by the same derivation (an owner id never holds a `:`).
   const secretCell = (name: string) =>
-    env.SECRET.getByName(`${projectId}:${assertSecretName(name)}`);
+    env.SECRET.getByName(`${owner.id}:${assertSecretName(name)}`);
   /** THE append: every event appended through this scope carries WHO appended it — the DO's own
    *  stamp, never a client's (src/principal.ts): the session's verified principal, or none. */
   const append = (...events: StreamEventInput[]) =>
     ownContext().append(...events.map((event) => stampPrincipal(event, deps.caller().principal)));
-  /** Secrets are the PROJECT's: the value's key is project-scoped, so the catalog lives in ONE log —
-   *  the root context's. Each `secrets` verb runs `here` on the root context, and on a child context
-   *  runs as the same call on the root, over the DO hop. */
-  // A child context runs every secrets verb as the SAME call on the ROOT (secrets are the project's —
-  // one catalog, in the root's log). Acquire the root context PER CALL: a stub cached across calls
+  /** Secrets are the RESOURCE OWNER's: the value's key is owner-scoped, so the catalog lives in ONE
+   *  log — the owner's root context (`owner.rootPath`: a project's `/`, a user's `/users/<id>`).
+   *  Each `secrets` verb runs `here` on that root, and on a context below it runs as the same call
+   *  on the root, over the DO hop. A user's context IS its own root: no hop, no shared catalog. */
+  // A context below the owner's root runs every secrets verb as the SAME call on that ROOT (one
+  // catalog, in the root's log). Acquire the root context PER CALL: a stub cached across calls
   // stays broken after a root DO failure (Cloudflare's DO error-handling requires re-acquiring). And
   // forward `deps.caller()` so the durable change event keeps the child call's authenticated principal.
   const onRootContext = <T>(call: ItxExpressionStep, here: () => Promise<T>): Promise<T> =>
-    path === "/"
+    path === owner.rootPath
       ? here()
       : (deps
-          .context("/")
+          .context(owner.rootPath)
           .invoke(["itx", "builtins", "secrets", call], [], deps.caller()) as Promise<T>);
 
   // A secret mutation is append-THEN-cell, two awaits; a concurrent set and delete of the SAME name
   // could commit the log in one order while their cell writes land in the other, leaving egress a
-  // value the catalog says is gone (or vice versa). Serialize per name — on the root DO, where every
-  // verb runs (`onRootContext`) — so the log order IS the cell's order. Different names never contend.
+  // value the catalog says is gone (or vice versa). Serialize per name — on the owner's root DO, where
+  // every verb runs (`onRootContext`) — so the log order IS the cell's order. Different names never contend.
   // (This is `#builtIns`, built ONCE per DO instance, so the chain persists across calls.) An eviction
   // BETWEEN a delete's append and its cell clear can still strand a value — a durable reconciliation
   // sweep is the follow-up; see docs/cleanup-log.md.
@@ -416,10 +425,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       list: () => onRootContext(["list"], async () => deps.secrets()),
     },
     ai: env.AI, // the binding object itself — dispatch walks its methods
-    cfArtifacts: projectScopedArtifacts(env.ARTIFACTS, projectId),
+    cfArtifacts: projectScopedArtifacts(env.ARTIFACTS, owner.id),
     repos: projectScopedRepos({
       namespace: env.ARTIFACTS,
-      projectId,
+      projectId: owner.id,
       accountId: deps.artifactsAccountId,
       namespaceName: deps.artifactsNamespace,
     }),
