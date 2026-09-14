@@ -688,6 +688,52 @@ Retain one retried Playwright tree-visibility assertion and the **247.2 s** OS
 E2E duration, **147.2 s** over budget. Raw log:
 `depot-kzstmfpdtz-d30pw91t7d.log`.
 
+A temporary native-only probe on version `362c71dd…` captured all five first
+voice-facet wakes, with SDK `055337b` and uninstrumented voice pin `acde9d3b…`.
+Four calls produced audio. The first reached client `call-started` only at
+**9,620 ms**, then exceeded acceptance and cleanup-acknowledgement deadlines.
+Its terminal event subsequently folded: snapshot offset 73 has `call: null`,
+the activation in `recentEndedActivations`, and subscription lag zero with no
+error. The connection-runtime API's null result alone does **not** prove a
+facet or provider socket is absent; provider-side close was not observed.
+
+| Native probe duration, ms                   |  01 |  02 |  03 |  04 |  05 |
+| ------------------------------------------- | --: | --: | --: | --: | --: |
+| Hosted watchdog acknowledgement             |  68 |  42 |  54 | 153 | 114 |
+| Class preparation                           |  11 |   0 |   0 |   0 |   0 |
+| First facet configure                       | 202 |   — | 216 | 159 | 153 |
+| Facet wake RPC                              |  15 |  33 |  35 |  22 |  27 |
+| Wake-work entry to receiver-wake resolution | 259 |  75 | 305 | 204 | 192 |
+
+These rows are **not additive**. Other concurrent callers entered facet
+configuration while the watchdog acknowledgement was pending: overlap was
+26/130/102 ms in calls 01/04/05. Call 02 was already configured. Zero class
+preparation means the Workers clock did not advance during that synchronous
+work, not zero CPU work. Event-created-at to alarm-entry wall correlations
+were 52/192/129/186/153 ms; keep them separate from the native phase clock.
+The cold sample's main delay preceded the call-started append, not this
+259-ms native wake. Raw evidence: `native-facet-delivery-phase-control.log`,
+`native-facet-delivery-phase-observability-raw.json`, and the corrected summary
+and failed-state artifacts. The diagnostic patch was removed and clean runtime
+version `526f45e2-5708-4338-bded-7495393ff608` passed deployment smokes.
+
+The cold sample's trace `ea494045447e4a26b89a9e3643cc8286` contains a fresh
+`voice-agent.ts` build lasting **3.353 s** (bundler RPC 3.137 s), before the
+call-started append. Its 1.664-second KV-put span is retained background work:
+this deployment already includes `85f8e58c1`, and the enclosing RPC span's
+longer lifetime does not establish when its caller resumed. The remaining
+pre-append delay is unsegmented. Evidence:
+`native-precall-310992b0-attribution.md` and its raw trace artifacts.
+
+Fable's additional review proposed overlapping watchdog persistence and facet
+configuration, but the probe already observes that overlap in several calls;
+its possible gain needs a narrower control. Its per-isolate bundle-size idea
+remains untested. A proposed RPC-future disposal concern was checked directly
+in Preview 17: native `env.ITX.get()` reports `Symbol.dispose in future` true,
+the member is callable, and explicit disposal succeeds after a benign read.
+Evidence: `native-itx-dispose-probe-result.json`. No authority relaxation or
+new delivery scheduler was adopted from the review.
+
 ## Reproduce
 
 From `apps/os`, with the current voice source installed in a disposable
