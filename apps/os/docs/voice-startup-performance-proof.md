@@ -86,12 +86,45 @@ restart took 5,425 ms, including 1,746 ms credential preflight, 1,208 ms first
 ITX access, and 1,884 ms provider handshake. Warm calls mostly took
 1,584–1,791 ms; a 2,493 ms call included a 1,992 ms provider handshake.
 
-**Open finding:** one earlier hosted call accepted and folded commentary but
-produced no audio within 10 seconds. The retained stream is
-`/agents/voice/startup-colocated/01-18cb23dd`. Its historical logs do not prove
-whether commentary was sent. Ten exact matching direct calls and ten later
-instrumented hosted calls produced audio. Those successes do not explain or
-resolve the failure. Treat it as a release blocker, not a discarded sample.
+**Open finding:** intermittent hosted calls accepted commentary but produced no
+audio within ten seconds. The original retained stream is
+`/agents/voice/startup-colocated/01-18cb23dd`. A later instrumented 15-call
+run captured two more: the facet sent commentary without a synchronous throw,
+but received only `session.started`, with no transcript/audio, parse failure,
+or speaker append. This places the observed failure before speaker delivery;
+it does not prove that OpenAI received the commentary. A matched direct Node
+control produced audio in all 15 calls.
+
+A separate direct control sent commentary but withheld input audio for three
+seconds: it received no response until input began, then received PCM 790 ms
+later. Missing initial input can therefore produce the same symptom. The next
+hosted probe counted input delivery: all 15 calls received their single mic
+frame, started silence fill, and produced audio. It did not capture the silent
+failure, so the input-loss hypothesis remains unconfirmed. A repeat of that
+probe had four calls stall before `session-configured`, two calls accept but
+end without audio, then nine healthy calls. The two post-acceptance failures
+have explicit terminal reasons: the provider input clock fell 2,041 and 1,633
+ms behind. The clock was anchored at `session.started` even though no input
+had arrived; delayed first input therefore created artificial silence debt.
+The six-line fix anchors the clock at first forwarded input and credits queued
+capture duration; the one-second guard against genuine scheduling stalls is
+unchanged. Both regressions were observed failing against the archived pre-fix
+source; all 86 voice tests pass with the fix. Preview source
+`eec00510bdd4a458fa580d7c8966e3e5552e7dd0` also passed an intentional delayed-input
+call: acceptance at 3,171 ms, a 2,500 ms wait before input, then PCM at 6,649 ms.
+The call stayed live and its project socket closed normally. The deliberate
+wait is part of this correctness test, not ordinary startup latency. This defect is separate from the still-unexplained four pending
+dials and earlier silent calls. Their runtime probe was already
+null because the voice facet had ended the dial.
+
+**Alarm correctness finding:** hosted alarm writes cross an RPC boundary, while
+`StreamAlarmArmer` relies on native output-gate semantics. A rejected remote
+alarm write can follow a successful child append acknowledgement. Existing tests
+did not cover that boundary or outbound delivery before the remote write commits.
+The actual sender already creates an in-flight watchdog before its background
+delivery, so a second completion protocol is unnecessary if that watchdog write
+is acknowledged before delivery. The hosted adapter must enforce this ordering
+and preserve retry after a rejected arm. This remains a blocker.
 
 During source installation/mounting, two `stream core background work failed`
 errors at 14:39:10 UTC mapped to ancestor `child-stream-created` announcements.
@@ -167,6 +200,32 @@ the close acknowledgement (bounded to one second) before returning. A fresh
 audio call through the corrected CLI reached readiness at 2,679 ms and PCM
 at 3,550 ms, then closed with code 1000 and no teardown failure. The preview
 error query covering both close checks returned no error-level entries.
+
+## Fable review and narrower controls
+
+Claude Fable 5.1 at xhigh reviewed the source and measurements, then reviewed
+an A/B/A control. Full Agent setup had median readiness 2,036 ms; omitting
+Agent creation and protocol append diagnostically gave 1,637 ms; restoring
+full setup gave 2,039 ms. Each arm had five calls. The omitted-Agent arm had
+one silent call and was not a functional delegation configuration. The result
+supports investigating contention, without identifying the contended resource.
+Delaying Agent creation only until the initial voice batch committed worsened
+median readiness to 2,295 ms and was rejected.
+
+A separate five-call local-clock probe measured initial voice append at
+91–154 ms, voice catch-up barrier at 462–831 ms, Agent creation at 648–856 ms,
+and Agent protocol append at 158–374 ms. The secret preflight took 1,222 ms
+first, then 61–100 ms. These intervals overlap; the voice catch-up barrier
+holds the setup RPC but does not gate provider dialing or client acceptance.
+Agent creation contains existence/facts reads, collection and birth appends,
+and four completion barriers; it is not a single storage operation.
+
+Fable's actionable next experiments are an Agent start after voice acceptance
+(measuring first-delegation cost too), moving initial persona context into the
+existing Agent setup batch, an inert DO-facet egress control, longer idle
+intervals, and three simultaneous calls. Its alarm review found the correctness
+boundary described above. No security-policy relaxation, discarded audit write,
+keepalive, or Agent harness change was adopted from the review.
 
 ## Reproduce
 

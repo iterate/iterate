@@ -1208,6 +1208,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
            * 50 ms frames every 55 ms then keep the provider clock five ms
            * behind on every frame.  The silence clock accumulates those gaps
            * into its next 100 ms fill instead. */
+          if (!dial.silenceFillStarted) {
+            dial.micAudioCoveredUntilFacetMs = this.deps.nowAtFacetMs();
+          }
           dial.micAudioCoveredUntilFacetMs += base64ByteLength(micB64) / PCM16_BYTES_PER_MS;
           this.#sendMicAudio(dial.socket, micB64);
           this.#startSilenceFill(dial, append, runInBackground);
@@ -1553,10 +1556,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
         /* Usable. Everything the handshake made us hold goes now. */
         dial.ready = true;
         const heldMicFrames = dial.micQueue.length;
+        dial.micAudioCoveredUntilFacetMs =
+          receivedAtFacetMs + dial.micQueueBytes / PCM16_BYTES_PER_MS;
         for (const held of dial.micQueue) this.#sendMicAudio(dial.socket!, held);
         dial.micQueue = [];
         dial.micQueueBytes = 0;
-        dial.micAudioCoveredUntilFacetMs = receivedAtFacetMs;
         /*
          * A pre-opened session has no microphone frames yet: the device is
          * still binding its direct subscription and deliberately holds local

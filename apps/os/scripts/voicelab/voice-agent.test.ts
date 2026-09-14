@@ -294,11 +294,16 @@ async function callIsLive(h: Harness, configured: Record<string, unknown> = {}):
   return (started[0]!.payload as { conversationId: string }).conversationId;
 }
 
-/** Let the timers and the tick chains run `ms` of the fake clock, in coarse steps. */
+/**
+ * Let timers run without manufacturing a scheduling overrun. The input clock
+ * permits one second of real lateness, while its frames are 100 ms; keeping
+ * fake-clock wakes below that boundary preserves a partial opening frame's
+ * ordinary remainder instead of turning it into a fake >1 s outage.
+ */
 async function playOutEverything(h: Harness, ms: number): Promise<void> {
   await h.settle();
   for (let spent = 0; spent < ms; ) {
-    const step = Math.min(1_000, ms - spent);
+    const step = Math.min(900, ms - spent);
     await h.advanceTime(step);
     await h.settle();
     spent += step;
@@ -357,6 +362,54 @@ describe("opening a call", () => {
     expect(h.provider.sentOfType("session.input_audio.append")[0]).toMatchObject({
       audio: opening,
     });
+  });
+
+  it("anchors the silence clock at a delayed first microphone frame", async () => {
+    const h = makeHarness();
+    await h.append(
+      { type: "events.iterate.com/voice-agent/created", payload: {} },
+      { type: "events.iterate.com/voice-agent/configured", payload: {} },
+      {
+        type: "events.iterate.com/voice-agent/call-started",
+        payload: { activation: ACTIVATION, conversationId: "conv_delayed_input" },
+      },
+    );
+    await h.settle();
+    h.provider.start();
+    await h.settle();
+    await h.advanceTime(2_000);
+    await h.settle();
+
+    const opening = speechDelta(20, 7);
+    await h.append(openingMicFrame(ACTIVATION, opening));
+    await h.settle();
+    await h.advanceTime(SILENCE_FILL_MS);
+    await h.settle();
+
+    expect(eventsOfType(h, "conversation-ended")).toEqual([]);
+    expect(h.provider.sentOfType("session.input_audio.append")[0]).toMatchObject({
+      audio: opening,
+    });
+  });
+
+  it("credits held opening capture before silence fill starts", async () => {
+    const h = makeHarness();
+    const held = speechDelta(500, 8);
+    await h.append(
+      { type: "events.iterate.com/voice-agent/configured", payload: {} },
+      openingMicFrame(ACTIVATION, held),
+    );
+    await h.settle();
+    h.provider.start();
+    await h.settle();
+
+    expect(h.provider.sentOfType("session.input_audio.append")).toHaveLength(1);
+    await h.advanceTime(500);
+    await h.settle();
+    expect(h.provider.sentOfType("session.input_audio.append")).toHaveLength(1);
+    await h.advanceTime(SILENCE_FILL_MS);
+    await h.settle();
+    expect(h.provider.sentOfType("session.input_audio.append")).toHaveLength(2);
   });
 
   it("ends a pre-opened call after eviction instead of re-dialling it", async () => {
