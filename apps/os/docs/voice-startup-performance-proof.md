@@ -610,6 +610,84 @@ request. Evidence is `hosted-background-cache-startup-control.json`.
 Every CI check passed on runtime commit `85f8e58c1`; this does not resolve the
 earlier storage faults or complete sustained-audio performance proof.
 
+A refreshed direct Node control at 19:17 UTC used the current 2,125-byte
+instructions, `gpt-live-1`/`marin`, 16 kHz PCM, and `Say: ready.` commentary.
+All five calls reached session readiness and audible PCM: median readiness
+**994 ms** (821–1,376), first non-silent PCM **1,905 ms** (1,711–2,218), and
+readiness-to-PCM **890 ms**. It intentionally closes after first audio; close
+1005 is its no-status close, not a handshake timeout. This measures decoded
+audio availability, not acoustic speaker onset. The Doppler `os/prd` API key
+has not been verified as the same account/key as the preview project's
+secret. Evidence: `direct-current-ready-20260914/summary.json`.
+
+A temporary console-only facet phase probe produced no usable diagnostic
+records. Its first fresh stream timed out before acceptance; four subsequent
+calls reached audio. The missing logs provide no phase attribution. The
+ordinary source was freshly reinstalled and mounted at `6c3725bf5d16…`,
+preserving exact-head snapshot eligibility rather than remounting a historical
+pin. Artifacts: `facet-ready-phases-{install,restore}.json`,
+`facet-ready-phases-audio-control.log`, and `facet-ready-phases-logs.json`.
+
+Runtime `14056353a` uses native RPC promise pipelining for Project and Secret
+processor-facade reads. It sends facade selection and its read together,
+preserving strict catch-up, policy/grant checks, unborn-secret handling and
+disposal. The patch changes two files (14 additions, 12 deletions); 113 relevant
+tests and app typecheck passed, with one existing expected failure. Preview
+version `5d901237-f837-4d3a-9870-1db87a02e9a3` passed deployment smokes with
+the same SDK pin `055337b`.
+
+A temporary source probe returned phase durations in the existing acceptance
+payload and one declared diagnostic event appended after acceptance persisted.
+Native before/after runs kept identical pinned voice source `3a7e5cf1abb5…`,
+scenario and SDK. Each arm used one project WebSocket and five new hosted
+streams; both sockets closed 1000. Four calls per arm reached audio. BEFORE's
+first stream timed out before acceptance. AFTER's first accepted at **8,793 ms**,
+leaving only 829 ms after commentary acknowledgement before the overall
+10-second deadline; it failed the first-audio deadline. Neither is excluded
+from the raw results or treated as an audio success.
+
+| Median over the four subsequent calls, ms | Before | After |
+| ----------------------------------------- | -----: | ----: |
+| Client readiness                          |  1,857 | 1,767 |
+| Facet provider dial to session readiness  |    977 |   973 |
+| Facet acceptance append completion        |    129 |   125 |
+
+This small comparison does **not** establish an end-to-end latency improvement
+from pipelining. On the facet clock, acceptance append started in the same
+millisecond as `session.started` in every recorded row. Its await took
+103–420 ms before and 98–163 ms in the four warm after calls. These durations
+do not localize the remaining client-visible delay to any one actor.
+The rendered instructions were 2,096 bytes (`Speak supplied commentary briefly.`
+plus the standard policy), so this is not an exact prompt match to the refreshed
+2,125-byte direct Node control above.
+
+BEFORE's failed stream has a durable benchmark terminal event at offset 20,
+after configuration and call-started at offsets 12/13. That proves terminal
+append, not the cause of the missing provider response. Fresh uninstrumented
+source was restored at pin `acde9d3bb139…`, mounted offset 790, with the original
+source bytes verified. Raw evidence is `facet-ready-payload-{before,after}.log`,
+their `-phase-table` artifacts, the scenario fingerprint and restore JSON.
+The diagnostic event and instrumentation are excluded from the runtime diff.
+
+The subsequent exact-prompt direct control verified the same 2,096-byte
+instruction hash (`191ca6ff…a80c1b89`) before dialing. All five calls reached
+readiness and non-silent PCM. Median readiness was **903 ms** (833–1,625),
+first PCM **1,837 ms** (1,649–2,425); the first sample was 1,242/2,060 ms.
+All five intentionally closed with no status (1005), with no provider errors.
+The key/account-equivalence limitation remains. Evidence:
+`direct-exact-ready-2096-20260914/summary.json`.
+
+Every CI check passed on runtime `14056353a`. The complete Preview CI log
+independently confirms actual passes for path-addressed secret substitution,
+the in-flight secret-refresh race, and enrolled approval keys; these are not
+expected-failure wrappers. A manual filtered invocation lost its tool session
+handle, so it supplies no aggregate proof. CI completed 59 files with 216
+passes, 10 expected failures and 4 skips, and all five preview apps passed.
+The log has no unexpected native storage reset or network-close diagnostics.
+Retain one retried Playwright tree-visibility assertion and the **247.2 s** OS
+E2E duration, **147.2 s** over budget. Raw log:
+`depot-kzstmfpdtz-d30pw91t7d.log`.
+
 ## Reproduce
 
 From `apps/os`, with the current voice source installed in a disposable
