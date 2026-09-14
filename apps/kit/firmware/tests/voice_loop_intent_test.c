@@ -240,6 +240,7 @@ static void fill_outbox_during_board_poll(void) {
 }
 
 static bool sent_after_contains(size_t from, const char *needle);
+static void deliver_accepted_latest(void);
 static void pump(void);
 
 /** Back to idle, and prove it, so the next scenario starts from nothing. */
@@ -707,6 +708,38 @@ static void deliver_accepted_latest(void) {
   }
 }
 
+static void deliver_accepted_for_stream(const char *stream_path) {
+  static char message[512];
+  struct iterate_kit_itx_connection *connection =
+      iterate_kit_fake_platform_connection();
+  const char *activation = strrchr(stream_path, '-');
+  const long offset = next_event_offset++;
+  long callback = 0L;
+  assert(connection != NULL);
+  assert(activation != NULL && activation[1] != '\0');
+  ++activation;
+  for (size_t slot = 0U; slot < sizeof(open_connections) / sizeof(open_connections[0]); ++slot) {
+    if (strcmp(open_connections[slot].stream_path, stream_path) == 0) {
+      callback = open_connections[slot].callback;
+    }
+  }
+  assert(callback != 0L);
+  (void)snprintf(
+      message,
+      sizeof(message),
+      "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
+      "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
+      "\"offset\":%ld,"
+      "\"payload\":{\"activation\":\"%s\",\"conversationId\":\"convdial\",\"handshakeTookMs\":2000}}"
+      "]],\"scannedThroughOffset\":%ld,\"state\":null}]]]",
+      callback, offset, activation, offset);
+  deliver(connection, message);
+  (void)snprintf(
+      message, sizeof(message), "[\"release\",%lld,1]",
+      (long long)next_inbound_call_id++);
+  deliver(connection, message);
+}
+
 static void deliver_ended_latest(void) {
   static char message[512];
   struct iterate_kit_itx_connection *connection =
@@ -780,6 +813,8 @@ static void same_pass_end_then_start_creates_a_new_activation(void) {
   remote_call("conversation", "start");
   step();
   pump();
+  deliver_accepted_latest();
+  step();
   speak_frames(1U);
   run_ms(50U);
   (void)snprintf(activation_a, sizeof(activation_a), "%s", current_activation());
@@ -788,6 +823,8 @@ static void same_pass_end_then_start_creates_a_new_activation(void) {
   remote_call("conversation", "start");
   step();
   pump();
+  deliver_accepted_latest();
+  step();
   speak_frames(1U);
   run_ms(50U);
 
@@ -807,6 +844,8 @@ static void accepted_call_end_then_start_creates_b_after_a_terminal(void) {
   remote_call("conversation", "start");
   step();
   pump();
+  deliver_accepted_latest();
+  step();
   speak_frames(1U);
   run_ms(50U);
   (void)snprintf(activation_a, sizeof(activation_a), "%s", current_activation());
@@ -835,6 +874,8 @@ static void terminal_waits_for_outbox_headroom(void) {
   remote_call("conversation", "start");
   step();
   pump();
+  deliver_accepted_latest();
+  step();
   speak_frames(1U);
   run_ms(50U);
   assert(sent_after_contains(before, "\"pcm\":"));
@@ -875,6 +916,8 @@ static void failed_microphone_append_ends_the_activation(void) {
   remote_call("conversation", "start");
   step();
   pump();
+  deliver_accepted_latest();
+  step();
   speak_frames(1U);
   iterate_kit_fake_platform_fail_next_send();
   run_ms(50U);
@@ -909,6 +952,8 @@ static void delayed_a_setup_cannot_cancel_or_mount_b(void) {
   resolve_deferred_voice_setup(0U);
   step();
   pump();
+  deliver_accepted_latest();
+  step();
   speak_frames(1U);
   run_ms(100U);
 
@@ -930,6 +975,8 @@ static void queued_terminal_survives_session_loss_before_b(void) {
   remote_call("conversation", "start");
   step();
   pump();
+  deliver_accepted_latest();
+  step();
   speak_frames(1U);
   run_ms(100U);
 
@@ -956,6 +1003,8 @@ static void queued_terminal_survives_session_loss_before_b(void) {
   remote_call("conversation", "start");
   step();
   pump();
+  deliver_accepted_latest();
+  step();
   speak_frames(1U);
   run_ms(100U);
   assert(board.last_view.wants_call);
@@ -977,6 +1026,8 @@ static void b_pcm_waits_for_its_own_child_after_a_terminal(void) {
   remote_call("conversation", "start");
   step();
   pump();
+  deliver_accepted_latest();
+  step();
   speak_frames(1U);
   run_ms(100U);
 
@@ -992,6 +1043,9 @@ static void b_pcm_waits_for_its_own_child_after_a_terminal(void) {
   iterate_kit_fake_platform_drain_control_outbox();
   step();
   pump();
+  assert(collect_setup_paths(before, paths, 2U) == 2U);
+  deliver_accepted_for_stream(paths[1]);
+  step();
   run_ms(100U);
   b_open = first_sent_after_containing(after_b_capture, "openConnection");
   b_microphone = first_sent_after_containing(after_b_capture, "\"pcm\":");
@@ -1000,7 +1054,6 @@ static void b_pcm_waits_for_its_own_child_after_a_terminal(void) {
   assert(b_open < iterate_kit_fake_platform_sent_count());
   assert(b_microphone < iterate_kit_fake_platform_sent_count());
   assert(b_open < b_microphone);
-  assert(collect_setup_paths(before, paths, 2U) == 2U);
   assert(strcmp(paths[0], paths[1]) != 0);
   assert(sent_microphone_to_stream(after_b_capture, paths[1]));
   quiescent();
@@ -1009,7 +1062,7 @@ static void b_pcm_waits_for_its_own_child_after_a_terminal(void) {
 /* Reclaimable FAILED handles must be opened again for the next child path. */
 static void rejected_stream_can_be_reused_by_an_immediate_new_activation(void) {
   char reply[160];
-  char activation_a[65];
+  char paths[2][160];
   quiescent();
   const size_t before = iterate_kit_fake_platform_sent_count();
   defer_stream_get = true;
@@ -1017,7 +1070,6 @@ static void rejected_stream_can_be_reused_by_an_immediate_new_activation(void) {
   step();
   pump();
   assert(deferred_stream_get_id != 0L);
-  (void)snprintf(activation_a, sizeof(activation_a), "%s", current_activation());
   (void)snprintf(reply, sizeof(reply),
       "[\"reject\",%ld,[\"error\",\"Error\",\"stream denied\"]]",
       deferred_stream_get_id);
@@ -1030,11 +1082,15 @@ static void rejected_stream_can_be_reused_by_an_immediate_new_activation(void) {
   remote_call("conversation", "start");
   step();
   pump();
+  assert(collect_setup_paths(before, paths, 2U) == 2U);
+  deliver_accepted_for_stream(paths[1]);
+  step();
   speak_frames(1U);
   run_ms(50U);
   assert(board.last_view.wants_call);
-  assert(strcmp(activation_a, current_activation()) != 0);
-  assert(sent_after_count(before, "[\"streams\",\"get\"]") == 2U);
+  assert(strcmp(paths[0], paths[1]) != 0);
+  /* A failed pre-opened child terminal reopens its exact stream. */
+  assert(sent_after_count(before, "[\"streams\",\"get\"]") == 3U);
   assert(sent_after_contains(before, "\"pcm\":"));
   quiescent();
 }
@@ -1060,6 +1116,8 @@ static void pre_mount_speech_is_preserved_and_sent_immediately(void) {
 
   assert(!sent_after_contains(before, "mic-frame"));
   pump();
+  deliver_accepted_latest();
+  step();
   run_ms(50U);
   assert(sent_after_contains(before, "mic-frame"));
   assert(collect_sent_microphone(before, pcm, sizeof(pcm)) == sizeof(pcm));
@@ -1070,14 +1128,14 @@ static void pre_mount_speech_is_preserved_and_sent_immediately(void) {
 
 /* Ending A fences its queued tail before B gets a fresh activation. */
 static void ending_a_never_sends_its_tail_as_b(void) {
-  char activation_a[65];
+  char paths[2][160];
   size_t after_end;
   quiescent();
+  const size_t before = iterate_kit_fake_platform_sent_count();
   remote_call("conversation", "start");
   step();
   speak_frames(3U);
   run_ms(50U);
-  (void)snprintf(activation_a, sizeof(activation_a), "%s", current_activation());
 
   remote_call("conversation", "end");
   step();
@@ -1088,9 +1146,12 @@ static void ending_a_never_sends_its_tail_as_b(void) {
   remote_call("conversation", "start");
   step();
   pump();
+  deliver_accepted_latest();
+  step();
   speak_frames(1U);
   run_ms(50U);
-  assert(strcmp(current_activation(), activation_a) != 0);
+  assert(collect_setup_paths(before, paths, 2U) == 2U);
+  assert(strcmp(paths[0], paths[1]) != 0);
 }
 
 /* A ends after uploading PCM but before acceptance; its terminal still reaches
@@ -1103,6 +1164,8 @@ static void ending_before_acceptance_terminates_a_before_b(void) {
   remote_call("conversation", "start");
   step();
   pump();
+  deliver_accepted_latest();
+  step();
   speak_frames(1U);
   run_ms(50U);
   assert(sent_after_contains(before, "\"pcm\":"));
@@ -1112,8 +1175,10 @@ static void ending_before_acceptance_terminates_a_before_b(void) {
   const size_t after_end = iterate_kit_fake_platform_sent_count();
   remote_call("conversation", "start");
   step();
-  speak_frames(1U);
   pump();
+  deliver_accepted_latest();
+  step();
+  speak_frames(1U);
   run_ms(50U);
 
   terminal = first_sent_after_containing(
@@ -1135,6 +1200,8 @@ static void server_end_discards_a_tail_before_b(void) {
   remote_call("conversation", "start");
   step();
   pump();
+  deliver_accepted_latest();
+  step();
   speak_frames(1U);
   run_ms(50U);
   deliver_accepted_latest();
@@ -1148,6 +1215,8 @@ static void server_end_discards_a_tail_before_b(void) {
   defer_voice_setup = true;
   pump();
   assert(deferred_voice_setup_count == 1U);
+  deliver_accepted_latest();
+  step();
   defer_voice_setup = false;
   resolve_deferred_voice_setup(0U);
   deferred_voice_setup_count = 0U;
@@ -1176,6 +1245,8 @@ static void an_idle_accepted_call_is_not_recycled_for_silence(void) {
   remote_call("conversation", "start");
   run_ms(1500U);
   pump();
+  deliver_accepted_latest();
+  step();
   speak_frames(10U);
   run_ms(200U);
   step();
@@ -1205,6 +1276,8 @@ static void a_lane_silent_mid_answer_is_recycled(void) {
   remote_call("conversation", "start");
   run_ms(1500U);
   pump();
+  deliver_accepted_latest();
+  step();
   speak_frames(10U);
   run_ms(200U);
   step();
@@ -1232,12 +1305,58 @@ static void activation_during_codec_read_keeps_idle_pre_roll(void) {
   step();
   speak_frames(1U);
   pump();
+  deliver_accepted_latest();
+  step();
   run_ms(50U);
   assert(collect_sent_microphone(before, pcm, sizeof(pcm)) == sizeof(pcm));
   assert(collected_sample(pcm, 0U) == 3000);
   assert(collected_sample(pcm, 5U) == 3005);
   assert(collected_sample(pcm, 6U) == 3006);
   step();
+}
+
+/* A pre-opened provider can accept while setup RPC completion is delayed. */
+static void accepted_before_setup_reply_flushes_opening_pcm(void) {
+  const size_t before = iterate_kit_fake_platform_sent_count();
+  quiescent();
+  defer_voice_setup = true;
+  remote_call("conversation", "start");
+  step();
+  pump();
+  assert(deferred_voice_setup_count == 1U);
+  assert(sent_after_contains(before, "\"activation\":\""));
+  deliver_accepted_latest();
+  step();
+  speak_frames(1U);
+  run_ms(50U);
+  assert(sent_after_contains(before, "\"pcm\":"));
+  defer_voice_setup = false;
+  resolve_deferred_voice_setup(0U);
+  deferred_voice_setup_count = 0U;
+  pump();
+  quiescent();
+}
+
+/* Ending a pre-opened call before the first mic frame still emits its terminal. */
+static void preopened_call_ends_before_first_mic(void) {
+  const size_t before = iterate_kit_fake_platform_sent_count();
+  quiescent();
+  defer_voice_setup = true;
+  remote_call("conversation", "start");
+  step();
+  pump();
+  assert(deferred_voice_setup_count == 1U);
+  remote_call("conversation", "end");
+  step();
+  defer_voice_setup = false;
+  pump();
+  assert(sent_after_contains(
+      before, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
+  assert(sent_after_contains(before, "\"reason\":\"button\""));
+  resolve_deferred_voice_setup(0U);
+  deferred_voice_setup_count = 0U;
+  pump();
+  assert(!board.last_view.wants_call);
 }
 
 /* An unanswered activation stops once at 20 seconds and says why. */
@@ -1280,6 +1399,8 @@ int main(void) {
   an_idle_accepted_call_is_not_recycled_for_silence();
   a_lane_silent_mid_answer_is_recycled();
   activation_during_codec_read_keeps_idle_pre_roll();
+  accepted_before_setup_reply_flushes_opening_pcm();
+  preopened_call_ends_before_first_mic();
   an_unaccepted_activation_times_out_once();
   delayed_a_setup_cannot_cancel_or_mount_b();
   /* Every activation above used the same authenticated WebSocket session. */

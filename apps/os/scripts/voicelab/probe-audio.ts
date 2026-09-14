@@ -81,6 +81,8 @@ export function deliveredMsOf(pcm: string): number {
 export interface StreamHandle {
   openConnection(options: {
     connectionKey: string;
+    /** Exclusive durable replay cursor; 0 catches up from this stream's first event. */
+    replayAfterOffset?: number;
     eventTypes: string[];
     processEventBatch: (batch: { events?: { type: string; payload?: unknown }[] }) => void;
   }): Promise<{ close(): void }>;

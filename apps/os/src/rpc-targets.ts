@@ -98,6 +98,7 @@ import {
   DurableObjectNameCodec,
   normalizePath,
 } from "./domains/durable-object-names.ts";
+import { resolveStreamStub } from "./domains/streams/hosted-stream-routing.ts";
 import type {
   CommittedSubscriptionConfiguredEvent,
   CommittedSubscriptionRemovedEvent,
@@ -464,7 +465,6 @@ import {
   type ProjectAiInterceptor,
 } from "./lib/model-interception.ts";
 import { resolveSlugConventionTemplate } from "./lib/slug-config-template.ts";
-
 /**
  * The root of every itx-facing RpcTarget. Extending it (directly, or through
  * another IterateRpcTarget subclass) is the opt-in signal for the generated
@@ -653,16 +653,19 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     this.props = { ...props, path: canonicalizeStreamPath(props.path) };
   }
 
+  /** @internal Native or hosted stream transport; never part of the public ITX contract. */
   get [STREAM_DURABLE_OBJECT_STUB]() {
-    return env.STREAM.getByName(
-      DurableObjectNameCodec.stringify(
+    return resolveStreamStub({
+      deploymentEnv: env.DEPLOYMENT_ENV,
+      getByName: env.STREAM.getByName.bind(env.STREAM),
+      logicalName: DurableObjectNameCodec.stringify(
         {
           projectId: this.props.projectId,
           path: this.props.path,
         },
         { allowNullProjectId: true },
       ),
-    );
+    });
   }
 
   #assertCanUseStreamTestMethod(method: string): void {
@@ -1318,12 +1321,14 @@ class StreamSubscriptionCollectionRpcTarget extends IterateRpcTarget<"StreamSubs
   }
 
   #stub() {
-    return env.STREAM.getByName(
-      DurableObjectNameCodec.stringify(
+    return resolveStreamStub({
+      deploymentEnv: env.DEPLOYMENT_ENV,
+      getByName: env.STREAM.getByName.bind(env.STREAM),
+      logicalName: DurableObjectNameCodec.stringify(
         { projectId: this.props.projectId, path: this.props.path },
         { allowNullProjectId: true },
       ),
-    );
+    });
   }
 
   /** Every configured subscription joined with its durable cursor row. */
@@ -7925,7 +7930,11 @@ function streamContextForAuth(auth: ItxAuth): StreamContext {
  * the workspace Durable Object's source for the derived mount table. Served
  * by the root stream's facet-hosted project processor facade. */
 export async function projectProcessorState(projectId: string) {
-  const stream = env.STREAM.getByName(DurableObjectNameCodec.stringify({ path: "/", projectId }));
+  const stream = resolveStreamStub({
+    deploymentEnv: env.DEPLOYMENT_ENV,
+    getByName: env.STREAM.getByName.bind(env.STREAM),
+    logicalName: DurableObjectNameCodec.stringify({ path: "/", projectId }),
+  });
   try {
     let facade: Awaited<ReturnType<typeof stream.processorFacade>>;
     try {
@@ -9225,12 +9234,14 @@ function streamProcessorFacade(input: {
   // StreamProcessorFacadeStub declares (methods a given facet composition
   // lacks reject at call time, matching each caller's contract). The cast
   // swaps the generated Rpc-mapped stub type for that plain declaration.
-  return env.STREAM.getByName(
-    DurableObjectNameCodec.stringify(
+  return resolveStreamStub({
+    deploymentEnv: env.DEPLOYMENT_ENV,
+    getByName: env.STREAM.getByName.bind(env.STREAM),
+    logicalName: DurableObjectNameCodec.stringify(
       { projectId: input.projectId, path: input.path },
       { allowNullProjectId: true },
     ),
-  ).processorFacade({ name: input.name }) as unknown as PromiseLike<StreamProcessorFacadeStub>;
+  }).processorFacade({ name: input.name }) as unknown as PromiseLike<StreamProcessorFacadeStub>;
 }
 
 /**
@@ -9313,12 +9324,14 @@ function facetProcessorLiveStateRelay<State extends object>(input: {
       label: `facet ${input.name} ${input.path}`,
       dialPager: () =>
         dialLiveStatePager(
-          env.STREAM.getByName(
-            DurableObjectNameCodec.stringify(
+          resolveStreamStub({
+            deploymentEnv: env.DEPLOYMENT_ENV,
+            getByName: env.STREAM.getByName.bind(env.STREAM),
+            logicalName: DurableObjectNameCodec.stringify(
               { projectId: input.projectId, path: input.path },
               { allowNullProjectId: true },
             ),
-          ),
+          }),
           { lane: input.name },
         ),
     },

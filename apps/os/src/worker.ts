@@ -14,7 +14,6 @@
  * from "cloudflare:workers" directly:
  * https://developers.cloudflare.com/workers/runtime-apis/bindings/#importing-env-as-a-global
  */
-import handler from "@tanstack/react-start/server-entry";
 import { newHttpBatchRpcResponse, RpcSession } from "capnweb";
 import type { Env } from "./env.ts";
 import { createItxWebSocketTransport, registerItxSessionTransport } from "./session-transport.ts";
@@ -64,6 +63,7 @@ export { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts"
 export { WorkerBuildCoordinatorDurableObject } from "./domains/workers/worker-build-coordinator-durable-object.ts";
 export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
 export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
+export { HostedStreamPrototypeFacet } from "./domains/streams/hosted-stream-prototype.ts";
 export { WorkspaceV2DurableObject } from "./domains/workspaces/workspace-durable-object.ts";
 export { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
 export { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
@@ -157,6 +157,7 @@ async function appFetch(
     waitUntil: (promise) => ctx.waitUntil(promise),
   };
 
+  const { default: handler } = await import("@tanstack/react-start/server-entry");
   return await handler.fetch(request, { context });
 }
 

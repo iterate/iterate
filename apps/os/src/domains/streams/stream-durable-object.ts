@@ -76,6 +76,14 @@ import { RepoNotSeededError } from "../repos/utils.ts";
 import type { StatefulDynamicWorkerRef } from "../workers/schemas.ts";
 import { buildCopyAppends } from "./copy-appends.ts";
 import {
+  HOSTED_STREAM_HOST_PATH,
+  HOSTED_STREAM_LOGICAL_NAME_HEADER,
+  isHostedStreamMethod,
+  isHostedStreamPrototypePath,
+  resolveStreamStub,
+  type HostedStreamMethod,
+} from "./hosted-stream-routing.ts";
+import {
   assertCoreProcessorCheckpointGrowthFits,
   STREAM_PAUSED_ERROR_PREFIX,
   StreamCoreProcessor,
@@ -590,6 +598,13 @@ const PROJECT_WORKER_SUBSCRIPTION_NAME = "project-worker";
  * replays into every facet-placed subscription's facet.
  */
 const FACET_ALARM_KV_KEY = "facetAlarmAtMs";
+/** One alarm desire per colocated child stream. Only the dedicated preview
+ * host owns this map; each child retains its own ordinary StreamDO storage. */
+const HOSTED_STREAM_ALARMS_KV_KEY = "hostedStreamPrototypeAlarms";
+/** A child failure receives a few explicit local retries; afterwards its owed
+ * alarm remains durably terminal and the native alarm rejects visibly rather
+ * than silently looping child work forever. */
+const HOSTED_STREAM_ALARM_MAX_LOCAL_RETRIES = 3;
 
 /** Per-userspace-facet marker of which loaded build the facet is running,
  * keyed by subscription name. A changed source cacheKey (a config-repo commit)
@@ -603,6 +618,18 @@ const FACET_ALARM_RETRY_DELAY_MS = 1_000;
 /** One facet's failed `handleAlarm` replay, surfaced so the alarm invocation
  * can fail and keep the platform's alarm retry owed (see `alarm()`). */
 type FacetAlarmReplayFailure = { facet: string; error: unknown };
+type HostedStreamAlarmReplayFailure = { logicalName: string; error: unknown };
+type HostedStreamAlarmRecord = {
+  atMs: number;
+  failures: number;
+  generation: string;
+  terminal?: true;
+  terminalError?: string;
+};
+
+type HostedStreamPrototypeFacetStub = Pick<StreamDurableObject, HostedStreamMethod> & {
+  handleHostedAlarm(alarmInfo?: AlarmInvocationInfo): Promise<void>;
+};
 
 /**
  * One row of `subscriptions.list()`: the committed catalog entry joined with
@@ -968,7 +995,19 @@ class ExpressionProcessorFacadeRpcTarget extends RpcTarget {
  * here are storage/runtime implementation methods, and the append/read methods
  * that touch SQLite/KV must remain synchronous.
  */
-export class StreamDurableObject extends DurableObject<Env> {
+/** DurableObject itself must receive the native branded context. A hosted
+ * child can then install a StreamDO-only view before this class's fields run. */
+class StreamDurableObjectBase extends DurableObject<Env> {
+  constructor(rawCtx: DurableObjectState, env: Env, streamCtx: DurableObjectState = rawCtx) {
+    super(rawCtx, env);
+    // `streamCtx` is a DurableObjectState-compatible view. Hosted facets
+    // substitute only StreamDO's id and storage view; the empty generic
+    // affects TypeScript's user state only, never native capabilities.
+    this.ctx = streamCtx as DurableObjectState<{}>;
+  }
+}
+
+export class StreamDurableObject extends StreamDurableObjectBase {
   /** Report this incarnation's code version for the deployment rollout gate. */
   deploymentVersion(): string {
     return workerVersion(this.env);
@@ -1072,6 +1111,11 @@ export class StreamDurableObject extends DurableObject<Env> {
         const facetDesire = this.#readFacetAlarmAtMs();
         if (facetDesire !== null) {
           this.#alarmArmer.armNoLaterThan(facetDesire);
+          return;
+        }
+        const hostedStreamDesire = this.#nextHostedStreamAlarmAtMs();
+        if (hostedStreamDesire !== null) {
+          this.#alarmArmer.armNoLaterThan(hostedStreamDesire);
           return;
         }
         this.#alarmArmer.clearWhenQuiet();
@@ -1211,8 +1255,8 @@ export class StreamDurableObject extends DurableObject<Env> {
         });
   }
 
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
+  constructor(ctx: DurableObjectState, env: Env, streamCtx: DurableObjectState = ctx) {
+    super(ctx, env, streamCtx);
     const loaded = this.#readCoreProcessorState();
     if (loaded.kind === "ready") {
       this.#coreProcessorState = loaded.state;
@@ -1253,6 +1297,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     // re-arm could otherwise strand a persisted facet desire forever.
     const facetAlarmAtMs = this.#readFacetAlarmAtMs();
     if (facetAlarmAtMs !== null) this.#alarmArmer.armNoLaterThan(facetAlarmAtMs);
+    const hostedStreamAlarmAtMs = this.#nextHostedStreamAlarmAtMs();
+    if (hostedStreamAlarmAtMs !== null) this.#alarmArmer.armNoLaterThan(hostedStreamAlarmAtMs);
 
     // The first boot appends the stream's birth certificate; every wake
     // (fetch, RPC, alarm) appends a `woken` event, whose post-commit sends are
@@ -1358,16 +1404,26 @@ export class StreamDurableObject extends DurableObject<Env> {
   async alarm(alarmInfo?: AlarmInvocationInfo) {
     this.#alarmArmer.markFired();
     let facetReplays: Promise<FacetAlarmReplayFailure[]> | undefined;
+    let hostedStreamReplays: Promise<HostedStreamAlarmReplayFailure[]> | undefined;
     this.#deliveryAlarmBoundary.runAlarmTurn(() => {
       facetReplays = this.#fireDueFacetAlarms(alarmInfo);
+      hostedStreamReplays = this.#fireDueHostedStreamAlarms(alarmInfo);
       this.#reconcileCommittedState({ alarmTurn: true });
+      this.#rearmHostedStreamAlarm();
     });
-    const failures = await (facetReplays || []);
-    if (failures.length > 0) {
+    const [facetFailures, hostedStreamFailures] = await Promise.all([
+      facetReplays || [],
+      hostedStreamReplays || [],
+    ]);
+    if (facetFailures.length > 0 || hostedStreamFailures.length > 0) {
+      const failure = facetFailures[0] || hostedStreamFailures[0]!;
+      const subject =
+        facetFailures.length > 0
+          ? facetFailures.map((entry) => entry.facet).join(", ")
+          : hostedStreamFailures.map((entry) => entry.logicalName).join(", ");
       throw new Error(
-        `facet alarm replay failed for ${failures.map((failure) => failure.facet).join(", ")}; ` +
-          `failing the alarm invocation keeps the platform's alarm retry owed`,
-        { cause: failures[0]!.error },
+        `facet alarm replay failed for ${subject}; failing the alarm invocation keeps the platform's alarm retry owed`,
+        { cause: failure.error },
       );
     }
   }
@@ -1383,6 +1439,10 @@ export class StreamDurableObject extends DurableObject<Env> {
   readonly #configuredProcessorFacets = new Set<string>();
   /** Per-facet consecutive handleAlarm replay failures (backoff input; in-memory). */
   readonly #facetAlarmFailures = new Map<string, number>();
+  /** Child alarms currently dispatched by this host incarnation. Their durable
+   * records remain owed, but must not cause a second hot native alarm before
+   * the in-flight child acknowledges or this host restarts. */
+  readonly #hostedStreamAlarmsInFlight = new Set<string>();
 
   /**
    * The committed catalog row a processor read/dial door may act on: the
@@ -1645,6 +1705,237 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** Facet-only alarm door: the shared slot's currently desired fire time. */
   proxyGetAlarm(): number | null {
     return this.#readFacetAlarmAtMs();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Preview-only colocated logical streams. A child is a real StreamDO facet;
+  // this warm host owns only its platform-alarm namespace because facets do
+  // not have native alarms. The public invocation surface is deliberately
+  // restricted to StreamDO's existing public methods by hosted-stream-routing.
+  // ---------------------------------------------------------------------------
+
+  #assertHostedStreamHost(): void {
+    if (this.env.DEPLOYMENT_ENV !== "preview_17") {
+      throw new Error("hosted stream prototype is only enabled in preview_17");
+    }
+    if (this.name.path !== HOSTED_STREAM_HOST_PATH) {
+      throw new Error("hosted stream prototype must use its dedicated host stream");
+    }
+    if (this.name.projectId === null) {
+      throw new Error("hosted stream prototype host requires a project stream");
+    }
+  }
+
+  #assertHostedLogicalName(logicalName: string): void {
+    this.#assertHostedStreamHost();
+    const logical = DurableObjectNameCodec.parse(logicalName, { allowNullProjectId: true });
+    if (logical.projectId !== this.name.projectId) {
+      throw new Error("hosted stream prototype child belongs to a different project");
+    }
+    if (!isHostedStreamPrototypePath(logical.path)) {
+      throw new Error(`hosted stream prototype rejects ${logical.path}`);
+    }
+  }
+
+  #readHostedStreamAlarms(): Record<string, HostedStreamAlarmRecord> {
+    const raw = this.ctx.storage.kv.get<unknown>(HOSTED_STREAM_ALARMS_KV_KEY);
+    if (raw === undefined) return {};
+    return z
+      .record(
+        z.string(),
+        z.object({
+          atMs: z.number().int().nonnegative(),
+          failures: z.number().int().nonnegative(),
+          generation: z.string(),
+          terminal: z.literal(true).optional(),
+          terminalError: z.string().optional(),
+        }),
+      )
+      .parse(raw);
+  }
+
+  #writeHostedStreamAlarms(alarms: Record<string, HostedStreamAlarmRecord>): void {
+    if (Object.keys(alarms).length === 0) {
+      this.ctx.storage.kv.delete(HOSTED_STREAM_ALARMS_KV_KEY);
+      return;
+    }
+    this.ctx.storage.kv.put(HOSTED_STREAM_ALARMS_KV_KEY, alarms);
+  }
+
+  #nextHostedStreamAlarmAtMs(): number | null {
+    if (this.env.DEPLOYMENT_ENV !== "preview_17" || this.name.path !== HOSTED_STREAM_HOST_PATH) {
+      return null;
+    }
+    const times = Object.entries(this.#readHostedStreamAlarms())
+      .filter(
+        ([logicalName, alarm]) =>
+          !alarm.terminal && !this.#hostedStreamAlarmsInFlight.has(logicalName),
+      )
+      .map(([, alarm]) => alarm.atMs);
+    return times.length === 0 ? null : Math.min(...times);
+  }
+
+  #rearmHostedStreamAlarm(): void {
+    const atMs = this.#nextHostedStreamAlarmAtMs();
+    if (atMs !== null) this.#alarmArmer.armNoLaterThan(atMs);
+  }
+
+  #hostedStreamPrototypeFacet(logicalName: string): HostedStreamPrototypeFacetStub {
+    this.#assertHostedLogicalName(logicalName);
+    // Workers types exports as an untyped map. This known Worker export is
+    // checked for presence before facet construction.
+    const entrypoint = (this.ctx.exports as Record<string, unknown>).HostedStreamPrototypeFacet as
+      | DurableObjectClass
+      | undefined;
+    if (!entrypoint) {
+      throw new Error("HostedStreamPrototypeFacet entrypoint is unavailable");
+    }
+    // facets.get returns an opaque capability. This narrows it to the exact
+    // public child methods invoked below; the child class provides that shape.
+    return this.ctx.facets.get(`hosted-stream:${logicalName}`, () => ({
+      class: entrypoint,
+      // Facet context IDs are strings in the current platform API. The child
+      // validates and parses this complete logical identity before base init.
+      id: logicalName,
+    })) as unknown as HostedStreamPrototypeFacetStub;
+  }
+
+  async invokeHostedStream(input: {
+    args: unknown[];
+    logicalName: string;
+    method: HostedStreamMethod;
+  }): Promise<unknown> {
+    this.#assertHostedLogicalName(input.logicalName);
+    if (!isHostedStreamMethod(input.method)) {
+      throw new Error(`hosted stream prototype does not expose ${String(input.method)}`);
+    }
+    // Native reset deletes the child storage and its native alarm. Hosted
+    // children store alarm intent on this parent, so this preview experiment
+    // rejects reset until it has cross-object reset semantics.
+    if (input.method === "reset") {
+      throw new Error("hosted stream prototype does not support reset");
+    }
+    // HostedStreamMethod was validated above. The opaque facet capability has
+    // no index signature, so this view only selects that validated method.
+    const child = this.#hostedStreamPrototypeFacet(input.logicalName) as unknown as Record<
+      string,
+      unknown
+    >;
+    const method = child[input.method];
+    if (typeof method !== "function") {
+      throw new Error(`hosted stream prototype child does not implement ${input.method}`);
+    }
+    // A facet method is an already-bound remote capability. Supplying the
+    // facet stub as Function.apply's receiver makes Workers try to transfer
+    // that stub into the child Worker. Invoke the bound capability directly.
+    return await method(...input.args);
+  }
+
+  async setHostedStreamAlarm(input: { atMs: number; logicalName: string }): Promise<void> {
+    this.#assertHostedLogicalName(input.logicalName);
+    const atMs = z.number().int().nonnegative().parse(input.atMs);
+    const alarms = this.#readHostedStreamAlarms();
+    // A child write is an independent fresh desire, including when it happens
+    // during replay. Its generation prevents the completing old fire from
+    // deleting it.
+    alarms[input.logicalName] = {
+      atMs,
+      failures: 0,
+      generation: crypto.randomUUID(),
+    };
+    this.#writeHostedStreamAlarms(alarms);
+    this.#alarmArmer.armNoLaterThan(atMs);
+  }
+
+  async getHostedStreamAlarm(input: { logicalName: string }): Promise<number | null> {
+    this.#assertHostedLogicalName(input.logicalName);
+    return this.#readHostedStreamAlarms()[input.logicalName]?.atMs ?? null;
+  }
+
+  async deleteHostedStreamAlarm(input: { logicalName: string }): Promise<void> {
+    this.#assertHostedLogicalName(input.logicalName);
+    const alarms = this.#readHostedStreamAlarms();
+    delete alarms[input.logicalName];
+    this.#writeHostedStreamAlarms(alarms);
+    this.#rearmHostedStreamAlarm();
+  }
+
+  #fireDueHostedStreamAlarms(alarmInfo?: AlarmInvocationInfo) {
+    if (this.env.DEPLOYMENT_ENV !== "preview_17" || this.name.path !== HOSTED_STREAM_HOST_PATH) {
+      return undefined;
+    }
+    const now = Date.now();
+    const due = Object.entries(this.#readHostedStreamAlarms()).filter(
+      ([logicalName, alarm]) =>
+        !alarm.terminal && !this.#hostedStreamAlarmsInFlight.has(logicalName) && alarm.atMs <= now,
+    );
+    if (due.length === 0) {
+      this.#rearmHostedStreamAlarm();
+      return undefined;
+    }
+    // Keep every record durable until its exact generation succeeds. A reset
+    // between dispatch and acknowledgement therefore replays the same owed
+    // level-triggered child alarm rather than losing it. The in-memory guard
+    // prevents the pending durable record from re-arming a hot duplicate turn.
+    for (const [logicalName] of due) this.#hostedStreamAlarmsInFlight.add(logicalName);
+    return Promise.all(
+      due.map(async ([logicalName, dispatched]): Promise<HostedStreamAlarmReplayFailure[]> => {
+        try {
+          await this.#hostedStreamPrototypeFacet(logicalName).handleHostedAlarm(
+            alarmInfo
+              ? {
+                  isRetry: alarmInfo.isRetry,
+                  retryCount: alarmInfo.retryCount,
+                  scheduledTime: alarmInfo.scheduledTime,
+                }
+              : undefined,
+          );
+          const alarms = this.#readHostedStreamAlarms();
+          if (alarms[logicalName]?.generation === dispatched.generation) {
+            delete alarms[logicalName];
+            this.#writeHostedStreamAlarms(alarms);
+          }
+          return [];
+        } catch (error) {
+          const alarms = this.#readHostedStreamAlarms();
+          const current = alarms[logicalName];
+          // A reentrant fresh desire owns the current record; do not overwrite
+          // it with the old invocation's failure bookkeeping.
+          if (current?.generation !== dispatched.generation) {
+            return [{ error, logicalName }];
+          }
+          const failures = current.failures + 1;
+          if (failures >= HOSTED_STREAM_ALARM_MAX_LOCAL_RETRIES) {
+            alarms[logicalName] = {
+              ...current,
+              failures,
+              terminal: true,
+              terminalError: error instanceof Error ? error.message : String(error),
+            };
+            this.#writeHostedStreamAlarms(alarms);
+            console.error("hosted stream prototype child alarm reached durable retry limit", {
+              error,
+              failures,
+              logicalName,
+            });
+          } else {
+            const retryAtMs = Date.now() + FACET_ALARM_RETRY_DELAY_MS;
+            alarms[logicalName] = { ...current, atMs: retryAtMs, failures };
+            this.#writeHostedStreamAlarms(alarms);
+            this.#alarmArmer.armNoLaterThan(retryAtMs);
+            console.error("hosted stream prototype child alarm replay failed; re-arming retry", {
+              error,
+              failures,
+              logicalName,
+              retryAtMs,
+            });
+          }
+          return [{ error, logicalName }];
+        } finally {
+          this.#hostedStreamAlarmsInFlight.delete(logicalName);
+        }
+      }),
+    ).then((results) => results.flat());
   }
 
   /**
@@ -2692,12 +2983,14 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #streamStub(path: string) {
-    return this.env.STREAM.getByName(
-      DurableObjectNameCodec.stringify(
+    return resolveStreamStub({
+      deploymentEnv: this.env.DEPLOYMENT_ENV,
+      getByName: (name) => this.env.STREAM.getByName(name),
+      logicalName: DurableObjectNameCodec.stringify(
         { projectId: this.name.projectId, path },
         { allowNullProjectId: true },
       ),
-    );
+    });
   }
 
   /**
@@ -3366,6 +3659,28 @@ export class StreamDurableObject extends DurableObject<Env> {
    * Provider Pager for the capability-host facet, and the Stream Subscriber
    * Pager upgrades — nothing else. */
   async fetch(request: Request): Promise<Response> {
+    const hostedLogicalName = request.headers.get(HOSTED_STREAM_LOGICAL_NAME_HEADER);
+    if (hostedLogicalName) {
+      let logicalName: string;
+      try {
+        logicalName = decodeURIComponent(hostedLogicalName);
+      } catch {
+        return Response.json({ error: "invalid hosted stream logical name" }, { status: 400 });
+      }
+      try {
+        this.#assertHostedLogicalName(logicalName);
+      } catch (error) {
+        return Response.json(
+          { error: error instanceof Error ? error.message : String(error) },
+          { status: 403 },
+        );
+      }
+      const headers = new Headers(request.headers);
+      headers.delete(HOSTED_STREAM_LOGICAL_NAME_HEADER);
+      return await this.#hostedStreamPrototypeFacet(logicalName).fetch(
+        new Request(request, { headers }),
+      );
+    }
     const lane = liveStatePagerLaneKey(request);
     if (lane !== undefined) {
       // A socket upgrade is a read: it must not create a lane (whose pulls

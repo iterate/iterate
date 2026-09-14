@@ -45,7 +45,11 @@ import type {
 } from "iterate/processors";
 import { z } from "zod";
 import type { Stream } from "../../itx-api.generated.ts";
-import { dialHibernatablePager, parseHibernatablePage } from "../hibernatable-pager.ts";
+import {
+  dialHibernatablePager,
+  parseHibernatablePage,
+  type HibernatablePagerUpgrade,
+} from "../hibernatable-pager.ts";
 import {
   retainConnectionPing,
   retainGetProcessorRuntimeState,
@@ -75,7 +79,9 @@ type RelayedStreamConnection = {
  * a captured stub would inherit workerd's broken-stub semantics forever.
  */
 export async function openRelayedStreamConnection(input: {
-  stub: () => DurableObjectStub<StreamDurableObject>;
+  stub: () => Pick<DurableObjectStub<StreamDurableObject>, "openConnection"> & {
+    fetch(input: string, init?: RequestInit): Promise<HibernatablePagerUpgrade>;
+  };
   args: Parameters<Stream["openConnection"]>[0];
 }): Promise<RelayedStreamConnection> {
   const { args } = input;

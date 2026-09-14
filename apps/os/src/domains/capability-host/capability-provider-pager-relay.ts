@@ -15,6 +15,7 @@ import { RpcTarget } from "cloudflare:workers";
 import { z } from "zod";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
+import { resolveStreamStub } from "../streams/hosted-stream-routing.ts";
 import { dialHibernatablePager, parseHibernatablePage } from "../hibernatable-pager.ts";
 import { assertCapabilityPath } from "./capability-path.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
@@ -125,7 +126,11 @@ export class CapabilityProviderPagerRelay {
     // DurableObjectStub type for the plain subset, the same seam pattern as
     // the facet relays' ParentStreamStub.
     this.#newDurableObject = () =>
-      input.env.STREAM.getByName(durableObjectName) as unknown as CapabilityHostStreamStub;
+      resolveStreamStub({
+        deploymentEnv: input.env.DEPLOYMENT_ENV,
+        getByName: input.env.STREAM.getByName.bind(input.env.STREAM),
+        logicalName: durableObjectName,
+      }) as unknown as CapabilityHostStreamStub;
     this.#durableObject = this.#newDurableObject();
     this.#waitUntil = input.waitUntil;
     this.#onPagerLost = input.onPagerLost;

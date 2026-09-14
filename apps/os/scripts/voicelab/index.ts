@@ -11,6 +11,7 @@ export { reliability } from "./reliability.ts";
 export { talk } from "./talk.ts";
 export { tap } from "./tap.ts";
 export { liveProbe } from "./live-probe.ts";
+export { startup } from "./startup.ts";
 export { duplex } from "./duplex.ts";
 export { ask } from "./ask.ts";
 export { timeline } from "./timeline.ts";
