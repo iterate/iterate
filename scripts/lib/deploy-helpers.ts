@@ -295,10 +295,9 @@ export async function removeWorkerSecrets(
   const backoffMs = options.backoffMs || [1_000, 2_000, 4_000, 8_000, 15_000];
   const sleep =
     options.sleep || ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  let stale: string[] = [];
   for (let attempt = 0; ; attempt++) {
     const remaining = SecretBindings.parse(await input.cf(scriptPath));
-    stale = remaining
+    const stale = remaining
       .map((binding) => binding.name)
       .filter((name) => retired.has(name))
       .sort();
