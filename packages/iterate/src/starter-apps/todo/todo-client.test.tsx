@@ -10,14 +10,24 @@ test("an added todo stays optimistic until the subscription confirms it, even af
   await ui.add("green apples");
   expect(ui.host.querySelector("li")?.textContent).toContain("green apples");
   expect(ui.host.querySelector('li[data-spinner="true"]')).not.toBeNull();
-  await act(async () => ui.response.resolve("saved-id"));
+  await act(async () => ui.response.resolve(ui.added().id));
   expect(ui.host.querySelector('li[data-spinner="true"]')).not.toBeNull();
-  await act(async () => ui.publish([{ id: "saved-id", title: "green apples", done: false }]));
+  await act(async () => ui.publish([ui.added()]));
   expect(ui.host.querySelectorAll("li")).toHaveLength(1);
   expect(ui.host.querySelector('[data-spinner="true"]')).toBeNull();
   // A later remote deletion must not bring the optimistic row back.
   await act(async () => ui.publish([]));
   expect(ui.host.querySelectorAll("li")).toHaveLength(0);
+});
+
+test("a subscription that arrives before the add response does not duplicate the optimistic row", async () => {
+  await using ui = await mountTodo();
+  await ui.add("green apples");
+  await act(async () => ui.publish([ui.added()]));
+  expect(ui.host.querySelectorAll("li")).toHaveLength(1);
+  await act(async () => ui.response.resolve(ui.added().id));
+  expect(ui.host.querySelectorAll("li")).toHaveLength(1);
+  expect(ui.host.querySelector('[data-spinner="true"]')).toBeNull();
 });
 
 test("a rejected add removes its optimistic row and shows the error", async () => {
@@ -38,8 +48,12 @@ async function mountTodo() {
   const response = Promise.withResolvers<string>();
   let sink: any;
   let revision = 0;
+  let added: any;
   const api = {
-    add: () => response.promise,
+    add: (title: string, id = "saved-id") => {
+      added = { title, id, done: false };
+      return response.promise;
+    },
     onRpcBroken() {},
     [Symbol.dispose]() {},
     liveState: {
@@ -64,6 +78,7 @@ async function mountTodo() {
     host,
     response,
     publish,
+    added: () => added,
     async add(title: string) {
       const input = host.querySelector("input")!;
       await act(async () => {

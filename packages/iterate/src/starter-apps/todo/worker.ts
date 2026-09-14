@@ -88,10 +88,11 @@ export class TodoApp extends IterateDurableObject {
     return this.#load();
   }
 
-  add(title: string): string {
+  // The browser supplies its optimistic ID; existing server-side callers
+  // can still ask this app to allocate one.
+  add(title: string, id = crypto.randomUUID()): string {
     const trimmed = title.trim().slice(0, 200);
     if (trimmed.length === 0) throw new Error("Todo title must not be empty.");
-    const id = crypto.randomUUID();
     this.#db.insert({
       createdAt: new Date().toISOString(),
       id,
@@ -174,8 +175,8 @@ export class TodoApi extends RpcTarget {
     return this.#liveState;
   }
 
-  async add(title: string): Promise<string> {
-    return this.#app.add(title);
+  async add(title: string, id: string): Promise<string> {
+    return this.#app.add(title, id);
   }
 
   async setDone(id: string, done: boolean): Promise<void> {

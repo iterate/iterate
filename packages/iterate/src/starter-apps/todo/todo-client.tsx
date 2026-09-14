@@ -14,7 +14,7 @@ export function TodoClient() {
   const [actionError, setActionError] = useState("");
   const [pending, setPending] = useState<{
     count: number;
-    added: { id: string | null; title: string } | null;
+    added: { id: string; title: string } | null;
   }>({ count: 0, added: null });
   const confirmed = pending.added && state?.todos.some((todo) => todo.id === pending.added!.id);
   // Retire the optimistic item permanently when this browser receives it.
@@ -46,11 +46,11 @@ export function TodoClient() {
     event.preventDefault();
     if (api === undefined || title.trim().length === 0) return;
     const next = title.trim().slice(0, 200);
+    const id = crypto.randomUUID();
     setTitle("");
-    setPending((current) => ({ ...current, added: { id: null, title: next } }));
+    setPending((current) => ({ ...current, added: { id, title: next } }));
     await run(async () => {
-      const id = await api.add(next);
-      setPending((current) => ({ ...current, added: { id, title: next } }));
+      await api.add(next, id);
     });
   };
 
