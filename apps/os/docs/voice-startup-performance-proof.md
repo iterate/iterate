@@ -853,8 +853,14 @@ health prewarming preceded these calls.
 Native ProcessorFacet timings for the cold call are 8,164 ms inside source
 resolution before loader acquisition and 3,183 ms in the guest RPC, totaling
 11,347 ms. The four warm source-resolution segments show no clock advance;
-synchronous CPU may still consume time. The cold 8,164-ms interval needs
-further subdivision using its retained build trace.
+synchronous CPU may still consume time. The full trace was subsequently retrieved in 35 bounded pages (2,227
+unique spans). The caller's artifact KV lookup took 25 ms. Its voice build
+recorded 221 ms source snapshot and 3,249 ms compilation; the coordinator
+invocation continued through a 1,767-ms background KV put. That persistence
+is a foreground-delay hypothesis until caller-response markers establish
+when the await resumed. The overlapping 2,221-ms default-worker build cannot
+be subtracted from this caller's 8,164 ms without a dependency proof.
+Evidence: `setup-probe-v2-first-resolve-attribution.md` and its paged traces.
 
 The guest's independent cold clock shows:
 
