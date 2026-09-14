@@ -77,7 +77,7 @@ patchedDependencies:
     hash: 628f45a8b65f5811216d637fb5cc4584db8f69a125d1ae417c4e49bc38ebca83
     path: patches/@journeyapps__wa-sqlite@1.7.0.patch
   middlewright@0.1.0:
-    hash: a9554a8a4cf5eced24cbe70bbd57654bfc3d4c8cb4fd835f81c5aadc5f034862
+    hash: 44a56f15d8376f0284bd93291a6a4bfe3d322157aac562d31301acd628338147
     path: patches/middlewright@0.1.0.patch
   zod@4.5.4:
     hash: bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5
@@ -162,7 +162,7 @@ importers:
         version: 16.3.2
       middlewright:
         specifier: https://pkg.pr.new/middlewright@08dd4f9
-        version: https://pkg.pr.new/middlewright@08dd4f9(patch_hash=a9554a8a4cf5eced24cbe70bbd57654bfc3d4c8cb4fd835f81c5aadc5f034862)(@playwright/test@1.60.0)
+        version: https://pkg.pr.new/middlewright@08dd4f9(patch_hash=44a56f15d8376f0284bd93291a6a4bfe3d322157aac562d31301acd628338147)(@playwright/test@1.60.0)
       oxfmt:
         specifier: ^0.35.0
         version: 0.35.0
@@ -27560,7 +27560,7 @@ snapshots:
       braces: 3.0.3
       picomatch: 2.3.1
 
-  middlewright@https://pkg.pr.new/middlewright@08dd4f9(patch_hash=a9554a8a4cf5eced24cbe70bbd57654bfc3d4c8cb4fd835f81c5aadc5f034862)(@playwright/test@1.60.0):
+  middlewright@https://pkg.pr.new/middlewright@08dd4f9(patch_hash=44a56f15d8376f0284bd93291a6a4bfe3d322157aac562d31301acd628338147)(@playwright/test@1.60.0):
     dependencies:
       '@playwright/test': 1.60.0
       dedent: 1.7.2

@@ -23,15 +23,46 @@ index 74841e6628fb775d06454b3a6d610ebe006f0247..fa3738456ab841aa8f7a467907663cf7
      ...oneArgMethods,
  ];
  /**
+diff --git a/dist/plugins/spinner-waiter.js b/dist/plugins/spinner-waiter.js
+index d58b62dab7b1844d64fd4e295bfc421c4a5b662a..5d10e7c27df82ff25d3382c2db71692242a60ee0 100644
+--- a/dist/plugins/spinner-waiter.js
++++ b/dist/plugins/spinner-waiter.js
+@@ -101,6 +101,11 @@ export const spinnerWaiter = Object.assign((options = {}) => {
+             const spinnerLocator = page.locator(spinnerSelector);
+             const loading = await loadingVisible(page, spinnerLocator);
+             if (!loading) {
++                // The target may have appeared while we checked loading. Do not
++                // turn a now-ready action into a 1ms timeout just because its
++                // spinner disappeared between the two observations.
++                if (await locatorIsReady(locator, method))
++                    return next();
+                 // No spinner, no navigation - call action, suggest a spinner if it fails
+                 settings.log(`${locator} not ready, nothing loading, failing fast`);
+                 try {
 diff --git a/src/plugin-system.ts b/src/plugin-system.ts
-index 7788774d2217015778a226317f5b760b62038db7..4e99337e1704c0f3fe22247291ca9ac0c61e24d6 100644
+index 7788774d2217015778a226317f5b760b62038db7..228dd1bbb4362f0996ca77aa2126ff6710434eaf 100644
 --- a/src/plugin-system.ts
 +++ b/src/plugin-system.ts
 @@ -27,6 +27,7 @@ const overrideableMethods = [
    "blur",
    "focus",
    "hover",
-+    "inputValue",
++  "inputValue",
    ...oneArgMethods,
  ] satisfies (keyof Locator)[];
  type OverrideableMethod = (typeof overrideableMethods)[number];
+diff --git a/src/plugins/spinner-waiter.ts b/src/plugins/spinner-waiter.ts
+index 43a5558f98ed82fa7c49a2bafff1fb968408fdac..11836542006c4188cba6c3286cdd93ad89c4245b 100644
+--- a/src/plugins/spinner-waiter.ts
++++ b/src/plugins/spinner-waiter.ts
+@@ -134,6 +134,10 @@ export const spinnerWaiter = Object.assign(
+         const loading = await loadingVisible(page, spinnerLocator);
+ 
+         if (!loading) {
++          // The target may have appeared while we checked loading. Do not
++          // turn a now-ready action into a 1ms timeout just because its
++          // spinner disappeared between the two observations.
++          if (await locatorIsReady(locator, method)) return next();
+           // No spinner, no navigation - call action, suggest a spinner if it fails
+           settings.log(`${locator} not ready, nothing loading, failing fast`);
+           try {
