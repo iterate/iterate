@@ -17,6 +17,8 @@ import { hashObject, type GitObjectType } from "./git-wire.ts";
  */
 
 const CHUNK_BYTES = 512 * 1024;
+// Durable Object SQLite accepts at most 100 bound variables per statement.
+const BRANCH_PATH_CHUNK_SIZE = 99;
 
 export class CorruptStoredObject extends Error {
   constructor(oid: string, detail: string) {
@@ -165,7 +167,7 @@ export function sqliteGitObjectStore(storage: {
 
     installSnapshot: (branch, delta) => {
       storage.transactionSync(() => {
-        for (const group of chunked(delta.removes)) {
+        for (const group of chunked(delta.removes, BRANCH_PATH_CHUNK_SIZE)) {
           sql.exec(
             `DELETE FROM git_manifest WHERE branch = ? AND path IN (${group.map(() => "?").join(",")})`,
             branch,
@@ -240,7 +242,7 @@ export function sqliteGitObjectStore(storage: {
 
     manifestEntries: (branch, paths) => {
       const byPath = new Map<string, ManifestFile>();
-      for (const group of chunked(paths)) {
+      for (const group of chunked(paths, BRANCH_PATH_CHUNK_SIZE)) {
         const rows = sql
           .exec(
             `SELECT path, blob_oid, mode FROM git_manifest
