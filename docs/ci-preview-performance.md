@@ -55,12 +55,11 @@ raise the budget automatically.
 - OS Vitest gives every current file a worker immediately and permits at most
   two concurrent tests per file in CI. Each file owns isolated projects; the
   examples matrix still overlaps its isolated runtimes inside each case.
-- Root Playwright uses sixteen fully parallel workers in CI. The latest
-  zero-retry full-suite sample carried about 1,554 seconds of aggregate work and
-  a 117-second longest case: sixteen workers make that longest case, rather than
-  worker queueing, the expected floor. Preview runs queue the long
-  reconnect/resume specs first so their fixed probe windows overlap the
-  ordinary catalogue.
+- Root Playwright keeps sixteen fully parallel workers in CI. The earlier
+  1,554-second aggregate and 117-second longest-test sample included shared
+  rollout waiting inside fixtures. Remeasure without that wait before using
+  per-test timings to size the worker pool. Preview still queues the long
+  reconnect/resume specs first.
 - The job uses a 16-core Depot runner. Measurements on larger runners showed
   the overlapping local work peaking below ten cores; the deployed Worker and
   Durable Objects, rather than host CPU, are the integration boundary. The
