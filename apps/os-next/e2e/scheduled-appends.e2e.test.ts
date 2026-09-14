@@ -85,6 +85,8 @@ test("a processor emits idempotent scheduling intent and later reduces the remin
   expect(definition.source.processor.whileProcessing.offset).toBe(opened.offset);
   expect(due.source.schedule.scheduledAtOffset).toBe(definition.offset);
   expect(due.source.schedule.definedBy.processor.slug).toBe("reminders");
+  expect(Object.keys(due.source.schedule.definedBy)).toEqual(["processor"]);
+  expect(due).toStrictEqual(events.find((event) => event.offset === due.offset));
   expect(due.source.processor).toBeUndefined();
   // Repeating the original durable intent after completion returns its receipt, never a new timer.
   const [receipt] = await itx.append({
@@ -124,6 +126,8 @@ test("pause holds a deadline until resume; session attribution names the definit
     afterOffset: definition.scheduledAtOffset,
   });
   expect(due.source.schedule.definedBy.principal.actor).toBe("admin");
+  expect(Object.keys(due.source.schedule.definedBy)).toEqual(["principal"]);
+  expect(due).toStrictEqual((await readAll(itx)).find((event) => event.offset === due.offset));
   expect(due.source.principal).toBeUndefined();
   expect(await itx.schedules.list()).toEqual([]);
 });

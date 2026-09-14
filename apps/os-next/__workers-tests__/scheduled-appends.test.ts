@@ -1,6 +1,7 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test, vi } from "vitest";
 import { scheduledAppendFacetSource } from "../e2e/support/scheduled-append-facet.ts";
+import type { StreamEvent } from "../src/stream/processor.ts";
 import { stub, quiesce } from "./support.ts";
 
 const at = "2035-01-01T00:00:00Z";
@@ -17,6 +18,30 @@ async function read(ctx: string) {
     events: { type: string; offset: number; payload?: Record<string, unknown> }[];
   };
 }
+
+test.each([{ principal: { actor: "admin" } }, { processor: { slug: "reminders", version: "1" } }])(
+  "live and replayed occurrences preserve absent attribution fields: %j",
+  async (source) => {
+    const ctx = `prj_schedule_source_${Object.keys(source)[0]}`;
+    const s = stub(ctx);
+    await s.append({
+      type: "events.iterate.com/stream/append-scheduled",
+      payload: { key: "reminder", when: { at }, events: [{ type: "reminder/due" }] },
+      source,
+    });
+    // No afterOffset: this must observe the live commit, not find the occurrence in history.
+    const waiting = s.invoke([
+      "itx",
+      ["waitForEvent", { type: "reminder/due", timeoutMs: 5000 }],
+    ]) as Promise<StreamEvent>;
+    await s.invoke("itx.schedules.list()");
+    await fire(ctx);
+    const live = await waiting;
+    const replay = (await read(ctx)).events.find((event) => event.type === "reminder/due");
+    expect(live.source?.schedule?.definedBy).toStrictEqual(source);
+    expect(live).toStrictEqual(replay);
+  },
+);
 
 test("a facet's deadline survives quiesce and eviction; duplicate alarms append one batch", async () => {
   const ctx = "prj_scheduled_eviction";

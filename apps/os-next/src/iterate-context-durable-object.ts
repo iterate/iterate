@@ -569,8 +569,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
                   ...payload,
                   ...((row.source?.processor || row.source?.principal) && {
                     definedBy: {
-                      processor: row.source?.processor,
-                      principal: row.source?.principal,
+                      ...(row.source?.processor && { processor: row.source.processor }),
+                      ...(row.source?.principal && { principal: row.source.principal }),
                     },
                   }),
                 },
