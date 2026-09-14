@@ -184,17 +184,42 @@ describe("removeWorkerSecrets", () => {
     ).rejects.toBe(cloudflareError);
   });
 
-  it("fails closed when deletion does not remove a retired secret", async () => {
+  it("tolerates a secret list that lags one read behind the deletion", async () => {
     const binding = { name: secretName, type: "secret_text" };
+    const sleep = vi.fn(async () => {});
     const cf = vi
       .fn()
       .mockResolvedValueOnce([binding])
       .mockResolvedValueOnce({})
-      .mockResolvedValueOnce([binding]);
+      .mockResolvedValueOnce([binding]) // the DELETE has not propagated yet
+      .mockResolvedValueOnce([]);
 
     await expect(
-      removeWorkerSecrets({ cf, workerName, secretNames: retiredSecretNames }),
+      removeWorkerSecrets(
+        { cf, workerName, secretNames: retiredSecretNames },
+        { backoffMs: [1, 1], sleep },
+      ),
+    ).resolves.toEqual([secretName]);
+    expect(sleep).toHaveBeenCalledExactlyOnceWith(1);
+    expect(cf).toHaveBeenCalledTimes(4);
+  });
+
+  it("fails closed when deletion does not remove a retired secret within the budget", async () => {
+    const binding = { name: secretName, type: "secret_text" };
+    const sleep = vi.fn(async () => {});
+    const cf = vi
+      .fn()
+      .mockResolvedValueOnce([binding])
+      .mockResolvedValueOnce({})
+      .mockResolvedValue([binding]);
+
+    await expect(
+      removeWorkerSecrets(
+        { cf, workerName, secretNames: retiredSecretNames },
+        { backoffMs: [1, 1], sleep },
+      ),
     ).rejects.toThrow(`Retired Worker secrets remain after deletion: ${workerName}/${secretName}`);
+    expect(sleep).toHaveBeenCalledTimes(2);
   });
 });
 

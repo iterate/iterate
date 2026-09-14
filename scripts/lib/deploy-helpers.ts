@@ -250,11 +250,18 @@ export async function deployWithSecrets(input: {
  * retirement stays an assertion ({@link assertDopplerSecretAbsent}) because
  * Doppler is human-edited — a reappearance there is drift for a human.
  */
-export async function removeWorkerSecrets(input: {
-  cf: (path: string, init?: RequestInit) => Promise<unknown>;
-  workerName: string;
-  secretNames: readonly string[];
-}): Promise<string[]> {
+export async function removeWorkerSecrets(
+  input: {
+    cf: (path: string, init?: RequestInit) => Promise<unknown>;
+    workerName: string;
+    secretNames: readonly string[];
+  },
+  options: {
+    /** Waits between re-lists while a deletion propagates; the last wait is the budget's end. */
+    backoffMs?: readonly number[];
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<string[]> {
   const scriptPath = `/workers/scripts/${encodeURIComponent(input.workerName)}/secrets`;
   let current: z.infer<typeof SecretBindings>;
   try {
@@ -282,15 +289,26 @@ export async function removeWorkerSecrets(input: {
     return [];
   }
 
-  const remaining = SecretBindings.parse(await input.cf(scriptPath));
-  const stale = remaining
-    .map((binding) => binding.name)
-    .filter((name) => retired.has(name))
-    .sort();
-  if (stale.length > 0) {
-    throw new Error(
-      `Retired Worker secrets remain after deletion: ${input.workerName}/${stale.join(", ")}`,
-    );
+  // The secret list is eventually consistent: a re-list right after the DELETE has answered the
+  // pre-deletion set (os-next-prd, 2026-09-14 — a deploy went red on a secret that was gone a
+  // second later). Re-list until the retired names are absent, within a bounded budget.
+  const backoffMs = options.backoffMs ?? [1_000, 2_000, 4_000, 8_000, 15_000];
+  const sleep =
+    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let stale: string[] = [];
+  for (let attempt = 0; ; attempt++) {
+    const remaining = SecretBindings.parse(await input.cf(scriptPath));
+    stale = remaining
+      .map((binding) => binding.name)
+      .filter((name) => retired.has(name))
+      .sort();
+    if (stale.length === 0) break;
+    if (attempt >= backoffMs.length) {
+      throw new Error(
+        `Retired Worker secrets remain after deletion: ${input.workerName}/${stale.join(", ")}`,
+      );
+    }
+    await sleep(backoffMs[attempt]!);
   }
   console.log(`verified retired Worker secrets absent: ${input.workerName}`);
   return present;
