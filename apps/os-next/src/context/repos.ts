@@ -275,12 +275,10 @@ export function projectScopedRepos(input: {
 
   /** A repo-relative path, `notes/log.md`: no leading slash, no empty, `.` or `..` segment. */
   const repoPath = (path: string): string => {
+    const refusal = `itx.repos: not a repo-relative path (${JSON.stringify(path)})`;
     // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of a wire-fed argument (its static type is a claim, not a guarantee, across the capability boundary)
-    if (
-      typeof path !== "string" ||
-      path.split("/").some((s) => s === "" || s === "." || s === "..")
-    )
-      throw new Error(`itx.repos: not a repo-relative path (${JSON.stringify(path)})`);
+    if (typeof path !== "string") throw new Error(refusal);
+    if (path.split("/").some((s) => s === "" || s === "." || s === "..")) throw new Error(refusal);
     return path;
   };
 
