@@ -1479,16 +1479,37 @@ export class StreamDurableObject extends DurableObject<Env> {
     // the class passed in the startup callback — a ProcessorFacet subclass
     // (the OS built-in or the userspace StreamProcessorFacet base), whose RPC
     // surface ProcessorFacetStub over-approximates.
-    const facet = this.ctx.facets.get(name, () => ({
-      class: resolved.loadClass(),
-    })) as unknown as ProcessorFacetStub;
+    // A startup callback that throws (a loader limit or outage) leaves the
+    // facet in workerd's facet map with a rejected start promise, replayed by
+    // every later ctx.facets.get until an abort erases it — so the failing
+    // configure below aborts the facet, and the next dial starts afresh.
+    let startupFailed = false;
+    const facet = this.ctx.facets.get(name, () => {
+      try {
+        return { class: resolved.loadClass() };
+      } catch (error) {
+        startupFailed = true;
+        throw error;
+      }
+    }) as unknown as ProcessorFacetStub;
     if (!this.#configuredProcessorFacets.has(name)) {
       const parentName = DurableObjectNameCodec.stringify(this.name, { allowNullProjectId: true });
-      await facet.configure({
-        parentName,
-        projectId: this.name.projectId,
-        path: this.name.path,
-      });
+      try {
+        await facet.configure({
+          parentName,
+          projectId: this.name.projectId,
+          path: this.name.path,
+        });
+      } catch (error) {
+        if (startupFailed) {
+          try {
+            this.ctx.facets.abort(name, "facet startup failed");
+          } catch {
+            /* facet not running */
+          }
+        }
+        throw error;
+      }
       this.#configuredProcessorFacets.add(name);
     }
     return facet;

@@ -236,7 +236,19 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // Loading an isolate on a warm request can replace the class beneath the
     // live facet even when the build is unchanged. Let the runtime request a
     // class only on startup, as in Cloudflare's Durable Object facets example.
-    const target = this.ctx.facets.get(FACET_NAME, () => ({ class: loaded.loadClass() }));
+    // A startup callback that throws (a loader limit or outage) leaves the
+    // facet in workerd's facet map with a rejected start promise, replayed by
+    // every later ctx.facets.get until an abort erases it — so the failing
+    // first call below aborts the facet, and the next request starts afresh.
+    let startupFailed = false;
+    const target = this.ctx.facets.get(FACET_NAME, () => {
+      try {
+        return { class: loaded.loadClass() };
+      } catch (error) {
+        startupFailed = true;
+        throw error;
+      }
+    });
 
     // A facet cannot learn its own ref through ctx.facets.get(), so offer it
     // once before traffic. Plain DurableObject classes may omit this SDK door.
@@ -246,6 +258,14 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
         await invokeFlattenedPath({ args: [ref], path: ["__stashSelfRef"], target });
         this.#identityDelivered = identity;
       } catch (error) {
+        if (startupFailed) {
+          try {
+            this.ctx.facets.abort(FACET_NAME, "facet startup failed");
+          } catch {
+            /* facet not running */
+          }
+          throw error;
+        }
         const cannotAcceptIdentity =
           isMissingInvokeCapabilityError(error) ||
           (error instanceof Error && error.message.includes('"__stashSelfRef" is not a method'));
