@@ -1147,6 +1147,62 @@ and explicit warmup failure with capability disposal. OS typecheck passed.
 Evidence: `voicelab-deploy-prewarm-{first,second}.log` and
 `voicelab-deploy-prewarm-audit.json` under `/tmp/voice-startup-pr`.
 
+## Native delivery scheduling boundary
+
+A temporary Preview 17 probe measured one child StreamDO clock from entry to
+its public setup append through receiver selection and wake RPC. Its synchronous
+row writes and first receiver selection were at 0 ms in all five calls. Starting
+the wake RPC took 191 / 245 / 271 / 138 / 143 ms; obtaining its callback took
+482 / 293 / 327 / 313 / 284 ms. The interval includes alarm scheduling and the
+hosted watchdog acknowledgement. Returning a callback does not establish that
+its first event batch has been processed. Client ingress and other actors are
+outside this clock.
+
+The five real calls all returned audio. Readiness was 3,730 / 1,563 / 1,606 /
+1,521 / 1,655 ms; the first cold sample remains included. All five had terminal
+call state, matching ended activations, no pending delegations, zero subscription
+lag, and no last error. The exact prompt hash, source pin and dynamic runtime
+identity matched the previous controls. Targeted parent and ProjectDO error
+queries returned no records. Evidence: `native-delivery-phases-v2-result.json`,
+its terminal audit, and the 53 untruncated `delivery-v2-complete` probe records.
+Version: `3f0ee4e2-e12a-47cf-8ff2-e3ca83333ae7`.
+
+An initial harness attempt used removed helper options and therefore created
+five ordinary-placement paths instead of the reserved probe paths. Those calls
+returned audio, but the harness assertion failed and supplied no valid probe
+comparison. The full log and recovered rows are retained in
+`native-delivery-phases.log` and `native-delivery-harness-mismatch-recovered.json`.
+
+## Initial eager delivery control (excluded)
+
+A second temporary version, `79abef90-7fb0-4caf-9937-e1948022117e`, alternated
+five eager and five ordinary scheduled calls. Only the initial public setup
+append could start its work immediately after arming the existing alarm. The
+pending-alarm marker, watchdog, hosted alarm acknowledgement and ordinary
+callback-append boundary remained in place.
+
+All ten returned audio and ended with matching terminal activations and zero
+subscription lag. There was no observed deadlock in these calls. Later-four
+readiness medians were **1,889 ms eager / 1,850 ms scheduled**; all-five medians
+were **1,916 / 1,812 ms**. The first eager call took 5,808 ms to readiness and
+7,053 ms to first PCM. One scheduled call had readiness at 1,888 ms but first
+PCM at 5,654 ms. Its retained transcript timing and durable events do not locate
+that extra audio delay: ephemeral PCM was no longer available to the subsequent
+read. This remains an unexplained sample, not attributed to OpenAI.
+
+The eager control does not establish an end-to-end improvement and introduces
+a callback-cycle risk that unit doubles cannot resolve. It was removed along
+with the timing probe and temporary CLI helper. Its 103 focused tests and OS
+typecheck passed. Parent and ProjectDO error queries found no records; a bounded
+follow-up completed the initially delayed probe logs (90 untruncated records).
+Evidence: `native-delivery-eager-result.json`, its terminal audit,
+`delayed-first-pcm-event-times.json`, and `native-delivery-eager-applied.patch`.
+
+A separate source review rejected ephemeral `conversation-accepted`: firmware
+and CLI use that durable, replayable event to release opening microphone audio.
+Changing its retention would require a new subscriber/reconnect contract.
+Clean restore `db7657d5-0a30-48e5-80a0-510d5423ab98` passed all deployment smokes.
+
 ## Reproduce
 
 From `apps/os`, with the current voice source installed in a disposable
