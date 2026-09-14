@@ -122,9 +122,11 @@ export class SecretDurableObject extends DurableObject {
    *  (the revision fence) — a stale mint must never resurrect material a set replaced. */
   async #doRefresh(revision: number): Promise<void> {
     const stored = await this.ctx.storage.get<Stored>("stored");
-    if (!stored?.record.refresh) throw new Error("no refresh strategy");
-    if (stored.revision !== revision) return; // a set landed first: its material is the answer
+    // A set landed first: whatever it stored (new material, or no strategy any more) is the answer,
+    // and the caller re-reads it — so the fence comes before any look at the strategy.
+    if (stored?.revision !== revision) return;
     const { refresh, urls } = stored.record;
+    if (!refresh) throw new Error("no refresh strategy"); // unreachable: this revision was read with one
     const next = await refreshSecretMaterial(refresh, stored.record.material, (exchange) => {
       // Refresh moves bytes only toward pinned hosts, like any use.
       if (!originPinned(exchange.url, urls))
