@@ -741,8 +741,11 @@ Two rules that follow from the resolver:
 doors are those of `StreamProcessorDurableObject` (section 5.3): `snapshot`,
 `liveSnapshot`, `waitUntilProcessed`, `catchUpFromLog`, `processEventBatch`. For a loaded
 `DurableObject` class hosted as a facet, every method the class defines is
-reachable the same way, and a terminal `.fetch(request)` rides the facet's own
-fetch channel (so a 101 works).
+reachable the same way, and a terminal `.fetch(request)` is an ordinary call on
+the facet's own fetch — plain HTTP only. A facet never answers a WebSocket
+(`FACET_NO_UPGRADE`): a socket terminates at the edge — a session's `/api`
+socket, a project host's lent-stub upgrade — and the facet behind it is reached
+by itx expression, so the idle quiesce can abort an idle facet with nothing to lose.
 
 One reduce-only processor is always on and runs **inline** in the commit
 transaction: the core reduce (`src/stream/core-processor.ts`, slug `core`,

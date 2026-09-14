@@ -614,6 +614,22 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         "itx.facets.get(name, spec?): name the facet; pass { source, className } to load and host it",
       );
     if (itxExpressionSteps.length === 0) throw new Error(`facet: name a method`);
+    // A FACET ANSWERS RPC AND PLAIN HTTP — NEVER A WEBSOCKET. A socket terminates at the edge (a
+    // session's /api pager socket on this DO, a project host's lent-stub upgrade leg), and the
+    // facet behind it is reached by itx expression; so the idle quiesce (alarm) aborts an idle
+    // facet with nothing to lose, and no socket is ever held by a facet the parent cannot see.
+    // Refused BEFORE the memo: an upgrade aimed at a facet materializes nothing.
+    const [first] = itxExpressionSteps;
+    if (
+      Array.isArray(first) &&
+      first[0] === "fetch" &&
+      first[1] instanceof Request &&
+      first[1].headers.get("Upgrade")?.toLowerCase() === "websocket"
+    )
+      throw codedError(
+        "FACET_NO_UPGRADE",
+        `facet "${name}": a facet answers RPC and plain HTTP, never a WebSocket — a socket terminates at the edge; reach the facet by itx expression`,
+      );
     // The core reduce answers at its facet-shaped address with a synthesized view — it is not a
     // facet, pins nothing, needs no watchdog, and can never be hosted.
     if (name === CoreContract.slug) {
@@ -700,17 +716,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         }
       });
       this.#liveFacetNames.add(name); // live from here
-      // A top-level `.fetch` rides the facet's own fetch — the one channel that carries a 101
-      // natively (context/rpc-stubs.ts doctrine, points 1 & 4); a method walks
-      // receiver-preservingly. The watchdog (FACET_CALL_WATCHDOG_MS) aborts a facet that never
-      // answers: its pending call rejects, the counter drains, the next call re-materializes it.
-      const [first] = itxExpressionSteps;
-      const call =
-        itxExpressionSteps.length === 1 && Array.isArray(first) && first[0] === "fetch"
-          ? (facet as { fetch(r: Request): Promise<Response> }).fetch(first[1] as Request)
-          : walkSteps({ value: facet, receiver: undefined }, itxExpressionSteps).then(
-              (walked) => walked.value,
-            );
+      // The call walks the steps receiver-preservingly — a `.fetch(request)` included (plain HTTP;
+      // the upgrade was refused above). The watchdog (FACET_CALL_WATCHDOG_MS) aborts a facet that
+      // never answers: its pending call rejects, the counter drains, the next call re-materializes it.
+      const call = walkSteps({ value: facet, receiver: undefined }, itxExpressionSteps).then(
+        (walked) => walked.value,
+      );
       let result: unknown;
       try {
         // The label PRINTS the whole pushed batch (JSON5 + key-sort) — built lazily, so a facet
@@ -908,8 +919,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           : new Response(`fetch lane: ${JSON.stringify(result)}\n`);
       } catch (error) {
         // A project host makes this lane public: default-deny is a 404 (a visitor's "no such app" is
-        // no issue), anything else a 500 — the message alone either way, the stack REPORTED, never served.
-        const status = errorCode(error) === "NO_ITX_EXPRESSION_MATCH" ? 404 : 500;
+        // no issue), a WebSocket upgrade aimed at a facet-hosted app is the caller's 400 (#invokeFacet),
+        // anything else a 500 — the message alone every way, the stack REPORTED, never served.
+        const code = errorCode(error);
+        const status =
+          code === "NO_ITX_EXPRESSION_MATCH" ? 404 : code === "FACET_NO_UPGRADE" ? 400 : 500;
         if (status === 500)
           reportIssue("iterate-context.fetch-lane", error, { itxExpression: itxExpressionHeader });
         const message = error instanceof Error ? error.message : String(error);

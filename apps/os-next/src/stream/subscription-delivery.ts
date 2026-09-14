@@ -515,6 +515,12 @@ export class SubscriptionDelivery {
             this.#haltRow(name, row.configuredAtOffset, range.after, 1, error);
             return;
           }
+          // A push the watchdog TIMED OUT aborted the facet (#invokeFacet): the batch was never
+          // checkpointed and nothing else redelivers it, so the restarted facet CATCHES UP from the
+          // log — queued behind whatever already waits on this row (a later push heals the same gap
+          // on its own; the catch-up is then a no-op). ONE catch-up per timed-out push: a batch that
+          // is slow every time costs two aborts per commit and never loops.
+          if (errorCode(error) === "TIMEOUT") this.#catchUpAfterPushTimeout(name, row);
           throw error;
         }
         return;
@@ -535,6 +541,17 @@ export class SubscriptionDelivery {
     } finally {
       this.#recordActivityForQuietClock();
     }
+  }
+
+  /** The catch-up a timed-out push owes (above): chained, so it runs after this row's in-flight
+   *  delivery and before anything queued later; a catch-up that fails is reported, never retried. */
+  #catchUpAfterPushTimeout(name: string, row: Subscription): void {
+    const record = this.#deliveryRecordFor(name);
+    record.deliveryChain = record.deliveryChain.then(() =>
+      this.#catchUpFacetRow(name, row).catch((error) =>
+        reportIssue("subscription-delivery.catch-up-after-timeout", error, { name }),
+      ),
+    );
   }
 
   /** HALT ONCE, FOR THE RIGHT ROW — the one place the `subscription-delivery-halted` fact is
