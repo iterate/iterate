@@ -40,6 +40,22 @@ export const petshopExpireTokens = (
     body: JSON.stringify({ clientId }),
   });
 
+/** A PUBLIC client, dynamically registered (RFC 7591) with one redirect URI — no secret, PKCE
+ *  alone at the code exchange, `client_id` in the body on refresh: the MCP-client shape. The
+ *  provider then accepts only that redirect URI for it. */
+export const petshopRegisterPublicClient = (redirectUri: string): Promise<{ clientId: string }> =>
+  petshopJson<{ client_id: string }>("/oauth/register", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      client_name: "os-next e2e",
+      redirect_uris: [redirectUri],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+    }),
+  }).then((registered) => ({ clientId: registered.client_id }));
+
 /** Revoke one refresh token at the provider — the next refresh grant with it is `invalid_grant`. */
 export const petshopRevokeRefreshToken = (refreshToken: string): Promise<unknown> =>
   petshopJson("/__backdoor/revoke-refresh-token", {
