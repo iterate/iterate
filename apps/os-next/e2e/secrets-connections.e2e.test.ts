@@ -1,13 +1,19 @@
-// secrets-refresh.e2e.test.ts — THE SECRET CELL end to end: a credential that expires is ONE secret
-// (material + pin + refresh strategy), and the cell re-mints it in its own trusted code. Proven
-// against the deployed dummy-petshop (support/petshop.ts) — a real third party over the real
-// network from the local worker and the deployed one alike:
-//   • `waitrose-session` — the username/password → session archetype (Waitrose's login, petshop's
-//     GraphQL door speaks the same wire shape): the secret holds ONLY the account credential, the
-//     cell logs in on first use and re-logs-in on 401; the session works on the pets API.
-//   • `oauth-refresh-token` — a connected OAuth client's `{ clientId, clientSecret, refreshToken,
-//     accessToken }` in one secret; an expired access token is refreshed inside the cell.
-// The material never leaves: the catalog fact and the log carry the pin and the kind, never a value.
+// secrets-connections.e2e.test.ts — EVERY WAY A PROJECT CONNECTS TO A THIRD-PARTY API, end to end,
+// against the deployed dummy-petshop (support/petshop.ts) — a real third party over the real network
+// from the local worker and the deployed one alike (the plain pasted key is secrets.e2e.test.ts):
+//   • `waitrose-session` — the username/password → session archetype (Waitrose's login; the
+//     petshop's GraphQL login speaks the same wire shape): the secret holds ONLY the account
+//     credential, its Durable Object logs in on first use and logs in again on 401.
+//   • `oauth-refresh-token`, tokens brought by a trusted party — the OAuth story with the consent
+//     walked by the test: discovery, code exchange, the secret, a call, expiry, rotation, revocation.
+//   • the connect half, confidential client — `itx.secrets.connect` runs the consent: the authorize
+//     URL out, the provider's redirect back at the platform's one callback, the exchange inside the
+//     secret's Durable Object; HTTP Basic at the token endpoint.
+//   • the connect half, PUBLIC client — dynamically registered (RFC 7591), no secret, PKCE alone at
+//     the exchange, `client_id` in the body on refresh: the MCP-client shape.
+// The connect rows run in a DIRECTORY-REGISTERED project — a row on the console, not an ad-hoc
+// context — exactly what a person would do. The material never leaves: the catalog fact and the log
+// carry the pin and the strategy kind, never a value.
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, readAll, workerUrl } from "./support/client.ts";
@@ -17,8 +23,10 @@ import {
   petshopConnect,
   petshopExpireTokens,
   petshopMintClient,
+  petshopRegisterPublicClient,
   petshopRevokeRefreshToken,
 } from "./support/petshop.ts";
+import { freshDnsSafeProjectId, registerProject } from "./support/project-host.ts";
 
 /** A bearer call on the pets API through egress, the secret's `accessToken` as the placeholder. */
 const bearerCall = async (itx: any, name: string, path: string) => {
@@ -162,8 +170,11 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
 // page); the provider redirects to the platform's one callback with the code; the secret's Durable
 // Object exchanges it. From then on it is the ordinary `oauth-refresh-token` secret the story above
 // proves. No code outside that object ever held a token — not even the test.
-test("connect: the platform runs the consent half — authorize URL out, the code back at the platform's callback, the exchange inside the secret's Durable Object; then a call, expiry and refresh as before", async () => {
-  const itx = openItx(freshCtx("secrets-connect"));
+test("connect, confidential client: the platform runs the consent half in a directory-registered project — authorize URL out, the code back at the platform's callback, the exchange inside the secret's Durable Object; then a call, expiry and refresh as before", async () => {
+  // a REAL project: a directory row (the console lists it), not an ad-hoc context
+  const projectId = freshDnsSafeProjectId("secrets-connect");
+  await registerProject(projectId);
+  const itx = openItx(projectId);
   const petshop = petshopBaseUrl();
   const { authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint } =
     await petshopAuthorizationServer();
@@ -222,6 +233,49 @@ test("connect: the platform runs the consent half — authorize URL out, the cod
   const log = JSON.stringify(await readAll(itx));
   expect(log).not.toContain(client.clientSecret);
   expect(log).not.toContain("access_token");
+});
+
+// THE PUBLIC CLIENT: no secret anywhere — the provider registered the platform's callback as the one
+// redirect URI, PKCE alone proves the exchange, and every later refresh identifies the client with
+// `client_id` in the body. This is how an MCP client (and any DCR-registered client) connects.
+test("connect, public client (RFC 7591 registration, PKCE alone, client_id in the body on refresh): the same consent half, no secret involved at any point", async () => {
+  const projectId = freshDnsSafeProjectId("secrets-connect-public");
+  await registerProject(projectId);
+  const itx = openItx(projectId);
+  const petshop = petshopBaseUrl();
+  const { authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint } =
+    await petshopAuthorizationServer();
+  const callback = workerUrl("/.auth/connect/callback");
+  const { clientId } = await petshopRegisterPublicClient(callback);
+
+  const { authorizationUrl } = await itx.secrets.connect("petshop-public", {
+    authorizationEndpoint,
+    tokenEndpoint,
+    clientId,
+    scope: "pets",
+    urls: [petshop],
+  });
+  const authorize = new URL(authorizationUrl);
+  expect(authorize.searchParams.get("client_id")).toBe(clientId);
+  expect(authorize.searchParams.get("redirect_uri")).toBe(callback);
+  authorize.searchParams.set("approve", "1");
+  const consent = await fetch(authorize, { redirect: "manual" });
+  expect(consent.status).toBe(302);
+  const back = new URL(consent.headers.get("location")!);
+  expect(back.origin + back.pathname).toBe(callback);
+  const done = await fetch(back);
+  expect(done.status, await done.text()).toBe(200);
+
+  expect(await bearerCall(itx, "petshop-public", "/api/me")).toMatchObject({
+    status: 200,
+    body: { clientId },
+  });
+  // expiry → the refresh grant with client_id in the body (no Basic header to send) → 200
+  await petshopExpireTokens(clientId);
+  expect(await bearerCall(itx, "petshop-public", "/api/me")).toMatchObject({
+    status: 200,
+    body: { clientId },
+  });
 });
 
 test("one request, one secret: a request naming two secrets is refused at the door", async () => {
