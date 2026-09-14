@@ -175,15 +175,18 @@ test("undo keeps a peer's shopping-list edit in the seeded Docs app", async ({
   const editor = page.locator(".cm-content");
   const peerEditor = peer.locator(".cm-content");
   await replaceEditorWord(page, "green", "red");
+  // Cursor labels are DOM decorations, not document text. Read the rendered
+  // lines without those labels; remote edits have no local spinner to wait on.
+  await expect.poll(() => readEditorText(peerEditor)).toContain("red apples");
   await replaceEditorWord(peer, "crunchy", "smooth");
-  await editor.getByText("red apples", { exact: false }).waitFor({ timeout: 10_000 }); // timeout: remote collaborative edits have no local spinner-waiter progress
-  await editor.getByText("smooth peanut butter", { exact: false }).waitFor({ timeout: 10_000 }); // timeout: peer edit propagates without local spinner-waiter progress
+  await expect.poll(() => readEditorText(editor)).toContain("red apples");
+  await expect.poll(() => readEditorText(editor)).toContain("smooth peanut butter");
   await editor.click();
   await page.keyboard.press("ControlOrMeta+z");
-  await editor.getByText("green apples", { exact: false }).waitFor();
-  await editor.getByText("smooth peanut butter", { exact: false }).waitFor();
-  await editor.getByText("red", { exact: false }).waitFor({ state: "hidden" });
-  await peerEditor.getByText("green apples", { exact: false }).waitFor({ timeout: 10_000 }); // timeout: peer receives undo over the network, not local spinner-waiter progress
+  await expect.poll(() => readEditorText(editor)).toContain("green apples");
+  await expect.poll(() => readEditorText(editor)).toContain("smooth peanut butter");
+  expect(await readEditorText(editor)).not.toContain("red");
+  await expect.poll(() => readEditorText(peerEditor)).toContain("green apples");
   await expect
     .poll(() => workspace.readFile(path), {
       timeout: 30_000, // timeout: file durability follows the editor's visible state, outside spinner-waiter
@@ -593,16 +596,7 @@ async function replaceEditorWord(
   replacement: string,
 ) {
   const editor = page.locator(".cm-content");
-  const text = await editor.locator(".cm-line").evaluateAll((lines) =>
-    lines
-      .map((line) => {
-        const copy = line.cloneNode(true) as HTMLElement;
-        // Peer labels are decoration, not characters in the editable document.
-        copy.querySelectorAll(".cm-remote-caret").forEach((caret) => caret.remove());
-        return copy.textContent;
-      })
-      .join("\n"),
-  );
+  const text = await readEditorText(editor);
   const offset = text.indexOf(word);
   expect(offset).toBeGreaterThanOrEqual(0);
   await editor.click();
@@ -614,4 +608,17 @@ async function replaceEditorWord(
     word,
   );
   await page.keyboard.insertText(replacement);
+}
+
+function readEditorText(editor: import("@playwright/test").Locator) {
+  return editor.locator(".cm-line").evaluateAll((lines) =>
+    lines
+      .map((line) => {
+        const copy = line.cloneNode(true) as HTMLElement;
+        // Peer labels are decoration, not characters in the editable document.
+        copy.querySelectorAll(".cm-remote-caret").forEach((caret) => caret.remove());
+        return copy.textContent;
+      })
+      .join("\n"),
+  );
 }

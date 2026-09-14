@@ -50,7 +50,7 @@ async function mountTodo() {
   let revision = 0;
   let added: any;
   const api = {
-    add: (title: string, id = "saved-id") => {
+    add: (title: string, id: string) => {
       added = { title, id, done: false };
       return response.promise;
     },

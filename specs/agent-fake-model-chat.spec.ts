@@ -114,9 +114,13 @@ test("a pending message shows Sending before backend progress takes over", async
   );
   await page.goto(agent.webUrl);
   await page.getByPlaceholder("Message this agent").fill("Hello");
+  // Finish the initial subscriptions before holding subsequent client frames.
+  // Otherwise the gate can prevent Send becoming enabled in the first place.
+  const send = page.getByRole("button", { name: "Send message" });
+  await send.click({ trial: true });
   holding = true;
   try {
-    await page.getByRole("button", { name: "Send message" }).click();
+    await send.click();
     await page.locator('[role="status"][data-spinner="true"]').getByText("Sending…").waitFor();
     expect(heldMessages.length).toBeGreaterThan(0);
     holding = false;
