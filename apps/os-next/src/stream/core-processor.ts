@@ -278,7 +278,7 @@ function parseSubscriptionName(name: string): string {
  *  state. The reduce below is the one list of the types it consumes. */
 export const CoreContract = {
   slug: "core",
-  version: "9.0.0",
+  version: "10.0.0",
   initialState: (): CoreState => ({
     paused: null,
     itxExpressionRewriteRules: {},

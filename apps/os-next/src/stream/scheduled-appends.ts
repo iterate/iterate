@@ -1,11 +1,32 @@
 import { z } from "zod";
 import type { StreamEvent, StreamEventInput } from "./processor.ts";
 
-const key = z
+const keyPart = z
   .string()
   .min(1)
   .max(200)
   .refine((value) => !(value in Object.prototype));
+/** A pair scopes a local key to a facet instance (or another explicit owner). Scope is naming,
+ *  not access control: the context-wide API can inspect and cancel every schedule. */
+export const ScheduleKey = z
+  .union([keyPart, z.tuple([keyPart, keyPart])])
+  .transform((value) => (typeof value === "string" ? value : JSON.stringify(value)))
+  .pipe(keyPart);
+export type ScheduleKey = z.input<typeof ScheduleKey>;
+export const ScheduleReceipt = z.strictObject({
+  key: keyPart,
+  scheduledAtOffset: z.number().int().positive(),
+});
+export type ScheduleReceipt = z.infer<typeof ScheduleReceipt>;
+const instant = z.iso
+  .datetime({ offset: true })
+  .refine((value) => Number.isFinite(Date.parse(value)), "invalid instant");
+// Bound arithmetic and make the smallest recurring cadence explicit. Missed ticks coalesce.
+const delay = z
+  .number()
+  .int()
+  .min(0)
+  .max(365 * 24 * 60 * 60 * 1000);
 // Lifecycle and recovery facts belong to their runtime transitions. In particular a scheduled
 // resume cannot release a paused stream: pause deliberately holds every scheduled append.
 const runtimeEvents = new Set([
@@ -30,35 +51,37 @@ const EventBody = z.strictObject({
   metadata: z.record(z.string(), z.json()).optional(),
 });
 
-/** One-shot, same-context durable batches. Event identity and provenance are assigned at firing.
+/** Same-context durable batches. Event identity and provenance are assigned at firing.
  *  A bounded definition keeps the core checkpoint and its live-state updates small. */
 export const ScheduledAppendInput = z
   .strictObject({
-    key,
-    when: z.strictObject({
-      at: z.iso
-        .datetime({ offset: true })
-        .refine((value) => Number.isFinite(Date.parse(value)), "invalid instant"),
-    }),
+    key: ScheduleKey,
+    when: z.union([
+      z.strictObject({ at: instant }),
+      z.strictObject({ afterMs: delay }),
+      z.strictObject({ everyMs: delay.min(1000) }),
+    ]),
     events: z.array(EventBody).min(1).max(100),
   })
   .refine(
     (value) => JSON.stringify(value).length <= 64 * 1024,
     "schedule exceeds 65,536 serialized characters",
   );
-export type ScheduledAppendInput = z.infer<typeof ScheduledAppendInput>;
+export type ScheduledAppendInput = z.input<typeof ScheduledAppendInput>;
 
 export const ScheduledAppendCancelled = z.strictObject({
-  key,
+  key: ScheduleKey,
   ifScheduledAtOffset: z.number().int().positive().optional(),
 });
 export const ScheduledAppendSettled = z.strictObject({
-  key,
+  key: ScheduleKey,
   scheduledAtOffset: z.number().int().positive(),
+  at: instant.optional(),
   error: z.string().max(2000).optional(),
 });
 
-export type ScheduledAppend = ScheduledAppendInput & {
+export type ScheduledAppend = z.output<typeof ScheduledAppendInput> & {
+  nextAt: string;
   scheduledAtOffset: number;
   source?: StreamEventInput["source"];
   failure?: { error: string; offset: number };
@@ -77,6 +100,13 @@ export function reduceScheduledAppends(
         ...schedules,
         [input.key]: {
           ...input,
+          nextAt:
+            "at" in input.when
+              ? input.when.at
+              : new Date(
+                  Date.parse(event.createdAt) +
+                    ("afterMs" in input.when ? input.when.afterMs : input.when.everyMs),
+                ).toISOString(),
           scheduledAtOffset: event.offset,
           source: event.source,
         },
@@ -99,13 +129,22 @@ export function reduceScheduledAppends(
       const input = ScheduledAppendSettled.parse(event.payload);
       const row = schedules[input.key];
       if (!row || row.scheduledAtOffset !== input.scheduledAtOffset) return schedules;
+      if ("everyMs" in row.when && input.at !== row.nextAt) return schedules;
       const next = { ...schedules };
       if (event.type === "events.iterate.com/stream/append-schedule-failed")
         next[input.key] = {
           ...row,
           failure: { error: input.error || "scheduled append failed", offset: event.offset },
         };
-      else delete next[input.key];
+      else if ("everyMs" in row.when) {
+        const due = Date.parse(row.nextAt);
+        const ticks =
+          Math.floor(Math.max(0, Date.parse(event.createdAt) - due) / row.when.everyMs) + 1;
+        next[input.key] = {
+          ...row,
+          nextAt: new Date(due + ticks * row.when.everyMs).toISOString(),
+        };
+      } else delete next[input.key];
       return next;
     }
     default:

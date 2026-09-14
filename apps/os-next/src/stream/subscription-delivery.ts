@@ -282,7 +282,7 @@ export class SubscriptionDelivery {
         record.pushedEventBatch = { events, after, through: throughOffset };
         // A delivery is owed from here: an eviction before the cursor lane even evaluates the
         // target must leave an alarm behind to come back.
-        this.#stream.armAlarmNoLaterThan(Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
+        this.#stream.alarms.request("delivery", Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
       }
       this.#queuePushBehindInFlightDelivery(name, events, { after, through: throughOffset });
     }
@@ -669,7 +669,7 @@ export class SubscriptionDelivery {
         }
         if (row.halted) return;
         if (cursor.nextAttemptAtMs !== undefined && Date.now() < cursor.nextAttemptAtMs) {
-          this.#stream.armAlarmNoLaterThan(cursor.nextAttemptAtMs);
+          this.#stream.alarms.request("delivery", cursor.nextAttemptAtMs);
           return;
         }
         // The batch: the pushed one when contiguous (ephemerals ride it); else a page of the log, read
@@ -751,7 +751,7 @@ export class SubscriptionDelivery {
               if (!this.cursor(name)) continue; // replaced while the target was evaluated
             }
             // Die mid-call and the alarm survives to re-derive from the rows.
-            this.#stream.armAlarmNoLaterThan(Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
+            this.#stream.alarms.request("delivery", Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
             const target = evaluatedTarget;
             await withTimeout(
               target.call([eventBatch.events, range]),
@@ -789,7 +789,7 @@ export class SubscriptionDelivery {
               Math.min(1000 * 2 ** (attempt - 1), 1_800_000) * (0.8 + Math.random() * 0.4);
             const nextAttemptAtMs = Date.now() + Math.round(backoff);
             this.#adoptCursor(name, { ...cursor, attempt, nextAttemptAtMs }, true);
-            this.#stream.armAlarmNoLaterThan(nextAttemptAtMs);
+            this.#stream.alarms.request("delivery", nextAttemptAtMs);
             return;
           }
         } finally {

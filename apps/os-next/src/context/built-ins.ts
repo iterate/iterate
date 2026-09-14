@@ -10,7 +10,12 @@
 // Dynamic code has two doors, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
-import type { ScheduledAppendInput, ScheduledAppend } from "../stream/scheduled-appends.ts";
+import {
+  ScheduleKey,
+  ScheduleReceipt,
+  type ScheduledAppendInput,
+  type ScheduledAppend,
+} from "../stream/scheduled-appends.ts";
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import { stampPrincipal, type Caller } from "../principal.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/processor.ts";
@@ -133,15 +138,18 @@ export interface BuiltInScope extends LibraryRoots {
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
    *  RpcTarget exactly: `itx.append({...})` is one spelling on every hop. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  /** One-shot durable batches appended in this context at or after an ISO instant. Setting a key
+  /** Durable batches appended after a deadline or on a fixed interval (missed ticks coalesce). Setting a key
    *  replaces it; cancelling cannot retract an occurrence already committed. Pause holds work
    *  until resume; set is refused while paused, while cancel remains available. Failure remains
    *  visible until replacement or cancellation. */
   schedules: {
-    set(input: ScheduledAppendInput): Promise<StreamEvent[]>;
-    cancel(key: string, ifScheduledAtOffset?: number): Promise<StreamEvent[]>;
+    set(
+      input: ScheduledAppendInput,
+      options?: { idempotencyKey?: string },
+    ): Promise<ScheduleReceipt>;
+    cancel(schedule: ScheduleKey | ScheduleReceipt): Promise<StreamEvent[]>;
     list(): ScheduledAppend[];
-    get(key: string): ScheduledAppend | null;
+    get(key: ScheduleKey): ScheduledAppend | null;
   };
   /** Read a page of the durable log — `itx.readEvents(afterOffset?, limit?)`, the twin of `append`
    *  (non-minting: a probe never wakes storage). */
@@ -415,13 +423,24 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     append,
     schedules: {
       ...deps.schedules,
-      set: (input) =>
-        append({ type: "events.iterate.com/stream/append-scheduled", payload: input }),
-      cancel: (key, ifScheduledAtOffset) =>
-        append({
+      get: (key) => deps.schedules.get(ScheduleKey.parse(key)),
+      set: async (input, options) => {
+        const [definition] = await append({
+          type: "events.iterate.com/stream/append-scheduled",
+          payload: input,
+          idempotencyKey: options?.idempotencyKey,
+        });
+        return { key: ScheduleKey.parse(input.key), scheduledAtOffset: definition.offset };
+      },
+      cancel: (schedule) => {
+        const receipt = ScheduleReceipt.safeParse(schedule);
+        return append({
           type: "events.iterate.com/stream/append-schedule-cancelled",
-          payload: { key, ifScheduledAtOffset },
-        }),
+          payload: receipt.success
+            ? { key: receipt.data.key, ifScheduledAtOffset: receipt.data.scheduledAtOffset }
+            : { key: ScheduleKey.parse(schedule) },
+        });
+      },
     },
     readEvents: (afterOffset?: number, limit?: number) => ownContext().read(afterOffset, limit),
     waitForEvent: deps.waitForEvent,

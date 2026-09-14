@@ -56,7 +56,7 @@ test("reconstruction cannot postpone a scheduled deadline when delivery arms lat
   const { stream, create, alarms } = setup();
   stream.append(scheduled());
   const deadline = Date.parse("2030-01-01T00:00:00Z");
-  create().armAlarmNoLaterThan(deadline + 60_000);
+  create().alarms.request("delivery", deadline + 60_000);
   expect(alarms).toEqual([deadline, deadline]);
 });
 
@@ -65,9 +65,9 @@ test("scheduled work survives the retry breaker; pause holds it and resume rearm
   for (let i = 0; i < 5; i++) stream.noteSelfWake();
   stream.append(scheduled());
   expect(alarms).toHaveLength(1);
-  stream.noteAlarmFired();
+  stream.alarms.fired();
   stream.append({ type: "events.iterate.com/stream/paused", payload: { reason: "maintenance" } });
-  stream.armScheduledAppends();
+  stream.alarms.reconcile();
   expect(stream.nextScheduledAppendAt()).toBeNull();
   expect(alarms).toHaveLength(1);
   stream.append({ type: "events.iterate.com/stream/resumed" });
@@ -145,10 +145,10 @@ test("a due-work pass arms once for its final obligations, preserving another su
   const [a] = stream.append(scheduled("a"));
   const [b] = stream.append(scheduled("b"));
   stream.append(scheduled("later", "2032-01-01T00:00:00Z"));
-  stream.noteAlarmFired();
+  stream.alarms.fired();
   alarms.length = 0;
   const retryAt = Date.parse("2031-01-01T00:00:00Z");
-  stream.deferAlarmWrites(() => {
+  stream.alarms.batch(() => {
     for (const row of [a, b]) {
       stream.append({
         type: "events.iterate.com/stream/append-schedule-completed",
@@ -157,7 +157,7 @@ test("a due-work pass arms once for its final obligations, preserving another su
           scheduledAtOffset: row.offset,
         },
       });
-      stream.armAlarmNoLaterThan(retryAt);
+      stream.alarms.request("delivery", retryAt);
     }
   });
   expect(alarms).toEqual([retryAt]);
@@ -224,4 +224,69 @@ test("a nearly full definition budget still permits bounded terminal failure dia
     })),
   );
   expect(Object.values(stream.coreReducedState.schedules).every((row) => row.failure)).toBe(true);
+});
+
+test("relative deadlines resolve once from the committed definition, including retries and replay", () => {
+  const { stream, create } = setup();
+  const input = normalizeControlEvent({
+    type: "events.iterate.com/stream/append-scheduled",
+    idempotencyKey: "relative-request",
+    payload: { key: ["facet-a", "deadline"], when: { afterMs: 30_000 }, events: [{ type: "due" }] },
+  });
+  const [definition] = stream.append(input);
+  const key = JSON.stringify(["facet-a", "deadline"]);
+  const expected = new Date(Date.parse(definition.createdAt) + 30_000).toISOString();
+  expect(stream.coreReducedState.schedules[key].nextAt).toBe(expected);
+  expect(stream.append(input)[0].offset).toBe(definition.offset);
+  expect(create().coreReducedState.schedules[key].nextAt).toBe(expected);
+  expect(
+    reduceCoreEventBatch(stream.read().events, CoreContract.initialState(), (error) => {
+      throw error;
+    }).schedules[key].nextAt,
+  ).toBe(expected);
+});
+
+test("interval completion coalesces missed ticks, retains cadence and ignores duplicate occurrences", () => {
+  const input = {
+    type: "events.iterate.com/stream/append-scheduled",
+    payload: { key: "tick", when: { everyMs: 1000 }, events: [{ type: "tick" }] },
+    offset: 1,
+    path: "/",
+    createdAt: "2030-01-01T00:00:00.000Z",
+  };
+  let state = reduceCoreEventBatch([input], CoreContract.initialState(), (error) => {
+    throw error;
+  });
+  expect(state.schedules.tick.nextAt).toBe("2030-01-01T00:00:01.000Z");
+  const completed = {
+    type: "events.iterate.com/stream/append-schedule-completed",
+    payload: { key: "tick", scheduledAtOffset: 1, at: state.schedules.tick.nextAt },
+    offset: 3,
+    path: "/",
+    createdAt: "2030-01-01T01:00:00.500Z",
+  };
+  state = reduceCoreEventBatch([completed], state, (error) => {
+    throw error;
+  });
+  expect(state.schedules.tick.nextAt).toBe("2030-01-01T01:00:01.000Z");
+  const repeated = reduceCoreEventBatch([{ ...completed, offset: 4 }], state, (error) => {
+    throw error;
+  });
+  expect(repeated.schedules).toEqual(state.schedules);
+});
+
+test.each([
+  { afterMs: -1 },
+  { afterMs: 0.5 },
+  { afterMs: Number.MAX_SAFE_INTEGER },
+  { everyMs: 0 },
+  { everyMs: 999 },
+  { at: "2030-01-01T00:00:00Z", afterMs: 1 },
+])("invalid relative/interval deadlines are refused: %j", (when) => {
+  expect(() =>
+    normalizeControlEvent({
+      type: "events.iterate.com/stream/append-scheduled",
+      payload: { key: "invalid", when, events: [{ type: "due" }] },
+    }),
+  ).toThrow();
 });

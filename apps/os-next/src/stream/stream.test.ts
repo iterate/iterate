@@ -564,14 +564,14 @@ test("N alarm-only self-wakes stop alarm arming; a public door resumes it", () =
   const stream = bareStream({ storage: slice });
 
   // Arming works normally.
-  stream.armAlarmNoLaterThan(Date.now() + 60_000);
+  stream.alarms.request("delivery", Date.now() + 60_000);
   expect(setAlarmAtMs.length).toBe(1);
   expect(stream.selfWakeHalted()).toBe(false);
 
   // Self-wake until halted — a SMALL, billing-safe ceiling (robust to the exact constant).
   let selfWakes = 0;
   while (!stream.selfWakeHalted() && selfWakes < 100) {
-    stream.noteAlarmFired(); // each alarm pass clears the arm memo, as the real one does
+    stream.alarms.fired(); // each alarm pass clears the arm memo, as the real one does
     stream.noteSelfWake();
     selfWakes++;
   }
@@ -580,14 +580,14 @@ test("N alarm-only self-wakes stop alarm arming; a public door resumes it", () =
 
   // Arming is now a no-op — the loop cannot re-arm from anywhere.
   const armsBefore = setAlarmAtMs.length;
-  stream.noteAlarmFired();
-  stream.armAlarmNoLaterThan(Date.now() + 60_000);
+  stream.alarms.fired();
+  stream.alarms.request("delivery", Date.now() + 60_000);
   expect(setAlarmAtMs.length).toBe(armsBefore);
 
   // A real public door clears the streak and arming resumes.
   stream.notePublicDoor();
   expect(stream.selfWakeHalted()).toBe(false);
-  stream.armAlarmNoLaterThan(Date.now() + 60_000);
+  stream.alarms.request("delivery", Date.now() + 60_000);
   expect(setAlarmAtMs.length).toBe(armsBefore + 1);
 });
 

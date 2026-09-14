@@ -516,7 +516,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       !this.#library.hasOpenConnections()
     )
       return;
-    this.#stream.armAlarmNoLaterThan(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS);
+    this.#stream.alarms.request("idle", this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS);
   }
 
   /** The self-wake breaker's other half (stream.ts SELF_WAKE_HALT_STREAK holds the durable streak):
@@ -544,20 +544,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #facetWorkInFlight = 0;
 
   async alarm(): Promise<void> {
-    this.#stream.noteAlarmFired();
+    this.#stream.alarms.fired();
     // Append each occurrence locally before awaiting subscriber RPC. A completion in the SAME
     // transaction removes the obligation, so eviction or duplicate alarm delivery cannot repeat it.
     const now = Date.now();
     const due = Object.values(this.#stream.coreReducedState.schedules)
-      .filter((row) => !row.failure && Date.parse(row.when.at) <= now)
+      .filter((row) => !row.failure && Date.parse(row.nextAt) <= now)
       .sort(
         (a, b) =>
-          Date.parse(a.when.at) - Date.parse(b.when.at) ||
-          a.scheduledAtOffset - b.scheduledAtOffset,
+          Date.parse(a.nextAt) - Date.parse(b.nextAt) || a.scheduledAtOffset - b.scheduledAtOffset,
       )
       .slice(0, 32);
     let scheduledProgress = false;
-    this.#stream.deferAlarmWrites(() => {
+    this.#stream.alarms.batch(() => {
       for (const row of due) {
         if (this.#stream.coreReducedState.paused) break;
         if (
@@ -565,7 +564,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           row.scheduledAtOffset
         )
           continue;
-        const payload = { key: row.key, scheduledAtOffset: row.scheduledAtOffset };
+        const payload = { key: row.key, scheduledAtOffset: row.scheduledAtOffset, at: row.nextAt };
         try {
           this.#appendAndRunCommittedEffects([
             ...row.events.map((event) => ({
@@ -573,7 +572,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
               source: {
                 schedule: {
                   ...payload,
-                  at: row.when.at,
                   ...((row.source?.processor || row.source?.principal) && {
                     definedBy: {
                       processor: row.source?.processor,
@@ -591,14 +589,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             namespace: "iterate-context",
             ...payload,
             count: row.events.length,
-            latenessMs: now - Date.parse(row.when.at),
+            latenessMs: now - Date.parse(row.nextAt),
           });
         } catch (error) {
           // If the commit succeeded but a subsequent effect threw, preserve the completion and let
           // the platform retry recovery. Otherwise park this definition visibly, without a loop.
           if (
+            this.#stream.coreReducedState.schedules[row.key]?.nextAt !== row.nextAt ||
             this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
-            row.scheduledAtOffset
+              row.scheduledAtOffset
           ) {
             reportIssue("scheduled-append.effect-failed", error, payload);
             throw error;
@@ -666,7 +665,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // minute would otherwise re-fire this alarm in a tight, billed loop). With NOTHING to quiesce
       // there is no re-arm (the #recordActivityForQuietClock rule): re-arming regardless was the
       // every-minute `woken` loop the breaker was measured on.
-      this.#stream.armAlarmNoLaterThan(
+      this.#stream.alarms.request(
+        "idle",
         Math.max(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS, Date.now() + 10_000),
       );
     }

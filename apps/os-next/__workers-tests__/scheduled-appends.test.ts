@@ -30,7 +30,7 @@ test("a facet's deadline survives quiesce and eviction; duplicate alarms append 
       { source: scheduledAppendFacetSource, className: "DeadlinesDurableObject" },
     ],
   ]);
-  await s.invoke(["itx", "facets", ["get", "deadlines"], ["start", "invoice", at]]);
+  await s.invoke(["itx", "facets", ["get", "deadlines"], ["start", "invoice", { at }]]);
   await quiesce(ctx);
   await evictDurableObject(s);
   // A new incarnation's delivery watchdog must not replace the earlier scheduled deadline.
@@ -135,4 +135,66 @@ test("a two-due plus one-future pass leaves only the future alarm", async () => 
   expect(
     await runInDurableObject(s, async (_instance, state) => await state.storage.getAlarm()),
   ).toBe(Date.parse(future));
+});
+
+test("an interval coalesces an idle gap across eviction and stops on explicit cancellation", async () => {
+  const ctx = "prj_scheduled_interval";
+  const s = stub(ctx);
+  const receipt = await s.invoke([
+    "itx",
+    "schedules",
+    ["set", { key: "tick", when: { everyMs: 10_000 }, events: [{ type: "tick" }] }],
+  ]);
+  const schedule = (await s.invoke("itx.schedules.get('tick')")) as { nextAt: string };
+  const firstAt = Date.parse(schedule.nextAt);
+  await evictDurableObject(s);
+  await fire(ctx, firstAt + 65_000);
+  expect((await read(ctx)).events.filter((event) => event.type === "tick")).toHaveLength(1);
+  expect(await s.invoke("itx.schedules.get('tick')")).toMatchObject({
+    nextAt: new Date(firstAt + 70_000).toISOString(),
+  });
+  await fire(ctx, firstAt + 65_000); // duplicate delivery at the same wall time
+  expect((await read(ctx)).events.filter((event) => event.type === "tick")).toHaveLength(1);
+  await fire(ctx, firstAt + 70_000);
+  expect((await read(ctx)).events.filter((event) => event.type === "tick")).toHaveLength(2);
+  await s.invoke(["itx", "schedules", ["cancel", receipt]]);
+  await fire(ctx, firstAt + 80_000);
+  expect((await read(ctx)).events.filter((event) => event.type === "tick")).toHaveLength(2);
+  expect(await s.invoke("itx.schedules.list()")).toEqual([]);
+});
+
+test("a failed interval stays parked across later alarms", async () => {
+  const ctx = "prj_scheduled_interval_failed";
+  const s = stub(ctx);
+  await runInDurableObject(s, async (_instance, state) => {
+    state.storage.sql.exec(
+      "CREATE TRIGGER reject_tick BEFORE INSERT ON events WHEN json_extract(NEW.body, '$.type') = 'tick' BEGIN SELECT RAISE(ABORT, 'injected tick refusal'); END",
+    );
+  });
+  await s.invoke([
+    "itx",
+    "schedules",
+    [
+      "set",
+      {
+        key: "tick",
+        when: { everyMs: 1000 },
+        events: [{ type: "tick" }],
+      },
+    ],
+  ]);
+  const schedule = (await s.invoke("itx.schedules.get('tick')")) as { nextAt: string };
+  await fire(ctx, Date.parse(schedule.nextAt));
+  await evictDurableObject(s);
+  await fire(ctx, Date.parse(schedule.nextAt) + 60_000);
+  expect(await s.invoke("itx.schedules.get('tick')")).toMatchObject({
+    failure: {
+      error: expect.stringContaining("injected tick refusal"),
+    },
+  });
+  expect(
+    (await read(ctx)).events.filter(
+      (event) => event.type === "events.iterate.com/stream/append-schedule-failed",
+    ),
+  ).toHaveLength(1);
 });
