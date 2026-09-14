@@ -217,27 +217,24 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
       ),
     );
-    // The wake record, before any door opens (Stream.appendCreatedAndWokenEvents).
-    this.#stream.appendCreatedAndWokenEvents();
-    // EVERY STREAM SUBSCRIBES THE "/" CONTEXT'S CONFIG WORKER: `itx.worker.processEventBatch` is
-    // delivered every committed event, cross-context, at-least-once. `consumes: ["*"]` is honest —
-    // the config worker sees everything, `woken` included. A DOWN config worker cannot wake-loop
-    // forever: the ladder is bounded and the self-wake breaker (stream.ts SELF_WAKE_HALT_STREAK)
-    // halts arming regardless; `itx.worker` always resolves (a bundled no-op default,
-    // itx-expression-rewriting.ts), so a config-less project never halts. Idempotent — one row per
-    // context whatever the incarnation.
-    // The birth append bypasses the DO's append boundary, so normalize this literal here.
-    this.#stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: {
-          name: "config",
-          target: "itx.cd('/').worker.processEventBatch",
-          consumes: ["*"],
-        },
-        idempotencyKey: "config-subscription",
-      }),
-    );
+    // Keep constructor-time delivery from replacing the alarm that woke this incarnation.
+    this.ctx.blockConcurrencyWhile(async () => {
+      this.#stream.alarms.restore(await this.ctx.storage.getAlarm());
+      // Initialize the log before accepting requests. The root config worker subscribes once;
+      // its idempotency key preserves that subscription across incarnations.
+      this.#stream.appendCreatedAndWokenEvents();
+      this.#stream.append(
+        normalizeControlEvent({
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            name: "config",
+            target: "itx.cd('/').worker.processEventBatch",
+            consumes: ["*"],
+          },
+          idempotencyKey: "config-subscription",
+        }),
+      );
+    });
   }
 
   /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,

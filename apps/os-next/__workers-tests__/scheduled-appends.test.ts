@@ -276,3 +276,18 @@ test.each(["once", "interval"])(
     await s.invoke("itx.schedules.cancel('remove-facet')");
   },
 );
+
+test("a cold context preserves its existing physical alarm even without a pending schedule", async () => {
+  const ctx = "prj_scheduled_existing_alarm";
+  const s = stub(ctx);
+  await s.invoke("itx.schedules.list()");
+  const deadline = Date.now() + 5000;
+  await runInDurableObject(s, async (_instance, state) => {
+    await state.storage.setAlarm(deadline);
+  });
+  await evictDurableObject(s);
+  await s.invoke("itx.schedules.list()");
+  const alarm = await runInDurableObject(s, async (_instance, state) => state.storage.getAlarm());
+  expect(alarm).not.toBeNull();
+  expect(alarm!).toBeLessThanOrEqual(deadline);
+});

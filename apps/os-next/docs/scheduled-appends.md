@@ -87,6 +87,8 @@ business event, use `at: new Date(Date.parse(event.createdAt) + delayMs).toISOSt
 - Each alarm processes at most 32 due definitions, ordered by deadline then defining offset.
   The alarm coordinator reconciles once against the final batch state and other requested deadlines.
   Replacement or cancellation can leave one obsolete early wake, which rechecks durable state.
+  Cold startup restores the stored physical alarm before appending wake events, so startup delivery
+  bookkeeping cannot postpone the alarm that woke the context.
 
 ## Bounds
 
@@ -106,7 +108,8 @@ schedules leave the projection; history remains in the log.
 - `e2e/support/scheduled-append-facet.ts`: complete userspace sources with no alarm handler or native
   alarm storage. `start(job, when)` supports both deadlines and intervals; `finish(receipt)` cancels.
 - `__workers-tests__/scheduled-appends.test.ts`: eviction, duplicate alarms, paused recovery,
-  atomic refusal, bounded batches, coalesced intervals, parked interval failures, and post-commit effect failures.
+  atomic refusal, bounded batches, coalesced intervals, parked interval failures, post-commit effect
+  failures, and preservation of existing physical alarms during cold startup.
 - `src/stream/scheduled-appends.test.ts`: replay, deadline reconstruction, breaker independence,
   relative timestamp anchoring, interval replacement, recurrence identity, validation and transactional limits.
 

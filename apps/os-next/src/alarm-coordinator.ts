@@ -17,6 +17,12 @@ export class AlarmCoordinator {
     this.#deps = deps;
   }
 
+  /** Seed once before startup work can arm. An existing alarm may be the wake starting this
+   *  incarnation; replacing it with a later watchdog would cancel it before the handler runs. */
+  restore(at: number | null): void {
+    this.#armedAt = at;
+  }
+
   request(owner: "delivery" | "idle", at: number): void {
     if (this.#deps.recoveryHalted()) return;
     this.#requested.set(owner, Math.min(this.#requested.get(owner) ?? at, at));
