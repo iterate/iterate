@@ -175,8 +175,11 @@ test("deleteFile whites a repo file out until committed; revert lifts the whiteo
   expect(await workspace.deleteFile("/nowhere.txt")).toBe(false);
 });
 
-test("configure mounts a repo at a second path — ONE workspace/configured event, reduced by the workspace processor; a commit names its mount with scope", async () => {
+test("configure mounts a repo at a second path — ONE workspace/configured event, reduced by the workspace processor; a commit names its mount with scope; scratch at a mount point stays scratch", async () => {
   const { itx, workspace, repos } = await workspaceOverFakeRepos("four");
+  // Scratch written where a mount will later be: a mount point is a directory, never a file, so
+  // this row stays scratch after the mount appears — unmounted in status, never committed as "".
+  await workspace.writeFile("/vendor/cfg", "scratch at a future mount point");
   expect(await workspace.configure({ mounts: { "/vendor/cfg": { repo: "config" } } })).toEqual({
     "/repos/config": { repo: "config" },
     "/vendor/cfg": { repo: "config" },
@@ -187,6 +190,7 @@ test("configure mounts a repo at a second path — ONE workspace/configured even
   expect(await workspace.listAllFiles()).toEqual([
     "/repos/config/notes/log.md",
     "/repos/config/worker.ts",
+    "/vendor/cfg",
     "/vendor/cfg/notes/log.md",
     "/vendor/cfg/worker.ts",
   ]);
@@ -198,15 +202,13 @@ test("configure mounts a repo at a second path — ONE workspace/configured even
   const commit = await workspace.gitCommit({ message: "a", scope: "/vendor/cfg" });
   expect(commit.changedPaths).toEqual(["/vendor/cfg/a.txt"]);
   expect(repos.readFile("config", "a.txt")).toBe("a");
-  expect(
-    (await workspace.gitStatus()).mounts.map((m: { path: string; changes: unknown[] }) => [
-      m.path,
-      m.changes.length,
-    ]),
-  ).toEqual([
-    ["/repos/config", 1],
-    ["/vendor/cfg", 0],
-  ]);
+  expect(await workspace.gitStatus()).toMatchObject({
+    mounts: [
+      { path: "/repos/config", changes: [{ path: "/repos/config/b.txt", change: "added" }] },
+      { path: "/vendor/cfg", changes: [] },
+    ],
+    unmounted: [{ path: "/vendor/cfg", change: "added" }],
+  });
   expect(await workspace.configure({ mounts: { "/vendor/cfg": null } })).toEqual({
     "/repos/config": { repo: "config" },
   });

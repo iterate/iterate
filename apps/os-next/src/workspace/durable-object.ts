@@ -41,15 +41,17 @@ export function absolutePath(path: string): string {
   return `/${resolved.join("/")}`;
 }
 
-/** The mount a path falls under — the LONGEST mount path that is the path or an ancestor of it — with
- *  the repo-relative remainder ("" for the mount point itself); null under no mount. */
+/** The mount a FILE path falls under — the LONGEST mount path that is a proper ancestor of it — with
+ *  the repo-relative remainder; null under no mount, and null for a mount point itself: a mount
+ *  point is a directory, never a file, so an overlay row AT one (scratch written before the mount
+ *  existed) stays scratch — listed as unmounted, never handed to a repo as the path "". */
 export function routeMount(
   mounts: Record<string, WorkspaceMount>,
   path: string,
 ): { mountPath: string; repo: string; relativePath: string } | null {
   let best: { mountPath: string; repo: string; relativePath: string } | null = null;
   for (const [mountPath, mount] of Object.entries(mounts)) {
-    if (path !== mountPath && !path.startsWith(`${mountPath}/`)) continue;
+    if (!path.startsWith(`${mountPath}/`)) continue;
     if (best && best.mountPath.length >= mountPath.length) continue;
     best = { mountPath, repo: mount.repo, relativePath: path.slice(mountPath.length + 1) };
   }
@@ -150,7 +152,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
 
   async #readMounted(path: string, mounts: Record<string, WorkspaceMount>): Promise<string | null> {
     const route = routeMount(mounts, path);
-    if (!route || route.relativePath === "") return null;
+    if (!route) return null;
     return this.withItx((itx) => itx.repos.readFile(route.repo, route.relativePath));
   }
 
@@ -181,7 +183,6 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
     const route = routeMount(await this.mounts(), resolved);
     const mounted =
       !!route &&
-      route.relativePath !== "" &&
       (await this.withItx((itx) => itx.repos.listFiles(route.repo))).paths.includes(
         route.relativePath,
       );
