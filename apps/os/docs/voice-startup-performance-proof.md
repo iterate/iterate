@@ -380,6 +380,55 @@ all ten rows failed before fetch and are retained separately, not counted as
 OpenAI samples. Corrected results are in
 `facet-vs-stateless-live-probe-v2-result.json` in the temporary artifact directory.
 
+## Clean current-head results
+
+Runtime commit `055337b142344aed13b86cb6246c8caa1df212cd` is rebased onto
+`origin/main` at `3a5ea998e`; the clean, uninstrumented deployment is
+`1829d6cd-62c4-4c0b-a365-82b6ec8347b6`. Deployment smokes passed. The five
+startup samples retained one cold acceptance timeout at 10 seconds, whose
+setup eventually resolved at 18,515 ms. The four succeeding calls reached
+acceptance at 8,483/1,658/1,812/1,587 ms, with first PCM at
+9,524/2,657/2,763/2,607 ms. The failed sample has no observed call-started or
+provider milestones; its pre-voice delay remains unattributed. Do not summarize
+only the last three as the distribution of all fresh calls.
+
+The subsequent continuous test failed before audio while opening its
+subscription, with native storage-reset reference `1cvjbn8bp2mrbi7gdv5q7jbe`.
+The reset affected the common host and its alarm/subscription work. A cursor
+`nack` write also failed during recovery; that stack identifies where the
+already-failing storage was accessed, not the origin of the platform fault.
+A readback verified the scoped terminal fact and zero remaining connections,
+subscription lag, retries or deadlines. No automatic retry turned either
+failed sample into a reported success. The clean sustained-audio proof is
+therefore still incomplete.
+
+A separate primitive control then opened five alternating native/hosted fresh
+stream pairs on one project WebSocket, with no voice setup or OpenAI call.
+Each subscribed at head, appended one durable marker, and observed delivery.
+All ten passed and the socket closed with code 1000:
+
+| Median milliseconds | Native stream | Hosted stream |
+| ------------------- | ------------: | ------------: |
+| Open subscription   |         1,894 |           156 |
+| Append acknowledged |           175 |            76 |
+| Append to delivery  |           174 |            43 |
+
+A second five-pair control started each subscription (replay from offset zero)
+and first marker append concurrently. All ten pairs of operations and marker
+deliveries passed. Native median subscription/append acknowledgement/delivery
+times were 1,779/1,675/1,739 ms; hosted were 191/113/155 ms. The single project
+WebSocket closed with code 1000. This exercises fresh-child construction overlap
+without voice setup; it did not reproduce the intermittent storage fault.
+Its artifact is `primitive-concurrent-subscription-control.json`.
+
+Delivery may precede the append RPC reply because they use independent callback
+and acknowledgement messages. This proves the small hosted primitive cost on
+these samples; it neither explains the voice cold-start delay nor rules out the
+intermittent storage-reset fault. Raw artifacts are
+`startup-source-owned-ephemeral-clean.json`,
+`hosted-continuous-audio-source-owned-ephemeral-clean.json`, and
+`primitive-subscription-control.json` under the temporary artifact directory.
+
 ## Reproduce
 
 From `apps/os`, with the current voice source installed in a disposable
