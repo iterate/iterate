@@ -1017,6 +1017,74 @@ and `clean-cold-workers-native-warm-*`. Two read-only harness failures (Node
 import and property-proxy disposal) are retained separately; corrected runs
 passed. No diagnostic code is part of the PR.
 
+## Further review and smaller controls
+
+Claude Fable 5.1 at xhigh reviewed the latest cold-build boundaries. Its useful
+next direction is to enqueue builds when mounted source/deployment keys change,
+preserving global coordination while moving compilation off call startup. This
+is a proposal, not a measured improvement. Precreating the next conversation
+would move work outside the requested button-press measurement, so that idea
+is excluded. Making acceptance ephemeral also needs a separate reconnect and
+delivery contract review before adoption.
+
+A richer native transport probe on version
+`1287d3e7-5ddf-4805-8523-26a96e445cbf` alternated retained-fetch-timeout and
+clear-timeout-after-upgrade controls. All ten produced audible PCM with no
+parse errors, send failures, aborts, or missed input-fill ticks. The first cold
+call took 4,328 ms to readiness; the following nine took 770–1,173 ms. Neither
+arm reproduced the earlier silent call, so that failure remains unexplained.
+Targeted hosted-parent and ProjectDO error queries returned zero records for
+this interval. Evidence: `native-warm-host-counter-control-result.json` and
+`clean-cold-workers-native-counter-*`.
+
+A separate native RPC primitive control ran ten alternating serial/pipelined
+pairs of `ITX.get()` plus one public `getEvents({ limit: 1 })` on an existing
+hosted child. Median operation time was **12.5 / 11 ms**; all arms succeeded.
+The initial warmup was separately retained at 1,009 ms. Pipelining is supported
+in the deployed runtime, but this small warm difference does not explain the
+remaining startup gap. The SDK patch remains isolated. Evidence:
+`itx-self-stream-pipeline-control-result.json`; its ownership/error tests passed
+3/3. The earlier native transport probes are removed from local source.
+
+## Actual native voice processor comparison
+
+Preview version `5ea40972-1924-4a8a-a1e7-5ed0bb5164db` temporarily selected the
+unchanged `VoiceAgentProcessor` as a native facet for one reserved prefix.
+Five native calls alternated with five ordinary dynamic calls on one project
+WebSocket, using the same installed setup, fresh paths, events, scoped egress,
+secret and exact prompt. Runtime build identities verified the intended
+placement in every call; this was not the earlier bare transport control.
+
+All ten produced non-silent PCM within the 10-second budget. Across all five
+calls per arm, median client readiness was **1,906 ms native / 1,973 ms dynamic**.
+The first native call retained the deployment cold start: ready **7,346 ms**,
+PCM **8,217 ms**. Across the subsequent four calls in each arm, readiness was
+**1,846.5 / 1,857 ms**, handshake **868 / 845.5 ms**, and first PCM
+**2,865 / 3,054 ms**. This does not establish a warm readiness improvement from
+native hosting. These client measurements use the same clock boundary; the
+provider handshake is reported separately, not subtracted across actors.
+
+All ten had terminal call state and matching ended activations. One initial
+subscription description reported lag 69 despite a concurrent terminal
+snapshot; a bounded follow-up read showed all ten at zero lag and no last
+error. These are separate checkpoints: `describe()` reads the source stream
+row, while the snapshot reads the facet fold. Settled hosted callback batches
+do not themselves advance the source cursor; a later checkpoint report or
+teardown does. The exact advancement trigger in this sample is unobserved.
+Both raw reads are retained; their difference is not a measured lost event. The project
+WebSocket closed with code 1000. Targeted parent and ProjectDO error queries
+returned no records over the call interval. Neither query proves the absence
+of failures elsewhere.
+
+The adapter's four selection tests and OS typecheck passed. The temporary
+adapter and local benchmark helper are removed from source; the SDK experiment
+also remains excluded. Evidence: `native-voice-processor-ab-result.json`, its
+log, `native-voice-processor-terminal-audit{,-followup}.json`, and
+`clean-cold-workers-native-processor-ab-*`. Source remained pinned to
+`ebb0a42dc2b1a44ae5cee36f87eee448a914b664`, SDK `055337b`, secret offset 295. Clean version `09b2bbf8-6bb9-45cd-ad2f-1526a8e52806`
+passed deployment smokes after removal. No production deployment or device
+flash occurred.
+
 ## Reproduce
 
 From `apps/os`, with the current voice source installed in a disposable
