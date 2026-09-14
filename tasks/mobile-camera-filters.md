@@ -17,8 +17,10 @@ High-level status: seven filters and project-authored filters are implemented;
 main is merged. The September 14 review fixes preserve project-filter state,
 validate settings, stop stale camera acquisitions, preserve photo-only
 permission mode, and make capture saving/cancellation safe. Regression tests
-pass locally. Current-build iPhone recording verification remains; playback
-controls and lazy asset hosting are separate recommendations under discussion.
+pass locally. Filter data is now hosted on mobile.iterate.com with lazy loading
+and retry; the DOM bundle is ~849 KB (down from 20.7 MB). Native video controls
+are restored with Save/Close above the player. Current-build iPhone capture,
+playback, and camera-roll save verification remains.
 
 ## Why this shape (assumptions made while AFK)
 
@@ -72,6 +74,14 @@ controls and lazy asset hosting are separate recommendations under discussion.
 - [x] Photo capture with filter baked in → `ComposerAttachment` (photo)
 - [x] Video capture with filter baked in (incl. mic audio) →
       `ComposerAttachment` (video, mp4)
+- [x] Host filter data on mobile.iterate.com, keeping JavaScript bundled _218
+      content-hashed files in the existing mobile website R2 bucket; generators
+      emit URLs, deploy uploads first; `docs/filter-assets.md` documents upkeep._
+- [x] Show loading and retry, keeping ordinary capture calls usable _DOM camera
+      tracks only current-frame images; shutter waits; pending video starts can
+      be canceled before assets finish._
+- [x] Restore native video controls and keep Save _`video-attachment.tsx` uses
+      native play/pause/scrubbing with a separate Save/Close toolbar._
 - [ ] Human test on a real phone (Misha)
 
 ## Out of scope / follow-ups
@@ -401,3 +411,29 @@ MediaRecorder mechanisms, both hardened:
 
 Playback controls and remote assets were requested as recommendations only in
 this follow-up; those behaviors remain unchanged.
+
+
+### September 14: remote assets and native playback
+
+- Moved the existing 216 images and two gzipped tracker binaries losslessly
+  to `website/filter-assets/`; the JavaScript loader stays bundled. No new
+  dependencies and no OS backend changes. Versioned URLs survive future
+  releases; published R2 objects are never deleted by deployment.
+- Website deployment `a9853b1c-eebe-4356-8da8-db5cf67b41c1` is live. The remote
+  Cloudflare preview loaded the actual WASM/model and served correct bytes;
+  production verification compared all 218 objects (14,931,092 bytes) and CORS/
+  cache headers. The 10:31–10:33 UTC production trace sample had 220 successful
+  requests/R2 reads, 441 spans with all parents present, and no worker failures.
+  Example trace: https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/observability/traces/d14de388327c843051ebb2ff80bfd17d
+- Playwriter headless smoke mounted the real DOM component with synthetic
+  camera input: tracker loaded from the hosted binaries; remote animal art
+  survived JPEG capture; forced image 503 → Retry → loading → capture worked
+  through ordinary UI actions. A captured browser video decoded successfully.
+  No existing browser spec needed waits or other accommodations.
+- Mobile regression tests cover waiting on lazy images, isolating a failed
+  filter, and canceling a video start during loading, alongside the earlier
+  state/permissions/capture fixes. Website tests use Wrangler's local R2
+  runtime for CORS, caching, conditional/HEAD requests, and private-key isolation.
+- First use now needs a network connection (~6.6 MB for tracking plus selected
+  artwork). HTTP caching helps reuse; persistent offline availability is not
+  promised. Real iPhone/WebKit video and Photos checks remain manual.

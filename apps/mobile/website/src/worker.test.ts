@@ -1,5 +1,39 @@
 import { expect, test } from "vitest";
+import { getPlatformProxy } from "wrangler";
 import worker, { type Env } from "./worker.ts";
+
+test("public filter assets are immutable, canvas-safe, and cannot expose channel state", async () => {
+  const platform = await getPlatformProxy<Env>({ persist: false });
+  await using _cleanup = { [Symbol.asyncDispose]: () => platform.dispose() };
+  const filename = `${"a".repeat(64)}.png`;
+  await platform.env.STATE_BUCKET.put(`filter-assets/${filename}`, new Uint8Array([1, 2, 3]));
+  await platform.env.STATE_BUCKET.put("channel-status/private", "private state");
+  const request = (path: string, init?: RequestInit) =>
+    worker.fetch(new Request(`https://mobile.iterate.com${path}`, init), platform.env);
+  const response = await request(`/filter-assets/${filename}`, { headers: { origin: "null" } });
+  expect(response.status).toBe(200);
+  expect(Object.fromEntries(response.headers)).toMatchObject({
+    "access-control-allow-origin": "*",
+    "cache-control": "public, max-age=31536000, immutable",
+    "content-type": "image/png",
+  });
+  expect([...new Uint8Array(await response.arrayBuffer())]).toEqual([1, 2, 3]);
+  const head = await request(`/filter-assets/${filename}`, { method: "HEAD" });
+  expect(head.status).toBe(200);
+  expect(await head.text()).toBe("");
+  const conditional = await request(`/filter-assets/${filename}`, {
+    headers: { "if-none-match": response.headers.get("etag")! },
+  });
+  expect(conditional.status).toBe(304);
+  const missing = await request(`/filter-assets/${"b".repeat(64)}.png`);
+  expect(missing.status).toBe(404);
+  expect(missing.headers.get("cache-control")).toBe("no-store");
+  expect(
+    (await request(`/filter-assets/${filename}`, { method: "PUT", body: "replace" })).status,
+  ).toBe(405);
+  expect((await request("/filter-assets/channel-status/private")).status).toBe(404);
+  expect((await request(`/filter-assets/${"a".repeat(64)}.js`)).status).toBe(404);
+});
 
 test("serves the apple-app-site-association for universal links, both paths", async () => {
   for (const path of ["/.well-known/apple-app-site-association", "/apple-app-site-association"]) {

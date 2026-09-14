@@ -1,7 +1,6 @@
 // Filter metadata that is safe to import from the NATIVE bundle: the ✨
 // picker needs ids, labels and chip emoji — and must not pull in the draw
-// functions, which carry megabytes of generated image/wasm data that belongs
-// only in the filter-camera DOM (WebView) bundle. definitions.ts asserts
+// functions or MediaPipe runtime from the filter-camera DOM (WebView) bundle. definitions.ts asserts
 // every picker id has a drawer.
 
 export const FILTER_PICKER = [

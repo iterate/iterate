@@ -1,6 +1,83 @@
 import { expect, test } from "vitest";
 import FilterCamera from "./filter-camera.tsx";
 
+test("capture waits for the active filter's image, then uses it without a second shutter press", async () => {
+  using camera = filterCamera({
+    source: `({label: "Image", emoji: "I", draw({ctx, helpers}) {
+    const image = helpers.cachedImage("capture-test", "https://mobile.iterate.com/filter-assets/test.png");
+    if (image) ctx.drawImage(image, 0, 0);
+  }})`,
+  });
+  camera.update({ facing: "back" });
+  camera.requests[0].resolve(mediaStream());
+  await camera.settle();
+  expect(camera.instance.state).toMatchObject({ assetsLoading: true });
+  expect(camera.images).toHaveLength(1);
+  expect(camera.images[0].crossOrigin).toBe("anonymous");
+  camera.update({ command: { seq: 1, type: "snap" } });
+  await camera.settle();
+  expect(camera.photos).toHaveLength(0);
+  camera.images[0].naturalWidth = 100;
+  camera.images[0].complete = true;
+  camera.images[0].onload();
+  await camera.settle();
+  expect(camera.instance.state).toMatchObject({ assetsLoading: false });
+  expect(camera.photos).toHaveLength(1);
+  expect(camera.drawnImages).toContain(camera.images[0]);
+  expect(camera.errors).toEqual([]);
+});
+
+test("a failed image gives an actionable error and does not block an unrelated filter", async () => {
+  using camera = filterCamera({
+    source: `({label: "Image", emoji: "I", draw({helpers}) {
+    helpers.cachedImage("failed-test", "https://mobile.iterate.com/filter-assets/failed.png");
+  }})`,
+  });
+  camera.update({ facing: "back" });
+  camera.requests[0].resolve(mediaStream());
+  await camera.settle();
+  camera.images[0].onerror();
+  camera.tick();
+  expect(camera.instance.state).toMatchObject({
+    assetsLoading: false,
+    assetError: "Could not load image: failed-test",
+  });
+  camera.update({ command: { seq: 1, type: "snap" } });
+  await camera.settle();
+  expect(camera.photos).toHaveLength(0);
+  expect(camera.errors).toEqual(["Could not load image: failed-test"]);
+  camera.update({
+    dynamicFilters: [
+      { id: camera.instance.props.filterId, source: '({label: "Plain", emoji: "P", draw() {}})' },
+    ],
+  });
+  camera.update({ command: { seq: 2, type: "snap" } });
+  await camera.settle();
+  expect(camera.instance.state).toMatchObject({ assetsLoading: false, assetError: null });
+  expect(camera.photos).toHaveLength(1);
+});
+
+test("stopping while video assets load cancels the pending start", async () => {
+  using camera = filterCamera({
+    source: `({label: "Image", emoji: "I", draw({helpers}) {
+    helpers.cachedImage("stop-test", "https://mobile.iterate.com/filter-assets/stop.png");
+  }})`,
+  });
+  camera.update({ facing: "back" });
+  camera.requests[0].resolve(mediaStream());
+  await camera.settle();
+  camera.update({ command: { seq: 1, type: "start-recording" } });
+  await camera.settle();
+  camera.update({ command: { seq: 2, type: "stop-recording" } });
+  await camera.settle();
+  expect(camera.errors).toEqual(["Recording canceled while the filter was loading"]);
+  camera.images[0].naturalWidth = 100;
+  camera.images[0].onload();
+  await camera.settle();
+  expect(camera.errors).toHaveLength(1);
+  expect(camera.instance.state).toMatchObject({ recording: false });
+});
+
 test("a project filter keeps its method state while the native recording clock updates", async () => {
   using camera = filterCamera({
     source: `({ label: "Counter", emoji: "🧮", draw({ctx}) {
@@ -92,9 +169,12 @@ function filterCamera({ source }: { source: string }) {
   }[] = [];
   const drawnText: string[] = [];
   const errors: string[] = [];
+  const images: any[] = [];
+  const photos: any[] = [];
+  const drawnImages: any[] = [];
   const ctx = {
     setTransform() {},
-    drawImage() {},
+    drawImage: (image: any) => drawnImages.push(image),
     fillText: (text: string) => drawnText.push(text),
   };
   const video = {
@@ -106,6 +186,20 @@ function filterCamera({ source }: { source: string }) {
   };
   let tick = () => {};
   const globals = {
+    Image: class {
+      complete = false;
+      naturalWidth = 0;
+      constructor() {
+        images.push(this);
+      }
+    },
+    FileReader: class {
+      result = "data:image/jpeg;base64,AQID";
+      onload = () => {};
+      readAsDataURL() {
+        this.onload();
+      }
+    },
     document: {
       createElement: (tag: string) => (tag === "video" ? video : { getContext: () => ctx }),
     },
@@ -131,7 +225,9 @@ function filterCamera({ source }: { source: string }) {
     filterId: "project:/repos/notes:counter",
     dynamicFilters: [{ id: "project:/repos/notes:counter", source }],
     command: null,
-    onPhoto: async () => {},
+    onPhoto: async (photo) => {
+      photos.push(photo);
+    },
     onVideo: async () => {},
     onCaptureError: async (message: string) => {
       errors.push(message);
@@ -141,7 +237,12 @@ function filterCamera({ source }: { source: string }) {
   // updates here without requiring a DOM renderer for the controlled canvas.
   instance.setState = (update: any) => Object.assign(instance.state, update);
   instance.forceUpdate = () => {};
-  const canvas = { width: 400, height: 800, getContext: () => ctx };
+  const canvas = {
+    width: 400,
+    height: 800,
+    getContext: () => ctx,
+    toBlob: (callback: any) => callback(new Blob([new Uint8Array([1, 2, 3])])),
+  };
   const rendered: any = instance.render();
   rendered.props.children[1].props.ref(canvas);
   return {
@@ -149,6 +250,9 @@ function filterCamera({ source }: { source: string }) {
     requests,
     drawnText,
     errors,
+    images,
+    photos,
+    drawnImages,
     video,
     tick: () => tick(),
     update(props: Partial<FilterCamera["props"]>) {

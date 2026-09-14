@@ -4,17 +4,16 @@
 // filters from userland streams through this same interface.
 //
 // ONLY import this module from the filter-camera DOM component (and its
-// test harness): the generated image imports below are megabytes that must
-// not ride into the native Hermes bundle. The native picker reads picker.ts.
+// test harness): keep the canvas runtime out of the native Hermes bundle. The native picker reads picker.ts.
 //
 // Backdrops and flashcard pictures are AI-generated or stock images (the
-// scripts/generate-*.mjs scripts, committed as data URIs); face art is
-// emoji. The "real eyes and lips" effect samples the live video through
+// scripts/generate-filters.ts script, hosted on mobile.iterate.com). The "real eyes and lips" effect samples the live video through
 // cutouts whose shape IS your tracked feature's landmark ring (feathered,
 // user-adjustable looseness) — drawn in place (a mask following your face),
 // remapped onto a character (the buried potato), or pinned to a screen
 // region (the flashcards keep your face in the top half).
 
+import { cachedImage } from "./images.ts";
 import { ANIMAL_ANCHORS, type AnimalAnchors } from "./animal-anchors.generated.ts";
 import { ANIMAL_FACE_IMAGES } from "./animal-faces.generated.ts";
 import { FILTER_BACKDROPS } from "./backdrops.generated.ts";
@@ -1315,21 +1314,6 @@ export const FILTER_ACTIONS: Record<string, { id: string; label: string }[]> = {
     { id: "reroll", label: "🎲 reseed" },
   ],
 };
-
-// Data-URI images decode lazily; cached across frames. Returns null for the
-// first frame or two while the image decodes (callers draw without it).
-const imageCache = new Map<string, HTMLImageElement>();
-
-function cachedImage(key: string, dataUri: string | undefined): HTMLImageElement | null {
-  if (!dataUri) return null;
-  let image = imageCache.get(key);
-  if (!image) {
-    image = new Image();
-    image.src = dataUri;
-    imageCache.set(key, image);
-  }
-  return image.complete && image.naturalWidth ? image : null;
-}
 
 function drawBackdrop(args: FilterFrameArgs, id: string) {
   const { ctx, width, height } = args;

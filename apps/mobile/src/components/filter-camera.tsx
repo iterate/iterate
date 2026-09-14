@@ -3,7 +3,7 @@
 // The live filter pipeline, hosted in a WebView as an Expo DOM component
 // (same pattern as code-editor.tsx). getUserMedia → hidden <video> → canvas
 // draw loop, with MediaPipe FaceLandmarker (Apache-2.0, loaded from the
-// jsdelivr CDN at runtime) supplying face geometry. The native side drives
+// bundled JavaScript plus mobile.iterate.com assets) supplying face geometry. The native side drives
 // captures through the marshaled `command` prop; captured bytes go back as
 // base64 through the async result props.
 //
@@ -15,8 +15,8 @@ import { Component } from "react";
 import { FaceLandmarker } from "@mediapipe/tasks-vision";
 import { base64ToUint8Array } from "../lib/encoding.ts";
 import {
-  FACE_LANDMARKER_MODEL_GZ,
-  MEDIAPIPE_WASM_GZ,
+  FACE_LANDMARKER_MODEL_GZ_URL,
+  MEDIAPIPE_WASM_GZ_URL,
   MEDIAPIPE_WASM_LOADER_JS_GZ,
 } from "../lib/filters/mediapipe-assets.generated.ts";
 import {
@@ -31,6 +31,7 @@ import {
   type FilterFrameArgs,
   type MaskStretch,
 } from "../lib/filters/definitions.ts";
+import { beginImageFrame, imageFrameState, retryFailedImages } from "../lib/filters/images.ts";
 import { autoCorrelatePitchHz } from "../lib/filters/pitch.ts";
 import {
   coverTransform,
@@ -71,6 +72,8 @@ type State = {
   /** Mirrors #recorder so render() can hide chrome (the mode button) that
    * should not appear in recorded clips' UI. */
   recording: boolean;
+  assetsLoading: boolean;
+  assetError: string | null;
 };
 
 const MASK_STRETCH_KEY = "iterate.filterMaskStretch.v1";
@@ -120,6 +123,8 @@ export default class FilterCamera extends Component<Props, State> {
     adjustLabel: null,
     filterError: null,
     recording: false,
+    assetsLoading: false,
+    assetError: null,
   };
 
   #canvas: HTMLCanvasElement | null = null;
@@ -128,6 +133,14 @@ export default class FilterCamera extends Component<Props, State> {
   #stream: MediaStream | null = null;
   #landmarker: FaceLandmarker | null = null;
   #trackerError: string | null = null;
+  #trackerLoading: Promise<void> | null = null;
+  #assetAbort = new AbortController();
+  #closed = new Promise<void>((resolve) =>
+    this.#assetAbort.signal.addEventListener("abort", () => resolve(), { once: true }),
+  );
+  #frameError: string | null = null;
+  #pendingImages: Promise<void>[] = [];
+  #preparingRecording: number | null = null;
   #raf = 0;
   #disposed = false;
   #cameraRequest = 0;
@@ -182,7 +195,7 @@ export default class FilterCamera extends Component<Props, State> {
     this.#video.playsInline = true;
     this.#video.muted = true;
     void this.#start();
-    void this.#loadFaceTracker();
+    this.#trackerLoading = this.#loadFaceTracker();
   }
 
   componentDidUpdate(previous: Props) {
@@ -208,6 +221,7 @@ export default class FilterCamera extends Component<Props, State> {
 
   componentWillUnmount() {
     this.#disposed = true;
+    this.#assetAbort.abort();
     cancelAnimationFrame(this.#raf);
     void this.#audioContext?.close();
     this.#recorder?.stop();
@@ -275,11 +289,6 @@ export default class FilterCamera extends Component<Props, State> {
     }
   }
 
-  // The whole tracking runtime ships in the app (wasm + model, gzipped in
-  // mediapipe-assets.generated.ts) and is handed to MediaPipe as blob URLs /
-  // bytes: release builds host DOM components on file:// pages, where
-  // cross-origin module imports and fetches are unreliable — an earlier
-  // CDN-loading version of this hung forever on-device.
   #setupPitchAnalysis(stream: MediaStream) {
     try {
       void this.#audioContext?.close();
@@ -304,19 +313,24 @@ export default class FilterCamera extends Component<Props, State> {
   }
 
   async #loadFaceTracker() {
+    this.#trackerError = null;
+    this.forceUpdate();
+    const urls: string[] = [];
     try {
       if (typeof DecompressionStream === "undefined") {
         throw new Error("DecompressionStream unavailable (needs iOS 16.4+)");
       }
       const [loaderJs, wasmBinary, model] = await Promise.all([
         gunzip(MEDIAPIPE_WASM_LOADER_JS_GZ),
-        gunzip(MEDIAPIPE_WASM_GZ),
-        gunzip(FACE_LANDMARKER_MODEL_GZ),
+        fetchGzip(MEDIAPIPE_WASM_GZ_URL, this.#assetAbort.signal),
+        fetchGzip(FACE_LANDMARKER_MODEL_GZ_URL, this.#assetAbort.signal),
       ]);
       const fileset = {
         wasmLoaderPath: URL.createObjectURL(new Blob([loaderJs], { type: "text/javascript" })),
         wasmBinaryPath: URL.createObjectURL(new Blob([wasmBinary], { type: "application/wasm" })),
       };
+      urls.push(fileset.wasmLoaderPath, fileset.wasmBinaryPath);
+      if (this.#disposed) return;
       const create = (delegate: "GPU" | "CPU") =>
         FaceLandmarker.createFromOptions(fileset, {
           baseOptions: { modelAssetBuffer: model, delegate },
@@ -333,16 +347,23 @@ export default class FilterCamera extends Component<Props, State> {
       this.#landmarker = landmarker;
       this.forceUpdate();
     } catch (error) {
+      if (this.#disposed) return;
       // Filters keep running on the fallback face oval; the pill in render()
       // says exactly what broke.
       this.#trackerError = String((error as Error).message || error);
       this.forceUpdate();
+    } finally {
+      for (const url of urls) URL.revokeObjectURL(url);
     }
   }
 
   #loop = () => {
     if (this.#disposed) return;
     this.#raf = requestAnimationFrame(this.#loop);
+    this.#drawFrame();
+  };
+
+  #drawFrame() {
     const canvas = this.#canvas;
     const video = this.#video;
     if (!canvas || video.readyState < 2 || !video.videoWidth) return;
@@ -426,6 +447,8 @@ export default class FilterCamera extends Component<Props, State> {
       adjust: { featureScale: this.#adjust.featureScale, faceScale: this.#adjust.faceScale },
       timeMs: performance.now(),
     });
+    beginImageFrame();
+    this.#frameError = null;
     try {
       this.#draw(args);
       if (this.state.filterError !== null) this.setState({ filterError: null });
@@ -434,10 +457,18 @@ export default class FilterCamera extends Component<Props, State> {
       // show the plain frame plus the error.
       ctx.drawImage(this.#frameCanvas, 0, 0);
       const message = String((error as Error).message || error);
+      this.#frameError = message;
       if (this.state.filterError !== message) this.setState({ filterError: message });
     }
+    const assets = imageFrameState();
+    this.#frameError = this.#frameError || assets.error;
+    this.#pendingImages = assets.pending;
+    const assetsLoading = assets.pending.length > 0;
+    if (this.state.assetsLoading !== assetsLoading || this.state.assetError !== assets.error) {
+      this.setState({ assetsLoading, assetError: assets.error });
+    }
     this.#featureHits = featureHits;
-  };
+  }
 
   /** Invoke project methods with their definition as `this`, so their game
    * state survives frames and bridge updates until the source changes. */
@@ -587,10 +618,35 @@ export default class FilterCamera extends Component<Props, State> {
 
   async #run(command: FilterCameraCommand) {
     try {
+      if (command.type === "start-recording") this.#preparingRecording = command.seq;
+      if (command.type === "stop-recording" && this.#preparingRecording !== null) {
+        this.#preparingRecording = null;
+        await this.props.onCaptureError("Recording canceled while the filter was loading");
+        return;
+      }
+      if (command.type !== "stop-recording") {
+        await Promise.race([this.#trackerLoading, this.#closed]);
+        // The normal shutter action waits for a fully drawn frame. No caller
+        // or browser spec needs a special "wait for filter assets" step.
+        do {
+          if (this.#disposed) return;
+          if (command.type === "start-recording" && this.#preparingRecording !== command.seq)
+            return;
+          this.#drawFrame();
+          if (this.#frameError) throw new Error(this.#frameError);
+          if (!this.#pendingImages.length) break;
+          await Promise.race([Promise.all(this.#pendingImages), this.#closed]);
+        } while (!this.#disposed);
+        if (this.#disposed) return;
+      }
       if (command.type === "snap") await this.#snap();
-      if (command.type === "start-recording") this.#startRecording();
+      if (command.type === "start-recording") {
+        this.#preparingRecording = null;
+        this.#startRecording();
+      }
       if (command.type === "stop-recording") this.#recorder?.stop();
     } catch (error) {
+      if (command.type === "start-recording") this.#preparingRecording = null;
       await this.props.onCaptureError(String((error as Error).message || error));
     }
   }
@@ -786,12 +842,40 @@ export default class FilterCamera extends Component<Props, State> {
         {this.state.status === "starting" ? (
           <div className="pill">Warming up the camera…</div>
         ) : null}
-        {this.state.status === "live" && !trackerLive && this.#trackerError === null ? (
-          <div className="pill">Loading face tracking…</div>
+        {this.state.status === "live" &&
+        !trackerLive &&
+        this.#trackerError === null &&
+        !this.state.assetError ? (
+          <div className="assetStatus" role="status">
+            <span className="spinner" /> Loading face tracking…
+          </div>
+        ) : null}
+        {this.state.assetsLoading &&
+        !this.state.assetError &&
+        (trackerLive || this.#trackerError) ? (
+          <div className="assetStatus" role="status">
+            <span className="spinner" /> Loading filter…
+          </div>
+        ) : null}
+        {this.state.assetError ? (
+          <div className="assetStatus error" role="alert">
+            {this.state.assetError}{" "}
+            <button type="button" onClick={() => retryFailedImages()}>
+              Retry
+            </button>
+          </div>
         ) : null}
         {this.state.status === "live" && this.#trackerError !== null ? (
           <div className="pill error">
             Face tracking failed — using a guessed face. {this.#trackerError}
+            <button
+              type="button"
+              onClick={() => {
+                this.#trackerLoading = this.#loadFaceTracker();
+              }}
+            >
+              Retry tracking
+            </button>
           </div>
         ) : null}
         {this.state.status === "error" ? (
@@ -799,6 +883,28 @@ export default class FilterCamera extends Component<Props, State> {
         ) : null}
       </main>
     );
+  }
+}
+
+async function fetchGzip(url: string, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
+  // AbortSignal.any needs newer Safari than the iOS 16.4 decompressor.
+  const controller = new AbortController();
+  const abort = () => controller.abort(signal.reason);
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) abort();
+  const timer = setTimeout(
+    () => controller.abort(new Error("Filter asset download timed out")),
+    30_000,
+  );
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) throw new Error(`Filter asset request failed (${response.status})`);
+    if (!response.body) throw new Error("Filter asset response was empty");
+    const stream = response.body.pipeThrough(new DecompressionStream("gzip"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", abort);
   }
 }
 
@@ -838,6 +944,9 @@ const styles = `
     border-radius: 999px;
     text-align: center;
   }
+  .assetStatus { position: fixed; top: 20%; left: 50%; transform: translateX(-50%); background: #0b0b0fbf; color: white; padding: 10px 14px; border-radius: 16px; font: 14px -apple-system, sans-serif; text-align: center; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #ffffff50; border-top-color: white; border-radius: 50%; vertical-align: middle; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .pill.error { background: rgba(180, 30, 30, 0.85); }
   /* One horizontal row for every filter setting: mode cyclers, one-shot
      actions, the adjust mode. Fits on a phone; scrolls if a filter ever
