@@ -165,7 +165,7 @@ export type NotesAnalysis = { title: string; tags: string[]; processedBy: string
  * with an in-memory file map and the worker wires it over itx per call. */
 export type NotesWorkspace = {
   readFile(path: string): Promise<string | null>;
-  writeFile(path: string, content: string): Promise<void>;
+  edit(input: { path: string; oldString: string; newString: string }): Promise<unknown>;
   /** Paths dirty in the notes mount (relative to git truth). */
   dirtyNotePaths(): Promise<string[]>;
   commit(input: { message: string; scope: string }): Promise<void>;
@@ -339,13 +339,27 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
     if (currentNote.body !== note.body) {
       return { status: "superseded", reason: "note body changed during analysis" };
     }
-    await this.deps.workspace.writeFile(
-      path,
-      composeNoteFile(
-        { ...currentNote.frontmatter, title: analysis.title, tags: analysis.tags },
-        currentNote.body,
-      ),
-    );
+    // The final read and this write cross an RPC boundary. An unconditional
+    // write can still replace a user's edit committed after the guard read.
+    // Workspace.edit checks the old contents inside its serialized write.
+    try {
+      await this.deps.workspace.edit({
+        path,
+        oldString: current,
+        newString: composeNoteFile(
+          { ...currentNote.frontmatter, title: analysis.title, tags: analysis.tags },
+          currentNote.body,
+        ),
+      });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        /^(Edit oldString was not found in|Workspace file does not exist:)/.test(error.message)
+      ) {
+        return { status: "superseded", reason: "note changed before analysis could be saved" };
+      }
+      throw error;
+    }
     return { status: "succeeded", ...analysis };
   }
 

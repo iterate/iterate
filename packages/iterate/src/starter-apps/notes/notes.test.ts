@@ -29,7 +29,13 @@ function fakeWorkspace() {
   let committed = new Map<string, string>();
   const workspace: NotesWorkspace = {
     readFile: async (path) => (files.has(path) ? files.get(path)! : null),
-    writeFile: async (path, content) => void files.set(path, content),
+    edit: async ({ path, oldString, newString }) => {
+      const content = files.get(path);
+      if (content === undefined) throw new Error(`Workspace file does not exist: "${path}".`);
+      if (!content.includes(oldString))
+        throw new Error(`Edit oldString was not found in "${path}".`);
+      files.set(path, content.replace(oldString, newString));
+    },
     dirtyNotePaths: async () => {
       const dirty = new Set<string>();
       for (const [path, content] of files) {
@@ -120,6 +126,33 @@ test("re-read guard: a body edited mid-analysis settles superseded, file untouch
   });
   expect(h.events("events.iterate.com/notes/analysis-settled")).toMatchObject([
     { payload: { result: { status: "superseded", reason: "note body changed during analysis" } } },
+  ]);
+});
+
+test("an edit after the analysis guard read cannot be overwritten by stale analysis", async () => {
+  const { files, workspace } = fakeWorkspace();
+  const original = composeNoteFile({}, "76cm felt right");
+  const edited = composeNoteFile({}, "76cm — confirmed at home");
+  files.set(NOTE_PATH, original);
+  let reads = 0;
+  const readFile = workspace.readFile;
+  workspace.readFile = async (path) => {
+    const snapshot = await readFile(path);
+    if (++reads === 2) {
+      // The guard read is already answered on the server. A user's save wins
+      // before that RPC answer gets back to the analysis processor.
+      files.set(NOTE_PATH, edited);
+    }
+    return snapshot;
+  };
+  const h = makeNotesHarness({
+    workspace,
+    analyze: async () => ({ title: "Old analysis", tags: [], processedBy: "fake" }),
+  });
+  await h.append(captured(NOTE_PATH));
+  expect(files.get(NOTE_PATH)).toBe(edited);
+  expect(h.events("events.iterate.com/notes/analysis-settled")).toMatchObject([
+    { payload: { result: { status: "superseded" } } },
   ]);
 });
 
@@ -274,7 +307,7 @@ test("replay: a fresh instance re-executes no analysis, no writes, no commits", 
     },
     workspace: {
       readFile: workspace.readFile,
-      writeFile: async () => {
+      edit: async () => {
         throw new Error("replay must not write files");
       },
       dirtyNotePaths: async () => [],

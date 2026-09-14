@@ -34,9 +34,9 @@ export class NotesApp extends StreamProcessorDurableObject<NotesState> {
           using project = await this.env.ITX.get();
           return await project.workspaces.get(notesWorkspacePath).readFile(path);
         },
-        writeFile: async (path, content) => {
+        edit: async (input) => {
           using project = await this.env.ITX.get();
-          await project.workspaces.get(notesWorkspacePath).writeFile(path, content);
+          return await project.workspaces.get(notesWorkspacePath).edit(input);
         },
         dirtyNotePaths: async () => {
           using project = await this.env.ITX.get();
