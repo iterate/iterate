@@ -1,24 +1,30 @@
-// repos.ts — THE PROJECT'S REPOS: the Artifacts binding, a repo's files by path. Two roots, one prefix:
+// repos.ts — THE PROJECT'S REPOS, the PHYSICAL half: the Artifacts binding and git-over-HTTPS. Two
+// roots, one prefix:
 //   • `itx.cfArtifacts` (`projectScopedArtifacts`) — the RAW Cloudflare Artifacts binding, project-
 //     scoped and shaped like the real binding: the control-plane escape hatch (create / get / list /
 //     delete a repo; a repo's bytes are git-over-HTTPS, below);
-//   • `itx.repos` (`projectScopedRepos`) — the git-backed layer built ON TOP of it + the git wire
+//   • `itx.git` (`projectScopedGit`) — the stateless git layer built ON TOP of it + the git wire
 //     section below (`createGitWireTransport`, the copied git-over-HTTPS engine): a repo's files on
 //     `main`, by repo-relative path —
-//       list()                                  — this project's repos;
-//       readFile(repo, path)                    — the tip's tree → the path's blob (the `itx.worker` source producer);
+//       list()                                  — this project's repos in the namespace;
+//       create(repo)                            — the Artifacts repo, `main` unborn;
+//       tip(repo)                               — `main`'s tip, one ls-refs;
+//       snapshot(repo)                          — the tip's every file, one shallow fetch;
+//       readFile(repo, path)                    — the tip's tree → the path's blob;
 //       listFiles(repo)                         — every path at the tip;
 //       commitFiles(repo, { message, changes }) — ONE commit on `main` (the repo created on first write);
 //       writeFile(repo, path, content)          — commitFiles for one file;
 //       log(repo, { limit? })                   — the newest commits.
+//   The DOMAIN half — `itx.repos.get(name)`, a repo as a stream on `/repos/<name>` with its birth
+//   certificate, its commit facts and the tip CACHE — is the repo facet (src/repo/), a library root
+//   (library.ts) over this adapter.
 //
-// SCOPE of `itx.repos`, deliberately small: branch `main` only; a read is ONE shallow fetch of the
-// whole tip (`deepen: 1` — no object cache, so every call fetches the tip's pack: fine for a
-// config-sized repo, the cache is the next step); a commit is compare-and-swapped on the tip (a
-// concurrent push refuses it — no merge); text content only. Both roots address the very same repos
-// under the ONE `${projectId}.` name prefix (`ArtifactsScope` says why `.`); the remote is built from
-// the account + namespace vars, and Artifacts hands the same URL back from `create`, so the two
-// always agree.
+// SCOPE of `itx.git`, deliberately small: branch `main` only; stateless — a read is ONE shallow fetch
+// of the whole tip (`deepen: 1`; the repo facet is what caches it); a commit is compare-and-swapped
+// on the tip (a concurrent push refuses it — no merge); text content only. Both roots address the
+// very same repos under the ONE `${projectId}.` name prefix (`ArtifactsScope` says why `.`); the
+// remote is built from the account + namespace vars, and Artifacts hands the same URL back from
+// `create`, so the two always agree.
 
 import { RpcTarget } from "capnweb";
 import { deflate, Inflate } from "pako";
@@ -110,7 +116,7 @@ export function projectScopedArtifacts(
   };
 }
 
-// ── `itx.repos` — a repo's files, over git-wire ──
+// ── `itx.git` — a repo's files, over git-wire ──
 
 const REF = "refs/heads/main";
 const ZERO_OID = "0".repeat(40);
@@ -137,10 +143,17 @@ export type RepoLogEntry = {
   parents: string[];
 };
 
-/** `itx.repos` — a project's git repos on `main`, by file. Data in, data out (no handles cross /api). */
-export interface ReposScope {
-  /** Every repo of this project (the Artifacts namespace, filtered to the project's prefix). */
+/** `itx.git` — a project's git repos on `main`, by file. Data in, data out (no handles cross /api). */
+export interface GitScope {
+  /** Every repo of this project in the Artifacts namespace (its prefix), born or not. */
   list(): Promise<string[]>;
+  /** The Artifacts repo, `main` unborn until the first commit; false when it already existed. */
+  create(repo: string): Promise<{ created: boolean }>;
+  /** `main`'s tip — one ls-refs; null when there is no such repo or `main` is unborn. */
+  tip(repo: string): Promise<string | null>;
+  /** The tip's every file as text, one shallow fetch (a submodule pointer has no text and is left
+   *  out); null when there is no such repo or `main` is unborn. */
+  snapshot(repo: string): Promise<{ commitOid: string; files: Record<string, string> } | null>;
   /** The text of `path` (repo-relative, nested) at the tip of `main` — null when there is no such
    *  repo, `main` is unborn, or the file is absent. */
   readFile(repo: string, path: string): Promise<string | null>;
@@ -180,7 +193,7 @@ export function manifestOf(
     if (entry.mode === "40000") {
       const tree = objects.get(entry.oid);
       if (tree?.type !== "tree")
-        throw new Error(`itx.repos: the pack omitted the tree ${entry.oid} (${path}/)`);
+        throw new Error(`itx.git: the pack omitted the tree ${entry.oid} (${path}/)`);
       for (const [nested, nestedEntry] of manifestOf(parseTree(tree.payload), objects, `${path}/`))
         manifest.set(nested, nestedEntry);
     } else manifest.set(path, { oid: entry.oid, mode: entry.mode });
@@ -260,22 +273,22 @@ export function parseCommit(payload: Uint8Array): {
       }
     }
   }
-  if (!tree) throw new Error("itx.repos: a commit without a tree header");
+  if (!tree) throw new Error("itx.git: a commit without a tree header");
   return { tree, parents, author, timestamp, message };
 }
 
-export function projectScopedRepos(input: {
+export function projectScopedGit(input: {
   namespace: ArtifactsNamespace;
   projectId: string;
   accountId: string;
   namespaceName: string;
-}): ReposScope {
+}): GitScope {
   const prefix = `${input.projectId}.`;
   const artifacts = projectScopedArtifacts(input.namespace, input.projectId);
 
   /** A repo-relative path, `notes/log.md`: no leading slash, no empty, `.` or `..` segment. */
   const repoPath = (path: string): string => {
-    const refusal = `itx.repos: not a repo-relative path (${JSON.stringify(path)})`;
+    const refusal = `itx.git: not a repo-relative path (${JSON.stringify(path)})`;
     // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of a wire-fed argument (its static type is a claim, not a guarantee, across the capability boundary)
     if (typeof path !== "string") throw new Error(refusal);
     if (path.split("/").some((s) => s === "" || s === "." || s === "..")) throw new Error(refusal);
@@ -325,10 +338,10 @@ export function projectScopedRepos(input: {
     );
     const commit = objects.get(tip);
     if (commit?.type !== "commit")
-      throw new Error(`itx.repos: the pack omitted the tip commit ${tip} of ${REF}`);
+      throw new Error(`itx.git: the pack omitted the tip commit ${tip} of ${REF}`);
     const tree = objects.get(parseCommit(commit.payload).tree);
     if (tree?.type !== "tree")
-      throw new Error(`itx.repos: the pack omitted the tree of the tip commit ${tip}`);
+      throw new Error(`itx.git: the pack omitted the tree of the tip commit ${tip}`);
     return { manifest: manifestOf(parseTree(tree.payload), objects), objects };
   };
 
@@ -341,10 +354,9 @@ export function projectScopedRepos(input: {
     return { tip, ...(await tipSnapshot(transport, tip)) };
   };
 
-  const commitFiles: ReposScope["commitFiles"] = async (repo, { message, changes, author }) => {
-    if (!message.trim())
-      throw new Error("itx.repos.commitFiles: message must be a non-empty string");
-    if (changes.length === 0) throw new Error("itx.repos.commitFiles: changes must name a file");
+  const commitFiles: GitScope["commitFiles"] = async (repo, { message, changes, author }) => {
+    if (!message.trim()) throw new Error("itx.git.commitFiles: message must be a non-empty string");
+    if (changes.length === 0) throw new Error("itx.git.commitFiles: changes must name a file");
     const transport = await transportFor(repo, "write");
     const tip = await transport.tipOf(REF);
     // The tip's snapshot, or an unborn repo's empty one. (A tip whose commit or tree the pack omits
@@ -370,7 +382,7 @@ export function projectScopedRepos(input: {
       // A file is never written where a directory is, nor under a file.
       for (const existing of manifest.keys())
         if (existing.startsWith(`${path}/`) || path.startsWith(`${existing}/`))
-          throw new Error(`itx.repos.commitFiles: "${path}" collides with "${existing}"`);
+          throw new Error(`itx.git.commitFiles: "${path}" collides with "${existing}"`);
       const blob = textEncoder.encode(change.content);
       const oid = await hashObject("blob", blob);
       const current = manifest.get(path);
@@ -399,8 +411,7 @@ export function projectScopedRepos(input: {
       ref: REF,
     });
     // oxlint-disable-next-line iterate/simple-truthiness-check -- push() returns null only on success; an empty-string refusal reason (an `ng <ref>` line with no message) is still a refusal and must throw
-    if (refused !== null)
-      throw new Error(`itx.repos: the commit to ${repo} was refused: ${refused}`);
+    if (refused !== null) throw new Error(`itx.git: the commit to ${repo} was refused: ${refused}`);
     return { commitOid, changedPaths };
   };
 
@@ -416,6 +427,34 @@ export function projectScopedRepos(input: {
       }
     },
 
+    create: async (repo) => {
+      if (await readTransport(repo)) return { created: false };
+      await input.namespace.create(prefix + repo);
+      return { created: true };
+    },
+
+    tip: async (repo) => {
+      const transport = await readTransport(repo);
+      if (!transport) return null;
+      return (await transport.tipOf(REF)) || null;
+    },
+
+    snapshot: async (repo) => {
+      const snapshot = await readSnapshot(repo);
+      if (!snapshot) return null;
+      const files: Record<string, string> = {};
+      for (const [path, entry] of snapshot.manifest) {
+        if (entry.mode === "160000") continue;
+        const blob = snapshot.objects.get(entry.oid);
+        if (blob?.type !== "blob")
+          throw new Error(
+            `itx.git: the pack for ${repo} omitted the blob of ${path} (${entry.oid})`,
+          );
+        files[path] = textDecoder.decode(blob.payload);
+      }
+      return { commitOid: snapshot.tip, files };
+    },
+
     readFile: async (repo, path) => {
       const name = repoPath(path);
       const snapshot = await readSnapshot(repo);
@@ -423,9 +462,7 @@ export function projectScopedRepos(input: {
       if (!snapshot || !entry || entry.mode === "160000") return null; // no repo, unborn, absent — or a submodule pointer, which has no blob
       const blob = snapshot.objects.get(entry.oid);
       if (blob?.type !== "blob")
-        throw new Error(
-          `itx.repos: the pack for ${repo} omitted the blob of ${name} (${entry.oid})`,
-        );
+        throw new Error(`itx.git: the pack for ${repo} omitted the blob of ${name} (${entry.oid})`);
       return textDecoder.decode(blob.payload);
     },
 
@@ -439,12 +476,12 @@ export function projectScopedRepos(input: {
     commitFiles,
 
     writeFile: (repo, path, content) =>
-      commitFiles(repo, { message: `itx.repos: write ${path}`, changes: [{ path, content }] }),
+      commitFiles(repo, { message: `itx.git: write ${path}`, changes: [{ path, content }] }),
 
     log: async (repo, options = {}) => {
       const limit = options.limit ?? 20;
       if (!Number.isInteger(limit) || limit < 1)
-        throw new Error(`itx.repos.log: limit must be a positive integer (got ${String(limit)})`);
+        throw new Error(`itx.git.log: limit must be a positive integer (got ${String(limit)})`);
       const transport = await readTransport(repo);
       if (!transport) return [];
       const tip = await transport.tipOf(REF);

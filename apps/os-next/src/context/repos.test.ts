@@ -1,5 +1,5 @@
 // context/repos.test.ts — the repos' unit pins: `itx.cfArtifacts` (the raw binding, project-scoped,
-// pure over an injected namespace) and the git wire's one refusal that matters to `itx.repos`.
+// pure over an injected namespace) and the git wire's one refusal that matters to `itx.git`.
 
 import { describe, expect, test, afterEach, vi } from "vitest";
 import {
@@ -95,7 +95,7 @@ test("the '.' delimiter is collision-free for hyphenated project IDs; list filte
   expect((await ab.list()).repos.map((r) => r.name)).toEqual(["secret"]);
 });
 
-// ── git wire ── the wire's one refusal that matters to `itx.repos`: a TRUNCATED pkt-line body is
+// ── git wire ── the wire's one refusal that matters to `itx.git`: a TRUNCATED pkt-line body is
 // an outage, never an empty ref list (an empty list reads as "unborn repo" → "no file", which would
 // silently blank the config worker's source).
 
@@ -115,7 +115,7 @@ test("a pkt-line body cut mid-header rejects instead of yielding an empty ref li
 // author iterate <config@iterate.com>, 1700000000 +0000, message "first"), so `commitFiles`'s
 // nested-directory encoding — entry order, the directory mode, the commit header — is pinned to git.
 
-describe("itx.repos' tree codec against git's ids", () => {
+describe("itx.git's tree codec against git's ids", () => {
   const manifest: RepoManifest = new Map([
     ["a.txt", { oid: "ce013625030ba8dba906f756967f9e9ca394464a", mode: "100644" }],
     ["dir/b.txt", { oid: "cc628ccd10742baea8241c5924df992b5c019f71", mode: "100644" }],

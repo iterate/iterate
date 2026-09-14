@@ -113,7 +113,7 @@
     "APP_CONFIG_MCP_ORIGIN": "https://mcp.iterate2.com",
     "APP_CONFIG_PROJECT_HOSTNAME_BASE": "project-worker.iterate.com",
     // The Artifacts git remote is `https://<ACCOUNT_ID>.artifacts.cloudflare.net/git/<NAMESPACE>/<repo>.git`
-    // — the `itx.repos` layer builds it from these when it does git over HTTPS.
+    // — the `itx.git` layer builds it from these when it does git over HTTPS.
     "APP_CONFIG_ARTIFACTS_ACCOUNT_ID": "04b3b57291ef2626c6a8daa9d47065a7",
     "APP_CONFIG_ARTIFACTS_NAMESPACE": "project-worker-repos",
   },

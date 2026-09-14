@@ -1,17 +1,20 @@
 // src/workspace/durable-object.ts — THE WORKSPACE: the facet any context hosts under the name
 // `workspace` (`itx.workspaces.get(path)`, library.ts — at most one per path, nothing appended to
 // get it). ONE private overlay over a table of REPO MOUNTS: a read tries the overlay, then falls
-// through to the mounted repo's `main` at its tip (`itx.repos`); a write shadows the repo's file
-// until `gitCommit` lands ONE mount's changes as one commit on that repo's `main` and clears them; a
-// delete of a repo file is a WHITEOUT until then. Mounts are DERIVED — every project repo at
+// through to the mounted repo's `main` at its tip (the repo facet, `itx.repos.get(name)` — its tip
+// cache, shared by every workspace of the project); a write shadows the repo's file until
+// `gitCommit` lands ONE mount's changes as one commit on that repo's `main` and clears them; a delete
+// of a repo file is a WHITEOUT until then. Mounts are DERIVED — every repo in the project catalog at
 // `/repos/<name>` (`itx.repos.list()`) — plus what `configure` adds, the reduce in processor.ts
 // folding `workspace/configured` into the view. A path under no mount is the workspace's own scratch
-// (`/workspace/…` by convention): writable, never committed.
+// (`/workspace/…` by convention): writable, never committed. On first use the workspace appends its
+// birth certificate (`workspace/created { path }`) on its own path and cross-posts it to `/`, where
+// the project processor keeps the catalog `itx.workspaces.list()` reads.
 //
 // Storage is this facet's own SQLite: `files` (the overlay) and `whiteouts`. Text only, one file at
-// most a mebibyte (a SQLite value holds 2 MB). ONE writer, no collab, no policies, no catalog. The
-// repo tier is reached as `itx.repos` through the context's rules, so a test lends a fake
-// (`provide("itx.repos", …)`, e2e/workspaces.e2e.test.ts) exactly as it fakes `itx.ai`.
+// most a mebibyte (a SQLite value holds 2 MB). ONE writer, no collab, no policies. The repo facets
+// reach git as `itx.git` through THEIR context's rules, so a test lends a fake there
+// (`provide("itx.git", …)` on `/repos/<name>`, e2e/workspaces.e2e.test.ts) exactly as it fakes `itx.ai`.
 //
 // THE SINGLE SOURCE: build-sdk.mjs bundles THIS module — pulling `WorkspaceProcessor` from
 // ./processor.ts (the tested spec) — into the generated WORKSPACE_PROCESSOR_SOURCE string, the SDK
@@ -103,16 +106,38 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
     this.#sql.exec("DELETE FROM whiteouts WHERE path = ?", path);
   }
 
+  // ── birth ──
+
+  #born = false;
+  /** The birth certificate, once: on this workspace's own path and cross-posted to `/` — the SAME
+   *  event under the SAME idempotency key, so a workspace at `/` itself would carry it once. */
+  async #ensureBorn(state: WorkspaceView): Promise<void> {
+    if (this.#born) return;
+    if (!state.created) {
+      const { path } = await this.withItx((itx) => itx.whoami());
+      const birth = {
+        type: "events.iterate.com/workspace/created",
+        payload: { path },
+        idempotencyKey: `workspace/created:${path}`,
+      };
+      await this.withItx((itx) => itx.append(birth));
+      await this.withItx((itx) => itx.cd("/").append(birth));
+    }
+    this.#born = true;
+  }
+
   // ── the mount table ──
 
-  /** The EFFECTIVE mounts: every project repo at `/repos/<name>` (derived), the configured ones over them. */
+  /** The EFFECTIVE mounts: every repo in the project catalog at `/repos/<name>` (derived), the
+   *  configured ones over them. Every method starts here, so the first use is the birth. */
   async mounts(): Promise<Record<string, WorkspaceMount>> {
     const [repos, { state }] = await Promise.all([
       this.withItx((itx) => itx.repos.list()),
       this.snapshot(),
     ]);
+    await this.#ensureBorn(state);
     const mounts: Record<string, WorkspaceMount> = {};
-    for (const repo of repos) mounts[`/repos/${repo}`] = { repo };
+    for (const { name } of repos) mounts[`/repos/${name}`] = { repo: name };
     return { ...mounts, ...state.mounts };
   }
 
@@ -153,7 +178,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
   async #readMounted(path: string, mounts: Record<string, WorkspaceMount>): Promise<string | null> {
     const route = routeMount(mounts, path);
     if (!route) return null;
-    return this.withItx((itx) => itx.repos.readFile(route.repo, route.relativePath));
+    return this.withItx((itx) => itx.repos.get(route.repo).readFile(route.relativePath));
   }
 
   /** Write into the overlay (an empty string is a file); a whiteout at the path is lifted. */
@@ -183,7 +208,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
     const route = routeMount(await this.mounts(), resolved);
     const mounted =
       !!route &&
-      (await this.withItx((itx) => itx.repos.listFiles(route.repo))).paths.includes(
+      (await this.withItx((itx) => itx.repos.get(route.repo).listFiles())).paths.includes(
         route.relativePath,
       );
     if (mounted) this.#sql.exec("INSERT OR IGNORE INTO whiteouts (path) VALUES (?)", resolved);
@@ -204,7 +229,8 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
     const paths = new Set(this.#overlayRows().map((row) => row.path));
     await Promise.all(
       Object.entries(mounts).map(async ([mountPath, { repo }]) => {
-        for (const relativePath of (await this.withItx((itx) => itx.repos.listFiles(repo))).paths) {
+        for (const relativePath of (await this.withItx((itx) => itx.repos.get(repo).listFiles()))
+          .paths) {
           const path = `${mountPath}/${relativePath}`;
           if (!whiteouts.has(path) && routeMount(mounts, path)?.mountPath === mountPath)
             paths.add(path);
@@ -243,7 +269,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
       }
       let tip = tipPaths.get(route.mountPath);
       if (!tip) {
-        tip = new Set((await this.withItx((itx) => itx.repos.listFiles(route.repo))).paths);
+        tip = new Set((await this.withItx((itx) => itx.repos.get(route.repo).listFiles())).paths);
         tipPaths.set(route.mountPath, tip);
       }
       byMount.get(route.mountPath)!.changes.push({
@@ -295,7 +321,9 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
         .map((path) => ({ path: relative(path), delete: true as const })),
     ];
     const committed = await this.withItx((itx) =>
-      itx.repos.commitFiles(mount.repo, { message: input.message, changes, author: input.author }),
+      itx.repos
+        .get(mount.repo)
+        .commitFiles({ message: input.message, changes, author: input.author }),
     );
     // The commit landed: the overlay under this mount IS the tip now — drop it, whiteouts included.
     for (const { path } of mount.changes) this.#forget(path);
@@ -321,6 +349,6 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
       throw new Error(
         `workspace: name the mount to log — { scope } is one of ${mountPaths.map((path) => `"${path}"`).join(", ")}`,
       );
-    return this.withItx((itx) => itx.repos.log(mount.repo, { limit: input.limit }));
+    return this.withItx((itx) => itx.repos.get(mount.repo).log({ limit: input.limit }));
   }
 }

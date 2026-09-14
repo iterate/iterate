@@ -12,17 +12,28 @@ const configured = (mounts: Record<string, { repo: string } | null>) => ({
   payload: { mounts },
 });
 
-describe("WorkspaceProcessor — configured mounts folded from patches", () => {
+describe("WorkspaceProcessor — born, and configured mounts folded from patches", () => {
   const rows: {
     name: string;
     events: { type: string; payload?: unknown }[];
     view: WorkspaceView;
   }[] = [
-    { name: "the empty view: no configured mounts", events: [], view: { mounts: {} } },
+    {
+      name: "the empty view: not born, no configured mounts",
+      events: [],
+      view: { created: false, mounts: {} },
+    },
+    {
+      name: "the birth certificate",
+      events: [
+        { type: "events.iterate.com/workspace/created", payload: { path: "/workspaces/x" } },
+      ],
+      view: { created: true, mounts: {} },
+    },
     {
       name: "a patch adds a mount at a path",
       events: [configured({ "/vendor/cfg": { repo: "config" } })],
-      view: { mounts: { "/vendor/cfg": { repo: "config" } } },
+      view: { created: false, mounts: { "/vendor/cfg": { repo: "config" } } },
     },
     {
       name: "a later patch replaces one path and leaves the others; null removes a mount",
@@ -31,12 +42,12 @@ describe("WorkspaceProcessor — configured mounts folded from patches", () => {
         configured({ "/a": { repo: "three" } }),
         configured({ "/b": null }),
       ],
-      view: { mounts: { "/a": { repo: "three" } } },
+      view: { created: false, mounts: { "/a": { repo: "three" } } },
     },
     {
       name: "removing a mount that was never configured is a no-op; an unrelated event leaves the view as it was",
       events: [configured({ "/never": null }), { type: "note", payload: { n: 1 } }],
-      view: { mounts: {} },
+      view: { created: false, mounts: {} },
     },
     {
       name: "a malformed payload for the KNOWN type is skipped by the contract, never reduced",
@@ -47,7 +58,7 @@ describe("WorkspaceProcessor — configured mounts folded from patches", () => {
         },
         configured({ "/y": { repo: "ok" } }),
       ],
-      view: { mounts: { "/y": { repo: "ok" } } },
+      view: { created: false, mounts: { "/y": { repo: "ok" } } },
     },
   ];
   for (const { name, events, view } of rows)

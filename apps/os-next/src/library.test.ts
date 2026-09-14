@@ -13,12 +13,16 @@ import {
   connectToMcp,
   type McpConnection,
   connectToOpenApi,
+  projectCatalog,
+  repoHandle,
   runScript,
   runScriptModule,
   workspaceHandle,
 } from "./library.ts";
 import { InvokeHandle } from "./context/expression.ts";
 import { WORKSPACE_PROCESSOR_SOURCE } from "./generated/workspace-processor-source.ts";
+import { REPO_PROCESSOR_SOURCE } from "./generated/repo-processor-source.ts";
+import { PROJECT_PROCESSOR_SOURCE } from "./generated/project-processor-source.ts";
 
 // ── the library ── the memo `buildLibrary` keeps over the three verbs: a connect with the same
 // (verb, url, options) is ONE live connection for the context's life; `releaseConnections()` (the
@@ -1070,15 +1074,17 @@ describe("openapi", () => {
   });
 });
 
-// ── workspaces ── `workspaces.get(path)`: the `workspace` facet on `itx.cd(path)`, every call on the
-// handle ONE dispatch there of the facet chain plus the call, with the SDK-bundled spec.
+// ── the entities ── `workspaces.get(path)` and `repos.get(name)`: a facet on `itx.cd(path)`, every
+// call on the handle ONE dispatch there of the facet chain plus the call, with the SDK-bundled spec;
+// `list()` reads the `project` facet's snapshot on `/`.
 
-describe("workspaces", () => {
-  test("get(path) is the workspace facet on itx.cd(path): one dispatch, relative to the facet, with the bundled spec", async () => {
+describe("the entities", () => {
+  /** A fake `itx` whose `cd` records the path and hands back one recording sibling. */
+  function siblings(answer: unknown) {
     const dispatched: unknown[] = [];
     const sibling = new InvokeHandle((steps) => {
       dispatched.push(steps);
-      return "answer";
+      return answer;
     });
     const itx = {
       cd: (path: string) => {
@@ -1086,6 +1092,11 @@ describe("workspaces", () => {
         return sibling;
       },
     } as unknown as LibraryItx;
+    return { itx, dispatched };
+  }
+
+  test("workspaces.get(path) is the workspace facet on itx.cd(path): one dispatch, relative to the facet, with the bundled spec", async () => {
+    const { itx, dispatched } = siblings("answer");
     const handle = workspaceHandle(itx, "/workspaces/one");
     expect(await handle.invoke([["readFile", "/repos/config/worker.ts"]])).toBe("answer");
     expect(dispatched).toEqual([
@@ -1102,6 +1113,37 @@ describe("workspaces", () => {
     ]);
     expect(WORKSPACE_PROCESSOR_SOURCE["cap.js"]).toContain("WorkspaceDurableObject");
   });
+
+  test("repos.get(name) is the repo facet on itx.cd('/repos/<name>'); a name Artifacts would refuse is refused here", async () => {
+    const { itx, dispatched } = siblings("tip");
+    expect(await repoHandle(itx, "config").invoke([["tip"]])).toBe("tip");
+    expect(dispatched).toEqual([
+      ["cd", "/repos/config"],
+      [
+        "facets",
+        ["get", "repo", { source: REPO_PROCESSOR_SOURCE, className: "RepoDurableObject" }],
+        ["tip"],
+      ],
+    ]);
+    expect(REPO_PROCESSOR_SOURCE["cap.js"]).toContain("RepoDurableObject");
+    expect(() => repoHandle(itx, "../x")).toThrow(/a repo name is/);
+    expect(() => repoHandle(itx, "")).toThrow(/a repo name is/);
+  });
+
+  test("the catalog is the project facet's snapshot on /", async () => {
+    const view = { repos: { config: { path: "/repos/config", createdAt: "t" } }, workspaces: {} };
+    const { itx, dispatched } = siblings({ offset: 3, state: view });
+    expect(await projectCatalog(itx)).toEqual(view);
+    expect(dispatched).toEqual([
+      ["cd", "/"],
+      [
+        "facets",
+        ["get", "project", { source: PROJECT_PROCESSOR_SOURCE, className: "ProjectDurableObject" }],
+        ["snapshot"],
+      ],
+    ]);
+    expect(PROJECT_PROCESSOR_SOURCE["cap.js"]).toContain("ProjectDurableObject");
+  });
 });
 
 // ── the library boundary ── THE LIBRARY RULE, pinned: a library module takes `itx` and nothing else,
@@ -1115,7 +1157,10 @@ const ALLOWED_RUNTIME_IMPORTS = new Set([
   "cloudflare:workers",
   "zod", // an npm package a userspace worker could bundle too — used to PARSE untrusted MCP responses
   "./context/expression.ts",
-  "./generated/workspace-processor-source.ts", // the workspace facet's bundled source: a STRING, data a userspace worker could carry too
+  // the facets' bundled sources: STRINGS, data a userspace worker could carry too
+  "./generated/workspace-processor-source.ts",
+  "./generated/repo-processor-source.ts",
+  "./generated/project-processor-source.ts",
 ]);
 
 describe("the library boundary", () => {

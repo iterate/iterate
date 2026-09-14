@@ -1,103 +1,39 @@
 // workspaces.e2e.test.ts — `itx.workspaces.get(path)`: THE WORKSPACE of any context, at most one per
 // path, nothing appended to get it — the `workspace` facet (src/workspace/durable-object.ts) hosted
 // on `itx.cd(path)` by the library root (src/library.ts). ONE private overlay over a table of repo
-// mounts: every project repo at `/repos/<name>` (derived from `itx.repos.list()`) plus what
-// `configure` adds; reads fall through to a mount's repo at its tip; a write shadows until
+// mounts: every repo in the project catalog at `/repos/<name>` (`itx.repos.list()`) plus what
+// `configure` adds; reads fall through to a mount's repo facet at its tip; a write shadows until
 // `gitCommit` lands ONE mount's changes on its repo's `main`; a delete is a whiteout until then;
-// `/workspace/…` is scratch — never committed. Locally the repo tier is a FAKE lent to the
-// workspace's context (`provide("itx.repos", …)`: the facet reaches `itx.repos` through the
-// context's rules, exactly as a test fakes `itx.ai`); against the deployed worker the last test runs
-// the same story on real Artifacts (`WORKER_BASE_URL=https://os.iterate2.com pnpm e2e workspaces`).
+// `/workspace/…` is scratch — never committed. On first use the workspace appends its birth
+// certificate on its path and cross-posts it to `/`, so `itx.workspaces.list()` knows it. Locally
+// the physical tier is a FAKE `itx.git` lent to each repo's context (support/fake-git.ts); against
+// the deployed worker the last test runs the same story on real Artifacts
+// (`WORKER_BASE_URL=https://os.iterate2.com pnpm e2e workspaces`).
 
-import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { freshCtx, openItx, readAll, rejection } from "./support/client.ts";
+import { FakeGit, type FakeCommit } from "./support/fake-git.ts";
 import { deployedOnly } from "./support/project-host.ts";
-
-type FakeCommit = {
-  oid: string;
-  message: string;
-  author: { name: string; email: string };
-  timestamp: number;
-  parents: string[];
-};
-
-/** `itx.repos` in memory — each repo a path → content map and its commits; `commitFiles` applies the
- *  changes and records one commit. The shapes are `ReposScope`'s (src/context/repos.ts). */
-class FakeRepos extends RpcTarget {
-  readonly #repos = new Map<string, { files: Map<string, string>; commits: FakeCommit[] }>();
-  constructor(seed: Record<string, Record<string, string>>) {
-    super();
-    for (const [name, files] of Object.entries(seed))
-      this.#repos.set(name, {
-        files: new Map(Object.entries(files)),
-        commits: [this.#commit("seed", [])],
-      });
-  }
-  #commit(message: string, parents: string[]): FakeCommit {
-    return {
-      oid: `c${Math.random().toString(36).slice(2, 10)}`,
-      message,
-      author: { name: "iterate", email: "config@iterate.com" },
-      timestamp: Date.now(),
-      parents,
-    };
-  }
-  list() {
-    return [...this.#repos.keys()].sort();
-  }
-  readFile(repo: string, path: string) {
-    return this.#repos.get(repo)?.files.get(path) ?? null;
-  }
-  listFiles(repo: string) {
-    const known = this.#repos.get(repo);
-    return {
-      commitOid: known?.commits.at(-1)?.oid ?? null,
-      paths: known ? [...known.files.keys()].sort() : [],
-    };
-  }
-  commitFiles(
-    repo: string,
-    input: {
-      message: string;
-      changes: ({ path: string; content: string } | { path: string; delete: true })[];
-    },
-  ) {
-    let known = this.#repos.get(repo);
-    if (!known) this.#repos.set(repo, (known = { files: new Map(), commits: [] }));
-    const changedPaths: string[] = [];
-    for (const change of input.changes) {
-      if ("delete" in change) {
-        if (known.files.delete(change.path)) changedPaths.push(change.path);
-      } else if (known.files.get(change.path) !== change.content) {
-        known.files.set(change.path, change.content);
-        changedPaths.push(change.path);
-      }
-    }
-    const tip = known.commits.at(-1);
-    if (changedPaths.length === 0) return { commitOid: tip?.oid ?? null, changedPaths };
-    const commit = this.#commit(input.message, tip ? [tip.oid] : []);
-    known.commits.push(commit);
-    return { commitOid: commit.oid, changedPaths };
-  }
-  log(repo: string, options: { limit?: number } = {}) {
-    return [...(this.#repos.get(repo)?.commits ?? [])].reverse().slice(0, options.limit ?? 20);
-  }
-}
 
 const SEED = { config: { "worker.ts": "export default 1;\n", "notes/log.md": "# log\n" } };
 
-/** A fresh project whose `/workspaces/<name>` context has the fake repo tier lent to it, and the
- *  workspace handle at that path. */
-async function workspaceOverFakeRepos(name: string) {
+/** A fresh project whose repos are BORN (the creation saga run) over one fake `itx.git` lent to each
+ *  repo's context, and the workspace handle at `/workspaces/<name>`. */
+async function workspaceOverFakeGit(
+  name: string,
+  seed: Record<string, Record<string, string>> = SEED,
+) {
   const itx = openItx(freshCtx("ws"));
-  const repos = new FakeRepos(SEED);
-  await itx.cd(`/workspaces/${name}`).provide("itx.repos", repos);
-  return { itx, repos, workspace: itx.workspaces.get(`/workspaces/${name}`) };
+  const git = new FakeGit(seed);
+  for (const repo of Object.keys(seed)) {
+    await itx.cd(`/repos/${repo}`).provide("itx.git", git);
+    await itx.repos.get(repo).create();
+  }
+  return { itx, git, workspace: itx.workspaces.get(`/workspaces/${name}`) };
 }
 
 test("reads fall through to the mounted repo at its tip; a write shadows; the merged listing and the status say which is which", async () => {
-  const { workspace } = await workspaceOverFakeRepos("one");
+  const { workspace } = await workspaceOverFakeGit("one");
   expect(await workspace.mounts()).toEqual({ "/repos/config": { repo: "config" } });
   expect(await workspace.readFile("/repos/config/worker.ts")).toBe("export default 1;\n");
   expect(await workspace.readFile("/repos/config/missing.ts")).toBeNull();
@@ -132,7 +68,7 @@ test("reads fall through to the mounted repo at its tip; a write shadows; the me
 });
 
 test("gitCommit lands one mount's changes as ONE commit on its repo and clears the overlay; the fall-through then reads the new tip; gitLog shows it", async () => {
-  const { workspace, repos } = await workspaceOverFakeRepos("two");
+  const { workspace, git } = await workspaceOverFakeGit("two");
   await workspace.writeFile("/repos/config/notes/log.md", "# log\n- one\n");
   await workspace.deleteFile("/repos/config/worker.ts");
   await workspace.writeFile("/workspace/scratch.md", "mine"); // scratch never commits
@@ -140,10 +76,10 @@ test("gitCommit lands one mount's changes as ONE commit on its repo and clears t
   expect(commit).toMatchObject({
     mount: "/repos/config",
     repo: "config",
-    changedPaths: ["/repos/config/notes/log.md", "/repos/config/worker.ts"],
+    changedPaths: ["/repos/config/worker.ts", "/repos/config/notes/log.md"], // deletes land first
   });
-  expect(repos.readFile("config", "notes/log.md")).toBe("# log\n- one\n");
-  expect(repos.readFile("config", "worker.ts")).toBeNull();
+  expect(git.readFile("config", "notes/log.md")).toBe("# log\n- one\n");
+  expect(git.readFile("config", "worker.ts")).toBeNull();
   expect(await workspace.gitStatus()).toEqual({
     mounts: [{ path: "/repos/config", repo: "config", changes: [] }],
     unmounted: [{ path: "/workspace/scratch.md", change: "added" }],
@@ -162,7 +98,7 @@ test("gitCommit lands one mount's changes as ONE commit on its repo and clears t
 });
 
 test("deleteFile whites a repo file out until committed; revert lifts the whiteout, and a shadowing write", async () => {
-  const { workspace } = await workspaceOverFakeRepos("three");
+  const { workspace } = await workspaceOverFakeGit("three");
   expect(await workspace.deleteFile("/repos/config/worker.ts")).toBe(true);
   expect(await workspace.readFile("/repos/config/worker.ts")).toBeNull();
   expect(await workspace.listAllFiles()).toEqual(["/repos/config/notes/log.md"]);
@@ -176,7 +112,7 @@ test("deleteFile whites a repo file out until committed; revert lifts the whiteo
 });
 
 test("configure mounts a repo at a second path — ONE workspace/configured event, reduced by the workspace processor; a commit names its mount with scope; scratch at a mount point stays scratch", async () => {
-  const { itx, workspace, repos } = await workspaceOverFakeRepos("four");
+  const { itx, workspace, git } = await workspaceOverFakeGit("four");
   // Scratch written where a mount will later be: a mount point is a directory, never a file, so
   // this row stays scratch after the mount appears — unmounted in status, never committed as "".
   await workspace.writeFile("/vendor/cfg", "scratch at a future mount point");
@@ -201,7 +137,7 @@ test("configure mounts a repo at a second path — ONE workspace/configured even
   );
   const commit = await workspace.gitCommit({ message: "a", scope: "/vendor/cfg" });
   expect(commit.changedPaths).toEqual(["/vendor/cfg/a.txt"]);
-  expect(repos.readFile("config", "a.txt")).toBe("a");
+  expect(git.readFile("config", "a.txt")).toBe("a");
   expect(await workspace.gitStatus()).toMatchObject({
     mounts: [
       { path: "/repos/config", changes: [{ path: "/repos/config/b.txt", change: "added" }] },
@@ -216,18 +152,23 @@ test("configure mounts a repo at a second path — ONE workspace/configured even
   expect(events.filter((e) => e.type === "events.iterate.com/workspace/configured")).toHaveLength(
     2,
   );
+  // Born on first use: ONE certificate on its own path, the same one cross-posted to /, and the
+  // catalog — beside the repo the setup birthed — lists it.
+  const born = (log: { type: string; payload?: unknown }[]) =>
+    log.filter((e) => e.type === "events.iterate.com/workspace/created").map((e) => e.payload);
+  expect(born(events)).toEqual([{ path: "/workspaces/four" }]);
+  expect(born(await readAll(itx))).toEqual([{ path: "/workspaces/four" }]);
+  expect(await itx.workspaces.list()).toEqual([
+    { path: "/workspaces/four", createdAt: expect.any(String) },
+  ]);
+  expect((await itx.repos.list()).map((r: { name: string }) => r.name)).toEqual(["config"]);
 });
 
 test("a nested mount wins beneath its path: the listing, reads and status all route to the longest mount", async () => {
-  const itx = openItx(freshCtx("ws"));
-  await itx.cd("/workspaces/nested").provide(
-    "itx.repos",
-    new FakeRepos({
-      config: { "worker.ts": "w", "vendor/x.txt": "from config" },
-      lib: { "y.txt": "from lib" },
-    }),
-  );
-  const workspace = itx.workspaces.get("/workspaces/nested");
+  const { workspace } = await workspaceOverFakeGit("nested", {
+    config: { "worker.ts": "w", "vendor/x.txt": "from config" },
+    lib: { "y.txt": "from lib" },
+  });
   await workspace.configure({ mounts: { "/repos/config/vendor": { repo: "lib" } } });
   expect(await workspace.listAllFiles()).toEqual([
     "/repos/config/vendor/y.txt",
@@ -250,11 +191,9 @@ test("a nested mount wins beneath its path: the listing, reads and status all ro
 });
 
 test("a workspace is its path: a second session opens the same overlay, uncommitted work included", async () => {
-  const ctx = freshCtx("ws");
-  const itx = openItx(ctx);
-  await itx.cd("/workspaces/five").provide("itx.repos", new FakeRepos(SEED));
+  const { itx } = await workspaceOverFakeGit("five");
   await itx.workspaces.get("/workspaces/five").writeFile("/workspace/draft.md", "draft");
-  const again = openItx(ctx);
+  const again = openItx((await itx.whoami()).projectId);
   expect(await again.workspaces.get("/workspaces/five").readFile("/workspace/draft.md")).toBe(
     "draft",
   );
@@ -270,7 +209,7 @@ deployedOnly(
   async () => {
     const itx = openItx(freshCtx("wsrepo"));
     try {
-      await itx.repos.writeFile("config", "worker.ts", "export default 1;\n");
+      await itx.repos.get("config").writeFile("worker.ts", "export default 1;\n");
       const workspace = itx.workspaces.get("/workspaces/deployed");
       expect(await workspace.readFile("/repos/config/worker.ts")).toBe("export default 1;\n");
       await workspace.writeFile("/repos/config/notes/log.md", "# log\n");
@@ -280,8 +219,9 @@ deployedOnly(
         "/repos/config/notes/log.md",
         "/repos/config/worker.ts",
       ]);
-      expect(await itx.repos.readFile("config", "notes/log.md")).toBe("# log\n");
-      expect(await itx.repos.listFiles("config")).toEqual({
+      expect(await itx.repos.get("config").readFile("notes/log.md")).toBe("# log\n");
+      expect(await itx.git.readFile("config", "notes/log.md")).toBe("# log\n"); // the physical tier agrees
+      expect(await itx.repos.get("config").listFiles()).toEqual({
         commitOid: commit.commitOid,
         paths: ["notes/log.md", "worker.ts"],
       });
@@ -295,10 +235,14 @@ deployedOnly(
       });
       await workspace.deleteFile("/repos/config/worker.ts");
       await workspace.gitCommit({ message: "drop the worker" });
-      expect(await itx.repos.listFiles("config")).toMatchObject({ paths: ["notes/log.md"] });
+      expect(await itx.repos.get("config").listFiles()).toMatchObject({ paths: ["notes/log.md"] });
       expect(
         (await workspace.gitLog({ scope: "/repos/config" })).map((c: FakeCommit) => c.message),
-      ).toEqual(["drop the worker", "notes", "itx.repos: write worker.ts"]);
+      ).toEqual(["drop the worker", "notes", "write worker.ts"]);
+      expect((await itx.repos.list()).map((r: { name: string }) => r.name)).toEqual(["config"]);
+      expect((await itx.workspaces.list()).map((w: { path: string }) => w.path)).toEqual([
+        "/workspaces/deployed",
+      ]);
     } finally {
       await itx.cfArtifacts.delete("config"); // teardown — cfArtifacts and repos address the same repo
     }

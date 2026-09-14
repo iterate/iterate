@@ -22,6 +22,7 @@ export class WorkspaceProcessor extends StreamProcessor<
   }: ReduceArgs<WorkspaceView, ConsumedEvent<typeof WorkspaceContract>>):
     | WorkspaceView
     | undefined {
+    if (event.type === "events.iterate.com/workspace/created") return { ...state, created: true };
     if (event.type !== "events.iterate.com/workspace/configured") return undefined;
     const mounts = { ...state.mounts };
     for (const [mountPath, mount] of Object.entries(event.payload.mounts)) {

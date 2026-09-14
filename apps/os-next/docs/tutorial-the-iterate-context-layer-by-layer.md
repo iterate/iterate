@@ -1496,19 +1496,19 @@ await until(async () =>
 // e2e/config-worker.e2e.test.ts
 ```
 
-### `itx.repos` and `itx.cfArtifacts`: where code lives
+### `itx.git`, `itx.repos` and `itx.cfArtifacts`: where code lives
 
 `itx.cfArtifacts` is Cloudflare Artifacts, project-scoped: every repo name is forced under
 `${projectId}.`, `list` is filtered locally, and `get(name)` returns a handle whose `createToken`
-pipelines across `/api` (its `fork`, whose name escapes the wall, is withheld). `itx.repos` is the
+pipelines across `/api` (its `fork`, whose name escapes the wall, is withheld). `itx.git` is the
 primary door built on top: a repo's file bytes, git-over-HTTPS, one root-level path on `main`. Both
 are deployed-only in the lane — Artifacts has no local implementation.
 
 ```ts
-expect(await itx.repos.readFile(repo, "worker.ts")).toBeNull(); // an unborn repo reads as null
-const first = await itx.repos.writeFile(repo, "worker.ts", source); // creates the repo, commits on main
+expect(await itx.git.readFile(repo, "worker.ts")).toBeNull(); // an unborn repo reads as null
+const first = await itx.git.writeFile(repo, "worker.ts", source); // creates the repo, commits on main
 expect(first.commitOid).toMatch(/^[0-9a-f]{40}$/);
-expect(await itx.repos.readFile(repo, "worker.ts")).toBe(source);
+expect(await itx.git.readFile(repo, "worker.ts")).toBe(source);
 await itx.cfArtifacts.delete(repo); // repos and cfArtifacts address the same repo
 // e2e/cfartifacts.e2e.test.ts (deployed only)
 const tok = await a.cfArtifacts.get(repo).createToken("read", 300); // pipelined server-side
@@ -1519,11 +1519,11 @@ The payoff is the config worker with its source moved out of KV and into a real 
 changed — the `itx.worker` rewrite is the seam:
 
 ```ts
-await itx.repos.writeFile("config", "worker.ts", CONFIG_WORKER_SRC);
+await itx.git.writeFile("config", "worker.ts", CONFIG_WORKER_SRC);
 await itx.provide("itx.worker", [
   "itx",
   "workers",
-  ["get", { source: `itx.repos.readFile('config','worker.ts')`, cacheKey: "config:repo:v1" }],
+  ["get", { source: `itx.git.readFile('config','worker.ts')`, cacheKey: "config:repo:v1" }],
 ]);
 // e2e/config-worker.e2e.test.ts (deployed only)
 ```
