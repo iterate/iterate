@@ -130,10 +130,11 @@ export interface BuiltInScope extends LibraryRoots {
   /** THE ESCAPE HATCH: the raw Cloudflare Artifacts binding, project-scoped (repos.ts
    *  `ArtifactsScope`); `itx.repos` is built on top of it. */
   cfArtifacts: ArtifactsScope;
-  /** THE PRIMARY REPO DOOR (repos.ts `ReposScope`): a repo's files on `main` over git-over-HTTPS, by
-   *  repo-relative path — `list()`, `readFile`, `listFiles`, `commitFiles` (one commit, many files),
-   *  `writeFile`, `log`; what holds the config worker's source (`itx.provide("itx.worker",
-   *  "…itx.repos.readFile(…)")`) and what a workspace's mounts read and commit through. */
+  /** THE REPOS ROOT (repos.ts `ReposScope`), built on `cfArtifacts`: a repo's files on `main` over
+   *  git-over-HTTPS, by repo-relative path — `list()`, `readFile`, `listFiles`, `commitFiles` (one
+   *  commit, many files), `writeFile`, `log`; what holds the config worker's source
+   *  (`itx.provide("itx.worker", "…itx.repos.readFile(…)")`) and what a workspace's mounts read and
+   *  commit through. */
   repos: ReposScope;
   /** Append to this context's append-only event log (the facets that REDUCE it are
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge

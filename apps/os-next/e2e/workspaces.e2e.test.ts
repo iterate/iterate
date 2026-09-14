@@ -220,15 +220,13 @@ test("configure mounts a repo at a second path — ONE workspace/configured even
 
 test("a nested mount wins beneath its path: the listing, reads and status all route to the longest mount", async () => {
   const itx = openItx(freshCtx("ws"));
-  await itx
-    .cd("/workspaces/nested")
-    .provide(
-      "itx.repos",
-      new FakeRepos({
-        config: { "worker.ts": "w", "vendor/x.txt": "from config" },
-        lib: { "y.txt": "from lib" },
-      }),
-    );
+  await itx.cd("/workspaces/nested").provide(
+    "itx.repos",
+    new FakeRepos({
+      config: { "worker.ts": "w", "vendor/x.txt": "from config" },
+      lib: { "y.txt": "from lib" },
+    }),
+  );
   const workspace = itx.workspaces.get("/workspaces/nested");
   await workspace.configure({ mounts: { "/repos/config/vendor": { repo: "lib" } } });
   expect(await workspace.listAllFiles()).toEqual([
