@@ -961,6 +961,62 @@ typecheck, then was removed. Clean native version
 its raw arm/restore files, `clean-cold-workers-direct-boundary-*`, and
 `direct-boundary-native-applied.patch`.
 
+## Same-credential native-host transport control
+
+The next direct Node run and Preview 17 `/secrets/openai` used the same
+in-memory credential, with no credential or fingerprint written to the proof
+artifacts. The secret update is offset 295. Five direct calls all returned
+audio: median readiness **1,095 ms**, first non-silent PCM **1,787 ms**.
+This resolves credential equivalence for this comparison, not older controls.
+
+Temporary version `04b409ff-96f3-4861-9386-208f2fb21131` added an admin-only native
+facet on the actual hosted StreamDO parent. It used normal project egress,
+policy, secret substitution and audit, with no voice/Agent processor setup.
+Five native controls alternated with five real fresh hosted conversations on
+one existing project WebSocket. All real sessions' configured prompt hashes
+matched the native/Node 2,096-byte prompt. Model, voice, initial 100-ms PCM input,
+and commentary also matched. The original short persona was retained in real
+setup; supplying the compiled prompt as a persona would duplicate policy.
+
+| Measurement                           | Result                                                      |
+| ------------------------------------- | ----------------------------------------------------------- |
+| Native session readiness, five calls  | median 954 ms; 885–1,202 ms                                 |
+| Native audio                          | 4/5; successful PCM median 1,821 ms; fifth hit 10s deadline |
+| Real hosted audio                     | 5/5; no recorded call errors                                |
+| Real hosted warm readiness, calls 2–5 | median 1,825 ms                                             |
+| Real hosted warm PCM, calls 2–5       | median 2,866.5 ms                                           |
+| First real hosted call                | ready 3,963 ms; PCM 5,022 ms                                |
+
+Native timings begin inside the facet; real readiness is observed at the
+client and includes setup and event delivery. Their difference is not an exact
+attribution to any one operation. A native preflight is retained separately:
+ready 2,304 ms, PCM 2,989 ms. No acoustic-onset measurement was made.
+
+The fifth native control reached `session.started` at 961 ms, but recorded no
+non-silent PCM. Its deadline and close code 1006 occurred at 10,000 ms. The
+probe's fetch-abort deadline and session deadline coincide, so the cause of
+that close is ambiguous. Its ProjectDO fetch outcome was `canceled`, whereas
+the four successful controls were `ok`; the fetch had already returned before
+`session.started`. Current records lack frame counters, so neither OpenAI
+silence nor post-upgrade message loss is established. This sample remains a
+failure, not an excluded outlier. The targeted host-error query returned zero
+records over the paired interval; that does not explain the silent sample.
+
+All five real conversations subsequently had `call: null`, their activation
+in `recentEndedActivations`, no pending delegations, subscription lag zero,
+and no last subscription error. Their client WebSocket closed with code 1000.
+These are durable terminal-state checks, not proof of a remote socket close.
+
+The temporary native code passed OS typecheck and 11 routing/alarm tests. It
+and the local paired-startup helper were removed. Clean version
+`8f2098ee-985b-4aa7-a51e-1d83a7387c5e` passed deployment smokes. Source remains
+pinned to `ebb0a42dc2b1a44ae5cee36f87eee448a914b664`. Evidence:
+`direct-same-key-20260914/`, `native-warm-host-paired-control-result.json`, its
+full log, `native-warm-host-preflight.json`, `native-warm-hosted-terminal-audit.json`,
+and `clean-cold-workers-native-warm-*`. Two read-only harness failures (Node
+import and property-proxy disposal) are retained separately; corrected runs
+passed. No diagnostic code is part of the PR.
+
 ## Reproduce
 
 From `apps/os`, with the current voice source installed in a disposable
