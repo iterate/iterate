@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 size: large
 branch: fix/playwright-flake-causes
 base: a85434f645
@@ -7,23 +7,42 @@ base: a85434f645
 
 # Fix the recurring Playwright failures
 
-The targeted fixes are implemented and pushed. Controlled browser regressions pass; larger zero-retry preview batches and the server-error audit are running. Final validation and preview cleanup remain. **Do not open a pull request**; deliver GitHub compare links.
+The targeted fixes are implemented and pushed. The final preview batch passed **192/192**, with zero test retries at 16 workers. Freeze also passed 40/40 focused repetitions. Two earlier startup failures remain ordinary failures and are captured in `tasks/preview-stream-startup-stalls.md`. Preview data was erased and the lease released. Inert artifact repos left by the bounded cleanup await the next GC pass; file/backup objects have three-hour expiry. **Do not open a pull request**; deliver GitHub compare links.
+
+## Final preview validation
+
+Local Chromium against leased Cloudflare preview 3; each repetition creates a new project. Shared deployment/assets can be warm. Test head `8b7f9ebdb`; deployed SDK/source `dac4f9f2e280e01c8d4d70a88251e2f64dbacdd9`; OS version `cb1ea6cf-25d9-4ef5-82af-3b689e24bde3`. Later documentation/cleanup commits do not change the deployed product. The complete batch took 4.9 minutes at 16 workers, with `--repeat-each=24 --retries=0 --fully-parallel`.
+
+| Scenario | Actual passes | Median / maximum seconds |
+| --- | --- | --- |
+| Seeded Todo | 24/24 | 14.0 / 16.8 |
+| Fake-model three-turn chat | 24/24 | 19.6 / 26.6 |
+| Local Sending → backend progress | 24/24 | 15.2 / 20.8 |
+| Script return typing, without warm-up agent | 24/24 | 21.4 / 26.0 |
+| Shopping-list collaborative undo | 24/24 | 16.4 / 20.8 |
+| Remaining Docs review | 24/24 | 22.8 / 29.0 |
+| Freeze + socket recovery | 24/24 | 13.1 / 16.7 |
+| Mobile notes | 24/24 | 27.2 / 35.8 |
+
+Durations include project/bootstrap work. The Docs wrapper recorded **24 `pass`, zero `flake-fail`, zero `unexpected-error`**. Its expected-failure display does not mean those bodies failed. Known review-only failures remain narrowly quarantined as requested; undo is a normal test. The independent 40-repeat freeze batch passed 40/40 at eight workers (median 14.2s, maximum 18.2s). The fully traced eight-worker sample passed 16/16. Earlier failed/interrupted batches remain recorded below, not replaced by the final green batch.
+
+Focused static/regression checks: 21 SDK tests, 34 OS tests, OS/specs typechecks and changed-file lint passed. Middlewright's 28 spinner/plugin tests passed; the three new scenarios also passed ten repetitions each (30/30), plus typecheck/build/lint. The SDK-wide typecheck still has the three pre-existing errors listed below.
 
 ## Request and assumptions
 
 Fix the six failure groups investigated in the CI design jam, with repeated individual tests against a leased preview. Commit this specification first, then commit and push meaningful changes and findings as the investigation proceeds. Keep ordinary retries configured for now; all acceptance reruns use zero retries. Leave the root worktree and the separate CI readiness work untouched.
 
-- [ ] Seeded todo: display an optimistic item immediately, with `data-spinner` until the server's subscribed state confirms it. Test confirmation/persistence, not just optimistic rendering.
-- [ ] Fake-model multi-turn and script return typing: show local Sending immediately, then maintain visible progress through backend acceptance, execution and displayed results. Investigate remaining real delays separately from progress gaps. Reuse existing OS/mobile behavior where appropriate.
-- [ ] Remove the script test's warm-up agent if the real behavior passes without it; do not swallow warm-up failures or replace it with sleeps.
-- [ ] Docs: isolate collaborative undo. Start with green apples, crunchy peanut butter and bananas; local changes green to red, peer changes crunchy to smooth; positively wait for both; undo locally; positively wait for green and smooth, then assert no red. Verify the saved document. Move remaining review behaviors into a separate test and record their specific known failures with `createFlake`.
-- [ ] Mobile notes: add Middlewright support for `inputValue` loading waits. Fix stale note text passed into chat, preserving acknowledged edits. Check the navigation stalls independently.
-- [ ] Freeze/socket recovery: test the current pause/resume stimulus. If the specific event-recovery failure persists, use a narrow `createFlake` with recorded evidence; unrelated setup/transport failures remain failures.
-- [ ] Add focused regression coverage for product fixes and run relevant static checks.
-- [ ] Lease a preview without creating a PR; deploy the relevant apps and confirm readiness before focused tests.
-- [ ] Run at least 20 independent zero-retry repetitions of each affected test on the final relevant code, with controlled parallel batches. Record actual passes, known flakes, failures, timings, commit and deployment identity. Investigate every unexpected failure; repeated green alone is evidence, not proof of zero flake probability.
-- [ ] Inspect relevant preview errors/traces for any unexplained product failures, clean up test projects and release the lease when finished.
-- [ ] Push all work and provide the compare link with a concise account of validation and any explicit coverage debt.
+- [x] Seeded todo: display an optimistic item immediately, with `data-spinner` until the server's subscribed state confirms it. Test confirmation/persistence, not just optimistic rendering. *Optimistic row and stable ID in `todo-client.tsx`; both RPC/subscription orderings and rejected saves covered.*
+- [x] Fake-model multi-turn and script return typing: show local Sending immediately, then maintain visible progress through backend acceptance, execution and displayed results. Investigate remaining real delays separately from progress gaps. Reuse existing OS/mobile behavior where appropriate. *OS Sending reuses existing pending state; controlled browser transport/model gates prove the handoff. Turn timings are above.*
+- [x] Remove the script test's warm-up agent if the real behavior passes without it; do not swallow warm-up failures or replace it with sleeps. *Removed from `specs/agent-script-reuse.spec.ts`; cold tests pass without swallowed work.*
+- [x] Docs: isolate collaborative undo. Start with green apples, crunchy peanut butter and bananas; local changes green to red, peer changes crunchy to smooth; positively wait for both; undo locally; positively wait for green and smooth, then assert no red. Verify the saved document. Move remaining review behaviors into a separate test and record their specific known failures with `createFlake`. *Separate shopping-list spec verifies both editors and exact saved file. Review-only patterns remain measured.*
+- [x] Mobile notes: add Middlewright support for `inputValue` loading waits. Fix stale note text passed into chat, preserving acknowledged edits. Check the navigation stalls independently. *Middlewright patch handles `inputValue`; notes analysis now conditionally edits the exact contents, preserving newer edits/deletion.*
+- [x] Freeze/socket recovery: test the current pause/resume stimulus. If the specific event-recovery failure persists, use a narrow `createFlake` with recorded evidence; unrelated setup/transport failures remain failures. *Current stimulus passed 40 focused and 24 final mixed runs; the two startup failures remain red and are documented separately.*
+- [x] Add focused regression coverage for product fixes and run relevant static checks. *Focused SDK/OS tests, typechecks and lint passed; upstream Middlewright regression coverage also passed.*
+- [x] Lease a preview without creating a PR; deploy the relevant apps and confirm readiness before focused tests. *Leased preview 3 and deployed Auth, Docs and OS; waited for the shared deployment delay outside the reruns.*
+- [x] Run at least 20 independent zero-retry repetitions of each affected test on the final relevant code, with controlled parallel batches. Record actual passes, known flakes, failures, timings, commit and deployment identity. Investigate every unexpected failure; repeated green alone is evidence, not proof of zero flake probability. *24 actual passes per scenario in the final 192-run batch, zero retries; earlier failures and all recorded outcomes retained.*
+- [x] Inspect relevant preview errors/traces for any unexplained product failures, clean up test projects and release the lease when finished. *Audit and remaining errors documented; nine DO classes retired, Auth D1/KV erased, bounded artifacts GC completed, lease released.*
+- [x] Push all work and provide the compare link with a concise account of validation and any explicit coverage debt. *Both branches pushed; compare links below. No PRs opened.*
 
 ## Evidence and implementation log
 
@@ -56,3 +75,13 @@ Fix the six failure groups investigated in the CI design jam, with repeated indi
 - Final product deployment: SDK/source `dac4f9f2e280e01c8d4d70a88251e2f64dbacdd9`, OS `cb1ea6cf-25d9-4ef5-82af-3b689e24bde3`. Both real conditional-edit probes now have `client_error` outcomes and info-level spans, while preserving the newer edit/deletion: trace `50573400e673b4e3a80155756510c64c`, calls `log_64f7dda9fa694c75b71d47e17b4e1ad4` and `log_fb8332101fe149549d832dd672b3b54a`.
 - Full-trace sample on that deployment: 16/16 passed at eight workers. Fake-model project creation took 12.25/12.92 seconds; the six individual Send-to-visible-reply intervals were 2.87–3.42 seconds. No warm-up agent or whole-test retry. This sample separates setup cost from model-turn latency; it does not explain every historical slow run.
 - First 16-worker stress batch stopped after two failures: 77 actual passes, two failures, 15 interrupted, 146 not run. All 12 completed review bodies passed. Both failures were before the freeze stimulus: an agent-creation keyed append got no response within its existing 10-second bound; another browser missed the baseline within 30 seconds. That browser's mirror was still `connecting`, with a client but no event connection or delivered events. The server had published the baseline at offset 51 and its feed was caught up. Its SQLite WASM request had HTTP 200 headers but no completed body in the trace; all 16 successful traced runs had complete WASM downloads. This points to asset/bootstrap delivery, not a demonstrated freeze-recovery regression. These failures remain red; neither the allowed Docs pattern nor test timeouts were broadened.
+- Final batch telemetry: 134 error-labelled records, comprising 100 records across 25 network-closure traces (this suite deliberately closes sockets), 31 native HTTP 503 records during cold Docs worker builds, and three registry alarm-arming errors. No ITX server-error record appeared in this batch. The alarm-arming errors remain investigation debt in `tasks/preview-stream-startup-stalls.md`; green tests do not establish that they are harmless. The real stale-edit/deletion probes separately proved the new `client_error` classification.
+- The previously affected repository's `repo` and `feed` subscriptions were also checked after the storage-reset burst: both caught up to offset 25, lag zero, active, no retry or last error. This verifies recovery of the inspected streams, not all platform recovery behavior.
+- Removed the temporary branch push trigger from `pkg-pr-new.yml` after publishing the exact SDK tarballs used by the preview. The final workflow matches the original. No PR was opened in either repository.
+
+## Handoff
+
+- Iterate: https://github.com/iterate/iterate/compare/main...fix/playwright-flake-causes
+- Middlewright: https://github.com/iterate/middlewright/compare/main...fix/input-value-loading
+
+Preview exit cleanup succeeded: nine non-container DO classes retired, 1,276 KV keys deleted, Auth D1 data erased. Artifacts GC deleted 733 repos before its 90-second deadline; remaining repos are inert and the next pass continues. R2 files and sandbox backups have three-hour expiry. Preview 3 was released after cleanup; its OS worker remains parked until the next owner deploys.

@@ -196,7 +196,7 @@ test("undo keeps a peer's shopping-list edit in the seeded Docs app", async ({
 });
 
 // Known review-only failures remain measured while collaborative undo has its own plain test.
-// Evidence and exit criteria: tasks/playwright-flake-causes.md.
+// Evidence and exit criteria: tasks/complete/2026-09-15-playwright-flake-causes.md.
 const flake = createFlake(
   test,
   /locator\.waitFor[\s\S]*cm-markdown-table-cell[\s\S]*Approved|Docs review: both persisted comment threads/,
