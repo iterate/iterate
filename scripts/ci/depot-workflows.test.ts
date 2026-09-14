@@ -69,6 +69,15 @@ const deploymentWorkflows = [
     },
   },
   {
+    file: ".depot/workflows/deploy-os-next.yml",
+    group: "deploy-os-next-production",
+    jobs: {
+      deploy: { size: "4x16", timeoutMinutes: 30 },
+      e2e: { size: "4x16", timeoutMinutes: 30 },
+      notify: { size: "2x8", timeoutMinutes: 10 },
+    },
+  },
+  {
     file: ".depot/workflows/deploy-semaphore.yml",
     group: "deploy-semaphore-production",
     jobs: {

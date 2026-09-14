@@ -1,0 +1,70 @@
+# OS-Next isolate crash hunt — nightly, against prd. The load-dependent rows of
+# apps/os-next/e2e/isolate-ceilings-deployed.e2e.test.ts (concurrent readers, a large
+# ephemeral fan-out, concurrent big appends, a poison facet) drive one context's Durable
+# Object up to and past its 128 MiB isolate ceiling on purpose; they are opt-in
+# (RUN_ISOLATE_CRASH_HUNT=1) so the deploy's e2e run stays deterministic. This is where
+# they run: once a night, on the prd worker (no users; every row uses a fresh context),
+# from the default branch's tooling. A red run posts to #error-pulse.
+#
+# Run it by hand: depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+#   --workflow os-next-crash-hunt.yml --ref main
+#
+# Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN.
+
+name: OS-Next crash hunt
+permissions:
+  contents: read
+on:
+  # Nightly, off the hour (deploys land at :00, the DO probe at :41, preview GC at :23).
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch: {}
+concurrency:
+  group: os-next-crash-hunt
+  cancel-in-progress: false
+jobs:
+  crash-hunt:
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.event_name == 'schedule' && github.event.repository.default_branch || github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config prd --project project-worker
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Hunt isolate crashes on os.iterate2.com
+        working-directory: apps/os-next
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          WORKER_BASE_URL: https://os.iterate2.com
+          RUN_ISOLATE_CRASH_HUNT: "1"
+        run: doppler run -- sh -c 'ADMIN_API_SECRET="$APP_CONFIG_ADMIN_API_SECRET" pnpm e2e isolate-ceilings --no-file-parallelism'
+  notify:
+    needs:
+      - crash-hunt
+    if: always() && needs.crash-hunt.result == 'failure'
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 10
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Notify Slack
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: pnpm tsx scripts/ci/notify.ts workflow-failure

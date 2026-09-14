@@ -26,6 +26,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Reconcile dependencies (baked)
         run: pnpm install --frozen-lockfile --prefer-offline
+      # The type-aware lint rules resolve os-next through its generated SDK bundle
+      # (apps/os-next/src/generated/, gitignored). `pnpm typecheck` builds it too, but
+      # in the parallel block below — so lint's coverage of os-next would be a race.
+      - name: Build the os-next SDK bundle
+        run: pnpm --filter os-next exec node build-sdk.mjs
       - fail-fast: false
         parallel:
           - name: Run Lint
