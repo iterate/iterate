@@ -23,6 +23,7 @@ import {
   type SecretRefresh,
 } from "../secrets.ts";
 import type { SecretDurableObject } from "../secret-durable-object.ts";
+import { normalizeSecretConnect, type SecretConnectOptions } from "../secret-connect.ts";
 import {
   assertFacetSourceWithinCeiling,
   facetSpecOf,
@@ -112,6 +113,11 @@ export interface BuiltInScope extends LibraryRoots {
       material: SecretMaterial,
       options?: { urls?: string[]; refresh?: SecretRefresh },
     ): Promise<{ ok: true }>;
+    /** THE OAUTH CONNECT HALF (secret-connect.ts): reserve `name` as an `oauth-refresh-token` secret
+     *  and hand back the provider's authorize URL — send a human there; the provider redirects to
+     *  the platform's `/.auth/connect/callback`, and the secret's own Durable Object exchanges the
+     *  code for the first tokens. Bring your own OAuth client. */
+    connect(name: string, options: SecretConnectOptions): Promise<{ authorizationUrl: string }>;
     delete(name: string): Promise<{ ok: true }>;
     list(): Promise<SecretCatalogEntry[]>;
   };
@@ -376,6 +382,20 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             });
             await cell.set(record);
             return { ok: true as const };
+          }),
+        ),
+      connect: (name, options) =>
+        onRootContext(["connect", name, options], () =>
+          serializeSecretMutation(name, async () => {
+            const cell = secretCell(name);
+            const connect = normalizeSecretConnect(options);
+            // The catalog fact first, as for `set`: the name, its pin and the strategy the exchange
+            // will configure — the material arrives later, at the callback, and only into the cell.
+            await append({
+              type: "events.iterate.com/secrets/changed",
+              payload: { name, urls: connect.urls, refresh: "oauth-refresh-token" },
+            });
+            return cell.beginConnect(connect);
           }),
         ),
       delete: (name) =>

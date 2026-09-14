@@ -10,7 +10,7 @@
 // The material never leaves: the catalog fact and the log carry the pin and the kind, never a value.
 
 import { expect, test } from "vitest";
-import { freshCtx, openItx, readAll } from "./support/client.ts";
+import { freshCtx, openItx, readAll, workerUrl } from "./support/client.ts";
 import {
   petshopAuthorizationServer,
   petshopBaseUrl,
@@ -155,6 +155,73 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
   const refusal = await elsewhere.text();
   expect(refusal).toContain(`bound to ${petshop}`);
   expect(refusal).not.toContain(first.accessToken);
+});
+
+// THE CONNECT HALF, run by the platform: `itx.secrets.connect` hands back the provider's authorize
+// URL; the human consents there (the petshop's test-only `approve=1` shortcut stands in for the
+// page); the provider redirects to the platform's one callback with the code; the secret's Durable
+// Object exchanges it. From then on it is the ordinary `oauth-refresh-token` secret the story above
+// proves. No code outside that object ever held a token — not even the test.
+test("connect: the platform runs the consent half — authorize URL out, the code back at the platform's callback, the exchange inside the secret's Durable Object; then a call, expiry and refresh as before", async () => {
+  const itx = openItx(freshCtx("secrets-connect"));
+  const petshop = petshopBaseUrl();
+  const { authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint } =
+    await petshopAuthorizationServer();
+  const client = await petshopMintClient();
+
+  const { authorizationUrl } = await itx.secrets.connect("petshop", {
+    authorizationEndpoint,
+    tokenEndpoint,
+    ...client,
+    scope: "pets",
+    urls: [petshop],
+  });
+  // the catalog knows the name, the pin and the strategy already; the material arrives at the callback
+  expect(await itx.secrets.list()).toEqual([
+    { name: "petshop", urls: [petshop], refresh: "oauth-refresh-token" },
+  ]);
+  // a use before the callback is a clean 502: nothing to substitute, nothing to refresh with yet
+  expect((await bearerCall(itx, "petshop", "/api/me")).status).toBe(502);
+
+  // the human's consent: the URL names the platform's callback and carries PKCE
+  const authorize = new URL(authorizationUrl);
+  const callback = workerUrl("/.auth/connect/callback");
+  expect(authorize.searchParams.get("redirect_uri")).toBe(callback);
+  expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
+  expect(authorizationUrl).not.toContain(client.clientSecret);
+  authorize.searchParams.set("approve", "1");
+  const consent = await fetch(authorize, { redirect: "manual" });
+  expect(consent.status).toBe(302);
+  const back = new URL(consent.headers.get("location")!);
+  expect(back.origin + back.pathname).toBe(callback);
+  expect(back.searchParams.get("code")).toBeTruthy();
+
+  // the callback: the exchange happens inside the secret's Durable Object
+  const done = await fetch(back);
+  const said = await done.text();
+  expect(done.status, said).toBe(200);
+  expect(said).toContain('the secret "petshop"');
+  // a replayed callback completes nothing (the attempt was consumed)
+  expect((await fetch(back)).status).toBe(400);
+  // a forged state is refused before any Durable Object is dialled
+  const forged = new URL(back);
+  forged.searchParams.set("state", "not-signed-by-us");
+  expect((await fetch(forged)).status).toBe(400);
+
+  // now an ordinary oauth-refresh-token secret: a call, expiry, transparent refresh
+  expect(await bearerCall(itx, "petshop", "/api/me")).toMatchObject({
+    status: 200,
+    body: { clientId: client.clientId },
+  });
+  await petshopExpireTokens(client.clientId);
+  expect(await bearerCall(itx, "petshop", "/api/me")).toMatchObject({
+    status: 200,
+    body: { clientId: client.clientId },
+  });
+  // and nothing token-shaped on the log
+  const log = JSON.stringify(await readAll(itx));
+  expect(log).not.toContain(client.clientSecret);
+  expect(log).not.toContain("access_token");
 });
 
 test("one request, one secret: a request naming two secrets is refused at the door", async () => {

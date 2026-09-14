@@ -12,6 +12,7 @@ import { IterateContextDurableObject } from "./iterate-context-durable-object.ts
 import type { Env as WorkerEnv } from "./control-plane.ts";
 import { auth } from "./sdk/auth.ts";
 import { identityDoor } from "./identity.ts";
+import { SECRET_CONNECT_CALLBACK_PATH, secretConnectCallback } from "./secret-connect.ts";
 import { oauthResponse } from "./api.ts";
 import { consoleHandler } from "./control-plane.ts";
 import { appConfigOf } from "./app-config.ts";
@@ -198,6 +199,9 @@ export default {
       );
     }
 
+    // The OAuth connect half's one callback (secret-connect.ts): a provider sends a human back here
+    // with the code for a project secret. Before the browser adapter, which owns the rest of /.auth/*.
+    if (url.pathname === SECRET_CONNECT_CALLBACK_PATH) return secretConnectCallback(request, env);
     const identityResponse = await identityDoor(request, env);
     if (identityResponse) return identityResponse;
     if (!appConfig.mcpOrigin && url.pathname === "/mcp") return oauthResponse(request, env, ctx);

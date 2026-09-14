@@ -8,9 +8,20 @@
 //
 // The catalog (name, pin, strategy kind) is a fact on the project's log (`secrets/changed`); this
 // object is the physical value — apps/os's Secret DO, minus its stream (the material sits in this
-// object's storage, never on a log).
+// object's storage, never on a log). `beginConnect` + `completeConnect` are the OAuth connect half
+// (secret-connect.ts): the pending attempt lives here too, and the code exchange writes the record.
 
 import { DurableObject } from "cloudflare:workers";
+import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
+import { signClaims } from "./principal.ts";
+import {
+  beginSecretConnect,
+  completeSecretConnect,
+  normalizeSecretConnect,
+  SECRET_CONNECT_CALLBACK_PATH,
+  type PendingSecretConnect,
+  type SecretConnectState,
+} from "./secret-connect.ts";
 import {
   originPinned,
   pinRefusal,
@@ -25,7 +36,7 @@ import {
  *  from the old. */
 type Stored = { record: SecretRecord; revision: number };
 
-export class SecretDurableObject extends DurableObject {
+export class SecretDurableObject extends DurableObject<AppConfigEnv> {
   /** The one refresh in flight, keyed by the revision it read (single-flight: N callers who 401
    *  together on the same material share ONE mint). A caller holding a NEWER revision — a `set`
    *  landed while a mint for the old material was running, and the fence will drop that mint — is
@@ -46,10 +57,48 @@ export class SecretDurableObject extends DurableObject {
     await this.ctx.storage.deleteAll();
   }
 
+  /** THE CONNECT HALF, step one: keep the pending attempt, hand back the authorize URL. The `state`
+   *  is a platform-signed claim naming this secret plus a nonce only this attempt knows; the
+   *  redirect URI is the platform's one callback (secret-connect.ts). A new attempt replaces an
+   *  unfinished one; the record, if any, stays until the exchange writes over it. */
+  async beginConnect(options: unknown): Promise<{ authorizationUrl: string }> {
+    const config = appConfigOf(this.env);
+    const { projectId, name } = this.#address();
+    const nonce = crypto.randomUUID();
+    const state: SecretConnectState = { projectId, name, nonce, exp: Date.now() + 10 * 60_000 };
+    const { pending, authorizationUrl } = await beginSecretConnect(
+      normalizeSecretConnect(options),
+      {
+        redirectUri: `${config.platformOrigin}${SECRET_CONNECT_CALLBACK_PATH}`,
+        state: await signClaims(state, config.sessionSecret.exposeSecret()),
+        nonce,
+      },
+    );
+    await this.ctx.storage.put<PendingSecretConnect>("pending", pending);
+    return { authorizationUrl };
+  }
+
+  /** THE CONNECT HALF, step two (the callback): the code for the pending attempt the nonce names →
+   *  the exchange → the record, as a `set`. Once: the pending attempt is consumed either way. */
+  async completeConnect(input: { code: string; nonce: string }): Promise<void> {
+    const pending = await this.ctx.storage.get<PendingSecretConnect>("pending");
+    await this.ctx.storage.delete("pending");
+    if (!pending || pending.nonce !== input.nonce)
+      throw new Error("no pending connection matches this callback — start the connection again");
+    if (pending.until <= Date.now())
+      throw new Error("the connection attempt expired — start the connection again");
+    const record = await completeSecretConnect(pending, input.code, (exchange) => {
+      if (!originPinned(exchange.url, pending.urls))
+        throw new Error(`the token endpoint ${new URL(exchange.url).origin} is outside the pin`);
+      return dispatch(exchange);
+    });
+    await this.set(record);
+  }
+
   /** THE CELL: substitute, pin, dispatch — refresh and retry once on a mintable miss or a 401. A
    *  refusal is a 502 to the caller with the reason (never the destination, never the value). */
   override async fetch(request: Request): Promise<Response> {
-    const name = this.ctx.id.name?.slice(this.ctx.id.name.indexOf(":") + 1) ?? "?";
+    const { name } = this.#address();
     // The record AS OF NOW, its pin checked against THIS request every time it is read — after a
     // refresh (or a `set` that won the revision fence) the pin may have moved, and the retried
     // request must honour the pin the new material was set with.
@@ -102,6 +151,13 @@ export class SecretDurableObject extends DurableObject {
         return new Response(`${error.message}\n`, { status: 502 });
       throw error;
     }
+  }
+
+  /** This object's name, `<projectId>:<name>` (a project id never holds a `:`). */
+  #address(): { projectId: string; name: string } {
+    const id = this.ctx.id.name ?? ":";
+    const colon = id.indexOf(":");
+    return { projectId: id.slice(0, colon), name: id.slice(colon + 1) };
   }
 
   #refresh(revision: number): Promise<void> {
