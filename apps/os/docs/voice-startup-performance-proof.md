@@ -133,6 +133,24 @@ successful retry still leaves exactly one. All 110 focused alarm/sender tests,
 app typecheck, and targeted lint pass. This correction still needs deployed
 sustained-audio and recovery proof.
 
+On the corrected native deployment `b48bde47-2467-42d7-8c79-ae6cfbe469ef`,
+the first startup sample missed its 10-second deadline; the next four reached
+readiness at 4,996/3,712/2,184/3,497 ms and produced audio. These results do
+not establish acceptable performance. The cold sample's trace shows a
+6,416 ms project-config-worker build before the first voice setup append;
+OpenAI had not been contacted. A separate continuous-input test hit its
+eight-in-flight limit after 1.1 seconds of 100 ms microphone appends:
+acknowledgements took 108–1,282 ms (median 789 ms). It stopped before a complete
+spoken answer, then closed normally. Source review found that ephemeral
+processor batches also awaited the new remote alarm barrier. This is a
+release-blocking regression. The follow-up gives each outstanding ephemeral
+batch a bounded in-memory timeout, cancelled on acknowledgement or close,
+while durable batches retain their acknowledged recovery alarm. All 113 focused
+tests pass, including a final unacknowledged PCM batch with no future append,
+acknowledgement cancellation, and replacement cancellation. Deployed audio
+proof is still required. Raw evidence is in `startup-alarm-fix-baseline.json` and
+`hosted-continuous-audio-alarm-barrier.json` under the temporary artifact directory.
+
 During source installation/mounting, two `stream core background work failed`
 errors at 14:39:10 UTC mapped to ancestor `child-stream-created` announcements.
 They preceded the first measured leaf announcement by 37 seconds. All 20 expected
@@ -255,6 +273,24 @@ existing Agent setup batch, an inert DO-facet egress control, longer idle
 intervals, and three simultaneous calls. Its alarm review found the correctness
 boundary described above. No security-policy relaxation, discarded audit write,
 keepalive, or Agent harness change was adopted from the review.
+
+A minimal provider control alternated five stateless Worker calls and five
+fresh dynamic stateful-worker calls, with the same source, project egress,
+secret, model, instructions, and paced input. Stateless readiness was
+862/954/865/901/1,048 ms (median 901); stateful readiness was
+3,167/2,260/2,810/2,337/1,749 ms (median 2,337). These are remote method-entry
+to `session.started` measurements, excluding caller dispatch. First PCM
+medians were 1,785 and 3,162 ms respectively. All ten produced audio and
+observed socket closure. The stateless result is close to the earlier direct
+Node control's 840 ms readiness, with the usual location and clock limits.
+
+This stateful control uses `StatefulWorkerDurableObject`, not a hosted stream
+processor; changing its path prefix does not change its placement. It therefore
+does not measure the hosted-stream overhead. The first probe mistakenly called
+the platform's literal `getSecret(...)` header grammar as a JavaScript function;
+all ten rows failed before fetch and are retained separately, not counted as
+OpenAI samples. Corrected results are in
+`facet-vs-stateless-live-probe-v2-result.json` in the temporary artifact directory.
 
 ## Reproduce
 

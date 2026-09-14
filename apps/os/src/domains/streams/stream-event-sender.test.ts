@@ -2513,8 +2513,16 @@ describe("ephemeral delivery to hosted processors", () => {
       wakeProcessor: wakeReturning(calls, consumes),
     });
     h.eventSender.sendDue();
+    for (let attempt = 0; calls.length === 0 && attempt < 10; attempt += 1) {
+      await Promise.resolve();
+    }
+    const delivered = typesDelivered(calls);
+    // These contract tests deliberately do not model an acknowledgement. Close
+    // their real retained callback so the memory watchdog is cancelled instead
+    // of leaving a live 20-second timer behind in the test worker.
+    h.eventSender.connections.close(PROCESSOR_KEY, "replaced");
     await h.settle();
-    return typesDelivered(calls);
+    return delivered;
   };
 
   it("delivers an ephemeral event whose type the processor named", async () => {
@@ -3173,15 +3181,93 @@ describe("StreamConnections hosted delivery watchdog", () => {
       processEventBatch: recordingProcessEventBatch(calls, () => undefined),
       replayAfterOffset: 0,
     });
+    const alarmCountBeforePcm = h.alarmTimes.length;
     connection.sendQueued();
     expect(calls).toHaveLength(1);
     expect(calls[0]!.batch.events).toHaveLength(2);
-    /* No mark: the row never learned a batch was in flight. */
+    /* No durable marker or additional alarm: PCM stays on memory only. */
     expect(h.store.get("processor")?.inFlightDeadlineAt ?? null).toBeNull();
+    expect(h.alarmTimes).toHaveLength(alarmCountBeforePcm);
     calls[0]!.report("ok");
     await flushMicrotasks();
     /* And the lane keeps moving: the ack dispatched the next scan. */
     expect(h.store.get("processor")?.inFlightDeadlineAt ?? null).toBeNull();
+  });
+
+  it("times out an unacknowledged final ephemeral batch without a native alarm", async () => {
+    vi.useFakeTimers();
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({ events: [{ ...streamEvent(1), ephemeral: true as const }] });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    try {
+      const alarmCountBeforePcm = h.alarmTimes.length;
+      connection.sendQueued();
+      expect(calls).toHaveLength(1);
+      expect(h.alarmTimes).toHaveLength(alarmCountBeforePcm);
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_DELIVERY_TIMEOUT_MS);
+      expect(h.deliveryFailures).toHaveBeenCalledOnce();
+      expect(h.connections.has("processor")).toBe(false);
+      // A late acknowledgement belongs to the closed generation and cannot
+      // create a second failure or revive this connection.
+      calls[0]!.report("ok");
+      expect(h.deliveryFailures).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels an acknowledged ephemeral watchdog before its deadline", async () => {
+    vi.useFakeTimers();
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({ events: [{ ...streamEvent(1), ephemeral: true as const }] });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    try {
+      connection.sendQueued();
+      expect(calls).toHaveLength(1);
+      calls[0]!.report("ok");
+
+      // The acknowledgement synchronously cancels its own timer. Any later
+      // empty catch-up scan has a new deadline, so reaching this deadline
+      // cannot report the completed batch as hung.
+      await vi.advanceTimersByTimeAsync(DEFAULT_DELIVERY_TIMEOUT_MS);
+      expect(h.deliveryFailures).not.toHaveBeenCalled();
+      expect(h.connections.has("processor")).toBe(true);
+    } finally {
+      h.connections.close("processor", "replaced");
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels an ephemeral watchdog when its connection is replaced", async () => {
+    vi.useFakeTimers();
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({ events: [{ ...streamEvent(1), ephemeral: true as const }] });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    try {
+      connection.sendQueued();
+      expect(calls).toHaveLength(1);
+      h.connections.close("processor", "replaced");
+      await vi.advanceTimersByTimeAsync(DEFAULT_DELIVERY_TIMEOUT_MS);
+      expect(h.deliveryFailures).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the insurance for a durable batch", () => {

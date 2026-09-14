@@ -1843,6 +1843,13 @@ type StreamConnection = {
   close(reason: ConnectionCloseReason, error?: string): void;
 };
 
+type HostedInFlightBatch = {
+  deadlineAtMs: number;
+  insured: boolean;
+  startedAtMs: number;
+  uninsuredTimer?: { resolve(): void; timer: ReturnType<typeof setTimeout> };
+};
+
 /**
  * Apply a session connection's per-batch delivery ceilings. Count first,
  * then cumulative bytes; the first event always survives so one event
@@ -2453,10 +2460,7 @@ export class StreamConnections {
      * row always names the OLDEST outstanding insured batch, so eviction
      * recovery starts from the first thing that might not have landed.
      */
-    const hostedInFlight = new Map<
-      symbol,
-      { startedAtMs: number; deadlineAtMs: number; insured: boolean }
-    >();
+    const hostedInFlight = new Map<symbol, HostedInFlightBatch>();
     /** The wake greeting's token while unacknowledged: it alone is single-flight. */
     let greetingToken: symbol | null = null;
     /** Start of the un-reported scan window; null once a batch reported it. */
@@ -2474,13 +2478,9 @@ export class StreamConnections {
 
     const sendQueuedBatches = async () => {
       /*
-       * THE UNINSURED BATCH'S WATCHDOG IS THIS CHECK. An all-ephemeral batch
-       * dispatches without the durable in-flight row, so nothing else notices
-       * if its ack never comes back from a facet that hung without dying (a
-       * dead one surfaces as rpc-broken on its own). This lane's next
-       * dispatch attempt — every append tries one — is the detector: past
-       * the deadline, fail the batch the way the durable watchdog would
-       * have, which closes and replaces the connection.
+       * A later append is a secondary deadline check. The primary check for
+       * an uninsured final PCM batch is its memory-only timeout, installed
+       * before the callback below; it needs no durable parent alarm write.
        */
       if (
         kind === "hosted" &&
@@ -2489,8 +2489,6 @@ export class StreamConnections {
       ) {
         const nowMs = this.#hooks.now();
         if ([...hostedInFlight.values()].some((flight) => nowMs > flight.deadlineAtMs)) {
-          hostedInFlight.clear();
-          greetingToken = null;
           this.onHostedDeliveryError(
             connectionKey,
             new Error(`hosted batch unacknowledged for ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`),
@@ -2681,11 +2679,31 @@ export class StreamConnections {
             const insuredAlreadyOutstanding = [...hostedInFlight.values()].some(
               (flight) => flight.insured,
             );
-            hostedInFlight.set(deliveryToken, {
+            const flight: HostedInFlightBatch = {
               startedAtMs: dispatchedAtMs,
               deadlineAtMs: batchDeadlineAtMs,
               insured,
-            });
+            };
+            hostedInFlight.set(deliveryToken, flight);
+            if (!insured) {
+              // Ephemeral bodies cannot survive an eviction, so retain only a
+              // bounded in-memory timeout. It preserves a final hung callback's
+              // terminal outcome without a parent alarm RPC per PCM batch.
+              const timeout = Promise.withResolvers<void>();
+              const timer = setTimeout(() => {
+                timeout.resolve();
+                if (hostedInFlight.get(deliveryToken) !== flight) return;
+                this.onHostedDeliveryError(
+                  connectionKey,
+                  new Error(
+                    `uninsured hosted batch acknowledgement timed out after ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`,
+                  ),
+                  expectedDelivery,
+                );
+              }, DEFAULT_DELIVERY_TIMEOUT_MS);
+              flight.uninsuredTimer = { resolve: timeout.resolve, timer };
+              this.#hooks.keepAlive(timeout.promise);
+            }
             if (isInitialBatch) greetingToken = deliveryToken;
             if (insured && !insuredAlreadyOutstanding) {
               // This SQLite write and the native alarm are both issued before
@@ -2701,20 +2719,27 @@ export class StreamConnections {
                 cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
               });
             }
-            // Armed for BOTH kinds — for the uninsured it is the backstop
-            // that gets the wedge check a turn when no append ever comes,
-            // and it is free whenever any earlier alarm is already armed
-            // (armNoLaterThan skips the write).
-            this.#hooks.armAlarm(batchDeadlineAtMs);
-            const awaitAlarmWrite = this.#hooks.awaitAlarmWrite;
-            if (awaitAlarmWrite) await awaitAlarmWrite();
+            if (insured) {
+              // This durable watchdog must commit before the receiver observes
+              // a recoverable batch. Uninsured PCM uses its bounded memory-only
+              // timeout above and never crosses the hosted parent alarm relay.
+              this.#hooks.armAlarm(batchDeadlineAtMs);
+              const awaitAlarmWrite = this.#hooks.awaitAlarmWrite;
+              if (awaitAlarmWrite) await awaitAlarmWrite();
+            }
             (processEventBatch as unknown as RetainedProcessEventBatch<StreamWakeEventBatch>)({
               ...batch,
               reportDeliveryResult: (deliveryResult) => {
                 // Each callback belongs to exactly one batch. Duplicate or
                 // late reports cannot complete a replacement connection or the
                 // next batch on this connection.
-                if (!hostedInFlight.delete(deliveryToken)) return;
+                const settledFlight = hostedInFlight.get(deliveryToken);
+                if (!settledFlight) return;
+                hostedInFlight.delete(deliveryToken);
+                if (settledFlight.uninsuredTimer) {
+                  clearTimeout(settledFlight.uninsuredTimer.timer);
+                  settledFlight.uninsuredTimer.resolve();
+                }
                 if (greetingToken === deliveryToken) greetingToken = null;
                 const parsed = parseWakeDeliveryResult(deliveryResult);
                 if (
@@ -2840,6 +2865,11 @@ export class StreamConnections {
       close: (reason, error) => {
         if (!open) return;
         open = false;
+        for (const flight of hostedInFlight.values()) {
+          if (!flight.uninsuredTimer) continue;
+          clearTimeout(flight.uninsuredTimer.timer);
+          flight.uninsuredTimer.resolve();
+        }
         hostedInFlight.clear();
         greetingToken = null;
         if (this.#connections.get(connectionKey) === connection) {

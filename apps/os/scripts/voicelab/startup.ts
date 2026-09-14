@@ -442,5 +442,5 @@ export async function startup(options: StartupOptions) {
     throw new Error(`project WebSocket cleanup failed: ${projectSocketCloseFailure}`);
   }
   if (failures.length > 0)
-    throw new Error(`${String(failures.length)} startup run(s) emitted provider diagnostics`);
+    throw new Error(`${String(failures.length)} startup run(s) failed or emitted diagnostics`);
 }
