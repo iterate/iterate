@@ -36,6 +36,7 @@ const desktopWebUse = {
 
 export default defineConfig({
   testDir: "specs",
+  globalSetup: "./specs/setup.ts",
   testMatch: "**/*.spec.ts",
   // Stateful specs provision isolated fixture projects; local-only helper
   // specs share no remote state. Parallel in CI against a deployed slot;
