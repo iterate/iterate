@@ -165,7 +165,7 @@ is durable**.
 a bare `async function` and an `RpcTarget` subclass both work.
 
 How a client reaches one (`src/session.ts`, the apps/os session shape):
-`UnauthenticatedSession.authenticate(credentials: SessionCredentials)` → `Session`
+`IterateRpcTarget.authenticate(credentials: SessionCredentials)` → `SessionRpcTarget`
 (`whoami()` → `SessionPrincipal`, and the getter `projects`) → `ProjectCollection`:
 `list()` → `Project[]` (`{ id, orgId, role? }` — the projects of the orgs the user belongs to; every
 project, no role, for the admin secret), `get(project)` → the root `IterateContext` (a project only —
@@ -550,23 +550,21 @@ Everything on a project host is the app's; the platform's own doors stay on the 
 An app that fetches its own host re-enters the edge with the hop count it FORWARDS
 (`x-itx-expression-hops`, the count the app was handed); the fourth forwarded pass is a 508 — a
 fresh Request starts at zero, so an app looping its own project with fresh Requests is its own
-cost. WHO, on a project host:
-`/.itx/session?token=<projectToken>&next=<path>` turns a token for THIS project into the host-scoped
-`__Host-itx-project-session` cookie (HttpOnly, Secure, SameSite=Lax, `Path=/`, no `Domain` — the
-`__Host-` prefix makes a browser refuse it set any other way, so no sibling host can set or shadow it;
-until the token expires) and redirects; `POST ?logout` clears it (a GET is 405 — a GET cannot end a
-session; a foreign origin's POST 403). A valid project token — the cookie (a browser), or `Authorization: Bearer
-<projectToken>` (a script; the bearer wins when both are present) —
-stamps `x-itx-principal` (the JSON principal) on the Request the app sees, and the lane's call runs
-under it; the token itself never reaches the app: the platform's cookie is stripped from the cookie
-header, and a bearer that verified for THIS project — its token, the admin secret, its own secret —
-is dropped (an app's own bearer scheme, and a credential of another project, pass through untouched,
-as a visitor's other cookies do); a visitor's own `x-itx-principal` is stripped with every inbound
-`x-itx-*`; a token for another project is a 401 at the session door. The admin secret as the bearer
-is `{ actor: "admin" }` on any project. The control plane's session cookie is never a lane
-credential: a cross-site top-level navigation carries it with no `Origin` to check, so it counts on
-`/api` alone (`from-server-cookie`). Who logs in and mints the token is the control plane's; the
-ingress only verifies.
+cost. WHO, on a project host: the same OAuth grants as everywhere else. A browser signs in through the
+app's own `/.auth/*` adapter on that host (`src/client/app-auth.ts`: `/.auth/login` sends it to the
+issuer, `/.auth/callback` exchanges the code, `/.auth/logout` ends it) and holds one opaque HttpOnly
+`__Host-itx-session` cookie whose `BrowserSession` Durable Object keeps the tokens
+(`browserAuthorization`, `src/browser-client.ts`); a script sends `Authorization: Bearer <accessToken>`
+— an OAuth grant's access token (a personal access token included) or the admin secret (the bearer
+wins when both are present). The edge admits either through the one provider gate
+(`authorizationForToken`, `src/worker.ts`): a bearer that does not verify is 401, a grant that does
+not reach THIS project is 403 (`directory.reachesProject`), and the verified principal is stamped as
+`x-itx-principal` (the JSON principal) on the Request the app sees; the lane's call runs under it.
+The credential itself never reaches the app: every `__Host-itx-*` cookie is stripped from the cookie
+header (`appCookies`) and the platform's bearer is dropped (a visitor's other cookies, and an
+`Authorization` header in another scheme, pass through untouched); a visitor's own `x-itx-principal`
+is stripped with every inbound `x-itx-*`. The admin secret as the bearer is `{ actor: "admin" }` on
+any project. Who signs in is the issuer's (`/login`, the OAuth AS); the ingress only verifies.
 
 **The control plane** (`src/control-plane.ts`, IN-PROCESS: everything on the worker's hostname that
 is not `/api`, `/version` or a static asset (`dist/client`: the console's bundle, the hosted `/demo`
@@ -580,10 +578,10 @@ foreign one refused), a D1 directory (`control-plane.sql`: users → orgs via `o
 projects; access is org membership), THE CONSOLE — a TanStack Start app (`src/routes/**`, SSR'd
 here through the Start server entry; `src/router.tsx`, `routeTree.gen.ts`, `console.css`): `/login`
 (the email form; "continue as / switch account" with a session), the `_auth` layout (no session ⇒
-`/login?next=`), the account page at `/` (orgs; projects, each with an `open` link through
-`/.itx/session?token=` to its APEX host — the config worker's `fetch`, the bundled default's 404 for
-a project with none of its own — and one per app it serves, `<label>--<project>`; a create-project
-form; log out) and the `/authorize` consent — every route reading and acting through its own
+`/login?next=`), the account page at `/` (orgs; projects — a project's hosts, the APEX (the config
+worker's `fetch`, the bundled default's 404 for a project with none of its own) and one per app it
+serves, `<label>--<project>`, sign a visitor in through their own `/.auth/*` adapter, never through a
+token in a link; a create-project form; log out) and the `/authorize` consent — every route reading and acting through its own
 `createServerFn`s, which call this file's console half (`consoleSessionOf` · `signIn` · `signOut` ·
 `accountOf` · `createProjectFor` · `consentOf` · `approveConsent`) with the worker's env and the
 request as `context` (`src/routes/-console-context.ts`); beside them THE MACHINE DOORS
@@ -599,18 +597,15 @@ request the provider refuses is sent back to the client with `error`, `error_des
 and `iss` once its redirect URI validated, rendered here otherwise), and `/mcp` — THE ONE MCP SERVER
 for every project, ONE tool: `run({ project?, script })` — the text of
 `async (itx) => …` run (`itx.run`) in THAT project's root context in-process under the
-bearer's principal (`invokeAs`); `project` optional when the grant reaches exactly one, required
+bearer's principal; `project` optional when the grant reaches exactly one, required
 for the admin secret, refused outside the grant (apps/os `resolveToolProject`) and refused as a
 context name (the expression reaches the project's other contexts through `itx.cd(path)`); an
 expression error an `isError` result led by its code. No tool creates a project: a project is
 created on the console or over `/api` (`projects.create`). The provider's `resolveExternalToken`
-admits the platform's own credentials as bearers, through the one `verifyCredentials`: a project
-token (its principal on its one project), the admin secret (`{ actor: "admin" }`, every project) and
-a project's own secret, which names its project with `?project=<id>` on the `/mcp` URL
-(`{ actor: "project:<id>" }`, that project). What a bearer reaches is `reachOf`'s answer, THE
-BINDING FIRST: a bearer bound to named projects — a grant that chose, a token, a secret — reaches
-exactly those whoever it is (a token the admin minted reaches its one project, never every); unbound,
-the admin secret every project and a user the projects of their orgs. The admin secret's projects live in `org_admin`, the deployment's own org (no members;
+admits one more bearer: the admin secret (`{ actor: "admin" }`, every project). What a bearer
+reaches is its grant's `Reach` (`authorizationOf`, `src/oauth.ts`), THE CEILING FIRST: a grant that
+chose projects — a consent's selection, a personal access token's `projects` — reaches exactly those
+whoever it is; unbound, the admin secret every project and a user the projects of their orgs. The admin secret's projects live in `org_admin`, the deployment's own org (no members;
 `directory.adminOrg`).
 
 **Configuration** (`src/worker.ts`). ONE typed object per isolate, parsed once from the
@@ -835,8 +830,8 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
 ### Decided on 2026-09-06, done (identity — the assessment's Gap 2)
 
 - **The principal is an event `source`**, the platform's own field (`source.principal`, section 4
-  "Who"): set by the DO's append root from the session's verified project token, never taken from a
-  client. The two questions the assessment left open are answered minimally: a loaded worker's
+  "Who"): set by the DO's append root from the session's verified principal (an OAuth grant's, or
+  the admin secret's), never taken from a client. The two questions the assessment left open are answered minimally: a loaded worker's
   `env.ITX` carries NO principal (it speaks for the project; the request's principal reaches the app
   as `x-itx-principal` and the app attributes what it appends itself), and membership stays the
   control plane's — the token names one project, minted after the check, so the worker calls no
@@ -847,8 +842,8 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
   `INVALID_CREDENTIALS` for a bad and an expired token) and the session-door test in
   `e2e/ingress-project-host.e2e.test.ts` (the cookie, the header the app sees, a forged header
   stripped, a foreign token's 401, logout). `src/principal.test.ts` is the token table.
-- Deferred then, built since: the machine lane (`Authorization: Bearer <projectToken>` on a project
-  host, section 10; `itx.serveMcp()` of that day is gone since 2026-09-09 — the one `/mcp` below)
+- Deferred then, built since: the machine lane (`Authorization: Bearer` — an OAuth access token — on
+  a project host, section 10; `itx.serveMcp()` of that day is gone since 2026-09-09 — the one `/mcp` below)
   and the login page (the in-process control plane's email form, section 10).
 
 ### Decided on 2026-09-08, done (ONE worker, ONE package)
@@ -858,8 +853,8 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
   `src/worker.ts`'s catch-all (`src/control-plane.ts`, section 10): an OAuth AS, a D1 directory of
   users, orgs and projects (a project's id IS its DNS-safe name), `/mcp`, a console with an email login
   form (the `open` login mode of that day is gone since 2026-09-09: every session names a
-  credential — the cookie, a project token, the admin secret). Ingress admits a project host by ONE
-  directory read.
+  credential — an OAuth grant, as the cookie or a bearer, or the admin secret). Ingress admits a
+  project host by ONE directory read.
 - The session is the catalog (section 4): `authenticate(credentials)`; `Session.whoami()`;
   `projects.list()` / `get(project)` / `create({ project })`.
 - Egress is terminal (section 5, `fetch`): a request naming a secret is forwarded to that secret's
@@ -873,8 +868,9 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
 - `/mcp` on the platform host is the ONE MCP server for every project (section 10): the provider's
   one pinned resource (`<origin>/mcp`), `/oauth/token` + `/oauth/register`, CIMD on, PKCE S256 only;
   project selection at consent narrows `props.projects`; `itx.invoke({ project?, expression, args? })`
-  runs through the named project's context under the bearer's principal; the admin secret and a
-  project secret are bearers through `resolveExternalToken`.
+  runs through the named project's context under the bearer's principal; the admin secret is a
+  bearer through `resolveExternalToken` (the project-secret bearer of that day was deleted on
+  2026-09-14, PR #2644).
 - `itx.serveMcp()` — the library member, `McpServerHandle`, its unit rows, the
   `library-mcp-server` e2e and the per-project `mcp--<p>.<base>` mount — is DELETED, and with it
   the email-mode red pin (an anonymous `tools/call` on the mount): there is no unauthenticated MCP

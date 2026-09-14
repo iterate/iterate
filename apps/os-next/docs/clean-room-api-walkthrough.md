@@ -56,9 +56,9 @@ flowchart LR
     c["capnweb session<br/>api.authenticate(credentials).projects.get(project)"]
   end
   subgraph edge["project-worker, ONE stateless worker (src/worker.ts)"]
-    api["/api → UnauthenticatedSession → Session → ProjectCollection → IterateContext<br/>src/session.ts, src/iterate-context.ts"]
+    api["/api → IterateRpcTarget → SessionRpcTarget → ProjectCollection → IterateContext<br/>src/session.ts, src/iterate-context.ts"]
     relay["pager relay + SessionTeardown<br/>the session's lent rpc stubs"]
-    host["project-host ingress: app--project.base | app.project.base → itx.apps.app, project.base → itx.worker<br/>src/worker.ts · x-iterate-app · /.itx/session · Bearer token | admin secret | project secret"]
+    host["project-host ingress: app--project.base | app.project.base → itx.apps.app, project.base → itx.worker<br/>src/worker.ts · x-iterate-app · /.auth/* · Bearer access token | admin secret"]
     cp["the control plane, in-process (the catch-all)<br/>OAuth AS · D1 directory · /mcp · console<br/>src/control-plane.ts"]
   end
   subgraph do["IterateContextDurableObject, one per {projectId, path}"]
@@ -119,16 +119,18 @@ packages/v3/project-worker/
                                  -console-context.ts (the one typed door to the worker's env + request for every
                                  server function). router.tsx · routeTree.gen.ts (generated, checked in) · console.css
     worker.ts                    THE EDGE and the front door. default fetch: project-host ingress (the three
-                                 host shapes, admission, x-iterate-app, /.itx/session, the principal stamp —
+                                 host shapes, admission, x-iterate-app, the OAuth bearer or the app's
+                                 /.auth/* session, the principal stamp —
                                  the one HTTP way into a project), /api, /version, the static assets (the
                                  platform host's alone); everything else on the worker's hostname is the
                                  in-process control plane.
                                  Exports ItxEntrypoint, IterateContextDurableObject.
-    session.ts                   UnauthenticatedSession → Session (whoami, projects) → ProjectCollection
+    session.ts                   IterateRpcTarget → SessionRpcTarget (whoami, projects, grants) → ProjectCollection
                                  (list · get · create — the gate + catalog); SessionTeardown (what a session
                                  undoes at its end)
-    principal.ts                 WHO: the project token (signClaims/verifyClaims — the ONE signed-claims
-                                 codec), stampPrincipal (source.principal), x-itx-principal
+    principal.ts                 WHO: Principal + Caller, stampPrincipal (source.principal), x-itx-principal,
+                                 verifyAdminSecret; signClaims/verifyClaims (the login flow's cookie — the
+                                 ONE signed-claims codec)
     types.ts                     the `./types` export: the session and context types, hand-written
     control-plane.ts             THE CONTROL PLANE, in-process (the catch-all): the OAuth AS wrapper
                                  (/authorize /oauth/token /oauth/register /.well-known, /mcp its one
@@ -140,7 +142,7 @@ packages/v3/project-worker/
                                  projects; a project's id IS its slug), /mcp — the ONE MCP server for every
                                  project (ONE tool: run(project?, script)); control-plane.sql is the schema
     iterate-context.ts           IterateContext, the client-facing RpcTarget: a PROXY in front of the DO —
-                                 cd · invoke · provide · subscribe · mintToken · rotateApiKey;
+                                 cd · invoke · provide · subscribe;
                                  RewriteRuleHandle / SubscriptionHandle (disposable); the DO-name codec
                                  (DurableObjectNameCodec, resolveContextPath); ItxEntrypoint (what a loaded
                                  worker's env.ITX is)
@@ -237,8 +239,12 @@ const mine = await session.projects.list(); // [{ id, orgId, role? }, …]
 
 // One-shot and socketless (CLI, cron): every call chained off the session flushes as ONE POST.
 // A batch session cannot hold live callbacks (nothing outlives the response).
-const cli = newHttpBatchRpcSession("https://<worker>/api")
-  .authenticate({ type: "project-token", token })
+const cli = newHttpBatchRpcSession(
+  new Request("https://<worker>/api", {
+    headers: { Authorization: `Bearer ${personalAccessToken}` }, // an OAuth grant: the gate resolves it
+  }),
+)
+  .authenticate({ type: "from-server-cookie" })
   .projects.get("prj_demo");
 ```
 
@@ -246,18 +252,18 @@ const cli = newHttpBatchRpcSession("https://<worker>/api")
 context's full name is accepted too); a non-root context name is refused, reach
 those with `cd`. `projects.create({ project })` slugifies the name — the slug IS the
 project's id, globally unique (`PROJECT_NAME_TAKEN` names another org's) — in the
-user's org, created on first use. WHO: `authenticate(credentials)` takes one of four
-kinds (`SessionCredentials`): `from-server-cookie` — the control plane's session cookie
-that rode the handshake, honoured on a same-origin request only (a foreign `Origin`, or
-no cookie, ⇒ `UNAUTHENTICATED`); `project-token` — a principal bound to ONE project
-(`get` of any other is `FORBIDDEN`; `list` is that project; `create` needs a signed-in
-user); `admin-secret` — the deployment's `APP_CONFIG_ADMIN_API_SECRET`, `{ actor: "admin" }`
-on every project (with `as: { email }` that user's session, no login);
-`project-secret` — the project's own key, `{ actor: "project:<id>" }`, bound like a
-token's. The root context `get` vends carries the two project doors:
-`itx.mintToken({ ttlSeconds? })` signs a project token as the session's principal, and
-`itx.rotateApiKey()` mints the project's key (only its hash is stored — a reveal IS a
-rotation). A user's `get` admits members of the owning org only. One
+user's org, created on first use. WHO: `authenticate(credentials)` takes one of two
+kinds (`SessionCredentials`): `from-server-cookie` — the OAuth grant the transport already
+resolved, the browser's cookie on a same-origin request or an `Authorization: Bearer` access
+token (a transport carrying none ⇒ `UNAUTHENTICATED`); `admin-secret` — the deployment's
+`APP_CONFIG_ADMIN_API_SECRET`, `{ actor: "admin" }` on every project (with `as: { email }`
+that user's session, no login), verified in-band on the operator door `/internal/rpc` (on
+`/api` the admin secret is a bearer like any other). OAuth grants are the one credential for
+everyone else: a PERSONAL ACCESS TOKEN is `session.grants.mint({ name, projects })` — one
+finite grant, 30 days, scoped to the projects named, its bearer answered once, listed and
+ended by `session.grants.list()` / `end` like any grant; `get` outside the grant's projects is
+`FORBIDDEN`, `list` is those projects, `create` on a narrowed grant is `FORBIDDEN`. A user's
+`get` admits members of the owning org only. One
 session may hold contexts of many projects; the session's `SessionTeardown` is keyed by the
 JSON pair `[iterateContextName, rpcStubKey]`, so two contexts lending under the same key never
 recall each other's stubs.
@@ -289,54 +295,51 @@ args (a callback function, a Date, bytes, a `Request`).
 type ProjectIdOrSlug = string;
 /** What a client hands `authenticate`: where its identity already is, or the secret that proves it. */
 type SessionCredentials =
-  | { type: "from-server-cookie" } // the login cookie on the handshake, same origin only
-  | { type: "project-token"; token: string } // short-lived, ONE user on ONE project
-  | { type: "project-secret"; project: ProjectIdOrSlug; secret: string } // the project itself: `rotateApiKey` minted it
-  | { type: "admin-secret"; secret: string; as?: { email: string } }; // every project; `as` impersonates
-/** Who a session is: a principal, bound to ONE project when it came from a project token or the
- *  project secret; the admin secret's is `{ actor: "admin" }`. */
-type SessionPrincipal = Principal & { projectId?: string }; // Principal = { actor: string; email?: string }
+  | { type: "from-server-cookie" } // the OAuth grant the transport already resolved: the browser's cookie on the handshake (same origin only), or a bearer access token
+  | { type: "admin-secret"; secret: string; as?: { email: string } }; // every project; `as` a user's session without a login
+/** Who a session is: `{ actor, email? }` — the grant's user, the admin's `as`, or `{ actor: "admin" }`. */
+type SessionPrincipal = Principal; // Principal = { actor: string; email?: string }
 
-class UnauthenticatedSession extends RpcTarget {
-  /** THE introduction door. Each kind has its check and its refusal, coded: the cookie on a
-   *  cross-origin browser request, or no cookie at all, is UNAUTHENTICATED; a token or a secret that
-   *  does not verify is INVALID_CREDENTIALS, whatever is wrong with it. The admin's `as` upserts
-   *  the user's row like /login. */
-  authenticate(credentials: SessionCredentials): Promise<Session>;
+class IterateRpcTarget extends RpcTarget {
+  /** THE introduction door. Each kind has its check and its refusal, coded: a transport that carries
+   *  no resolved grant (no cookie, a foreign origin, no bearer) is UNAUTHENTICATED; an admin secret
+   *  that does not match is INVALID_CREDENTIALS. The admin's `as` upserts the user's row like /login. */
+  authenticate(credentials: SessionCredentials): Promise<SessionRpcTarget>;
   /** capnweb calls this when the session ends: every stub this session lent is recalled
    *  (its pager closed), and every handle it exported is disposed — see 4.2. */
   [Symbol.dispose](): void;
 }
 
-class Session extends RpcTarget {
-  /** Who this session is: the user (the cookie's, the admin's `as`), the token's principal (and its
-   *  project), the project itself (`{ projectId, actor: "project:<projectId>" }`), or
+class SessionRpcTarget extends RpcTarget {
+  /** Who this session is: the grant's user (the cookie's, a bearer's), the admin's `as`, or
    *  `{ actor: "admin" }`. */
   whoami(): SessionPrincipal;
   /** The project catalog. A getter, not a field: capnweb exposes prototype members only. */
   get projects(): ProjectCollection;
+  /** The user's OAuth grants (src/grants.ts): `list(cursor?)`, `end(grantId)`, and `mint({ name,
+   *  projects })` — a PERSONAL ACCESS TOKEN: one finite grant, 30 days, scoped to the projects named,
+   *  its bearer answered ONCE. FORBIDDEN for the admin secret: it manages no grants. */
+  get grants(): Grants;
 }
 
 /** A directory row (src/control-plane.ts): the id IS the DNS-safe slug. */
 type Project = { id: string; orgId: string; role?: string };
 
 class ProjectCollection extends RpcTarget {
-  /** The projects the user can reach — a member of the owning org — with their role; the one project
-   *  a bound session names (its row, no role); for the admin secret, every project (no role). */
+  /** The projects this session reaches (`Reach`, src/directory.ts): the user's orgs' projects with
+   *  their role, narrowed to the projects a grant chose; for the admin secret, every project (no role). */
   list(): Promise<Project[]>;
   /** Create the project named `project` (slugified: that IS its id) in the user's org — their first,
    *  created on first use — or in the deployment's own `org_admin` for the admin secret, and vend its
-   *  root context. A name ANY org already holds is refused, coded (PROJECT_NAME_TAKEN); the same
-   *  org's again is idempotent. */
+   *  root context. A grant narrowed to named projects creates none: FORBIDDEN. A name ANY org already
+   *  holds is refused, coded (PROJECT_NAME_TAKEN); the same org's again is idempotent. */
   create(input: { project: ProjectIdOrSlug }): Promise<IterateContext>;
-  /** The project's root context ("/") — and, on it, the two project doors `mintToken` and
-   *  `rotateApiKey` (4.2), gated by this very admission. A project only — a context name belongs
-   *  to `cd`. A bound session (a project token, the project secret) holds its ONE project; a
-   *  user's session holds the projects of their orgs (one directory read); the admin secret's
-   *  holds any. The DO itself is materialized by the first door that reaches it (its constructor
-   *  appends `stream/created` + `stream/woken`, section 5.5). */
+  /** The project's root context ("/"). A project only — a context name belongs to `cd`. Outside this
+   *  session's reach is FORBIDDEN: a user's session holds the projects of their orgs (one directory
+   *  read), a grant that chose projects holds those, the admin secret's holds any. The DO itself is
+   *  materialized by the first door that reaches it (its constructor appends `stream/created` +
+   *  `stream/woken`, section 5.5). */
   get(project: ProjectIdOrSlug): Promise<IterateContext>;
-  // create() on a bound session is FORBIDDEN: a token or the project secret names one project.
 }
 ```
 
@@ -396,19 +399,6 @@ class IterateContext extends RpcTarget {
   // Processors are NOT edge verbs: `itx.processors.enable(name, { source, className, consumes? })`
   // / `.disable(name)` / `.list()` is a built-in root (context/built-ins.ts) — two appends spelled
   // for you inside the DO, reachable by a client, loaded code and a sibling through the same door.
-
-  // ── the project doors: what the session that vended this context may do FOR THE PROJECT, no DO touched ──
-  /** A PROJECT TOKEN for this project as this context's principal — `ProjectTokenClaims` signed
-   *  with `APP_CONFIG_PROJECT_TOKEN_SECRET`: what `/.itx/session?token=` on a project host turns
-   *  into its cookie, what a script presents as a bearer. The door is a member's, the admin's, or
-   *  the project-secret session's for its own project (then the actor is `project:<projectId>`).
-   *  15 minutes by default, 24 hours at most; a project-token session's handle (a delegation) and
-   *  a handle no session vended (`env.ITX`) are FORBIDDEN. */
-  mintToken(input?: { ttlSeconds?: number }): Promise<string>;
-  /** The project's API KEY, minted fresh and answered ONCE: only its SHA-256 hash is stored
-   *  (`SECRETS_KV` `project-api-key:<projectId>`), so a reveal IS a rotation and the previous key
-   *  stops verifying at once; a project has no key until the first call. The same door. */
-  rotateApiKey(): Promise<string>;
 
   // ── everything else: the DO's built-in roots and every rewrite rule ──
   /** Any undeclared dotted access reduces into invoke: itx.append({...}), itx.readEvents(0),
@@ -599,7 +589,7 @@ interface BuiltInScope {
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
 
-  /** Project secrets for egress: `getSecret("/secrets/NAME")` in an outbound request's URL or
+  /** The project's secrets for egress: `getSecret("/secrets/NAME")` in an outbound request's URL or
    *  headers substitutes to the value at the egress door (`fetch`); `getSecret("/secrets/NAME",
    *  { field: "a.b" })` to one field of a JSON value. WRITE-ONLY — `set`, `delete`, and a `list` of
    *  names and origins, never a value. A secret `set` with an `origin` is sent to that origin ONLY.
@@ -1450,11 +1440,11 @@ interface Context {
 
 ## 8. Worker entrypoints, DO classes, bindings
 
-| Export (from `src/worker.ts`) | Kind                                                                                          | Surface                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ----------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `default`                     | module worker `fetch`                                                                         | a PROJECT HOST — `<app>--<project>.<base>`, `<app>.<project>.<base>` (the app `itx.apps.<app>`), the apex `<project>.<base>` (the config worker, `itx.worker`) — admitted by `directory.getProject`, 421 for the unknown; `/.itx/session` the cookie door; `x-iterate-app` always overwritten; the Request rides verbatim into the DO's fetch lane; on the worker's hostname `/api` (capnweb: WS or one-shot HTTP batch → `UnauthenticatedSession`), `/version`, `/demo` (a static asset); everything else the in-process CONTROL PLANE |
-| `IterateContextDurableObject` | Durable Object (binding `ITERATE_CONTEXT`)                                                    | section 7                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `ItxEntrypoint`               | `WorkerEntrypoint`, minted via `ctx.exports.ItxEntrypoint({ props: { iterateContextName } })` | `get()` → the real `IterateContext` scope (every stream verb rides it: `env.ITX.get().append(…)`); `fetch` (egress). Nothing else.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Export (from `src/worker.ts`) | Kind                                                                                          | Surface                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `default`                     | module worker `fetch`                                                                         | a PROJECT HOST — `<app>--<project>.<base>`, `<app>.<project>.<base>` (the app `itx.apps.<app>`), the apex `<project>.<base>` (the config worker, `itx.worker`) — admitted by `directory.getProject`, 421 for the unknown; an OAuth bearer or the app's `/.auth/*` browser session stamps the principal; `x-iterate-app` always overwritten; the Request rides verbatim into the DO's fetch lane; on the worker's hostname `/api` (capnweb: WS or one-shot HTTP batch, behind the OAuth gate → `IterateRpcTarget`), `/internal/rpc` (the operator door: the same root, `admin-secret` in-band), `/version`, `/demo` (a static asset); everything else the in-process CONTROL PLANE |
+| `IterateContextDurableObject` | Durable Object (binding `ITERATE_CONTEXT`)                                                    | section 7                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `ItxEntrypoint`               | `WorkerEntrypoint`, minted via `ctx.exports.ItxEntrypoint({ props: { iterateContextName } })` | `get()` → the real `IterateContext` scope (every stream verb rides it: `env.ITX.get().append(…)`); `fetch` (egress). Nothing else.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 Injected into loaded isolates, never deployed as a class:
 
@@ -1482,33 +1472,33 @@ projects as checkboxes, all checked; approving grants the client the user on the
 grant that follows their membership).
 `/mcp` is the ONE MCP server for every project, ONE tool: `run({ project?, script })` — the
 text of `async (itx) => …` run (`itx.run`) in THAT project's root context in-process under
-the bearer's principal (the DO's `invokeAs`), `project` optional when the grant reaches exactly one,
+the bearer's principal, `project` optional when the grant reaches exactly one,
 required for the admin secret, refused outside the grant (apps/os's `resolveToolProject`) and refused
 as a context name (the
 expression `cd`s); an expression error is an `isError` result led by its code. No tool creates a
-project: a project is created on the console or over `/api` (`projects.create`). Two more bearers
-ride the provider's `resolveExternalToken`: the admin secret (`{ actor: "admin" }`, every project)
-and a project's own secret on `/mcp?project=<id>` (`{ actor: "project:<id>" }`, that project); what
-any bearer reaches is `reachOf`'s answer, the binding first — a project token the admin minted
-reaches its one project on `/mcp` exactly as over `/api`. The directory (D1 through
+project: a project is created on the console or over `/api` (`projects.create`). One more bearer
+rides the provider's `resolveExternalToken`: the admin secret (`{ actor: "admin" }`, every project);
+what any bearer reaches is its grant's `Reach` (`authorizationOf`, `src/oauth.ts`) — the projects
+the consent chose (a personal access token's, the ones named at mint), else the user's membership —
+on `/mcp` exactly as over `/api`. The directory (D1 through
 `prepare().bind()`, `control-plane.sql`): users → orgs via `org_members` → projects; access is org
 membership; a project's id is ONE DNS-safe slug — the directory row, the DO name and the host label.
 The admin secret's projects live in `org_admin`, the deployment's own org (no members).
 
 Bindings (`wrangler.jsonc`):
 
-| Binding               | Kind                                         | Used for                                                                                                                                                                                                                                                                                                                 |
-| --------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ITERATE_CONTEXT`     | DO namespace → `IterateContextDurableObject` | every context, `getByName(codec)`                                                                                                                                                                                                                                                                                        |
-| `LOADER`              | Worker Loader                                | `itx.workers.get`, processors                                                                                                                                                                                                                                                                                            |
-| `AI`                  | Workers AI                                   | `itx.ai`, the binding verbatim                                                                                                                                                                                                                                                                                           |
-| `ARTIFACTS`           | Cloudflare Artifacts namespace               | `itx.cfArtifacts` (project-scoped), `itx.repos`                                                                                                                                                                                                                                                                          |
-| `ITX_KV`              | KV                                           | `itx.kv`, keys prefixed `${projectId}:`                                                                                                                                                                                                                                                                                  |
-| `SECRET`              | Durable Object (`SecretDurableObject`)       | THE SECRET CELL, one per project secret (`<projectId>:<name>`): the material, its pin and its refresh strategy; `itx.secrets` writes it, egress forwards a placeholder-bearing request to it (src/secrets.ts, src/secret-durable-object.ts)                                                                              |
-| `DB`                  | D1                                           | the control plane's directory (`definitions.sql`)                                                                                                                                                                                                                                                                        |
-| `OAUTH_KV`            | KV                                           | the OAuth AS's store (grants, tokens, DCR clients)                                                                                                                                                                                                                                                                       |
-| `CF_VERSION_METADATA` | version metadata                             | `worker.ts` reads it into `deployId`: every loader cacheKey, and `/version`                                                                                                                                                                                                                                              |
-| `APP_CONFIG_*` vars   | configuration (`src/worker.ts`)              | parsed once per isolate into one typed object, an unknown var refused: `ENVIRONMENT_NAME`, `PROJECT_HOSTNAME_BASE`, `PROJECT_TOKEN_SECRET` (a wrangler secret on a deployment), `ARTIFACTS_ACCOUNT_ID`, `ARTIFACTS_NAMESPACE`, `SESSION_SECRET` and `ADMIN_API_SECRET` (both required; wrangler secrets on a deployment) |
+| Binding               | Kind                                         | Used for                                                                                                                                                                                                                                                                                                                                                                               |
+| --------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ITERATE_CONTEXT`     | DO namespace → `IterateContextDurableObject` | every context, `getByName(codec)`                                                                                                                                                                                                                                                                                                                                                      |
+| `LOADER`              | Worker Loader                                | `itx.workers.get`, processors                                                                                                                                                                                                                                                                                                                                                          |
+| `AI`                  | Workers AI                                   | `itx.ai`, the binding verbatim                                                                                                                                                                                                                                                                                                                                                         |
+| `ARTIFACTS`           | Cloudflare Artifacts namespace               | `itx.cfArtifacts` (project-scoped), `itx.repos`                                                                                                                                                                                                                                                                                                                                        |
+| `ITX_KV`              | KV                                           | `itx.kv`, keys prefixed `${projectId}:`                                                                                                                                                                                                                                                                                                                                                |
+| `SECRET`              | Durable Object (`SecretDurableObject`)       | THE SECRET CELL, one per secret of a project (`<projectId>:<name>`): the material, its pin and its refresh strategy; `itx.secrets` writes it, egress forwards a placeholder-bearing request to it (src/secrets.ts, src/secret-durable-object.ts)                                                                                                                                       |
+| `DB`                  | D1                                           | the control plane's directory (`definitions.sql`)                                                                                                                                                                                                                                                                                                                                      |
+| `OAUTH_KV`            | KV                                           | the OAuth AS's store (grants, tokens, DCR clients)                                                                                                                                                                                                                                                                                                                                     |
+| `CF_VERSION_METADATA` | version metadata                             | `worker.ts` reads it into `deployId`: every loader cacheKey, and `/version`                                                                                                                                                                                                                                                                                                            |
+| `APP_CONFIG_*` vars   | configuration (`src/app-config.ts`)          | parsed once per isolate into one typed object, an unknown var warned about at boot and ignored: `ENVIRONMENT_NAME`, `PLATFORM_ORIGIN`, `MCP_ORIGIN`, `PROJECT_HOSTNAME_BASE`, `ARTIFACTS_ACCOUNT_ID`, `ARTIFACTS_NAMESPACE`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `TEST_EMAIL_LOGIN`, `SESSION_SECRET` and `ADMIN_API_SECRET` (both required; wrangler secrets on a deployment) |
 
 The route `*.project-worker.iterate.com/*` (a wildcard DNS record in the zone) is the project hosts;
 `public/` is served as static assets (`/demo`). The e2e lane boots this same config, patched
@@ -1680,33 +1670,33 @@ itself.
 
 ## 10. Vocabulary
 
-| Word                  | Meaning here                                                                                                                                                                                                                                                                                                                                                                                                              |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| context               | one `IterateContextDurableObject`, named `{projectId}.iterate{path}`; a stream + a rewrite-rule table + a subscriptions table + the rpc-stub directory                                                                                                                                                                                                                                                                    |
-| session               | what `/api` hands you: `UnauthenticatedSession → authenticate(credentials) → Session → projects.list()/get(project)/create({ project })`; a session is not a context, it is how you reach one — and who you are (`whoami()`: the control plane's user, a project token's principal, or the admin)                                                                                                                         |
-| itx expression        | `["itx", ...steps]` (`ItxExpression`) or its string form; either half is an `ItxExpressionInput`; the persisted currency of every target                                                                                                                                                                                                                                                                                  |
-| itx-expression prefix | a rewrite rule's `match`: dotted names, any step may pin literal args — `itx.greet`, `itx.ai.run('gpt-5')`; `canonicalItxExpressionPrefix` is its one spelling, the table's key                                                                                                                                                                                                                                           |
-| rewrite rule          | `{ match, target }`: a call starting with `match` runs as the same call with `match` replaced by `target`; one map entry per canonical match, written by `itx/rewrite-rule-configured { match, target \| null }`; nothing else rides it                                                                                                                                                                                   |
-| default rule          | a rule at the bare prefix `itx`; claims any non-built-in call                                                                                                                                                                                                                                                                                                                                                             |
-| built-in              | a root of `BuiltInScope`, reached as `itx.builtins.<root>` (the reserved root, the fixed point — never a rule's match) or as the implicit platform row `itx.<root>`, which the context's own rows come before (shadowable, maskable)                                                                                                                                                                                      |
-| InvokeHandle          | a pipelinable `RpcTarget` returned mid-chain (`cd`, `workers.get(...)`); `FacetHandle` and `RpcStubHandle` are its two brands                                                                                                                                                                                                                                                                                             |
-| rpc stub              | a live capnweb value a session LENDS under an opaque `rpcStubKey`; the edge owns it, the DO BORROWS it per page and RETURNS it at idle; `itx.builtins.rpcStubs.get(rpcStubKey)` is how the platform's rows name it, and any spelling that resolves there counts; presence is `list()`                                                                                                                                     |
-| pager                 | the hibernatable WebSocket from the edge relay to the DO, one per key, carrying `{ transportId, rpcStubKey }`; the DO sends `{ type: "page" }` to get a fresh stub lent                                                                                                                                                                                                                                                   |
-| session-scoped handle | what `provide` / `subscribe` return (`RewriteRuleHandle`, `SubscriptionHandle`): disposable; disposing — or the session ending — undoes the act; the durable spelling is the raw event                                                                                                                                                                                                                                    |
-| subscription          | a named row `{ target, consumes? }` in the subscriptions table; delivered every commit by the one loop                                                                                                                                                                                                                                                                                                                    |
-| push                  | delivery to a target that owns its progress: `(events, range)`, fire-and-forget to a lent stub, awaited to a facet                                                                                                                                                                                                                                                                                                        |
-| stream-kept cursor    | delivery to a target that cannot own progress: at-least-once from a kv cursor, retry ladder, halt fact                                                                                                                                                                                                                                                                                                                    |
-| processor             | a pure `StreamProcessor` (contract + reduce, optional effects) inside a `StreamProcessorDurableObject` host, hosted as a facet and subscribed to `processEventBatch`; durable configuration; the core reduce is one hosted inline instead                                                                                                                                                                                 |
-| core reduce           | the ONE reduce-only processor run inside the commit transaction: `core` (identity, wake, pause, rewrite rules, subscriptions, the secrets catalog), owned by the `Stream`                                                                                                                                                                                                                                                 |
-| facet                 | a workerd `ctx.facets` child of the DO with its own storage; hosts loaded `DurableObject` classes, processors included                                                                                                                                                                                                                                                                                                    |
-| scanned range         | `{ after, through }` delivered with each batch; the contiguity proof subscribers chain                                                                                                                                                                                                                                                                                                                                    |
-| ephemeral             | an event that takes an offset but is never stored and costs no write; delivered only to subscribers that name its type                                                                                                                                                                                                                                                                                                    |
-| incarnation           | one life of the DO between evictions; the constructor's `stream/woken` opens each (offset 1 is the first one's `stream/created`); ephemeral offsets are unique within one                                                                                                                                                                                                                                                 |
-| live state            | a `LiveState` holder's `{ rev, state }` plus `live-state/changed` deltas; clients chain revs and re-seed on a gap                                                                                                                                                                                                                                                                                                         |
-| egress                | any fetch leaving project code: `getSecret("/secrets/NAME")` (and `{ field: "a.b" }`) substituted in the DO (URL + headers; a missing or origin-bound secret is a 502), then the terminal `fetch` — no next door                                                                                                                                                                                                          |
-| control plane         | the in-process catch-all of the one worker (`src/control-plane.ts`): the OAuth AS, the D1 directory (users → orgs → projects; a project's id IS its slug), `/mcp`, the console's server half + the Start entry that SSRs the console (`src/routes/**`); what admits a project host and answers membership                                                                                                                 |
-| project host          | the one HTTP way into a project: `<app>--<project>.<base>` and `<app>.<project>.<base>` are the app `itx.apps.<app>` of the project's root context, the apex `<project>.<base>` its config worker's `fetch`; the Request verbatim, `x-iterate-app` the host's label; admitted by one directory read (421 otherwise); a project token as the `/.itx/session` cookie or as `Authorization: Bearer` stamps `x-itx-principal` |
-| fetch lane            | the DO's `x-itx-expression` door: a project host from outside, a terminal `itx.x.fetch(request)` from inside a session, `env.ITX.fetch` from loaded code                                                                                                                                                                                                                                                                  |
+| Word                  | Meaning here                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| context               | one `IterateContextDurableObject`, named `{projectId}.iterate{path}`; a stream + a rewrite-rule table + a subscriptions table + the rpc-stub directory                                                                                                                                                                                                                                                                                               |
+| session               | what `/api` hands you: `IterateRpcTarget → authenticate(credentials) → SessionRpcTarget → projects.list()/get(project)/create({ project })`; a session is not a context, it is how you reach one — and who you are (`whoami()`: the OAuth grant's user — a personal access token's included — the admin's `as`, or the admin)                                                                                                                        |
+| itx expression        | `["itx", ...steps]` (`ItxExpression`) or its string form; either half is an `ItxExpressionInput`; the persisted currency of every target                                                                                                                                                                                                                                                                                                             |
+| itx-expression prefix | a rewrite rule's `match`: dotted names, any step may pin literal args — `itx.greet`, `itx.ai.run('gpt-5')`; `canonicalItxExpressionPrefix` is its one spelling, the table's key                                                                                                                                                                                                                                                                      |
+| rewrite rule          | `{ match, target }`: a call starting with `match` runs as the same call with `match` replaced by `target`; one map entry per canonical match, written by `itx/rewrite-rule-configured { match, target \| null }`; nothing else rides it                                                                                                                                                                                                              |
+| default rule          | a rule at the bare prefix `itx`; claims any non-built-in call                                                                                                                                                                                                                                                                                                                                                                                        |
+| built-in              | a root of `BuiltInScope`, reached as `itx.builtins.<root>` (the reserved root, the fixed point — never a rule's match) or as the implicit platform row `itx.<root>`, which the context's own rows come before (shadowable, maskable)                                                                                                                                                                                                                 |
+| InvokeHandle          | a pipelinable `RpcTarget` returned mid-chain (`cd`, `workers.get(...)`); `FacetHandle` and `RpcStubHandle` are its two brands                                                                                                                                                                                                                                                                                                                        |
+| rpc stub              | a live capnweb value a session LENDS under an opaque `rpcStubKey`; the edge owns it, the DO BORROWS it per page and RETURNS it at idle; `itx.builtins.rpcStubs.get(rpcStubKey)` is how the platform's rows name it, and any spelling that resolves there counts; presence is `list()`                                                                                                                                                                |
+| pager                 | the hibernatable WebSocket from the edge relay to the DO, one per key, carrying `{ transportId, rpcStubKey }`; the DO sends `{ type: "page" }` to get a fresh stub lent                                                                                                                                                                                                                                                                              |
+| session-scoped handle | what `provide` / `subscribe` return (`RewriteRuleHandle`, `SubscriptionHandle`): disposable; disposing — or the session ending — undoes the act; the durable spelling is the raw event                                                                                                                                                                                                                                                               |
+| subscription          | a named row `{ target, consumes? }` in the subscriptions table; delivered every commit by the one loop                                                                                                                                                                                                                                                                                                                                               |
+| push                  | delivery to a target that owns its progress: `(events, range)`, fire-and-forget to a lent stub, awaited to a facet                                                                                                                                                                                                                                                                                                                                   |
+| stream-kept cursor    | delivery to a target that cannot own progress: at-least-once from a kv cursor, retry ladder, halt fact                                                                                                                                                                                                                                                                                                                                               |
+| processor             | a pure `StreamProcessor` (contract + reduce, optional effects) inside a `StreamProcessorDurableObject` host, hosted as a facet and subscribed to `processEventBatch`; durable configuration; the core reduce is one hosted inline instead                                                                                                                                                                                                            |
+| core reduce           | the ONE reduce-only processor run inside the commit transaction: `core` (identity, wake, pause, rewrite rules, subscriptions, the secrets catalog), owned by the `Stream`                                                                                                                                                                                                                                                                            |
+| facet                 | a workerd `ctx.facets` child of the DO with its own storage; hosts loaded `DurableObject` classes, processors included                                                                                                                                                                                                                                                                                                                               |
+| scanned range         | `{ after, through }` delivered with each batch; the contiguity proof subscribers chain                                                                                                                                                                                                                                                                                                                                                               |
+| ephemeral             | an event that takes an offset but is never stored and costs no write; delivered only to subscribers that name its type                                                                                                                                                                                                                                                                                                                               |
+| incarnation           | one life of the DO between evictions; the constructor's `stream/woken` opens each (offset 1 is the first one's `stream/created`); ephemeral offsets are unique within one                                                                                                                                                                                                                                                                            |
+| live state            | a `LiveState` holder's `{ rev, state }` plus `live-state/changed` deltas; clients chain revs and re-seed on a gap                                                                                                                                                                                                                                                                                                                                    |
+| egress                | any fetch leaving project code: `getSecret("/secrets/NAME")` (and `{ field: "a.b" }`) substituted in the DO (URL + headers; a missing or origin-bound secret is a 502), then the terminal `fetch` — no next door                                                                                                                                                                                                                                     |
+| control plane         | the in-process catch-all of the one worker (`src/control-plane.ts`): the OAuth AS, the D1 directory (users → orgs → projects; a project's id IS its slug), `/mcp`, the console's server half + the Start entry that SSRs the console (`src/routes/**`); what admits a project host and answers membership                                                                                                                                            |
+| project host          | the one HTTP way into a project: `<app>--<project>.<base>` and `<app>.<project>.<base>` are the app `itx.apps.<app>` of the project's root context, the apex `<project>.<base>` its config worker's `fetch`; the Request verbatim, `x-iterate-app` the host's label; admitted by one directory read (421 otherwise); an OAuth grant — the app's `/.auth/*` browser session, or an access token as `Authorization: Bearer` — stamps `x-itx-principal` |
+| fetch lane            | the DO's `x-itx-expression` door: a project host from outside, a terminal `itx.x.fetch(request)` from inside a session, `env.ITX.fetch` from loaded code                                                                                                                                                                                                                                                                                             |
 
 ---
 

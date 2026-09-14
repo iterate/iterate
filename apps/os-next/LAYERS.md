@@ -155,7 +155,7 @@ on exhaustion, appends `stream/paused { reason }`; an operator appends `stream/r
 ## Layer 5 — the edge (sessions and the pager relay)
 
 `session.ts` + `iterate-context.ts`: capnweb terminates in `worker.ts`'s `/api`, never in a DO
-(`session.ts`: `UnauthenticatedSession → authenticate(credentials) → Session → projects.list()/get(project)/create({ project })`
+(`session.ts`: `IterateRpcTarget → authenticate(credentials) → SessionRpcTarget → projects.list()/get(project)/create({ project })`
 — `from-server-cookie` is the OAuth grant the transport already resolved (the browser's cookie on a
 same-origin request, or a bearer access token — a personal access token is one such grant,
 `session.grants.mint`), `admin-secret` every project (with `as`, a user's session without a login);
