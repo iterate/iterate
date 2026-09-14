@@ -79,6 +79,10 @@
   "exports": {
     "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "BrowserSession": { "type": "durable-object", "storage": "sqlite" },
+    // A namespace an unpushed build provisioned on os-next-prd (2026-09-14) for a class no commit
+    // on main exports; without this tombstone wrangler refuses every upload ("orphaned provisioned
+    // namespace"). One successful deploy retires it (its instances included); then delete this line.
+    "SecretDurableObject": { "type": "durable-object", "state": "deleted" },
   },
 
   // The in-process control plane's directory (src/control-plane.sql: users, orgs,
@@ -104,7 +108,7 @@
   // loud on a bad or unknown one. Bindings are declared above; a var is what differs between
   // deployments of the same code. The two secrets — APP_CONFIG_SESSION_SECRET (the login flow's
   // cookie) and APP_CONFIG_ADMIN_API_SECRET (the admin secret: `authenticate({ type: "admin-secret" })`,
-  // the lanes' admin bearer) — are wrangler secrets, never committed vars; both are required.
+  // the test configs' admin bearer) — are wrangler secrets, never committed vars; both are required.
   "vars": {
     "APP_CONFIG_ENVIRONMENT_NAME": "poc",
     "APP_CONFIG_PLATFORM_ORIGIN": "https://os.iterate2.com",

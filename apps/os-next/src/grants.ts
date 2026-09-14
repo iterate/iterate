@@ -27,7 +27,7 @@ const MintInput = z.object({
 
 /** Whether this deployment mints personal access tokens: a bearer that acts as a person must only
  *  ever travel over TLS — or to the local worker (`localhost`, `127.0.0.1`), where `pnpm dev` and
- *  the e2e lane speak plain http on the loopback. Any other http issuer is refused. */
+ *  the e2e vitest project speak plain http on the loopback. Any other http issuer is refused. */
 const mintsPersonalAccessTokens = (issuer: string): boolean =>
   issuer.startsWith("https:") || isLocalOrigin(issuer);
 

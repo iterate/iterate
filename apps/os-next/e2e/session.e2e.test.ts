@@ -132,7 +132,7 @@ export default class Echo extends WorkerEntrypoint {
 }`,
 };
 
-test("a personal access token — one OAuth grant the account mints — is the user's bearer on /api, /mcp and a covered project host; an uncovered project is FORBIDDEN; grants.end refuses it on every door", async () => {
+test("a personal access token — one OAuth grant the account mints — is the user's bearer on /api, /mcp and a covered project host; an uncovered project is FORBIDDEN; grants.end refuses it on /api, /mcp and the project host", async () => {
   const projectId = freshDnsSafeProjectId("personal");
   const other = freshDnsSafeProjectId("personal-other");
   const member = { email: `${projectId}@example.com` };
@@ -147,7 +147,7 @@ test("a personal access token — one OAuth grant the account mints — is the u
   // The account's own session (the login cookie) is what the sessions page speaks; a batch session
   // is one-shot, so each account call below opens its own.
   const accountRequest = () => new Request(workerUrl("/api"), { headers: issuerHeaders });
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- A bounded mint through the account capability, the console's own door.
+  // eslint-disable-next-line iterate/no-capnweb-http-batch -- A bounded mint through the account capability, the console's own client.
   using minter = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
   const { token, expiresAt } = await minter
     .authenticate({ type: "from-server-cookie" })
@@ -198,7 +198,7 @@ test("a personal access token — one OAuth grant the account mints — is the u
   expect(grant?.kind).toBe("Personal access token");
   // the provider keeps its deadline in seconds; the list shows that, the mint the millisecond one
   expect(Math.abs((grant?.expiresAt ?? 0) - expiresAt)).toBeLessThan(2000);
-  // … and ends it: the same bearer is refused on every door at once
+  // … and ends it: the same bearer is refused on /api, /mcp and the project host at once
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded revocation on the account session.
   using ender = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
   expect(await ender.authenticate({ type: "from-server-cookie" }).grants.end(grant!.id)).toEqual({

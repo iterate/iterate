@@ -92,7 +92,7 @@ test("origin binding at the egress door: a bound secret is refused, 502, for any
   expect(left.text).not.toMatch(/no stored project secret|bound to/);
 });
 
-test("`{ field }` at the egress door: a field the JSON value has no string at, and a field of a non-JSON value, are 502s naming the placeholder; a name never set is a 502 too", async () => {
+test("`{ field }` in the egress placeholder: a field the JSON value has no string at, and a field of a non-JSON value, are 502s naming the placeholder; a name never set is a 502 too", async () => {
   const itx = openItx(freshCtx("secrets-field"));
   await itx.secrets.set("tg", JSON.stringify({ bot: { token: "123:abc" } }));
   await itx.secrets.set("plain", "p");

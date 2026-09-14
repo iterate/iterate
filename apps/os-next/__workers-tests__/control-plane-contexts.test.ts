@@ -106,7 +106,7 @@ describe("account — foundation shape (passing)", () => {
     expect(fact.type).toBe("events.iterate.com/account/authenticated");
   });
 
-  test("session.user hosts the account processor: a later authentication appears in its live view — the exact snapshot `useLiveState`'s door reads", async () => {
+  test("session.user hosts the account processor: a later authentication appears in its live view — the exact snapshot `useLiveState` reads through `liveSnapshot()`", async () => {
     const email = "acct-live@sec.test";
     const s = await userSession(email);
     await s.user.processors.enable("account", {
