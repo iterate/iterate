@@ -1,0 +1,75 @@
+// e2e/support/petshop.ts — the deployed dummy-petshop (apps/dummy-petshop), the fake third party the
+// secret-cell proofs connect to over plain HTTP: an OAuth 2.0 provider with refresh, a GraphQL
+// session-login door speaking the Waitrose wire shape, one bearer-protected pets API, and a
+// `/__backdoor` console to force expiry. The worker under test fetches it directly (the local
+// worker over the real network, the deployed worker from the edge); nothing here proxies for it.
+
+/** The deployed fixture — `PETSHOP_BASE_URL` picks another (a preview slot's). */
+export const petshopBaseUrl = (): string =>
+  (process.env.PETSHOP_BASE_URL?.trim() || "https://dummy-petshop.iterate.com").replace(/\/$/, "");
+
+const backdoorHeaders = (): Record<string, string> => {
+  const secret = process.env.PETSHOP_BACKDOOR_SECRET?.trim();
+  return secret ? { "x-petshop-backdoor": secret } : {};
+};
+
+async function petshopJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${petshopBaseUrl()}${path}`, init);
+  if (!response.ok)
+    throw new Error(`petshop ${path} -> ${response.status}: ${await response.text()}`);
+  return (await response.json()) as T;
+}
+
+/** A fresh OAuth client of its own, so forcing ITS tokens to expire touches no other test. */
+export const petshopMintClient = (): Promise<{ clientId: string; clientSecret: string }> =>
+  petshopJson("/__backdoor/clients", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    body: "{}",
+  });
+
+/** Bump one client's epoch — every outstanding access token of it answers 401 from now on: the
+ *  deterministic way to force a real 401 → refresh. The GraphQL login door is the client
+ *  `graphql-session-login`. */
+export const petshopExpireTokens = (
+  clientId: string,
+): Promise<{ clientId: string; accessTokenEpoch: number }> =>
+  petshopJson("/__backdoor/expire-tokens", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    body: JSON.stringify({ clientId }),
+  });
+
+/** The connect half a trusted party runs ONCE: the consent-free authorize (`approve=1`, the test
+ *  lane) → the code → the token exchange with HTTP Basic client auth. What lands in the secret. */
+export async function petshopConnect(client: {
+  clientId: string;
+  clientSecret: string;
+}): Promise<{ accessToken: string; refreshToken: string }> {
+  const redirectUri = "https://project.example/callback";
+  const authorize = new URL(`${petshopBaseUrl()}/oauth/authorize`);
+  authorize.searchParams.set("client_id", client.clientId);
+  authorize.searchParams.set("redirect_uri", redirectUri);
+  authorize.searchParams.set("state", "e2e");
+  authorize.searchParams.set("approve", "1");
+  const redirected = await fetch(authorize, { redirect: "manual" });
+  const location = redirected.headers.get("location");
+  if (!location) throw new Error(`petshop authorize did not redirect (${redirected.status})`);
+  const code = new URL(location).searchParams.get("code");
+  if (!code) throw new Error(`petshop authorize redirect had no code: ${location}`);
+  const response = await fetch(`${petshopBaseUrl()}/oauth/token`, {
+    method: "POST",
+    headers: {
+      authorization: `Basic ${Buffer.from(`${client.clientId}:${client.clientSecret}`).toString("base64")}`,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      code,
+      grant_type: "authorization_code",
+      redirect_uri: redirectUri,
+    }),
+  });
+  if (!response.ok) throw new Error(`petshop token exchange -> ${response.status}`);
+  const tokens = (await response.json()) as { access_token: string; refresh_token: string };
+  return { accessToken: tokens.access_token, refreshToken: tokens.refresh_token };
+}

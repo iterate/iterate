@@ -15,10 +15,9 @@ export default async function ensureResources(options: { env?: string } = {}) {
   const namespaces = await ctx.cf<{ id: string; title: string }[]>(
     "/storage/kv/namespaces?per_page=1000",
   );
-  const resources = { directoryDbId: db.uuid, oauthKvId: "", secretsKvId: "", itxKvId: "" };
+  const resources = { directoryDbId: db.uuid, oauthKvId: "", itxKvId: "" };
   for (const [key, suffix] of [
     ["oauthKvId", "oauth"],
-    ["secretsKvId", "secrets"],
     ["itxKvId", "itx"],
   ] as const) {
     const title = `${ctx.env.resourceNamePrefix}-${suffix}`;

@@ -32,11 +32,13 @@
     "bindings": [
       { "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" },
       { "name": "BROWSER_SESSION", "class_name": "BrowserSession" },
+      { "name": "SECRET", "class_name": "SecretDurableObject" },
     ],
   },
   "exports": {
     "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "BrowserSession": { "type": "durable-object", "storage": "sqlite" },
+    "SecretDurableObject": { "type": "durable-object", "storage": "sqlite" },
   },
   // The control plane is in-process: a local (empty) D1 + OAuth KV so the worker loads; the e2e lane
   // applies the schema (support/global-setup.ts). ids are meaningless locally.
@@ -44,7 +46,6 @@
     { "binding": "DB", "database_name": "control-plane-directory", "database_id": "test" },
   ],
   "kv_namespaces": [
-    { "binding": "SECRETS_KV", "id": "6df3b8c18a624d078d1a1da66f3251c0" },
     { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },
     { "binding": "OAUTH_KV", "id": "oauth-test" },
   ],

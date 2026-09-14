@@ -85,6 +85,7 @@ registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknow
 
 export { IterateContextDurableObject };
 export { BrowserSession } from "./browser-session.ts";
+export { SecretDurableObject } from "./secret-durable-object.ts";
 export { ItxEntrypoint } from "./iterate-context.ts";
 
 export default {

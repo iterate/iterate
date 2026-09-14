@@ -750,27 +750,33 @@ describe("the secrets catalog — by name, the origin only, never a value", () =
       identity: "a new state",
     },
     {
-      title: "a set with an origin",
-      events: [changed(1, { name: "a", origin: "https://api.example.com" })],
-      becomes: { a: { origin: "https://api.example.com" } },
+      title: "a set with a pin and a refresh strategy's kind",
+      events: [
+        changed(1, {
+          name: "a",
+          urls: ["https://api.example.com"],
+          refresh: "oauth-refresh-token",
+        }),
+      ],
+      becomes: { a: { urls: ["https://api.example.com"], refresh: "oauth-refresh-token" } },
       identity: "a new state",
     },
     {
-      title: "a re-set REPLACES (the origin can be dropped)",
+      title: "a re-set REPLACES (the pin and the strategy can be dropped)",
       events: [
-        changed(1, { name: "a", origin: "https://api.example.com" }),
+        changed(1, { name: "a", urls: ["https://api.example.com"], refresh: "waitrose-session" }),
         changed(2, { name: "a" }),
       ],
       becomes: { a: {} },
       identity: "a new state",
     },
     {
-      title: "a re-set with the SAME origin is a no-op",
+      title: "a re-set with the SAME pin is a no-op",
       events: [
-        changed(1, { name: "a", origin: "https://api.example.com" }),
-        changed(2, { name: "a", origin: "https://api.example.com" }),
+        changed(1, { name: "a", urls: ["https://api.example.com"] }),
+        changed(2, { name: "a", urls: ["https://api.example.com"] }),
       ],
-      becomes: { a: { origin: "https://api.example.com" } },
+      becomes: { a: { urls: ["https://api.example.com"] } },
       identity: "undefined (a no-op)",
     },
     {

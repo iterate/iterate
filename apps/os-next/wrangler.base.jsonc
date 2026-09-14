@@ -73,16 +73,16 @@
     "bindings": [
       { "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" },
       { "name": "BROWSER_SESSION", "class_name": "BrowserSession" },
+      // THE SECRET CELL: one per project secret (`<projectId>:<name>`) — the material, its pin and
+      // its refresh strategy; egress forwards a placeholder-bearing request to it (src/secret-durable-object.ts).
+      { "name": "SECRET", "class_name": "SecretDurableObject" },
     ],
   },
-  // The DO's lifecycle, declaratively: one SQLite-backed class, no migration history to replay.
+  // The DOs' lifecycle, declaratively: SQLite-backed classes, no migration history to replay.
   "exports": {
     "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "BrowserSession": { "type": "durable-object", "storage": "sqlite" },
-    // A namespace an unpushed build provisioned on os-next-prd (2026-09-14) for a class no commit
-    // on main exports; without this tombstone wrangler refuses every upload ("orphaned provisioned
-    // namespace"). One successful deploy retires it (its instances included); then delete this line.
-    "SecretDurableObject": { "type": "durable-object", "state": "deleted" },
+    "SecretDurableObject": { "type": "durable-object", "storage": "sqlite" },
   },
 
   // The in-process control plane's directory (src/control-plane.sql: users, orgs,
@@ -95,10 +95,8 @@
     },
   ],
 
-  // SECRETS_KV = the per-project secret store egress substitutes from (secret:<projectId>:<name>).
   // OAUTH_KV = the in-process OAuth AS's provider store (grants/tokens/DCR clients).
   "kv_namespaces": [
-    { "binding": "SECRETS_KV", "id": "6df3b8c18a624d078d1a1da66f3251c0" },
     // itx.kv backing — project-prefixed (the D8 portability proof point).
     { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },
     { "binding": "OAUTH_KV", "id": "b8efbdc3253840fa95331a80efbeb03d" },

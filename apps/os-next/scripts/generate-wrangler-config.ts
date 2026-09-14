@@ -50,7 +50,6 @@ export function writeWranglerConfig() {
           ],
           kv_namespaces: [
             { binding: "OAUTH_KV", id: env.resources.oauthKvId },
-            { binding: "SECRETS_KV", id: env.resources.secretsKvId },
             { binding: "ITX_KV", id: env.resources.itxKvId },
           ],
           vars: {

@@ -21,6 +21,7 @@
 // (Stream.appendCreatedAndWokenEvents); the pause exemptions are Stream.append's.
 //   subscriptions — a literal `subscription-configured` event, THE SUBSCRIPTIONS TABLE's one command (the rows are core state)
 
+import { isRefreshKind, type SecretCatalogEntry } from "../secrets.ts";
 import {
   normalizedItxExpression,
   type ItxExpressionInput,
@@ -244,10 +245,10 @@ export type CoreState = {
   itxExpressionRewriteRules: Record<string, ItxExpressionRewriteRule>;
   /** THE SUBSCRIPTIONS TABLE, by name. */
   subscriptions: Record<string, Subscription>;
-  /** THE SECRETS CATALOG, by name — the origin a secret is bound to, never a value (the value is
-   *  physical, in KV): `itx.secrets.list()` reads this, strongly consistent, where KV's own list lags
-   *  a write by up to a minute. */
-  secrets: Record<string, { origin?: string }>;
+  /** THE SECRETS CATALOG, by name — the origins a secret is pinned to and its refresh strategy's
+   *  kind, never a value (the value is physical, in the secret's own Durable Object):
+   *  `itx.secrets.list()` reads this, strongly consistent. */
+  secrets: Record<string, Omit<SecretCatalogEntry, "name">>;
 };
 
 /** A subscription name is ONE segment, [A-Za-z0-9_-] — and never a key of `Object.prototype`: the
@@ -319,7 +320,16 @@ export function reduceCoreEvent(
       const name = payload.name as string;
       const next = payload.deleted
         ? undefined
-        : { ...(typeof payload.origin === "string" && { origin: payload.origin }) };
+        : {
+            // The fact is appended by the `secrets` built-in (context/built-ins.ts) from a normalized
+            // record, so a well-formed payload carries strings and a known kind; a hand-appended one
+            // is read the same way and anything else in it is dropped, never trusted.
+            ...(Array.isArray(payload.urls) &&
+              payload.urls.length > 0 && {
+                urls: payload.urls.filter((url): url is string => typeof url === "string"),
+              }),
+            ...(isRefreshKind(payload.refresh) && { refresh: payload.refresh }),
+          };
       // A no-op is `undefined`, not a fresh object (the rules case says why).
       if (next ? jsonEqual(state.secrets[name], next) : state.secrets[name] === undefined)
         return undefined;

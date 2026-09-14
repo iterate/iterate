@@ -96,7 +96,7 @@ The tree is laid out by primitive, one folder per chapter of the tutorial.
 
 ```text
 packages/v3/project-worker/
-  wrangler.jsonc                 bindings: ITERATE_CONTEXT (DO), LOADER, AI, ARTIFACTS, ITX_KV, SECRETS_KV,
+  wrangler.jsonc                 bindings: ITERATE_CONTEXT (DO), SECRET (DO, one per secret), LOADER, AI, ARTIFACTS, ITX_KV,
                                  OAUTH_KV, DB (D1: the directory), CF_VERSION_METADATA; the APP_CONFIG_* vars;
                                  the *.project-worker.iterate.com route (project hosts)
   wrangler.test.jsonc            the workers lane's config (no AI; fresh local D1 + OAuth KV; its worker is the
@@ -793,7 +793,7 @@ type CoreState = {
     }
   >;
   // THE SECRETS CATALOG: by name — the origin a secret is bound to, never a value (the value is
-  // physical, in SECRETS_KV); `itx.secrets.list()` reads this, strongly consistent
+  // physical, in the secret's own Durable Object); `itx.secrets.list()` reads this, strongly consistent
   secrets: Record<string, { origin?: string }>;
 };
 
@@ -1418,7 +1418,7 @@ class IterateContextDurableObject extends DurableObject<Env> {
   /** Ordered partial-fetch walk: x-itx-rpc-stub-pager (the pager WS) → x-itx-fetch-upgrade (the
    *  101 leg of an rpc-stub fetch) → x-itx-expression (the fetch lane, run under the x-itx-principal
    *  stamp when the edge set one) → else EGRESS (#egress): getSecret("/secrets/NAME") substitution in
-   *  the URL and headers from SECRETS_KV (a missing secret, or one bound to another origin, is a
+   *  the URL and headers inside the secret's cell, `SecretDurableObject` (a missing secret, or one pinned to other origins, is a
    *  502 — ProjectSecretRefused — to the caller), then the terminal fetch. */
   fetch(request: Request): Promise<Response>;
   /** The cursor retry pump, then idle quiesce (aborts idle facets, returns borrowed stubs). */
@@ -1504,7 +1504,7 @@ Bindings (`wrangler.jsonc`):
 | `AI`                  | Workers AI                                   | `itx.ai`, the binding verbatim                                                                                                                                                                                                                                                                                           |
 | `ARTIFACTS`           | Cloudflare Artifacts namespace               | `itx.cfArtifacts` (project-scoped), `itx.repos`                                                                                                                                                                                                                                                                          |
 | `ITX_KV`              | KV                                           | `itx.kv`, keys prefixed `${projectId}:`                                                                                                                                                                                                                                                                                  |
-| `SECRETS_KV`          | KV                                           | `itx.secrets` writes, egress reads: keys `secret:${projectId}:${name}`, the origin in metadata                                                                                                                                                                                                                           |
+| `SECRET`              | Durable Object (`SecretDurableObject`)       | THE SECRET CELL, one per project secret (`<projectId>:<name>`): the material, its pin and its refresh strategy; `itx.secrets` writes it, egress forwards a placeholder-bearing request to it (src/secrets.ts, src/secret-durable-object.ts)                                                                              |
 | `DB`                  | D1                                           | the control plane's directory (`definitions.sql`)                                                                                                                                                                                                                                                                        |
 | `OAUTH_KV`            | KV                                           | the OAuth AS's store (grants, tokens, DCR clients)                                                                                                                                                                                                                                                                       |
 | `CF_VERSION_METADATA` | version metadata                             | `worker.ts` reads it into `deployId`: every loader cacheKey, and `/version`                                                                                                                                                                                                                                              |

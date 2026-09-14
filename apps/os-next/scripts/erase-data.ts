@@ -122,7 +122,6 @@ export default async function eraseData(options: {
   };
   for (const [label, namespaceId] of [
     ["oauth", resources.oauthKvId],
-    ["secrets", resources.secretsKvId],
     ["itx", resources.itxKvId],
   ] as const) {
     const names = await listKeyNames(namespaceId);
