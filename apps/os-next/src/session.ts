@@ -305,7 +305,15 @@ class OrganizationCollection extends RpcTarget {
   }
 
   async get(orgId: string): Promise<IterateContextRpcTarget> {
+    // ONE path segment — the directory's `org_<hex>` — never a path: the id is interpolated into
+    // `/organizations/<id>`, and `..` or `x/../users/<id>` would canonicalize onto another global
+    // context (the admin reaches every org, so the membership check alone would not catch it).
     const id = z.string().trim().min(1).parse(orgId);
+    if (!/^[A-Za-z0-9_-]+$/.test(id))
+      throw codedError(
+        "FORBIDDEN",
+        `organizations.get(${JSON.stringify(id)}): an organization id is one path segment, never a path`,
+      );
     if (!(await this.#reachesOrg(id)))
       throw codedError(
         "FORBIDDEN",
