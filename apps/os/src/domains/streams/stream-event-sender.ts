@@ -720,6 +720,25 @@ export class StreamEventSender {
       if (row.confirmedOffset >= state.maxOffset) continue; // caught up; nothing to send
 
       if (this.#sourceOwnedSendsInFlight.has(name)) continue;
+
+      /* A post-commit send can see a complete live-only suffix without
+       * scheduling source-owned durable work. The handoff is valid only when
+       * its exact first offset follows this cursor and its tail is the current
+       * head; otherwise the normal delivery loop owns reads, filtering,
+       * retries, and replacement checks. */
+      const suffix = this.#justCommittedEvents;
+      if (
+        suffix.length > 0 &&
+        suffix[0]!.event.offset === row.confirmedOffset + 1 &&
+        suffix.at(-1)!.event.offset === state.maxOffset &&
+        suffix.every((entry) => entry.event.ephemeral === true)
+      ) {
+        this.#hooks.store.ack(name, state.maxOffset, {
+          cursorChangedAtOffset: row.cursorChangedAtOffset,
+          preserveFailingEventSkips: true,
+        });
+        continue;
+      }
       this.#sendPendingSourceOwnedEvents(name);
     }
   }

@@ -141,6 +141,7 @@ function harness(args: {
   const alarms: number[] = [];
   const alarmClears: number[] = [];
   const kept: Promise<unknown>[] = [];
+  let durableRuns = 0;
   const appendedDeliveryEvents: StreamEventInput[] = [];
   const wakeCalls: Parameters<SubscriptionReceiverCalls["wakeStreamProcessor"]>[] = [];
   const receiverCalls: SubscriptionReceiverCalls = {
@@ -177,7 +178,10 @@ function harness(args: {
       armAlarm: (atMs) => alarms.push(atMs),
       awaitAlarmWrite: args.awaitAlarmWrite,
       clearAlarm: () => alarmClears.push(now),
-      runDurable: (work) => kept.push(work()),
+      runDurable: (work) => {
+        durableRuns += 1;
+        kept.push(work());
+      },
       keepAlive: (promise) => kept.push(promise),
       subscriberPagerConnectionKeys: () => new Set<string>(),
       onSessionsIdleClosed: () => undefined,
@@ -199,6 +203,9 @@ function harness(args: {
     wakeCalls,
     alarms,
     alarmClears,
+    get durableRuns() {
+      return durableRuns;
+    },
     appendedDeliveryEvents,
     state,
     store,
@@ -722,6 +729,151 @@ describe("StreamEventSender hosted processor delivery", () => {
 });
 
 describe("StreamEventSender stream delivery", () => {
+  it("skips an ephemeral-only PostHog suffix before scheduling source-owned delivery", async () => {
+    const events: StreamEvent[] = [
+      { ...event(2, "events.iterate.com/voice-agent/mic-frame", { pcm: "AQI=" }), ephemeral: true },
+    ];
+    const batches: StreamDeliveryBatch[] = [];
+    const h = harness({
+      events,
+      configuration: {
+        name: PROCESSOR_KEY,
+        description: "Iterate's first-party durable-event PostHog feed",
+        receiver: {
+          action: "itx-call",
+          expression: ["integrations", "posthog", "processEventBatch"],
+          delivery: { start: "beginning", onFailingEvent: "halt" },
+        },
+      },
+      deliverToItx: async (_expression, batch) => {
+        batches.push(batch);
+      },
+      wakeProcessor: async () => {
+        throw new Error("a PostHog ITX receiver must not wake a hosted processor");
+      },
+    });
+    // The project worker already consumed all durable history. A lone live
+    // microphone frame is the only new suffix.
+    h.store.ack(PROCESSOR_KEY, 1);
+    expect(h.store.get(PROCESSOR_KEY)?.confirmedOffset).toBe(1);
+
+    h.eventSender.sendDue([{ event: events[0]!, byteLength: JSON.stringify(events[0]).length }]);
+    await h.settle();
+
+    expect(h.durableRuns).toBe(0);
+    expect(h.alarms).toEqual([]);
+    expect(h.store.get(PROCESSOR_KEY)?.confirmedOffset).toBe(2);
+    expect(batches).toEqual([]);
+
+    events.push(event(3, "events.iterate.com/voice-agent/utterance-transcript", { text: "hello" }));
+    h.state.maxOffset = 3;
+    h.eventSender.sendDue([{ event: events[1]!, byteLength: JSON.stringify(events[1]).length }]);
+    await h.settle();
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]!.events.map(({ offset }) => offset)).toEqual([3]);
+    expect(h.store.get(PROCESSOR_KEY)?.confirmedOffset).toBe(3);
+  });
+
+  it("does not skip a live suffix hiding an older durable backlog", async () => {
+    const events: StreamEvent[] = [
+      event(2, "events.iterate.com/voice-agent/utterance-transcript", { text: "durable" }),
+      { ...event(3, "events.iterate.com/voice-agent/mic-frame", { pcm: "AQI=" }), ephemeral: true },
+    ];
+    const batches: StreamDeliveryBatch[] = [];
+    const h = harness({
+      events,
+      configuration: {
+        name: PROCESSOR_KEY,
+        receiver: {
+          action: "itx-call",
+          expression: ["integrations", "posthog", "processEventBatch"],
+          delivery: { start: "beginning", onFailingEvent: "halt" },
+        },
+      },
+      deliverToItx: async (_expression, batch) => {
+        batches.push(batch);
+      },
+      wakeProcessor: async () => {
+        throw new Error("a PostHog ITX receiver must not wake a hosted processor");
+      },
+    });
+    h.store.ack(PROCESSOR_KEY, 1);
+
+    // A cursor rewind or old durable backlog makes this live append non-contiguous.
+    h.eventSender.sendDue([{ event: events[1]!, byteLength: JSON.stringify(events[1]).length }]);
+    await h.settle();
+
+    expect(h.durableRuns).toBe(1);
+    expect(batches[0]!.events.map(({ offset }) => offset)).toEqual([2]);
+    expect(h.store.get(PROCESSOR_KEY)?.confirmedOffset).toBe(3);
+  });
+
+  it("does not skip a mixed just-committed batch", async () => {
+    const events: StreamEvent[] = [
+      { ...event(2, "events.iterate.com/voice-agent/mic-frame", { pcm: "AQI=" }), ephemeral: true },
+      event(3, "events.iterate.com/voice-agent/utterance-transcript", { text: "durable" }),
+    ];
+    const batches: StreamDeliveryBatch[] = [];
+    const h = harness({
+      events,
+      configuration: {
+        name: PROCESSOR_KEY,
+        receiver: {
+          action: "itx-call",
+          expression: ["integrations", "posthog", "processEventBatch"],
+          delivery: { start: "beginning", onFailingEvent: "halt" },
+        },
+      },
+      deliverToItx: async (_expression, batch) => {
+        batches.push(batch);
+      },
+      wakeProcessor: async () => {
+        throw new Error("a PostHog ITX receiver must not wake a hosted processor");
+      },
+    });
+    h.store.ack(PROCESSOR_KEY, 1);
+
+    h.eventSender.sendDue(
+      events.map((entry) => ({ event: entry, byteLength: JSON.stringify(entry).length })),
+    );
+    await h.settle();
+
+    expect(h.durableRuns).toBe(1);
+    expect(batches[0]!.events.map(({ offset }) => offset)).toEqual([3]);
+    expect(h.store.get(PROCESSOR_KEY)?.confirmedOffset).toBe(3);
+  });
+
+  it("skips a complete long live-only suffix without durable delivery", async () => {
+    const events: StreamEvent[] = Array.from({ length: 1_000 }, (_, index) => ({
+      ...event(index + 2, "events.iterate.com/voice-agent/mic-frame", { pcm: "AQI=" }),
+      ephemeral: true as const,
+    }));
+    const h = harness({
+      events,
+      configuration: {
+        name: PROCESSOR_KEY,
+        receiver: {
+          action: "itx-call",
+          expression: ["integrations", "posthog", "processEventBatch"],
+          delivery: { start: "beginning", onFailingEvent: "halt" },
+        },
+      },
+      wakeProcessor: async () => {
+        throw new Error("a PostHog ITX receiver must not wake a hosted processor");
+      },
+    });
+    h.store.ack(PROCESSOR_KEY, 1);
+
+    h.eventSender.sendDue(
+      events.map((entry) => ({ event: entry, byteLength: JSON.stringify(entry).length })),
+    );
+    await h.settle();
+
+    expect(h.durableRuns).toBe(0);
+    expect(h.store.get(PROCESSOR_KEY)?.confirmedOffset).toBe(1_001);
+  });
+
   it("pins the next read to one event after a batch failure so a poison event cannot strand its healthy prefix", async () => {
     const attemptedOffsets: number[][] = [];
     const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => {

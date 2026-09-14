@@ -69,7 +69,7 @@ was not measured.
 
 ## Correctness evidence and remaining limits
 
-The clean native preview version is
+The first clean native preview version was
 `0c87aed9-c59d-4969-96df-85e855bcfc1c`. Two-child append/read/subscription
 isolation passed. A full child retained its durable marker across killing the
 native host; a new connection/subscription then received a new event.
@@ -130,8 +130,7 @@ retries share that replacement, and an identical idempotency-key append also
 repairs it. Quiet clears are coalesced. The actual hosted-child regression
 verifies that a rejected acknowledgement leaves one durable event and a
 successful retry still leaves exactly one. All 110 focused alarm/sender tests,
-app typecheck, and targeted lint pass. This correction still needs deployed
-sustained-audio and recovery proof.
+app typecheck, and targeted lint pass. The deployed sustained-audio results and remaining recovery limits follow.
 
 On the corrected native deployment `b48bde47-2467-42d7-8c79-ae6cfbe469ef`,
 the first startup sample missed its 10-second deadline; the next four reached
@@ -145,11 +144,100 @@ spoken answer, then closed normally. Source review found that ephemeral
 processor batches also awaited the new remote alarm barrier. This is a
 release-blocking regression. The follow-up gives each outstanding ephemeral
 batch a bounded in-memory timeout, cancelled on acknowledgement or close,
-while durable batches retain their acknowledged recovery alarm. All 113 focused
+while durable batches retain their acknowledged recovery alarm. All 114 focused
 tests pass, including a final unacknowledged PCM batch with no future append,
-acknowledgement cancellation, and replacement cancellation. Deployed audio
-proof is still required. Raw evidence is in `startup-alarm-fix-baseline.json` and
+acknowledgement cancellation, replacement cancellation, and closing a connection
+while its durable alarm acknowledgement is pending. Raw evidence is in `startup-alarm-fix-baseline.json` and
 `hosted-continuous-audio-alarm-barrier.json` under the temporary artifact directory.
+
+The memory-timeout follow-up is deployed as native version
+`41b88e87-75fd-4dde-b78b-b285299671a7`, pinned to commit `3ebf951d81dabb2a258fad58d9851c8bb382faaf`.
+The repeated continuous-input test acknowledged all 201 microphone appends over
+20 seconds: median 175 ms, maximum 490 ms, versus the failed previous run's
+789 ms median. It received speaker audio, closed with code 1000, and its
+17:05:08–17:05:36 UTC preview window had no error-level Worker events.
+This establishes continuous delivery, **not smooth playback**. Within its first
+answer, the measured supply deficit was 598 ms: that much initial buffering
+would have been needed to cover arrival variance at the subscriber. A matched
+direct Node control, with the same instructions, commentary and paced input,
+needed 138 ms for its first answer. These are individual answers of different
+lengths; they indicate remaining relay variance, not a measured hardware
+underrun rate. Inter-answer pauses are excluded from both figures.
+
+The first post-deploy attempt is retained separately: it missed a 15-second
+acceptance deadline. Its stream woke at 17:03:42.021 UTC, but the initial voice
+batch was not appended until 17:03:55.696, a 13.675-second gap before voice
+setup. Available traces do not yet explain this gap; observed config-worker
+calls alone do not account for it. The benchmark ended before acceptance.
+Unlike the earlier 6.416-second build sample, this is not an attributed cold
+build measurement.
+
+Five later startup calls on the existing project all produced audio and closed
+normally, with client-ready times 5,214/2,871/2,341/2,595/2,147 ms (median
+2,595). Five calls on a newly provisioned project with identical voice source
+also all produced audio: 4,686/2,169/1,425/1,617/1,442 ms (median 1,617).
+Provider-handshake medians were 990 and 897 ms respectively. Both first samples
+are retained. This sequential comparison suggests the existing host's accumulated
+state or concurrent work matters, but does not identify that cause; project
+placement and timing also differ. Inputs are
+`startup-memory-watchdog-baseline.json` and
+`startup-memory-watchdog-fresh-project.json`.
+
+The successful continuous run's shared host also recorded 268 alarm-set spans
+in the trace dataset (265 in Workers invocation records). The host contains
+historical child streams, so these totals do not prove an alarm write per
+current audio frame. Processor recovery can independently arm the same hosted
+alarm relay, beyond the ephemeral sender watchdog. Argument-level attribution
+or a fresh-project control is required before changing that recovery behavior.
+An instrumented follow-up identified the current child's writers. Of 330
+retained relay writes, 161 came from immediate delivery scheduling and 154 from
+alarm-turn replay; only 11 facet-alarm proxy calls were observed. The dominant
+cause is source-owned durable subscriptions scheduling a turn before discarding
+an audio-only suffix. A regression test reproduces that unnecessary scheduling.
+The correction acknowledges an exactly contiguous, complete ephemeral
+suffix from the existing append handoff before scheduling source-owned work;
+other batches retain normal reads, filtering, retries and watchdogs.
+
+The first two instrumented runs of that correction did not prove performance.
+On native `dbc8871d-b147-42b6-a9aa-3f976b8434f6`, the first hit a code-update
+reset at 17:28:13.995 UTC, coinciding with acceptance; microphone requests then
+reached the eight-pending bound. The second failed while opening its subscription
+with a native storage-reset reference (`kc7nagaslasop9jcfiv5j6os`), before any
+microphone append. Its terminal fact was already durable, and a subsequent
+read found every subscription caught up, with no connections, errors or queued
+work. Both failed samples are retained as
+`hosted-continuous-audio-source-owned-ephemeral-probe{,-repeat}.json`.
+Cloudflare documents that code updates propagate eventually and can reset
+in-flight objects, but that does not explain the separate internal storage
+failure. See [Durable Object lifecycle](https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/).
+
+A third, post-recovery run on the same deployment completed all 201 microphone
+appends (42 ms median, 117 ms p95, 318 ms maximum) and closed with code 1000.
+Its retained error query was empty. Comparing the actual 20-second feed windows
+with the successful pre-fix instrumented run, relay writes fell from **290 to
+11**. Facet-alarm proxy records were nine and eight respectively. Both runs
+used the same 201-frame contract and commentary; answer lengths and other
+durable events varied, so the 96.2% reduction is an observed traffic comparison,
+not an exact per-frame cost model. First-answer supply deficit was 236 ms,
+versus 392 ms in the earlier clean fresh-project run and 138 ms in direct Node.
+This remains an instrumented measurement, not hardware playback proof.
+
+Claude Fable 5.1 at xhigh independently reviewed the 19-line change and found
+no blocking correctness issue. The cursor update already existed in the
+matched-empty delivery path; it now joins the original append transaction,
+removing the unnecessary alarm turn and range read. The final regression was
+executed against archived pre-fix source and failed as expected. All 92 sender
+tests and 128 combined sender/alarm/keepalive tests pass, as do app typecheck
+and targeted lint. Runtime instrumentation is excluded from the committed fix.
+The separate native internal-storage reset remains unexplained; subsequent
+success is not its remediation. Evidence is in
+`source-owned-ephemeral-valid-comparison.md` and
+`hosted-continuous-audio-source-owned-ephemeral-probe-recovered.json`.
+
+Raw evidence is retained in `hosted-continuous-audio-memory-watchdog.json`,
+`hosted-continuous-audio-memory-watchdog-repeat.json`, and
+`direct-continuous-audio-20260914-metrics.json`. All checks, including preview
+deployment and e2e, pass on `3ebf951`; the operational findings above remain open.
 
 During source installation/mounting, two `stream core background work failed`
 errors at 14:39:10 UTC mapped to ancestor `child-stream-created` announcements.
