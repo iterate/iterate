@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Env } from "../../env.ts";
 import type { WorkerBuildArtifact, WorkerBuildResult } from "./artifact-store.ts";
-import type { WorkerBuildRequest } from "./worker-build-capability.ts";
+import type {
+  executeCoordinatedWorkerBuild,
+  WorkerBuildRequest,
+} from "./worker-build-capability.ts";
 
 const h = vi.hoisted(() => ({
-  execute: vi.fn<(request: WorkerBuildRequest, env: Env) => Promise<WorkerBuildResult>>(),
+  execute: vi.fn<typeof executeCoordinatedWorkerBuild>(),
 }));
 
 vi.mock("../../env.ts", () => ({ workerVersion: () => "test-version" }));
@@ -37,6 +40,7 @@ const artifact: WorkerBuildArtifact = {
 
 function coordinator(records: Map<string, unknown>) {
   h.execute.mockReset().mockResolvedValue({ artifact, ok: true });
+  const background: Promise<unknown>[] = [];
   const setAlarm = vi.fn(async () => undefined);
   const ctx = {
     id: { name: request.buildKey },
@@ -48,12 +52,33 @@ function coordinator(records: Map<string, unknown>) {
       },
       setAlarm,
     },
+    waitUntil: (work: Promise<unknown>) => background.push(work),
   } as unknown as DurableObjectState;
   const value = new WorkerBuildCoordinatorDurableObject(ctx, {} as Env);
-  return { records, setAlarm, value };
+  return { background, records, setAlarm, value };
 }
 
 describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
+  it("serves same-key followers before immutable cache persistence settles", async () => {
+    const persisted = Promise.withResolvers<void>();
+    const { background, value } = coordinator(new Map());
+    h.execute.mockImplementationOnce(async (_request, _env, context) => {
+      context.waitUntil(persisted.promise);
+      return { artifact, ok: true };
+    });
+
+    const first = await value.build(request);
+    const follower = await value.build(request);
+
+    expect(first).toEqual({ artifact, ok: true });
+    expect(follower).toEqual({ artifact, ok: true });
+    expect(h.execute).toHaveBeenCalledOnce();
+    expect(background).toHaveLength(1);
+
+    persisted.resolve();
+    await expect(background[0]).resolves.toBeUndefined();
+  });
+
   it("serves a zero-budget follower from the settled coordinator artifact", async () => {
     const { records, setAlarm, value } = coordinator(new Map());
 
@@ -93,7 +118,11 @@ describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
 
     await value.alarm();
 
-    expect(h.execute).toHaveBeenCalledWith(request, expect.anything());
+    expect(h.execute).toHaveBeenCalledWith(
+      request,
+      expect.anything(),
+      expect.objectContaining({ waitUntil: expect.any(Function) }),
+    );
     expect(records.size).toBe(0);
   });
 

@@ -47,18 +47,28 @@ export function coordinateWorkerBuild(
 export async function executeCoordinatedWorkerBuild(
   request: WorkerBuildRequest,
   buildEnv: Pick<Env, "REPO" | "WORKER_BUILD_CACHE" | "WORKER_BUNDLER">,
+  context: Pick<DurableObjectState, "waitUntil">,
 ): Promise<WorkerBuildResult> {
   const store = new KvWorkerBuildArtifactStore(buildEnv.WORKER_BUILD_CACHE);
+  const cacheReadStartedAt = Date.now();
   const cached = await store.get(request.buildKey);
   if (cached !== null) return { artifact: cached, ok: true };
 
+  const sourceSnapshotStartedAt = Date.now();
   const files = await resolvedSourceFiles(buildEnv, request.projectId, request.resolved);
+  const buildStartedAt = Date.now();
   const result = await executeWorkerBuild({
     files,
     iterateRepoPkgRef: request.iterateRepoPkgRef,
     iterateRepoPkgSpecOverrides: request.iterateRepoPkgSpecOverrides,
     source: request.source,
     workerBundler: buildEnv.WORKER_BUNDLER,
+  });
+  console.log("dynamic worker build phases", {
+    buildKey: request.buildKey,
+    cacheReadMs: sourceSnapshotStartedAt - cacheReadStartedAt,
+    compilationMs: Date.now() - buildStartedAt,
+    sourceSnapshotMs: buildStartedAt - sourceSnapshotStartedAt,
   });
   if (!result.ok) return result;
   const built = result.output;
@@ -79,7 +89,25 @@ export async function executeCoordinatedWorkerBuild(
     ...(built.warnings.length === 0 ? {} : { warnings: built.warnings }),
     ...(built.wranglerConfig === undefined ? {} : { wranglerConfig: built.wranglerConfig }),
   };
-  await store.put(artifact);
+  // KV caches this immutable artifact; if persistence fails or is interrupted,
+  // the next cold caller rebuilds from the source.
+  const cacheWriteStartedAt = Date.now();
+  context.waitUntil(
+    store.put(artifact).then(
+      () => {
+        console.log("dynamic worker artifact cache persisted", {
+          buildKey: request.buildKey,
+          durationMs: Date.now() - cacheWriteStartedAt,
+        });
+      },
+      (error: unknown) => {
+        console.error("dynamic worker artifact cache persistence failed", {
+          buildKey: request.buildKey,
+          error,
+        });
+      },
+    ),
+  );
   return { artifact, ok: true };
 }
 

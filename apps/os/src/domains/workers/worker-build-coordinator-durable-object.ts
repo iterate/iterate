@@ -17,7 +17,7 @@ const TERMINAL_BUILD_FAILURE_STORAGE_KEY = "worker-build:terminal-failure";
 export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
   readonly #coordinator = new WorkerBuildCoordinator(
     async (request) => {
-      const result = await executeCoordinatedWorkerBuild(request, this.env);
+      const result = await executeCoordinatedWorkerBuild(request, this.env, this.ctx);
       if (!result.ok) this.#rememberTerminalFailure(result.failure);
       return result;
     },

@@ -489,6 +489,68 @@ persistence and using the existing entrypoint health call at client reconnect.
 Its proposed stale-while-revalidate policy reads remain unadopted: latency
 work must preserve the existing egress-policy enforcement guarantees.
 
+### Exact-pinned repo reads and remaining latency
+
+Runtime `c503c53f` serves an exact pinned default-branch snapshot from the
+Repo DO's durable lazy-head reader when the stored, listed and read heads all
+match. Historical revisions still use checkout. A pre-fix test failed on the
+unnecessary checkout; 39 repo tests and app typecheck pass with the change.
+Preview version `3cda6957-824b-4236-8d4b-841e624840b5` deliberately retains
+SDK pin `055337b` so the comparison changes only the native implementation.
+
+Three forced-cold health calls per arm use the same pinned source, with unique
+unused virtual modules to force different artifact keys. The emitted runtime
+hash correctly remains identical. All six calls succeed:
+
+| Measurement (ms), three samples  | Before                | After                 |
+| -------------------------------- | --------------------- | --------------------- |
+| Full health call                 | 9,617 / 6,083 / 7,746 | 7,272 / 6,718 / 6,315 |
+| Build coordinator                | 5,863 / 3,581 / 5,731 | 2,873 / 4,843 / 3,872 |
+| Repo snapshot native callee span | 1,615 / 348 / 244     | 0 / 0 / 0             |
+| Artifact KV write                | 1,618 / 1,268 / 2,092 | 1,255 / 1,120 / 988   |
+
+Zero is the reported span resolution, not literally zero CPU. The removed
+checkout is verified; n=3 and variable KV latency do not establish that the
+entire median health improvement (7.75 to 6.72 seconds) comes from that fix.
+Artifacts are `cold-pinned-worker-build-{before,after}.json`.
+
+The following continuous hosted call still took **10,167 ms** to acceptance.
+It acknowledged all 201 microphone frames and terminated normally, but its
+17.9-second answer needed **893 ms** extra initial buffering to avoid a supply
+deficit. A maximum **799 ms** gap already appears at the provider WebSocket
+callback, before outbound stream delivery. This does not distinguish provider
+delay from Worker CPU, storage gating or egress delay. A matched direct Node
+control had completed-answer maximum gaps of 126/194/107 ms, but itself hit
+its 50-second harness deadline waiting for the final answer's silent-tail
+boundary; retain that incomplete segment and close code 1005. Neither run is
+a clean end-to-end performance proof. Evidence:
+`hosted-continuous-audio-pinned-snapshot-clean.json`,
+`pinned-snapshot-answer-stage-metrics.json`, and
+`direct-continuous-audio-20260914-current{,-metrics}.json`.
+
+An eight-call alternating setup-route control used one authenticated socket,
+fresh hosted paths and the exact installed source/props for both routes.
+Mounted acceptance times were **4,485 / 3,851 / 1,833 / 1,812 ms**; direct
+`workers.get(ref).setupVoiceAgent` times were **2,317 / 2,459 / 1,670 / 1,797 ms**.
+All eight produced audio without diagnostics, closing the socket with 1000.
+Excluding only the retained initial cold mounted sample, median setup was
+1,251 ms mounted versus 1,413 ms direct. Provider handshakes ranged from
+881 to 3,268 ms. This shows no consistent gain from bypassing the mounted
+capability; keep the existing interface. Raw samples and exact reference are
+in `setup-route-control.json`.
+
+Current-head CI also retained a native storage reset on **Preview 5**, version
+`079a3c42-4068-465c-8ff6-14799064e0fe`. ITX `Stream.append` call
+`log_b1edabec50b04621b01622ac9c8d569f` failed in 857 ms; the concurrent native
+Feed alarm reported references `104jd2la0q85fsj9vjfdvmlt` and
+`2ipt9jh9fl6v4rr6hvoluda4` in trace
+`5333052a7aad37b25fead9bea5917324`. This is not evidence that the repo change
+fixed the source-version test: its expected-flake wrapper already accepts a
+passing body and reports unexpected failures as `Expect test to fail`.
+Keep the existing expectations and investigate the reset. These traces do
+not identify its cause or establish a hosted-placement regression. Raw
+evidence is `c503-storage-reset-{observability,traces}-raw.json`.
+
 ## Reproduce
 
 From `apps/os`, with the current voice source installed in a disposable
