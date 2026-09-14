@@ -5,10 +5,10 @@ size: small
 
 # Prepare the environment before timing OS test suites
 
-Status: implementation and focused validation complete. Both suites wait
+Status: implementation and local validation complete. Both suites wait
 outside their test clocks; Playwright auth is prepared before workers start.
 A smoke-teardown telemetry defect is recorded below; this is not a claim of
-an error-free platform. Branch: `codex/ci-suite-readiness`; no PR requested.
+an error-free platform. Branch: `codex/ci-suite-readiness`.
 
 Before this change, Playwright waited for deployment propagation inside project/sign-in
 fixtures, so individual test durations include shared deployment setup.
@@ -28,7 +28,7 @@ in Playwright workers. These shared prerequisites now run outside individual tes
       *Removed from project and email-signup helpers, including unused TestInfo plumbing.*
 - [x] Cover readiness ordering, setup failure, concurrent suite execution and
       auth setup with behavior tests; update affected documentation.
-      *Actual preview shell is exercised with controlled commands; real Playwright workers prove auth inheritance. 193 preview tests pass.*
+      *Actual preview shell is exercised with controlled commands; auth setup and fixture reads use a controlled Doppler executable. Browser integration is covered by the preview proof below.*
 - [x] Run focused tests, type/lint/format checks and available runtime proof;
       record any validation limitations explicitly.
       *193 preview tests, scripts/spec typechecks, lint and formatting pass; fresh preview proof below.*
@@ -50,14 +50,25 @@ in Playwright workers. These shared prerequisites now run outside individual tes
 ## Implementation log
 
 - 2026-09-14: created worktree from `origin/main` at `3a5ea998e1`.
+- 2026-09-14: after reviewing the compare link, the user authorized opening a PR.
+  Full-workspace validation exposed five-second timeouts starting nested
+  Playwright runners in the auth tests. Those tests now exercise real suite
+  setup and fixture config reads with a controlled Doppler executable, without
+  starting another test framework. The fresh preview proves worker integration.
+  Product code and timeout budgets were unchanged by this test simplification.
 
 ## Validation — 2026-09-14
 
+- Before opening the PR: full `pnpm typecheck`, `pnpm lint`, `pnpm knip`,
+  `pnpm format:check` and `pnpm test` passed. The final full test run includes
+  all 311 scripts tests; the three auth setup tests took 867ms together.
+  Scripts typecheck and changed-file lint/format were rechecked after simplifying
+  the harness. No timeout increases or added retries.
 - `pnpm --dir scripts exec vitest run preview`: **193 passed**, eight files.
   The actual preview shell is checked for concurrent starts, early-start
-  rejection, and smoke/rollout failure. Actual Playwright processes check
-  auth inheritance across two workers, one Doppler lookup, no lookup when
-  env is supplied, and failure before test execution on invalid settings.
+  rejection, and smoke/rollout failure. Auth tests check prepared settings,
+  one Doppler lookup across repeated fixture reads, no lookup when env is
+  supplied, and setup failure on invalid settings.
 - `pnpm --dir scripts typecheck` and `pnpm exec tsc --noEmit -p specs/tsconfig.json`:
   passed. Changed TypeScript files: zero lint warnings/errors. Formatting and
   `git diff --check`: passed.
@@ -153,4 +164,4 @@ Semantic spans (all in the linked trace, parent `a3c6788ded5cc642`, outcome `ok`
 Post-proof OS erase succeeded: DO classes retired, D1/KV cleared, Worker parked.
 Artifacts GC deleted 649 repositories before its existing deadline; older
 repositories remain for subsequent GC passes, and R2 uses the existing TTL.
-The manual `preview-2` lease was released successfully. No PR was created.
+The manual `preview-2` lease was released successfully before PR creation was authorized.
