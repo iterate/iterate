@@ -7,8 +7,9 @@ export type Principal = { actor: string; email?: string };
  *  dispatch and every sibling hop (`invoke(call, args, caller)`). Set ONLY by trusted code — the edge
  *  after admission, the kernel — never by a client: the DO's `invoke` is a Workers-RPC verb, never
  *  capnweb-exposed, so a client cannot supply its own `Caller`. Authority is inferred FROM the
- *  principal (no separate scopes/trust field). The path-mask AUTHORITY that reads this to allow/refuse
- *  a path is NOT yet enforced (the control-plane security spec's expected-fails capture what it must do). */
+ *  principal (no separate scopes/trust field): in the global namespace a null principal IS the
+ *  kernel — its delivery loop's config funnel is the one path hop `cd` lets through there
+ *  (context/built-ins.ts); a person's is refused. */
 export type Caller = { principal: Principal | null };
 /** The header the edge sets on a Request it forwards on a principal's behalf — the ingress after
  *  the cookie check, a session's terminal `fetch` — and strips from every inbound Request. */

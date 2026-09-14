@@ -69,10 +69,12 @@ pins it + a note here; API/abstraction/concept questions → research + note her
   onto (a) and deleting (b)+(c)'s duplication; the owner explicitly wants the LiveState (c) path for the
   live UX. DECISION NEEDED: which is canonical, and does the LiveState token become a real credential
   (a minting EFFECT that writes a hash) or stay a readable placeholder? (codex #4, #8)
-- **Account/organization handles are unrestricted global itx.** `session.user` / `session.organizations`
-  return full global-context itx; `.cd("/users/<other>")` reaches any subtree. This is the KNOWN deferred
-  path-mask enforcement (already pinned as control-plane security-spec expected-fails). Left as-is until
-  the enforcement pass. (codex #1, src/session.ts:260)
+- **Account/organization handles are unrestricted global itx.** RESOLVED 2026-09-14, structurally:
+  the global namespace is not navigable — a global handle's `cd` is refused (edge and, for a
+  principal, DO), `session.organizations.get` checks membership, `global` is a reserved project name;
+  the kernel's config funnel is the one hop, under a null principal
+  (docs/control-plane-context-resolved-design.md). What is still shared across global contexts is
+  the project-scoped resources (`itx.kv`, `itx.secrets`, `itx.repos`), not a path. (codex #1)
 
 ### Deferred — cleanup (do in a later round)
 
