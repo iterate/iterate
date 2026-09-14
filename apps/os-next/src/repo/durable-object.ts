@@ -1,5 +1,5 @@
-// src/repo/durable-object.ts — THE REPO: the facet the context at `/repos/<name>` hosts under the name
-// `repo` (`itx.repos.get(name)`, library.ts). A repo's files live in git, in Artifacts, behind the
+// src/repo/durable-object.ts — THE REPO: the facet a context at ANY path hosts under the name `repo`
+// (`itx.repos.get(path)`, library.ts; `/repos/<name>` is the convention, not a rule). A repo's files live in git, in Artifacts, behind the
 // stateless `itx.git`; this host is what makes a repo a DOMAIN OBJECT — the creation SAGA on its own
 // path (`create()` appends `repos/create-requested`; the processor's effect, wired here to `itx.git`
 // and `itx.cd("/")`, provisions the Artifacts repo and appends the terminal `repos/created`, the
@@ -13,8 +13,9 @@
 // THE SINGLE SOURCE: build-sdk.mjs bundles THIS module — pulling `RepoProcessor` from ./processor.ts —
 // into the generated REPO_PROCESSOR_SOURCE string; library.ts hands it to `facets.get` as the spec.
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
+import { requestCreation } from "../stream/creation-saga.ts";
 import type { RepoFileChange, RepoLogEntry } from "../context/repos.ts";
-import type { RepoIdentity, RepoView } from "./contract.ts";
+import { repoArtifactName, type RepoIdentity, type RepoView } from "./contract.ts";
 import { RepoProcessor } from "./processor.ts";
 
 export class RepoDurableObject extends StreamProcessorDurableObject<RepoView> {
@@ -23,15 +24,13 @@ export class RepoDurableObject extends StreamProcessorDurableObject<RepoView> {
     crossPost: (event) => this.withItx((itx) => itx.cd("/").append(event)),
   });
 
-  // ── identity: the context this facet is hosted on names the repo ──
+  // ── identity: the context this facet is hosted on IS the repo; its Artifacts name derives from the path ──
 
-  #identityRead?: RepoIdentity;
-  async #identity(): Promise<RepoIdentity> {
+  #identityRead?: RepoIdentity & { name: string };
+  async #identity(): Promise<RepoIdentity & { name: string }> {
     if (this.#identityRead) return this.#identityRead;
     const { path } = await this.withItx((itx) => itx.whoami());
-    if (!path.startsWith("/repos/") || path === "/repos/")
-      throw new Error(`repo: hosted on "${path}" — a repo facet lives on a /repos/<name> context`);
-    return (this.#identityRead = { name: path.slice("/repos/".length), path });
+    return (this.#identityRead = { path, name: repoArtifactName(path) });
   }
 
   // ── the tip cache: this facet's own SQLite ──
@@ -83,39 +82,40 @@ export class RepoDurableObject extends StreamProcessorDurableObject<RepoView> {
 
   // ── the creation saga ──
 
-  /** Bring the repo into being — the saga, as apps/os runs it: append `repos/create-requested` (a
-   *  new attempt after a failure; a no-op while one is open or done), let the processor's effect
-   *  provision the Artifacts repo and land the terminal fact, then answer with the certificate or
-   *  throw the recorded failure. Idempotent: a created repo answers at once. */
+  /** Bring the repo into being — the saga, as apps/os runs it (stream/creation-saga.ts
+   *  `requestCreation`): the request on this repo's path, the processor's effect provisioning the
+   *  Artifacts repo and landing the terminal fact, then the certificate — or the recorded failure,
+   *  thrown; a later `create()` is a new attempt. Idempotent: a created repo answers at once. Every
+   *  other method refuses until the saga has completed. */
   async create(): Promise<RepoIdentity> {
-    const identity = await this.#identity();
-    let { state } = await this.snapshot();
-    if (state.creation !== "requested" && state.creation !== "created") {
-      await this.withItx((itx) =>
-        itx.append({
-          type: "events.iterate.com/repos/create-requested",
-          payload: identity,
-          idempotencyKey: `repos/create-requested:${identity.path}:${state.attempts}`,
-        }),
-      );
-      ({ state } = await this.snapshot()); // reduces the request and drives the effect
-    }
-    // The effect lands the terminal fact DURING the catch-up that reads the request, one page past
-    // it: a bounded re-read sees it.
-    for (let reads = 0; reads < 5 && state.creation === "requested"; reads++)
-      ({ state } = await this.snapshot());
-    if (state.creation === "created") return identity;
+    const { path } = await this.#identity();
+    const state = await requestCreation("repos", path, {
+      snapshot: () => this.snapshot(),
+      append: (event) => this.withItx((itx) => itx.append(event)),
+    });
+    if (state.creation === "created") return { path };
     if (state.creation === "failed")
-      throw new Error(`repo ${identity.name}: creation failed — ${state.error}`);
-    throw new Error(`repo ${identity.name}: creation still owed after the request landed`);
+      throw new Error(`repo ${path}: creation failed — ${state.error}`);
+    throw new Error(`repo ${path}: creation still owed after the request landed`);
+  }
+
+  /** Every method past `create()` starts here: a repo the saga has not completed refuses. */
+  async #created(): Promise<RepoIdentity & { name: string }> {
+    const identity = await this.#identity();
+    const { state } = await this.snapshot();
+    if (state.creation !== "created")
+      throw new Error(`repo ${identity.path}: not created — call create() first`);
+    return identity;
   }
 
   /** `main`'s tip at the remote, or null. */
   async tip(): Promise<string | null> {
+    await this.#created();
     return this.#fresh();
   }
 
   async readFile(path: string): Promise<string | null> {
+    await this.#created();
     await this.#fresh();
     const row = this.#sql
       .exec<{ content: string }>("SELECT content FROM snapshot_files WHERE path = ?", path)
@@ -124,6 +124,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<RepoView> {
   }
 
   async listFiles(): Promise<{ commitOid: string | null; paths: string[] }> {
+    await this.#created();
     const commitOid = await this.#fresh();
     return {
       commitOid,
@@ -134,8 +135,8 @@ export class RepoDurableObject extends StreamProcessorDurableObject<RepoView> {
     };
   }
 
-  /** ONE commit on `main` (`itx.git.commitFiles`) on a repo the saga has created (run first if not),
-   *  the cache updated in place under the new tip, and `repo/commit-completed` on this repo's path.
+  /** ONE commit on `main` (`itx.git.commitFiles`), the cache updated in place under the new tip, and
+   *  `repo/commit-completed` on this repo's path.
    *  A batch that changes nothing commits nothing. The commit is built ON THE CACHED TIP and guarded
    *  by it (`expectedTip`): a write from outside that lands between the refresh and the push is
    *  refused by the adapter, the cache refreshed, and the commit retried once — the cache never
@@ -145,7 +146,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<RepoView> {
     changes: RepoFileChange[];
     author?: { name: string; email: string };
   }): Promise<{ commitOid: string | null; changedPaths: string[] }> {
-    const { name } = await this.create();
+    const { name } = await this.#created();
     let parentOid = await this.#fresh();
     let committed: { commitOid: string | null; changedPaths: string[] };
     try {
@@ -196,7 +197,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<RepoView> {
   }
 
   async log(options: { limit?: number } = {}): Promise<RepoLogEntry[]> {
-    const { name } = await this.#identity();
+    const { name } = await this.#created();
     return this.withItx((itx) => itx.git.log(name, options));
   }
 }

@@ -9,8 +9,8 @@ import { RepoContract } from "../repo/contract.ts";
 import { WorkspaceContract } from "../workspace/contract.ts";
 
 export const ProjectView = z.object({
-  /** Every repo born under the project, by name: its context path and when it was born. */
-  repos: z.record(z.string(), z.object({ path: z.string(), createdAt: z.string() })).default({}),
+  /** Every repo born under the project, by its context path. */
+  repos: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
   /** Every workspace born under the project, by path. */
   workspaces: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
 });

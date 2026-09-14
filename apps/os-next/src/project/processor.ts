@@ -21,15 +21,13 @@ export class ProjectProcessor extends StreamProcessor<
     state,
   }: ReduceArgs<ProjectView, ConsumedEvent<typeof ProjectContract>>): ProjectView | undefined {
     if (event.type === "events.iterate.com/repos/created") {
-      if (state.repos[event.payload.name]) return undefined;
+      if (state.repos[event.payload.path]) return undefined;
       return {
         ...state,
-        repos: {
-          ...state.repos,
-          [event.payload.name]: { path: event.payload.path, createdAt: event.createdAt },
-        },
+        repos: { ...state.repos, [event.payload.path]: { createdAt: event.createdAt } },
       };
     }
+
     if (event.type === "events.iterate.com/workspace/created") {
       if (state.workspaces[event.payload.path]) return undefined;
       return {

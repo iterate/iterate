@@ -9,9 +9,9 @@ import { describe, expect, test } from "vitest";
 import { ProcessorEngine, type StreamEventInput } from "../stream/processor.ts";
 import { memoryStorage, memoryStream, reduceProcessor } from "../stream/test-support.ts";
 import { RepoProcessor, type RepoEffects } from "./processor.ts";
-import { type RepoView } from "./contract.ts";
+import { repoArtifactName, type RepoView } from "./contract.ts";
 
-const identity = { name: "config", path: "/repos/config" };
+const identity = { path: "/repos/config" };
 const requested = { type: "events.iterate.com/repos/create-requested", payload: identity };
 const created = { type: "events.iterate.com/repos/created", payload: identity };
 const failed = {
@@ -22,11 +22,32 @@ const committed = (commitOid: string, parentOid: string | null) => ({
   type: "events.iterate.com/repo/commit-completed",
   payload: { commitOid, parentOid, message: "m", changedPaths: ["worker.ts"] },
 });
-const initial: RepoView = { creation: null, attempts: 0, error: null, tip: null, commits: 0 };
+const initial: RepoView = {
+  path: null,
+  creation: null,
+  attempts: 0,
+  error: null,
+  tip: null,
+  commits: 0,
+};
 const noEffects: RepoEffects = {
   createRepo: async () => undefined,
   crossPost: async () => undefined,
 };
+
+describe("repoArtifactName — the Artifacts repo a path is backed by", () => {
+  test("segments joined with `--`; the convention and any other path alike", () => {
+    expect(repoArtifactName("/repos/config")).toBe("repos--config");
+    expect(repoArtifactName("/vendor/lib")).toBe("vendor--lib");
+    expect(repoArtifactName("/a/b.c/d_e-f")).toBe("a--b.c--d_e-f");
+  });
+  test("injective: a segment may not contain `--`; the grammar and the root are refused", () => {
+    expect(() => repoArtifactName("/repos/a--b")).toThrow(/without "--"/);
+    expect(() => repoArtifactName("/repos/with space")).toThrow(/a path segment is/);
+    expect(() => repoArtifactName("/")).toThrow(/root context is not a repo/);
+    expect(() => repoArtifactName("/.hidden")).toThrow(/start with a letter or digit/);
+  });
+});
 
 describe("RepoProcessor — the reduce", () => {
   const rows: { name: string; events: { type: string; payload?: unknown }[]; view: RepoView }[] = [
@@ -34,22 +55,29 @@ describe("RepoProcessor — the reduce", () => {
     {
       name: "a request opens the saga",
       events: [requested],
-      view: { ...initial, creation: "requested", attempts: 1 },
+      view: { ...initial, path: "/repos/config", creation: "requested", attempts: 1 },
     },
     {
       name: "the certificate closes it",
       events: [requested, created],
-      view: { ...initial, creation: "created", attempts: 1 },
+      view: { ...initial, path: "/repos/config", creation: "created", attempts: 1 },
     },
     {
       name: "a failure closes the attempt with its error; a new request is a new attempt and clears it",
       events: [requested, failed, requested],
-      view: { ...initial, creation: "requested", attempts: 2 },
+      view: { ...initial, path: "/repos/config", creation: "requested", attempts: 2 },
     },
     {
       name: "commits advance the tip and count; an unrelated event leaves the view as it was",
       events: [requested, created, committed("a", null), { type: "note" }, committed("b", "a")],
-      view: { ...initial, creation: "created", attempts: 1, tip: "b", commits: 2 },
+      view: {
+        ...initial,
+        path: "/repos/config",
+        creation: "created",
+        attempts: 1,
+        tip: "b",
+        commits: 2,
+      },
     },
     {
       name: "a malformed payload for a KNOWN type is skipped by the contract, never reduced",
@@ -57,7 +85,7 @@ describe("RepoProcessor — the reduce", () => {
         { type: "events.iterate.com/repo/commit-completed", payload: { commitOid: 1 } },
         requested,
       ],
-      view: { ...initial, creation: "requested", attempts: 1 },
+      view: { ...initial, path: "/repos/config", creation: "requested", attempts: 1 },
     },
   ];
   for (const { name, events, view } of rows)
@@ -102,7 +130,7 @@ describe("RepoProcessor — the creation saga on the engine", () => {
     await first.snapshot();
     const { state } = await first.snapshot();
     expect(state).toMatchObject({ creation: "created", attempts: 1, error: null });
-    expect(created).toEqual(["config"]);
+    expect(created).toEqual(["repos--config"]);
     expect(types()).toEqual(["repos/create-requested", "repos/created"]);
     expect(root).toEqual([
       {
@@ -132,7 +160,7 @@ describe("RepoProcessor — the creation saga on the engine", () => {
     await first.snapshot(); // the next catch-up re-drives at head
     await first.snapshot();
     expect((await first.snapshot()).state).toMatchObject({ creation: "created", attempts: 1 });
-    expect(created).toEqual(["config", "config"]); // provisioning ran twice — idempotent by design
+    expect(created).toEqual(["repos--config", "repos--config"]); // provisioning ran twice — idempotent by design
     expect(root).toHaveLength(1);
     expect(types()).toEqual(["repos/create-requested", "repos/created"]);
   });
@@ -174,12 +202,12 @@ describe("RepoProcessor — the creation saga on the engine", () => {
     const fresh = engine();
     await fresh.snapshot();
     expect((await fresh.snapshot()).state).toMatchObject({ creation: "created", attempts: 1 });
-    expect(created).toEqual(["config"]);
+    expect(created).toEqual(["repos--config"]);
     expect(types()).toEqual(["repos/create-requested", "repos/created"]);
     expect(root).toHaveLength(1);
     // And once created, further catch-ups drive nothing.
     expect((await engine().snapshot()).state).toMatchObject({ creation: "created" });
-    expect(created).toEqual(["config"]);
+    expect(created).toEqual(["repos--config"]);
     expect(types()).toEqual(["repos/create-requested", "repos/created"]);
   });
 });

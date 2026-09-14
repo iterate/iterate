@@ -16,6 +16,7 @@ import {
   type StreamEvent,
 } from "../stream/processor.ts";
 import type { ItxEntrypoint } from "../iterate-context.ts";
+import { parse } from "../context/expression.ts";
 import { auth } from "./auth.ts";
 
 export {
@@ -35,6 +36,16 @@ export {
   type StreamEventInput,
 } from "../stream/processor.ts";
 export { z } from "zod";
+// THE CREATION SAGA (stream/creation-saga.ts): the state slice, the reduce, the driver and the request
+// every entity born by request shares (the repo and the workspace hosts).
+export {
+  CreationState,
+  createdEvent,
+  creationEvents,
+  driveCreationSaga,
+  reduceCreation,
+  requestCreation,
+} from "../stream/creation-saga.ts";
 // capnweb's CLIENT constructors, so userspace can dial a remote capnweb API from inside its isolate
 // through the context's own egress, and `newWorkersRpcResponse`, the SERVER half, so a loaded worker
 // can serve a capnweb API over its `fetch`. The HTTP batch is exported ON PURPOSE beside the
@@ -178,6 +189,43 @@ export type ConfigWorkerItx = ReturnType<Service<ItxEntrypoint>["get"]>;
 /** One committed event handed to the config worker, with the batch's range and the batch's itx scope. */
 export type ConfigEventArgs = { event: StreamEvent; range: ScannedRange; itx: ConfigWorkerItx };
 
+/** A COMMIT TAKES EFFECT: when `repo/commit-completed` lands on the repo the context's `itx.worker`
+ *  rule reads its source from — a rule whose target is `itx.workers.get({ source, cacheKey })` with a
+ *  `source` producer spelled `itx.repos.get('<that path>')…` — the rule is re-appended with
+ *  `cacheKey: <commitOid>`, so the next `itx.worker` call is a cold isolate under a new key and the
+ *  producer re-reads the repo. Without this a fixed key would load the new code only after an
+ *  eviction. Idempotent by key (one re-point per commit); a rule that does not read from that repo
+ *  is left alone. The funnel delivers every stream's events to `/`'s worker, so the reaction runs
+ *  where the rule lives. */
+async function followCommittedSource(event: StreamEvent, itx: ConfigWorkerItx): Promise<void> {
+  if (event.type !== "events.iterate.com/repo/commit-completed") return;
+  const commitOid = event.payload?.commitOid;
+  if (typeof commitOid !== "string") return;
+  const rule = await itx.rewriteRules.get("itx.worker");
+  if (!rule || rule.origin !== "context" || !rule.target) return;
+  const [root, workers, get] = parse(rule.target);
+  if (root !== "itx" || workers !== "workers" || !Array.isArray(get) || get[0] !== "get") return;
+  const spec = get[1];
+  if (typeof spec !== "object" || !spec || !("source" in spec) || typeof spec.source !== "string")
+    return;
+  const [, repos, repoGet] = parse(spec.source);
+  if (
+    repos !== "repos" ||
+    !Array.isArray(repoGet) ||
+    repoGet[0] !== "get" ||
+    repoGet[1] !== event.path
+  )
+    return;
+  await itx.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: {
+      match: "itx.worker",
+      target: ["itx", "workers", ["get", { ...spec, cacheKey: commitOid }]],
+    },
+    idempotencyKey: `itx.worker@${commitOid}`,
+  });
+}
+
 /** THE CONFIG WORKER — a stateless `WorkerEntrypoint`. Override `processEvent` (the platform calls
  *  `processEventBatch`, the subscription target) and `fetch` (a project host with no app label).
  *  Nothing to construct, no contract, no reduce. */
@@ -187,11 +235,16 @@ export abstract class ConfigWorker<
   /** At fetch entry: `const denied = this.auth.require(request); if (denied) return denied;` */
   protected readonly auth = auth;
   /** THE SUBSCRIBED METHOD: a committed batch, in offset order. One `env.ITX.get()` for the whole
-   *  batch (the calls pipeline through it), disposed in the `finally` — bounded to this one turn. */
+   *  batch (the calls pipeline through it), disposed in the `finally` — bounded to this one turn.
+   *  Before the author's hook, the one convention the base follows for every project: a commit to
+   *  the repo `itx.worker`'s source is read from re-points the rule at that commit. */
   async processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
     const itx = this.env.ITX.get();
     try {
-      for (const event of events) await this.processEvent({ event, range, itx });
+      for (const event of events) {
+        await followCommittedSource(event, itx);
+        await this.processEvent({ event, range, itx });
+      }
     } finally {
       (itx as unknown as Disposable)[Symbol.dispose]?.();
     }

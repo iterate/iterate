@@ -6,9 +6,9 @@ import { reduceProcessor } from "../stream/test-support.ts";
 import { ProjectProcessor } from "./processor.ts";
 import { type ProjectView } from "./contract.ts";
 
-const repoBorn = (name: string) => ({
+const repoBorn = (path: string) => ({
   type: "events.iterate.com/repos/created",
-  payload: { name, path: `/repos/${name}` },
+  payload: { path },
 });
 const workspaceBorn = (path: string) => ({
   type: "events.iterate.com/workspace/created",
@@ -20,20 +20,25 @@ describe("ProjectProcessor — the catalog folded from cross-posted birth certif
     [
       { name: "the empty catalog", events: [], view: { repos: {}, workspaces: {} } },
       {
-        name: "a repo's and a workspace's certificates each add one entry, stamped with the event's time",
-        events: [repoBorn("config"), workspaceBorn("/workspaces/notes")],
+        name: "a repo's and a workspace's certificates each add one entry, by path, stamped with the event's time",
+        events: [repoBorn("/repos/config"), workspaceBorn("/workspaces/notes")],
         view: {
-          repos: { config: { path: "/repos/config", createdAt: expect.any(String) } },
+          repos: { "/repos/config": { createdAt: expect.any(String) } },
           workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
         },
       },
       {
-        name: "a second certificate for the same name is ignored (born once); an unrelated event leaves the view as it was",
-        events: [repoBorn("config"), repoBorn("config"), { type: "note" }, repoBorn("lib")],
+        name: "a second certificate for the same path is ignored (born once); an unrelated event leaves the view as it was; any path can host a repo",
+        events: [
+          repoBorn("/repos/config"),
+          repoBorn("/repos/config"),
+          { type: "note" },
+          repoBorn("/vendor/lib"),
+        ],
         view: {
           repos: {
-            config: { path: "/repos/config", createdAt: expect.any(String) },
-            lib: { path: "/repos/lib", createdAt: expect.any(String) },
+            "/repos/config": { createdAt: expect.any(String) },
+            "/vendor/lib": { createdAt: expect.any(String) },
           },
           workspaces: {},
         },
@@ -41,7 +46,7 @@ describe("ProjectProcessor — the catalog folded from cross-posted birth certif
       {
         name: "a malformed certificate is skipped by the contract, never reduced",
         events: [
-          { type: "events.iterate.com/repos/created", payload: { name: 1 } },
+          { type: "events.iterate.com/repos/created", payload: { path: 1 } },
           workspaceBorn("/w"),
         ],
         view: { repos: {}, workspaces: { "/w": { createdAt: expect.any(String) } } },

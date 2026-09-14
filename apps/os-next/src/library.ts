@@ -5,7 +5,7 @@
 //   capnweb     — `itx.connectToCapnweb(url)`: a remote capnweb API as a pipelinable handle
 //   mcp         — `itx.connectToMcp(url)`: an MCP client over Streamable HTTP
 //   openapi     — `itx.connectToOpenApi(spec)`: an OpenAPI 3 service as an RpcTarget of operationIds
-//   repos       — `itx.repos.get(name)` / `.list()`: a repo as a stream on `/repos/<name>` — its `repo` facet
+//   repos       — `itx.repos.get(path)` / `.list()`: a repo as a stream on any path — its `repo` facet
 //   workspaces  — `itx.workspaces.get(path)` / `.list()`: the workspace of any context — its `workspace` facet
 
 import {
@@ -84,16 +84,17 @@ export interface LibraryRoots {
    *  (default) or one HTTP batch per chain (`{ transport: "batch" }`); dotted calls chain with no round
    *  trip per step. */
   connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
-  /** THE REPOS (src/repo/): a repo as a DOMAIN OBJECT — a stream on `/repos/<name>` whose `repo`
-   *  facet keeps the birth certificate, the commit facts and the tip cache over `itx.git`.
-   *  `get(name)` is that facet, hosted on its first call and addressed after; its first use births
-   *  the repo (`create()` explicitly, or the first commit). Every call on the handle is one dotted
-   *  expression on the facet (`RepoDurableObject`'s methods: `create` `tip` `readFile` `listFiles`
-   *  `commitFiles` `writeFile` `log`). `list()` is the project catalog: the birth certificates
-   *  cross-posted to `/`, folded by the project processor (src/project/). */
+  /** THE REPOS (src/repo/): a repo as a DOMAIN OBJECT — a stream on ANY path (`/repos/<name>` by
+   *  convention) whose `repo` facet keeps the creation saga, the commit facts and the tip cache over
+   *  `itx.git` (the Artifacts repo's name derives from the path). `get(path)` is that facet, hosted
+   *  on its first call and addressed after; `create()` runs the saga, and every other method
+   *  refuses until it has. Every call on the handle is one dotted expression on the facet
+   *  (`RepoDurableObject`'s methods: `create` `tip` `readFile` `listFiles` `commitFiles` `writeFile`
+   *  `log`). `list()` is the project catalog: the birth certificates cross-posted to `/`, folded by
+   *  the project processor (src/project/). */
   repos: {
-    get(name: string): InvokeHandle & RepoFacet;
-    list(): Promise<{ name: string; path: string; createdAt: string }[]>;
+    get(path: string): InvokeHandle & RepoFacet;
+    list(): Promise<{ path: string; createdAt: string }[]>;
   };
   /** THE WORKSPACES (src/workspace/): the workspace of ANY context, at most one per path —
    *  `get(path)` is the `workspace` facet on `itx.cd(path)`, hosted on its first call and addressed
@@ -161,10 +162,10 @@ export function buildLibrary(itx: LibraryItx): {
       connectToCapnweb: (url, options) =>
         memoized(["capnweb", url, options], () => connectToCapnweb(itx, url, options)),
       repos: {
-        get: (name) => repoHandle(itx, name),
+        get: (path) => repoHandle(itx, path),
         list: async () =>
-          Object.entries((await projectCatalog(itx)).repos).map(([name, repo]) => ({
-            name,
+          Object.entries((await projectCatalog(itx)).repos).map(([path, repo]) => ({
+            path,
             ...repo,
           })),
       },
@@ -242,7 +243,7 @@ export function runScript(itx: LibraryItx, script: unknown): Promise<unknown> {
   })();
 }
 
-// ── the entities ── `itx.repos.get(name)`, `itx.workspaces.get(path)`: a repo (src/repo/) and a
+// ── the entities ── `itx.repos.get(path)`, `itx.workspaces.get(path)`: a repo (src/repo/) and a
 // workspace (src/workspace/) are each a FACET hosted on their own context — a facet named with a
 // spec is hosted on its first call and addressed after (the DO's startup memo; an unchanged spec never
 // restarts it), so nothing is appended to get one, and the facet appends its own birth certificate
@@ -280,13 +281,10 @@ export function workspaceHandle(itx: LibraryItx, path: string): InvokeHandle & W
   }) as InvokeHandle & WorkspaceFacet;
 }
 
-/** The `repo` facet on the context at `/repos/<name>` — a name Artifacts accepts. Exported for the unit pin. */
-export function repoHandle(itx: LibraryItx, name: string): InvokeHandle & RepoFacet {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name))
-    throw new Error(
-      `itx.repos.get(name): a repo name is [a-zA-Z0-9][a-zA-Z0-9._-]* (got ${JSON.stringify(name)})`,
-    );
-  return facetHandle(itx, `/repos/${name}`, "repo", {
+/** The `repo` facet on the context at `path` — any path; the facet derives the Artifacts name from
+ *  it and refuses one it cannot back. Exported for the unit pin. */
+export function repoHandle(itx: LibraryItx, path: string): InvokeHandle & RepoFacet {
+  return facetHandle(itx, path, "repo", {
     source: REPO_PROCESSOR_SOURCE,
     className: "RepoDurableObject",
   }) as InvokeHandle & RepoFacet;

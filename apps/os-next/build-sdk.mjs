@@ -31,6 +31,10 @@ const sdk = await build({
   bundle: true,
   format: "esm",
   platform: "neutral",
+  // The neutral platform resolves NO main fields by default: json5 (the expression codec's literal
+  // parser, reached through the config worker's commit-follow) has no exports map entry esbuild
+  // would pick without them.
+  mainFields: ["module", "main"],
   // capnweb's WORKERD build: inside a loaded isolate its RpcTarget/RpcPromise are the native
   // cloudflare:workers ones (inject-workers-module), so a class the fixture extends from
   // "cloudflare:workers" is what `newWorkersRpcResponse` serves, and what the platform's
@@ -56,10 +60,14 @@ console.log(`processor.js: ${(sdk.outputFiles[0].text.length / 1024).toFixed(1)}
 const externalizeToProcessorJs = {
   name: "externalize-to-processor-js",
   setup(pluginBuild) {
-    // A facet entry imports the kernel (../stream/processor.ts), zod, and/or the SDK host
-    // (../sdk/index.ts); every symbol they name is re-exported by the injected processor.js.
+    // A facet entry imports the kernel (../stream/processor.ts), the creation saga
+    // (../stream/creation-saga.ts), zod, and/or the SDK host (../sdk/index.ts); every symbol they
+    // name is re-exported by the injected processor.js.
     pluginBuild.onResolve(
-      { filter: /(^zod$)|(\/sdk\/index\.ts$)|(\/stream\/processor\.ts$)/ },
+      {
+        filter:
+          /(^zod$)|(\/sdk\/index\.ts$)|(\/stream\/processor\.ts$)|(\/stream\/creation-saga\.ts$)/,
+      },
       () => ({ path: "./processor.js", external: true }),
     );
   },

@@ -1114,11 +1114,11 @@ describe("the entities", () => {
     expect(WORKSPACE_PROCESSOR_SOURCE["cap.js"]).toContain("WorkspaceDurableObject");
   });
 
-  test("repos.get(name) is the repo facet on itx.cd('/repos/<name>'); a name Artifacts would refuse is refused here", async () => {
+  test("repos.get(path) is the repo facet on itx.cd(path) — any path, /repos/ is the convention", async () => {
     const { itx, dispatched } = siblings("tip");
-    expect(await repoHandle(itx, "config").invoke([["tip"]])).toBe("tip");
+    expect(await repoHandle(itx, "/vendor/lib").invoke([["tip"]])).toBe("tip");
     expect(dispatched).toEqual([
-      ["cd", "/repos/config"],
+      ["cd", "/vendor/lib"],
       [
         "facets",
         ["get", "repo", { source: REPO_PROCESSOR_SOURCE, className: "RepoDurableObject" }],
@@ -1126,12 +1126,10 @@ describe("the entities", () => {
       ],
     ]);
     expect(REPO_PROCESSOR_SOURCE["cap.js"]).toContain("RepoDurableObject");
-    expect(() => repoHandle(itx, "../x")).toThrow(/a repo name is/);
-    expect(() => repoHandle(itx, "")).toThrow(/a repo name is/);
   });
 
   test("the catalog is the project facet's snapshot on /", async () => {
-    const view = { repos: { config: { path: "/repos/config", createdAt: "t" } }, workspaces: {} };
+    const view = { repos: { "/repos/config": { createdAt: "t" } }, workspaces: {} };
     const { itx, dispatched } = siblings({ offset: 3, state: view });
     expect(await projectCatalog(itx)).toEqual(view);
     expect(dispatched).toEqual([

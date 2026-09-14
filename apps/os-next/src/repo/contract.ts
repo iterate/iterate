@@ -1,6 +1,7 @@
 // src/repo/contract.ts — a repo's vocabulary and view (the triplet's first: processor.ts is the pure
 // reduce and the saga's effect, durable-object.ts the loadable host). A repo is a domain object with
-// its OWN stream, the context at `/repos/<name>`. Its creation is a SAGA, as in apps/os:
+// its OWN stream, the context at any path (`/repos/<name>` by convention). Its creation is THE SAGA
+// (stream/creation-saga.ts), as in apps/os:
 // `repos/create-requested` is the durable intent; the processor's effect provisions the Artifacts
 // repo and appends the terminal fact — `repos/created`, the birth certificate (cross-posted to `/`
 // for the project catalog), or `repos/create-failed`; an open request survives an eviction and is
@@ -8,15 +9,34 @@
 // The bytes are not here — they are git, in Artifacts, behind `itx.git`; the host keeps the tip's
 // snapshot as a cache in its own storage.
 import { z } from "zod";
+import { CreationState } from "../stream/creation-saga.ts";
 import { defineProcessorContract } from "../stream/processor.ts";
 
-/** The repo's identity — the request's payload, the certificate's, and the failure's. */
-const RepoIdentity = z.object({
-  name: z.string().min(1),
-  /** The repo's context path, `/repos/<name>` — what a workspace mounts. */
-  path: z.string().min(1),
-});
+/** The repo's identity — the request's payload, the certificate's, and the failure's: its context
+ *  PATH. Any path can host a repo; `/repos/<name>` is the convention, not a rule. A workspace mounts
+ *  a repo at that same path. */
+const RepoIdentity = z.object({ path: z.string().min(1) });
 export type RepoIdentity = z.infer<typeof RepoIdentity>;
+
+/** The Artifacts repo a path is backed by: the path's segments joined with `--` (`/repos/config` →
+ *  `repos--config`, `/vendor/lib` → `vendor--lib`), which Artifacts' name grammar
+ *  (`[a-zA-Z0-9][a-zA-Z0-9._-]*`) accepts. Injective because a segment may not contain `--`
+ *  (refused, as is a segment outside the grammar and the root itself). */
+export function repoArtifactName(path: string): string {
+  const segments = path.split("/").filter((segment) => segment !== "");
+  if (segments.length === 0) throw new Error("repo: the project's root context is not a repo");
+  for (const segment of segments)
+    if (segment.includes("--") || !/^[a-zA-Z0-9._-]+$/.test(segment))
+      throw new Error(
+        `repo: "${path}" cannot back an Artifacts repo — a path segment is [a-zA-Z0-9._-]+ without "--" (got "${segment}")`,
+      );
+  const name = segments.join("--");
+  if (!/^[a-zA-Z0-9]/.test(name))
+    throw new Error(
+      `repo: "${path}" cannot back an Artifacts repo — its name must start with a letter or digit`,
+    );
+  return name;
+}
 
 /** One commit that landed on `main` through the repo facet. */
 const RepoCommit = z.object({
@@ -26,19 +46,12 @@ const RepoCommit = z.object({
   changedPaths: z.array(z.string()),
 });
 
-export const RepoView = z.object({
-  /** The saga's position: null before any request; "requested" while the effect is owed;
-   *  "created" (the certificate reduced) or "failed" (closed for this attempt) at a terminal. */
-  creation: z.enum(["requested", "created", "failed"]).nullable().default(null),
-  /** How many `create-requested` have been reduced — a request after a failure is a new attempt. */
-  attempts: z.number().int().default(0),
-  /** What the newest failed attempt reported. */
-  error: z.string().nullable().default(null),
+export const RepoView = CreationState.extend({
   /** The newest commit that landed THROUGH this repo (a push from outside is not a fact here). */
   tip: z.string().nullable().default(null),
   commits: z.number().int().default(0),
 });
-/** The repo's reduced state: where its creation stands, and what landed through it. */
+/** The repo's reduced state: the saga's slice, and what landed through it. */
 export type RepoView = z.infer<typeof RepoView>;
 
 export const RepoContract = defineProcessorContract({

@@ -1,25 +1,27 @@
 // src/workspace/durable-object.ts — THE WORKSPACE: the facet any context hosts under the name
 // `workspace` (`itx.workspaces.get(path)`, library.ts — at most one per path, nothing appended to
 // get it). ONE private overlay over a table of REPO MOUNTS: a read tries the overlay, then falls
-// through to the mounted repo's `main` at its tip (the repo facet, `itx.repos.get(name)` — its tip
+// through to the mounted repo's `main` at its tip (the repo facet, `itx.repos.get(path)` — its tip
 // cache, shared by every workspace of the project); a write shadows the repo's file until
 // `gitCommit` lands ONE mount's changes as one commit on that repo's `main` and clears them; a delete
 // of a repo file is a WHITEOUT until then. Mounts are DERIVED — every repo in the project catalog at
-// `/repos/<name>` (`itx.repos.list()`) — plus what `configure` adds, the reduce in processor.ts
+// its own path (`itx.repos.list()`; the workspace is a view of the project's one path namespace) —
+// plus what `configure` adds, the reduce in processor.ts
 // folding `workspace/configured` into the view. A path under no mount is the workspace's own scratch
-// (`/workspace/…` by convention): writable, never committed. On first use the workspace appends its
-// birth certificate (`workspace/created { path }`) on its own path and cross-posts it to `/`, where
-// the project processor keeps the catalog `itx.workspaces.list()` reads.
+// (`/workspace/…` by convention): writable, never committed. `create()` runs the creation saga
+// (stream/creation-saga.ts): the certificate (`workspace/created { path }`) crosses to `/`, where the
+// project processor keeps the catalog `itx.workspaces.list()` reads, and lands on this path.
 //
 // Storage is this facet's own SQLite: `files` (the overlay) and `whiteouts`. Text only, one file at
 // most a mebibyte (a SQLite value holds 2 MB). ONE writer, no collab, no policies. The repo facets
 // reach git as `itx.git` through THEIR context's rules, so a test lends a fake there
-// (`provide("itx.git", …)` on `/repos/<name>`, e2e/workspaces.e2e.test.ts) exactly as it fakes `itx.ai`.
+// (`provide("itx.git", …)` on the repo's path, e2e/workspaces.e2e.test.ts) exactly as it fakes `itx.ai`.
 //
 // THE SINGLE SOURCE: build-sdk.mjs bundles THIS module — pulling `WorkspaceProcessor` from
 // ./processor.ts (the tested spec) — into the generated WORKSPACE_PROCESSOR_SOURCE string, the SDK
 // imports left external as "./processor.js"; library.ts hands that string to `facets.get` as the spec.
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
+import { requestCreation } from "../stream/creation-saga.ts";
 import type { RepoFileChange, RepoLogEntry } from "../context/repos.ts";
 import type { WorkspaceMount, WorkspaceView } from "./contract.ts";
 import { WorkspaceProcessor } from "./processor.ts";
@@ -62,7 +64,14 @@ export function routeMount(
 }
 
 export class WorkspaceDurableObject extends StreamProcessorDurableObject<WorkspaceView> {
-  processor = new WorkspaceProcessor();
+  processor = new WorkspaceProcessor({
+    crossPost: (event) => this.withItx((itx) => itx.cd("/").append(event)),
+  });
+
+  #pathRead?: string;
+  async #path(): Promise<string> {
+    return (this.#pathRead ??= (await this.withItx((itx) => itx.whoami())).path);
+  }
 
   // ── the overlay and the whiteouts: this facet's own SQLite ──
 
@@ -106,40 +115,38 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
     this.#sql.exec("DELETE FROM whiteouts WHERE path = ?", path);
   }
 
-  // ── birth ──
+  // ── the creation saga ──
 
-  #born = false;
-  /** The birth certificate, once: cross-posted to `/` FIRST, then on this workspace's own path —
-   *  the own-path fact is what marks the workspace born, so a cross-post that fails is retried on
-   *  the next use and the catalog can never miss a workspace that was born. The SAME event under
-   *  the SAME idempotency key both times, so a workspace at `/` itself carries it once. */
-  async #ensureBorn(state: WorkspaceView): Promise<void> {
-    if (this.#born) return;
-    if (!state.created) {
-      const { path } = await this.withItx((itx) => itx.whoami());
-      const birth = {
-        type: "events.iterate.com/workspace/created",
-        payload: { path },
-        idempotencyKey: `workspace/created:${path}`,
-      };
-      await this.withItx((itx) => itx.cd("/").append(birth));
-      await this.withItx((itx) => itx.append(birth));
-    }
-    this.#born = true;
+  /** Bring the workspace into being — the saga, as apps/os runs it (stream/creation-saga.ts
+   *  `requestCreation`): the request on this path, the processor's effect landing the certificate
+   *  (nothing to provision yet), then the identity — or the recorded failure, thrown. Idempotent: a
+   *  created workspace answers at once. Every other method refuses until the saga has completed. */
+  async create(): Promise<{ path: string }> {
+    const path = await this.#path();
+    const state = await requestCreation("workspace", path, {
+      snapshot: () => this.snapshot(),
+      append: (event) => this.withItx((itx) => itx.append(event)),
+    });
+    if (state.creation === "created") return { path };
+    if (state.creation === "failed")
+      throw new Error(`workspace ${path}: creation failed — ${state.error}`);
+    throw new Error(`workspace ${path}: creation still owed after the request landed`);
   }
 
   // ── the mount table ──
 
-  /** The EFFECTIVE mounts: every repo in the project catalog at `/repos/<name>` (derived), the
-   *  configured ones over them. Every method starts here, so the first use is the birth. */
+  /** The EFFECTIVE mounts: every repo in the project catalog at its OWN path (derived — the
+   *  workspace is a view of the project's one path namespace), the configured ones over them. Every
+   *  method starts here: a workspace the saga has not completed refuses. */
   async mounts(): Promise<Record<string, WorkspaceMount>> {
     const [repos, { state }] = await Promise.all([
       this.withItx((itx) => itx.repos.list()),
       this.snapshot(),
     ]);
-    await this.#ensureBorn(state);
+    if (state.creation !== "created")
+      throw new Error(`workspace ${await this.#path()}: not created — call create() first`);
     const mounts: Record<string, WorkspaceMount> = {};
-    for (const { name } of repos) mounts[`/repos/${name}`] = { repo: name };
+    for (const { path } of repos) mounts[path] = { repo: path };
     return { ...mounts, ...state.mounts };
   }
 
