@@ -7,6 +7,7 @@ import { expect, test, vi } from "vitest";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { HOSTED_STREAM_HOST_PATH, HOSTED_STREAM_PREFIX } from "./hosted-stream-routing.ts";
+import { HostedStreamPrototypeFacet } from "./hosted-stream-prototype.ts";
 import { StreamDurableObject } from "./stream-durable-object.ts";
 
 const PROJECT_ID = "prj_hosted_alarm";
@@ -18,7 +19,12 @@ function logicalName(suffix: string, projectId = PROJECT_ID): string {
 test("uses exact same-project facet namespaces and rejects another project's child", async () => {
   const harness = await bootHost();
   const child = logicalName("one");
-  harness.facets.set(child, { getMaxOffset: () => 17 });
+  harness.facets.set(child, {
+    invokeHostedStream: ({ method }: { method: string }) => {
+      if (method !== "getMaxOffset") throw new Error(`unexpected method ${method}`);
+      return 17;
+    },
+  });
 
   await expect(
     harness.host.invokeHostedStream({ args: [], logicalName: child, method: "getMaxOffset" }),
@@ -32,6 +38,87 @@ test("uses exact same-project facet namespaces and rejects another project's chi
     }),
   ).rejects.toThrow("different project");
   harness.close();
+});
+
+test("repairs a failed parent arm before an idempotent hosted append can acknowledge", async () => {
+  const childName = logicalName("idempotent-repair");
+  const context = durableObjectContext(childName);
+  Object.defineProperty(context.ctx, "id", { value: childName });
+  let rejectNextArm = false;
+  const setHostedStreamAlarm = vi.fn(async () => {
+    if (!rejectNextArm) return;
+    rejectNextArm = false;
+    throw new Error("injected parent arm rejection");
+  });
+  const hostName = DurableObjectNameCodec.stringify({
+    projectId: PROJECT_ID,
+    path: HOSTED_STREAM_HOST_PATH,
+  });
+  const env = {
+    DEPLOYMENT_ENV: "preview_17",
+    STREAM: {
+      getByName(name: string) {
+        if (name === hostName) {
+          return {
+            deleteHostedStreamAlarm: async () => undefined,
+            getHostedStreamAlarm: async () => null,
+            setHostedStreamAlarm,
+          };
+        }
+        return {
+          appendCoreEvent: async (eventInput: unknown) => ({
+            ...(eventInput as object),
+            createdAt: new Date().toISOString(),
+            offset: 1,
+          }),
+        };
+      },
+    },
+  } as unknown as Env;
+  const child = new HostedStreamPrototypeFacet(context.ctx, env);
+  await context.waitForInitialization();
+
+  await child.invokeHostedStream({
+    args: [
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        idempotencyKey: "configure-copy",
+        payload: {
+          name: "copy",
+          filter: { eventTypes: ["example.com/idempotent-repair"] },
+          receiver: {
+            action: "copy-to-stream",
+            receivingStreamPath: "/sink",
+            delivery: { onFailingEvent: "halt", start: "beginning" },
+          },
+        },
+      },
+    ],
+    method: "append",
+  });
+  // Consume the configuration's immediate hosted alarm so the next durable
+  // append must issue a fresh parent arm instead of using its local marker.
+  await child.handleHostedAlarm();
+  rejectNextArm = true;
+  const retryArgs = [
+    {
+      type: "example.com/idempotent-repair",
+      idempotencyKey: "same-key-after-arm-failure",
+      payload: { value: 1 },
+    },
+  ];
+
+  await expect(child.invokeHostedStream({ args: retryArgs, method: "append" })).rejects.toThrow(
+    "hosted stream alarm write failed",
+  );
+  expect(child.getEvents({ eventTypes: ["example.com/idempotent-repair"] })).toHaveLength(1);
+
+  await expect(
+    child.invokeHostedStream({ args: retryArgs, method: "append" }),
+  ).resolves.toHaveLength(1);
+  expect(child.getEvents({ eventTypes: ["example.com/idempotent-repair"] })).toHaveLength(1);
+  expect(setHostedStreamAlarm).toHaveBeenCalledTimes(3);
+  context.close();
 });
 
 test("rejects hosted reset before it can invoke a child", async () => {

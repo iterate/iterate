@@ -123,8 +123,15 @@ alarm write can follow a successful child append acknowledgement. Existing tests
 did not cover that boundary or outbound delivery before the remote write commits.
 The actual sender already creates an in-flight watchdog before its background
 delivery, so a second completion protocol is unnecessary if that watchdog write
-is acknowledged before delivery. The hosted adapter must enforce this ordering
-and preserve retry after a rejected arm. This remains a blocker.
+is acknowledged before delivery. The hosted adapter now drains required parent
+alarm writes before acknowledging child methods or starting outbound delivery.
+A failed arm remains visible until a replacement commits; concurrent caller
+retries share that replacement, and an identical idempotency-key append also
+repairs it. Quiet clears are coalesced. The actual hosted-child regression
+verifies that a rejected acknowledgement leaves one durable event and a
+successful retry still leaves exactly one. All 110 focused alarm/sender tests,
+app typecheck, and targeted lint pass. This correction still needs deployed
+sustained-audio and recovery proof.
 
 During source installation/mounting, two `stream core background work failed`
 errors at 14:39:10 UTC mapped to ancestor `child-stream-created` announcements.
@@ -211,6 +218,28 @@ one silent call and was not a functional delegation configuration. The result
 supports investigating contention, without identifying the contended resource.
 Delaying Agent creation only until the initial voice batch committed worsened
 median readiness to 2,295 ms and was rejected.
+
+A later A/B/A delayed Agent creation until durable conversation acceptance.
+All fifteen calls produced audio, on the same native deployment; each arm's
+first call after its source mount is included.
+
+| Median, milliseconds                | Original A | Agent after acceptance B | Restored A2 |
+| ----------------------------------- | ---------: | -----------------------: | ----------: |
+| Client readiness                    |      2,601 |                    2,293 |       2,357 |
+| First non-silent PCM                |      3,837 |                    3,398 |       3,519 |
+| Provider handshake bucket           |      1,510 |                    1,300 |       1,138 |
+| Readiness minus handshake, per call |      1,061 |                    1,244 |       1,061 |
+| Setup RPC resolved                  |      2,177 |                    3,874 |       2,030 |
+
+The delayed arm did not reduce the time outside the handshake bucket. Its
+setup RPC finished 1,212–1,778 ms after acceptance, versus -892–688 ms in A
+and -826–9 ms in A2. Setup completion is not a measurement of first delegation
+latency, but the backend work is clearly later. This small experiment does not
+justify adopting the ordering change; the original ordering was restored.
+The temporary variant also added an internal event wait (no additional device
+WebSocket), whose cost is part of the comparison. Raw samples are retained in
+`/tmp/voice-startup-pr/agent-after-accepted-comparison.json` and its three
+`startup-after-accepted-{a,b,a2}.json` inputs.
 
 A separate five-call local-clock probe measured initial voice append at
 91–154 ms, voice catch-up barrier at 462–831 ms, Agent creation at 648–856 ms,

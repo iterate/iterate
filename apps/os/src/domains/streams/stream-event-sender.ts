@@ -355,6 +355,9 @@ type StreamEventSenderHooks = {
   }): SizedStreamEvent[];
   /** Current core reduced state, read in the same synchronous block as each delivery. */
   coreState(): CoreProcessorState;
+  /** Hosted stream alarms are parent RPCs. Await a requested durable arm before
+   * an outbound receiver can observe the work; native output gates need no-op. */
+  awaitAlarmWrite?(): Promise<void>;
   /** Durable cursor rows in SQLite next to the event log. */
   store: SubscriptionCursorStore;
   /** Concrete calls to the configured receiver (see {@link SubscriptionReceiverCalls}). */
@@ -760,6 +763,8 @@ export class StreamEventSender {
         // the request until the future wake is durable; arming only after the
         // call started leaves a kill/deploy window that can strand the row.
         this.#armInFlightWatchdog();
+        const awaitAlarmWrite = this.#hooks.awaitAlarmWrite;
+        if (awaitAlarmWrite) await awaitAlarmWrite();
         // A wake call that outlives its timeout still eventually settles with a
         // RETAINED processEventBatch; dropping that undisposed would leak a session-pinning
         // callback on exactly the wedged-connection occasions the timeout exists
@@ -1070,6 +1075,8 @@ export class StreamEventSender {
           // Same ordering as hosted wake: the durable retry must commit
           // before any remote receiver can observe this attempt.
           this.#armInFlightWatchdog();
+          const awaitAlarmWrite = this.#hooks.awaitAlarmWrite;
+          if (awaitAlarmWrite) await awaitAlarmWrite();
           try {
             if (receiver.action === "webhook-post") {
               if (state.projectId === null) return; // unreachable: rejected at append (egress attribution)
@@ -1893,6 +1900,7 @@ type StreamConnectionsHooks = Pick<
   | "runtimeChanged"
   | "now"
   | "armAlarm"
+  | "awaitAlarmWrite"
   | "keepAlive"
   | "subscriberPagerConnectionKeys"
   | "onSessionsIdleClosed"
@@ -2698,6 +2706,8 @@ export class StreamConnections {
             // and it is free whenever any earlier alarm is already armed
             // (armNoLaterThan skips the write).
             this.#hooks.armAlarm(batchDeadlineAtMs);
+            const awaitAlarmWrite = this.#hooks.awaitAlarmWrite;
+            if (awaitAlarmWrite) await awaitAlarmWrite();
             (processEventBatch as unknown as RetainedProcessEventBatch<StreamWakeEventBatch>)({
               ...batch,
               reportDeliveryResult: (deliveryResult) => {

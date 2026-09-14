@@ -201,6 +201,8 @@ type StreamDeliveryAlarmBoundaryHooks = {
 type StreamAlarmStorage = {
   setAlarm(atMs: number): Promise<void>;
   deleteAlarm(): Promise<void>;
+  /** The hosted storage adapter supplies this; native output gates need no hook. */
+  awaitHostedAlarmWrites?(): Promise<void>;
 };
 
 /**
@@ -242,6 +244,29 @@ export class StreamAlarmArmer {
 
   markFired(): void {
     this.#armedForMs = null;
+  }
+
+  /** A hosted parent alarm RPC rejected after the local coalescing marker was
+   * set. Native output gates never need this recovery path. */
+  forgetFailedWrite(): void {
+    this.#armedForMs = null;
+  }
+
+  /** Whether this StreamDO's alarm storage is the hosted parent relay. */
+  get hasHostedAlarmWriteBarrier(): boolean {
+    return typeof this.#storage.awaitHostedAlarmWrites === "function";
+  }
+
+  /** Hosted alarm writes cross into the warm parent rather than the native
+   * output gate. Delivery calls this immediately before an external receiver
+   * can observe a durable attempt. */
+  async awaitHostedAlarmWrites(): Promise<void> {
+    try {
+      await this.#storage.awaitHostedAlarmWrites?.();
+    } catch (error) {
+      this.forgetFailedWrite();
+      throw error;
+    }
   }
 
   /**
@@ -627,9 +652,11 @@ type HostedStreamAlarmRecord = {
   terminalError?: string;
 };
 
-type HostedStreamPrototypeFacetStub = Pick<StreamDurableObject, HostedStreamMethod> & {
-  handleHostedAlarm(alarmInfo?: AlarmInvocationInfo): Promise<void>;
-};
+type HostedStreamPrototypeFacetStub = {
+  invokeHostedStream(input: { args: unknown[]; method: HostedStreamMethod }): Promise<unknown>;
+} & Pick<StreamDurableObject, "fetch"> & {
+    handleHostedAlarm(alarmInfo?: AlarmInvocationInfo): Promise<void>;
+  };
 
 /**
  * One row of `subscriptions.list()`: the committed catalog entry joined with
@@ -1097,6 +1124,9 @@ export class StreamDurableObject extends StreamDurableObjectBase {
       now: () => Date.now(),
       random: () => Math.random(),
       armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
+      ...(this.#alarmArmer.hasHostedAlarmWriteBarrier && {
+        awaitAlarmWrite: () => this.#alarmArmer.awaitHostedAlarmWrites(),
+      }),
       clearAlarm: () => {
         // An append turn may have armed an immediate alarm for scheduled
         // durable work that has not started yet; that owed wake is invisible
@@ -1815,20 +1845,13 @@ export class StreamDurableObject extends StreamDurableObjectBase {
     if (input.method === "reset") {
       throw new Error("hosted stream prototype does not support reset");
     }
-    // HostedStreamMethod was validated above. The opaque facet capability has
-    // no index signature, so this view only selects that validated method.
-    const child = this.#hostedStreamPrototypeFacet(input.logicalName) as unknown as Record<
-      string,
-      unknown
-    >;
-    const method = child[input.method];
-    if (typeof method !== "function") {
-      throw new Error(`hosted stream prototype child does not implement ${input.method}`);
-    }
-    // A facet method is an already-bound remote capability. Supplying the
-    // facet stub as Function.apply's receiver makes Workers try to transfer
-    // that stub into the child Worker. Invoke the bound capability directly.
-    return await method(...input.args);
+    // The child wrapper drains parent-alarm writes issued by this synchronous
+    // commit before this RPC acknowledges. It is a hosted-only boundary, not
+    // a general stream proxy.
+    return await this.#hostedStreamPrototypeFacet(input.logicalName).invokeHostedStream({
+      args: input.args,
+      method: input.method,
+    });
   }
 
   async setHostedStreamAlarm(input: { atMs: number; logicalName: string }): Promise<void> {
@@ -2429,6 +2452,12 @@ export class StreamDurableObject extends StreamDurableObjectBase {
    */
   append(...eventInputs: StreamEventInput[]): StreamEvent[] {
     return this.#append({ authority: "public" }, eventInputs);
+  }
+
+  /** Hosted child only: a parent alarm write rejected after this armer
+   * coalesced it, so the caller retry must issue a fresh parent write. */
+  protected forgetHostedAlarmWriteFailure(): void {
+    this.#alarmArmer.forgetFailedWrite();
   }
 
   /**

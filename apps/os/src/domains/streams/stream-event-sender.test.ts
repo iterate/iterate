@@ -103,6 +103,7 @@ function harness(args: {
   /** Share durable cursor rows with an earlier sender: the post-eviction rebuild. */
   store?: SqliteSubscriptionCursorStore;
   facetWorkArmedAtMs?: () => number | null;
+  awaitAlarmWrite?: () => Promise<void>;
   /** Reduced halt record, as folded from a committed subscription-delivery-halted event. */
   deliveryHalted?: NonNullable<
     CoreProcessorState["subscriptions"]["outbound"]["byName"][string]["deliveryHalted"]
@@ -174,6 +175,7 @@ function harness(args: {
       now: () => now,
       random: () => 0.5,
       armAlarm: (atMs) => alarms.push(atMs),
+      awaitAlarmWrite: args.awaitAlarmWrite,
       clearAlarm: () => alarmClears.push(now),
       runDurable: (work) => kept.push(work()),
       keepAlive: (promise) => kept.push(promise),
@@ -209,6 +211,28 @@ function harness(args: {
 }
 
 describe("StreamEventSender hosted processor delivery", () => {
+  it("does not expose a hosted wake before its parent alarm write settles", async () => {
+    const arm = Promise.withResolvers<void>();
+    const wake = vi.fn(async () => ({
+      streamId: SOURCE_STREAM_ID,
+      checkpointOffset: 0,
+      processEventBatch: retainedProcessEventBatch(() => undefined),
+    }));
+    const h = harness({
+      events: [event(2, "a", { keep: true })],
+      awaitAlarmWrite: () => arm.promise,
+      wakeProcessor: wake,
+    });
+
+    h.eventSender.sendDue();
+    await Promise.resolve();
+    expect(wake).not.toHaveBeenCalled();
+
+    arm.resolve();
+    await h.settle();
+    expect(wake).toHaveBeenCalledOnce();
+  });
+
   it("replaces a hosted callback by clearing its matching watchdog and immediately redelivering", async () => {
     const deliveries: DeliveryCall[] = [];
     const disposals = [vi.fn(), vi.fn()];
