@@ -26,8 +26,11 @@ import {
 type Stored = { record: SecretRecord; revision: number };
 
 export class SecretDurableObject extends DurableObject {
-  /** The one refresh in flight (single-flight: N callers who 401 together share ONE mint). */
-  #refreshing: Promise<void> | undefined;
+  /** The one refresh in flight, keyed by the revision it read (single-flight: N callers who 401
+   *  together on the same material share ONE mint). A caller holding a NEWER revision — a `set`
+   *  landed while a mint for the old material was running, and the fence will drop that mint — is
+   *  never coalesced onto it: its own mint queues behind the running one. */
+  #refreshing: { revision: number; promise: Promise<void> } | undefined;
 
   /** Replace the record whole — material always travels with its complete policy (apps/os's
    *  `update` rule), so a value never inherits a pin or a strategy it was not set with. */
@@ -102,10 +105,17 @@ export class SecretDurableObject extends DurableObject {
   }
 
   #refresh(revision: number): Promise<void> {
-    this.#refreshing ??= this.#doRefresh(revision).finally(() => {
-      this.#refreshing = undefined;
-    });
-    return this.#refreshing;
+    const inFlight = this.#refreshing;
+    if (inFlight?.revision === revision) return inFlight.promise;
+    // A different revision is running (or none): run this one after it settles, never alongside.
+    const previous = inFlight?.promise.catch(() => {}) ?? Promise.resolve();
+    const promise = previous
+      .then(() => this.#doRefresh(revision))
+      .finally(() => {
+        if (this.#refreshing?.promise === promise) this.#refreshing = undefined;
+      });
+    this.#refreshing = { revision, promise };
+    return promise;
   }
 
   /** Run the strategy against the record AS READ NOW; commit only if nothing was `set` meanwhile
