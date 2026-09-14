@@ -1085,6 +1085,68 @@ log, `native-voice-processor-terminal-audit{,-followup}.json`, and
 passed deployment smokes after removal. No production deployment or device
 flash occurred.
 
+## Shared build host control (excluded)
+
+A preview-only coordinator host reused one native Durable Object with a facet
+per build key. Ten alternating uncached builds used the same full voice source
+and SDK pin, adding a different unimported file to force each cache miss.
+Every result produced exactly 1,075,589 module bytes with the same SHA-256
+`1949d8caf5a43e13634cfc66f9d983cf42fbdc86a3f27a4b08ed4511ba94570c`.
+
+| Pair | Native build RPC (ms) | Hosted build RPC (ms) |
+| ---- | --------------------: | --------------------: |
+| 1    |                 4,266 |                 5,538 |
+| 2    |                 3,844 |                 2,089 |
+| 3    |                 4,397 |                 2,236 |
+| 4    |                 4,388 |                 2,168 |
+| 5    |                 3,539 |                 2,081 |
+
+All-five medians were 4,266 / 2,168 ms; the subsequent four per arm were
+4,116 / 2,128.5 ms. The first cold hosted request remains included. These are
+caller-clock build RPC durations, not call readiness or OpenAI latency.
+Coordinator-local build durations also varied (native 710–2,197 ms; hosted
+622–2,345 ms), so the full difference cannot be attributed to actor activation.
+All ten returned success. The bounded coordinator query returned 40 untruncated
+records, including ten successful starts/settlements and no failed outcomes.
+
+Adversarial source review rejected the implementation: hosted facets remain
+resident until explicitly aborted, retaining approximately 1 MB per completed
+key; queued child work lacks a safe durable handoff to the parent alarm; and
+repeated enqueues reset the per-key retry budget. The diagnostic route and
+shared-host implementation were removed rather than expanding this PR with a
+new build lifecycle. The smaller follow-up prewarms the installed pinned voice
+worker through its existing health RPC, outside conversation startup.
+
+Evidence: `worker-build-host-control-result.json`,
+`clean-cold-workers-host-control-worker-build.json`, and the archived
+`worker-build-host-reviewed-experiment.patch` under `/tmp/voice-startup-pr`.
+Experimental version `47368745-a2aa-4305-81a6-623382ba9024` ran at
+22:04:10–22:04:47 UTC on 2026-09-14. No OpenAI request or project config change
+was part of this build control. Clean restore version
+`88599b3b-8993-4ab0-ab94-98c4b5840156` passed all deployment smokes.
+
+## Installer prewarm
+
+`voicelab deploy` now calls the existing health RPC on the exact installed
+entrypoint after installation and optional legacy pruning. It reports an
+explicit post-install failure if warmup fails, without rolling back the commit.
+It creates no voice stream and starts no provider session. This does not yet
+prebuild arbitrary worker refs changed through other config editing paths.
+
+On clean Preview 17 version `88599b3b-8993-4ab0-ab94-98c4b5840156`, a new project
+`prj_7c1966fd12f940c0aa4070cbb3d1491d` installed voice package `055337b` at config
+commit `8058498c1b4a77b79dbdea76934fa0ba85355d4b`. The first prewarm completed
+in **5,887 ms**; an unchanged second deploy completed prewarm in **954 ms**.
+Both returned build key
+`217a3f8784d63bb5d7d01d705e41c15de2f6194011d87667396457059d0dbcab`.
+Post-deploy audits asserted healthy worker identity and zero voice streams.
+These are installer-health durations, not a first-call latency comparison.
+
+Three focused tests cover pinned reference selection, the later pruning commit,
+and explicit warmup failure with capability disposal. OS typecheck passed.
+Evidence: `voicelab-deploy-prewarm-{first,second}.log` and
+`voicelab-deploy-prewarm-audit.json` under `/tmp/voice-startup-pr`.
+
 ## Reproduce
 
 From `apps/os`, with the current voice source installed in a disposable
