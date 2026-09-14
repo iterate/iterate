@@ -81,6 +81,7 @@ const deterministicFailure = (error: unknown): boolean =>
     "NO_ITX_EXPRESSION_MATCH",
     "REDUCE_CHECKPOINT_TOO_LARGE",
     "EVENT_TOO_LARGE",
+    "FORBIDDEN", // a target this context may not reach (a global path that is not its own): a retry cannot change who the caller is
   ].includes(errorCode(error) ?? "");
 
 /** One row's push waiting behind its in-flight delivery — later commits fold into it; `chars` is
@@ -621,9 +622,14 @@ export class SubscriptionDelivery {
     // call result pins the callee's export table until disposed, so release it here — a live client's
     // push runs on every commit, and leaving each result to GC would leak a slot per delivered batch.
     const call = async (args: unknown[]): Promise<void> => {
-      const result = method
+      const walked = method
         ? (await walkSteps({ value: head, receiver: undefined }, [[method, ...args]])).value
         : await callOn(head, undefined, args);
+      // A PIPELINED call answers with a branded promise the step walk hands back UNAWAITED
+      // (expression.ts): settle it HERE, before the dispose — otherwise a sibling hop's refusal
+      // (FORBIDDEN from the target context) or a hang was disposed unseen and the batch acked as
+      // delivered. The settled value is what pins the callee, so that is what is released.
+      const result = await walked;
       if (typeof result === "object" && result && Symbol.dispose in result)
         (result as Disposable)[Symbol.dispose]();
     };
