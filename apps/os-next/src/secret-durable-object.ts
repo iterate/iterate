@@ -169,7 +169,9 @@ export class SecretDurableObject extends DurableObject<AppConfigEnv> {
     }
   }
 
-  /** This object's name, `<projectId>:<name>` (a project id never holds a `:`). */
+  /** This object's name, `<projectId>:<name>` — the left half is the RESOURCE OWNER's id
+   *  (iterate-context.ts `resourceScope`: a project's id, or `global--users--<id>` /
+   *  `global--organizations--<id>`), which never holds a `:`. */
   #address(): { projectId: string; name: string } {
     const id = this.ctx.id.name ?? ":";
     const colon = id.indexOf(":");

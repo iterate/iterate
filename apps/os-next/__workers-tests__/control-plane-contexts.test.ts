@@ -6,14 +6,17 @@
 // membership), a global edge handle's `cd` is refused for everyone, and inside a global DO the
 // built-in `cd` admits one hop — the kernel's config funnel `itx.cd('/').worker…` under no principal
 // (src/iterate-context.ts, src/context/built-ins.ts, src/session.ts). That is the whole path mask:
-// nobody can NAME another user's path. What remains open is the append type-gate, still a
+// nobody can NAME another user's path. Beneath it, every project-scoped RESOURCE (`itx.kv`, the
+// secret cells and catalog, the Artifacts repos) is keyed by the RESOURCE OWNER — a project, or in
+// the global namespace the user's/organization's subtree (`resourceScope`, src/iterate-context.ts)
+// — so a name is never shared across users. What remains open is the append type-gate, still a
 // `test.fails` here: the body asserts the SECURE outcome, so while the code is insecure the assertion
 // fails and the expected-fail passes; whoever wires the fix deletes the `.fails`.
 // See apps/os-next/docs/control-plane-context-resolved-design.md.
 import { beforeAll, describe, expect, test } from "vitest";
 import { AccountProcessor } from "../src/account/processor.ts";
 import { ACCOUNT_PROCESSOR_SOURCE } from "../src/generated/account-processor-source.ts";
-import { adminCredentials, applyDirectorySchema, openSession, until } from "./support.ts";
+import { adminCredentials, applyDirectorySchema, openSession, stub, until } from "./support.ts";
 
 beforeAll(applyDirectorySchema);
 
@@ -261,6 +264,52 @@ describe("security requirements — the global namespace is not navigable", () =
     });
     expect(config.halted).toBeUndefined();
     expect(config.cursor!.attempt).toBe(0);
+  });
+
+  // The RESOURCE OWNER beneath the mask (`resourceScope`): a user's kv, secrets and repos are keyed
+  // by their own subtree, so a name is never another user's nor the global root's. The global root
+  // and a context BELOW a user are reached through the lane's raw DO door (`stub`): no session can
+  // navigate there — `session.user.cd` is refused, `projects.get('global')` too.
+
+  test("a user's kv is their own: A's put is A's get, not B's, not the global root's — and a context below A reads A's", async () => {
+    const a = await userSession("kv-a@sec.test");
+    const b = await userSession("kv-b@sec.test");
+    const aId = (await a.whoami()).actor;
+    await a.user.kv.put("k", "a");
+    expect(await a.user.kv.get("k")).toBe("a");
+    expect(await b.user.kv.get("k")).toBeNull();
+    expect(await stub("global").invoke(["itx", "kv", ["get", "k"]])).toBeNull();
+    expect(
+      await stub(`global.iterate/users/${aId}/notes`).invoke(["itx", "kv", ["get", "k"]]),
+    ).toBe("a");
+    expect((await b.user.kv.list()).keys).toEqual([]);
+  });
+
+  test("a user's secrets are their own: A's set is in A's catalog (A's context IS its secrets root), not B's, not the global root's — a context below A shares A's catalog", async () => {
+    const a = await userSession("secret-a@sec.test");
+    const b = await userSession("secret-b@sec.test");
+    const aId = (await a.whoami()).actor;
+    await a.user.secrets.set("x", "value-a", { urls: ["https://example.test"] });
+    expect(await a.user.secrets.list()).toEqual([{ name: "x", urls: ["https://example.test"] }]);
+    expect(await b.user.secrets.list()).toEqual([]);
+    expect(await stub("global").invoke(["itx", "secrets", ["list"]])).toEqual([]);
+    expect(
+      await stub(`global.iterate/users/${aId}/notes`).invoke(["itx", "secrets", ["list"]]),
+    ).toEqual([{ name: "x", urls: ["https://example.test"] }]);
+    // The catalog fact landed in A's own log, attributed to A — not in the global root's.
+    const aPage = (await a.user.invoke(["itx", ["readEvents"]])) as {
+      events: { type: string; payload?: { name?: string } }[];
+    };
+    expect(
+      aPage.events.some(
+        (event) =>
+          event.type === "events.iterate.com/secrets/changed" && event.payload?.name === "x",
+      ),
+    ).toBe(true);
+    // B setting the same NAME is B's own row, and leaves A's untouched.
+    await b.user.secrets.set("x", "value-b");
+    expect(await b.user.secrets.list()).toEqual([{ name: "x" }]);
+    expect(await a.user.secrets.list()).toEqual([{ name: "x", urls: ["https://example.test"] }]);
   });
 
   // parked: these need machinery from later increments (the privileged account facet and the

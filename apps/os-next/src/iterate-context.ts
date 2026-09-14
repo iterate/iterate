@@ -406,6 +406,36 @@ const PROJECT_ID = /^[A-Za-z0-9_-]+$/;
  *  RESERVED at the project catalog (session.ts `projects.create` / `projects.get`). */
 export const GLOBAL_PROJECT_ID = "global";
 
+/** THE RESOURCE OWNER of a context: `id` is the half every project-scoped resource key is prefixed
+ *  with (`itx.kv`'s `${id}:`, a secret cell's `${id}:${name}` Durable Object, the Artifacts `${id}.`
+ *  repo prefix) and `rootPath` the context whose log holds its secrets catalog. */
+export type ResourceScope = { id: string; rootPath: string };
+
+/** THE ONE DERIVATION of a context's resource owner (`ResourceScope`). A project owns its resources
+ *  whole — `{ id: projectId, rootPath: "/" }`, every key byte-identical to a plain project prefix.
+ *  The global namespace is no owner: one "project" shared by every user's and organization's
+ *  context, where the path mask partitions nothing a resource is keyed by — so there the owner is
+ *  the OWNER SUBTREE: under `/users/<id>` or `/organizations/<id>` it is `{ id:
+ *  "global--<kind>--<id>", rootPath: "/<kind>/<id>" }`, and the global root `/` (or any other global
+ *  path) is `{ id: "global", rootPath: "/" }`, the kernel's own. The `--` join is the project-host
+ *  label convention (`<app>--<project>`); the owner id is held to the projectId charset, so the
+ *  joined id stays inside `[A-Za-z0-9_-]` and the `:` and `.` delimiters still cannot collide, and
+ *  no project can spell it (directory.ts `projectSlug` collapses a dash run to one dash). User
+ *  A's `itx.kv.put('k')` is never user B's `itx.kv.get('k')`, and a user's context IS its own
+ *  secrets root. */
+export function resourceScope(projectId: string, path: string): ResourceScope {
+  if (projectId !== GLOBAL_PROJECT_ID) return { id: projectId, rootPath: "/" };
+  const [kind, ownerId] = resolveContextPath("/", path).split("/").slice(1);
+  if (!ownerId || (kind !== "users" && kind !== "organizations"))
+    return { id: GLOBAL_PROJECT_ID, rootPath: "/" };
+  if (!PROJECT_ID.test(ownerId))
+    throw codedError(
+      "INVALID_CONTEXT",
+      `invalid ${kind} id ${JSON.stringify(ownerId)}: only [A-Za-z0-9_-] (it is half of every resource key)`,
+    );
+  return { id: `${GLOBAL_PROJECT_ID}--${kind}--${ownerId}`, rootPath: `/${kind}/${ownerId}` };
+}
+
 /** A parsed DO address. `name` is its own canonical string form — parse once, carry both
  *  halves together (no separate re-stringify field at call sites). */
 export type DurableObjectAddress = { projectId: string; path: string; name: string };
