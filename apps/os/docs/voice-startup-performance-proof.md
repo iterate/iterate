@@ -809,6 +809,79 @@ mount and repository head. Evidence: `minify-aba-repeat-results/summary.json`,
 all arm logs and receiver records, and `minify-aba-repeat-mounted-state.json`.
 The failed first attempt remains separately preserved.
 
+## B's handshake outlier: project policy refresh
+
+Trace `d7fea57dd6f2dc5688c41fd28655c283` narrows the retained B first-call
+handshake outlier. Its ProjectDO egress request lasted 4,535 ms. A nested
+root processor-facade invocation lasted 3,944 ms and ended shortly before the
+473-ms SecretDO fetch began. The source awaits the project policy snapshot
+before entering SecretDO egress. Together, the ordering and source localize
+the delay to policy refresh; exact caller-resume markers are still required
+to equate the whole RPC lifetime with foreground wait.
+
+That root invocation contains a default project-worker build: 134 ms repo
+snapshot plus 2,579 ms compilation, settling in 2,713 ms. Config-source
+installation changes the whole repository build key even if `worker.ts`
+bytes are unchanged. The ProjectProcessor config-commit handler waits for
+default worker readiness while processor work is blocked. This is a cost of
+the first call after a config change, distinct from an ordinary fresh stream
+with unchanged installed source. It is not evidence of a five-second OpenAI
+connection. The remaining SecretDO duration cannot be split into secret
+preparation and upstream fetch using this retained trace.
+
+Evidence: `minify-b-outlier-telemetry.json` and
+`minify-b-outlier-full-trace.json`. Do not weaken build-cache correctness or
+policy freshness to remove this wait.
+
+## Setup source-resolution and guest phase probe
+
+A temporary native/guest probe split setup without extra events or RPCs. Its
+first harness attempt lost its client result to a missing cleanup import;
+that artifact remains separate. Native evidence still records 5,003 ms source
+resolution and 6,541 ms guest execution. Durable inspection found terminal
+offset 20, no active call, the activation in the ended set, and subscription
+lag zero at offset 72. This proves the terminal fold, not provider-side close.
+The harness was corrected and its actual copied runner/wrapper typechecked.
+
+The second run used an explicit **20-second observation window**, retaining
+the ordinary 10-second budget as the acceptance criterion. All five calls
+returned audio without recorded errors, but the first is an original-budget
+failure: accepted at **10,608 ms**, first non-silent PCM at **11,509 ms**. Four
+warm calls had median readiness **2,012 ms** and PCM **3,018.5 ms**. No root
+health prewarming preceded these calls.
+
+Native ProcessorFacet timings for the cold call are 8,164 ms inside source
+resolution before loader acquisition and 3,183 ms in the guest RPC, totaling
+11,347 ms. The four warm source-resolution segments show no clock advance;
+synchronous CPU may still consume time. The cold 8,164-ms interval needs
+further subdivision using its retained build trace.
+
+The guest's independent cold clock shows:
+
+| Guest operation            | Start, ms | End, ms |
+| -------------------------- | --------: | ------: |
+| Entrypoint ITX await       |         0 |       0 |
+| Initial voice append       |         0 |     111 |
+| Voice subscription barrier |       111 |     661 |
+| Secret validation          |         0 |   1,189 |
+| Agent create               |     1,189 |   2,327 |
+| Agent append               |     2,327 |   3,055 |
+| Backend-ready append       |     3,055 |   3,183 |
+
+Voice and Agent lanes overlap. Agent create/append dominate **setup RPC
+completion**, but do not gate the initial provider dial; backend readiness
+only gates delegation forwarding. Do not infer an Agent readiness bottleneck
+from this table or combine native/guest timestamps as one clock.
+
+All temporary native code was removed. Clean preview version
+`656f50f7-3f0c-4e3b-8207-963aeefe1c96` passed deployment smokes. Original voice
+bytes were restored at mount offset 1247, pinned to
+`2ea818d217c0f03f4e8eb36ed5353e641d5675bf`; probe marker absent. Evidence:
+`setup-probe-v2-results/phase-summary.json`, its raw startup/restore files,
+`clean-cold-workers-setup-probe-v2-voice startup setup dispatch.json`, and
+`deploy-setup-phase-restore.log`. The failed first attempt and terminal audit
+are in `setup-probe-results/` and `setup-probe-first-attempt-failed-state.json`.
+
 ## Reproduce
 
 From `apps/os`, with the current voice source installed in a disposable
