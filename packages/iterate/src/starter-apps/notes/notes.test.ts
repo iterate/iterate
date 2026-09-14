@@ -30,8 +30,8 @@ function fakeWorkspace() {
   const workspace: NotesWorkspace = {
     readFile: async (path) => (files.has(path) ? files.get(path)! : null),
     edit: async ({ path, oldString, newString }) => {
-      const content = files.get(path);
-      if (content === undefined) throw new Error(`Workspace file does not exist: "${path}".`);
+      if (!files.has(path)) throw new Error(`Workspace file does not exist: "${path}".`);
+      const content = files.get(path)!;
       if (!content.includes(oldString))
         throw new Error(`Edit oldString was not found in "${path}".`);
       files.set(path, content.replace(oldString, newString));
@@ -129,30 +129,50 @@ test("re-read guard: a body edited mid-analysis settles superseded, file untouch
   ]);
 });
 
-test("an edit after the analysis guard read cannot be overwritten by stale analysis", async () => {
+test.each(["edit", "delete"])(
+  "a %s after the analysis guard read cannot be overwritten by stale analysis",
+  async (change) => {
+    const { files, workspace } = fakeWorkspace();
+    const original = composeNoteFile({}, "76cm felt right");
+    const edited = composeNoteFile({}, "76cm — confirmed at home");
+    files.set(NOTE_PATH, original);
+    let reads = 0;
+    const readFile = workspace.readFile;
+    workspace.readFile = async (path) => {
+      const snapshot = await readFile(path);
+      if (++reads === 2) {
+        // The guard read is already answered on the server. A user's save wins
+        // before that RPC answer gets back to the analysis processor.
+        if (change === "edit") files.set(NOTE_PATH, edited);
+        else files.delete(NOTE_PATH);
+      }
+      return snapshot;
+    };
+    const h = makeNotesHarness({
+      workspace,
+      analyze: async () => ({ title: "Old analysis", tags: [], processedBy: "fake" }),
+    });
+    await h.append(captured(NOTE_PATH));
+    expect(files.get(NOTE_PATH)).toBe(change === "edit" ? edited : undefined);
+    expect(h.events("events.iterate.com/notes/analysis-settled")).toMatchObject([
+      { payload: { result: { status: "superseded" } } },
+    ]);
+  },
+);
+
+test("an unrelated analysis write failure remains a failure, not a superseded edit", async () => {
   const { files, workspace } = fakeWorkspace();
-  const original = composeNoteFile({}, "76cm felt right");
-  const edited = composeNoteFile({}, "76cm — confirmed at home");
-  files.set(NOTE_PATH, original);
-  let reads = 0;
-  const readFile = workspace.readFile;
-  workspace.readFile = async (path) => {
-    const snapshot = await readFile(path);
-    if (++reads === 2) {
-      // The guard read is already answered on the server. A user's save wins
-      // before that RPC answer gets back to the analysis processor.
-      files.set(NOTE_PATH, edited);
-    }
-    return snapshot;
+  files.set(NOTE_PATH, composeNoteFile({}, "green apples"));
+  workspace.edit = async () => {
+    throw new Error("transport disconnected");
   };
   const h = makeNotesHarness({
     workspace,
-    analyze: async () => ({ title: "Old analysis", tags: [], processedBy: "fake" }),
+    analyze: async () => ({ title: "Shopping", tags: [], processedBy: "fake" }),
   });
   await h.append(captured(NOTE_PATH));
-  expect(files.get(NOTE_PATH)).toBe(edited);
   expect(h.events("events.iterate.com/notes/analysis-settled")).toMatchObject([
-    { payload: { result: { status: "superseded" } } },
+    { payload: { result: { status: "failed", error: "transport disconnected" } } },
   ]);
 });
 

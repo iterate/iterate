@@ -7,7 +7,7 @@ base: a85434f645
 
 # Fix the recurring Playwright failures
 
-Worktree and scope prepared. Implementation and preview reruns remain. The deliverable is a pushed branch and GitHub compare link; **do not open a pull request**.
+Initial fixes are committed; the first preview batch passed 12/14 executions. Both failures exposed a selection bug in the new shopping-list helper, now corrected for the next batch. Larger reruns and final cleanup remain. The deliverable is a pushed branch and GitHub compare link; **do not open a pull request**.
 
 ## Request and assumptions
 
@@ -30,3 +30,11 @@ Fix the six failure groups investigated in the CI design jam, with repeated indi
 - Historical evidence: root worktree `explainers.ignoreme/ci-design-jam/retry-causes.md` and `evidence/retry-first-failures.json`; 75 first failures across 61 attempts, September 8–14. Some failures predate fixes, especially mobile composer waits and the freeze stimulus. Do not count those as current defects without verification.
 - Ranked working hypotheses: (1) local submission state ends before backend progress or feed rendering begins; (2) UI assertions mistake optimistic state for a persisted edit; (3) older browser/harness APIs do not honor loading or accurately simulate suspension; (4) genuine backend/transport stalls remain and require separate timing evidence.
 - User approved initial likely fixes before preview iteration. Use deterministic delayed-operation coverage where practical, then test the original flows against the real deployed system.
+
++- Preview 3 leased as `playwright-flake-causes` until 2026-09-15 10:31 UTC. Entry erase retired old DOs and removed 713 old artifact repos before its bounded GC deadline; remaining inert repos are outside test correctness. Auth, Docs and OS deployed successfully.
++- Initial deployment: SDK/source `965cafd3e512bebf885110c0949a259a945bcaba`; OS version `1fc7a42f-f878-4241-a373-c0cf6e5b564c`, Auth `1e460a64-3966-4a18-bbd0-3a07e1a25c9b`, Docs `537fde6e-f142-4168-bbec-a5f738b03403`. Waited 90 seconds after successful deployment before tests.
++- Initial batch: 2 repeats of each of seven focused tests, four workers, zero retries. Todo, fake-model multi-turn, script return typing without warm-up, mobile notes, freeze recovery and review each passed twice. The review wrapper recorded actual `pass` twice (no matched flakes). Shopping-list undo failed twice because DOM text offsets included peer-caret labels; remove those decorations when measuring the native selection and assert the selected word before typing.
++- Note-race reproduction: analysis re-reads the old body, a user edit commits, then analysis writes the old body back. Replaced unconditional writeback with `Workspace.edit` so its old-text check and write serialize together. Tests also cover deletion and unrelated write errors. Twelve notes tests pass.
++- Middlewright upstream branch: https://github.com/iterate/middlewright/compare/main...fix/input-value-loading (`bb18716`). The delayed-composer regression failed before the change, then all 27 spinner/plugin tests, typecheck, build and lint passed. Iterate carries that change as a pnpm patch until upstream release; no upstream PR opened.
++- Focused checks: 18 SDK regression tests and 17 OS progress/composer tests passed; specs typecheck and OS TypeScript check passed; changed-file lint passed. SDK-wide `tsc --noEmit` has three pre-existing errors in unchanged auth-contract/CLI code (`Headers` iterable/entries and `NestedClient` typing), not in these changes.
++- Raw local evidence: `.flake-validation.ignoreme/initial/` (JSON report, first-failure traces, zero-retry command, flake records), plus worker tail. It is deliberately ignored; retain a concise results table here for review.

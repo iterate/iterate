@@ -594,7 +594,16 @@ async function replaceEditorWord(
   replacement: string,
 ) {
   const editor = page.locator(".cm-content");
-  const text = (await editor.locator(".cm-line").allTextContents()).join("\n");
+  const text = await editor.locator(".cm-line").evaluateAll((lines) =>
+    lines
+      .map((line) => {
+        const copy = line.cloneNode(true) as HTMLElement;
+        // Peer labels are decoration, not characters in the editable document.
+        copy.querySelectorAll(".cm-remote-caret").forEach((caret) => caret.remove());
+        return copy.textContent;
+      })
+      .join("\n"),
+  );
   const offset = text.indexOf(word);
   expect(offset).toBeGreaterThanOrEqual(0);
   await editor.click();
@@ -602,5 +611,8 @@ async function replaceEditorWord(
   await page.keyboard.press("ArrowLeft");
   for (let i = 0; i < offset; i++) await page.keyboard.press("ArrowRight");
   for (let i = 0; i < word.length; i++) await page.keyboard.press("Shift+ArrowRight");
+  expect(await editor.evaluate((element) => element.ownerDocument.getSelection()?.toString())).toBe(
+    word,
+  );
   await page.keyboard.insertText(replacement);
 }
