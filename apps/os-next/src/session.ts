@@ -12,7 +12,13 @@ import {
   type IterateContextNamespace,
   type WaitUntil,
 } from "./iterate-context.ts";
-import { describeReach, type Directory, type Project, type Reach } from "./directory.ts";
+import {
+  describeReach,
+  projectSlug,
+  type Directory,
+  type Project,
+  type Reach,
+} from "./directory.ts";
 import type { AppConfig } from "./app-config.ts";
 import { codedError } from "./lib.ts";
 import { verifyAdminSecret, type Principal } from "./principal.ts";
@@ -170,9 +176,18 @@ export class SessionRpcTarget extends RpcTarget {
       authority.principal,
       authority.reach,
     );
-    this.#organizations = new OrganizationCollection((orgId) =>
-      this.#globalContext(`/organizations/${orgId}`),
+    this.#organizations = new OrganizationCollection(
+      (orgId) => this.#reachesOrg(orgId),
+      (orgId) => this.#globalContext(`/organizations/${orgId}`),
     );
+  }
+
+  /** Whether this session may hold `orgId`'s context: the admin (every project) reaches every
+   *  organization; a user reaches the organizations `orgs()` lists — their memberships, narrowed to
+   *  the orgs of the projects a grant chose. */
+  async #reachesOrg(orgId: string): Promise<boolean> {
+    if (this.#authority.reach === "every") return true;
+    return (await this.orgs()).some((org) => org.id === orgId);
   }
 
   [Symbol.dispose](): void {
@@ -238,7 +253,7 @@ export class SessionRpcTarget extends RpcTarget {
 
   /** The organizations this session can reach, each as a global IterateContextRpcTarget at
    *  `(global, /organizations/<orgId>)` — the same context surface as a user or a project. `orgs()`
-   *  returns the directory rows; this vends the org's context. */
+   *  returns the directory rows; this vends the org's context, by membership. */
   get organizations(): OrganizationCollection {
     return this.#organizations;
   }
@@ -258,9 +273,10 @@ export class SessionRpcTarget extends RpcTarget {
   }
 
   /** A context in the deployment-global namespace (the control plane's own): an ordinary
-   *  IterateContextRpcTarget at `(GLOBAL_PROJECT_ID, path)`, carrying this session's principal. Which global paths a caller may reach is the path-mask access policy — NOT YET
-   *  ENFORCED: for now any authenticated caller can reach any global path, and the naughty things
-   *  that lets them do are captured as failing tests (see the security spec), to be fixed later. */
+   *  IterateContextRpcTarget at `(GLOBAL_PROJECT_ID, path)`, carrying this session's principal. THE
+   *  ONLY WAY TO A GLOBAL CONTEXT: `user` and `organizations.get` vend one by IDENTITY (the session's
+   *  own user, an org it belongs to) and the handle's `cd` is refused (iterate-context.ts), so no
+   *  caller can name another global path — the path mask with no policy table. */
   #globalContext(path: string): IterateContextRpcTarget {
     return new IterateContextRpcTarget(
       this.#input.contextNamespace,
@@ -273,18 +289,37 @@ export class SessionRpcTarget extends RpcTarget {
 }
 
 /** The organization catalog: `get(orgId)` vends an organization's context in the deployment-global
- *  namespace. Thin — it holds only a factory for `(global, /organizations/<orgId>)`; which orgs a
- *  caller may reach is the path-mask access policy (NOT YET ENFORCED — captured as failing tests). */
+ *  namespace, `(global, /organizations/<orgId>)` — BY MEMBERSHIP (`SessionRpcTarget.#reachesOrg`):
+ *  an org the session does not reach is FORBIDDEN, exactly as `projects.get` outside its reach. */
 class OrganizationCollection extends RpcTarget {
+  readonly #reachesOrg: (orgId: string) => Promise<boolean>;
   readonly #context: (orgId: string) => IterateContextRpcTarget;
 
-  constructor(context: (orgId: string) => IterateContextRpcTarget) {
+  constructor(
+    reachesOrg: (orgId: string) => Promise<boolean>,
+    context: (orgId: string) => IterateContextRpcTarget,
+  ) {
     super();
+    this.#reachesOrg = reachesOrg;
     this.#context = context;
   }
 
-  get(orgId: string): IterateContextRpcTarget {
-    return this.#context(z.string().trim().min(1).parse(orgId));
+  async get(orgId: string): Promise<IterateContextRpcTarget> {
+    // ONE path segment — the directory's `org_<hex>` — never a path: the id is interpolated into
+    // `/organizations/<id>`, and `..` or `x/../users/<id>` would canonicalize onto another global
+    // context (the admin reaches every org, so the membership check alone would not catch it).
+    const id = z.string().trim().min(1).parse(orgId);
+    if (!/^[A-Za-z0-9_-]+$/.test(id))
+      throw codedError(
+        "FORBIDDEN",
+        `organizations.get(${JSON.stringify(id)}): an organization id is one path segment, never a path`,
+      );
+    if (!(await this.#reachesOrg(id)))
+      throw codedError(
+        "FORBIDDEN",
+        `organizations.get(${JSON.stringify(id)}): not an organization this session belongs to`,
+      );
+    return this.#context(id);
   }
 }
 
@@ -322,12 +357,18 @@ class ProjectCollection extends RpcTarget {
    *  by name when they have several, created on first use when they have none), or in the
    *  deployment's own org for the admin secret — and vend its root context. A grant narrowed to
    *  named projects creates none: FORBIDDEN. A name ANY org already holds is refused, coded
-   *  (PROJECT_NAME_TAKEN); the same org's again is idempotent. */
+   *  (PROJECT_NAME_TAKEN); the same org's again is idempotent. The global namespace's id is a
+   *  RESERVED word (PROJECT_NAME_RESERVED): a project could otherwise address `(global, "/")`. */
   async create(input: {
     project: ProjectIdOrSlug;
     orgId?: string;
   }): Promise<IterateContextRpcTarget> {
     const data = z.object({ project: z.string(), orgId: z.string().optional() }).parse(input);
+    if (projectSlug(data.project) === GLOBAL_PROJECT_ID)
+      throw codedError(
+        "PROJECT_NAME_RESERVED",
+        `projects.create: ${JSON.stringify(GLOBAL_PROJECT_ID)} is the deployment-global namespace, not a project name`,
+      );
     const project = await this.#input.directory.createProject(
       this.#reach,
       data.project,
@@ -337,12 +378,17 @@ class ProjectCollection extends RpcTarget {
   }
 
   /** The project's root context ("/"). A project only — a context name belongs to `cd`. Outside
-   *  this session's reach is FORBIDDEN. */
+   *  this session's reach is FORBIDDEN; so is the global namespace's id (it is no project). */
   async get(project: ProjectIdOrSlug): Promise<IterateContextRpcTarget> {
     const address = DurableObjectNameCodec.parse(project);
     if (address.path !== "/")
       throw new Error(
         `projects.get(project): got a context name ${JSON.stringify(project)} — pass the project and cd(path) from its root`,
+      );
+    if (address.projectId === GLOBAL_PROJECT_ID)
+      throw codedError(
+        "FORBIDDEN",
+        `projects.get(${JSON.stringify(project)}): the deployment-global namespace is no project — a global context is reached by identity (session.user, session.organizations)`,
       );
     if (!(await this.#input.directory.reachesProject(this.#reach, address.projectId)))
       throw codedError(
