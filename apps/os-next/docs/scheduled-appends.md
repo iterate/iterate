@@ -35,7 +35,7 @@ try {
   `{ everyMs: 60_000 }`. Relative delays resolve against the durable definition's `createdAt`,
   so replay and idempotent requests retain the deadline. Delays are integer milliseconds from
   zero to 365 days; intervals are from one second to 365 days. Absolute instants require a timezone.
-- `cancel(receipt)` cancels that version only. `cancel(key)` cancels whichever definition currently
+- `cancel(receipt)` cancels that version only; an inspection row from `get` or `list` also works. `cancel(key)` cancels whichever definition currently
   owns the key. Receipts belong to the context where they were created.
 - `get(key)` returns the current definition or null. `list()` returns pending and failed definitions.
   Each row includes `nextAt`, the next intended occurrence time, and `scheduledAtOffset`.
@@ -94,20 +94,21 @@ A definition contains 1–100 durable event bodies (`type`, optional JSON `paylo
 with no explicit identity, source, offset or ephemeral flag. Nested scheduling and runtime lifecycle
 controls are refused. Each definition is limited to 65,536 serialized JS characters, with at most
 100 pending/failed definitions and 1,048,576 serialized characters in the definition projection per
-context. Failure diagnostics have a separate 2,000-character cap. Completed one-shots and cancelled
+context. Capacity is checked when definitions are added or replaced; interval ticks skip the redundant budget scan.
+Failure diagnostics have a separate 2,000-character cap. Completed one-shots and cancelled
 schedules leave the projection; history remains in the log.
 
 ## Executable examples
 
-- `e2e/scheduled-appends.e2e.test.ts`: ten deployed tests covering facet timeout batches, replacement,
+- `e2e/scheduled-appends.e2e.test.ts`: eleven deployed tests covering facet timeout batches, replacement,
   versioned cancellation, processor intent, pause/resume, validation, disconnection past idle cleanup,
-  two facet instances sharing a local key, recurring events, and idempotent receipts after completion.
+  two facet instances sharing a local key, recurring events, idempotent receipts after completion, and cancellation using inspection rows.
 - `e2e/support/scheduled-append-facet.ts`: complete userspace sources with no alarm handler or native
   alarm storage. `start(job, when)` supports both deadlines and intervals; `finish(receipt)` cancels.
 - `__workers-tests__/scheduled-appends.test.ts`: eviction, duplicate alarms, paused recovery,
-  atomic refusal, bounded batches, coalesced intervals and parked interval failures.
+  atomic refusal, bounded batches, coalesced intervals, parked interval failures, and post-commit effect failures.
 - `src/stream/scheduled-appends.test.ts`: replay, deadline reconstruction, breaker independence,
-  relative timestamp anchoring, recurrence identity, validation and transactional limits.
+  relative timestamp anchoring, interval replacement, recurrence identity, validation and transactional limits.
 
 ```sh
 pnpm --dir apps/os-next test scheduled-appends

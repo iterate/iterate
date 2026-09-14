@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { CoreContract, normalizeControlEvent, reduceCoreEventBatch } from "./core-processor.ts";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
@@ -289,4 +289,61 @@ test.each([
       payload: { key: "invalid", when, events: [{ type: "due" }] },
     }),
   ).toThrow();
+});
+
+test("replacing an interval anchors its new cadence and ignores the old completion and cancellation", () => {
+  vi.useFakeTimers({ now: Date.parse("2030-01-01T00:00:00Z"), toFake: ["Date"] });
+  try {
+    const { stream, create } = setup();
+    const [old] = stream.append(
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/append-scheduled",
+        payload: { key: "tick", when: { everyMs: 1000 }, events: [{ type: "old/tick" }] },
+      }),
+    );
+    const oldAt = stream.coreReducedState.schedules.tick.nextAt;
+    vi.setSystemTime(Date.now() + 750);
+    const [replacement] = stream.append(
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/append-scheduled",
+        payload: { key: "tick", when: { everyMs: 5000 }, events: [{ type: "new/tick" }] },
+      }),
+    );
+    stream.append(
+      {
+        type: "events.iterate.com/stream/append-schedule-completed",
+        payload: { key: "tick", scheduledAtOffset: old.offset, at: oldAt },
+      },
+      {
+        type: "events.iterate.com/stream/append-schedule-cancelled",
+        payload: { key: "tick", ifScheduledAtOffset: old.offset },
+      },
+    );
+    const expected = {
+      scheduledAtOffset: replacement.offset,
+      nextAt: new Date(Date.parse(replacement.createdAt) + 5000).toISOString(),
+      when: { everyMs: 5000 },
+      events: [{ type: "new/tick" }],
+    };
+    expect(create().coreReducedState.schedules.tick).toMatchObject(expected);
+    expect(
+      reduceCoreEventBatch(stream.read().events, CoreContract.initialState(), (error) => {
+        throw error;
+      }).schedules.tick,
+    ).toMatchObject(expected);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a batch can replace a full schedule set without transient capacity failures", () => {
+  const { stream } = setup();
+  stream.append(...Array.from({ length: 100 }, (_, i) => scheduled(`old${i}`)));
+  stream.append(scheduled("new"), {
+    type: "events.iterate.com/stream/append-schedule-cancelled",
+    payload: { key: "old0" },
+  });
+  expect(Object.keys(stream.coreReducedState.schedules)).toHaveLength(100);
+  expect(stream.coreReducedState.schedules.old0).toBeUndefined();
+  expect(stream.coreReducedState.schedules.new).toBeDefined();
 });

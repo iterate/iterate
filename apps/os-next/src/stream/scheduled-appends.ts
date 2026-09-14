@@ -1,20 +1,20 @@
 import { z } from "zod";
 import type { StreamEvent, StreamEventInput } from "./processor.ts";
 
-const keyPart = z
-  .string()
-  .min(1)
-  .max(200)
+const keyPart = z.string().min(1);
+const normalizedKey = keyPart
+  .max(200, "normalized schedule key exceeds 200 characters")
   .refine((value) => !(value in Object.prototype));
 /** A pair scopes a local key to a facet instance (or another explicit owner). Scope is naming,
  *  not access control: the context-wide API can inspect and cancel every schedule. */
 export const ScheduleKey = z
   .union([keyPart, z.tuple([keyPart, keyPart])])
   .transform((value) => (typeof value === "string" ? value : JSON.stringify(value)))
-  .pipe(keyPart);
+  .pipe(normalizedKey);
 export type ScheduleKey = z.input<typeof ScheduleKey>;
-export const ScheduleReceipt = z.strictObject({
-  key: keyPart,
+// Inspection rows carry this same identity plus metadata; accept them wherever a receipt works.
+export const ScheduleReceipt = z.object({
+  key: normalizedKey,
   scheduledAtOffset: z.number().int().positive(),
 });
 export type ScheduleReceipt = z.infer<typeof ScheduleReceipt>;

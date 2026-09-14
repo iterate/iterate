@@ -314,7 +314,6 @@ export class Stream {
       "events.iterate.com/stream/paused",
       "events.iterate.com/stream/resumed",
       "events.iterate.com/stream/append-schedule-cancelled",
-      "events.iterate.com/stream/append-schedule-failed",
       // the delivery loop's own record of a halted row — a paused stream's ladder must still end
       "events.iterate.com/stream/subscription-delivery-halted",
     ];
@@ -369,15 +368,15 @@ export class Stream {
       freshEvents.push(committedEvent);
     }
     if (freshEvents.length === 0) return committedEvents; // every event deduped to an existing one
-    // Bound definitions before committing; terminal failure diagnostics have their own size cap
-    // and must remain writable even when definitions have filled their budget.
-    const scheduledAppends = freshEvents.reduce(
-      reduceScheduledAppends,
-      this.#coreReducedState.schedules,
-    );
-    if (
-      scheduledAppends !== this.#coreReducedState.schedules &&
-      (Object.keys(scheduledAppends).length > 100 ||
+    // Only definitions can grow the projection. Completion/cancellation shrink it or advance a
+    // fixed-width nextAt; bounded failure diagnostics are excluded from the definition budget.
+    if (freshEvents.some((event) => event.type === "events.iterate.com/stream/append-scheduled")) {
+      const scheduledAppends = freshEvents.reduce(
+        reduceScheduledAppends,
+        this.#coreReducedState.schedules,
+      );
+      if (
+        Object.keys(scheduledAppends).length > 100 ||
         JSON.stringify(
           Object.fromEntries(
             Object.entries(scheduledAppends).map(([key, { failure: _failure, ...definition }]) => [
@@ -386,12 +385,13 @@ export class Stream {
             ]),
           ),
         ).length >
-          1024 * 1024)
-    )
-      throw codedError(
-        "SCHEDULE_LIMIT",
-        "a context may retain at most 100 schedules and 1,048,576 serialized characters; cancel failed definitions before adding more",
-      );
+          1024 * 1024
+      )
+        throw codedError(
+          "SCHEDULE_LIMIT",
+          "a context may retain at most 100 schedules and 1,048,576 serialized characters; cancel failed definitions before adding more",
+        );
+    }
     // 3 + 4. reduce and commit
     let coreReducedStateChanged = false;
     if (freshEvents.every((event) => event.ephemeral)) {

@@ -198,3 +198,81 @@ test("a failed interval stays parked across later alarms", async () => {
     ),
   ).toHaveLength(1);
 });
+
+test.each(["once", "interval"])(
+  "a %s occurrence survives a post-commit effect failure without being parked or repeated",
+  async (kind) => {
+    const ctx = `prj_scheduled_effect_${kind}`;
+    const s = stub(ctx);
+    await s.invoke([
+      "itx",
+      "processors",
+      [
+        "enable",
+        "deadlines",
+        {
+          source: scheduledAppendFacetSource,
+          className: "DeadlinesDurableObject",
+        },
+      ],
+    ]);
+    await s.invoke([
+      "itx",
+      "schedules",
+      [
+        "set",
+        {
+          key: "remove-facet",
+          when: kind === "once" ? { at } : { everyMs: 10_000 },
+          events: [
+            { type: "postcommit/due" },
+            {
+              type: "events.iterate.com/stream/subscription-configured",
+              payload: { name: "deadlines", target: null },
+            },
+          ],
+        },
+      ],
+    ]);
+    const schedule = (await s.invoke("itx.schedules.get('remove-facet')")) as { nextAt: string };
+    const dueAt = Date.parse(schedule.nextAt);
+    vi.useFakeTimers({ now: dueAt, toFake: ["Date"] });
+    try {
+      await runInDurableObject(s, async (instance, state) => {
+        const deletion = vi.spyOn(state.facets, "delete").mockImplementation(() => {
+          throw new Error("injected post-commit facet deletion failure");
+        });
+        try {
+          await expect(instance.alarm()).rejects.toThrow(
+            "injected post-commit facet deletion failure",
+          );
+          expect(deletion).toHaveBeenCalledOnce();
+        } finally {
+          deletion.mockRestore();
+        }
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    await evictDurableObject(s);
+    await fire(ctx, dueAt); // recovery sees the committed completion, never the original obligation
+    const events = (await read(ctx)).events;
+    expect(events.filter((event) => event.type === "postcommit/due")).toHaveLength(1);
+    expect(
+      events.filter(
+        (event) => event.type === "events.iterate.com/stream/append-schedule-completed",
+      ),
+    ).toHaveLength(1);
+    expect(
+      events.filter((event) => event.type === "events.iterate.com/stream/append-schedule-failed"),
+    ).toEqual([]);
+    expect(await s.invoke("itx.schedules.get('remove-facet')")).toEqual(
+      kind === "once"
+        ? null
+        : expect.objectContaining({
+            nextAt: new Date(dueAt + 10_000).toISOString(),
+          }),
+    );
+    await s.invoke("itx.schedules.cancel('remove-facet')");
+  },
+);

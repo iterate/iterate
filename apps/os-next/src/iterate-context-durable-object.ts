@@ -424,9 +424,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     },
     schedules: {
       list: () => Object.values(this.#stream.coreReducedState.schedules),
-      get: (key) =>
-        Object.values(this.#stream.coreReducedState.schedules).find((row) => row.key === key) ??
-        null,
+      get: (key) => this.#stream.coreReducedState.schedules[key] ?? null,
     },
     subscriptions: {
       list: () => this.#subscriptionList(),
@@ -622,6 +620,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // touched this incarnation is a self-wake. Recorded once, when the streak first crosses. A
     // halted context FALLS THROUGH to the quiesce below: it will not wake itself again, so it must
     // not stay pinned (billed for duration) by what this wake materialized.
+    // An obsolete early wake can count here; the breaker never suppresses durable schedules.
     if (!this.#publicDoorTouched && !scheduledProgress) {
       const { streak, justHalted } = this.#stream.noteSelfWake();
       if (justHalted) {

@@ -287,7 +287,10 @@ interface BuildBuiltInsDeps {
   /** The rpcStubs view — closures over the DO's transport table (the pager sockets can never move). */
   rpcStubs: BuiltInScope["rpcStubs"];
   subscriptions: BuiltInScope["subscriptions"];
-  schedules: Pick<BuiltInScope["schedules"], "get" | "list">;
+  schedules: {
+    get(key: string): ScheduledAppend | null;
+    list(): ScheduledAppend[];
+  };
   rewriteRules: BuiltInScope["rewriteRules"];
   /** The own context's — a wait never crosses a hop. */
   waitForEvent: BuiltInScope["waitForEvent"];
@@ -430,7 +433,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           payload: input,
           idempotencyKey: options?.idempotencyKey,
         });
-        return { key: ScheduleKey.parse(input.key), scheduledAtOffset: definition.offset };
+        return ScheduleReceipt.parse({
+          key: definition.payload?.key,
+          scheduledAtOffset: definition.offset,
+        });
       },
       cancel: (schedule) => {
         const receipt = ScheduleReceipt.safeParse(schedule);

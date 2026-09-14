@@ -282,9 +282,27 @@ test("a userspace facet consumes recurring events until it cancels its receipt",
 
 test("set with an idempotency key returns the original receipt after completion", async () => {
   const itx = openItx(freshCtx("schedule_receipt_retry"));
-  const input = { key: "once", when: { afterMs: 0 }, events: [{ type: "once/due" }] };
+  const input = { key: ["facet", "once"], when: { afterMs: 0 }, events: [{ type: "once/due" }] };
   const receipt = await itx.schedules.set(input, { idempotencyKey: "request-1" });
   await itx.waitForEvent({ type: "once/due", afterOffset: receipt.scheduledAtOffset });
   expect(await itx.schedules.set(input, { idempotencyKey: "request-1" })).toEqual(receipt);
+  expect(await itx.schedules.list()).toEqual([]);
+});
+
+test("inspection rows are cancellation receipts and a stale row cannot cancel a replacement", async () => {
+  const itx = openItx(freshCtx("schedule_inspected_receipt"));
+  const input = {
+    key: ["facet", "deadline"],
+    when: { afterMs: 60_000 },
+    events: [{ type: "inspected/due" }],
+  };
+  await itx.schedules.set(input);
+  const old = await itx.schedules.get(input.key);
+  const replacement = await itx.schedules.set(input);
+  await itx.schedules.cancel(old);
+  const current = await itx.schedules.get(input.key);
+  expect(current.scheduledAtOffset).toBe(replacement.scheduledAtOffset);
+  await itx.schedules.cancel(current);
+  expect(await itx.schedules.get(input.key)).toBeNull();
   expect(await itx.schedules.list()).toEqual([]);
 });
