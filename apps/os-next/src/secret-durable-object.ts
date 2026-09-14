@@ -20,7 +20,6 @@ import {
   normalizeSecretConnect,
   SECRET_CONNECT_CALLBACK_PATH,
   type PendingSecretConnect,
-  type SecretConnectState,
 } from "./secret-connect.ts";
 import {
   originPinned,
@@ -73,7 +72,7 @@ export class SecretDurableObject extends DurableObject<AppConfigEnv> {
     const config = appConfigOf(this.env);
     const { projectId, name } = this.#address();
     const nonce = crypto.randomUUID();
-    const state: SecretConnectState = { projectId, name, nonce, exp: Date.now() + 10 * 60_000 };
+    const state = { projectId, name, nonce, exp: Date.now() + 10 * 60_000 };
     const { pending, authorizationUrl } = await beginSecretConnect(
       normalizeSecretConnect(options),
       {
