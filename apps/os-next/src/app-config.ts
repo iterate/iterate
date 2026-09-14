@@ -50,8 +50,6 @@ export const AppConfig = z.object({
   /** The base every project host hangs under — `<app>--<project>.<base>`, `<project>.<base>`
    *  (the project host section); blank ⇒ no project-host ingress. */
   projectHostnameBase: z.string().trim().default(""),
-  /** The HMAC secret project tokens are signed with (principal.ts). */
-  projectTokenSecret: requiredSecret,
   /** The HMAC secret the control plane's session cookie is signed with (control-plane.ts). */
   sessionSecret: requiredSecret,
   /** The deployment's admin secret — `authenticate({ type: "admin-secret" })` and the project host's

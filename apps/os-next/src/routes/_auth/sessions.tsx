@@ -1,77 +1,64 @@
-import { useMemo, useState, type FormEvent } from "react";
+// /_auth/sessions — every OAuth grant the signed-in user holds (browsers, connected apps, personal
+// access tokens), each endable on its own, and the one place a personal access token is minted: a
+// name and the projects it may reach → `session.grants.mint` → the token, shown ONCE (it is a finite
+// provider access token, never stored readable — grants.ts). The list is the loader's; a mint or an
+// end invalidates it, the way the page already reloads after `grants.end`.
+import { useState, type FormEvent } from "react";
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { z } from "zod";
 import { useItx } from "../-itx.tsx";
-import { useLiveState } from "../../client/react.tsx";
-import { ACCOUNT_PROCESSOR_SOURCE } from "../../generated/account-processor-source.ts";
-import { AccountContract, AccountView } from "../../account/contract.ts";
 
 export const Route = createFileRoute("/_auth/sessions")({
   validateSearch: (search: Record<string, unknown>) => ({
     cursor: typeof search.cursor === "string" ? search.cursor : undefined,
   }),
   loaderDeps: ({ search }) => ({ cursor: search.cursor }),
-  // Host the account processor (the live token view) alongside the grant list. RpcPromise is
-  // callable; normalize the grant list to a native Promise for the router loader.
-  loader: async ({ deps, context }) => {
-    await context.api.user.processors.enable("account", {
-      source: ACCOUNT_PROCESSOR_SOURCE,
-      className: "AccountDurableObject",
-      consumes: [...AccountContract.consumes],
-    });
-    return await context.api.grants.list(deps.cursor);
-  },
+  // RpcPromise is callable; normalize the grant list to a native Promise for the router loader.
+  loader: async ({ deps, context }) => await context.api.grants.list(deps.cursor),
   component: SessionsPage,
 });
 
+/** A personal access token as the form just minted it — held only in this page's state, shown
+ *  once; a reload forgets it, as the server already has. */
+type MintedPersonalAccessToken = { name: string; token: string; expiresAt: number };
+
 function SessionsPage() {
-  const { items, cursor } = Route.useLoaderData();
+  const { items, cursor, projects, canMintToken } = Route.useLoaderData();
   const router = useRouter();
   const { api } = useItx();
   const search = Route.useSearch();
   const [error, setError] = useState<string | null>(null);
 
-  // API tokens are LiveState — the account processor on session.user. Creating or revoking one is a
-  // single appended command; the list updates the instant the delta streams back, no reload.
-  const userItx = useMemo(() => api.user, [api]);
-  const { value, status } = useLiveState<AccountView>(userItx, {
-    key: "account",
-    door: async () =>
-      z
-        .object({ rev: z.number(), state: AccountView })
-        .parse(await userItx.invoke("itx.facets.get('account').liveSnapshot()")),
-  });
   const [tokenName, setTokenName] = useState("");
-  const createToken = async (event: FormEvent<HTMLFormElement>) => {
+  const [excludedProjectIds, setExcludedProjectIds] = useState<Set<string>>(new Set());
+  const [minted, setMinted] = useState<MintedPersonalAccessToken | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [minting, setMinting] = useState(false);
+  const selectedProjectIds = projects
+    .filter((project) => !excludedProjectIds.has(project.id))
+    .map((project) => project.id);
+
+  const mintPersonalAccessToken = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const name = tokenName.trim() || "Untitled token";
-    setTokenName("");
+    const name = tokenName.trim();
     setError(null);
+    setMinting(true);
     try {
-      const requestId = crypto.randomUUID();
-      await userItx.append({
-        type: "events.iterate.com/account/token-create-requested",
-        payload: {
-          requestId,
-          name,
-          // INSECURE-FIRST: a readable token value (a client-generated string for now).
-          value: `tok_${crypto.randomUUID().replace(/-/g, "")}`,
-          requestedAt: Date.now(),
-        },
-        idempotencyKey: `token-create/${requestId}`,
-      });
+      const { token, expiresAt } = await api.grants.mint({ name, projects: selectedProjectIds });
+      setMinted({ name, token, expiresAt });
+      setCopied(false);
+      setTokenName("");
+      await router.invalidate();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setMinting(false);
     }
   };
-  const revokeToken = async (requestId: string) => {
-    setError(null);
+  const copyMintedToken = async () => {
+    if (!minted) return;
     try {
-      await userItx.append({
-        type: "events.iterate.com/account/token-revoked",
-        payload: { requestId },
-        idempotencyKey: `token-revoke/${requestId}`,
-      });
+      await navigator.clipboard.writeText(minted.token);
+      setCopied(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
@@ -84,8 +71,8 @@ function SessionsPage() {
       </p>
       <h1>Sessions</h1>
       <p>
-        Each browser, connected client, and API token can be signed out independently. Existing
-        connections end within a minute.
+        Each browser, connected client, and personal access token can be signed out independently.
+        Existing connections end within a minute.
       </p>
       {error && <p role="alert">{error}</p>}
       <table>
@@ -130,7 +117,13 @@ function SessionsPage() {
                     }
                   }}
                 >
-                  {item.cleanupPending ? "Retry cleanup" : item.expired ? "Remove" : "Log out"}
+                  {item.cleanupPending
+                    ? "Retry cleanup"
+                    : item.expired
+                      ? "Remove"
+                      : item.kind === "Personal access token"
+                        ? "Revoke"
+                        : "Log out"}
                 </button>
               </td>
             </tr>
@@ -151,40 +144,72 @@ function SessionsPage() {
         )}
       </p>
 
-      <h2>
-        API tokens (<span data-testid="token-count">{value?.tokens.length ?? 0}</span>)
-      </h2>
+      <h2>Personal access tokens</h2>
       <p>
-        Live from <code>session.user</code> — created and revoked tokens appear instantly.{" "}
-        <span data-testid="status">{status}</span>
+        A personal access token is one OAuth grant: it acts as you, for the projects you choose, for
+        30 days, and is shown once. Send it as <code>Authorization: Bearer</code> on{" "}
+        <code>/api</code>, <code>/mcp</code> or a project host; revoke it from the list above.
       </p>
-      <form onSubmit={createToken}>
-        <label>
-          Name{" "}
-          <input
-            aria-label="Token name"
-            value={tokenName}
-            onChange={(event) => setTokenName(event.target.value)}
-            maxLength={100}
-            placeholder="My script"
-          />
-        </label>{" "}
-        <button type="submit">Create token</button>
-      </form>
-      <ul data-testid="tokens">
-        {(value?.tokens ?? []).map((token) => (
-          <li key={token.requestId}>
-            <strong>{token.name}</strong> <code>{token.value}</code>{" "}
-            <button
-              type="button"
-              aria-label={`Revoke ${token.name}`}
-              onClick={() => revokeToken(token.requestId)}
-            >
-              Revoke
-            </button>
-          </li>
-        ))}
-      </ul>
+      {minted && (
+        <p role="status" data-testid="minted">
+          <strong>{minted.name}</strong> — copy it now; it is not shown again. Expires{" "}
+          {new Date(minted.expiresAt).toISOString()}.{" "}
+          <code data-testid="minted-token">{minted.token}</code>{" "}
+          <button type="button" onClick={copyMintedToken}>
+            {copied ? "Copied" : "Copy"}
+          </button>{" "}
+          <button type="button" onClick={() => setMinted(null)}>
+            Dismiss
+          </button>
+        </p>
+      )}
+      {canMintToken ? (
+        <form onSubmit={mintPersonalAccessToken}>
+          <label>
+            Name{" "}
+            <input
+              aria-label="Token name"
+              value={tokenName}
+              onChange={(event) => setTokenName(event.target.value)}
+              maxLength={100}
+              placeholder="My script"
+              required
+            />
+          </label>
+          <p aria-label="Projects the token may reach">
+            {projects.length > 0
+              ? projects.map((project) => (
+                  <label key={project.id}>
+                    <input
+                      type="checkbox"
+                      aria-label={project.id}
+                      checked={!excludedProjectIds.has(project.id)}
+                      disabled={minting}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setExcludedProjectIds((current) => {
+                          const next = new Set(current);
+                          if (checked) next.delete(project.id);
+                          else next.add(project.id);
+                          return next;
+                        });
+                      }}
+                    />{" "}
+                    {project.id}{" "}
+                  </label>
+                ))
+              : "Create a project first — a token is scoped to the projects it may reach."}
+          </p>
+          <button
+            type="submit"
+            disabled={minting || selectedProjectIds.length === 0 || tokenName.trim().length === 0}
+          >
+            {minting ? "Creating…" : "Create personal access token"}
+          </button>
+        </form>
+      ) : (
+        <p>Personal access tokens require an HTTPS deployment.</p>
+      )}
     </main>
   );
 }

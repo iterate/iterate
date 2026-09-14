@@ -106,49 +106,32 @@ describe("account — foundation shape (passing)", () => {
     expect(fact.type).toBe("events.iterate.com/account/authenticated");
   });
 
-  test("session.user hosts the account processor: a token appears in its live view with a readable value, and revoke removes it", async () => {
-    const s = await userSession("acct-live@sec.test");
+  test("session.user hosts the account processor: a later authentication appears in its live view — the exact snapshot `useLiveState`'s door reads", async () => {
+    const email = "acct-live@sec.test";
+    const s = await userSession(email);
     await s.user.processors.enable("account", {
       source: ACCOUNT_PROCESSOR_SOURCE,
       className: "AccountDurableObject",
-      consumes: [
-        "events.iterate.com/account/authenticated",
-        "events.iterate.com/account/token-create-requested",
-        "events.iterate.com/account/token-revoked",
-      ],
+      consumes: ["events.iterate.com/account/authenticated"],
     });
-    const readTokens = () =>
-      s.user.invoke("itx.facets.get('account').liveSnapshot()") as Promise<{
-        state?: { tokens: { requestId: string; name: string; value: string }[] };
-      }>;
-    await s.user.append({
-      type: "events.iterate.com/account/token-create-requested",
-      payload: { requestId: "req-1", name: "CI token", value: "tok_ci", requestedAt: Date.now() },
-      idempotencyKey: "token-create/req-1",
-    });
-    // The facet reduces the command into its live view — the exact snapshot `useLiveState`'s door reads.
-    const created = await until("account view has the token", async () => {
-      const snapshot = await readTokens();
-      return snapshot.state?.tokens.some((token) => token.name === "CI token")
+    // A processor subscribes from now; the fact this session's own authenticate published may have
+    // landed before it. A second authentication of the same user is a fact the processor must fold.
+    await userSession(email);
+    const view = await until("account view holds an authentication", async () => {
+      const snapshot = (await s.user.invoke("itx.facets.get('account').liveSnapshot()")) as {
+        state?: { authentications: { credential: string; operationId: string }[] };
+      };
+      return snapshot.state && snapshot.state.authentications.length > 0
         ? snapshot.state
         : undefined;
     });
-    // The token value is stored readable (insecure-first).
-    expect(created.tokens.find((token) => token.name === "CI token")?.value).toBe("tok_ci");
-
-    // Revoke is a single command; the token leaves the live view.
-    await s.user.append({
-      type: "events.iterate.com/account/token-revoked",
-      payload: { requestId: "req-1" },
-      idempotencyKey: "token-revoke/req-1",
-    });
-    const revoked = await until("account view drops the revoked token", async () => {
-      const snapshot = await readTokens();
-      return snapshot.state && !snapshot.state.tokens.some((token) => token.requestId === "req-1")
-        ? snapshot.state
-        : undefined;
-    });
-    expect(revoked.tokens.some((token) => token.requestId === "req-1")).toBe(false);
+    expect(view.authentications.every((fact) => fact.credential === "admin-secret")).toBe(true);
+    // No credential material rides the view — only the kind, the time and the op id.
+    expect(Object.keys(view.authentications[0]!).sort()).toEqual([
+      "at",
+      "credential",
+      "operationId",
+    ]);
   });
 });
 

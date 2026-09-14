@@ -4,9 +4,9 @@
 // append; a name the placeholder cannot spell is refused at the door. THE PLACEHOLDER is apps/os's
 // `getSecret("/secrets/NAME")`, and `getSecret("/secrets/NAME", { field: "a.b" })` for one field of
 // a JSON value. ORIGIN BINDING at the egress door: a secret bound to one origin is refused, 502, for
-// any other — the credential's name is told to the caller, never sent anywhere; the project's own API
-// key is no secret the placeholder reaches. The positive half (the value arrives at the bound origin)
-// is deployed-only: it egresses to one of THIS project's own apps on a real project host.
+// any other — the credential's name is told to the caller, never sent anywhere. The positive half (the
+// value arrives at the bound origin) is deployed-only: it egresses to one of THIS project's own apps
+// on a real project host.
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, readAll } from "./support/client.ts";
@@ -92,7 +92,7 @@ test("origin binding at the egress door: a bound secret is refused, 502, for any
   expect(left.text).not.toMatch(/no stored project secret|bound to/);
 });
 
-test("`{ field }` at the egress door: a field the JSON value has no string at, and a field of a non-JSON value, are 502s naming the placeholder; the project's own API key is outside the catalog — no placeholder reaches it", async () => {
+test("`{ field }` at the egress door: a field the JSON value has no string at, and a field of a non-JSON value, are 502s naming the placeholder; a name never set is a 502 too", async () => {
   const itx = openItx(freshCtx("secrets-field"));
   await itx.secrets.set("tg", JSON.stringify({ bot: { token: "123:abc" } }));
   await itx.secrets.set("plain", "p");
@@ -109,11 +109,9 @@ test("`{ field }` at the egress door: a field the JSON value has no string at, a
   expect(await refusal('getSecret("/secrets/plain", { field: "x" })')).toContain(
     "not a JSON value",
   );
-  // the key that authenticates AS the project (principal.ts, outside the `secret:` prefix): the
-  // placeholder finds nothing, so the project's own code can never mail it anywhere
-  await itx.rotateApiKey();
-  expect(await refusal('Bearer getSecret("/secrets/project-api-key")')).toContain(
-    'no stored project secret for getSecret("/secrets/project-api-key")',
+  // a name the catalog never held: the placeholder finds nothing, the request never leaves
+  expect(await refusal('Bearer getSecret("/secrets/never-set")')).toContain(
+    'no stored project secret for getSecret("/secrets/never-set")',
   );
   // a well-formed field passes the door and the request goes on to the network (the `.invalid`
   // failure there is the proof it left)

@@ -1,4 +1,4 @@
-// src/account/contract.test.ts — the AccountProcessor's executable spec, declarative `{ events →
+// src/account/processor.test.ts — the AccountProcessor's executable spec, declarative `{ events →
 // view }` rows on the shared processor harness (stream/test-support.ts `reduceProcessor`): the pure
 // reduce only, with the engine's contract validation (a malformed KNOWN payload is skipped). apps/os
 // tests its processors the same shape.
@@ -12,41 +12,28 @@ const authenticated = (operationId: string, credential: "from-server-cookie" | "
   type: "events.iterate.com/account/authenticated",
   payload: { credential, at: 1, operationId },
 });
-const tokenCreate = (requestId: string, name: string) => ({
-  type: "events.iterate.com/account/token-create-requested",
-  payload: { requestId, name, value: `secret-${requestId}`, requestedAt: 1 },
-});
-const tokenRevoke = (requestId: string) => ({
-  type: "events.iterate.com/account/token-revoked",
-  payload: { requestId },
-});
 
-describe("AccountProcessor — the account view folded from facts + commands", () => {
+describe("AccountProcessor — the account view folded from facts", () => {
   const rows: { name: string; events: { type: string; payload?: unknown }[]; view: AccountView }[] =
     [
-      { name: "the empty view", events: [], view: { authentications: [], tokens: [] } },
+      { name: "the empty view", events: [], view: { authentications: [] } },
       {
         name: "an authentication fact appends to authentications (no credential material, only the fact)",
         events: [authenticated("op-1", "admin-secret")],
-        view: {
-          authentications: [{ credential: "admin-secret", at: 1, operationId: "op-1" }],
-          tokens: [],
-        },
+        view: { authentications: [{ credential: "admin-secret", at: 1, operationId: "op-1" }] },
       },
       {
-        name: "token-create adds by requestId; token-revoke drops exactly that one, the rest stand",
-        events: [tokenCreate("a", "CI"), tokenCreate("b", "laptop"), tokenRevoke("a")],
+        name: "facts fold in order; an unrelated event leaves the view as it was",
+        events: [
+          authenticated("op-1", "from-server-cookie"),
+          { type: "note", payload: { n: 1 } },
+          authenticated("op-2", "admin-secret"),
+        ],
         view: {
-          authentications: [],
-          tokens: [{ requestId: "b", name: "laptop", value: "secret-b", requestedAt: 1 }],
-        },
-      },
-      {
-        name: "revoking a requestId that was never created is a no-op",
-        events: [tokenCreate("a", "CI"), tokenRevoke("nope")],
-        view: {
-          authentications: [],
-          tokens: [{ requestId: "a", name: "CI", value: "secret-a", requestedAt: 1 }],
+          authentications: [
+            { credential: "from-server-cookie", at: 1, operationId: "op-1" },
+            { credential: "admin-secret", at: 1, operationId: "op-2" },
+          ],
         },
       },
       {
@@ -60,7 +47,6 @@ describe("AccountProcessor — the account view folded from facts + commands", (
         ],
         view: {
           authentications: [{ credential: "from-server-cookie", at: 1, operationId: "op-2" }],
-          tokens: [],
         },
       },
     ];

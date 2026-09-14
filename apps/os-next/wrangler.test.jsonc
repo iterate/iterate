@@ -49,16 +49,15 @@
     { "binding": "OAUTH_KV", "id": "oauth-test" },
   ],
   // Configuration (src/worker.ts `parseAppConfig`): the workers lane is its own deployment name; its
-  // project hosts hang under `projects.test` (SELF.fetch takes any hostname — no DNS); the three
-  // required secrets are test values (control-plane.test.ts and session-doors.test.ts sign in,
-  // mint and authenticate with them).
+  // project hosts hang under `projects.test` (SELF.fetch takes any hostname — no DNS); the two
+  // required secrets are test values (control-plane.test.ts and session-doors.test.ts sign in and
+  // authenticate with them).
   "vars": {
     "APP_CONFIG_ENVIRONMENT_NAME": "test",
     "APP_CONFIG_PLATFORM_ORIGIN": "https://control.test",
     "APP_CONFIG_GOOGLE_CLIENT_ID": "google-test-client",
     "APP_CONFIG_GOOGLE_CLIENT_SECRET": "google-test-secret",
     "APP_CONFIG_PROJECT_HOSTNAME_BASE": "projects.test",
-    "APP_CONFIG_PROJECT_TOKEN_SECRET": "test-project-token-secret",
     "APP_CONFIG_SESSION_SECRET": "test-session-secret",
     "APP_CONFIG_ADMIN_API_SECRET": "test-admin-api-secret",
   },

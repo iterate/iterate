@@ -2,7 +2,6 @@ import { env, SELF } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, expect, test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { signProjectToken, rotateProjectApiKey } from "../src/principal.ts";
 import type { Env } from "../src/control-plane.ts";
 import { applyDirectorySchema, SRC_ECHO_APP } from "./support.ts";
 
@@ -103,36 +102,4 @@ test("under the base, only a project host: a hostname that fails the grammar is 
     expect(res.headers.get("set-cookie"), host).toBeNull();
   }
   expect((await call("https://control.test/version")).status).toBe(200);
-});
-
-test("legacy project credentials never authenticate public resources or the operator gate", async () => {
-  const gate = await api();
-  const admin = await gate.authenticate(ADMIN);
-  using project = await admin.projects.create({ project: "retired-credentials" });
-  await project.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
-  const token = await signProjectToken(
-    { actor: "former-user", projectId: "retired-credentials" },
-    60_000,
-    bindings.APP_CONFIG_PROJECT_TOKEN_SECRET!,
-  );
-  const key = await rotateProjectApiKey("retired-credentials", bindings.SECRETS_KV);
-  for (const value of [token, key]) {
-    for (const url of [
-      "https://control.test/api",
-      "https://control.test/mcp",
-      "https://echo--retired-credentials.projects.test/",
-    ])
-      expect((await call(url, { headers: { Authorization: `Bearer ${value}` } })).status).toBe(401);
-  }
-  await expect(gate.authenticate({ type: "project-token", token })).rejects.toThrow(
-    /from-server-cookie|admin-secret/,
-  );
-  await expect(
-    gate.authenticate({ type: "project-secret", project: "retired-credentials", secret: key }),
-  ).rejects.toThrow(/from-server-cookie|admin-secret/);
-  const legacy = await call(
-    `https://echo--retired-credentials.projects.test/.itx/session?token=${encodeURIComponent(token)}`,
-  );
-  expect(legacy.headers.has("set-cookie")).toBe(false);
-  expect(await legacy.json()).toMatchObject({ principal: null });
 });
