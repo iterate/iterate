@@ -122,8 +122,8 @@ export abstract class StreamProcessorDurableObject<
       // the fixed point, `itx.builtins.…` — a context's rows (a whole-context override, a mask at
       // `itx.append`) redirect the processor's calls to `itx.…`, never its log traffic.
       stream: {
-        append: (...events) => this.#withItx((itx) => itx.builtins.append(...events)),
-        read: (after, limit) => this.#withItx((itx) => itx.builtins.readEvents(after, limit)),
+        append: (...events) => this.withItx((itx) => itx.builtins.append(...events)),
+        read: (after, limit) => this.withItx((itx) => itx.builtins.readEvents(after, limit)),
       },
       storage: new ReduceCheckpointTable(this.ctx.storage.sql),
     }));
@@ -132,8 +132,9 @@ export abstract class StreamProcessorDurableObject<
   /** ONE pipelined round trip on the itx scope, then RELEASE it: `env.ITX.get()` and the call
    *  pipelined on it PIN THE PARENT DO until GC (the "GC is too late" defect the DO's facet door
    *  fixes in the other direction). Await the answer — plain data, the wire already copied it —
-   *  then dispose the call AND the get. */
-  async #withItx<T>(call: (itx: ItxScope) => T): Promise<Awaited<T>> {
+   *  then dispose the call AND the get. Protected: a host with methods of its own (the workspace,
+   *  src/workspace/durable-object.ts) reaches its context the same way. */
+  protected async withItx<T>(call: (itx: ItxScope) => T): Promise<Awaited<T>> {
     const itx = this.env.ITX.get();
     const result = call(itx);
     try {

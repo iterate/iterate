@@ -5,6 +5,7 @@
 //   capnweb     — `itx.connectToCapnweb(url)`: a remote capnweb API as a pipelinable handle
 //   mcp         — `itx.connectToMcp(url)`: an MCP client over Streamable HTTP
 //   openapi     — `itx.connectToOpenApi(spec)`: an OpenAPI 3 service as an RpcTarget of operationIds
+//   workspaces  — `itx.workspaces.get(path)`: the workspace of any context — its `workspace` facet
 
 import {
   RpcSession,
@@ -16,6 +17,7 @@ import {
 import { z } from "zod";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/expression.ts";
+import { WORKSPACE_PROCESSOR_SOURCE } from "./generated/workspace-processor-source.ts";
 
 // ── the library ── THE LIBRARY: the built-ins that could be userspace. context/built-ins.ts has TWO
 // groups: ROOTS, implemented against ctx/env (the log, the stub registry, the rule table, the two
@@ -28,8 +30,9 @@ import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/e
 // from the stream, the DO or the context folder, except context/expression.ts — the codec and the
 // pipelinable handle).
 //
-// The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb`. `run` is sugar over
-// `itx.workers.get` (the run section). The three connectors each
+// The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `workspaces.get`. `run`
+// is sugar over `itx.workers.get` (the run section); `workspaces.get` over `itx.cd(path).facets.get`
+// (the workspaces section). The three connectors each
 // return a connection RpcTarget a caller can hold across calls, and each does ALL its HTTP through
 // `itx.fetch` (egress: `getSecret("/secrets/NAME")` placeholders in headers substitute for free; a user
 // rule shadowing `itx.fetch` redirects the library too, which is how a test fakes a remote). The
@@ -46,9 +49,10 @@ import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/e
 // reopens itself on its next use (the mcp and capnweb sections), so a memoized one is never dead.
 
 /** What a library module is handed: the itx handle (the record's own dotted surface), narrowed to
- *  what the library uses today — `fetch`, the connectors' HTTP, and `workers`, the host `run` loads
- *  into. Widen it HERE when a module needs more of itx — never by importing something else. */
-export type LibraryItx = Pick<BuiltInScope, "fetch" | "workers">;
+ *  what the library uses today — `fetch`, the connectors' HTTP; `workers`, the host `run` loads
+ *  into; `cd`, the sibling `workspaces.get` hosts on. Widen it HERE when a module needs more of itx
+ *  — never by importing something else. */
+export type LibraryItx = Pick<BuiltInScope, "fetch" | "workers" | "cd">;
 
 /** The library's roots, exactly as the built-ins record spreads them in: each verb closed over ONE
  *  `itx`. `BuiltInScope` (context/built-ins.ts) extends this, so the typed surface has them once. */
@@ -74,6 +78,13 @@ export interface LibraryRoots {
    *  (default) or one HTTP batch per chain (`{ transport: "batch" }`); dotted calls chain with no round
    *  trip per step. */
   connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
+  /** THE WORKSPACES (src/workspace/): the workspace of ANY context, at most one per path —
+   *  `get(path)` is the `workspace` facet on `itx.cd(path)`, hosted on its first call and addressed
+   *  after; nothing is appended to get one and there is no list — a workspace IS its path. Every
+   *  call on the handle is one dotted expression on that facet (`WorkspaceDurableObject`'s
+   *  methods: `readFile` `readBase` `writeFile` `deleteFile` `revert` `listAllFiles` `mounts`
+   *  `configure` `gitStatus` `gitCommit` `gitLog`). */
+  workspaces: { get(path: string): InvokeHandle };
 }
 
 /** The library, built once per context: the verbs closed over one `itx`, memoizing the live
@@ -108,6 +119,7 @@ export function buildLibrary(itx: LibraryItx): {
         memoized(["openapi", specOrUrl, options], () => connectToOpenApi(itx, specOrUrl, options)),
       connectToCapnweb: (url, options) =>
         memoized(["capnweb", url, options], () => connectToCapnweb(itx, url, options)),
+      workspaces: { get: (path) => workspaceHandle(itx, path) },
     },
     hasOpenConnections: () => liveConnections.size > 0,
     releaseConnections: () => {
@@ -172,6 +184,33 @@ export function runScript(itx: LibraryItx, script: unknown): Promise<unknown> {
     };
     return worker.run();
   })();
+}
+
+// ── workspaces ── `itx.workspaces.get(path)`: THE WORKSPACE of any context, at most one per path
+// (src/workspace/durable-object.ts). The handle IS the `workspace` facet hosted on `itx.cd(path)`: a
+// facet named with a spec is hosted on its first call and addressed after (the DO's startup memo —
+// an unchanged spec never restarts it), so nothing is appended to get a workspace and there is no
+// list; a workspace is its path. Every call on the handle is one dotted expression on that facet,
+// run in the sibling under ITS rules (a test lends a fake `itx.repos` there). The spec's source is
+// the SDK-bundled facet (build-sdk.mjs) — a string, which a userspace worker could carry just the same.
+
+/** The `workspace` facet on the context at `path`: the call's steps, relative to the facet, as one
+ *  dispatch there. Exported for the unit pin. */
+export function workspaceHandle(itx: LibraryItx, path: string): InvokeHandle {
+  return new InvokeHandle(async (itxExpressionSteps) => {
+    // TWO dotted calls, never one chain (the `run` section says why): the sibling's handle first —
+    // in-process a VALUE — then the facet chain relative to it.
+    const context = await itx.cd(path);
+    return context.invoke([
+      "facets",
+      [
+        "get",
+        "workspace",
+        { source: WORKSPACE_PROCESSOR_SOURCE, className: "WorkspaceDurableObject" },
+      ],
+      ...itxExpressionSteps,
+    ]);
+  });
 }
 
 // ── what the three connectors share ──

@@ -15,7 +15,10 @@ import {
   connectToOpenApi,
   runScript,
   runScriptModule,
+  workspaceHandle,
 } from "./library.ts";
+import { InvokeHandle } from "./context/expression.ts";
+import { WORKSPACE_PROCESSOR_SOURCE } from "./generated/workspace-processor-source.ts";
 
 // ── the library ── the memo `buildLibrary` keeps over the three verbs: a connect with the same
 // (verb, url, options) is ONE live connection for the context's life; `releaseConnections()` (the
@@ -1067,6 +1070,40 @@ describe("openapi", () => {
   });
 });
 
+// ── workspaces ── `workspaces.get(path)`: the `workspace` facet on `itx.cd(path)`, every call on the
+// handle ONE dispatch there of the facet chain plus the call, with the SDK-bundled spec.
+
+describe("workspaces", () => {
+  test("get(path) is the workspace facet on itx.cd(path): one dispatch, relative to the facet, with the bundled spec", async () => {
+    const dispatched: unknown[] = [];
+    const sibling = new InvokeHandle((steps) => {
+      dispatched.push(steps);
+      return "answer";
+    });
+    const itx = {
+      cd: (path: string) => {
+        dispatched.push(["cd", path]);
+        return sibling;
+      },
+    } as unknown as LibraryItx;
+    const handle = workspaceHandle(itx, "/workspaces/one");
+    expect(await handle.invoke([["readFile", "/repos/config/worker.ts"]])).toBe("answer");
+    expect(dispatched).toEqual([
+      ["cd", "/workspaces/one"],
+      [
+        "facets",
+        [
+          "get",
+          "workspace",
+          { source: WORKSPACE_PROCESSOR_SOURCE, className: "WorkspaceDurableObject" },
+        ],
+        ["readFile", "/repos/config/worker.ts"],
+      ],
+    ]);
+    expect(WORKSPACE_PROCESSOR_SOURCE["cap.js"]).toContain("WorkspaceDurableObject");
+  });
+});
+
 // ── the library boundary ── THE LIBRARY RULE, pinned: a library module takes `itx` and nothing else,
 // so at runtime it may import only npm packages a userspace worker could bundle too (capnweb,
 // cloudflare:workers) and the one platform primitive that is pure data or a handle
@@ -1078,6 +1115,7 @@ const ALLOWED_RUNTIME_IMPORTS = new Set([
   "cloudflare:workers",
   "zod", // an npm package a userspace worker could bundle too — used to PARSE untrusted MCP responses
   "./context/expression.ts",
+  "./generated/workspace-processor-source.ts", // the workspace facet's bundled source: a STRING, data a userspace worker could carry too
 ]);
 
 describe("the library boundary", () => {

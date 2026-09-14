@@ -93,6 +93,11 @@ await bundleFacet(
   "PRESENCE_PROCESSOR_SOURCE",
   "src/generated/presence-processor-source.ts",
 );
+await bundleFacet(
+  "src/workspace/durable-object.ts",
+  "WORKSPACE_PROCESSOR_SOURCE",
+  "src/generated/workspace-processor-source.ts",
+);
 
 // The hosted demo page: bundle src/client/demo.tsx (React + react-dom + the capnweb fork + the
 // useLiveState hook, all inlined — no CDN) into ONE module script, inline it in an HTML doc, and
