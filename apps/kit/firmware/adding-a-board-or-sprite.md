@@ -1,12 +1,6 @@
----
-name: adding-a-kit-device-or-sprite
-description: Add an ESP32 voice board to apps/kit/firmware, or add a shared face sprite pack.
-publish: false
----
-
 # Add a Kit board or sprite
 
-Read [the firmware guide](../../../apps/kit/firmware/README.md) first. It is
+Read [the firmware guide](README.md) first. It is
 canonical for board ownership, provisioning, build, installer and proof steps.
 GPT-Live-1 is the only voice model: a board contributes hardware facts, never a
 provider mode or a different voice protocol.

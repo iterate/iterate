@@ -1,8 +1,3 @@
----
-name: cloudflare-traces
-description: Query and audit Cloudflare Workers traces and logs through the general Cloudflare API MCP server. Use when diagnosing distributed traces, custom spans, Durable Object or Workers RPC chains, console logs, or correlation IDs.
----
-
 # Cloudflare Traces
 
 Use Cloudflare's general API MCP server (`https://mcp.cloudflare.com/mcp`), not
@@ -30,7 +25,7 @@ keys/values endpoints when a dataset, field, or value is uncertain.
 6. Widen the timeframe before adding complicated filters.
 7. Return compact fields and aggregates rather than thousands of raw events.
 
-See [EXAMPLES.md](EXAMPLES.md) for reusable query blocks.
+See [queries.md](queries.md) for reusable query blocks.
 
 ## Trace audit
 
@@ -68,3 +63,7 @@ Once the account and trace are known:
 Include the account/service, UTC timeframe, trace deep link, script version,
 span/log counts, semantic chain, correlation IDs, failures, span-contract
 violations, and the exact query that established each conclusion.
+
+## MCP connection troubleshooting
+
+The general endpoint is `https://mcp.cloudflare.com/mcp`; pass `account_id` to the execute tool, not in the URL. If a multi-account bearer token is rejected before initialization, use normal MCP OAuth or a narrower token. For transport/auth failures, use the [official Inspector](https://modelcontextprotocol.io/docs/tools/inspector); retain proxy authentication.

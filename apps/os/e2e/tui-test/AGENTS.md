@@ -1,37 +1,7 @@
-# Stream TUI Specs
+# Stream TUI specs
 
-This folder is its own Microsoft TUI Test project root. Run TUI Test from here so `.tui-test/cache`,
-`tui-traces`, and snapshot files stay local and the runner does not copy the whole app or monorepo.
+This suite is quarantined. `run.ts` is an explicit no-op skip, not passing coverage. Read [the restoration task](../../../../tasks/quarantined-tui-e2e.md) before reviving it.
 
-Run checked-in workflow specs with:
+Keep the real installed CLI as the program under test. This directory is the TUI Test project root so caches, PTY traces and snapshots stay local. Avoid shell launchers unless shell behavior is under test.
 
-```bash
-pnpm --dir apps/os exec tsx ./e2e/tui-test/run.ts
-```
-
-Use Microsoft TUI Test for black-box terminal workflow specs. The runner owns the PTY, but specs must
-still launch the real app CLI:
-
-```ts
-program: {
-  file: "pnpm",
-  args: ["-w", "iterate", "chat", "--project", "prj_...", "--agent-path", "/agents/..."],
-}
-```
-
-Avoid `bash -lc` launchers unless shell behavior is the thing under test.
-
-Prefer positive visible assertions:
-
-```ts
-await expect(terminal.getByText("...")).toBeVisible();
-```
-
-Use strict locators by default. Use `{ strict: false }` only when text can legitimately appear more
-than once, such as stream paths, event names, echoed input, or command labels.
-
-Use `terminal.write()` for partial input, `terminal.submit()` for submitted text or Enter, and key
-helpers for navigation. Keep fixed `columns` and `rows` in each `test.use`.
-
-Keep `trace: true`. Treat `.tui-test/cache`, `tui-traces`, and `__snapshots__` as local debug
-artifacts.
+Use visible assertions, strict locators unless duplicate text is legitimate, fixed terminal dimensions, and `trace: true`. `terminal.write()` sends partial input; `terminal.submit()` sends submitted text or Enter. Keep generated caches/traces/snapshots out of Git.

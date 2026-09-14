@@ -1,12 +1,11 @@
 ---
 name: debug-os-worker
-description: Debug OS production and preview failures with Cloudflare traces plus operation-wide logs. Use when diagnosing ITX calls, agent conversations, scheduler alarms, dynamic workers, Durable Objects, or a reported OS correlation ID.
+description: Diagnose OS production and preview failures using its trace fields, operation logs and correlation IDs.
 ---
 
 # Debug OS Worker
 
-Read [../cloudflare-traces/SKILL.md](../cloudflare-traces/SKILL.md) first. Use
-the general Cloudflare API MCP server and its Workers Observability endpoints.
+Use the general Cloudflare API MCP server. [Query examples](references/queries.md) and [dataset, span and MCP caveats](references/cloudflare.md) are available when needed.
 
 ## Scope
 
@@ -39,11 +38,6 @@ the general Cloudflare API MCP server and its Workers Observability endpoints.
   `dynamic_worker.project_config.call` and native DO/RPC spans.
 - Do not expect prompts, scripts, arguments, results, raw errors, or trusted
   project identity in telemetry; the privacy contract intentionally omits them.
-
-Observed on 2026-07-13, Cloudflare rendered a failing custom span's metadata
-message with an `OK` suffix. Treat the suffix as presentation metadata;
-`source.itx.outcome` is the semantic result and the correlated error-level wide
-log corroborates it.
 
 ## Scheduler and alarms
 

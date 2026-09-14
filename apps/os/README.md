@@ -223,5 +223,5 @@ test coverage removed without replacement is
 
 ## Agent Notes
 
-`AGENTS.md` is a symlink to this file. Keep this README short and move durable
+Agent instructions live in [AGENTS.md](AGENTS.md). Keep this README short and move durable
 details to `apps/os/docs` or `apps/os/CONTEXT.md`.
