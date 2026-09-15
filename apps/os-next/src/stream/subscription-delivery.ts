@@ -39,8 +39,8 @@ import type { Stream, SubscriptionCursor } from "./stream.ts";
  *  failed (the ladder armed), and an eviction in between leaves the alarm behind to re-derive. */
 const CURSOR_DELIVERY_CALL_WATCHDOG_MS = 20_000;
 
-const deliveryAlarmOwner = (name: string): string => `delivery:${name}`;
-const deliveryWatchdogAlarmOwner = (name: string): string => `delivery-watchdog:${name}`;
+const deliveryAlarmOwner = (name: string) => `delivery:${name}`;
+const deliveryWatchdogAlarmOwner = (name: string) => `delivery-watchdog:${name}`;
 
 /** THE IN-FLIGHT BUDGET, per context: the most serialized event chars ALL rows together may have
  *  handed to calls that have not settled — a push's arguments live in this isolate until the RPC
@@ -223,7 +223,7 @@ export class SubscriptionDelivery {
     return record;
   }
 
-  #traceDelivery(name: string, reason: string, details: Record<string, unknown> = {}): void {
+  #traceDelivery(name: string, reason: string, details: Record<string, unknown> = {}) {
     this.#stream.emitAlarmTrace({ phase: "delivery", reason, subscription: name, ...details });
   }
 
