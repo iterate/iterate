@@ -1,5 +1,5 @@
 ---
-status: complete
+status: review-amendments
 size: large
 branch: fix/playwright-flake-causes
 base: a85434f645
@@ -7,7 +7,14 @@ base: a85434f645
 
 # Fix the recurring Playwright failures
 
-The targeted fixes are implemented and pushed. The final preview batch passed **192/192**, with zero test retries at 16 workers. Freeze also passed 40/40 focused repetitions. Two earlier startup failures remain ordinary failures and are captured in `tasks/preview-stream-startup-stalls.md`. Preview data was erased and the lease released. Inert artifact repos left by the bounded cleanup await the next GC pass; file/backup objects have three-hour expiry. **Do not open a pull request**; deliver GitHub compare links.
+Review amendments are underway: shrink the spinner UI, restore Todo's original file, remove the requested tests and Docs selection helper, and consume a published Middlewright build. The `Workspace.edit` classification implementation stays unchanged pending a separate design decision. Prior preview evidence below predates these amendments. **Do not open a pull request**; deliver GitHub compare links.
+
+## Review amendments
+
+- [ ] Apply the requested UI/test simplifications.
+- [ ] Replace the Middlewright patch with a commit-pinned pkg.pr.new build.
+- [ ] Revalidate the existing scenarios with zero retries on a fresh preview; erase/release it afterwards.
+- [ ] Recommend a structured conflict outcome without changing the current classification implementation.
 
 ## Final preview validation
 

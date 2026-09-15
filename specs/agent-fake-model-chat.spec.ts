@@ -84,59 +84,6 @@ test("multi-turn chat with a sarcastic agent served by the spec's own fake-model
   await page.getByText(/"fine. .*" do you hear yourself/i).waitFor();
 });
 
-test("a pending message shows Sending before backend progress takes over", async ({
-  helpers,
-  page,
-}) => {
-  await using fixture = await helpers.createFixture("agent-send-progress");
-  const agent = await fixture.createAgent();
-  const modelStarted = Promise.withResolvers<void>();
-  const answer = Promise.withResolvers<void>();
-  agent.responses.set(async () => {
-    modelStarted.resolve();
-    await answer.promise;
-    return '```ts\nasync (itx) => { await itx.chat.sendMessage("Reply after acceptance") }\n```';
-  });
-
-  // Delay the actual browser transport, without changing the server. This
-  // distinguishes local pending UI from progress reported by the backend.
-  let holding = false;
-  const heldMessages: Array<() => void> = [];
-  await page.routeWebSocket(
-    (url) => url.pathname === "/api",
-    (socket) => {
-      const server = socket.connectToServer();
-      socket.onMessage((message) => {
-        if (holding) heldMessages.push(() => server.send(message));
-        else server.send(message);
-      });
-    },
-  );
-  await page.goto(agent.webUrl);
-  await page.getByPlaceholder("Message this agent").fill("Hello");
-  // Finish the initial subscriptions before holding subsequent client frames.
-  // Otherwise the gate can prevent Send becoming enabled in the first place.
-  const send = page.getByRole("button", { name: "Send message" });
-  await send.click({ trial: true });
-  holding = true;
-  try {
-    await send.click();
-    await page.locator('[role="status"][data-spinner="true"]').getByText("Sending…").waitFor();
-    expect(heldMessages.length).toBeGreaterThan(0);
-    holding = false;
-    heldMessages.splice(0).forEach((send) => send());
-    await modelStarted.promise;
-    await page.getByTestId("agent-live-status").waitFor();
-    await page.getByText("Sending…", { exact: true }).waitFor({ state: "hidden" });
-    answer.resolve();
-    await page.getByText("Reply after acceptance", { exact: true }).waitFor();
-  } finally {
-    holding = false;
-    heldMessages.splice(0).forEach((send) => send());
-    answer.resolve();
-  }
-});
-
 test("switching agents clears the previous stream's submission acknowledgement", async ({
   helpers,
   page,

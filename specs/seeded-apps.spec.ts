@@ -1,3 +1,4 @@
+import dedent from "dedent";
 import { expect } from "@playwright/test";
 import { readReview } from "iterate/document-review";
 import { spinnerWaiter } from "middlewright";
@@ -155,7 +156,14 @@ test("undo keeps a peer's shopping-list edit in the seeded Docs app", async ({
   using workspace = project.workspaces.get("/agents/shopper");
   await workspace.create({});
   const path = "shopping-list.md";
-  await workspace.writeFile(path, "- green apples\n- crunchy peanut butter\n- bananas\n");
+  await workspace.writeFile(
+    path,
+    dedent`
+    - green apples
+    - crunchy peanut butter
+    - bananas
+  ` + "\n",
+  );
   await project.kv.set("docs-app-origin", docsOriginForBaseUrl(baseURL!));
   const url = new URL(appUrl("docs", slug, baseURL!));
   url.searchParams.set("workspace", "/agents/shopper");
@@ -165,20 +173,27 @@ test("undo keeps a peer's shopping-list edit in the seeded Docs app", async ({
     await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor();
   });
   await page.getByRole("link", { name: "Continue with iterate" }).click({ timeout: 30_000 }); // timeout: cross-origin auth and cold build do not have continuous spinner-waiter progress
-  await page.getByText(/^live · v\d+$/).waitFor({ timeout: 120_000 }); // timeout: cold build and collab attach; the a11y-only badge is invisible to spinner-waiter
+  await page.getByText(/^live · v\d+$/).waitFor();
   const peer = await page.context().newPage();
   await peer.goto(url.toString());
-  await peer.getByText(/^live · v\d+$/).waitFor({ timeout: 30_000 }); // timeout: second collab attach has no spinner-waiter-visible progress
+  await peer.getByText(/^live · v\d+$/).waitFor();
   await page.getByRole("button", { name: "Source", exact: true }).click();
   await peer.getByRole("button", { name: "Source", exact: true }).click();
   page.videoMode?.setStartTime();
   const editor = page.locator(".cm-content");
   const peerEditor = peer.locator(".cm-content");
-  await replaceEditorWord(page, "green", "red");
+  // Click inside the first word after the list marker, not the centre of the full-width line.
+  await editor
+    .locator(".cm-line", { hasText: "green apples" })
+    .dblclick({ position: { x: 40, y: 10 } });
+  await page.keyboard.insertText("red");
   // Cursor labels are DOM decorations, not document text. Read the rendered
   // lines without those labels; remote edits have no local spinner to wait on.
   await expect.poll(() => readEditorText(peerEditor)).toContain("red apples");
-  await replaceEditorWord(peer, "crunchy", "smooth");
+  await peerEditor
+    .locator(".cm-line", { hasText: "crunchy peanut butter" })
+    .dblclick({ position: { x: 40, y: 10 } });
+  await peer.keyboard.insertText("smooth");
   await expect.poll(() => readEditorText(editor)).toContain("red apples");
   await expect.poll(() => readEditorText(editor)).toContain("smooth peanut butter");
   await editor.click();
@@ -191,7 +206,13 @@ test("undo keeps a peer's shopping-list edit in the seeded Docs app", async ({
     .poll(() => workspace.readFile(path), {
       timeout: 30_000, // timeout: file durability follows the editor's visible state, outside spinner-waiter
     })
-    .toBe("- green apples\n- smooth peanut butter\n- bananas\n");
+    .toBe(
+      dedent`
+      - green apples
+      - smooth peanut butter
+      - bananas
+    ` + "\n",
+    );
   await peer.close();
 });
 
@@ -583,26 +604,6 @@ function docsOriginForBaseUrl(baseURL: string): string {
   }
   if (new URL(baseURL).hostname === "os.iterate.com") return "https://docs.iterate.workers.dev";
   throw new Error("DOCS_APP_ORIGIN is required when running the Docs app spec outside preview.");
-}
-
-async function replaceEditorWord(
-  page: import("@playwright/test").Page,
-  word: string,
-  replacement: string,
-) {
-  const editor = page.locator(".cm-content");
-  const text = await readEditorText(editor);
-  const offset = text.indexOf(word);
-  expect(offset).toBeGreaterThanOrEqual(0);
-  await editor.click();
-  await page.keyboard.press("ControlOrMeta+a");
-  await page.keyboard.press("ArrowLeft");
-  for (let i = 0; i < offset; i++) await page.keyboard.press("ArrowRight");
-  for (let i = 0; i < word.length; i++) await page.keyboard.press("Shift+ArrowRight");
-  expect(await editor.evaluate((element) => element.ownerDocument.getSelection()?.toString())).toBe(
-    word,
-  );
-  await page.keyboard.insertText(replacement);
 }
 
 function readEditorText(editor: import("@playwright/test").Locator) {
