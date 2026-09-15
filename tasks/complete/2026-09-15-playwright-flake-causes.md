@@ -9,7 +9,7 @@ base: a85434f645
 
 Draft PR [#2656](https://github.com/iterate/iterate/pull/2656) contains the approved fixes and three seeded-app video-mode recordings. All 52 focused Todo/auth runs and all three recording runs passed with zero retries; recording-head CI is green. Preview erasure and lease release are confirmed. Historical startup failures and the recurring registry alarm error remain recorded separately.
 
-Latest review amendment: replace the unnecessary file poll and let destination assertions handle auth navigation. Code and local checks are ready; fresh preview reruns are in progress. The two review threads remain open until those changes are validated and pushed.
+Latest review amendment: removed the unnecessary file poll and let destination assertions handle auth navigation. Commit `ff6866850` passed 63/63 fresh preview runs with zero retries and all required CI checks. Both review threads were resolved after implementation and validation. Preview erasure and lease release are confirmed.
 
 ## Review amendments
 
@@ -158,3 +158,17 @@ Merged main's shared Playwright readiness change (#2653), preserving these tests
 - Exported the rendered videos as H.264 MP4s: Todo **20.52s**, undo **7.48s**, review **51.28s**. Visual inspection confirmed each sequence. Middlewright currently clamps explicit start markers back to the earliest interaction highlight, including signup; trimmed that lead-in from the rendered files without changing their content or playback speed. Evidence: `.flake-validation.ignoreme/seeded-videos/` and `pr-videos/manifest.json`.
 - Local checks: frozen install, all workspace/specs typechecks, lint, formatting and knip passed. The first overlapping test/build/check run hit the unchanged CLI strip-loader test's five-second timeout. The full monorepo then passed with `pnpm -r --workspace-concurrency=1 test`; that CLI case took **817ms**, with no timeout change. CI at `60ff6404c` passed all required checks; the optional DO duration probe was skipped. Preview CI recorded one retry in the unchanged root-stream restart/interception Vitest test; the three recording runs used none.
 - Recording exit cleanup retired nine non-container DO classes, erased Auth D1/KV and deleted **600** artifact repositories within its bounded GC pass. Remaining repositories are inert; R2 files/backups retain three-hour expiry. Preview-3 lease `a483db5a-02f7-44aa-948b-02a377cc9d3b` was released (`released: true`), leaving OS parked. PR CI's separate preview-12 lease was untouched.
+
+## Review timeout corrections
+
+- [x] Use Middlewright's existing navigation/loading grace instead of auth click overrides. *All three Continue links use `noWaitAfter`; the destination assertions own navigation. Todo/Docs cold-build assertions now use spinner-waiter instead of disabling it. Commit `ff6866850`.*
+- [x] Assert saved shopping-list contents directly after peer confirmation. *Removed the 30-second poll: `workspace.readFile` reads the live collab head, whose update was persisted before reaching the peer.*
+- [x] Validate before resolving the two review threads. *Three fresh-preview samples plus 20 repetitions of each scenario at eight workers: 63 actual passes, zero retries, zero allowed-flake matches. Specs typecheck, lint and formatting pass.*
+
+The initial review replies agreed with the feedback but resolved the threads without implementing the changes. Reopened both after the user called this out; only resolved them again after the code was pushed and the focused runs passed.
+
+Navigation repro: with the real installed Middlewright and a one-second Playwright action budget, a link to a response delayed 1.8 seconds fails inside the click's navigation wait. `noWaitAfter` followed by the destination assertion passes in 1.86 seconds; the callback-page case also passes. Middlewright already recognises navigation, but its pre-action check cannot extend a click already waiting on navigation. No dependency patch was needed. Evidence: `.flake-validation.ignoreme/navigation-grace.{mjs,jsonl}`.
+
+Manual preview-3 source checkout/test head `ff6866850a8ea82d401a4226929364e59eafb71a`, unchanged product packages pinned to `107a4f38b3697a50ad9978e40f913df70d429c08`. OS version `166b658a-8f13-474c-8148-4a4b858e25c8`; Auth `3b140678-505f-485e-ba64-f1f75f759919`; Docs `2d9d8967-785c-4619-acd0-a56c7911060f`. Entry erase and all deploy smoke checks passed; tests started after the shared 90-second deployment-age gate. Twenty-repeat median/max seconds: Todo **25.9/36.3**, shopping-list undo **25.2/30.8**, Docs review **36.0/43.6**. Full batch **4.2 minutes**. Evidence: `.flake-validation.ignoreme/review-timeouts-{sample,repeat20}/`.
+
+All required CI checks passed on `ff6866850`; optional assistant/duration checks were skipped. Exit cleanup retired nine non-container DO classes, cleared 260 Auth users and 126 organizations, deleted 172 KV keys and 620 artifact repositories within the bounded pass. Remaining artifact repositories are inert; files/backups retain three-hour expiry. Manual lease `1b959cae-fedb-497b-a6e8-bac201c41bf6` released successfully, leaving OS parked. The separate Todo coalescing finding from self-review is not addressed by these timeout changes.
