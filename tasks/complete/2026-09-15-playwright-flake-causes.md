@@ -1,5 +1,5 @@
 ---
-status: review-amendments
+status: complete
 size: large
 branch: fix/playwright-flake-causes
 base: a85434f645
@@ -7,16 +7,16 @@ base: a85434f645
 
 # Fix the recurring Playwright failures
 
-Review amendments are underway: shrink the spinner UI, restore Todo's original file, remove the requested tests and Docs selection helper, and consume a published Middlewright build. The `Workspace.edit` classification implementation stays unchanged pending a separate design decision. Prior preview evidence below predates these amendments. **Do not open a pull request**; deliver GitHub compare links.
+The requested review amendments are implemented and pushed. The OS UI diff is one Stop-button attribute; Todo is back in its original file; the requested tests/helper are removed; Middlewright comes from pkg.pr.new. Across 206 zero-retry preview attempts, 201 actually passed, one hit the known Docs table flake, and four failed during startup/auth. Notes separately passed 24/24 at four workers. Those failures and backend telemetry findings remain recorded in `tasks/preview-stream-startup-stalls.md`; this is not a claim that all flakes are fixed. The `Workspace.edit` classification implementation is unchanged. Preview 3 was erased and released. **No pull request was opened**; review through the compare links below.
 
 ## Review amendments
 
-- [ ] Apply the requested UI/test simplifications.
-- [ ] Replace the Middlewright patch with a commit-pinned pkg.pr.new build.
-- [ ] Revalidate the existing scenarios with zero retries on a fresh preview; erase/release it afterwards.
-- [ ] Recommend a structured conflict outcome without changing the current classification implementation.
+- [x] Apply the requested UI/test simplifications. *Stop button annotation, Todo restored to `client.tsx`, requested tests removed, dedent lists and native double-click word edits.*
+- [x] Replace the Middlewright patch with a commit-pinned pkg.pr.new build. *Published `e3f2374`; no local patch remains. Temporary publication triggers removed from both branches. Frozen install and specs typecheck passed.*
+- [x] Revalidate the existing scenarios with zero retries on a fresh preview; erase/release it afterwards. *Traced 14-run sample, 168-run stress batch, and 24 focused Notes runs. Full outcomes below; preview cleanup and release confirmed.*
+- [x] Recommend a structured conflict outcome without changing the current classification implementation. *Typed not-applied result at Workspace; Notes records superseded. Recommendation below; implementation untouched.*
 
-## Final preview validation
+## Previous validation (before review amendments)
 
 Local Chromium against leased Cloudflare preview 3; each repetition creates a new project. Shared deployment/assets can be warm. Test head `8b7f9ebdb`; deployed SDK/source `dac4f9f2e280e01c8d4d70a88251e2f64dbacdd9`; OS version `cb1ea6cf-25d9-4ef5-82af-3b689e24bde3`. Later documentation/cleanup commits do not change the deployed product. The complete batch took 4.9 minutes at 16 workers, with `--repeat-each=24 --retries=0 --fully-parallel`.
 
@@ -39,11 +39,11 @@ Focused static/regression checks: 21 SDK tests, 34 OS tests, OS/specs typechecks
 
 Fix the six failure groups investigated in the CI design jam, with repeated individual tests against a leased preview. Commit this specification first, then commit and push meaningful changes and findings as the investigation proceeds. Keep ordinary retries configured for now; all acceptance reruns use zero retries. Leave the root worktree and the separate CI readiness work untouched.
 
-- [x] Seeded todo: display an optimistic item immediately, with `data-spinner` until the server's subscribed state confirms it. Test confirmation/persistence, not just optimistic rendering. *Optimistic row and stable ID in `todo-client.tsx`; both RPC/subscription orderings and rejected saves covered.*
-- [x] Fake-model multi-turn and script return typing: show local Sending immediately, then maintain visible progress through backend acceptance, execution and displayed results. Investigate remaining real delays separately from progress gaps. Reuse existing OS/mobile behavior where appropriate. *OS Sending reuses existing pending state; controlled browser transport/model gates prove the handoff. Turn timings are above.*
+- [x] Seeded todo: display an optimistic item immediately, with `data-spinner` until the server's subscribed state confirms it. Test confirmation/persistence, not just optimistic rendering. *Optimistic row and stable ID in the original `client.tsx`; real Todo spec verifies confirmation and persistence. Review removed the component extraction and its unit tests.*
+- [x] Fake-model multi-turn and script return typing: mark the existing pending-send/Stop UI immediately, then maintain visible progress through backend acceptance, execution and displayed results. Investigate remaining real delays separately from progress gaps. Reuse existing OS/mobile behavior where appropriate. *The existing Stop button carries `data-spinner`; the separate Sending status and dedicated loading-state test were removed during review. Existing multi-turn/script specs provide coverage.*
 - [x] Remove the script test's warm-up agent if the real behavior passes without it; do not swallow warm-up failures or replace it with sleeps. *Removed from `specs/agent-script-reuse.spec.ts`; cold tests pass without swallowed work.*
 - [x] Docs: isolate collaborative undo. Start with green apples, crunchy peanut butter and bananas; local changes green to red, peer changes crunchy to smooth; positively wait for both; undo locally; positively wait for green and smooth, then assert no red. Verify the saved document. Move remaining review behaviors into a separate test and record their specific known failures with `createFlake`. *Separate shopping-list spec verifies both editors and exact saved file. Review-only patterns remain measured.*
-- [x] Mobile notes: add Middlewright support for `inputValue` loading waits. Fix stale note text passed into chat, preserving acknowledged edits. Check the navigation stalls independently. *Middlewright patch handles `inputValue`; notes analysis now conditionally edits the exact contents, preserving newer edits/deletion.*
+- [x] Mobile notes: add Middlewright support for `inputValue` loading waits. Fix stale note text passed into chat, preserving acknowledged edits. Check the navigation stalls independently. *Published Middlewright build handles `inputValue`; notes analysis now conditionally edits the exact contents, preserving newer edits/deletion.*
 - [x] Freeze/socket recovery: test the current pause/resume stimulus. If the specific event-recovery failure persists, use a narrow `createFlake` with recorded evidence; unrelated setup/transport failures remain failures. *Current stimulus passed 40 focused and 24 final mixed runs; the two startup failures remain red and are documented separately.*
 - [x] Add focused regression coverage for product fixes and run relevant static checks. *Focused SDK/OS tests, typechecks and lint passed; upstream Middlewright regression coverage also passed.*
 - [x] Lease a preview without creating a PR; deploy the relevant apps and confirm readiness before focused tests. *Leased preview 3 and deployed Auth, Docs and OS; waited for the shared deployment delay outside the reruns.*
@@ -92,3 +92,21 @@ Fix the six failure groups investigated in the CI design jam, with repeated indi
 - Middlewright: https://github.com/iterate/middlewright/compare/main...fix/input-value-loading
 
 Preview exit cleanup succeeded: nine non-container DO classes retired, 1,276 KV keys deleted, Auth D1 data erased. Artifacts GC deleted 733 repos before its 90-second deadline; remaining repos are inert and the next pass continues. R2 files and sandbox backups have three-hour expiry. Preview 3 was released after cleanup; its OS worker remains parked until the next owner deploys.
+
+
+## Review amendment validation log
+
+- Product SDK `e165a68cbff4ff9c2568b1f0273e0f2b6c04a264`; preview SDK ref `e165a68cb`. OS version `9bfe9dab-7752-4f34-a5fa-844de6c1d644`; Docs `0be6147e-36cd-4532-b3d0-8a7d666517a3`. Fresh manual preview-3 lease after entry erasure. Test head `dadd42f98` consumes Middlewright `e3f2374`.
+- Local checks: 18 existing SDK/Notes/Todo tests, 14 remaining ITX observability tests, OS/specs typechecks and changed-file lint passed. New Middlewright package passed frozen installation and specs typecheck.
+- Middlewright upstream CI completed successfully: 159 tests passed initially, one video cursor-tail test passed on retry, three skipped. This is not a zero-retry upstream run. Its failure was the existing `video-mode-ffmpeg.spec.ts` pointer-tail check, separate from spinner/inputValue coverage. The package also includes main's existing cursor-expression fix (#43), the only product-code difference from the old package beyond this branch's spinner/inputValue fixes.
+
+- Recommendation left for discussion: model a rejected conditional edit at the Workspace boundary as a typed `not-applied` result (changed/deleted), which Notes records as `superseded`. Throw actual storage/transport faults. This removes both Notes' message matching and telemetry's method/message matching; no special `client_error` rule is needed for an ordinary race. This is a public API decision, not implemented in this branch. The current observability implementation is unchanged by the review amendments.
+
+- Review traced sample: **14/14 actual passes**, two per scenario at eight workers, zero retries. The OS audit had 20 records across five connection-closure traces and seven cold-build HTTP 503 records; no ITX server errors in this sample.
+- Review stress batch: **163 actual passes, one known Docs table flake, four ordinary failures**, 168 attempts at 16 workers, zero retries (6.1 minutes). Todo, fake-model multi-turn, shopping-list undo and freeze each passed 24/24. Script reuse passed 23/24; the failure was before first send, stuck on Initializing agent with an uncompleted WASM response. Notes passed 21/24; the three failures were in auth fixture setup with HTTP 429s, before Notes. Review passed 23/24 with the one specifically allowed Approved-table timeout. These outcomes are retained, not overwritten by later runs.
+- Full SDK typecheck exposed a UUID-inferred parameter type in Todo; explicit `id: string` fixes it without changing emitted JavaScript. Commit `050d7bf8f`. Full SDK typecheck and worker lint then passed. The earlier historical SDK diagnostics are not present in this checkout's final typecheck.
+- Stress telemetry: 128 error-labelled records: 95 connection-closure records (24 traces), 25 native cold-build 503 records, five registry alarm-arming errors, two `LiveStateRelay.subscribe` errors and one hosted repository processor acknowledgement timeout. The latter findings and the confirmed repository recovery are recorded in `tasks/preview-stream-startup-stalls.md`; no claim that this branch resolves them.
+
+- Separate Notes run: **24/24 passed**, four workers, zero retries, 2.9 minutes (median 24.7s, maximum 37.6s). No error-labelled OS telemetry records in that run. This supplies focused Notes evidence without dismissing the mixed run's OAuth rate-limit failures.
+
+- Review exit cleanup succeeded: nine non-container DO classes retired, 602 Auth users/250 organizations cleared, 458 KV keys removed. Artifact GC deleted 665 repositories before its 90-second budget; remaining inert repositories await the next pass. File/backup buckets retain the three-hour expiry policy. Preview-3 lease `f1cc0b0f-a961-4b06-bca7-7f5d43312f99` was released (`released: true`).
