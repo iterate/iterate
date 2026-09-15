@@ -329,7 +329,11 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({
         readmePresent: true,
-        edited: { occurrenceCount: 1, path: "/repos/config/notes/workspace-example.md" },
+        edited: {
+          status: "applied",
+          occurrenceCount: 1,
+          path: "/repos/config/notes/workspace-example.md",
+        },
       });
       const typed = result as {
         commitOid: string;

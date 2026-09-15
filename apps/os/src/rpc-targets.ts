@@ -2551,7 +2551,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
         configure:
           'Patch mount overlays ({ config: { mounts } }) — deep-merged per mount point: unknown keys add mounts, partial values deviate a derived mount\'s fields (e.g. policy: "read-only"), null clears the overlay (the derived default returns). Appends workspace/configured.',
         deleteFile: "Delete one file (whiteouts a mount copy; false when it did not exist).",
-        edit: "Replace an exact string in one file (copies a mount file up first); private until committed.",
+        edit: "Replace an exact string in one file; private until committed. Check status: applied, or not-applied with text-mismatch/file-missing. A rejected edit changes nothing.",
         exists: "Whether a path exists in the merged view.",
         getConfig: "The live EFFECTIVE mount table (derived default merged with overlays).",
         collab:
@@ -2720,7 +2720,9 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     return this.durableObjectStub.writeFileBytes(path, data);
   }
 
-  /** Replace an exact string in one file (copies a mount file up first). */
+  /** Replace an exact string in one file (copies a mount file up on success).
+   * Returns not-applied when the file is missing or oldString no longer matches.
+   * Invalid arguments, ambiguous matches and storage failures still throw. */
   edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult> {
     return this.durableObjectStub.edit(input);
   }
