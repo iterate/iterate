@@ -8,6 +8,7 @@
 // nothing durable). Invariant: nothing lives only in the stream — the fold
 // holds obligations, never note content; files are truth.
 import { z } from "zod";
+import type { EditWorkspaceFileResult } from "../../itx-api.generated.ts";
 import {
   defineProcessorContract,
   isIdempotencyConflict,
@@ -165,7 +166,11 @@ export type NotesAnalysis = { title: string; tags: string[]; processedBy: string
  * with an in-memory file map and the worker wires it over itx per call. */
 export type NotesWorkspace = {
   readFile(path: string): Promise<string | null>;
-  edit(input: { path: string; oldString: string; newString: string }): Promise<unknown>;
+  edit(input: {
+    path: string;
+    oldString: string;
+    newString: string;
+  }): Promise<EditWorkspaceFileResult>;
   /** Paths dirty in the notes mount (relative to git truth). */
   dirtyNotePaths(): Promise<string[]>;
   commit(input: { message: string; scope: string }): Promise<void>;
@@ -342,23 +347,16 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
     // The final read and this write cross an RPC boundary. An unconditional
     // write can still replace a user's edit committed after the guard read.
     // Workspace.edit checks the old contents inside its serialized write.
-    try {
-      await this.deps.workspace.edit({
-        path,
-        oldString: current,
-        newString: composeNoteFile(
-          { ...currentNote.frontmatter, title: analysis.title, tags: analysis.tags },
-          currentNote.body,
-        ),
-      });
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        /^(Edit oldString was not found in|Workspace file does not exist:)/.test(error.message)
-      ) {
-        return { status: "superseded", reason: "note changed before analysis could be saved" };
-      }
-      throw error;
+    const edited = await this.deps.workspace.edit({
+      path,
+      oldString: current,
+      newString: composeNoteFile(
+        { ...currentNote.frontmatter, title: analysis.title, tags: analysis.tags },
+        currentNote.body,
+      ),
+    });
+    if (edited.status === "not-applied") {
+      return { status: "superseded", reason: edited.reason };
     }
     return { status: "succeeded", ...analysis };
   }

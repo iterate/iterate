@@ -30,11 +30,12 @@ function fakeWorkspace() {
   const workspace: NotesWorkspace = {
     readFile: async (path) => (files.has(path) ? files.get(path)! : null),
     edit: async ({ path, oldString, newString }) => {
-      if (!files.has(path)) throw new Error(`Workspace file does not exist: "${path}".`);
+      if (!files.has(path)) return { status: "not-applied", reason: "file-missing", path };
       const content = files.get(path)!;
       if (!content.includes(oldString))
-        throw new Error(`Edit oldString was not found in "${path}".`);
+        return { status: "not-applied", reason: "text-mismatch", path };
       files.set(path, content.replace(oldString, newString));
+      return { status: "applied", occurrenceCount: 1, path };
     },
     dirtyNotePaths: async () => {
       const dirty = new Set<string>();

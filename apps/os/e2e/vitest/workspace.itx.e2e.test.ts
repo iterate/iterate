@@ -1,6 +1,47 @@
 import { expect, test } from "vitest";
+import { createTestProject } from "../test-support/create-test-project.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
+
+test.each(["settled", "live"])(
+  "conditional edits preserve changed and deleted %s files",
+  async (mode) => {
+    await using fixture = await createTestProject({ slugPrefix: "workspace-edit" });
+    using project = fixture.itx();
+    using workspace = project.workspaces.get("/workspaces/edit");
+    await workspace.create({});
+    const path = "/workspace/note.md";
+    await workspace.writeFile(path, "green apples");
+    if (mode === "live") await workspace.collab.open(path);
+
+    expect(await workspace.edit({ path, oldString: "green", newString: "red" })).toEqual({
+      status: "applied",
+      occurrenceCount: 1,
+      path,
+    });
+    expect(await workspace.readFile(path)).toBe("red apples");
+
+    // An analyzer still holding the old text must not overwrite the newer save.
+    expect(
+      await workspace.edit({ path, oldString: "green apples", newString: "stale analysis" }),
+    ).toEqual({
+      status: "not-applied",
+      reason: "text-mismatch",
+      path,
+    });
+    expect(await workspace.readFile(path)).toBe("red apples");
+
+    await workspace.deleteFile(path);
+    expect(
+      await workspace.edit({ path, oldString: "red apples", newString: "stale analysis" }),
+    ).toEqual({
+      status: "not-applied",
+      reason: "file-missing",
+      path,
+    });
+    expect(await workspace.readFile(path)).toBeNull();
+  },
+);
 
 test(
   "workspaces are one namespace: repos auto-mount at /repos/**, scratch lives at /workspace, commits route per mount",
@@ -79,7 +120,11 @@ test(
       newString: "hello world",
     });
     // Results speak the resolved absolute spelling.
-    expect(editedScratch).toEqual({ occurrenceCount: 1, path: `/workspace/notes.md` });
+    expect(editedScratch).toEqual({
+      status: "applied",
+      occurrenceCount: 1,
+      path: `/workspace/notes.md`,
+    });
     expect(await workspace.readFile("notes.md")).toBe("workspace hello world");
     expect(await workspace.listAllFiles()).toContain(`/workspace/notes.md`);
     // A relative glob resolves against the workspace's own directory.
@@ -105,7 +150,11 @@ test(
       oldString: "hello",
       newString: "hello world",
     });
-    expect(edited).toEqual({ occurrenceCount: 1, path: "/repos/config/notes/e2e.md" });
+    expect(edited).toEqual({
+      status: "applied",
+      occurrenceCount: 1,
+      path: "/repos/config/notes/e2e.md",
+    });
     expect(await workspace.readFile("/repos/config/notes/e2e.md")).toBe("workspace hello world");
     // The mounted repo is untouched by workspace writes until a commit.
     expect(await project.repo.readFile({ path: "notes/e2e.md" })).toBeNull();

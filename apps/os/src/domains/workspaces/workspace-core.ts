@@ -421,11 +421,11 @@ export class WorkspaceCore {
       // Copy-up: editing a mount file materializes the edited copy locally.
       const content = await this.readFile(input.path);
       if (content === null) {
-        throw new Error(`Workspace file does not exist: "${input.path}".`);
+        return { status: "not-applied", reason: "file-missing", path: input.path };
       }
       const occurrenceCount = countOccurrences(content, input.oldString);
       if (occurrenceCount === 0) {
-        throw new Error(`Edit oldString was not found in "${input.path}".`);
+        return { status: "not-applied", reason: "text-mismatch", path: input.path };
       }
       if (!input.replaceAll && occurrenceCount !== 1) {
         throw new Error(
@@ -439,7 +439,7 @@ export class WorkspaceCore {
       });
       await this.#workspace.writeFile(input.path, edited);
       this.#clearWhiteout(input.path);
-      return { occurrenceCount, path: input.path };
+      return { status: "applied", occurrenceCount, path: input.path };
     });
   }
 

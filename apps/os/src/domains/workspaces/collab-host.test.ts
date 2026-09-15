@@ -101,11 +101,16 @@ describe("collab host", () => {
     const host = new CollabHost({ fs, store });
     await host.open(PATH);
     const result = await host.edit({ newString: "$& $' $1", oldString: "MARKER", path: PATH });
-    expect(result).toEqual({ occurrenceCount: 1, path: PATH });
+    expect(result).toEqual({ status: "applied", occurrenceCount: 1, path: PATH });
     expect(await host.readFile(PATH)).toBe("alpha $& $' $1 omega");
-    await expect(host.edit({ newString: "x", oldString: "absent", path: PATH })).rejects.toThrow(
-      "was not found",
-    );
+    const beforeConflict = await host.open(PATH);
+    expect(await host.edit({ newString: "x", oldString: "absent", path: PATH })).toEqual({
+      status: "not-applied",
+      reason: "text-mismatch",
+      path: PATH,
+    });
+    // A rejected edit changes neither the document nor its collaboration version.
+    expect(await host.open(PATH)).toEqual(beforeConflict);
   });
 
   test("flush failure keeps the session durably dirty; the next barrier retries", async () => {

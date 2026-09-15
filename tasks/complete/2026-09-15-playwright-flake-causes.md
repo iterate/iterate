@@ -1,5 +1,5 @@
 ---
-status: complete
+status: conditional-edit-outcome
 size: large
 branch: fix/playwright-flake-causes
 base: a85434f645
@@ -7,7 +7,7 @@ base: a85434f645
 
 # Fix the recurring Playwright failures
 
-The requested review amendments are implemented and pushed. The OS UI diff is one Stop-button attribute; Todo is back in its original file; the requested tests/helper are removed; Middlewright comes from pkg.pr.new. Across 206 zero-retry preview attempts, 201 actually passed, one hit the known Docs table flake, and four failed during startup/auth. Notes separately passed 24/24 at four workers. Those failures and backend telemetry findings remain recorded in `tasks/preview-stream-startup-stalls.md`; this is not a claim that all flakes are fixed. The `Workspace.edit` classification implementation is unchanged. Preview 3 was erased and released. **No pull request was opened**; review through the compare links below.
+The conditional-edit follow-up is implemented and awaiting preview validation. Workspace returns explicit applied/not-applied results; Notes handles the latter as superseded, and the method-name/message classification workaround is removed. Local behavioral tests, generated-contract checks and OS/SDK typechecks pass. Earlier browser evidence and the remaining startup/auth failures are preserved below. **No pull request**; keep using the compare links.
 
 ## Review amendments
 
@@ -110,3 +110,14 @@ Preview exit cleanup succeeded: nine non-container DO classes retired, 1,276 KV 
 - Separate Notes run: **24/24 passed**, four workers, zero retries, 2.9 minutes (median 24.7s, maximum 37.6s). No error-labelled OS telemetry records in that run. This supplies focused Notes evidence without dismissing the mixed run's OAuth rate-limit failures.
 
 - Review exit cleanup succeeded: nine non-container DO classes retired, 602 Auth users/250 organizations cleared, 458 KV keys removed. Artifact GC deleted 665 repositories before its 90-second budget; remaining inert repositories await the next pass. File/backup buckets retain the three-hour expiry policy. Preview-3 lease `f1cc0b0f-a961-4b06-bca7-7f5d43312f99` was released (`released: true`).
+
+
+## Conditional-edit follow-up (approved)
+
+The user approved replacing the expected conflict exceptions with explicit results. Return `status: applied` with the edit metadata, or `status: not-applied` with `text-mismatch` / `file-missing` and the path. Apply this to both settled files and live collaborative files. Notes records not-applied as superseded. Remove all method/message matching added by this branch. Invalid requests and storage/transport defects continue to throw. Regenerate the published contract, adapt existing behavioral tests, validate through deployed RPC/Notes, then clean up the preview. Keep the same branch; no PR.
+
+- [x] Implement explicit Workspace edit outcomes and remove the string-based classification. *Both WorkspaceCore and CollabHost return typed outcomes; Notes handles them; observability is restored to its original implementation.*
+- [ ] Verify text/deletion preservation and live-document no-op behavior, including deployed RPC and repeated Notes runs.
+- [ ] Regenerate contracts, check callers, commit/push, and clean up the preview.
+
+- Local follow-up proof: the existing collab edit test failed before the contract change; both existing Notes race scenarios failed with the new fake result until Notes handled not-applied. Then 96 OS tests (WorkspaceCore, CollabHost, observability and generated contracts) and 12 Notes tests passed. OS/SDK typechecks and changed-file lint passed. The live-file test verifies a rejected edit leaves both document and collaboration version unchanged. New deployed cases exercise ordinary and live files through the public Workspace API.
