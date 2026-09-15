@@ -4064,9 +4064,9 @@ async function cleanupPreviewApps({
   }
 
   let ok = true;
-  const appsToCleanUp = (Object.keys(current.apps) as CloudflarePreviewAppSlugType[])
-    .map((appSlug) => cloudflarePreviewApps[appSlug])
-    .filter((app): app is PreviewAppRuntime => app != null);
+  const appsToCleanUp = Object.values(cloudflarePreviewApps).filter(
+    (app) => current.apps[app.slug],
+  );
   const cleanupBatches = [...orderPreviewDeployBatches(appsToCleanUp)].reverse();
   for (const batch of cleanupBatches) {
     const entries = await mapWithConcurrency(

@@ -1,5 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { Octokit } from "@octokit/rest";
+import { z } from "zod";
 
 export type PreviewPullRequest = {
   number: number;
@@ -51,7 +52,7 @@ export async function writePullRequestBody(params: {
   );
 }
 
-export function splitRepositoryFullName(repositoryFullName: string) {
+export function splitRepositoryFullName(repositoryFullName: string): [string, string] {
   const parts = repositoryFullName.split("/");
   if (parts.length !== 2 || !parts[0] || !parts[1]) {
     throw new Error(
@@ -59,7 +60,7 @@ export function splitRepositoryFullName(repositoryFullName: string) {
     );
   }
 
-  return parts as [string, string];
+  return [parts[0], parts[1]];
 }
 
 export async function readPreviewPullRequest(params: {
@@ -94,7 +95,7 @@ export async function withGithubRetry<T>(
     try {
       return await call();
     } catch (error) {
-      const status = (error as { status?: number } | null)?.status;
+      const status = z.object({ status: z.number() }).safeParse(error).data?.status;
       const transient = status != null && (status >= 500 || status === 429 || status === 408);
       lastError = error;
       if (!transient || attempt === attempts) throw error;

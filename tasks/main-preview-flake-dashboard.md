@@ -5,7 +5,7 @@ size: large
 
 # Main preview runs and a current flake dashboard
 
-Status: ordinary-slot allocation and the dashboard changes are implemented. All preview commands now share a target for PRs and workflow commits; local checks pass and the shared deploy/erase commands have run on preview-8. PR #2658 is reopened with the final review fixes, current risk map and dashboard screenshot. Packages now publish and deployed e2e is running. The first CI run exposed a slow CLI-help test, addressed below.
+Status: implementation and PR preview validation are complete; all CI checks passed at `3b17b8689`. Final bot-review fixes cover empty cancelled runs and remove three casts. A full dispatch of the main-specific workflow remains outstanding; its deployment/cleanup path was already exercised.
 
 ## Current scope
 
@@ -66,3 +66,5 @@ Codex session: `01a0a1e6-0135-7902-91aa-b4bb07026de2`.
 - Final human review: use `nopr` rather than inferring main in local telemetry IDs. `requireCleanCheckout` is now a named internal option intersected with `PreviewCommandOptions`, without exposing a CLI bypass flag. User authorized reopening PR #2658 with the current design.
 
 - Reopened CI failure: the new `pnpm preview deploy --help` test spent 8.3s starting the CLI under full workspace contention and exceeded Vitest's 5s timeout, stopping other suites. Removed the seven flag-presence subprocess tests; the ambiguous-source check now calls the public `run` command directly. No product code, timeout or retry policy changed. Native CLI loading was already verified manually and is exercised by deployed CI.
+
+- Final bot review: reproduced cancelled finalization with zero artifacts failing for both `unit` and `preview`, then kept its cancelled manifest without writing an unidentifiable suite summary. Cleanup now selects from the known app registry, repository parsing returns a validated tuple without assertion, and GitHub retry status is schema-validated. The full scripts suite passes 329 tests; current-head CI before these fixes (`3b17b8689`) passed all required checks and preview e2e.

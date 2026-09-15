@@ -100,7 +100,9 @@ export async function finalizeTestTelemetry(options: {
     observedArtifactSources,
     observedWorkspaces,
   });
-  if (options.flakeSuites) {
+  // Cancellation before any reporter starts has no source identity for a summary.
+  // Keep the cancelled manifest; absence of a summary cannot clear the dashboard.
+  if (options.flakeSuites && loaded.length > 0) {
     const headSha = process.env.TEST_TELEMETRY_HEAD_SHA;
     if (!headSha)
       throw new Error("TEST_TELEMETRY_HEAD_SHA is required for full flake suite summaries");
