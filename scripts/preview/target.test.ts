@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { expect, test } from "vitest";
 import { createMainPreview } from "./target.ts";
+import { run } from "./preview.ts";
 
 test("a main preview pins its checkout and records state without a PR", async () => {
   using repo = repository();
@@ -117,40 +118,10 @@ test("cleanup can recover its target even if the build modified a tracked file",
   ).toThrow(/serialized/);
 });
 
-test.each(["deploy", "test", "run", "erase", "cleanup", "assign", "test-target"])(
-  "%s accepts PRs and pinned workflow commits under native Node",
-  (command) => {
-    const help = execFileSync("pnpm", ["preview", command, "--help"], {
-      cwd: resolve(import.meta.dirname, "../.."),
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    expect(help).toContain("--pull-request-number");
-    expect(help).toContain("--commit");
-  },
-);
-
-test("ambiguous command sources fail before any GitHub or deployment request", () => {
-  expect(() =>
-    execFileSync(
-      "pnpm",
-      [
-        "preview",
-        "run",
-        "--pull-request-number",
-        "123",
-        "--commit",
-        "a".repeat(40),
-        "--github-token",
-        "test",
-      ],
-      {
-        cwd: resolve(import.meta.dirname, "../.."),
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    ),
-  ).toThrow(/Choose --commit or --pull-request-number/);
+test("ambiguous command sources fail before any GitHub or deployment request", async () => {
+  await expect(
+    run({ pullRequestNumber: 123, commit: "a".repeat(40), githubToken: "test" }),
+  ).rejects.toThrow(/Choose --commit or --pull-request-number/);
 });
 
 function repository() {

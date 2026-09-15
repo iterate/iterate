@@ -5,7 +5,7 @@ size: large
 
 # Main preview runs and a current flake dashboard
 
-Status: ordinary-slot allocation and the dashboard changes are implemented. All preview commands now share a target for PRs and workflow commits; local checks pass and the shared deploy/erase commands have run on preview-8. The user has approved reopening PR #2658 after the final review fixes. Full e2e still needs published packages for the branch commit.
+Status: ordinary-slot allocation and the dashboard changes are implemented. All preview commands now share a target for PRs and workflow commits; local checks pass and the shared deploy/erase commands have run on preview-8. PR #2658 is reopened with the final review fixes, current risk map and dashboard screenshot. Packages now publish and deployed e2e is running. The first CI run exposed a slow CLI-help test, addressed below.
 
 ## Current scope
 
@@ -21,7 +21,7 @@ Status: ordinary-slot allocation and the dashboard changes are implemented. All 
 - [x] Test shared lease renewal, pinned commit validation, complete-zero-flake replacement, partial-run handling, and the rendered issue through real public boundaries/harnesses. *156 focused CI/runner tests and 31 dashboard harness tests pass.*
 - [ ] Validate the shared path against a preview and inspect its results/artifacts. Check the new main workflow using supported Depot execution before merge; do not claim automatic main triggers are live before merge.
 - [x] Complete checks and commit/push the common-target refactor for compare-link review. *Implementation pushed as `170a85b7c`; local checks and partial deployed validation are recorded below. PR stayed closed during compare-link review.*
-- [ ] Reopen PR #2658 after the final human-review fixes, with a current description and risk map.
+- [x] Reopen PR #2658 after the final human-review fixes, with a current description and risk map. *Reopened at `f951e6897`; global monitoring is active through September 16.*
 
 ## Decisions and limits
 
@@ -64,3 +64,5 @@ Codex session: `01a0a1e6-0135-7902-91aa-b4bb07026de2`.
 - Downloaded reports confirm all six app outcomes carry the exact head, the file-backed report carries the job URL/attempt, and both suite summaries are `incomplete` with zero tests and branch `ci/main-preview-dashboard`. The failed branch dispatch cannot replace main's current unknown-flake snapshot. Evidence: `/tmp/preview-common-target-ci.log`, `/tmp/preview-common-target-artifacts.zip`. A successful full e2e deployment remains outstanding; do not describe this check as green.
 
 - Final human review: use `nopr` rather than inferring main in local telemetry IDs. `requireCleanCheckout` is now a named internal option intersected with `PreviewCommandOptions`, without exposing a CLI bypass flag. User authorized reopening PR #2658 with the current design.
+
+- Reopened CI failure: the new `pnpm preview deploy --help` test spent 8.3s starting the CLI under full workspace contention and exceeded Vitest's 5s timeout, stopping other suites. Removed the seven flag-presence subprocess tests; the ambiguous-source check now calls the public `run` command directly. No product code, timeout or retry policy changed. Native CLI loading was already verified manually and is exercised by deployed CI.
