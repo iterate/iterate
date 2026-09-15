@@ -285,6 +285,7 @@ async function callIsLive(h: Harness, configured: Record<string, unknown> = {}):
     type: "events.iterate.com/voice-agent/configured",
     payload: configured,
   });
+  await h.append({ type: "events.iterate.com/voice-agent/backend-ready", payload: {} });
   await h.append(micFrame(1));
   await h.settle();
   h.provider.start();
@@ -293,11 +294,16 @@ async function callIsLive(h: Harness, configured: Record<string, unknown> = {}):
   return (started[0]!.payload as { conversationId: string }).conversationId;
 }
 
-/** Let the timers and the tick chains run `ms` of the fake clock, in coarse steps. */
+/**
+ * Let timers run without manufacturing a scheduling overrun. The input clock
+ * permits one second of real lateness, while its frames are 100 ms; keeping
+ * fake-clock wakes below that boundary preserves a partial opening frame's
+ * ordinary remainder instead of turning it into a fake >1 s outage.
+ */
 async function playOutEverything(h: Harness, ms: number): Promise<void> {
   await h.settle();
   for (let spent = 0; spent < ms; ) {
-    const step = Math.min(1_000, ms - spent);
+    const step = Math.min(900, ms - spent);
     await h.advanceTime(step);
     await h.settle();
     spent += step;
@@ -330,6 +336,101 @@ afterEach(() => {
 /* ========================================================================== */
 
 describe("opening a call", () => {
+  it("starts the provider from a live call-started event before any microphone arrives", async () => {
+    const h = makeHarness();
+    await h.append(
+      { type: "events.iterate.com/voice-agent/created", payload: {} },
+      { type: "events.iterate.com/voice-agent/configured", payload: {} },
+      {
+        type: "events.iterate.com/voice-agent/call-started",
+        payload: { activation: ACTIVATION, conversationId: "conv_preopened" },
+      },
+    );
+    await h.settle();
+
+    expect(h.sockets).toHaveLength(1);
+    expect(h.provider.sentOfType("session.start")).toHaveLength(1);
+    h.provider.start();
+    await h.settle();
+    await h.advanceTime(SILENCE_FILL_MS * 2);
+    await h.settle();
+    expect(h.provider.sentOfType("session.input_audio.append")).toHaveLength(0);
+
+    const opening = micFrame(1).payload.pcm;
+    await h.append(micFrame(1));
+    await h.settle();
+    expect(h.provider.sentOfType("session.input_audio.append")[0]).toMatchObject({
+      audio: opening,
+    });
+  });
+
+  it("anchors the silence clock at a delayed first microphone frame", async () => {
+    const h = makeHarness();
+    await h.append(
+      { type: "events.iterate.com/voice-agent/created", payload: {} },
+      { type: "events.iterate.com/voice-agent/configured", payload: {} },
+      {
+        type: "events.iterate.com/voice-agent/call-started",
+        payload: { activation: ACTIVATION, conversationId: "conv_delayed_input" },
+      },
+    );
+    await h.settle();
+    h.provider.start();
+    await h.settle();
+    await h.advanceTime(2_000);
+    await h.settle();
+
+    const opening = speechDelta(20, 7);
+    await h.append(openingMicFrame(ACTIVATION, opening));
+    await h.settle();
+    await h.advanceTime(SILENCE_FILL_MS);
+    await h.settle();
+
+    expect(eventsOfType(h, "conversation-ended")).toEqual([]);
+    expect(h.provider.sentOfType("session.input_audio.append")[0]).toMatchObject({
+      audio: opening,
+    });
+  });
+
+  it("credits held opening capture before silence fill starts", async () => {
+    const h = makeHarness();
+    const held = speechDelta(500, 8);
+    await h.append(
+      { type: "events.iterate.com/voice-agent/configured", payload: {} },
+      openingMicFrame(ACTIVATION, held),
+    );
+    await h.settle();
+    h.provider.start();
+    await h.settle();
+
+    expect(h.provider.sentOfType("session.input_audio.append")).toHaveLength(1);
+    await h.advanceTime(500);
+    await h.settle();
+    expect(h.provider.sentOfType("session.input_audio.append")).toHaveLength(1);
+    await h.advanceTime(SILENCE_FILL_MS);
+    await h.settle();
+    expect(h.provider.sentOfType("session.input_audio.append")).toHaveLength(2);
+  });
+
+  it("ends a pre-opened call after eviction instead of re-dialling it", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/call-started",
+      payload: { activation: ACTIVATION, conversationId: "conv_preopened" },
+    });
+    await h.settle();
+    expect(h.sockets).toHaveLength(1);
+
+    h.crash();
+    await h.append({ type: "events.iterate.com/voice-agent/keepalive", payload: {} });
+    await h.settle();
+
+    expect(h.sockets).toHaveLength(1);
+    expect(eventsOfType(h, "conversation-ended")).toMatchObject([
+      { payload: { activation: ACTIVATION, reason: "the voice session was interrupted" } },
+    ]);
+  });
+
   it("opens exactly one call however many frames arrive first", async () => {
     const h = makeHarness();
     await h.append({ type: "events.iterate.com/voice-agent/created", payload: {} });
@@ -1138,6 +1239,53 @@ describe("the transcript", () => {
 /* ========================================================================== */
 
 describe("the Agent bridge", () => {
+  it("puts an activation's durable call start after voice configuration", async () => {
+    const setupEvents: { type: string; payload: Record<string, unknown> }[][] = [];
+    const project = {
+      secrets: {
+        get: () => ({
+          __describe: async () => ({ created: true, hasMaterial: true }),
+          [Symbol.dispose]: () => {},
+        }),
+      },
+      agents: {
+        get: () => ({ create: async () => {}, append: async () => {} }),
+      },
+      streams: {
+        get: () => ({
+          append: async (...events: { type: string; payload: Record<string, unknown> }[]) => {
+            setupEvents.push(events);
+            return events.map((_, index) => ({ offset: index + 1 }));
+          },
+          subscriptions: {
+            get: () => ({ waitUntilProcessed: async () => {}, [Symbol.dispose]: () => {} }),
+          },
+          [Symbol.dispose]: () => {},
+        }),
+      },
+    };
+    const entrypoint = { itx: project } as unknown as VoiceAgentEntrypoint;
+
+    await VoiceAgentEntrypoint.prototype.setupVoiceAgent.call(entrypoint, {
+      activation: ACTIVATION,
+      instructions: "Be concise.",
+      streamPath: "/agents/voice/preopen",
+    });
+
+    const voiceSetup = setupEvents[0]!;
+    expect(voiceSetup.map((event) => event.type)).toEqual([
+      "events.iterate.com/voice-agent/created",
+      "events.iterate.com/voice-agent/configured",
+      "events.iterate.com/voice-agent/call-started",
+      "events.iterate.com/stream/subscription-configured",
+    ]);
+    expect(voiceSetup[2]!.payload).toEqual({
+      activation: ACTIVATION,
+      conversationId: `conv_${ACTIVATION}`,
+      streamPath: "/agents/voice/preopen",
+    });
+  });
+
   it("sets up the ordinary Agent once on the voice stream with its standing protocol", async () => {
     const agentCreates: string[] = [];
     const agentAppends: { path: string; events: unknown[] }[] = [];
@@ -1228,7 +1376,6 @@ describe("the Agent bridge", () => {
             get: () => ({
               waitUntilProcessed: async () => {
                 voiceBarrierReached = true;
-                releaseAgentCreate?.();
               },
               [Symbol.dispose]: () => {},
             }),
@@ -1239,11 +1386,307 @@ describe("the Agent bridge", () => {
     };
     const entrypoint = { itx: project } as unknown as VoiceAgentEntrypoint;
 
-    await VoiceAgentEntrypoint.prototype.setupVoiceAgent.call(entrypoint, {
+    const setup = VoiceAgentEntrypoint.prototype.setupVoiceAgent.call(entrypoint, {
       streamPath: "/agents/voice/parallel-setup",
     });
 
-    expect(voiceBarrierReached).toBe(true);
+    await vi.waitFor(() => expect(voiceBarrierReached).toBe(true));
+    await vi.waitFor(() => expect(releaseAgentCreate).toBeTypeOf("function"));
+    releaseAgentCreate!();
+    await setup;
+  });
+
+  it("starts the initial voice batch while credential validation is pending, without creating the Agent", async () => {
+    let releaseSecret: ((description: { created: true; hasMaterial: true }) => void) | undefined;
+    let agentCreates = 0;
+    const streamAppends: { type: string }[][] = [];
+    const project = {
+      secrets: {
+        get: () => ({
+          __describe: async () =>
+            await new Promise<{ created: true; hasMaterial: true }>((resolve) => {
+              releaseSecret = resolve;
+            }),
+          [Symbol.dispose]: () => {},
+        }),
+      },
+      agents: {
+        get: () => ({
+          create: async () => {
+            agentCreates += 1;
+          },
+          append: async () => {},
+        }),
+      },
+      streams: {
+        get: () => ({
+          append: async (...events: { type: string }[]) => {
+            streamAppends.push(events);
+            return events.map((_, index) => ({ offset: index + 1 }));
+          },
+          subscriptions: {
+            get: () => ({ waitUntilProcessed: async () => {}, [Symbol.dispose]: () => {} }),
+          },
+          [Symbol.dispose]: () => {},
+        }),
+      },
+    };
+    const entrypoint = { itx: project } as unknown as VoiceAgentEntrypoint;
+
+    const setup = VoiceAgentEntrypoint.prototype.setupVoiceAgent.call(entrypoint, {
+      streamPath: "/agents/voice/secret-overlap",
+      activation: ACTIVATION,
+    });
+
+    await vi.waitFor(() => expect(releaseSecret).toBeTypeOf("function"));
+    expect(agentCreates).toBe(0);
+    expect(streamAppends[0]?.map((event) => event.type)).toEqual([
+      "events.iterate.com/voice-agent/created",
+      "events.iterate.com/voice-agent/configured",
+      "events.iterate.com/voice-agent/call-started",
+      "events.iterate.com/stream/subscription-configured",
+    ]);
+    releaseSecret?.({ created: true, hasMaterial: true });
+    await setup;
+    expect(agentCreates).toBe(1);
+  });
+
+  it("rejects a missing secret, never creates the Agent, and terminals its activation", async () => {
+    let agentCreates = 0;
+    const streamAppends: { type: string; payload?: Record<string, unknown> }[][] = [];
+    const project = {
+      secrets: {
+        get: () => ({
+          __describe: async () => ({ created: true, hasMaterial: false }),
+          [Symbol.dispose]: () => {},
+        }),
+      },
+      agents: {
+        get: () => ({
+          create: async () => {
+            agentCreates += 1;
+          },
+          append: async () => {},
+        }),
+      },
+      streams: {
+        get: () => ({
+          append: async (...events: { type: string; payload?: Record<string, unknown> }[]) => {
+            streamAppends.push(events);
+            return events.map((_, index) => ({ offset: index + 1 }));
+          },
+          subscriptions: {
+            get: () => ({ waitUntilProcessed: async () => {}, [Symbol.dispose]: () => {} }),
+          },
+          [Symbol.dispose]: () => {},
+        }),
+      },
+    };
+    const entrypoint = { itx: project } as unknown as VoiceAgentEntrypoint;
+
+    await expect(
+      VoiceAgentEntrypoint.prototype.setupVoiceAgent.call(entrypoint, {
+        streamPath: "/agents/voice/missing-secret",
+        activation: ACTIVATION,
+      }),
+    ).rejects.toThrow('voice-agent setup requires secret "/secrets/openai"');
+
+    expect(agentCreates).toBe(0);
+    expect(streamAppends[0]?.map((event) => event.type)).toContain(
+      "events.iterate.com/voice-agent/call-started",
+    );
+    expect(
+      streamAppends
+        .flat()
+        .filter((event) => event.type === "events.iterate.com/voice-agent/conversation-ended"),
+    ).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ activation: ACTIVATION }),
+      }),
+    ]);
+  });
+
+  it("holds a delegation passive until backend-ready, then releases one durable trigger across replay", async () => {
+    const h = makeHarness();
+    await h.append({ type: "events.iterate.com/voice-agent/configured", payload: {} });
+    await h.append(micFrame(1));
+    await h.settle();
+    h.provider.start();
+    await h.settle();
+
+    h.provider.delegationCreated("delegate-before-ready");
+    await h.settle();
+    const passive = h
+      .events("events.iterate.com/agents/context-added")
+      .filter((event) => event.idempotencyKey?.includes("voice-agent/agent-delegation:"));
+    expect(passive).toHaveLength(1);
+    expect(
+      h
+        .events("events.iterate.com/agents/context-added")
+        .filter(
+          (event) =>
+            (event.payload as { llmRequestPolicy?: { behaviour?: string } }).llmRequestPolicy
+              ?.behaviour === "after-current-request",
+        ),
+    ).toEqual([]);
+    expect(h.state().pendingDelegations).toHaveLength(1);
+
+    const streamAppend = h.stream.append.bind(h.stream);
+    let rejectTriggeredMarker = true;
+    vi.spyOn(h.stream, "append").mockImplementation(async (...events) => {
+      if (
+        rejectTriggeredMarker &&
+        events.some((event) => event.type === "events.iterate.com/voice-agent/delegation-triggered")
+      ) {
+        rejectTriggeredMarker = false;
+        throw new Error("injected delegation marker failure");
+      }
+      return await streamAppend(...events);
+    });
+    await h.append({ type: "events.iterate.com/voice-agent/backend-ready", payload: {} });
+    await h.settle();
+    const triggers = () =>
+      h
+        .events("events.iterate.com/agents/context-added")
+        .filter(
+          (event) =>
+            (event.payload as { llmRequestPolicy?: { behaviour?: string } }).llmRequestPolicy
+              ?.behaviour === "after-current-request",
+        );
+    const [trigger] = triggers();
+    expect(trigger).toBeDefined();
+    const triggerPayload = trigger?.payload;
+    if (!triggerPayload || typeof triggerPayload.content !== "string") {
+      throw new Error("expected one delegation trigger with string content");
+    }
+    const triggerMetadata = triggerPayload.content.split("\n").at(1);
+    if (!triggerMetadata) throw new Error("expected delegation trigger metadata");
+    expect(JSON.parse(triggerMetadata)).toEqual({
+      metadataOffset: passive[0]!.offset,
+    });
+    /* The marker's injected failure is retried by the next at-head pass in
+     * this same settle. Its Agent trigger keeps one idempotency key. */
+    expect(h.state().pendingDelegations).toEqual([]);
+
+    await h.append({ type: "events.iterate.com/voice-agent/keepalive", payload: {} });
+    await h.settle();
+    expect(triggers()).toHaveLength(1);
+    expect(h.state().pendingDelegations).toEqual([]);
+
+    h.crash();
+    await h.append({ type: "events.iterate.com/voice-agent/keepalive", payload: {} });
+    await h.settle();
+    expect(triggers()).toHaveLength(1);
+  });
+
+  it("releases a delegation immediately when the backend is already ready", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    h.provider.delegationCreated("delegate-after-ready");
+    await h.settle();
+    expect(
+      h
+        .events("events.iterate.com/agents/context-added")
+        .filter(
+          (event) =>
+            (event.payload as { llmRequestPolicy?: { behaviour?: string } }).llmRequestPolicy
+              ?.behaviour === "after-current-request",
+        ),
+    ).toHaveLength(1);
+  });
+
+  it("does not queue another trigger behind each microphone delivery", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    let releaseMarker: (() => void) | undefined;
+    let holdMarker = true;
+    let triggerAttempts = 0;
+    h.stream.holdAppend = (events) => {
+      if (
+        events.some((event) =>
+          event.idempotencyKey?.includes("voice-agent/agent-delegation-trigger:"),
+        )
+      ) {
+        triggerAttempts += 1;
+      }
+      if (
+        holdMarker &&
+        events.some((event) => event.type === "events.iterate.com/voice-agent/delegation-triggered")
+      ) {
+        return new Promise<void>((resolve) => {
+          releaseMarker = resolve;
+        });
+      }
+      return undefined;
+    };
+
+    h.provider.delegationCreated("delegate-no-fanout");
+    await h.settle();
+    expect(releaseMarker).toBeTypeOf("function");
+
+    await h.append(...Array.from({ length: 40 }, (_, index) => micFrame(index + 2)));
+    await h.settle();
+    expect(triggerAttempts).toBe(1);
+
+    holdMarker = false;
+    releaseMarker!();
+    await h.settle();
+    expect(triggerAttempts).toBe(1);
+  });
+
+  it("ends a preopened call and does not certify readiness when Agent setup fails", async () => {
+    const streamAppends: { type: string; payload?: Record<string, unknown> }[][] = [];
+    const project = {
+      secrets: {
+        get: () => ({
+          __describe: async () => ({ created: true, hasMaterial: true }),
+          [Symbol.dispose]: () => {},
+        }),
+      },
+      agents: {
+        get: () => ({
+          create: async () => {
+            throw new Error("injected agent setup failure");
+          },
+          append: async () => {},
+        }),
+      },
+      streams: {
+        get: () => ({
+          append: async (...events: { type: string; payload?: Record<string, unknown> }[]) => {
+            streamAppends.push(events);
+            return events.map((_, index) => ({ offset: index + 1 }));
+          },
+          subscriptions: {
+            get: () => ({
+              waitUntilProcessed: async () => {},
+              [Symbol.dispose]: () => {},
+            }),
+          },
+          [Symbol.dispose]: () => {},
+        }),
+      },
+    };
+    const entrypoint = { itx: project } as unknown as VoiceAgentEntrypoint;
+
+    await expect(
+      VoiceAgentEntrypoint.prototype.setupVoiceAgent.call(entrypoint, {
+        streamPath: "/agents/voice/backend-failure",
+        activation: ACTIVATION,
+      }),
+    ).rejects.toThrow("injected agent setup failure");
+    expect(streamAppends.flat()).not.toContainEqual(
+      expect.objectContaining({ type: "events.iterate.com/voice-agent/backend-ready" }),
+    );
+    expect(streamAppends.flat()).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/voice-agent/conversation-ended",
+        payload: expect.objectContaining({
+          activation: ACTIVATION,
+          reason: expect.stringContaining("the voice backend could not be started"),
+        }),
+      }),
+    );
   });
 
   it("puts passive open-transcript snapshots before each queued delegation request", async () => {
@@ -1255,17 +1698,23 @@ describe("the Agent bridge", () => {
     await h.settle();
 
     const contexts = h.events("events.iterate.com/agents/context-added") as {
+      offset: number;
       idempotencyKey?: string;
       payload: Record<string, unknown>;
     }[];
-    const metadataEvents = contexts.filter(
+    const triggerEvents = contexts.filter(
       (event) =>
         (event.payload.llmRequestPolicy as { behaviour?: string } | undefined)?.behaviour ===
         "after-current-request",
     );
-    expect(metadataEvents).toHaveLength(2);
-    for (const [index, metadata] of metadataEvents.entries()) {
+    expect(triggerEvents).toHaveLength(2);
+    for (const [index, trigger] of triggerEvents.entries()) {
       const delegationId = `delegate-${index === 0 ? "a" : "b"}`;
+      const metadata = contexts.find(
+        (event) =>
+          event.idempotencyKey?.includes("voice-agent/agent-delegation:") &&
+          event.idempotencyKey.endsWith(`:${delegationId}`),
+      );
       const snapshot = contexts.find(
         (event) =>
           event.idempotencyKey?.includes(`agent-delegation-transcript:`) &&
@@ -1276,16 +1725,19 @@ describe("the Agent bridge", () => {
         content: "Create a note.",
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
       });
-      expect(metadata.payload).toMatchObject({
+      expect(metadata!.payload).toMatchObject({
         role: "developer",
-        llmRequestPolicy: { behaviour: "after-current-request" },
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
       });
-      // The Agent's published example reads the original event and parses
-      // this line, so IDs need not be copied through generated source code.
-      const content = metadata.payload.content as string;
+      // The passive metadata carries opaque IDs once. The trigger names its
+      // offset, so it never reserializes those IDs or can target a later call.
+      const content = metadata!.payload.content as string;
       expect(JSON.parse(content.split("\n")[1]!)).toEqual({
         activation: ACTIVATION,
         delegationId: `delegate-${index === 0 ? "a" : "b"}`,
+      });
+      expect(JSON.parse((trigger.payload.content as string).split("\n")[1]!)).toEqual({
+        metadataOffset: metadata!.offset,
       });
     }
   });

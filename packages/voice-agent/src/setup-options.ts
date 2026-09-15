@@ -11,6 +11,15 @@
 export interface SetupVoiceAgentOptions {
   /** The conversation stream. A fresh /agents/voice/* path is generated when omitted. */
   streamPath?: string;
+  /**
+   * Start a fresh provider session while this stream's voice facet catches up.
+   *
+   * A device generates this opaque activation once per local conversation and
+   * opens its downlink subscription in parallel. It waits for the resulting
+   * `conversation-accepted` event before flushing its locally buffered PCM.
+   * Omit it when installing a voice facet without opening a conversation.
+   */
+  activation?: string;
   /** What GPT-Live is told it is — persona and tone. */
   instructions?: string;
   /** Classify the answer into mouth shapes for a face-rendering client. */

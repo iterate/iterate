@@ -259,7 +259,7 @@ const LIVE_DELEGATION_POLICY = [
 function agentVoiceProtocol(streamPath: string): string {
   return [
     "You are the project's ordinary Agent working with GPT-Live client delegation on this stream.",
-    "Voice delegation metadata is platform context, not user speech. Keep its original @offset with the work it describes; several delegations may be outstanding. Before sending an update, read that exact event and parse its second content line as JSON to obtain activation and delegationId. Reuse those values; never retype the opaque IDs or look up the latest call, which could belong to a different request.",
+    "Voice delegation metadata is platform context, not user speech. A later developer trigger names the passive metadata context's @offset on its second content line; read that original context and parse its second content line as JSON to obtain activation and delegationId. Keep that original @offset with the work it describes; several delegations may be outstanding. Reuse those values; never retype opaque IDs or look up the latest call, which could belong to a different request.",
     "Voice transcripts can be incomplete or corrected; each observation records either a human or GPT-Live speaking, and GPT-Live speech (labelled `Voice agent (spoken transcript):` in new entries) is never your output, a task completion, or evidence an action happened. An open-turn snapshot may precede its finished transcript; both are observations, and only delegation metadata requests work. Use later context before acting, and let ordinary Agent work continue after a voice call ends.",
     "To guide GPT-Live, append one of these plain-string events to this stream:",
     "- events.iterate.com/voice-agent/instructions directs the live model's behaviour.",
@@ -376,6 +376,15 @@ const Activation = z.string().min(1).max(64);
  * stream capacity. Remember that exact bounded set, so either delayed
  * terminal still fences its own queued microphone audio. */
 const RECENT_ENDED_ACTIVATIONS_CAPACITY = 2;
+/** A live model may have several client delegations outstanding, but never an unbounded log. */
+const PENDING_DELEGATIONS_CAPACITY = 32;
+
+const PendingDelegation = z.strictObject({
+  activation: Activation,
+  delegationId: z.string().min(1).max(128),
+  /** The passive Agent context row containing the opaque IDs. */
+  metadataOffset: z.number().int().positive(),
+});
 
 /**
  * Everything that outlives the Durable Object holding the socket.
@@ -392,6 +401,16 @@ const VoiceState = z.object({
    * Certificate data because it is a fact about the CLIENT.
    */
   visemes: z.boolean().default(false),
+  /**
+   * The ordinary Agent exists and has received the voice protocol plus model
+   * configuration. A delegation may only trigger it after this certificate.
+   */
+  backendReady: z.boolean().default(false),
+  /**
+   * Delegation metadata is already durable Agent context. These rows merely
+   * wait for the one safe moment to append their LLM-request trigger.
+   */
+  pendingDelegations: z.array(PendingDelegation).max(PENDING_DELEGATIONS_CAPACITY).default([]),
   /**
    * The rolling recap: the newest finished turns, in words, both sides.
    * Folded from the durable transcript events and seeded as history into
@@ -424,7 +443,7 @@ export const VoiceAgentContract = defineProcessorContract({
    * the live subscription is named for it, and the device speaks these event
    * names already. */
   slug: "voice-agent",
-  version: "24.0.1",
+  version: "24.1.0",
   description:
     "Runs a GPT-Live voice call in the stream's own Durable Object, relaying audio both ways as it arrives.",
   stateSchema: VoiceState,
@@ -443,6 +462,20 @@ export const VoiceAgentContract = defineProcessorContract({
         instructions: z.string().optional(),
         visemes: z.boolean().optional(),
       }),
+    },
+    "events.iterate.com/voice-agent/backend-ready": {
+      description:
+        "The ordinary Agent's birth, voice protocol, and model configuration are durable; pending client delegations may now trigger it.",
+      payloadSchema: z.strictObject({}),
+    },
+    "events.iterate.com/voice-agent/delegation-requested": {
+      description:
+        "A client delegation's passive Agent metadata is durable. It awaits backend readiness before requesting Agent work.",
+      payloadSchema: PendingDelegation,
+    },
+    "events.iterate.com/voice-agent/delegation-triggered": {
+      description: "The Agent LLM-request trigger for this client delegation was durably appended.",
+      payloadSchema: z.strictObject({ metadataOffset: z.number().int().positive() }),
     },
     /*
      * THE DEVICE'S HALF is one verb and a heartbeat: here is audio, I am
@@ -596,6 +629,9 @@ export const VoiceAgentContract = defineProcessorContract({
   consumes: [
     "events.iterate.com/voice-agent/created",
     "events.iterate.com/voice-agent/configured",
+    "events.iterate.com/voice-agent/backend-ready",
+    "events.iterate.com/voice-agent/delegation-requested",
+    "events.iterate.com/voice-agent/delegation-triggered",
     "events.iterate.com/voice-agent/instructions",
     "events.iterate.com/voice-agent/thinking",
     "events.iterate.com/voice-agent/commentary",
@@ -623,6 +659,9 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/answer-transcript",
     "events.iterate.com/voice-agent/session-configured",
     "events.iterate.com/voice-agent/spk-frame",
+    "events.iterate.com/voice-agent/backend-ready",
+    "events.iterate.com/voice-agent/delegation-requested",
+    "events.iterate.com/voice-agent/delegation-triggered",
   ],
 });
 export type VoiceAgentContract = typeof VoiceAgentContract;
@@ -746,6 +785,8 @@ interface Dial {
    * burst chops the person's words with silence (measured: "count to sixty"
    * reached the model as "count to six"). */
   micAudioCoveredUntilFacetMs: number;
+  /** The post-input gap filler has one background chain per provider dial. */
+  silenceFillStarted: boolean;
   /**
    * The furthest point on the provider's SESSION TIMELINE seen so far —
    * transcript `end_ms`, delegation `offset_ms`, and the running total of
@@ -783,6 +824,7 @@ const freshDial = (conversationId: string, activation: string): Dial => ({
   transcript: [],
   answer: freshAnswer(),
   micAudioCoveredUntilFacetMs: 0,
+  silenceFillStarted: false,
   timelineMs: 0,
   turns: { user: null, assistant: null },
 });
@@ -839,6 +881,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
   #pendingTranscriptContexts = new Map<string, AgentTranscriptContext>();
   /** Agent context writes share keys, so their invocation order is their overwrite order. */
   #agentAppendTail: Promise<void> = Promise.resolve();
+  /** Volatile dedupe for a durable pending delegation; eviction retries its stable keys. */
+  #scheduledPendingDelegationOffsets = new Set<number>();
   /* ------------------------------------------------------------------ fold */
 
   reduce({ state, event }: ReduceArgs<VoiceAgentContract>) {
@@ -856,6 +900,32 @@ export class VoiceAgentProcessor extends StreamProcessor<
           ...state,
           instructions: event.payload.instructions ?? "",
           visemes: event.payload.visemes ?? false,
+        };
+
+      case "events.iterate.com/voice-agent/backend-ready":
+        return state.backendReady ? state : { ...state, backendReady: true };
+
+      case "events.iterate.com/voice-agent/delegation-requested": {
+        if (
+          state.pendingDelegations.some(
+            (pending) => pending.metadataOffset === event.payload.metadataOffset,
+          )
+        ) {
+          return state;
+        }
+        /* A provider cannot create enough useful parallel work to reach this
+         * limit. Refuse to turn a faulty provider into unbounded DO state; the
+         * corresponding process arm records a terminal explanation. */
+        if (state.pendingDelegations.length >= PENDING_DELEGATIONS_CAPACITY) return state;
+        return { ...state, pendingDelegations: [...state.pendingDelegations, event.payload] };
+      }
+
+      case "events.iterate.com/voice-agent/delegation-triggered":
+        return {
+          ...state,
+          pendingDelegations: state.pendingDelegations.filter(
+            (pending) => pending.metadataOffset !== event.payload.metadataOffset,
+          ),
         };
 
       case "events.iterate.com/voice-agent/call-started":
@@ -966,12 +1036,44 @@ export class VoiceAgentProcessor extends StreamProcessor<
       this.#lastDeviceInputAtStreamMsMirror = state.call.lastDeviceInputAtStreamMs;
     }
 
+    /*
+     * Setup may put `call-started` in the voice facet's initial catch-up
+     * batch. Starting the provider here overlaps its handshake with the
+     * fresh stream's subscription delivery and the device's downlink bind.
+     *
+     * This is deliberately narrower than "a call exists": after eviction the
+     * durable call still exists but this live event is absent, so the recovery
+     * branch below records the interruption instead of re-dialling a socket
+     * whose previous side effects are unknowable.
+     */
+    if (
+      event?.type === "events.iterate.com/voice-agent/call-started" &&
+      state.call?.activation === event.payload.activation &&
+      this.#dial === null
+    ) {
+      this.#openProviderConnection(
+        state.call.conversationId,
+        state.call.activation,
+        state,
+        append,
+        runInBackground,
+      );
+    }
+
     /* A provider session is volatile. Its durable record cannot revive it. */
     const owedCall = delivery.caughtUp ? state.call : null;
     if (owedCall && this.#dial?.activation !== owedCall.activation) {
       args.blockProcessorWhile(() =>
         this.#end(owedCall.activation, "the voice session was interrupted", append),
       );
+    }
+
+    if (event?.type === "events.iterate.com/voice-agent/delegation-triggered") {
+      this.#scheduledPendingDelegationOffsets.delete(event.payload.metadataOffset);
+    }
+
+    if (delivery.caughtUp && state.backendReady && state.pendingDelegations.length > 0) {
+      this.#flushPendingDelegations(state.pendingDelegations, append);
     }
 
     if (event === null) return;
@@ -1106,8 +1208,12 @@ export class VoiceAgentProcessor extends StreamProcessor<
            * 50 ms frames every 55 ms then keep the provider clock five ms
            * behind on every frame.  The silence clock accumulates those gaps
            * into its next 100 ms fill instead. */
+          if (!dial.silenceFillStarted) {
+            dial.micAudioCoveredUntilFacetMs = this.deps.nowAtFacetMs();
+          }
           dial.micAudioCoveredUntilFacetMs += base64ByteLength(micB64) / PCM16_BYTES_PER_MS;
           this.#sendMicAudio(dial.socket, micB64);
+          this.#startSilenceFill(dial, append, runInBackground);
         } else {
           const micBytes = base64ByteLength(micB64);
           const openingDial = dial?.activation === activation ? dial : null;
@@ -1174,6 +1280,32 @@ export class VoiceAgentProcessor extends StreamProcessor<
                 : `Voice configuration at ${this.path}@${event.offset}: the live voice model uses these persona instructions. They are not Agent instructions:\n${instructions}`,
           }),
         );
+        return;
+      }
+
+      case "events.iterate.com/voice-agent/delegation-requested": {
+        if (
+          state.pendingDelegations.length >= PENDING_DELEGATIONS_CAPACITY &&
+          !state.pendingDelegations.some(
+            (pending) => pending.metadataOffset === event.payload.metadataOffset,
+          )
+        ) {
+          const dial = this.#dial;
+          if (dial?.activation === event.payload.activation) {
+            this.#sendControl(dial, {
+              type: "session.thinking.append",
+              delegation_id: event.payload.delegationId,
+              content: "The backend cannot accept this request; the call will end.",
+            });
+          }
+          args.blockProcessorWhile(() =>
+            this.#end(
+              event.payload.activation,
+              `too many pending backend delegations (maximum ${PENDING_DELEGATIONS_CAPACITY})`,
+              append,
+            ),
+          );
+        }
         return;
       }
 
@@ -1424,11 +1556,19 @@ export class VoiceAgentProcessor extends StreamProcessor<
         /* Usable. Everything the handshake made us hold goes now. */
         dial.ready = true;
         const heldMicFrames = dial.micQueue.length;
+        dial.micAudioCoveredUntilFacetMs =
+          receivedAtFacetMs + dial.micQueueBytes / PCM16_BYTES_PER_MS;
         for (const held of dial.micQueue) this.#sendMicAudio(dial.socket!, held);
         dial.micQueue = [];
         dial.micQueueBytes = 0;
-        dial.micAudioCoveredUntilFacetMs = receivedAtFacetMs;
-        this.#startSilenceFill(dial, append, runInBackground);
+        /*
+         * A pre-opened session has no microphone frames yet: the device is
+         * still binding its direct subscription and deliberately holds local
+         * capture until it sees this acceptance. Do not put synthetic silence
+         * ahead of those real opening words. The first real frame starts the
+         * usual gap filler below.
+         */
+        if (heldMicFrames > 0) this.#startSilenceFill(dial, append, runInBackground);
         this.runInBackground(() =>
           append({
             type: "events.iterate.com/voice-agent/conversation-accepted",
@@ -1794,6 +1934,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
     append: ProcessEventArgs<VoiceAgentContract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
   ): void {
+    if (dial.silenceFillStarted) return;
+    dial.silenceFillStarted = true;
     runInBackground(async () => {
       while (this.#dial === dial && dial.socket && dial.ready) {
         await this.deps.sleep(SILENCE_FILL_MS);
@@ -1891,25 +2033,28 @@ export class VoiceAgentProcessor extends StreamProcessor<
       this.#appendAgentContext(async () => {
         try {
           const transcriptSnapshots = this.#transcriptSnapshots(dial, delegationId);
-          await this.stream.append(...transcriptSnapshots, {
-            type: "events.iterate.com/agents/context-added",
-            idempotencyKey: this.idempotencyKey(`agent-delegation:${dial.dialId}:${delegationId}`),
+          const committed = await this.stream.append(
+            ...transcriptSnapshots,
+            this.#delegationMetadata(dial, delegationId),
+          );
+          const metadata = committed.at(-1);
+          if (!metadata) throw new Error("Agent delegation metadata append returned no event");
+          await append({
+            type: "events.iterate.com/voice-agent/delegation-requested",
+            idempotencyKey: this.idempotencyKey(
+              `delegation-requested:${dial.dialId}:${delegationId}`,
+            ),
             payload: {
-              role: "developer",
-              content: [
-                "Voice delegation metadata (platform context, not user speech):",
-                JSON.stringify({ activation: dial.activation, delegationId }),
-                "Handle the request in the conversation transcript for this client delegation. To reply, read this metadata event at its @offset and parse the JSON on its second content line; use the returned IDs in the voice events explained above, without retyping them.",
-                "Completed transcript context may arrive later.",
-              ].join("\n"),
-              llmRequestPolicy: { behaviour: "after-current-request" },
+              activation: dial.activation,
+              delegationId,
+              metadataOffset: metadata.offset,
             },
           });
           if (this.#dial === dial) {
             this.#sendControl(dial, {
               type: "session.thinking.append",
               delegation_id: delegationId,
-              content: "The request was handed to the backend; the conversation may continue.",
+              content: "The request was recorded for the backend; the conversation may continue.",
             });
           }
         } catch (error) {
@@ -1922,6 +2067,64 @@ export class VoiceAgentProcessor extends StreamProcessor<
         }
       }),
     );
+  }
+
+  #delegationMetadata(dial: Dial, delegationId: string): AgentEventInput {
+    return {
+      type: "events.iterate.com/agents/context-added",
+      idempotencyKey: this.idempotencyKey(`agent-delegation:${dial.dialId}:${delegationId}`),
+      payload: {
+        role: "developer",
+        content: [
+          "Voice delegation metadata (platform context, not user speech):",
+          JSON.stringify({ activation: dial.activation, delegationId }),
+          "Handle the request in the conversation transcript for this client delegation. To reply, read this metadata event at its @offset and parse the JSON on its second content line; use the returned IDs in the voice events explained above, without retyping them.",
+          "Completed transcript context may arrive later.",
+        ].join("\n"),
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+      },
+    };
+  }
+
+  #flushPendingDelegations(
+    pendingDelegations: VoiceState["pendingDelegations"],
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+  ): void {
+    for (const pending of pendingDelegations) {
+      if (this.#scheduledPendingDelegationOffsets.has(pending.metadataOffset)) continue;
+      this.#scheduledPendingDelegationOffsets.add(pending.metadataOffset);
+      this.runInBackground(async () => {
+        try {
+          await this.#appendAgentContext(async () => {
+            /* A queued duplicate can outlive the marker that retired it. */
+            if (!this.#scheduledPendingDelegationOffsets.has(pending.metadataOffset)) return;
+            await this.stream.append({
+              type: "events.iterate.com/agents/context-added",
+              idempotencyKey: this.idempotencyKey(
+                `agent-delegation-trigger:${pending.metadataOffset}`,
+              ),
+              payload: {
+                role: "developer",
+                content: [
+                  "Resolve the pending voice delegation described by the passive metadata context at the offset below.",
+                  JSON.stringify({ metadataOffset: pending.metadataOffset }),
+                  "Read that context event, parse its second content line as JSON, then use its activation and delegationId for voice updates.",
+                ].join("\n"),
+                llmRequestPolicy: { behaviour: "after-current-request" },
+              },
+            });
+            await append({
+              type: "events.iterate.com/voice-agent/delegation-triggered",
+              idempotencyKey: this.idempotencyKey(`delegation-triggered:${pending.metadataOffset}`),
+              payload: { metadataOffset: pending.metadataOffset },
+            });
+          });
+        } catch (error) {
+          this.#scheduledPendingDelegationOffsets.delete(pending.metadataOffset);
+          throw error;
+        }
+      });
+    }
   }
 
   #transcriptSnapshots(dial: Dial, delegationId: string): AgentEventInput[] {
@@ -2124,15 +2327,17 @@ async function setupVoiceAgent(
     );
   }
 
-  await assertVoiceProviderSecret(project);
+  const activation = options.activation ? Activation.parse(options.activation) : null;
 
-  /* The Agent and voice facet have independent durable setup paths. Start both
-   * after credential preflight, then wait for both: callers receive a ready
-   * voice facet only once its backend protocol and model are also durable. */
+  /* Start credential validation immediately, then let the voice facet prepare
+   * in parallel. Agent creation remains behind the validation: a caller still
+   * receives success only once credentials, backend protocol, and voice facet
+   * are all durable. */
   const setupId = crypto.randomUUID();
   const agentReady = (async () => {
     const agent = project.agents.get(streamPath);
     try {
+      await assertVoiceProviderSecret(project);
       disposeRpcStub(await agent.create(), "setup agent create result");
       disposeRpcStub(
         await agent.append(...agentSetupEvents(streamPath, setupId), {
@@ -2142,6 +2347,39 @@ async function setupVoiceAgent(
         }),
         "setup agent append result",
       );
+      const stream = project.streams.get(streamPath);
+      try {
+        disposeRpcStub(
+          await stream.append({
+            type: "events.iterate.com/voice-agent/backend-ready",
+            idempotencyKey: `voice-agent/backend-ready:${streamPath}`,
+            payload: {},
+          }),
+          "setup backend ready append result",
+        );
+      } finally {
+        disposeRpcStub(stream, "setup backend ready stream");
+      }
+    } catch (error) {
+      if (activation) {
+        const stream = project.streams.get(streamPath);
+        try {
+          disposeRpcStub(
+            await stream.append({
+              type: "events.iterate.com/voice-agent/conversation-ended",
+              idempotencyKey: `voice-agent/backend-start-failed:${activation}`,
+              payload: {
+                activation,
+                reason: `the voice backend could not be started: ${String(error).slice(0, 200)}`,
+              },
+            }),
+            "setup backend failure terminal append result",
+          );
+        } finally {
+          disposeRpcStub(stream, "setup backend failure terminal stream");
+        }
+      }
+      throw error;
     } finally {
       disposeRpcStub(agent, "setup agent");
     }
@@ -2154,7 +2392,12 @@ async function setupVoiceAgent(
        * key with nothing but the stream path in it. The configuration is an
        * ordinary event, keyed per SETUP RUN so every run applies.
        */
-      const { streamPath: _streamPath, reinstall: _reinstall, ...configPayload } = options;
+      const {
+        streamPath: _streamPath,
+        activation: _activation,
+        reinstall: _reinstall,
+        ...configPayload
+      } = options;
       const subscriptionPayload = {
         name: VoiceAgentContract.slug,
         description: "Wake the voice-agent facet in this stream's own Durable Object.",
@@ -2181,6 +2424,25 @@ async function setupVoiceAgent(
           idempotencyKey: `voice-agent/configured:${streamPath}:setup:${setupId}`,
           payload: configPayload,
         },
+        ...(activation
+          ? [
+              {
+                type: "events.iterate.com/voice-agent/call-started" as const,
+                /*
+                 * Setup retries must describe the same durable call. The
+                 * device activation is already a 128-bit opaque identifier,
+                 * so it is enough to make the internal conversation name
+                 * deterministic without another read-before-write round trip.
+                 */
+                idempotencyKey: `voice-agent/call:${activation}`,
+                payload: {
+                  activation,
+                  conversationId: `conv_${activation}`,
+                  streamPath,
+                },
+              },
+            ]
+          : []),
         {
           type: "events.iterate.com/stream/subscription-configured",
           idempotencyKey: options.reinstall

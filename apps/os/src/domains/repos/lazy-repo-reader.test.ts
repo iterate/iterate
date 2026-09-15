@@ -31,7 +31,7 @@ const sqlite = createRequire(import.meta.url)("node:sqlite") as {
  * `failOn` to make the Nth statement matching a fragment throw mid-transaction
  * — rollback behavior is then observable, not assumed.
  */
-function nodeStorage() {
+function nodeStorage(maxSqlVariables = Number.POSITIVE_INFINITY) {
   const db = new sqlite.DatabaseSync(":memory:");
   const fault = { armed: null as null | { fragment: string; remaining: number } };
   return {
@@ -40,6 +40,11 @@ function nodeStorage() {
     },
     sql: {
       exec: (query: string, ...bindings: unknown[]) => {
+        if (bindings.length > maxSqlVariables) {
+          throw new Error(
+            `SQLite statement bound ${bindings.length} variables; limit is ${maxSqlVariables}`,
+          );
+        }
         if (fault.armed !== null && query.includes(fault.armed.fragment)) {
           fault.armed.remaining -= 1;
           if (fault.armed.remaining <= 0) {
@@ -432,6 +437,58 @@ describe("lifecycle", () => {
     const total = store.manifestByteSize("main");
     expect(total).toBeGreaterThan(700 * 1024);
     expect(total).toBeLessThan(701 * 1024 + 100);
+  });
+});
+
+describe("SQLite variable limit", () => {
+  const manifestFiles = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      blobOid: `blob-${index}`,
+      mode: "100644",
+      path: `src/${index}.ts`,
+    }));
+
+  test("reads 100 manifest paths without binding more than Durable Object SQLite allows", () => {
+    const storage = nodeStorage(100);
+    const store = sqliteGitObjectStore(storage);
+    const files = manifestFiles(100);
+    store.installSnapshot("main", {
+      commitOid: "commit",
+      dirs: [],
+      removes: [],
+      rootTreeOid: "tree",
+      upserts: files,
+    });
+
+    expect(
+      store.manifestEntries(
+        "main",
+        files.map((file) => file.path),
+      ),
+    ).toEqual(files);
+  });
+
+  test("removes 101 manifest paths without exceeding Durable Object SQLite's variable limit", () => {
+    const storage = nodeStorage(100);
+    const store = sqliteGitObjectStore(storage);
+    const files = manifestFiles(101);
+    store.installSnapshot("main", {
+      commitOid: "first-commit",
+      dirs: [],
+      removes: [],
+      rootTreeOid: "first-tree",
+      upserts: files,
+    });
+
+    store.installSnapshot("main", {
+      commitOid: "second-commit",
+      dirs: [],
+      removes: files.map((file) => file.path),
+      rootTreeOid: "second-tree",
+      upserts: [],
+    });
+
+    expect(store.manifest("main")).toEqual([]);
   });
 });
 

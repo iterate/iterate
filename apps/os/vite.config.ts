@@ -69,8 +69,12 @@ export default defineConfig({
     ],
   },
   build: {
+    // Vite leaves SSR unminified by default; every fresh DO loads this worker.
+    minify: "oxc",
     rollupOptions: {
       output: {
+        // RPC telemetry names targets by their constructor, including in previews.
+        keepNames: true,
         chunkFileNames: safeRollupChunkFileName,
       },
     },

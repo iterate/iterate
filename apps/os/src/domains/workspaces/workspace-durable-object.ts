@@ -12,6 +12,7 @@ import {
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { resolveStreamStub } from "../streams/hosted-stream-routing.ts";
 import { isUnconfiguredSubscriptionError } from "../streams/utils.ts";
 import type {
   EditWorkspaceFileInput,
@@ -137,12 +138,14 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
 
   /** The facet-hosted workspace processor's read surface on the stream. */
   async #processorFacade(): Promise<WorkspaceProcessorFacade> {
-    return (await this.env.STREAM.getByName(
-      DurableObjectNameCodec.stringify({
+    return (await resolveStreamStub({
+      deploymentEnv: this.env.DEPLOYMENT_ENV,
+      getByName: this.env.STREAM.getByName.bind(this.env.STREAM),
+      logicalName: DurableObjectNameCodec.stringify({
         path: this.#name.path,
         projectId: this.#name.projectId,
       }),
-    ).processorFacade({
+    }).processorFacade({
       name: PROCESSOR_SLUG,
       // The Stream DO's facade forwards to the facet registered for this
       // path family; both /workspaces/** and /agents/** register the workspace

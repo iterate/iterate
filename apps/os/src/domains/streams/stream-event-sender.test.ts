@@ -103,6 +103,8 @@ function harness(args: {
   /** Share durable cursor rows with an earlier sender: the post-eviction rebuild. */
   store?: SqliteSubscriptionCursorStore;
   facetWorkArmedAtMs?: () => number | null;
+  awaitAlarmWrite?: () => Promise<void>;
+  subscriberPagerConnectionKeys?: () => ReadonlySet<string>;
   /** Reduced halt record, as folded from a committed subscription-delivery-halted event. */
   deliveryHalted?: NonNullable<
     CoreProcessorState["subscriptions"]["outbound"]["byName"][string]["deliveryHalted"]
@@ -140,6 +142,7 @@ function harness(args: {
   const alarms: number[] = [];
   const alarmClears: number[] = [];
   const kept: Promise<unknown>[] = [];
+  let durableRuns = 0;
   const appendedDeliveryEvents: StreamEventInput[] = [];
   const wakeCalls: Parameters<SubscriptionReceiverCalls["wakeStreamProcessor"]>[] = [];
   const receiverCalls: SubscriptionReceiverCalls = {
@@ -174,10 +177,15 @@ function harness(args: {
       now: () => now,
       random: () => 0.5,
       armAlarm: (atMs) => alarms.push(atMs),
+      awaitAlarmWrite: args.awaitAlarmWrite,
       clearAlarm: () => alarmClears.push(now),
-      runDurable: (work) => kept.push(work()),
+      runDurable: (work) => {
+        durableRuns += 1;
+        kept.push(work());
+      },
       keepAlive: (promise) => kept.push(promise),
-      subscriberPagerConnectionKeys: () => new Set<string>(),
+      subscriberPagerConnectionKeys:
+        args.subscriberPagerConnectionKeys || (() => new Set<string>()),
       onSessionsIdleClosed: () => undefined,
       pageDormantSubscribers: () => undefined,
     },
@@ -197,6 +205,9 @@ function harness(args: {
     wakeCalls,
     alarms,
     alarmClears,
+    get durableRuns() {
+      return durableRuns;
+    },
     appendedDeliveryEvents,
     state,
     store,
@@ -209,6 +220,89 @@ function harness(args: {
 }
 
 describe("StreamEventSender hosted processor delivery", () => {
+  it("does not expose a hosted wake before its parent alarm write settles", async () => {
+    const arm = Promise.withResolvers<void>();
+    const wake = vi.fn(async () => ({
+      streamId: SOURCE_STREAM_ID,
+      checkpointOffset: 0,
+      processEventBatch: retainedProcessEventBatch(() => undefined),
+    }));
+    const h = harness({
+      events: [event(2, "a", { keep: true })],
+      awaitAlarmWrite: () => arm.promise,
+      wakeProcessor: wake,
+    });
+
+    h.eventSender.sendDue();
+    await Promise.resolve();
+    expect(wake).not.toHaveBeenCalled();
+
+    arm.resolve();
+    await h.settle();
+    expect(wake).toHaveBeenCalledOnce();
+  });
+
+  it("defers quiet idle teardown while the pre-wake alarm write is held", async () => {
+    const alarmWrite = Promise.withResolvers<void>();
+    const h = harness({
+      events: [event(2, "a", { keep: true })],
+      awaitAlarmWrite: () => alarmWrite.promise,
+      subscriberPagerConnectionKeys: () => new Set(["quiet"]),
+      wakeProcessor: async () => ({
+        streamId: SOURCE_STREAM_ID,
+        checkpointOffset: 0,
+        processEventBatch: retainedProcessEventBatch(() => undefined),
+      }),
+    });
+    h.eventSender.connections.openSession({
+      connectionKey: "quiet",
+      processEventBatch: () => undefined,
+    });
+    h.alarms.length = 0;
+
+    h.eventSender.sendDue();
+    await Promise.resolve();
+    expect(h.alarms).toContain(31_000);
+    expect(h.alarms).not.toContain(15_000);
+    expect(h.wakeCalls).toHaveLength(0);
+    expect(h.eventSender.connections.runIdleTeardownNow()).toEqual([]);
+
+    alarmWrite.resolve();
+    await h.settle();
+    expect(h.alarms).toContain(15_000);
+    expect(h.wakeCalls).toHaveLength(1);
+  });
+
+  it("releases quiet idle teardown when the held pre-wake call fails", async () => {
+    const alarmWrite = Promise.withResolvers<void>();
+    const h = harness({
+      events: [event(2, "a", { keep: true })],
+      awaitAlarmWrite: () => alarmWrite.promise,
+      subscriberPagerConnectionKeys: () => new Set(["quiet"]),
+      wakeProcessor: async () => {
+        throw new Error("wake failed");
+      },
+    });
+    h.eventSender.connections.openSession({
+      connectionKey: "quiet",
+      processEventBatch: () => undefined,
+    });
+    h.alarms.length = 0;
+
+    h.eventSender.sendDue();
+    await Promise.resolve();
+    expect(h.alarms).toContain(31_000);
+    expect(h.alarms).not.toContain(15_000);
+    expect(h.wakeCalls).toHaveLength(0);
+    expect(h.eventSender.connections.runIdleTeardownNow()).toEqual([]);
+
+    alarmWrite.resolve();
+    await h.settle();
+    expect(h.alarms).toContain(15_000);
+    expect(h.wakeCalls).toHaveLength(1);
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({ attempt: 1, nextAttemptAt: 11_000 });
+  });
+
   it("replaces a hosted callback by clearing its matching watchdog and immediately redelivering", async () => {
     const deliveries: DeliveryCall[] = [];
     const disposals = [vi.fn(), vi.fn()];
@@ -698,6 +792,151 @@ describe("StreamEventSender hosted processor delivery", () => {
 });
 
 describe("StreamEventSender stream delivery", () => {
+  it("skips an ephemeral-only PostHog suffix before scheduling source-owned delivery", async () => {
+    const events: StreamEvent[] = [
+      { ...event(2, "events.iterate.com/voice-agent/mic-frame", { pcm: "AQI=" }), ephemeral: true },
+    ];
+    const batches: StreamDeliveryBatch[] = [];
+    const h = harness({
+      events,
+      configuration: {
+        name: PROCESSOR_KEY,
+        description: "Iterate's first-party durable-event PostHog feed",
+        receiver: {
+          action: "itx-call",
+          expression: ["integrations", "posthog", "processEventBatch"],
+          delivery: { start: "beginning", onFailingEvent: "halt" },
+        },
+      },
+      deliverToItx: async (_expression, batch) => {
+        batches.push(batch);
+      },
+      wakeProcessor: async () => {
+        throw new Error("a PostHog ITX receiver must not wake a hosted processor");
+      },
+    });
+    // The project worker already consumed all durable history. A lone live
+    // microphone frame is the only new suffix.
+    h.store.ack(PROCESSOR_KEY, 1);
+    expect(h.store.get(PROCESSOR_KEY)?.confirmedOffset).toBe(1);
+
+    h.eventSender.sendDue([{ event: events[0]!, byteLength: JSON.stringify(events[0]).length }]);
+    await h.settle();
+
+    expect(h.durableRuns).toBe(0);
+    expect(h.alarms).toEqual([]);
+    expect(h.store.get(PROCESSOR_KEY)?.confirmedOffset).toBe(2);
+    expect(batches).toEqual([]);
+
+    events.push(event(3, "events.iterate.com/voice-agent/utterance-transcript", { text: "hello" }));
+    h.state.maxOffset = 3;
+    h.eventSender.sendDue([{ event: events[1]!, byteLength: JSON.stringify(events[1]).length }]);
+    await h.settle();
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]!.events.map(({ offset }) => offset)).toEqual([3]);
+    expect(h.store.get(PROCESSOR_KEY)?.confirmedOffset).toBe(3);
+  });
+
+  it("does not skip a live suffix hiding an older durable backlog", async () => {
+    const events: StreamEvent[] = [
+      event(2, "events.iterate.com/voice-agent/utterance-transcript", { text: "durable" }),
+      { ...event(3, "events.iterate.com/voice-agent/mic-frame", { pcm: "AQI=" }), ephemeral: true },
+    ];
+    const batches: StreamDeliveryBatch[] = [];
+    const h = harness({
+      events,
+      configuration: {
+        name: PROCESSOR_KEY,
+        receiver: {
+          action: "itx-call",
+          expression: ["integrations", "posthog", "processEventBatch"],
+          delivery: { start: "beginning", onFailingEvent: "halt" },
+        },
+      },
+      deliverToItx: async (_expression, batch) => {
+        batches.push(batch);
+      },
+      wakeProcessor: async () => {
+        throw new Error("a PostHog ITX receiver must not wake a hosted processor");
+      },
+    });
+    h.store.ack(PROCESSOR_KEY, 1);
+
+    // A cursor rewind or old durable backlog makes this live append non-contiguous.
+    h.eventSender.sendDue([{ event: events[1]!, byteLength: JSON.stringify(events[1]).length }]);
+    await h.settle();
+
+    expect(h.durableRuns).toBe(1);
+    expect(batches[0]!.events.map(({ offset }) => offset)).toEqual([2]);
+    expect(h.store.get(PROCESSOR_KEY)?.confirmedOffset).toBe(3);
+  });
+
+  it("does not skip a mixed just-committed batch", async () => {
+    const events: StreamEvent[] = [
+      { ...event(2, "events.iterate.com/voice-agent/mic-frame", { pcm: "AQI=" }), ephemeral: true },
+      event(3, "events.iterate.com/voice-agent/utterance-transcript", { text: "durable" }),
+    ];
+    const batches: StreamDeliveryBatch[] = [];
+    const h = harness({
+      events,
+      configuration: {
+        name: PROCESSOR_KEY,
+        receiver: {
+          action: "itx-call",
+          expression: ["integrations", "posthog", "processEventBatch"],
+          delivery: { start: "beginning", onFailingEvent: "halt" },
+        },
+      },
+      deliverToItx: async (_expression, batch) => {
+        batches.push(batch);
+      },
+      wakeProcessor: async () => {
+        throw new Error("a PostHog ITX receiver must not wake a hosted processor");
+      },
+    });
+    h.store.ack(PROCESSOR_KEY, 1);
+
+    h.eventSender.sendDue(
+      events.map((entry) => ({ event: entry, byteLength: JSON.stringify(entry).length })),
+    );
+    await h.settle();
+
+    expect(h.durableRuns).toBe(1);
+    expect(batches[0]!.events.map(({ offset }) => offset)).toEqual([3]);
+    expect(h.store.get(PROCESSOR_KEY)?.confirmedOffset).toBe(3);
+  });
+
+  it("skips a complete long live-only suffix without durable delivery", async () => {
+    const events: StreamEvent[] = Array.from({ length: 1_000 }, (_, index) => ({
+      ...event(index + 2, "events.iterate.com/voice-agent/mic-frame", { pcm: "AQI=" }),
+      ephemeral: true as const,
+    }));
+    const h = harness({
+      events,
+      configuration: {
+        name: PROCESSOR_KEY,
+        receiver: {
+          action: "itx-call",
+          expression: ["integrations", "posthog", "processEventBatch"],
+          delivery: { start: "beginning", onFailingEvent: "halt" },
+        },
+      },
+      wakeProcessor: async () => {
+        throw new Error("a PostHog ITX receiver must not wake a hosted processor");
+      },
+    });
+    h.store.ack(PROCESSOR_KEY, 1);
+
+    h.eventSender.sendDue(
+      events.map((entry) => ({ event: entry, byteLength: JSON.stringify(entry).length })),
+    );
+    await h.settle();
+
+    expect(h.durableRuns).toBe(0);
+    expect(h.store.get(PROCESSOR_KEY)?.confirmedOffset).toBe(1_001);
+  });
+
   it("pins the next read to one event after a batch failure so a poison event cannot strand its healthy prefix", async () => {
     const attemptedOffsets: number[][] = [];
     const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => {
@@ -2308,6 +2547,7 @@ function connectionsHarness(
     subscriberPagerConnectionKeys?: () => ReadonlySet<string>;
     onSessionsIdleClosed?: (connectionKeys: readonly string[]) => void;
     facetWorkArmedAtMs?: () => number | null;
+    awaitAlarmWrite?: () => Promise<void>;
     readBatch?: ConstructorParameters<typeof StreamConnections>[0]["hooks"]["readBatch"];
     onAppend?: (args: {
       connections: StreamConnections;
@@ -2367,6 +2607,7 @@ function connectionsHarness(
       runtimeChanged: () => undefined,
       now: () => now,
       armAlarm: (atMs) => alarmTimes.push(atMs),
+      awaitAlarmWrite: options.awaitAlarmWrite,
       keepAlive: () => undefined,
       subscriberPagerConnectionKeys:
         options.subscriberPagerConnectionKeys ?? (() => new Set<string>()),
@@ -2381,6 +2622,7 @@ function connectionsHarness(
         candidate.connectionGeneration === expectedDelivery.connectionGeneration,
       onHostedDeliveryFailure: deliveryFailures,
       sendDueSubscriptions: durableDeliveryWakes,
+      hasHostedWakeInFlight: () => false,
     },
   });
   return {
@@ -2489,8 +2731,16 @@ describe("ephemeral delivery to hosted processors", () => {
       wakeProcessor: wakeReturning(calls, consumes),
     });
     h.eventSender.sendDue();
+    for (let attempt = 0; calls.length === 0 && attempt < 10; attempt += 1) {
+      await Promise.resolve();
+    }
+    const delivered = typesDelivered(calls);
+    // These contract tests deliberately do not model an acknowledgement. Close
+    // their real retained callback so the memory watchdog is cancelled instead
+    // of leaving a live 20-second timer behind in the test worker.
+    h.eventSender.connections.close(PROCESSOR_KEY, "replaced");
     await h.settle();
-    return typesDelivered(calls);
+    return delivered;
   };
 
   it("delivers an ephemeral event whose type the processor named", async () => {
@@ -2537,6 +2787,33 @@ describe("ephemeral delivery to hosted processors", () => {
 });
 
 describe("StreamConnections hosted delivery watchdog", () => {
+  it("defers idle teardown until the initial hosted greeting settles", () => {
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({ events: [] });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+
+    // Publication comes before the wake path starts its first scan. The
+    // pre-wake watchdog owns recovery in this gap, so it must not also queue
+    // a five-second idle teardown write.
+    expect(h.alarmTimes).toEqual([]);
+
+    connection.sendQueued();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.batch.events).toEqual([]);
+    expect(h.alarmTimes).toEqual([1_000 + DEFAULT_DELIVERY_TIMEOUT_MS]);
+
+    // An eventless greeting still clears the initial reservation. Once its
+    // durable acknowledgement settles, normal idle eligibility returns.
+    calls[0]!.report("ok");
+    h.connections.armOrClearIdleAlarm();
+    expect(h.alarmTimes.at(-1)).toBe(1_000 + 5_000);
+  });
+
   it("does not publish a hosted callback until its opened event finishes appending", () => {
     const calls: DeliveryCall[] = [];
     const h = connectionsHarness({
@@ -3149,15 +3426,129 @@ describe("StreamConnections hosted delivery watchdog", () => {
       processEventBatch: recordingProcessEventBatch(calls, () => undefined),
       replayAfterOffset: 0,
     });
+    const alarmCountBeforePcm = h.alarmTimes.length;
     connection.sendQueued();
     expect(calls).toHaveLength(1);
     expect(calls[0]!.batch.events).toHaveLength(2);
-    /* No mark: the row never learned a batch was in flight. */
+    /* No durable marker or additional alarm: PCM stays on memory only. */
     expect(h.store.get("processor")?.inFlightDeadlineAt ?? null).toBeNull();
+    expect(h.alarmTimes).toHaveLength(alarmCountBeforePcm);
     calls[0]!.report("ok");
     await flushMicrotasks();
     /* And the lane keeps moving: the ack dispatched the next scan. */
     expect(h.store.get("processor")?.inFlightDeadlineAt ?? null).toBeNull();
+  });
+
+  it("times out an unacknowledged final ephemeral batch without a native alarm", async () => {
+    vi.useFakeTimers();
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({ events: [{ ...streamEvent(1), ephemeral: true as const }] });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    try {
+      const alarmCountBeforePcm = h.alarmTimes.length;
+      connection.sendQueued();
+      expect(calls).toHaveLength(1);
+      expect(h.alarmTimes).toHaveLength(alarmCountBeforePcm);
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_DELIVERY_TIMEOUT_MS);
+      expect(h.deliveryFailures).toHaveBeenCalledOnce();
+      expect(h.connections.has("processor")).toBe(false);
+      // A late acknowledgement belongs to the closed generation and cannot
+      // create a second failure or revive this connection.
+      calls[0]!.report("ok");
+      expect(h.deliveryFailures).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels an acknowledged ephemeral watchdog before its deadline", async () => {
+    vi.useFakeTimers();
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({ events: [{ ...streamEvent(1), ephemeral: true as const }] });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    try {
+      connection.sendQueued();
+      expect(calls).toHaveLength(1);
+      calls[0]!.report("ok");
+
+      // The acknowledgement synchronously cancels its own timer. Any later
+      // empty catch-up scan has a new deadline, so reaching this deadline
+      // cannot report the completed batch as hung.
+      await vi.advanceTimersByTimeAsync(DEFAULT_DELIVERY_TIMEOUT_MS);
+      expect(h.deliveryFailures).not.toHaveBeenCalled();
+      expect(h.connections.has("processor")).toBe(true);
+    } finally {
+      h.connections.close("processor", "replaced");
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels an ephemeral watchdog when its connection is replaced", async () => {
+    vi.useFakeTimers();
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({ events: [{ ...streamEvent(1), ephemeral: true as const }] });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    try {
+      connection.sendQueued();
+      expect(calls).toHaveLength(1);
+      h.connections.close("processor", "replaced");
+      await vi.advanceTimersByTimeAsync(DEFAULT_DELIVERY_TIMEOUT_MS);
+      expect(h.deliveryFailures).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not dispatch through a connection closed while an insured alarm waits", async () => {
+    vi.useFakeTimers();
+    const alarm = Promise.withResolvers<void>();
+    const calls: DeliveryCall[] = [];
+    const events = [{ ...streamEvent(1), ephemeral: true as const }, streamEvent(2)];
+    const h = connectionsHarness({
+      events,
+      awaitAlarmWrite: () => alarm.promise,
+      readBatch: (afterOffset, _beforeOffset, limit) =>
+        events
+          .filter((event) => event.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+    });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    try {
+      connection.sendQueued();
+      expect(calls).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_DELIVERY_TIMEOUT_MS);
+      await flushMicrotasks();
+      expect(h.connections.has("processor")).toBe(false);
+
+      alarm.resolve();
+      await flushMicrotasks();
+      expect(calls).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the insurance for a durable batch", () => {
@@ -3225,15 +3616,19 @@ describe("StreamConnections hosted delivery watchdog", () => {
 
   it("defers idle teardown while a facet holds work, and runs it after", () => {
     let facetWork: number | null = 60_000;
-    const h = connectionsHarness({ facetWorkArmedAtMs: () => facetWork });
+    const h = connectionsHarness({ events: [], facetWorkArmedAtMs: () => facetWork });
     const calls: DeliveryCall[] = [];
-    h.connections.openHosted({
+    const connection = h.connections.openHosted({
       connectionKey: "processor",
       expectedHostedDelivery: h.expectedDelivery,
       processEventBatch: recordingProcessEventBatch(calls, () => undefined),
       replayAfterOffset: 0,
     });
-    calls[0]?.report("ok");
+    // Production wakes always start the initial greeting after publishing the
+    // callback. Settle it before exercising idle lifecycle behavior.
+    connection.sendQueued();
+    expect(calls).toHaveLength(1);
+    calls[0]!.report("ok");
     /* The alarm lands while the facet is mid-call: stand down. */
     expect(h.connections.runIdleTeardownNow()).toEqual([]);
     /* The facet settled and disarmed: the next firing tears down as before. */
@@ -3691,12 +4086,17 @@ describe("StreamConnections hosted delivery watchdog", () => {
     });
     const disposed = vi.fn();
     h.store.ack("processor", 3);
-    h.connections.openHosted({
+    const calls: DeliveryCall[] = [];
+    const connection = h.connections.openHosted({
       connectionKey: "processor",
       expectedHostedDelivery: h.expectedDelivery,
-      processEventBatch: recordingProcessEventBatch([], disposed),
+      processEventBatch: recordingProcessEventBatch(calls, disposed),
       replayAfterOffset: 3,
     });
+    // The wake owner sends and settles the required eventless greeting before
+    // a quiet connection becomes eligible for idle teardown.
+    connection.sendQueued();
+    calls[0]!.report("ok");
 
     expect(h.connections.runIdleTeardownNow()).toEqual(["processor"]);
 

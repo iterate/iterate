@@ -39,6 +39,7 @@ import { parseConfig } from "../config.ts";
 import { workerVersion, type Env } from "../env.ts";
 import { itxForScope, StreamRpcTarget } from "../rpc-targets.ts";
 import { readProjectById } from "../project-directory.ts";
+import { resolveStreamStub } from "./streams/hosted-stream-routing.ts";
 import { aiGatewayMetadata } from "./agents/ai-gateway-metadata.ts";
 import { facetProcessorFamilyForPath } from "./processor-facet-families.ts";
 import { projectStub } from "./projects/egress.ts";
@@ -163,7 +164,11 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
     // Rpc-mapped signatures don't match plain method declarations, and
     // keeping the full stub type here would deep-instantiate the Stream DO's
     // surface through this facet's fields.
-    return this.env.STREAM.getByName(identity.parentName) as unknown as ParentStreamStub;
+    return resolveStreamStub({
+      deploymentEnv: this.env.DEPLOYMENT_ENV,
+      getByName: this.env.STREAM.getByName.bind(this.env.STREAM),
+      logicalName: identity.parentName,
+    }) as unknown as ParentStreamStub;
   }
 
   protected createHost(identity: ProcessorFacetIdentity): ProcessorFacetHost {

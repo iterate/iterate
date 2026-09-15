@@ -355,6 +355,9 @@ type StreamEventSenderHooks = {
   }): SizedStreamEvent[];
   /** Current core reduced state, read in the same synchronous block as each delivery. */
   coreState(): CoreProcessorState;
+  /** Hosted stream alarms are parent RPCs. Await a requested durable arm before
+   * an outbound receiver can observe the work; native output gates need no-op. */
+  awaitAlarmWrite?(): Promise<void>;
   /** Durable cursor rows in SQLite next to the event log. */
   store: SubscriptionCursorStore;
   /** Concrete calls to the configured receiver (see {@link SubscriptionReceiverCalls}). */
@@ -492,6 +495,7 @@ export class StreamEventSender {
           this.#deliveryStillMatches(name, expectedDelivery),
         onHostedDeliveryFailure: (name, error) => this.#onDeliveryFailure(name, error),
         sendDueSubscriptions: () => this.sendDue(),
+        hasHostedWakeInFlight: () => this.#hostedWakesInFlight.size > 0,
         reconcileAlarm: () => this.reconcileAlarmAfterSettlement(),
       },
     });
@@ -717,6 +721,25 @@ export class StreamEventSender {
       if (row.confirmedOffset >= state.maxOffset) continue; // caught up; nothing to send
 
       if (this.#sourceOwnedSendsInFlight.has(name)) continue;
+
+      /* A post-commit send can see a complete live-only suffix without
+       * scheduling source-owned durable work. The handoff is valid only when
+       * its exact first offset follows this cursor and its tail is the current
+       * head; otherwise the normal delivery loop owns reads, filtering,
+       * retries, and replacement checks. */
+      const suffix = this.#justCommittedEvents;
+      if (
+        suffix.length > 0 &&
+        suffix[0]!.event.offset === row.confirmedOffset + 1 &&
+        suffix.at(-1)!.event.offset === state.maxOffset &&
+        suffix.every((entry) => entry.event.ephemeral === true)
+      ) {
+        this.#hooks.store.ack(name, state.maxOffset, {
+          cursorChangedAtOffset: row.cursorChangedAtOffset,
+          preserveFailingEventSkips: true,
+        });
+        continue;
+      }
       this.#sendPendingSourceOwnedEvents(name);
     }
   }
@@ -760,6 +783,8 @@ export class StreamEventSender {
         // the request until the future wake is durable; arming only after the
         // call started leaves a kill/deploy window that can strand the row.
         this.#armInFlightWatchdog();
+        const awaitAlarmWrite = this.#hooks.awaitAlarmWrite;
+        if (awaitAlarmWrite) await awaitAlarmWrite();
         // A wake call that outlives its timeout still eventually settles with a
         // RETAINED processEventBatch; dropping that undisposed would leak a session-pinning
         // callback on exactly the wedged-connection occasions the timeout exists
@@ -1070,6 +1095,8 @@ export class StreamEventSender {
           // Same ordering as hosted wake: the durable retry must commit
           // before any remote receiver can observe this attempt.
           this.#armInFlightWatchdog();
+          const awaitAlarmWrite = this.#hooks.awaitAlarmWrite;
+          if (awaitAlarmWrite) await awaitAlarmWrite();
           try {
             if (receiver.action === "webhook-post") {
               if (state.projectId === null) return; // unreachable: rejected at append (egress attribution)
@@ -1836,6 +1863,13 @@ type StreamConnection = {
   close(reason: ConnectionCloseReason, error?: string): void;
 };
 
+type HostedInFlightBatch = {
+  deadlineAtMs: number;
+  insured: boolean;
+  startedAtMs: number;
+  uninsuredTimer?: ReturnType<typeof setTimeout>;
+};
+
 /**
  * Apply a session connection's per-batch delivery ceilings. Count first,
  * then cumulative bytes; the first event always survives so one event
@@ -1893,6 +1927,7 @@ type StreamConnectionsHooks = Pick<
   | "runtimeChanged"
   | "now"
   | "armAlarm"
+  | "awaitAlarmWrite"
   | "keepAlive"
   | "subscriberPagerConnectionKeys"
   | "onSessionsIdleClosed"
@@ -1905,6 +1940,7 @@ type StreamConnectionsHooks = Pick<
   ): boolean;
   onHostedDeliveryFailure(connectionKey: string, error: unknown): void;
   sendDueSubscriptions(): void;
+  hasHostedWakeInFlight(): boolean;
   /** Recompute (and possibly clear) the alarm after a hosted batch settles. */
   reconcileAlarm(): void;
 };
@@ -2029,6 +2065,7 @@ export class StreamConnections {
   }
 
   rearmIdleAlarm(): void {
+    if (this.#hooks.hasHostedWakeInFlight()) return;
     if (this.#idleTeardownAtMs !== null) this.#hooks.armAlarm(this.#idleTeardownAtMs);
   }
 
@@ -2241,6 +2278,12 @@ export class StreamConnections {
     // remainder still looks idle-eligible with stale activity; arming from
     // that nested turn issues one pointless immediate wake per teardown.
     if (this.#tearingDown) return;
+    // Idle cleanup would queue behind the wake watchdog and ahead of its
+    // receiver while the callback is absent.
+    if (this.#hooks.hasHostedWakeInFlight()) {
+      this.#idleTeardownAtMs = null;
+      return;
+    }
     const eligible = this.#idleEligibleConnectionKeys();
     // Pending connections are excluded from both activity derivation and
     // teardown — their in-flight watchdog owns their future. Letting stale
@@ -2292,7 +2335,7 @@ export class StreamConnections {
     /* Level-triggered twin of the deferral in armOrClearIdleAlarm: an alarm
      * armed before the facet took up work can still land here while the work
      * runs. Re-derive the pushed-out deadline and stand down. */
-    if (this.#hooks.facetWorkArmedAtMs() !== null) {
+    if (this.#hooks.facetWorkArmedAtMs() !== null || this.#hooks.hasHostedWakeInFlight()) {
       this.armOrClearIdleAlarm();
       return [];
     }
@@ -2445,10 +2488,7 @@ export class StreamConnections {
      * row always names the OLDEST outstanding insured batch, so eviction
      * recovery starts from the first thing that might not have landed.
      */
-    const hostedInFlight = new Map<
-      symbol,
-      { startedAtMs: number; deadlineAtMs: number; insured: boolean }
-    >();
+    const hostedInFlight = new Map<symbol, HostedInFlightBatch>();
     /** The wake greeting's token while unacknowledged: it alone is single-flight. */
     let greetingToken: symbol | null = null;
     /** Start of the un-reported scan window; null once a batch reported it. */
@@ -2466,13 +2506,9 @@ export class StreamConnections {
 
     const sendQueuedBatches = async () => {
       /*
-       * THE UNINSURED BATCH'S WATCHDOG IS THIS CHECK. An all-ephemeral batch
-       * dispatches without the durable in-flight row, so nothing else notices
-       * if its ack never comes back from a facet that hung without dying (a
-       * dead one surfaces as rpc-broken on its own). This lane's next
-       * dispatch attempt — every append tries one — is the detector: past
-       * the deadline, fail the batch the way the durable watchdog would
-       * have, which closes and replaces the connection.
+       * A later append is a secondary deadline check. The primary check for
+       * an uninsured final PCM batch is its memory-only timeout, installed
+       * before the callback below; it needs no durable parent alarm write.
        */
       if (
         kind === "hosted" &&
@@ -2481,8 +2517,6 @@ export class StreamConnections {
       ) {
         const nowMs = this.#hooks.now();
         if ([...hostedInFlight.values()].some((flight) => nowMs > flight.deadlineAtMs)) {
-          hostedInFlight.clear();
-          greetingToken = null;
           this.onHostedDeliveryError(
             connectionKey,
             new Error(`hosted batch unacknowledged for ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`),
@@ -2659,9 +2693,9 @@ export class StreamConnections {
              * is either a run of ephemeral events or a single durable one, so
              * the check is the first event's flag; `every` keeps it honest.
              * The wake's first batch and every durable batch keep the full
-             * machinery. Liveness without the alarm: the wedge check at the
-             * top of this loop, plus rpc-broken detection when the isolate
-             * actually dies.
+             * machinery. An uninsured batch has a bounded in-memory timeout
+             * while this incarnation is alive; isolate death loses its body
+             * and surfaces through the retained callback transport.
              */
             const uninsuredEphemeral =
               events.length > 0
@@ -2673,11 +2707,35 @@ export class StreamConnections {
             const insuredAlreadyOutstanding = [...hostedInFlight.values()].some(
               (flight) => flight.insured,
             );
-            hostedInFlight.set(deliveryToken, {
+            const flight: HostedInFlightBatch = {
               startedAtMs: dispatchedAtMs,
               deadlineAtMs: batchDeadlineAtMs,
               insured,
-            });
+            };
+            hostedInFlight.set(deliveryToken, flight);
+            if (!insured) {
+              // Ephemeral bodies cannot survive an eviction, so retain only a
+              // bounded in-memory timeout. It preserves a final hung callback's
+              // terminal outcome without a parent alarm RPC per PCM batch.
+              // A live Durable Object remains active for its timer; see
+              // https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/.
+              const timer = setTimeout(() => {
+                if (hostedInFlight.get(deliveryToken) !== flight) return;
+                this.#hooks.keepAlive(
+                  Promise.resolve().then(() => {
+                    if (hostedInFlight.get(deliveryToken) !== flight) return;
+                    this.onHostedDeliveryError(
+                      connectionKey,
+                      new Error(
+                        `uninsured hosted batch acknowledgement timed out after ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`,
+                      ),
+                      expectedDelivery,
+                    );
+                  }),
+                );
+              }, DEFAULT_DELIVERY_TIMEOUT_MS);
+              flight.uninsuredTimer = timer;
+            }
             if (isInitialBatch) greetingToken = deliveryToken;
             if (insured && !insuredAlreadyOutstanding) {
               // This SQLite write and the native alarm are both issued before
@@ -2693,18 +2751,25 @@ export class StreamConnections {
                 cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
               });
             }
-            // Armed for BOTH kinds — for the uninsured it is the backstop
-            // that gets the wedge check a turn when no append ever comes,
-            // and it is free whenever any earlier alarm is already armed
-            // (armNoLaterThan skips the write).
-            this.#hooks.armAlarm(batchDeadlineAtMs);
+            if (insured) {
+              // This durable watchdog must commit before the receiver observes
+              // a recoverable batch. Uninsured PCM uses its bounded memory-only
+              // timeout above and never crosses the hosted parent alarm relay.
+              this.#hooks.armAlarm(batchDeadlineAtMs);
+              const awaitAlarmWrite = this.#hooks.awaitAlarmWrite;
+              if (awaitAlarmWrite) await awaitAlarmWrite();
+              if (!open) return;
+            }
             (processEventBatch as unknown as RetainedProcessEventBatch<StreamWakeEventBatch>)({
               ...batch,
               reportDeliveryResult: (deliveryResult) => {
                 // Each callback belongs to exactly one batch. Duplicate or
                 // late reports cannot complete a replacement connection or the
                 // next batch on this connection.
-                if (!hostedInFlight.delete(deliveryToken)) return;
+                const settledFlight = hostedInFlight.get(deliveryToken);
+                if (!settledFlight) return;
+                hostedInFlight.delete(deliveryToken);
+                clearTimeout(settledFlight.uninsuredTimer);
                 if (greetingToken === deliveryToken) greetingToken = null;
                 const parsed = parseWakeDeliveryResult(deliveryResult);
                 if (
@@ -2814,7 +2879,8 @@ export class StreamConnections {
       pingRtt: new LatencyRing(),
       sendQueued: () => void sendQueuedBatches(),
       isLive: () => open,
-      hasPendingDelivery: () => kind === "hosted" && hostedInFlight.size > 0,
+      hasPendingDelivery: () =>
+        kind === "hosted" && (initialBatchPending || hostedInFlight.size > 0),
       pendingDeliveryStartedAtMs: () =>
         [...hostedInFlight.values()].reduce<number | null>(
           (earliest, flight) =>
@@ -2830,6 +2896,9 @@ export class StreamConnections {
       close: (reason, error) => {
         if (!open) return;
         open = false;
+        for (const flight of hostedInFlight.values()) {
+          clearTimeout(flight.uninsuredTimer);
+        }
         hostedInFlight.clear();
         greetingToken = null;
         if (this.#connections.get(connectionKey) === connection) {

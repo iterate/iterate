@@ -170,6 +170,23 @@ describe("StreamAlarmArmer", () => {
     expect(setAlarm).toHaveBeenCalledTimes(3);
   });
 
+  it("retries a hosted parent arm after its asynchronous barrier rejects", async () => {
+    const setAlarm = vi.fn(async () => undefined);
+    const storage = {
+      setAlarm,
+      deleteAlarm: vi.fn(async () => undefined),
+      awaitHostedAlarmWrites: vi.fn(async () => {
+        throw new Error("parent rejected alarm");
+      }),
+    };
+    const armer = new StreamAlarmArmer(storage);
+
+    armer.armNoLaterThan(100);
+    await expect(armer.awaitHostedAlarmWrites()).rejects.toThrow("parent rejected alarm");
+    armer.armNoLaterThan(100);
+    expect(setAlarm).toHaveBeenCalledTimes(2);
+  });
+
   it("restores its in-memory deadline when setAlarm throws synchronously", () => {
     const failure = new Error("storage unavailable");
     const setAlarm = vi

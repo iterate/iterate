@@ -1278,7 +1278,13 @@ static bool queue_terminal(const char *reason) {
       stream_path,
       sizeof(runtime.pending_terminals[slot].stream_path));
   runtime.pending_terminals[slot].reason = reason;
-  runtime.pending_terminals[slot].stream = runtime.voicelab->stream;
+  /* A rejected opening handle cannot append its terminal. Reopen that exact
+   * path on the dedicated terminal handle instead of pinning a failed slot. */
+  runtime.pending_terminals[slot].stream =
+      runtime.voicelab->stream != NULL &&
+          runtime.voicelab->stream->state == ITERATE_KIT_STREAM_READY
+      ? runtime.voicelab->stream
+      : NULL;
   ++runtime.pending_terminal_count;
   return true;
 }
@@ -1297,9 +1303,8 @@ static void end_local_activation(const char *reason, const char *status) {
   /* Every local end is immediately audible: discard the old answer before
    * fencing capture or waiting for its terminal to reach the stream. */
   (void)abandon_speaker_audio();
-  /* A terminal is required only after this activation reached the stream. */
-  queued = !runtime.activation_live ||
-      runtime.first_mic_append_at_ms == 0U || queue_terminal(reason);
+  /* A prepared path can receive call-started before the first mic frame. */
+  queued = !runtime.activation_live || queue_terminal(reason);
   fence_activation();
   /* `pending_terminals` owns the ID now. Do not let a delayed acceptance or
    * speaker frame match an activation the person has already ended. */
@@ -1391,15 +1396,6 @@ static void bind_voice_if_ready(struct voice_setup_ticket *ticket) {
   runtime.voicelab_generation = runtime.connection.generation;
 }
 
-static bool current_voice_setup_ready(void) {
-  for (size_t index = 0U; index < sizeof(runtime.setup) / sizeof(runtime.setup[0]); ++index) {
-    if (runtime.setup[index].ready &&
-        runtime.setup[index].generation == runtime.connection.generation &&
-        strcmp(runtime.setup[index].activation, runtime.activation) == 0) return true;
-  }
-  return false;
-}
-
 static void setup_voice_completed(
     void *context, const struct capnweb_result *result) {
   struct voice_setup_ticket *const ticket = context;
@@ -1431,12 +1427,17 @@ static void start_voice_setup(struct voice_setup_ticket *ticket) {
     CAPNWEB_EXPRESSION_STRING,
     {.string = {ticket->stream_path, strlen(ticket->stream_path)}},
   };
+  const struct capnweb_expression activation = {
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {ticket->activation, strlen(ticket->activation)}},
+  };
   const struct capnweb_expression visemes = {
     CAPNWEB_EXPRESSION_BOOLEAN,
     {.boolean = runtime.board->observe_answer != NULL},
   };
   const struct capnweb_object_field fields[] = {
     {{"streamPath", sizeof("streamPath") - 1U}, &path},
+    {{"activation", sizeof("activation") - 1U}, &activation},
     {{"visemes", sizeof("visemes") - 1U}, &visemes},
   };
   const struct capnweb_expression args = {
@@ -1468,6 +1469,7 @@ static void start_voice_setup(struct voice_setup_ticket *ticket) {
   if (status != CAPNWEB_OK) {
     ticket->pending = false;
     end_local_activation("opening-failed", "voice setup failed");
+    return;
   }
 }
 
@@ -3246,7 +3248,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
             runtime.mic_flushed_at_ms, now);
         if (take != 0U &&
             runtime.voicelab->state == ITERATE_KIT_VOICELAB_READY &&
-            current_voice_setup_ready() &&
+            runtime.voicelab->call_active &&
             outbox_free >= (size_t)MIC_OUTBOX_RESERVE) {
           /*
            * The stamp only advances on a flush that was actually sent, so a

@@ -4034,11 +4034,12 @@ export type StreamEventReadInput = {
   /** Page size, 1-500. Defaults to 500. */
   limit?: number;
   /**
-   * Maximum serialized durable-event bytes in one page, from 1 through 8 MiB.
-   * It cannot be used with `includeEphemeral`. A shorter nonempty page may
-   * still have more matching events; advance from its last offset until an
-   * empty page confirms the current head. The first matching event is returned
-   * even when it alone exceeds this cap, so the cursor can make progress.
+   * Maximum serialized event bytes in one page, from 1 through 8 MiB. A shorter
+   * nonempty page may still have more matching events; advance from its last
+   * offset until an empty page confirms the current head. The first matching
+   * event is returned even when it alone exceeds this cap, so the cursor can
+   * make progress. With `includeEphemeral`, the bound applies to the merged,
+   * offset-ordered durable and buffered prefix.
    */
   byteLimit?: number;
   /**

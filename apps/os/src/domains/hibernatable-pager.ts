@@ -231,11 +231,19 @@ export class HibernatablePagers<Attachment> {
   }
 }
 
+/** The upgrade fields every Pager caller needs from a native Durable Object fetch. */
+export type HibernatablePagerUpgrade = {
+  status: number;
+  webSocket?: WebSocket | null;
+};
+
 /** Give a Durable Object a Hibernatable Pager through its real fetch(). */
 export async function dialHibernatablePager(input: {
   headerName: string;
   headerValue: unknown;
-  stub: { fetch(request: RequestInfo | URL, init?: RequestInit): Promise<Response> };
+  stub: {
+    fetch(request: RequestInfo | URL, init?: RequestInit): Promise<HibernatablePagerUpgrade>;
+  };
   url: string;
 }): Promise<WebSocket> {
   const upgrade = await input.stub.fetch(input.url, {
@@ -245,7 +253,7 @@ export async function dialHibernatablePager(input: {
     },
   });
   const socket = upgrade.webSocket;
-  if (socket === null) {
+  if (!socket) {
     throw new Error(`hibernatable Pager upgrade returned ${upgrade.status} without a WebSocket`);
   }
   socket.accept();

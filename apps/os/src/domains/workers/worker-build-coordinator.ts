@@ -115,8 +115,8 @@ export class WorkerBuildCoordinator {
       // One actor owns one immutable build key. Keep its successful result in
       // memory so callers from other OS isolates do not fall back through the
       // eventually-consistent KV cache immediately after the first build.
-      // Actor eviction remains the cache eviction policy; after that, the KV
-      // write is visible at the coordinator's stable location.
+      // After actor eviction, a completed KV write avoids rebuilding; an
+      // interrupted cache write simply rebuilds from the immutable source.
       this.#settled = { artifact: result.artifact, buildKey: request.buildKey, sizes };
       this.#emit(flight, "settled", "built", sizes);
       for (const waiter of flight.waiters) waiter.resolve(result);

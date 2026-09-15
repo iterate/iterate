@@ -7,6 +7,7 @@ import { createJsonByteLength } from "@iterate-com/shared/json-byte-length";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
+import { resolveStreamStub } from "./hosted-stream-routing.ts";
 import { createFeedPublicationStore, FeedProcessor } from "./feed-processor.ts";
 import { FeedProcessorContract } from "./feed-contract.ts";
 
@@ -19,7 +20,11 @@ const feedReductionCache = {
 /** One presentation owner per stream, independent of the stream's domain processors. */
 export class FeedFacet extends ProcessorFacet<Env> {
   protected parentAlarms({ parentName }: ProcessorFacetIdentity) {
-    return this.env.STREAM.getByName(parentName);
+    return resolveStreamStub({
+      deploymentEnv: this.env.DEPLOYMENT_ENV,
+      getByName: this.env.STREAM.getByName.bind(this.env.STREAM),
+      logicalName: parentName,
+    });
   }
 
   protected createHost(identity: ProcessorFacetIdentity): ProcessorFacetHost {

@@ -105,7 +105,9 @@ const h = vi.hoisted(() => {
           state.coordinatorBudgets.push(buildBudgetMs);
           const operation = (async () => {
             const { executeCoordinatedWorkerBuild } = await import("./worker-build-capability.ts");
-            return await executeCoordinatedWorkerBuild(request, itxEnv as never);
+            return await executeCoordinatedWorkerBuild(request, itxEnv as never, {
+              waitUntil: () => {},
+            });
           })();
           state.buildOperations.push(operation);
           const result =
