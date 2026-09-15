@@ -271,7 +271,7 @@ const flake = createFlake(
   /locator\.waitFor[\s\S]*cm-markdown-table-cell[\s\S]*Approved|Docs review: both persisted comment threads/,
   { timeoutMs: E2E_HEAVY_TEST_TIMEOUT_MS },
 );
-flake("review a workspace document in the seeded Docs app", async ({ baseURL, page }) => {
+flake("review a workspace document in the seeded Docs app", async ({ baseURL, page }, testInfo) => {
   test.skip(
     !(await startEmailOtpSignIn(page)),
     "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
