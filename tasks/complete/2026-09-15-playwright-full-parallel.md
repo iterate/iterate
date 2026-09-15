@@ -1,21 +1,21 @@
 ---
-status: in-progress
+status: complete
 size: large
 ---
 
 # Run the preview Playwright catalogue fully in parallel
 
-Status: implementation is in place with shared deployment/readiness, six browser jobs, strict result collection and capacity checks. Repository checks pass and a real six-shard run has exercised report merging and failure propagation. One browser click failure remains under investigation; final green validation and review remain.
+Status: implemented and validated on Depot. Six browser runners provide 96 slots, share one deployment/readiness barrier, and preserve reports, telemetry and cleanup. The code commit is fully green; overall CI latency still needs work outside test scheduling.
 
 The user wants fixed shard/worker counts with `shards * workers >= num_tests`, not an adaptive scheduling algorithm. Use six independent CI runners with sixteen Playwright workers each (96 slots). Keep local runs at one worker.
 
-- [x] Run six Playwright shards after one successful deployment/readiness barrier, alongside the other preview tests. *Defined in cloudflare-preview-sharded.yml; live validation is underway.*
-- [ ] Preserve one preview lifecycle owner across deployment, all tests, result collection, and cleanup; cancellation/new pushes must not erase a live sibling shard.
+- [x] Run six Playwright shards after one successful deployment/readiness barrier, alongside the other preview tests. *Defined in cloudflare-preview-sharded.yml and validated in run nv3l390bf0.*
+- [x] Preserve one preview lifecycle owner across deployment, all tests, result collection, and cleanup; cancellation/new pushes must not erase a live sibling shard. *Reusable workflow caller holds the lifecycle lock; live runs confirmed fan-out, cancellation and cleanup after all producers.*
 - [x] Pin every shard to the same checked-out SHA, preview slot, and deployed Worker versions. *ciPrepare/ciTest validate the plan against checkout, workflow attempt and live lease.*
-- [ ] Preserve individual-test retries, traces, merged HTML/JSON reports, flake records, and canonical telemetry. Missing or failed shards must fail the preview check.
+- [x] Preserve individual-test retries, traces, merged HTML/JSON reports, flake records, and canonical telemetry. Missing or failed shards must fail the preview check. *Real failed and successful previews merged all 92 results; receipt tests cover missing/foreign results.*
 - [x] Add a check that discovers the real CI catalogue and fails if the fixed capacity no longer covers it (including per-shard capacity). *Discovered 92 tests; shard counts are 16,16,15,15,15,15. An intentionally undersized real CLI run fails.*
-- [ ] Exercise failure propagation/report collection, run repository checks, and validate a real sharded preview on Depot.
-- [ ] Address CI/review feedback, update docs and PR, then move this task to complete.
+- [x] Exercise failure propagation/report collection, run repository checks, and validate a real sharded preview on Depot. *Run nv3l390bf0 passed every check on 2996ffc9c; prior run 3v0rvw0gg3 proved failure propagation and retained diagnostics.*
+- [x] Address CI/review feedback, update docs and PR, then move this task to complete. *Lease race fixed; no review threads posted as of 2026-09-15 18:16 UTC. Global PR monitor remains registered.*
 
 ## Implementation notes
 
@@ -34,3 +34,12 @@ The user wants fixed shard/worker counts with `shards * workers >= num_tests`, n
 - The live run exposed simultaneous semaphore lease renewal in readers; `4cdd25e` fixes this by checking ownership without reacquiring the slot. All six readers subsequently passed.
 - Shard 5 failed on `seeded-apps.spec.ts:394`: the Docs Source button was visible/enabled, but its stability check exceeded the existing 1000 ms action budget. `createFlake` reports this unexpected error as “Expected to fail, but passed”; the product body did not pass. A minimal local two-tab reproduction did not fail. No timeout, skip, or allowed-flake pattern was changed.
 - Keep browser runners at the original 16-core size, so adding sharding does not also halve CPU per worker. The first run's 8-core shape showed no sustained saturation, so this is preserving the baseline, not claiming to fix the click failure.
+
+## Final validation
+
+- Code commit: `2996ffc9cf3b2456b7668479d28b6899eb8dd53f`. All checks passed, including all six Playwright shards, app tests, result collection, cleanup and publishing.
+- Root Playwright: 88 passed, four existing skips, zero retries. All six test pools started within 1.5 seconds; individual shard commands finished in about 40–91 seconds. No tests, timeouts, retries or flake patterns were relaxed.
+- Reports merged all 92 cases; 17 raw telemetry artifacts normalized successfully. Existing PostHog delivery is downsampled to zero, so validation covers retained artifacts and normalization, not successful remote ingestion.
+- Failure-path proof: run `3v0rvw0gg3` kept all shard reports, failed the final check for the actual browser failure, and still completed cleanup.
+- Scope limit: this is a concurrency improvement, not proof of an end-to-end speedup. The final workflow took about 14 minutes: preparation 6m13s, app-test job 3m40s, collection/cleanup 3m43s plus scheduling. Browser jobs took 1m54s–2m45s including setup. OS Vitest's command took 150s. Repeated dependency setup and 90-second artifact-repository cleanup passes remain expensive; six 16-core browser runners also increase allocated capacity.
+- The earlier Docs click timeout did not recur on the final run. Its cause is unproven; the passing run is not a claim that a browser/product defect was fixed.
