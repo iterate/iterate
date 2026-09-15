@@ -212,8 +212,6 @@ test("one provider grant can cover MCP and Cap'n Web while retaining membership 
   expect(await root.whoami()).toEqual({ actor: flow.user.id, email: flow.user.email });
   expect((await root.projects.list()).map((p: { id: string }) => p.id)).toEqual(["oauth-a"]);
   await expect(root.projects.get("oauth-b")).rejects.toThrow(/outside/);
-  const context = root.projects.get("oauth-a");
-  await expect(context.mintToken()).rejects.toThrow(/FORBIDDEN|delegation|token/i);
   expect((await tool(token, "run", { script: "async () => 1" })).status).toBe(200);
   const org = (await directory(bindings.DB).getProject("oauth-a"))!.orgId;
   await bindings.DB.prepare("DELETE FROM org_members WHERE user_id = ? AND org_id = ?")
@@ -503,7 +501,7 @@ test("console and project browsers use the same CIMD flow and independent grants
     const [, personalId] = personal.token.split(":");
     expect(inventory.items.find((item) => item.id === personalId)).toMatchObject({
       name: "My CLI",
-      kind: "API token",
+      kind: "Personal access token",
       current: false,
     });
     expect(JSON.stringify(inventory)).not.toContain(personal.token);

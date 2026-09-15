@@ -617,13 +617,13 @@ export interface OsNextEnv {
   mcpBaseUrl: string;
   projectHostnameBase: string;
   artifactsNamespace: string;
-  /** The name the Cloudflare resources were CREATED under (D1 `<prefix>-directory`, KV `<prefix>-oauth|-secrets|-itx`) —
+  /** The name the Cloudflare resources were CREATED under (D1 `<prefix>-directory`, KV `<prefix>-oauth|-itx`) —
    *  pinned apart from `workerName` because the worker was renamed after they existed; `ensure-resources` and
    *  the wrangler generator derive names from this, never from the worker name. */
   resourceNamePrefix: string;
   /** Unverified email sign-in for this isolated test deployment. Never enable for real user data. */
   testEmailLogin?: boolean;
-  resources: { directoryDbId: string; oauthKvId: string; secretsKvId: string; itxKvId: string };
+  resources: { directoryDbId: string; oauthKvId: string; itxKvId: string };
 }
 export const osNextEnvs: Record<string, OsNextEnv> = {
   prd: {
@@ -639,7 +639,6 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     resources: {
       directoryDbId: "be6a3789-726a-4786-8b50-ef150c583b4e",
       oauthKvId: "a1a12d1cf1c342f8a389e5bf9dc5b760",
-      secretsKvId: "20fb83b6648440f0bcdc5a9938abdfab",
       itxKvId: "02d9483f71b84a9f9fae588f0ad9b3bd",
     },
   },

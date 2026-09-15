@@ -106,7 +106,7 @@ function ConsentPage({ answer }: { answer: Extract<ConsentView, { kind: "consent
         {scopes.includes("account") && (
           <p>
             <strong>Account permission:</strong> this app can view and end all your sessions and
-            create API tokens for the projects you grant it.
+            create personal access tokens for the projects you grant it.
           </p>
         )}
         <ProjectPicker

@@ -18,10 +18,10 @@ The preview lifecycle has two barriers:
 Every freshly deployed live suite that addresses Durable Objects respects one
 bounded deployment-age clock. Short Semaphore, Streams, and Petshop suites wait
 at their own command boundary. OS starts its agent smoke, explicit TUI
-quarantine marker, Chromium setup, and Playwright immediately; browser and auth
-setup continue while project-backed Playwright fixture creation and high-fanout
-Vitest wait for the same absolute boundary. The clock normally finishes under
-Playwright's longer critical path. Therefore, healthy wall time should approach:
+quarantine marker, and Chromium installation immediately. Playwright and
+Vitest both start after the rollout clock and agent smoke succeed. Readiness
+is timed outside both runners, so individual test durations measure their own
+setup and checks. Healthy wall time should approach:
 
 ```text
 pickup + setup + slowest deploy + slowest test lane + reporting
@@ -41,24 +41,25 @@ raise the budget automatically.
 - The short Semaphore, Streams, and Petshop commands wait independently at
   their own rollout boundary; this does not serialize them with OS or with one
   another. Auth has no live Durable Object suite and starts immediately.
-- OS smoke, the explicit TUI quarantine marker, Chromium setup, Playwright, and
-  the rollout-age clock run concurrently. Playwright workers may perform
-  browser/auth setup immediately, but their shared project-creation helpers
-  wait on the clock's absolute deadline before addressing fresh project-backed
-  Durable Objects. High-fanout Vitest waits only for the smoke and clock; every
-  background process is joined even if another one fails, so a failure cannot
-  orphan work or discard another lane's result.
-- Chromium installation begins before the four OS lanes and overlaps their
-  startup.
+- OS smoke, the explicit TUI quarantine marker, Chromium installation, and
+  the rollout-age clock run concurrently. Both Playwright and Vitest wait
+  for successful smoke and rollout completion, then run concurrently. Every
+  background process is joined even after a failure.
+- Playwright loads and validates its auth configuration once in global setup,
+  before workers start. Workers inherit the prepared environment; fixtures
+  neither fetch Doppler secrets nor wait for deployment propagation. Test
+  identities, signed tokens and projects remain specific to each test.
+- Chromium installation overlaps readiness. Browser startup and authentication
+  now happen after readiness, so this change improves duration reporting but
+  may add time previously hidden by overlapping setup.
 - OS Vitest gives every current file a worker immediately and permits at most
   two concurrent tests per file in CI. Each file owns isolated projects; the
   examples matrix still overlaps its isolated runtimes inside each case.
-- Root Playwright uses sixteen fully parallel workers in CI. The latest
-  zero-retry full-suite sample carried about 1,554 seconds of aggregate work and
-  a 117-second longest case: sixteen workers make that longest case, rather than
-  worker queueing, the expected floor. Preview runs queue the long
-  reconnect/resume specs first so their fixed probe windows overlap the
-  ordinary catalogue.
+- Root Playwright keeps sixteen fully parallel workers in CI. The earlier
+  1,554-second aggregate and 117-second longest-test sample included shared
+  rollout waiting inside fixtures. Remeasure without that wait before using
+  per-test timings to size the worker pool. Preview still queues the long
+  reconnect/resume specs first.
 - The job uses a 16-core Depot runner. Measurements on larger runners showed
   the overlapping local work peaking below ten cores; the deployed Worker and
   Durable Objects, rather than host CPU, are the integration boundary. The
@@ -89,13 +90,12 @@ serially because they intentionally share one warm container.
   after the new edge Worker answers, and changing an object's assigned version
   resets that object. Every freshly deployed app whose live suite calls Durable
   Objects therefore waits until 90 seconds after its successful deploy command.
-  Short suites wait immediately before their command. Root Playwright receives
-  OS's absolute deadline instead: its process and non-project work begin
-  immediately, while forged-session and real-signup helpers wait at the
-  project-create operation; OS Vitest waits at its fan-out boundary. All app
-  lanes remain concurrent, and reused old deployments wait zero seconds. This
-  is one visible lifecycle boundary per deployment, not a retry or a synthetic
-  placement sample.
+  Short suites wait immediately before their command. OS has one visible
+  readiness step outside Playwright and Vitest: the remaining deployment age
+  plus the successful agent smoke. Both runners start after this step. The
+  smoke still receives the absolute deadline so its own project creation
+  respects the same clock. Reused old deployments wait zero seconds for age.
+  Improving the readiness condition is separate from choosing where to wait.
 - **Warm OS deploys skip only proven-unchanged container work.** Wrangler
   otherwise builds and reconciles the six stock sandbox image applications
   serially even when all six report `no changes`. The orchestrator requests
@@ -139,7 +139,9 @@ serially because they intentionally share one warm container.
 - `[preview] deploy passed: <app> (Ns)` and `[preview] test passed: <app> (Ns)`
   in the run log show phase wall times.
 - `[preview:os] lane start/finish` lines show the overlapping OS work, including
-  the visible `rollout-settle` clock and when Vitest was released.
+  the visible `rollout-settle` clock. `environment readiness start/finish`
+  records the shared preparation boundary before both runners start;
+  `[playwright] auth setup complete` records suite-wide auth preparation.
 - `[preview] rollout settle start/finish` lines expose the independent boundary
   for each short Durable Object-backed app suite.
 - The managed preview block in the PR body records per-app deploy duration,

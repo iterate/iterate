@@ -1,12 +1,10 @@
-import { test, type Page, type TestInfo } from "@playwright/test";
-import { z } from "zod/v4";
+import { test, type Page } from "@playwright/test";
 import type {
   IterateAuthAccessTokenOrganizationClaim,
   IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
-import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/test-support/preview-rollout-gate";
 import {
   connectItxReady,
   type ItxInitialConnectionRetry,
@@ -14,40 +12,10 @@ import {
 } from "iterate/node";
 import dedent from "dedent";
 import { interceptor } from "@iterate-com/test-support";
-import { doppler, localOsDevServer } from "../../apps/os/scripts/dev.ts";
+import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "./email-otp-signup.ts";
-
-type OsPlaywrightAuthConfig = {
-  adminApiSecret: string;
-  clientId: string;
-  /** The forge private JWK as its raw JSON string — what forge-token.ts consumes. */
-  forgePrivateJwk: string;
-  issuer: string;
-};
-
-type OsPlaywrightAuthEnv = z.infer<typeof OsPlaywrightAuthEnv>;
-
-const OsPlaywrightAuthEnv = z.object({
-  /** OS admin handle used to create and clean up fixture projects through /api/itx. */
-  APP_CONFIG_ADMIN_API_SECRET: z.string().min(1),
-  /** OAuth client id used as the id-token audience. */
-  APP_CONFIG_ITERATE_AUTH__CLIENT_ID: z.string().min(1),
-  /** Auth issuer used for both forged access and id tokens. */
-  APP_CONFIG_ITERATE_AUTH__ISSUER: z.url(),
-  /** Private half of the ES256 Auth signing key whose public half OS trusts. */
-  AUTH_FORGE_ES256_PRIVATE_JWK: z
-    .string()
-    .min(1)
-    .refine((value) => {
-      try {
-        JSON.parse(value);
-        return true;
-      } catch {
-        return false;
-      }
-    }, "must be the forge private JWK as a JSON string"),
-});
+import { readOsPlaywrightAuthConfig, type OsPlaywrightAuthConfig } from "./auth-config.ts";
 
 export type MintedIterateSession = {
   accessToken: string;
@@ -55,7 +23,6 @@ export type MintedIterateSession = {
   idToken: string;
 };
 
-let configPromise: Promise<OsPlaywrightAuthConfig> | undefined;
 const ITX_INITIAL_CONNECTION_RETRY_PREFIX = "[itx-initial-connection-retry] ";
 
 export async function createMobileFixture(
@@ -63,10 +30,9 @@ export async function createMobileFixture(
   input: {
     baseURL: string | undefined;
     page: Page;
-    testInfo: TestInfo;
   },
 ) {
-  const { page, testInfo } = input;
+  const { page } = input;
   const resources = new AsyncDisposableStack();
   const osBaseUrl = await resolveOsBaseUrl();
 
@@ -78,7 +44,7 @@ export async function createMobileFixture(
 
   const itx = resources.use(
     await connectItxReady({
-      auth: { type: "admin-secret", secret: await resolveAdminSecret() },
+      auth: { type: "admin-secret", secret: resolveAdminSecret() },
       baseUrl: osBaseUrl,
       projectId,
     }),
@@ -130,7 +96,6 @@ export async function createMobileFixture(
       // and a slug-containing name makes getByText(projectSlug) ambiguous.
       email: uniqueSignupEmail(slugPrefix),
       projectSlug,
-      testInfo,
     });
     // Project selection auto-continues for test identities — consent is next.
     await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
@@ -145,18 +110,12 @@ export async function createProjectFixture(
     baseURL: string | undefined;
     page: Page;
     projectCount?: number;
-    testInfo: TestInfo;
   },
 ) {
   const baseUrl = input.baseURL;
   if (!baseUrl) throw new Error("Playwright baseURL fixture is required.");
 
-  const [config] = await Promise.all([
-    resolveOsPlaywrightAuthConfig(),
-    waitForPreviewRolloutBeforeProjectCreation({
-      beforeWait: (waitMs) => input.testInfo.setTimeout(input.testInfo.timeout + waitMs),
-    }),
-  ]);
+  const config = readOsPlaywrightAuthConfig();
   const projectSlug = uniqueFixtureSlug(slugPrefix);
   const projectFixtures = await Promise.all(
     Array.from({ length: input.projectCount ?? 1 }, (_, index) =>
@@ -466,13 +425,13 @@ export async function connectAdminItx(
   baseUrl: string,
   options?: { onWebSocketClose?: (close: { code: number; reason: string }) => void },
 ) {
-  const config = await resolveOsPlaywrightAuthConfig();
+  const config = readOsPlaywrightAuthConfig();
   return connectPlaywrightAdminItx({ baseUrl, config, ...options });
 }
 
 /** The OS admin API secret, for specs that dial project-scoped itx handles directly. */
-export async function resolveAdminSecret(): Promise<string> {
-  return (await resolveOsPlaywrightAuthConfig()).adminApiSecret;
+export function resolveAdminSecret() {
+  return readOsPlaywrightAuthConfig().adminApiSecret;
 }
 
 async function createAdminProjectAfterPreviewRollout(input: {
@@ -553,7 +512,7 @@ export async function mintIterateSession(input: {
   organizations: IterateAuthAccessTokenOrganizationClaim[];
   projects: IterateAuthProjectClaim[];
 }): Promise<MintedIterateSession> {
-  const config = await resolveOsPlaywrightAuthConfig();
+  const config = readOsPlaywrightAuthConfig();
   // Signing lives in scripts/auth/forge-token.ts (the core behind
   // `pnpm auth:mint`); this layer only picks the audience for the deployment
   // under test and wraps the token pair in a browser cookie.
@@ -583,55 +542,6 @@ export async function mintIterateSession(input: {
     expiresAtMs: exp * 1000,
     idToken,
   };
-}
-
-async function resolveOsPlaywrightAuthConfig(): Promise<OsPlaywrightAuthConfig> {
-  configPromise = configPromise || loadOsPlaywrightAuthConfig();
-  return await configPromise;
-}
-
-async function loadOsPlaywrightAuthConfig(): Promise<OsPlaywrightAuthConfig> {
-  const env = await loadOsPlaywrightAuthEnv();
-
-  return {
-    adminApiSecret: env.APP_CONFIG_ADMIN_API_SECRET,
-    clientId: env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID,
-    forgePrivateJwk: env.AUTH_FORGE_ES256_PRIVATE_JWK,
-    issuer: env.APP_CONFIG_ITERATE_AUTH__ISSUER,
-  };
-}
-
-async function loadOsPlaywrightAuthEnv(): Promise<OsPlaywrightAuthEnv> {
-  const env = OsPlaywrightAuthEnv.safeParse(process.env);
-  if (env.success) return env.data;
-
-  const dopplerEnv = doppler.loadOsSecrets();
-  if (dopplerEnv.ok) {
-    const parsed = OsPlaywrightAuthEnv.safeParse({ ...dopplerEnv.secrets, ...process.env });
-    if (parsed.success) return parsed.data;
-
-    throw new Error(
-      [
-        "Playwright forged-session specs require OS auth/admin env from Doppler.",
-        "process.env was missing required values, and `doppler secrets download --no-file --format json` from apps/os did not contain valid replacements.",
-        "process.env validation:",
-        z.prettifyError(env.error),
-        "apps/os Doppler validation:",
-        z.prettifyError(parsed.error),
-      ].join("\n\n"),
-    );
-  }
-
-  throw new Error(
-    [
-      "Playwright forged-session specs require OS auth/admin env from Doppler.",
-      "Run with `doppler run --project os --config <dev|preview_N> -- pnpm spec`, or configure Doppler for apps/os so `pnpm spec` can read secrets directly.",
-      "process.env validation:",
-      z.prettifyError(env.error),
-      "apps/os Doppler lookup:",
-      dopplerEnv.error,
-    ].join("\n\n"),
-  );
 }
 
 function authResourceForBaseUrl(baseUrl: string) {

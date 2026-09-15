@@ -56,7 +56,7 @@ Use card layout for data lists (not tables). Cards work well on all screen sizes
 
 Key patterns:
 
-- `flex flex-col gap-*` for stacking — never `space-y-*` / `space-x-*` (see `.agents/skills/shadcn/SKILL.md`)
+- `flex flex-col gap-*` for stacking — never `space-y-*` / `space-x-*`
 - `flex items-start justify-between gap-4 p-4` for card layout
 - `min-w-0 flex-1` on content to enable truncation
 - Status dots with `Circle` icon + fill color

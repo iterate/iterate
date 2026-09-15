@@ -2,7 +2,7 @@ import { z } from "zod";
 import { OAuthProvider, type GrantSummary } from "@cloudflare/workers-oauth-provider";
 import { RpcTarget } from "capnweb";
 import type { Env } from "./control-plane.ts";
-import { codedError } from "./lib.ts";
+import { codedError, isLocalOrigin } from "./lib.ts";
 import { directory } from "./directory.ts";
 import {
   authorizationOf,
@@ -25,6 +25,12 @@ const MintInput = z.object({
   projects: z.array(z.string()).min(1),
 });
 
+/** Whether this deployment mints personal access tokens: a bearer that acts as a person must only
+ *  ever travel over TLS — or to the local worker (`localhost`, `127.0.0.1`), where `pnpm dev` and
+ *  the e2e vitest project speak plain http on the loopback. Any other http issuer is refused. */
+const mintsPersonalAccessTokens = (issuer: string): boolean =>
+  issuer.startsWith("https:") || isLocalOrigin(issuer);
+
 /** Account capabilities are consented independently of project access. */
 export class Grants extends RpcTarget {
   readonly #env: Env;
@@ -41,7 +47,7 @@ export class Grants extends RpcTarget {
     if (!grant?.scope.includes("account"))
       throw codedError(
         "FORBIDDEN",
-        "Account permission is required to manage sessions and API tokens.",
+        "Account permission is required to manage sessions and personal access tokens.",
       );
     return { sub: grant.userId, email: grant.email, reach: this.#auth.reach, grant };
   }
@@ -83,7 +89,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
           kind: !grant.expiresAt
             ? "Pending sign-in"
             : metadata.tokenKind === "personal"
-              ? "API token"
+              ? "Personal access token"
               : "Session",
           createdAt: grant.createdAt * 1000,
           expiresAt,
@@ -112,7 +118,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       items: [...items, ...cleanup],
       cursor: page.cursor,
       projects: await directory(env.DB).reachableProjects(session.reach),
-      canMintToken: oauthAddresses(env).issuer.startsWith("https:"),
+      canMintToken: mintsPersonalAccessTokens(oauthAddresses(env).issuer),
     };
   }
 
@@ -139,8 +145,35 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     return revokeGrant(env, { userId: session.sub, grantId });
   }
 
-  /** One finite provider access token, shown once, with no refresh credential. The
-   * console's existing CIMD client performs the code exchange in process. */
+  /** The console's own OAuth client the personal-token exchange runs through: the client id
+   * metadata document at `/.auth/client.json` on an HTTPS issuer; on the local worker (a plain-http
+   * client id is no CIMD client) a public client registered with the provider, as the browser
+   * session's login registers one (browser-session.ts). The local harness's KV does not promise
+   * read-your-write (a lookup right after the put has missed under load), and the exchange below
+   * reads the row three times — so the id is returned only once the provider sees it. */
+  async #consoleClientId(issuer: string, redirectUri: string): Promise<string> {
+    if (!isLocalOrigin(issuer)) return `${issuer}/.auth/client.json`;
+    const helpers = oauthHelpers(this.#env);
+    const client = await helpers.createClient({
+      clientName: new URL(issuer).host,
+      redirectUris: [redirectUri],
+      tokenEndpointAuthMethod: "none",
+      grantTypes: ["authorization_code"],
+      responseTypes: ["code"],
+    });
+    for (let attempt = 0; attempt < 40; attempt++) {
+      if (await helpers.lookupClient(client.clientId)) return client.clientId;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error("The local console client did not become visible to the provider.");
+  }
+
+  /** A PERSONAL ACCESS TOKEN: one finite OAuth grant of this user's — 30 days, scoped to the
+   * `projects` named (each one the user reaches), revocable from `list`/`end` like any grant — whose
+   * access token is answered ONCE and never stored readable; it carries no refresh credential
+   * (`tokenExchangeCallback`, oauth.ts, refuses a refresh of a personal grant). The bearer opens
+   * `/api`, `/mcp` and a project host of a covered project as the user (`authorizationForToken`).
+   * The console's own CIMD client performs the code exchange in process. */
   async mint(input: unknown) {
     const env = this.#env;
     const ctx = this.#ctx;
@@ -149,14 +182,14 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       throw codedError("UNAUTHENTICATED", "This session has ended. Sign in again.");
     const data = MintInput.parse(input);
     const { issuer, api, mcp } = oauthAddresses(env);
-    if (!issuer.startsWith("https:"))
-      throw codedError("FORBIDDEN", "Personal tokens require an HTTPS deployment.");
+    if (!mintsPersonalAccessTokens(issuer))
+      throw codedError("FORBIDDEN", "Personal access tokens require an HTTPS deployment.");
     const projects = (await directory(env.DB).reachableProjects(session.reach))
       .filter((project) => data.projects.includes(project.id))
       .map((project) => project.id);
     if (!projects.length) throw codedError("FORBIDDEN", "Choose a project you can access.");
-    const clientId = `${issuer}/.auth/client.json`;
     const redirectUri = `${issuer}/.auth/callback`;
+    const clientId = await this.#consoleClientId(issuer, redirectUri);
     const flow = await authorizationCodeRequest({
       issuer,
       clientId,

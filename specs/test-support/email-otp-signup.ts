@@ -1,5 +1,4 @@
-import type { Page, TestInfo } from "@playwright/test";
-import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/test-support/preview-rollout-gate";
+import type { Page } from "@playwright/test";
 
 /**
  * Real signup through the apps/auth email-OTP lane. Non-production auth
@@ -29,14 +28,7 @@ export function uniqueSignupEmail(prefix: string) {
  * Lands on the auth app's login page in email mode. Resolves false when the
  * deployment doesn't offer email OTP sign-in.
  */
-export async function startEmailOtpSignIn(page: Page, testInfo: TestInfo) {
-  // Preview teardown leaves a parked OS Worker behind. During a fresh edge
-  // rollout, even the exact-version request can briefly reach that 503
-  // predecessor, so consume the existing rollout boundary before the first
-  // OS navigation rather than waiting later at project creation.
-  await waitForPreviewRolloutBeforeProjectCreation({
-    beforeWait: (waitMs) => testInfo.setTimeout(testInfo.timeout + waitMs),
-  });
+export async function startEmailOtpSignIn(page: Page) {
   await page.goto("/api/iterate-auth/login?login_hint=email");
   await page.getByText("Sign in to your iterate account").waitFor();
   return await page.getByTestId("email-input").isVisible();
@@ -49,7 +41,7 @@ export async function startEmailOtpSignIn(page: Page, testInfo: TestInfo) {
  */
 export async function signUpWithEmailOtp(
   page: Page,
-  input: { email: string; projectSlug: string; testInfo: TestInfo },
+  input: { email: string; projectSlug: string },
 ) {
   await page.getByTestId("email-input").fill(input.email);
   await page.getByTestId("email-submit-button").click();
@@ -68,8 +60,5 @@ export async function signUpWithEmailOtp(
   // so the spinner-waiter rides real product UI the whole way.
   await page.getByLabel("Organization name").fill(`Playwright ${input.email.split("@")[0]}`);
   await page.getByLabel("Project slug").fill(input.projectSlug);
-  await waitForPreviewRolloutBeforeProjectCreation({
-    beforeWait: (waitMs) => input.testInfo.setTimeout(input.testInfo.timeout + waitMs),
-  });
   await page.getByRole("button", { name: "Get started" }).click();
 }

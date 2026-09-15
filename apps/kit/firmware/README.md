@@ -151,6 +151,6 @@ while someone is using the board. Inspect health before and after. A serial
 monitor can reboot a board, so use stream health for in-call observation.
 
 For sprites and managed dependency pins, see the
-[onboarding skill](../../../.agents/skills/adding-a-kit-device-or-sprite/SKILL.md).
+[onboarding guide](adding-a-board-or-sprite.md).
 The retained board measurements, USB recovery notes and configuration traps are
 in [bench notes](./bench-notes.md).

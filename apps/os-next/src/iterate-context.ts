@@ -11,9 +11,7 @@
 // addressing), `invoke` (the landing door of the prototype hop at the bottom, plus the one fetch-lane
 // fork), `provide` and `subscribe` (declared here because their target may be a client's rpc stub,
 // which must live in this stateless worker and never in the DO — the DON'T-PIN rule,
-// context/rpc-stubs.ts), the two processor verbs, and the two PROJECT doors a session carries on the
-// root context it vends — `mintToken` (a project token as this session's principal) and
-// `rotateApiKey` (the project's own secret) — which touch no DO at all. Each verb builds ONE event and appends it;
+// context/rpc-stubs.ts) and the two processor verbs. Each verb builds ONE event and appends it;
 // every built-in root rides the hop with ZERO code here. `provide` and `subscribe` hand back a
 // DISPOSABLE handle, so what they make is SESSION-SCOPED (capnweb disposes every exported handle at
 // session end); the raw event — `itx.append({ type: "…/rewrite-rule-configured", payload: { match, target } })` — is the verb
@@ -45,13 +43,8 @@ import {
   restoreRuleTarget,
 } from "./context/itx-expression-rewriting.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
-import { SessionTeardown, type ProjectDoorsInput } from "./session.ts";
-import {
-  ITX_PRINCIPAL_HEADER,
-  rotateProjectApiKey,
-  signProjectToken,
-  type Principal,
-} from "./principal.ts";
+import { SessionTeardown } from "./session.ts";
+import { ITX_PRINCIPAL_HEADER, type Principal } from "./principal.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
 import { codedError } from "./lib.ts";
 
@@ -108,11 +101,6 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  session, a loaded worker's `env.ITX`). Every dispatch runs under it, so every event it appends
    *  carries `source.principal`. */
   readonly #principal: Principal | null;
-  /** What the two project doors sign and write with — `mintToken` signs with the configuration's
-   *  token secret, `rotateApiKey` writes the key hash to `SECRETS_KV` — or null for a handle that
-   *  carries neither door: one no session vended (a loaded worker's `env.ITX`), or a project-token
-   *  session's (a delegation, minutes long, never a minter of tokens or keys — session.ts). */
-  readonly #projectDoors: ProjectDoorsInput | null;
 
   constructor(
     contextNamespace: IterateContextNamespace,
@@ -120,7 +108,6 @@ export class IterateContextRpcTarget extends RpcTarget {
     sessionTeardown: SessionTeardown,
     waitUntil: WaitUntil,
     principal: Principal | null = null,
-    projectDoors: ProjectDoorsInput | null = null,
   ) {
     super();
     this.#contextNamespace = contextNamespace;
@@ -128,7 +115,6 @@ export class IterateContextRpcTarget extends RpcTarget {
     this.#sessionTeardown = sessionTeardown;
     this.#waitUntil = waitUntil;
     this.#principal = principal;
-    this.#projectDoors = projectDoors;
   }
 
   /** The context DO's stub, minted PER CALL (a stub is a cheap handle onto one shared connection):
@@ -149,8 +135,18 @@ export class IterateContextRpcTarget extends RpcTarget {
   /** Another context of THIS project. Absolute by convention (`cd("/agents/support")`); relative
    *  (`"agents/support"`, `"../inbox"`) resolves against this context's path — one resolver, shared
    *  with the built-in `itx.cd(...)` root. Returns an EDGE context, so `provide` on it lends in this
-   *  same session. Pure addressing. */
+   *  same session. Pure addressing — and, the projectId being kept, a project's `cd` can never spell
+   *  the global namespace. THE GLOBAL NAMESPACE IS NOT NAVIGABLE: a global context is reached by
+   *  IDENTITY only (`session.user`, `session.organizations.get`), so its `cd` is refused for everyone
+   *  — the admin included; the one path hop the platform needs there is the kernel's own, inside the
+   *  DO (built-ins.ts `cd`). This is the whole path mask: with no way to name another user's path,
+   *  there is no policy to get wrong. */
   cd(path: string): IterateContextRpcTarget {
+    if (this.#durableObjectAddress.projectId === GLOBAL_PROJECT_ID)
+      throw codedError(
+        "FORBIDDEN",
+        "a global context is reached by identity (session.user, session.organizations), never by path",
+      );
     const durableObjectAddress = DurableObjectNameCodec.address({
       projectId: this.#durableObjectAddress.projectId,
       path: resolveContextPath(this.#durableObjectAddress.path, path),
@@ -161,7 +157,6 @@ export class IterateContextRpcTarget extends RpcTarget {
       this.#sessionTeardown,
       this.#waitUntil,
       this.#principal,
-      this.#projectDoors,
     );
   }
 
@@ -185,48 +180,6 @@ export class IterateContextRpcTarget extends RpcTarget {
       return this.#durableObject.fetch(new Request(terminalFetch.request, { headers }));
     }
     return this.#invokeOnDurableObject(itxExpression, args);
-  }
-
-  // ── the project doors: what the session that vended this context may do FOR THE PROJECT, no DO touched ──
-
-  /** A PROJECT TOKEN for this project as this context's principal — `ProjectTokenClaims`
-   *  (principal.ts) signed with `APP_CONFIG_PROJECT_TOKEN_SECRET`: what `/.itx/session?token=` on a
-   *  project host turns into its cookie (the console links a project host through it), what a script
-   *  presents as `Authorization: Bearer`, what `authenticate({ type: "project-token" })` takes.
-   *  The door is a member's, the admin's, or the project-secret session's for its own project (then
-   *  the token's actor is `project:<projectId>`) — the session that vended this handle carries it
-   *  (session.ts). `ttlSeconds` defaults to 15 minutes; 24 hours is the most. A handle without the
-   *  project doors — a loaded worker's `env.ITX`, a project-token session's — is FORBIDDEN. */
-  async mintToken({ ttlSeconds = 15 * 60 }: { ttlSeconds?: number } = {}): Promise<string> {
-    if (!this.#projectDoors || !this.#principal)
-      throw codedError(
-        "FORBIDDEN",
-        "mintToken(): this handle carries no project doors — a loaded worker's env.ITX speaks for the project, never for a person, and a project-token session is a delegation that mints no further token",
-      );
-    if (!(Number.isFinite(ttlSeconds) && ttlSeconds > 0 && ttlSeconds <= 24 * 60 * 60))
-      throw new Error(
-        `mintToken({ ttlSeconds }): a token lives between 1 second and 24 hours, got ${JSON.stringify(ttlSeconds)}`,
-      );
-    return signProjectToken(
-      { projectId: this.#durableObjectAddress.projectId, ...this.#principal },
-      ttlSeconds * 1000,
-      this.#projectDoors.appConfig.projectTokenSecret.exposeSecret(),
-    );
-  }
-
-  /** The project's API KEY — its own long-lived secret (`authenticate({ type: "project-secret" })`;
-   *  the bearer a device or a headless app presents on a project host), minted fresh and answered
-   *  ONCE: only its SHA-256 hash is stored (principal.ts `rotateProjectApiKey`), so a reveal IS a
-   *  rotation and the previous key stops verifying at once (a project has no key until the first
-   *  call). The same door as `mintToken`'s; the key is the PROJECT's, so any context of it (`cd`)
-   *  rotates the same key. A handle without the project doors is FORBIDDEN. */
-  async rotateApiKey(): Promise<string> {
-    if (!this.#projectDoors)
-      throw codedError(
-        "FORBIDDEN",
-        "rotateApiKey(): this handle carries no project doors — a loaded worker's env.ITX cannot rotate the project's key, and a project-token session is a delegation that reaches no key",
-      );
-    return rotateProjectApiKey(this.#durableObjectAddress.projectId, this.#projectDoors.secretsKv);
   }
 
   // ── THE ONE FRONT DOOR: make `match` mean `target` — (a) a lent rpc stub or (b) a pure rewrite ──
@@ -447,10 +400,41 @@ const PROJECT_ID = /^[A-Za-z0-9_-]+$/;
 /** The reserved projectId of the deployment-global namespace: the control plane's own contexts —
  *  `/users/<id>`, `/organizations/<id>`, and `/projects/<id>` records — live here. A global context
  *  is an ORDINARY context at this projectId: same codec, same built-ins, same surface as a project's
- *  (`session.user` is exactly `session.projects.get(...)` one namespace over). Real projects are
- *  addressed by their `prj_`-prefixed id, so a slug can never spell `global`; until project ids carry
- *  that prefix the collision is a known gap, captured as a failing test, not a runtime check. */
+ *  (`session.user` is exactly `session.projects.get(...)` one namespace over) — except that it is NOT
+ *  NAVIGABLE: `cd` is refused on a global edge handle (IterateContextRpcTarget.cd) and, for a
+ *  principal, inside a global DO (built-ins.ts `cd`). A project's id is its slug, so the word is
+ *  RESERVED at the project catalog (session.ts `projects.create` / `projects.get`). */
 export const GLOBAL_PROJECT_ID = "global";
+
+/** THE RESOURCE OWNER of a context: `id` is the half every project-scoped resource key is prefixed
+ *  with (`itx.kv`'s `${id}:`, a secret cell's `${id}:${name}` Durable Object, the Artifacts `${id}.`
+ *  repo prefix) and `rootPath` the context whose log holds its secrets catalog. */
+export type ResourceScope = { id: string; rootPath: string };
+
+/** THE ONE DERIVATION of a context's resource owner (`ResourceScope`). A project owns its resources
+ *  whole — `{ id: projectId, rootPath: "/" }`, every key byte-identical to a plain project prefix.
+ *  The global namespace is no owner: one "project" shared by every user's and organization's
+ *  context, where the path mask partitions nothing a resource is keyed by — so there the owner is
+ *  the OWNER SUBTREE: under `/users/<id>` or `/organizations/<id>` it is `{ id:
+ *  "global--<kind>--<id>", rootPath: "/<kind>/<id>" }`, and the global root `/` (or any other global
+ *  path) is `{ id: "global", rootPath: "/" }`, the kernel's own. The `--` join is the project-host
+ *  label convention (`<app>--<project>`); the owner id is held to the projectId charset, so the
+ *  joined id stays inside `[A-Za-z0-9_-]` and the `:` and `.` delimiters still cannot collide, and
+ *  no project can spell it (directory.ts `projectSlug` collapses a dash run to one dash). User
+ *  A's `itx.kv.put('k')` is never user B's `itx.kv.get('k')`, and a user's context IS its own
+ *  secrets root. */
+export function resourceScope(projectId: string, path: string): ResourceScope {
+  if (projectId !== GLOBAL_PROJECT_ID) return { id: projectId, rootPath: "/" };
+  const [kind, ownerId] = resolveContextPath("/", path).split("/").slice(1);
+  if (!ownerId || (kind !== "users" && kind !== "organizations"))
+    return { id: GLOBAL_PROJECT_ID, rootPath: "/" };
+  if (!PROJECT_ID.test(ownerId))
+    throw codedError(
+      "INVALID_CONTEXT",
+      `invalid ${kind} id ${JSON.stringify(ownerId)}: only [A-Za-z0-9_-] (it is half of every resource key)`,
+    );
+  return { id: `${GLOBAL_PROJECT_ID}--${kind}--${ownerId}`, rootPath: `/${kind}/${ownerId}` };
+}
 
 /** A parsed DO address. `name` is its own canonical string form — parse once, carry both
  *  halves together (no separate re-stringify field at call sites). */

@@ -32,13 +32,15 @@ type ErrorCode =
   | "INVALID_CONTEXT" // a context name / project id the codec refuses (iterate-context.ts `DurableObjectNameCodec`) — coded, so it survives the hop
   | "EXPRESSION_TOO_LONG" // a STRING itx expression over ITX_EXPRESSION_STRING_MAX_CHARS — pass the parsed form
   | "FACET_SOURCE_TOO_LARGE" // a facet's literal source over FACET_SOURCE_MAX_CHARS (worker-loader.ts) — refused at the door
-  | "INVALID_CREDENTIALS" // authenticate(): the project token did not verify (bad signature, expired, no secret), the admin secret did not match, or the project secret is not that project's
+  | "INVALID_CREDENTIALS" // authenticate(): the admin secret did not match, or the credentials named no known kind
   | "UNAUTHENTICATED" // authenticate({ type: "from-server-cookie" }): no session cookie on the request, or a cross-origin browser's request
-  | "FORBIDDEN" // projects.get(project): the session is bound to another project (a project token, the project secret), or the user is no member of its org; create on a bound session; mintToken/rotateApiKey on a handle no session vended (a loaded worker's env.ITX)
+  | "FORBIDDEN" // projects.get(project): outside the session's reach (a grant narrowed to other projects, or the user is no member of its org); create on a narrowed grant; grants/consent on a session that carries none; organizations.get outside the session's memberships; `cd` in the global namespace (a global context is reached by identity, never by path)
   | "PROJECT_NAME_TAKEN" // projects.create({ project }): a project of that name exists in another org
+  | "PROJECT_NAME_RESERVED" // projects.create({ project }): the name slugs to the deployment-global namespace's id
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now — or its lend ended mid-call (recalled, returned, broken; the relay re-codes)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet of that name has been loaded into this context
+  | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (iterate-context-durable-object.ts #invokeFacet)
   | "WAIT_TIMEOUT" // waitForEvent expired with no matching event committed
   | "TIMEOUT"; // lib.ts withTimeout: the call did not answer within its deadline
 // (There is no separate boundary-validation library: the append door's own runtime guards

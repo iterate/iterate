@@ -14,7 +14,17 @@ import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream
 import { stampPrincipal, type Caller } from "../principal.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/processor.ts";
 import type { LibraryRoots } from "../library.ts";
-import { resolveContextPath } from "../iterate-context.ts";
+import { GLOBAL_PROJECT_ID, resolveContextPath, resourceScope } from "../iterate-context.ts";
+import { codedError } from "../lib.ts";
+import {
+  assertSecretName,
+  normalizeSecretRecord,
+  type SecretCatalogEntry,
+  type SecretMaterial,
+  type SecretRefresh,
+} from "../secrets.ts";
+import type { SecretDurableObject } from "../secret-durable-object.ts";
+import { normalizeSecretConnect, type SecretConnectOptions } from "../secret-connect.ts";
 import {
   assertFacetSourceWithinCeiling,
   facetSpecOf,
@@ -24,6 +34,7 @@ import {
   type WorkerSource,
 } from "./worker-loader.ts";
 import {
+  itxExpressionStepName,
   print,
   type ItxExpression,
   type ItxExpressionInput,
@@ -77,29 +88,43 @@ export interface BuiltInScope extends LibraryRoots {
   builtins: Omit<BuiltInScope, "builtins">;
   /** Identify this context. */
   whoami(): { projectId: string; path: string };
-  /** Project-prefixed durable key/value (the `${projectId}:` prefix IS the isolation). */
+  /** Durable key/value prefixed with the RESOURCE OWNER's id (iterate-context.ts `resourceScope`:
+   *  a project's id, or a global user's/organization's subtree) — the `${owner.id}:` prefix IS the
+   *  isolation. */
   kv: {
     get(key: string): Promise<string | null>;
     put(key: string, value: string): Promise<{ ok: true }>;
     delete(key: string): Promise<{ ok: true }>;
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
-  /** Project secrets for egress: `getSecret("/secrets/NAME")` in an outbound request's URL (path
-   *  or query) or headers substitutes to the value at the fetch door (`fetch`), and
-   *  `getSecret("/secrets/NAME", { field: "a.b" })` to one dotted field of a JSON value — apps/os's
-   *  placeholder grammar for a URL or a header (iterate-context-durable-object.ts
-   *  `substituteProjectSecrets`); not its `Basic base64(user:getSecret(…))` peeling nor its
-   *  JSON-body template — the body is never scanned. WRITE-ONLY — `set`, `delete`,
-   *  and a `list` of names and origins, never a value (the same physical-write carve-out as
-   *  `kv.put`). A secret `set` with an `origin` is sent to that origin ONLY: a mis-typed URL cannot
-   *  mail a credential to a stranger. Every change appends `events.iterate.com/secrets/changed` with
-   *  the name (and origin, or `deleted`) — the value never enters the log — attributed like any
-   *  append (`source.principal`). A name is what the placeholder can spell, `[a-zA-Z0-9._-]+`; the
-   *  project's own API key lives outside this catalog (principal.ts) and no placeholder reaches it. */
+  /** The resource owner's secrets for egress (a project's; a global user's or organization's own —
+   *  never a catalog shared across users) — THE SECRET CELL (secrets.ts, secret-durable-object.ts): a
+   *  `getSecret("/secrets/NAME")` placeholder in an outbound request's URL (path or query) or
+   *  headers substitutes to the value at egress (`fetch`), and `getSecret("/secrets/NAME",
+   *  { field: "a.b" })` to one string field of a JSON material — apps/os's placeholder grammar for
+   *  a URL or a header (not its `Basic base64(user:getSecret(…))` peeling nor its JSON-body
+   *  template — the body is never scanned). The material is a string or a JSON object; `urls` pins
+   *  it to those ORIGINS only (a mis-typed URL cannot mail a credential to a stranger); `refresh`
+   *  names the strategy the cell re-mints an expired credential with, in trusted code, on a 401 or
+   *  on first use (`oauth-refresh-token`, `waitrose-session`). WRITE-ONLY — `set`, `delete`, and a
+   *  `list` of names, pins and strategy kinds, never a value. Every change appends
+   *  `events.iterate.com/secrets/changed` with the name, the pin and the strategy kind (or
+   *  `deleted`) — the value never enters the log — attributed like any append (`source.principal`).
+   *  A name is what the placeholder can spell, `[a-zA-Z0-9._-]+`; the project's own API key lives
+   *  outside this catalog (principal.ts) and no placeholder reaches it. */
   secrets: {
-    set(name: string, value: string, options?: { origin?: string }): Promise<{ ok: true }>;
+    set(
+      name: string,
+      material: SecretMaterial,
+      options?: { urls?: string[]; refresh?: SecretRefresh },
+    ): Promise<{ ok: true }>;
+    /** THE OAUTH CONNECT HALF (secret-connect.ts): reserve `name` as an `oauth-refresh-token` secret
+     *  and hand back the provider's authorize URL — send a human there; the provider redirects to
+     *  the platform's `/.auth/connect/callback`, and the secret's own Durable Object exchanges the
+     *  code for the first tokens. Bring your own OAuth client. */
+    connect(name: string, options: SecretConnectOptions): Promise<{ authorizationUrl: string }>;
     delete(name: string): Promise<{ ok: true }>;
-    list(): Promise<{ name: string; origin?: string }[]>;
+    list(): Promise<SecretCatalogEntry[]>;
   };
   /** THE FIRST BINDINGS ROOT: Cloudflare's Workers AI binding, VERBATIM — `run(model, inputs,
    *  options?)`, `models()`, `gateway(id).run({ provider, endpoint, headers, query })`, `toMarkdown()`,
@@ -226,8 +251,9 @@ interface BuildBuiltInsDeps {
   env: {
     LOADER: WorkerLoader;
     ITX_KV: KVNamespace;
-    /** The per-project secret store egress substitutes from (`secret:<projectId>:<name>`). */
-    SECRETS_KV: KVNamespace;
+    /** The secret cells (secret-durable-object.ts): one per secret, `<owner.id>:<name>` — the
+     *  resource owner's id (iterate-context.ts `resourceScope`). */
+    SECRET: DurableObjectNamespace<SecretDurableObject>;
     AI: Ai;
     ARTIFACTS: ArtifactsNamespace;
   };
@@ -236,9 +262,9 @@ interface BuildBuiltInsDeps {
   /** The Artifacts account + namespace `itx.repos` builds git remotes from (worker.ts `AppConfig`). */
   artifactsAccountId: string;
   artifactsNamespace: string;
-  /** The secrets catalog — names and origins, from the core reduce (strongly consistent; a KV list
-   *  lags a write by up to a minute). */
-  secrets: () => { name: string; origin?: string }[];
+  /** The secrets catalog — names, pins and strategy kinds, from the core reduce (strongly
+   *  consistent; never a value). */
+  secrets: () => SecretCatalogEntry[];
   /** Evaluate a producer source expression through THIS context's dispatch (inside the loader's
    *  `getCode`, so only on a cold isolate). */
   invoke: (call: ItxExpression) => Promise<unknown>;
@@ -249,7 +275,8 @@ interface BuildBuiltInsDeps {
   egress: (request: Request) => Promise<Response>;
   /** WHO is calling right now — the `Caller` the DO runs this call under (the fetch lane's header,
    *  or the edge's stamp), `{ principal: null }` for an anonymous session, a processor, a loaded
-   *  worker. Carried across sibling `cd` hops; the path-mask that reads it is not yet enforced. */
+   *  worker and the KERNEL's own delivery loop. Carried across sibling `cd` hops; in the global
+   *  namespace `cd` reads it to tell the kernel's config funnel from a person's path. */
   caller: () => Caller;
   /** The rpcStubs view — closures over the DO's transport table (the pager sockets can never move). */
   rpcStubs: BuiltInScope["rpcStubs"];
@@ -273,40 +300,43 @@ interface BuildBuiltInsDeps {
 export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> {
   const { projectId, path, iterateContextName, env } = deps;
 
-  const kvPrefix = `${projectId}:`;
+  // THE RESOURCE OWNER (iterate-context.ts `resourceScope`): the project itself, or — in the global
+  // namespace — the user's or organization's subtree. Every resource key below is prefixed with
+  // `owner.id`; the secrets catalog lives in the log at `owner.rootPath`.
+  const owner = resourceScope(projectId, path);
+  const kvPrefix = `${owner.id}:`;
   const ownContext = () => deps.context(path);
-  // A project secret lives at `secret:<projectId>:<name>` — the key the DO's egress door reads.
-  const secretKey = (name: string): string => {
-    if (!/^[a-zA-Z0-9._-]+$/.test(name))
-      throw new Error(
-        `secrets: a name is [a-zA-Z0-9._-]+ (what getSecret("/secrets/NAME") can spell), got ${JSON.stringify(name)}`,
-      );
-    return `secret:${projectId}:${name}`;
-  };
+  // A secret's cell is the Durable Object `<owner.id>:<name>` — the one the context DO's `#egress`
+  // forwards a placeholder-bearing request to, by the same derivation (an owner id never holds a `:`).
+  const secretCell = (name: string) =>
+    env.SECRET.getByName(`${owner.id}:${assertSecretName(name)}`);
   /** THE append: every event appended through this scope carries WHO appended it — the DO's own
    *  stamp, never a client's (src/principal.ts): the session's verified principal, or none. */
   const append = (...events: StreamEventInput[]) =>
     ownContext().append(...events.map((event) => stampPrincipal(event, deps.caller().principal)));
-  /** Secrets are the PROJECT's: the value's key is project-scoped, so the catalog lives in ONE log —
-   *  the root context's. Each `secrets` verb runs `here` on the root context, and on a child context
-   *  runs as the same call on the root, over the DO hop. */
-  // A child context runs every secrets verb as the SAME call on the ROOT (secrets are the project's —
-  // one catalog, in the root's log). Acquire the root context PER CALL: a stub cached across calls
+  /** Secrets are the RESOURCE OWNER's: the value's key is owner-scoped, so the catalog lives in ONE
+   *  log — the owner's root context (`owner.rootPath`: a project's `/`, a user's `/users/<id>`).
+   *  Each `secrets` verb runs `here` on that root, and on a context below it runs as the same call
+   *  on the root, over the DO hop. A user's context IS its own root: no hop, no shared catalog. */
+  // A context below the owner's root runs every secrets verb as the SAME call on that ROOT (one
+  // catalog, in the root's log). Acquire the root context PER CALL: a stub cached across calls
   // stays broken after a root DO failure (Cloudflare's DO error-handling requires re-acquiring). And
   // forward `deps.caller()` so the durable change event keeps the child call's authenticated principal.
   const onRootContext = <T>(call: ItxExpressionStep, here: () => Promise<T>): Promise<T> =>
-    path === "/"
+    path === owner.rootPath
       ? here()
-      : (deps
-          .context("/")
+      : // The owner root runs the SAME secrets verb `here` would run (the one built-in, the same
+        // arguments), so its answer has `here`'s type; `invoke` is untyped across the DO hop.
+        (deps
+          .context(owner.rootPath)
           .invoke(["itx", "builtins", "secrets", call], [], deps.caller()) as Promise<T>);
 
-  // A secret mutation is append-THEN-KV, two awaits; a concurrent set and delete of the SAME name
-  // could commit the log in one order while their KV writes land in the other, leaving egress a value
-  // the catalog says is gone (or vice versa). Serialize per name — on the root DO, where every verb
-  // runs (`onRootContext`) — so the log order IS the KV order. Different names never contend.
+  // A secret mutation is append-THEN-cell, two awaits; a concurrent set and delete of the SAME name
+  // could commit the log in one order while their cell writes land in the other, leaving egress a
+  // value the catalog says is gone (or vice versa). Serialize per name — on the owner's root DO, where
+  // every verb runs (`onRootContext`) — so the log order IS the cell's order. Different names never contend.
   // (This is `#builtIns`, built ONCE per DO instance, so the chain persists across calls.) An eviction
-  // BETWEEN a delete's append and its KV delete can still strand a value — a durable reconciliation
+  // BETWEEN a delete's append and its cell clear can still strand a value — a durable reconciliation
   // sweep is the follow-up; see docs/cleanup-log.md.
   const secretMutations = new Map<string, Promise<unknown>>();
   const serializeSecretMutation = <T>(name: string, work: () => Promise<T>): Promise<T> => {
@@ -348,44 +378,59 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       },
     },
     secrets: {
-      set: (name, value, options) =>
-        onRootContext(["set", name, value, options], () =>
+      set: (name, material, options) =>
+        onRootContext(["set", name, material, options], () =>
           serializeSecretMutation(name, async () => {
-            const origin =
-              options?.origin === undefined ? undefined : new URL(options.origin).origin;
+            const cell = secretCell(name);
+            const record = normalizeSecretRecord(material, options);
             // The change is appended FIRST: a refused append (a paused stream) leaves the value
-            // untouched; a KV failure after it leaves a catalog row whose value egress cannot find —
-            // loud, not silent.
-            const key = secretKey(name);
+            // untouched; a cell failure after it leaves a catalog row whose value egress cannot find
+            // — loud, not silent. The fact carries the pin and the strategy KIND, never the material.
             await append({
               type: "events.iterate.com/secrets/changed",
-              payload: { name, origin },
+              payload: {
+                name,
+                ...(record.urls.length > 0 && { urls: record.urls }),
+                ...(record.refresh && { refresh: record.refresh.kind }),
+              },
             });
-            await env.SECRETS_KV.put(key, String(value), {
-              metadata: { origin },
-            });
+            await cell.set(record);
             return { ok: true as const };
+          }),
+        ),
+      connect: (name, options) =>
+        onRootContext(["connect", name, options], () =>
+          serializeSecretMutation(name, async () => {
+            const cell = secretCell(name);
+            const connect = normalizeSecretConnect(options);
+            // The catalog fact first, as for `set`: the name, its pin and the strategy the exchange
+            // will configure — the material arrives later, at the callback, and only into the cell.
+            await append({
+              type: "events.iterate.com/secrets/changed",
+              payload: { name, urls: connect.urls, refresh: "oauth-refresh-token" },
+            });
+            return cell.beginConnect(connect);
           }),
         ),
       delete: (name) =>
         onRootContext(["delete", name], () =>
           serializeSecretMutation(name, async () => {
-            const key = secretKey(name);
+            const cell = secretCell(name);
             await append({
               type: "events.iterate.com/secrets/changed",
               payload: { name, deleted: true },
             });
-            await env.SECRETS_KV.delete(key);
+            await cell.clear();
             return { ok: true as const };
           }),
         ),
       list: () => onRootContext(["list"], async () => deps.secrets()),
     },
     ai: env.AI, // the binding object itself — dispatch walks its methods
-    cfArtifacts: projectScopedArtifacts(env.ARTIFACTS, projectId),
+    cfArtifacts: projectScopedArtifacts(env.ARTIFACTS, owner.id),
     repos: projectScopedRepos({
       namespace: env.ARTIFACTS,
-      projectId,
+      projectId: owner.id,
       accountId: deps.artifactsAccountId,
       namespaceName: deps.artifactsNamespace,
     }),
@@ -396,9 +441,32 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     // hop, where the ambient store does not reach), so an event appended there is attributed too.
     cd: (contextPath: string) =>
       new InvokeHandle((itxExpressionSteps) => {
-        const context = deps.context(resolveContextPath(path, contextPath)); // a ReachableContext
+        const siblingPath = resolveContextPath(path, contextPath);
+        // THE GLOBAL NAMESPACE IS NOT NAVIGABLE (iterate-context.ts `cd`): a person's expression —
+        // a rule or subscription written into their own context, run under their principal — may
+        // not name another global path. The ONE hop that exists here is the kernel's config funnel,
+        // `itx.cd('/').worker…` (the birth row every context carries), which the delivery loop runs
+        // under NO principal — so a user's row that spells the same hop can only feed the funnel.
+        // Stamped `retryable: false`: a subscription row naming another path can only repeat this
+        // refusal, so the delivery loop halts it at once instead of climbing its ladder.
+        if (
+          projectId === GLOBAL_PROJECT_ID &&
+          !(
+            deps.caller().principal === null &&
+            siblingPath === "/" &&
+            itxExpressionStepName(itxExpressionSteps[0]) === "worker"
+          )
+        )
+          throw Object.assign(
+            codedError(
+              "FORBIDDEN",
+              "a global context is reached by identity (session.user, session.organizations), never by path",
+            ),
+            { retryable: false },
+          );
+        const context = deps.context(siblingPath); // a ReachableContext
         // The caller crosses with the call: the sibling runs it under the same Caller, so an event
-        // appended there is attributed too. (No path-mask check here yet — carried, not enforced.)
+        // appended there is attributed too.
         return context.invoke(["itx", ...itxExpressionSteps], [], deps.caller());
       }),
     fetch: (request: Request) => deps.egress(request),

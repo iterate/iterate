@@ -81,6 +81,7 @@ const deterministicFailure = (error: unknown): boolean =>
     "NO_ITX_EXPRESSION_MATCH",
     "REDUCE_CHECKPOINT_TOO_LARGE",
     "EVENT_TOO_LARGE",
+    "FORBIDDEN", // a target this context may not reach (a global path that is not its own): a retry cannot change who the caller is
   ].includes(errorCode(error) ?? "");
 
 /** One row's push waiting behind its in-flight delivery — later commits fold into it; `chars` is
@@ -515,6 +516,12 @@ export class SubscriptionDelivery {
             this.#haltRow(name, row.configuredAtOffset, range.after, 1, error);
             return;
           }
+          // A push the watchdog TIMED OUT aborted the facet (#invokeFacet): the batch was never
+          // checkpointed and nothing else redelivers it, so the restarted facet CATCHES UP from the
+          // log — queued behind whatever already waits on this row (a later push heals the same gap
+          // on its own; the catch-up is then a no-op). ONE catch-up per timed-out push: a batch that
+          // is slow every time costs two aborts per commit and never loops.
+          if (errorCode(error) === "TIMEOUT") this.#catchUpAfterPushTimeout(name, row);
           throw error;
         }
         return;
@@ -535,6 +542,17 @@ export class SubscriptionDelivery {
     } finally {
       this.#recordActivityForQuietClock();
     }
+  }
+
+  /** The catch-up a timed-out push owes (above): chained, so it runs after this row's in-flight
+   *  delivery and before anything queued later; a catch-up that fails is reported, never retried. */
+  #catchUpAfterPushTimeout(name: string, row: Subscription): void {
+    const record = this.#deliveryRecordFor(name);
+    record.deliveryChain = record.deliveryChain.then(() =>
+      this.#catchUpFacetRow(name, row).catch((error) =>
+        reportIssue("subscription-delivery.catch-up-after-timeout", error, { name }),
+      ),
+    );
   }
 
   /** HALT ONCE, FOR THE RIGHT ROW — the one place the `subscription-delivery-halted` fact is
@@ -604,9 +622,14 @@ export class SubscriptionDelivery {
     // call result pins the callee's export table until disposed, so release it here — a live client's
     // push runs on every commit, and leaving each result to GC would leak a slot per delivered batch.
     const call = async (args: unknown[]): Promise<void> => {
-      const result = method
+      const walked = method
         ? (await walkSteps({ value: head, receiver: undefined }, [[method, ...args]])).value
         : await callOn(head, undefined, args);
+      // A PIPELINED call answers with a branded promise the step walk hands back UNAWAITED
+      // (expression.ts): settle it HERE, before the dispose — otherwise a sibling hop's refusal
+      // (FORBIDDEN from the target context) or a hang was disposed unseen and the batch acked as
+      // delivered. The settled value is what pins the callee, so that is what is released.
+      const result = await walked;
       if (typeof result === "object" && result && Symbol.dispose in result)
         (result as Disposable)[Symbol.dispose]();
     };

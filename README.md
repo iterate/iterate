@@ -2,31 +2,7 @@
 
 Monorepo for Iterate's Cloudflare Workers platform. **`apps/os`** is the main app — the product dashboard at `os.iterate.com`.
 
-## Irrevocable engineering principle: no deviant system behaviour
-
-We do not accept unexplained, unbounded, or silently tolerated system
-behaviour. An error is either an explicitly modelled and correctly classified
-expected outcome, or it is a product defect. The same rule applies to retry
-storms, stuck work, silent data loss, unexplained latency, state drift, and
-resource leaks.
-
-- Never normalize an error counter merely because it is noisy or longstanding.
-  Classify every contributing outcome, remove expected outcomes from error
-  telemetry, and fix the rest.
-- Never swallow, endlessly retry, or hide failures behind fallbacks or
-  compatibility shims. Recovery must be bounded, observable, and preserve a
-  durable explanation of what happened.
-- A healthy request is not enough if it leaves corrupt, stalled, or divergent
-  state behind. Verify the resulting state and the relevant production-shaped
-  telemetry.
-- Green tests are necessary but not sufficient. For operational changes, the
-  acceptance proof includes a preview deployment and evidence that its traces,
-  logs, metrics, and state transitions are coherent, correctly classified, and
-  free of new unexplained errors.
-
-Treat any unexplained error volume as a release blocker until evidence proves
-that each outcome is expected and correctly represented outside the error
-signal. "Unavoidable error spam" is not a category.
+Agent instructions: [AGENTS.md](AGENTS.md). Engineering requirements: [no deviant system behaviour](docs/engineering-invariants.md).
 
 ## Environments
 
@@ -48,7 +24,7 @@ pattern: [Doppler-backed scripts](apps/os/docs/doppler-backed-scripts.md).
 
 ### itx API
 
-OS exposes project capability handles through `/api/itx`. The app CLI
+OS exposes project capability handles through `/api`. The app CLI
 authenticates with the config's admin API secret and can run scripts against a
 project's itx surface:
 
@@ -97,7 +73,7 @@ use captun, preview, or production for public callbacks. Details:
 Before PRs:
 
 ```bash
-pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
+pnpm install && pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test
 ```
 
 How to open a PR (branch hygiene, body shape, **screenshots that actually
@@ -176,14 +152,13 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [Vitest patterns](docs/vitest-patterns.md)
 - [Domain objects & stream processors](docs/domain-objects-and-stream-processors.md)
 - [Writing & testing stream processors](docs/writing-stream-processors.md) — side-effect guarantees, the obligation/reconciler pattern, eviction recovery, staleness policy, and the node test harness
-- [Playwright specs](./spec/AGENTS.md) - instructions for agents writing playwright tests
+- [Playwright specs](./specs/AGENTS.md) - instructions for agents writing playwright tests
 
 ### Tasks & agent docs
 
 - [Task system](docs/task-system.md)
 - [Task grooming](docs/tasks-grooming.md)
 - [Writing agent docs](docs/writing-agent-docs.md)
-- [Cloudflare trace queries](.agents/skills/cloudflare-traces/SKILL.md) — MCP dataset selection, correlation, and span-tree audits
 - [Debugging the OS worker](.agents/skills/debug-os-worker/SKILL.md) — ITX, agents, scheduler alarms, dynamic workers, and error lookup
 
 ### App-specific
@@ -191,7 +166,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [OS app](apps/os/AGENTS.md)
 - [Kit device installer](apps/kit/README.md)
 - [Auth app](apps/auth/README.md) — public OIDC/oRPC plus OS-only Workers RPC for the org/project directory
-- [itx](apps/os/src/README.md) — the `/api/itx` surface and its public contract (`types.ts`)
+- [itx](apps/os/src/README.md) — the `/api` surface and its public contract (`types.ts`)
 - [OS worker topology](apps/os/docs/worker-topology.md)
 - [OS architecture & operations](apps/os/docs/architecture-and-operations.md)
 - [Debugging deployed OS workers](apps/os/docs/debugging-deployed-os-workers.md)

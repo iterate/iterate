@@ -12,6 +12,7 @@ import { IterateContextDurableObject } from "./iterate-context-durable-object.ts
 import type { Env as WorkerEnv } from "./control-plane.ts";
 import { auth } from "./sdk/auth.ts";
 import { identityDoor } from "./identity.ts";
+import { SECRET_CONNECT_CALLBACK_PATH, secretConnectCallback } from "./secret-connect.ts";
 import { oauthResponse } from "./api.ts";
 import { consoleHandler } from "./control-plane.ts";
 import { appConfigOf } from "./app-config.ts";
@@ -41,8 +42,8 @@ type ProjectHostIdentity = { principal: Principal | null; platformBearer: boolea
  *  WebSocket upgrade intact, with the headers made the platform's: every inbound `x-itx-*` gone (a
  *  pager or fetch-upgrade header from outside would enter the DO's internal protocol), the cookie
  *  header replaced by `appCookies` (null ⇒ none — what the capability may see), a platform bearer
- *  (this project's token, the admin secret, this project's secret) removed (an app's own bearer
- *  scheme passes through untouched), then the expression the host names — `itx.apps.<app>`, or the
+ *  (an OAuth access token, the admin secret) removed (an app's own bearer scheme passes through
+ *  untouched), then the expression the host names — `itx.apps.<app>`, or the
  *  config worker `itx.worker` for a host with no app label (its `fetch` routes by hostname,
  *  sdk/index.ts `ConfigWorker`) — the hop count and the principal's stamp. The app label the app
  *  sees (`x-iterate-app`) is not written here: the DO's fetch lane derives it from the expression,
@@ -85,6 +86,7 @@ registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknow
 
 export { IterateContextDurableObject };
 export { BrowserSession } from "./browser-session.ts";
+export { SecretDurableObject } from "./secret-durable-object.ts";
 export { ItxEntrypoint } from "./iterate-context.ts";
 
 export default {
@@ -122,7 +124,6 @@ export default {
       waitUntil: (promise) => ctx.waitUntil(promise),
       directory: directory(env.DB),
       appConfig,
-      secretsKv: env.SECRETS_KV,
     };
     const projectHost = projectHostOf(url.hostname, projectHostnameBase);
     if (projectHost) {
@@ -198,6 +199,9 @@ export default {
       );
     }
 
+    // The OAuth connect half's one callback (secret-connect.ts): a provider sends a human back here
+    // with the code for a project secret. Before the browser adapter, which owns the rest of /.auth/*.
+    if (url.pathname === SECRET_CONNECT_CALLBACK_PATH) return secretConnectCallback(request, env);
     const identityResponse = await identityDoor(request, env);
     if (identityResponse) return identityResponse;
     if (!appConfig.mcpOrigin && url.pathname === "/mcp") return oauthResponse(request, env, ctx);

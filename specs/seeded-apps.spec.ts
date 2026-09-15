@@ -49,13 +49,10 @@ test("the seeded guestbook app works after creating a project", async ({
 // and organization: project-member auth deliberately checks the live Auth
 // directory on every request, not merely the OS access-token claims used by
 // the suite's usual forged-session fixture.
-test("the seeded todo app authenticates a real project member", async ({
-  baseURL,
-  page,
-}, testInfo) => {
+test("the seeded todo app authenticates a real project member", async ({ baseURL, page }) => {
   test.setTimeout(E2E_HEAVY_TEST_TIMEOUT_MS);
   test.skip(
-    !(await startEmailOtpSignIn(page, testInfo)),
+    !(await startEmailOtpSignIn(page)),
     "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
   );
 
@@ -63,7 +60,6 @@ test("the seeded todo app authenticates a real project member", async ({
   await signUpWithEmailOtp(page, {
     email: uniqueSignupEmail("todo-app-auth"),
     projectSlug: slug,
-    testInfo,
   });
 
   // First-run onboarding creates the Auth directory membership and the
@@ -136,7 +132,7 @@ test("the seeded todo app authenticates a real project member", async ({
 test("review a workspace document in the seeded Docs app", async ({ baseURL, page }, testInfo) => {
   test.setTimeout(E2E_HEAVY_TEST_TIMEOUT_MS);
   test.skip(
-    !(await startEmailOtpSignIn(page, testInfo)),
+    !(await startEmailOtpSignIn(page)),
     "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
   );
 
@@ -144,7 +140,6 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   await signUpWithEmailOtp(page, {
     email: uniqueSignupEmail("docs-app-review"),
     projectSlug: slug,
-    testInfo,
   });
   // Review needs the authenticated project, independently of the chat composer.
   await page.getByRole("link", { name: "New agent", exact: true }).waitFor();

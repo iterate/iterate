@@ -166,26 +166,37 @@ export class DynamicWorkerRunner {
   }
 
   /**
-   * Stateful refs resolve only to a class plus source identity. The outer
-   * Durable Object owns storage/facet lifetime and is the only place that should
-   * instantiate or restart the hosted class.
+   * Resolve the immutable build now, but load its class only when requested.
+   * Facet hosts must call loadClass inside their startup callback: Worker
+   * Loader caching does not guarantee that another get returns the same
+   * isolate, while a running facet must keep the class it started with.
    */
-  async loadStatefulClass<T extends DurableObjectClass = DurableObjectClass>(
+  async prepareStatefulClass<T extends DurableObjectClass = DurableObjectClass>(
     ref: StatefulDynamicWorkerRef,
     buildBudgetMs?: number,
     /** Supplied only by a caller that just classified a clone-version skew on
      * this class's isolate; retires the shared identity for the rebuild. */
     freshInstanceNonce?: string,
   ): Promise<
-    | { klass: T; ok: true; resolved: ResolvedWorkerSource }
+    | { loadClass: () => T; ok: true; resolved: ResolvedWorkerSource }
     | { failure: WorkerBuildFailure; ok: false }
   > {
-    const loaded = await this.#load(ref, "cached", buildBudgetMs, freshInstanceNonce);
-    if (!loaded.ok) return loaded;
+    const result = await resolveWorkerSource({
+      buildBudgetMs,
+      projectId: this.#projectId,
+      source: ref.source,
+    });
+    if (!result.ok) return result;
     return {
-      klass: this.#durableObjectClass<T>(ref, loaded.worker),
+      loadClass: () =>
+        tracing.enterSpan("dynamic_worker.stateful.load_class", () =>
+          this.#durableObjectClass<T>(
+            ref,
+            this.#loadResolved(result.source, "cached", freshInstanceNonce),
+          ),
+        ),
       ok: true,
-      resolved: loaded.resolved,
+      resolved: result.source,
     };
   }
 

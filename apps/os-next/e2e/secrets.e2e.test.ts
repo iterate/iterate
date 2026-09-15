@@ -4,9 +4,9 @@
 // append; a name the placeholder cannot spell is refused at the door. THE PLACEHOLDER is apps/os's
 // `getSecret("/secrets/NAME")`, and `getSecret("/secrets/NAME", { field: "a.b" })` for one field of
 // a JSON value. ORIGIN BINDING at the egress door: a secret bound to one origin is refused, 502, for
-// any other — the credential's name is told to the caller, never sent anywhere; the project's own API
-// key is no secret the placeholder reaches. The positive half (the value arrives at the bound origin)
-// is deployed-only: it egresses to one of THIS project's own apps on a real project host.
+// any other — the credential's name is told to the caller, never sent anywhere. The positive half (the
+// value arrives at the bound origin) is deployed-only: it egresses to one of THIS project's own apps
+// on a real project host.
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, readAll } from "./support/client.ts";
@@ -25,27 +25,27 @@ test("set / list / delete: names and origins are listed, values never are; each 
   expect(await itx.secrets.list()).toEqual([]);
   expect(await itx.secrets.set("api.key_v-2", "hunter2")).toEqual({ ok: true });
   expect(
-    await itx.secrets.set("stripe", "sk_live", { origin: "https://api.stripe.com/v1/x" }),
+    await itx.secrets.set("stripe", "sk_live", { urls: ["https://api.stripe.com/v1/x"] }),
   ).toEqual({
     ok: true,
   });
   expect(await itx.secrets.list()).toEqual([
     { name: "api.key_v-2" },
-    { name: "stripe", origin: "https://api.stripe.com" }, // the ORIGIN of the URL given, path dropped
+    { name: "stripe", urls: ["https://api.stripe.com"] }, // the ORIGIN of the URL given, path dropped
   ]);
   await itx.secrets.delete("api.key_v-2");
-  expect(await itx.secrets.list()).toEqual([{ name: "stripe", origin: "https://api.stripe.com" }]);
+  expect(await itx.secrets.list()).toEqual([{ name: "stripe", urls: ["https://api.stripe.com"] }]);
   const changes = (await readAll(itx)).filter((e) => e.type === CHANGED).map((e) => e.payload);
   expect(changes).toEqual([
     { name: "api.key_v-2" },
-    { name: "stripe", origin: "https://api.stripe.com" },
+    { name: "stripe", urls: ["https://api.stripe.com"] },
     { name: "api.key_v-2", deleted: true },
   ]);
   expect(JSON.stringify(changes)).not.toContain("hunter2");
   expect(JSON.stringify(changes)).not.toContain("sk_live");
   // a name the placeholder grammar cannot spell can never be substituted — refused at the door
   await expect(itx.secrets.set("has space", "x")).rejects.toThrow(/\[a-zA-Z0-9._-\]\+/);
-  await expect(itx.secrets.set("ok", "x", { origin: "not a url" })).rejects.toThrow();
+  await expect(itx.secrets.set("ok", "x", { urls: ["not a url"] })).rejects.toThrow();
 });
 
 test("an authenticated session's set is attributed — the change carries the principal, never the value", async () => {
@@ -63,7 +63,7 @@ test("an authenticated session's set is attributed — the change carries the pr
 
 test("origin binding at the egress door: a bound secret is refused, 502, for any other origin — naming the binding to the caller", async () => {
   const itx = openItx(freshCtx("secrets-origin"));
-  await itx.secrets.set("bound", "v", { origin: "https://api.example.com" });
+  await itx.secrets.set("bound", "v", { urls: ["https://api.example.com"] });
   const res = await itx.fetch(
     new Request("https://egress.invalid/", {
       headers: { authorization: 'getSecret("/secrets/bound")' },
@@ -92,7 +92,7 @@ test("origin binding at the egress door: a bound secret is refused, 502, for any
   expect(left.text).not.toMatch(/no stored project secret|bound to/);
 });
 
-test("`{ field }` at the egress door: a field the JSON value has no string at, and a field of a non-JSON value, are 502s naming the placeholder; the project's own API key is outside the catalog — no placeholder reaches it", async () => {
+test("`{ field }` in the egress placeholder: a field the JSON value has no string at, and a field of a non-JSON value, are 502s naming the placeholder; a name never set is a 502 too", async () => {
   const itx = openItx(freshCtx("secrets-field"));
   await itx.secrets.set("tg", JSON.stringify({ bot: { token: "123:abc" } }));
   await itx.secrets.set("plain", "p");
@@ -109,11 +109,9 @@ test("`{ field }` at the egress door: a field the JSON value has no string at, a
   expect(await refusal('getSecret("/secrets/plain", { field: "x" })')).toContain(
     "not a JSON value",
   );
-  // the key that authenticates AS the project (principal.ts, outside the `secret:` prefix): the
-  // placeholder finds nothing, so the project's own code can never mail it anywhere
-  await itx.rotateApiKey();
-  expect(await refusal('Bearer getSecret("/secrets/project-api-key")')).toContain(
-    'no stored project secret for getSecret("/secrets/project-api-key")',
+  // a name the catalog never held: the placeholder finds nothing, the request never leaves
+  expect(await refusal('Bearer getSecret("/secrets/never-set")')).toContain(
+    'no stored project secret for getSecret("/secrets/never-set")',
   );
   // a well-formed field passes the door and the request goes on to the network (the `.invalid`
   // failure there is the proof it left)
@@ -153,18 +151,21 @@ export default class Echo extends WorkerEntrypoint {
       ],
     ]);
     const origin = `https://echo--${projectId}.${projectHostnameBase()}`;
-    await itx.secrets.set("arrives", "the-value", { origin });
-    await itx.secrets.set("arrives-json", JSON.stringify({ a: { b: "the-field" } }), { origin });
-    const res = await itx.fetch(
+    await itx.secrets.set("arrives", "the-value", { urls: [origin] });
+    await itx.secrets.set("arrives-json", { a: { b: "the-field" } }, { urls: [origin] });
+    // one request, one secret — the whole-string form, then the `{ field }` form of an object material
+    const plain = await itx.fetch(
+      new Request(`${origin}/`, { headers: { "x-secret": 'getSecret("/secrets/arrives")' } }),
+    );
+    expect(plain.status).toBe(200);
+    expect(await plain.text()).toBe("the-value (none)");
+    const field = await itx.fetch(
       new Request(`${origin}/`, {
-        headers: {
-          "x-secret": 'getSecret("/secrets/arrives")',
-          "x-field": 'getSecret("/secrets/arrives-json", { field: "a.b" })',
-        },
+        headers: { "x-field": 'getSecret("/secrets/arrives-json", { field: "a.b" })' },
       }),
     );
-    expect(res.status).toBe(200);
-    expect(await res.text()).toBe("the-value the-field");
+    expect(field.status).toBe(200);
+    expect(await field.text()).toBe("(none) the-field");
   },
   30_000,
 );
@@ -174,16 +175,16 @@ test("the catalog is the PROJECT's: a secret set from one context is listed from
   const root = openItx(projectId);
   const a = root.cd("/a");
   const b = root.cd("/b");
-  await a.secrets.set("shared", "v", { origin: "https://api.example.com" });
-  expect(await b.secrets.list()).toEqual([{ name: "shared", origin: "https://api.example.com" }]);
+  await a.secrets.set("shared", "v", { urls: ["https://api.example.com"] });
+  expect(await b.secrets.list()).toEqual([{ name: "shared", urls: ["https://api.example.com"] }]);
   expect(await root.secrets.list()).toEqual([
-    { name: "shared", origin: "https://api.example.com" },
+    { name: "shared", urls: ["https://api.example.com"] },
   ]);
   await b.secrets.delete("shared");
   expect(await a.secrets.list()).toEqual([]);
   // the change events live in the ROOT's log, whichever context wrote them
   expect((await readAll(root)).filter((e) => e.type === CHANGED).map((e) => e.payload)).toEqual([
-    { name: "shared", origin: "https://api.example.com" },
+    { name: "shared", urls: ["https://api.example.com"] },
     { name: "shared", deleted: true },
   ]);
 });
