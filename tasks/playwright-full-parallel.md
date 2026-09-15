@@ -5,7 +5,7 @@ size: large
 
 # Run the preview Playwright catalogue fully in parallel
 
-Status: implementation is in place with shared deployment/readiness, six browser jobs, strict result collection and capacity checks. Local orchestration tests and type checks pass; real Depot validation and review remain.
+Status: implementation is in place with shared deployment/readiness, six browser jobs, strict result collection and capacity checks. Repository checks pass and a real six-shard run has exercised report merging and failure propagation. One browser click failure remains under investigation; final green validation and review remain.
 
 The user wants fixed shard/worker counts with `shards * workers >= num_tests`, not an adaptive scheduling algorithm. Use six independent CI runners with sixteen Playwright workers each (96 slots). Keep local runs at one worker.
 
@@ -29,3 +29,8 @@ The user wants fixed shard/worker counts with `shards * workers >= num_tests`, n
 - A real six-process Playwright report exercise preserves four passing tests, one retry-then-pass and one final failure, and produces HTML/JSON at the expected paths through the production merge config.
 - Draft PR: https://github.com/iterate/iterate/pull/2659. Global monitor registered for task 01a09f64-ea4e-7c61-ab0a-c15eb65df3bc.
 - First implementation CI proof (77e125f, run xcb07kjntm) is testing fan-out. Follow-up commits strengthen telemetry cardinality and fix merge-config-relative output paths; these require a subsequent exact-head proof.
+
+- Run `3v0rvw0gg3` at `4cdd25e` started all six independent jobs. Each shard launched all 15–16 assigned tests together. Playwright durations were 35.7–84 seconds, including one retry; the jobs themselves started within three seconds but some spent roughly a minute longer in dependency setup. Sharding capacity does not guarantee identical test start times across runners.
+- The live run exposed simultaneous semaphore lease renewal in readers; `4cdd25e` fixes this by checking ownership without reacquiring the slot. All six readers subsequently passed.
+- Shard 5 failed on `seeded-apps.spec.ts:394`: the Docs Source button was visible/enabled, but its stability check exceeded the existing 1000 ms action budget. `createFlake` reports this unexpected error as “Expected to fail, but passed”; the product body did not pass. A minimal local two-tab reproduction did not fail. No timeout, skip, or allowed-flake pattern was changed.
+- Keep browser runners at the original 16-core size, so adding sharding does not also halve CPU per worker. The first run's 8-core shape showed no sustained saturation, so this is preserving the baseline, not claiming to fix the click failure.

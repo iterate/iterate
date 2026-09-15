@@ -134,7 +134,7 @@ jobs:
         # The discovery reporter fails when fixed capacity needs increasing.
         shard: [1, 2, 3, 4, 5, 6]
     runs-on:
-      size: 8x32
+      size: 16x64
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 12
     steps:

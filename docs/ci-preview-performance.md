@@ -55,7 +55,7 @@ raise the budget automatically.
 - OS Vitest gives every current file a worker immediately and permits at most
   two concurrent tests per file in CI. Each file owns isolated projects; the
   examples matrix still overlaps its isolated runtimes inside each case.
-- Root Playwright runs six shards on independent 8-core Depot runners, each
+- Root Playwright runs six shards on independent 16-core Depot runners, each
   with sixteen workers: 96 slots for the current 92 tests. Both the full
   catalogue and each shard check their fixed capacity. When tests outgrow it,
   increase the explicit shard/worker counts; there is no adaptive scheduler.
