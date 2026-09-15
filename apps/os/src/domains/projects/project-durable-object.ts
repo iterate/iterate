@@ -41,6 +41,7 @@ import {
   type HumanApprovalRequestedPayload,
 } from "./egress-approvals.ts";
 import { isOpenAiPublicApiRequest, routeOpenAiViaGateway } from "./openai-ai-gateway-egress.ts";
+import { egressRulesReadPlan } from "./egress-rules-read-plan.ts";
 import { takeStreamContext, type StreamContext } from "./stream-context.ts";
 import {
   ProjectProcessorContract,
@@ -57,8 +58,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
-  // Last time #egressRules paid a facade snapshot — bounds rules staleness to ~5s.
-  #egressRulesFreshAt = 0;
+  // When #egressRules last read the fold, and whether a root-stream commit
+  // has landed since (see egress-rules-read-plan.ts).
+  #egressRulesReadAtMs = 0;
+  #egressRulesInvalidatedByRootCommit = false;
+  #egressRulesBackgroundRefresh: Promise<void> | undefined;
   // Demo (stateful live state): a counter every watcher of `itx.liveState` sees
   // update, mutated by `itx.liveDemo.increment()`. Proves the DO-backed,
   // shared-engine case — and dogfoods the composite fold the streams index uses.
@@ -197,6 +201,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
    */
   async indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void> {
     this.#streamDatabase.touch(input.stream);
+    // Egress rules fold on the root stream; a committed root batch is the only
+    // way they change, so it is the only thing that invalidates the held copy.
+    if (input.stream.path === "/") this.#egressRulesInvalidatedByRootCommit = true;
     // The reduced slice's refresh is a cross-DO snapshot now (the fold lives
     // in the root stream's facet); only pay it while someone is watching —
     // an engine subscriber (the pinning fallback path) or a socket watcher.
@@ -267,18 +274,45 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * The project's egress rules, from reduced state with BOUNDED staleness:
-   * at most every 5s an egress request pays one facade snapshot (a strict
-   * catch-up-backed read of the facet-hosted fold). (Grants are the trust
-   * boundary and always catch up; rules are policy, where seconds of lag are
-   * acceptable.)
+   * The project's egress rules, from the held copy of reduced state. Rules
+   * only change through committed root-stream batches, and every one of those
+   * is delivered here (`indexCommittedBatchFacts`) — so the copy is exact
+   * until such a delivery invalidates it, and a provider dial no longer pays
+   * a cross-Durable-Object fold snapshot. (Grants are the trust boundary and
+   * always catch up.) A copy quiet for a minute refreshes in the background
+   * as a safety net against a missed delivery.
    */
   async #egressRules(): Promise<readonly EgressRule[]> {
-    if (this.#lastReduced === undefined || Date.now() - this.#egressRulesFreshAt > 5_000) {
-      await this.#refreshReducedState();
-      this.#egressRulesFreshAt = Date.now();
+    const plan = egressRulesReadPlan({
+      hasCachedRules: this.#lastReduced !== undefined,
+      invalidatedByRootCommit: this.#egressRulesInvalidatedByRootCommit,
+      readAtMs: this.#egressRulesReadAtMs,
+      nowMs: Date.now(),
+    });
+    if (plan === "await-refresh") {
+      await this.#refreshEgressRules();
+    } else if (plan === "serve-and-refresh") {
+      this.#egressRulesBackgroundRefresh ??= this.#refreshEgressRules()
+        .catch((error: unknown) => {
+          console.warn("project egress rules background refresh failed", {
+            error,
+            projectId: this.#name.projectId,
+          });
+        })
+        .finally(() => {
+          this.#egressRulesBackgroundRefresh = undefined;
+        });
+      this.ctx.waitUntil(this.#egressRulesBackgroundRefresh);
     }
     return this.#lastReduced!.egressRules;
+  }
+
+  async #refreshEgressRules(): Promise<void> {
+    // Clear the flag BEFORE the read: a root commit landing during the read
+    // must invalidate the copy this read returns.
+    this.#egressRulesInvalidatedByRootCommit = false;
+    await this.#refreshReducedState();
+    this.#egressRulesReadAtMs = Date.now();
   }
 
   /**

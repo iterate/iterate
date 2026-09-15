@@ -1188,6 +1188,7 @@ export class StreamProcessorRunner<
         afterOffset: scannedAfterOffset,
         ...(targetOffset === undefined ? {} : { beforeOffset: targetOffset + 1 }),
         byteLimit: MAX_STREAM_EVENT_READ_BYTE_LIMIT,
+        includeEphemeral: true,
         limit: this.readPageSize,
       });
       this.#assertReadStreamId(page.streamId, streamId);
