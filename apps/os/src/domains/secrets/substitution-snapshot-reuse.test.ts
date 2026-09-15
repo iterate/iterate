@@ -65,7 +65,7 @@ for (const row of rows) {
       nowMs: READ_AT + row.ageMs,
       revision: row.revision,
     });
-    expect(result === null ? "read-again" : "held").toBe(row.becomes);
+    expect(result ? "held" : "read-again").toBe(row.becomes);
     if (row.becomes === "held") expect(result).toBe(state);
   });
 }

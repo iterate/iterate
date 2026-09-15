@@ -910,7 +910,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       nowMs: Date.now(),
       revision,
     });
-    if (held !== null) return held;
+    if (held) return held;
     const state = await this.#snapshot();
     this.#heldSubstitutionSnapshot = { state, readAtMs: Date.now() };
     return state;

@@ -1488,8 +1488,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     const refKey = JSON.stringify(ref);
     const nonce = this.#facetRecoveryNonce;
     const held = this.#heldUserspaceFacetResolutions.get(name);
-    if (held !== undefined && held.refKey === refKey && held.nonce === nonce) {
-      if (Date.now() - held.resolvedAtMs > FACET_SOURCE_RECHECK_MS && held.recheck === undefined) {
+    if (held && held.refKey === refKey && held.nonce === nonce) {
+      if (Date.now() - held.resolvedAtMs > FACET_SOURCE_RECHECK_MS && !held.recheck) {
         held.recheck = this.#prepareUserspaceFacetClass(name, ref, nonce)
           .then(
             (fresh) => {

@@ -20,7 +20,7 @@ export function reusableSubstitutionSnapshot<State extends { updatedOffset: numb
   revision: SubstitutionRevision;
 }): State | null {
   const { held } = input;
-  if (held === undefined) return null;
+  if (!held) return null;
   if (input.nowMs - held.readAtMs > SUBSTITUTION_SNAPSHOT_MAX_AGE_MS) return null;
   if (
     input.revision.kind === "exact-revision" &&
