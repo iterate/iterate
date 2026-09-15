@@ -34,6 +34,10 @@ import {
   SecretSubstitutionError,
 } from "./utils.ts";
 import { withWebSocketHandshakeHeaders } from "./websocket-handshake.ts";
+import {
+  reusableSubstitutionSnapshot,
+  type SubstitutionRevision,
+} from "./substitution-snapshot-reuse.ts";
 
 type SecretState = ProcessorState<typeof SecretProcessorContract>;
 type SecretSnapshot = { offset: number; state: SecretState };
@@ -67,6 +71,7 @@ const INGEST_WAIT_TIMEOUT_MS = 15_000;
  * headers or URL are substituted before opening the pinned upstream socket.
  * Application frames are opaque and are never scanned for placeholders.
  */
+
 export class SecretDurableObject extends DurableObject<Env> {
   /** Report this incarnation's code version for the deployment rollout gate. */
   deploymentVersion(): string {
@@ -107,6 +112,9 @@ export class SecretDurableObject extends DurableObject<Env> {
   // then compare-and-appends. Serialize local callers to avoid wasted crypto;
   // public stream appends remain concurrent and are handled by the assertion.
   #updates: Promise<void> = Promise.resolve();
+
+  /** The last fold snapshot this incarnation read for substitution (see substitution-snapshot-reuse.ts). */
+  #heldSubstitutionSnapshot: { state: SecretState; readAtMs: number } | undefined;
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): void {
@@ -392,10 +400,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     });
   }
 
-  async #fetch(
-    request: Request,
-    revision: { kind: "any-revision" } | { kind: "exact-revision"; updatedOffset: number },
-  ): Promise<Response> {
+  async #fetch(request: Request, revision: SubstitutionRevision): Promise<Response> {
     const { problems, references } = await secretReferencesFromRequest(request);
     if (problems[0] !== undefined) return secretErrorResponse(problems[0].code);
     if (references.length === 0) return secretErrorResponse("secret_reference_required");
@@ -405,7 +410,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     }
 
     try {
-      let state = await this.#snapshot();
+      let state = await this.#snapshotForSubstitution(revision);
       assertSecretCreated(state, this.#name.path);
       assertSecretRevision(state, revision);
       assertOriginPinned(request.url, state);
@@ -435,7 +440,7 @@ export class SecretDurableObject extends DurableObject<Env> {
         retry = null; // one refresh per request: a just-minted token gets no second go
       }
 
-      await this.#appendUsed(request.url);
+      this.#recordUsed(request.url);
       await this.#assertGithubInstallationUseAuthorized(state.refresh);
       const response = await fetchWithCredentialRedirects(substituted, {
         assertUrlAllowed: (url) => assertOriginPinned(url, state),
@@ -454,7 +459,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       const retriedState = await this.#snapshot();
       assertSecretRevision(retriedState, revision);
       const retried = await this.#substitute(retry.source, retriedState);
-      await this.#appendUsed(request.url);
+      this.#recordUsed(request.url);
       await this.#assertGithubInstallationUseAuthorized(retriedState.refresh);
       return await withWebSocketHandshakeHeaders(
         request,
@@ -872,6 +877,25 @@ export class SecretDurableObject extends DurableObject<Env> {
     }
   }
 
+  /**
+   * The `secret/used` audit fact rides behind the upstream call instead of in
+   * front of it: it records that a use happened, it does not authorize one
+   * (the origin pin and the revision assertion above do), and awaiting its
+   * durable append put a stream round trip in front of every provider dial.
+   */
+  #recordUsed(url: string): void {
+    this.ctx.waitUntil(
+      this.#appendUsed(url).catch((error: unknown) => {
+        console.error("secret/used audit append failed", {
+          error,
+          path: this.#name.path,
+          projectId: this.#name.projectId,
+          url,
+        });
+      }),
+    );
+  }
+
   #appendUsed(url: string): Promise<unknown> {
     return this.#appendSecretEvent({
       type: "events.iterate.com/secret/used",
@@ -879,11 +903,26 @@ export class SecretDurableObject extends DurableObject<Env> {
     });
   }
 
+  /** Substitution state: the held copy when it may be reused, else a fresh fold snapshot. */
+  async #snapshotForSubstitution(revision: SubstitutionRevision): Promise<SecretState> {
+    const held = reusableSubstitutionSnapshot({
+      held: this.#heldSubstitutionSnapshot,
+      nowMs: Date.now(),
+      revision,
+    });
+    if (held !== null) return held;
+    const state = await this.#snapshot();
+    this.#heldSubstitutionSnapshot = { state, readAtMs: Date.now() };
+    return state;
+  }
+
   #appendSecretEvent(event: {
     offset?: number;
     type: `events.iterate.com/secret/${string}`;
     payload: Record<string, unknown>;
   }) {
+    // Any write from this object changes the fold: drop the held substitution copy.
+    this.#heldSubstitutionSnapshot = undefined;
     return this.env.STREAM.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.#name.projectId,
