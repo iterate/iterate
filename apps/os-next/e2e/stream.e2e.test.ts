@@ -577,15 +577,11 @@ export default class Waiter extends WorkerEntrypoint {
   expect(got.offset).toBeGreaterThan(head);
 });
 
-// ── THE SELF-WAKE BILLING CONTROL (stream.ts SELF_WAKE_HALT_STREAK): the DEPLOYED, EVICTION-RATE-
-// DEPENDENT observation — the control itself is proven deterministically in src/stream/stream.test.ts
-// (halts at N, resumes on a public door, durable across incarnations); its DO wiring is live. Measured
-// deployed (2026-09-07), the self-wake loop is a SLOW DRIP, not a runaway: the streak only advances on
-// an EVICTED, no-public-door incarnation (the incarnation that handled a request holds
-// #publicDoorTouched for its whole life), and evictions are Cloudflare-timed — a cursor-sub-on-
-// `stream/woken` drips ~+2 `woken` / 8 min; a stuck-retry cursor got 3 in 90 s. Reaching N takes
-// minutes and varies run to run, so this row is OPT-IN (never on the board) — run it by hand and record
-// `streak reached k`:
+// ── THE WAKE TRACE PROBE: `stream/woken` remains the durable incarnation boundary. Alarm internals
+// are available only through an exact `events.iterate.com/stream/trace/alarm` waitForEvent observer,
+// so ordinary wake delivery keeps its durable offsets stable. Keep this probe opt-in and correlate
+// trace phases with the context's resource state before attributing a recurring wake to a lifecycle
+// bug:
 //
 //   RUN_WAKE_LOOP_PROBE=1 WORKER_BASE_URL=https://os.iterate2.com \
 //     pnpm e2e stream.e2e ──
