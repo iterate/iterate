@@ -202,7 +202,7 @@ test("alarm traces are bounded ephemeral events and leave the durable stream unt
   );
 });
 
-test("alarm trace events cannot be smuggled through the ordinary append door", () => {
+test("alarm trace events cannot be smuggled through the ordinary append interface", () => {
   const stream = bareStream();
   stream.append({ type: "seed" });
   expect(stream.emitAlarmTrace({ phase: "fire", reason: "unobserved" })).toBeUndefined();
