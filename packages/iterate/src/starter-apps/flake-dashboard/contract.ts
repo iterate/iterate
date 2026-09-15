@@ -159,7 +159,10 @@ const TrackedTest = z.object({
 export const FlakeDashboardState = z.object({
   birthCertificate: z.object({ config: FlakeDashboardConfig }).nullable().default(null),
   tests: z.record(z.string(), TrackedTest).default({}),
-  /** Main-only unknowns, isolated by suite; history stays in tests and the stream. */
+  /**
+   * Main-only unknowns, isolated by suite. Healthy rows are hidden, retaining
+   * their streak so late failures can correct an apparent recovery.
+   */
   unknownFlakes: z
     .record(
       z.string(),

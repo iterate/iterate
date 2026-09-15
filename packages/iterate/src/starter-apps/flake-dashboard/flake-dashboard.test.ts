@@ -289,6 +289,42 @@ test("unknown streaks count only that test's complete main results in its suite"
   expect(renderBody(h.state())).toContain("0/20 consecutive passes");
 });
 
+test.each(["retry", "final failure"])(
+  "a late %s still breaks an unknown pass streak",
+  async (failure) => {
+    const h = makeHarness();
+    const flake = record("chat upload", "retried-pass", { kind: "unknown" });
+    const pass = { name: "chat upload", outcome: "pass" } as const;
+    await h.append(
+      birth(),
+      runRecorded(1, [flake]),
+      runRecorded(2, [], { tests: [pass] }),
+      runRecorded(5, [], { complete: false }),
+      // The later incomplete run must not hide a late-delivered failure.
+      runRecorded(4, failure === "retry" ? [flake] : [], {
+        tests: [{ ...pass, outcome: "fail" }],
+      }),
+      runRecorded(6, [], { tests: [pass] }),
+    );
+    expect(renderBody(h.state())).toContain("1/20 consecutive passes");
+  },
+);
+
+test("a late failure can restore a row that reached 20 passes before that failure arrived", async () => {
+  const h = makeHarness();
+  await h.append(
+    birth(),
+    runRecorded(0, [record("chat upload", "retried-pass", { kind: "unknown" })]),
+  );
+  for (let n = 1; n <= 20; n++) {
+    await h.append(runRecorded(n, [], { tests: [{ name: "chat upload", outcome: "pass" }] }));
+  }
+  expect(renderBody(h.state())).not.toContain("chat upload |");
+  await h.append(runRecorded(19.5, [], { tests: [{ name: "chat upload", outcome: "fail" }] }));
+  expect(renderBody(h.state())).toContain("chat upload |");
+  expect(renderBody(h.state())).toContain("0/20 consecutive passes");
+});
+
 test("a retry in an interrupted main run resets an unknown streak; a main wrapper adopts it", async () => {
   const h = makeHarness();
   const flake = record("chat upload", "retried-pass", { kind: "unknown" });
