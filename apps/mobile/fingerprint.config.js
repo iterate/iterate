@@ -20,6 +20,11 @@
 /** @type {import('@expo/fingerprint').Config} */
 const config = {
   sourceSkips: ["PackageJsonScriptsAll"],
-  ignorePaths: ["eas.json"],
+  ignorePaths: [
+    "eas.json",
+    // Local module documentation and Mac proof sources do not ship to iOS.
+    "modules/filter-camera/README.md",
+    "modules/filter-camera/tests/**",
+  ],
 };
 module.exports = config;
