@@ -7,7 +7,8 @@ Add native Cloudflare spans around existing project-creation timing steps.
 Separate connection/authentication, creation, description and reply timing in
 agent smoke. Preserve existing deployment waits, RPC behavior and CI ordering.
 No trace-query scripts, new lookup artifacts or readiness wrappers. Work in
-`codex/project-creation-traces`; push a compare link without opening a PR.
+`codex/project-creation-traces`. Initially delivered as a compare branch;
+opening a PR with a measured trace chart was subsequently approved.
 
 - [x] Add spans to `timedStep`, retaining its logs, return values and errors.
       *Native `create-timing.*` spans with existing identity fields and outcome.*
@@ -61,3 +62,7 @@ No trace-query scripts, new lookup artifacts or readiness wrappers. Work in
   in unsampled API results, and the dashboard omits their descendants. The
   corrected links expose the foreground creation steps and artifact seeding;
   they do not establish a complete tree of every creation step.
+- PR preparation: `pnpm knip` passed. Charted the recorded spans across all three
+  traces against the server's `Project.create` start, explicitly preserving
+  overlap and marking gaps as uninstrumented. The chart shows measured timings
+  from this one preview run, not a complete causal tree or a latency benchmark.
