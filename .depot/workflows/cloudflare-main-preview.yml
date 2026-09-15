@@ -1,4 +1,4 @@
-# Same preview deploy/readiness/tests/erase as PRs, with one reserved slot.
+# Same preview deploy/readiness/tests/erase as PRs, using the ordinary preview pool.
 # Let the active run finish. Depot keeps the newest pending push, so frequent
 # merges cannot starve the dashboard of a complete baseline.
 name: Main Preview (Depot CI)
@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: cloudflare-main-preview-1
+  group: cloudflare-main-preview
   cancel-in-progress: false
 
 jobs:

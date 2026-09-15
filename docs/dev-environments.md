@@ -459,22 +459,25 @@ direct deploy from an old checkout cannot be protected by code that checkout
 does not contain and is unsupported. Doppler/Cloudflare deploy access is an
 operator capability, so use current `main` for manual preview deployments.
 
-### Story 1: CI previews my PR
+### Main preview runs
 
-Main also runs the full preview fleet after each push, through
-`pnpm preview run-main --commit <full-sha>`. It uses **preview-1**, reserved in
-Semaphore for `main-preview`; PRs and manual allocations use the other slots.
+Main runs the full preview fleet after each push, through
+`pnpm preview run-main --commit <full-sha>`. It leases an ordinary slot with the
+holder `main-preview`. Each run renews that holder's existing lease when present,
+then erases test data after the tests without releasing the slot. The same 3h
+expiry applies as for PRs: after a quiet period, main may get a different slot.
+No slots are reserved and no Semaphore policy changes are needed.
+
 The main workflow finishes its active deploy/test/erase before starting the
-newest queued commit. PR cancellation behavior is unchanged.
+newest queued commit. PR cancellation behavior is unchanged. Dispatch it with
+`depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow cloudflare-main-preview.yml --ref <branch>`.
+Local `run-main` invocations are refused because they bypass that workflow lock.
 
-Invoke main previews through `depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow cloudflare-main-preview.yml --ref <branch>`. Local `run-main` invocations are refused because they bypass the workflow lock.
+`run-main` requires a clean checkout at the exact SHA. A branch dispatch keeps
+its branch identity, so validation cannot replace the dashboard's main results.
+The report is saved in `test-results/main-preview-state.json`.
 
-`run-main` requires a clean checkout at that exact SHA and a Semaphore that
-already enforces the reservation. On first rollout, release any existing preview-1 lease before deploying the new Semaphore, or let it expire and be garbage-collected. Main waits for an active owner or GC to release the reserved slot.
-A branch dispatch validates the same workflow but keeps the branch's identity,
-so it cannot replace the dashboard's main results. The report is retained as
-`test-results/main-preview-state.json`. Expiry-based GC can still clean an
-abandoned main slot; it cannot force-acquire one while a run holds it.
+### Story 1: CI previews my PR
 
 Opening/pushing a PR that touches preview-relevant paths triggers the
 `Cloudflare Previews` workflow, which runs `pnpm preview run` — deploy then

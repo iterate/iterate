@@ -8,7 +8,6 @@ import { request as httpsRequest } from "node:https";
 import { dirname, resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
-import { resourceAllowedForHolder } from "../../apps/semaphore/src/resource-reservations.ts";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
 import { CONFIG_REPO_TEMPLATE_CATALOG } from "../../apps/os/src/domains/repos/config-repo-template-catalog.generated.ts";
 import {
@@ -303,7 +302,7 @@ export async function run(options: DeployCommandOptions = {}) {
   });
 }
 
-/** Run the full preview fleet on main's reserved slot. Invoke through cloudflare-main-preview.yml so deployment and teardown are serialized. */
+/** Run the full preview fleet using an ordinary lease. The main workflow serializes deployment, tests and cleanup. */
 export async function runMain(options: { commit: string; githubToken?: string }) {
   const runtime = createPreviewRuntime();
   const context = createMainRunContext({
@@ -313,16 +312,6 @@ export async function runMain(options: { commit: string; githubToken?: string })
     environment: runtime.commandEnvironment,
   });
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
-  // The policy comes from the coordinator itself. An older semaphore must
-  // be upgraded before main claims a slot that old PR clients still request.
-  const policy = await semaphore.policy({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
-  if (
-    !policy.reservations.some(
-      ({ slug, holder }) => slug === "preview-1" && holder === context.holder,
-    )
-  ) {
-    throw new Error("Semaphore must reserve preview-1 for main-preview before running main CI.");
-  }
   return await withPreviewE2eTelemetry(context, runtime, "run", async (telemetry) => {
     const errors: unknown[] = [];
     let result;
@@ -337,7 +326,7 @@ export async function runMain(options: { commit: string; githubToken?: string })
     try {
       await eraseSlotHeldByHolder({
         holder: context.holder,
-        preferSlug: "preview-1",
+        preferSlug: (await context.readState()).state.environmentConfigLease?.slug || null,
         eraseSlotData: makePreviewSlotDataEraser(runtime),
         semaphore,
       });
@@ -1416,7 +1405,7 @@ export async function status(options: StatusOptions = {}) {
     : [];
   const diagnosis = diagnosePreviewFleetCapacity({
     openPullRequests,
-    slots: slots.filter((slot) => previewEnvironmentSlugs.includes(slot.slug)),
+    slots,
   });
 
   return {
@@ -1424,7 +1413,6 @@ export async function status(options: StatusOptions = {}) {
     semaphoreBaseUrl: defaultSemaphoreBaseUrl,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
     total: slots.length,
-    prCapacity: previewEnvironmentSlugs.length,
     availableCount: diagnosis.availableCount,
     leasedCount: diagnosis.leasedCount,
     minIdleHours,
@@ -1762,7 +1750,7 @@ export async function gc(options: GcOptions = {}) {
       continue;
     }
     const taken = await semaphore.acquireSpecific({
-      allowedSlugs: previewSlugsForHolder("gc"),
+      allowedSlugs: previewEnvironmentSlugs,
       type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
       slug: slot.slug,
       leaseMs: holdMs,
@@ -2769,17 +2757,7 @@ export const environmentConfigLeaseInventory = previewEnvironmentSlotNumbers.map
   };
 }) satisfies EnvironmentConfigLeaseInventoryItem[];
 
-const previewEnvironmentSlugs = environmentConfigLeaseInventory
-  .map((resource) => resource.slug)
-  .filter((slug) => resourceAllowedForHolder(ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE, slug, null));
-
-function previewSlugsForHolder(holder: string) {
-  return environmentConfigLeaseInventory
-    .map((resource) => resource.slug)
-    .filter((slug) =>
-      resourceAllowedForHolder(ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE, slug, holder),
-    );
-}
+const previewEnvironmentSlugs = environmentConfigLeaseInventory.map((resource) => resource.slug);
 
 function resolveRequestedPreviewEnvironment(body: string): string | null {
   const actionableBody = withoutMarkdownExamplesOrComments(body);
@@ -2879,9 +2857,7 @@ export type PreviewAppRuntime = (typeof cloudflarePreviewApps)[CloudflarePreview
 
 type PreviewRuntime = {
   commandEnvironment: NodeJS.ProcessEnv;
-  createPreviewSemaphoreResourceClient: () => ReturnType<
-    typeof createPreviewSemaphoreResourceClient
-  >;
+  createPreviewSemaphoreResourceClient: () => PreviewSemaphoreResourceClient;
   repositoryRoot: string;
   signal?: AbortSignal;
 };
@@ -2941,7 +2917,9 @@ function createPreviewRuntime(): PreviewRuntime {
   };
 }
 
-function createPreviewSemaphoreResourceClient(env: NodeJS.ProcessEnv) {
+function createPreviewSemaphoreResourceClient(
+  env: NodeJS.ProcessEnv,
+): PreviewSemaphoreResourceClient {
   // Semaphore is behind the same apps/auth auth as os: authenticate with a
   // pre-minted bearer token (SEMAPHORE_API_TOKEN) when one is provided, else
   // forge-mint an admin access token from the config's forge key
@@ -2956,7 +2934,6 @@ function createPreviewSemaphoreResourceClient(env: NodeJS.ProcessEnv) {
   });
 
   return {
-    policy: semaphore.resources.policy,
     acquire: ({ allowedSlugs, holder, leaseMs, type, waitMs }) =>
       semaphore.resources.acquire({ allowedSlugs, holder, leaseMs, type, waitMs }),
     acquireSpecific: ({ allowedSlugs, force, holder, leaseMs, slug, type }) =>
@@ -2964,7 +2941,7 @@ function createPreviewSemaphoreResourceClient(env: NodeJS.ProcessEnv) {
     release: ({ force, leaseId, slug, type }) =>
       semaphore.resources.release({ force, leaseId, slug, type }),
     list: ({ type }) => semaphore.resources.list({ type }),
-  } satisfies PreviewSemaphoreResourceClient & { policy: typeof semaphore.resources.policy };
+  };
 }
 
 type PreviewInventoryClient = {
@@ -4934,7 +4911,6 @@ async function classifyEnvironmentConfigLeases(input: {
 
       return {
         slug: resource.slug,
-        reservedFor: resource.slug === "preview-1" ? "main" : null,
         verdict,
         // What `eraseSlotData` needs to wipe the slot. Falls back to the
         // slug-derived config (preview-3 → preview_3) for slots that have
@@ -5046,7 +5022,7 @@ async function acquireAnyEnvironmentConfigLease(input: {
     const waitMs = attempt === 1 ? 0 : Math.max(0, Math.min(slotWaitPerAttemptMs, remainingMs));
     try {
       const acquired = await input.semaphore.acquire({
-        allowedSlugs: previewSlugsForHolder(input.holder),
+        allowedSlugs: previewEnvironmentSlugs,
         type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         leaseMs: input.leaseMs,
         waitMs,
@@ -5272,7 +5248,7 @@ async function assignEnvironmentConfigLease(input: {
       }
 
       const acquired = await input.semaphore.acquireSpecific({
-        allowedSlugs: previewSlugsForHolder(input.holder),
+        allowedSlugs: previewEnvironmentSlugs,
         leaseMs: input.leaseMs,
         slug: input.wantedSlug,
         type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
@@ -5401,10 +5377,7 @@ function toEnvironmentConfigLease(lease: {
 async function listSlotsLeasedToHolder(semaphore: PreviewSemaphoreResourceClient, holder: string) {
   const resources = await semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
   return resources.filter(
-    (resource) =>
-      resource.leaseState === "leased" &&
-      resource.holder === holder &&
-      previewSlugsForHolder(holder).includes(resource.slug),
+    (resource) => resource.leaseState === "leased" && resource.holder === holder,
   );
 }
 
@@ -5435,7 +5408,7 @@ async function adoptLeaseHeldBySemaphore(input: {
   );
   for (const resource of held) {
     const reissued = await input.semaphore.acquireSpecific({
-      allowedSlugs: previewSlugsForHolder(input.holder),
+      allowedSlugs: previewEnvironmentSlugs,
       type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
       slug: resource.slug,
       leaseMs: input.leaseMs,
@@ -5477,11 +5450,11 @@ async function retakeRecordedSlotIfFree(input: {
   recordedSlug: string | null;
   semaphore: PreviewSemaphoreResourceClient;
 }): Promise<EnvironmentConfigLease | null> {
-  if (!input.recordedSlug || !previewSlugsForHolder(input.holder).includes(input.recordedSlug)) {
+  if (!input.recordedSlug) {
     return null;
   }
   const retaken = await input.semaphore.acquireSpecific({
-    allowedSlugs: previewSlugsForHolder(input.holder),
+    allowedSlugs: previewEnvironmentSlugs,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
     slug: input.recordedSlug,
     leaseMs: input.leaseMs,

@@ -2193,37 +2193,37 @@ describe("eraseHeldSlotAfterRun", () => {
 });
 
 describe("claimEnvironmentConfigLease", () => {
-  test("adopts (and thereby renews) the slot the semaphore attributes to this holder", async () => {
-    // The PR body's copy is never consulted for ownership: the semaphore says
-    // pr-1600 holds preview-2, so the claim re-issues that lease. The slot
-    // carries this PR's own deployment and is still erased: fresh on every
-    // deploy.
-    const eraseSlotData = vi.fn(async () => {});
-    const semaphore = fakeSemaphore({
-      acquireSpecific: vi.fn(async () => fakeLease({ expiresAt: 1_800_000_000_000 })),
-      list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
-    });
+  test.each(["pr-1600", "main-preview"])(
+    "%s renews its existing slot without a recorded state",
+    async (holder) => {
+      // Ownership survives between runs in Semaphore, even without PR body state.
+      const eraseSlotData = vi.fn(async () => {});
+      const semaphore = fakeSemaphore({
+        acquireSpecific: vi.fn(async () => fakeLease({ holder, expiresAt: 1_800_000_000_000 })),
+        list: vi.fn(async () => [leasedResource("preview-2", holder)]),
+      });
 
-    const lease = await claimEnvironmentConfigLease({
-      eraseSlotData,
-      holder: "pr-1600",
-      leaseMs: 1000,
-      recordedSlug: "preview-2",
-      semaphore,
-      waitTotalMs: 0,
-    });
+      const lease = await claimEnvironmentConfigLease({
+        eraseSlotData,
+        holder,
+        leaseMs: 1000,
+        recordedSlug: null,
+        semaphore,
+        waitTotalMs: 0,
+      });
 
-    expect(lease.slug).toBe("preview-2");
-    expect(lease.leasedUntil).toBe(1_800_000_000_000);
-    expect(semaphore.acquireSpecific).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ slug: "preview-2", holder: "pr-1600", force: true }),
-    );
-    expect(semaphore.acquire).not.toHaveBeenCalled();
-    expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
-      dopplerConfig: "preview_2",
-      slug: "preview-2",
-    });
-  });
+      expect(lease.slug).toBe("preview-2");
+      expect(lease.leasedUntil).toBe(1_800_000_000_000);
+      expect(semaphore.acquireSpecific).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ slug: "preview-2", holder, force: true }),
+      );
+      expect(semaphore.acquire).not.toHaveBeenCalled();
+      expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
+        dopplerConfig: "preview_2",
+        slug: "preview-2",
+      });
+    },
+  );
 
   test("a failed erase hands the slot back, and taking it back erases again — never a dirty deploy", async () => {
     // The adopt's erase dies half-way, so the lease is released. The recorded
@@ -2356,9 +2356,7 @@ describe("claimEnvironmentConfigLease", () => {
     expect(lease.dopplerConfig).toBe("preview_5");
     expect(semaphore.acquire).toHaveBeenCalledWith(
       expect.objectContaining({
-        allowedSlugs: environmentConfigLeaseInventory
-          .map((resource) => resource.slug)
-          .filter((slug) => slug !== "preview-1"),
+        allowedSlugs: environmentConfigLeaseInventory.map((resource) => resource.slug),
         holder: "pr-1600",
       }),
     );

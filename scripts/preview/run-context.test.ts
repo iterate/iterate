@@ -15,7 +15,7 @@ test("a main preview pins its checkout and records state without a PR", async ()
     ),
   );
   expect(workflow).toMatchObject({
-    concurrency: { group: "cloudflare-main-preview-1", "cancel-in-progress": false },
+    concurrency: { group: "cloudflare-main-preview", "cancel-in-progress": false },
     on: { push: { branches: ["main"] } },
   });
   expect(workflow.jobs.preview).toBeDefined();

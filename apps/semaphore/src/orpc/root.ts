@@ -227,10 +227,6 @@ const internalRouter = semaphore.__internal.router({
 export const appRouter = semaphore.router({
   __internal: internalRouter,
   resources: semaphore.resources.router({
-    policy: semaphore.resources.policy
-      .use(requireAuth)
-      .use(mapResourceErrors)
-      .handler(({ input }) => getCoordinator(input.type).policy({ type: input.type })),
     add: addResourceProcedure,
     delete: deleteResourceProcedure,
     list: listResourcesProcedure,
