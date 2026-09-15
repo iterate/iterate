@@ -17,3 +17,4 @@ export { timeline } from "./timeline.ts";
 export { transcript } from "./transcript.ts";
 export { utterances } from "./utterances.ts";
 export { wire } from "./wire.ts";
+export { startup } from "./startup.ts";
