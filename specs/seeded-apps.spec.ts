@@ -132,6 +132,7 @@ test("the seeded todo app authenticates a real project member", async ({ baseURL
   const thirdTitle = `${todoTitle}-third`;
   const composer = page.getByLabel("New todo");
   await page.getByText("No todos yet.").waitFor();
+  page.videoMode?.setStartTime();
 
   // A slow connection must not stop someone composing their next todo.
   holdMessages = true;

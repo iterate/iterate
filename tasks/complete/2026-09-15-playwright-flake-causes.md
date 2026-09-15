@@ -7,7 +7,7 @@ base: a85434f645
 
 # Fix the recurring Playwright failures
 
-The approved Todo/auth follow-up is implemented: per-row pending operations and preview auth limits of 600 per 60 seconds. All 52 focused browser runs passed with zero retries, including 48 at 16 workers; preview erasure and lease release are confirmed. Historical startup failures and the recurring registry alarm error remain recorded separately. **No pull request**; keep using the compare links.
+The approved Todo/auth follow-up is implemented: per-row pending operations and preview auth limits of 600 per 60 seconds. All 52 focused browser runs passed with zero retries, including 48 at 16 workers; preview erasure and lease release are confirmed. Historical startup failures and the recurring registry alarm error remain recorded separately. The user has now approved opening a draft PR with video-mode recordings of the changed seeded-app specs.
 
 ## Review amendments
 
@@ -144,3 +144,10 @@ No new component extraction or dedicated loading-state tests. Nullable `oldStrin
 - Server telemetry window **10:37:23–10:40:29 UTC**: no Auth error records. OS has eight: three native cold-build HTTP 503 records, four records from one network-closure trace, and one recurring registry alarm-arming error. All 32 ITX calls captured in the connection trace have outcome `ok`. A second query after ingestion caught up returned exactly the same eight OS records and zero Auth records. The registry error remains unresolved, with the same getAlarm stack and no useful cause as earlier rounds; this branch does not claim to fix it. Evidence: `todo-auth-final-{os,auth}-errors.json`, `todo-auth-{alarm,connection}.json`; follow-up recorded in `tasks/preview-stream-startup-stalls.md`.
 
 - Todo/auth exit cleanup succeeded: nine non-container DO classes retired, 272 Auth users and 106 organizations cleared, 106 KV keys removed. Artifact GC deleted 629 repositories before its 90-second budget; remaining inert repositories await the next pass. R2 files and sandbox backups retain three-hour expiry. Preview-3 lease `3f97d463-4e7f-455d-91ea-bcbfa7cd6a04` was released (`released: true`); OS remains parked until the next deployment.
+
+## Draft PR and recordings (approved)
+
+- [ ] Open a draft PR against main, register review monitoring, and attach rendered video-mode recordings of Todo, shopping-list undo and Docs review.
+- [ ] Verify the GitHub players render, inspect CI/reviews, and clean up recording resources.
+
+Merged main's shared Playwright readiness change (#2653), preserving these tests and adopting its simplified signup helper signatures. Todo video now starts at the ready list, matching the existing Docs recording trims.
