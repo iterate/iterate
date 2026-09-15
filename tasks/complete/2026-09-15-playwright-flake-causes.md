@@ -9,6 +9,8 @@ base: a85434f645
 
 Draft PR [#2656](https://github.com/iterate/iterate/pull/2656) contains the approved fixes and three seeded-app video-mode recordings. All 52 focused Todo/auth runs and all three recording runs passed with zero retries; recording-head CI is green. Preview erasure and lease release are confirmed. Historical startup failures and the recurring registry alarm error remain recorded separately.
 
+Latest review amendment: replace the unnecessary file poll and let destination assertions handle auth navigation. Code and local checks are ready; fresh preview reruns are in progress. The two review threads remain open until those changes are validated and pushed.
+
 ## Review amendments
 
 - [x] Apply the requested UI/test simplifications. *Stop button annotation, Todo restored to `client.tsx`, requested tests removed, dedent lists and native double-click word edits.*

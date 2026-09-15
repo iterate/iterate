@@ -118,13 +118,12 @@ test("the seeded todo app authenticates a real project member", async ({ baseURL
   // cookie installed by the signup flow; the callback redeems a fragment token
   // into an app-host-only HttpOnly cookie before returning to `/`. The click
   // waits through two origins and three navigations, then worker-bundler
-  // transforms the package-backed server and compiles the browser entry —
-  // preserve the real cold-build deadline instead of letting spinner-waiter
-  // collapse the wait to its no-spinner fast-fail.
-  await page.getByRole("link", { name: "Continue with iterate" }).click({ timeout: 30_000 }); // timeout: the real cross-origin cold-build deadline the note above describes — spinner-waiter would fast-fail it
+  // transforms the package-backed server and compiles the browser entry.
+  // Let the destination wait own navigation instead of the short click budget.
+  await page.getByRole("link", { name: "Continue with iterate" }).click({ noWaitAfter: true });
 
-  await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    await page.getByRole("heading", { name: "Todo" }).waitFor({ timeout: 120_000 }); // timeout: manual cold-build budget — spinner-waiter is disabled for this wait
+  await spinnerWaiter.settings.run({ spinnerTimeout: 130_000 }, async () => {
+    await page.getByRole("heading", { name: "Todo" }).waitFor();
   });
 
   const todoTitle = `todo-${crypto.randomUUID().slice(0, 8)}`;
@@ -220,7 +219,8 @@ test("undo keeps a peer's shopping-list edit in the seeded Docs app", async ({ b
   await spinnerWaiter.settings.run({ spinnerTimeout: 130_000 }, async () => {
     await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor();
   });
-  await page.getByRole("link", { name: "Continue with iterate" }).click({ timeout: 30_000 }); // timeout: cross-origin auth and cold build do not have continuous spinner-waiter progress
+  // The destination assertion owns navigation and loading through spinner-waiter.
+  await page.getByRole("link", { name: "Continue with iterate" }).click({ noWaitAfter: true });
   await page.getByText(/^live · v\d+$/).waitFor();
   const peer = await page.context().newPage();
   await peer.goto(url.toString());
@@ -250,17 +250,13 @@ test("undo keeps a peer's shopping-list edit in the seeded Docs app", async ({ b
   await expect.poll(() => readEditorText(editor)).toContain("smooth peanut butter");
   expect(await readEditorText(editor)).not.toContain("red");
   await expect.poll(() => readEditorText(peerEditor)).toContain("green apples");
-  await expect
-    .poll(() => workspace.readFile(path), {
-      timeout: 30_000, // timeout: file durability follows the editor's visible state, outside spinner-waiter
-    })
-    .toBe(
-      dedent`
-        - green apples
-        - smooth peanut butter
-        - bananas
-      ` + "\n",
-    );
+  expect(await workspace.readFile(path)).toBe(
+    dedent`
+      - green apples
+      - smooth peanut butter
+      - bananas
+    ` + "\n",
+  );
   await peer.close();
 });
 
@@ -350,17 +346,15 @@ flake("review a workspace document in the seeded Docs app", async ({ baseURL, pa
     await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor();
   });
   await page.getByText("This app is available to project members.").waitFor();
-  await page.getByRole("link", { name: "Continue with iterate" }).click({ timeout: 30_000 }); // timeout: cross-origin auth callback + cold build — spinner-waiter would fast-fail it
+  // The destination assertion owns navigation and loading through spinner-waiter.
+  await page.getByRole("link", { name: "Continue with iterate" }).click({ noWaitAfter: true });
 
-  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+  await spinnerWaiter.settings.run({ spinnerTimeout: 130_000 }, async () => {
     // The header names the document by its workspace-relative path (the
     // sidebar owns the workspace name; the document's own H1 carries the
     // title). The live status is visually silent but stays in the
     // accessibility tree — still the signal that the editor synced.
-    await page
-      .locator("header")
-      .getByRole("heading", { name: documentPath })
-      .waitFor({ timeout: 120_000 }); // timeout: manual cold-build budget — spinner-waiter is disabled for this wait
+    await page.locator("header").getByRole("heading", { name: documentPath }).waitFor();
   });
   await page.getByText(/^live · v\d+$/).waitFor({ timeout: 30_000 }); // timeout: collab attach — the live badge is a11y-only, nothing for the spinner-waiter to watch
   // The PR walkthrough is about reviewing the document, not account
