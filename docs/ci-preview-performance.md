@@ -2,7 +2,7 @@
 
 The **Cloudflare Previews** check deploys every affected app to one leased
 preview slot and runs its deployed e2e coverage. Its target is **under 3m30s
-end-to-end**. The 20-minute workflow timeout is only a runaway backstop.
+end-to-end**. Job timeouts are runaway backstops, not performance targets.
 
 For workflow commands, logs, and metrics, see [Depot CI](depot-ci.md). This
 document defines the critical-path model and the rules that keep it fast.
@@ -49,9 +49,9 @@ raise the budget automatically.
   before workers start. Workers inherit the prepared environment; fixtures
   neither fetch Doppler secrets nor wait for deployment propagation. Test
   identities, signed tokens and projects remain specific to each test.
-- Chromium installation overlaps readiness. Browser startup and authentication
-  now happen after readiness, so this change improves duration reporting but
-  may add time previously hidden by overlapping setup.
+- The single-machine command overlaps Chromium installation with readiness.
+  Distributed shards use the baked browser image and check installation on
+  their own runner. Their browser startup and authentication follow readiness.
 - OS Vitest gives every current file a worker immediately and permits at most
   two concurrent tests per file in CI. Each file owns isolated projects; the
   examples matrix still overlaps its isolated runtimes inside each case.

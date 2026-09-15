@@ -502,7 +502,13 @@ export async function ciFinish(options: PullRequestCommandOptions = {}) {
     }
     const entries = await Promise.all(
       apps.map(async (app) => {
-        telemetry.appStarted(app.previewTestArtifactSources);
+        telemetry.appStarted(
+          app.previewTestArtifactSources.flatMap((source) =>
+            app.slug === "os" && source.framework === "playwright"
+              ? previewPlaywrightShards.map(() => source)
+              : [source],
+          ),
+        );
         const keys = [
           app.slug,
           ...(app.slug === "os"
@@ -537,6 +543,7 @@ export async function ciFinish(options: PullRequestCommandOptions = {}) {
         failures.push(...summary.collectionErrors);
         announceRetryTelemetry(app.slug, summary);
         const message = failures.length ? failures.join("; ") : null;
+        if (!message) warnIfOverBudget("e2e", app.slug, durationMs, app.previewTestBudgetMs);
         telemetry.appFinished({
           app: app.slug,
           slot: plan.slot,
