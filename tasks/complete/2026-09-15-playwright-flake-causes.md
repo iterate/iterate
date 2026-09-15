@@ -1,5 +1,5 @@
 ---
-status: complete
+status: todo-operations-and-auth-limits
 size: large
 branch: fix/playwright-flake-causes
 base: a85434f645
@@ -7,7 +7,7 @@ base: a85434f645
 
 # Fix the recurring Playwright failures
 
-The conditional-edit follow-up is complete: all 84 deployed checks passed with zero retries, local checks passed, and the preview was erased and released. Workspace returns explicit applied/not-applied results, Notes handles the latter as superseded, and the method-name/message classification workaround is removed. Earlier browser evidence and the remaining startup/auth failures are preserved below. **No pull request**; keep using the compare links.
+The next approved follow-up is in progress: one Todo pending-operation array and higher preview auth limits. Conditional edit outcomes are complete and validated; earlier browser evidence and the remaining startup/auth failures are preserved below. **No pull request**; keep using the compare links.
 
 ## Review amendments
 
@@ -127,3 +127,11 @@ The user approved replacing the expected conflict exceptions with explicit resul
 - Repeated deployed conditional-edit cases passed **40/40**, 20 ordinary-file and 20 live-file cases, two concurrent Vitest processes, zero retries, fresh project per case. Each case verifies a successful edit, preservation after a text mismatch, and preservation of deletion. Ordinary-file median/max 12.8/18.8s; live-file 12.6/25.6s, including fixture setup/disposal. Total follow-up deployed proof: **84/84 passed**. Evidence: `.flake-validation.ignoreme/edit-outcome-rpc-repeat20/`.
 - Follow-up telemetry, 09:46:27–09:55:11 UTC, Cloudflare account `376ef7ed81b0573f93524de763666c15`, service `os-preview-3`: **all 130 captured Workspace.edit calls have outcome `ok`**, including the conditional conflicts and missing files. No method/message classification is involved. Queried again after ingestion caught up; the first response held 128 calls. The complete error query contains 46 records: 13 deliberately rejected operations in the two old Workspace tests, four stream-kill records including its ITX call, 12 connection-closure records across three traces, 14 native cold-build HTTP 503 responses, and three existing registry alarm-arming errors. The alarm issue and remaining expected-error classification debt are recorded in `tasks/preview-stream-startup-stalls.md`; these tests do not fix them. Queries and results: `query-followup-final-{edits,errors}.json`, `followup-final-{edits,errors}-settled.json` in the retained evidence folder.
 - Follow-up exit cleanup succeeded: nine non-container DO classes retired, 208 Auth users and 80 organizations cleared, 188 KV keys removed. Artifact GC deleted 582 repositories before its 90-second budget; remaining inert repositories await a later pass. R2 files/backups retain three-hour expiry. Preview-3 lease `b98d3f24-0a07-4863-992e-6733312883cc` released at 09:57 UTC (`released: true`). The OS worker remains parked until the next owner's deployment.
+
+## Todo operations and preview auth limits (approved)
+
+- [ ] Replace Todo's count/single-added-item state with one array of add/setDone/remove operations. Allow overlapping additions and changes to different rows; disable only the affected row. Keep the approved conditional render reconciliation and clear operations when live state confirms them. A failed request removes only its own operation. Use actual todo IDs for optimistic rows and mark pending rows with `data-spinner`; retain deleting rows until server confirmation.
+- [ ] Set each OAuth endpoint and fixed-code OTP to `window: 60, max: 600` when fixed test OTP is enabled. Preserve production defaults. Leave Better Auth internals alone: this version extends its counter expiry on each request, so continuous traffic can accumulate across minutes; the configured window is not a precise sustained per-minute quota.
+- [ ] Validate the existing auth test and extend the real Todo CRUD spec for overlapping changes and persistence. Run repeated Todo/mobile sign-ins against a fresh preview with zero retries, inspect failures/telemetry, erase and release the preview, then commit/push the validation record.
+
+No new component extraction or dedicated loading-state tests. Nullable `oldString` was discussed but is not part of these two approved changes.
