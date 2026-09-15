@@ -38,9 +38,10 @@ jobs:
           TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
         run: |-
           set -euo pipefail
-          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview run \
-            --github-token "$GITHUB_TOKEN" \
-            --commit "$GITHUB_SHA"
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- \
+            pnpm preview run \
+              --github-token "$GITHUB_TOKEN" \
+              --commit "$GITHUB_SHA"
       - name: Main preview / erase slot data after e2e
         if: always()
         env:
@@ -48,16 +49,19 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |-
           set -euo pipefail
-          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview erase \
-            --github-token "$GITHUB_TOKEN" \
-            --commit "$GITHUB_SHA" \
-            --ran-head-sha "$GITHUB_SHA"
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- \
+            pnpm preview erase \
+              --github-token "$GITHUB_TOKEN" \
+              --commit "$GITHUB_SHA" \
+              --ran-head-sha "$GITHUB_SHA"
       - name: Normalize and send preview test telemetry
         if: always()
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
-        run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
+        run: |-
+          doppler run --project _shared --config prd -- \
+            pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
       - name: Collect OS preview test artifacts
         if: always()
         run: scripts/preview/collect-test-artifacts.sh test-results
