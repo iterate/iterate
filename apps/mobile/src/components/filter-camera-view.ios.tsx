@@ -204,7 +204,7 @@ class NativeFilterCamera extends Component<
               ...previous.maskStretch,
               [kind]: {
                 x: Math.min(3, Math.max(0.35, stretch.x * (1 + gesture.dx / 240))),
-                y: Math.min(3, Math.max(0.35, stretch.y * (1 + gesture.dy / 240))),
+                y: Math.min(3, Math.max(0.35, stretch.y * (1 - gesture.dy / 240))),
               },
             },
           },

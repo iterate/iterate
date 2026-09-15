@@ -92,8 +92,10 @@ final class FilterCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
           self.settings = ""
         }
         if self.settings != settings {
-          try self.renderer?.configure(settings)
+          // Remember the attempted selection even if its filter throws. Going
+          // back to the previous good filter must configure it and clear failure.
           self.settings = settings
+          try self.renderer?.configure(settings)
           self.failure = nil
           let values = try JSONSerialization.jsonObject(with: Data(settings.utf8)) as? [String: Any]
           let filterID = values?["filterId"] as? String ?? ""

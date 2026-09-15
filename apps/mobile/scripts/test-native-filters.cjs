@@ -26,7 +26,7 @@ const path = require("node:path");
     ],
     { stdio: "inherit" },
   );
-  execFileSync(binary, [runtime], { stdio: "inherit", timeout: 120_000 });
+  execFileSync(binary, [runtime, ...process.argv.slice(2)], { stdio: "inherit", timeout: 120_000 });
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

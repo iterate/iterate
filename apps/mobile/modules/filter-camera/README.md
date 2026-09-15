@@ -26,7 +26,12 @@ From `apps/mobile`, run `pnpm test:native:macos` on a Mac with Command Line
 Tools. It exercises real Apple encoding/decoding, audio in short callbacks,
 retained image handles, path fill/stroke, all seven drawers, and live hosted
 images. It prints the MP4/PNG locations. This is not an iPhone camera test.
+Use `pnpm test:native:macos --long` for a two-minute recording proof.
 The EAS preview workflow compiles and signs the actual iPhone application.
+
+A throwing project filter stops a pending capture or recording visibly; it
+never silently saves unfiltered footage. Retry or selecting a valid filter
+restarts preview, including returning to the previously selected filter.
 
 Metro builds `native-runtime.generated.ts` before bundling. Changes to filter
 JavaScript can ship through EAS Update; Swift/module changes need a native

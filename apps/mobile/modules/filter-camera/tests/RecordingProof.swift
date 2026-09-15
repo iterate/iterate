@@ -22,6 +22,8 @@ import ImageIO
       }
     }
     try retainedImageAndPathProof()
+    try arcWindingProof()
+    let frameCount = CommandLine.arguments.contains("--long") ? 3600 : 90
     let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(
       "iterate-native-filter-proof.mp4")
     try? FileManager.default.removeItem(at: url)
@@ -48,8 +50,24 @@ import ImageIO
       try renderer.configure(
         String(data: JSONSerialization.data(withJSONObject: settings), encoding: .utf8)!)
     }
+    var invalid = settings
+    invalid["dynamicFilters"] = [
+      ["id": "project:proof", "source": "({ label: 'Invalid', emoji: 'X', draw: null })"]
+    ]
+    do {
+      try renderQueue.sync {
+        try renderer.configure(
+          String(data: JSONSerialization.data(withJSONObject: invalid), encoding: .utf8)!)
+      }
+      preconditionFailure("Invalid project filter metadata must fail visibly")
+    } catch { precondition(error.localizedDescription.contains("draw")) }
+    // The next user selection must recover, including the previous valid one.
+    try renderQueue.sync {
+      try renderer.configure(
+        String(data: JSONSerialization.data(withJSONObject: settings), encoding: .utf8)!)
+    }
     let movie = try FilterMovieWriter(url: url, width: 320, height: 480, hasAudio: true)
-    for index in 0..<90 {
+    for index in 0..<frameCount {
       var buffer: CVPixelBuffer?
       CVPixelBufferCreate(
         nil, 320, 480, kCVPixelFormatType_32BGRA,
@@ -108,7 +126,7 @@ import ImageIO
       reader.status == .completed && audibleSamples > 10000,
       "Saved audio must decode to the recorded tone")
     let duration = try await asset.load(.duration).seconds
-    precondition(duration > 2.8 && duration < 3.2)
+    precondition(abs(duration - Double(frameCount) / 30) < 0.2)
     let generator = AVAssetImageGenerator(asset: asset)
     let (image, _) = try await generator.image(at: CMTime(seconds: 1, preferredTimescale: 600))
     precondition(image.width == 320 && image.height == 480)
@@ -123,7 +141,7 @@ import ImageIO
     precondition(
       rgba[1] > 150 && rgba[0] < 100 && rgba[2] < 100,
       "Saved video must contain the green filter, not the red camera input: \(rgba)")
-    precondition(movie.writtenFrames == 90 && movie.droppedFrames == 0)
+    precondition(movie.writtenFrames == frameCount && movie.droppedFrames == 0)
     let canceledURL = url.deletingPathExtension().appendingPathExtension("canceled.mp4")
     let canceled = try FilterMovieWriter(url: canceledURL, width: 320, height: 480, hasAudio: false)
     canceled.cancel()
@@ -162,7 +180,7 @@ import ImageIO
       }
     }
     print(
-      "Native MP4 proof: rendered frames + audio decode; duration \(duration)s; cancellation removes file; 90 frames written without drops. \(url.path)"
+      "Native MP4 proof: rendered frames + audio decode; duration \(duration)s; cancellation removes file; \(frameCount) frames written without drops. \(url.path)"
     )
   }
 }
@@ -254,5 +272,46 @@ func retainedImageAndPathProof() throws {
     precondition(
       pixels[border] > 200 && pixels[border + 1] < 40, "fill→stroke must keep its red outline")
     precondition(pixels[0] == 255, "Retained image must still draw on the second frame")
+  }
+}
+
+func arcWindingProof() throws {
+  let sourceContext = CGContext(
+    data: nil, width: 32, height: 32, bitsPerComponent: 8, bytesPerRow: 128,
+    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+  let source = sourceContext.makeImage()!
+  for operation in ["arc", "ellipse"] {
+    for counterclockwise in [false, true] {
+      let args = operation == "arc" ? "16,16,10,0,Math.PI/2" : "16,16,10,8,0,0,Math.PI/2"
+      let script = """
+        var NativeFilters = { configure() { return {}; }, frame() {
+          drawing.draw(1, 'beginPath', []);
+          drawing.draw(1, '\(operation)', [\(args),\(counterclockwise)]);
+          drawing.draw(1, 'strokeStyle', ['#ffffff']);
+          drawing.draw(1, 'lineWidth', [3]);
+          drawing.draw(1, 'stroke', []);
+          return {};
+        } };
+        """
+      let renderer = try FilterRenderer(
+        source: script, queue: DispatchQueue(label: "winding-proof"))
+      try renderer.configure("{}")
+      var pixels = [UInt8](repeating: 0, count: 32 * 32 * 4)
+      try pixels.withUnsafeMutableBytes { raw in
+        let output = CGContext(
+          data: raw.baseAddress, width: 32, height: 32, bitsPerComponent: 8, bytesPerRow: 128,
+          space: CGColorSpaceCreateDeviceRGB(),
+          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        _ = try renderer.render(frame: source, into: output, timeMs: 0, pitchHz: nil, face: nil)
+      }
+      let lowerY = operation == "arc" ? 23 : 22
+      let upperY = operation == "arc" ? 9 : 10
+      let lowerRight = pixels[(lowerY * 32 + 23) * 4]
+      let upperRight = pixels[(upperY * 32 + 23) * 4]
+      precondition(
+        counterclockwise
+          ? (upperRight > 200 && lowerRight == 0) : (lowerRight > 200 && upperRight == 0),
+        "\(operation) counterclockwise=\(counterclockwise) must use top-left canvas coordinates")
+    }
   }
 }

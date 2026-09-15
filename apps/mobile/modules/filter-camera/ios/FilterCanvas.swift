@@ -175,6 +175,8 @@ final class FilterSurface {
     case "closePath": c.closePath()
     case "moveTo": c.move(to: try CGPoint(x: number(0), y: number(1)))
     case "lineTo": c.addLine(to: try CGPoint(x: number(0), y: number(1)))
+    // The top-left transform flips CoreGraphics' y axis: increasing angles
+    // appear clockwise, matching Canvas when counterclockwise is false.
     case "arc":
       c.addArc(
         center: try CGPoint(x: number(0), y: number(1)), radius: try number(2),
