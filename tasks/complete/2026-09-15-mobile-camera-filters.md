@@ -16,7 +16,7 @@ normal composer attachments, filter baked in.
 High-level status: the user tried the native iPhone build and confirmed it works.
 The follow-up preloads three flashcards ahead and hides the filter picker after
 selection. Regression tests and native media proofs pass; the refreshed native
-build is being prepared.
+build is signed and its install page, manifest and download are verified.
 
 ## Why this shape (assumptions made while AFK)
 
@@ -496,4 +496,4 @@ on each new card, and the filter picker covered the per-filter controls.
 - [x] Preload just the next three cards in deck order and selected style. _The shared drawer warms the existing cache; native/browser loaders exclude preloads from current-frame readiness and errors. Native downloads remain bounded to four tasks and the existing 32 MB cache._
 - [x] Hide the filter picker after selection. _The parent unmounts the camera on Close, so reopening starts at None with the picker visible again._
 - [x] Verify preload order and loading/error isolation. _The bundled native engine test follows three taps and a style change; browser-cache and native Apple proofs check that upcoming downloads do not block capture and errors surface on selection._
-- [ ] Publish the refreshed native build. _The small native cache change requires a new runtime; keep the install page pointed at the matching signed build._
+- [x] Publish the refreshed native build. _EAS build `37ab5b53-bf4a-4d3e-b3cd-b1ebd8ca951c` finished at 11:55 UTC, source `c6977b21a`, runtime `907a5fc072db8e22b08c08c118e40fc61ec069db`; install page, manifest, IPA download and hosted art verified._

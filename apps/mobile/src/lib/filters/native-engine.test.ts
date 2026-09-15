@@ -38,7 +38,7 @@ test("flashcards preload only the next three cards in the current deck and style
   engine.configure(settings);
   engine.frame(frame);
   expect(current).toHaveLength(1);
-  expect(ahead).toHaveLength(2); // The third upcoming card is a drawn colour swatch.
+  expect(ahead).toHaveLength(2); // One of the next three cards is a drawn colour swatch.
   const nextCards = [...ahead];
   const cartoonCard = current[0];
 
@@ -60,6 +60,6 @@ test("flashcards preload only the next three cards in the current deck and style
   engine.frame(frame);
   expect(current).toHaveLength(1);
   expect(current[0]).not.toBe(cartoonCard);
-  expect(ahead).toHaveLength(2); // The third upcoming card is a drawn colour swatch.
+  expect(ahead).toHaveLength(2); // One of the next three cards is a drawn colour swatch.
   expect(ahead.some((url) => nextCards.includes(url))).toBe(false);
 });
