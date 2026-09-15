@@ -571,17 +571,22 @@ async function resolvePreviewCiSetup(options: PullRequestCommandOptions) {
       await readFile(resolve(runtime.repositoryRoot, "test-results/preview-ci-plan.json"), "utf8"),
     ),
   );
-  const held = await adoptLeaseHeldBySemaphore({
-    holder: pullRequestHolder(context.pullRequestNumber),
-    leaseMs: defaultPreviewLeaseMs,
-    preferSlug: plan.slot,
-    semaphore: runtime.createPreviewSemaphoreResourceClient(),
-  });
+  // Deployment acquired the lease for the whole workflow. Shards only read
+  // ownership: parallel force-renewals race while replacing the same lease.
+  const holder = await findEnvironmentConfigLeaseHolder(
+    runtime.createPreviewSemaphoreResourceClient(),
+    plan.slot,
+  );
+  if (holder !== pullRequestHolder(context.pullRequestNumber)) {
+    throw new Error(
+      `Preview slot ${plan.slot} is no longer owned by PR #${context.pullRequestNumber}; refusing to run tests.`,
+    );
+  }
   assertPreviewCiIdentity(plan, {
     headSha: context.pullRequestHeadSha,
     runId: z.string().min(1).parse(process.env.GITHUB_RUN_ID),
     runAttempt: z.string().min(1).parse(process.env.GITHUB_RUN_ATTEMPT),
-    slot: held?.slug || "no owned slot",
+    slot: plan.slot,
   });
   if (plan.pullRequestNumber !== context.pullRequestNumber)
     throw new Error("Preview CI plan belongs to another PR.");
