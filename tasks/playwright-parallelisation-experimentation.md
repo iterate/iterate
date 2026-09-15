@@ -5,7 +5,7 @@ size: large
 
 # Playwright parallelisation experimentation
 
-Status: experiment specified. The existing six-shard runs and normal-run traces are retained. Next: restore the one-runner preview workflow, measure 16/32/64/92 workers, and publish each trace from this branch.
+Status: 16/32/64-worker runs measured and published; 92 workers is next. The current evidence favors 32 for the full workflow, but repeats and final validation remain.
 
 ## Request and assumptions
 
@@ -26,7 +26,7 @@ The user wants PR #2659 renamed and used for an overnight experiment: push commi
 - [x] Rename PR and rewrite its purpose around experimentation, retaining machine-maintained preview sections. *PR #2659 renamed; fresh machine-owned preview/LOC blocks preserved.*
 - [x] Restore the unsharded workflow and measure 16 workers. *Run 9p5w4fcrlz: preview success, 604.6s overall, 147.8s Playwright, 127.6s Vitest, no retries; one existing quarantined photo failure. Separate stale unit assertion corrected for the next commit.*
 - [x] Push and measure 32 workers. *Run 3nc3m3tfjd: preview success, 532.6s overall, 114.1s Playwright, 124.6s Vitest, one dashboard retry and the same quarantined mobile-photo failure. All unit/lint checks pass.*
-- [ ] Push and measure 64 workers.
+- [x] Push and measure 64 workers. *Run g5bvvvj3s3: 623.3s preview, 108.6s Playwright, 120.6s Vitest, two successful browser retries, all 88 browser bodies passed, peak memory 36.1 GB.*
 - [ ] Push and measure 92 workers.
 - [ ] Repeat the useful control/finalist comparison and account for failures and cache variability.
 - [ ] Commit a permanent, self-contained explainer and update it with each result; retain reproducible sanitized evidence and trace-generation code.
@@ -51,3 +51,5 @@ The user wants PR #2659 renamed and used for an overnight experiment: push commi
 - Control evidence: `explainers/playwright-parallelisation/runs/workers-16.json`; catalogue hash matches the historical 92 names. CPU during Playwright: sampled mean 5.2/16 cores, peak 12.4; peak memory 15.7 GB. The original pnpm/Depot/Nub findings and all three historical traces remain in the permanent page.
 
 - 32-worker evidence: `runs/workers-32.json` in the permanent explainer source. First-start spread fell from 91.2s to 49.4s; median attempt duration rose from 18.3s to 21.7s. CPU sampled mean 7.6/16 cores, peak 13.7; memory peak 22.3 GB. Post-loading Navigate click timed out at 1s, then passed on retry. No application/test changes made to hide it.
+
+- 64-worker evidence: `runs/workers-64.json`. Only 5.6s browser gain over 32 while per-attempt median rose to 31.9s. The two initial failures were 1s isEnabled checks for Navigate and ONBOARDING.md. Setup was slower independently of the test count (63.8s pnpm and slower deployment). All three worker runs began from image checkout `611c376`; an identical image digest is still not proven.

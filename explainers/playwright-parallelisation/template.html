@@ -703,6 +703,46 @@
       </section>
       <section class="card methods">
         <h2>What this experiment holds fixed</h2>
+        <details>
+          <summary>What shares one runner?</summary>
+          <pre style="overflow: auto">
+One Depot runner: 16 CPU cores, 64 GB RAM
+├─ Preview coordinator: deploy → ready → tests → cleanup
+├─ OS Vitest: concurrent test processes
+├─ Playwright coordinator
+│  ├─ Worker 1: Node process + Chromium → one test at a time
+│  ├─ Worker 2: Node process + Chromium → one test at a time
+│  └─ … up to the configured worker count
+└─ Shared Expo / Metro server for the mobile web app
+
+Browser / Vitest requests → deployed Cloudflare apps and DOs
+                            (outside this runner)</pre
+          >
+          <p>
+            A worker is a test process, not a CPU core. It keeps its test slot while awaiting I/O.
+            Chromium itself uses multiple processes. Raising workers increases both remote requests
+            and local browser work; CPU, memory, Expo and the deployed services can all become
+            limits.
+          </p>
+        </details>
+        <details>
+          <summary>Why mobile setup is a separate thing to investigate</summary>
+          <p>
+            <code>createMobileFixture</code> repeats the real server-picker → OAuth popup → email
+            OTP → consent → chat-list flow, then connects to the new project.
+            <code>createProjectFixture</code> creates projects through the admin API and mints the
+            test session. Their timings measure different work.
+          </p>
+          <p>
+            Source:
+            <a
+              href="https://github.com/iterate/iterate/blob/611c3769b/specs/test-support/forged-session.ts#L28"
+              >the fixture code used by these runs</a
+            >. A follow-up worth testing: prepare signed-in state for mobile feature tests, while
+            keeping focused real signup coverage. That is outside this worker-count experiment; no
+            authentication coverage was removed here.
+          </p>
+        </details>
         <p>
           Same application revision and 92 named root browser cases; 16, 32, 64 or 92 workers; one
           unsharded runner; the same Playwright retry, timeout, trace and video settings; the same

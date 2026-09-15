@@ -1,6 +1,4 @@
-<strong
-  >32 workers shortened Playwright from 148s to 114s; Vitest now finishes last at 125s.</strong
->
-Full preview: 10m05s → 8m53s, including a 39s faster install. The 32-worker run needed one dashboard
-retry; both runs had the same quarantined photo failure. Next: 64 workers. Repeats will check
-whether these gains and failures recur.
+<strong>So far, 32 workers gets Playwright below the Vitest bottleneck.</strong> Browser times: 148s
+→ 114s → 109s at 16 / 32 / 64 workers. Going from 32 to 64 saved only 6s in browsers, used 36 GB
+instead of 22 GB, and needed two retries instead of one. Full CI varies heavily with setup. Next: 92
+workers, then useful repeats.
