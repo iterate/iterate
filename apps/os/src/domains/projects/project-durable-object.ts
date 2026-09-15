@@ -61,6 +61,7 @@ import type { ProjectLiveState } from "./project-live-state.ts";
 
 type VoiceHandshakeOverlapEntry = {
   activation: string;
+  preparing: boolean;
   response: Response | null;
   failure: string | null;
   completion: Promise<void>;
@@ -301,6 +302,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
     const entry: VoiceHandshakeOverlapEntry = {
       activation: input.activation,
+      preparing: true,
       response: null,
       failure: null,
       completion,
@@ -308,7 +310,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
       expiry: setTimeout(
         () => this.#expireVoiceHandshakeOverlap(input.streamPath),
         VOICE_HANDSHAKE_OVERLAP_TTL_MS,
-        VOICE_HANDSHAKE_OVERLAP_URL,
       ),
     };
     this.#voiceHandshakeOverlaps.set(input.streamPath, entry);
@@ -331,19 +332,23 @@ export class ProjectDurableObject extends DurableObject<Env> {
       setTimeout(
         () => this.#cancelledVoiceHandshakeActivations.delete(activationKey),
         VOICE_HANDSHAKE_OVERLAP_TTL_MS,
-        VOICE_HANDSHAKE_OVERLAP_URL,
       ),
     );
     const entry = this.#voiceHandshakeOverlaps.get(input.streamPath);
     if (entry && entry.activation === input.activation) {
       this.#expireVoiceHandshakeOverlap(input.streamPath, "cancelled after conversation end");
     }
-    console.info("voice handshake overlap cancellation settled", {
-      activation: input.activation,
-      streamPath: input.streamPath,
-      pendingUpgrades: this.#voiceHandshakeOverlaps.size,
-      pendingRegistrations: this.#voiceHandshakeOverlapRegistrations.size,
-    });
+    console.info(
+      entry?.preparing
+        ? "voice handshake overlap cancellation requested"
+        : "voice handshake overlap cancellation settled",
+      {
+        activation: input.activation,
+        streamPath: input.streamPath,
+        pendingUpgrades: this.#voiceHandshakeOverlaps.size,
+        pendingRegistrations: this.#voiceHandshakeOverlapRegistrations.size,
+      },
+    );
     return { cancelled: true };
   }
 
@@ -359,13 +364,16 @@ export class ProjectDurableObject extends DurableObject<Env> {
       if ((await this.#egressRules()).length !== 0) {
         throw new Error("voice handshake overlap control requires no configured egress rules");
       }
+      if (entry.failure) return;
       const request = new Request(VOICE_HANDSHAKE_OVERLAP_URL, {
         headers: { Upgrade: "websocket", Authorization: 'Bearer getSecret("/secrets/openai")' },
       });
       if (this.#egressInterceptor !== undefined) {
         throw new Error("voice handshake overlap interceptor appeared before egress");
       }
-      const response = await this.#egressWithApprovalGate(request, {
+      // Empty policy was checked above; continue through the ordinary secret
+      // substitution and audit path without a second awaited policy read.
+      const response = await this.#egress(request, {
         kind: "scope",
         scopePath: input.streamPath,
       });
@@ -373,7 +381,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         await response.body?.cancel();
         throw new Error("voice handshake overlap provider upgrade was refused");
       }
-      if (this.#voiceHandshakeOverlaps.get(input.streamPath) !== entry) {
+      if (entry.failure || this.#voiceHandshakeOverlaps.get(input.streamPath) !== entry) {
         closeUnacceptedWebSocket(response.webSocket, "no longer claimable");
         return;
       }
@@ -385,12 +393,24 @@ export class ProjectDurableObject extends DurableObject<Env> {
         upgradeReadyAtMs: Date.now(),
       });
     } catch (error) {
-      entry.failure = String(error).slice(0, 300);
+      entry.failure ||= String(error).slice(0, 300);
       console.error("voice handshake overlap prepare failed", {
         error,
         streamPath: input.streamPath,
       });
     } finally {
+      entry.preparing = false;
+      if (entry.failure) {
+        clearTimeout(entry.expiry);
+        this.#voiceHandshakeOverlaps.delete(input.streamPath);
+        console.info("voice handshake overlap preparation settled", {
+          activation: input.activation,
+          streamPath: input.streamPath,
+          reason: entry.failure,
+          pendingUpgrades: this.#voiceHandshakeOverlaps.size,
+          pendingRegistrations: this.#voiceHandshakeOverlapRegistrations.size,
+        });
+      }
       entry.resolveCompletion();
     }
   }
@@ -430,11 +450,15 @@ export class ProjectDurableObject extends DurableObject<Env> {
     }
     if (!entry) return new Response("voice handshake overlap was not prepared", { status: 409 });
     await entry.completion;
-    if ((await this.#egressRules()).length !== 0) {
+    if (!entry.failure && (await this.#egressRules()).length !== 0) {
       this.#expireVoiceHandshakeOverlap(streamPath, "egress policy changed before claim");
       return new Response("voice handshake overlap policy changed before claim", { status: 409 });
     }
-    if (this.#voiceHandshakeOverlaps.get(streamPath) !== entry || !entry.response) {
+    if (
+      entry.failure ||
+      this.#voiceHandshakeOverlaps.get(streamPath) !== entry ||
+      !entry.response
+    ) {
       return new Response(`voice handshake overlap failed: ${entry.failure || "expired"}`, {
         status: 409,
       });
@@ -478,9 +502,20 @@ export class ProjectDurableObject extends DurableObject<Env> {
     const entry = this.#voiceHandshakeOverlaps.get(streamPath);
     if (!entry) return;
     clearTimeout(entry.expiry);
-    this.#voiceHandshakeOverlaps.delete(streamPath);
-    if (entry.response) closeUnacceptedWebSocket(entry.response.webSocket!, reason);
     entry.failure ||= reason;
+    // A cancelled native DO fetch can still open its downstream socket. Keep
+    // this operation charged to capacity until it returns so we can close it.
+    if (!entry.preparing) {
+      this.#voiceHandshakeOverlaps.delete(streamPath);
+      if (entry.response) closeUnacceptedWebSocket(entry.response.webSocket!, reason);
+    }
+    console.info("voice handshake overlap claim expired", {
+      activation: entry.activation,
+      streamPath,
+      reason,
+      preparing: entry.preparing,
+      pendingUpgrades: this.#voiceHandshakeOverlaps.size,
+    });
     entry.resolveCompletion();
   }
 

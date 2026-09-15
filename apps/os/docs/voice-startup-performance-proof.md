@@ -1363,10 +1363,14 @@ proof project `prj_56cbca83186a40019f5792b2463c81fa`, treatment paths under
 policy and no interceptor. Normal authorization, secret substitution and audit
 still run. A treatment stream permits one activation for its durable lifetime,
 so the unchanged fetch's trusted stream scope identifies its pending activation.
-A claim can wait up to 250 ms for registration. Pending upgrades are capped at
-eight and expire after ten seconds; terminal events cancel unclaimed upgrades,
-including those still opening. Failed/missing claims return a non-upgrade
-response instead of opening another connection. These restrictions and the
+A claim can wait up to 250 ms for registration. Claim rights expire after ten
+seconds; terminal events revoke them immediately. Pending operations remain
+charged to the eight-upgrade cap until their actual egress settles, including
+cancelled operations. Ready or late-arriving unclaimed sockets are closed.
+An operation that never settles continues occupying capacity; new requests
+then fail explicitly instead of allowing unbounded outstanding upgrades.
+Failed/missing claims return a non-upgrade response instead of opening another
+connection. These restrictions and the
 native voice-specific commit hook must be reconsidered before production use.
 
 Ten counterbalanced calls over one established project WebSocket all returned
@@ -1469,6 +1473,50 @@ Evidence under `/tmp/voice-startup-pr`: `handshake-overlap-identity-ready-result
 PR checks, including preview deployment/E2E, passed on `eb8c912ea`; subsequent
 head checks remain authoritative. Earlier unexplained silent calls still
 block promotion.
+
+## Cancelled upgrades retain capacity until actual cleanup
+
+A local workerd DO-to-DO experiment showed that adding `AbortController` would
+be unsafe here: the caller rejected in 29 ms after cancellation, but the
+receiving object still completed a delayed upstream 101 roughly one second
+later. Its socket remained open at the 2.5-second observation. The uncancelled
+control remained claimable and echoed normally. This is a negative local
+runtime result, not evidence about production request cancellation.
+
+The overlap control therefore keeps the actual fetch awaited and retains its
+capacity slot after cancellation or claim expiry. A late 101 is accepted and
+closed before the slot is released. Logs distinguish cancellation requested
+from preparation actually settled. A cancelled claim skips a needless policy
+refresh; normal claims still recheck policy. Preparation checks the empty
+policy once, then follows the ordinary secret/audit egress path. No abort
+signal or alternative credential route was introduced.
+
+Regression coverage exercises the real ProjectDO ownership logic with a
+controlled SecretDO response: eight cancelled or expired pending fetches keep
+the ninth rejected until one late response is closed, a successful response
+can be claimed only once, and cancellation during the initial policy read
+starts no provider fetch. Node's inability to construct a 101 is mocked at the
+response adapter only. These tests do not prove cross-object network cleanup;
+that limitation is why the actual fetch remains owned until settlement.
+
+All three lifecycle regressions fail on the prior implementation (the ninth
+request was incorrectly admitted), then pass with the fix. The combined five
+lifecycle/scope tests, focused lint, and typecheck pass. Red/green outputs are
+`/tmp/voice-startup-pr/handshake-capacity-{red,green}.log`.
+
+Fable 5.1 xhigh independently identified the in-flight capacity issue and
+recommended finer registration-to-facet timing. Its suggestion to reuse a
+finished treatment stream was rejected: the precommit guard already enforces
+one activation per stream. Two limits remain explicit: the 10s claim TTL is
+shorter than the facet's 15s opening deadline, and the 250ms registration wait
+has not been proved for implicit microphone-minted calls. Current benchmarks
+and HAVPE setup use explicit activation. The review and source-checked
+assessment are in `/tmp/voice-startup-pr/claude-fable-5-1-review/handshake-overlap-*`.
+
+Evidence: `/tmp/workerd-handshake-abort-20260915/result.json` and
+`apps/os/src/domains/projects/voice-handshake-overlap-lifecycle.test.ts`.
+The earlier twenty successful audio samples did not exercise pending-fetch
+cancellation and must not be treated as proof of that case.
 
 ## Reproduce
 
