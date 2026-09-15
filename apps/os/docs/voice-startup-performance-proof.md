@@ -1540,3 +1540,206 @@ machine are under `/tmp/voice-startup-pr`; the independent Node transport
 comparison is under `/tmp/voice-startup-webrtc-20260914`. They are not runtime
 dependencies. Retain failed samples and distinguish clocks from different
 actors when interpreting their phase arrays.
+
+## First-call setup phase probe and cancelled-upgrade settlement
+
+A Preview 17-only, exact-project probe split the first corrected fresh-stream
+setup call without adding a stream event, an extra await, or a new protocol
+option. It recorded native runner phases on the runner clock and returned guest
+setup phases on the guest clock; the two clocks are correlated by activation
+and stream path and must not be added as one sequential waterfall.
+
+The first row retained its failure. It observed `call-started` at 2,462 ms,
+returned setup at 5,604 ms, and accepted the conversation at 5,348 ms, but no
+non-silent PCM arrived during the **remaining 4,395 ms** of the fixed
+10-second overall startup deadline. This is not treated as a successful audio sample.
+The terminal audit subsequently found the call ended, subscription lag zero,
+no subscription error, and no pending delegation. The next four rows produced
+PCM at 2,999 / 2,845 / 2,593 / 2,654 ms.
+
+| First-row phase                    | Duration / observation |
+| ---------------------------------- | ---------------------: |
+| Native source resolution           |                  96 ms |
+| Guest `this.itx` before setup body |               1,012 ms |
+| Initial durable setup append       |                  81 ms |
+| Client observes `call-started`     |               2,462 ms |
+| Guest voice barrier settles        |               2,402 ms |
+
+The native probe reached guest method invocation at 96 ms. The guest clock
+then spent 1,012 ms reaching its project ITX handle and 81 ms on the initial
+append. About **1,120 ms** remains outside the runner's full 4,484 ms invocation,
+as combined dispatch/return work; it is not yet attributed to one
+foreground operation. The 1,012 ms guest ITX interval and the native 96 ms
+source interval use different actor clocks, so the table identifies boundaries
+rather than a valid additive critical path. This rules out a multi-second
+source build in this sample, but it does not yet identify the remaining first
+`call-started` delay.
+
+The temporary source was pinned to `5fad812c482e6c647efac1b6d2421e5d89b78cc0`
+on Preview deployment `aa36ee1b-6d3b-470b-9edc-b7afd49dae21`; its runtime
+key was `83ad97859d80780a00b0833cacefa5d687d9bc6e6b3f73a8154e0fd80938f5a4`.
+The raw benchmark, terminal audit, and native phase records are respectively
+`startup-first-call-phase-result.json`,
+`startup-first-call-phase-terminal-audit.json`, and
+`clean-cold-workers-startup-first-call-phase-voice startup first-call phases.json`
+under `/tmp/voice-startup-pr`.
+
+A separate native-only pending-upgrade cancellation proof created two
+activations and ended both before a voice facet claimed them. Neither sent
+`session.start` or audio. For each activation, logs recorded cancellation while
+`pendingUpgrades` was 1, followed by preparation settlement with
+`pendingUpgrades` and `pendingRegistrations` both 0. This proves that the
+ProjectDO's retained pending slot is released after its owned preparation
+settles, rather than at cancellation request time. It does **not** prove an
+upstream provider close acknowledgement. There is no basis in this proof to
+infer microphone-frame loss from absent ephemeral events.
+
+The durable streams contain one matching `call-started` and one
+`conversation-ended` record each, with reason `preview native upgrade
+cancellation proof`. Evidence is
+`handshake-capacity-cancellation-result.json` and
+`clean-cold-workers-handshake-capacity-cancel-voice handshake overlap.json`
+under `/tmp/voice-startup-pr`.
+
+## Outer timing and silent-counter follow-up
+
+A second five-call Preview 17 probe added an outer setup boundary and read
+bounded runtime counters after each call. All five calls produced audio. The
+CLI process nevertheless exited non-zero because row 2's terminal append did
+not resolve within its 1,000 ms cleanup bound. That is retained as a harness
+failure, not discarded: the later terminal audit found the same activation
+ended with subscription lag zero and no subscription error. It therefore does
+not establish a lost terminal event or explain the startup delay. Row 3's
+901 ms initial durable append is also retained rather than averaged away.
+
+For the first row, the native runner measured source resolution at 79 ms and
+runner settlement at 4,690 ms. Guest project ITX took 930 ms and the initial
+append 143 ms. The outer native call settled at 4,708 ms, only 18 ms after the
+runner, so that portion is server work inside the facet/runner boundary rather
+than a multi-second outer dispatch gap. The client received setup at 5,843 ms:
+approximately 1,135 ms remains outside the facet measurement and is still
+unassigned. As before, the native, guest, outer, and client clocks establish
+correlated boundaries; they are not an additive waterfall.
+
+Each runtime read reported one 640-byte microphone frame, one commentary item,
+provider output above zero, and a maximum silence gap of 100 ms. This is
+runtime-getter evidence, not persisted console evidence: the
+`voice-silent-call-probe` log query returned zero records. Ten native records
+matched the exact deployment version and were untruncated; parent/project error
+queries returned zero records. No transcript content is retained here. The
+benchmark, terminal audit, and native records are
+`startup-first-call-silent-phase-result.json`,
+`startup-first-call-silent-phase-terminal-audit.json`, and
+`clean-cold-workers-outer-silent-phase-voice startup first-call.json` under
+`/tmp/voice-startup-pr`.
+
+### Health warmup after a native deployment
+
+A separate fresh deployment (`6171319f-4a12-4caf-a0f9-3df5e73095b2`)
+kept the same instrumented voice source/runtime as the counter run, but called
+its existing `voice.health()` before the first setup, on the benchmark's one
+project WebSocket. No earlier setup, future stream, activation, or provider
+session was created. Health took 2,368 ms and returned the expected runtime key.
+This is a deployment-separated observation, not a within-deployment matched
+pair: running a cold setup before health would itself warm the control.
+
+All five calls returned audio and passed the CLI's cleanup bounds. The first
+call's guest project-handle wait and native source resolution were both 0 ms;
+the initial append still took 854 ms. First readiness was 2,998 ms and first
+received PCM 4,232 ms. Its native runner took 4,169 ms, ProcessorFacet 4,174 ms,
+and client setup 4,193 ms, leaving 19 ms outside the facet instead of the prior
+cold observation's 1,135 ms. These observations support moving root/binding
+warmup to connection establishment; they do not establish a general cold-call
+latency target or remove the remaining initial-append/processor work. The
+provider handshake also varied (865 ms here versus 1,751 ms in the previous
+cold sample), so the full readiness difference is not attributable to health.
+
+Ten native phase records matched the deployment and activations and were
+untruncated. All five audited states were ended with no pending delegation or
+subscription error. The first audit reported lag 10 for row four; a bounded
+follow-up reported lag 0, with intervening stream-wake/revival and feed events
+retained. All runtime counters were null by this later audit; they are not
+used as audio-forwarding evidence for this run. Project/host-parent error
+queries returned zero events. The successful client PCM observations remain
+the audio evidence.
+
+Artifacts under `/tmp/voice-startup-pr` are
+`startup-first-call-health-warm-result.json`,
+`startup-first-call-health-warm-terminal-audit.json`,
+`startup-first-call-health-warm-events-with-ephemeral.json`, and
+`clean-cold-workers-health-warm-phase-voice startup first-call.json`.
+The temporary CLI health branch is excluded from the product benchmark; its
+2,368 ms is explicitly separate from button-to-call timing, not hidden work.
+
+### Final root capability boundary probe
+
+A third deployment (`66d9bea7-ff21-49af-917c-d002268a59d2`) added a
+root capability timer around the existing facade acquisition/invocation/disposal,
+retaining the same instrumented voice source. Five fresh calls, without health
+prewarm, returned audio and passed cleanup. Their terminal audits had matching
+runtime/activation, ended state, no pending delegation, and zero lag/error.
+Fifteen phase records were version-matched and untruncated; scoped ProjectDO
+and hosted-parent error queries returned zero events.
+
+The first guest project-handle wait recurred at 1,127 ms; source resolution was
+67 ms and initial append 107 ms. However, the former one-second outer gap did
+not recur: facade acquisition took 9 ms first and 8–9 ms later. The first
+ProcessorFacet duration was 4,280 ms versus 4,277 ms in the runner. The root
+reported 4,379 ms while the client's setup measurement was 4,370 ms. That small
+cross-actor discrepancy is retained: independent clocks/observation boundaries
+are not an exact additive waterfall. This run does **not** retrospectively
+attribute or explain the earlier 1,135 ms gap. First readiness was 4,795 ms and
+first received PCM 5,803 ms, with a 2,035 ms provider handshake.
+
+Artifacts under `/tmp/voice-startup-pr` are
+`startup-first-call-root-boundary-result.json`, its `terminal-audit.json`, and
+`clean-cold-workers-root-boundary-phase-voice startup first-call.json`.
+The combined native/CLI instrumentation is archived as
+`startup-combined-phase-probes-applied.patch` and removed from the checkout.
+
+### Clean restoration exposed a multi-second regression
+
+After removing all phase/health instrumentation and restoring the original
+`ebb0a42d…` source (`bbc88660…` runtime), clean native deployment
+`84afd2d1-d261-40d3-b75b-567a3623a121` passed deploy smokes but **failed** its
+three-call overlap validation. Readiness was 9,949 / 8,469 / 2,854 ms. The first
+call had only 51 ms left to acknowledge its microphone append, never sent the
+commentary, and also exceeded the one-second terminal-append bound; its setup
+RPC settled after 20,315 ms. The other two returned PCM at 9,812 / 4,685 ms.
+This first failure is a deadline-exhaustion case, not the earlier unexplained
+silent-after-commentary case.
+
+The immediately preceding same-key direct Node reference returned audio in
+all five calls. Median upgrade was 459.844 ms, `session.started` 832.655 ms,
+and first non-silent PCM 1,605.907 ms. The in-memory key was also written to
+Preview's `/secrets/openai` at offset 621; no key/fingerprint was persisted.
+The exact 2,096-byte prompt stayed unchanged. This is a sequential software
+reference, not a physical speaker or interleaved provider-path control.
+
+Twelve untruncated, version/activation-matched native overlap records showed
+all three resources eventually settled with zero pending entries. The second
+upgrade took 443 ms, then waited **6,046 ms** before the voice facet claimed
+it. Thus OpenAI upgrade duration does not explain that particular stall.
+All three later audited states were ended, with matching runtime/activation,
+no pending delegation, and zero lag/error; that does not explain the delay.
+
+Error-only ProjectDO/host-parent queries returned zero, but a targeted trace
+query found **339 informational `processor relay retrying after Durable Object
+lifecycle reset` messages** on trace `6dfc6368e7c015b37163624f5385991d` during
+the window. That label is broader than literal resets: its classifier also
+accepts overload/retryable flags and tagged stream-unavailable errors. The
+logs omit the original reason and whether acquisition or invocation failed.
+They establish substantial retry activity, not 339 proven object restarts or
+one unbounded loop. The shared-parent invocation query hit its 2,000-row cap;
+retained 1–4 second partitions avoid treating capped output as a full count.
+This retry activity and the multi-second stalls remain release blockers.
+
+The clean fixture's functional source files match the checkout. Probe sources
+use different immutable source/runtime/facet identities, so their faster
+samples do not isolate the effect of removing instrumentation or cache reuse.
+
+Artifacts under `/tmp/voice-startup-pr`: `startup-after-phase-cleanup-result.json`,
+`startup-after-phase-cleanup-terminal-audit.json`,
+`clean-cold-workers-after-phase-cleanup-voice handshake overlap.json`,
+`direct-same-key-after-first-call-phases/`, and
+`clean-cold-workers-restored-dominant-custom-6dfc6368e7c015b37163624f5385991d.json`.
