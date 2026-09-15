@@ -591,7 +591,8 @@
                   <th>Setup</th>
                   <th>Peak active tests</th>
                   <th>First-start spread</th>
-                  <th>Test duration p50 / p95</th>
+                  <th>Attempt duration p50 / p95</th>
+                  <th>Mobile setup p50</th>
                   <th>CPU mean / peak</th>
                   <th>Memory peak</th>
                 </tr>
@@ -640,6 +641,7 @@
           ><button id="collapse">Collapse jobs</button><button id="expand">Expand phases</button>
         </div>
         <div class="legend">
+          <span><i style="background: #bb563d"></i>Failed attempt (including quarantine)</span>
           <span><i style="background: var(--install)"></i>Dependencies</span
           ><span><i style="background: var(--deploy)"></i>Deploy</span
           ><span><i style="background: var(--readiness)"></i>Readiness</span
@@ -710,8 +712,8 @@ One Depot runner: 16 CPU cores, 64 GB RAM
 ├─ Preview coordinator: deploy → ready → tests → cleanup
 ├─ OS Vitest: concurrent test processes
 ├─ Playwright coordinator
-│  ├─ Worker 1: Node process + Chromium → one test at a time
-│  ├─ Worker 2: Node process + Chromium → one test at a time
+│  ├─ Worker 1: Node process + browser when needed → one test at a time
+│  ├─ Worker 2: Node process + browser when needed → one test at a time
 │  └─ … up to the configured worker count
 └─ Shared Expo / Metro server for the mobile web app
 
@@ -906,7 +908,7 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
           const left = Math.max(0, ((n.start - start) / width) * 100);
           const right = Math.min(100, ((n.end - start) / width) * 100);
           const visible = right >= left;
-          html += `<div class="trace-row ${n.kind === "job" ? "job" : ""} ${n.id === selected ? "selected" : ""}" style="--depth:${depth};--color:var(--${n.kind})"><div class="name">${children.length ? `<button class="toggle" data-toggle="${n.id}" aria-label="${expanded ? "Collapse" : "Expand"} ${escape(n.label)}" aria-expanded="${expanded}">${expanded ? "▾" : "▸"}</button>` : '<span class="toggle-spacer"></span>'}<button class="span-name" data-select="${n.id}" title="${escape(n.label)}">${escape(n.label)}</button><span class="duration">${n.unknown ? "untimed" : duration(n.end - n.start)}</span></div><div class="lane">${visible ? (n.unknown ? `<button class="unknown-marker" data-select="${n.id}" style="left:${Math.min(left, 75)}%" aria-label="${escape(n.label)}: duration unrecorded">? untimed</button>` : `<button class="bar" data-select="${n.id}" style="left:${left}%;width:${Math.max(0.08, right - left)}%" title="${escape(n.label)} · ${duration(n.end - n.start)}" aria-label="${escape(n.label)}: ${duration(n.end - n.start)}, ${fmt(n.start)} to ${fmt(n.end)}"></button>`) : ""}</div></div>`;
+          html += `<div class="trace-row ${n.kind === "job" ? "job" : ""} ${n.id === selected ? "selected" : ""}" style="--depth:${depth};--color:${n.failed ? "#bb563d" : `var(--${n.kind})`}"><div class="name">${children.length ? `<button class="toggle" data-toggle="${n.id}" aria-label="${expanded ? "Collapse" : "Expand"} ${escape(n.label)}" aria-expanded="${expanded}">${expanded ? "▾" : "▸"}</button>` : '<span class="toggle-spacer"></span>'}<button class="span-name" data-select="${n.id}" title="${escape(n.label)}">${escape(n.label)}</button><span class="duration">${n.unknown ? "untimed" : duration(n.end - n.start)}</span></div><div class="lane">${visible ? (n.unknown ? `<button class="unknown-marker" data-select="${n.id}" style="left:${Math.min(left, 75)}%" aria-label="${escape(n.label)}: duration unrecorded">? untimed</button>` : `<button class="bar" data-select="${n.id}" style="left:${left}%;width:${Math.max(0.08, right - left)}%" title="${escape(n.label)} · ${duration(n.end - n.start)}" aria-label="${escape(n.label)}: ${duration(n.end - n.start)}, ${fmt(n.start)} to ${fmt(n.end)}"></button>`) : ""}</div></div>`;
           if (expanded) for (const c of children) row(c, depth + 1);
         }
         row(data.root, 0);
@@ -1018,7 +1020,8 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
       ];
       document.getElementById("run-picker").innerHTML = entries
         .map(
-          ([key, r]) => `<option value="${key}">${escape(r.label)} · ${duration(r.total)}</option>`,
+          ([key, r]) =>
+            `<option value="${key}">${r.metrics?.result && r.metrics.result !== "success" ? r.metrics.result.toUpperCase() + " · " : ""}${escape(r.label)} · ${duration(r.total)}</option>`,
         )
         .join("");
       document.getElementById("results").innerHTML = comparisonEntries
@@ -1051,7 +1054,7 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
       document.getElementById("pressure-results").innerHTML = comparisonEntries
         .map(([key, r]) => {
           const m = r.metrics || {};
-          return `<tr><td>${escape(r.label)}</td><td>${m.peakActiveAttempts || "—"}</td><td>${m.firstStartSpread == null ? "—" : duration(m.firstStartSpread)}</td><td>${m.attemptDurationMedian == null ? "—" : duration(m.attemptDurationMedian) + " / " + duration(m.attemptDurationP95)}</td><td>${m.cpuMean == null ? "—" : (m.cpuMean * 100).toFixed(0) + "% / " + (m.cpuPeak * 100).toFixed(0) + "%"}</td><td>${m.memoryPeak == null ? "—" : (m.memoryPeak * 64).toFixed(1) + " GB"}</td></tr>`;
+          return `<tr><td>${escape(r.label)}</td><td>${m.peakActiveAttempts || "—"}</td><td>${m.firstStartSpread == null ? "—" : duration(m.firstStartSpread)}</td><td>${m.attemptDurationMedian == null ? "—" : duration(m.attemptDurationMedian) + " / " + duration(m.attemptDurationP95)}</td><td>${m.mobileFixtureMedian == null ? "—" : duration(m.mobileFixtureMedian)}</td><td>${m.cpuMean == null ? "—" : (m.cpuMean * 100).toFixed(0) + "% / " + (m.cpuPeak * 100).toFixed(0) + "%"}</td><td>${m.memoryPeak == null ? "—" : (m.memoryPeak * 64).toFixed(1) + " GB"}</td></tr>`;
         })
         .join("");
       selectRun(entries.at(-1)[0]);

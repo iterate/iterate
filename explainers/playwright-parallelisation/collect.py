@@ -7,6 +7,8 @@ import argparse
 import hashlib
 import json
 import re
+import statistics
+import math
 from datetime import datetime
 from pathlib import Path
 
@@ -23,7 +25,7 @@ HERE = Path(__file__).resolve().parent
 x = json.loads(args.metrics.read_text())
 w = next(w for w in x["workflows"] if w["workflow"]["workflow_path"] == "cloudflare-previews.yml")
 workflow = w["workflow"]
-assert workflow["status"] == "finished", "Wait for cleanup before collecting"
+assert workflow.get("finished_at"), "Wait for cleanup before collecting"
 t0 = datetime.fromisoformat(workflow["started_at"].replace("Z", "+00:00"))
 
 
@@ -160,7 +162,7 @@ if root_pw:
                 first_starts.append(start)
             outcome = "body passed; quarantine wrapper throws as expected" if "Flaky test passed this run" in a.get("error", {}).get("message", "") else a["state"]
             module = t["moduleId"].replace("/home/runner/work/iterate/iterate/", "")
-            attempt_node = add(pool, t["fullName"] + (f' · retry {a["attemptIndex"]}' if a.get("attemptIndex") else ""), start, finish, "test", f"{module} · {outcome} · worker {a.get('workerIndex')} / slot {a.get('parallelIndex')} · attempt {a.get('attemptIndex', 0)}.", "Playwright per-attempt telemetry", test=True)
+            attempt_node = add(pool, t["fullName"] + (f' · retry {a["attemptIndex"]}' if a.get("attemptIndex") else ""), start, finish, "test", f"{module} · {outcome} · worker {a.get('workerIndex')} / slot {a.get('parallelIndex')} · attempt {a.get('attemptIndex', 0)}.", "Playwright per-attempt telemetry", test=True, failed=a["state"] not in ["passed", "skipped"] and "Flaky test passed this run" not in a.get("error", {}).get("message", ""))
             for phase in a.get("phases", []):
                 if phase["name"] in ["Before Hooks", "After Hooks", "create project fixture", "create mobile fixture", "connect admin itx"] and phase.get("startedAt") and phase.get("durationMs", 0) >= 100:
                     phase_start = sec(phase["startedAt"])
@@ -203,7 +205,10 @@ metrics["peakActiveAttempts"] = peak
 metrics["firstStartSpread"] = max(first_starts) - min(first_starts) if first_starts else None
 lengths = sorted(e - s for s, e in active_intervals)
 if lengths:
-    metrics.update(attemptDurationMedian=lengths[len(lengths) // 2], attemptDurationP95=lengths[min(len(lengths) - 1, int(len(lengths) * 0.95))], attemptDurationMax=max(lengths), activeAttemptSeconds=sum(lengths))
+    metrics.update(attemptDurationMedian=statistics.median(lengths), attemptDurationP95=lengths[math.ceil(len(lengths) * 0.95) - 1], attemptDurationMax=max(lengths), activeAttemptSeconds=sum(lengths))
+if root_pw:
+    mobile_setup = [phase["durationMs"] / 1000 for t in root_pw["tests"] for a in t.get("attempts", []) for phase in a.get("phases", []) if phase["name"] == "create mobile fixture"]
+    metrics["mobileFixtureMedian"] = statistics.median(mobile_setup) if mobile_setup else None
 if root_pw is None:
     for field in ["browserRetries", "browserGreen", "browserSkipped", "browserBodyFailures", "peakActiveAttempts"]:
         metrics[field] = None

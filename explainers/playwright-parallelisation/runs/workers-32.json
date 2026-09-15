@@ -513,7 +513,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n108",
@@ -545,7 +546,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n111",
@@ -577,7 +579,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": true
                       },
                       {
                         "id": "n84",
@@ -629,7 +632,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n117",
@@ -661,7 +665,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n51",
@@ -713,7 +718,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n66",
@@ -755,7 +761,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n124",
@@ -787,7 +794,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n47",
@@ -829,7 +837,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n130",
@@ -861,7 +870,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n56",
@@ -913,7 +923,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n75",
@@ -955,7 +966,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n89",
@@ -997,7 +1009,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n106",
@@ -1019,7 +1032,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n79",
@@ -1071,7 +1085,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n136",
@@ -1103,7 +1118,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n98",
@@ -1145,7 +1161,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n102",
@@ -1187,7 +1204,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n93",
@@ -1239,7 +1257,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n148",
@@ -1271,7 +1290,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n61",
@@ -1323,7 +1343,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n160",
@@ -1355,7 +1376,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n145",
@@ -1387,7 +1409,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n127",
@@ -1419,7 +1442,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n133",
@@ -1451,7 +1475,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n157",
@@ -1483,7 +1508,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n120",
@@ -1515,7 +1541,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n139",
@@ -1547,7 +1574,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n154",
@@ -1579,7 +1607,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n151",
@@ -1611,7 +1640,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n123",
@@ -1622,7 +1652,8 @@
                         "note": "packages/shared/src/test-support/flake-test.ts \u00b7 body passed; quarantine wrapper throws as expected \u00b7 worker 18 / slot 18 \u00b7 attempt 0.",
                         "basis": "Playwright per-attempt telemetry",
                         "children": [],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n163",
@@ -1654,7 +1685,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n142",
@@ -1686,7 +1718,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n166",
@@ -1708,7 +1741,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n168",
@@ -1730,7 +1764,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n170",
@@ -1752,7 +1787,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n172",
@@ -1774,7 +1810,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n174",
@@ -1806,7 +1843,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n177",
@@ -1828,7 +1866,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n179",
@@ -1850,7 +1889,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n181",
@@ -1882,7 +1922,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n184",
@@ -1904,7 +1945,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n189",
@@ -1926,7 +1968,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n186",
@@ -1958,7 +2001,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n191",
@@ -1980,7 +2024,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n193",
@@ -2002,7 +2047,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n195",
@@ -2024,7 +2070,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n197",
@@ -2046,7 +2093,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n199",
@@ -2068,7 +2116,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n201",
@@ -2090,7 +2139,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n203",
@@ -2112,7 +2162,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n207",
@@ -2134,7 +2185,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n114",
@@ -2166,7 +2218,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n209",
@@ -2188,7 +2241,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n205",
@@ -2210,7 +2264,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n211",
@@ -2252,7 +2307,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n219",
@@ -2274,7 +2330,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n215",
@@ -2316,7 +2373,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n221",
@@ -2348,7 +2406,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n224",
@@ -2380,7 +2439,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n227",
@@ -2412,7 +2472,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n230",
@@ -2434,7 +2495,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n232",
@@ -2466,7 +2528,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n235",
@@ -2488,7 +2551,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n237",
@@ -2499,7 +2563,8 @@
                         "note": "specs/seeded-apps.spec.ts \u00b7 passed \u00b7 worker 23 / slot 23 \u00b7 attempt 0.",
                         "basis": "Playwright per-attempt telemetry",
                         "children": [],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n238",
@@ -2521,7 +2586,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n240",
@@ -2543,7 +2609,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n242",
@@ -2554,7 +2621,8 @@
                         "note": "specs/signup.spec.ts \u00b7 passed \u00b7 worker 27 / slot 27 \u00b7 attempt 0. After Hooks has a timestamp outside the reported attempt interval; omitted from nesting (end offset +0.007s).",
                         "basis": "Playwright per-attempt telemetry",
                         "children": [],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n243",
@@ -2586,7 +2654,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n246",
@@ -2618,7 +2687,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n249",
@@ -2640,7 +2710,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n251",
@@ -2651,7 +2722,8 @@
                         "note": "specs/test-support/screenshot.spec.ts \u00b7 passed \u00b7 worker 7 / slot 7 \u00b7 attempt 0.",
                         "basis": "Playwright per-attempt telemetry",
                         "children": [],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n252",
@@ -2662,7 +2734,8 @@
                         "note": "specs/test-support/screenshot.spec.ts \u00b7 passed \u00b7 worker 31 / slot 31 \u00b7 attempt 0.",
                         "basis": "Playwright per-attempt telemetry",
                         "children": [],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n255",
@@ -2684,7 +2757,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n253",
@@ -2706,7 +2780,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n257",
@@ -2728,7 +2803,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": true
                       },
                       {
                         "id": "n259",
@@ -2750,7 +2826,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n261",
@@ -2792,7 +2869,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n265",
@@ -2814,7 +2892,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n267",
@@ -2836,7 +2915,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n269",
@@ -2858,7 +2938,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n271",
@@ -2880,7 +2961,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n273",
@@ -2912,7 +2994,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n279",
@@ -2934,7 +3017,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n276",
@@ -2966,7 +3050,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n281",
@@ -2988,7 +3073,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n283",
@@ -3020,7 +3106,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n286",
@@ -3062,7 +3149,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       },
                       {
                         "id": "n290",
@@ -3084,7 +3172,8 @@
                             "children": []
                           }
                         ],
-                        "test": true
+                        "test": true,
+                        "failed": false
                       }
                     ]
                   }
@@ -3174,11 +3263,12 @@
     "resourceSummary": "During Playwright: sampled mean CPU 47.6% (7.6 cores), peak 85.5% (13.7 cores); peak memory 22.3 GB. 22 samples.",
     "peakActiveAttempts": 32,
     "firstStartSpread": 49.375999999999976,
-    "attemptDurationMedian": 21.672000000000025,
+    "attemptDurationMedian": 21.67199999999997,
     "attemptDurationP95": 45.841999999999985,
     "attemptDurationMax": 60.771000000000015,
     "activeAttemptSeconds": 2132.4049999999997,
-    "quarantinedFailures": 1
+    "quarantinedFailures": 1,
+    "mobileFixtureMedian": 34.04000000000002
   },
   "installs": [{ "job": "Preview / deploy + e2e", "start": 7.364, "end": 16.298, "order": 0 }],
   "installWall": 8.933999999999997,
@@ -3298,5 +3388,5 @@
   "imageTag": "0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree",
   "bakedSourceHead": "611c376",
   "context": "32 workers \u00b7 run 3nc3m3tfjd \u00b7 commit b4dc9efb0 \u00b7 preview-6. Same application code; fresh runner.",
-  "findings": "Preview finished in 8m52.6s: 114.1s Playwright, 124.6s OS Vitest. Versus 16 workers, Playwright improved by 33.7s; the full preview improved by 71.9s, including 38.7s less pnpm install. First starts span 49.4s instead of 91.2s. Individual attempts got slower: median 21.7s vs 18.3s; mobile fixture median 34.0s vs 22.8s. Dashboard navigation needed one retry: the Navigate button was missing after loading finished and the 1s click budget expired; the retry passed. The same quarantined mobile-photo lookup failed as in the control. One run does not establish a worker-count cause for that retry. During Playwright: sampled mean CPU 47.6% (7.6 cores), peak 85.5% (13.7 cores); peak memory 22.3 GB. 22 samples."
+  "findings": "Preview finished in 8m52.6s: 114.1s Playwright, 124.6s OS Vitest. Versus 16 workers, Playwright improved by 33.7s; the full preview improved by 71.9s, including 38.7s less pnpm install. First starts span 49.4s instead of 91.2s. Individual attempts got slower: median 21.7s vs 18.2s; mobile fixture median 34.0s vs 22.8s. Dashboard navigation needed one retry: the Navigate button was missing after loading finished and the 1s click budget expired; the retry passed. The same quarantined mobile-photo lookup failed as in the control. One run does not establish a worker-count cause for that retry. During Playwright: sampled mean CPU 47.6% (7.6 cores), peak 85.5% (13.7 cores); peak memory 22.3 GB. 22 samples."
 }

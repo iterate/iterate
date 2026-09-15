@@ -1,4 +1,4 @@
-<strong>So far, 32 workers gets Playwright below the Vitest bottleneck.</strong> Browser times: 148s
-→ 114s → 109s at 16 / 32 / 64 workers. Going from 32 to 64 saved only 6s in browsers, used 36 GB
-instead of 22 GB, and needed two retries instead of one. Full CI varies heavily with setup. Next: 92
-workers, then useful repeats.
+<strong>92 workers achieved near-complete concurrency, but the preview failed.</strong> Browser
+times at 16 / 32 / 64 / 92 workers: 148 / 114 / 109 / 104 seconds. Vitest finishes last from 32
+upward. At 92, three browser tests retried and dashboard navigation still failed; memory peaked at
+46 GB. Repeating 16 and 32 next. So far, 32 looks like the useful stopping point.
