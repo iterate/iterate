@@ -155,6 +155,13 @@ export class HostedStreamPrototypeFacet extends StreamDurableObject {
     return await this.#atHostedBoundary(() => Reflect.apply(method, this, input.args));
   }
 
+  protected override invokeInlineVoiceStreamMethod(
+    method: HostedStreamMethod,
+    args: unknown[],
+  ): Promise<unknown> {
+    return this.invokeHostedStream({ method, args });
+  }
+
   /** `alarm` is a platform callback name, not a cross-facet RPC contract. */
   async handleHostedAlarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
     await this.#atHostedBoundary(() => this.alarm(alarmInfo));

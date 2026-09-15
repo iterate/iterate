@@ -88,6 +88,12 @@ import {
   type HostedStreamMethod,
 } from "./hosted-stream-routing.ts";
 import {
+  InlineVoiceProcessorHost,
+  INLINE_VOICE_PROCESSOR_LOCAL_PREFIX,
+  isInlineVoiceProcessorExperiment,
+  isInlineVoiceProcessorTreatment,
+} from "./inline-voice-processor-host.ts";
+import {
   assertCoreProcessorCheckpointGrowthFits,
   STREAM_PAUSED_ERROR_PREFIX,
   StreamCoreProcessor,
@@ -1029,8 +1035,10 @@ class ExpressionProcessorFacadeRpcTarget extends RpcTarget {
 /** DurableObject itself must receive the native branded context. A hosted
  * child can then install a StreamDO-only view before this class's fields run. */
 class StreamDurableObjectBase extends DurableObject<Env> {
+  protected readonly rawCtx: DurableObjectState;
   constructor(rawCtx: DurableObjectState, env: Env, streamCtx: DurableObjectState = rawCtx) {
     super(rawCtx, env);
+    this.rawCtx = rawCtx;
     // `streamCtx` is a DurableObjectState-compatible view. Hosted facets
     // substitute only StreamDO's id and storage view; the empty generic
     // affects TypeScript's user state only, never native capabilities.
@@ -1548,11 +1556,59 @@ export class StreamDurableObject extends StreamDurableObjectBase {
   /** Set only by clone-skew recovery; consumed by every later userspace facet
    * load in this incarnation so none of them return to the stale identity. */
   #facetRecoveryNonce: string | undefined;
+  #inlineVoiceProcessorHost: InlineVoiceProcessorHost | undefined;
+
+  /** The local experiment must retain the hosted child's alarm-write boundary. */
+  protected invokeInlineVoiceStreamMethod(
+    _method: HostedStreamMethod,
+    _args: unknown[],
+  ): Promise<unknown> {
+    throw new Error("inline local stream transport requires a hosted child");
+  }
 
   async #dialProcessorFacet(name: string): Promise<ProcessorFacetStub> {
     const receiver = this.#requireHostedProcessorSubscription(name);
     if (receiver.action !== "facet-processor") {
       throw new Error(`subscription "${name}" does not run as a facet`);
+    }
+    if (
+      isInlineVoiceProcessorTreatment({
+        deploymentEnv: this.env.DEPLOYMENT_ENV,
+        projectId: this.name.projectId,
+        path: this.name.path,
+        subscriptionName: name,
+      })
+    ) {
+      if (
+        receiver.source.kind !== "userspace" ||
+        !isInlineVoiceProcessorExperiment({ path: this.name.path, worker: receiver.source.worker })
+      ) {
+        throw new Error("inline voice processor treatment source mismatch");
+      }
+      const identity = {
+        parentName: DurableObjectNameCodec.stringify(this.name, { allowNullProjectId: true }),
+        projectId: this.name.projectId,
+        path: this.name.path,
+      };
+      const host = (this.#inlineVoiceProcessorHost ??= new InlineVoiceProcessorHost({
+        rawCtx: this.rawCtx,
+        streamCtx: this.ctx,
+        env: this.env,
+        identity,
+        ...(this.name.path.startsWith(INLINE_VOICE_PROCESSOR_LOCAL_PREFIX) && {
+          invokeLocalStream: (method: HostedStreamMethod, args: unknown[]) =>
+            this.invokeInlineVoiceStreamMethod(method, args),
+        }),
+        parentAlarms: {
+          proxySetAlarm: async (atMs) => this.proxySetAlarm(atMs),
+          proxyGetAlarm: async () => this.proxyGetAlarm(),
+          proxyDeleteAlarm: async () => this.proxyDeleteAlarm(),
+        },
+      }));
+      host.configure(identity);
+      // This local host inherits the same ProcessorFacet delivery/read surface.
+      // The loose stub also lists other domains' methods, which voice never uses.
+      return host as unknown as ProcessorFacetStub;
     }
     const resolved =
       receiver.source.kind === "userspace"

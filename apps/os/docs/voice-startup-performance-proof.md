@@ -1743,3 +1743,153 @@ Artifacts under `/tmp/voice-startup-pr`: `startup-after-phase-cleanup-result.jso
 `clean-cold-workers-after-phase-cleanup-voice handshake overlap.json`,
 `direct-same-key-after-first-call-phases/`, and
 `clean-cold-workers-restored-dominant-custom-6dfc6368e7c015b37163624f5385991d.json`.
+
+### Bounded retry-attribution follow-up
+
+Temporary, project-scoped native logging records the relay's acquisition/call
+phase, target stream/processor, and reset/overload/retryable/unavailable flags.
+It changes no retry behavior. Diagnostic deployment
+`ed44cc2d-6cbb-4b72-857d-435eb67d17e6` retained the clean `ebb0a42d…` voice
+source and `bbc88660…` runtime. Its deploy smokes passed; 37 relay tests,
+OS typecheck, and focused lint passed. An earlier deployment attempt stalled
+in the local Vite build and was cancelled before uploading the main worker.
+
+The first three-call batch, without a preceding secret rewrite, returned PCM
+in all three calls. Readiness was 5,344 / 1,511 / 1,565 ms and first PCM
+6,549 / 2,714 / 2,563 ms. The first call after deployment remains included.
+A second bounded batch followed rewriting the same credential at secret offset
+652, with no source/native deployment between batches. All three returned PCM:
+readiness 2,086 / 1,662 / 1,792 ms, first PCM 3,101 / 2,847 / 3,197 ms.
+Neither batch reproduced any relay-retry messages. A secret rewrite alone is
+therefore not a reliable reproduction; the different warm/cold conditions do
+not establish whether it contributed to the original failure.
+
+Each batch has twelve untruncated, exact-version overlap records. All six
+terminal audits had matching runtime/activation, ended calls, no pending
+delegations, zero lag, and no last error. ProjectDO and hosted-parent
+error-level queries covering both batches returned zero records. These
+negative reproductions do not explain or clear the earlier 339 retries,
+multi-second stalls, or retained silent-call findings.
+
+Source inspection confirms that each relay attempt reacquires a fresh routed
+facade and retries exactly once. Thus the earlier volume needs multiple
+callers or outer reissues; it is not evidence of one unbounded relay loop.
+A secret update does not directly update the project catalog, although
+delivery activity can indirectly refresh watched project state.
+
+Artifacts under `/tmp/voice-startup-pr`: `startup-relay-retry-probe-result.json`,
+`startup-relay-retry-after-secret-result.json`, their terminal audits,
+`clean-cold-workers-relay-retry-*-*.json`, and the temporary diagnostic patch
+`relay-retry-diagnostic-applied.patch`. The diagnostic is not yet part of the PR.
+
+## Native inline voice processor control
+
+A broader control on version `3d35ba3a-ae88-4b00-be3f-7868659319e2`
+instantiated the existing `ProcessorFacet` host class locally inside each
+hosted conversation child, without creating another processor facet. Its
+registry used the child's own storage and existing processor-alarm proxy.
+Both arms retained provider-upgrade overlap, ordinary Agent setup, and the
+same voice processor implementation. A source/class/project/preview guard
+restricted the native arm to fresh `/overlap/inline/` paths and the immutable
+`ebb0a42d…` source. The native implementation also uses native StreamRpcTarget
+and scoped project egress instead of guest ITX/outbound bindings. This is a
+comparison of that complete native treatment, not placement alone.
+
+All ten counterbalanced calls over one identity-resolved project WebSocket
+returned audio and passed cleanup. The first samples remain included.
+
+| Measurement                      | Native inline                         | Ordinary dynamic facet                |
+| -------------------------------- | ------------------------------------- | ------------------------------------- |
+| Readiness samples (ms)           | 3,878 / 1,548 / 1,867 / 1,803 / 2,144 | 1,394 / 1,893 / 2,486 / 1,898 / 1,682 |
+| All-five readiness median (ms)   | 1,867                                 | 1,893                                 |
+| Later-four readiness median (ms) | 1,835                                 | 1,895.5                               |
+| All-five first PCM median (ms)   | 3,134                                 | 3,024                                 |
+
+There is no established useful improvement. The immediately preceding
+five-call same-key direct Node reference had median upgrade 481.995 ms,
+`session.started` 1,057.002 ms, and first PCM 1,802.533 ms; all five returned
+audio. That in-memory key was written to preview secret offset 665. The
+2,096-byte prompt hash matched every hosted call. These are software receipt
+measurements, not physical speaker onset.
+
+Five exact-version creation records confirmed the intended inline hosts.
+Forty exact-version, untruncated overlap records accounted for all ten calls;
+each cancelled upgrade settled with zero pending entries. All terminal audits
+showed ended calls, matching activation, no delegation, zero lag/error, and
+the expected native deployment key or dynamic `bbc88660…` runtime. Initial
+voice batches were contiguous and voice/Agent configuration payloads matched
+after normalizing only path, activation, UUID, and textual offset references.
+ProjectDO/host-parent error queries and relay-retry queries returned zero.
+
+Validation included 53 hosted/relay tests, five real-workerd ProcessorFacet
+lifecycle tests, three new focused host/guard tests, OS typecheck, lint, and
+deploy smokes. A separate real-workerd constructor proof verified that the
+local host can receive raw native context before using the hosted child view.
+The focused mocked context test distinguishes incorrect context use; it does
+not by itself prove native storage isolation.
+
+This temporary control does not preserve mid-call source-change or clone-skew
+retirement: the source guard rejects a changed configuration, but a cached
+inline host does not follow ordinary facet-abort cleanup. Those operations
+were excluded, not proved equivalent. The control is not a production design.
+
+Artifacts under `/tmp/voice-startup-pr`: `inline-voice-ab-result.json`,
+`inline-voice-ab-classified.json`, `inline-voice-terminal-audit.json`,
+`inline-voice-events-audit.json`, `inline-voice-semantic-proof.json`,
+`inline-voice-source-equivalence.json`, `inline-voice-control-applied.patch`,
+`direct-same-key-inline/`, and `clean-cold-workers-inline-ab-*.json`.
+
+## Local self-stream invocation
+
+Version `79ac9c76-b023-4004-ab5c-ab0603527fd4` compared two native inline
+hosts. The remote arm retained StreamRpcTarget's normal routed self-RPC. The
+local arm supplied only its five processor read/append verbs through the
+same hosted child's `invokeHostedStream` method. It retained that boundary's
+required alarm-write repair/flush, plus StreamRpcTarget's retry, lifecycle
+tagging, result detachment, paging, and stream-lifetime guarded append logic.
+Sibling `at()` handles remained remote. This removes a self-invocation
+boundary, including its output-gate behavior; it does not isolate network
+transport time alone.
+
+All ten counterbalanced calls returned audio and passed cleanup over one
+identity-resolved project WebSocket, with fresh paths inside every call timer.
+
+| Measurement                      | Local self-stream                     | Routed self-stream                    |
+| -------------------------------- | ------------------------------------- | ------------------------------------- |
+| Readiness samples (ms)           | 3,335 / 1,354 / 1,252 / 1,462 / 1,618 | 1,606 / 1,755 / 1,827 / 2,355 / 2,340 |
+| All-five readiness median (ms)   | 1,462                                 | 1,827                                 |
+| Later-four readiness median (ms) | 1,408                                 | 2,083.5                               |
+| All-five first PCM median (ms)   | 2,826                                 | 3,195                                 |
+
+The 365 ms median readiness reduction is useful evidence, not completion:
+the first local call still took 3,335 ms, and the immediately preceding
+five-call same-key direct reference measured median upgrade 473.799 ms,
+`session.started` 822.562 ms, and first PCM 1,693.055 ms. All direct calls
+returned audio; the same in-memory key was written at secret offset 688.
+Every hosted call reported the unchanged 2,096-byte prompt hash.
+
+Ten exact-version host records confirmed five local and five remote choices.
+Forty exact-version, untruncated overlap records accounted for every resource,
+each settling with zero pending entries. Two later local calls claimed while
+the provider upgrade was still pending, waiting 334 / 410 ms inside claim;
+their already-ready socket wait was zero. The other later local ready-to-claim
+waits were 217 / 379 ms. Every remote socket waited after upgrade readiness:
+340 / 349 / 519 / 845 / 1,185 ms. These timings support removing self-stream
+work from startup, without explaining every remaining interval.
+
+All ten terminal audits had the expected deployment runtime key, matching
+activation, ended call, no delegation, zero lag, and no last error. ProjectDO,
+host-parent error, and relay-retry queries returned zero events. The earlier
+failed/silent samples and the mid-call source/clone lifecycle limitations
+above remain unresolved; this run does not erase them.
+
+Five focused inline-host tests, OS typecheck, lint, format, and deploy smokes
+passed. The new tests exercise actual StreamRpcTarget reads, passive context
+append, guarded append, and rejection through the supplied local callback.
+Existing hosted and ProcessorFacet lifecycle evidence remains applicable to
+the reused implementations; it does not prove every new composition boundary.
+
+Artifacts under `/tmp/voice-startup-pr`: `inline-local-ab-result.json`,
+`inline-local-ab-classified.json`, `inline-local-terminal-audit.json`,
+`inline-local-events-audit.json`, `direct-same-key-inline-local/`,
+`inline-local-control-applied.patch`, and `clean-cold-workers-inline-local-*.json`.
