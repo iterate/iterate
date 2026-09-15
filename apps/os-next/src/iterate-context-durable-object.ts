@@ -251,7 +251,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  append; a REFUSED one pays nothing (arming the quiet-clock alarm is a storage write a rejected
    *  probe must not pay). */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    this.#notePublicDoor();
+    this.#noteExternalRequest();
     return this.#appendAndRunCommittedEffects(events);
   }
 
@@ -332,7 +332,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** One BUDGETED page of the log (Stream.read). */
   async read(afterOffset = 0, limit = 500): Promise<StreamPage> {
-    this.#notePublicDoor();
+    this.#noteExternalRequest();
     return this.#stream.read(afterOffset, limit); // sync on the Stream, async at this cross-hop door
   }
 
@@ -371,7 +371,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   );
 
   /** The own-context adapter used by built-ins. Internal loopback calls keep caller attribution and
-   * committed effects, but do not pass through the public-door activity/self-wake bookkeeping. */
+   * committed effects, but do not pass through external-request activity/self-wake bookkeeping. */
   readonly #localContext: ReachableContext = {
     append: async (...events) => this.#appendAndRunCommittedEffects(events),
     read: async (afterOffset, limit) => this.#stream.read(afterOffset, limit),
@@ -524,11 +524,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#stream.alarms.replace("idle", this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS);
   }
 
-  /** Whether an external door touched this incarnation, included in alarm traces for correlation.
-   * Same-context loopbacks intentionally do not set it. */
-  #publicDoorTouched = false;
-  #notePublicDoor(): void {
-    this.#publicDoorTouched = true;
+  /** Whether an external request touched this incarnation, included in alarm traces for
+   * correlation. Same-context loopbacks intentionally do not set it. */
+  #externalRequestTouched = false;
+  #noteExternalRequest(): void {
+    this.#externalRequestTouched = true;
   }
 
   /** EVERY facet materialized this incarnation — the set the quiesce alarm aborts so no LIVE facet
@@ -641,7 +641,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#stream.emitAlarmTrace({
       phase: "reconcile",
       reason: "alarm-pass-complete",
-      publicDoorTouched: this.#publicDoorTouched,
+      externalRequestTouched: this.#externalRequestTouched,
       scheduledProgress,
       nextScheduledAppendAt: this.#stream.nextScheduledAppendAt(),
     });
@@ -954,7 +954,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     args: unknown[] = [],
     caller: Caller = { principal: null },
   ): Promise<unknown> {
-    this.#notePublicDoor();
+    this.#noteExternalRequest();
     this.#recordActivityForQuietClock();
     try {
       return await this.#callerStorage.run(caller, () =>
@@ -967,9 +967,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** Same-context dispatch for kernel loopbacks (not an externally reachable door). It preserves the
-   * caller AsyncLocalStorage used to stamp appends, while leaving public activity and self-wake
-   * accounting to the actual request that initiated the work. */
+  /** Same-context dispatch for kernel loopbacks (not an externally reachable request). It preserves
+   * the caller AsyncLocalStorage used to stamp appends, while leaving external activity and
+   * self-wake accounting to the request that initiated the work. */
   async #invokeLocal(
     call: ItxExpressionInput,
     args: unknown[] = [],
@@ -982,7 +982,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   // ── native fetch: the rpc-stub pager door, the fetch lane, egress ──
 
   async fetch(request: Request): Promise<Response> {
-    this.#notePublicDoor();
+    this.#noteExternalRequest();
     // The doors, in order — each answers or declines: the rpc-stub pager and the rpc-stub fetch
     // upgrade leg; THE FETCH LANE (`x-itx-expression` names an itx expression — JSON from a session's
     // terminal `fetch(request)`, dotted text from a project host (`itx.apps.<app>`, `itx.worker`) or

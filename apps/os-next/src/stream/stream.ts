@@ -90,6 +90,8 @@ function boundedTraceValue(value: unknown, depth: number): unknown {
 }
 
 function boundAlarmTracePayload(payload: AlarmTracePayload): Record<string, unknown> {
+  // boundedTraceValue only returns a record for this root object: AlarmTracePayload is a plain
+  // object, and the helper has already recursively bounded every value before this narrowing.
   const bounded = boundedTraceValue(payload, 0) as Record<string, unknown>;
   if (JSON.stringify(bounded).length <= traceMaxChars) return bounded;
   return {
