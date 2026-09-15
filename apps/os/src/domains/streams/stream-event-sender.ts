@@ -495,6 +495,7 @@ export class StreamEventSender {
           this.#deliveryStillMatches(name, expectedDelivery),
         onHostedDeliveryFailure: (name, error) => this.#onDeliveryFailure(name, error),
         sendDueSubscriptions: () => this.sendDue(),
+        hasHostedWakeInFlight: () => this.#hostedWakesInFlight.size > 0,
         reconcileAlarm: () => this.reconcileAlarmAfterSettlement(),
       },
     });
@@ -1939,6 +1940,7 @@ type StreamConnectionsHooks = Pick<
   ): boolean;
   onHostedDeliveryFailure(connectionKey: string, error: unknown): void;
   sendDueSubscriptions(): void;
+  hasHostedWakeInFlight(): boolean;
   /** Recompute (and possibly clear) the alarm after a hosted batch settles. */
   reconcileAlarm(): void;
 };
@@ -2063,6 +2065,7 @@ export class StreamConnections {
   }
 
   rearmIdleAlarm(): void {
+    if (this.#hooks.hasHostedWakeInFlight()) return;
     if (this.#idleTeardownAtMs !== null) this.#hooks.armAlarm(this.#idleTeardownAtMs);
   }
 
@@ -2275,6 +2278,12 @@ export class StreamConnections {
     // remainder still looks idle-eligible with stale activity; arming from
     // that nested turn issues one pointless immediate wake per teardown.
     if (this.#tearingDown) return;
+    // Idle cleanup would queue behind the wake watchdog and ahead of its
+    // receiver while the callback is absent.
+    if (this.#hooks.hasHostedWakeInFlight()) {
+      this.#idleTeardownAtMs = null;
+      return;
+    }
     const eligible = this.#idleEligibleConnectionKeys();
     // Pending connections are excluded from both activity derivation and
     // teardown — their in-flight watchdog owns their future. Letting stale
@@ -2326,7 +2335,7 @@ export class StreamConnections {
     /* Level-triggered twin of the deferral in armOrClearIdleAlarm: an alarm
      * armed before the facet took up work can still land here while the work
      * runs. Re-derive the pushed-out deadline and stand down. */
-    if (this.#hooks.facetWorkArmedAtMs() !== null) {
+    if (this.#hooks.facetWorkArmedAtMs() !== null || this.#hooks.hasHostedWakeInFlight()) {
       this.armOrClearIdleAlarm();
       return [];
     }
@@ -2870,7 +2879,8 @@ export class StreamConnections {
       pingRtt: new LatencyRing(),
       sendQueued: () => void sendQueuedBatches(),
       isLive: () => open,
-      hasPendingDelivery: () => kind === "hosted" && hostedInFlight.size > 0,
+      hasPendingDelivery: () =>
+        kind === "hosted" && (initialBatchPending || hostedInFlight.size > 0),
       pendingDeliveryStartedAtMs: () =>
         [...hostedInFlight.values()].reduce<number | null>(
           (earliest, flight) =>

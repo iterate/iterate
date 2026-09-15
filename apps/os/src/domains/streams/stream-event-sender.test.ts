@@ -104,6 +104,7 @@ function harness(args: {
   store?: SqliteSubscriptionCursorStore;
   facetWorkArmedAtMs?: () => number | null;
   awaitAlarmWrite?: () => Promise<void>;
+  subscriberPagerConnectionKeys?: () => ReadonlySet<string>;
   /** Reduced halt record, as folded from a committed subscription-delivery-halted event. */
   deliveryHalted?: NonNullable<
     CoreProcessorState["subscriptions"]["outbound"]["byName"][string]["deliveryHalted"]
@@ -183,7 +184,8 @@ function harness(args: {
         kept.push(work());
       },
       keepAlive: (promise) => kept.push(promise),
-      subscriberPagerConnectionKeys: () => new Set<string>(),
+      subscriberPagerConnectionKeys:
+        args.subscriberPagerConnectionKeys || (() => new Set<string>()),
       onSessionsIdleClosed: () => undefined,
       pageDormantSubscribers: () => undefined,
     },
@@ -238,6 +240,67 @@ describe("StreamEventSender hosted processor delivery", () => {
     arm.resolve();
     await h.settle();
     expect(wake).toHaveBeenCalledOnce();
+  });
+
+  it("defers quiet idle teardown while the pre-wake alarm write is held", async () => {
+    const alarmWrite = Promise.withResolvers<void>();
+    const h = harness({
+      events: [event(2, "a", { keep: true })],
+      awaitAlarmWrite: () => alarmWrite.promise,
+      subscriberPagerConnectionKeys: () => new Set(["quiet"]),
+      wakeProcessor: async () => ({
+        streamId: SOURCE_STREAM_ID,
+        checkpointOffset: 0,
+        processEventBatch: retainedProcessEventBatch(() => undefined),
+      }),
+    });
+    h.eventSender.connections.openSession({
+      connectionKey: "quiet",
+      processEventBatch: () => undefined,
+    });
+    h.alarms.length = 0;
+
+    h.eventSender.sendDue();
+    await Promise.resolve();
+    expect(h.alarms).toContain(31_000);
+    expect(h.alarms).not.toContain(15_000);
+    expect(h.wakeCalls).toHaveLength(0);
+    expect(h.eventSender.connections.runIdleTeardownNow()).toEqual([]);
+
+    alarmWrite.resolve();
+    await h.settle();
+    expect(h.alarms).toContain(15_000);
+    expect(h.wakeCalls).toHaveLength(1);
+  });
+
+  it("releases quiet idle teardown when the held pre-wake call fails", async () => {
+    const alarmWrite = Promise.withResolvers<void>();
+    const h = harness({
+      events: [event(2, "a", { keep: true })],
+      awaitAlarmWrite: () => alarmWrite.promise,
+      subscriberPagerConnectionKeys: () => new Set(["quiet"]),
+      wakeProcessor: async () => {
+        throw new Error("wake failed");
+      },
+    });
+    h.eventSender.connections.openSession({
+      connectionKey: "quiet",
+      processEventBatch: () => undefined,
+    });
+    h.alarms.length = 0;
+
+    h.eventSender.sendDue();
+    await Promise.resolve();
+    expect(h.alarms).toContain(31_000);
+    expect(h.alarms).not.toContain(15_000);
+    expect(h.wakeCalls).toHaveLength(0);
+    expect(h.eventSender.connections.runIdleTeardownNow()).toEqual([]);
+
+    alarmWrite.resolve();
+    await h.settle();
+    expect(h.alarms).toContain(15_000);
+    expect(h.wakeCalls).toHaveLength(1);
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({ attempt: 1, nextAttemptAt: 11_000 });
   });
 
   it("replaces a hosted callback by clearing its matching watchdog and immediately redelivering", async () => {
@@ -2559,6 +2622,7 @@ function connectionsHarness(
         candidate.connectionGeneration === expectedDelivery.connectionGeneration,
       onHostedDeliveryFailure: deliveryFailures,
       sendDueSubscriptions: durableDeliveryWakes,
+      hasHostedWakeInFlight: () => false,
     },
   });
   return {
@@ -2723,6 +2787,33 @@ describe("ephemeral delivery to hosted processors", () => {
 });
 
 describe("StreamConnections hosted delivery watchdog", () => {
+  it("defers idle teardown until the initial hosted greeting settles", () => {
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({ events: [] });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+
+    // Publication comes before the wake path starts its first scan. The
+    // pre-wake watchdog owns recovery in this gap, so it must not also queue
+    // a five-second idle teardown write.
+    expect(h.alarmTimes).toEqual([]);
+
+    connection.sendQueued();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.batch.events).toEqual([]);
+    expect(h.alarmTimes).toEqual([1_000 + DEFAULT_DELIVERY_TIMEOUT_MS]);
+
+    // An eventless greeting still clears the initial reservation. Once its
+    // durable acknowledgement settles, normal idle eligibility returns.
+    calls[0]!.report("ok");
+    h.connections.armOrClearIdleAlarm();
+    expect(h.alarmTimes.at(-1)).toBe(1_000 + 5_000);
+  });
+
   it("does not publish a hosted callback until its opened event finishes appending", () => {
     const calls: DeliveryCall[] = [];
     const h = connectionsHarness({
@@ -3525,15 +3616,19 @@ describe("StreamConnections hosted delivery watchdog", () => {
 
   it("defers idle teardown while a facet holds work, and runs it after", () => {
     let facetWork: number | null = 60_000;
-    const h = connectionsHarness({ facetWorkArmedAtMs: () => facetWork });
+    const h = connectionsHarness({ events: [], facetWorkArmedAtMs: () => facetWork });
     const calls: DeliveryCall[] = [];
-    h.connections.openHosted({
+    const connection = h.connections.openHosted({
       connectionKey: "processor",
       expectedHostedDelivery: h.expectedDelivery,
       processEventBatch: recordingProcessEventBatch(calls, () => undefined),
       replayAfterOffset: 0,
     });
-    calls[0]?.report("ok");
+    // Production wakes always start the initial greeting after publishing the
+    // callback. Settle it before exercising idle lifecycle behavior.
+    connection.sendQueued();
+    expect(calls).toHaveLength(1);
+    calls[0]!.report("ok");
     /* The alarm lands while the facet is mid-call: stand down. */
     expect(h.connections.runIdleTeardownNow()).toEqual([]);
     /* The facet settled and disarmed: the next firing tears down as before. */
@@ -3991,12 +4086,17 @@ describe("StreamConnections hosted delivery watchdog", () => {
     });
     const disposed = vi.fn();
     h.store.ack("processor", 3);
-    h.connections.openHosted({
+    const calls: DeliveryCall[] = [];
+    const connection = h.connections.openHosted({
       connectionKey: "processor",
       expectedHostedDelivery: h.expectedDelivery,
-      processEventBatch: recordingProcessEventBatch([], disposed),
+      processEventBatch: recordingProcessEventBatch(calls, disposed),
       replayAfterOffset: 3,
     });
+    // The wake owner sends and settles the required eventless greeting before
+    // a quiet connection becomes eligible for idle teardown.
+    connection.sendQueued();
+    calls[0]!.report("ok");
 
     expect(h.connections.runIdleTeardownNow()).toEqual(["processor"]);
 
