@@ -950,7 +950,7 @@ describe("preview test commands", () => {
     expect(collector).not.toContain("runner-telemetry");
   });
 
-  test("starts Playwright early while gating project-backed work and Vitest", () => {
+  test("starts both test runners after shared environment readiness", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
     const smokeLane = "pnpm exec tsx e2e/vitest/agent-smoke.ts";
@@ -976,18 +976,16 @@ describe("preview test commands", () => {
     expect(script).toContain('wait "$ROLLOUT_PID"');
     expect(script).toContain('wait "$TUI_PID"');
     expect(script).toContain('wait "$E2E_PID"');
-    expect(script).toContain('[ "$SMOKE_OK" -eq 0 ]');
+    expect(script).toContain('READY_OK="$SMOKE_OK"');
     expect(script).toContain('[ "$TUI_OK" -eq 0 ]');
     expect(script).toContain('[ "$E2E_OK" -eq 0 ]');
-    // Independent setup starts immediately. Playwright begins as soon as
-    // Chromium is ready. Its project fixture and the smoke consume the
-    // absolute deadline from the environment, while the age clock gates
-    // Vitest here.
+    // Browser installation overlaps readiness; neither test runner includes
+    // the shared wait in individual test durations.
     for (const lane of ["run_visible_lane rollout-settle sleep", smokeLane, tuiLane]) {
       expect(script.indexOf(lane)).toBeLessThan(script.indexOf('wait "$PW_INSTALL_PID"'));
     }
     expect(script.indexOf('wait "$PW_INSTALL_PID"')).toBeLessThan(script.indexOf(playwrightSpec));
-    expect(script.indexOf(playwrightSpec)).toBeLessThan(script.indexOf('wait "$SMOKE_PID"'));
+    expect(script.indexOf('wait "$ROLLOUT_PID"')).toBeLessThan(script.indexOf(playwrightSpec));
     expect(script.indexOf('wait "$SMOKE_PID"')).toBeLessThan(script.indexOf('wait "$ROLLOUT_PID"'));
     expect(script.indexOf('wait "$ROLLOUT_PID"')).toBeLessThan(script.indexOf(e2eLane));
     expect(script.indexOf('wait "$SMOKE_PID"')).toBeLessThan(script.indexOf(e2eLane));
