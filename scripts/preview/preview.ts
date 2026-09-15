@@ -634,6 +634,7 @@ async function runPreviewCiCommand(
       "env",
       `${E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV}=${plan.workerVersionOverrides}`,
       `${previewRolloutRemainingSecondsEnvironment}=${remaining}`,
+      `${PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV}=${resolvePreviewRolloutReadyAtMs({ appSlug: slug, deployedAt: entry.deployedAt || entry.updatedAt })}`,
       ...baseUrlEnvironment,
       ...args,
     ],
