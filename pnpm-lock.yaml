@@ -76,9 +76,6 @@ patchedDependencies:
   '@journeyapps/wa-sqlite@1.7.0':
     hash: 628f45a8b65f5811216d637fb5cc4584db8f69a125d1ae417c4e49bc38ebca83
     path: patches/@journeyapps__wa-sqlite@1.7.0.patch
-  middlewright@0.1.0:
-    hash: 44a56f15d8376f0284bd93291a6a4bfe3d322157aac562d31301acd628338147
-    path: patches/middlewright@0.1.0.patch
   zod@4.5.4:
     hash: bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5
     path: patches/zod@4.5.4.patch
@@ -161,8 +158,8 @@ importers:
         specifier: ^16.2.7
         version: 16.3.2
       middlewright:
-        specifier: https://pkg.pr.new/middlewright@08dd4f9
-        version: https://pkg.pr.new/middlewright@08dd4f9(patch_hash=44a56f15d8376f0284bd93291a6a4bfe3d322157aac562d31301acd628338147)(@playwright/test@1.60.0)
+        specifier: https://pkg.pr.new/middlewright@e3f2374
+        version: https://pkg.pr.new/middlewright@e3f2374(@playwright/test@1.60.0)
       oxfmt:
         specifier: ^0.35.0
         version: 0.35.0
@@ -11769,8 +11766,8 @@ packages:
     resolution: {integrity: sha512-PXwfBhYu0hBCPw8Dn0E+WDYb7af3dSLVWKi3HGv84IdF4TyFoC0ysxFd0Goxw7nSv4T/PzEJQxsYsEiFCKo2BA==}
     engines: {node: '>=8.6'}
 
-  middlewright@https://pkg.pr.new/middlewright@08dd4f9:
-    resolution: {tarball: https://pkg.pr.new/middlewright@08dd4f9}
+  middlewright@https://pkg.pr.new/middlewright@e3f2374:
+    resolution: {tarball: https://pkg.pr.new/middlewright@e3f2374}
     version: 0.1.0
     engines: {node: '>=20'}
     peerDependencies:
@@ -27560,7 +27557,7 @@ snapshots:
       braces: 3.0.3
       picomatch: 2.3.1
 
-  middlewright@https://pkg.pr.new/middlewright@08dd4f9(patch_hash=44a56f15d8376f0284bd93291a6a4bfe3d322157aac562d31301acd628338147)(@playwright/test@1.60.0):
+  middlewright@https://pkg.pr.new/middlewright@e3f2374(@playwright/test@1.60.0):
     dependencies:
       '@playwright/test': 1.60.0
       dedent: 1.7.2

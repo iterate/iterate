@@ -159,10 +159,10 @@ test("undo keeps a peer's shopping-list edit in the seeded Docs app", async ({
   await workspace.writeFile(
     path,
     dedent`
-    - green apples
-    - crunchy peanut butter
-    - bananas
-  ` + "\n",
+      - green apples
+      - crunchy peanut butter
+      - bananas
+    ` + "\n",
   );
   await project.kv.set("docs-app-origin", docsOriginForBaseUrl(baseURL!));
   const url = new URL(appUrl("docs", slug, baseURL!));
@@ -208,10 +208,10 @@ test("undo keeps a peer's shopping-list edit in the seeded Docs app", async ({
     })
     .toBe(
       dedent`
-      - green apples
-      - smooth peanut butter
-      - bananas
-    ` + "\n",
+        - green apples
+        - smooth peanut butter
+        - bananas
+      ` + "\n",
     );
   await peer.close();
 });
