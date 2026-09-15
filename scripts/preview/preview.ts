@@ -47,7 +47,7 @@ import {
   type WorkerSizeInfo,
 } from "./worker-size.ts";
 import { PreviewE2eTelemetryArtifact } from "./e2e-telemetry.ts";
-import { assertPreviewCiIdentity } from "./ci-identity.ts";
+import { assertPreviewCiIdentity, PreviewCiIdentity, readPreviewCiResults } from "./ci-identity.ts";
 import { previewPlaywrightShards } from "./playwright-capacity-reporter.ts";
 
 // Flake-hunt notes for the preview e2e lane live in
@@ -515,29 +515,13 @@ export async function ciFinish(options: PullRequestCommandOptions = {}) {
             ? previewPlaywrightShards.map((shard) => `playwright-${shard}`)
             : []),
         ];
-        const failures: string[] =
-          app.slug === "streams-example-app" && streamsReportError ? [streamsReportError] : [];
-        let durationMs = 0;
-        for (const key of keys) {
-          try {
-            const receipt = PreviewCiReceipt.parse(
-              JSON.parse(
-                await readFile(
-                  resolve(runtime.repositoryRoot, `test-results/preview-ci-results/${key}.json`),
-                  "utf8",
-                ),
-              ),
-            );
-            assertPreviewCiIdentity(plan, receipt);
-            if (receipt.key !== key)
-              throw new Error(`Expected result for ${key}, received ${receipt.key}`);
-            durationMs = Math.max(durationMs, receipt.durationMs);
-            if (receipt.exitCode !== 0)
-              failures.push(receipt.error || `${key} failed with exit ${receipt.exitCode}`);
-          } catch (error) {
-            failures.push(`Missing or invalid ${key} result: ${String(error)}`);
-          }
-        }
+        const { failures, durationMs } = await readPreviewCiResults(
+          plan,
+          keys,
+          resolve(runtime.repositoryRoot, "test-results/preview-ci-results"),
+        );
+        if (app.slug === "streams-example-app" && streamsReportError)
+          failures.push(streamsReportError);
         if (app.slug === "os" && mergeFailure) failures.push(mergeFailure);
         const summary = await app.collectTestTelemetry({ repositoryRoot: runtime.repositoryRoot });
         failures.push(...summary.collectionErrors);
@@ -3101,12 +3085,6 @@ const CloudflarePreviewState = z.object({
   notice: z.string().trim().min(1).nullable().default(null),
 });
 
-const PreviewCiIdentity = z.object({
-  headSha: z.string().min(1),
-  runId: z.string().min(1),
-  runAttempt: z.string().min(1),
-  slot: z.string().min(1),
-});
 const PreviewCiPlan = PreviewCiIdentity.extend({
   pullRequestNumber: z.number().int().positive(),
   state: CloudflarePreviewState,
@@ -3114,13 +3092,6 @@ const PreviewCiPlan = PreviewCiIdentity.extend({
   playwrightTestCount: z.number().int().positive(),
   workerVersionOverrides: z.string().min(1),
 });
-const PreviewCiReceipt = PreviewCiIdentity.extend({
-  key: z.string().min(1),
-  exitCode: z.number().int(),
-  durationMs: z.number().nonnegative(),
-  error: z.string().nullable(),
-});
-
 const CloudflareZonesResponse = z
   .object({
     success: z.boolean(),
