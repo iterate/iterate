@@ -250,7 +250,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     if (liveStateUpgrade !== undefined) return liveStateUpgrade;
     const taken = takeStreamContext(request);
     const overlap = this.#claimVoiceHandshakeOverlap(taken.request, taken.streamContext);
-    if (overlap !== null) return await overlap;
+    if (overlap) return await overlap;
     if (this.#egressInterceptor !== undefined) {
       // Egress interceptors run before secret substitution. They must never
       // receive raw secret material, only getSecret(...) placeholders.
@@ -335,7 +335,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
       ),
     );
     const entry = this.#voiceHandshakeOverlaps.get(input.streamPath);
-    if (entry !== undefined && entry.activation === input.activation) {
+    if (entry && entry.activation === input.activation) {
       this.#expireVoiceHandshakeOverlap(input.streamPath, "cancelled after conversation end");
     }
     console.info("voice handshake overlap cancellation settled", {
@@ -369,7 +369,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         kind: "scope",
         scopePath: input.streamPath,
       });
-      if (response.status !== 101 || response.webSocket === null) {
+      if (response.status !== 101 || !response.webSocket) {
         await response.body?.cancel();
         throw new Error("voice handshake overlap provider upgrade was refused");
       }
@@ -421,22 +421,21 @@ export class ProjectDurableObject extends DurableObject<Env> {
   async #takeVoiceHandshakeOverlap(streamPath: string) {
     const claimEnteredAtMs = Date.now();
     let entry = this.#voiceHandshakeOverlaps.get(streamPath);
-    if (entry === undefined) {
+    if (!entry) {
       // The native registration RPC is issued before receiver delivery but may
       // reach this actor one turn later. Wait briefly for registration; never
       // issue a second provider request if it does not arrive.
       await this.#waitForVoiceHandshakeOverlapRegistration(streamPath);
       entry = this.#voiceHandshakeOverlaps.get(streamPath);
     }
-    if (entry === undefined)
-      return new Response("voice handshake overlap was not prepared", { status: 409 });
+    if (!entry) return new Response("voice handshake overlap was not prepared", { status: 409 });
     await entry.completion;
     if ((await this.#egressRules()).length !== 0) {
       this.#expireVoiceHandshakeOverlap(streamPath, "egress policy changed before claim");
       return new Response("voice handshake overlap policy changed before claim", { status: 409 });
     }
-    if (this.#voiceHandshakeOverlaps.get(streamPath) !== entry || entry.response === null) {
-      return new Response(`voice handshake overlap failed: ${entry.failure ?? "expired"}`, {
+    if (this.#voiceHandshakeOverlaps.get(streamPath) !== entry || !entry.response) {
+      return new Response(`voice handshake overlap failed: ${entry.failure || "expired"}`, {
         status: 409,
       });
     }
@@ -453,7 +452,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   #waitForVoiceHandshakeOverlapRegistration(streamPath: string) {
     let waiter = this.#voiceHandshakeOverlapRegistrations.get(streamPath);
-    if (waiter !== undefined) return waiter.promise;
+    if (waiter) return waiter.promise;
     let resolve: () => void;
     const promise = new Promise<void>((done) => {
       resolve = done;
@@ -469,7 +468,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   #resolveVoiceHandshakeOverlapRegistration(streamPath: string) {
     const waiter = this.#voiceHandshakeOverlapRegistrations.get(streamPath);
-    if (waiter === undefined) return;
+    if (!waiter) return;
     clearTimeout(waiter.timeout);
     this.#voiceHandshakeOverlapRegistrations.delete(streamPath);
     waiter.resolve();
@@ -477,11 +476,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   #expireVoiceHandshakeOverlap(streamPath: string, reason = "expired without claim") {
     const entry = this.#voiceHandshakeOverlaps.get(streamPath);
-    if (entry === undefined) return;
+    if (!entry) return;
     clearTimeout(entry.expiry);
     this.#voiceHandshakeOverlaps.delete(streamPath);
-    if (entry.response !== null) closeUnacceptedWebSocket(entry.response.webSocket!, reason);
-    entry.failure ??= reason;
+    if (entry.response) closeUnacceptedWebSocket(entry.response.webSocket!, reason);
+    entry.failure ||= reason;
     entry.resolveCompletion();
   }
 
