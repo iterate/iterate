@@ -31,16 +31,27 @@ jobs:
           ref: ${{ github.sha }}
       - name: Reconcile dependencies (baked)
         run: pnpm install --frozen-lockfile --prefer-offline
-      - name: Main preview / deploy + e2e + erase
+      - name: Main preview / deploy + e2e
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
         run: |-
           set -euo pipefail
-          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview run-main \
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview run \
             --github-token "$GITHUB_TOKEN" \
             --commit "$GITHUB_SHA"
+      - name: Main preview / erase slot data after e2e
+        if: always()
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |-
+          set -euo pipefail
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview erase \
+            --github-token "$GITHUB_TOKEN" \
+            --commit "$GITHUB_SHA" \
+            --ran-head-sha "$GITHUB_SHA"
       - name: Normalize and send preview test telemetry
         if: always()
         env:

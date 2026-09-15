@@ -5,12 +5,12 @@ size: large
 
 # Main preview runs and a current flake dashboard
 
-Status: ordinary-slot allocation is implemented; the runner now also separates run identity from report state and PR-specific decisions. PR #2658 stays closed. Local refactor checks are passing; full e2e still needs published packages for the branch commit.
+Status: ordinary-slot allocation and the dashboard changes are implemented. All preview commands now share a target for PRs and workflow commits; local verification of this latest refactor passes; deployed verification is next. PR #2658 stays closed. Full e2e still needs published packages for the branch commit.
 
 ## Current scope
 
-- [x] Keep `pnpm preview run --pull-request-number <n>` working. Add `pnpm preview run-main --commit <sha>` for the exact checked-out main commit. *Shared runner retained; `run-main --help` works and pinned checkout tests pass.*
-- [x] Share deployment, readiness, tests and cleanup between PR/main callers. Extract PR reporting/context from the shared implementation where needed; keep the extraction focused. *`PreviewRun` and `PreviewReport` feed the shared deploy/test/cleanup functions; PR policy stays in the command path.*
+- [x] Keep `pnpm preview run --pull-request-number <n>` working. Support the exact checked-out main commit through the same command with `--commit <sha>`. *Removed `run-main`; the workflow now uses shared `run` and `erase` commands.*
+- [x] Share deployment, readiness, tests and cleanup between PR/main callers. Extract PR reporting/context from the shared implementation where needed; keep the extraction focused. *`PreviewTarget` supplies run identity, report, comparison base, slot preference and review project to shared commands; source-specific setup stays at the boundary.*
 - [x] Main takes an ordinary preview lease under `main-preview`, renews it across runs, and keeps it after cleanup. Use the existing 3h expiry and GC; make no Semaphore policy changes. *Semaphore matches the base commit; shared claim tests cover `main-preview` renewal.*
 - [x] Trigger the full preview suite on main pushes. Serialize main deployment/test/cleanup on its ordinary slot without cancelling an active run; newer queued commits replace older queued commits. Keep current PR cancellation behavior. *`cloudflare-main-preview.yml` uses one concurrency group with cancellation disabled.*
 - [x] Upload complete suite results even when no unknown flakes occur. Only a completed full main result replaces that suite's current unknown-flake list; partial/cancelled/missing results must not look like a clean run. Preserve historical records. *Suite summaries carry branch/head and completeness; incomplete results retain the previous snapshot.*
@@ -20,11 +20,11 @@ Status: ordinary-slot allocation is implemented; the runner now also separates r
 - [x] Put collapsible Sentinels last. Render unknown test names as plain text with safe Markdown escaping. *Renderer orders Sentinels last and escapes plain unknown names.*
 - [x] Test shared lease renewal, pinned commit validation, complete-zero-flake replacement, partial-run handling, and the rendered issue through real public boundaries/harnesses. *156 focused CI/runner tests and 31 dashboard harness tests pass.*
 - [ ] Validate the shared path against a preview and inspect its results/artifacts. Check the new main workflow using supported Depot execution before merge; do not claim automatic main triggers are live before merge.
-- [x] Complete local checks and commit/push the revised branch for compare-link review. Keep PR #2658 closed; do not open another PR. *Local checks pass; full preview-test limitation is recorded separately above.*
+- [ ] Complete checks and commit/push the common-target refactor for compare-link review. Keep PR #2658 closed; do not open another PR.
 
 ## Decisions and limits
 
-- `run-main` selects the full suite and a stable holder; all slot allocation and renewal use the existing shared path.
+- The workflow target selects the full suite and a stable holder; all slot allocation and renewal use the existing shared path.
 - Main results measure the shared baseline. PR results still remain in their CI reports and historical telemetry.
 - A disappearing unknown row means it did not recur in the latest full run, not that its cause is proven fixed.
 - This work does not fix the outstanding child-agent delegation orphaned-script flake or disable retries. A green check is not proof of zero retries; validation will inspect recorded retries explicitly.
@@ -54,3 +54,7 @@ Codex session: `01a0a1e6-0135-7902-91aa-b4bb07026de2`.
 
 - 2026-09-15 context refactor: replaced `PullRequestPreviewContext` / the conversion wrapper with raw `PreviewPullRequest` data at the PR command boundary. Shared operations take `PreviewRun`, `PreviewReport` and resolved deployment choices. PR diff selection, explicit slot requests and review login setup happen before/after the shared deploy. Report state now lives in one process-owned object; publishing preserves current human PR prose without reloading old managed state. Removed the `knownState`, accumulated-entry and context-state wrappers. Generic deployment helpers now use `headSha`/`baseSha`, and both preview and production pass the existing `PLATFORM_DEPLOY_HEAD_SHA` variable.
 - Refactor verification: all 323 scripts tests pass, including selection, renewal, superseded cleanup, report rendering and file-backed main state. Scripts and OS typechecks, full lint and formatting pass; both PR/main CLI help commands load under native Node TypeScript, and independent review found no behavior regression. Live e2e is still subject to the package-publishing limitation above; the earlier preview-8 evidence predates this refactor.
+
+- 2026-09-15 common target: all deployment/test/assignment/cleanup commands now resolve a `PreviewTarget`. Removed the separate main execution path and PR deploy wrapper. Main uses the same `run` plus `erase` commands as PR CI; its report can reload across commands within one job attempt, while a new job or retry starts fresh. Atomic file writes prevent interrupted publication from leaving truncated state. Kept main workflow serialization, ordinary leases, PR supersession protection and PR review links. Cleanup does not demand a clean tree, so build-generated changes cannot prevent stopping costs. Compared with main throughout; no new command framework or arbitrary-target configuration format.
+
+- Local common-target checks: 334 scripts tests, scripts typecheck, full lint and formatting pass. `target.ts` holds the common contract and main report storage; commands stay in `preview.ts`. Final comparison against main removes the obsolete main execution path and single-caller erase wrapper rather than retaining adapter layers.

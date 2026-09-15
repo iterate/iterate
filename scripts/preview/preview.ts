@@ -54,9 +54,8 @@ import {
   makeDefaultWorkflowRunUrl,
   splitRepositoryFullName,
   withGithubRetry,
-  type PreviewPullRequest,
 } from "./github.ts";
-import { createMainPreview, PreviewReport, type PreviewRun } from "./run.ts";
+import { createMainPreview, PreviewReport, type PreviewRun, type PreviewTarget } from "./target.ts";
 import {
   CloudflarePreviewAppEntry,
   CloudflarePreviewSlotDisplay,
@@ -65,11 +64,13 @@ import {
 
 // Flake-hunt notes for the preview e2e lane live in
 // docs/preview-e2e-flake-hunt.md.
-type PullRequestCommandOptions = {
+type PreviewCommandOptions = {
   /** GitHub token. Defaults to GITHUB_TOKEN. */
   githubToken?: string;
   /** Pull request number. Defaults to GITHUB_PR_NUMBER. */
   pullRequestNumber?: number;
+  /** Exact checked-out commit for the serialized main preview workflow, instead of a PR. */
+  commit?: string;
 };
 
 // Cloudflare documents that a Worker/DO code update is globally eventually
@@ -83,7 +84,7 @@ type PullRequestCommandOptions = {
 const previewMinimumDeploymentAgeMs = 90_000;
 const previewRolloutRemainingSecondsEnvironment = "PREVIEW_APP_ROLLOUT_REMAINING_SECONDS";
 
-type DeployCommandOptions = PullRequestCommandOptions & {
+type DeployCommandOptions = PreviewCommandOptions & {
   /**
    * Deploy every preview app regardless of the diff. Diff selection only
    * redeploys apps affected since their LAST DEPLOYED head. A caller that
@@ -94,18 +95,44 @@ type DeployCommandOptions = PullRequestCommandOptions & {
   allApps?: boolean;
 };
 
-/** Resolve PR-specific input once, before entering the shared runner. */
-async function resolvePullRequestCommand(options: PullRequestCommandOptions) {
+/** Resolve the source once. Commands below use the same target for PRs and workflow commits. */
+async function resolvePreviewCommandSetup(
+  options: PreviewCommandOptions,
+  requireCleanCheckout: boolean,
+) {
   const runtime = createPreviewRuntime();
-  const target = {
-    githubToken: resolveGithubToken(options, runtime.commandEnvironment),
+  if (options.commit && options.pullRequestNumber) {
+    throw new Error("Choose --commit or --pull-request-number, not both.");
+  }
+  const githubToken = resolveGithubToken(options, runtime.commandEnvironment);
+  if (options.commit) {
+    return {
+      target: createMainPreview({
+        commit: options.commit,
+        requireCleanCheckout,
+        githubToken,
+        repositoryRoot: runtime.repositoryRoot,
+        environment: runtime.commandEnvironment,
+      }),
+      runtime,
+    };
+  }
+  const pullRequestNumber =
+    options.pullRequestNumber || Number(runtime.commandEnvironment.GITHUB_PR_NUMBER);
+  if (!Number.isInteger(pullRequestNumber) || pullRequestNumber <= 0) {
+    throw new Error(
+      "Provide --pull-request-number (or GITHUB_PR_NUMBER), or --commit for the main workflow.",
+    );
+  }
+  const github = {
+    githubToken,
     repositoryFullName: runtime.commandEnvironment.GITHUB_REPOSITORY || defaultRepositoryFullName,
-    pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
+    pullRequestNumber,
   };
-  const pullRequest = await readPreviewPullRequest(target);
+  const pullRequest = await readPreviewPullRequest(github);
   const run: PreviewRun = {
-    githubToken: target.githubToken,
-    repositoryFullName: target.repositoryFullName,
+    githubToken,
+    repositoryFullName: github.repositoryFullName,
     workflowRunUrl: makeDefaultWorkflowRunUrl(runtime.commandEnvironment) || pullRequest.url,
     headSha: pullRequest.headSha,
     branch: pullRequest.branch,
@@ -114,74 +141,46 @@ async function resolvePullRequestCommand(options: PullRequestCommandOptions) {
   };
   const report = new PreviewReport(parseCloudflarePreviewState(pullRequest.body), async (state) => {
     // Preserve human edits to the surrounding body, but use this run's state.
-    const body = await readPullRequestBody(target);
+    const body = await readPullRequestBody(github);
     await writePullRequestBody({
-      ...target,
+      ...github,
       body: renderCloudflarePreviewPullRequestBody(body, state, pullRequest.number),
     });
   });
-  return { run, report, pullRequest, runtime };
-}
-
-/** PR-only decisions: diff selection, an explicit slot request, and the review login. */
-async function deployPullRequestPreview(
-  input: Awaited<ReturnType<typeof resolvePullRequestCommand>> & {
-    allApps: boolean;
-    telemetry: PreviewE2eTelemetryArtifact;
-  },
-) {
-  const { run, report, pullRequest, runtime, telemetry } = input;
-  const selectedApps = input.allApps
-    ? Object.values(cloudflarePreviewApps)
-    : await selectPreviewAppsByDiff({
-        githubToken: run.githubToken,
-        repositoryFullName: run.repositoryFullName,
-        baseSha: pullRequest.baseSha,
-        headSha: run.headSha,
-        previousState: report.state,
-      });
-  const requestedEnvironment = resolveRequestedPreviewEnvironment(pullRequest.body);
-  const result = await deployPreviewApps({
+  const target: PreviewTarget = {
     run,
     report,
-    selectedApps,
-    requestedEnvironment,
-    runtime,
-    telemetry,
-  });
-  if (selectedApps.length > 0) {
-    await seedPreviewTestLogin({
-      lease: requireValue(
-        result.state.environmentConfigLease,
-        "Deployment did not record its slot",
-      ),
-      pullRequestNumber: pullRequest.number,
-    });
-  }
-  return result;
+    baseSha: pullRequest.baseSha,
+    // Only deployment consumes the directive. A typo must not block cleanup.
+    get requestedEnvironment() {
+      return resolveRequestedPreviewEnvironment(pullRequest.body);
+    },
+    reviewProject: `pr${pullRequest.number}`,
+  };
+  return { target, runtime };
 }
 
 /**
- * Deploy affected preview apps for a pull request without running preview e2e.
+ * Deploy affected preview apps without running preview e2e.
  */
 export async function deploy(options: DeployCommandOptions = {}) {
-  const preview = await resolvePullRequestCommand(options);
-  return await withPreviewE2eTelemetry(preview.run, preview.runtime, "deploy", (telemetry) =>
+  const { target, runtime } = await resolvePreviewCommandSetup(options, true);
+  return await withPreviewE2eTelemetry(target.run, runtime, "deploy", (telemetry) =>
     measurePreviewDeployRun(telemetry, () =>
-      deployPullRequestPreview({ ...preview, allApps: Boolean(options.allApps), telemetry }),
+      deployPreviewApps({ target, runtime, allApps: Boolean(options.allApps), telemetry }),
     ),
   );
 }
 
-/** Run preview e2e against the PR's recorded deployment. */
-export async function test(options: PullRequestCommandOptions = {}) {
-  const { run, report, runtime } = await resolvePullRequestCommand(options);
-  return await withPreviewE2eTelemetry(run, runtime, "test", (telemetry) =>
-    testPreviewApps({ run, report, runtime, telemetry }),
+/** Run preview e2e against the target's recorded deployment. */
+export async function test(options: PreviewCommandOptions = {}) {
+  const { target, runtime } = await resolvePreviewCommandSetup(options, true);
+  return await withPreviewE2eTelemetry(target.run, runtime, "test", (telemetry) =>
+    testPreviewApps({ target, runtime, telemetry }),
   );
 }
 
-type TestTargetOptions = PullRequestCommandOptions & {
+type TestTargetOptions = PreviewCommandOptions & {
   /** Test runner to invoke against the deployed OS preview. */
   runner: PreviewTestTargetRunner;
   /** Test file path, relative to the repository root for Playwright or apps/os for Vitest. */
@@ -193,7 +192,7 @@ type TestTargetOptions = PullRequestCommandOptions & {
 };
 
 /**
- * Run one OS Vitest file or Playwright spec against an already-deployed PR
+ * Run one OS Vitest file or Playwright spec against an already-deployed
  * preview. This renews the existing lease but never deploys, erases data, or
  * marks the app's full preview suite green.
  */
@@ -206,7 +205,8 @@ export async function testTarget(options: TestTargetOptions) {
       target: z.string().trim().min(1),
     })
     .parse(options);
-  const { run, report, runtime } = await resolvePullRequestCommand(options);
+  const { target, runtime } = await resolvePreviewCommandSetup(options, true);
+  const { run, report } = target;
   const recorded = report.state;
   const holder = run.holder;
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
@@ -342,66 +342,14 @@ export async function testTarget(options: TestTargetOptions) {
  * runs.
  */
 export async function run(options: DeployCommandOptions = {}) {
-  const preview = await resolvePullRequestCommand(options);
-  return await withPreviewE2eTelemetry(preview.run, preview.runtime, "run", async (telemetry) => {
+  const { target, runtime } = await resolvePreviewCommandSetup(options, true);
+  return await withPreviewE2eTelemetry(target.run, runtime, "run", async (telemetry) => {
     await measurePreviewDeployRun(telemetry, () =>
-      deployPullRequestPreview({ ...preview, allApps: Boolean(options.allApps), telemetry }),
+      deployPreviewApps({ target, runtime, allApps: Boolean(options.allApps), telemetry }),
     );
     // A no-deploy result still tests the current head. Both phases use the
     // same report in memory, so GitHub read-after-write lag cannot lose work.
-    return await testPreviewApps({
-      run: preview.run,
-      report: preview.report,
-      runtime: preview.runtime,
-      telemetry,
-    });
-  });
-}
-
-/** Run the full preview fleet using an ordinary lease. The main workflow serializes deployment, tests and cleanup. */
-export async function runMain(options: { commit: string; githubToken?: string }) {
-  const runtime = createPreviewRuntime();
-  const { run, report } = createMainPreview({
-    commit: options.commit,
-    githubToken: resolveGithubToken(options, runtime.commandEnvironment),
-    repositoryRoot: runtime.repositoryRoot,
-    environment: runtime.commandEnvironment,
-  });
-  const semaphore = runtime.createPreviewSemaphoreResourceClient();
-  return await withPreviewE2eTelemetry(run, runtime, "run", async (telemetry) => {
-    const errors: unknown[] = [];
-    let result;
-    try {
-      await measurePreviewDeployRun(telemetry, () =>
-        deployPreviewApps({
-          run,
-          report,
-          selectedApps: Object.values(cloudflarePreviewApps),
-          requestedEnvironment: null,
-          runtime,
-          telemetry,
-        }),
-      );
-      result = await testPreviewApps({ run, report, runtime, telemetry });
-    } catch (error) {
-      errors.push(error);
-    }
-    try {
-      await eraseSlotHeldByHolder({
-        holder: run.holder,
-        preferSlug: report.state.environmentConfigLease?.slug || null,
-        eraseSlotData: makePreviewSlotDataEraser(runtime),
-        semaphore,
-      });
-    } catch (error) {
-      errors.push(error);
-    }
-    if (errors.length)
-      throw new AggregateError(
-        errors,
-        "Main preview failed; see deploy, test and cleanup output above.",
-      );
-    return result;
+    return await testPreviewApps({ target, runtime, telemetry });
   });
 }
 
@@ -495,20 +443,27 @@ function previewResultSlot(result: unknown): string | undefined {
 }
 
 async function deployPreviewApps({
-  run,
-  report,
-  selectedApps,
-  requestedEnvironment,
+  target,
+  allApps,
   runtime,
   telemetry,
 }: {
-  run: PreviewRun;
-  report: PreviewReport;
-  selectedApps: PreviewAppRuntime[];
-  requestedEnvironment: string | null;
+  target: PreviewTarget;
+  allApps: boolean;
   runtime: PreviewRuntime;
   telemetry: PreviewE2eTelemetryArtifact;
 }) {
+  const { run, report } = target;
+  const selectedApps =
+    allApps || !target.baseSha
+      ? Object.values(cloudflarePreviewApps)
+      : await selectPreviewAppsByDiff({
+          githubToken: run.githubToken,
+          repositoryFullName: run.repositoryFullName,
+          baseSha: target.baseSha,
+          headSha: run.headSha,
+          previousState: report.state,
+        });
   logPreview(
     `deploy for ${run.holder} (head ${run.headSha.slice(0, 7)}) — holder ${run.holder}, semaphore ${defaultSemaphoreBaseUrl}`,
   );
@@ -539,6 +494,7 @@ async function deployPreviewApps({
       .join(" then ")}`,
   );
 
+  const requestedEnvironment = target.requestedEnvironment;
   if (requestedEnvironment) {
     logPreview(`requested slot: ${requestedEnvironment}`);
   }
@@ -561,8 +517,7 @@ async function deployPreviewApps({
           eraseSlotData: makePreviewSlotDataEraser(runtime),
           holder,
           leaseMs: defaultPreviewLeaseMs,
-          // Surface the wait in the PR body the moment every slot is busy, not
-          // only in workflow logs nobody has open.
+          // Surface the wait in the report as soon as every slot is busy.
           onFirstWait: async (holderTable) => {
             await report.update((state) => ({
               ...state,
@@ -745,6 +700,13 @@ async function deployPreviewApps({
     );
   }
 
+  if (target.reviewProject) {
+    await seedPreviewTestLogin({
+      lease: toSlotDisplay(environmentConfigLease),
+      project: target.reviewProject,
+    });
+  }
+
   return result;
 }
 
@@ -759,9 +721,9 @@ async function deployPreviewApps({
  */
 async function seedPreviewTestLogin(input: {
   lease: CloudflarePreviewSlotDisplay;
-  pullRequestNumber: number;
+  project: string;
 }) {
-  const url = previewLoginUrl(input.lease, input.pullRequestNumber);
+  const url = previewLoginUrl(input.lease, input.project);
   if (!url) {
     return;
   }
@@ -772,7 +734,7 @@ async function seedPreviewTestLogin(input: {
     });
     if (response.status >= 300 && response.status < 400) {
       logPreview(
-        `test-login seeded: pr${input.pullRequestNumber}+test@nustom.com user, org, and project exist on ${input.lease.slug}`,
+        `test-login seeded: ${input.project}+test@nustom.com user, org, and project exist on ${input.lease.slug}`,
       );
     } else {
       const detail = (await response.text().catch(() => "")).slice(0, 200);
@@ -931,16 +893,15 @@ function resolvePreviewRolloutReadyAtMs(input: {
 }
 
 async function testPreviewApps({
-  run,
-  report,
+  target,
   runtime,
   telemetry,
 }: {
-  run: PreviewRun;
-  report: PreviewReport;
+  target: PreviewTarget;
   runtime: PreviewRuntime;
   telemetry: PreviewE2eTelemetryArtifact;
 }) {
+  const { run, report } = target;
   logPreview(
     `test for ${run.holder} (head ${run.headSha.slice(0, 7)}) — holder ${run.holder}, semaphore ${defaultSemaphoreBaseUrl}`,
   );
@@ -948,7 +909,7 @@ async function testPreviewApps({
 
   // The semaphore is the single source of lease truth: resolve ownership
   // FIRST, from what the semaphore attributes to this holder right now. The
-  // PR body's slot record is display only — it never authorizes tests and is
+  // report's slot record is display only — it never authorizes tests and is
   // never a reason to skip them (a recorded copy once got nulled after a slot
   // steal, and the next run then skipped "no lease" instead of seeing the
   // steal).
@@ -982,7 +943,7 @@ async function testPreviewApps({
       throw new Error(message);
     }
 
-    // This PR has deployments on record but no slot: the slot was stolen (or
+    // This target has deployments on record but no slot: the slot was stolen (or
     // lapsed and taken). Testing would hammer someone else's deployment, and
     // skipping would hide the steal — refuse loudly instead.
     const message = describeLostSlotOwnership({
@@ -1225,11 +1186,11 @@ async function testPreviewApps({
 }
 
 /**
- * Tear down deployed apps recorded in the managed PR preview section and release the environment config lease.
+ * Tear down recorded preview apps and release the environment config lease.
  */
-export async function cleanup(options: PullRequestCommandOptions = {}) {
-  const { run, report, runtime } = await resolvePullRequestCommand(options);
-  const result = await cleanupPreviewApps({ run, report, runtime });
+export async function cleanup(options: PreviewCommandOptions = {}) {
+  const { target, runtime } = await resolvePreviewCommandSetup(options, false);
+  const result = await cleanupPreviewApps({ target, runtime });
 
   // Exit-code contract (the only consumer is the cleanup workflow's
   // red/green — nothing gates on it): exit non-zero ONLY when the lease
@@ -1251,73 +1212,58 @@ export async function cleanup(options: PullRequestCommandOptions = {}) {
   return result;
 }
 
-type EraseOptions = PullRequestCommandOptions & {
-  /** The PR head this run tested. When the PR has moved on since, the erase is skipped: that push's own run erases before it deploys, and erasing now would race its deploy. Omit to erase regardless. */
+type EraseOptions = PreviewCommandOptions & {
+  /** The head this run tested. Skip if the target has moved on: erasing would race its newer deployment. Omit to erase regardless. */
   ranHeadSha?: string;
 };
 
 /**
- * Erase the slot this PR holds and keep the lease. CI runs it right after the e2e, so the test projects a run created stop burning the moment it ends.
+ * Erase the target's slot and keep the lease. CI runs this after e2e to stop test projects spending.
  */
 export async function erase(options: EraseOptions = {}) {
-  const { pullRequest, runtime } = await resolvePullRequestCommand(options);
-  return await erasePullRequestSlotAfterRun({
-    pullRequest,
+  const { target, runtime } = await resolvePreviewCommandSetup(options, false);
+  return await eraseHeldSlotAfterRun({
+    target,
     eraseSlotData: makePreviewSlotDataEraser(runtime),
     ranHeadSha: options.ranHeadSha || null,
     semaphore: runtime.createPreviewSemaphoreResourceClient(),
   });
 }
 
-async function erasePullRequestSlotAfterRun(input: {
-  pullRequest: Pick<PreviewPullRequest, "body" | "headSha" | "number">;
+async function eraseHeldSlotAfterRun(input: {
+  target: PreviewTarget;
   eraseSlotData: EraseSlotData;
   ranHeadSha: string | null;
   semaphore: PreviewSemaphoreResourceClient;
 }) {
-  const holder = pullRequestHolder(input.pullRequest.number);
-  if (input.ranHeadSha && input.ranHeadSha !== input.pullRequest.headSha) {
+  const { run, report } = input.target;
+  if (input.ranHeadSha && input.ranHeadSha !== run.headSha) {
     logPreview(
-      `erase skipped: PR #${input.pullRequest.number} moved on from ${input.ranHeadSha.slice(0, 7)} to ${input.pullRequest.headSha.slice(0, 7)} — that push's run erases ${holder}'s slot before it deploys`,
+      `erase skipped: ${run.holder} moved on from ${input.ranHeadSha.slice(0, 7)} to ${run.headSha.slice(0, 7)} — that push's run erases its slot before it deploys`,
     );
     return { erased: false, reason: "superseded", slug: null };
   }
-  return await eraseSlotHeldByHolder({
-    holder,
-    preferSlug:
-      parseCloudflarePreviewState(input.pullRequest.body).environmentConfigLease?.slug || null,
-    eraseSlotData: input.eraseSlotData,
-    semaphore: input.semaphore,
-  });
-}
-
-async function eraseSlotHeldByHolder(input: {
-  holder: string;
-  preferSlug: string | null;
-  eraseSlotData: EraseSlotData;
-  semaphore: PreviewSemaphoreResourceClient;
-}) {
   const lease = await adoptLeaseHeldBySemaphore({
-    holder: input.holder,
+    holder: run.holder,
     leaseMs: defaultPreviewLeaseMs,
-    preferSlug: input.preferSlug,
+    preferSlug: report.state.environmentConfigLease?.slug || null,
     semaphore: input.semaphore,
   });
   if (!lease) {
-    logPreview(`erase skipped: the semaphore leases no slot to ${input.holder} — nothing to erase`);
+    logPreview(`erase skipped: the semaphore leases no slot to ${run.holder} — nothing to erase`);
     return { erased: false, reason: "no-lease", slug: null };
   }
   await input.eraseSlotData({ dopplerConfig: lease.dopplerConfig, slug: lease.slug });
   logPreview(
-    `erased ${lease.slug} after the run; ${input.holder} keeps the lease until ${formatUntil(lease.leasedUntil)}`,
+    `erased ${lease.slug} after the run; ${run.holder} keeps the lease until ${formatUntil(lease.leasedUntil)}`,
   );
   return { erased: true, reason: null, slug: lease.slug };
 }
 
 /**
- * Assign a preview slot to a PR — a specific slot or whatever is free — and record it in the PR body's managed preview section.
+ * Assign a preview slot to a target — a specific slot or whatever is free — and record it in the report.
  */
-type AssignOptions = PullRequestCommandOptions & {
+type AssignOptions = PreviewCommandOptions & {
   /** Preview slot: a number (3) or slug (preview-3 / preview_3). Omit to take any free slot. */
   slot?: string;
   /** Evict the slot's current holder first. Their deployment on the slot will be clobbered. */
@@ -1325,12 +1271,13 @@ type AssignOptions = PullRequestCommandOptions & {
 };
 
 export async function assign(options: AssignOptions = {}) {
-  const { run, report, pullRequest, runtime } = await resolvePullRequestCommand(options);
+  const { target, runtime } = await resolvePreviewCommandSetup(options, true);
+  const { run, report } = target;
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
   const holder = run.holder;
   const wantedSlug = options.slot ? normalizePreviewSlotSlug(options.slot) : null;
   logPreview(
-    `assign for PR #${pullRequest.number} — ${wantedSlug ? `wants ${wantedSlug}` : "wants any free slot"}, holder ${holder}`,
+    `assign for ${holder} — ${wantedSlug ? `wants ${wantedSlug}` : "wants any free slot"}`,
   );
 
   const current = report.state;
@@ -1345,14 +1292,14 @@ export async function assign(options: AssignOptions = {}) {
   });
 
   // Every outcome needs a redeploy now: taking a slot erases it, and that
-  // includes keeping the one this PR already held (fresh on every acquire).
+  // includes keeping the one this target already held (fresh on every acquire).
   // A changed slug additionally means the recorded apps point at the wrong
   // hostname.
   const redeployMessage = result.changedFromSlug
     ? `Slot reassigned from ${result.changedFromSlug} to ${result.lease.slug}; run preview deploy to redeploy here.`
     : result.outcome === "kept"
       ? `Slot ${result.lease.slug} kept and erased — taking a slot always erases it. Run preview deploy to redeploy.`
-      : `Slot ${result.lease.slug} was re-acquired after this PR's lease lapsed — previous deployments there may have been replaced. Run preview deploy to redeploy.`;
+      : `Slot ${result.lease.slug} was re-acquired after this target's lease lapsed — previous deployments there may have been replaced. Run preview deploy to redeploy.`;
   const update = await report.update((state) => ({
     ...state,
     environmentConfigLease: toSlotDisplay(result.lease),
@@ -1370,11 +1317,11 @@ export async function assign(options: AssignOptions = {}) {
     ),
   }));
   logPreview(
-    `PR body updated: PR #${pullRequest.number} now records ${result.lease.slug} (doppler config ${result.lease.dopplerConfig})`,
+    `Preview report updated: ${holder} now records ${result.lease.slug} (doppler config ${result.lease.dopplerConfig})`,
   );
 
   return {
-    pullRequestNumber: pullRequest.number,
+    pullRequestNumber: run.pullRequestNumber,
     slot: result.lease.slug,
     dopplerConfig: result.lease.dopplerConfig,
     holder,
@@ -1383,7 +1330,7 @@ export async function assign(options: AssignOptions = {}) {
     previousSlot: result.changedFromSlug,
     previousLeaseReleased: result.previousLeaseReleased,
     appsMarkedForRedeploy: Object.keys(update.apps),
-    nextStep: `doppler run --project _shared --config prd -- pnpm preview deploy --pull-request-number ${pullRequest.number}`,
+    nextStep: `Run preview deploy with the same target options to deploy to ${result.lease.slug}.`,
   };
 }
 
@@ -1423,10 +1370,7 @@ export async function status(options: StatusOptions = {}) {
   const openPullRequests = githubToken
     ? await listOpenPullRequestsForPreviewDiagnosis(githubToken, repositoryFullName)
     : [];
-  const diagnosis = diagnosePreviewFleetCapacity({
-    openPullRequests,
-    slots,
-  });
+  const diagnosis = diagnosePreviewFleetCapacity({ openPullRequests, slots });
 
   return {
     checkedAt: new Date().toISOString(),
@@ -2669,14 +2613,11 @@ const cloudflarePreviewSectionLabel = "CLOUDFLARE_PREVIEW";
 const cloudflarePreviewStateLabel = "CLOUDFLARE_PREVIEW_STATE";
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
 const defaultRepositoryFullName = "iterate/iterate";
-// A preview slot belongs to its PR for the PR's whole life: every `preview
-// deploy` and `preview test` run renews the lease for this long, and closing
-// the PR releases it. Expiry is only the safety valve for abandoned PRs — a
-// PR that pushes nothing for this long loses its slot (the GC sweep reclaims
-// it; see docs/preview-resource-gc.md). While a lease is live, nothing takes
-// the slot without a human --force. 3h keeps idle slots (and the Cloudflare
-// resources behind them) from costing us for a full day after a PR goes quiet;
-// a deploy/e2e cycle is minutes, so an active PR never lapses mid-run.
+// Deploy and test renew the target's lease; cleanup releases it. Expiry is
+// the backstop for abandoned previews: 3h limits idle resource costs while
+// leaving ample time for a deploy/e2e run. Main and PR targets use this same
+// policy. While a lease is live, nothing takes it without an explicit --force.
+// See docs/preview-resource-gc.md.
 const defaultPreviewLeaseMs = 3 * 60 * 60 * 1000;
 // Routed previews can be healthy before Cloudflare has finished issuing edge
 // certificates for newly-created hostnames. Some apps record a separate
@@ -2717,7 +2658,7 @@ export type EnvironmentConfigLease = {
 };
 
 /**
- * The PR body's record of which slot a PR's previews live on — DISPLAY ONLY.
+ * The report records where the preview lives — DISPLAY ONLY.
  * It tells humans where to look (slot, doppler config) and lets deploy prefer
  * its previous slot; it is never lease authority and never a reason to skip
  * tests. Ownership questions always go to the semaphore.
@@ -2827,9 +2768,9 @@ function describePreviewSlotChange(input: {
 }): string | null {
   if (!input.previousSlug || input.previousSlug === input.nextSlug) return null;
   if (input.requestedEnvironment === input.nextSlug) {
-    return `This PR requested ${input.nextSlug} via preview_environment, so its slot changed from ${input.previousSlug} to ${input.nextSlug} at ${input.changedAt}. Everything below refers to the new slot.`;
+    return `This preview requested ${input.nextSlug} via preview_environment, so its slot changed from ${input.previousSlug} to ${input.nextSlug} at ${input.changedAt}. Everything below refers to the new slot.`;
   }
-  return `This PR's slot changed from ${input.previousSlug} to ${input.nextSlug} at ${input.changedAt} (the old lease lapsed and someone else took the slot). Everything below refers to the new slot.`;
+  return `The preview slot changed from ${input.previousSlug} to ${input.nextSlug} at ${input.changedAt} (the old lease lapsed and someone else took the slot). Everything below refers to the new slot.`;
 }
 
 type PreviewSemaphoreLease = {
@@ -3085,7 +3026,7 @@ function renderCloudflarePreviewPullRequestBody(
  */
 function previewLoginUrl(
   lease: CloudflarePreviewSlotDisplay,
-  pullRequestNumber: number,
+  project: string,
   // Optional post-login destination on the os app (a same-origin path like
   // `/new-project?template=codemode-tag`) — rides the relying-party login's
   // own `return_to`, so one click lands signed-in on that page.
@@ -3104,8 +3045,8 @@ function previewLoginUrl(
   const osLogin = new URL("/api/iterate-auth/login", osBaseUrl);
   if (osReturnToPath) osLogin.searchParams.set("return_to", osReturnToPath);
   const url = new URL("/test-login", authBaseUrl);
-  url.searchParams.set("email", `pr${pullRequestNumber}+test@nustom.com`);
-  url.searchParams.set("project", `pr${pullRequestNumber}`);
+  url.searchParams.set("email", `${project}+test@nustom.com`);
+  url.searchParams.set("project", project);
   url.searchParams.set("return_to", osLogin.toString());
   return url.toString();
 }
@@ -3121,7 +3062,7 @@ function previewQuickLaunchLine(lease: CloudflarePreviewSlotDisplay, pullRequest
     const shortName = path.replace(/^configs\//, "");
     const url = previewLoginUrl(
       lease,
-      pullRequestNumber,
+      `pr${pullRequestNumber}`,
       `/new-project?template=${encodeURIComponent(shortName)}`,
     );
     return url === null ? null : `[${label} ↗](${url})`;
@@ -3142,7 +3083,7 @@ function renderCloudflarePreviewSection(state: CloudflarePreviewState, pullReque
     : null;
 
   const loginUrl = state.environmentConfigLease
-    ? previewLoginUrl(state.environmentConfigLease, pullRequestNumber)
+    ? previewLoginUrl(state.environmentConfigLease, `pr${pullRequestNumber}`)
     : null;
 
   return [
@@ -4020,32 +3961,19 @@ function resolveGithubToken(options: { githubToken?: string }, env: NodeJS.Proce
   );
 }
 
-function resolvePullRequestNumber(
-  options: PullRequestCommandOptions,
-  env: NodeJS.ProcessEnv,
-): number {
-  const value = options.pullRequestNumber || Number(env.GITHUB_PR_NUMBER);
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error("A pull request number is required.");
-  }
-
-  return value;
-}
-
 function normalizePreviewSlotSlug(slot: string) {
   const trimmed = slot.trim().toLowerCase().replaceAll("_", "-");
   return /^\d+$/.test(trimmed) ? `preview-${trimmed}` : trimmed;
 }
 
 async function cleanupPreviewApps({
-  run,
-  report,
+  target,
   runtime,
 }: {
-  run: PreviewRun;
-  report: PreviewReport;
+  target: PreviewTarget;
   runtime: PreviewRuntime;
 }) {
+  const { run, report } = target;
   logPreview(`cleanup for ${run.holder} — semaphore ${defaultSemaphoreBaseUrl}`);
   const current = report.state;
   // Never destroy a slot this run does not hold: ownership comes from the
@@ -4062,7 +3990,7 @@ async function cleanupPreviewApps({
       preferSlug: displaySlot?.slug ?? null,
       semaphore,
     })) ??
-    // A lapsed-but-free recorded slot still carries this PR's deployment;
+    // A lapsed-but-free recorded slot still carries this target's deployment;
     // take it back (non-force) so the teardown can erase it.
     (await retakeRecordedSlotIfFree({
       holder,
@@ -4184,7 +4112,7 @@ async function cleanupPreviewApps({
     teardownOk: ok,
   });
   if (!releaseResult.ok) {
-    // Keep the recorded lease in the PR body so a cleanup re-run still finds
+    // Keep the recorded lease in the report so a cleanup re-run still finds
     // the slot to release.
     return {
       ok: false,
@@ -6194,7 +6122,7 @@ export const previewInternals = {
   classifyLeaseForReclaim,
   describeEnvironmentConfigLeases,
   describeForcePushCompareHazard,
-  erasePullRequestSlotAfterRun,
+  eraseHeldSlotAfterRun,
   describeLostSlotOwnership,
   describePreviewSlotChange,
   diagnosePreviewFleetCapacity,

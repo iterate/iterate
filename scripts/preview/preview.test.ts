@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { PreviewReport, type PreviewTarget } from "./target.ts";
 import { CloudflarePreviewAppEntry, CloudflarePreviewSlotDisplay } from "./state.ts";
 import {
   CloudflarePreviewAppSlug,
@@ -130,7 +131,7 @@ test("a requested slot move is not reported as a stolen lapsed lease", () => {
       requestedEnvironment: "preview-17",
     }),
   ).toBe(
-    "This PR requested preview-17 via preview_environment, so its slot changed from preview-6 to preview-17 at 2026-07-21T10:00:00.000Z. Everything below refers to the new slot.",
+    "This preview requested preview-17 via preview_environment, so its slot changed from preview-6 to preview-17 at 2026-07-21T10:00:00.000Z. Everything below refers to the new slot.",
   );
 });
 
@@ -2120,34 +2121,40 @@ function leasedResource(slug: string, holder: string, dopplerConfig = slug.repla
 // never reclaim share this inert eraser.
 const noopEraseSlotData = async () => {};
 
-describe("erasePullRequestSlotAfterRun", () => {
-  const { erasePullRequestSlotAfterRun } = previewInternals;
+describe("eraseHeldSlotAfterRun", () => {
+  const { eraseHeldSlotAfterRun } = previewInternals;
 
-  test("erases the slot the semaphore attributes to this holder and keeps the lease", async () => {
-    const eraseSlotData = vi.fn(async () => {});
-    const semaphore = fakeSemaphore({
-      acquireSpecific: vi.fn(async () => fakeLease({ expiresAt: 1_800_000_000_000 })),
-      list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
-    });
+  test.each(["pr-1600", "main-preview"])(
+    "%s erases only its own slot and keeps the lease",
+    async (holder) => {
+      const eraseSlotData = vi.fn(async () => {});
+      const semaphore = fakeSemaphore({
+        acquireSpecific: vi.fn(async () => fakeLease({ holder, expiresAt: 1_800_000_000_000 })),
+        list: vi.fn(async () => [
+          leasedResource("preview-2", holder),
+          leasedResource("preview-3", "someone-else"),
+        ]),
+      });
 
-    const result = await erasePullRequestSlotAfterRun({
-      pullRequest: { body: "", headSha: "abc1234", number: 1600 },
-      eraseSlotData,
-      ranHeadSha: "abc1234",
-      semaphore,
-    });
+      const result = await eraseHeldSlotAfterRun({
+        target: previewTarget(holder, "abc1234"),
+        eraseSlotData,
+        ranHeadSha: "abc1234",
+        semaphore,
+      });
 
-    expect(result).toEqual({ erased: true, reason: null, slug: "preview-2" });
-    expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
-      dopplerConfig: "preview_2",
-      slug: "preview-2",
-    });
-    // Adopting re-issues (renews) the lease; the PR still owns the slot.
-    expect(semaphore.acquireSpecific).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ slug: "preview-2", holder: "pr-1600", force: true }),
-    );
-    expect(semaphore.release).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({ erased: true, reason: null, slug: "preview-2" });
+      expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
+        dopplerConfig: "preview_2",
+        slug: "preview-2",
+      });
+      // Adopting re-issues (renews) the lease; the target still owns the slot.
+      expect(semaphore.acquireSpecific).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ slug: "preview-2", holder, force: true }),
+      );
+      expect(semaphore.release).not.toHaveBeenCalled();
+    },
+  );
 
   test("skips when the PR head moved on since the run — that push's run erases before it deploys", async () => {
     const eraseSlotData = vi.fn(async () => {});
@@ -2155,8 +2162,8 @@ describe("erasePullRequestSlotAfterRun", () => {
       list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
     });
 
-    const result = await erasePullRequestSlotAfterRun({
-      pullRequest: { body: "", headSha: "def5678", number: 1600 },
+    const result = await eraseHeldSlotAfterRun({
+      target: previewTarget("pr-1600", "def5678"),
       eraseSlotData,
       ranHeadSha: "abc1234",
       semaphore,
@@ -2171,8 +2178,8 @@ describe("erasePullRequestSlotAfterRun", () => {
     const eraseSlotData = vi.fn(async () => {});
     const semaphore = fakeSemaphore();
 
-    const result = await erasePullRequestSlotAfterRun({
-      pullRequest: { body: "", headSha: "abc1234", number: 1600 },
+    const result = await eraseHeldSlotAfterRun({
+      target: previewTarget("pr-1600", "abc1234"),
       eraseSlotData,
       ranHeadSha: null,
       semaphore,
@@ -3294,3 +3301,21 @@ describe("assignEnvironmentConfigLease", () => {
     );
   });
 });
+
+function previewTarget(holder: string, headSha: string): PreviewTarget {
+  return {
+    run: {
+      holder,
+      headSha,
+      branch: "test-branch",
+      githubToken: "test",
+      repositoryFullName: "iterate/iterate",
+      workflowRunUrl: null,
+      pullRequestNumber: null,
+    },
+    report: new PreviewReport(parseCloudflarePreviewState(""), async () => {}),
+    baseSha: null,
+    requestedEnvironment: null,
+    reviewProject: null,
+  };
+}

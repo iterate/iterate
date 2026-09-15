@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { makeDefaultWorkflowRunUrl } from "./github.ts";
@@ -15,6 +16,17 @@ export type PreviewRun = {
   holder: string;
   /** Reporting metadata only; deployment and lease policy do not depend on it. */
   pullRequestNumber: number | null;
+};
+
+/** Inputs shared by preview commands, regardless of where they came from. */
+export type PreviewTarget = {
+  run: PreviewRun;
+  report: PreviewReport;
+  /** A null comparison base selects the full fleet. */
+  baseSha: string | null;
+  requestedEnvironment: string | null;
+  /** Seed a review login when humans will use this deployment. */
+  reviewProject: string | null;
 };
 
 /** State lives in the process; publishing a report never reads older state back. */
@@ -39,10 +51,11 @@ export class PreviewReport {
 
 export function createMainPreview(input: {
   commit: string;
+  requireCleanCheckout: boolean;
   githubToken: string;
   repositoryRoot: string;
   environment: NodeJS.ProcessEnv;
-}) {
+}): PreviewTarget {
   const headSha = z
     .string()
     .regex(/^[a-f0-9]{40}$/)
@@ -58,7 +71,8 @@ export function createMainPreview(input: {
       "--commit must be the exact checked-out commit; refusing to mislabel a deployment.",
     );
   }
-  if (git("status", "--porcelain", "--untracked-files=no")) {
+  // Build output must not prevent the later erase/cleanup command from stopping costs.
+  if (input.requireCleanCheckout && git("status", "--porcelain", "--untracked-files=no")) {
     throw new Error(
       "Main preview has uncommitted changes; commit them before deploying a pinned revision.",
     );
@@ -71,7 +85,7 @@ export function createMainPreview(input: {
     input.environment.GITHUB_JOB !== "preview"
   ) {
     throw new Error(
-      "Run main previews through the serialized cloudflare-main-preview.yml Depot workflow; use depot ci dispatch instead of invoking run-main locally.",
+      "Run main previews through the serialized cloudflare-main-preview.yml Depot workflow; use depot ci dispatch instead of invoking preview commands with --commit locally.",
     );
   }
   // Dispatching this workflow on a feature branch is useful for validation,
@@ -90,13 +104,39 @@ export function createMainPreview(input: {
     holder: "main-preview",
     pullRequestNumber: null,
   };
-  const report = new PreviewReport(CloudflarePreviewState.parse({}), async (state) => {
-    const directory = join(input.repositoryRoot, "test-results");
+  const directory = join(input.repositoryRoot, "test-results");
+  const file = join(directory, "main-preview-state.json");
+  const identity = {
+    headSha,
+    branch,
+    jobUrl: input.environment.DEPOT_JOB_URL,
+    attempt: input.environment.GITHUB_RUN_ATTEMPT || "1",
+  };
+  const previous = existsSync(file)
+    ? z
+        .object({
+          headSha: z.string(),
+          branch: z.string(),
+          jobUrl: z.string(),
+          attempt: z.string(),
+          state: CloudflarePreviewState,
+        })
+        .parse(JSON.parse(readFileSync(file, "utf8")))
+    : null;
+  // Commands in one job share state. A new run/attempt starts fresh, even
+  // when the baked workspace still contains another run's report.
+  const state =
+    previous &&
+    previous.headSha === headSha &&
+    previous.branch === branch &&
+    previous.jobUrl === identity.jobUrl &&
+    previous.attempt === identity.attempt
+      ? previous.state
+      : CloudflarePreviewState.parse({});
+  const report = new PreviewReport(state, async (state) => {
     await mkdir(directory, { recursive: true });
-    await writeFile(
-      join(directory, "main-preview-state.json"),
-      JSON.stringify({ headSha, branch, state }, null, 2),
-    );
+    await writeFile(`${file}.tmp`, JSON.stringify({ ...identity, state }, null, 2));
+    await rename(`${file}.tmp`, file);
   });
-  return { run, report };
+  return { run, report, baseSha: null, requestedEnvironment: null, reviewProject: null };
 }
