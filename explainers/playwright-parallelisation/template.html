@@ -1,0 +1,1018 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Playwright parallelisation experiments</title>
+    <style>
+      :root {
+        --ink: #172c3c;
+        --muted: #647582;
+        --line: #dce4e8;
+        --paper: #fff;
+        --bg: #f4f6f7;
+        --job: #536879;
+        --install: #b5621c;
+        --other: #8996a3;
+        --deploy: #337b9d;
+        --readiness: #a07c26;
+        --cleanup: #ac5064;
+        --test: #367a62;
+        --artifact: #7961ac;
+        --browser: #b5621c;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--bg);
+        font:
+          14px/1.5 system-ui,
+          -apple-system,
+          sans-serif;
+      }
+      main {
+        max-width: 1500px;
+        margin: auto;
+        padding: 28px 30px 60px;
+      }
+      a {
+        color: #236caa;
+        text-underline-offset: 3px;
+      }
+      h1 {
+        font-size: 36px;
+        letter-spacing: -1.1px;
+        line-height: 1.15;
+        margin: 10px 0;
+      }
+      h2 {
+        font-size: 21px;
+        margin: 0 0 12px;
+      }
+      p {
+        margin: 8px 0 12px;
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        font-weight: 700;
+        color: var(--muted);
+      }
+      .intro {
+        max-width: 940px;
+        font-size: 16px;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .facts {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin: 22px 0;
+      }
+      .fact {
+        border: 1px solid var(--line);
+        background: var(--paper);
+        padding: 16px;
+        border-radius: 10px;
+      }
+      .fact b {
+        display: block;
+        font-size: 27px;
+        letter-spacing: -0.5px;
+      }
+      .fact small {
+        font-size: 13px;
+        display: block;
+        color: var(--muted);
+      }
+      button,
+      select {
+        font: inherit;
+        color: var(--ink);
+        border: 1px solid #c8d3da;
+        background: #fff;
+        border-radius: 6px;
+        padding: 7px 10px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #edf4f8;
+      }
+      button[aria-pressed="true"] {
+        color: #215f98;
+        background: #e8f2fb;
+        border-color: #83a9cb;
+      }
+      button:focus-visible,
+      select:focus-visible,
+      a:focus-visible {
+        outline: 3px solid #328bd3;
+        outline-offset: 2px;
+      }
+      .toolbar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin: 12px 0;
+      }
+      .toolbar .spacer {
+        flex: 1;
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        font-size: 12px;
+        color: var(--muted);
+        margin: 12px 0;
+      }
+      .legend i {
+        display: inline-block;
+        width: 9px;
+        height: 9px;
+        border-radius: 2px;
+        margin-right: 5px;
+      }
+      .viewer {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 265px;
+        gap: 16px;
+        align-items: start;
+      }
+      .trace-scroll {
+        height: 660px;
+        overflow: auto;
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 9px;
+        position: relative;
+      }
+      .trace-table {
+        min-width: 920px;
+      }
+      .axis {
+        height: 35px;
+        display: grid;
+        grid-template-columns: 330px 1fr;
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        border-bottom: 1px solid var(--line);
+        background: #f2f5f7;
+      }
+      .axis > strong {
+        font-size: 11px;
+        letter-spacing: 0.8px;
+        text-transform: uppercase;
+        position: sticky;
+        left: 0;
+        background: #f2f5f7;
+        padding: 9px 12px;
+        z-index: 6;
+      }
+      .ticks {
+        position: relative;
+        margin: 0 12px;
+      }
+      .ticks span {
+        position: absolute;
+        top: 9px;
+        transform: translateX(-50%);
+        font:
+          11px ui-monospace,
+          monospace;
+        color: var(--muted);
+      }
+      .trace-row {
+        height: 31px;
+        display: grid;
+        grid-template-columns: 330px 1fr;
+        border-bottom: 1px solid #edf1f3;
+      }
+      .trace-row:hover {
+        background: #f1f6fa;
+      }
+      .trace-row.selected {
+        background: #eaf3fa;
+      }
+      .trace-row.job > .name {
+        background: #eef3f6;
+        font-weight: 650;
+      }
+      .name {
+        display: flex;
+        align-items: center;
+        gap: 1px;
+        min-width: 0;
+        background: #fff;
+        position: sticky;
+        left: 0;
+        z-index: 2;
+        padding-left: calc(8px + var(--depth) * 12px);
+        border-right: 1px solid var(--line);
+      }
+      .trace-row.selected .name {
+        background: #eaf3fa;
+      }
+      .toggle {
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        padding: 0;
+        min-width: 19px;
+        width: 19px;
+        height: 28px;
+        flex-shrink: 0;
+        font-size: 12px;
+      }
+      .toggle-spacer {
+        width: 19px;
+        flex-shrink: 0;
+      }
+      .span-name {
+        border: 0;
+        background: transparent;
+        border-radius: 0;
+        padding: 0 7px 0 1px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        text-align: left;
+        font-size: 12px;
+        flex: 1;
+        height: 28px;
+      }
+      .duration {
+        font:
+          11px ui-monospace,
+          monospace;
+        padding-right: 9px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .lane {
+        position: relative;
+        margin: 0 12px;
+        background-image: linear-gradient(to right, #edf1f3 1px, transparent 1px);
+        background-size: 20% 100%;
+      }
+      .bar {
+        position: absolute;
+        top: 8px;
+        height: 15px;
+        min-width: 3px;
+        border: 0;
+        border-radius: 3px;
+        padding: 0;
+        background: var(--color);
+        opacity: 0.9;
+      }
+      .bar:hover {
+        background: var(--color);
+        opacity: 1;
+        outline: 2px solid #283e50;
+      }
+      .trace-row.job .bar {
+        top: 7px;
+        height: 17px;
+      }
+      .unknown-marker {
+        position: absolute;
+        top: 6px;
+        font-size: 11px;
+        color: #976026;
+        white-space: nowrap;
+        background: #fff9ef;
+        border: 1px dashed #cc9b5d;
+        border-radius: 3px;
+        padding: 0 5px;
+        cursor: pointer;
+      }
+      .inspect {
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 10px;
+        padding: 17px;
+        position: sticky;
+        top: 18px;
+        overflow-wrap: anywhere;
+      }
+      .inspect h3 {
+        font-size: 18px;
+        margin: 7px 0;
+      }
+      .inspect p {
+        font-size: 13px;
+      }
+      .inspect dl {
+        display: grid;
+        grid-template-columns: 65px 1fr;
+        gap: 7px;
+        font-size: 12px;
+        margin: 15px 0;
+      }
+      .inspect dt {
+        color: var(--muted);
+      }
+      .inspect dd {
+        margin: 0;
+        font-family: ui-monospace, monospace;
+      }
+      .inspect .source {
+        font-size: 11px;
+        color: var(--muted);
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+      }
+      .note {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 10px;
+        max-width: 950px;
+      }
+      section {
+        margin-top: 30px;
+      }
+      .two {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 20px;
+      }
+      .card {
+        padding: 20px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+      }
+      .table-scroll {
+        overflow: auto;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 13px;
+      }
+      th,
+      td {
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+      }
+      th {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      td:nth-child(n + 2) {
+        font-variant-numeric: tabular-nums;
+      }
+      code {
+        font:
+          12px ui-monospace,
+          monospace;
+        background: #edf1f4;
+        padding: 2px 4px;
+        border-radius: 4px;
+      }
+      details {
+        margin-top: 16px;
+      }
+      summary {
+        cursor: pointer;
+        font-weight: 600;
+      }
+      li {
+        margin: 6px 0;
+      }
+      .chain {
+        margin-top: 15px;
+        background: #edf4f9;
+        padding: 12px;
+        border-radius: 8px;
+      }
+      .chain b {
+        color: #236598;
+      }
+      footer {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 28px;
+      }
+      @media (max-width: 1100px) {
+        .viewer {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .inspect {
+          position: static;
+        }
+        .facts,
+        .two {
+          grid-template-columns: 1fr;
+        }
+        .trace-scroll {
+          height: 570px;
+        }
+      }
+      @media (max-width: 600px) {
+        main {
+          padding: 20px 14px;
+        }
+        .facts {
+          gap: 8px;
+        }
+        .fact b {
+          font-size: 23px;
+        }
+        h1 {
+          font-size: 30px;
+        }
+        .toolbar .spacer {
+          display: none;
+        }
+        .card {
+          padding: 14px;
+        }
+      }
+      .compare-chart {
+        overflow: auto;
+        margin: 16px 0;
+      }
+      .compare-svg {
+        min-width: 780px;
+        width: 100%;
+        display: block;
+      }
+      .run-picker {
+        scroll-margin-top: 15px;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: 26px;
+      }
+      .comparison-title {
+        font-size: 25px;
+      }
+      .comparison th:nth-child(n + 2),
+      .comparison td:nth-child(n + 2) {
+        white-space: nowrap;
+      }
+      .verdict {
+        padding: 14px 17px;
+        background: #fff3e9;
+        border-left: 4px solid #b5621c;
+        font-size: 16px;
+      }
+      .run-context {
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .results {
+        min-width: 960px;
+      }
+      .results td {
+        white-space: nowrap;
+      }
+      .results td:first-child {
+        min-width: 210px;
+      }
+      .results tr[data-result] {
+        cursor: pointer;
+      }
+      .results tr[data-result]:hover {
+        background: #edf4f8;
+      }
+      .results th {
+        white-space: nowrap;
+      }
+      .resource-chart {
+        width: 100%;
+        height: 150px;
+        display: block;
+      }
+      .bad {
+        color: #a52939;
+      }
+      .good {
+        color: #276950;
+      }
+      .facts {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      #run-picker {
+        max-width: 100%;
+        width: 100%;
+      }
+      .methods p {
+        max-width: 950px;
+      }
+      .mini-trace {
+        display: flex;
+        height: 14px;
+        min-width: 90px;
+      }
+      .mini-trace i {
+        height: 100%;
+      }
+      @media (max-width: 600px) {
+        .facts {
+          grid-template-columns: 1fr;
+        }
+        .trace-table {
+          min-width: 800px;
+        }
+        .trace-row,
+        .axis {
+          grid-template-columns: 290px 1fr;
+        }
+        .trace-scroll {
+          height: 510px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <a href="https://github.com/iterate/iterate/pull/2659">Experiment PR #2659</a>
+      <div class="eyebrow" style="margin-top: 18px">Measured CI · September 2026</div>
+      <h1>How many Playwright workers?</h1>
+      <p class="intro">
+        One runner can start many tests while they wait on the network. But every Playwright worker
+        is a separate Node process, normally with its own browser. How much concurrency helps before
+        CPU, memory or the backend starts slowing things down?
+      </p>
+      <div class="verdict">__VERDICT__</div>
+      <section class="card" id="comparison">
+        <h2>Measured runs</h2>
+        <p>
+          Tap a row to open its full trace.
+          <strong>Worker experiments use one 16-core / 64-GB runner</strong> for setup, deployment,
+          Playwright, Vitest and cleanup. Historical sharded runs use nine jobs. Times below
+          overlap; do not add them together.
+        </p>
+        <div class="table-scroll">
+          <table class="results">
+            <thead>
+              <tr>
+                <th>Setup / run</th>
+                <th>Whole preview</th>
+                <th>pnpm</th>
+                <th>Playwright</th>
+                <th>OS Vitest</th>
+                <th>Browser retries</th>
+                <th>App retries</th>
+                <th>Preview result</th>
+              </tr>
+            </thead>
+            <tbody id="results"></tbody>
+          </table>
+        </div>
+        <p class="note">
+          Playwright and Vitest times come from reporter run boundaries, including runner setup.
+          They start after shared readiness. A shorter browser run helps the whole workflow only
+          while it finishes after the other suites. “Green” can include explicitly quarantined
+          tests; inspect each run’s notes.
+        </p>
+        <div id="experiment-notes"></div>
+        <details>
+          <summary>Test scheduling and resource comparison</summary>
+          <div class="table-scroll">
+            <table class="results">
+              <thead>
+                <tr>
+                  <th>Setup</th>
+                  <th>Peak active tests</th>
+                  <th>First-start spread</th>
+                  <th>Test duration p50 / p95</th>
+                  <th>CPU mean / peak</th>
+                  <th>Memory peak</th>
+                </tr>
+              </thead>
+              <tbody id="pressure-results"></tbody>
+            </table>
+          </div>
+          <p class="note">
+            First-start spread: time between the first and last non-skipped test beginning its first
+            attempt. It includes scheduling and startup, not just queue time. Test durations include
+            fixtures and teardown; higher concurrency may make individual tests slower.
+          </p>
+        </details>
+      </section>
+      <section id="interactive-trace">
+        <h2>Interactive trace</h2>
+        <p>
+          Choose a run. Expand a phase, then a test pool to see test attempts. Tap any bar for
+          timestamps and evidence. Scroll sideways on mobile.
+        </p>
+        <label for="run-picker">Run</label
+        ><select id="run-picker"></select>
+        <p class="run-context" id="run-context"></p>
+        <div class="facts">
+          <div class="fact"><b id="install-count"></b><small id="install-context"></small></div>
+          <div class="fact"><b id="install-critical"></b><small id="install-path"></small></div>
+          <div class="fact">
+            <b>Browser checks: untimed</b
+            ><small
+              >Chromium is baked in. The per-run install checks have no individual timestamps; their
+              enclosing interval is shown.</small
+            >
+          </div>
+        </div>
+        <div class="toolbar">
+          <button data-preset="all" aria-pressed="true">Full trace</button
+          ><button data-preset="installs" aria-pressed="false">Just installs</button
+          ><label
+            >Zoom
+            <select id="zoom">
+              <option value="all">Same scale across runs</option>
+              <option value="prepare">Deployment / readiness</option>
+              <option value="tests">Tests</option>
+              <option value="finish">Reporting / cleanup</option>
+            </select></label
+          ><button id="collapse">Collapse jobs</button><button id="expand">Expand phases</button>
+        </div>
+        <div class="legend">
+          <span><i style="background: var(--install)"></i>Dependencies</span
+          ><span><i style="background: var(--deploy)"></i>Deploy</span
+          ><span><i style="background: var(--readiness)"></i>Readiness</span
+          ><span><i style="background: var(--test)"></i>Tests</span
+          ><span><i style="background: var(--cleanup)"></i>Cleanup</span
+          ><span><i style="background: var(--artifact)"></i>Reports</span>
+        </div>
+        <div class="viewer">
+          <div class="trace-scroll" id="trace-scroll">
+            <div class="trace-table">
+              <div class="axis">
+                <strong>Span / duration</strong>
+                <div class="ticks" id="ticks"></div>
+              </div>
+              <div id="rows"></div>
+            </div>
+          </div>
+          <aside class="inspect" id="inspect"></aside>
+        </div>
+        <p class="note">
+          Parent bars include their children. Buffered app logs are not used as test start times.
+          “Untimed” means the command is known to run there; its individual duration was not
+          recorded.
+        </p>
+        <div class="card" style="margin-top: 18px">
+          <h2>Runner pressure during tests</h2>
+          <p id="resource-summary"></p>
+          <svg
+            id="resource-chart"
+            class="resource-chart"
+            viewBox="0 0 1000 150"
+            role="img"
+            aria-label="CPU and memory samples during the root Playwright test window"
+          ></svg>
+          <p class="note">
+            Blue: CPU as a share of 16 cores. Purple: memory as a share of 64 GB. Samples cover the
+            whole runner, including concurrent Vitest and Expo, at roughly five-second intervals.
+            Peaks between samples may be missed.
+          </p>
+        </div>
+        <details>
+          <summary>Where installs happen in this run</summary>
+          <div class="two">
+            <div class="card">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Job</th>
+                    <th>Start</th>
+                    <th>End</th>
+                    <th>Duration</th>
+                  </tr>
+                </thead>
+                <tbody id="install-table"></tbody>
+              </table>
+              <div class="chain" id="install-chain"></div>
+            </div>
+            <div class="card" id="browser-context"></div>
+          </div>
+        </details>
+      </section>
+      <section class="card methods">
+        <h2>What this experiment holds fixed</h2>
+        <p>
+          Same application revision and 92 named root browser cases; 16, 32, 64 or 92 workers; one
+          unsharded runner; the same Playwright retry, timeout, trace and video settings; the same
+          readiness, lease and cleanup policy. Every run gets a fresh runner. The image uses the
+          same mutable tag, so an identical resolved image is not proven. Preview slot, test
+          retries, deploy reuse, remote-service latency and cold filesystem reads can still vary.
+        </p>
+        <p>
+          The older 16-worker reference is from another PR/slot. The two sharded runs split the same
+          catalogue across six browser jobs, alongside an app-test job, plus Prepare and Finish.
+          They explain the motivation; the new same-branch runs are the worker-count comparison.
+        </p>
+        <details>
+          <summary>How to interpret a “retry”, a quarantine result and a queue</summary>
+          <p>
+            A test retry is a second attempt of one test, not a rerun of the whole CI job. Retries
+            are shown separately in the trace. The existing flake wrapper marks some tests as
+            expected failures; when their bodies pass it deliberately throws “Flaky test passed this
+            run”. Those are body passes, not regressions. A quarantined body failure is called out
+            separately. Skipped cases never occupy an active worker slot.
+          </p>
+          <p>
+            Playwright runs one test at a time in each worker process. More workers let waiting
+            tests overlap, but process/browser startup and page work still use CPU and RAM. Worker
+            count is a maximum, not proof that that many tests are simultaneously active. The trace
+            records actual test start/end times and worker IDs.
+          </p>
+        </details>
+        <details>
+          <summary>Reproduce and audit</summary>
+          <p>
+            Source: <code>explainers/playwright-parallelisation/</code>. The README describes
+            collection and rendering. Committed JSON contains sanitized timestamps, durations, test
+            names and outcomes, not raw auth data or signed artifact URLs. Each run links to its
+            Depot workflow and Git commit.
+          </p>
+          <p>
+            Source facts:
+            <a href="https://playwright.dev/docs/test-parallel">Playwright parallelism</a> and
+            <a href="https://playwright.dev/docs/test-fixtures">fixture scopes</a>. This page uses
+            measured logs and telemetry, not projected bar widths.
+          </p>
+        </details>
+      </section>
+      <details>
+        <summary>Earlier pnpm / Depot / Nub investigation</summary>
+        __INSTALL_FINDINGS__
+      </details>
+      <footer>
+        Generated from recorded runs. Live branch: codex/playwright-full-parallel. Historical traces
+        retained; failed experiment runs remain visible.
+      </footer>
+    </main>
+    <script>
+      const runs = __RUNS__;
+      const maxTime = Math.max(...Object.values(runs).map((r) => r.total));
+      let data,
+        flat = [],
+        byId = new Map(),
+        jobs = [],
+        open = new Set(),
+        mode = "all",
+        selected = "",
+        range = [0, maxTime];
+      function walk(n, parent) {
+        flat.push(n);
+        n.parent = parent;
+        for (const c of n.children) walk(c, n);
+      }
+      const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+      const duration = (s) =>
+        s < 1
+          ? `${Math.round(s * 1000)}ms`
+          : s < 60
+            ? `${s.toFixed(1)}s`
+            : `${Math.floor(s / 60)}m ${(s % 60).toFixed(1)}s`;
+      const escape = (s) =>
+        String(s).replace(
+          /[&<>"']/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+        );
+      function selectRun(key) {
+        data = runs[key];
+        flat = [];
+        walk(data.root, null);
+        byId = new Map(flat.map((n) => [n.id, n]));
+        jobs = data.root.children;
+        open = new Set([
+          data.root.id,
+          ...jobs.map((n) => n.id),
+          ...flat
+            .filter((n) =>
+              [
+                "Run app suites + OS readiness",
+                "Shared OS readiness",
+                "Prepare deployment + readiness",
+                "Shared readiness",
+              ].includes(n.label),
+            )
+            .map((n) => n.id),
+        ]);
+        selected = data.root.id;
+        range = [0, maxTime];
+        mode = "all";
+        document.getElementById("zoom").value = "all";
+        document.getElementById("trace-scroll").scrollTop = 0;
+        document.getElementById("run-picker").value = key;
+        document
+          .querySelectorAll("[data-preset]")
+          .forEach((b) => b.setAttribute("aria-pressed", b.dataset.preset === "all"));
+        document.getElementById("run-context").textContent =
+          data.context ||
+          (key === "rerun"
+            ? "Repeat run dbhs702vpk · empty commit ec079ad · same application and CI code, fresh runners."
+            : data.normal
+              ? "Normal run j8p7lt2bsk · code 0277de2 · one machine throughout. Expand “Run app suites + OS readiness” to see the existing overlap."
+              : "Sharded run nv3l390bf0 · code 2996ffc9c · Prepare, seven concurrent test jobs, then Finish.");
+        document.getElementById("install-count").textContent =
+          `${data.installs.length} × pnpm install`;
+        document.getElementById("install-context").textContent = data.normal
+          ? "Once, before deploy. The same machine runs tests and cleanup."
+          : "Prepare, seven test runners, then Finish. Seven of those installs overlap.";
+        document.getElementById("install-path").textContent = data.normal
+          ? "Install time on the path to green, all in the one preview job."
+          : "Install time along Prepare → App tests → Finish.";
+        document.getElementById("install-critical").textContent =
+          `${duration(data.installWall)} of installs`;
+        document.getElementById("install-table").innerHTML = data.installs
+          .map(
+            (x) =>
+              `<tr><td>${x.job}</td><td>${fmt(x.start)}</td><td>${fmt(x.end)}</td><td>${duration(x.end - x.start)}</td></tr>`,
+          )
+          .join("");
+        document.getElementById("install-chain").innerHTML = data.normal
+          ? `<b>${duration(data.installSum)}</b> on one machine; no later install steps.`
+          : `<b>${duration(data.installSum)}</b> summed across nine jobs.<br><b>${duration(data.installWall)}</b> along Prepare → App tests → Finish.`;
+        document.getElementById("browser-context").innerHTML = data.normal
+          ? "<ul><li><strong>Earlier image build:</strong> Chromium is baked in, outside this trace.</li><li><strong>OS readiness:</strong> one Chromium check overlaps smoke, TUI and the rollout timer. The same machine later starts root Playwright.</li><li><strong>Streams suite:</strong> one additional Chromium check runs alongside Streams Vitest, before Streams Playwright.</li></ul><p><strong>Two per-run Chromium checks</strong>, with no recorded durations, plus the earlier image bake. No new check before cleanup.</p>"
+          : "<ul><li><strong>Earlier image build:</strong> Chromium is baked in, outside this trace.</li><li><strong>Prepare:</strong> a Chromium check overlaps smoke, TUI and the rollout timer.</li><li><strong>Each of six browser shards:</strong> <code>playwright install chromium</code> precedes <code>pnpm spec</code> in a short CLI/Doppler startup window.</li><li><strong>App-test runner:</strong> Streams checks Chromium alongside Streams Vitest, then starts Streams Playwright.</li><li><strong>Finish:</strong> no browser install.</li></ul><p><strong>Eight per-run Chromium checks</strong>, with no separately recorded durations, plus the earlier image bake. Empty install logs are consistent with a cached browser, not a measured zero duration.</p>";
+        inspect();
+        draw();
+        resources();
+      }
+      function eligible(n) {
+        if (mode === "all") return true;
+        return n.kind === "install" || n.unknown || n.children.some(eligible);
+      }
+      function draw() {
+        const start = range[0],
+          end = range[1],
+          width = end - start;
+        document.getElementById("ticks").innerHTML = Array.from(
+          { length: 6 },
+          (_, i) => `<span style="left:${i * 20}%">${fmt(start + (width * i) / 5)}</span>`,
+        ).join("");
+        let html = "";
+        function row(n, depth) {
+          if (n.end < start || n.start > end || !eligible(n)) return;
+          const children = n.children.filter(eligible);
+          const expanded = open.has(n.id) || mode === "installs";
+          const left = Math.max(0, ((n.start - start) / width) * 100);
+          const right = Math.min(100, ((n.end - start) / width) * 100);
+          const visible = right >= left;
+          html += `<div class="trace-row ${n.kind === "job" ? "job" : ""} ${n.id === selected ? "selected" : ""}" style="--depth:${depth};--color:var(--${n.kind})"><div class="name">${children.length ? `<button class="toggle" data-toggle="${n.id}" aria-label="${expanded ? "Collapse" : "Expand"} ${escape(n.label)}" aria-expanded="${expanded}">${expanded ? "▾" : "▸"}</button>` : '<span class="toggle-spacer"></span>'}<button class="span-name" data-select="${n.id}" title="${escape(n.label)}">${escape(n.label)}</button><span class="duration">${n.unknown ? "untimed" : duration(n.end - n.start)}</span></div><div class="lane">${visible ? (n.unknown ? `<button class="unknown-marker" data-select="${n.id}" style="left:${Math.min(left, 75)}%" aria-label="${escape(n.label)}: duration unrecorded">? untimed</button>` : `<button class="bar" data-select="${n.id}" style="left:${left}%;width:${Math.max(0.08, right - left)}%" title="${escape(n.label)} · ${duration(n.end - n.start)}" aria-label="${escape(n.label)}: ${duration(n.end - n.start)}, ${fmt(n.start)} to ${fmt(n.end)}"></button>`) : ""}</div></div>`;
+          if (expanded) for (const c of children) row(c, depth + 1);
+        }
+        row(data.root, 0);
+        document.getElementById("rows").innerHTML = html;
+        document.querySelectorAll("[data-toggle]").forEach(
+          (b) =>
+            (b.onclick = () => {
+              const id = b.dataset.toggle;
+              open.has(id) ? open.delete(id) : open.add(id);
+              draw();
+            }),
+        );
+        document.querySelectorAll("[data-select]").forEach(
+          (b) =>
+            (b.onclick = () => {
+              selected = b.dataset.select;
+              inspect();
+              draw();
+            }),
+        );
+      }
+      function inspect() {
+        const n = byId.get(selected);
+        let j = n;
+        while (j.parent && j.parent !== data.root) j = j.parent;
+        document.getElementById("inspect").innerHTML =
+          `<div class="eyebrow">Selected span</div><h3>${escape(n.label)}</h3><p>${escape(n.note)}</p>${n.unknown ? "<p><strong>Duration unrecorded.</strong> The marker shows where this command belongs, not when it finished.</p>" : `<dl><dt>Start</dt><dd>+${fmt(n.start)} (${n.start.toFixed(3)}s)</dd><dt>End</dt><dd>+${fmt(n.end)} (${n.end.toFixed(3)}s)</dd><dt>Elapsed</dt><dd>${duration(n.end - n.start)}</dd></dl>`}<div class="source">Basis: ${escape(n.basis)}</div>${j.attempt ? `<p><a href="https://depot.dev/orgs/0p91s0lz49/workflows/${data.workflow}?attempt=${j.attempt}">Open this job in Depot ↗</a></p>` : ""}`;
+      }
+      document.querySelectorAll("[data-preset]").forEach(
+        (b) =>
+          (b.onclick = () => {
+            mode = b.dataset.preset;
+            document
+              .querySelectorAll("[data-preset]")
+              .forEach((x) => x.setAttribute("aria-pressed", x === b));
+            document.getElementById("trace-scroll").scrollTop = 0;
+            draw();
+          }),
+      );
+      document.getElementById("zoom").onchange = (e) => {
+        const v = e.target.value;
+        range = v === "all" ? [0, maxTime] : data.windows[v];
+        document.getElementById("trace-scroll").scrollTop = 0;
+        draw();
+      };
+      document.getElementById("collapse").onclick = () => {
+        mode = "all";
+        open = new Set([data.root.id]);
+        document
+          .querySelectorAll("[data-preset]")
+          .forEach((b) => b.setAttribute("aria-pressed", b.dataset.preset === "all"));
+        draw();
+      };
+      document.getElementById("expand").onclick = () => {
+        mode = "all";
+        open = new Set(flat.filter((n) => !n.children.some((c) => c.test)).map((n) => n.id));
+        document
+          .querySelectorAll("[data-preset]")
+          .forEach((b) => b.setAttribute("aria-pressed", b.dataset.preset === "all"));
+        draw();
+      };
+      function navigateTrace() {
+        const key = location.hash.slice(1).replace("trace-", "");
+        if (runs[key]) selectRun(key);
+      }
+      document.getElementById("run-picker").onchange = (e) => {
+        history.replaceState(null, "", "#trace-" + e.target.value);
+        selectRun(e.target.value);
+      };
+      window.addEventListener("hashchange", navigateTrace);
+
+      function resources() {
+        const samples = data.samples || [],
+          m = data.metrics || {},
+          svg = document.getElementById("resource-chart");
+        document.getElementById("resource-summary").textContent =
+          m.resourceSummary ||
+          "No test-window resource summary recorded for this historical trace.";
+        if (!samples.length) {
+          svg.innerHTML = "";
+          svg.style.display = "none";
+          return;
+        }
+        svg.style.display = "block";
+        const [a, b] = data.browserWindow || data.windows.tests;
+        const subset = samples.filter((s) => s.time >= a && s.time <= b);
+        let out = "";
+        for (const v of [0, 0.5, 1])
+          out += `<line x1="40" x2="980" y1="${120 - v * 100}" y2="${120 - v * 100}" stroke="#dce4e8"/><text x="3" y="${124 - v * 100}" font-size="12" fill="#647582">${v * 100}%</text>`;
+        for (const [field, color] of [
+          ["cpu", "#337b9d"],
+          ["memory", "#7961ac"],
+        ]) {
+          const points = subset
+            .filter((s) => typeof s[field] === "number")
+            .map((s) => `${40 + ((s.time - a) / (b - a)) * 940},${120 - s[field] * 100}`)
+            .join(" ");
+          out += `<polyline points="${points}" fill="none" stroke="${color}" stroke-width="2"/>`;
+        }
+        out += `<text x="40" y="145" font-size="12">${fmt(a)}</text><text x="930" y="145" font-size="12">${fmt(b)}</text>`;
+        svg.innerHTML = out;
+      }
+      const entries = Object.entries(runs);
+      const comparisonEntries = [
+        ...entries.filter(([key, r]) => r.workers),
+        ...entries.filter(([key, r]) => !r.workers),
+      ];
+      document.getElementById("run-picker").innerHTML = entries
+        .map(
+          ([key, r]) => `<option value="${key}">${escape(r.label)} · ${duration(r.total)}</option>`,
+        )
+        .join("");
+      document.getElementById("results").innerHTML = comparisonEntries
+        .map(([key, r]) => {
+          const m = r.metrics || {};
+          return `<tr data-result="${key}" tabindex="0" role="button" aria-label="Open ${escape(r.label)} trace"><td><strong>${escape(r.label)}</strong><br><small>${escape(r.run)} · ${escape((r.head || "").slice(0, 9))}</small></td><td>${duration(r.total)}</td><td>${duration(r.installWall)}</td><td>${m.playwright == null ? "—" : duration(m.playwright)}${r.normal ? "" : " longest shard"}</td><td>${m.vitest == null ? "—" : duration(m.vitest)}</td><td>${m.browserRetries == null ? "—" : m.browserRetries}</td><td>${m.appRetries == null ? "—" : m.appRetries}</td><td class="${m.result === "success" ? "good" : "bad"}">${escape(m.result || "unknown")}</td></tr>`;
+        })
+        .join("");
+      document.querySelectorAll("[data-result]").forEach((row) => {
+        const go = () => {
+          history.replaceState(null, "", "#trace-" + row.dataset.result);
+          selectRun(row.dataset.result);
+          document.getElementById("interactive-trace").scrollIntoView({ block: "start" });
+        };
+        row.onclick = go;
+        row.onkeydown = (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            go();
+          }
+        };
+      });
+      document.getElementById("experiment-notes").innerHTML = entries
+        .filter(([k, r]) => r.findings)
+        .map(
+          ([k, r]) =>
+            `<details><summary>${escape(r.label)} — findings</summary><p>${escape(r.findings)}</p><p><a href="https://depot.dev/orgs/0p91s0lz49/workflows/${r.workflow}">Depot run</a> · <a href="https://github.com/iterate/iterate/commit/${r.head}">Commit ${escape(r.head.slice(0, 9))}</a></p></details>`,
+        )
+        .join("");
+      document.getElementById("pressure-results").innerHTML = comparisonEntries
+        .map(([key, r]) => {
+          const m = r.metrics || {};
+          return `<tr><td>${escape(r.label)}</td><td>${m.peakActiveAttempts || "—"}</td><td>${m.firstStartSpread == null ? "—" : duration(m.firstStartSpread)}</td><td>${m.attemptDurationMedian == null ? "—" : duration(m.attemptDurationMedian) + " / " + duration(m.attemptDurationP95)}</td><td>${m.cpuMean == null ? "—" : (m.cpuMean * 100).toFixed(0) + "% / " + (m.cpuPeak * 100).toFixed(0) + "%"}</td><td>${m.memoryPeak == null ? "—" : (m.memoryPeak * 64).toFixed(1) + " GB"}</td></tr>`;
+        })
+        .join("");
+      selectRun(entries.at(-1)[0]);
+      navigateTrace();
+    </script>
+  </body>
+</html>

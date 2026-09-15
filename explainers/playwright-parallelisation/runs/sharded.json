@@ -1,0 +1,2491 @@
+{
+  "root": {
+    "id": "s0",
+    "label": "Preview workflow",
+    "start": 0,
+    "end": 840.946,
+    "kind": "job",
+    "note": "One preview lifecycle: prepare \u2192 seven parallel test jobs \u2192 finish. Parent durations include their children.",
+    "basis": "Depot workflow timestamps",
+    "children": [
+      {
+        "id": "s190",
+        "label": "Prepare",
+        "start": 5.128,
+        "end": 377.953,
+        "kind": "job",
+        "note": "One 16-core runner. Uses the shared preview environment.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "s191",
+            "label": "Runner startup / unlogged setup",
+            "start": 5.128,
+            "end": 16.977,
+            "kind": "other",
+            "note": "From Depot job start to the first checkout log. Includes runner initialization; individual operations are not timed.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s192",
+            "label": "Checkout",
+            "start": 16.977,
+            "end": 20.806,
+            "kind": "other",
+            "note": "Sync the requested commit into the baked worktree. Ends at the next command start.",
+            "basis": "Observed step window",
+            "children": []
+          },
+          {
+            "id": "s193",
+            "label": "pnpm install",
+            "start": 20.806,
+            "end": 86.871,
+            "kind": "install",
+            "note": "pnpm install --frozen-lockfile --prefer-offline. Reconciles all 26 workspaces against the baked dependencies. The log says \u201cAlready up to date\u201d; that does not make the command free.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "s194",
+            "label": "Reset artifacts + checks",
+            "start": 86.871,
+            "end": 91.444,
+            "kind": "other",
+            "note": "Remove old local reports, validate deployment epoch, and discover the 92-test catalogue.",
+            "basis": "Observed step window",
+            "children": []
+          },
+          {
+            "id": "s195",
+            "label": "Prepare deployment + readiness",
+            "start": 91.444,
+            "end": 375.867,
+            "kind": "deploy",
+            "note": "Resolve PR/slot, erase old data, deploy selected apps, then wait for shared readiness.",
+            "basis": "Observed command window",
+            "children": [
+              {
+                "id": "s196",
+                "label": "Resolve PR, lease + deploy plan",
+                "start": 91.444,
+                "end": 97.25500000000001,
+                "kind": "other",
+                "note": "CLI/Doppler startup, current PR head, preview lease and affected-app selection.",
+                "basis": "Observed enclosing interval",
+                "children": []
+              },
+              {
+                "id": "s197",
+                "label": "Clean old preview data",
+                "start": 97.25500000000001,
+                "end": 204.955,
+                "kind": "cleanup",
+                "note": "Whole pre-deploy erase. Removes DO state, auth D1 rows, KV keys and artifact repositories, plus Streams state. Artifact deletion hit its deadline with repositories remaining.",
+                "basis": "End log and reported 107.7-second duration",
+                "children": [
+                  {
+                    "id": "s198",
+                    "label": "OS reset + D1 + KV",
+                    "start": 97.25500000000001,
+                    "end": 102.265,
+                    "kind": "cleanup",
+                    "note": "Includes OS erase startup, inspecting/resetting DO classes and clearing D1/KV.",
+                    "basis": "Observed enclosing interval",
+                    "children": []
+                  },
+                  {
+                    "id": "s199",
+                    "label": "Artifact repository cleanup window",
+                    "start": 102.265,
+                    "end": 199.469,
+                    "kind": "cleanup",
+                    "note": "580 repositories deleted. This is the window between the KV completion and artifact deletion summary, not individually timed delete requests.",
+                    "basis": "Observed enclosing interval",
+                    "children": []
+                  },
+                  {
+                    "id": "s200",
+                    "label": "Remaining cleanup + deadline handling",
+                    "start": 199.469,
+                    "end": 204.955,
+                    "kind": "cleanup",
+                    "note": "Includes Streams cleanup and the artifact-deletion deadline message.",
+                    "basis": "Observed enclosing interval",
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "s201",
+                "label": "Deploy selected apps concurrently",
+                "start": 205.53199999999998,
+                "end": 266.864,
+                "kind": "deploy",
+                "note": "Per-app measurements include configuration, build/deploy and deployed-version readiness. Dummy Petshop reuses a proven existing deployment.",
+                "basis": "Deployment telemetry",
+                "children": [
+                  {
+                    "id": "s202",
+                    "label": "os",
+                    "start": 205.53199999999998,
+                    "end": 266.864,
+                    "kind": "deploy",
+                    "note": "App deployment measurement. Reconstructed start = finish \u2212 recorded duration.",
+                    "basis": "Deployment telemetry",
+                    "children": [
+                      {
+                        "id": "s203",
+                        "label": "Configure",
+                        "start": 205.53199999999998,
+                        "end": 205.534,
+                        "kind": "deploy",
+                        "note": "Sequential subphase reported by the deployment orchestrator.",
+                        "basis": "Deployment telemetry durations, positioned in code order",
+                        "children": []
+                      },
+                      {
+                        "id": "s204",
+                        "label": "Build + deploy command",
+                        "start": 205.534,
+                        "end": 253.613,
+                        "kind": "deploy",
+                        "note": "Sequential subphase reported by the deployment orchestrator.",
+                        "basis": "Deployment telemetry durations, positioned in code order",
+                        "children": []
+                      },
+                      {
+                        "id": "s205",
+                        "label": "Verify deployed version",
+                        "start": 253.613,
+                        "end": 266.864,
+                        "kind": "deploy",
+                        "note": "Sequential subphase reported by the deployment orchestrator.",
+                        "basis": "Deployment telemetry durations, positioned in code order",
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "id": "s206",
+                    "label": "docs",
+                    "start": 205.53199999999998,
+                    "end": 242.165,
+                    "kind": "deploy",
+                    "note": "App deployment measurement. Reconstructed start = finish \u2212 recorded duration.",
+                    "basis": "Deployment telemetry",
+                    "children": [
+                      {
+                        "id": "s207",
+                        "label": "Configure",
+                        "start": 205.53199999999998,
+                        "end": 205.53499999999997,
+                        "kind": "deploy",
+                        "note": "Sequential subphase reported by the deployment orchestrator.",
+                        "basis": "Deployment telemetry durations, positioned in code order",
+                        "children": []
+                      },
+                      {
+                        "id": "s208",
+                        "label": "Build + deploy command",
+                        "start": 205.53499999999997,
+                        "end": 235.31299999999996,
+                        "kind": "deploy",
+                        "note": "Sequential subphase reported by the deployment orchestrator.",
+                        "basis": "Deployment telemetry durations, positioned in code order",
+                        "children": []
+                      },
+                      {
+                        "id": "s209",
+                        "label": "Verify deployed version",
+                        "start": 235.31299999999996,
+                        "end": 242.16499999999996,
+                        "kind": "deploy",
+                        "note": "Sequential subphase reported by the deployment orchestrator.",
+                        "basis": "Deployment telemetry durations, positioned in code order",
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "id": "s210",
+                    "label": "semaphore",
+                    "start": 205.53300000000002,
+                    "end": 228.675,
+                    "kind": "deploy",
+                    "note": "App deployment measurement. Reconstructed start = finish \u2212 recorded duration.",
+                    "basis": "Deployment telemetry",
+                    "children": [
+                      {
+                        "id": "s211",
+                        "label": "Configure",
+                        "start": 205.53300000000002,
+                        "end": 205.537,
+                        "kind": "deploy",
+                        "note": "Sequential subphase reported by the deployment orchestrator.",
+                        "basis": "Deployment telemetry durations, positioned in code order",
+                        "children": []
+                      },
+                      {
+                        "id": "s212",
+                        "label": "Build + deploy command",
+                        "start": 205.537,
+                        "end": 228.369,
+                        "kind": "deploy",
+                        "note": "Sequential subphase reported by the deployment orchestrator.",
+                        "basis": "Deployment telemetry durations, positioned in code order",
+                        "children": []
+                      },
+                      {
+                        "id": "s213",
+                        "label": "Verify deployed version",
+                        "start": 228.369,
+                        "end": 228.675,
+                        "kind": "deploy",
+                        "note": "Sequential subphase reported by the deployment orchestrator.",
+                        "basis": "Deployment telemetry durations, positioned in code order",
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "id": "s214",
+                    "label": "auth",
+                    "start": 205.532,
+                    "end": 244.026,
+                    "kind": "deploy",
+                    "note": "App deployment measurement. Reconstructed start = finish \u2212 recorded duration.",
+                    "basis": "Deployment telemetry",
+                    "children": [
+                      {
+                        "id": "s215",
+                        "label": "Configure",
+                        "start": 205.532,
+                        "end": 205.538,
+                        "kind": "deploy",
+                        "note": "Sequential subphase reported by the deployment orchestrator.",
+                        "basis": "Deployment telemetry durations, positioned in code order",
+                        "children": []
+                      },
+                      {
+                        "id": "s216",
+                        "label": "Build + deploy command",
+                        "start": 205.538,
+                        "end": 243.425,
+                        "kind": "deploy",
+                        "note": "Sequential subphase reported by the deployment orchestrator.",
+                        "basis": "Deployment telemetry durations, positioned in code order",
+                        "children": []
+                      },
+                      {
+                        "id": "s217",
+                        "label": "Verify deployed version",
+                        "start": 243.425,
+                        "end": 244.026,
+                        "kind": "deploy",
+                        "note": "Sequential subphase reported by the deployment orchestrator.",
+                        "basis": "Deployment telemetry durations, positioned in code order",
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "id": "s218",
+                    "label": "streams-example-app",
+                    "start": 205.533,
+                    "end": 237.176,
+                    "kind": "deploy",
+                    "note": "App deployment measurement. Reconstructed start = finish \u2212 recorded duration.",
+                    "basis": "Deployment telemetry",
+                    "children": [
+                      {
+                        "id": "s219",
+                        "label": "Configure",
+                        "start": 205.533,
+                        "end": 205.539,
+                        "kind": "deploy",
+                        "note": "Sequential subphase reported by the deployment orchestrator.",
+                        "basis": "Deployment telemetry durations, positioned in code order",
+                        "children": []
+                      },
+                      {
+                        "id": "s220",
+                        "label": "Build + deploy command",
+                        "start": 205.539,
+                        "end": 236.719,
+                        "kind": "deploy",
+                        "note": "Sequential subphase reported by the deployment orchestrator.",
+                        "basis": "Deployment telemetry durations, positioned in code order",
+                        "children": []
+                      },
+                      {
+                        "id": "s221",
+                        "label": "Verify deployed version",
+                        "start": 236.719,
+                        "end": 237.176,
+                        "kind": "deploy",
+                        "note": "Sequential subphase reported by the deployment orchestrator.",
+                        "basis": "Deployment telemetry durations, positioned in code order",
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "id": "s222",
+                    "label": "dummy-petshop",
+                    "start": 228.67499999999998,
+                    "end": 228.885,
+                    "kind": "deploy",
+                    "note": "App deployment measurement. Reconstructed start = finish \u2212 recorded duration.",
+                    "basis": "Deployment telemetry",
+                    "children": [
+                      {
+                        "id": "s223",
+                        "label": "Prove existing deployment can be reused",
+                        "start": 228.67499999999998,
+                        "end": 228.88199999999998,
+                        "kind": "deploy",
+                        "note": "Sequential subphase reported by the deployment orchestrator.",
+                        "basis": "Deployment telemetry durations, positioned in code order",
+                        "children": []
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "id": "s224",
+                "label": "Shared readiness",
+                "start": 272.586,
+                "end": 375.867,
+                "kind": "readiness",
+                "note": "Smoke, the remaining rollout timer, TUI check and Chromium check overlap. The smoke check finishes last.",
+                "basis": "Timestamped log boundaries",
+                "children": [
+                  {
+                    "id": "s225",
+                    "label": "Rollout settle timer",
+                    "start": 272.586,
+                    "end": 344.587,
+                    "kind": "readiness",
+                    "note": "Wait for the remaining deployment-age buffer.",
+                    "basis": "Timestamped log boundaries",
+                    "children": []
+                  },
+                  {
+                    "id": "s226",
+                    "label": "Agent smoke",
+                    "start": 272.586,
+                    "end": 375.867,
+                    "kind": "readiness",
+                    "note": "The smoke check creates a project and receives an agent reply. Its own project-creation path also waits for rollout readiness.",
+                    "basis": "Timestamped log boundaries",
+                    "children": []
+                  },
+                  {
+                    "id": "s227",
+                    "label": "TUI quarantine check",
+                    "start": 272.586,
+                    "end": 272.996,
+                    "kind": "readiness",
+                    "note": "The quarantined TUI script exits quickly; this is not a full TUI suite.",
+                    "basis": "Timestamped log boundaries",
+                    "children": []
+                  },
+                  {
+                    "id": "s228",
+                    "label": "Chromium install/check",
+                    "start": 272.586,
+                    "end": 375.867,
+                    "kind": "browser",
+                    "note": "Started alongside readiness and awaited before readiness completes. Its redirected log is empty. No separate start/end measurement: this 103s parent window is not the browser-install duration.",
+                    "basis": "Known from code; duration unrecorded",
+                    "children": [],
+                    "unknown": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "s229",
+            "label": "Publish plan + collect/upload artifacts",
+            "start": 375.867,
+            "end": 377.953,
+            "kind": "artifact",
+            "note": "Publish the prepared deployment identity, collect readiness logs, upload telemetry and finish the job.",
+            "basis": "Observed tail window",
+            "children": []
+          }
+        ],
+        "attempt": "n4x4l6mjsv",
+        "order": 0
+      },
+      {
+        "id": "s1",
+        "label": "App tests",
+        "start": 389.019,
+        "end": 609.092,
+        "kind": "job",
+        "note": "One 16-core runner. Uses the shared preview environment.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "s2",
+            "label": "Runner startup / unlogged setup",
+            "start": 389.019,
+            "end": 399.856,
+            "kind": "other",
+            "note": "From Depot job start to the first checkout log. Includes runner initialization; individual operations are not timed.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s3",
+            "label": "Checkout",
+            "start": 399.856,
+            "end": 403.555,
+            "kind": "other",
+            "note": "Sync the requested commit into the baked worktree. Ends at the next command start.",
+            "basis": "Observed step window",
+            "children": []
+          },
+          {
+            "id": "s4",
+            "label": "pnpm install",
+            "start": 403.555,
+            "end": 452.409,
+            "kind": "install",
+            "note": "pnpm install --frozen-lockfile --prefer-offline. Reconciles all 26 workspaces against the baked dependencies. The log says \u201cAlready up to date\u201d; that does not make the command free.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "s5",
+            "label": "Reset + download deployment plan",
+            "start": 452.409,
+            "end": 453.04,
+            "kind": "artifact",
+            "note": "Load the shared deployment identity; no backend deployment here.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s6",
+            "label": "Resolve CI environment",
+            "start": 453.04,
+            "end": 457.988,
+            "kind": "other",
+            "note": "CLI/Doppler startup and app-suite setup.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s7",
+            "label": "Run app suites concurrently",
+            "start": 457.988,
+            "end": 607.914,
+            "kind": "test",
+            "note": "OS Vitest, Docs, Auth, Semaphore, Dummy Petshop and Streams share this machine.",
+            "basis": "Observed command window",
+            "children": [
+              {
+                "id": "s8",
+                "label": "streams-example-app \u00b7 playwright",
+                "start": 463.588,
+                "end": 522.011,
+                "kind": "test",
+                "note": "Reporter run interval. Enclosing shell/CLI setup is outside this span. Streams Vitest logs are replayed after its browser suite; these timestamps come from telemetry, so show the real overlap.",
+                "basis": "Test telemetry",
+                "children": []
+              },
+              {
+                "id": "s9",
+                "label": "docs \u00b7 vitest",
+                "start": 463.243,
+                "end": 464.115,
+                "kind": "test",
+                "note": "Reporter run interval. Enclosing shell/CLI setup is outside this span. Streams Vitest logs are replayed after its browser suite; these timestamps come from telemetry, so show the real overlap.",
+                "basis": "Test telemetry",
+                "children": []
+              },
+              {
+                "id": "s10",
+                "label": "auth \u00b7 vitest",
+                "start": 459.158,
+                "end": 480.832,
+                "kind": "test",
+                "note": "Reporter run interval. Enclosing shell/CLI setup is outside this span. Streams Vitest logs are replayed after its browser suite; these timestamps come from telemetry, so show the real overlap.",
+                "basis": "Test telemetry",
+                "children": []
+              },
+              {
+                "id": "s11",
+                "label": "os \u00b7 vitest",
+                "start": 461.616,
+                "end": 607.882,
+                "kind": "test",
+                "note": "Reporter run interval. Enclosing shell/CLI setup is outside this span. Streams Vitest logs are replayed after its browser suite; these timestamps come from telemetry, so show the real overlap.",
+                "basis": "Test telemetry",
+                "children": []
+              },
+              {
+                "id": "s12",
+                "label": "semaphore \u00b7 vitest",
+                "start": 459.154,
+                "end": 484.438,
+                "kind": "test",
+                "note": "Reporter run interval. Enclosing shell/CLI setup is outside this span. Streams Vitest logs are replayed after its browser suite; these timestamps come from telemetry, so show the real overlap.",
+                "basis": "Test telemetry",
+                "children": []
+              },
+              {
+                "id": "s13",
+                "label": "dummy-petshop \u00b7 vitest",
+                "start": 459.153,
+                "end": 467.858,
+                "kind": "test",
+                "note": "Reporter run interval. Enclosing shell/CLI setup is outside this span. Streams Vitest logs are replayed after its browser suite; these timestamps come from telemetry, so show the real overlap.",
+                "basis": "Test telemetry",
+                "children": []
+              },
+              {
+                "id": "s14",
+                "label": "streams-example-app \u00b7 vitest",
+                "start": 461.621,
+                "end": 498.095,
+                "kind": "test",
+                "note": "Reporter run interval. Enclosing shell/CLI setup is outside this span. Streams Vitest logs are replayed after its browser suite; these timestamps come from telemetry, so show the real overlap.",
+                "basis": "Test telemetry",
+                "children": []
+              },
+              {
+                "id": "s15",
+                "label": "Streams Chromium install/check",
+                "start": 457.988,
+                "end": 461.795,
+                "kind": "browser",
+                "note": "Runs on the app-test machine, after Streams auth setup, alongside Streams Vitest. Awaited before Streams Playwright. Its log is empty and duration is unrecorded.",
+                "basis": "Known from code; duration unrecorded",
+                "children": [],
+                "unknown": true
+              }
+            ]
+          },
+          {
+            "id": "s16",
+            "label": "Collect + upload app results",
+            "start": 607.914,
+            "end": 609.092,
+            "kind": "artifact",
+            "note": "Write app receipts, collect reports and upload.",
+            "basis": "Observed tail window",
+            "children": []
+          }
+        ],
+        "attempt": "tpcsb95sv4",
+        "order": 1
+      },
+      {
+        "id": "s30",
+        "label": "Playwright 1/6",
+        "start": 388.062,
+        "end": 530.4,
+        "kind": "job",
+        "note": "One 16-core runner. Uses the shared preview environment.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "s31",
+            "label": "Runner startup / unlogged setup",
+            "start": 388.062,
+            "end": 399.892,
+            "kind": "other",
+            "note": "From Depot job start to the first checkout log. Includes runner initialization; individual operations are not timed.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s32",
+            "label": "Checkout",
+            "start": 399.892,
+            "end": 403.203,
+            "kind": "other",
+            "note": "Sync the requested commit into the baked worktree. Ends at the next command start.",
+            "basis": "Observed step window",
+            "children": []
+          },
+          {
+            "id": "s33",
+            "label": "pnpm install",
+            "start": 403.203,
+            "end": 452.421,
+            "kind": "install",
+            "note": "pnpm install --frozen-lockfile --prefer-offline. Reconciles all 26 workspaces against the baked dependencies. The log says \u201cAlready up to date\u201d; that does not make the command free.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "s34",
+            "label": "Reset + download deployment plan",
+            "start": 452.421,
+            "end": 453.059,
+            "kind": "artifact",
+            "note": "Read the plan from Prepare; no backend deployment here.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s35",
+            "label": "Resolve env + Chromium check",
+            "start": 453.059,
+            "end": 458.667,
+            "kind": "other",
+            "note": "This measured window includes CLI/Doppler setup, playwright install chromium, and pnpm spec startup. Chromium\u2019s time is not separately logged.",
+            "basis": "Observed enclosing interval",
+            "children": [
+              {
+                "id": "s36",
+                "label": "Chromium install/check",
+                "start": 453.059,
+                "end": 458.667,
+                "kind": "browser",
+                "note": "Runs before the spec command on this shard. Exact duration is unrecorded; the entire enclosing startup window is 5.6s, so that is an upper bound, not an install measurement. No browser download output appears.",
+                "basis": "Known from code; duration unrecorded",
+                "children": [],
+                "unknown": true
+              }
+            ]
+          },
+          {
+            "id": "s37",
+            "label": "Playwright command",
+            "start": 458.667,
+            "end": 529.027,
+            "kind": "test",
+            "note": "One shard of root Playwright. Includes global setup, local mobile web server, worker startup, tests and reporting.",
+            "basis": "Observed command window",
+            "children": [
+              {
+                "id": "s38",
+                "label": "Global setup + mobile web server",
+                "start": 458.667,
+                "end": 463.984,
+                "kind": "other",
+                "note": "Start Playwright, launch the local Expo server and resolve auth before the worker pool runs.",
+                "basis": "Observed enclosing interval",
+                "children": [
+                  {
+                    "id": "s39",
+                    "label": "Expo startup until listening",
+                    "start": 459.902,
+                    "end": 461.857,
+                    "kind": "other",
+                    "note": "Observed Expo launch to listening message. Later page bundling can still happen while tests run.",
+                    "basis": "Timestamped Expo log boundaries",
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "s40",
+                "label": "Worker pool + reporting",
+                "start": 463.984,
+                "end": 529.027,
+                "kind": "test",
+                "note": "Up to 16 independent tests run at once. Expand to see each test\u2019s recorded interval.",
+                "basis": "Playwright pool log boundaries",
+                "children": [
+                  {
+                    "id": "s41",
+                    "label": "preview-resilience \u203a stream-resume-after-suspend.spec.ts \u203a control: appended event is delivered to a live stream feed",
+                    "start": 464.941,
+                    "end": 485.018,
+                    "kind": "test",
+                    "note": "specs/stream-resume-after-suspend.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s42",
+                    "label": "preview-resilience \u203a stream-resume-after-suspend.spec.ts \u203a feed resumes after the /api WebSocket dies (clean close)",
+                    "start": 464.903,
+                    "end": 494.41900000000004,
+                    "kind": "test",
+                    "note": "specs/stream-resume-after-suspend.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s43",
+                    "label": "preview-resilience \u203a stream-resume-after-suspend.spec.ts \u203a feed resumes after page freeze + socket death (mobile suspend shape)",
+                    "start": 464.938,
+                    "end": 491.596,
+                    "kind": "test",
+                    "note": "specs/stream-resume-after-suspend.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s44",
+                    "label": "preview-resilience \u203a stream-resume-after-suspend.spec.ts \u203a feed resumes after the /api WebSocket goes half-open (no close frame)",
+                    "start": 464.983,
+                    "end": 507.698,
+                    "kind": "test",
+                    "note": "specs/stream-resume-after-suspend.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s45",
+                    "label": "web \u203a agent-chat.spec.ts \u203a agent replies to a browser chat message in the feed",
+                    "start": 464.945,
+                    "end": 487.18399999999997,
+                    "kind": "test",
+                    "note": "specs/agent-chat.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s46",
+                    "label": "web \u203a agent-fake-model-chat.spec.ts \u203a a config file mention is materialized before the model sees the turn",
+                    "start": 465.011,
+                    "end": 493.112,
+                    "kind": "test",
+                    "note": "specs/agent-fake-model-chat.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s47",
+                    "label": "web \u203a agent-fake-model-chat.spec.ts \u203a multi-turn chat with a sarcastic agent served by the spec's own fake-model interceptor",
+                    "start": 464.994,
+                    "end": 499.067,
+                    "kind": "test",
+                    "note": "specs/agent-fake-model-chat.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s48",
+                    "label": "web \u203a agent-fake-model-chat.spec.ts \u203a switching agents clears the previous stream's submission acknowledgement",
+                    "start": 464.943,
+                    "end": 500.82099999999997,
+                    "kind": "test",
+                    "note": "specs/agent-fake-model-chat.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s49",
+                    "label": "web \u203a agent-fake-model-chat.spec.ts \u203a recreating an agent at the same path resets its composer",
+                    "start": 465.003,
+                    "end": 502.275,
+                    "kind": "test",
+                    "note": "specs/agent-fake-model-chat.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s50",
+                    "label": "web \u203a agent-script-reuse.spec.ts \u203a a repeat request reuses the previous turn's journaled script instead of re-deriving it",
+                    "start": 464.969,
+                    "end": 496.944,
+                    "kind": "test",
+                    "note": "specs/agent-script-reuse.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s51",
+                    "label": "web \u203a agent-script-reuse.spec.ts \u203a run() return values are typed from the reused row's data, through the real gate",
+                    "start": 464.941,
+                    "end": 499.69899999999996,
+                    "kind": "test",
+                    "note": "specs/agent-script-reuse.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s52",
+                    "label": "web \u203a clients-os-app.spec.ts \u203a two dashboard tabs are two clients; an itx caller navigates each independently",
+                    "start": 465.049,
+                    "end": 495.03299999999996,
+                    "kind": "test",
+                    "note": "specs/clients-os-app.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s53",
+                    "label": "web \u203a collect-secret.spec.ts \u203a a person provides a secret from a phone-sized sheet",
+                    "start": 465.029,
+                    "end": 482.431,
+                    "kind": "test",
+                    "note": "specs/collect-secret.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s54",
+                    "label": "web \u203a create-project.spec.ts \u203a the config template opens a proactive onboarding conversation for a new project",
+                    "start": 465.02,
+                    "end": 522.571,
+                    "kind": "test",
+                    "note": "specs/create-project.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s55",
+                    "label": "web \u203a dashboard.spec.ts \u203a can enter the dashboard with a forged session",
+                    "start": 465.002,
+                    "end": 479.708,
+                    "kind": "test",
+                    "note": "specs/dashboard.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s56",
+                    "label": "web \u203a dashboard.spec.ts \u203a loads project navigation only when it opens",
+                    "start": 465.032,
+                    "end": 477.645,
+                    "kind": "test",
+                    "note": "specs/dashboard.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "s57",
+            "label": "Save + upload shard results",
+            "start": 529.027,
+            "end": 530.4,
+            "kind": "artifact",
+            "note": "Write the shard receipt, blob report and telemetry, then upload.",
+            "basis": "Observed tail window",
+            "children": []
+          }
+        ],
+        "attempt": "x0rsjtftq0",
+        "order": 2
+      },
+      {
+        "id": "s58",
+        "label": "Playwright 2/6",
+        "start": 386.654,
+        "end": 500.495,
+        "kind": "job",
+        "note": "One 16-core runner. Uses the shared preview environment.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "s59",
+            "label": "Runner startup / unlogged setup",
+            "start": 386.654,
+            "end": 398.811,
+            "kind": "other",
+            "note": "From Depot job start to the first checkout log. Includes runner initialization; individual operations are not timed.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s60",
+            "label": "Checkout",
+            "start": 398.811,
+            "end": 402.372,
+            "kind": "other",
+            "note": "Sync the requested commit into the baked worktree. Ends at the next command start.",
+            "basis": "Observed step window",
+            "children": []
+          },
+          {
+            "id": "s61",
+            "label": "pnpm install",
+            "start": 402.372,
+            "end": 452.431,
+            "kind": "install",
+            "note": "pnpm install --frozen-lockfile --prefer-offline. Reconciles all 26 workspaces against the baked dependencies. The log says \u201cAlready up to date\u201d; that does not make the command free.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "s62",
+            "label": "Reset + download deployment plan",
+            "start": 452.431,
+            "end": 453.06,
+            "kind": "artifact",
+            "note": "Read the plan from Prepare; no backend deployment here.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s63",
+            "label": "Resolve env + Chromium check",
+            "start": 453.06,
+            "end": 458.659,
+            "kind": "other",
+            "note": "This measured window includes CLI/Doppler setup, playwright install chromium, and pnpm spec startup. Chromium\u2019s time is not separately logged.",
+            "basis": "Observed enclosing interval",
+            "children": [
+              {
+                "id": "s64",
+                "label": "Chromium install/check",
+                "start": 453.06,
+                "end": 458.659,
+                "kind": "browser",
+                "note": "Runs before the spec command on this shard. Exact duration is unrecorded; the entire enclosing startup window is 5.6s, so that is an upper bound, not an install measurement. No browser download output appears.",
+                "basis": "Known from code; duration unrecorded",
+                "children": [],
+                "unknown": true
+              }
+            ]
+          },
+          {
+            "id": "s65",
+            "label": "Playwright command",
+            "start": 458.659,
+            "end": 499.342,
+            "kind": "test",
+            "note": "One shard of root Playwright. Includes global setup, local mobile web server, worker startup, tests and reporting.",
+            "basis": "Observed command window",
+            "children": [
+              {
+                "id": "s66",
+                "label": "Global setup + mobile web server",
+                "start": 458.659,
+                "end": 464.051,
+                "kind": "other",
+                "note": "Start Playwright, launch the local Expo server and resolve auth before the worker pool runs.",
+                "basis": "Observed enclosing interval",
+                "children": [
+                  {
+                    "id": "s67",
+                    "label": "Expo startup until listening",
+                    "start": 459.911,
+                    "end": 461.889,
+                    "kind": "other",
+                    "note": "Observed Expo launch to listening message. Later page bundling can still happen while tests run.",
+                    "basis": "Timestamped Expo log boundaries",
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "s68",
+                "label": "Worker pool + reporting",
+                "start": 464.051,
+                "end": 499.342,
+                "kind": "test",
+                "note": "Up to 16 independent tests run at once. Expand to see each test\u2019s recorded interval.",
+                "basis": "Playwright pool log boundaries",
+                "children": [
+                  {
+                    "id": "s69",
+                    "label": "web \u203a dashboard.spec.ts \u203a opening OS returns to the most recently active project",
+                    "start": 465.149,
+                    "end": 481.146,
+                    "kind": "test",
+                    "note": "specs/dashboard.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s70",
+                    "label": "web \u203a dashboard.spec.ts \u203a project settings is available under /settings",
+                    "start": 465.188,
+                    "end": 477.351,
+                    "kind": "test",
+                    "note": "specs/dashboard.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s71",
+                    "label": "web \u203a flake-sentinel.spec.ts \u203a flake sentinel (specs)",
+                    "start": 465.153,
+                    "end": 465.15500000000003,
+                    "kind": "test",
+                    "note": "packages/shared/src/test-support/flake-test.ts \u00b7 body passed; quarantine wrapper throws as expected \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s72",
+                    "label": "web \u203a forged-session-repl.spec.ts \u203a project REPL accepts a forged session",
+                    "start": 465.112,
+                    "end": 488.01000000000005,
+                    "kind": "test",
+                    "note": "specs/forged-session-repl.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s73",
+                    "label": "web \u203a integrations-hydration.spec.ts \u203a hydrates the client-only integrations route without rebuilding the shell",
+                    "start": 465.178,
+                    "end": 480.493,
+                    "kind": "test",
+                    "note": "specs/integrations-hydration.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s74",
+                    "label": "web \u203a project-route-ssr.spec.ts \u203a project home hydrates the dashboard and REPL still server-renders",
+                    "start": 465.122,
+                    "end": 481.796,
+                    "kind": "test",
+                    "note": "specs/project-route-ssr.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s75",
+                    "label": "web \u203a reactivity-hydration.spec.ts \u203a hydrates the client-only reactivity route without rebuilding the shell",
+                    "start": 465.229,
+                    "end": 480.945,
+                    "kind": "test",
+                    "note": "specs/reactivity-hydration.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s76",
+                    "label": "web \u203a reactivity.spec.ts \u203a reactivity page repaints from a stream subscription after a page action",
+                    "start": 465.222,
+                    "end": 481.39799999999997,
+                    "kind": "test",
+                    "note": "specs/reactivity.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s77",
+                    "label": "web \u203a reactivity.spec.ts \u203a reactivity page appends a batch and renders every delivered marker",
+                    "start": 465.196,
+                    "end": 485.68600000000004,
+                    "kind": "test",
+                    "note": "specs/reactivity.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s78",
+                    "label": "web \u203a reactivity.spec.ts \u203a reactivity page replays already appended events after reload",
+                    "start": 465.218,
+                    "end": 482.06,
+                    "kind": "test",
+                    "note": "specs/reactivity.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s79",
+                    "label": "web \u203a reactivity.spec.ts \u203a reactivity page delivers an appended event to another open tab",
+                    "start": 465.164,
+                    "end": 480.094,
+                    "kind": "test",
+                    "note": "specs/reactivity.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s80",
+                    "label": "web \u203a reactivity.spec.ts \u203a reactivity page processor panel goes live and repaints from a server push",
+                    "start": 465.23,
+                    "end": 481.01,
+                    "kind": "test",
+                    "note": "specs/reactivity.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s81",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"stream-receive-events-from\" through the project REPL",
+                    "start": 465.194,
+                    "end": 493.117,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s82",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"scheduler-basics\" through the project REPL",
+                    "start": 465.253,
+                    "end": 488.215,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s83",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"scheduler-agent-checkin\" through the project REPL",
+                    "start": 465.211,
+                    "end": 487.05400000000003,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s84",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"describe-project\" through the project REPL",
+                    "start": 465.21,
+                    "end": 483.28799999999995,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "s85",
+            "label": "Save + upload shard results",
+            "start": 499.342,
+            "end": 500.495,
+            "kind": "artifact",
+            "note": "Write the shard receipt, blob report and telemetry, then upload.",
+            "basis": "Observed tail window",
+            "children": []
+          }
+        ],
+        "attempt": "f637fb02sl",
+        "order": 3
+      },
+      {
+        "id": "s86",
+        "label": "Playwright 3/6",
+        "start": 387.104,
+        "end": 507.919,
+        "kind": "job",
+        "note": "One 16-core runner. Uses the shared preview environment.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "s87",
+            "label": "Runner startup / unlogged setup",
+            "start": 387.104,
+            "end": 398.69,
+            "kind": "other",
+            "note": "From Depot job start to the first checkout log. Includes runner initialization; individual operations are not timed.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s88",
+            "label": "Checkout",
+            "start": 398.69,
+            "end": 402.42,
+            "kind": "other",
+            "note": "Sync the requested commit into the baked worktree. Ends at the next command start.",
+            "basis": "Observed step window",
+            "children": []
+          },
+          {
+            "id": "s89",
+            "label": "pnpm install",
+            "start": 402.42,
+            "end": 452.487,
+            "kind": "install",
+            "note": "pnpm install --frozen-lockfile --prefer-offline. Reconciles all 26 workspaces against the baked dependencies. The log says \u201cAlready up to date\u201d; that does not make the command free.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "s90",
+            "label": "Reset + download deployment plan",
+            "start": 452.487,
+            "end": 453.137,
+            "kind": "artifact",
+            "note": "Read the plan from Prepare; no backend deployment here.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s91",
+            "label": "Resolve env + Chromium check",
+            "start": 453.137,
+            "end": 458.772,
+            "kind": "other",
+            "note": "This measured window includes CLI/Doppler setup, playwright install chromium, and pnpm spec startup. Chromium\u2019s time is not separately logged.",
+            "basis": "Observed enclosing interval",
+            "children": [
+              {
+                "id": "s92",
+                "label": "Chromium install/check",
+                "start": 453.137,
+                "end": 458.772,
+                "kind": "browser",
+                "note": "Runs before the spec command on this shard. Exact duration is unrecorded; the entire enclosing startup window is 5.6s, so that is an upper bound, not an install measurement. No browser download output appears.",
+                "basis": "Known from code; duration unrecorded",
+                "children": [],
+                "unknown": true
+              }
+            ]
+          },
+          {
+            "id": "s93",
+            "label": "Playwright command",
+            "start": 458.772,
+            "end": 506.456,
+            "kind": "test",
+            "note": "One shard of root Playwright. Includes global setup, local mobile web server, worker startup, tests and reporting.",
+            "basis": "Observed command window",
+            "children": [
+              {
+                "id": "s94",
+                "label": "Global setup + mobile web server",
+                "start": 458.772,
+                "end": 463.81,
+                "kind": "other",
+                "note": "Start Playwright, launch the local Expo server and resolve auth before the worker pool runs.",
+                "basis": "Observed enclosing interval",
+                "children": [
+                  {
+                    "id": "s95",
+                    "label": "Expo startup until listening",
+                    "start": 460.011,
+                    "end": 461.863,
+                    "kind": "other",
+                    "note": "Observed Expo launch to listening message. Later page bundling can still happen while tests run.",
+                    "basis": "Timestamped Expo log boundaries",
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "s96",
+                "label": "Worker pool + reporting",
+                "start": 463.81,
+                "end": 506.456,
+                "kind": "test",
+                "note": "Up to 16 independent tests run at once. Expand to see each test\u2019s recorded interval.",
+                "basis": "Playwright pool log boundaries",
+                "children": [
+                  {
+                    "id": "s97",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"discover-tree\" through the project REPL",
+                    "start": 464.733,
+                    "end": 485.928,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s98",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"files-roundtrip\" through the project REPL",
+                    "start": 464.755,
+                    "end": 490.597,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s99",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"append-and-read-stream\" through the project REPL",
+                    "start": 464.826,
+                    "end": 494.922,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s100",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"egress-rules-configured\" through the project REPL",
+                    "start": 464.775,
+                    "end": 489.60499999999996,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s101",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"ephemeral-events\" through the project REPL",
+                    "start": 464.862,
+                    "end": 485.69,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s102",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"run-script\" through the project REPL",
+                    "start": 464.845,
+                    "end": 499.49,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s103",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"provide-itx-expression\" through the project REPL",
+                    "start": 464.797,
+                    "end": 482.139,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s104",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"dynamic-worker-stateless\" through the project REPL",
+                    "start": 464.774,
+                    "end": 486.864,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s105",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"dynamic-worker-stateful\" through the project REPL",
+                    "start": 464.799,
+                    "end": 490.738,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s106",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"sandbox-exec\" through the project REPL",
+                    "start": 464.793,
+                    "end": 495.173,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s107",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"workspace-edit-and-push\" through the project REPL",
+                    "start": 464.825,
+                    "end": 488.578,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s108",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"workspace-files-transfer\" through the project REPL",
+                    "start": 464.798,
+                    "end": 486.653,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s109",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"use-project-skill\" through the project REPL",
+                    "start": 464.883,
+                    "end": 497.589,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s110",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"repo-commit-files\" through the project REPL",
+                    "start": 464.866,
+                    "end": 494.962,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s111",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"repo-read-file\" through the project REPL",
+                    "start": 464.893,
+                    "end": 489.501,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "s112",
+            "label": "Save + upload shard results",
+            "start": 506.456,
+            "end": 507.919,
+            "kind": "artifact",
+            "note": "Write the shard receipt, blob report and telemetry, then upload.",
+            "basis": "Observed tail window",
+            "children": []
+          }
+        ],
+        "attempt": "ncwdmzv1f2",
+        "order": 4
+      },
+      {
+        "id": "s113",
+        "label": "Playwright 4/6",
+        "start": 385.241,
+        "end": 521.45,
+        "kind": "job",
+        "note": "One 16-core runner. Uses the shared preview environment.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "s114",
+            "label": "Runner startup / unlogged setup",
+            "start": 385.241,
+            "end": 398.872,
+            "kind": "other",
+            "note": "From Depot job start to the first checkout log. Includes runner initialization; individual operations are not timed.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s115",
+            "label": "Checkout",
+            "start": 398.872,
+            "end": 402.445,
+            "kind": "other",
+            "note": "Sync the requested commit into the baked worktree. Ends at the next command start.",
+            "basis": "Observed step window",
+            "children": []
+          },
+          {
+            "id": "s116",
+            "label": "pnpm install",
+            "start": 402.445,
+            "end": 452.461,
+            "kind": "install",
+            "note": "pnpm install --frozen-lockfile --prefer-offline. Reconciles all 26 workspaces against the baked dependencies. The log says \u201cAlready up to date\u201d; that does not make the command free.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "s117",
+            "label": "Reset + download deployment plan",
+            "start": 452.461,
+            "end": 453.075,
+            "kind": "artifact",
+            "note": "Read the plan from Prepare; no backend deployment here.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s118",
+            "label": "Resolve env + Chromium check",
+            "start": 453.075,
+            "end": 459.117,
+            "kind": "other",
+            "note": "This measured window includes CLI/Doppler setup, playwright install chromium, and pnpm spec startup. Chromium\u2019s time is not separately logged.",
+            "basis": "Observed enclosing interval",
+            "children": [
+              {
+                "id": "s119",
+                "label": "Chromium install/check",
+                "start": 453.075,
+                "end": 459.117,
+                "kind": "browser",
+                "note": "Runs before the spec command on this shard. Exact duration is unrecorded; the entire enclosing startup window is 6.0s, so that is an upper bound, not an install measurement. No browser download output appears.",
+                "basis": "Known from code; duration unrecorded",
+                "children": [],
+                "unknown": true
+              }
+            ]
+          },
+          {
+            "id": "s120",
+            "label": "Playwright command",
+            "start": 459.117,
+            "end": 520.082,
+            "kind": "test",
+            "note": "One shard of root Playwright. Includes global setup, local mobile web server, worker startup, tests and reporting.",
+            "basis": "Observed command window",
+            "children": [
+              {
+                "id": "s121",
+                "label": "Global setup + mobile web server",
+                "start": 459.117,
+                "end": 463.98,
+                "kind": "other",
+                "note": "Start Playwright, launch the local Expo server and resolve auth before the worker pool runs.",
+                "basis": "Observed enclosing interval",
+                "children": [
+                  {
+                    "id": "s122",
+                    "label": "Expo startup until listening",
+                    "start": 460.322,
+                    "end": 461.867,
+                    "kind": "other",
+                    "note": "Observed Expo launch to listening message. Later page bundling can still happen while tests run.",
+                    "basis": "Timestamped Expo log boundaries",
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "s123",
+                "label": "Worker pool + reporting",
+                "start": 463.98,
+                "end": 520.082,
+                "kind": "test",
+                "note": "Up to 16 independent tests run at once. Expand to see each test\u2019s recorded interval.",
+                "basis": "Playwright pool log boundaries",
+                "children": [
+                  {
+                    "id": "s124",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"repo-edit-file\" through the project REPL",
+                    "start": 464.948,
+                    "end": 507.001,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s125",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"secrets-lifecycle\" through the project REPL",
+                    "start": 464.952,
+                    "end": 488.148,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s126",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"journal-is-the-record\" through the project REPL",
+                    "start": 464.974,
+                    "end": 483.294,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s127",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"docs-search-and-get\" through the project REPL",
+                    "start": 464.936,
+                    "end": 488.43399999999997,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s128",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"typed-capability-mount\" through the project REPL",
+                    "start": 464.983,
+                    "end": 484.831,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s129",
+                    "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"agent-send-message\" through the project REPL",
+                    "start": 464.964,
+                    "end": 494.245,
+                    "kind": "test",
+                    "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s130",
+                    "label": "web \u203a repl-lazy.spec.ts \u203a the REPL creates no session stream until the first Run",
+                    "start": 465.017,
+                    "end": 487.59,
+                    "kind": "test",
+                    "note": "specs/repl-lazy.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s131",
+                    "label": "web \u203a repo-ide-html-preview.spec.ts \u203a toggle an html file between Code and its sandboxed Preview",
+                    "start": 465.005,
+                    "end": 492.393,
+                    "kind": "test",
+                    "note": "specs/repo-ide-html-preview.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s132",
+                    "label": "web \u203a repo-ide-json-schema.spec.ts \u203a flags a package.json schema violation with a red squiggle",
+                    "start": 464.945,
+                    "end": 513.643,
+                    "kind": "test",
+                    "note": "specs/repo-ide-json-schema.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s133",
+                    "label": "web \u203a repo-ide-markdown-preview.spec.ts \u203a toggle a markdown file between Code and its rendered Preview",
+                    "start": 465.011,
+                    "end": 493.70500000000004,
+                    "kind": "test",
+                    "note": "specs/repo-ide-markdown-preview.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s134",
+                    "label": "web \u203a repo-ide-svg-index-preview.spec.ts \u203a toggle an svg file between Code and its sandboxed Preview",
+                    "start": 465.016,
+                    "end": 490.177,
+                    "kind": "test",
+                    "note": "specs/repo-ide-svg-index-preview.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s135",
+                    "label": "web \u203a repo-ide-svg-index-preview.spec.ts \u203a preview a staged snapshot from the readonly Index view",
+                    "start": 464.985,
+                    "end": 489.928,
+                    "kind": "test",
+                    "note": "specs/repo-ide-svg-index-preview.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s136",
+                    "label": "web \u203a repo-ide.spec.ts \u203a edit, stage, inspect the Index, and commit through the repo IDE",
+                    "start": 465.045,
+                    "end": 495.728,
+                    "kind": "test",
+                    "note": "specs/repo-ide.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s137",
+                    "label": "web \u203a repo-ide.spec.ts \u203a discarding a new file confirms before permanently removing it",
+                    "start": 465.019,
+                    "end": 486.974,
+                    "kind": "test",
+                    "note": "specs/repo-ide.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "s138",
+            "label": "Save + upload shard results",
+            "start": 520.082,
+            "end": 521.45,
+            "kind": "artifact",
+            "note": "Write the shard receipt, blob report and telemetry, then upload.",
+            "basis": "Observed tail window",
+            "children": []
+          }
+        ],
+        "attempt": "8t1f4sjf1w",
+        "order": 5
+      },
+      {
+        "id": "s139",
+        "label": "Playwright 5/6",
+        "start": 386.057,
+        "end": 533.628,
+        "kind": "job",
+        "note": "One 16-core runner. Uses the shared preview environment.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "s140",
+            "label": "Runner startup / unlogged setup",
+            "start": 386.057,
+            "end": 399.018,
+            "kind": "other",
+            "note": "From Depot job start to the first checkout log. Includes runner initialization; individual operations are not timed.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s141",
+            "label": "Checkout",
+            "start": 399.018,
+            "end": 402.439,
+            "kind": "other",
+            "note": "Sync the requested commit into the baked worktree. Ends at the next command start.",
+            "basis": "Observed step window",
+            "children": []
+          },
+          {
+            "id": "s142",
+            "label": "pnpm install",
+            "start": 402.439,
+            "end": 452.476,
+            "kind": "install",
+            "note": "pnpm install --frozen-lockfile --prefer-offline. Reconciles all 26 workspaces against the baked dependencies. The log says \u201cAlready up to date\u201d; that does not make the command free.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "s143",
+            "label": "Reset + download deployment plan",
+            "start": 452.476,
+            "end": 453.104,
+            "kind": "artifact",
+            "note": "Read the plan from Prepare; no backend deployment here.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s144",
+            "label": "Resolve env + Chromium check",
+            "start": 453.104,
+            "end": 458.717,
+            "kind": "other",
+            "note": "This measured window includes CLI/Doppler setup, playwright install chromium, and pnpm spec startup. Chromium\u2019s time is not separately logged.",
+            "basis": "Observed enclosing interval",
+            "children": [
+              {
+                "id": "s145",
+                "label": "Chromium install/check",
+                "start": 453.104,
+                "end": 458.717,
+                "kind": "browser",
+                "note": "Runs before the spec command on this shard. Exact duration is unrecorded; the entire enclosing startup window is 5.6s, so that is an upper bound, not an install measurement. No browser download output appears.",
+                "basis": "Known from code; duration unrecorded",
+                "children": [],
+                "unknown": true
+              }
+            ]
+          },
+          {
+            "id": "s146",
+            "label": "Playwright command",
+            "start": 458.717,
+            "end": 532.166,
+            "kind": "test",
+            "note": "One shard of root Playwright. Includes global setup, local mobile web server, worker startup, tests and reporting.",
+            "basis": "Observed command window",
+            "children": [
+              {
+                "id": "s147",
+                "label": "Global setup + mobile web server",
+                "start": 458.717,
+                "end": 465.238,
+                "kind": "other",
+                "note": "Start Playwright, launch the local Expo server and resolve auth before the worker pool runs.",
+                "basis": "Observed enclosing interval",
+                "children": [
+                  {
+                    "id": "s148",
+                    "label": "Expo startup until listening",
+                    "start": 459.961,
+                    "end": 463.115,
+                    "kind": "other",
+                    "note": "Observed Expo launch to listening message. Later page bundling can still happen while tests run.",
+                    "basis": "Timestamped Expo log boundaries",
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "s149",
+                "label": "Worker pool + reporting",
+                "start": 465.238,
+                "end": 532.166,
+                "kind": "test",
+                "note": "Up to 16 independent tests run at once. Expand to see each test\u2019s recorded interval.",
+                "basis": "Playwright pool log boundaries",
+                "children": [
+                  {
+                    "id": "s150",
+                    "label": "web \u203a repo-markdown-preview.spec.ts \u203a markdown files get a sanitized Code | Preview toggle in the repo IDE",
+                    "start": 466.268,
+                    "end": 497.003,
+                    "kind": "test",
+                    "note": "specs/repo-markdown-preview.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s151",
+                    "label": "web \u203a seeded-apps.spec.ts \u203a the seeded guestbook app works after creating a project",
+                    "start": 466.34,
+                    "end": 496.195,
+                    "kind": "test",
+                    "note": "specs/seeded-apps.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s152",
+                    "label": "web \u203a seeded-apps.spec.ts \u203a the seeded todo app authenticates a real project member",
+                    "start": 466.215,
+                    "end": 503.74699999999996,
+                    "kind": "test",
+                    "note": "specs/seeded-apps.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s153",
+                    "label": "web \u203a seeded-apps.spec.ts \u203a undo keeps a peer's shopping-list edit in the seeded Docs app",
+                    "start": 466.261,
+                    "end": 501.023,
+                    "kind": "test",
+                    "note": "specs/seeded-apps.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s154",
+                    "label": "web \u203a seeded-apps.spec.ts \u203a review a workspace document in the seeded Docs app",
+                    "start": 466.317,
+                    "end": 516.347,
+                    "kind": "test",
+                    "note": "packages/shared/src/test-support/flake-test.ts \u00b7 body passed; quarantine wrapper throws as expected \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s155",
+                    "label": "web \u203a signup.spec.ts \u203a can sign up with an email one-time passcode",
+                    "start": 466.361,
+                    "end": 498.41499999999996,
+                    "kind": "test",
+                    "note": "specs/signup.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s156",
+                    "label": "web \u203a stream-cache-before-live.spec.ts \u203a empty agent feeds distinguish waiting from filtered zero matches",
+                    "start": 466.319,
+                    "end": 484.22,
+                    "kind": "test",
+                    "note": "specs/stream-cache-before-live.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s157",
+                    "label": "web \u203a stream-cache-before-live.spec.ts \u203a a cold stream stays pending until its server history catches up",
+                    "start": 466.301,
+                    "end": 490.352,
+                    "kind": "test",
+                    "note": "specs/stream-cache-before-live.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s158",
+                    "label": "web \u203a stream-cache-before-live.spec.ts \u203a a cached stream opens before its live connection",
+                    "start": 466.311,
+                    "end": 492.61899999999997,
+                    "kind": "test",
+                    "note": "specs/stream-cache-before-live.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s159",
+                    "label": "web \u203a test-support/screenshot.spec.ts \u203a saves a successful locator screenshot under its readable locator slug",
+                    "start": 466.197,
+                    "end": 467.088,
+                    "kind": "test",
+                    "note": "specs/test-support/screenshot.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s160",
+                    "label": "web \u203a test-support/screenshot.spec.ts \u203a does not overwrite a screenshot from another page in the same test",
+                    "start": 466.245,
+                    "end": 467.184,
+                    "kind": "test",
+                    "note": "specs/test-support/screenshot.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s161",
+                    "label": "mobile \u203a mobile/approvals.spec.ts \u203a approve and reject script bursts from inside the chat thread",
+                    "start": 466.337,
+                    "end": 525.567,
+                    "kind": "test",
+                    "note": "specs/mobile/approvals.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s162",
+                    "label": "mobile \u203a mobile/chat-attachment-sheet.spec.ts \u203a + opens the sheet; carousel attaches chips that need a confirm to remove",
+                    "start": 466.268,
+                    "end": 505.239,
+                    "kind": "test",
+                    "note": "specs/mobile/chat-attachment-sheet.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "s163",
+            "label": "Save + upload shard results",
+            "start": 532.166,
+            "end": 533.628,
+            "kind": "artifact",
+            "note": "Write the shard receipt, blob report and telemetry, then upload.",
+            "basis": "Observed tail window",
+            "children": []
+          }
+        ],
+        "attempt": "j6nw3tm6vn",
+        "order": 6
+      },
+      {
+        "id": "s164",
+        "label": "Playwright 6/6",
+        "start": 386.656,
+        "end": 551.604,
+        "kind": "job",
+        "note": "One 16-core runner. Uses the shared preview environment.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "s165",
+            "label": "Runner startup / unlogged setup",
+            "start": 386.656,
+            "end": 398.811,
+            "kind": "other",
+            "note": "From Depot job start to the first checkout log. Includes runner initialization; individual operations are not timed.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s166",
+            "label": "Checkout",
+            "start": 398.811,
+            "end": 402.371,
+            "kind": "other",
+            "note": "Sync the requested commit into the baked worktree. Ends at the next command start.",
+            "basis": "Observed step window",
+            "children": []
+          },
+          {
+            "id": "s167",
+            "label": "pnpm install",
+            "start": 402.371,
+            "end": 452.421,
+            "kind": "install",
+            "note": "pnpm install --frozen-lockfile --prefer-offline. Reconciles all 26 workspaces against the baked dependencies. The log says \u201cAlready up to date\u201d; that does not make the command free.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "s168",
+            "label": "Reset + download deployment plan",
+            "start": 452.421,
+            "end": 453.036,
+            "kind": "artifact",
+            "note": "Read the plan from Prepare; no backend deployment here.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s169",
+            "label": "Resolve env + Chromium check",
+            "start": 453.036,
+            "end": 458.648,
+            "kind": "other",
+            "note": "This measured window includes CLI/Doppler setup, playwright install chromium, and pnpm spec startup. Chromium\u2019s time is not separately logged.",
+            "basis": "Observed enclosing interval",
+            "children": [
+              {
+                "id": "s170",
+                "label": "Chromium install/check",
+                "start": 453.036,
+                "end": 458.648,
+                "kind": "browser",
+                "note": "Runs before the spec command on this shard. Exact duration is unrecorded; the entire enclosing startup window is 5.6s, so that is an upper bound, not an install measurement. No browser download output appears.",
+                "basis": "Known from code; duration unrecorded",
+                "children": [],
+                "unknown": true
+              }
+            ]
+          },
+          {
+            "id": "s171",
+            "label": "Playwright command",
+            "start": 458.648,
+            "end": 550.224,
+            "kind": "test",
+            "note": "One shard of root Playwright. Includes global setup, local mobile web server, worker startup, tests and reporting.",
+            "basis": "Observed command window",
+            "children": [
+              {
+                "id": "s172",
+                "label": "Global setup + mobile web server",
+                "start": 458.648,
+                "end": 463.947,
+                "kind": "other",
+                "note": "Start Playwright, launch the local Expo server and resolve auth before the worker pool runs.",
+                "basis": "Observed enclosing interval",
+                "children": [
+                  {
+                    "id": "s173",
+                    "label": "Expo startup until listening",
+                    "start": 459.879,
+                    "end": 461.854,
+                    "kind": "other",
+                    "note": "Observed Expo launch to listening message. Later page bundling can still happen while tests run.",
+                    "basis": "Timestamped Expo log boundaries",
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "s174",
+                "label": "Worker pool + reporting",
+                "start": 463.947,
+                "end": 550.224,
+                "kind": "test",
+                "note": "Up to 16 independent tests run at once. Expand to see each test\u2019s recorded interval.",
+                "basis": "Playwright pool log boundaries",
+                "children": [
+                  {
+                    "id": "s175",
+                    "label": "mobile \u203a mobile/chat-photos.spec.ts \u203a photos share a mosaic row; tall solo on a blurred backdrop",
+                    "start": 464.959,
+                    "end": 517.776,
+                    "kind": "test",
+                    "note": "packages/shared/src/test-support/flake-test.ts \u00b7 body passed; quarantine wrapper throws as expected \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s176",
+                    "label": "mobile \u203a mobile/chat-titles.spec.ts \u203a a chat wears its agent-set title in the thread header and chat list",
+                    "start": 465.042,
+                    "end": 501.493,
+                    "kind": "test",
+                    "note": "specs/mobile/chat-titles.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s177",
+                    "label": "mobile \u203a mobile/collect-secret.spec.ts \u203a provides a secret from the thread, with no browser in the way",
+                    "start": 465.139,
+                    "end": 511.61400000000003,
+                    "kind": "test",
+                    "note": "specs/mobile/collect-secret.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s178",
+                    "label": "mobile \u203a mobile/expected-backend-mismatch.spec.ts \u203a a mismatched phone sees the differences and a one-tap sign-in fix",
+                    "start": 465.115,
+                    "end": 474.262,
+                    "kind": "test",
+                    "note": "specs/mobile/expected-backend-mismatch.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s179",
+                    "label": "mobile \u203a mobile/expected-backend-mismatch.spec.ts \u203a a phone already matching the expectation is told so",
+                    "start": 465.06,
+                    "end": 474.08,
+                    "kind": "test",
+                    "note": "specs/mobile/expected-backend-mismatch.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s180",
+                    "label": "mobile \u203a mobile/expected-backend-signin.spec.ts \u203a scanning the channel you're already on shows the bundle's expected backend",
+                    "start": 465.112,
+                    "end": 474.25600000000003,
+                    "kind": "test",
+                    "note": "specs/mobile/expected-backend-signin.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s181",
+                    "label": "mobile \u203a mobile/expected-backend-signin.spec.ts \u203a one tap signs the test identity in: consent is the only stop before the project",
+                    "start": 465.109,
+                    "end": 492.419,
+                    "kind": "test",
+                    "note": "specs/mobile/expected-backend-signin.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s182",
+                    "label": "mobile \u203a mobile/integrations.spec.ts \u203a opens the project integration catalogue from the mobile drawer",
+                    "start": 465.033,
+                    "end": 501.189,
+                    "kind": "test",
+                    "note": "specs/mobile/integrations.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s183",
+                    "label": "mobile \u203a mobile/live-status.spec.ts \u203a the live card wears the agent-set status and a phase glyph per round",
+                    "start": 465.088,
+                    "end": 517.3340000000001,
+                    "kind": "test",
+                    "note": "specs/mobile/live-status.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s184",
+                    "label": "mobile \u203a mobile/media.spec.ts \u203a renders, searches, and views seeded media",
+                    "start": 465.076,
+                    "end": 506.766,
+                    "kind": "test",
+                    "note": "specs/mobile/media.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s185",
+                    "label": "mobile \u203a mobile/note-composer-camera-roll.spec.ts \u203a attaches a recent photo to a note through the shared attachment sheet",
+                    "start": 465.029,
+                    "end": 506.48199999999997,
+                    "kind": "test",
+                    "note": "specs/mobile/note-composer-camera-roll.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s186",
+                    "label": "mobile \u203a mobile/notes.spec.ts \u203a captures a note from the global composer and manages it on /notes",
+                    "start": 465.13,
+                    "end": 512.183,
+                    "kind": "test",
+                    "note": "specs/mobile/notes.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s187",
+                    "label": "mobile \u203a mobile/notifications.spec.ts \u203a the approval push is suppressed in the watched thread and sent when you're elsewhere",
+                    "start": 465.167,
+                    "end": 544.081,
+                    "kind": "test",
+                    "note": "specs/mobile/notifications.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  },
+                  {
+                    "id": "s188",
+                    "label": "mobile \u203a mobile/signed-out.spec.ts \u203a the mobile app can be reviewed without an iOS build",
+                    "start": 465.063,
+                    "end": 474.10499999999996,
+                    "kind": "test",
+                    "note": "specs/mobile/signed-out.spec.ts \u00b7 passed \u00b7 0 retries. Test/fixture interval as reported by Playwright.",
+                    "basis": "Playwright per-test telemetry",
+                    "children": [],
+                    "test": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "s189",
+            "label": "Save + upload shard results",
+            "start": 550.224,
+            "end": 551.604,
+            "kind": "artifact",
+            "note": "Write the shard receipt, blob report and telemetry, then upload.",
+            "basis": "Observed tail window",
+            "children": []
+          }
+        ],
+        "attempt": "dr4ssxtrks",
+        "order": 7
+      },
+      {
+        "id": "s17",
+        "label": "Finish",
+        "start": 614.054,
+        "end": 837.348,
+        "kind": "job",
+        "note": "One 4-core runner. Uses the shared preview environment.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "s18",
+            "label": "Runner startup / unlogged setup",
+            "start": 614.054,
+            "end": 631.218,
+            "kind": "other",
+            "note": "From Depot job start to the first checkout log. Includes runner initialization; individual operations are not timed.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s19",
+            "label": "Checkout",
+            "start": 631.218,
+            "end": 635.963,
+            "kind": "other",
+            "note": "Sync the requested commit into the baked worktree. Ends at the next command start.",
+            "basis": "Observed step window",
+            "children": []
+          },
+          {
+            "id": "s20",
+            "label": "pnpm install",
+            "start": 635.963,
+            "end": 710.213,
+            "kind": "install",
+            "note": "pnpm install --frozen-lockfile --prefer-offline. Reconciles all 26 workspaces against the baked dependencies. The log says \u201cAlready up to date\u201d; that does not make the command free.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "s21",
+            "label": "Reset + download all results",
+            "start": 710.213,
+            "end": 711.045,
+            "kind": "artifact",
+            "note": "Clear local reports and download the prepared plan plus every producer\u2019s result.",
+            "basis": "Observed enclosing interval",
+            "children": []
+          },
+          {
+            "id": "s22",
+            "label": "Resolve run + merge reports",
+            "start": 711.045,
+            "end": 718.308,
+            "kind": "artifact",
+            "note": "CLI/Doppler startup, receipt validation, merge six Playwright blobs and publish preview result.",
+            "basis": "Observed command window",
+            "children": [
+              {
+                "id": "s23",
+                "label": "Playwright report merge itself",
+                "start": 716.601,
+                "end": 716.983,
+                "kind": "artifact",
+                "note": "Only the blob/report merge, within the larger ci-finish command.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              }
+            ]
+          },
+          {
+            "id": "s24",
+            "label": "Post-test cleanup",
+            "start": 718.308,
+            "end": 833.251,
+            "kind": "cleanup",
+            "note": "Includes CLI/lease lookup followed by 112.6s erasing slot data. Artifact repository deletion hits its deadline with repositories remaining.",
+            "basis": "Observed command window",
+            "children": [
+              {
+                "id": "s25",
+                "label": "Resolve PR + lease",
+                "start": 718.308,
+                "end": 720.63,
+                "kind": "other",
+                "note": "Resolve the run and current slot lease before erasing.",
+                "basis": "Observed enclosing interval",
+                "children": []
+              },
+              {
+                "id": "s26",
+                "label": "OS reset + D1 + KV",
+                "start": 720.63,
+                "end": 733.5,
+                "kind": "cleanup",
+                "note": "Retire OS DO classes, clear auth D1 rows and remove 575 KV keys.",
+                "basis": "Observed enclosing interval",
+                "children": []
+              },
+              {
+                "id": "s27",
+                "label": "Artifact repository cleanup window",
+                "start": 733.5,
+                "end": 825.932,
+                "kind": "cleanup",
+                "note": "476 repositories deleted. Window bounded by the KV completion and artifact summary; individual deletion requests are not timed.",
+                "basis": "Observed enclosing interval",
+                "children": []
+              },
+              {
+                "id": "s28",
+                "label": "Streams cleanup + deadline handling",
+                "start": 825.932,
+                "end": 833.23,
+                "kind": "cleanup",
+                "note": "Retire the Streams class and report that artifact deletion reached its deadline.",
+                "basis": "Observed enclosing interval",
+                "children": []
+              }
+            ]
+          },
+          {
+            "id": "s29",
+            "label": "Telemetry, uploads + final checks",
+            "start": 833.251,
+            "end": 837.348,
+            "kind": "artifact",
+            "note": "Normalize telemetry, retain reports and flake records, then require every selected test job to have succeeded.",
+            "basis": "Observed tail window",
+            "children": []
+          }
+        ],
+        "attempt": "2zctfgxzm3",
+        "order": 8
+      }
+    ]
+  },
+  "total": 840.946,
+  "installs": [
+    { "job": "Prepare", "start": 20.806, "end": 86.871, "order": 0 },
+    { "job": "App tests", "start": 403.555, "end": 452.409, "order": 1 },
+    { "job": "Playwright 1/6", "start": 403.203, "end": 452.421, "order": 2 },
+    { "job": "Playwright 2/6", "start": 402.372, "end": 452.431, "order": 3 },
+    { "job": "Playwright 3/6", "start": 402.42, "end": 452.487, "order": 4 },
+    { "job": "Playwright 4/6", "start": 402.445, "end": 452.461, "order": 5 },
+    { "job": "Playwright 5/6", "start": 402.439, "end": 452.476, "order": 6 },
+    { "job": "Playwright 6/6", "start": 402.371, "end": 452.421, "order": 7 },
+    { "job": "Finish", "start": 635.963, "end": 710.213, "order": 8 }
+  ],
+  "installWall": 189.16899999999998,
+  "installSum": 488.616,
+  "workflow": "ts361t0jxg",
+  "run": "nv3l390bf0",
+  "normal": false,
+  "windows": { "prepare": [0, 380.953], "tests": [382.241, 612.092], "finish": [611.054, 840.946] },
+  "label": "Historical \u00b7 6 \u00d7 16",
+  "head": "2996ffc9cf3b2456b7668479d28b6899eb8dd53f",
+  "metrics": {
+    "playwright": 90.787,
+    "vitest": 146.266,
+    "browserRetries": 0,
+    "appRetries": 0,
+    "result": "success"
+  },
+  "findings": "88 browser bodies passed, including three quarantine wrappers; four skipped. Historical comparison: different deploy reuse and setup/cache behavior. Not a controlled worker-count comparison."
+}

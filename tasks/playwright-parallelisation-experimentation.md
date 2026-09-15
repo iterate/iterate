@@ -23,14 +23,14 @@ The user wants PR #2659 renamed and used for an overnight experiment: push commi
 
 ## Work
 
-- [ ] Rename PR and rewrite its purpose around experimentation, retaining machine-maintained preview sections.
-- [ ] Restore the unsharded workflow and measure 16 workers.
+- [x] Rename PR and rewrite its purpose around experimentation, retaining machine-maintained preview sections. *PR #2659 renamed; fresh machine-owned preview/LOC blocks preserved.*
+- [x] Restore the unsharded workflow and measure 16 workers. *Run 9p5w4fcrlz: preview success, 604.6s overall, 147.8s Playwright, 127.6s Vitest, no retries; one existing quarantined photo failure. Separate stale unit assertion corrected for the next commit.*
 - [ ] Push and measure 32 workers.
 - [ ] Push and measure 64 workers.
 - [ ] Push and measure 92 workers.
 - [ ] Repeat the useful control/finalist comparison and account for failures and cache variability.
 - [ ] Commit a permanent, self-contained explainer and update it with each result; retain reproducible sanitized evidence and trace-generation code.
-- [ ] Verify the branch-served explainer and put the working URL in the PR body.
+- [x] Verify the branch-served explainer and put the working URL in the PR body. *HTTP 200 and headless browser interaction verified on the branch-serving route; link is in the PR.*
 - [ ] Review the final diff, run relevant checks, address review/CI feedback, and document the recommendation.
 
 ## Evidence before this experiment
@@ -45,3 +45,7 @@ The user wants PR #2659 renamed and used for an overnight experiment: push commi
 
 - Existing branch `codex/playwright-full-parallel`, worktree `../worktrees/iterate/playwright-full-parallel`, PR https://github.com/iterate/iterate/pull/2659.
 - Owning Codex task: `01a09f64-ea4e-7c61-ab0a-c15eb65df3bc`.
+
+- 16-worker control pushed at `1f2cf5033`; run `9p5w4fcrlz`, preview workflow `3gwspz3c34`, attempt `kv2hxdtlcz`. The general unit job exposed a stale assertion that still required the sharded caller; fixed for the next commit without changing the running preview. All 319 script tests pass locally after the correction.
+
+- Control evidence: `explainers/playwright-parallelisation/runs/workers-16.json`; catalogue hash matches the historical 92 names. CPU during Playwright: sampled mean 5.2/16 cores, peak 12.4; peak memory 15.7 GB. The original pnpm/Depot/Nub findings and all three historical traces remain in the permanent page.

@@ -41,18 +41,29 @@ test("fixed capacity rejects catalogue growth and an overloaded individual shard
   ).toThrow(/six shards/);
 });
 
-test("the lifecycle owner encloses every fixed shard and cleanup waits for their completion", () => {
+test("the unsharded experiment keeps deployment, tests and cleanup under one lifecycle owner", () => {
   const root = resolve(import.meta.dirname, "../..");
   const caller = parse(
     readFileSync(resolve(root, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
   );
+  expect(caller.jobs.preview).toMatchObject({
+    concurrency: { "cancel-in-progress": false },
+    "runs-on": { size: "16x64" },
+  });
+  const steps = caller.jobs.preview.steps;
+  const run = steps.findIndex((step: any) => step.name === "Preview / deploy + e2e");
+  const erase = steps.findIndex((step: any) => step.name === "Preview / erase slot data after e2e");
+  expect(run).toBeGreaterThan(-1);
+  expect(erase).toBeGreaterThan(run);
+  expect(steps[run].run).toContain("pnpm preview run");
+  expect(steps[erase]).toMatchObject({ if: "always()" });
+});
+
+test("the retained sharded experiment waits for every shard before cleanup", () => {
+  const root = resolve(import.meta.dirname, "../..");
   const workflow = parse(
     readFileSync(resolve(root, ".depot/workflows/cloudflare-preview-sharded.yml"), "utf8"),
   );
-  expect(caller.jobs.preview).toMatchObject({
-    uses: "./.depot/workflows/cloudflare-preview-sharded.yml",
-    concurrency: { "cancel-in-progress": false },
-  });
   expect(workflow.jobs.playwright).toMatchObject({
     needs: "prepare",
     strategy: { "fail-fast": false, matrix: { shard: previewPlaywrightShards } },

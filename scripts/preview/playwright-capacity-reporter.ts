@@ -5,7 +5,7 @@ import type { FullConfig, Reporter, Suite } from "@playwright/test/reporter";
 // Fixed capacity, deliberately not an adaptive scheduler. Keep the workflow
 // matrix and this policy together when the catalogue grows beyond 96 tests.
 export const previewPlaywrightShards = [1, 2, 3, 4, 5, 6];
-export const previewPlaywrightWorkers = 16;
+export const previewPlaywrightWorkers = 32;
 
 export function assertPlaywrightCapacity(input: {
   tests: number;
