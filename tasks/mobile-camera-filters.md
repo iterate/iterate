@@ -13,14 +13,11 @@ Picking a filter swaps the plain `expo-camera` preview for a live filtered
 pipeline. Photos and clips captured while a filter is active come back as
 normal composer attachments, filter baked in.
 
-High-level status: seven filters and project-authored filters are implemented;
-main is merged. The September 14 review fixes preserve project-filter state,
-validate settings, stop stale camera acquisitions, preserve photo-only
-permission mode, and make capture saving/cancellation safe. Regression tests
-pass locally. Filter data is now hosted on mobile.iterate.com with lazy loading
-and retry; the DOM bundle is ~849 KB (down from 20.7 MB). Native video controls
-are restored with Save/Close above the player. Current-build iPhone capture,
-playback, and camera-roll save verification remains.
+High-level status: the reviewed filters, remote assets, and native playback
+controls are implemented. The next pass replaces iPhone WebView capture with
+native capture and recording, per the September 15 request. The new native
+build is authorized; implementation, native media proof, and build delivery
+are in progress. The user will verify the resulting build on an iPhone.
 
 ## Why this shape (assumptions made while AFK)
 
@@ -446,3 +443,26 @@ this follow-up; those behaviors remain unchanged.
 - Asset names now start with short descriptive slugs (for example,
   `animal-cat-<sha256>.png`). Generators preserve these names, hash validation
   still checks the bytes, and previously published hash-only URLs stay valid.
+
+## September 15: native recording migration
+
+The user wants normal native recording, accepts a new native build, and will
+try the build when ready. Keep the seven filters, project-authored filters,
+settings/gestures, photos, audio, and hosted art. Do not trade a bounded
+recorder for whole-video strings or another WebView recording workaround.
+
+Implementation direction: an iOS Expo module uses AVFoundation for camera,
+microphone, and incremental MP4 writing. Filter logic stays JavaScript; a
+native drawing interface renders the same effects into the frames used by
+both preview and recording. Evaluate Apple's on-device face landmarks to
+avoid adding another tracking SDK. Keep browser rendering for web tests.
+No native renderer is claimed ready until a recorded file contains its
+rendered effect and audio and can be decoded through native media APIs.
+
+- [ ] Prove native rendering and incremental video/audio writing with a synthetic input. _Exercise the same renderer/writer used by the camera; verify decoded frames, audio, cancellation, and bounded buffer ownership._
+- [ ] Integrate the native camera view, photos, permissions, lifecycle, and settings. _iPhone implementation; web keeps its browser path._
+- [ ] Port the seven filters and preserve the project-filter contract where supported. _Document any deliberate API changes rather than silently ignoring commands._
+- [ ] Keep lazy asset loading and the ordinary shutter's readiness behavior. _Include camera warmup, addressing the new Bugbot race report._
+- [ ] Address AI review comments against the resulting implementation. _Removed WebView-only findings become obsolete; generator/shared-media issues still apply._
+- [ ] Publish a new native preview build and verify its install link. _Use the existing runtime-fingerprint/build workflow; the user will do final iPhone testing._
+- [ ] Refresh PR description and the cost review for the native implementation. _Keep limits and unverified device behavior explicit._
