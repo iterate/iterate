@@ -5,7 +5,7 @@ size: large
 
 # Main preview runs and a current flake dashboard
 
-Status: ordinary-slot allocation and the dashboard changes are implemented. All preview commands now share a target for PRs and workflow commits; local verification of this latest refactor passes; deployed verification is next. PR #2658 stays closed. Full e2e still needs published packages for the branch commit.
+Status: ordinary-slot allocation and the dashboard changes are implemented. All preview commands now share a target for PRs and workflow commits; local checks pass and the shared deploy/erase commands have run on preview-8. PR #2658 stays closed. Full e2e still needs published packages for the branch commit.
 
 ## Current scope
 
@@ -20,7 +20,7 @@ Status: ordinary-slot allocation and the dashboard changes are implemented. All 
 - [x] Put collapsible Sentinels last. Render unknown test names as plain text with safe Markdown escaping. *Renderer orders Sentinels last and escapes plain unknown names.*
 - [x] Test shared lease renewal, pinned commit validation, complete-zero-flake replacement, partial-run handling, and the rendered issue through real public boundaries/harnesses. *156 focused CI/runner tests and 31 dashboard harness tests pass.*
 - [ ] Validate the shared path against a preview and inspect its results/artifacts. Check the new main workflow using supported Depot execution before merge; do not claim automatic main triggers are live before merge.
-- [ ] Complete checks and commit/push the common-target refactor for compare-link review. Keep PR #2658 closed; do not open another PR.
+- [x] Complete checks and commit/push the common-target refactor for compare-link review. Keep PR #2658 closed; do not open another PR. *Implementation pushed as `170a85b7c`; local checks and partial deployed validation are recorded below. PR remains closed.*
 
 ## Decisions and limits
 
@@ -58,3 +58,6 @@ Codex session: `01a0a1e6-0135-7902-91aa-b4bb07026de2`.
 - 2026-09-15 common target: all deployment/test/assignment/cleanup commands now resolve a `PreviewTarget`. Removed the separate main execution path and PR deploy wrapper. Main uses the same `run` plus `erase` commands as PR CI; its report can reload across commands within one job attempt, while a new job or retry starts fresh. Atomic file writes prevent interrupted publication from leaving truncated state. Kept main workflow serialization, ordinary leases, PR supersession protection and PR review links. Cleanup does not demand a clean tree, so build-generated changes cannot prevent stopping costs. Compared with main throughout; no new command framework or arbitrary-target configuration format.
 
 - Local common-target checks: 334 scripts tests, scripts typecheck, full lint and formatting pass. `target.ts` holds the common contract and main report storage; commands stay in `preview.ts`. Final comparison against main removes the obsolete main execution path and single-caller erase wrapper rather than retaining adapter layers.
+
+- Live common-target validation of `170a85b7c`: [Depot run rrdz3ztnrs](https://depot.dev/orgs/0p91s0lz49/workflows/bwqgghb1fc?job=7stw41kpjz&attempt=x017hpw4tb) renewed ordinary preview-8 for `main-preview`, erased before deployment, and deployed five supporting apps. OS failed only on missing exact-commit `iterate` and `@iterate-com/docs` pkg.pr.new packages (HTTP 404 after the existing bounded 120s preflight). No e2e ran. The separate shared `preview erase --commit` step succeeded after the failure, erased the slot in 103.5s and retained the lease until `2026-09-15T21:52:27.039Z`.
+- Downloaded reports confirm all six app outcomes carry the exact head, the file-backed report carries the job URL/attempt, and both suite summaries are `incomplete` with zero tests and branch `ci/main-preview-dashboard`. The failed branch dispatch cannot replace main's current unknown-flake snapshot. Evidence: `/tmp/preview-common-target-ci.log`, `/tmp/preview-common-target-artifacts.zip`. A successful full e2e deployment remains outstanding; do not describe this check as green.
