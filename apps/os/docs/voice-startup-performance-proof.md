@@ -31,6 +31,13 @@ removed after it showed no startup benefit.
 
 ## Measurements
 
+**Audio-input correction:** the earlier direct Node controls sent an initial
+100 ms PCM frame; the stream benchmark sent 20 ms. Readiness measurements
+precede input and remain comparable, but those earlier first-PCM comparisons
+were not input-matched. The corrected control below uses 20 ms initially and
+the same wall-clock silence coverage/debt algorithm. Raw earlier results are
+retained rather than replaced.
+
 Use precise milestones, rather than calling every phase “setup complete”:
 
 - **Setup returned:** Agent provisioning/configuration and voice fold-through
@@ -1947,3 +1954,83 @@ The original immutable source was restored at root offset 2660 with a matching
 
 Native restoration `857dbf87-cb43-4614-9212-7366cc3b5994` passed all deployment
 smokes. No additional voice calls were made to replace the failed sample.
+
+### Matching the direct input and tracing microphone delivery
+
+The temporary, proof-path-only microphone counters on native deployment
+`adfe9a53-bf84-425a-b7c2-95f4a04c02b2`, source
+`100d209556d1feab6cc2d04ebb604f792ffab135`, recorded one admitted 640-byte
+microphone frame in each of five calls. Every call sent session.start and
+commentary, received provider audio, and had no parse/dispatch/send exception.
+All five produced subscriber PCM and ended with the matching activation, no
+pending delegation, zero lag, and no last error. Retirement logs can precede
+outstanding speaker-append settlement; they do not prove all appends settled.
+Later runtime reads returned no retained counter record after reactivation.
+This negative reproduction does not explain the earlier silent calls.
+
+A subsequent five-call control corrected direct input to 20 ms of PCM16/16k,
+followed by 100 ms silence frames based on actual wall-clock coverage debt.
+Both paths used the same in-memory credential (secret offset 755), 2,096-byte
+prompt, model, voice, and commentary. The preview deployment and mounted source
+were unchanged. The five fresh paths were minted during their call timers on
+one already-authenticated project WebSocket. No health call or future stream
+or provider precreation was added.
+
+| Milliseconds                | Direct Node                   | Preview stream                        |
+| --------------------------- | ----------------------------- | ------------------------------------- |
+| Ready, all five             | 1,576 / 986 / 838 / 827 / 809 | 2,828 / 1,230 / 1,303 / 1,182 / 1,344 |
+| Median ready                | 838 (`session.started`)       | 1,303 (client acceptance)             |
+| Median first non-silent PCM | 1,860                         | 2,555                                 |
+
+All ten calls produced PCM. Preview terminal audits were clean for all five.
+The preview window was `2026-09-15T03:09:28.466Z–03:09:45.617Z`.
+These are separate five-call controls, not a transport-only causal comparison:
+provider variability and the different hosted/direct network paths remain.
+The first preview call still spent 1,694 ms before call-started observation;
+later calls spent 384–527 ms. Neither the cold cost nor earlier silent failures
+is resolved by this successful run.
+
+Artifacts: `/tmp/voice-startup-pr/direct-same-key-20ms-mic-delivery/`,
+`mic-delivery-20ms-control-result.json`,
+`mic-delivery-20ms-control-terminal-audit.json`, and the original
+`mic-delivery-{result,terminal-audit,events-audit}.json`.
+
+### Buffered-event catch-up regression
+
+A separate deterministic reproduction found that explicit processor catch-up
+read only durable events, then advanced its processing cursor through the raw
+head, which includes buffered ephemeral offsets. Later hosted delivery deduped
+the skipped buffered event. The fix opts live self-catch-up into buffered reads;
+reduction rebuilding stays durable-only and each processor's declared event
+contract still controls which ephemeral events it consumes. Agent LLM/harness
+business logic is unchanged.
+
+Byte-capped reads now bound the merged durable/buffered prefix. They retain the
+existing cutoff before an omitted durable event, so a later buffered row cannot
+advance the cursor past it. An oversized first event still permits progress.
+A hosted-only control and catch-up-before-hosted regression respectively passes/fails on the old runner and both pass on the
+fixed runner; direct StreamDO paging tests cover the omitted
+oversized durable row followed by a buffered tail. Root validation passed 70
+focused/generated-contract tests, OS typecheck, lint, and generated API refresh.
+
+This is a real delivery defect, but it is not established as the cause of the
+measured silent call: that benchmark did not request a voice snapshot during
+input, and the delayed-backend fold barrier had already completed before input.
+
+Preview deployment `eacf61d4-7aec-4b99-9951-143d6e3c3b06` includes the fix in
+the native inline runner; its mounted guest source remains `100d2095…` and the
+published guest SDK pin remains unchanged. Deployment smokes passed. Five fresh
+calls at `2026-09-15T03:12:12.962Z–03:12:31.601Z` all returned PCM: readiness
+5,303 / 1,573 / 1,432 / 1,591 / 1,380 ms; PCM
+6,437 / 2,647 / 2,500 / 2,668 / 2,601 ms. The slow first call remains a failure
+of the latency objective, even though it produced audio before the deadline.
+All five settled terminal states had matching activations/version, no pending
+delegation, zero lag, and no last error. The initial non-atomic audit observed
+lag 69 on the fifth subscription while its snapshot already showed ended; a
+separate retained audit confirmed settlement. Five microphone records and twenty
+upgrade lifecycle records matched the exact deployment and were untruncated.
+Relay retries and host-parent error queries returned zero rows. This validates
+the native inline composition; it does not yet validate deployment of the new
+runner through the published userspace SDK. Artifacts use
+`mic-delivery-catchup-fix-*` and `clean-cold-workers-catchup-fix-*` under the same
+temporary proof directory.

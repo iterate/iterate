@@ -2898,10 +2898,11 @@ export class StreamDurableObject extends StreamDurableObjectBase {
     });
     if (!args.includeEphemeral) return durableEvents;
 
-    // A byte-capped durable prefix may stop before a later durable body. Do
-    // not merge a farther ephemeral row into that prefix: callers advance a
-    // single shared offset cursor, so doing so would silently skip the omitted
-    // durable event. The next read starts after this retained durable prefix.
+    // A byte-capped durable prefix may stop before a later durable row. Do not
+    // merge a farther buffered event into that prefix: callers advance one
+    // shared offset cursor, so doing so would skip the omitted durable row.
+    // Within the retained durable prefix, merge both offset spaces before
+    // applying the shared count/byte prefix.
     const ephemeralEvents = this.#ephemeralEvents.getRangeSized({
       afterOffset: args.afterOffset,
       beforeOffset:
@@ -2911,9 +2912,20 @@ export class StreamDurableObject extends StreamDurableObjectBase {
       eventTypes: args.eventTypes,
       limit: args.limit,
     });
-    return [...durableEvents, ...ephemeralEvents]
-      .sort((left, right) => left.event.offset - right.event.offset)
-      .slice(0, args.limit);
+    const merged = [...durableEvents, ...ephemeralEvents].sort(
+      (left, right) => left.event.offset - right.event.offset,
+    );
+    if (args.byteLimit === undefined) return merged.slice(0, args.limit);
+
+    const prefix: SizedStreamEvent[] = [];
+    let bytes = 0;
+    for (const entry of merged) {
+      if (prefix.length === args.limit) break;
+      if (prefix.length > 0 && bytes + entry.byteLength > args.byteLimit) break;
+      prefix.push(entry);
+      bytes += entry.byteLength;
+    }
+    return prefix;
   }
 
   /**
@@ -2944,9 +2956,6 @@ export class StreamDurableObject extends StreamDurableObjectBase {
     }
     if (byteLimit !== undefined && byteLimit > MAX_STREAM_EVENT_READ_BYTE_LIMIT) {
       throw new Error(`getEvents byteLimit must be at most ${MAX_STREAM_EVENT_READ_BYTE_LIMIT}.`);
-    }
-    if (byteLimit !== undefined && args.includeEphemeral === true) {
-      throw new Error("getEvents byteLimit cannot include ephemeral events.");
     }
     return this.#readEventsSized({
       afterOffset: args.afterOffset ?? 0,
