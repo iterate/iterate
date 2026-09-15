@@ -172,6 +172,20 @@ What we do NOT want:
 - Unit tests for arg parsing of internal scripts, trivial glue, or anything
   a covering e2e already proves by existing.
 
+## Shared preview setup
+
+OS preview CI waits for the deployment-age clock and agent smoke before
+starting either Playwright or Vitest. This shared readiness time belongs to
+CI setup, not individual test durations. Both suites run concurrently once
+ready; browser installation overlaps the wait.
+
+Root Playwright's `globalSetup` loads and validates auth configuration once,
+using the supplied environment or the existing apps/os Doppler configuration.
+The prepared values are inherited by workers, including when running
+`pnpm spec` locally. Fixtures read those settings synchronously and mint their
+own sessions. An auth configuration error fails Playwright setup before tests
+start. A rollout/smoke failure prevents both preview suites from starting.
+
 ## Test dimensions (DRAFT — under discussion)
 
 Every test sits somewhere on five axes, and the rule mirrors the env-var

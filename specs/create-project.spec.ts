@@ -19,19 +19,18 @@ const userMessage = '[data-testid="agent-feed-message"][data-kind="user"]';
 test("the config template opens a proactive onboarding conversation for a new project", async ({
   baseURL,
   page,
-}, testInfo) => {
+}) => {
   // Two LLM turns plus two project-creation sagas and their UI transitions.
   test.setTimeout(240_000);
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
   test.skip(
-    !(await startEmailOtpSignIn(page, testInfo)),
+    !(await startEmailOtpSignIn(page)),
     "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
   );
   const firstSlug = uniqueFixtureSlug("first-project");
   await signUpWithEmailOtp(page, {
     email: uniqueSignupEmail("create-project"),
     projectSlug: firstSlug,
-    testInfo,
   });
 
   // The config worker receives project/created, creates the onboarding agent,
