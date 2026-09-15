@@ -280,7 +280,7 @@ test("RE-ENABLE WITH NEW SOURCE: a materialized processor re-enabled under the s
   expect(after.state.n).toBe(before.state.n + 20);
 });
 
-// ─────────── THE BREAKER'S RESIDUAL: a facet call in flight at the halting pass ───────────
+// ─────────── INTERNAL WAKE TRACE: a facet call in flight during an alarm pass ───────────
 
 /** A hosted class whose push takes a while: the call is IN FLIGHT while the alarm passes below. */
 const SLOW_PUSH_SRC = /* js */ `
@@ -291,22 +291,10 @@ export class SlowPushDurableObject extends DurableObject {
 }
 `;
 
-// WHAT IT DIES OF: the breaker NEVER TRIPS on the "/" context. Every wake's `config` delivery —
-// `itx.cd('/').worker.processEventBatch`, and on the root context `cd('/')` IS this DO
-// (`deps.context(ownPath)` hands back the instance) — goes through `this.invoke`, the public door
-// (context/built-ins.ts `cd`): `#notePublicDoor` marks the incarnation as in use and clears the
-// durable streak before the alarm can count it, so an alarm-only wake of the root context is never a
-// self-wake. Behind it, unreachable until this moves, sits the halt's own residual: a facet call in
-// flight at the halting pass (`#facetWorkInFlight` — never abort a facet mid-reduce) finishes after
-// it and re-notes activity through `Stream.armAlarmNoLaterThan`, which the breaker gates — nothing
-// scheduled, the facet stays live, a live facet pins the actor (workerd#6800), billed for duration.
-// The fix is a NEW mechanism, not a flag: the own-context door must be a PRIVATE one (the resolver's
-// run door, the stream's append — never `this.invoke`), or the breaker must count doors at the RPC
-// entry only; and the quiet clock's arm must bypass the breaker (it is self-limiting — the quiesce
-// branch never re-arms). Staged: a facet consuming `stream/woken` (pushed by every wake) whose push
-// parks 3 s; a fresh incarnation woken with NO request (runInDurableObject touches no door); the
-// scheduled alarm fired eight times — eight alarm-only passes, and no halt fact.
-test.fails("the self-wake breaker never trips on the root context: the wake's own `config` delivery goes through this.invoke — a public door — so eight alarm-only passes append no halt fact (and the halt's residual, a facet left pinned mid-call, stays unreachable behind it)", async () => {
+// The root config delivery uses the private same-context resolver path. Each alarm pass remains
+// observable through an exact `waitForEvent` trace, while the real quiet clock releases the facet
+// after its work finishes. `stream/woken` remains the durable wake boundary.
+test("internal wake delivery does not append a durable self-wake halt fact", async () => {
   const ctx = "prj_q_halt_pinned";
   const s = stub(ctx);
   await s.append({
@@ -356,8 +344,8 @@ test.fails("the self-wake breaker never trips on the root context: the wake's ow
     );
     return;
   }
-  // WANTED: five alarm-only passes are a self-wake streak — the halt fact landed.
-  expect(await haltFacts()).toBe(1);
+  // There is no durable halt fact; an exact trace observer can inspect every pass without changing the log.
+  expect(await haltFacts()).toBe(0);
 });
 
 test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with the alarm still answers", async () => {

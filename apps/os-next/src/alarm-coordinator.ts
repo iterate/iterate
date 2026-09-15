@@ -1,14 +1,16 @@
 type AlarmCoordinatorDeps = {
   setAlarm: (at: number) => Promise<void>;
+  deleteAlarm?: () => Promise<void>;
   scheduledAt: () => number | null;
-  recoveryHalted: () => boolean;
 };
+export type AlarmOwner = string;
 
 /** One physical alarm for a context. Durable scheduling state is queried on every reconciliation;
  *  delivery watchdogs and idle cleanup contribute deadlines for the current incarnation. */
 export class AlarmCoordinator {
   #armedAt: number | null = null;
-  #requested = new Map<"delivery" | "idle", number>();
+  #inheritedAlarm = false;
+  #requested = new Map<AlarmOwner, number>();
   #deferred = 0;
 
   readonly #deps: AlarmCoordinatorDeps;
@@ -21,17 +23,48 @@ export class AlarmCoordinator {
    *  incarnation; replacing it with a later watchdog would cancel it before the handler runs. */
   restore(at: number | null): void {
     this.#armedAt = at;
+    this.#inheritedAlarm = at !== null;
   }
 
-  request(owner: "delivery" | "idle", at: number): void {
-    if (this.#deps.recoveryHalted()) return;
+  request(owner: AlarmOwner, at: number): void {
     this.#requested.set(owner, Math.min(this.#requested.get(owner) ?? at, at));
     this.reconcile();
   }
 
-  fired(): void {
+  /** Replace one owner's current deadline. `null` withdraws it after the corresponding durable or
+   * in-memory obligation has settled. */
+  replace(owner: AlarmOwner, at: number | null): void {
+    if (at === null) {
+      this.#requested.delete(owner);
+      this.reconcile();
+      return;
+    }
+    const previous = this.#requested.get(owner);
+    this.#requested.set(owner, at);
+    // If this owner held the current non-inherited minimum and its work moved later, replace the
+    // physical alarm too. An obsolete early fire is safe, but retaining it obscures the current
+    // deadline and creates avoidable wake evidence.
+    if (
+      previous !== undefined &&
+      this.#armedAt === previous &&
+      !this.#inheritedAlarm &&
+      at > previous
+    )
+      this.#armedAt = null;
+    this.reconcile();
+  }
+
+  clear(owner: AlarmOwner): void {
+    this.replace(owner, null);
+  }
+
+  fired(now = Date.now()): void {
     this.#armedAt = null;
-    this.#requested.clear();
+    this.#inheritedAlarm = false;
+    // The native wake consumed every owner deadline at or before its firing time. Handlers rebuild
+    // any still-outstanding obligation from durable state; retaining a past request would hot-loop
+    // a context when a handler exits before its normal clear/replace path.
+    for (const [owner, at] of this.#requested) if (at <= now) this.#requested.delete(owner);
   }
 
   /** Commit a synchronous batch of due work before selecting the next deadline. */
@@ -48,9 +81,17 @@ export class AlarmCoordinator {
   reconcile(): void {
     if (this.#deferred) return;
     const scheduledAt = this.#deps.scheduledAt();
-    const deadlines = this.#deps.recoveryHalted() ? [] : [...this.#requested.values()];
+    const deadlines = [...this.#requested.values()];
     if (scheduledAt !== null) deadlines.push(scheduledAt);
-    if (!deadlines.length) return;
+    if (!deadlines.length) {
+      // A native alarm read during construction is recovery insurance. Keep it until that alarm
+      // fires once; after that, an owner with no deadline really has no work and can withdraw it.
+      if (this.#armedAt !== null && !this.#inheritedAlarm) {
+        this.#armedAt = null;
+        void this.#deps.deleteAlarm?.();
+      }
+      return;
+    }
     const at = Math.max(Date.now(), Math.min(...deadlines));
     if (this.#armedAt !== null && this.#armedAt <= at) return;
     this.#armedAt = at;

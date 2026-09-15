@@ -4,14 +4,14 @@
 // workerd): waitForEvent's wait/settle/timeout mechanics, what construction writes, the wake record
 // (`appendCreatedAndWokenEvents()` — an explicit call here; in production the DO constructor's
 // first act), the pause check and the reserved `core` at the append door, the zero-write ephemeral
-// contract, the step-1 refusals, and the self-wake billing circuit-breaker. Every test constructs a
+// contract and the step-1 refusals. Every test constructs a
 // BARE Stream with no-op host deps — no wake record unless the test appends one.
 
 import { expect, test } from "vitest";
 import { errorCode } from "../lib.ts";
 import type { StreamEvent, SqlStorageHandle } from "./processor.ts";
 import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
-import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
+import { STREAM_ALARM_TRACE_EVENT, Stream, type DurableObjectStorageSlice } from "./stream.ts";
 
 /** THE ONE way a test constructs a Stream: over a fresh node:sqlite store unless given one (a
  *  second incarnation reuses the first's). `batches` records each `fresh` batch the fan-out was fed
@@ -169,6 +169,48 @@ test("waitForEvent: an EPHEMERAL event resolves a waiting caller (and never hits
   expect(got.ephemeral).toBe(true);
   // catchable only while waiting: the body never reached a row
   expect(stream.read(0).events.some((e) => e.type === "blip")).toBe(false);
+});
+
+test("alarm traces are bounded ephemeral events and leave the durable stream untouched", async () => {
+  const storage = nodeSqliteDurableObjectStorage();
+  const batches: StreamEvent[][] = [];
+  const stream = bareStream({ storage, batches });
+  stream.append({ type: "seed" });
+  const rowsBefore = persistedEventRows(storage);
+  const markBefore = persistedDurableMark(storage);
+  const pending = stream.waitForEvent({ type: STREAM_ALARM_TRACE_EVENT, timeoutMs: 5_000 });
+  const trace = stream.emitAlarmTrace({
+    phase: "fire",
+    reason: "unit-test",
+    huge: "x".repeat(100_000),
+    nested: { values: Array.from({ length: 100 }, (_, i) => i) },
+  });
+  expect(trace?.type).toBe(STREAM_ALARM_TRACE_EVENT);
+  expect(trace?.ephemeral).toBe(true);
+  expect(JSON.stringify(trace?.payload).length).toBeLessThanOrEqual(64 * 1024);
+  expect(persistedEventRows(storage)).toBe(rowsBefore);
+  expect(persistedDurableMark(storage)).toBe(markBefore);
+  expect(batches.at(-1)?.[0]).toMatchObject({
+    type: STREAM_ALARM_TRACE_EVENT,
+    ephemeral: true,
+  });
+  const observed = await pending;
+  expect(observed.offset).toBe(trace!.offset);
+  // The trace is incarnation-local: it is not returned by the durable read after emission.
+  expect(stream.read(0).events.some((event) => event.type === STREAM_ALARM_TRACE_EVENT)).toBe(
+    false,
+  );
+});
+
+test("alarm trace events cannot be smuggled through the ordinary append door", () => {
+  const stream = bareStream();
+  stream.append({ type: "seed" });
+  expect(stream.emitAlarmTrace({ phase: "fire", reason: "unobserved" })).toBeUndefined();
+  expect(stream.append({ type: "next" })[0].offset).toBe(2);
+  expect(() => stream.append({ type: STREAM_ALARM_TRACE_EVENT, ephemeral: true })).toThrow(
+    "kernel-owned",
+  );
+  expect(() => stream.append({ type: STREAM_ALARM_TRACE_EVENT })).toThrow("kernel-owned");
 });
 
 test("waitForEvent: one event resolves MULTIPLE waiters, in registration order", async () => {
@@ -540,82 +582,6 @@ test("expected offset: an input carrying `offset` lands exactly there or the who
   expect(
     stream.append({ type: "keyed", idempotencyKey: "k", payload: {}, offset: 6 })[0].offset,
   ).toBe(5);
-});
-
-// ── THE BILLING CIRCUIT-BREAKER (wave-0 3b, Jonas: "we need runaway billing controls"): a durable
-// self-wake streak gates the single alarm-arm chokepoint (Stream.armAlarmNoLaterThan) — past the
-// ceiling, arming is a no-op until a public door clears the streak. Observed on setAlarm. ──
-
-/** A storage slice over node:sqlite that RECORDS every setAlarm — the arming the breaker gates. */
-function recordingStorage(base = nodeSqliteDurableObjectStorage()) {
-  const setAlarmAtMs: number[] = [];
-  const slice: DurableObjectStorageSlice = {
-    sql: base.sql,
-    transactionSync: base.transactionSync,
-    setAlarm: async (at) => {
-      setAlarmAtMs.push(typeof at === "number" ? at : at.getTime());
-    },
-  };
-  return { base, slice, setAlarmAtMs };
-}
-
-test("N alarm-only self-wakes stop alarm arming; a public door resumes it", () => {
-  const { slice, setAlarmAtMs } = recordingStorage();
-  const stream = bareStream({ storage: slice });
-
-  // Arming works normally.
-  stream.alarms.request("delivery", Date.now() + 60_000);
-  expect(setAlarmAtMs.length).toBe(1);
-  expect(stream.selfWakeHalted()).toBe(false);
-
-  // Self-wake until halted — a SMALL, billing-safe ceiling (robust to the exact constant).
-  let selfWakes = 0;
-  while (!stream.selfWakeHalted() && selfWakes < 100) {
-    stream.alarms.fired(); // each alarm pass clears the arm memo, as the real one does
-    stream.noteSelfWake();
-    selfWakes++;
-  }
-  expect(stream.selfWakeHalted()).toBe(true);
-  expect(selfWakes).toBeLessThanOrEqual(10); // a few minutes of a loop, not hours
-
-  // Arming is now a no-op — the loop cannot re-arm from anywhere.
-  const armsBefore = setAlarmAtMs.length;
-  stream.alarms.fired();
-  stream.alarms.request("delivery", Date.now() + 60_000);
-  expect(setAlarmAtMs.length).toBe(armsBefore);
-
-  // A real public door clears the streak and arming resumes.
-  stream.notePublicDoor();
-  expect(stream.selfWakeHalted()).toBe(false);
-  stream.alarms.request("delivery", Date.now() + 60_000);
-  expect(setAlarmAtMs.length).toBe(armsBefore + 1);
-});
-
-test("the streak is DURABLE across incarnations — a reborn Stream over the same store stays halted", () => {
-  const { base, slice } = recordingStorage();
-  let stream = bareStream({ storage: slice });
-  while (!stream.selfWakeHalted()) stream.noteSelfWake();
-  expect(stream.selfWakeHalted()).toBe(true);
-
-  // A NEW incarnation over the SAME storage (the loop evicts between wakes — the streak must survive).
-  stream = bareStream({ storage: base });
-  expect(stream.selfWakeHalted()).toBe(true); // it persisted
-
-  // And a public door clears it durably: a third incarnation sees zero.
-  stream.notePublicDoor();
-  stream = bareStream({ storage: base });
-  expect(stream.selfWakeHalted()).toBe(false);
-});
-
-test("a public door is a NO-OP write when the streak is already zero (the common request path pays nothing)", () => {
-  const { slice } = recordingStorage();
-  const stream = bareStream({ storage: slice });
-  // Nothing to reset: notePublicDoor must not touch storage. (Observed by staying un-halted and by
-  // not throwing — the write path is only taken when the streak moves off zero.)
-  expect(stream.selfWakeHalted()).toBe(false);
-  stream.notePublicDoor();
-  stream.notePublicDoor();
-  expect(stream.selfWakeHalted()).toBe(false);
 });
 
 test("a paused stream ADMITS the replay of an event already in the log (the DO constructor's birth `config` row rides an idempotency key on every incarnation) — checked before the dedupe, a paused context could never be rebuilt after an eviction, so never resumed", () => {

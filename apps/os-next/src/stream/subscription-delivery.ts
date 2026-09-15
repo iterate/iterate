@@ -39,6 +39,9 @@ import type { Stream, SubscriptionCursor } from "./stream.ts";
  *  failed (the ladder armed), and an eviction in between leaves the alarm behind to re-derive. */
 const CURSOR_DELIVERY_CALL_WATCHDOG_MS = 20_000;
 
+const deliveryAlarmOwner = (name: string): string => `delivery:${name}`;
+const deliveryWatchdogAlarmOwner = (name: string): string => `delivery-watchdog:${name}`;
+
 /** THE IN-FLIGHT BUDGET, per context: the most serialized event chars ALL rows together may have
  *  handed to calls that have not settled — a push's arguments live in this isolate until the RPC
  *  returns, and per-row bounds would multiply by rows (20 stuck rows × 8 MiB is an isolate). A facet
@@ -220,6 +223,10 @@ export class SubscriptionDelivery {
     return record;
   }
 
+  #traceDelivery(name: string, reason: string, details: Record<string, unknown> = {}): void {
+    this.#stream.emitAlarmTrace({ phase: "delivery", reason, subscription: name, ...details });
+  }
+
   /** The post-commit hook: one pass over the rows. Fire-and-forget from append's view. */
   onCommit(freshEvents: StreamEvent[], afterOffset: number, throughOffset: number): void {
     const rows = this.#stream.coreReducedState.subscriptions;
@@ -282,7 +289,12 @@ export class SubscriptionDelivery {
         record.pushedEventBatch = { events, after, through: throughOffset };
         // A delivery is owed from here: an eviction before the cursor lane even evaluates the
         // target must leave an alarm behind to come back.
-        this.#stream.alarms.request("delivery", Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
+        const deadline = Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS;
+        this.#stream.alarms.request(deliveryAlarmOwner(name), deadline);
+        this.#traceDelivery(name, "frontier-queued", {
+          deadline,
+          through: throughOffset,
+        });
       }
       this.#queuePushBehindInFlightDelivery(name, events, { after, through: throughOffset });
     }
@@ -416,11 +428,15 @@ export class SubscriptionDelivery {
   /** Everything remembered about the row under `name` goes with it — the persisted cursor too. A
    *  closure still queued finds no pending push and exits; the cursor lane's lock stays (above). */
   #forgetSubscription(name: string): void {
+    this.#stream.alarms.clear(deliveryAlarmOwner(name));
+    this.#stream.alarms.clear(deliveryWatchdogAlarmOwner(name));
     this.#stream.storage.deleteSubscriptionCursor(name);
     this.#deliveryRecordByName.delete(name);
   }
 
   #dropCursor(name: string): void {
+    this.#stream.alarms.clear(deliveryAlarmOwner(name));
+    this.#stream.alarms.clear(deliveryWatchdogAlarmOwner(name));
     const record = this.#deliveryRecordByName.get(name);
     if (record) record.cursor = undefined;
     this.#stream.storage.deleteSubscriptionCursor(name);
@@ -431,6 +447,27 @@ export class SubscriptionDelivery {
   #adoptCursor(name: string, cursor: SubscriptionCursor, persist: boolean): void {
     this.#deliveryRecordFor(name).cursor = cursor;
     if (persist) this.#stream.storage.writeSubscriptionCursor(name, cursor);
+    this.#stream.alarms.clear(deliveryWatchdogAlarmOwner(name));
+    if (cursor.nextAttemptAtMs !== undefined) {
+      this.#stream.alarms.replace(deliveryAlarmOwner(name), cursor.nextAttemptAtMs);
+      this.#traceDelivery(name, "retry-deadline-replaced", {
+        deadline: cursor.nextAttemptAtMs,
+        attempt: cursor.attempt,
+        confirmedOffset: cursor.confirmedOffset,
+      });
+    }
+  }
+
+  #settleDeliveryAlarm(name: string): void {
+    const record = this.#deliveryRecordByName.get(name);
+    // A commit may have queued another batch while the awaited call was in flight. Keep the
+    // pending owner until that frontier is drained; clearing it here would lose the only wake for
+    // a self-appended event before the next external commit.
+    if (!record?.pendingPush && !record?.pushedEventBatch) {
+      this.#stream.alarms.clear(deliveryAlarmOwner(name));
+      this.#traceDelivery(name, "deadline-cleared");
+    } else this.#traceDelivery(name, "frontier-retained");
+    this.#stream.alarms.clear(deliveryWatchdogAlarmOwner(name));
   }
 
   // ── one batch, one subscription: evaluate, look at the value, push or cursor ──
@@ -568,6 +605,7 @@ export class SubscriptionDelivery {
   ): void {
     const current = this.#stream.coreReducedState.subscriptions[name];
     if (current?.configuredAtOffset !== configuredAtOffset || current.halted) return;
+    this.#settleDeliveryAlarm(name);
     this.#stream.append({
       type: "events.iterate.com/stream/subscription-delivery-halted",
       payload: {
@@ -669,7 +707,7 @@ export class SubscriptionDelivery {
         }
         if (row.halted) return;
         if (cursor.nextAttemptAtMs !== undefined && Date.now() < cursor.nextAttemptAtMs) {
-          this.#stream.alarms.request("delivery", cursor.nextAttemptAtMs);
+          this.#stream.alarms.replace(deliveryAlarmOwner(name), cursor.nextAttemptAtMs);
           return;
         }
         // The batch: the pushed one when contiguous (ephemerals ride it); else a page of the log, read
@@ -735,6 +773,7 @@ export class SubscriptionDelivery {
             continue;
           if (eventBatch.events.length === 0) {
             this.#adoptCursor(name, { ...cursor, confirmedOffset: range.through }, true); // a log page: durable ground
+            this.#settleDeliveryAlarm(name);
             continue;
           }
           try {
@@ -751,7 +790,9 @@ export class SubscriptionDelivery {
               if (!this.cursor(name)) continue; // replaced while the target was evaluated
             }
             // Die mid-call and the alarm survives to re-derive from the rows.
-            this.#stream.alarms.request("delivery", Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
+            const watchdogAt = Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS;
+            this.#stream.alarms.replace(deliveryWatchdogAlarmOwner(name), watchdogAt);
+            this.#traceDelivery(name, "watchdog-armed", { deadline: watchdogAt });
             const target = evaluatedTarget;
             await withTimeout(
               target.call([eventBatch.events, range]),
@@ -770,6 +811,7 @@ export class SubscriptionDelivery {
               },
               durable, // an ephemeral-only batch never touches storage
             );
+            this.#settleDeliveryAlarm(name);
             this.#recordActivityForQuietClock();
           } catch (error) {
             if (!this.cursor(name)) continue; // replaced mid-flight: re-evaluated for the new row
@@ -789,7 +831,7 @@ export class SubscriptionDelivery {
               Math.min(1000 * 2 ** (attempt - 1), 1_800_000) * (0.8 + Math.random() * 0.4);
             const nextAttemptAtMs = Date.now() + Math.round(backoff);
             this.#adoptCursor(name, { ...cursor, attempt, nextAttemptAtMs }, true);
-            this.#stream.alarms.request("delivery", nextAttemptAtMs);
+            this.#stream.alarms.replace(deliveryAlarmOwner(name), nextAttemptAtMs);
             return;
           }
         } finally {

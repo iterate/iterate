@@ -37,6 +37,8 @@ const runtimeEvents = new Set([
   "events.iterate.com/stream/self-wake-halted",
   "events.iterate.com/stream/subscription-delivery-halted",
   "events.iterate.com/stream/subscription-delivery-resumed",
+  // Kernel diagnostics are ephemeral and are never a durable schedule payload.
+  "events.iterate.com/stream/trace/alarm",
 ]);
 const EventBody = z.strictObject({
   type: z

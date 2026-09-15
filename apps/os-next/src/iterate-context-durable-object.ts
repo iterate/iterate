@@ -11,8 +11,8 @@
 // `provide`/`subscribe` and the `processors` root build one and call `append`; a lent stub's rule or
 // row rides its pager upgrade and is appended as the pager is accepted) — there are no
 // configuration verbs here. The events this class appends on its own initiative: the birth `config`
-// subscription (the constructor), the un-set of whatever named an rpc stub whose last pager closed
-// (onPresence), and the self-wake-halted fact (alarm); the two effects it runs off a committed
+// subscription (the constructor) and the un-set of whatever named an rpc stub whose last pager closed
+// (onPresence); alarm diagnostics are ephemeral traces. The two effects it runs off a committed
 // event: deleting the facet a removed subscription hosted, and refreshing the startup memo of the
 // facet a hosting subscription configures.
 
@@ -56,7 +56,7 @@ import {
   type BorrowedRpcStub,
 } from "./context/rpc-stubs.ts";
 import { buildLibrary, type LibraryItx } from "./library.ts";
-import { Stream, type StreamPage } from "./stream/stream.ts";
+import { Stream, type ReachableContext, type StreamPage } from "./stream/stream.ts";
 import { DurableObjectNameCodec, itxEntrypointFor } from "./iterate-context.ts";
 import { secretNamesReferenced } from "./secrets.ts";
 import type { SecretDurableObject } from "./secret-durable-object.ts";
@@ -370,6 +370,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     new InvokeHandle((steps) => this.invoke(["itx", ...steps])) as unknown as LibraryItx,
   );
 
+  /** The own-context adapter used by built-ins. Internal loopback calls keep caller attribution and
+   * committed effects, but do not pass through the public-door activity/self-wake bookkeeping. */
+  readonly #localContext: ReachableContext = {
+    append: async (...events) => this.#appendAndRunCommittedEffects(events),
+    read: async (afterOffset, limit) => this.#stream.read(afterOffset, limit),
+    invoke: (call, args, caller) => this.#invokeLocal(call, args, caller),
+  };
+
   /** `itx.builtins` — the physical scope this context resolves against (context/built-ins.ts). */
   readonly #builtIns: Record<string, unknown> = buildBuiltIns({
     projectId: this.#durableObjectAddress.projectId,
@@ -388,7 +396,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // a sibling context by path; the own path is this DO itself — a ReachableContext structurally (stream.ts)
     context: (p) =>
       p === this.#durableObjectAddress.path
-        ? this
+        ? this.#localContext
         : this.env.ITERATE_CONTEXT.getByName(
             DurableObjectNameCodec.stringify({
               projectId: this.#durableObjectAddress.projectId,
@@ -509,21 +517,18 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#liveFacetNames.size === 0 &&
       !this.#rpcStubs.hasBorrowedRpcStubs() &&
       !this.#library.hasOpenConnections()
-    )
+    ) {
+      this.#stream.alarms.clear("idle");
       return;
-    this.#stream.alarms.request("idle", this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS);
+    }
+    this.#stream.alarms.replace("idle", this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS);
   }
 
-  /** The self-wake breaker's other half (stream.ts SELF_WAKE_HALT_STREAK holds the durable streak):
-   *  set the moment any RPC into this DO is answered this incarnation, as opposed to an alarm-only
-   *  pass. "Any RPC" includes the wake's own facet loopbacks — a processor pushed by the
-   *  constructor's `woken` reads or appends through `itx.builtins` and lands here, so a context
-   *  hosting a `*`-consuming processor counts its wakes as doors (accepted: the loop that would
-   *  mask needs an eviction between alarms, which a live facet prevents). */
+  /** Whether an external door touched this incarnation, included in alarm traces for correlation.
+   * Same-context loopbacks intentionally do not set it. */
   #publicDoorTouched = false;
   #notePublicDoor(): void {
     this.#publicDoorTouched = true;
-    this.#stream.notePublicDoor();
   }
 
   /** EVERY facet materialized this incarnation — the set the quiesce alarm aborts so no LIVE facet
@@ -550,6 +555,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           Date.parse(a.nextAt) - Date.parse(b.nextAt) || a.scheduledAtOffset - b.scheduledAtOffset,
       )
       .slice(0, 32);
+    this.#stream.emitAlarmTrace({
+      phase: "fire",
+      reason: "native-alarm-fired",
+      now,
+      dueSchedules: due.length,
+      schedules: Object.keys(this.#stream.coreReducedState.schedules).length,
+      subscriptions: Object.keys(this.#stream.coreReducedState.subscriptions).length,
+      liveFacets: this.#liveFacetNames.size,
+      borrowedStubs: this.#rpcStubs.hasBorrowedRpcStubs(),
+      openLibraryConnections: this.#library.hasOpenConnections(),
+    });
     let scheduledProgress = false;
     this.#stream.alarms.batch(() => {
       for (const row of due) {
@@ -613,38 +629,34 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // count of its own. The cursor lane arms this alarm itself while a delivery is owed; the quiet
     // clock arms it for facets and borrowed stubs.
     await this.#subscriptionDelivery.deliverEveryCursorSubscription();
-    // The self-wake breaker (stream.ts SELF_WAKE_HALT_STREAK): an alarm pass with NO public door
-    // touched this incarnation is a self-wake. Recorded once, when the streak first crosses. A
-    // halted context FALLS THROUGH to the quiesce below: it will not wake itself again, so it must
-    // not stay pinned (billed for duration) by what this wake materialized.
-    // An obsolete early wake can count here; the breaker never suppresses durable schedules.
-    if (!this.#publicDoorTouched && !scheduledProgress) {
-      const { streak, justHalted } = this.#stream.noteSelfWake();
-      if (justHalted) {
-        console.warn({
-          event: "self-wake-halted",
-          namespace: "iterate-context",
-          message: `context self-woke ${streak} times with no public door — halting the alarm (runaway billing control) until a real request arrives`,
-          name: this.#durableObjectAddress.name,
-          streak,
-        });
-        try {
-          this.#stream.append({
-            type: "events.iterate.com/stream/self-wake-halted",
-            payload: { streak },
-          });
-        } catch (error) {
-          console.warn({
-            event: "self-wake-halted.fact-failed",
-            namespace: "iterate-context",
-            message: "could not append the self-wake-halted fact (the halt still holds)",
-            error: String(error),
-          });
-        }
-      }
-    }
+    this.#stream.emitAlarmTrace({
+      phase: "delivery",
+      reason: "cursor-pass-settled",
+      schedules: Object.keys(this.#stream.coreReducedState.schedules).length,
+      subscriptions: Object.keys(this.#stream.coreReducedState.subscriptions).length,
+      liveFacets: this.#liveFacetNames.size,
+      borrowedStubs: this.#rpcStubs.hasBorrowedRpcStubs(),
+      openLibraryConnections: this.#library.hasOpenConnections(),
+    });
+    this.#stream.emitAlarmTrace({
+      phase: "reconcile",
+      reason: "alarm-pass-complete",
+      publicDoorTouched: this.#publicDoorTouched,
+      scheduledProgress,
+      nextScheduledAppendAt: this.#stream.nextScheduledAppendAt(),
+    });
     const quiet = Date.now() - this.#lastActivityMs >= IDLE_QUIESCE_AFTER_MS;
-    if ((quiet || this.#stream.selfWakeHalted()) && this.#facetWorkInFlight === 0) {
+    if (quiet && this.#facetWorkInFlight === 0) {
+      this.#stream.alarms.clear("idle");
+      this.#stream.emitAlarmTrace({
+        phase: "quiesce",
+        reason: "quiet-resources-released",
+        quiet,
+        facetWorkInFlight: this.#facetWorkInFlight,
+        liveFacets: this.#liveFacetNames.size,
+        borrowedStubs: this.#rpcStubs.hasBorrowedRpcStubs(),
+        openLibraryConnections: this.#library.hasOpenConnections(),
+      });
       for (const facetName of this.#liveFacetNames)
         this.#abortFacetIfRunning(facetName, "idle quiesce");
       this.#liveFacetNames.clear(); // aborted facets re-materialize on their next call
@@ -652,6 +664,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // and released here, borrowed and reopened on use.
       this.#rpcStubs.returnBorrowedRpcStubs();
       this.#library.releaseConnections();
+      this.#stream.emitAlarmTrace({
+        phase: "quiesce",
+        reason: "resources-released",
+        liveFacets: this.#liveFacetNames.size,
+        borrowedStubs: this.#rpcStubs.hasBorrowedRpcStubs(),
+        openLibraryConnections: this.#library.hasOpenConnections(),
+      });
     } else if (
       this.#liveFacetNames.size > 0 ||
       this.#rpcStubs.hasBorrowedRpcStubs() ||
@@ -660,11 +679,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // Look again when the quiet period would end — never in the PAST (work in flight for over a
       // minute would otherwise re-fire this alarm in a tight, billed loop). With NOTHING to quiesce
       // there is no re-arm (the #recordActivityForQuietClock rule): re-arming regardless was the
-      // every-minute `woken` loop the breaker was measured on.
-      this.#stream.alarms.request(
-        "idle",
-        Math.max(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS, Date.now() + 10_000),
-      );
+      // every-minute `woken` loop that this deadline lifecycle is intended to make observable and
+      // finite.
+      const idleAt = Math.max(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS, Date.now() + 10_000);
+      this.#stream.alarms.replace("idle", idleAt);
+      this.#stream.emitAlarmTrace({
+        phase: "reconcile",
+        reason: "resources-still-live",
+        idleAt,
+        facetWorkInFlight: this.#facetWorkInFlight,
+        liveFacets: this.#liveFacetNames.size,
+        borrowedStubs: this.#rpcStubs.hasBorrowedRpcStubs(),
+        openLibraryConnections: this.#library.hasOpenConnections(),
+      });
     }
   }
 
@@ -938,6 +965,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // before it existed), and a connection is exactly what the quiet clock must arm for.
       this.#recordActivityForQuietClock();
     }
+  }
+
+  /** Same-context dispatch for kernel loopbacks (not an externally reachable door). It preserves the
+   * caller AsyncLocalStorage used to stamp appends, while leaving public activity and self-wake
+   * accounting to the actual request that initiated the work. */
+  async #invokeLocal(
+    call: ItxExpressionInput,
+    args: unknown[] = [],
+    caller: Caller = this.#callerStorage.getStore() ?? { principal: null },
+  ): Promise<unknown> {
+    return this.#callerStorage.run(caller, () => this.#itxExpressionResolver.invoke(call, ...args));
   }
   readonly #callerStorage = new AsyncLocalStorage<Caller>();
 

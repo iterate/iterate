@@ -57,20 +57,47 @@ const READ_PAGE_BUDGET_BYTES = 8 * 1024 * 1024;
  *  the byte budget cannot see. */
 const READ_PAGE_MAX_EVENTS = 1000;
 
-/** THE SELF-WAKE HALT STREAK — the billing circuit-breaker (wave-0 3b, Jonas: "we need runaway
- *  billing controls"). A context that fires its alarm this many times IN A ROW with NO public door
- *  touched in between has woken itself for nothing — a retry ladder grinding on a context no one is
- *  using, or any arm that fires and re-arms with nothing to show for it. (The loop it was measured
- *  on — the constructor appends `woken`, the `config` cursor row arms the lane's insurance alarm to
- *  deliver it, that alarm found nothing due and the DO's alarm() re-armed its quiet clock with
- *  nothing to quiesce, the isolate was evicted in between, the alarm re-created it every minute —
- *  is closed at its root: alarm() re-arms only while a facet is live or a stub is borrowed.) Past
- *  this, `alarms.request` stops arming (below) — one billed wake per minute becomes zero —
- *  until a real request clears the streak. Low, because each self-wake is a billed wake and a durable
- *  row: five is a few minutes of a loop, not hours. A live retry ladder is self-limiting anyway (≤ 15
- *  attempts, then it halts on its own); this bounds the UNBOUNDED case. The durable count lives in
- *  stream-storage's `stream_meta`. */
-const SELF_WAKE_HALT_STREAK = 5;
+/** An opt-in, in-memory trace of the alarm coordinator and its host. Trace events are deliberately
+ * ephemeral: they make the current incarnation inspectable without becoming work for the durable
+ * log, the core reducer, or a wildcard subscription. An exact subscription to this type is still
+ * allowed to observe it, so the payload is bounded and callers should sample or detach promptly. */
+export const STREAM_ALARM_TRACE_EVENT = "events.iterate.com/stream/trace/alarm" as const;
+export type AlarmTracePayload = {
+  phase: "fire" | "reconcile" | "delivery" | "quiesce";
+  reason: string;
+  [key: string]: unknown;
+};
+const traceMaxKeys = 32;
+const traceMaxString = 256;
+const traceMaxArray = 32;
+const traceMaxDepth = 3;
+const traceMaxChars = 64 * 1024;
+
+function boundedTraceValue(value: unknown, depth: number): unknown {
+  if (typeof value === "string") return value.slice(0, traceMaxString);
+  if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
+  if (depth >= traceMaxDepth) return value ? "[truncated]" : String(value);
+  if (Array.isArray(value))
+    return value.slice(0, traceMaxArray).map((item) => boundedTraceValue(item, depth + 1));
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- values are unknown JSON fragments; the object check is the runtime narrowing before Object.entries
+  if (value && typeof value === "object") {
+    const bounded: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value).slice(0, traceMaxKeys))
+      bounded[key.slice(0, traceMaxString)] = boundedTraceValue(item, depth + 1);
+    return bounded;
+  }
+  return String(value).slice(0, traceMaxString);
+}
+
+function boundAlarmTracePayload(payload: AlarmTracePayload): Record<string, unknown> {
+  const bounded = boundedTraceValue(payload, 0) as Record<string, unknown>;
+  if (JSON.stringify(bounded).length <= traceMaxChars) return bounded;
+  return {
+    phase: payload.phase,
+    reason: String(payload.reason).slice(0, traceMaxString),
+    truncated: true,
+  };
+}
 
 /** The waitForEvent selector: `type` is an exact event-type match (absent = any type); only events
  *  with offset strictly greater than `afterOffset` match (default = the head at call time — "the
@@ -122,10 +149,8 @@ export class Stream {
   /** FIFO; resolved from `freshEvents` in append's step 5. */
   readonly #waitForEventWaiters: WaitForEventWaiter[] = [];
   readonly alarms: AlarmCoordinator;
-  /** The self-wake streak (SELF_WAKE_HALT_STREAK), durable in `stream_meta` and loaded once at
-   *  construction so `alarms.request` can gate on it synchronously; the host DO drives it. */
-  #selfWakeStreak = 0;
-
+  /** Prevent an observer that reacts synchronously to a trace from recursively tracing itself. */
+  #emittingAlarmTrace = false;
   // ── THE CORE REDUCE's state: rehydrated by the constructor from the versioned checkpoint and caught
   // up to the durable mark, reduced inside every durable commit and checkpointed with it (the cursor
   // every batch, the state on change). Durable events only, so it rebuilds bit-identically. ──
@@ -138,10 +163,9 @@ export class Stream {
     this.storage = new StreamStorage(deps.storage);
     this.alarms = new AlarmCoordinator({
       setAlarm: (at) => deps.storage.setAlarm(at),
+      deleteAlarm: deps.storage.deleteAlarm ? () => deps.storage.deleteAlarm!() : undefined,
       scheduledAt: () => this.nextScheduledAppendAt(),
-      recoveryHalted: () => this.selfWakeHalted(),
     });
-    this.#selfWakeStreak = this.storage.readSelfWakeStreak(); // durable across incarnations
     this.#path = deps.path;
     this.#projectId = deps.projectId;
     this.#onCommit = deps.onCommit;
@@ -230,6 +254,36 @@ export class Stream {
     );
   }
 
+  /** Emit one bounded, ephemeral alarm trace. Diagnostics are best effort by design: an observer
+   * must never make the alarm path fail or wedge a context. Failures are still reported through the
+   * issue channel, with the phase and reason retained for classification. The trace is lazy: normal
+   * contexts have no trace offset traffic unless an exact waitForEvent observer opted in. */
+  emitAlarmTrace(payload: AlarmTracePayload): StreamEvent | undefined {
+    if (!this.#waitForEventWaiters.some((waiter) => waiter.type === STREAM_ALARM_TRACE_EVENT))
+      return undefined;
+    if (this.#emittingAlarmTrace) return undefined;
+    this.#emittingAlarmTrace = true;
+    try {
+      let trace: StreamEvent | undefined;
+      this.alarms.batch(() => {
+        trace = this.append({
+          type: STREAM_ALARM_TRACE_EVENT,
+          ephemeral: true,
+          payload: boundAlarmTracePayload(payload),
+        })[0];
+      });
+      return trace;
+    } catch (error) {
+      reportIssue("stream.alarm-trace", error, {
+        phase: payload.phase,
+        reason: payload.reason,
+      });
+      return undefined;
+    } finally {
+      this.#emittingAlarmTrace = false;
+    }
+  }
+
   highestAssignedOffset(): number {
     return this.#highestAssignedOffset;
   }
@@ -277,6 +331,11 @@ export class Stream {
       // oxlint-disable-next-line iterate/simple-truthiness-check -- append is the SOLE enforcement door (no boundary validator); event.type arrives from callers/the wire, so the static string type is not a runtime guarantee
       if (typeof event.type !== "string" || event.type.trim() === "")
         throw new Error("append: every event needs a non-empty type");
+      if (
+        event.type === STREAM_ALARM_TRACE_EVENT &&
+        (!event.ephemeral || !this.#emittingAlarmTrace)
+      )
+        throw new Error("append: alarm trace events are kernel-owned and must use emitAlarmTrace");
       // RESERVED NAMES, refused at the one append door (parseSubscriptionName refuses them at the
       // command door too): `core` — a raw `subscription-configured { name: "core" }` would install an
       // undeliverable row that climbs the retry ladder to a halt — and any key of `Object.prototype`,
@@ -316,6 +375,9 @@ export class Stream {
       "events.iterate.com/stream/append-schedule-cancelled",
       // the delivery loop's own record of a halted row — a paused stream's ladder must still end
       "events.iterate.com/stream/subscription-delivery-halted",
+      // Alarm traces are kernel diagnostics, not user work; an operator must still be able to
+      // inspect a paused context's current incarnation.
+      STREAM_ALARM_TRACE_EVENT,
     ];
     const afterOffset = this.#highestAssignedOffset;
     const createdAt = new Date().toISOString();
@@ -566,33 +628,6 @@ export class Stream {
     }
     return earliest;
   }
-
-  /** True once the self-wake streak has hit its ceiling — `alarms.request` is a no-op until a
-   *  public door clears it. */
-  selfWakeHalted(): boolean {
-    return this.#selfWakeStreak >= SELF_WAKE_HALT_STREAK;
-  }
-
-  /** One more self-wake (the host's alarm-only pass). `justHalted` is true for THE call that crossed
-   *  the ceiling, so the host records the durable fact exactly once even if a pre-armed alarm fires
-   *  once more after the halt. */
-  noteSelfWake(): { streak: number; justHalted: boolean } {
-    const before = this.#selfWakeStreak;
-    this.#selfWakeStreak += 1;
-    this.storage.writeSelfWakeStreak(this.#selfWakeStreak);
-    return {
-      streak: this.#selfWakeStreak,
-      justHalted: this.selfWakeHalted() && before < SELF_WAKE_HALT_STREAK,
-    };
-  }
-
-  /** A real request: the loop is broken, so reset the streak and lift the halt. NO write when
-   *  already zero, so the common request path pays nothing. */
-  notePublicDoor(): void {
-    if (this.#selfWakeStreak === 0) return;
-    this.#selfWakeStreak = 0;
-    this.storage.writeSelfWakeStreak(0);
-  }
 }
 
 // ── stream storage ── THE STREAM'S TABLES, typed: every SQL statement the stream runs lives here,
@@ -604,7 +639,7 @@ export class Stream {
 //   event_chunks          offset · chunk_index · chunk      a body over EVENT_CHUNK_SIZE, sliced —
 //                         the events row keeps an EMPTY body as the chunked marker (a real body is
 //                         never empty JSON); reads and the idempotency lookup reassemble it
-//   stream_meta           key · value                       the incarnation counter, the self-wake streak
+//   stream_meta           key · value                       the incarnation counter
 //   subscription_cursors  name · cursor (JSON)              the delivery loop's at-least-once cursors
 //   reduce_checkpoints    ReduceCheckpointTable (processor.ts) the core reduce's checkpoint (a facet host
 //                                                           keeps its own, in its own storage)
@@ -615,6 +650,7 @@ export type DurableObjectStorageSlice = {
   sql: SqlStorageHandle;
   transactionSync<T>(closure: () => T): T;
   setAlarm(scheduledTime: number | Date): Promise<void>;
+  deleteAlarm?: () => Promise<void>;
 };
 
 /** A serialized body longer than this (chars) is split across `event_chunks` rows instead of one
@@ -687,21 +723,6 @@ class StreamStorage {
 
   transactionSync<T>(closure: () => T): T {
     return this.#storage.transactionSync(closure);
-  }
-
-  /** The self-wake streak (stream.ts SELF_WAKE_HALT_STREAK): one `stream_meta` row, read once at
-   *  construction and written only when it MOVES, so normal request operation pays no extra write. */
-  readSelfWakeStreak(): number {
-    const row = this.#sql
-      .exec<{ value: string }>("SELECT value FROM stream_meta WHERE key = 'selfWakeStreak'")
-      .toArray()[0];
-    return row ? Number(row.value) : 0;
-  }
-  writeSelfWakeStreak(streak: number): void {
-    this.#sql.exec(
-      "INSERT OR REPLACE INTO stream_meta (key, value) VALUES ('selfWakeStreak', ?)",
-      String(streak),
-    );
   }
 
   /** The highest offset in the log — 0 on an empty one. The stream's constructor reads it once: a

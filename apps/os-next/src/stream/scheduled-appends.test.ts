@@ -15,14 +15,18 @@ const scheduled = (key = "reminder", at = "2030-01-01T00:00:00Z") =>
 function setup() {
   const base = nodeSqliteDurableObjectStorage();
   const alarms: number[] = [];
+  const deletes: number[] = [];
   const storage: DurableObjectStorageSlice = {
     ...base,
     setAlarm: async (at) => {
       alarms.push(Number(at));
     },
+    deleteAlarm: async () => {
+      deletes.push(1);
+    },
   };
   const create = () => new Stream({ storage, path: "/", projectId: "prj_schedule", onCommit() {} });
-  return { stream: create(), create, alarms, storage };
+  return { stream: create(), create, alarms, deletes, storage };
 }
 
 test("a schedule, replacement, stale cancellation and atomic completion reconstruct from the log", () => {
@@ -52,6 +56,19 @@ test("a schedule, replacement, stale cancellation and atomic completion reconstr
   expect(log.filter((event) => event.type === "reminder")).toHaveLength(1);
 });
 
+test("delivery deadlines can be replaced and withdrawn without retaining a stale native alarm", () => {
+  const { stream, alarms, deletes } = setup();
+  const first = Date.now() + 1_000;
+  const later = first + 60_000;
+  stream.alarms.request("delivery:one", first);
+  expect(alarms).toHaveLength(1);
+  stream.alarms.fired();
+  stream.alarms.replace("delivery:one", later);
+  expect(alarms.at(-1)).toBe(later);
+  stream.alarms.clear("delivery:one");
+  expect(deletes).toHaveLength(1);
+});
+
 test("reconstruction cannot postpone a scheduled deadline when delivery arms later", () => {
   const { stream, create, alarms } = setup();
   stream.append(scheduled());
@@ -60,9 +77,8 @@ test("reconstruction cannot postpone a scheduled deadline when delivery arms lat
   expect(alarms).toEqual([deadline, deadline]);
 });
 
-test("scheduled work survives the retry breaker; pause holds it and resume rearms", () => {
+test("scheduled work survives an alarm pass; pause holds it and resume rearms", () => {
   const { stream, alarms } = setup();
-  for (let i = 0; i < 5; i++) stream.noteSelfWake();
   stream.append(scheduled());
   expect(alarms).toHaveLength(1);
   stream.alarms.fired();
