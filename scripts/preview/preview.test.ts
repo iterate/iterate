@@ -766,7 +766,9 @@ describe("preview workflow dispatch", () => {
       "utf8",
     );
 
-    expect(workflow).toContain("all-apps: ${{ github.event_name == 'workflow_dispatch' }}");
+    expect(workflow).toContain(
+      "${{ github.event_name == 'workflow_dispatch' && '--all-apps' || '' }}",
+    );
   });
 });
 

@@ -51,8 +51,8 @@ export default defineConfig({
   // (docs/testing.md#retries-and-timeouts). A burst that defeats it fails
   // the run on purpose: platform weather should be visible, not absorbed.
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
-  // Six preview runners each admit sixteen tests; catalogue checks enforce
-  // enough fixed capacity both across the suite and within every shard.
+  // Experiment: one 16-core / 64-GB preview runner, with a fixed worker count.
+  // Compare 16, 32, 64 and 92 before choosing the final concurrency.
   workers: process.env.CI ? previewPlaywrightWorkers : 1,
   outputDir: shardIndex ? `${shardRoot}/output` : "test-results/playwright-output",
   reporter: shardIndex
