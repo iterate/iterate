@@ -81,6 +81,18 @@ test("the seeded todo app authenticates a real project member", async ({
   // worker-status overlay must ride that CSP via its nonce, not inline
   // script.
   const todoUrl = appUrl("todo", slug, baseURL!);
+  let holdMessages = false;
+  const heldMessages: Array<() => void> = [];
+  await page.routeWebSocket(
+    (url) => url.hostname === new URL(todoUrl).hostname && url.pathname === "/api",
+    (socket) => {
+      const server = socket.connectToServer();
+      socket.onMessage((message) => {
+        if (holdMessages) heldMessages.push(() => server.send(message));
+        else server.send(message);
+      });
+    },
+  );
   const signInResponsePromise = page.waitForResponse(
     (response) =>
       response.url() === todoUrl &&
@@ -120,19 +132,62 @@ test("the seeded todo app authenticates a real project member", async ({
   });
 
   const todoTitle = `todo-${crypto.randomUUID().slice(0, 8)}`;
+  const secondTitle = `${todoTitle}-second`;
+  const thirdTitle = `${todoTitle}-third`;
   const composer = page.getByLabel("New todo");
-  await composer.fill(todoTitle);
-  await page.getByRole("button", { name: "Add" }).click();
-  await page.getByText(todoTitle).waitFor();
+  await page.getByText("No todos yet.").waitFor();
+
+  // A slow connection must not stop someone composing their next todo.
+  holdMessages = true;
+  try {
+    await spinnerWaiter.settings.run({ disabled: true }, async () => {
+      await composer.fill(todoTitle);
+      await page.getByRole("button", { name: "Add" }).click();
+      await composer.fill(secondTitle);
+      await page.getByRole("button", { name: "Add" }).click();
+      await page.getByText(todoTitle, { exact: true }).waitFor();
+      await page.getByText(secondTitle, { exact: true }).waitFor();
+    });
+  } finally {
+    holdMessages = false;
+    for (const send of heldMessages.splice(0)) send();
+  }
 
   await page.getByLabel(`Mark ${todoTitle} done`).click();
   await page.getByLabel(`Mark ${todoTitle} not done`).waitFor();
 
-  // Durability: the row and its completed state live in the app's Durable
-  // Object state, so a fresh page load reads them back.
+  // Deleting one row must not block checking another or adding a third.
+  const firstRow = page
+    .getByRole("listitem")
+    .filter({ has: page.getByText(todoTitle, { exact: true }) });
+  // Finish the first batch before holding the next batch's requests.
+  await page.getByLabel(`Mark ${secondTitle} done`).click({ trial: true });
+  holdMessages = true;
+  try {
+    await spinnerWaiter.settings.run({ disabled: true }, async () => {
+      await firstRow.getByRole("button", { name: "Delete", exact: true }).click();
+      await page.getByLabel(`Mark ${secondTitle} done`).click();
+      await composer.fill(thirdTitle);
+      await page.getByRole("button", { name: "Add" }).click();
+    });
+  } finally {
+    holdMessages = false;
+    for (const send of heldMessages.splice(0)) send();
+  }
+  await firstRow.waitFor({ state: "hidden" });
+  await page.getByLabel(`Mark ${secondTitle} not done`).waitFor();
+  await page.getByLabel(`Mark ${thirdTitle} done`).click();
+  await page.getByLabel(`Mark ${thirdTitle} not done`).waitFor();
+
+  // All three operations survive a fresh load, including the deleted row.
   await page.reload();
-  await page.getByText(todoTitle).waitFor({ timeout: 30_000 }); // timeout: manual budget — reload repaints with no spinner-waiter-visible loading UI
-  await page.getByRole("checkbox", { checked: true, name: `Mark ${todoTitle} not done` }).waitFor();
+  await page
+    .getByRole("checkbox", { checked: true, name: `Mark ${secondTitle} not done` })
+    .waitFor();
+  await page
+    .getByRole("checkbox", { checked: true, name: `Mark ${thirdTitle} not done` })
+    .waitFor();
+  await page.getByText(todoTitle, { exact: true }).waitFor({ state: "hidden" });
 });
 
 test("undo keeps a peer's shopping-list edit in the seeded Docs app", async ({
