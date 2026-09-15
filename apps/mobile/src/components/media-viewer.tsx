@@ -110,7 +110,7 @@ export function MediaViewer({
             </Text>
           </Pressable>
           {download.isError ? (
-            <Text style={styles.downloadError}>{String((download.error as Error).message)}</Text>
+            <Text style={styles.downloadError}>{download.error.message}</Text>
           ) : null}
           <View style={styles.panel}>
             {title ? <Text style={styles.panelTitle}>{title}</Text> : null}

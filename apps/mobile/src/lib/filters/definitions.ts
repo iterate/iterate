@@ -3,9 +3,8 @@
 // index) — deliberately data-shaped so a later PR can load agent-written
 // filters from userland streams through this same interface.
 //
-// ONLY import this module from the filter-camera DOM component (and its
-// test harness): keep the canvas runtime out of the native Hermes bundle.
-// The native picker reads picker.ts.
+// Loaded by the browser camera and the native JavaScriptCore engine.
+// React Native's picker imports the lightweight picker.ts metadata.
 //
 // Backdrops and flashcard pictures are AI-generated or stock images (the
 // scripts/generate-filters.ts script, hosted on mobile.iterate.com).
@@ -15,7 +14,14 @@
 // remapped onto a character (the buried potato), or pinned to a screen
 // region (the flashcards keep your face in the top half).
 
-import { cachedImage } from "./images.ts";
+import {
+  cachedImage,
+  createFilterCanvas,
+  playTone,
+  type FilterImage,
+  type FilterContext,
+  type FilterCanvas,
+} from "./graphics.ts";
 import { ANIMAL_ANCHORS, type AnimalAnchors } from "./animal-anchors.generated.ts";
 import { ANIMAL_FACE_IMAGES } from "./animal-faces.generated.ts";
 import { FILTER_BACKDROPS } from "./backdrops.generated.ts";
@@ -62,19 +68,19 @@ export type FilterHelpers = {
   ellipseFeature: typeof ellipseFeature;
   emoji: (glyph: string, cx: number, cy: number, sizePx: number, angle: number) => void;
   /** Decode-once image cache for data URIs (null while decoding). */
-  cachedImage: (key: string, dataUri: string | undefined) => HTMLImageElement | null;
+  cachedImage: (key: string, dataUri: string | undefined) => FilterImage | null;
   /** Cover-fit an image over the whole canvas. */
-  imageCover: (image: HTMLImageElement) => void;
-  /** Beep a sine tone (WebAudio) — the sing ladder's note playback. */
+  imageCover: (image: FilterImage) => void;
+  /** Beep a sine tone through the host audio output — the sing ladder's note playback. */
   playTone: (hz: number, durationMs: number) => void;
 };
 
 export type FilterFrameArgs = {
-  ctx: CanvasRenderingContext2D;
+  ctx: FilterContext;
   /** The current camera frame, already mirrored + cover-mapped to canvas
    * size, so drawImage(frame, 0, 0) paints exactly what the plain preview
    * would show. */
-  frame: CanvasImageSource;
+  frame: FilterImage;
   width: number;
   height: number;
   face: FaceGeometry;
@@ -145,31 +151,6 @@ export function buildFrameArgs(base: Omit<FilterFrameArgs, "helpers">): FilterFr
     playTone,
   };
   return args;
-}
-
-// One lazily-created output context for tone playback; resumed on every
-// call because iOS suspends it until a user gesture has happened.
-let toneContext: AudioContext | null = null;
-
-function playTone(hz: number, durationMs: number) {
-  try {
-    toneContext = toneContext || new AudioContext();
-    void toneContext.resume();
-    const oscillator = toneContext.createOscillator();
-    const gain = toneContext.createGain();
-    oscillator.type = "sine";
-    oscillator.frequency.value = hz;
-    const now = toneContext.currentTime;
-    const seconds = durationMs / 1000;
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.4, now + 0.03);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + seconds);
-    oscillator.connect(gain).connect(toneContext.destination);
-    oscillator.start(now);
-    oscillator.stop(now + seconds + 0.05);
-  } catch {
-    // No audio output available — taps just do nothing audible.
-  }
 }
 
 /** A project-authored filter: the `filters/<name>.filter.js` repo file must
@@ -288,7 +269,7 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
       drawFaceCutoutsInPlace(args);
       return;
     }
-    const height = width * (image.naturalHeight / image.naturalWidth);
+    const height = width * (image.height / image.width);
 
     // Your mouth openness (lip ring aspect), smoothed, drives the animal's
     // OWN mouth: the portrait stays intact; opening reveals a dark mouth
@@ -862,30 +843,59 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
 
 const DO_HZ = 261.63;
 
-const singState = {
+const singState: {
+  lastTapSeq: number;
+  note: number;
+  wallStartMs: number;
+  ballPos: number;
+  winUntil: number;
+  flashUntil: number;
+  history: { atMs: number; pos: number }[];
+  octaveCycle: number[];
+} = {
   lastTapSeq: -1,
   note: 0,
   wallStartMs: 0,
   ballPos: 0,
   winUntil: 0,
   flashUntil: 0,
-  history: [] as { atMs: number; pos: number }[],
-  octaveCycle: [] as number[],
+  history: [],
+  octaveCycle: [],
 };
 
-const faceDropState = {
+const faceDropState: {
+  lastTap: number;
+  stage: number;
+  locked: { dx: number; dy: number }[];
+  cycleStartMs: number;
+  eyesClosed: boolean;
+} = {
   lastTap: -1,
   stage: 0,
-  locked: [] as { dx: number; dy: number }[],
+  locked: [],
   cycleStartMs: 0,
   eyesClosed: false,
 };
 
-const paperTossState = {
+const paperTossState: {
+  lastTapSeq: number;
+  score: number;
+  phase: "aim" | "flying" | "landed";
+  binX: number | null;
+  binDepth: number;
+  windX: number;
+  throwStartMs: number;
+  throwDepth: number;
+  mouthWasOpen: boolean;
+  landedMs: number;
+  landedHit: boolean;
+  landedX: number;
+  landedY: number;
+} = {
   lastTapSeq: -1,
   score: 0,
-  phase: "aim" as "aim" | "flying" | "landed",
-  binX: null as number | null,
+  phase: "aim",
+  binX: null,
   binDepth: 0.5,
   windX: 0,
   throwStartMs: 0,
@@ -898,7 +908,7 @@ const paperTossState = {
 };
 
 /** A crumpled paper ball: white disc with a few crease arcs. */
-function drawPaperBall(ctx: CanvasRenderingContext2D, cx: number, cy: number, radius: number) {
+function drawPaperBall(ctx: FilterContext, cx: number, cy: number, radius: number) {
   ctx.save();
   ctx.beginPath();
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
@@ -1191,26 +1201,26 @@ const animalMouthState = { open: 0 };
 
 // Scratch canvases for the animal chin patch (separate from the video
 // cutout scratches so the two never fight over sizing).
-let chinScratch: HTMLCanvasElement | null = null;
-let chinMaskScratch: HTMLCanvasElement | null = null;
+let chinScratch: FilterCanvas | null = null;
+let chinMaskScratch: FilterCanvas | null = null;
 
 /** Sample a feathered elliptical patch from `image` (ellipse in normalized
  * image coordinates) and draw it into the CURRENT (rotated, face-local)
  * context at its own location shifted down by `dropPx` — the animal's chin
  * following your jaw. */
 function drawImageEllipsePatch(
-  ctx: CanvasRenderingContext2D,
-  image: HTMLImageElement,
+  ctx: FilterContext,
+  image: FilterImage,
   ellipse: { cx: number; cy: number; rx: number; ry: number },
   drawWidth: number,
   drawHeight: number,
   dropPx: number,
 ) {
   const pad = 1.3;
-  const sourceWidth = Math.ceil(ellipse.rx * 2 * pad * image.naturalWidth);
-  const sourceHeight = Math.ceil(ellipse.ry * 2 * pad * image.naturalHeight);
+  const sourceWidth = Math.ceil(ellipse.rx * 2 * pad * image.width);
+  const sourceHeight = Math.ceil(ellipse.ry * 2 * pad * image.height);
   if (sourceWidth <= 0 || sourceHeight <= 0) return;
-  chinScratch = chinScratch || document.createElement("canvas");
+  chinScratch = chinScratch || createFilterCanvas();
   if (chinScratch.width < sourceWidth) chinScratch.width = sourceWidth;
   if (chinScratch.height < sourceHeight) chinScratch.height = sourceHeight;
   const sctx = chinScratch.getContext("2d")!;
@@ -1218,8 +1228,8 @@ function drawImageEllipsePatch(
   sctx.clearRect(0, 0, chinScratch.width, chinScratch.height);
   sctx.drawImage(
     image,
-    ellipse.cx * image.naturalWidth - sourceWidth / 2,
-    ellipse.cy * image.naturalHeight - sourceHeight / 2,
+    ellipse.cx * image.width - sourceWidth / 2,
+    ellipse.cy * image.height - sourceHeight / 2,
     sourceWidth,
     sourceHeight,
     0,
@@ -1230,7 +1240,7 @@ function drawImageEllipsePatch(
   const maskScale = 8;
   const maskWidth = Math.max(2, Math.round(sourceWidth / maskScale));
   const maskHeight = Math.max(2, Math.round(sourceHeight / maskScale));
-  chinMaskScratch = chinMaskScratch || document.createElement("canvas");
+  chinMaskScratch = chinMaskScratch || createFilterCanvas();
   if (chinMaskScratch.width < maskWidth) chinMaskScratch.width = maskWidth;
   if (chinMaskScratch.height < maskHeight) chinMaskScratch.height = maskHeight;
   const mctx = chinMaskScratch.getContext("2d")!;
@@ -1266,10 +1276,15 @@ function drawImageEllipsePatch(
   );
 }
 
-const flashcardDeck = {
-  seed: null as number | null,
+const flashcardDeck: {
+  seed: number | null;
+  baseIndex: number;
+  order: number[] | null;
+  lastActionSeq: number;
+} = {
+  seed: null,
   baseIndex: 0,
-  order: null as number[] | null,
+  order: null,
   lastActionSeq: -1,
 };
 
@@ -1329,24 +1344,19 @@ function drawBackdrop(args: FilterFrameArgs, id: string) {
   drawImageCover(ctx, image, width, height);
 }
 
-function drawImageCover(
-  ctx: CanvasRenderingContext2D,
-  image: HTMLImageElement,
-  width: number,
-  height: number,
-) {
-  const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
+function drawImageCover(ctx: FilterContext, image: FilterImage, width: number, height: number) {
+  const scale = Math.max(width / image.width, height / image.height);
   ctx.drawImage(
     image,
-    (width - image.naturalWidth * scale) / 2,
-    (height - image.naturalHeight * scale) / 2,
-    image.naturalWidth * scale,
-    image.naturalHeight * scale,
+    (width - image.width * scale) / 2,
+    (height - image.height * scale) / 2,
+    image.width * scale,
+    image.height * scale,
   );
 }
 
 function drawEmoji(
-  ctx: CanvasRenderingContext2D,
+  ctx: FilterContext,
   emoji: string,
   cx: number,
   cy: number,
@@ -1381,8 +1391,8 @@ function naturalCutoutWidth(kind: keyof MaskStretch, feature: FaceFeature): numb
 
 // Scratch canvases reused across frames: the sampled patch and its
 // polygon mask (drawn small, upscaled with smoothing = cheap feather).
-let scratch: HTMLCanvasElement | null = null;
-let maskScratch: HTMLCanvasElement | null = null;
+let scratch: FilterCanvas | null = null;
+let maskScratch: FilterCanvas | null = null;
 
 /** Sample the live video under a tracked feature — the mask's shape is the
  * feature's own landmark ring, inflated by the per-kind base looseness and
@@ -1439,7 +1449,7 @@ function drawFeatureCutout(
   const sh = Math.ceil(maxY - minY + margin * 2);
   if (sw <= 0 || sh <= 0 || !Number.isFinite(sw + sh)) return;
 
-  scratch = scratch || document.createElement("canvas");
+  scratch = scratch || createFilterCanvas();
   if (scratch.width < sw) scratch.width = sw;
   if (scratch.height < sh) scratch.height = sh;
   const sctx = scratch.getContext("2d")!;
@@ -1453,7 +1463,7 @@ function drawFeatureCutout(
   const maskScale = 6 * (dest?.softness || 1);
   const mw = Math.max(2, Math.round(sw / maskScale));
   const mh = Math.max(2, Math.round(sh / maskScale));
-  maskScratch = maskScratch || document.createElement("canvas");
+  maskScratch = maskScratch || createFilterCanvas();
   if (maskScratch.width < mw) maskScratch.width = mw;
   if (maskScratch.height < mh) maskScratch.height = mh;
   const mctx = maskScratch.getContext("2d")!;

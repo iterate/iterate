@@ -158,6 +158,35 @@ test("denying microphone permission still allows filtered photos, but not silent
   expect(camera.errors).toEqual([expect.stringContaining("microphone")]);
 });
 
+test("a shutter press during camera warmup waits for real pixels without a second press", async () => {
+  using camera = filterCamera({ source: '({label: "Photo", emoji: "P", draw() {}})' });
+  camera.update({ facing: "back" });
+  camera.update({ command: { seq: 1, type: "snap" } });
+  await camera.settle();
+  expect(camera.photos).toEqual([]);
+  expect(camera.errors).toEqual([]);
+  camera.video.readyState = 0;
+  camera.requests[0].resolve(mediaStream());
+  await camera.settle();
+  expect(camera.photos).toEqual([]);
+  camera.video.readyState = 2;
+  camera.tick();
+  await camera.settle();
+  expect(camera.photos).toHaveLength(1);
+  expect(camera.errors).toEqual([]);
+});
+
+test("camera denial settles a shutter that was waiting for warmup", async () => {
+  using camera = filterCamera({ source: '({label: "Photo", emoji: "P", draw() {}})' });
+  camera.update({ facing: "back" });
+  camera.update({ command: { seq: 1, type: "snap" } });
+  await camera.settle();
+  camera.requests[0].reject(new DOMException("Camera disconnected", "NotReadableError"));
+  await camera.settle();
+  expect(camera.photos).toEqual([]);
+  expect(camera.errors).toEqual([expect.stringContaining("Camera disconnected")]);
+});
+
 // The host's public React lifecycle/bridge callbacks run against controlled
 // browser devices. No MediaPipe inference or real recording is simulated:
 // these tests cover ownership and project-code execution, not WebKit quality.

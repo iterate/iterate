@@ -19,7 +19,7 @@ The file is ONE JavaScript object expression (not a module, no imports):
   // optional: the camera shows a cycle button for these; read args.modeIndex
   modes: ["Meadow", "Space"],
   draw(args) {
-    // called ~60×/second; draw the whole frame every call
+    // called once per camera frame; draw the whole frame every call
     args.ctx.fillStyle = "#7cb342";
     args.ctx.fillRect(0, 0, args.width, args.height);
     args.helpers.emoji(
@@ -36,15 +36,28 @@ The file is ONE JavaScript object expression (not a module, no imports):
 });
 ```
 
-It runs inside the camera's WebView with the same trust as the rest of the
-project's userland code. A filter that throws shows an error pill over the
-plain camera; fix the file and reopen.
+On iPhone, filters run in JavaScriptCore with native drawing and file recording.
+Browser/Android uses the WebView renderer. These are trusted project scripts;
+keep them bounded. Errors appear over the camera; fix the file and reopen.
+There is no DOM, browser storage, fetch, or timer API in the iPhone engine.
+Keep game state on `this` and animate using `timeMs`.
+
+The shared drawing surface supports `drawImage`, save/restore, clear/fill/stroke
+rectangles, translate/rotate/scale/setTransform, paths (begin/close, moveTo,
+lineTo, arc, ellipse, roundRect, fill, stroke, clip), and fillText. Styles are
+solid hex/rgb/hsl colors, alpha, line width, font, alignment/baseline, image
+smoothing, and source-over/destination-in/destination-out/copy compositing.
+It does not support gradients, shadows, pixel reads, or arbitrary Canvas APIs.
+Images are opaque handles with `width` and `height`; use `cachedImage` to load
+HTTPS or data URLs. The iPhone renderer decodes images up to 1024 pixels on
+their longest side, with at most eight distinct images per frame. Unsupported
+operations fail visibly. The built-in filters use this same surface.
 
 ## args — what draw() receives
 
 | field             | what it is                                                                                                                                                                                                                                                                                                                                                                   |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ctx`             | Canvas 2D context, full-screen, device pixels                                                                                                                                                                                                                                                                                                                                |
+| `ctx`             | shared drawing context (operations listed above), full-screen camera pixels                                                                                                                                                                                                                                                                                                  |
 | `frame`           | the current camera frame (already mirrored for the front camera); `ctx.drawImage(frame, 0, 0)` paints the plain preview                                                                                                                                                                                                                                                      |
 | `width`, `height` | canvas size in device pixels                                                                                                                                                                                                                                                                                                                                                 |
 | `face`            | tracked geometry: `box` (`cx, cy, width, height, angle` — angle is head roll in radians) and features `leftEye`, `rightEye`, `nose`, `lips`. Each feature has `ring` (polygon points), `center`, `rx`/`ry` (half-extents), `angle`. `leftEye` is always the CANVAS-left eye. `face.tracked` is false when tracking has no face (a guessed face is supplied so keep drawing). |
@@ -91,5 +104,5 @@ below ~0.16 (use hysteresis: reopen above ~0.22); mouth open =
   properties on the definition object itself (`this.state ||= {...}` inside
   `draw` works: `draw` is a method).
 - **Reset on tap**: compare `args.tap?.seq` with a remembered value.
-- **Per-frame cost**: stay with drawImage/fills/cutouts; avoid
-  `getImageData` per frame — it will drop the frame rate.
+- **Per-frame cost**: stay with drawImage/fills/cutouts. Pixel reads are
+  unavailable on iPhone. Use the supplied face geometry for game input.

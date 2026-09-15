@@ -126,6 +126,46 @@ export function faceGeometryFromLandmarks(
   };
 }
 
+/** Apple's Vision supplies named feature rings, normalized to the rendered
+ * camera frame. The output contract is the same as the browser tracker. */
+export function faceGeometryFromFeatureRings(
+  input: {
+    box: { cx: number; cy: number; width: number; height: number };
+    eyeA: NormalizedLandmark[];
+    eyeB: NormalizedLandmark[];
+    nose: NormalizedLandmark[];
+    lips: NormalizedLandmark[];
+  },
+  width: number,
+  height: number,
+): FaceGeometry {
+  const points = (ring: NormalizedLandmark[]) =>
+    ring.map((p) => ({ x: p.x * width, y: p.y * height }));
+  const a = points(input.eyeA),
+    b = points(input.eyeB);
+  const ca = ringCenter(a),
+    cb = ringCenter(b);
+  const left = ca.x <= cb.x ? a : b,
+    right = ca.x <= cb.x ? b : a;
+  const lc = ringCenter(left),
+    rc = ringCenter(right);
+  const angle = Math.atan2(rc.y - lc.y, rc.x - lc.x);
+  return {
+    box: {
+      cx: input.box.cx * width,
+      cy: input.box.cy * height,
+      width: input.box.width * width,
+      height: input.box.height * height,
+      angle,
+    },
+    leftEye: featureFrom(left, angle),
+    rightEye: featureFrom(right, angle),
+    nose: featureFrom(points(input.nose), angle),
+    lips: featureFrom(points(input.lips), angle),
+    tracked: true,
+  };
+}
+
 /** Where a face would plausibly be when the tracker has nothing: a centered
  * oval so filters stay alive instead of going blank. */
 export function fallbackFaceGeometry(canvasWidth: number, canvasHeight: number): FaceGeometry {

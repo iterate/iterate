@@ -3,6 +3,7 @@ import {
   coverTransform,
   FACE_LANDMARK_RINGS,
   faceGeometryFromLandmarks,
+  faceGeometryFromFeatureRings,
   fallbackFaceGeometry,
 } from "./face-geometry.ts";
 
@@ -69,4 +70,44 @@ test("leftEye is the canvas-left eye even under the mirror", () => {
     const face = faceGeometryFromLandmarks(landmarks, coverTransform({ ...square, mirrored }));
     expect(face.leftEye.center.x).toBeLessThan(face.rightEye.center.x);
   }
+});
+
+test("Apple's named rings preserve screen-relative eyes and roll after front-camera mirroring", () => {
+  const ring = (x: number, y: number) => [
+    { x: x - 0.04, y },
+    { x, y: y - 0.02 },
+    { x: x + 0.04, y },
+    { x, y: y + 0.02 },
+  ];
+  const rings = {
+    box: { cx: 0.5, cy: 0.5, width: 0.6, height: 0.8 },
+    eyeA: ring(0.3, 0.4),
+    eyeB: ring(0.7, 0.5),
+    nose: ring(0.5, 0.55),
+    lips: ring(0.5, 0.7),
+  };
+  const face = faceGeometryFromFeatureRings(rings, 100, 200);
+  expect(face).toMatchObject({
+    tracked: true,
+    leftEye: { center: { x: 30, y: 80 } },
+    rightEye: { center: { x: 70, y: 100 } },
+    box: { cx: 50, cy: 100, width: 60, height: 160 },
+  });
+  expect(face.box.angle).toBeCloseTo(Math.atan2(20, 40));
+  const mirror = (points: { x: number; y: number }[]) =>
+    points.map(({ x, y }) => ({ x: 1 - x, y }));
+  const flipped = faceGeometryFromFeatureRings(
+    {
+      ...rings,
+      eyeA: mirror(rings.eyeA),
+      eyeB: mirror(rings.eyeB),
+      nose: mirror(rings.nose),
+      lips: mirror(rings.lips),
+    },
+    100,
+    200,
+  );
+  expect(flipped.leftEye.center.x).toBeCloseTo(30);
+  expect(flipped.rightEye.center.x).toBeCloseTo(70);
+  expect(flipped.box.angle).toBeCloseTo(-Math.atan2(20, 40));
 });

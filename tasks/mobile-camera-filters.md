@@ -13,9 +13,9 @@ Picking a filter swaps the plain `expo-camera` preview for a live filtered
 pipeline. Photos and clips captured while a filter is active come back as
 normal composer attachments, filter baked in.
 
-High-level status: the reviewed filters, remote assets, and native playback
-controls are implemented. The next pass replaces iPhone WebView capture with
-native capture and recording, per the September 15 request. The new native
+High-level status: iPhone native capture/recording and the shared seven-filter
+renderer are implemented; Mac proofs cover rendered MP4 + audio and hosted
+images. Native build, iPhone trial, and final PR review are pending. The new native
 build is authorized; implementation, native media proof, and build delivery
 are in progress. The user will verify the resulting build on an iPhone.
 
@@ -459,10 +459,10 @@ avoid adding another tracking SDK. Keep browser rendering for web tests.
 No native renderer is claimed ready until a recorded file contains its
 rendered effect and audio and can be decoded through native media APIs.
 
-- [ ] Prove native rendering and incremental video/audio writing with a synthetic input. _Exercise the same renderer/writer used by the camera; verify decoded frames, audio, cancellation, and bounded buffer ownership._
-- [ ] Integrate the native camera view, photos, permissions, lifecycle, and settings. _iPhone implementation; web keeps its browser path._
-- [ ] Port the seven filters and preserve the project-filter contract where supported. _Document any deliberate API changes rather than silently ignoring commands._
-- [ ] Keep lazy asset loading and the ordinary shutter's readiness behavior. _Include camera warmup, addressing the new Bugbot race report._
+- [x] Prove native rendering and incremental video/audio writing with a synthetic input. _Exercise the same renderer/writer used by the camera; verify decoded frames, audio, cancellation, and bounded buffer ownership._
+- [x] Integrate the native camera view, photos, permissions, lifecycle, and settings. _iPhone implementation; web keeps its browser path._
+- [x] Port the seven filters and preserve the project-filter contract where supported. _Document any deliberate API changes rather than silently ignoring commands._
+- [x] Keep lazy asset loading and the ordinary shutter's readiness behavior. _Include camera warmup, addressing the new Bugbot race report._
 - [ ] Address AI review comments against the resulting implementation. _Removed WebView-only findings become obsolete; generator/shared-media issues still apply._
 - [ ] Publish a new native preview build and verify its install link. _Use the existing runtime-fingerprint/build workflow; the user will do final iPhone testing._
 - [ ] Refresh PR description and the cost review for the native implementation. _Keep limits and unverified device behavior explicit._

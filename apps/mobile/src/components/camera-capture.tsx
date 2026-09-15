@@ -1,8 +1,8 @@
 // Full-screen camera capture, reached from the attachment sheet's live
 // camera tile: snap a photo (shutter) or record a clip (red button toggles).
 // The ✨ button opens a filter picker; with a filter active the plain
-// expo-camera preview swaps for the WebView filter pipeline
-// (filter-camera.tsx) and captures round-trip through it, filter baked in.
+// expo-camera preview swaps for the platform filter camera, with the
+// effect baked into its captured photos and videos.
 // Produces a ComposerAttachment; nothing sends until the composer's ↑.
 //
 import { useRef, useState } from "react";
@@ -21,7 +21,9 @@ import { getServerBaseUrl } from "../lib/storage.ts";
 import { formatClipDuration, type ComposerAttachment } from "../lib/composer-attachments.ts";
 import { FILTER_PICKER } from "../lib/filters/picker.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
-import FilterCamera, { type FilterCameraCommand } from "./filter-camera.tsx";
+// eslint-disable-next-line import/extensions -- Metro selects the .ios.tsx implementation; explicit extensions bypass platform selection.
+import FilterCamera from "./filter-camera-view";
+import type { FilterCameraCommand, FilterVideo } from "./filter-camera-types.ts";
 
 export function CameraCaptureModal(props: {
   visible: boolean;
@@ -35,7 +37,7 @@ export function CameraCaptureModal(props: {
   const { facing, setFacing } = useCameraFacing();
   // Project-authored filters: filters/<name>.filter.js files in any of the
   // project's repos, fetched here (native side holds the session) and
-  // evaluated inside the filter pipeline's WebView. Ask iterate to write
+  // evaluated inside the platform filter engine. Ask iterate to write
   // one and it shows up in the ✨ picker.
   const { projectId } = useGlobalSearchParams<{ projectId?: string }>();
   const dynamicFilters = useQuery({
@@ -50,12 +52,12 @@ export function CameraCaptureModal(props: {
       for (const { path: repoPath } of repos) {
         const repo = project.repos.get(repoPath);
         const { paths } = await repo.listFiles();
-        for (const path of paths as string[]) {
+        for (const path of paths) {
           if (!/(^|\/)filters\/[^/]+\.filter\.js$/.test(path)) continue;
           const file = await repo.readFile({ path });
           if (!file?.content) continue;
           // Metadata is regex-sniffed natively (the picker needs chips
-          // before any WebView exists); the WebView does the real eval.
+          // before the filter engine starts); the engine does the real eval.
           const slug = path
             .split("/")
             .pop()!
@@ -82,13 +84,14 @@ export function CameraCaptureModal(props: {
     reject: (error: Error) => void;
   } | null>(null);
   const pendingFilterVideo = useRef<{
-    resolve: (video: { base64: string; mimeType: string; durationSeconds: number }) => void;
+    resolve: (video: FilterVideo) => void;
     reject: (error: Error) => void;
   } | null>(null);
   const insets = useSafeAreaInsets();
 
+  const commandSequence = useRef(0);
   const sendFilterCommand = (type: FilterCameraCommand["type"]) => {
-    setFilterCommand({ seq: (filterCommand?.seq || 0) + 1, type });
+    setFilterCommand({ seq: ++commandSequence.current, type });
   };
 
   const snap = useMutation({
@@ -144,11 +147,7 @@ export function CameraCaptureModal(props: {
       captureAbort.current = abort;
       setRecordingStartedAt(Date.now());
       if (filterId !== null) {
-        const video = await new Promise<{
-          base64: string;
-          mimeType: string;
-          durationSeconds: number;
-        }>((resolve, reject) => {
+        const video = await new Promise<FilterVideo>((resolve, reject) => {
           pendingFilterVideo.current = { resolve, reject };
           sendFilterCommand("start-recording");
         });
@@ -194,6 +193,7 @@ export function CameraCaptureModal(props: {
   };
 
   const close = () => {
+    setFilterCommand(null);
     captureAbort.current?.abort();
     pendingFilterPhoto.current?.reject(new Error("Photo capture canceled"));
     pendingFilterPhoto.current = null;
@@ -243,16 +243,10 @@ export function CameraCaptureModal(props: {
             <FilterCamera
               command={filterCommand}
               dynamicFilters={(dynamicFilters.data || []).map(({ id, source }) => ({ id, source }))}
-              dom={{
-                style: { flex: 1 },
-                scrollEnabled: false,
-                allowsInlineMediaPlayback: true,
-                mediaPlaybackRequiresUserAction: false,
-                mediaCapturePermissionGrantType: "grant",
-              }}
               facing={facing}
               filterId={filterId}
               onCaptureError={async (message) => {
+                setFilterCommand(null);
                 const error = new Error(message);
                 pendingFilterPhoto.current?.reject(error);
                 pendingFilterPhoto.current = null;
@@ -260,10 +254,15 @@ export function CameraCaptureModal(props: {
                 pendingFilterVideo.current = null;
               }}
               onPhoto={async (photo) => {
+                setFilterCommand(null);
                 pendingFilterPhoto.current?.resolve(photo);
                 pendingFilterPhoto.current = null;
               }}
               onVideo={async (video) => {
+                setFilterCommand(null);
+                if (!pendingFilterVideo.current && "uri" in video) {
+                  await FileSystem.deleteAsync(video.uri, { idempotent: true });
+                }
                 pendingFilterVideo.current?.resolve(video);
                 pendingFilterVideo.current = null;
               }}
@@ -307,7 +306,10 @@ export function CameraCaptureModal(props: {
                 accessibilityRole="button"
                 disabled={snap.isPending || record.isPending}
                 key={id || "none"}
-                onPress={() => setFilterId(id)}
+                onPress={() => {
+                  setFilterCommand(null);
+                  setFilterId(id);
+                }}
                 style={[styles.filterChip, selected && styles.filterChipSelected]}
               >
                 <Text style={styles.filterChipEmoji}>{filter === null ? "🚫" : filter.emoji}</Text>

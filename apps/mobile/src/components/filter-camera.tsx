@@ -7,12 +7,17 @@
 // captures through the marshaled `command` prop; captured bytes go back as
 // base64 through the async result props.
 //
-// Why a WebView and not a camera frame processor: a frame processor means a
-// new native module and a new EAS dev-client build. This keeps filters pure
-// JS — the point of the exercise (see tasks/mobile-camera-filters.md).
+// Browser/Android implementation. iPhone uses the local AVFoundation module
+// through filter-camera-view.ios.tsx and records directly to a file.
 
 import { Component } from "react";
 import { FaceLandmarker } from "@mediapipe/tasks-vision";
+import {
+  DEFAULT_ADJUST,
+  DEFAULT_MASK_STRETCH,
+  parseAdjust,
+  parseMaskStretch,
+} from "../lib/filters/preferences.ts";
 import { base64ToUint8Array } from "../lib/encoding.ts";
 import {
   FACE_LANDMARKER_MODEL_GZ_URL,
@@ -32,6 +37,7 @@ import {
   type MaskStretch,
 } from "../lib/filters/definitions.ts";
 import { beginImageFrame, imageFrameState, retryFailedImages } from "../lib/filters/images.ts";
+import { browserContext, browserImage } from "../lib/filters/graphics.ts";
 import { autoCorrelatePitchHz } from "../lib/filters/pitch.ts";
 import {
   coverTransform,
@@ -87,33 +93,32 @@ const ADJUST_MODE_LABELS: Record<AdjustMode, string> = {
   face: "😐 face",
 };
 
-function loadAdjust(): { mode: AdjustMode; featureScale: number; faceScale: number } {
-  const defaults = { mode: "hole" as AdjustMode, featureScale: 1, faceScale: 1 };
+function loadAdjust() {
   try {
     const raw = localStorage.getItem(ADJUST_KEY);
-    if (raw) return { ...defaults, ...(JSON.parse(raw) as Partial<typeof defaults>) };
-  } catch {
-    // fall through to defaults
+    if (raw) {
+      const parsed = parseAdjust(JSON.parse(raw));
+      if (parsed) return parsed;
+      console.warn("Invalid saved filter adjustments; using defaults");
+    }
+  } catch (error) {
+    console.warn("Could not read saved filter adjustments", error);
   }
-  return defaults;
+  return DEFAULT_ADJUST;
 }
 
 function loadMaskStretch(): MaskStretch {
-  const defaults: MaskStretch = {
-    eyes: { x: 1, y: 1 },
-    nose: { x: 1, y: 1 },
-    lips: { x: 1, y: 1 },
-  };
-  // localStorage can be unavailable/empty on file:// pages — defaults win.
-  // Merge over defaults so values saved before a feature kind existed
-  // (nose) still load.
   try {
     const raw = localStorage.getItem(MASK_STRETCH_KEY);
-    if (raw) return { ...defaults, ...(JSON.parse(raw) as Partial<MaskStretch>) };
-  } catch {
-    // fall through to defaults
+    if (raw) {
+      const parsed = parseMaskStretch(JSON.parse(raw));
+      if (parsed) return parsed;
+      console.warn("Invalid saved filter mask; using defaults");
+    }
+  } catch (error) {
+    console.warn("Could not read saved filter mask", error);
   }
-  return defaults;
+  return DEFAULT_MASK_STRETCH;
 }
 
 export default class FilterCamera extends Component<Props, State> {
@@ -140,6 +145,7 @@ export default class FilterCamera extends Component<Props, State> {
   );
   #frameError: string | null = null;
   #pendingImages: Promise<void>[] = [];
+  #frameWaiters = new Set<() => void>();
   #preparingRecording: number | null = null;
   #raf = 0;
   #disposed = false;
@@ -282,10 +288,9 @@ export default class FilterCamera extends Component<Props, State> {
       this.#stream = null;
       this.setState({
         status: "error",
-        message: `Camera unavailable in the filter pipeline: ${String(
-          (error as Error).message || error,
-        )}`,
+        message: `Camera unavailable in the filter pipeline: ${error instanceof Error ? error.message : String(error)}`,
       });
+      for (const ready of this.#frameWaiters) ready();
     }
   }
 
@@ -350,7 +355,7 @@ export default class FilterCamera extends Component<Props, State> {
       if (this.#disposed) return;
       // Filters keep running on the fallback face oval; the pill in render()
       // says exactly what broke.
-      this.#trackerError = String((error as Error).message || error);
+      this.#trackerError = error instanceof Error ? error.message : String(error);
       this.forceUpdate();
     } finally {
       for (const url of urls) URL.revokeObjectURL(url);
@@ -429,8 +434,8 @@ export default class FilterCamera extends Component<Props, State> {
     const ctx = canvas.getContext("2d")!;
     const featureHits: FeatureHit[] = [];
     const args = buildFrameArgs({
-      ctx,
-      frame: this.#frameCanvas,
+      ctx: browserContext(ctx),
+      frame: browserImage(this.#frameCanvas),
       width,
       height,
       face,
@@ -456,7 +461,7 @@ export default class FilterCamera extends Component<Props, State> {
       // A broken (likely project-authored) filter must not kill the camera:
       // show the plain frame plus the error.
       ctx.drawImage(this.#frameCanvas, 0, 0);
-      const message = String((error as Error).message || error);
+      const message = error instanceof Error ? error.message : String(error);
       this.#frameError = message;
       if (this.state.filterError !== message) this.setState({ filterError: message });
     }
@@ -468,6 +473,7 @@ export default class FilterCamera extends Component<Props, State> {
       this.setState({ assetsLoading, assetError: assets.error });
     }
     this.#featureHits = featureHits;
+    for (const ready of this.#frameWaiters) ready();
   }
 
   /** Invoke project methods with their definition as `this`, so their game
@@ -489,7 +495,7 @@ export default class FilterCamera extends Component<Props, State> {
       try {
         cached = evaluateDynamicFilter(entry.source);
       } catch (error) {
-        cached = error as Error;
+        cached = error instanceof Error ? error : new Error(String(error));
       }
       this.#dynamicCache.set(id, cached);
     }
@@ -621,6 +627,7 @@ export default class FilterCamera extends Component<Props, State> {
       if (command.type === "start-recording") this.#preparingRecording = command.seq;
       if (command.type === "stop-recording" && this.#preparingRecording !== null) {
         this.#preparingRecording = null;
+        for (const ready of this.#frameWaiters) ready();
         await this.props.onCaptureError("Recording canceled while the filter was loading");
         return;
       }
@@ -632,6 +639,15 @@ export default class FilterCamera extends Component<Props, State> {
           if (this.#disposed) return;
           if (command.type === "start-recording" && this.#preparingRecording !== command.seq)
             return;
+          if (this.state.status === "error") throw new Error(this.state.message || "Camera failed");
+          if (
+            this.state.status !== "live" ||
+            this.#video.readyState < 2 ||
+            !this.#video.videoWidth
+          ) {
+            await this.#waitForFrame();
+            continue;
+          }
           this.#drawFrame();
           if (this.#frameError) throw new Error(this.#frameError);
           if (!this.#pendingImages.length) break;
@@ -641,13 +657,33 @@ export default class FilterCamera extends Component<Props, State> {
       }
       if (command.type === "snap") await this.#snap();
       if (command.type === "start-recording") {
-        this.#preparingRecording = null;
         this.#startRecording();
+        this.#preparingRecording = null;
       }
       if (command.type === "stop-recording") this.#recorder?.stop();
     } catch (error) {
+      if (command.type === "start-recording" && this.#preparingRecording !== command.seq) return;
       if (command.type === "start-recording") this.#preparingRecording = null;
-      await this.props.onCaptureError(String((error as Error).message || error));
+      await this.props.onCaptureError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async #waitForFrame() {
+    let ready = () => {};
+    let timer: ReturnType<typeof setTimeout>;
+    const frame = new Promise<void>((resolve, reject) => {
+      ready = resolve;
+      this.#frameWaiters.add(ready);
+      timer = setTimeout(
+        () => reject(new Error("Camera did not produce a frame within 30 seconds")),
+        30_000,
+      );
+    });
+    try {
+      await Promise.race([frame, this.#closed]);
+    } finally {
+      clearTimeout(timer!);
+      this.#frameWaiters.delete(ready);
     }
   }
 
@@ -706,7 +742,7 @@ export default class FilterCamera extends Component<Props, State> {
     };
     recorder.onerror = (event) => {
       void this.props.onCaptureError(
-        `Recording failed: ${String((event as { error?: Error }).error?.message || "MediaRecorder error")}`,
+        `Recording failed: ${"error" in event && event.error instanceof Error ? event.error.message : "MediaRecorder error"}`,
       );
     };
     recorder.onstop = () => {
@@ -725,7 +761,9 @@ export default class FilterCamera extends Component<Props, State> {
       this.setState({ recording: false });
       void blobToBase64(blob)
         .then((base64) => this.props.onVideo({ base64, mimeType, durationSeconds }))
-        .catch((error) => this.props.onCaptureError(String((error as Error).message || error)));
+        .catch((error) =>
+          this.props.onCaptureError(error instanceof Error ? error.message : String(error)),
+        );
     };
     // Timesliced so chunks flush as they happen — single-blob finalization
     // of long recordings is fragile in WebKit.
@@ -816,25 +854,6 @@ export default class FilterCamera extends Component<Props, State> {
         ) : null}
         {this.state.status === "live" && this.#microphoneUnavailable ? (
           <div className="pill">Photos only — allow microphone access for videos and singing.</div>
-        ) : null}
-        {!this.state.recording ? (
-          <button
-            className="mode adjustMode"
-            onClick={() => {
-              const order: AdjustMode[] = ["hole", "features", "face"];
-              const mode = order[(order.indexOf(this.#adjust.mode) + 1) % order.length];
-              this.#adjust = { ...this.#adjust, mode };
-              try {
-                localStorage.setItem(ADJUST_KEY, JSON.stringify(this.#adjust));
-              } catch {
-                // per-session mode still applies
-              }
-              this.forceUpdate();
-            }}
-            type="button"
-          >
-            {ADJUST_MODE_LABELS[this.#adjust.mode]}
-          </button>
         ) : null}
         {this.state.adjustLabel !== null ? (
           <div className="pill">{this.state.adjustLabel}</div>

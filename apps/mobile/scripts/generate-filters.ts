@@ -21,6 +21,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 
 const ASSETS_DIR = new URL("../website/filter-assets/", import.meta.url).pathname;
 const FILTERS_DIR = new URL("../src/lib/filters/", import.meta.url).pathname;
@@ -268,6 +269,14 @@ export async function animals() {
  * priors) — treat as a base and verify/correct via the harness ?annotate=1
  * view + ANIMAL_ANCHOR_OVERRIDES in definitions.ts. */
 export async function animalAnchors() {
+  const Position = z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) });
+  const Anchors = z.object({
+    leftEye: Position,
+    rightEye: Position,
+    mouth: Position,
+    eyeWidth: z.number().positive().max(1),
+    mouthWidth: z.number().positive().max(1),
+  });
   const source = readFileSync(join(FILTERS_DIR, "animal-faces.generated.ts"), "utf8");
   const images = [...source.matchAll(assetEntryPattern())].map((match) => ({
     id: match[1] || match[2],
@@ -304,10 +313,16 @@ All values are FRACTIONS of the image size between 0 and 1 (x from left edge, y 
       }),
     });
     if (!response.ok) throw new Error(`${id}: ${response.status} ${await response.text()}`);
-    const payload = (await response.json()) as { choices: { message: { content: string } }[] };
-    const anchors = JSON.parse(payload.choices[0].message.content) as unknown;
+    const payload = z
+      .object({
+        choices: z
+          .array(z.object({ message: z.object({ content: z.string().min(1) }) }))
+          .nonempty(),
+      })
+      .parse(await response.json());
+    const anchors = Anchors.parse(JSON.parse(payload.choices[0].message.content));
     console.log(id, JSON.stringify(anchors));
-    if (anchors) results.push([id, anchors]);
+    results.push([id, anchors]);
   }
   const outPath = join(FILTERS_DIR, "animal-anchors.generated.ts");
   writeFileSync(
@@ -374,7 +389,9 @@ async function openaiImage(
     }),
   });
   if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
-  const payload = (await response.json()) as { data: { b64_json: string }[] };
+  const payload = z
+    .object({ data: z.array(z.object({ b64_json: z.base64().min(1) })).nonempty() })
+    .parse(await response.json());
   const raw = join(scratchDir(), `image.${options.format}`);
   writeFileSync(raw, Buffer.from(payload.data[0].b64_json, "base64"));
   const sipsArgs = ["-Z", String(options.shrink)];

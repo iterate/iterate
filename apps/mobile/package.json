@@ -16,7 +16,8 @@
     "test": "vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "android": "expo run:android",
-    "generate-filters": "trpc-cli scripts/generate-filters.ts"
+    "generate-filters": "trpc-cli scripts/generate-filters.ts",
+    "test:native:macos": "node scripts/test-native-filters.cjs"
   },
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",
@@ -88,8 +89,9 @@
     "@iterate-com/shared": "workspace:*",
     "@types/react": "~19.1.17",
     "@types/react-dom": "~19.1.11",
+    "esbuild": "0.28.1",
+    "trpc-cli": "0.15.1",
     "typescript": "~5.9.3",
-    "vitest": "^4.1.7",
-    "trpc-cli": "0.15.1"
+    "vitest": "^4.1.7"
   }
 }

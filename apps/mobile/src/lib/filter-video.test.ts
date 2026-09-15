@@ -57,6 +57,67 @@ test("a filtered recording becomes a flat cache file with its bytes and media ty
   expect(await readFile(join(cache.path, "filter-456.webm"), "utf8")).toBe("captured video");
 });
 
+test("a native recording keeps its existing file and never converts the video to text", async () => {
+  await using cache = await cameraCache();
+  const uri = `${cache.uri}native.mp4`;
+  await writeFile(new URL(uri), new Uint8Array([0, 255, 13, 128]));
+  const attachment = await saveFilteredVideo({
+    video: {
+      uri,
+      mimeType: "video/mp4",
+      width: 720,
+      height: 1280,
+      durationSeconds: 3,
+      droppedFrames: 0,
+    },
+    capturedAt: 789,
+    signal: new AbortController().signal,
+    fileSystem: {
+      cacheDirectory: null,
+      writeAsStringAsync: async () => {
+        throw new Error("Native recording must not be copied through JavaScript");
+      },
+      deleteAsync: async (uri) => unlink(new URL(uri)),
+    },
+  });
+  expect(attachment).toMatchObject({
+    uri,
+    kind: "video",
+    width: 720,
+    height: 1280,
+    contentType: "video/mp4",
+    durationSeconds: 3,
+  });
+  expect([...(await readFile(new URL(uri)))]).toEqual([0, 255, 13, 128]);
+});
+
+test("a native recording delivered after cancellation is removed", async () => {
+  await using cache = await cameraCache();
+  const uri = `${cache.uri}canceled.mp4`;
+  await writeFile(new URL(uri), "captured video");
+  const attachment = await saveFilteredVideo({
+    video: {
+      uri,
+      mimeType: "video/mp4",
+      width: 720,
+      height: 1280,
+      durationSeconds: 3,
+      droppedFrames: 0,
+    },
+    capturedAt: 789,
+    signal: AbortSignal.abort(),
+    fileSystem: {
+      cacheDirectory: cache.uri,
+      writeAsStringAsync: async () => {
+        throw new Error("A canceled recording must not be copied");
+      },
+      deleteAsync: async (uri) => unlink(new URL(uri)),
+    },
+  });
+  expect(attachment).toBeNull();
+  expect(await readdir(cache.path)).toEqual([]);
+});
+
 async function cameraCache() {
   const path = await mkdtemp(join(tmpdir(), "filter-video-"));
   return {

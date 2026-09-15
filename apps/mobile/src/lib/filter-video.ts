@@ -1,7 +1,9 @@
 import type * as FileSystem from "expo-file-system/legacy";
+import type { FilterVideo } from "../components/filter-camera-types.ts";
 import type { ComposerAttachment } from "./composer-attachments.ts";
 
-/** Finish a WebView recording as a normal local attachment. Capture identity
+/** Native recording already owns a file; browser recording writes its result.
+ * Capture identity
  * is independent of filter IDs, which can contain project repository paths. */
 export async function saveFilteredVideo({
   video,
@@ -9,17 +11,22 @@ export async function saveFilteredVideo({
   signal,
   fileSystem,
 }: {
-  video: { base64: string; mimeType: string; durationSeconds: number };
+  video: FilterVideo;
   capturedAt: number;
   signal: AbortSignal;
   fileSystem: Pick<typeof FileSystem, "cacheDirectory" | "writeAsStringAsync" | "deleteAsync">;
 }): Promise<Extract<ComposerAttachment, { kind: "video" }> | null> {
-  if (signal.aborted) return null;
-  if (!fileSystem.cacheDirectory) throw new Error("The camera cache directory is unavailable");
+  if (signal.aborted) {
+    if ("uri" in video) await fileSystem.deleteAsync(video.uri);
+    return null;
+  }
+  if (!("uri" in video) && !fileSystem.cacheDirectory)
+    throw new Error("The camera cache directory is unavailable");
   const extension = video.mimeType.startsWith("video/mp4") ? "mp4" : "webm";
   const filename = `filter-${capturedAt}.${extension}`;
-  const uri = `${fileSystem.cacheDirectory}${filename}`;
-  await fileSystem.writeAsStringAsync(uri, video.base64, { encoding: "base64" });
+  const uri = "uri" in video ? video.uri : `${fileSystem.cacheDirectory}${filename}`;
+  if (!("uri" in video))
+    await fileSystem.writeAsStringAsync(uri, video.base64, { encoding: "base64" });
   if (signal.aborted) {
     await fileSystem.deleteAsync(uri);
     return null;
@@ -33,7 +40,7 @@ export async function saveFilteredVideo({
     previewUri: null,
     durationSeconds: video.durationSeconds,
     sizeBytes: null,
-    width: null,
-    height: null,
+    width: "uri" in video ? video.width : null,
+    height: "uri" in video ? video.height : null,
   };
 }

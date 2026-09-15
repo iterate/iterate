@@ -33,7 +33,7 @@ test("a project filter file evaluates and draws through the helpers kit", () => 
   );
   const args = buildFrameArgs({
     ctx,
-    frame: {} as CanvasImageSource,
+    frame: { source: {}, width: 320, height: 480 },
     width: 400,
     height: 800,
     face: fallbackFaceGeometry(400, 800),
