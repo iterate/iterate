@@ -170,8 +170,10 @@ policy. Its five direct Node calls measured `session.started` of
 1,576 / 986 / 838 / 827 / 809 ms (median 838) and first non-silent PCM median
 1,860 ms. The paired five preview paths measured client-ready
 2,828 / 1,230 / 1,303 / 1,182 / 1,344 ms (median 1,303) and first PCM median
-2,555 ms. Both arms returned PCM. This reports an added end-to-end topology
-cost under matched inputs; it does not identify a single causal hop.
+2,555 ms. Both arms returned PCM. Input content matched, but submission timing
+did not: the preview helper awaited the microphone append acknowledgement before
+sending commentary. The direct helper sent both immediately. Readiness precedes
+those inputs; first-PCM differences include the harness delay described below.
 
 Earlier controls with mismatched initial PCM frame sizes are retained but are
 not used for first-PCM comparison.
@@ -230,8 +232,9 @@ OS typecheck, lint and preview deployment smokes passed.
 
 Immediately afterward, the same in-memory key was installed at preview secret
 offset 905 and passed to five direct Node calls, followed by five fresh preview
-paths on the same native deployment. Prompt, model, voice and 20 ms input/silence
-protocol matched. These are sequential small samples, not randomized pairs.
+paths on the same native deployment. Prompt, model, voice, 20 ms input content
+and silence coverage matched. Submission timing differed as detailed below.
+These are sequential small samples, not randomized pairs.
 
 | Metric (ms)                    | Direct Node                       | Preview                           |
 | ------------------------------ | --------------------------------- | --------------------------------- |
@@ -240,8 +243,9 @@ protocol matched. These are sequential small samples, not randomized pairs.
 | First non-silent PCM           | 1,991, 1,766, 1,621, 3,250, 1,878 | 3,110, 2,348, 3,006, 2,704, 2,994 |
 | Median                         | 1,878                             | 2,994                             |
 
-The median difference is 412 ms for readiness and 1,116 ms for subscriber PCM.
-These compare complete topologies; they do not locate a single causal hop.
+The readiness median difference is 412 ms across complete topologies; it does
+not locate a single causal hop. The 1,116 ms subscriber-PCM median difference
+also includes a benchmark scheduling mismatch and is not a relay-cost estimate.
 The direct 2,192 ms outlier is retained. Both arms returned audio in all five
 calls; the preview terminal and scoped error/retry audits were clean. Its five
 bounded startup relay traces again contained no unwanted 5-second idle intent.
@@ -251,6 +255,56 @@ outside the call timers. The freshly written secret and existing parent were
 already initialized; this comparison is not a deployment-cold warmup proof.
 Direct artifacts: `/tmp/voice-startup-pr/direct-same-key-wake-inflight/`;
 preview artifacts: `/tmp/voice-startup-pr/wake-inflight-matched-*`.
+
+### Submission timing and diagnostic-free verification
+
+The preview helper awaited each microphone append ACK before sending commentary;
+the direct helper sent both back-to-back. In the comparison above, preview
+microphone ACKs took 381 / 255 / 637 / 259 / 371 ms, while the direct send gap
+was at most 0.203 ms. Commentary-send-to-PCM medians were 1,018 ms preview and
+1,017.6 ms direct. These separate interval distributions do not support
+subtracting medians to assign causal shares. Readiness is unaffected by this
+specific mismatch because input submission follows readiness.
+
+After removing temporary probes and restoring voice source
+`ebb0a42dc2b1a44ae5cee36f87eee448a914b664`, clean native deployment
+`af0f2120-d73b-4b7b-8731-0a4bf3f585c7` passed deployment smokes, but its first
+benchmark attempt failed before any conversation was created. At
+2026-09-15T05:01:52 UTC, the ordinary root Stream DO's foreground
+`processorFacade` RPC reported an internal storage reset, reference
+`gul8ku3a731v1gto3nlerhp7`, ITX call `log_25d0eb53554743b2ba756e56a4d4b488`.
+This zero-call failure is retained. The trace does not identify the failing SQL
+statement or establish a shared application cause with the earlier hosted-parent
+alarm reset. Neither is explained by OpenAI or audio input.
+
+One separately retained post-reset control, without a redeploy or retry loop,
+returned ready at 2,181 / 1,325 / 1,352 / 1,683 / 1,696 ms (median 1,683),
+and PCM at 3,711 / 2,624 / 2,704 / 3,344 / 2,865 ms (median 2,865).
+All five terminal states and scoped error/retry queries were clean. Health,
+parent and secret initialization took 1,661 / 1,013 / 1,642 ms outside timers.
+This demonstrates subsequent operation, not remediation of the reset.
+
+Two harness controls and one valid ordered-input control then ran on that
+unchanged clean deployment and credential:
+
+- Concurrent separate append RPCs reversed microphone/commentary order in one
+  of five calls. The ordering assertion stopped that row; its missing PCM is
+  not a silent-provider observation. This protocol is excluded.
+- An array passed as the sole append argument failed schema validation in all
+  five calls. The API is variadic; these are excluded harness failures.
+- A single variadic `append(microphone, commentary)` preserved increasing event
+  offsets in all five calls, removing the inter-input client wait. Ready times
+  were 1,791 / 1,975 / 1,404 / 1,892 / 1,761 ms (median 1,791); PCM times were
+  3,458 / 3,197 / 2,723 / 3,099 / 2,880 ms (median 3,099). All five returned audio.
+  This small sequential sample does not establish an overall latency gain.
+
+All fifteen control activations, including the harness failures, ended with
+matching clean build and activation, no pending delegation, zero processor lag
+or attempts, and no last error. The valid ordered control's scoped error/retry
+queries were empty and its twenty upgrade logs were exact-version/untruncated.
+Artifacts are `/tmp/voice-startup-pr/wake-inflight-clean-*-result.json`,
+`wake-inflight-input-controls-terminal-audit.json`, and
+`wake-inflight-clean-storage-reset-findings.md` in the same directory.
 
 ## Attribution results
 
