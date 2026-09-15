@@ -473,8 +473,9 @@ newest queued commit. PR cancellation behavior is unchanged. Dispatch it with
 `depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow cloudflare-main-preview.yml --ref <branch>`.
 Local `run-main` invocations are refused because they bypass that workflow lock.
 
-`run-main` requires a clean checkout at the exact SHA. A branch dispatch keeps
-its branch identity, so validation cannot replace the dashboard's main results.
+`run-main` requires a clean checkout at the exact SHA and that commit's
+pkg.pr.new packages (published by main/PR CI). A branch dispatch keeps its branch
+identity, so validation cannot replace the dashboard's main results.
 The report is saved in `test-results/main-preview-state.json`.
 
 ### Story 1: CI previews my PR

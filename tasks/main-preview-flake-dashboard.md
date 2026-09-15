@@ -1,26 +1,26 @@
 ---
-status: in-progress
+status: needs-preview-validation
 size: large
 ---
 
 # Main preview runs and a current flake dashboard
 
-Status: simplifying the preview runner to use an ordinary slot with a stable `main-preview` holder. PR #2658 stays closed; review continues through the compare link. Dashboard changes are preserved. Validation of the revised runner remains.
+Status: implemented and pushed for compare-link review; PR #2658 stays closed. All Semaphore changes are removed and local checks pass. Live validation acquired and renewed ordinary preview-8, and cleanup succeeded while retaining the lease. Full e2e remains blocked by unpublished packages for the new commit.
 
 ## Current scope
 
-- [ ] Keep `pnpm preview run --pull-request-number <n>` working. Add `pnpm preview run-main --commit <sha>` for the exact checked-out main commit.
-- [ ] Share deployment, readiness, tests and cleanup between PR/main callers. Extract PR reporting/context from the shared implementation where needed; keep the extraction focused.
-- [ ] Main takes an ordinary preview lease under `main-preview`, renews it across runs, and keeps it after cleanup. Use the existing 3h expiry and GC; make no Semaphore policy changes.
-- [ ] Trigger the full preview suite on main pushes. Serialize main deployment/test/cleanup on its ordinary slot without cancelling an active run; newer queued commits replace older queued commits. Keep current PR cancellation behavior.
-- [ ] Upload complete suite results even when no unknown flakes occur. Only a completed full main result replaces that suite's current unknown-flake list; partial/cancelled/missing results must not look like a clean run. Preserve historical records.
-- [ ] Show unknown flakes from the latest complete main run per suite, with run/commit provenance. Remove the 14-day accumulation from the current unknown table.
-- [ ] Explain all outcome emojis, including unexpected errors (❌).
-- [ ] Collapse the Failures table with test counts per suite in its summary.
-- [ ] Put collapsible Sentinels last. Render unknown test names as plain text with safe Markdown escaping.
-- [ ] Test shared lease renewal, pinned commit validation, complete-zero-flake replacement, partial-run handling, and the rendered issue through real public boundaries/harnesses.
+- [x] Keep `pnpm preview run --pull-request-number <n>` working. Add `pnpm preview run-main --commit <sha>` for the exact checked-out main commit. *Shared runner retained; `run-main --help` works and pinned checkout tests pass.*
+- [x] Share deployment, readiness, tests and cleanup between PR/main callers. Extract PR reporting/context from the shared implementation where needed; keep the extraction focused. *`PreviewRunContext` feeds the existing deployment and test functions.*
+- [x] Main takes an ordinary preview lease under `main-preview`, renews it across runs, and keeps it after cleanup. Use the existing 3h expiry and GC; make no Semaphore policy changes. *Semaphore matches the base commit; shared claim tests cover `main-preview` renewal.*
+- [x] Trigger the full preview suite on main pushes. Serialize main deployment/test/cleanup on its ordinary slot without cancelling an active run; newer queued commits replace older queued commits. Keep current PR cancellation behavior. *`cloudflare-main-preview.yml` uses one concurrency group with cancellation disabled.*
+- [x] Upload complete suite results even when no unknown flakes occur. Only a completed full main result replaces that suite's current unknown-flake list; partial/cancelled/missing results must not look like a clean run. Preserve historical records. *Suite summaries carry branch/head and completeness; incomplete results retain the previous snapshot.*
+- [x] Show unknown flakes from the latest complete main run per suite, with run/commit provenance. Remove the 14-day accumulation from the current unknown table. *Dashboard reducer/rendering tests cover complete, empty and incomplete main results.*
+- [x] Explain all outcome emojis, including unexpected errors (❌). *Both legend rows describe ❌ as an unexpected error.*
+- [x] Collapse the Failures table with test counts per suite in its summary. *Renderer uses details/summary with suite counts.*
+- [x] Put collapsible Sentinels last. Render unknown test names as plain text with safe Markdown escaping. *Renderer orders Sentinels last and escapes plain unknown names.*
+- [x] Test shared lease renewal, pinned commit validation, complete-zero-flake replacement, partial-run handling, and the rendered issue through real public boundaries/harnesses. *156 focused CI/runner tests and 31 dashboard harness tests pass.*
 - [ ] Validate the shared path against a preview and inspect its results/artifacts. Check the new main workflow using supported Depot execution before merge; do not claim automatic main triggers are live before merge.
-- [ ] Complete required checks and preview validation, then commit/push the revised branch for compare-link review. Keep PR #2658 closed; do not open another PR.
+- [x] Complete local checks and commit/push the revised branch for compare-link review. Keep PR #2658 closed; do not open another PR. *Local checks pass; full preview-test limitation is recorded separately above.*
 
 ## Decisions and limits
 
@@ -45,3 +45,9 @@ Codex session: `01a0a1e6-0135-7902-91aa-b4bb07026de2`.
 - 2026-09-15 user review: closed PR #2658 without deleting the branch. Continue review at https://github.com/iterate/iterate/compare/main...ci/main-preview-dashboard. The user rejected special-casing preview-1 throughout allocation and deployment; do not treat the original reservation requirement as settled or reopen a PR without a new request. Existing review fixes are preserved as a checkpoint, not an accepted design.
 
 - 2026-09-15 revised requirement: remove all preview-1 reservation code and use the ordinary preview pool. Main keeps its lease after erasing data, renews it on later runs, and remains subject to normal 3h expiry. A dedicated environment can be considered later if there is a concrete need.
+
+- 2026-09-15 simplification: commit `219cbb75a` removes the reservation implementation (181 net lines removed). Independent review found no new blocker. Full workspace tests passed, including 3,183 passing OS tests; latest focused tests are 156 CI/runner plus 31 dashboard tests. Scripts typecheck, full lint and full formatting checks pass. Live validation: https://depot.dev/orgs/0p91s0lz49/workflows/jfptlj2px3?job=dqv5wbbkn4&attempt=63dp1dth3s (run `b6gjx24535`, branch identity preserved).
+
+- Live validation of `219cbb75a`: the existing Semaphore allocated preview-8 to `main-preview`, then the shared cleanup path renewed it. Five app deploys passed; OS preflight failed because `iterate` and `@iterate-com/docs` pkg.pr.new artifacts for this exact commit were unavailable. The existing GitHub publisher only runs on main pushes and open PRs and has no manual dispatch. No e2e tests ran. Keep this limitation visible; do not reopen the PR or add a branch-specific publishing workaround for validation.
+
+- Teardown proof: run `b6gjx24535` finished with the expected package-preflight failure; cleanup succeeded and logged “main-preview keeps the lease”. A read-only production Semaphore status check confirmed preview-8 still held by `main-preview` until `2026-09-15T20:29:14.412Z`; preview-1 remains available to ordinary callers. Both uploaded suite summaries are `incomplete`, contain zero tests, and retain branch `ci/main-preview-dashboard` plus exact head `219cbb75a`, so this failed validation cannot clear main’s unknown flakes. Evidence: `/tmp/main-preview-ordinary-ci.log`, `/tmp/main-preview-ordinary-artifacts.zip`, `/tmp/main-preview-ordinary-slots.txt`.
