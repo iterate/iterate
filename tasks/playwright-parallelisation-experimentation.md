@@ -5,7 +5,7 @@ size: large
 
 # Playwright parallelisation experimentation
 
-Status: all four worker counts measured and published, including the failed 92-worker run. Repeating 16 and 32 next; final recommendation/configuration and validation remain.
+Status: all four worker counts measured and published, including the failed 92-worker run. The 16-worker repeat confirms the control; 32 is repeating next. Final recommendation/configuration and validation remain.
 
 ## Request and assumptions
 
@@ -55,3 +55,5 @@ The user wants PR #2659 renamed and used for an overnight experiment: push commi
 - 64-worker evidence: `runs/workers-64.json`. Only 5.6s browser gain over 32 while per-attempt median rose to 31.5s. The two initial failures were 1s isEnabled checks for Navigate and ONBOARDING.md. Setup was slower independently of the test count (63.8s pnpm and slower deployment). All three worker runs began from image checkout `611c376`; an identical image digest is still not proven.
 
 - 92-worker evidence: `runs/workers-92.json`. First starts span only 2.2s (87 active attempts), so the capacity goal was met. Mobile fixture median grew to 59.3s; local plain-HTML screenshotting also exceeded 1s once. No timeouts or tests changed to make the run pass. Next: repeat the 16-worker control and 32-worker candidate.
+
+- Repeated 16-worker control: `437023ccf`, run `48vk6h0d1h`, 578.7s preview / 149.3s Playwright / 125.3s Vitest, no retries, all 88 non-skipped bodies passed. Install 10.0s, peak memory 15.6 GB. Evidence: `runs/workers-16-repeat.json`.

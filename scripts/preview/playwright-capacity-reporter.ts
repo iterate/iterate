@@ -5,7 +5,7 @@ import type { FullConfig, Reporter, Suite } from "@playwright/test/reporter";
 // Fixed counts for the retained sharded experiment. The active preview
 // workflow is unsharded; its worker count is varied explicitly between runs.
 export const previewPlaywrightShards = [1, 2, 3, 4, 5, 6];
-export const previewPlaywrightWorkers = 16;
+export const previewPlaywrightWorkers = 32;
 
 export function assertPlaywrightCapacity(input: {
   tests: number;

@@ -1,1 +1,10 @@
-["normal", "sharded", "rerun", "workers-16", "workers-32", "workers-64", "workers-92"]
+[
+  "normal",
+  "sharded",
+  "rerun",
+  "workers-16",
+  "workers-32",
+  "workers-64",
+  "workers-92",
+  "workers-16-repeat"
+]

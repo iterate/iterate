@@ -1,4 +1,6 @@
-<strong>92 workers achieved near-complete concurrency, but the preview failed.</strong> Browser
-times at 16 / 32 / 64 / 92 workers: 148 / 114 / 109 / 104 seconds. Vitest finishes last from 32
-upward. At 92, three browser tests retried and dashboard navigation still failed; memory peaked at
-46 GB. Repeating 16 and 32 next. So far, 32 looks like the useful stopping point.
+<strong
+  >The 16-worker repeat confirms the control; 32 still looks like the useful stopping point.</strong
+>
+Playwright took 148 and 149 seconds at 16 workers, versus 114 / 109 / 104 at 32 / 64 / 92. Vitest
+finishes last from 32 upward. The 92-worker preview failed after three browser retries and used 46
+GB; the repeated control passed every body without retries. Repeating 32 next.
