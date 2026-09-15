@@ -288,9 +288,80 @@ describe("StreamDurableObject byte-capped reads", () => {
     ).toEqual([oversized]);
   });
 
-  it("validates byte caps and rejects ephemeral reads with one", async () => {
+  it("keeps a byte-capped mixed durable and buffered prefix cursor-safe", async () => {
+    const context = durableObjectContext(streamName("/byte-capped-buffered-read"));
+    const env = {
+      STREAM: {
+        getByName() {
+          return {
+            async appendCoreEvent(event: StreamEventInput): Promise<StreamEvent> {
+              return {
+                ...event,
+                path: "/",
+                offset: 1,
+                createdAt: "2026-07-21T12:00:00.000Z",
+              } as StreamEvent;
+            },
+          };
+        },
+      },
+    } as unknown as Env;
+    const stream = new StreamDurableObject(context.ctx, env);
+    await context.settle();
+
+    const [durableOne] = stream.append({
+      type: "example.com/durable-small",
+      payload: { body: "one" },
+    });
+    const [durableTwo] = stream.append({
+      type: "example.com/durable-oversized",
+      payload: { body: "two".repeat(1_000) },
+    });
+    const [ephemeralThree] = stream.append({
+      ephemeral: true,
+      type: "example.com/buffered-small",
+      payload: { body: "three" },
+    });
+    const byteLimit = new TextEncoder().encode(JSON.stringify(durableOne)).byteLength;
+    const input = {
+      afterOffset: durableOne.offset - 1,
+      byteLimit,
+      includeEphemeral: true,
+      limit: 1,
+    };
+
+    // The byte prefix stops before the oversized durable row and its later
+    // buffered successor; advancing from this page cannot skip that row.
+    expect(stream.getEvents({ ...input, limit: 500 })).toEqual([durableOne]);
+    // The count prefix holds even though a buffered event is available later.
+    expect(stream.getEvents(input)).toEqual([durableOne]);
+    // The omitted durable row is oversized but must still advance the cursor.
+    expect(stream.getEvents({ ...input, afterOffset: durableOne.offset })).toEqual([durableTwo]);
+    // Only after that durable row may the buffered tail be returned.
+    expect(stream.getEvents({ ...input, afterOffset: durableTwo.offset })).toEqual([
+      ephemeralThree,
+    ]);
+  });
+
+  it("validates byte caps and permits buffered reads with one", async () => {
     const context = durableObjectContext(streamName("/byte-capped-validation"));
-    const stream = new StreamDurableObject(context.ctx, {} as Env);
+    const env = {
+      STREAM: {
+        getByName() {
+          return {
+            async appendCoreEvent(event: StreamEventInput): Promise<StreamEvent> {
+              return {
+                ...event,
+                path: "/",
+                offset: 1,
+                createdAt: "2026-07-21T12:00:00.000Z",
+              } as StreamEvent;
+            },
+          };
+        },
+      },
+    } as unknown as Env;
+    const stream = new StreamDurableObject(context.ctx, env);
     await context.settle();
 
     expect(() => stream.getEvents({ byteLimit: 0 })).toThrow(
@@ -299,9 +370,7 @@ describe("StreamDurableObject byte-capped reads", () => {
     expect(() => stream.getEvents({ byteLimit: 8 * 1024 * 1024 + 1 })).toThrow(
       "byteLimit must be at most",
     );
-    expect(() => stream.getEvents({ byteLimit: 1, includeEphemeral: true })).toThrow(
-      "byteLimit cannot include ephemeral events",
-    );
+    expect(() => stream.getEvents({ byteLimit: 1, includeEphemeral: true })).not.toThrow();
   });
 });
 

@@ -33,6 +33,7 @@ import type { Stream } from "../../itx-api.generated.ts";
 
 const REQUESTED = "events.iterate.com/test-task/requested";
 const COMPLETED = "events.iterate.com/test-task/completed";
+const EPHEMERAL_AUDIO = "events.iterate.com/test-task/ephemeral-audio";
 const ECHOED = "events.iterate.com/test-task/echoed";
 const DRIVEN = "events.iterate.com/test-task/driven";
 // The ONE platform revival fact (core-owned); the fixture contract defines it
@@ -67,6 +68,7 @@ function taskContract(
     events: {
       [REQUESTED]: { payloadSchema: z.object({ id: z.string() }) },
       [COMPLETED]: { payloadSchema: z.object({ id: z.string() }) },
+      [EPHEMERAL_AUDIO]: { payloadSchema: z.object({ id: z.string() }), ephemeral: true },
       [ECHOED]: { payloadSchema: z.object({ id: z.string() }) },
       [DRIVEN]: { payloadSchema: z.object({ id: z.string() }) },
       [REVIVED]: { payloadSchema: z.object({}) },
@@ -74,7 +76,12 @@ function taskContract(
     // Cast: the runner reads `consumes` structurally (a string list + a `"*"`
     // check), so a runtime-supplied list is what the wildcard test needs; the
     // literal-union type the builder infers is irrelevant to the runner.
-    consumes: consumes as unknown as [typeof REQUESTED, typeof COMPLETED, typeof REVIVED],
+    consumes: consumes as unknown as [
+      typeof REQUESTED,
+      typeof COMPLETED,
+      typeof REVIVED,
+      typeof EPHEMERAL_AUDIO,
+    ],
     emits: [ECHOED, DRIVEN],
   });
 }
@@ -313,7 +320,11 @@ function makeJournal(homePath = HOME, options: { pageRpcByteLimit?: number } = {
     eventPageReads: () => eventPageReads,
     eventPageInputs: () => eventPageInputs,
     /** Seed a raw journal fact directly (no attempt logged — it's the fixture). */
-    seed(event: { type: string; payload?: Record<string, unknown> }): StreamEvent {
+    seed(event: {
+      type: string;
+      payload?: Record<string, unknown>;
+      ephemeral?: boolean;
+    }): StreamEvent {
       const rows = rowsFor(homePath);
       const committed = {
         ...event,
@@ -2136,4 +2147,80 @@ describe("StreamProcessorRunner recovery wiring", () => {
     await revived.deliverPending();
     expect(headCalls).toEqual([{ count: 1, open: ["a"] }]);
   });
+});
+
+it("consumes a contract-declared ephemeral hosted frame", async () => {
+  const journal = makeJournal();
+  const processed: string[] = [];
+  const harness = makeHarness({
+    journal,
+    contract: taskContract("0.0.1", [EPHEMERAL_AUDIO]),
+    hooks: { onProcess: ({ event }) => processed.push(event.payload.id) },
+  });
+  const audio = journal.seed({
+    type: EPHEMERAL_AUDIO,
+    payload: { id: "buffered-audio" },
+    ephemeral: true,
+  });
+  const opened = await harness.runner.openHostedEventBatchCallback(TEST_STREAM_ID);
+  await opened.processEventBatch({
+    streamId: TEST_STREAM_ID,
+    events: [audio],
+    scannedAfterOffset: 0,
+    scannedThroughOffset: 1,
+    streamMaxOffset: 1,
+  });
+  expect(processed).toEqual(["buffered-audio"]);
+});
+
+it("preserves buffered events when self catch-up precedes hosted delivery", async () => {
+  const journal = makeJournal();
+  const processed: string[] = [];
+  const harness = makeHarness({
+    journal,
+    contract: taskContract("0.0.1", [EPHEMERAL_AUDIO]),
+    hooks: {
+      onProcess: ({ event }) => {
+        if (event?.type === EPHEMERAL_AUDIO) processed.push(event.payload.id);
+      },
+    },
+  });
+  const ephemeralAudio = journal.seed({
+    type: EPHEMERAL_AUDIO,
+    payload: { id: "buffered-audio" },
+    ephemeral: true,
+  });
+  journal.seed({ type: NOISE, payload: {} });
+
+  // This mirrors StreamDurableObject.getEventPage's ordinary durable read:
+  // its raw head still includes the buffered mic offset, but the page does not.
+  const source = journal.stream;
+  const rawGetEventPage = source.getEventPage.bind(source);
+  source.getEventPage = async (args) => {
+    const page = await rawGetEventPage(args);
+    return {
+      ...page,
+      events:
+        args?.includeEphemeral === true
+          ? page.events
+          : page.events.filter((event) => event.ephemeral !== true),
+    };
+  };
+
+  const opened = await harness.runner.openHostedEventBatchCallback(TEST_STREAM_ID);
+  await harness.runner.catchUp();
+  expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(2);
+
+  await opened.processEventBatch({
+    streamId: TEST_STREAM_ID,
+    events: [ephemeralAudio],
+    scannedAfterOffset: 0,
+    scannedThroughOffset: 1,
+    streamMaxOffset: 2,
+  });
+
+  // Expected contract: the buffered microphone fact is processed exactly once.
+  // The self-pull opts into the same buffered row, so it processes the event;
+  // later hosted delivery is then safely deduped.
+  expect(processed).toEqual(["buffered-audio"]);
 });
