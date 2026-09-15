@@ -30,7 +30,6 @@ on:
   push:
     branches:
       - main
-      - fix/playwright-flake-causes
   pull_request:
 jobs:
   publish:
