@@ -133,21 +133,40 @@ export async function startup(options: StartupOptions) {
   if (!prefix.startsWith("/"))
     throw new Error(`--stream-prefix must be absolute; received ${prefix}`);
 
+  const connectionStartedAt = Date.now();
   const projectSocketClosed = deferred<{ code: number; reason: string }>();
   // The installed voice capability is supplied by project source and is absent
   // from the static SDK type. Narrow to the surfaces this benchmark exercises.
   const itx = (await connectProject(options, {
     onWebSocketClose: ({ code, reason }) => projectSocketClosed.resolve({ code, reason }),
   })) as unknown as {
+    identity(): Promise<unknown>;
     voice: Pick<VoiceAgentRpc, "setupVoiceAgent">;
     streams: { get(path: string): StreamHandle };
     [Symbol.dispose](): void;
   };
+  const projectSocketOpenMs = Date.now() - connectionStartedAt;
+  let projectConnectionReadyMs: number | null = null;
   const activateOnSetup = options.activateOnSetup ?? true;
   const results: StartupResult[] = [];
   let projectSocketClose: { code: number; reason: string } | null = null;
   let projectSocketCloseFailure: string | null = null;
   try {
+    // WebSocket open leaves authenticate()/projects.get() pipelined. Identity
+    // resolves that chain without opening a voice worker or conversation.
+    await waitForEvent(
+      discardRpcResult(itx.identity()),
+      15_000,
+      "project identity did not resolve before the startup benchmark",
+    );
+    projectConnectionReadyMs = Date.now() - connectionStartedAt;
+    console.log(
+      JSON.stringify({
+        type: "voicelab-startup-connection-ready",
+        projectSocketOpenMs,
+        projectConnectionReadyMs,
+      }),
+    );
     for (let index = 1; index <= runs; index += 1) {
       const streamPath = `${prefix}/${String(index).padStart(2, "0")}-${crypto.randomUUID().slice(0, 8)}`;
       const stream = itx.streams.get(streamPath);
@@ -408,7 +427,9 @@ export async function startup(options: StartupOptions) {
   }
   const summary = {
     project: options.project,
-    connection: "one established authenticated project WebSocket for all runs",
+    connection: "one authenticated, project-resolved WebSocket for all runs",
+    projectSocketOpenMs,
+    projectConnectionReadyMs,
     contract: {
       runs,
       streamPrefix: prefix,

@@ -26,8 +26,8 @@ Other changes start voice and ordinary Agent setup in parallel, put
 speech on `conversation-accepted` without waiting for Agent setup to return.
 Delegations wait for the ordinary Agent's existing provisioning/configuration
 contract. The Agent harness itself is unchanged. Dashboard SSR is imported
-only for dashboard requests; server output is minified while preserving class
-names for telemetry.
+only for dashboard requests. The separately tested minification experiment was
+removed after it showed no startup benefit.
 
 ## Measurements
 
@@ -41,6 +41,15 @@ Use precise milestones, rather than calling every phase “setup complete”:
   project WebSocket.
 - **First non-silent PCM:** a PCM16 frame with peak amplitude ≥100 reached the subscriber. This
   does not measure playback, DAC output, or physical speaker onset.
+
+**Measurement correction (15 September):** earlier CLI runs awaited WebSocket
+open but left authentication and project lookup pipelined. Their first timed
+call can include that unfinished work; descriptions of those first rows as
+“cold” do not isolate voice startup. Raw samples remain intact. Subsequent rows
+reuse resolved authentication. The corrected comparison below explicitly
+awaits project identity before every batch, without opening a voice worker or
+creating a conversation, and reports connection setup separately. Direct Node
+provider measurements do not use this project-client boundary.
 
 14 September 2026, Preview 17, five alternating native/hosted pairs on one
 project WebSocket, new stream path for every call:
@@ -1407,6 +1416,60 @@ Evidence under `/tmp/voice-startup-pr`: `handshake-overlap-result.json`,
 Local cleanup evidence: `/tmp/workerd-handshake-cleanup-20260915/result.json`.
 This preview result does not authorize a production deployment or HAVPE flash.
 
+## Authentication-resolved overlap comparison
+
+The CLI now bounds and awaits `identity()` after socket open and before any
+call timer. `connectItxReady` itself waits only for transport open: the owned
+proxy hides `then`, so returning it does not await pipelined authentication or
+`projects.get`. Identity resolves that chain through the project directory;
+it does not pre-create the conversation or warm its voice processor.
+
+On 15 September, 00:20:55–00:21:28 UTC, another ten counterbalanced calls used
+Preview 17 version `1ab3c20c-6a29-4a7a-84f9-8df3ee0ff77c`, the same installed
+source, prompt and credential as above, and one project connection. Socket
+open took 815 ms and resolved project identity took 857 ms from connection
+start; both are outside the call timers. All ten calls returned non-silent PCM.
+
+| Measurement                      | Ordinary                              | Upgrade overlap                       |
+| -------------------------------- | ------------------------------------- | ------------------------------------- |
+| Readiness samples (ms)           | 4,727 / 1,959 / 1,671 / 2,173 / 1,832 | 1,639 / 1,582 / 1,161 / 1,536 / 1,709 |
+| All-five readiness median (ms)   | 1,959                                 | 1,582                                 |
+| Later-four readiness median (ms) | 1,895.5                               | 1,559                                 |
+| First received PCM median (ms)   | 3,010                                 | 2,540                                 |
+| Calls with PCM                   | 5/5                                   | 5/5                                   |
+
+The all-five improvement is 377 ms; the direct Node readiness reference remains
+1,003.203 ms. The first ordinary call still took 4,727 ms after identity resolved,
+including 2,576 ms to observe `call-started`. Authentication therefore does not
+explain that remaining delay. This is a small comparison, not a tail-latency
+claim or proof of physical speaker onset.
+
+Twenty untruncated records matched the exact version and five treatment
+activations, with one registration, upgrade, claim and cancellation each.
+Egress took 494 / 530 / 448 / 472 / 476 ms. The prepared socket then waited
+371 / 465 / 225 / 547 / 418 ms for the voice facet's claim. Every cancellation
+reported zero pending upgrades and waiters. All ten terminal states had a
+closed call, matching activation, no pending delegations, zero subscription
+lag, no last error, and the expected voice runtime key. Targeted ProjectDO and
+hosted-parent error queries returned no records.
+
+Two earlier single-call deployment checks are also retained: readiness/first
+PCM was 5,786/6,958 ms for `final-smoke/01-2e9ad442` and 3,060/4,099 ms for
+`tail-diagnostic/01-6d4a6b67`. Both preceded the identity correction and cannot
+isolate call startup. Persisted telemetry queries for the first check returned
+invocations but no custom overlap-phase logs; this evidence gap remains
+unexplained. Live tail during the second check captured all four phases on the
+correct deployment and zero pending resources at cancellation. Live tail was
+not attached during the corrected paired benchmark.
+
+Evidence under `/tmp/voice-startup-pr`: `handshake-overlap-identity-ready-result.json`,
+`handshake-overlap-identity-ready-classified.json`,
+`handshake-overlap-identity-ready-terminal-audit.json`, and
+`handshake-overlap-live-tail.log`. Typecheck and focused CLI lint passed. All
+PR checks, including preview deployment/E2E, passed on `eb8c912ea`; subsequent
+head checks remain authoritative. Earlier unexplained silent calls still
+block promotion.
+
 ## Reproduce
 
 From `apps/os`, with the current voice source installed in a disposable
@@ -1419,7 +1482,8 @@ doppler run --config preview_17 -- pnpm cli voicelab startup \
 ```
 
 Use a prefix outside `startup-colocated/` for native placement. The CLI holds
-one authenticated project WebSocket and emits every sample, including errors.
+one authenticated, project-resolved WebSocket and emits every sample, including
+errors. Socket-open and project-ready timings are reported separately.
 Credential provisioning and source installation belong outside the call
 measurement. Never publish credentials in benchmark artifacts.
 
