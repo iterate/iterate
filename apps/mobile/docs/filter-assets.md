@@ -8,7 +8,10 @@ R2 bucket. No new runtime dependency or OS service is involved.
 
 iPhone uses Apple's Vision tracker and does not download the MediaPipe files.
 The browser/Android tracker downloads when filters open (~6.6 MB compressed).
-Images load when the current filter/card draws them; iPhone decodes them up to
+Images load when the current filter/card draws them. Flashcards preload the next
+three cards in the current shuffled deck and style through the same cache;
+colour swatches need no download. Preloads do not delay capture or show errors
+until their card is selected. iPhone decodes images up to
 1,024 pixels on the longest side. A spinner stays outside the captured image.
 The normal shutter waits for those images; failed downloads expose Retry,
 with a 30-second download limit. Browser HTTP caching and decoded image

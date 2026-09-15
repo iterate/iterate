@@ -1,6 +1,6 @@
 // Full-screen camera capture, reached from the attachment sheet's live
 // camera tile: snap a photo (shutter) or record a clip (red button toggles).
-// The ✨ button opens a filter picker; with a filter active the plain
+// The picker hides once a filter is selected; with a filter active the plain
 // expo-camera preview swaps for the platform filter camera, with the
 // effect baked into its captured photos and videos.
 // Produces a ComposerAttachment; nothing sends until the composer's ↑.
@@ -291,35 +291,35 @@ export function CameraCaptureModal(props: {
             {String(((snap.error || record.error) as Error).message)}
           </Text>
         ) : null}
-        <ScrollView
-          contentContainerStyle={styles.pickerContent}
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={[styles.picker, { bottom: insets.bottom + 120 }]}
-        >
-          {[null, ...FILTER_PICKER, ...(dynamicFilters.data || [])].map((filter) => {
-            const id = filter === null ? null : filter.id;
-            const selected = filterId === id;
-            return (
-              <Pressable
-                accessibilityLabel={filter === null ? "No filter" : `${filter.label} filter`}
-                accessibilityRole="button"
-                disabled={snap.isPending || record.isPending}
-                key={id || "none"}
-                onPress={() => {
-                  setFilterCommand(null);
-                  setFilterId(id);
-                }}
-                style={[styles.filterChip, selected && styles.filterChipSelected]}
-              >
-                <Text style={styles.filterChipEmoji}>{filter === null ? "🚫" : filter.emoji}</Text>
-                <Text style={styles.filterChipLabel}>
-                  {filter === null ? "None" : filter.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
+        {filterId ? null : (
+          <ScrollView
+            contentContainerStyle={styles.pickerContent}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={[styles.picker, { bottom: insets.bottom + 120 }]}
+          >
+            {[null, ...FILTER_PICKER, ...(dynamicFilters.data || [])].map((filter) => {
+              const id = filter ? filter.id : null;
+              const selected = filterId === id;
+              return (
+                <Pressable
+                  accessibilityLabel={filter ? `${filter.label} filter` : "No filter"}
+                  accessibilityRole="button"
+                  disabled={snap.isPending || record.isPending}
+                  key={id || "none"}
+                  onPress={() => {
+                    setFilterCommand(null);
+                    setFilterId(id);
+                  }}
+                  style={[styles.filterChip, selected && styles.filterChipSelected]}
+                >
+                  <Text style={styles.filterChipEmoji}>{filter ? filter.emoji : "🚫"}</Text>
+                  <Text style={styles.filterChipLabel}>{filter ? filter.label : "None"}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        )}
         <View style={[styles.bottomBar, { paddingBottom: insets.bottom + spacing.lg }]}>
           <Pressable
             accessibilityLabel="Flip camera"

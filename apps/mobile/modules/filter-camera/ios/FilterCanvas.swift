@@ -8,6 +8,7 @@ import JavaScriptCore
   func resize(_ id: Int, _ width: Int, _ height: Int)
   func draw(_ id: Int, _ operation: String, _ arguments: [Any])
   func image(_ key: String, _ url: String) -> [String: Any]?
+  func prefetch(_ key: String, _ url: String)
   func playTone(_ hz: Double, _ durationMs: Double)
 }
 
@@ -18,6 +19,7 @@ final class FilterDrawing: NSObject, FilterDrawingAPI {
   var frame: CGImage?
   weak var script: JSContext?
   var loadImage: (String, String) -> CGImage? = { _, _ in nil }
+  var preloadImage: (String, String) -> Void = { _, _ in }
   var tone: (Double, Double) -> Void = { _, _ in }
   var usedImages: [String: CGImage] = [:]
   private var nextID = 2
@@ -70,6 +72,8 @@ final class FilterDrawing: NSObject, FilterDrawingAPI {
     usedImages[url] = image
     return ["source": url, "width": image.width, "height": image.height]
   }
+
+  func prefetch(_ key: String, _ url: String) { preloadImage(key, url) }
 
   func playTone(_ hz: Double, _ durationMs: Double) {
     guard hz.isFinite, durationMs.isFinite, (20...20000).contains(hz),

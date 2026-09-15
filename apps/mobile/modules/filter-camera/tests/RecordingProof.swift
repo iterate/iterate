@@ -273,6 +273,39 @@ func retainedImageAndPathProof() throws {
       pixels[border] > 200 && pixels[border + 1] < 40, "fill→stroke must keep its red outline")
     precondition(pixels[0] == 255, "Retained image must still draw on the second frame")
   }
+  // Upcoming cards must not block this frame. A failed preload only becomes
+  // an actionable error if the user actually reaches that card.
+  let preloadScript = """
+    var NativeFilters = { configure() { return {}; }, frame({timeMs}) {
+      if (timeMs === 0) {
+        drawing.prefetch('ready', '\(url)');
+        drawing.prefetch('broken', 'data:image/png;base64,broken');
+        drawing.prefetch('pending', 'https://mobile.iterate.com/filter-assets/animal-cat-7c56f2296a6b1c0932caca0d014a221ea4ba5dbc0e63bc3c082d03a68ac9a552.png');
+      } else {
+        if (!drawing.image('ready', '\(url)')) throw new Error('Preloaded image lost');
+        drawing.image('broken', 'data:image/png;base64,broken');
+      }
+      return {};
+    } };
+    """
+  let preloadQueue = DispatchQueue(label: "preload-proof")
+  let preloader = try FilterRenderer(source: preloadScript, queue: preloadQueue)
+  try preloadQueue.sync {
+    try preloader.configure("{}")
+    let status = try preloader.render(
+      frame: source, into: input, timeMs: 0, pitchHz: nil, face: nil)
+    precondition(
+      status["loading"] as? Bool == false && status["error"] is NSNull,
+      "Upcoming downloads must not block the visible card")
+    let selected = try preloader.render(
+      frame: source, into: input, timeMs: 1, pitchHz: nil, face: nil)
+    precondition(selected["loading"] as? Bool == false)
+    precondition(
+      (selected["error"] as? String)?.contains("broken") == true,
+      "A failed preload must still report its error when selected")
+  }
+  print(
+    "Native preload proof: upcoming downloads do not block capture; failures surface on selection")
 }
 
 func arcWindingProof() throws {

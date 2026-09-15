@@ -27,6 +27,18 @@ export function retryFailedImages() {
 /** Project-filter API: returns null until ready; accepts data URIs too.
  * URL is part of identity so edits to project art cannot reuse stale pixels. */
 export function cachedImage(key: string, url: string | undefined): HTMLImageElement | null {
+  const entry = loadImage(key, url);
+  if (!entry) return null;
+  frameImages.add(entry);
+  return entry.pending || entry.error ? null : entry.image;
+}
+
+/** Warm the same cache without delaying capture of the current card. */
+export function prefetchImage(key: string, url: string | undefined) {
+  loadImage(key, url);
+}
+
+function loadImage(key: string, url: string | undefined) {
   if (!url) return null;
   const cacheKey = `${key}:${url}`;
   let entry = images.get(cacheKey);
@@ -52,6 +64,5 @@ export function cachedImage(key: string, url: string | undefined): HTMLImageElem
     images.set(cacheKey, load);
     entry = load;
   }
-  frameImages.add(entry);
-  return entry.pending || entry.error ? null : entry.image;
+  return entry;
 }

@@ -13,10 +13,10 @@ Picking a filter swaps the plain `expo-camera` preview for a live filtered
 pipeline. Photos and clips captured while a filter is active come back as
 normal composer attachments, filter baked in.
 
-High-level status: implementation, automated review, and build delivery are complete.
-The signed native iPhone build is ready at
-[the install page](https://mobile.iterate.com/install/mobile-camera-filters).
-The user's physical iPhone trial remains the acceptance check before merging.
+High-level status: the user tried the native iPhone build and confirmed it works.
+The follow-up preloads three flashcards ahead and hides the filter picker after
+selection. Regression tests and native media proofs pass; the refreshed native
+build is being prepared.
 
 ## Why this shape (assumptions made while AFK)
 
@@ -487,3 +487,13 @@ Final build: source `3d68a65b1`, runtime
 validation. Install the new binary, then tap **Open in app** on the install
 page to switch to the PR channel. Check photos, each game on a moving face,
 recording with sound, seeking/Save, camera flip/reopen and a longer clip.
+
+## September 15: first native phone trial
+
+The user confirmed native filters work. The flashcard loading overlay appeared
+on each new card, and the filter picker covered the per-filter controls.
+
+- [x] Preload just the next three cards in deck order and selected style. _The shared drawer warms the existing cache; native/browser loaders exclude preloads from current-frame readiness and errors. Native downloads remain bounded to four tasks and the existing 32 MB cache._
+- [x] Hide the filter picker after selection. _The parent unmounts the camera on Close, so reopening starts at None with the picker visible again._
+- [x] Verify preload order and loading/error isolation. _The bundled native engine test follows three taps and a style change; browser-cache and native Apple proofs check that upcoming downloads do not block capture and errors surface on selection._
+- [ ] Publish the refreshed native build. _The small native cache change requires a new runtime; keep the install page pointed at the matching signed build._

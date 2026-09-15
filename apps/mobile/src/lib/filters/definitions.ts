@@ -16,6 +16,7 @@
 
 import {
   cachedImage,
+  prefetchImage,
   createFilterCanvas,
   playTone,
   type FilterImage,
@@ -417,6 +418,21 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
         ctx.drawImage(image, x, y, cardSize, cardSize);
         ctx.restore();
       }
+    }
+
+    // Just the next three cards, in this shuffled deck and selected style.
+    // These use the ordinary image cache but never hold up the visible card.
+    for (let ahead = 1; ahead <= 3; ahead++) {
+      const step = cardStep + ahead;
+      const next =
+        FLASHCARDS[
+          deck.order[((step % deck.order.length) + deck.order.length) % deck.order.length]
+        ];
+      if (!next.swatch)
+        prefetchImage(
+          `flashcard-${style.id}-${next.word}`,
+          style.images[next.word] || FLASHCARD_IMAGES_CARTOON[next.word],
+        );
     }
 
     // Seed readout (display only — the settings row holds the buttons),

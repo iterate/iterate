@@ -1,4 +1,5 @@
 import { cachedImage as loadImage } from "./images.ts";
+export { prefetchImage } from "./images.ts";
 
 /** The drawing contract shared by the browser and native filter engines.
  * source is an opaque image handle, owned by the corresponding renderer. */

@@ -5,6 +5,7 @@ declare const drawing: {
   resize(id: number, width: number, height: number): void;
   draw(id: number, operation: string, args: unknown[]): void;
   image(key: string, url: string): FilterImage | null;
+  prefetch(key: string, url: string): void;
   playTone(hz: number, durationMs: number): void;
 };
 
@@ -108,6 +109,9 @@ export function createFilterCanvas(): FilterCanvas {
 
 export function cachedImage(key: string, url: string | undefined): FilterImage | null {
   return url ? drawing.image(key, url) : null;
+}
+export function prefetchImage(key: string, url: string | undefined) {
+  if (url) drawing.prefetch(key, url);
 }
 export function playTone(hz: number, durationMs: number) {
   drawing.playTone(hz, durationMs);

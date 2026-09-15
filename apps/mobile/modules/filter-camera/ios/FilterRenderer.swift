@@ -19,7 +19,12 @@ final class FilterRenderer {
     self.script = script
     self.assets = FilterImages(queue: queue)
     drawing.script = script
-    drawing.loadImage = { [weak assets] key, url in assets?.image(key: key, url: url) }
+    drawing.loadImage = { [weak assets] key, url in
+      assets?.image(key: key, url: url, required: true)
+    }
+    drawing.preloadImage = { [weak assets] key, url in
+      _ = assets?.image(key: key, url: url, required: false)
+    }
     script.setObject(drawing, forKeyedSubscript: "drawing" as NSString)
     script.evaluateScript(source)
     try checkError()
@@ -114,6 +119,7 @@ final class FilterImages {
   private var tasks: [String: Download] = [:]
   private var failures: [String: String] = [:]
   private var used = Set<String>()
+  private var required = Set<String>()
 
   init(queue: DispatchQueue) {
     self.queue = queue
@@ -126,11 +132,14 @@ final class FilterImages {
     cache.totalCostLimit = 32 * 1024 * 1024
   }
   deinit { session.invalidateAndCancel() }
-  func beginFrame() { used.removeAll(keepingCapacity: true) }
-  var isLoading: Bool {
-    used.contains { cache.object(forKey: $0 as NSString) == nil && failures[$0] == nil }
+  func beginFrame() {
+    used.removeAll(keepingCapacity: true)
+    required.removeAll(keepingCapacity: true)
   }
-  var error: String? { used.compactMap { failures[$0] }.first }
+  var isLoading: Bool {
+    required.contains { cache.object(forKey: $0 as NSString) == nil && failures[$0] == nil }
+  }
+  var error: String? { required.compactMap { failures[$0] }.first }
   func retry() { failures.removeAll() }
   func endFrame() {
     for (url, download) in tasks where !used.contains(url) {
@@ -140,10 +149,11 @@ final class FilterImages {
     failures = failures.filter { used.contains($0.key) }
   }
 
-  func image(key: String, url: String) -> CGImage? {
+  func image(key: String, url: String, required: Bool) -> CGImage? {
     used.insert(url)
+    if required { self.required.insert(url) }
     guard used.count <= 8 else {
-      failures[url] = "A filter may draw at most eight distinct images per frame"
+      failures[url] = "A filter may request at most eight distinct images per frame"
       return nil
     }
     if let image = cache.object(forKey: url as NSString) { return image }
