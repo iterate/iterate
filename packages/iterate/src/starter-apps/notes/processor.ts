@@ -41,7 +41,7 @@ const AnalysisResult = z.discriminatedUnion("status", [
     status: z.literal("superseded"),
     reason: z
       .string()
-      .meta({ description: "Why nothing was written (file changed/gone/expired)." }),
+      .meta({ description: "Why nothing was written (file empty/changed/gone/expired)." }),
   }),
   z.object({ status: z.literal("failed"), error: z.string() }),
 ]);
@@ -111,7 +111,7 @@ export const NotesProcessorContract = defineProcessorContract({
       description:
         "Terminal settlement of one analysis obligation. `succeeded` means the title/tags were " +
         "ALSO written into the file's frontmatter (the durable artifact); `superseded` means the " +
-        "body changed or the file vanished before write-back; `failed` carries the error. Exactly " +
+        "body was empty or changed, or the file vanished before write-back; `failed` carries the error. Exactly " +
         "one per obligation, keyed on path + requestOffset.",
       payloadSchema: z.object({
         path: z.string(),
@@ -334,6 +334,9 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
       return { status: "superseded", reason: "note file no longer exists" };
     }
     const note = parseNoteFile(content);
+    if (!note.body.trim()) {
+      return { status: "superseded", reason: "note has no text to analyze" };
+    }
     const analysis = await this.deps.analyze({ text: note.body });
 
     const current = await this.deps.workspace.readFile(path);

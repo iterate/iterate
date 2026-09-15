@@ -30,6 +30,7 @@ function fakeWorkspace() {
   const workspace: NotesWorkspace = {
     readFile: async (path) => (files.has(path) ? files.get(path)! : null),
     edit: async ({ path, oldString, newString }) => {
+      if (oldString === "") throw new Error("edit oldString must be a non-empty string.");
       if (!files.has(path)) return { status: "not-applied", reason: "file-missing", path };
       const content = files.get(path)!;
       if (!content.includes(oldString))
@@ -104,6 +105,30 @@ test("capture: analysis lands title/tags IN the file's frontmatter and settles",
   ]);
   expect(h.state().pendingAnalyses).toEqual({});
 });
+
+test.each(["", " \n\t", composeNoteFile({ capturedAt: "2026-09-15T00:00:00Z" }, "")])(
+  "a blank note stays unchanged without spending an analysis call: %j",
+  async (content) => {
+    const { files, workspace } = fakeWorkspace();
+    files.set(NOTE_PATH, content);
+    let analysisCalls = 0;
+    const h = makeNotesHarness({
+      workspace,
+      analyze: async () => {
+        analysisCalls += 1;
+        return { title: "Invented title", tags: [], processedBy: "fake" };
+      },
+    });
+    await h.append(captured(NOTE_PATH));
+
+    expect(h.events("events.iterate.com/notes/analysis-settled")).toMatchObject([
+      { payload: { result: { status: "superseded", reason: "note has no text to analyze" } } },
+    ]);
+    expect(files.get(NOTE_PATH)).toBe(content);
+    expect(analysisCalls).toBe(0);
+    expect(h.state().pendingAnalyses).toEqual({});
+  },
+);
 
 test("re-read guard: a body edited mid-analysis settles superseded, file untouched", async () => {
   const { files, workspace } = fakeWorkspace();

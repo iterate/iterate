@@ -11,6 +11,8 @@ Draft PR [#2656](https://github.com/iterate/iterate/pull/2656) contains the appr
 
 Latest review amendment: removed the unnecessary file poll and let destination assertions handle auth navigation. Commit `ff6866850` passed 63/63 fresh preview runs with zero retries and all required CI checks. Both review threads were resolved after implementation and validation. Preview erasure and lease release are confirmed.
 
+Blank-note follow-up: Notes now leaves empty bodies unchanged and settles them without calling AI. All 15 Notes tests and SDK typechecking pass; the Workspace edit contract is unchanged.
+
 ## Review amendments
 
 - [x] Apply the requested UI/test simplifications. *Stop button annotation, Todo restored to `client.tsx`, requested tests removed, dedent lists and native double-click word edits.*
@@ -172,3 +174,10 @@ Navigation repro: with the real installed Middlewright and a one-second Playwrig
 Manual preview-3 source checkout/test head `ff6866850a8ea82d401a4226929364e59eafb71a`, unchanged product packages pinned to `107a4f38b3697a50ad9978e40f913df70d429c08`. OS version `166b658a-8f13-474c-8148-4a4b858e25c8`; Auth `3b140678-505f-485e-ba64-f1f75f759919`; Docs `2d9d8967-785c-4619-acd0-a56c7911060f`. Entry erase and all deploy smoke checks passed; tests started after the shared 90-second deployment-age gate. Twenty-repeat median/max seconds: Todo **25.9/36.3**, shopping-list undo **25.2/30.8**, Docs review **36.0/43.6**. Full batch **4.2 minutes**. Evidence: `.flake-validation.ignoreme/review-timeouts-{sample,repeat20}/`.
 
 All required CI checks passed on `ff6866850`; optional assistant/duration checks were skipped. Exit cleanup retired nine non-container DO classes, cleared 260 Auth users and 126 organizations, deleted 172 KV keys and 620 artifact repositories within the bounded pass. Remaining artifact repositories are inert; files/backups retain three-hour expiry. Manual lease `1b959cae-fedb-497b-a6e8-bac201c41bf6` released successfully, leaving OS parked. The separate Todo coalescing finding from self-review is not addressed by these timeout changes.
+
+## Blank-note review follow-up
+
+- [x] Handle a zero-byte note without passing an empty search string to Workspace.edit. *Notes checks for a blank parsed body before analysis, leaves the file unchanged and records `superseded` with reason `note has no text to analyze`. Also covers whitespace-only bodies and metadata-only notes; no AI call or file write occurs.*
+- [x] Reproduce the failure and verify existing Notes behavior. *The fake workspace now honors the real API's rejection of an empty search string. Before the fix, the zero-byte regression settled as failed; the other two blank-body cases invented metadata. After the fix all 15 Notes tests pass, including concurrent edit/deletion preservation. SDK typechecking, changed-file lint and formatting pass.*
+
+The ordinary phone capture path always writes capturedAt frontmatter, but workspace-created files can be completely empty. A blank body has nothing to classify; this fix records that outcome without broadening Workspace.edit or falling back to an unconditional write. Evidence: `/tmp/flake-empty-note-{red,green,types}.log` in this session. Review thread: https://github.com/iterate/iterate/pull/2656#discussion_r4017220450.
