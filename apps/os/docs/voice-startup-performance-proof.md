@@ -1893,3 +1893,57 @@ Artifacts under `/tmp/voice-startup-pr`: `inline-local-ab-result.json`,
 `inline-local-ab-classified.json`, `inline-local-terminal-audit.json`,
 `inline-local-events-audit.json`, `direct-same-key-inline-local/`,
 `inline-local-control-applied.patch`, and `clean-cold-workers-inline-local-*.json`.
+
+### Delaying Agent provisioning after voice acceptance: excluded control
+
+The same-source comparison at `2026-09-15T02:38:44.761Z–02:39:22.533Z`
+used deployment `4fe68da7-dd19-446d-855f-77a230eb64db`, immutable source
+`188ddaa4d9d120e3ab7761617d487750d4d3489f`, and secret offset 711. Both arms
+kept provider overlap and native inline/local stream invocation. The treatment
+waited for matching durable acceptance and the normal initial fold barrier
+before ordinary Agent creation; credential validation stayed eager and shared.
+The one project WebSocket was identity-ready before timing. Paths were minted
+inside each call timer, with no health call after native deployment or future
+conversation/provider precreation. Order was late, parallel, parallel, late,
+late, parallel, parallel, late, late, parallel.
+
+| Milliseconds                | Delayed Agent (five calls)                  | Parallel Agent (five calls)           |
+| --------------------------- | ------------------------------------------- | ------------------------------------- |
+| Client readiness            | 3,143 / 1,054 / 1,068 / 1,229 / 1,843       | 1,453 / 1,155 / 1,261 / 1,400 / 1,192 |
+| Median readiness            | 1,229                                       | 1,261                                 |
+| First non-silent PCM        | **timeout** / 2,209 / 1,962 / 2,576 / 2,976 | 2,837 / 2,854 / 2,433 / 2,499 / 2,568 |
+| Median setup RPC completion | 3,106                                       | 2,530                                 |
+
+The immediately preceding same-key direct Node control returned audio in 5/5
+calls: median WebSocket open 473 ms, session.started 929 ms, first non-silent
+PCM 1,835 ms. Its first call was slower too (1,700 ms session.started), but
+returned PCM at 2,538 ms. The 32 ms median readiness difference does not justify
+retaining the scheduling change, particularly with later backend readiness.
+The treatment and its tests were archived and removed after this comparison.
+
+The first treatment accepted at 3,143 ms, acknowledged microphone input at
+3,253 ms and commentary at 3,475 ms, and completed setup at 4,867 ms, but did
+not return non-silent PCM before the fixed ten-second overall deadline. Its
+commentary is durable at offset 23; backend-ready follows at 52 and the client
+cleanup terminal at 66. No answer transcript was retained. This is a failed
+sample, not an audio success or proof that the provider ignored commentary.
+The other nine calls returned audio. All ten ended with matching activations,
+no pending delegation, zero subscription lag/error, and the expected runtime.
+
+Ten host-selection logs and forty upgrade lifecycle logs match the exact
+version and are untruncated; all cancellations settled with zero resources.
+No relay retries or ProjectDO/host-parent error-level logs were found. These
+negative checks do not explain the silent call. The temporary gate passed
+93 focused tests, OS typecheck, lint, formatting, and deployment smokes before
+the comparison. Its small shared credential promise prevented an early
+credential-failure terminal from being skipped by the acceptance replay cursor.
+
+Artifacts under `/tmp/voice-startup-pr`: `late-backend-ab-result.json`,
+`late-backend-ab-classified.json`, `late-backend-{events,terminal}-audit.json`,
+`direct-same-key-late-backend/`, `late-backend-install.json`,
+`late-backend-control-applied.patch`, and `clean-cold-workers-late-backend-*.json`.
+The original immutable source was restored at root offset 2660 with a matching
+`bbc88660…` health response before restoring the native deployment.
+
+Native restoration `857dbf87-cb43-4614-9212-7366cc3b5994` passed all deployment
+smokes. No additional voice calls were made to replace the failed sample.
