@@ -45,7 +45,7 @@ export class PreviewE2eTelemetryArtifact {
     this.environment = context.environment;
     const ci = ciTelemetrySourceFromEnvironment(
       context.environment,
-      `local-preview-${context.pullRequestNumber || "main"}-${context.headSha.slice(0, 12)}-${this.startedAtMs}`,
+      `local-preview-${context.pullRequestNumber || "nopr"}-${context.headSha.slice(0, 12)}-${this.startedAtMs}`,
     );
     this.ci = {
       ...ci,

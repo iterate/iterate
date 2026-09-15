@@ -97,8 +97,7 @@ type DeployCommandOptions = PreviewCommandOptions & {
 
 /** Resolve the source once. Commands below use the same target for PRs and workflow commits. */
 async function resolvePreviewCommandSetup(
-  options: PreviewCommandOptions,
-  requireCleanCheckout: boolean,
+  options: PreviewCommandOptions & { requireCleanCheckout: boolean },
 ) {
   const runtime = createPreviewRuntime();
   if (options.commit && options.pullRequestNumber) {
@@ -109,7 +108,7 @@ async function resolvePreviewCommandSetup(
     return {
       target: createMainPreview({
         commit: options.commit,
-        requireCleanCheckout,
+        requireCleanCheckout: options.requireCleanCheckout,
         githubToken,
         repositoryRoot: runtime.repositoryRoot,
         environment: runtime.commandEnvironment,
@@ -164,7 +163,10 @@ async function resolvePreviewCommandSetup(
  * Deploy affected preview apps without running preview e2e.
  */
 export async function deploy(options: DeployCommandOptions = {}) {
-  const { target, runtime } = await resolvePreviewCommandSetup(options, true);
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: true,
+  });
   return await withPreviewE2eTelemetry(target.run, runtime, "deploy", (telemetry) =>
     measurePreviewDeployRun(telemetry, () =>
       deployPreviewApps({ target, runtime, allApps: Boolean(options.allApps), telemetry }),
@@ -174,7 +176,10 @@ export async function deploy(options: DeployCommandOptions = {}) {
 
 /** Run preview e2e against the target's recorded deployment. */
 export async function test(options: PreviewCommandOptions = {}) {
-  const { target, runtime } = await resolvePreviewCommandSetup(options, true);
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: true,
+  });
   return await withPreviewE2eTelemetry(target.run, runtime, "test", (telemetry) =>
     testPreviewApps({ target, runtime, telemetry }),
   );
@@ -205,7 +210,10 @@ export async function testTarget(options: TestTargetOptions) {
       target: z.string().trim().min(1),
     })
     .parse(options);
-  const { target, runtime } = await resolvePreviewCommandSetup(options, true);
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: true,
+  });
   const { run, report } = target;
   const recorded = report.state;
   const holder = run.holder;
@@ -342,7 +350,10 @@ export async function testTarget(options: TestTargetOptions) {
  * runs.
  */
 export async function run(options: DeployCommandOptions = {}) {
-  const { target, runtime } = await resolvePreviewCommandSetup(options, true);
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: true,
+  });
   return await withPreviewE2eTelemetry(target.run, runtime, "run", async (telemetry) => {
     await measurePreviewDeployRun(telemetry, () =>
       deployPreviewApps({ target, runtime, allApps: Boolean(options.allApps), telemetry }),
@@ -1189,7 +1200,10 @@ async function testPreviewApps({
  * Tear down recorded preview apps and release the environment config lease.
  */
 export async function cleanup(options: PreviewCommandOptions = {}) {
-  const { target, runtime } = await resolvePreviewCommandSetup(options, false);
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: false,
+  });
   const result = await cleanupPreviewApps({ target, runtime });
 
   // Exit-code contract (the only consumer is the cleanup workflow's
@@ -1221,7 +1235,10 @@ type EraseOptions = PreviewCommandOptions & {
  * Erase the target's slot and keep the lease. CI runs this after e2e to stop test projects spending.
  */
 export async function erase(options: EraseOptions = {}) {
-  const { target, runtime } = await resolvePreviewCommandSetup(options, false);
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: false,
+  });
   return await eraseHeldSlotAfterRun({
     target,
     eraseSlotData: makePreviewSlotDataEraser(runtime),
@@ -1271,7 +1288,10 @@ type AssignOptions = PreviewCommandOptions & {
 };
 
 export async function assign(options: AssignOptions = {}) {
-  const { target, runtime } = await resolvePreviewCommandSetup(options, true);
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: true,
+  });
   const { run, report } = target;
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
   const holder = run.holder;
