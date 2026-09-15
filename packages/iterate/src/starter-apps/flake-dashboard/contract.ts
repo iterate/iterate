@@ -123,7 +123,7 @@ const TrackedTest = z.object({
    */
   lastSeenOffset: z.record(z.string(), StreamOffset).default({}),
   /**
-   * The last (up to) 10 recorded outcomes on any branch, oldest first — the
+   * The latest (up to) 10 outcomes on any branch, ordered by test time — the
    * render's emoji streak bar, each entry carrying the commit that produced
    * it so the square can link straight to that commit's checks. All branches,
    * like the counts, for debugging PR failures too. The numeric
@@ -131,7 +131,7 @@ const TrackedTest = z.object({
    * transition-threshold counts past what 10 entries can show.
    */
   recent: z
-    .array(z.object({ outcome: FlakeOutcome, commit: z.string().min(1).max(100) }))
+    .array(z.object({ outcome: FlakeOutcome, commit: z.string().min(1).max(100), at: z.string() }))
     .max(10)
     .default([]),
   /** Keyed by outcome value ("pass", "pinned-fail", …). */
@@ -175,7 +175,9 @@ export const FlakeDashboardState = z.object({
           passStreak: z.number().int().nonnegative(),
           /** Newest run that actually contained this test, including skips. */
           lastRunAt: z.string(),
-          recent: z.array(z.object({ outcome: FlakeOutcome, commit: z.string() })).max(10),
+          recent: z
+            .array(z.object({ outcome: FlakeOutcome, commit: z.string(), at: z.string() }))
+            .max(10),
         }),
       ),
     )
@@ -265,7 +267,7 @@ export const CheckRunWebhookEvent = z.object({
 
 export const FlakeDashboardProcessorContract = defineProcessorContract({
   slug: "flake-dashboard",
-  version: "0.6.0",
+  version: "0.7.0",
   description:
     "Folds createFlake test outcomes reported by CI into per-test flake stats, renders the GitHub 'Flake dashboard' issue, and proposes data-provable lifecycle transitions.",
   stateSchema: FlakeDashboardState,

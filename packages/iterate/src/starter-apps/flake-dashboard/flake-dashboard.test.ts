@@ -132,9 +132,7 @@ test("streak squares show up to 10 outcomes from any branch, oldest first", asyn
   for (let i = 1; i <= 8; i++) {
     await h.append(runRecorded(i, [record("deploy", "pass", { at: day(i) })]));
   }
-  // A PR-branch outcome enters the bar too — the specs and preview-e2e
-  // suites only ever run on PRs, so a main-only bar would stay empty for
-  // the suites where most flakes live.
+  // A PR-branch outcome enters the bar too, for debugging branch failures.
   await h.append(
     runRecorded(99, [record("deploy", "unexpected-error", { at: day(9) })], {
       branch: "some-pr",
@@ -143,7 +141,7 @@ test("streak squares show up to 10 outcomes from any branch, oldest first", asyn
   const row = renderBody(h.state())
     .split("\n")
     .find((line) => line.startsWith("`deploy`"))!;
-  // Squares in recorded order, each linking to the commit that produced it.
+  // Squares in test-time order, each linking to the commit that produced it.
   expect(row.match(/🟥|🟩|❌/gu)).toEqual(["🟥", ...Array<string>(8).fill("🟩"), "❌"]);
   expect(row).toContain("[🟥](https://github.com/iterate/iterate/commit/commit-0)");
   expect(row).toContain("[❌](https://github.com/iterate/iterate/commit/commit-99)");
@@ -153,9 +151,13 @@ test("streak squares show up to 10 outcomes from any branch, oldest first", asyn
   // An 11th outcome evicts the oldest: the bar caps at 10.
   await h.append(runRecorded(10, [record("deploy", "pass", { at: day(10) })]));
   expect(h.state().tests.deploy!.recent).toEqual([
-    ...Array.from({ length: 8 }, (_, i) => ({ outcome: "pass", commit: `commit-${i + 1}` })),
-    { outcome: "unexpected-error", commit: "commit-99" },
-    { outcome: "pass", commit: "commit-10" },
+    ...Array.from({ length: 8 }, (_, i) => ({
+      outcome: "pass",
+      commit: `commit-${i + 1}`,
+      at: day(i + 1),
+    })),
+    { outcome: "unexpected-error", commit: "commit-99", at: day(9) },
+    { outcome: "pass", commit: "commit-10", at: day(10) },
   ]);
 });
 
@@ -394,6 +396,35 @@ test("a late retry cannot undo newer wrapper adoption on main", async () => {
   // A newer unwrapped retry is fresh evidence, not a stale pre-adoption run.
   await h.append(runRecorded(4, [flake]));
   expect(renderBody(h.state())).toContain("chat upload |");
+});
+
+test("late retries keep history chronological without moving last flake backwards", async () => {
+  const h = makeHarness();
+  await h.append(
+    birth(),
+    runRecorded(2, [record("chat upload", "flake-fail", { at: day(2) })]),
+    runRecorded(3, [
+      record("chat upload", "unexpected-error", { at: day(3), error: "new error" }),
+      record("signup", "retried-pass", { kind: "unknown", at: day(3), error: "new signup error" }),
+    ]),
+    runRecorded(1, [
+      record("chat upload", "retried-pass", { kind: "unknown", at: day(1), error: "old error" }),
+      record("signup", "retried-pass", { kind: "unknown", at: day(1), error: "old signup error" }),
+    ]),
+  );
+  expect(h.state().tests["chat upload"]).toMatchObject({
+    kind: "flake",
+    lastFlakeAt: day(2),
+    lastRecordedAt: day(3),
+    recent: [{ commit: "commit-1" }, { commit: "commit-2" }, { commit: "commit-3" }],
+    recentErrors: [{ error: "old error" }, { error: "new error" }],
+    counts: { "retried-pass": 1, "flake-fail": 1, "unexpected-error": 1 },
+  });
+  expect(renderBody(h.state())).toContain("last flake: Jan 3, 12:00am");
+  expect(h.state().unknownFlakes.unit!.signup).toMatchObject({
+    record: { error: "new signup error", at: day(3) },
+    recent: [{ commit: "commit-1" }, { commit: "commit-3" }],
+  });
 });
 
 test("sentinel streaks never propose transitions", async () => {

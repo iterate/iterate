@@ -372,19 +372,29 @@ export class FlakeDashboardProcessor extends StreamProcessor<
             lastSeenOffset: { ...existing?.lastSeenOffset, [event.payload.suite]: event.offset },
             recent: [
               ...(existing?.recent || []),
-              { outcome: record.outcome, commit: event.payload.commit },
-            ].slice(-10),
+              { outcome: record.outcome, commit: event.payload.commit, at: record.at },
+            ]
+              .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+              .slice(-10),
             counts,
-            recentErrors:
-              errorSample === null
-                ? existing?.recentErrors || []
-                : [...(existing?.recentErrors || []), errorSample].slice(-3),
-            lastFlakeAt: flakeStruck ? record.at : existing?.lastFlakeAt || null,
+            recentErrors: errorSample
+              ? [...(existing?.recentErrors || []), errorSample]
+                  .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+                  .slice(-3)
+              : existing?.recentErrors || [],
+            lastFlakeAt:
+              flakeStruck &&
+              (!existing?.lastFlakeAt || Date.parse(record.at) > Date.parse(existing.lastFlakeAt))
+                ? record.at
+                : existing?.lastFlakeAt || null,
             // Dates the test's CURRENT kind (Failures render it as "pinned
             // since"): a flake that later becomes a pin restarts the clock.
             firstRecordedAt:
               existing && existing.kind === kind ? existing.firstRecordedAt : record.at,
-            lastRecordedAt: staleUnknown ? existing.lastRecordedAt : record.at,
+            lastRecordedAt:
+              existing && Date.parse(existing.lastRecordedAt) > Date.parse(record.at)
+                ? existing.lastRecordedAt
+                : record.at,
             defaultBranchStreak: nextStreak,
             lastMainWrapperAt:
               onDefaultBranch && record.kind !== "unknown"
@@ -461,7 +471,12 @@ export class FlakeDashboardProcessor extends StreamProcessor<
                 recent:
                   pass || fail
                     ? test.recent
-                        .concat({ outcome: pass ? "pass" : "unexpected-error", commit })
+                        .concat({
+                          outcome: pass ? "pass" : "unexpected-error",
+                          commit,
+                          at: summary.startedAt,
+                        })
+                        .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
                         .slice(-10)
                     : test.recent,
               };
@@ -480,11 +495,19 @@ export class FlakeDashboardProcessor extends StreamProcessor<
             }
             // A retry is evidence even if the rest of its suite was interrupted.
             unknowns[record.name] = {
-              record,
+              record:
+                previous && Date.parse(previous.record.at) > Date.parse(record.at)
+                  ? previous.record
+                  : record,
               passStreak: 0,
               lastRunAt:
                 previous && previous.lastRunAt > lastRunAt ? previous.lastRunAt : lastRunAt,
-              recent: [...(previous?.recent || []), { outcome: record.outcome, commit }].slice(-10),
+              recent: [
+                ...(previous?.recent || []),
+                { outcome: record.outcome, commit, at: record.at },
+              ]
+                .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+                .slice(-10),
             };
           }
           if (inventory) {

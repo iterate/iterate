@@ -27,7 +27,7 @@ Status: shared preview execution is validated on PR CI and the main-specific wor
 
 - The workflow target selects the full suite and a stable holder; all slot allocation and renewal use the existing shared path.
 - Main results measure the shared baseline. PR results still remain in their CI reports and historical telemetry.
-- A disappearing unknown row means it did not recur in the latest full run, not that its cause is proven fixed.
+- An unknown row disappears after 20 clean main passes, wrapper adoption, or confirmed absence from a full main test list. These are retirement rules, not proof that the underlying cause is fixed.
 - This work does not fix the outstanding child-agent delegation orphaned-script flake or disable retries. A green check is not proof of zero retries; validation will inspect recorded retries explicitly.
 - Main adds CI compute and occupies one ordinary slot while its lease is valid. The main check runs after merges and is not on the PR critical path.
 - Existing main worktree edits belong to the user and remain untouched. Work is isolated on `ci/main-preview-dashboard`.
@@ -84,3 +84,6 @@ Codex session: `01a0a1e6-0135-7902-91aa-b4bb07026de2`.
 - User approved the absence rule after discussion: unknown rows now retire immediately when absent from a complete main run's full test inventory. Incomplete/legacy/PR results cannot prove deletion. Preserve the latest full inventory so delayed historical retries cannot restore deleted tests; a genuinely newer flake can.
 
 - Absence-rule validation: a processor-harness lifecycle covers PR and suite isolation, skipped tests, missing inventories, incomplete runs, immediate deletion, delayed retries, a newer reintroduced test, and late complete inventories arriving after incomplete runs. Dashboard suite: 38 tests.
+
+- Bugbot `discussion_r4020833791`: reproduced delayed retries moving the last-flake date backwards and appearing at the newest end of history. Histories and error samples now sort by test time before keeping their bounded tails; last-flake/last-recorded timestamps and the unknown row's error sample preserve newer evidence. Version 0.7.0 rebuilds the reduced state from existing events to populate history timestamps; acknowledged side effects do not replay. Retention rules are unchanged.
+- Recency validation: all 39 dashboard tests, package typecheck, scoped lint and formatting pass. The regression covers both an adopted wrapper and an unknown row receiving older retry evidence after newer failures.
