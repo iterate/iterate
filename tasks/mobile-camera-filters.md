@@ -13,13 +13,16 @@ Picking a filter swaps the plain `expo-camera` preview for a live filtered
 pipeline. Photos and clips captured while a filter is active come back as
 normal composer attachments, filter baked in.
 
-High-level status: iPhone native capture/recording and the shared seven-filter
-renderer are implemented; Mac proofs cover rendered MP4 + audio and hosted
-images. Native build, iPhone trial, and final PR review are pending. The new native
-build is authorized; implementation, native media proof, and build delivery
-are in progress. The user will verify the resulting build on an iPhone.
+High-level status: native iPhone recording and all seven filters are implemented.
+Tests, native media proofs, and AI review are complete. The first iPhone build
+compiled and signed; the final build includes two follow-up fixes. Build delivery
+and the user's iPhone trial remain.
 
 ## Why this shape (assumptions made while AFK)
+
+Historical notes below describe the original WebView prototype. The September 15
+native migration supersedes the no-native-module assumption with explicit user
+approval; the current architecture is in `apps/mobile/modules/filter-camera/README.md`.
 
 - **No new native modules.** A native module means a new EAS dev-client build
   (see mobile-native-build-economy); `react-native-vision-camera` + Skia is
@@ -463,6 +466,18 @@ rendered effect and audio and can be decoded through native media APIs.
 - [x] Integrate the native camera view, photos, permissions, lifecycle, and settings. _iPhone implementation; web keeps its browser path._
 - [x] Port the seven filters and preserve the project-filter contract where supported. _Document any deliberate API changes rather than silently ignoring commands._
 - [x] Keep lazy asset loading and the ordinary shutter's readiness behavior. _Include camera warmup, addressing the new Bugbot race report._
-- [ ] Address AI review comments against the resulting implementation. _Removed WebView-only findings become obsolete; generator/shared-media issues still apply._
+- [x] Address AI review comments against the resulting implementation. _All 23 threads resolved; fixes include camera warmup, native error recovery and gesture direction. Native pixel tests disprove the arc-winding report._
 - [ ] Publish a new native preview build and verify its install link. _Use the existing runtime-fingerprint/build workflow; the user will do final iPhone testing._
 - [ ] Refresh PR description and the cost review for the native implementation. _Keep limits and unverified device behavior explicit._
+
+Validation: 275 mobile tests and 21 website tests pass; both typechecks, mobile
+lint and iOS Metro export pass. The Apple-framework proof decodes rendered MP4
+and audio, including 3,600 frames over two minutes with no writer drops. It also
+checks all seven filters with live hosted images, cancellation, drawing direction,
+recovery and pitch across microphone callback sizes. These are synthetic Mac
+proofs, not measurements of live iPhone camera quality or heat.
+
+The shared attachment sender still reads a whole file into JavaScript and has
+a 32 MB limit; this affects ordinary videos too. This migration removes the
+whole-video copy during filtered iPhone recording, not that existing send/storage
+cost. The cost review and PR description distinguish the two.

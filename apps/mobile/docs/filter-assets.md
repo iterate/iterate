@@ -1,14 +1,17 @@
 # Filter assets
 
-JavaScript stays in the Expo DOM bundle. Artwork, the pinned MediaPipe WASM,
-and the face model live at `https://mobile.iterate.com/filter-assets/<slug>-<sha256>.<ext>`.
+JavaScript stays in the app bundle: JavaScriptCore on iPhone, Expo DOM in the
+browser/Android camera. Artwork, the pinned browser MediaPipe WASM, and its
+face model live at `https://mobile.iterate.com/filter-assets/<slug>-<sha256>.<ext>`.
 The existing mobile website worker serves only that public prefix from its
 R2 bucket. No new runtime dependency or OS service is involved.
 
-The tracker downloads when filters open (~6.6 MB compressed). Images load only
-when the current filter/card draws them. A spinner stays outside the captured
-canvas. The normal shutter waits for those images; failed downloads expose
-Retry, with a 30-second download limit. Browser HTTP caching and decoded image
+iPhone uses Apple's Vision tracker and does not download the MediaPipe files.
+The browser/Android tracker downloads when filters open (~6.6 MB compressed).
+Images load when the current filter/card draws them; iPhone decodes them up to
+1,024 pixels on the longest side. A spinner stays outside the captured image.
+The normal shutter waits for those images; failed downloads expose Retry,
+with a 30-second download limit. Browser HTTP caching and decoded image
 reuse help repeat use; a fresh install or evicted cache needs a connection.
 
 Prefixes describe the art (`animal-cat`, `backdrop-potato-dirt`,
