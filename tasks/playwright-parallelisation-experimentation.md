@@ -1,0 +1,47 @@
+---
+status: in-progress
+size: large
+---
+
+# Playwright parallelisation experimentation
+
+Status: experiment specified. The existing six-shard runs and normal-run traces are retained. Next: restore the one-runner preview workflow, measure 16/32/64/92 workers, and publish each trace from this branch.
+
+## Request and assumptions
+
+The user wants PR #2659 renamed and used for an overnight experiment: push commits testing 16, 32, 64 and 92 Playwright workers on one runner, update an interactive trace explainer after each result, make the explainer permanent under `explainers/`, and link its branch-served URL from the PR body.
+
+- Keep this existing worktree and branch; do not rewrite history or merge the PR.
+- Hold application code, catalogue, Node/pnpm configuration, 16-core/64-GB runner, retries, timeouts, cleanup and readiness policy constant across the four configurations. Do not merge new mainline code mid-comparison.
+- Restore the original one-runner `preview run` workflow so deployment, overlapping app tests, browser tests, reporting and cleanup share a machine. Increasing workers changes process concurrency, not runner core count.
+- Run configurations sequentially so pushes cannot cancel an unfinished measurement or race a preview lease. Wait for cleanup and retain evidence before pushing the next configuration.
+- Record whole-workflow time, setup/install/deployment/readiness/cleanup intervals, Playwright and OS Vitest durations, individual test attempts, outcome and retries, test-window CPU/memory where available, and exact commit/run/image identity where reported.
+- Re-run the useful control/finalist comparison if needed to separate first-use caches and service variability from worker count. Keep failed attempts visible; do not loosen tests to manufacture green results.
+- Preserve the original unsharded, six-shard and repeat-six-shard traces as historical references, with their comparability limits.
+- Publish `explainers/playwright-parallelisation.html` through the existing Iterate project route using `?sha=codex/playwright-full-parallel`. Verify the actual HTTP response and browser interaction before adding the link as working.
+- Leave the PR in draft with a measured recommendation and an explicit final configuration. A count larger than the core count is an experiment, not a promise of faster tests. Extra workers must not materially worsen retries or the concurrently running Vitest suite.
+
+## Work
+
+- [ ] Rename PR and rewrite its purpose around experimentation, retaining machine-maintained preview sections.
+- [ ] Restore the unsharded workflow and measure 16 workers.
+- [ ] Push and measure 32 workers.
+- [ ] Push and measure 64 workers.
+- [ ] Push and measure 92 workers.
+- [ ] Repeat the useful control/finalist comparison and account for failures and cache variability.
+- [ ] Commit a permanent, self-contained explainer and update it with each result; retain reproducible sanitized evidence and trace-generation code.
+- [ ] Verify the branch-served explainer and put the working URL in the PR body.
+- [ ] Review the final diff, run relevant checks, address review/CI feedback, and document the recommendation.
+
+## Evidence before this experiment
+
+- Unsharded 16-worker reference: run `j8p7lt2bsk` / workflow `2nltk39ldj`, commit `0277de2`, 9m49s overall, 164.9s Playwright reporter interval, 134.2s OS Vitest, 9.2s pnpm install. Different PR/slot; one OS Vitest retry.
+- Six shards × 16 workers: run `nv3l390bf0` / `ts361t0jxg`, commit `2996ffc9c`, 14m01s overall, longest browser shard 90.8s, OS Vitest 146.3s; zero preview test retries.
+- Repeated six-shard run: `dbhs702vpk` / `gj4zmqn5kf`, empty commit `ec079ad`, 13m31s overall, longest browser shard 85.7s, OS Vitest 145.5s. Four shard installs took 8–10s, while Prepare/Apps/Finish installs still added 177.6s on the serial path. Zero preview test retries.
+- Removing recorded install time alone leaves the repeat sharded workflow at ~10m33s versus ~9m40s for the historical normal run. Job handoffs/startup remain; Vitest limits the benefit of faster browser tests.
+- A separate pnpm probe on the baked image took 72.4s then 7.2s on the same runner, adding no packages. Nub v0.9.2 rejects the frozen lockfile over the scoped capnweb override. Dependency-manager changes are outside this worker-count experiment.
+
+## Implementation log
+
+- Existing branch `codex/playwright-full-parallel`, worktree `../worktrees/iterate/playwright-full-parallel`, PR https://github.com/iterate/iterate/pull/2659.
+- Owning Codex task: `01a09f64-ea4e-7c61-ab0a-c15eb65df3bc`.
