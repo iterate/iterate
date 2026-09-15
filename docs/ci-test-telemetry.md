@@ -815,9 +815,16 @@ explicit `PlaywrightIncompleteStepError` instead of losing the whole artifact.
 Any test that fails then passes on retry on **main** enters Unknown flakes,
 including when the rest of its suite is interrupted. It stays until **20
 consecutive clean main passes** in that suite, with no time window. Another
-retry or final failure resets the streak. PR results, skips, absent tests and
-incomplete runs cannot advance it. Adding a wrapper on main moves the test to
-Flakes or Failures. History remains in the stream after a row disappears.
+retry or final failure resets the streak. If it is absent from a complete main
+run's **full test list**, remove the row immediately instead. PR results,
+skips and incomplete runs cannot advance its streak or prove its deletion.
+Adding a wrapper on main moves it to Flakes or Failures. History remains in
+the stream after a row disappears.
+
+Keep the latest full main test list per suite, even when a newer summary only
+has counts. A late retry from before proven deletion cannot restore the row;
+a new retry after that inventory can. A newer observation of the test also
+prevents an older inventory from falsely declaring it absent.
 
 Known `createFlake` tests suggest removing their wrapper after the same 20 main
 passes, without a minimum elapsed time. They remain wrapped until someone
@@ -830,7 +837,7 @@ the reporters use that same title for retries and wrappers. Multiple instances
 sharing a title count as one run, and all must pass to advance it. Missing
 reporters, unexecuted tests, wrong commits, interrupted runs and damaged/missing
 records cannot certify a clean result. Old summaries containing only counts
-cannot advance per-test streaks. Focused local runs do not publish complete
+cannot advance per-test streaks or prove deletion. Focused local runs do not publish complete
 suite summaries.
 
 Each suite shows its latest complete main commit, run, test count and failure

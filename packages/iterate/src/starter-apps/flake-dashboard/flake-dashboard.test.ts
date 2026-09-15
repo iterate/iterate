@@ -276,7 +276,7 @@ test("unknown streaks count only that test's complete main results in its suite"
     runRecorded(4, [], { tests: [pass], suite: "specs" }),
     runRecorded(5, [], { tests: [pass], complete: false }),
     runRecorded(6, [], { tests: [{ ...pass, outcome: "skip" }] }),
-    runRecorded(7, [], { tests: [{ name: "another test", outcome: "pass" }] }),
+    runRecorded(7, [], { tests: [{ name: "another test", outcome: "pass" }], complete: false }),
     // A legacy summary with just counts is not proof of this test passing.
     runRecorded(8, []),
     // Late delivery cannot advance the streak with an older observation.
@@ -287,6 +287,39 @@ test("unknown streaks count only that test's complete main results in its suite"
   expect(renderBody(h.state())).toContain("2/20 consecutive passes");
   await h.append(runRecorded(10, [], { tests: [pass, { ...pass, outcome: "fail" }] }));
   expect(renderBody(h.state())).toContain("0/20 consecutive passes");
+});
+
+test("only a complete main test inventory retires absent unknown flakes", async () => {
+  const h = makeHarness();
+  const flake = record("chat upload", "retried-pass", { kind: "unknown" });
+  const anotherTest = { name: "another test", outcome: "pass" } as const;
+  await h.append(birth(), runRecorded(1, [flake]));
+  await h.append(
+    runRecorded(2, [], { tests: [anotherTest], branch: "some-pr" }),
+    runRecorded(3, [], { tests: [anotherTest], suite: "specs" }),
+    runRecorded(4, [], { tests: [{ name: "chat upload", outcome: "skip" }] }),
+    runRecorded(5, []), // A legacy count-only summary cannot prove absence.
+    runRecorded(6, [], { tests: [anotherTest], complete: false }),
+  );
+  expect(renderBody(h.state())).toContain("chat upload |");
+  await h.append(runRecorded(7, [], { tests: [anotherTest] }));
+  expect(renderBody(h.state())).not.toContain("chat upload |");
+  await h.append(
+    runRecorded(8, []),
+    runRecorded(3.5, [flake, record("late historical retry", "retried-pass", { kind: "unknown" })]),
+  );
+  expect(renderBody(h.state())).not.toContain("chat upload |");
+  expect(renderBody(h.state())).not.toContain("late historical retry |");
+  await h.append(runRecorded(9, [flake]));
+  expect(renderBody(h.state())).toContain("chat upload |");
+  // An older inventory cannot hide a test observed in a newer run.
+  await h.append(runRecorded(8.5, [], { tests: [anotherTest] }));
+  expect(renderBody(h.state())).toContain("chat upload |");
+  await h.append(runRecorded(12, [], { tests: [anotherTest], complete: false }));
+  expect(renderBody(h.state())).toContain("chat upload |");
+  // The incomplete run did not observe this test and cannot block proof of deletion.
+  await h.append(runRecorded(10, [], { tests: [anotherTest] }));
+  expect(renderBody(h.state())).not.toContain("chat upload |");
 });
 
 test.each(["retry", "final failure"])(

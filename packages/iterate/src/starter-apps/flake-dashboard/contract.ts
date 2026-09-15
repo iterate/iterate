@@ -173,6 +173,7 @@ export const FlakeDashboardState = z.object({
         z.object({
           record: FlakeRecord,
           passStreak: z.number().int().nonnegative(),
+          /** Newest run that actually contained this test, including skips. */
           lastRunAt: z.string(),
           recent: z.array(z.object({ outcome: FlakeOutcome, commit: z.string() })).max(10),
         }),
@@ -185,13 +186,19 @@ export const FlakeDashboardState = z.object({
       z.object({
         latest: MainSuiteRun,
         complete: MainSuiteRun.nullable(),
+        // Keep the last full test list even if a newer legacy summary has only counts.
+        inventory: z
+          .object({ startedAt: z.iso.datetime(), names: z.array(z.string()) })
+          .nullable()
+          .default(null),
       }),
     )
     .default({}),
   /**
    * The newest three ingested results across all branches retire absent
    * tracked tests. This preserves visibility during partial PR runs. Unknown
-   * flakes instead stay until 20 consecutive main passes or wrapper adoption.
+   * flakes retire after 20 main passes, wrapper adoption, or proven absence
+   * from their suite's full main inventory.
    */
   suites: z
     .record(z.string(), z.object({ recentRunOffsets: z.array(StreamOffset).max(3).default([]) }))

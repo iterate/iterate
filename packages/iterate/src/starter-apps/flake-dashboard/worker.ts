@@ -412,6 +412,17 @@ export class FlakeDashboardProcessor extends StreamProcessor<
           },
         };
         const mainRuns = { ...state.mainRuns };
+        const previousInventory = mainRuns[suite]?.inventory || null;
+        const inventory =
+          onDefaultBranch &&
+          summary?.status === "complete" &&
+          summary.tests &&
+          (!previousInventory || summary.startedAt >= previousInventory.startedAt)
+            ? {
+                startedAt: summary.startedAt,
+                names: [...new Set(summary.tests.map((test) => test.name))],
+              }
+            : previousInventory;
         const unknownFlakes = { ...state.unknownFlakes };
         if (onDefaultBranch) {
           const unknowns = { ...unknownFlakes[suite] };
@@ -436,6 +447,7 @@ export class FlakeDashboardProcessor extends StreamProcessor<
               const wrapperAt = tests[name]?.lastMainWrapperAt[suite];
               if (wrapperAt && summary.startedAt < wrapperAt) continue;
               const outcome = results.get(name);
+              if (!outcome) continue;
               const pass = outcome === "pass" && summary.status === "complete";
               const fail = outcome === "fail";
               // Late passes cannot advance a streak. Late failures still break
@@ -475,6 +487,14 @@ export class FlakeDashboardProcessor extends StreamProcessor<
               recent: [...(previous?.recent || []), { outcome: record.outcome, commit }].slice(-10),
             };
           }
+          if (inventory) {
+            const names = new Set(inventory.names);
+            for (const [name, test] of Object.entries(unknowns)) {
+              // A newer observation can reintroduce a deleted test. An older
+              // delayed retry cannot undo its absence from a full main run.
+              if (test.lastRunAt <= inventory.startedAt && !names.has(name)) delete unknowns[name];
+            }
+          }
           unknownFlakes[suite] = unknowns;
         }
         if (onDefaultBranch && summary) {
@@ -482,6 +502,7 @@ export class FlakeDashboardProcessor extends StreamProcessor<
           // Per-test evidence is folded above; don't duplicate it in snapshots.
           const incoming = { runId, commit, summary: { ...summary, tests: undefined } };
           mainRuns[suite] = {
+            inventory,
             latest:
               !previous || summary.startedAt >= previous.latest.summary.startedAt
                 ? incoming
@@ -914,7 +935,7 @@ function renderUnknownFlakes(state: FlakeDashboardState): string[] {
     "",
     "## Unknown flakes",
     "",
-    `_Any main retry adds a test here. It stays until ${flakeTransitionThresholds.unwrap.runs} consecutive passes on main, or adoption into a wrapper. Failures reset the streak; skipped, absent and incomplete results cannot advance it. 🟩 passed · 🟥 needed a retry · ❌ failed. PR results do not affect this table._`,
+    `_Any main retry adds a test here. Remove it after ${flakeTransitionThresholds.unwrap.runs} consecutive main passes, wrapper adoption, or absence from a complete main run's full test list. Failures reset the streak. Skips and incomplete results cannot advance it or prove deletion. 🟩 passed · 🟥 needed a retry · ❌ failed. PR results do not affect this table._`,
     "",
     ...suites.map((suite) => {
       const result = state.mainRuns[suite];

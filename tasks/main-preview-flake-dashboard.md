@@ -5,7 +5,7 @@ size: large
 
 # Main preview runs and a current flake dashboard
 
-Status: shared preview execution is validated on PR CI and the main-specific workflow, including successful cleanup and retained lease. Unknown-flake retention now uses 20 consecutive main passes; local tests, typechecks, lint and the rendered dashboard pass. Fresh CI for this last change remains.
+Status: shared preview execution is validated on PR CI and the main-specific workflow, including successful cleanup and retained lease. Unknown flakes now retire after 20 consecutive main passes or confirmed absence from a full main test list; local tests, typechecks, lint and the rendered dashboard pass. Fresh CI for this last change remains.
 
 ## Current scope
 
@@ -14,7 +14,7 @@ Status: shared preview execution is validated on PR CI and the main-specific wor
 - [x] Main takes an ordinary preview lease under `main-preview`, renews it across runs, and keeps it after cleanup. Use the existing 3h expiry and GC; make no Semaphore policy changes. *Semaphore matches the base commit; shared claim tests cover `main-preview` renewal.*
 - [x] Trigger the full preview suite on main pushes. Serialize main deployment/test/cleanup on its ordinary slot without cancelling an active run; newer queued commits replace older queued commits. Keep current PR cancellation behavior. *`cloudflare-main-preview.yml` uses one concurrency group with cancellation disabled.*
 - [x] Upload complete suite results even when no unknown flakes occur. Preserve historical records. *Suite summaries carry branch/head, completeness and per-test results using the same bare title as retry records.*
-- [x] Any main retry adds an unknown flake; retain it until 20 consecutive actual passes in that suite, or wrapper adoption on main. Suggest removing known flake wrappers after 20 main passes, with no time minimum. *Reducer/rendering tests cover retention, resets, skipped/absent/incomplete results, PR isolation, adoption and late delivery.*
+- [x] Any main retry adds an unknown flake; retain it until 20 consecutive actual passes in that suite, wrapper adoption on main, or absence from a complete main test inventory. Suggest removing known flake wrappers after 20 main passes, with no time minimum. *Reducer/rendering tests cover retention, resets, skipped/absent/incomplete results, PR isolation, adoption and late delivery.*
 - [x] Explain all outcome emojis, including unexpected errors (❌). *Both legend rows describe ❌ as an unexpected error.*
 - [x] Collapse the Failures table with test counts per suite in its summary. *Renderer uses details/summary with suite counts.*
 - [x] Put collapsible Sentinels last. Render unknown test names as plain text with safe Markdown escaping. *Renderer orders Sentinels last and escapes plain unknown names.*
@@ -81,4 +81,6 @@ Codex session: `01a0a1e6-0135-7902-91aa-b4bb07026de2`.
 - Late-delivery check: an older success cannot extend the current streak; an older failure still resets it. Keep retired row state hidden so late failure evidence can restore a row that appeared to have recovered. Regression scenarios cover both retry/final failure and a late failure after 20 observed passes.
 
 - Bugbot `discussion_r4020789155`: confirmed a late retry could undo newer main wrapper adoption and change the historical test's current kind. Track the latest main wrapper run per suite; older retry evidence remains in counts/history without reopening the unknown row or replacing the current wrapper/pass streak. The public reducer regression also verifies a genuinely newer unwrapped retry still appears.
-- User discussion (no implementation requested): remove unknown rows immediately when absent from a complete main run's full test inventory. The user explicitly asked “Just answer”; current code still pauses absent-test streaks. This proposal is separate from the Bugbot ordering fix.
+- User approved the absence rule after discussion: unknown rows now retire immediately when absent from a complete main run's full test inventory. Incomplete/legacy/PR results cannot prove deletion. Preserve the latest full inventory so delayed historical retries cannot restore deleted tests; a genuinely newer flake can.
+
+- Absence-rule validation: a processor-harness lifecycle covers PR and suite isolation, skipped tests, missing inventories, incomplete runs, immediate deletion, delayed retries, a newer reintroduced test, and late complete inventories arriving after incomplete runs. Dashboard suite: 38 tests.
