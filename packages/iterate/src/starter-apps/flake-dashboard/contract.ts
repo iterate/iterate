@@ -126,11 +126,9 @@ const TrackedTest = z.object({
    * The last (up to) 10 recorded outcomes on any branch, oldest first — the
    * render's emoji streak bar, each entry carrying the commit that produced
    * it so the square can link straight to that commit's checks. All branches,
-   * like the counts: the specs and preview-e2e suites only run on pull
-   * requests, so a default-branch-only bar would stay empty forever for the
-   * suites where most flakes live. The numeric defaultBranchStreak below
-   * stays main-only and carries the transition-threshold counts past what 10
-   * entries can show.
+   * like the counts, for debugging PR failures too. The numeric
+   * defaultBranchStreak below stays main-only and carries the
+   * transition-threshold counts past what 10 entries can show.
    */
   recent: z
     .array(z.object({ outcome: FlakeOutcome, commit: z.string().min(1).max(100) }))
@@ -161,19 +159,34 @@ const TrackedTest = z.object({
 export const FlakeDashboardState = z.object({
   birthCertificate: z.object({ config: FlakeDashboardConfig }).nullable().default(null),
   tests: z.record(z.string(), TrackedTest).default({}),
+  /** Main-only unknowns, isolated by suite; history stays in tests and the stream. */
+  unknownFlakes: z
+    .record(
+      z.string(),
+      z.record(
+        z.string(),
+        z.object({
+          record: FlakeRecord,
+          passStreak: z.number().int().nonnegative(),
+          lastRunAt: z.string(),
+          recent: z.array(z.object({ outcome: FlakeOutcome, commit: z.string() })).max(10),
+        }),
+      ),
+    )
+    .default({}),
   mainRuns: z
     .record(
       z.string(),
       z.object({
         latest: MainSuiteRun,
-        complete: MainSuiteRun.extend({ records: z.array(FlakeRecord) }).nullable(),
+        complete: MainSuiteRun.nullable(),
       }),
     )
     .default({}),
   /**
    * The newest three ingested results across all branches retire absent
    * tracked tests. This preserves visibility during partial PR runs. Unknown
-   * flakes instead use the complete main snapshots in mainRuns.
+   * flakes instead stay until 20 consecutive main passes or wrapper adoption.
    */
   suites: z
     .record(z.string(), z.object({ recentRunOffsets: z.array(StreamOffset).max(3).default([]) }))
@@ -195,14 +208,14 @@ export const FlakeDashboardState = z.object({
 });
 
 /**
- * Thresholds for the data-provable lifecycle transitions (grilled decision:
- * unwrap after 50 consecutive default-branch passes over >=5 days; propose
- * `createFailing` after 25 consecutive matched failures over >=2 days).
+ * Suggest unwrapping createFlake after 20 consecutive main passes, regardless
+ * of elapsed time. Unknown flakes retire automatically at the same count.
+ * Propose createFailing after 25 matched failures over >=2 days.
  * Tunable constants. Sentinel tests are excluded from proposals entirely —
  * they are designed to flake.
  */
 export const flakeTransitionThresholds = {
-  unwrap: { runs: 50, minSpanMs: 5 * 24 * 60 * 60 * 1000 },
+  unwrap: { runs: 20, minSpanMs: 0 },
   "switch-to-failing": { runs: 25, minSpanMs: 2 * 24 * 60 * 60 * 1000 },
   // A pin that keeps passing unexpectedly looks fixed: propose deleting the
   // createFailing wrapper after a sustained streak.

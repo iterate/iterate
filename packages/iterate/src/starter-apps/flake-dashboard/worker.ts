@@ -243,6 +243,9 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
         ) {
           malformedRecords.push("Unknown flake records do not match the full runner result");
         }
+        if (summary?.tests && summary.tests.length !== summary.testCount) {
+          malformedRecords.push("Per-test results do not match the full runner test count");
+        }
         if (summary && malformedRecords.length > 0) {
           summary.status = "incomplete";
           summary.diagnostics.push(...new Set(malformedRecords));
@@ -394,9 +397,68 @@ export class FlakeDashboardProcessor extends StreamProcessor<
         };
         const mainRuns = { ...state.mainRuns };
         const { summary, suite, runId, commit, records } = event.payload;
+        const unknownFlakes = { ...state.unknownFlakes };
+        if (onDefaultBranch) {
+          const unknowns = { ...unknownFlakes[suite] };
+          const recordedNames = new Set(records.map((record) => record.name));
+          const results = new Map<string, "pass" | "fail" | "skip">();
+          for (const test of summary?.tests || []) {
+            // A shared title across projects/workspaces gets one vote per run.
+            // Every instance must pass; any failure breaks the streak.
+            const previous = results.get(test.name);
+            results.set(
+              test.name,
+              previous === "fail" || test.outcome === "fail"
+                ? "fail"
+                : previous === "skip" || test.outcome === "skip"
+                  ? "skip"
+                  : "pass",
+            );
+          }
+          if (summary) {
+            for (const [name, test] of Object.entries(unknowns)) {
+              if (recordedNames.has(name) || summary.startedAt <= test.lastRunAt) continue;
+              const outcome = results.get(name);
+              const pass = outcome === "pass" && summary.status === "complete";
+              const fail = outcome === "fail";
+              const passStreak = fail ? 0 : test.passStreak + Number(pass);
+              unknowns[name] = {
+                ...test,
+                passStreak,
+                lastRunAt: summary.startedAt,
+                recent:
+                  pass || fail
+                    ? test.recent
+                        .concat({ outcome: pass ? "pass" : "unexpected-error", commit })
+                        .slice(-10)
+                    : test.recent,
+              };
+              if (passStreak >= flakeTransitionThresholds.unwrap.runs) delete unknowns[name];
+            }
+          }
+          for (const record of records) {
+            const previous = unknowns[record.name];
+            const lastRunAt = summary?.startedAt || record.at;
+            if (previous && lastRunAt <= previous.lastRunAt) continue;
+            if (record.kind !== "unknown") {
+              // Wrapping the test on main moves it to Flakes/Failures.
+              delete unknowns[record.name];
+              continue;
+            }
+            // A retry is evidence even if the rest of its suite was interrupted.
+            unknowns[record.name] = {
+              record,
+              passStreak: 0,
+              lastRunAt,
+              recent: [...(previous?.recent || []), { outcome: record.outcome, commit }].slice(-10),
+            };
+          }
+          unknownFlakes[suite] = unknowns;
+        }
         if (onDefaultBranch && summary) {
           const previous = mainRuns[suite];
-          const incoming = { runId, commit, summary };
+          // Per-test evidence is folded above; don't duplicate it in snapshots.
+          const incoming = { runId, commit, summary: { ...summary, tests: undefined } };
           mainRuns[suite] = {
             latest:
               !previous || summary.startedAt >= previous.latest.summary.startedAt
@@ -405,11 +467,11 @@ export class FlakeDashboardProcessor extends StreamProcessor<
             complete:
               summary.status === "complete" &&
               (!previous?.complete || summary.startedAt >= previous.complete.summary.startedAt)
-                ? { ...incoming, records }
+                ? incoming
                 : previous?.complete || null,
           };
         }
-        return { ...state, tests, suites, mainRuns, lastDataOffset: event.offset };
+        return { ...state, tests, suites, mainRuns, unknownFlakes, lastDataOffset: event.offset };
       }
 
       case flakeEventTypes.transitionProposed: {
@@ -670,7 +732,7 @@ export function renderBody(state: FlakeDashboardState): string {
     .sort()
     .at(-1);
   // Tracked tests remain visible while present in the last three ingested
-  // results for their suite. Unknowns use complete main snapshots below.
+  // results for their suite. Unknowns use their main pass streaks below.
   // History remains in the event log and folded counts after a row disappears.
   const tracked = tests.filter(([, test]) => test.kind !== "unknown");
   const visible = tracked.filter(([, test]) =>
@@ -739,8 +801,7 @@ export function renderBody(state: FlakeDashboardState): string {
   const sections = [
     {
       title: "Flakes",
-      legend:
-        "_createFlake-wrapped: 🟩 passed · 🟥 the known flake struck · ❌ failed differently than expected._",
+      legend: `_createFlake-wrapped: 🟩 passed · 🟥 the known flake struck · ❌ failed differently than expected. Suggest removing the wrapper after ${flakeTransitionThresholds.unwrap.runs} consecutive main passes, with no minimum elapsed time._`,
       tests: visible.filter(([name, test]) => test.kind === "flake" && !isSentinel(name)),
     },
     {
@@ -759,7 +820,7 @@ export function renderBody(state: FlakeDashboardState): string {
 
   return [
     DASHBOARD_MARKER,
-    "Test health, folded from CI-reported runs: [`createFlake`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/flake-test.ts) wraps, [`createFailing`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/failing-test.ts) pins, and unclassified flaky tests caught by CI retries. Maintained automatically — edits to this body will be overwritten. Streak = last 10 recorded outcomes on any branch, oldest→newest; each square links to the commit that produced it.",
+    "Test health, folded from CI-reported runs: [`createFlake`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/flake-test.ts) wraps, [`createFailing`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/failing-test.ts) pins, and unclassified flaky tests caught by CI retries. Maintained automatically — edits to this body will be overwritten. Squares show the last 10 outcomes, oldest→newest, and link to their commits. Wrapped tests show all branches; unknown flakes show main only. Lifecycle streak counts use main only.",
     ...(sections.length === 0 ? ["", "_no tests recorded yet_"] : []),
     ...sections.filter((section) => section.title !== "Sentinels").flatMap(renderSection),
     ...renderUnknownFlakes(state),
@@ -807,22 +868,31 @@ function renderUnknownFlakes(state: FlakeDashboardState): string[] {
   const escape = (text: string) =>
     text.replaceAll(/\s+/gu, " ").replaceAll(/([\\`*_[\]|<>])/gu, "\\$1");
   const rows = suites.flatMap((suite) =>
-    (state.mainRuns[suite]?.complete?.records || [])
-      .filter((record) => record.kind === "unknown")
-      .map((record) =>
-        [
+    Object.entries(state.unknownFlakes[suite] || {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([, test]) => {
+        const record = test.record;
+        const config = state.birthCertificate!.config;
+        const squares = test.recent
+          .map(
+            ({ outcome, commit }) =>
+              `[${OUTCOME_EMOJI[outcome]}](https://github.com/${config.repository.owner}/${config.repository.repo}/commit/${commit})`,
+          )
+          .join("");
+        return [
           escape(record.name),
           `\`${(record.error || "No error sample recorded").replaceAll(/\s+/gu, " ").replaceAll("`", "'").replaceAll("|", "\\|").slice(0, 300)}\``,
           escape(suite),
-        ].join(" | "),
-      ),
+          `${squares}<br>${test.passStreak}/${flakeTransitionThresholds.unwrap.runs} consecutive passes`,
+        ].join(" | ");
+      }),
   );
   const completeCount = suites.filter((suite) => state.mainRuns[suite]?.complete).length;
   return [
     "",
     "## Unknown flakes",
     "",
-    "_Tests that failed then passed on retry in the latest complete main result for each suite. PR history is retained but does not populate this table._",
+    `_Any main retry adds a test here. It stays until ${flakeTransitionThresholds.unwrap.runs} consecutive passes on main, or adoption into a wrapper. Failures reset the streak; skipped, absent and incomplete results cannot advance it. 🟩 passed · 🟥 needed a retry · ❌ failed. PR results do not affect this table._`,
     "",
     ...suites.map((suite) => {
       const result = state.mainRuns[suite];
@@ -837,11 +907,11 @@ function renderUnknownFlakes(state: FlakeDashboardState): string[] {
     }),
     "",
     ...(rows.length > 0
-      ? ["test | first failure | suite", "--- | --- | ---", ...rows]
+      ? ["test | first failure | suite | streak (main)", "--- | --- | --- | ---", ...rows]
       : [
           completeCount === 0
             ? "_Awaiting the first complete main results._"
-            : "_No unknown flakes in these complete main results. A clean run does not prove earlier bugs fixed._",
+            : "_No active unknown flakes. Passing streaks are evidence of stability, not proof that the root cause is fixed._",
         ]),
   ];
 }

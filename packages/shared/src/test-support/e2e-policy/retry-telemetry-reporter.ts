@@ -168,7 +168,6 @@ export class RetryTelemetryReporter {
   ): Promise<void> {
     try {
       const tests: TestTelemetryRecord[] = [];
-      const reportedNames: (string | undefined)[] = [];
       const modules: ModuleTelemetryRecord[] = [];
       for (const testModule of testModules) {
         const moduleDiagnostic = testModule.diagnostic?.();
@@ -223,9 +222,9 @@ export class RetryTelemetryReporter {
             normalizeTestTelemetryError(error, "Unknown test-attempt error"),
           );
           const firstFailure = compactRetryFailure(errors[0]);
-          reportedNames.push(test.name);
           tests.push({
             fullName: test.fullName,
+            leafName: test.name,
             moduleId: testModule.moduleId,
             ...(test.location && {
               testLine: test.location.line,
@@ -289,11 +288,8 @@ export class RetryTelemetryReporter {
       // record it for the test-health dashboard, error sample included, so it
       // can be adopted into createFlake (see flake-record.ts). The bare test
       // name keys the record so a later createFlake wrap keeps the same row.
-      for (const [index, telemetryRecord] of tests.entries()) {
-        const unknownFlake = unknownFlakeRecordFromTelemetry({
-          ...telemetryRecord,
-          leafName: reportedNames[index],
-        });
+      for (const telemetryRecord of tests) {
+        const unknownFlake = unknownFlakeRecordFromTelemetry(telemetryRecord);
         if (unknownFlake) await appendFlakeRecord(unknownFlake);
       }
       const retried = tests.filter((test) => test.retryCount > 0);

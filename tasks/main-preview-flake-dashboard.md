@@ -1,11 +1,11 @@
 ---
-status: needs-preview-validation
+status: awaiting-ci
 size: large
 ---
 
 # Main preview runs and a current flake dashboard
 
-Status: implementation and PR preview validation are complete; all CI checks passed at `3b17b8689`. Final bot-review fixes cover empty cancelled runs and remove three casts. A full dispatch of the main-specific workflow remains outstanding; its deployment/cleanup path was already exercised.
+Status: shared preview execution is validated on PR CI and the main-specific workflow, including successful cleanup and retained lease. Unknown-flake retention now uses 20 consecutive main passes; local tests, typechecks, lint and the rendered dashboard pass. Fresh CI for this last change remains.
 
 ## Current scope
 
@@ -13,13 +13,13 @@ Status: implementation and PR preview validation are complete; all CI checks pas
 - [x] Share deployment, readiness, tests and cleanup between PR/main callers. Extract PR reporting/context from the shared implementation where needed; keep the extraction focused. *`PreviewTarget` supplies run identity, report, comparison base, slot preference and review project to shared commands; source-specific setup stays at the boundary.*
 - [x] Main takes an ordinary preview lease under `main-preview`, renews it across runs, and keeps it after cleanup. Use the existing 3h expiry and GC; make no Semaphore policy changes. *Semaphore matches the base commit; shared claim tests cover `main-preview` renewal.*
 - [x] Trigger the full preview suite on main pushes. Serialize main deployment/test/cleanup on its ordinary slot without cancelling an active run; newer queued commits replace older queued commits. Keep current PR cancellation behavior. *`cloudflare-main-preview.yml` uses one concurrency group with cancellation disabled.*
-- [x] Upload complete suite results even when no unknown flakes occur. Only a completed full main result replaces that suite's current unknown-flake list; partial/cancelled/missing results must not look like a clean run. Preserve historical records. *Suite summaries carry branch/head and completeness; incomplete results retain the previous snapshot.*
-- [x] Show unknown flakes from the latest complete main run per suite, with run/commit provenance. Remove the 14-day accumulation from the current unknown table. *Dashboard reducer/rendering tests cover complete, empty and incomplete main results.*
+- [x] Upload complete suite results even when no unknown flakes occur. Preserve historical records. *Suite summaries carry branch/head, completeness and per-test results using the same bare title as retry records.*
+- [x] Any main retry adds an unknown flake; retain it until 20 consecutive actual passes in that suite, or wrapper adoption on main. Suggest removing known flake wrappers after 20 main passes, with no time minimum. *Reducer/rendering tests cover retention, resets, skipped/absent/incomplete results, PR isolation, adoption and late delivery.*
 - [x] Explain all outcome emojis, including unexpected errors (❌). *Both legend rows describe ❌ as an unexpected error.*
 - [x] Collapse the Failures table with test counts per suite in its summary. *Renderer uses details/summary with suite counts.*
 - [x] Put collapsible Sentinels last. Render unknown test names as plain text with safe Markdown escaping. *Renderer orders Sentinels last and escapes plain unknown names.*
-- [x] Test shared lease renewal, pinned commit validation, complete-zero-flake replacement, partial-run handling, and the rendered issue through real public boundaries/harnesses. *156 focused CI/runner tests and 31 dashboard harness tests pass.*
-- [ ] Validate the shared path against a preview and inspect its results/artifacts. Check the new main workflow using supported Depot execution before merge; do not claim automatic main triggers are live before merge.
+- [x] Test shared lease renewal, pinned commit validation, per-test pass streaks, partial-run handling, and the rendered issue through real public boundaries/harnesses. *156 focused CI/runner tests and 31 dashboard harness tests pass.*
+- [x] Validate the shared path against a preview and inspect its results/artifacts. Check the new main workflow using supported Depot execution before merge. *Main workflow dispatch `7wfmztwtdn` at `128804816` passed all six deploys/test commands on preview-16; cleanup succeeded and retained the main-preview lease. File report and complete suite summaries preserve the feature-branch provenance. Automatic main triggers become live only after merge.*
 - [x] Complete checks and commit/push the common-target refactor for compare-link review. *Implementation pushed as `170a85b7c`; local checks and partial deployed validation are recorded below. PR stayed closed during compare-link review.*
 - [x] Reopen PR #2658 after the final human-review fixes, with a current description and risk map. *Reopened at `f951e6897`; global monitoring is active through September 16.*
 
@@ -68,3 +68,12 @@ Codex session: `01a0a1e6-0135-7902-91aa-b4bb07026de2`.
 - Reopened CI failure: the new `pnpm preview deploy --help` test spent 8.3s starting the CLI under full workspace contention and exceeded Vitest's 5s timeout, stopping other suites. Removed the seven flag-presence subprocess tests; the ambiguous-source check now calls the public `run` command directly. No product code, timeout or retry policy changed. Native CLI loading was already verified manually and is exercised by deployed CI.
 
 - Final bot review: reproduced cancelled finalization with zero artifacts failing for both `unit` and `preview`, then kept its cancelled manifest without writing an unidentifiable suite summary. Cleanup now selects from the known app registry, repository parsing returns a validated tuple without assertion, and GitHub retry status is schema-validated. The full scripts suite passes 329 tests; current-head CI before these fixes (`3b17b8689`) passed all required checks and preview e2e.
+
+
+### September 15 — retain unknown flakes through clean runs
+
+- Replaced latest-run replacement with per-suite unknown-flake streaks. Any main retry adds a row, including an interrupted suite. Twenty consecutive clean passes remove it; another failure resets it. Missing/skipped tests and incomplete runs never advance it. PR evidence cannot clear it; a wrapper on main adopts it.
+- Both telemetry reporters now persist the bare test title alongside the full name. Full-suite summaries carry individual outcomes, using the exact retry-record identity. Duplicate titles get one pass per suite run only if every instance passes. Missing per-test evidence cannot count as clean.
+- Known createFlake tests now suggest unwrapping after 20 main passes with no minimum elapsed time. Other proposal thresholds and sentinel exclusions are unchanged.
+- Validation: 96 CI-script tests, 45 test-support passes plus one expected failure, and 33 dashboard tests pass; all three affected workspace typechecks and scoped lint pass. The refreshed GitHub-Markdown-rendered example shows 3/20 and 8/20 streaks surviving an interrupted run.
+- Main-workflow acceptance: run `7wfmztwtdn` at `128804816` deployed all six apps and passed all test commands. Downloaded summaries: preview-e2e 232 tests / one unknown retry, specs 92 tests / no unknown retries, zero final failures, both complete with honest `ci/main-preview-dashboard` provenance. The file report has the same head/job/attempt; cleanup erased preview-16 and retained the lease until `2026-09-16T01:20:41.917Z`. The single retry was “project host exposes build failures and heals on the next good commit” after a Cloudflare DO storage reset. This dispatch validates runner plumbing; fresh PR CI validates the subsequent retention change.

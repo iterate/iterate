@@ -227,7 +227,7 @@ test("failure rows show pin-held stats and pinned since dates the pin, not the f
   expect(row.match(/🟥|🟩|❌/gu)).toEqual(["🟥", "🟥", "🟥", "🟩"]);
 });
 
-test("unknown flakes follow complete main results; PR and interrupted runs cannot clear them", async () => {
+test("an unknown flake stays until it passes 20 main runs in a row", async () => {
   const h = makeHarness();
   const flake = record("chat upload", "retried-pass", {
     at: day(0),
@@ -243,11 +243,67 @@ test("unknown flakes follow complete main results; PR and interrupted runs canno
   await h.append(runRecorded(3, [], { complete: false }));
   expect(renderBody(h.state())).toContain("chat upload |");
   expect(renderBody(h.state())).toContain("incomplete");
-  await h.append(runRecorded(4, []));
-  const clean = renderBody(h.state());
-  expect(clean).not.toContain("chat upload |");
-  expect(clean).toContain("No unknown flakes in these complete main results");
+  for (let n = 4; n < 23; n++) {
+    await h.append(
+      runRecorded(n, [], {
+        tests: [{ name: "chat upload", outcome: "pass" }],
+      }),
+    );
+  }
+  expect(renderBody(h.state())).toContain("chat upload |");
+  expect(renderBody(h.state())).toContain("19/20 consecutive passes");
+  await h.append(
+    runRecorded(23, [], {
+      tests: [{ name: "chat upload", outcome: "pass" }],
+    }),
+  );
+  expect(renderBody(h.state())).not.toContain("chat upload |");
+  expect(h.events(flakeEventTypes.transitionProposed)).toHaveLength(0);
   expect(h.state().tests["chat upload"]!.counts).toMatchObject({ "retried-pass": 2 });
+  await h.append(runRecorded(24, [flake]));
+  expect(renderBody(h.state())).toContain("chat upload |");
+  expect(renderBody(h.state())).toContain("0/20 consecutive passes");
+});
+
+test("unknown streaks count only that test's complete main results in its suite", async () => {
+  const h = makeHarness();
+  const pass = { name: "chat upload", outcome: "pass" } as const;
+  await h.append(
+    birth(),
+    runRecorded(1, [record("chat upload", "retried-pass", { kind: "unknown" })]),
+    runRecorded(2, [], { tests: [pass] }),
+    runRecorded(3, [], { tests: [pass], branch: "some-pr" }),
+    runRecorded(4, [], { tests: [pass], suite: "specs" }),
+    runRecorded(5, [], { tests: [pass], complete: false }),
+    runRecorded(6, [], { tests: [{ ...pass, outcome: "skip" }] }),
+    runRecorded(7, [], { tests: [{ name: "another test", outcome: "pass" }] }),
+    // A legacy summary with just counts is not proof of this test passing.
+    runRecorded(8, []),
+    // Late delivery cannot advance the streak with an older observation.
+    runRecorded(0, [], { tests: [pass] }),
+    // Two instances sharing a title count as one run, not two passes.
+    runRecorded(9, [], { tests: [pass, pass] }),
+  );
+  expect(renderBody(h.state())).toContain("2/20 consecutive passes");
+  await h.append(runRecorded(10, [], { tests: [pass, { ...pass, outcome: "fail" }] }));
+  expect(renderBody(h.state())).toContain("0/20 consecutive passes");
+});
+
+test("a retry in an interrupted main run resets an unknown streak; a main wrapper adopts it", async () => {
+  const h = makeHarness();
+  const flake = record("chat upload", "retried-pass", { kind: "unknown" });
+  await h.append(birth(), runRecorded(1, [flake], { complete: false }));
+  expect(renderBody(h.state())).toContain("chat upload |");
+  await h.append(
+    runRecorded(2, [], { tests: [{ name: "chat upload", outcome: "pass" }] }),
+    runRecorded(3, [flake], { complete: false }),
+  );
+  expect(renderBody(h.state())).toContain("0/20 consecutive passes");
+  await h.append(runRecorded(4, [record("chat upload", "pass")], { branch: "some-pr" }));
+  expect(renderBody(h.state())).toContain("chat upload |");
+  await h.append(runRecorded(5, [record("chat upload", "pass")]));
+  expect(renderBody(h.state())).not.toContain("chat upload |");
+  expect(renderBody(h.state())).toContain("`chat upload` |");
 });
 
 test("sentinel streaks never propose transitions", async () => {
@@ -294,37 +350,26 @@ test("default-branch streaks ignore other branches and reset on unexpected error
   expect(h.state().tests.deploy!.defaultBranchStreak).toBeNull();
 });
 
-test("a long passing streak proposes exactly one unwrap", async () => {
+test("20 main passes propose unwrapping, even within one hour, and only once", async () => {
   const h = makeHarness();
   await h.append(birth());
-  // 50 consecutive main passes spread over 10 days: crosses both the run
-  // count and the minimum span.
-  for (let i = 0; i < 50; i++) {
-    await h.append(runRecorded(i, [record("deploy", "pass", { at: day(i / 5) })]));
+  for (let i = 0; i < 19; i++) {
+    await h.append(runRecorded(i, [record("deploy", "pass", { at: day(i / 1440) })]));
   }
+  expect(h.events(flakeEventTypes.transitionProposed)).toHaveLength(0);
+  await h.append(runRecorded(19, [record("deploy", "pass", { at: day(19 / 1440) })]));
   const proposals = h.events(flakeEventTypes.transitionProposed);
   expect(proposals).toHaveLength(1);
   expect(proposals[0]!.payload).toMatchObject({
     testName: "deploy",
     transition: "unwrap",
-    evidence: { consecutiveRuns: 50, firstAt: day(0) },
+    evidence: { consecutiveRuns: 20, firstAt: day(0) },
   });
 
   // The streak keeps growing; the proposal does not repeat.
-  await h.append(runRecorded(50, [record("deploy", "pass", { at: day(11) })]));
+  await h.append(runRecorded(20, [record("deploy", "pass", { at: day(20 / 1440) })]));
   expect(h.events(flakeEventTypes.transitionProposed)).toHaveLength(1);
   expect(h.state().tests.deploy!.proposed).toEqual([`unwrap:${day(0)}`]);
-});
-
-test("a fast passing streak proposes nothing until the span threshold is met", async () => {
-  const h = makeHarness();
-  await h.append(birth());
-  // 60 passes within one day: plenty of runs, not enough elapsed time — the
-  // sentinel-derived guard against unwrapping on a lucky burst.
-  for (let i = 0; i < 60; i++) {
-    await h.append(runRecorded(i, [record("deploy", "pass", { at: day(i / 100) })]));
-  }
-  expect(h.events(flakeEventTypes.transitionProposed)).toHaveLength(0);
 });
 
 test("a never-passing test proposes switch-to-failing", async () => {
@@ -438,7 +483,12 @@ function birth() {
 function runRecorded(
   n: number,
   records: ReturnType<typeof record>[],
-  overrides?: { branch?: string; suite?: string; complete?: boolean },
+  overrides?: {
+    branch?: string;
+    suite?: string;
+    complete?: boolean;
+    tests?: { name: string; outcome: "pass" | "fail" | "skip" }[];
+  },
 ) {
   return {
     type: flakeEventTypes.runRecorded,
@@ -455,7 +505,8 @@ function runRecorded(
         status: overrides?.complete === false ? "incomplete" : "complete",
         startedAt: day(n),
         finishedAt: day(n + 0.001),
-        testCount: Math.max(1, records.length),
+        testCount: overrides?.tests?.length || Math.max(1, records.length),
+        tests: overrides?.tests,
         unknownFlakeCount: records.filter((record) => record.kind === "unknown").length,
         failedCount: 0,
         diagnostics: overrides?.complete === false ? ["test runner interrupted"] : [],
@@ -549,7 +600,7 @@ test("a completed workflow_run's flake artifacts become one run-recorded event p
   });
 });
 
-test.each(["clean", "torn record", "missing retry record"])(
+test.each(["clean", "torn record", "missing retry record", "missing test result"])(
   "%s artifact carries an honest completeness result through webhook ingestion",
   async (scenario) => {
     const summary = {
@@ -559,6 +610,10 @@ test.each(["clean", "torn record", "missing retry record"])(
       startedAt: day(1),
       finishedAt: day(1.001),
       testCount: 10,
+      tests: Array.from({ length: scenario === "missing test result" ? 9 : 10 }, (_, i) => ({
+        name: `test ${i}`,
+        outcome: "pass",
+      })),
       failedCount: 0,
       unknownFlakeCount: scenario === "missing retry record" ? 1 : 0,
       diagnostics: [],
@@ -578,7 +633,10 @@ test.each(["clean", "torn record", "missing retry record"])(
       payload: {
         suite: "specs",
         records: [],
-        summary: { status: scenario === "clean" ? "complete" : "incomplete" },
+        summary: {
+          status: scenario === "clean" ? "complete" : "incomplete",
+          tests: summary.tests,
+        },
       },
     });
   },

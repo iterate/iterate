@@ -98,6 +98,7 @@ it("records every Playwright attempt and nested step without uploading", async (
   });
   expect(artifact.tests[0]).toMatchObject({
     fullName: "chromium › greeting.spec.ts › greets",
+    leafName: "greets",
     durationMs: 800,
     retryCount: 1,
     passedAfterRetry: true,

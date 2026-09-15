@@ -85,6 +85,18 @@ export async function writeFlakeSuiteSummaries(input: {
       startedAt,
       finishedAt,
       testCount: tests.length,
+      tests: tests.map((test) => ({
+        name: test.leafName || test.fullName,
+        outcome:
+          test.state === "passed" &&
+          test.retryCount === 0 &&
+          !test.passedAfterRetry &&
+          (!test.expectedState || test.expectedState === "passed")
+            ? "pass"
+            : ["skipped", "pending", "interrupted"].includes(test.state)
+              ? "skip"
+              : "fail",
+      })),
       unknownFlakeCount: tests.filter((test) => unknownFlakeRecordFromTelemetry(test) !== null)
         .length,
       failedCount: tests.filter((test) =>

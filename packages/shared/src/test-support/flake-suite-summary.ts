@@ -9,6 +9,15 @@ export const FlakeSuiteSummary = z
     startedAt: z.iso.datetime(),
     finishedAt: z.iso.datetime(),
     testCount: z.number().int().nonnegative(),
+    // Older artifacts have only counts and cannot advance per-test pass streaks.
+    tests: z
+      .array(
+        z.object({
+          name: z.string().min(1),
+          outcome: z.enum(["pass", "fail", "skip"]),
+        }),
+      )
+      .optional(),
     unknownFlakeCount: z.number().int().nonnegative(),
     failedCount: z.number().int().nonnegative(),
     diagnostics: z.array(z.string()),
