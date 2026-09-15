@@ -1,0 +1,254 @@
+# Called only by cloudflare-previews.yml. Its caller holds the PR lifecycle
+# lock until every job here, including cleanup, has finished.
+name: Sharded preview tests
+on:
+  workflow_call:
+    inputs:
+      pull-request-number:
+        type: string
+        required: true
+      head-sha:
+        type: string
+        required: true
+      all-apps:
+        type: boolean
+        required: true
+    secrets:
+      DOPPLER_TOKEN:
+        required: true
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: read
+env:
+  TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
+jobs:
+  prepare:
+    name: Deploy and readiness
+    runs-on:
+      size: 16x64
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 20
+    outputs:
+      playwright: ${{ steps.prepare.outputs.playwright }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ inputs.head-sha }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Reset test artifacts
+        run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
+      - name: Enforce preview deployment epoch
+        run: |-
+          set -euo pipefail
+          expected="os-auth-rpc-v1"
+          actual="$(cat scripts/preview/deployment-epoch 2>/dev/null || true)"
+          if [ "$actual" != "$expected" ]; then
+            echo "This branch predates preview deployment epoch $expected. Merge main before deploying." >&2
+            exit 1
+          fi
+      - name: Check fixed Playwright capacity
+        env:
+          CI: "true"
+          APP_CONFIG_BASE_URL: https://os.iterate-preview-1.com
+          PLAYWRIGHT_PREVIEW_SLOW_FIRST: "1"
+          PLAYWRIGHT_CAPACITY_FILE: test-results/playwright-catalogue.json
+        run: pnpm spec --list --reporter=./scripts/preview/playwright-capacity-reporter.ts
+      - name: Deploy once and wait for readiness
+        id: prepare
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
+          pnpm preview ci-prepare --pull-request-number "${{ inputs.pull-request-number }}"
+          ${{ inputs.all-apps && '--all-apps' || '' }}
+      - name: Publish prepared deployment identity
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-ci-plan
+          path: test-results/preview-ci-plan.json
+          if-no-files-found: error
+      - name: Collect test artifacts
+        if: always()
+        run: scripts/preview/collect-test-artifacts.sh test-results
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-ci-prepare
+          path: test-results
+          include-hidden-files: true
+          if-no-files-found: error
+
+  apps:
+    name: App tests
+    needs: prepare
+    runs-on:
+      size: 16x64
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ inputs.head-sha }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Reset test artifacts
+        run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
+      - name: Download prepared deployment identity
+        uses: actions/download-artifact@v4
+        with:
+          name: preview-ci-plan
+          path: test-results
+      - name: Run app tests alongside browser shards
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
+          pnpm preview ci-test --pull-request-number "${{ inputs.pull-request-number }}"
+      - name: Collect test artifacts
+        if: always()
+        run: scripts/preview/collect-test-artifacts.sh test-results
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-ci-apps
+          path: test-results
+          include-hidden-files: true
+          if-no-files-found: error
+
+  playwright:
+    name: Playwright ${{ matrix.shard }}/6
+    needs: prepare
+    if: needs.prepare.outputs.playwright == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        # 92 tests at introduction: 6 × 16 = 96 available worker slots.
+        # The discovery reporter fails when fixed capacity needs increasing.
+        shard: [1, 2, 3, 4, 5, 6]
+    runs-on:
+      size: 8x32
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ inputs.head-sha }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Reset test artifacts
+        run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
+      - name: Download prepared deployment identity
+        uses: actions/download-artifact@v4
+        with:
+          name: preview-ci-plan
+          path: test-results
+      - name: Run Playwright shard
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
+          pnpm preview ci-test --pull-request-number "${{ inputs.pull-request-number }}"
+          --shard ${{ matrix.shard }}
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-ci-playwright-${{ matrix.shard }}
+          path: test-results
+          include-hidden-files: true
+          if-no-files-found: error
+
+  finish:
+    name: Collect results and clean up
+    needs: [prepare, apps, playwright]
+    if: always()
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ inputs.head-sha }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Reset test artifacts
+        run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
+      - name: Download every test result
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          pattern: preview-ci-*
+          merge-multiple: true
+          path: test-results
+      - name: Merge reports and publish full preview result
+        if: always() && needs.prepare.result == 'success'
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
+          pnpm preview ci-finish --pull-request-number "${{ inputs.pull-request-number }}"
+      # All producers have finished. On workflow cancellation Depot may kill
+      # even always() steps; the next run's pre-deploy erase remains the backstop.
+      - name: Erase slot data after all tests
+        if: always()
+        continue-on-error: true
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
+          pnpm preview erase --pull-request-number "${{ inputs.pull-request-number }}"
+          --ran-head-sha "${{ inputs.head-sha }}"
+      - name: Normalize and send preview test telemetry
+        if: always()
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts --workflow-scope ${{ cancelled() && '--cancelled' || '' }}
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-os-test-artifacts
+          path: test-results
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Upload specs flake records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-records-specs
+          path: test-results/flake-records/specs
+          if-no-files-found: ignore
+          overwrite: true
+      - name: Upload preview e2e flake records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-records-preview-e2e
+          path: test-results/flake-records/preview-e2e
+          if-no-files-found: ignore
+          overwrite: true
+      - name: Require every selected test job to succeed
+        if: always()
+        env:
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+          APPS_RESULT: ${{ needs.apps.result }}
+          PLAYWRIGHT_SELECTED: ${{ needs.prepare.outputs.playwright }}
+          PLAYWRIGHT_RESULT: ${{ needs.playwright.result }}
+        run: |-
+          test "$PREPARE_RESULT" = success
+          test "$APPS_RESULT" = success
+          if [ "$PLAYWRIGHT_SELECTED" = true ]; then test "$PLAYWRIGHT_RESULT" = success; fi

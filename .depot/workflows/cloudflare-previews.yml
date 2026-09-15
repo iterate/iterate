@@ -43,6 +43,7 @@ on:
       - synchronize
     paths:
       - .depot/workflows/cloudflare-previews.yml
+      - .depot/workflows/cloudflare-preview-sharded.yml
       - packages/shared/**
       - packages/ui/**
       - pnpm-lock.yaml
@@ -79,112 +80,14 @@ concurrency:
 jobs:
   preview:
     name: Preview / deploy + e2e
-    # The overlapping test pools peaked below ten cores. Keep the 16-core
-    # shape, but start from the same baked workspace used by mainline checks
-    # and production deploys so setup does not redownload the toolchain.
-    runs-on:
-      size: 16x64
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    # Hard backstop on one attempt. Each parallel sub-lane retains its own
-    # tighter watchdog; this outer bound catches setup, deploy, and reporting
-    # runaways while leaving enough time to preserve failure artifacts.
-    timeout-minutes: 20
+    # Hold the lifecycle lock for the entire called workflow, including all
+    # shards and final cleanup. Putting this lock on each shard serializes them.
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
       cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          clean: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      # Permanent breaking-change floor: an old branch would deploy Auth first,
-      # then fail or deploy an OS revision that cannot call the default RPC
-      # entrypoint. Refuse before any app or credential is touched. This is an
-      # epoch assertion, not a compatibility path; rebase is the only remedy.
-      - name: Enforce preview deployment epoch
-        run: |-
-          set -euo pipefail
-          expected="os-auth-rpc-v1"
-          actual="$(cat scripts/preview/deployment-epoch 2>/dev/null || true)"
-          if [ "$actual" != "$expected" ]; then
-            echo "This branch predates preview deployment epoch $expected. Rebase onto main before deploying." >&2
-            exit 1
-          fi
-      - name: Reconcile dependencies (baked)
-        run: pnpm install --frozen-lockfile --prefer-offline
-      # ONE step for deploy + e2e: `preview run` shares a single resolved PR
-      # head between the two phases, so a push can no longer race into a gap
-      # between separate deploy and test steps (that gap used to need a whole
-      # class of stale-head skip machinery in preview.ts). Deploy failures
-      # fail the step before any test runs.
-      - name: Preview / deploy + e2e
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ github.token }}
-          TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
-        run: |-
-          set -euo pipefail
-          # A manual dispatch is an explicit ask for a fresh preview of the
-          # whole fleet, regardless of what the diff touches.
-          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview run \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}" \
-            ${{ github.event_name == 'workflow_dispatch' && '--all-apps' || '' }}
-      # The e2e leaves a population of test projects behind whose Durable
-      # Objects keep waking; erase them the moment the run is over instead of
-      # letting them burn until the next push or the lease expiry. Not
-      # red-making — the next deploy erases anyway. A run cancelled by a newer
-      # push never gets here: Depot kills the whole job, always() steps
-      # included (observed 2026-09-03), so that population is the next run's
-      # before-deploy erase to clean. --ran-head-sha is the guard for the case
-      # this step does run after the PR moved on (a human running it late):
-      # the newer push's run erases before it deploys, and racing it would
-      # tombstone a Worker it is deploying.
-      - name: Preview / erase slot data after e2e
-        if: always()
-        continue-on-error: true
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |-
-          set -euo pipefail
-          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview erase \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}" \
-            --ran-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
-      - name: Normalize and send preview test telemetry
-        if: always()
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts ${{ cancelled() && '--cancelled' || '' }}
-      - name: Collect OS preview test artifacts
-        if: always()
-        run: scripts/preview/collect-test-artifacts.sh test-results
-      - name: Upload OS preview test artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: preview-os-test-artifacts
-          path: test-results
-          include-hidden-files: true
-          if-no-files-found: error
-      # flake-records-<suite> artifacts feed the flake dashboard's check_run
-      # ingestion (artifact-name-driven; #2582). ignore-when-empty: a lane
-      # that recorded nothing is normal; overwrite: a job retry re-uploads.
-      - name: Upload specs flake records
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: flake-records-specs
-          path: test-results/flake-records/specs
-          if-no-files-found: ignore
-          overwrite: true
-      - name: Upload preview e2e flake records
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: flake-records-preview-e2e
-          path: test-results/flake-records/preview-e2e
-          if-no-files-found: ignore
-          overwrite: true
+    uses: ./.depot/workflows/cloudflare-preview-sharded.yml
+    with:
+      pull-request-number: ${{ format('{0}', github.event.pull_request.number || inputs.pull-request-number) }}
+      head-sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      all-apps: ${{ github.event_name == 'workflow_dispatch' }}
+    secrets: inherit

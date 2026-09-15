@@ -55,16 +55,24 @@ raise the budget automatically.
 - OS Vitest gives every current file a worker immediately and permits at most
   two concurrent tests per file in CI. Each file owns isolated projects; the
   examples matrix still overlaps its isolated runtimes inside each case.
-- Root Playwright keeps sixteen fully parallel workers in CI. The earlier
-  1,554-second aggregate and 117-second longest-test sample included shared
-  rollout waiting inside fixtures. Remeasure without that wait before using
-  per-test timings to size the worker pool. Preview still queues the long
-  reconnect/resume specs first.
-- The job uses a 16-core Depot runner. Measurements on larger runners showed
-  the overlapping local work peaking below ten cores; the deployed Worker and
-  Durable Objects, rather than host CPU, are the integration boundary. The
-  marathon is the capacity and tail-latency proof for the resulting remote
-  burst.
+- Root Playwright runs six shards on independent 8-core Depot runners, each
+  with sixteen workers: 96 slots for the current 92 tests. Both the full
+  catalogue and each shard check their fixed capacity. When tests outgrow it,
+  increase the explicit shard/worker counts; there is no adaptive scheduler.
+- The parent preview job calls a workflow containing deploy/readiness, app
+  tests, browser shards, and final collection/cleanup. Its concurrency lock
+  encloses the entire workflow, so another push or PR-close cleanup cannot
+  acquire the slot lifecycle lock between those phases.
+- A non-secret artifact pins the candidate SHA, workflow attempt, slot and
+  exact deployed Worker versions. Each test job checks it against its checkout
+  and the live slot lease. Only the final collector publishes test outcomes.
+- All six shard receipts, the complete merged test count, and six canonical
+  Playwright telemetry artifacts are required. A failed shard does not cancel
+  its siblings. Blob reports are merged once into the familiar HTML/JSON
+  reports, without emitting telemetry or flake records twice.
+- App tests retain a 16-core runner. Measure browser CPU, overall test duration
+  and first-attempt failures together: sharding adds browser capacity while
+  all tests still share the deployed backend.
 
 Tests make this safe by owning isolated state. Test clients give every project
 create a collision-resistant caller-owned `prj_…` identifier, avoiding an

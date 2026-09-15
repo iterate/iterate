@@ -5,7 +5,7 @@ size: large
 
 # Run the preview Playwright catalogue fully in parallel
 
-Status: scoped from current main, which includes the shared readiness/auth setup changes. The CI catalogue contains 92 tests across 42 files; implementation and deployment proof remain.
+Status: implementation is in place with shared deployment/readiness, six browser jobs, strict result collection and capacity checks. Local orchestration tests and type checks pass; real Depot validation and review remain.
 
 The user wants fixed shard/worker counts with `shards * workers >= num_tests`, not an adaptive scheduling algorithm. Use six independent CI runners with sixteen Playwright workers each (96 slots). Keep local runs at one worker.
 

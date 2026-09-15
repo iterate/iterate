@@ -636,3 +636,24 @@ it("normalizes source paths with the artifact's original workspace when replayed
     events.find((event) => event.event === "ci test import finished")?.properties.imported_module,
   ).toBe("specs/test-support/session.ts");
 });
+
+it("can join shard jobs from one workflow attempt without accepting another attempt", async () => {
+  const { analyzeTestTelemetryCompleteness } = await import("./test-telemetry-completeness.ts");
+  const shard = {
+    ...artifact,
+    artifactId: "shard-1",
+    ci: { ...artifact.ci, jobName: "playwright-1" },
+  };
+  const anotherAttempt = {
+    ...artifact,
+    artifactId: "stale-shard",
+    ci: { ...shard.ci, workflowRunAttempt: "2" },
+  };
+  expect(analyzeTestTelemetryCompleteness([artifact, shard], []).foreignArtifactIds).toContain(
+    "shard-1",
+  );
+  expect(
+    analyzeTestTelemetryCompleteness([artifact, shard, anotherAttempt], [], "workflow")
+      .foreignArtifactIds,
+  ).toEqual(["stale-shard"]);
+});
