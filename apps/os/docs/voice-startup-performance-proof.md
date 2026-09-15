@@ -2008,8 +2008,9 @@ business logic is unchanged.
 Byte-capped reads now bound the merged durable/buffered prefix. They retain the
 existing cutoff before an omitted durable event, so a later buffered row cannot
 advance the cursor past it. An oversized first event still permits progress.
-A hosted-only control and catch-up-before-hosted regression respectively passes/fails on the old runner and both pass on the
-fixed runner; direct StreamDO paging tests cover the omitted
+The hosted-only control passes on both runners; the catch-up-before-hosted
+regression fails on the old runner and passes with the fix. Direct StreamDO
+paging tests cover the omitted
 oversized durable row followed by a buffered tail. Root validation passed 70
 focused/generated-contract tests, OS typecheck, lint, and generated API refresh.
 
@@ -2034,3 +2035,73 @@ the native inline composition; it does not yet validate deployment of the new
 runner through the published userspace SDK. Artifacts use
 `mic-delivery-catchup-fix-*` and `clean-cold-workers-catchup-fix-*` under the same
 temporary proof directory.
+
+### Connection-time health on the retained inline/local topology
+
+A fresh deployment of the same native code (`059f7869-fc76-4d7f-a1f8-d2ff37952468`)
+passed smokes. The temporary benchmark then called the already-mounted root
+`voice.health()` once, on the permanent project WebSocket immediately after
+identity and before any conversation timer. Health created no conversation,
+processor, Agent, or provider session. It took 2,274 ms and returned project
+`prj_56cbca83186a40019f5792b2463c81fa` and the unchanged `2b4563ca…` guest runtime.
+The mounted source, native implementation, diagnostic path, prompt, and key
+(offset 755) match the preceding no-health control.
+
+Five calls at `2026-09-15T03:15:40.831Z–03:16:00.787Z` all returned PCM.
+Readiness was 2,806 / 1,414 / 1,456 / 1,528 / 1,399 ms, with first PCM
+4,115 / 2,217 / 2,718 / 2,767 / 2,750 ms. First call-started observation was
+1,035 ms (preceding no-health deployment: 2,529 ms), then configured at
+2,312 ms and accepted at 2,806 ms. Later call-started observations were
+350–605 ms. All five terminal states were ended with matching activations and
+native runtime, no pending delegation, zero lag, and no last error. Five mic
+and twenty upgrade lifecycle records matched the exact version and were
+untruncated; retry and host-parent error queries returned zero rows.
+
+The lower first-call cost is consistent with moving guest initialization to
+connection establishment. Each arm has only one deployment-cold first sample;
+this does not establish a repeatable causal delta, and health did not remove
+the remaining first-stream delay. The total connection-plus-first-call cost
+must include the 2,274 ms health call. No product connection behavior was
+changed on this evidence. This test uses the retained inline/local topology;
+the earlier health control used a different implementation and route.
+
+Artifacts: `mic-delivery-health-control-{result,terminal-audit}.json`,
+`inline-startup-helper-health.ts`, and `clean-cold-workers-health-control-*`
+under `/tmp/voice-startup-pr/`.
+
+### Adding an existing-parent read at connection time
+
+Native deployment `21ea8bd7-ff85-42a5-af31-68dd1546dffd` passed smokes with the
+same code and source. The next control added one empty read of the existing
+`/agents/voice/startup-hosted-host` after voice health, before conversation
+timers. That fixed path bypasses child routing and reaches the exact native
+parent used by experimental children. It creates no future child, Agent,
+processor, event, or provider session. Health took 2,154 ms; the empty parent
+read took 775 ms and returned zero events. Both costs belong to connection
+establishment and must be included when measuring power-on-to-ready.
+
+Five fresh calls at `2026-09-15T03:20:25.080Z–03:20:46.369Z` returned PCM.
+First call-started observation was 457 ms, comparable to later
+500 / 707 / 429 / 513 ms. Readiness was
+2,580 / 955 / 2,221 / 1,625 / 1,158 ms; PCM was
+3,757 / 2,043 / 3,618 / 2,707 / 2,565 ms. The first call still reached configured
+at 2,134 ms, but that interval overlaps the prepared provider upgrade: its
+measured egress-to-upgrade interval was 2,005 ms, with the voice claim entering
+1,317 ms after egress began and waiting 688 ms for completion. Later provider
+upgrades took 448 / 533 / 450 / 563 ms. Calls three and four waited 896 / 549 ms
+after the upgrade was ready before claiming it. These same-ProjectDO timings
+separate provider-preparation time from waiting for the voice facet; they do
+not isolate network time from runtime/output-gate scheduling within fetch.
+
+All five terminal audits were ended with matching activation/native runtime,
+no pending delegation, zero lag, and no last error. Five microphone and twenty
+upgrade records matched the exact deployment and were untruncated; every
+cancellation settled with zero pending resources. Retry and host-parent error
+queries returned zero rows. This single deployment-cold sample supports
+investigating connection-time parent activation, but does not establish a
+repeatable latency improvement or resolve earlier failures. The control is
+temporary; no production warmup policy was added.
+
+Artifacts: `mic-delivery-health-host-control-{result,terminal-audit}.json`,
+`inline-startup-helper-health-host.ts`, and
+`clean-cold-workers-health-host-control-*` under `/tmp/voice-startup-pr/`.
