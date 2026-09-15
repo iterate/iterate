@@ -25,7 +25,7 @@ The user wants PR #2659 renamed and used for an overnight experiment: push commi
 
 - [x] Rename PR and rewrite its purpose around experimentation, retaining machine-maintained preview sections. *PR #2659 renamed; fresh machine-owned preview/LOC blocks preserved.*
 - [x] Restore the unsharded workflow and measure 16 workers. *Run 9p5w4fcrlz: preview success, 604.6s overall, 147.8s Playwright, 127.6s Vitest, no retries; one existing quarantined photo failure. Separate stale unit assertion corrected for the next commit.*
-- [ ] Push and measure 32 workers.
+- [x] Push and measure 32 workers. *Run 3nc3m3tfjd: preview success, 532.6s overall, 114.1s Playwright, 124.6s Vitest, one dashboard retry and the same quarantined mobile-photo failure. All unit/lint checks pass.*
 - [ ] Push and measure 64 workers.
 - [ ] Push and measure 92 workers.
 - [ ] Repeat the useful control/finalist comparison and account for failures and cache variability.
@@ -49,3 +49,5 @@ The user wants PR #2659 renamed and used for an overnight experiment: push commi
 - 16-worker control pushed at `1f2cf5033`; run `9p5w4fcrlz`, preview workflow `3gwspz3c34`, attempt `kv2hxdtlcz`. The general unit job exposed a stale assertion that still required the sharded caller; fixed for the next commit without changing the running preview. All 319 script tests pass locally after the correction.
 
 - Control evidence: `explainers/playwright-parallelisation/runs/workers-16.json`; catalogue hash matches the historical 92 names. CPU during Playwright: sampled mean 5.2/16 cores, peak 12.4; peak memory 15.7 GB. The original pnpm/Depot/Nub findings and all three historical traces remain in the permanent page.
+
+- 32-worker evidence: `runs/workers-32.json` in the permanent explainer source. First-start spread fell from 91.2s to 49.4s; median attempt duration rose from 18.3s to 21.7s. CPU sampled mean 7.6/16 cores, peak 13.7; memory peak 22.3 GB. Post-loading Navigate click timed out at 1s, then passed on retry. No application/test changes made to hide it.

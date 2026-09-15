@@ -158,9 +158,17 @@ if root_pw:
             active_intervals.append((start, finish))
             if a.get("attemptIndex", 0) == 0:
                 first_starts.append(start)
-            outcome = "body passed; quarantine wrapper throws as expected" if wrapper_pass and a["state"] == "failed" else a["state"]
+            outcome = "body passed; quarantine wrapper throws as expected" if "Flaky test passed this run" in a.get("error", {}).get("message", "") else a["state"]
             module = t["moduleId"].replace("/home/runner/work/iterate/iterate/", "")
-            add(pool, t["fullName"] + (f' · retry {a["attemptIndex"]}' if a.get("attemptIndex") else ""), start, finish, "test", f"{module} · {outcome} · worker {a.get('workerIndex')} / slot {a.get('parallelIndex')} · attempt {a.get('attemptIndex', 0)}.", "Playwright per-attempt telemetry", test=True)
+            attempt_node = add(pool, t["fullName"] + (f' · retry {a["attemptIndex"]}' if a.get("attemptIndex") else ""), start, finish, "test", f"{module} · {outcome} · worker {a.get('workerIndex')} / slot {a.get('parallelIndex')} · attempt {a.get('attemptIndex', 0)}.", "Playwright per-attempt telemetry", test=True)
+            for phase in a.get("phases", []):
+                if phase["name"] in ["Before Hooks", "After Hooks", "create project fixture", "create mobile fixture", "connect admin itx"] and phase.get("startedAt") and phase.get("durationMs", 0) >= 100:
+                    phase_start = sec(phase["startedAt"])
+                    phase_end = phase_start + phase["durationMs"] / 1000
+                    if phase_start >= start - 0.002 and phase_end <= finish + 0.002:
+                        add(attempt_node, phase["name"], phase_start, phase_end, "other", "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.", "Playwright step telemetry")
+                    else:
+                        attempt_node["note"] += f" {phase['name']} has a timestamp outside the reported attempt interval; omitted from nesting (end offset {phase_end - finish:+.3f}s)."
 
 erase_start = mark("##[group]Run set -euo pipefail", test_end or ready_end or installed or -1)
 upload = mark("##[group]Run doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry")
@@ -178,13 +186,14 @@ metrics = dict(result=j["job"]["conclusion"], playwright=root_pw["run"]["duratio
                appRetries=app_retries, browserGreen=green, browserSkipped=skipped, browserBodyFailures=body_failures,
                readiness=ready_end - ready if ready is not None and ready_end is not None else None,
                erase=[float(m[2]) for _, m in erases])
-browser_window = [sec(root_pw["run"]["startedAt"]), sec(root_pw["run"]["finishedAt"])] if root_pw else [test_start or 0, test_end or root["end"]]
+browser_window = [sec(root_pw["run"]["startedAt"]), sec(root_pw["run"]["finishedAt"])] if root_pw else [pw_start or test_start or 0, pw_end or test_end or root["end"]]
 subset = [s for s in samples if browser_window[0] <= s["time"] <= browser_window[1]]
 cpu = [s["cpu"] for s in subset if "cpu" in s]
 memory = [s["memory"] for s in subset if "memory" in s]
 if cpu and memory:
     metrics.update(cpuMean=sum(cpu) / len(cpu), cpuPeak=max(cpu), memoryPeak=max(memory))
-    metrics["resourceSummary"] = f"During Playwright: sampled mean CPU {sum(cpu) / len(cpu) * 100:.1f}% ({sum(cpu) / len(cpu) * 16:.1f} cores), peak {max(cpu) * 100:.1f}% ({max(cpu) * 16:.1f} cores); peak memory {max(memory) * 64:.1f} GB. {len(subset)} samples."
+    resource_label = "During Playwright" if root_pw else "Available test-command window (report missing)"
+    metrics["resourceSummary"] = f"{resource_label}: sampled mean CPU {sum(cpu) / len(cpu) * 100:.1f}% ({sum(cpu) / len(cpu) * 16:.1f} cores), peak {max(cpu) * 100:.1f}% ({max(cpu) * 16:.1f} cores); peak memory {max(memory) * 64:.1f} GB. {len(subset)} samples."
 events = sorted([(s, 1) for s, e in active_intervals] + [(e, -1) for s, e in active_intervals])
 active = peak = 0
 for _, change in events:
@@ -195,6 +204,11 @@ metrics["firstStartSpread"] = max(first_starts) - min(first_starts) if first_sta
 lengths = sorted(e - s for s, e in active_intervals)
 if lengths:
     metrics.update(attemptDurationMedian=lengths[len(lengths) // 2], attemptDurationP95=lengths[min(len(lengths) - 1, int(len(lengths) * 0.95))], attemptDurationMax=max(lengths), activeAttemptSeconds=sum(lengths))
+if root_pw is None:
+    for field in ["browserRetries", "browserGreen", "browserSkipped", "browserBodyFailures", "peakActiveAttempts"]:
+        metrics[field] = None
+if not apps:
+    metrics["appRetries"] = None
 catalogue = sorted(t["fullName"] for t in root_pw["tests"]) if root_pw else []
 record = dict(root=root, total=root["end"], run=x["run"]["run_id"], workflow=workflow["workflow_id"], head=x["run"]["head_sha"],
               label=args.label, normal=True, workers=args.workers, slot=slot, startedAt=workflow["started_at"], metrics=metrics,
@@ -202,8 +216,11 @@ record = dict(root=root, total=root["end"], run=x["run"]["run_id"], workflow=wor
               installWall=installed - install if installed else 0, installSum=installed - install if installed else 0,
               windows={"prepare": [0, ready_end or test_start or root["end"]], "tests": [test_start or 0, test_end or root["end"]], "finish": [erase_start or root["end"], root["end"]]},
               browserWindow=browser_window, samples=samples, catalogueCount=len(catalogue), catalogueHash=hashlib.sha256(json.dumps(catalogue).encode()).hexdigest(),
+              imageTag="0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree", bakedSourceHead=next((m[1] for _, line in lines if (m := re.search(r"HEAD is now at ([a-f0-9]+)", line))), None),
               context=f"{args.label} · run {x['run']['run_id']} · commit {x['run']['head_sha'][:9]} · {slot}. Same application code; fresh runner.",
               findings=f"{green} browser bodies passed, {skipped} skipped, {body_failures} body failures, {retries} browser retries, {app_retries} app retries. Peak simultaneous test attempts: {peak}. " + metrics.get("resourceSummary", ""))
+if root_pw is None:
+    record["findings"] = "Root Playwright report unavailable. The trace retains observed job/log intervals; browser outcomes and retry counts are unknown. " + metrics.get("resourceSummary", "")
 for n in nodes:
     n["children"].sort(key=lambda c: c["start"])
     for child in n["children"]:

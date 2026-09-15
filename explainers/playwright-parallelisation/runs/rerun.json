@@ -2454,7 +2454,8 @@
     "vitest": 145.507,
     "browserRetries": 0,
     "appRetries": 0,
-    "result": "success"
+    "result": "success",
+    "browserBodyFailures": 0
   },
   "findings": "88 browser bodies passed, including three quarantine wrappers; four skipped. Historical comparison: different deploy reuse and setup/cache behavior. Not a controlled worker-count comparison."
 }

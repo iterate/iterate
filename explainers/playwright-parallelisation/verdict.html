@@ -1,3 +1,6 @@
-<strong>16-worker control: 10m05s overall, 148s Playwright, 128s OS Vitest.</strong> The browser
-pool started its tests over a 91-second span. Next: 32 workers. The preview passed with no retries,
-but one existing quarantined mobile photo test hit its known timeout. No winner selected yet.
+<strong
+  >32 workers shortened Playwright from 148s to 114s; Vitest now finishes last at 125s.</strong
+>
+Full preview: 10m05s → 8m53s, including a 39s faster install. The 32-worker run needed one dashboard
+retry; both runs had the same quarantined photo failure. Next: 64 workers. Repeats will check
+whether these gains and failures recur.

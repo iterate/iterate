@@ -65,7 +65,10 @@ unsharded run's known workflow, install, Playwright, Vitest and retry totals.
 - Parent spans include child spans. Overlapping times are not additive.
 - Workflow, job and command boundaries come from Depot timestamps/logs.
 - Test start/end and retry attempts come from reporter telemetry, not buffered
-  stdout. A browser attempt occupies one worker until it ends, even while idle.
+  stdout. Expand an attempt for a small allowlist of fixed fixture/setup phase
+  names (at least 100 ms); dynamic URLs and raw errors are not published. Phase timestamps outside the
+  reported attempt interval are noted rather than forced into a false parent
+  span. A browser attempt occupies one worker until it ends, even while idle.
 - Missing browser-install timestamps stay explicitly untimed.
 - CPU/memory are whole-runner samples during the Playwright reporter interval,
   including concurrent Vitest and Expo. A sample mean is not a precise CPU-time

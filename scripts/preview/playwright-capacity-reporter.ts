@@ -2,10 +2,10 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { FullConfig, Reporter, Suite } from "@playwright/test/reporter";
 
-// Fixed capacity, deliberately not an adaptive scheduler. Keep the workflow
-// matrix and this policy together when the catalogue grows beyond 96 tests.
+// Fixed counts for the retained sharded experiment. The active preview
+// workflow is unsharded; its worker count is varied explicitly between runs.
 export const previewPlaywrightShards = [1, 2, 3, 4, 5, 6];
-export const previewPlaywrightWorkers = 32;
+export const previewPlaywrightWorkers = 64;
 
 export function assertPlaywrightCapacity(input: {
   tests: number;

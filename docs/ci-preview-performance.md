@@ -2,7 +2,7 @@
 
 The **Cloudflare Previews** check deploys every affected app to one leased
 preview slot and runs its deployed e2e coverage. Its target is **under 3m30s
-end-to-end**. Job timeouts are runaway backstops, not performance targets.
+end-to-end**. The 20-minute workflow timeout is only a runaway backstop.
 
 For workflow commands, logs, and metrics, see [Depot CI](depot-ci.md). This
 document defines the critical-path model and the rules that keep it fast.
@@ -49,30 +49,28 @@ raise the budget automatically.
   before workers start. Workers inherit the prepared environment; fixtures
   neither fetch Doppler secrets nor wait for deployment propagation. Test
   identities, signed tokens and projects remain specific to each test.
-- The single-machine command overlaps Chromium installation with readiness.
-  Distributed shards use the baked browser image and check installation on
-  their own runner. Their browser startup and authentication follow readiness.
+- Chromium installation overlaps readiness. Browser startup and authentication
+  now happen after readiness, so this change improves duration reporting but
+  may add time previously hidden by overlapping setup.
 - OS Vitest gives every current file a worker immediately and permits at most
   two concurrent tests per file in CI. Each file owns isolated projects; the
   examples matrix still overlaps its isolated runtimes inside each case.
-- Root Playwright runs six shards on independent 16-core Depot runners, each
-  with sixteen workers: 96 slots for the current 92 tests. Both the full
-  catalogue and each shard check their fixed capacity. When tests outgrow it,
-  increase the explicit shard/worker counts; there is no adaptive scheduler.
-- The parent preview job calls a workflow containing deploy/readiness, app
-  tests, browser shards, and final collection/cleanup. Its concurrency lock
-  encloses the entire workflow, so another push or PR-close cleanup cannot
-  acquire the slot lifecycle lock between those phases.
-- A non-secret artifact pins the candidate SHA, workflow attempt, slot and
-  exact deployed Worker versions. Each test job checks it against its checkout
-  and the live slot lease. Only the final collector publishes test outcomes.
-- All six shard receipts, the complete merged test count, and six canonical
-  Playwright telemetry artifacts are required. A failed shard does not cancel
-  its siblings. Blob reports are merged once into the familiar HTML/JSON
-  reports, without emitting telemetry or flake records twice.
-- App tests retain a 16-core runner. Measure browser CPU, overall test duration
-  and first-attempt failures together: sharding adds browser capacity while
-  all tests still share the deployed backend.
+- This branch is measuring root Playwright at 16, 32, 64 and 92 workers on
+  one 16-core / 64-GB runner. The active workflow runs deployment, app tests,
+  Playwright and cleanup on that same runner. Preview still queues the long
+  reconnect/resume specs first. The historical six-shard implementation is
+  retained during the experiment but is not called by the active workflow.
+- Compare whole-preview duration, Playwright and concurrent OS Vitest,
+  first-attempt failures, and CPU/memory during the test window. A fast install
+  can outweigh the worker-count change; a faster browser pool cannot shorten
+  the workflow below its other suites. The 16-worker control averaged 5.2 busy
+  cores during Playwright but briefly reached 12.4, so average CPU alone does
+  not establish that arbitrary concurrency is free.
+- Measured traces and experiment details:
+  [Playwright parallelisation](../explainers/playwright-parallelisation.html).
+  The [live branch explainer](https://iterate.iterate.app/explainers/playwright-parallelisation?sha=codex%2Fplaywright-full-parallel)
+  includes historical sharded runs, each worker-count run, retries, quarantined
+  failures and the measurement limits.
 
 Tests make this safe by owning isolated state. Test clients give every project
 create a collision-resistant caller-owned `prj_…` identifier, avoiding an
