@@ -467,9 +467,10 @@ Semaphore for `main-preview`; PRs and manual allocations use the other slots.
 The main workflow finishes its active deploy/test/erase before starting the
 newest queued commit. PR cancellation behavior is unchanged.
 
+Invoke main previews through `depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow cloudflare-main-preview.yml --ref <branch>`. Local `run-main` invocations are refused because they bypass the workflow lock.
+
 `run-main` requires a clean checkout at that exact SHA and a Semaphore that
-already enforces the reservation. On first rollout, let the current preview-1
-holder finish/release and deploy the new Semaphore before rerunning main.
+already enforces the reservation. On first rollout, release any existing preview-1 lease before deploying the new Semaphore, or let it expire and be garbage-collected. Main waits for an active owner or GC to release the reserved slot.
 A branch dispatch validates the same workflow but keeps the branch's identity,
 so it cannot replace the dashboard's main results. The report is retained as
 `test-results/main-preview-state.json`. Expiry-based GC can still clean an

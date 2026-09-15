@@ -1,5 +1,5 @@
-import { resourceAllowedForHolder, resourceReservations } from "~/resource-reservations.ts";
 import { DurableObject } from "cloudflare:workers";
+import { resourceAllowedForHolder, resourceReservations } from "~/resource-reservations.ts";
 import {
   AcquireResourceInput,
   AcquireSpecificResourceInput,
@@ -176,6 +176,15 @@ export class ResourceCoordinator extends DurableObject<Env> {
         parsed.slug,
       )
       .toArray()[0];
+    // A stale list response cannot authorize main to evict maintenance (or
+    // the PR that held this slot before reservation rollout).
+    if (
+      activeLease &&
+      parsed.type === "environment-config-lease" &&
+      parsed.slug === "preview-1" &&
+      activeLease.holder !== parsed.holder
+    )
+      return null;
     if (activeLease && !parsed.force) {
       return null;
     }

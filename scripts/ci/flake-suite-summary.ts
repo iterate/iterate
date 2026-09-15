@@ -1,6 +1,6 @@
-import { unknownFlakeRecordFromTelemetry } from "@iterate-com/shared/test-support/flake-record";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { unknownFlakeRecordFromTelemetry } from "@iterate-com/shared/test-support/flake-record";
 import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 import { analyzeTestTelemetryCompleteness } from "./test-telemetry-completeness.ts";
@@ -24,11 +24,15 @@ export async function writeFlakeSuiteSummaries(input: {
         : artifact.producer === "vitest-retry-telemetry-reporter" &&
             artifact.context.workspace === "@iterate-com/os";
     });
+    const source = artifacts[0] || input.artifacts[0];
+    if (!source) throw new Error("Cannot identify the CI run for the flake suite summary");
+    const branch = source.ci.branch || "";
     const completeness = analyzeTestTelemetryCompleteness(
       artifacts,
       suite === "unit" ? input.expectedWorkspaces : [],
     );
     const diagnostics = [
+      ...(!branch ? ["Missing source branch"] : []),
       ...(input.cancelled ? ["CI run cancelled"] : []),
       ...(artifacts.length === 0 ? ["No test runner result received"] : []),
       ...(suite !== "unit" && artifacts.length > 1
@@ -41,6 +45,9 @@ export async function writeFlakeSuiteSummaries(input: {
       ...completeness.incompleteArtifactIds.map((id) => `Incomplete runner result: ${id}`),
       ...completeness.foreignArtifactIds.map((id) => `Result belongs to another CI run: ${id}`),
       ...artifacts.flatMap((artifact) => [
+        ...(artifact.ci.branch !== branch
+          ? [`Result belongs to another branch: ${artifact.artifactId}`]
+          : []),
         ...(artifact.ci.headSha !== input.headSha
           ? [`Result belongs to another commit: ${artifact.artifactId}`]
           : []),
@@ -71,9 +78,9 @@ export async function writeFlakeSuiteSummaries(input: {
         .map((artifact) => artifact.run.finishedAt)
         .sort()
         .at(-1) || startedAt;
-    const source = artifacts[0] || input.artifacts[0];
-    if (!source) throw new Error("Cannot identify the CI run for the flake suite summary");
     const summary = FlakeSuiteSummary.parse({
+      headSha: input.headSha,
+      branch,
       status: diagnostics.length === 0 ? "complete" : "incomplete",
       startedAt,
       finishedAt,

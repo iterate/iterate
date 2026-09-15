@@ -51,7 +51,7 @@ export class PreviewE2eTelemetryArtifact {
       ...ci,
       ...(context.branch && { branch: context.branch }),
       headSha: context.headSha,
-      ...(context.pullRequestNumber && { pullRequestNumber: context.pullRequestNumber }),
+      pullRequestNumber: context.pullRequestNumber || undefined,
       ...(context.runUrl && { workflowRunUrl: context.runUrl }),
     };
     this.artifactId = testTelemetryArtifactId(

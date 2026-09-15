@@ -1,7 +1,8 @@
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
-export { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 import { z } from "zod";
 import { defineProcessorContract } from "../../processors/index.ts";
+
+export { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 
 export const flakeEventTypes = {
   created: "events.iterate.com/flakes/created",
@@ -239,7 +240,7 @@ export const CheckRunWebhookEvent = z.object({
 
 export const FlakeDashboardProcessorContract = defineProcessorContract({
   slug: "flake-dashboard",
-  version: "0.5.0",
+  version: "0.6.0",
   description:
     "Folds createFlake test outcomes reported by CI into per-test flake stats, renders the GitHub 'Flake dashboard' issue, and proposes data-provable lifecycle transitions.",
   stateSchema: FlakeDashboardState,

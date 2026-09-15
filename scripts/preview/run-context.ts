@@ -46,6 +46,17 @@ export function createMainRunContext(input: {
       "Main preview has uncommitted changes; commit them before deploying a pinned revision.",
     );
   }
+  // The fixed main holder is serialized by this workflow's concurrency
+  // group. A local invocation would bypass that lock and could erase CI.
+  if (
+    !input.environment.DEPOT_JOB_URL ||
+    input.environment.GITHUB_WORKFLOW !== "Main Preview (Depot CI)" ||
+    input.environment.GITHUB_JOB !== "preview"
+  ) {
+    throw new Error(
+      "Run main previews through the serialized cloudflare-main-preview.yml Depot workflow; use depot ci dispatch instead of invoking run-main locally.",
+    );
+  }
   // Dispatching this workflow on a feature branch is useful for validation,
   // but those results must never replace the dashboard's main baseline.
   const branch =

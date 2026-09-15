@@ -1,5 +1,5 @@
-import { Octokit } from "@octokit/rest";
 import { setTimeout as delay } from "node:timers/promises";
+import { Octokit } from "@octokit/rest";
 
 export type PullRequestPreviewContext = {
   githubToken: string;

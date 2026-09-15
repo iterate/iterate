@@ -54,7 +54,11 @@ interface ReportedTestCase {
 
 interface ReportedTestModule {
   moduleId: string;
-  children: { allTests(): Iterable<ReportedTestCase> };
+  errors?(): unknown[];
+  children: {
+    allTests(): Iterable<ReportedTestCase>;
+    allSuites?(): Iterable<{ errors(): unknown[] }>;
+  };
   diagnostic?(): {
     environmentSetupDuration: number;
     prepareDuration: number;
@@ -293,16 +297,23 @@ export class RetryTelemetryReporter {
         if (unknownFlake) await appendFlakeRecord(unknownFlake);
       }
       const retried = tests.filter((test) => test.retryCount > 0);
-      const unhandled = unhandledErrors.map((error) =>
-        normalizeTestTelemetryError(error, "Unknown unhandled Vitest error"),
-      );
+      // Vitest keeps import and suite-hook errors on the module/suite, not
+      // in unhandledErrors or the individual test results. Without these a
+      // failed file beside a passing file looks like complete clean coverage.
+      const runErrors = [
+        ...unhandledErrors,
+        ...testModules.flatMap((module) => [
+          ...(module.errors?.() || []),
+          ...Array.from(module.children.allSuites?.() || []).flatMap((suite) => suite.errors()),
+        ]),
+      ].map((error) => normalizeTestTelemetryError(error, "Unknown Vitest run error"));
 
       const finishedAtMs = Date.now();
       const status =
         reason === "interrupted"
           ? "interrupted"
           : reason === "failed" ||
-              unhandled.length > 0 ||
+              runErrors.length > 0 ||
               tests.some((test) => test.state === "failed")
             ? "failed"
             : "passed";
@@ -318,7 +329,7 @@ export class RetryTelemetryReporter {
           startedAt: new Date(this.runStartedAtMs).toISOString(),
           finishedAt: new Date(finishedAtMs).toISOString(),
           durationMs: Math.max(0, finishedAtMs - this.runStartedAtMs),
-          ...(unhandled[0] && { error: unhandled[0] }),
+          ...(runErrors[0] && { error: runErrors[0] }),
         },
         lanes: [
           {
@@ -327,7 +338,7 @@ export class RetryTelemetryReporter {
             durationMs: Math.max(0, finishedAtMs - this.runStartedAtMs),
             testCount: tests.length,
             retryCount: tests.reduce((total, test) => total + test.retryCount, 0),
-            collectionErrors: unhandled.map((error) => error.message),
+            collectionErrors: runErrors.map((error) => error.message),
           },
         ],
         tests,

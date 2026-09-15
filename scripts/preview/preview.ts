@@ -1,19 +1,3 @@
-import { resourceAllowedForHolder } from "../../apps/semaphore/src/resource-reservations.ts";
-import {
-  readPullRequestBody,
-  writePullRequestBody,
-  resolvePullRequestPreviewContext,
-  splitRepositoryFullName,
-  makeDefaultWorkflowRunUrl,
-  withGithubRetry,
-  type PullRequestPreviewContext,
-} from "./github.ts";
-import { createMainRunContext, type PreviewRunContext } from "./run-context.ts";
-import {
-  CloudflarePreviewAppEntry,
-  CloudflarePreviewSlotDisplay,
-  CloudflarePreviewState,
-} from "./state.ts";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promises as dns } from "node:dns";
@@ -24,6 +8,7 @@ import { request as httpsRequest } from "node:https";
 import { dirname, resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
+import { resourceAllowedForHolder } from "../../apps/semaphore/src/resource-reservations.ts";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
 import { CONFIG_REPO_TEMPLATE_CATALOG } from "../../apps/os/src/domains/repos/config-repo-template-catalog.generated.ts";
 import {
@@ -63,6 +48,20 @@ import {
   type WorkerSizeInfo,
 } from "./worker-size.ts";
 import { PreviewE2eTelemetryArtifact } from "./e2e-telemetry.ts";
+import {
+  readPullRequestBody,
+  writePullRequestBody,
+  resolvePullRequestPreviewContext,
+  splitRepositoryFullName,
+  withGithubRetry,
+  type PullRequestPreviewContext,
+} from "./github.ts";
+import { createMainRunContext, type PreviewRunContext } from "./run-context.ts";
+import {
+  CloudflarePreviewAppEntry,
+  CloudflarePreviewSlotDisplay,
+  CloudflarePreviewState,
+} from "./state.ts";
 
 // Flake-hunt notes for the preview e2e lane live in
 // docs/preview-e2e-flake-hunt.md.
@@ -304,7 +303,7 @@ export async function run(options: DeployCommandOptions = {}) {
   });
 }
 
-/** Run the full preview fleet on main's reserved slot, including teardown. */
+/** Run the full preview fleet on main's reserved slot. Invoke through cloudflare-main-preview.yml so deployment and teardown are serialized. */
 export async function runMain(options: { commit: string; githubToken?: string }) {
   const runtime = createPreviewRuntime();
   const context = createMainRunContext({
@@ -494,7 +493,7 @@ async function deployPreviewApps({
 
   const requestedEnvironment = context.pullRequest
     ? resolveRequestedPreviewEnvironment(context.pullRequest.pullRequestBody)
-    : "preview-1";
+    : null;
   if (requestedEnvironment) {
     logPreview(`PR body requests ${requestedEnvironment}`);
   }
@@ -523,7 +522,7 @@ async function deployPreviewApps({
             await context.updateState((state) => ({
               ...state,
               notice: [
-                `All preview slots are leased — this PR is waiting in line for one (since ${new Date().toISOString()}).`,
+                `All preview slots are leased — this run is waiting for one (since ${new Date().toISOString()}).`,
                 holderTable,
               ].join("\n"),
             }));
@@ -920,7 +919,7 @@ async function testPreviewApps({
   logPreview(
     `test for ${context.holder} (head ${context.headSha.slice(0, 7)}) — holder ${context.holder}, semaphore ${defaultSemaphoreBaseUrl}`,
   );
-  const recorded = knownState ?? (await context.readState()).state;
+  const recorded = knownState || (await context.readState()).state;
 
   // The semaphore is the single source of lease truth: resolve ownership
   // FIRST, from what the semaphore attributes to this holder right now. The
@@ -1415,13 +1414,17 @@ export async function status(options: StatusOptions = {}) {
   const openPullRequests = githubToken
     ? await listOpenPullRequestsForPreviewDiagnosis(githubToken, repositoryFullName)
     : [];
-  const diagnosis = diagnosePreviewFleetCapacity({ openPullRequests, slots });
+  const diagnosis = diagnosePreviewFleetCapacity({
+    openPullRequests,
+    slots: slots.filter((slot) => previewEnvironmentSlugs.includes(slot.slug)),
+  });
 
   return {
     checkedAt: new Date().toISOString(),
     semaphoreBaseUrl: defaultSemaphoreBaseUrl,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
     total: slots.length,
+    prCapacity: previewEnvironmentSlugs.length,
     availableCount: diagnosis.availableCount,
     leasedCount: diagnosis.leasedCount,
     minIdleHours,
@@ -2892,9 +2895,7 @@ function resolvePreviewTestTelemetryEnvironment(input: {
     TEST_TELEMETRY_KIND: "e2e",
     TEST_TELEMETRY_APP: input.app,
     TEST_TELEMETRY_HEAD_SHA: input.context.headSha,
-    ...(input.context.branch && {
-      TEST_TELEMETRY_BRANCH: input.context.branch,
-    }),
+    TEST_TELEMETRY_BRANCH: input.context.branch,
     TEST_TELEMETRY_PULL_REQUEST_NUMBER: input.context.pullRequest
       ? String(input.context.pullRequest.pullRequestNumber)
       : "",
@@ -4933,6 +4934,7 @@ async function classifyEnvironmentConfigLeases(input: {
 
       return {
         slug: resource.slug,
+        reservedFor: resource.slug === "preview-1" ? "main" : null,
         verdict,
         // What `eraseSlotData` needs to wipe the slot. Falls back to the
         // slug-derived config (preview-3 → preview_3) for slots that have

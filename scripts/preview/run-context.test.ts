@@ -1,17 +1,34 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { parse as parseYaml } from "yaml";
 import { expect, test } from "vitest";
 import { createMainRunContext } from "./run-context.ts";
 
 test("a main preview pins its checkout and records state without a PR", async () => {
   using repo = repository();
+  const workflow = parseYaml(
+    readFileSync(
+      resolve(import.meta.dirname, "../../.depot/workflows/cloudflare-main-preview.yml"),
+      "utf8",
+    ),
+  );
+  expect(workflow).toMatchObject({
+    concurrency: { group: "cloudflare-main-preview-1", "cancel-in-progress": false },
+    on: { push: { branches: ["main"] } },
+  });
+  expect(workflow.jobs.preview).toBeDefined();
   const context = createMainRunContext({
     commit: repo.sha,
     githubToken: "test",
     repositoryRoot: repo.path,
-    environment: { GITHUB_REF_NAME: "main" },
+    environment: {
+      DEPOT_JOB_URL: "https://depot.dev/jobs/test",
+      GITHUB_WORKFLOW: workflow.name,
+      GITHUB_JOB: "preview",
+      GITHUB_REF_NAME: "main",
+    },
   });
   expect(context).toMatchObject({
     headSha: repo.sha,
@@ -32,7 +49,12 @@ test("a different commit or modified checkout cannot be called a pinned main res
     commit: "a".repeat(40),
     githubToken: "test",
     repositoryRoot: repo.path,
-    environment: { GITHUB_REF_NAME: "main" },
+    environment: {
+      DEPOT_JOB_URL: "https://depot.dev/jobs/test",
+      GITHUB_WORKFLOW: "Main Preview (Depot CI)",
+      GITHUB_JOB: "preview",
+      GITHUB_REF_NAME: "main",
+    },
   };
   expect(() => createMainRunContext(options)).toThrow(/checked-out commit/);
   writeFileSync(join(repo.path, "source.txt"), "changed");
@@ -45,9 +67,26 @@ test("a validation dispatch from a branch cannot impersonate main", () => {
     commit: repo.sha,
     githubToken: "test",
     repositoryRoot: repo.path,
-    environment: { GITHUB_REF_NAME: "ci/test-main-workflow" },
+    environment: {
+      DEPOT_JOB_URL: "https://depot.dev/jobs/test",
+      GITHUB_WORKFLOW: "Main Preview (Depot CI)",
+      GITHUB_JOB: "preview",
+      GITHUB_REF_NAME: "ci/test-main-workflow",
+    },
   });
   expect(context).toMatchObject({ branch: "ci/test-main-workflow" });
+});
+
+test("local invocation cannot bypass main's workflow lock", () => {
+  using repo = repository();
+  expect(() =>
+    createMainRunContext({
+      commit: repo.sha,
+      githubToken: "test",
+      repositoryRoot: repo.path,
+      environment: { GITHUB_REF_NAME: "main" },
+    }),
+  ).toThrow(/serialized/);
 });
 
 function repository() {

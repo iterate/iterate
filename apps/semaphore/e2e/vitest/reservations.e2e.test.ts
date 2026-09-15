@@ -18,17 +18,24 @@ test("old PR clients cannot acquire main's slot, even with force; main cannot ta
     fetch: app.networkFetch,
   }).resources;
   const type = "environment-config-lease";
-  expect(await resources.list({ type })).toEqual([]);
   const created: string[] = [];
   const leases: Array<{ type: string; slug: string; leaseId: string }> = [];
-  await using cleanup = {
+  await using _cleanup = {
     async [Symbol.asyncDispose]() {
       for (const lease of leases.toReversed()) await resources.release(lease);
       for (const slug of created.toReversed()) await resources.delete({ type, slug });
     },
   };
+  const fixture = "main-preview-reservation-test";
+  // Cancellation kills disposable teardown. Recover only this test's own
+  // tagged inventory in the exclusively leased preview Semaphore.
+  for (const resource of await resources.list({ type })) {
+    expect(resource.data).toMatchObject({ fixture });
+    await resources.release({ type, slug: resource.slug, force: true });
+    await resources.delete({ type, slug: resource.slug });
+  }
   for (const slug of ["preview-1", "preview-2"]) {
-    await resources.add({ type, slug, data: {} });
+    await resources.add({ type, slug, data: { fixture } });
     created.push(slug);
   }
   expect(await resources.policy({ type })).toMatchObject({
@@ -80,6 +87,17 @@ test("old PR clients cannot acquire main's slot, even with force; main cannot ta
   });
   expect(maintenance).toMatchObject({ holder: "gc" });
   leases.push(maintenance!);
+  // Main may have observed its own lease before GC acquired it. That stale
+  // observation must not let force-renewal evict the cleaner.
+  expect(
+    await resources.acquireSpecific({
+      type,
+      slug: "preview-1",
+      holder: "main-preview",
+      force: true,
+      leaseMs: 60_000,
+    }),
+  ).toBeNull();
   expect(
     await resources.acquireSpecific({
       type,

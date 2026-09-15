@@ -257,10 +257,10 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
             payload: {
               runId,
               suite,
-              branch: checkRun.check_suite?.head_branch || "unknown",
-              commit: checkRun.head_sha,
+              branch: summary ? summary.branch : checkRun.check_suite?.head_branch || "unknown",
+              commit: summary ? summary.headSha : checkRun.head_sha,
               records,
-              ...(summary && { summary }),
+              summary,
             },
           });
         } catch (error) {
@@ -382,7 +382,13 @@ export class FlakeDashboardProcessor extends StreamProcessor<
           [event.payload.suite]: {
             recentRunOffsets: [
               ...(state.suites[event.payload.suite]?.recentRunOffsets || []),
-              event.offset,
+              ...((
+                event.payload.summary
+                  ? event.payload.summary.status === "complete"
+                  : event.payload.records.length > 0
+              )
+                ? [event.offset]
+                : []),
             ].slice(-3),
           },
         };
@@ -683,10 +689,12 @@ export function renderBody(state: FlakeDashboardState): string {
     // pattern or error would end the cell or the code span, and a raw newline
     // (playwright timeout messages carry a call log) would split the table
     // row — so all three render collapsed/escaped.
-    const cellCode = (text: string) =>
-      `\`${text.replaceAll(/\s+/gu, " ").replaceAll("`", "'").replaceAll("|", "\\|")}\``;
+    const pattern = `/${test.pattern}/`
+      .replaceAll(/\s+/gu, " ")
+      .replaceAll("`", "'")
+      .replaceAll("|", "\\|");
     const info = [
-      `pattern: ${cellCode(`/${test.pattern}/`)}`,
+      `pattern: \`${pattern}\``,
       `suites: ${test.suites.join(", ")}`,
       ...(test.proposed.length === 0
         ? []
@@ -704,7 +712,7 @@ export function renderBody(state: FlakeDashboardState): string {
         : [
             `runs: ${runs}`,
             `flake rate: ${gated === 0 ? "—" : `${Math.round((count(test, "flake-fail") / gated) * 100)}%`}`,
-            `last flake: ${test.lastFlakeAt === null ? "never" : shortDate(test.lastFlakeAt)}`,
+            `last flake: ${test.lastFlakeAt ? shortDate(test.lastFlakeAt) : "never"}`,
           ]
     ).join("<br>");
     // Tests only exist after birth, so config is always set here; the plain

@@ -34,9 +34,8 @@ test("folds CI-reported records into per-test stats", async () => {
 });
 
 test("a renamed test's old row retires once absent from 3 suite runs, not before", async () => {
-  // The specs suite runs on PR branches only (cloudflare-previews.yml has no
-  // push trigger), so expiry must work from PR-branch runs alone — but a
-  // 3-run window means no single PR push can hide a row by itself.
+  // Tracked tests keep their all-branch history. Three complete runs are
+  // needed so a single PR deleting a test cannot hide it repo-wide.
   const h = makeHarness();
   await h.append(
     birth(),
@@ -72,6 +71,27 @@ test("a renamed test's old row retires once absent from 3 suite runs, not before
   expect(body).toContain("`new name`");
   expect(body).toContain("1 retired test hidden");
   expect(h.state().tests["old name"]).toBeDefined();
+});
+
+test("incomplete runs cannot retire tracked failures or sentinels", async () => {
+  const h = makeHarness();
+  await h.append(
+    birth(),
+    runRecorded(
+      1,
+      [
+        record("tracked failure", "pinned-fail", { kind: "failing" }),
+        record("flake sentinel", "pass"),
+      ],
+      { suite: "specs" },
+    ),
+  );
+  for (const n of [2, 3, 4, 5])
+    await h.append(runRecorded(n, [], { suite: "specs", branch: "docs-only-pr", complete: false }));
+  const body = renderBody(h.state());
+  expect(body).toContain("`tracked failure`");
+  expect(body).toContain("`flake sentinel`");
+  expect(h.state().suites.specs!.recentRunOffsets).toHaveLength(1);
 });
 
 test("a transiently-absent test survives the window and returns with its history intact", async () => {
@@ -430,6 +450,8 @@ function runRecorded(
       commit: `commit-${n}`,
       records,
       summary: {
+        headSha: `commit-${n}`,
+        branch: overrides?.branch || "main",
         status: overrides?.complete === false ? "incomplete" : "complete",
         startedAt: day(n),
         finishedAt: day(n + 0.001),
@@ -531,6 +553,8 @@ test.each(["clean", "torn record", "missing retry record"])(
   "%s artifact carries an honest completeness result through webhook ingestion",
   async (scenario) => {
     const summary = {
+      headSha: "abc123",
+      branch: "main",
       status: "complete",
       startedAt: day(1),
       finishedAt: day(1.001),
@@ -545,7 +569,7 @@ test.each(["clean", "torn record", "missing retry record"])(
       zips: {
         summary: zipSync({
           "suite-summary.json": strToU8(JSON.stringify(summary)),
-          ...(scenario === "torn record" ? { "partial.jsonl": strToU8("{broken") } : {}),
+          ...(scenario === "torn record" && { "partial.jsonl": strToU8("{broken") }),
         }),
       },
     });
@@ -559,6 +583,20 @@ test.each(["clean", "torn record", "missing retry record"])(
     });
   },
 );
+
+test("a main webhook cannot relabel a branch artifact at the same SHA", async () => {
+  const summary = {
+    ...runRecorded(1, []).payload.summary,
+    headSha: "abc123",
+    branch: "ci/validation",
+  };
+  const { itx, appended } = fakeItx({
+    artifacts: [{ artifactId: "branch", name: "flake-records-specs", sizeBytes: 1000 }],
+    zips: { branch: zipSync({ "suite-summary.json": strToU8(JSON.stringify(summary)) }) },
+  });
+  await makeApp(itx).processEvent(webhookEvent());
+  expect(appended[1]).toMatchObject({ payload: { branch: "ci/validation", commit: "abc123" } });
+});
 
 test("runs without flake artifacts append nothing, not even a birth", async () => {
   const { itx, appended } = fakeItx({

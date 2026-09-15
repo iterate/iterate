@@ -1,13 +1,13 @@
 ---
-status: in-progress
+status: needs-design-review
 size: large
 ---
 
 # Main preview runs and a current flake dashboard
 
-Status: implementation and focused tests are in place. Main shares the existing preview runner, slot reservation is enforced in Semaphore, and unknown flakes now use complete main snapshots. Full repository checks, real preview validation and review remain.
+Status: PR #2658 is closed at the user’s request; branch retained for review through the compare link. Dashboard changes and preview implementation are preserved, but the preview-1 reservation design is rejected for excessive special-casing. Reconsider that requirement before further implementation; validation remains incomplete.
 
-## Agreed behavior
+## Original scope (reservation design needs reconsideration)
 
 - [ ] Keep `pnpm preview run --pull-request-number <n>` working. Add `pnpm preview run-main --commit <sha>` for the exact checked-out main commit.
 - [ ] Share deployment, readiness, tests and cleanup between PR/main callers. Extract PR reporting/context from the shared implementation where needed; keep the extraction focused.
@@ -38,3 +38,8 @@ Status: implementation and focused tests are in place. Main shares the existing 
 Codex session: `01a0a1e6-0135-7902-91aa-b4bb07026de2`.
 
 - 2026-09-15: Added complete-suite summaries with retry-record count validation, main-only current snapshots and dashboard layout changes; 29 dashboard tests and 162 focused CI/runner tests pass. Extracted GitHub transport, revision/report context and preview state from the CLI. Main refuses to start against a Semaphore that lacks the reservation policy. GC remains allowed to acquire an expired main slot without force, so cancellation still has a cost-control backstop.
+
+- 2026-09-15 review: fixed branch provenance when multiple Depot runs share a SHA; report summaries now carry their own branch/commit. Captured Vitest module/import and nested suite-hook errors in canonical telemetry, with real Vitest subprocess regression tests. Incomplete summaries no longer advance tracked-test retirement. Main is restricted to the serialized workflow, waits on reserved-slot contention, and cannot force-renew over GC. The reservation test tags and recovers its own inventory after cancelled runs.
+- First preview validation (`22f55968b`): unit CI passed 5,461 tests and uploaded a complete summary with zero unknown retries. The real Semaphore preview reservation test passed. Final browser/OS results and validation of the review fixes remain in progress.
+
+- 2026-09-15 user review: closed PR #2658 without deleting the branch. Continue review at https://github.com/iterate/iterate/compare/main...ci/main-preview-dashboard. The user rejected special-casing preview-1 throughout allocation and deployment; do not treat the original reservation requirement as settled or reopen a PR without a new request. Existing review fixes are preserved as a checkpoint, not an accepted design.
