@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 size: medium
 branch: mobile-camera-filters
 base: main
@@ -13,10 +13,10 @@ Picking a filter swaps the plain `expo-camera` preview for a live filtered
 pipeline. Photos and clips captured while a filter is active come back as
 normal composer attachments, filter baked in.
 
-High-level status: native iPhone recording and all seven filters are implemented.
-Tests, native media proofs, and AI review are complete. The first iPhone build
-compiled and signed; the final build includes two follow-up fixes. Build delivery
-and the user's iPhone trial remain.
+High-level status: implementation, automated review, and build delivery are complete.
+The signed native iPhone build is ready at
+[the install page](https://mobile.iterate.com/install/mobile-camera-filters).
+The user's physical iPhone trial remains the acceptance check before merging.
 
 ## Why this shape (assumptions made while AFK)
 
@@ -467,8 +467,8 @@ rendered effect and audio and can be decoded through native media APIs.
 - [x] Port the seven filters and preserve the project-filter contract where supported. _Document any deliberate API changes rather than silently ignoring commands._
 - [x] Keep lazy asset loading and the ordinary shutter's readiness behavior. _Include camera warmup, addressing the new Bugbot race report._
 - [x] Address AI review comments against the resulting implementation. _All 23 threads resolved; fixes include camera warmup, native error recovery and gesture direction. Native pixel tests disprove the arc-winding report._
-- [ ] Publish a new native preview build and verify its install link. _Use the existing runtime-fingerprint/build workflow; the user will do final iPhone testing._
-- [ ] Refresh PR description and the cost review for the native implementation. _Keep limits and unverified device behavior explicit._
+- [x] Publish a new native preview build and verify its install link. _EAS build `c2a1a007-c3d7-45cd-8f5c-5c90da68a23f` finished and signed on September 15 at 11:24 UTC; install page, manifest, IPA download, channel/runtime and hosted artwork verified._
+- [x] Refresh PR description and the cost review for the native implementation. _Both distinguish native capture from the shared 32 MB send limit and document native maintenance, API differences and unverified phone behavior._
 
 Validation: 275 mobile tests and 21 website tests pass; both typechecks, mobile
 lint and iOS Metro export pass. The Apple-framework proof decodes rendered MP4
@@ -481,3 +481,9 @@ The shared attachment sender still reads a whole file into JavaScript and has
 a 32 MB limit; this affects ordinary videos too. This migration removes the
 whole-video copy during filtered iPhone recording, not that existing send/storage
 cost. The cost review and PR description distinguish the two.
+
+Final build: source `3d68a65b1`, runtime
+`bf4074ff6cd65ff6dfbfc5f4d7931df0f7c0c310`. Subsequent commits only document
+validation. Install the new binary, then tap **Open in app** on the install
+page to switch to the PR channel. Check photos, each game on a moving face,
+recording with sound, seeking/Save, camera flip/reopen and a longer clip.
