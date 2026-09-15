@@ -149,6 +149,8 @@ const TrackedTest = z.object({
   firstRecordedAt: z.string(),
   lastRecordedAt: z.string(),
   defaultBranchStreak: DefaultBranchStreak.nullable().default(null),
+  /** Older retry evidence cannot undo a wrapper observed on main in this suite. */
+  lastMainWrapperAt: z.record(z.string(), z.string()).default({}),
   /**
    * One entry per proposal already made, keyed `${transition}:${streak.firstAt}`
    * — a streak proposes at most once however long it grows.

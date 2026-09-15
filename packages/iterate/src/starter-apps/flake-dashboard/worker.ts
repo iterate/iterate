@@ -330,19 +330,30 @@ export class FlakeDashboardProcessor extends StreamProcessor<
         const config = state.birthCertificate?.config;
         if (config === undefined) return state;
         const onDefaultBranch = event.payload.branch === config.defaultBranch;
+        const { summary, suite, runId, commit, records } = event.payload;
         const tests = { ...state.tests };
         for (const record of event.payload.records) {
           const existing = tests[record.name];
+          const runAt = summary?.startedAt || record.at;
+          const wrapperAt = existing?.lastMainWrapperAt[suite];
+          const staleUnknown =
+            existing &&
+            onDefaultBranch &&
+            record.kind === "unknown" &&
+            wrapperAt &&
+            runAt < wrapperAt;
+          const kind = staleUnknown ? existing.kind : record.kind;
           const counts = { ...existing?.counts };
           counts[record.outcome] = (counts[record.outcome] || 0) + 1;
           const streak = existing?.defaultBranchStreak || null;
-          const nextStreak = !onDefaultBranch
-            ? streak
-            : record.outcome === "unexpected-error"
-              ? null
-              : streak !== null && streak.outcome === record.outcome
-                ? { ...streak, runs: streak.runs + 1, lastAt: record.at }
-                : { outcome: record.outcome, runs: 1, firstAt: record.at, lastAt: record.at };
+          const nextStreak =
+            !onDefaultBranch || staleUnknown
+              ? streak
+              : record.outcome === "unexpected-error"
+                ? null
+                : streak && streak.outcome === record.outcome
+                  ? { ...streak, runs: streak.runs + 1, lastAt: record.at }
+                  : { outcome: record.outcome, runs: 1, firstAt: record.at, lastAt: record.at };
           const flakeStruck = record.outcome === "flake-fail" || record.outcome === "retried-pass";
           // Error samples worth keeping: an unknown flake's evidence, or an
           // unexpected error anywhere. A matched flake-fail / pinned-fail is
@@ -353,7 +364,7 @@ export class FlakeDashboardProcessor extends StreamProcessor<
               ? { error: record.error, commit: event.payload.commit, at: record.at }
               : null;
           tests[record.name] = {
-            kind: record.kind,
+            kind,
             pattern: record.pattern || existing?.pattern || "",
             suites: existing?.suites.includes(event.payload.suite)
               ? existing.suites
@@ -372,11 +383,16 @@ export class FlakeDashboardProcessor extends StreamProcessor<
             // Dates the test's CURRENT kind (Failures render it as "pinned
             // since"): a flake that later becomes a pin restarts the clock.
             firstRecordedAt:
-              existing !== undefined && existing.kind === record.kind
-                ? existing.firstRecordedAt
-                : record.at,
-            lastRecordedAt: record.at,
+              existing && existing.kind === kind ? existing.firstRecordedAt : record.at,
+            lastRecordedAt: staleUnknown ? existing.lastRecordedAt : record.at,
             defaultBranchStreak: nextStreak,
+            lastMainWrapperAt:
+              onDefaultBranch && record.kind !== "unknown"
+                ? {
+                    ...existing?.lastMainWrapperAt,
+                    [suite]: wrapperAt && wrapperAt > runAt ? wrapperAt : runAt,
+                  }
+                : existing?.lastMainWrapperAt || {},
             proposed: existing?.proposed || [],
           };
         }
@@ -396,7 +412,6 @@ export class FlakeDashboardProcessor extends StreamProcessor<
           },
         };
         const mainRuns = { ...state.mainRuns };
-        const { summary, suite, runId, commit, records } = event.payload;
         const unknownFlakes = { ...state.unknownFlakes };
         if (onDefaultBranch) {
           const unknowns = { ...unknownFlakes[suite] };
@@ -418,6 +433,8 @@ export class FlakeDashboardProcessor extends StreamProcessor<
           if (summary) {
             for (const [name, test] of Object.entries(unknowns)) {
               if (recordedNames.has(name)) continue;
+              const wrapperAt = tests[name]?.lastMainWrapperAt[suite];
+              if (wrapperAt && summary.startedAt < wrapperAt) continue;
               const outcome = results.get(name);
               const pass = outcome === "pass" && summary.status === "complete";
               const fail = outcome === "fail";
@@ -441,6 +458,8 @@ export class FlakeDashboardProcessor extends StreamProcessor<
           for (const record of records) {
             const previous = unknowns[record.name];
             const lastRunAt = summary?.startedAt || record.at;
+            const wrapperAt = tests[record.name]?.lastMainWrapperAt[suite];
+            if (record.kind === "unknown" && wrapperAt && lastRunAt < wrapperAt) continue;
             if (record.kind !== "unknown") {
               if (previous && lastRunAt <= previous.lastRunAt) continue;
               // Wrapping the test on main moves it to Flakes/Failures.

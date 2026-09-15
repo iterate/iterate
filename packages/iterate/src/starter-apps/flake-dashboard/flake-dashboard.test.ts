@@ -342,6 +342,27 @@ test("a retry in an interrupted main run resets an unknown streak; a main wrappe
   expect(renderBody(h.state())).toContain("`chat upload` |");
 });
 
+test("a late retry cannot undo newer wrapper adoption on main", async () => {
+  const h = makeHarness();
+  const flake = record("chat upload", "retried-pass", { kind: "unknown" });
+  await h.append(
+    birth(),
+    runRecorded(2, [record("chat upload", "pass")]),
+    runRecorded(3, [record("chat upload", "pass")]),
+    runRecorded(1, [flake]),
+  );
+  expect(renderBody(h.state())).not.toContain("chat upload |");
+  expect(renderBody(h.state())).toContain("`chat upload` |");
+  expect(h.state().tests["chat upload"]).toMatchObject({
+    kind: "flake",
+    defaultBranchStreak: { outcome: "pass", runs: 2 },
+    counts: { "retried-pass": 1 },
+  });
+  // A newer unwrapped retry is fresh evidence, not a stale pre-adoption run.
+  await h.append(runRecorded(4, [flake]));
+  expect(renderBody(h.state())).toContain("chat upload |");
+});
+
 test("sentinel streaks never propose transitions", async () => {
   const h = makeHarness();
   await h.append(birth());
