@@ -125,6 +125,8 @@ import {
   unconfiguredSubscriptionError,
 } from "./utils.ts";
 
+/** How long a resolved userspace facet class is reused before its source is rechecked. */
+const FACET_SOURCE_RECHECK_MS = 10_000;
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
 const CORE_STATE_REBUILD_KEY = "coreStateRebuild";
@@ -1455,6 +1457,77 @@ export class StreamDurableObject extends DurableObject<Env> {
    * load in this incarnation so none of them return to the stale identity. */
   #facetRecoveryNonce: string | undefined;
 
+  /**
+   * The resolved class per userspace facet, held for this incarnation.
+   *
+   * Resolving a source ref is a Repo DO head read (for an unpinned ref) plus
+   * build-key hashing, and it used to run on EVERY facet call — a cold Repo
+   * DO put seconds in front of a voice conversation's first microphone frame.
+   * A held resolution is reused as-is for the recheck interval, then
+   * re-resolved in the background; a changed ref or a clone-skew recovery
+   * nonce re-resolves before the call. A moved branch head is therefore
+   * picked up within one interval plus one call, which is the lag a
+   * config-repo commit already had through the coordinator's build cache.
+   */
+  #heldUserspaceFacetResolutions = new Map<
+    string,
+    {
+      loadClass: () => DurableObjectClass;
+      version: string;
+      refKey: string;
+      nonce: string | undefined;
+      resolvedAtMs: number;
+      recheck: Promise<void> | undefined;
+    }
+  >();
+
+  async #userspaceFacetClass(
+    name: string,
+    ref: StatefulDynamicWorkerRef,
+  ): Promise<{ loadClass: () => DurableObjectClass; version: string }> {
+    const refKey = JSON.stringify(ref);
+    const nonce = this.#facetRecoveryNonce;
+    const held = this.#heldUserspaceFacetResolutions.get(name);
+    if (held !== undefined && held.refKey === refKey && held.nonce === nonce) {
+      if (Date.now() - held.resolvedAtMs > FACET_SOURCE_RECHECK_MS && held.recheck === undefined) {
+        held.recheck = this.#prepareUserspaceFacetClass(name, ref, nonce)
+          .then(
+            (fresh) => {
+              this.#heldUserspaceFacetResolutions.set(name, {
+                ...fresh,
+                refKey,
+                nonce,
+                resolvedAtMs: Date.now(),
+                recheck: undefined,
+              });
+            },
+            (error: unknown) => {
+              // Keep serving the running class; try again after another interval.
+              held.resolvedAtMs = Date.now();
+              console.warn("stream facet source recheck failed; keeping the running class", {
+                error,
+                name,
+              });
+            },
+          )
+          .finally(() => {
+            held.recheck = undefined;
+          });
+        this.ctx.waitUntil(held.recheck);
+      }
+      return held;
+    }
+    const fresh = await this.#prepareUserspaceFacetClass(name, ref, nonce);
+    this.#heldUserspaceFacetResolutions.set(name, {
+      ...fresh,
+      refKey,
+      nonce,
+      resolvedAtMs: Date.now(),
+      recheck: undefined,
+    });
+    return fresh;
+  }
+
   async #dialProcessorFacet(name: string): Promise<ProcessorFacetStub> {
     const receiver = this.#requireHostedProcessorSubscription(name);
     if (receiver.action !== "facet-processor") {
@@ -1462,11 +1535,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
     const resolved =
       receiver.source.kind === "userspace"
-        ? await this.#prepareUserspaceFacetClass(
-            name,
-            receiver.source.worker,
-            this.#facetRecoveryNonce,
-          )
+        ? await this.#userspaceFacetClass(name, receiver.source.worker)
         : this.#builtinFacetClass(name);
     // Rebuild the facet whenever its resolved class changed: ctx.facets.get
     // reuses an existing facet and IGNORES a new startup class, so a source
