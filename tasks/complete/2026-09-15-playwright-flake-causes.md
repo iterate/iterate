@@ -7,7 +7,7 @@ base: a85434f645
 
 # Fix the recurring Playwright failures
 
-The approved Todo/auth follow-up is implemented: per-row pending operations and preview auth limits of 600 per 60 seconds. All 52 focused browser runs passed with zero retries, including 48 at 16 workers; preview erasure and lease release are confirmed. Historical startup failures and the recurring registry alarm error remain recorded separately. The user has now approved opening a draft PR with video-mode recordings of the changed seeded-app specs.
+Draft PR [#2656](https://github.com/iterate/iterate/pull/2656) contains the approved fixes and three seeded-app video-mode recordings. All 52 focused Todo/auth runs and all three recording runs passed with zero retries; recording-head CI is green. Preview erasure and lease release are confirmed. Historical startup failures and the recurring registry alarm error remain recorded separately.
 
 ## Review amendments
 
@@ -147,7 +147,12 @@ No new component extraction or dedicated loading-state tests. Nullable `oldStrin
 
 ## Draft PR and recordings (approved)
 
-- [ ] Open a draft PR against main, register review monitoring, and attach rendered video-mode recordings of Todo, shopping-list undo and Docs review.
-- [ ] Verify the GitHub players render, inspect CI/reviews, and clean up recording resources.
+- [x] Open a draft PR against main, register review monitoring, and attach rendered video-mode recordings of Todo, shopping-list undo and Docs review. *Draft #2656 includes all three clips; the global PR monitor is registered through September 16, 11:05 UTC.*
+- [x] Verify the GitHub players render, inspect CI/reviews, and clean up recording resources. *Three rendered `<video>` players; uploaded MP4s download successfully and decode. Recording-head CI passed; no review threads yet. Preview 3 erased and released.*
 
-Merged main's shared Playwright readiness change (#2653), preserving these tests and adopting its simplified signup helper signatures. Todo video now starts at the ready list, matching the existing Docs recording trims.
+Merged main's shared Playwright readiness change (#2653), preserving these tests and adopting its simplified signup helper signatures. Added Todo's explicit video start marker, matching the existing Docs markers. Typechecking caught an overly broad merge resolution that removed the review test's attachment context; commit `60ff6404c` restores it.
+
+- Recording deployment: source/SDK `60ff6404cabf7485cf07a4d50d71ccb771004c21`; OS `dc25664d-7620-42ea-a306-041a439838cc`, Auth `1d38cc7b-98e7-43ba-b4bd-6f6f7b680056`, Docs `7d6e976c-760f-4c23-89e8-45f31c6e2f87`. All smoke checks passed before the shared deployment-age wait. `VIDEO_MODE=1`, one worker, one repetition, zero retries: Todo **51.7s**, shopping-list undo **56.2s**, Docs review **80.7s**. All three bodies passed; the review ledger records `pass`, not a matched flake. Durations include video-mode interaction delays.
+- Exported the rendered videos as H.264 MP4s: Todo **20.52s**, undo **7.48s**, review **51.28s**. Visual inspection confirmed each sequence. Middlewright currently clamps explicit start markers back to the earliest interaction highlight, including signup; trimmed that lead-in from the rendered files without changing their content or playback speed. Evidence: `.flake-validation.ignoreme/seeded-videos/` and `pr-videos/manifest.json`.
+- Local checks: frozen install, all workspace/specs typechecks, lint, formatting and knip passed. The first overlapping test/build/check run hit the unchanged CLI strip-loader test's five-second timeout. The full monorepo then passed with `pnpm -r --workspace-concurrency=1 test`; that CLI case took **817ms**, with no timeout change. CI at `60ff6404c` passed all required checks; the optional DO duration probe was skipped. Preview CI recorded one retry in the unchanged root-stream restart/interception Vitest test; the three recording runs used none.
+- Recording exit cleanup retired nine non-container DO classes, erased Auth D1/KV and deleted **600** artifact repositories within its bounded GC pass. Remaining repositories are inert; R2 files/backups retain three-hour expiry. Preview-3 lease `a483db5a-02f7-44aa-948b-02a377cc9d3b` was released (`released: true`), leaving OS parked. PR CI's separate preview-12 lease was untouched.
