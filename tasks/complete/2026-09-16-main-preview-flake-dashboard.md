@@ -1,11 +1,11 @@
 ---
-status: awaiting-ci
+status: complete
 size: large
 ---
 
 # Main preview runs and a current flake dashboard
 
-Status: shared preview execution is validated on PR CI and the main-specific workflow, including successful cleanup and retained lease. Unknown flakes now retire after 20 consecutive main passes or confirmed absence from a full main test list; local tests, typechecks, lint and the rendered dashboard pass. Fresh CI for this last change remains.
+Status: implementation and acceptance are complete. All checks passed at `64085197f` (nine successful, two skipped), and all seven review threads are resolved. Downloaded unit, preview E2E and specs artifacts prove complete per-test results, matching names and honest branch/commit provenance. The PR remains open for human review; the live dashboard still needs its normal package update/deployment after merge.
 
 ## Current scope
 
@@ -22,6 +22,7 @@ Status: shared preview execution is validated on PR CI and the main-specific wor
 - [x] Validate the shared path against a preview and inspect its results/artifacts. Check the new main workflow using supported Depot execution before merge. *Main workflow dispatch `7wfmztwtdn` at `128804816` passed all six deploys/test commands on preview-16; cleanup succeeded and retained the main-preview lease. File report and complete suite summaries preserve the feature-branch provenance. Automatic main triggers become live only after merge.*
 - [x] Complete checks and commit/push the common-target refactor for compare-link review. *Implementation pushed as `170a85b7c`; local checks and partial deployed validation are recorded below. PR stayed closed during compare-link review.*
 - [x] Reopen PR #2658 after the final human-review fixes, with a current description and risk map. *Reopened at `f951e6897`; global monitoring is active through September 16.*
+- [x] Inspect successful CI artifacts for the final retention/absence changes and finish review. *Run `9hdx326789` at `64085197f`: all three suite summaries complete; every result matches raw telemetry, including one unknown E2E retry and one known flake strike. Cleanup and retained lease verified; all review threads resolved.*
 
 ## Decisions and limits
 
@@ -87,3 +88,11 @@ Codex session: `01a0a1e6-0135-7902-91aa-b4bb07026de2`.
 
 - Bugbot `discussion_r4020833791`: reproduced delayed retries moving the last-flake date backwards and appearing at the newest end of history. Histories and error samples now sort by test time before keeping their bounded tails; last-flake/last-recorded timestamps and the unknown row's error sample preserve newer evidence. Version 0.7.0 rebuilds the reduced state from existing events to populate history timestamps; acknowledged side effects do not replay. Retention rules are unchanged.
 - Recency validation: all 39 dashboard tests, package typecheck, scoped lint and formatting pass. The regression covers both an adopted wrapper and an unknown row receiving older retry evidence after newer failures.
+
+### September 16 — final acceptance
+
+- Head `64085197fcd2449a82747c10fc5c9ef7b4a47ed2`: all 11 GitHub checks completed (nine successful, two skipped), including preview, unit, lint/typecheck, Bugbot and Iterate Review. All seven review threads are resolved. No merge was requested or performed.
+- Successful Depot run `9hdx326789`, preview attempt `fbwnw665qd`, unit attempt `wwv983zc9k`. Downloaded flake records and raw telemetry: unit 5,484 tests / zero unknown retries; preview E2E 232 tests / one unknown retry; specs 92 tests / zero unknown retries. All three summaries are complete, have zero final failures, and preserve the exact head plus `ci/main-preview-dashboard`. Every summary entry matches the raw result's name and outcome, including duplicate-name counts. All Vitest/Playwright results have `leafName`; 108 Node tests correctly use their existing full name. Every wrapper/retry record matches a summary name.
+- The unknown retry is `a root stream DO restart closes the installing session with 4901; reconnect + re-install restores interception`: the first attempt expected `No AI interceptor installed` but received a Durable Object storage error; it passed on one retry. The existing wrapped `a userspace facet rebuilds on a source commit and only on a source commit` hit `SAME-BOOT STALENESS`. These remain product/test issues; green CI does not mean zero flakes. This PR records both honestly rather than fixing their causes.
+- Preview-13 cleanup retired OS/playground DO classes, wiped D1/KV, and kept the PR lease until `2026-09-16T02:04:31.822Z`. Artifact cleanup deleted 552 repositories and explicitly hit its existing deadline with some remaining for the next sweep; R2 data retains its 3h lifecycle. Cleanup was bounded and reported its remaining work, not a claim that all stored data was gone.
+- Evidence: [preview check](https://github.com/iterate/iterate/runs/104596944873), [Depot preview attempt](https://depot.dev/orgs/0p91s0lz49/workflows/q5h15jhczm?job=ssjw2c170f&attempt=fbwnw665qd), local `/tmp/retention-64085197f-acceptance.json`, `/tmp/retention-64085197f-preview.log`, and downloaded `/tmp/retention-64085197f-*.zip`. Earlier main-specific dispatch at `128804816` proves the main runner path; this successful PR run proves the subsequent retention artifact changes. The task-completion commit changes documentation only.
