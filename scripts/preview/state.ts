@@ -67,7 +67,7 @@ export const CloudflarePreviewState = z.object({
   // (leaseId, leasedUntil, type); z.object strips them on parse.
   environmentConfigLease: CloudflarePreviewSlotDisplay.nullable().default(null),
   /**
-   * Prominent banner rendered at the top of the managed PR-body section —
+   * Prominent status message included in the preview report —
    * slot exhaustion, slot takeovers, and moves land here so they are
    * impossible to miss. Cleared by the next successful deploy claim.
    */

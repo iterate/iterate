@@ -2,30 +2,47 @@ import { execFileSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { makeDefaultWorkflowRunUrl, type PullRequestPreviewContext } from "./github.ts";
+import { makeDefaultWorkflowRunUrl } from "./github.ts";
 import { CloudflarePreviewState } from "./state.ts";
 
-/** The shared runner knows its revision, lease holder and report destination. */
-export type PreviewRunContext = {
+/** Identity and source repository for one preview execution. */
+export type PreviewRun = {
   githubToken: string;
   repositoryFullName: string;
   workflowRunUrl: string | null;
   headSha: string;
   branch: string;
   holder: string;
-  pullRequest: PullRequestPreviewContext | null;
-  readState: () => Promise<{ state: CloudflarePreviewState }>;
-  updateState: (
-    update: (state: CloudflarePreviewState) => CloudflarePreviewState,
-  ) => Promise<{ state: CloudflarePreviewState }>;
+  /** Reporting metadata only; deployment and lease policy do not depend on it. */
+  pullRequestNumber: number | null;
 };
 
-export function createMainRunContext(input: {
+/** State lives in the process; publishing a report never reads older state back. */
+export class PreviewReport {
+  state: CloudflarePreviewState;
+  private publish: (state: CloudflarePreviewState) => Promise<void>;
+
+  constructor(
+    state: CloudflarePreviewState,
+    publish: (state: CloudflarePreviewState) => Promise<void>,
+  ) {
+    this.state = state;
+    this.publish = publish;
+  }
+
+  async update(update: (state: CloudflarePreviewState) => CloudflarePreviewState) {
+    this.state = CloudflarePreviewState.parse(update(this.state));
+    await this.publish(this.state);
+    return this.state;
+  }
+}
+
+export function createMainPreview(input: {
   commit: string;
   githubToken: string;
   repositoryRoot: string;
   environment: NodeJS.ProcessEnv;
-}): PreviewRunContext {
+}) {
   const headSha = z
     .string()
     .regex(/^[a-f0-9]{40}$/)
@@ -64,25 +81,22 @@ export function createMainRunContext(input: {
     input.environment.GITHUB_REF_NAME ||
     git("branch", "--show-current");
   if (!branch) throw new Error("Main preview needs a branch name for result provenance.");
-  let state = CloudflarePreviewState.parse({});
-  return {
+  const run: PreviewRun = {
     githubToken: input.githubToken,
     repositoryFullName: input.environment.GITHUB_REPOSITORY || "iterate/iterate",
     workflowRunUrl: makeDefaultWorkflowRunUrl(input.environment) || null,
     headSha,
     branch,
     holder: "main-preview",
-    pullRequest: null,
-    readState: async () => ({ state }),
-    updateState: async (update) => {
-      state = CloudflarePreviewState.parse(update(state));
-      const directory = join(input.repositoryRoot, "test-results");
-      await mkdir(directory, { recursive: true });
-      await writeFile(
-        join(directory, "main-preview-state.json"),
-        JSON.stringify({ headSha, branch, state }, null, 2),
-      );
-      return { state };
-    },
+    pullRequestNumber: null,
   };
+  const report = new PreviewReport(CloudflarePreviewState.parse({}), async (state) => {
+    const directory = join(input.repositoryRoot, "test-results");
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      join(directory, "main-preview-state.json"),
+      JSON.stringify({ headSha, branch, state }, null, 2),
+    );
+  });
+  return { run, report };
 }

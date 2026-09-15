@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { expect, test } from "vitest";
-import { createMainRunContext } from "./run-context.ts";
+import { createMainPreview } from "./run.ts";
 
 test("a main preview pins its checkout and records state without a PR", async () => {
   using repo = repository();
@@ -19,7 +19,7 @@ test("a main preview pins its checkout and records state without a PR", async ()
     on: { push: { branches: ["main"] } },
   });
   expect(workflow.jobs.preview).toBeDefined();
-  const context = createMainRunContext({
+  const { run, report } = createMainPreview({
     commit: repo.sha,
     githubToken: "test",
     repositoryRoot: repo.path,
@@ -30,17 +30,24 @@ test("a main preview pins its checkout and records state without a PR", async ()
       GITHUB_REF_NAME: "main",
     },
   });
-  expect(context).toMatchObject({
+  expect(run).toMatchObject({
     headSha: repo.sha,
     branch: "main",
     holder: "main-preview",
-    pullRequest: null,
+    pullRequestNumber: null,
   });
-  await context.updateState((state) => ({ ...state, notice: "Tests failed" }));
-  expect(await context.readState()).toMatchObject({ state: { notice: "Tests failed" } });
+  await report.update((state) => ({ ...state, notice: "Tests failed" }));
+  await report.update((state) => ({
+    ...state,
+    environmentConfigLease: { slug: "preview-8", dopplerConfig: "preview_8" },
+  }));
+  expect(report.state).toMatchObject({ notice: "Tests failed" });
   expect(
     JSON.parse(readFileSync(join(repo.path, "test-results/main-preview-state.json"), "utf8")),
-  ).toMatchObject({ headSha: repo.sha, state: { notice: "Tests failed" } });
+  ).toMatchObject({
+    headSha: repo.sha,
+    state: { notice: "Tests failed", environmentConfigLease: { slug: "preview-8" } },
+  });
 });
 
 test("a different commit or modified checkout cannot be called a pinned main result", () => {
@@ -56,14 +63,14 @@ test("a different commit or modified checkout cannot be called a pinned main res
       GITHUB_REF_NAME: "main",
     },
   };
-  expect(() => createMainRunContext(options)).toThrow(/checked-out commit/);
+  expect(() => createMainPreview(options)).toThrow(/checked-out commit/);
   writeFileSync(join(repo.path, "source.txt"), "changed");
-  expect(() => createMainRunContext({ ...options, commit: repo.sha })).toThrow(/uncommitted/);
+  expect(() => createMainPreview({ ...options, commit: repo.sha })).toThrow(/uncommitted/);
 });
 
 test("a validation dispatch from a branch cannot impersonate main", () => {
   using repo = repository();
-  const context = createMainRunContext({
+  const { run } = createMainPreview({
     commit: repo.sha,
     githubToken: "test",
     repositoryRoot: repo.path,
@@ -74,19 +81,31 @@ test("a validation dispatch from a branch cannot impersonate main", () => {
       GITHUB_REF_NAME: "ci/test-main-workflow",
     },
   });
-  expect(context).toMatchObject({ branch: "ci/test-main-workflow" });
+  expect(run).toMatchObject({ branch: "ci/test-main-workflow" });
 });
 
 test("local invocation cannot bypass main's workflow lock", () => {
   using repo = repository();
   expect(() =>
-    createMainRunContext({
+    createMainPreview({
       commit: repo.sha,
       githubToken: "test",
       repositoryRoot: repo.path,
       environment: { GITHUB_REF_NAME: "main" },
     }),
   ).toThrow(/serialized/);
+});
+
+test.each([
+  ["run", "--pull-request-number"],
+  ["run-main", "--commit"],
+])("the %s CLI loads with Node's native TypeScript support", (command, option) => {
+  const help = execFileSync("pnpm", ["preview", command, "--help"], {
+    cwd: resolve(import.meta.dirname, "../.."),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  expect(help).toContain(option);
 });
 
 function repository() {

@@ -1,15 +1,13 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { Octokit } from "@octokit/rest";
 
-export type PullRequestPreviewContext = {
-  githubToken: string;
-  pullRequestBaseSha: string;
-  pullRequestBody: string;
-  pullRequestHeadSha: string;
-  pullRequestHeadRef?: string;
-  pullRequestNumber: number;
-  repositoryFullName: string;
-  workflowRunUrl: string | null;
+export type PreviewPullRequest = {
+  number: number;
+  baseSha: string;
+  headSha: string;
+  branch: string;
+  body: string;
+  url: string;
 };
 
 export async function readPullRequestBody(params: {
@@ -64,33 +62,23 @@ export function splitRepositoryFullName(repositoryFullName: string) {
   return parts as [string, string];
 }
 
-export async function resolvePullRequestPreviewContext(params: {
-  commandEnvironment: NodeJS.ProcessEnv;
+export async function readPreviewPullRequest(params: {
   githubToken: string;
+  repositoryFullName: string;
   pullRequestNumber: number;
-}): Promise<PullRequestPreviewContext> {
-  const repositoryFullName =
-    params.commandEnvironment.GITHUB_REPOSITORY?.trim() || "iterate/iterate";
+}): Promise<PreviewPullRequest> {
   const octokit = new Octokit({ auth: params.githubToken });
-  const [owner, repo] = splitRepositoryFullName(repositoryFullName);
-  const pullRequest = await withGithubRetry("pulls.get (context)", () =>
-    octokit.rest.pulls.get({
-      owner,
-      repo,
-      pull_number: params.pullRequestNumber,
-    }),
+  const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
+  const { data } = await withGithubRetry("pulls.get", () =>
+    octokit.rest.pulls.get({ owner, repo, pull_number: params.pullRequestNumber }),
   );
-
   return {
-    githubToken: params.githubToken,
-    pullRequestBaseSha: pullRequest.data.base.sha,
-    pullRequestBody: pullRequest.data.body || "",
-    pullRequestHeadSha: pullRequest.data.head.sha,
-    pullRequestHeadRef: pullRequest.data.head.ref,
-    pullRequestNumber: params.pullRequestNumber,
-    repositoryFullName,
-    workflowRunUrl:
-      makeDefaultWorkflowRunUrl(params.commandEnvironment) || pullRequest.data.html_url || null,
+    number: data.number,
+    baseSha: data.base.sha,
+    headSha: data.head.sha,
+    branch: data.head.ref,
+    body: data.body || "",
+    url: data.html_url,
   };
 }
 

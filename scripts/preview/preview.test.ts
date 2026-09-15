@@ -63,7 +63,7 @@ const {
   resolvePreviewTestTelemetryEnvironment,
   resolvePreviewTestWorkerVersionOverrides,
   selectExpiredLeasesForGc,
-  selectPreviewAppsForPullRequest,
+  selectPreviewAppsByDiff,
   selectPreviewAppsNeedingRetry,
   selectPreviewAppsForTesting,
   selectPreviewSlotDataOwners,
@@ -478,16 +478,15 @@ describe("preview workflow scope", () => {
   });
 
   test("selects OS and its dependencies for a root Playwright-only change", async () => {
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       githubToken: "test-token",
       previousState: {
         apps: {},
         environmentConfigLease: null,
         notice: null,
       },
-      pullRequestBaseSha: "base-sha",
-      pullRequestHeadSha: "current-head",
-      pullRequestNumber: 2140,
+      baseSha: "base-sha",
+      headSha: "current-head",
       repositoryFullName: "iterate/iterate",
       fetchCompare: async () => ({
         status: "ahead",
@@ -503,16 +502,15 @@ describe("preview workflow scope", () => {
     // The cap truncates an ORDERED list, so a big diff loses its tail: 300
     // firmware files that select nothing, and the `apps/os/**` changes that
     // would have selected OS never appear in the response at all.
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       githubToken: "test-token",
       previousState: {
         apps: {},
         environmentConfigLease: null,
         notice: null,
       },
-      pullRequestBaseSha: "base-sha",
-      pullRequestHeadSha: "current-head",
-      pullRequestNumber: 2376,
+      baseSha: "base-sha",
+      headSha: "current-head",
       repositoryFullName: "iterate/iterate",
       fetchCompare: async () => ({
         status: "ahead",
@@ -528,16 +526,15 @@ describe("preview workflow scope", () => {
   });
 
   test("still selects by diff when the comparison is comfortably under the cap", async () => {
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       githubToken: "test-token",
       previousState: {
         apps: {},
         environmentConfigLease: null,
         notice: null,
       },
-      pullRequestBaseSha: "base-sha",
-      pullRequestHeadSha: "current-head",
-      pullRequestNumber: 2376,
+      baseSha: "base-sha",
+      headSha: "current-head",
       repositoryFullName: "iterate/iterate",
       fetchCompare: async () => ({
         status: "ahead",
@@ -907,16 +904,11 @@ describe("preview test commands", () => {
     expect(
       resolvePreviewTestTelemetryEnvironment({
         app: "os",
-        context: previewInternals.previewContextForPullRequest({
-          githubToken: "token",
-          pullRequestBaseSha: "base-sha",
-          pullRequestBody: "",
-          pullRequestHeadSha: "head-sha",
-          pullRequestHeadRef: "telemetry-branch",
+        run: {
+          headSha: "head-sha",
+          branch: "telemetry-branch",
           pullRequestNumber: 2237,
-          repositoryFullName: "iterate/iterate",
-          workflowRunUrl: "https://github.com/iterate/iterate/actions/runs/123",
-        }),
+        },
         previewSlot: "preview-19",
       }),
     ).toEqual({
@@ -1131,7 +1123,7 @@ describe("preview compare base", () => {
           environmentConfigLease: null,
           notice: null,
         },
-        pullRequestBaseSha: "base-sha",
+        baseSha: "base-sha",
       }),
     ).toBe("base-sha");
   });
@@ -1152,7 +1144,7 @@ describe("preview compare base", () => {
           environmentConfigLease: null,
           notice: null,
         },
-        pullRequestBaseSha: "base-sha",
+        baseSha: "base-sha",
       }),
     ).toBe("previous-preview-sha");
   });
@@ -1185,7 +1177,7 @@ describe("preview OS container rollout", () => {
         nextSlotSlug: "preview-7",
         previousSlotSlug: "preview-7",
         previousState,
-        pullRequestHeadSha: currentHead,
+        headSha: currentHead,
         repositoryFullName: "iterate/iterate",
         fetchCompare: async (basehead) => {
           expect(basehead).toBe(`${previousHead}...${currentHead}`);
@@ -1209,7 +1201,7 @@ describe("preview OS container rollout", () => {
         nextSlotSlug: "preview-7",
         previousSlotSlug: "preview-7",
         previousState,
-        pullRequestHeadSha: currentHead,
+        headSha: currentHead,
         repositoryFullName: "iterate/iterate",
         fetchCompare: async () => ({
           status: "ahead",
@@ -1231,7 +1223,7 @@ describe("preview OS container rollout", () => {
         nextSlotSlug: "preview-7",
         previousSlotSlug: "preview-6",
         previousState,
-        pullRequestHeadSha: currentHead,
+        headSha: currentHead,
         repositoryFullName: "iterate/iterate",
         fetchCompare,
       }),
@@ -1325,9 +1317,8 @@ describe("preview deploy selection", () => {
   const currentHead = "current-head";
   const selectionInput = {
     githubToken: "test-token",
-    pullRequestBaseSha: "base-sha",
-    pullRequestHeadSha: currentHead,
-    pullRequestNumber: 1793,
+    baseSha: "base-sha",
+    headSha: currentHead,
     repositoryFullName: "iterate/iterate",
   };
 
@@ -1358,7 +1349,7 @@ describe("preview deploy selection", () => {
   };
 
   test("selects nothing when the head is unchanged, every app is green, and every app is serving", async () => {
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       ...selectionInput,
       previousState: {
         apps: { os: recordedApp("os", "OS"), auth: recordedApp("auth", "Auth") },
@@ -1373,7 +1364,7 @@ describe("preview deploy selection", () => {
   });
 
   test("selects OS and its dependencies for an iterate package-only change", async () => {
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       ...selectionInput,
       previousState: {
         apps: {},
@@ -1394,7 +1385,7 @@ describe("preview deploy selection", () => {
   });
 
   test("selects Docs for an auth-only change because OS Playwright reviews a seeded document", async () => {
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       ...selectionInput,
       previousState: {
         apps: {},
@@ -1412,7 +1403,7 @@ describe("preview deploy selection", () => {
   });
 
   test("selects the full fleet for an e2e policy-only change", async () => {
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       ...selectionInput,
       previousState: {
         apps: {},
@@ -1446,7 +1437,7 @@ describe("preview deploy selection", () => {
     // os worker, and dependency expansion brings auth (which re-seeds its
     // OAuth clients on deploy) along.
     const probedUrls: string[] = [];
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       ...selectionInput,
       previousState: {
         apps: {
@@ -1483,7 +1474,7 @@ describe("preview deploy selection", () => {
   test("retries failed apps even when the push's diff does not touch them", async () => {
     // A slot whose deploy failed at an old head must not stay wedged just
     // because the next push's diff selects other apps.
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       ...selectionInput,
       previousState: {
         apps: {
@@ -1513,7 +1504,7 @@ describe("preview deploy selection", () => {
   });
 
   test("deploys the full fleet when the compare 404s because a force-push rewrote the deployed head away", async () => {
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       ...selectionInput,
       previousState: {
         apps: {
@@ -1542,7 +1533,7 @@ describe("preview deploy selection", () => {
     // A diverged (or behind) compare diffs from the merge base and cannot see
     // changes that existed only on the deployed side — which the slot still
     // runs. An empty file list here must not read as "nothing affected".
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       ...selectionInput,
       previousState: {
         apps: {
@@ -1567,7 +1558,7 @@ describe("preview deploy selection", () => {
 
   test("propagates non-404 compare failures instead of guessing a selection", async () => {
     await expect(
-      selectPreviewAppsForPullRequest({
+      selectPreviewAppsByDiff({
         ...selectionInput,
         previousState: {
           apps: {
@@ -2129,8 +2120,8 @@ function leasedResource(slug: string, holder: string, dopplerConfig = slug.repla
 // never reclaim share this inert eraser.
 const noopEraseSlotData = async () => {};
 
-describe("eraseHeldSlotAfterRun", () => {
-  const { eraseHeldSlotAfterRun } = previewInternals;
+describe("erasePullRequestSlotAfterRun", () => {
+  const { erasePullRequestSlotAfterRun } = previewInternals;
 
   test("erases the slot the semaphore attributes to this holder and keeps the lease", async () => {
     const eraseSlotData = vi.fn(async () => {});
@@ -2139,8 +2130,8 @@ describe("eraseHeldSlotAfterRun", () => {
       list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
     });
 
-    const result = await eraseHeldSlotAfterRun({
-      context: { pullRequestBody: "", pullRequestHeadSha: "abc1234", pullRequestNumber: 1600 },
+    const result = await erasePullRequestSlotAfterRun({
+      pullRequest: { body: "", headSha: "abc1234", number: 1600 },
       eraseSlotData,
       ranHeadSha: "abc1234",
       semaphore,
@@ -2164,8 +2155,8 @@ describe("eraseHeldSlotAfterRun", () => {
       list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
     });
 
-    const result = await eraseHeldSlotAfterRun({
-      context: { pullRequestBody: "", pullRequestHeadSha: "def5678", pullRequestNumber: 1600 },
+    const result = await erasePullRequestSlotAfterRun({
+      pullRequest: { body: "", headSha: "def5678", number: 1600 },
       eraseSlotData,
       ranHeadSha: "abc1234",
       semaphore,
@@ -2180,8 +2171,8 @@ describe("eraseHeldSlotAfterRun", () => {
     const eraseSlotData = vi.fn(async () => {});
     const semaphore = fakeSemaphore();
 
-    const result = await eraseHeldSlotAfterRun({
-      context: { pullRequestBody: "", pullRequestHeadSha: "abc1234", pullRequestNumber: 1600 },
+    const result = await erasePullRequestSlotAfterRun({
+      pullRequest: { body: "", headSha: "abc1234", number: 1600 },
       eraseSlotData,
       ranHeadSha: null,
       semaphore,
