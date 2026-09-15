@@ -1,5 +1,5 @@
 ---
-status: todo-operations-and-auth-limits
+status: complete
 size: large
 branch: fix/playwright-flake-causes
 base: a85434f645
@@ -7,7 +7,7 @@ base: a85434f645
 
 # Fix the recurring Playwright failures
 
-The next approved follow-up is in progress: one Todo pending-operation array and higher preview auth limits. Conditional edit outcomes are complete and validated; earlier browser evidence and the remaining startup/auth failures are preserved below. **No pull request**; keep using the compare links.
+The approved Todo/auth follow-up is implemented: per-row pending operations and preview auth limits of 600 per 60 seconds. All 52 focused browser runs passed with zero retries, including 48 at 16 workers; preview erasure and lease release are confirmed. Historical startup failures and the recurring registry alarm error remain recorded separately. **No pull request**; keep using the compare links.
 
 ## Review amendments
 
@@ -130,10 +130,17 @@ The user approved replacing the expected conflict exceptions with explicit resul
 
 ## Todo operations and preview auth limits (approved)
 
-- [ ] Replace Todo's count/single-added-item state with one array of add/setDone/remove operations. Allow overlapping additions and changes to different rows; disable only the affected row. Keep the approved conditional render reconciliation and clear operations when live state confirms them. A failed request removes only its own operation. Use actual todo IDs for optimistic rows and mark pending rows with `data-spinner`; retain deleting rows until server confirmation.
-- [ ] Set each OAuth endpoint and fixed-code OTP to `window: 60, max: 600` when fixed test OTP is enabled. Preserve production defaults. Leave Better Auth internals alone: this version extends its counter expiry on each request, so continuous traffic can accumulate across minutes; the configured window is not a precise sustained per-minute quota.
-- [ ] Validate the existing auth test and extend the real Todo CRUD spec for overlapping changes and persistence. Run repeated Todo/mobile sign-ins against a fresh preview with zero retries, inspect failures/telemetry, erase and release the preview, then commit/push the validation record.
+- [x] Replace Todo's count/single-added-item state with one array of add/setDone/remove operations. *`client.tsx` allows overlapping additions and changes to different rows, disables only the pending row and marks it with `data-spinner`. Live-state confirmation retires operations; failed calls remove only their own operation. Optimistic rows use their real IDs; deleting rows remain visible as Deleting… until confirmation.*
+- [x] Set each OAuth endpoint and fixed-code OTP to `window: 60, max: 600` when fixed test OTP is enabled. *All six OAuth overrides and OTP updated; production defaults preserved. Better Auth internals remain unchanged: this version extends counter expiry on each request, so the configured window is not a precise sustained per-minute quota.*
+- [x] Validate the existing auth test and extend the real Todo CRUD spec for overlapping changes and persistence. *108 auth tests and 13 existing Todo/Notes tests pass, along with typechecks/lint. Both deployed scenarios passed 26 times each, zero retries; telemetry audited and retained below. Preview erasure and lease release confirmed.*
 
 No new component extraction or dedicated loading-state tests. Nullable `oldString` was discussed but is not part of these two approved changes.
 
 - Todo/auth red-green evidence: the expanded existing OTP handler test failed at request 101 with the previous limit; the new configuration admits requests 1–600 and rejects request 601. All 108 auth tests, Auth/SDK/specs typechecks, 13 existing Todo/Notes tests and changed-file lint pass. The deployed Todo spec failed on its second Add click while the first request was held, proving the old global lock prevents overlapping additions. Baseline OS version `38ac0b4a-c1ca-4334-8a58-4564c43b6f14`, SDK `067718dd9`, new Auth version `37b7a8f1-6b2d-411c-a54d-50f4eaaefd7c`; evidence `.flake-validation.ignoreme/todo-operations-red/`.
+
+- Final Todo/auth deployment: SDK/source `4ae692529418f65abd3dc876cd5081b38d883c3c`, OS `47f7d312-6866-467e-9f95-f184c5f6f63a`, Auth `37b7a8f1-6b2d-411c-a54d-50f4eaaefd7c`, test head `19e182433`. Package publication succeeded, then the temporary workflow trigger was removed. Tests began after the shared 90-second gate. Fresh preview-3 lease `3f97d463-4e7f-455d-91ea-bcbfa7cd6a04`; entry erasure succeeded.
+- Final browser proof: initial sample **4/4**, then **48/48** at 16 workers, zero retries, 118.7 seconds including runner startup/teardown. Todo **24/24**, median/max **26.6/37.8s**; Notes **24/24**, **31.2/37.8s**. Together, **26 passes per scenario** on the new product. Todo holds real outgoing WebSocket messages while adding two items, then while deleting one, checking another and adding a third; a reload verifies persisted state. Evidence: `.flake-validation.ignoreme/todo-auth-{sample,stress24}/`, including every trace.
+- Stress auth traces: **24 registrations (200), 96 authorizations (302), 24 token exchanges (200), 48 OTP requests and 48 OTP sign-ins (200)**; no captured HTTP 429 anywhere. All 52 browser runs completed as actual passes, with no allowed-flake matches or test retries.
+- Server telemetry window **10:37:23–10:40:29 UTC**: no Auth error records. OS has eight: three native cold-build HTTP 503 records, four records from one network-closure trace, and one recurring registry alarm-arming error. All 32 ITX calls captured in the connection trace have outcome `ok`. A second query after ingestion caught up returned exactly the same eight OS records and zero Auth records. The registry error remains unresolved, with the same getAlarm stack and no useful cause as earlier rounds; this branch does not claim to fix it. Evidence: `todo-auth-final-{os,auth}-errors.json`, `todo-auth-{alarm,connection}.json`; follow-up recorded in `tasks/preview-stream-startup-stalls.md`.
+
+- Todo/auth exit cleanup succeeded: nine non-container DO classes retired, 272 Auth users and 106 organizations cleared, 106 KV keys removed. Artifact GC deleted 629 repositories before its 90-second budget; remaining inert repositories await the next pass. R2 files and sandbox backups retain three-hour expiry. Preview-3 lease `3f97d463-4e7f-455d-91ea-bcbfa7cd6a04` was released (`released: true`); OS remains parked until the next deployment.
