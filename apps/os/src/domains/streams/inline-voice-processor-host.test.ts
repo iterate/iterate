@@ -4,9 +4,9 @@
 // terminal fence have dedicated suites; this pins the new placement only.
 
 import { expect, test } from "vitest";
+import { FACET_IDENTITY_KEY, type ProcessorFacetIdentity } from "iterate/processors/cloudflare";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { FACET_IDENTITY_KEY, type ProcessorFacetIdentity } from "iterate/processors/cloudflare";
 import {
   InlineVoiceProcessorHost,
   INLINE_VOICE_PROCESSOR_PREFIX,

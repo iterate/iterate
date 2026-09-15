@@ -16,7 +16,6 @@ import type { HostedStreamMethod } from "./hosted-stream-routing.ts";
 
 export const INLINE_VOICE_PROCESSOR_PREFIX =
   "/agents/voice/startup-colocated/handshake-overlap/overlap/inline/";
-export const INLINE_VOICE_PROCESSOR_REMOTE_PREFIX = `${INLINE_VOICE_PROCESSOR_PREFIX}remote/`;
 export const INLINE_VOICE_PROCESSOR_LOCAL_PREFIX = `${INLINE_VOICE_PROCESSOR_PREFIX}local/`;
 export const INLINE_VOICE_PROCESSOR_PROJECT_ID = "prj_56cbca83186a40019f5792b2463c81fa";
 export const INLINE_VOICE_PROCESSOR_SUBSCRIPTION = "voice-agent";
