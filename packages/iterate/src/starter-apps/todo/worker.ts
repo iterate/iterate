@@ -90,7 +90,7 @@ export class TodoApp extends IterateDurableObject {
 
   // The browser supplies its optimistic ID; existing server-side callers
   // can still ask this app to allocate one.
-  add(title: string, id = crypto.randomUUID()): string {
+  add(title: string, id: string = crypto.randomUUID()): string {
     const trimmed = title.trim().slice(0, 200);
     if (trimmed.length === 0) throw new Error("Todo title must not be empty.");
     this.#db.insert({
