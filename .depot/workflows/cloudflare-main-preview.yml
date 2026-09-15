@@ -1,0 +1,94 @@
+# Same preview deploy/readiness/tests/erase as PRs, using the ordinary preview pool.
+# Let the active run finish. Depot keeps the newest pending push, so frequent
+# merges cannot starve the dashboard of a complete baseline.
+name: Main Preview (Depot CI)
+
+permissions:
+  contents: read
+  statuses: read
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: cloudflare-main-preview
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    name: Main preview / deploy + e2e
+    runs-on:
+      size: 16x64
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Main preview / deploy + e2e
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
+        run: |-
+          set -euo pipefail
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- \
+            pnpm preview run \
+              --github-token "$GITHUB_TOKEN" \
+              --commit "$GITHUB_SHA"
+      - name: Main preview / erase slot data after e2e
+        if: always()
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |-
+          set -euo pipefail
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- \
+            pnpm preview erase \
+              --github-token "$GITHUB_TOKEN" \
+              --commit "$GITHUB_SHA" \
+              --ran-head-sha "$GITHUB_SHA"
+      - name: Normalize and send preview test telemetry
+        if: always()
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
+        run: |-
+          doppler run --project _shared --config prd -- \
+            pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
+      - name: Collect OS preview test artifacts
+        if: always()
+        run: scripts/preview/collect-test-artifacts.sh test-results
+      - name: Upload OS preview test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-os-test-artifacts
+          path: test-results
+          include-hidden-files: true
+          if-no-files-found: error
+      # flake-records-<suite> artifacts feed the flake dashboard's check_run
+      # ingestion (artifact-name-driven; #2582). ignore-when-empty: a lane
+      # that recorded nothing is normal; overwrite: a job retry re-uploads.
+      - name: Upload specs flake records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-records-specs
+          path: test-results/flake-records/specs
+          if-no-files-found: ignore
+          overwrite: true
+      - name: Upload preview e2e flake records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-records-preview-e2e
+          path: test-results/flake-records/preview-e2e
+          if-no-files-found: ignore
+          overwrite: true

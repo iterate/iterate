@@ -34,9 +34,8 @@ test("folds CI-reported records into per-test stats", async () => {
 });
 
 test("a renamed test's old row retires once absent from 3 suite runs, not before", async () => {
-  // The specs suite runs on PR branches only (cloudflare-previews.yml has no
-  // push trigger), so expiry must work from PR-branch runs alone — but a
-  // 3-run window means no single PR push can hide a row by itself.
+  // Tracked tests keep their all-branch history. Three complete runs are
+  // needed so a single PR deleting a test cannot hide it repo-wide.
   const h = makeHarness();
   await h.append(
     birth(),
@@ -45,7 +44,7 @@ test("a renamed test's old row retires once absent from 3 suite runs, not before
       branch: "some-pr",
     }),
   );
-  expect(renderBody(h.state(), Date.UTC(2026, 0, 10))).toContain("`old name`");
+  expect(renderBody(h.state())).toContain("`old name`");
 
   // Two runs carrying only the new name: the old row is still within the
   // suite's 3-run window, so it stays.
@@ -57,7 +56,7 @@ test("a renamed test's old row retires once absent from 3 suite runs, not before
       }),
     );
   }
-  expect(renderBody(h.state(), Date.UTC(2026, 0, 10))).toContain("`old name`");
+  expect(renderBody(h.state())).toContain("`old name`");
 
   // The third absent run pushes the old name out of the window: retired —
   // hidden from the table, never deleted from state.
@@ -67,11 +66,32 @@ test("a renamed test's old row retires once absent from 3 suite runs, not before
       branch: "another-pr",
     }),
   );
-  const body = renderBody(h.state(), Date.UTC(2026, 0, 10));
+  const body = renderBody(h.state());
   expect(body).not.toContain("`old name`");
   expect(body).toContain("`new name`");
   expect(body).toContain("1 retired test hidden");
   expect(h.state().tests["old name"]).toBeDefined();
+});
+
+test("incomplete runs cannot retire tracked failures or sentinels", async () => {
+  const h = makeHarness();
+  await h.append(
+    birth(),
+    runRecorded(
+      1,
+      [
+        record("tracked failure", "pinned-fail", { kind: "failing" }),
+        record("flake sentinel", "pass"),
+      ],
+      { suite: "specs" },
+    ),
+  );
+  for (const n of [2, 3, 4, 5])
+    await h.append(runRecorded(n, [], { suite: "specs", branch: "docs-only-pr", complete: false }));
+  const body = renderBody(h.state());
+  expect(body).toContain("`tracked failure`");
+  expect(body).toContain("`flake sentinel`");
+  expect(h.state().suites.specs!.recentRunOffsets).toHaveLength(1);
 });
 
 test("a transiently-absent test survives the window and returns with its history intact", async () => {
@@ -83,11 +103,11 @@ test("a transiently-absent test survives the window and returns with its history
     // not retire the row — one absent run is inside the 3-run window...
     runRecorded(2, [record("boot", "pass", { at: day(1) })]),
   );
-  expect(renderBody(h.state(), Date.UTC(2026, 0, 10))).toContain("`deploy`");
+  expect(renderBody(h.state())).toContain("`deploy`");
   // ...and its next record resets the window, counts accumulated across the
   // gap — expiry is a projection choice over the log, nothing was deleted.
   await h.append(runRecorded(3, [record("deploy", "pass", { at: day(2) })]));
-  expect(renderBody(h.state(), Date.UTC(2026, 0, 10))).toContain("`deploy`");
+  expect(renderBody(h.state())).toContain("`deploy`");
   expect(h.state().tests.deploy!.counts).toMatchObject({ pass: 1, "flake-fail": 1 });
 });
 
@@ -103,7 +123,7 @@ test("a multi-suite test stays visible while any of its suites still carries it"
     runRecorded(4, [record("boot", "pass", { at: day(1) })], { suite: "unit" }),
     runRecorded(5, [record("boot", "pass", { at: day(1) })], { suite: "unit" }),
   );
-  expect(renderBody(h.state(), Date.UTC(2026, 0, 10))).toContain("`flake sentinel`");
+  expect(renderBody(h.state())).toContain("`flake sentinel`");
 });
 
 test("streak squares show up to 10 outcomes from any branch, oldest first", async () => {
@@ -112,18 +132,16 @@ test("streak squares show up to 10 outcomes from any branch, oldest first", asyn
   for (let i = 1; i <= 8; i++) {
     await h.append(runRecorded(i, [record("deploy", "pass", { at: day(i) })]));
   }
-  // A PR-branch outcome enters the bar too — the specs and preview-e2e
-  // suites only ever run on PRs, so a main-only bar would stay empty for
-  // the suites where most flakes live.
+  // A PR-branch outcome enters the bar too, for debugging branch failures.
   await h.append(
     runRecorded(99, [record("deploy", "unexpected-error", { at: day(9) })], {
       branch: "some-pr",
     }),
   );
-  const row = renderBody(h.state(), Date.UTC(2026, 0, 10))
+  const row = renderBody(h.state())
     .split("\n")
     .find((line) => line.startsWith("`deploy`"))!;
-  // Squares in recorded order, each linking to the commit that produced it.
+  // Squares in test-time order, each linking to the commit that produced it.
   expect(row.match(/🟥|🟩|❌/gu)).toEqual(["🟥", ...Array<string>(8).fill("🟩"), "❌"]);
   expect(row).toContain("[🟥](https://github.com/iterate/iterate/commit/commit-0)");
   expect(row).toContain("[❌](https://github.com/iterate/iterate/commit/commit-99)");
@@ -133,16 +151,20 @@ test("streak squares show up to 10 outcomes from any branch, oldest first", asyn
   // An 11th outcome evicts the oldest: the bar caps at 10.
   await h.append(runRecorded(10, [record("deploy", "pass", { at: day(10) })]));
   expect(h.state().tests.deploy!.recent).toEqual([
-    ...Array.from({ length: 8 }, (_, i) => ({ outcome: "pass", commit: `commit-${i + 1}` })),
-    { outcome: "unexpected-error", commit: "commit-99" },
-    { outcome: "pass", commit: "commit-10" },
+    ...Array.from({ length: 8 }, (_, i) => ({
+      outcome: "pass",
+      commit: `commit-${i + 1}`,
+      at: day(i + 1),
+    })),
+    { outcome: "unexpected-error", commit: "commit-99", at: day(9) },
+    { outcome: "pass", commit: "commit-10", at: day(10) },
   ]);
 });
 
 test("info and stats render as line-per-fact cells with readable dates", async () => {
   const h = makeHarness();
   await h.append(birth(), runRecorded(1, [record("deploy", "flake-fail", { at: day(0) })]));
-  const row = renderBody(h.state(), Date.UTC(2026, 0, 10))
+  const row = renderBody(h.state())
     .split("\n")
     .find((line) => line.startsWith("`deploy`"))!;
   expect(row).toContain("pattern: `/CPU startup time exceeded/`<br>suites: unit");
@@ -164,20 +186,24 @@ test("rows group into sections by kind, sentinels split out of Flakes", async ()
       }),
     ]),
   );
-  const body = renderBody(h.state(), Date.parse(day(1)));
+  const body = renderBody(h.state());
   // Section order and membership: each row under its own heading.
   const order = [
     "## Flakes",
     "`deploy`",
     "## Failures",
     "`stale facet`",
+    "## Unknown flakes",
+    "chat upload |",
     "## Sentinels",
     "`flake sentinel`",
-    "## Unknown flakes",
-    "`chat upload`",
   ];
   const positions = order.map((needle) => body.indexOf(needle));
+  expect(positions.every((position) => position >= 0)).toBe(true);
   expect(positions).toEqual([...positions].toSorted((a, b) => a - b));
+  expect(body).toContain("❌ failed differently than expected");
+  expect(body).toContain("<details>\n<summary>1 test · unit: 1</summary>");
+  expect(body).not.toContain("`chat upload`");
   expect(positions.every((position) => position >= 0)).toBe(true);
 });
 
@@ -192,7 +218,7 @@ test("failure rows show pin-held stats and pinned since dates the pin, not the f
     runRecorded(2, [record("stale facet", "pinned-fail", { at: day(2), kind: "failing" })]),
     runRecorded(3, [record("stale facet", "unexpected-pass", { at: day(3), kind: "failing" })]),
   );
-  const row = renderBody(h.state(), Date.parse(day(4)))
+  const row = renderBody(h.state())
     .split("\n")
     .find((line) => line.startsWith("`stale facet`"))!;
   expect(row).toContain(
@@ -203,30 +229,202 @@ test("failure rows show pin-held stats and pinned since dates the pin, not the f
   expect(row.match(/🟥|🟩|❌/gu)).toEqual(["🟥", "🟥", "🟥", "🟩"]);
 });
 
-test("unknown-flake rows show error samples and retire after 14 quiet days", async () => {
+test("an unknown flake stays until it passes 20 main runs in a row", async () => {
+  const h = makeHarness();
+  const flake = record("chat upload", "retried-pass", {
+    at: day(0),
+    kind: "unknown",
+    error: "Timeout 30000ms exceeded | waiting\nfor getByLabel('attachment')",
+  });
+  await h.append(birth(), runRecorded(1, [flake], { branch: "some-pr" }));
+  expect(renderBody(h.state())).not.toContain("chat upload |");
+  await h.append(runRecorded(2, [flake]));
+  const fresh = renderBody(h.state());
+  expect(fresh).toContain("chat upload |");
+  expect(fresh).toContain("`Timeout 30000ms exceeded \\| waiting for getByLabel('attachment')`");
+  await h.append(runRecorded(3, [], { complete: false }));
+  expect(renderBody(h.state())).toContain("chat upload |");
+  expect(renderBody(h.state())).toContain("incomplete");
+  for (let n = 4; n < 23; n++) {
+    await h.append(
+      runRecorded(n, [], {
+        tests: [{ name: "chat upload", outcome: "pass" }],
+      }),
+    );
+  }
+  expect(renderBody(h.state())).toContain("chat upload |");
+  expect(renderBody(h.state())).toContain("19/20 consecutive passes");
+  await h.append(
+    runRecorded(23, [], {
+      tests: [{ name: "chat upload", outcome: "pass" }],
+    }),
+  );
+  expect(renderBody(h.state())).not.toContain("chat upload |");
+  expect(h.events(flakeEventTypes.transitionProposed)).toHaveLength(0);
+  expect(h.state().tests["chat upload"]!.counts).toMatchObject({ "retried-pass": 2 });
+  await h.append(runRecorded(24, [flake]));
+  expect(renderBody(h.state())).toContain("chat upload |");
+  expect(renderBody(h.state())).toContain("0/20 consecutive passes");
+});
+
+test("unknown streaks count only that test's complete main results in its suite", async () => {
+  const h = makeHarness();
+  const pass = { name: "chat upload", outcome: "pass" } as const;
+  await h.append(
+    birth(),
+    runRecorded(1, [record("chat upload", "retried-pass", { kind: "unknown" })]),
+    runRecorded(2, [], { tests: [pass] }),
+    runRecorded(3, [], { tests: [pass], branch: "some-pr" }),
+    runRecorded(4, [], { tests: [pass], suite: "specs" }),
+    runRecorded(5, [], { tests: [pass], complete: false }),
+    runRecorded(6, [], { tests: [{ ...pass, outcome: "skip" }] }),
+    runRecorded(7, [], { tests: [{ name: "another test", outcome: "pass" }], complete: false }),
+    // A legacy summary with just counts is not proof of this test passing.
+    runRecorded(8, []),
+    // Late delivery cannot advance the streak with an older observation.
+    runRecorded(0, [], { tests: [pass] }),
+    // Two instances sharing a title count as one run, not two passes.
+    runRecorded(9, [], { tests: [pass, pass] }),
+  );
+  expect(renderBody(h.state())).toContain("2/20 consecutive passes");
+  await h.append(runRecorded(10, [], { tests: [pass, { ...pass, outcome: "fail" }] }));
+  expect(renderBody(h.state())).toContain("0/20 consecutive passes");
+});
+
+test("only a complete main test inventory retires absent unknown flakes", async () => {
+  const h = makeHarness();
+  const flake = record("chat upload", "retried-pass", { kind: "unknown" });
+  const anotherTest = { name: "another test", outcome: "pass" } as const;
+  await h.append(birth(), runRecorded(1, [flake]));
+  await h.append(
+    runRecorded(2, [], { tests: [anotherTest], branch: "some-pr" }),
+    runRecorded(3, [], { tests: [anotherTest], suite: "specs" }),
+    runRecorded(4, [], { tests: [{ name: "chat upload", outcome: "skip" }] }),
+    runRecorded(5, []), // A legacy count-only summary cannot prove absence.
+    runRecorded(6, [], { tests: [anotherTest], complete: false }),
+  );
+  expect(renderBody(h.state())).toContain("chat upload |");
+  await h.append(runRecorded(7, [], { tests: [anotherTest] }));
+  expect(renderBody(h.state())).not.toContain("chat upload |");
+  await h.append(
+    runRecorded(8, []),
+    runRecorded(3.5, [flake, record("late historical retry", "retried-pass", { kind: "unknown" })]),
+  );
+  expect(renderBody(h.state())).not.toContain("chat upload |");
+  expect(renderBody(h.state())).not.toContain("late historical retry |");
+  await h.append(runRecorded(9, [flake]));
+  expect(renderBody(h.state())).toContain("chat upload |");
+  // An older inventory cannot hide a test observed in a newer run.
+  await h.append(runRecorded(8.5, [], { tests: [anotherTest] }));
+  expect(renderBody(h.state())).toContain("chat upload |");
+  await h.append(runRecorded(12, [], { tests: [anotherTest], complete: false }));
+  expect(renderBody(h.state())).toContain("chat upload |");
+  // The incomplete run did not observe this test and cannot block proof of deletion.
+  await h.append(runRecorded(10, [], { tests: [anotherTest] }));
+  expect(renderBody(h.state())).not.toContain("chat upload |");
+});
+
+test.each(["retry", "final failure"])(
+  "a late %s still breaks an unknown pass streak",
+  async (failure) => {
+    const h = makeHarness();
+    const flake = record("chat upload", "retried-pass", { kind: "unknown" });
+    const pass = { name: "chat upload", outcome: "pass" } as const;
+    await h.append(
+      birth(),
+      runRecorded(1, [flake]),
+      runRecorded(2, [], { tests: [pass] }),
+      runRecorded(5, [], { complete: false }),
+      // The later incomplete run must not hide a late-delivered failure.
+      runRecorded(4, failure === "retry" ? [flake] : [], {
+        tests: [{ ...pass, outcome: "fail" }],
+      }),
+      runRecorded(6, [], { tests: [pass] }),
+    );
+    expect(renderBody(h.state())).toContain("1/20 consecutive passes");
+  },
+);
+
+test("a late failure can restore a row that reached 20 passes before that failure arrived", async () => {
   const h = makeHarness();
   await h.append(
     birth(),
+    runRecorded(0, [record("chat upload", "retried-pass", { kind: "unknown" })]),
+  );
+  for (let n = 1; n <= 20; n++) {
+    await h.append(runRecorded(n, [], { tests: [{ name: "chat upload", outcome: "pass" }] }));
+  }
+  expect(renderBody(h.state())).not.toContain("chat upload |");
+  await h.append(runRecorded(19.5, [], { tests: [{ name: "chat upload", outcome: "fail" }] }));
+  expect(renderBody(h.state())).toContain("chat upload |");
+  expect(renderBody(h.state())).toContain("0/20 consecutive passes");
+});
+
+test("a retry in an interrupted main run resets an unknown streak; a main wrapper adopts it", async () => {
+  const h = makeHarness();
+  const flake = record("chat upload", "retried-pass", { kind: "unknown" });
+  await h.append(birth(), runRecorded(1, [flake], { complete: false }));
+  expect(renderBody(h.state())).toContain("chat upload |");
+  await h.append(
+    runRecorded(2, [], { tests: [{ name: "chat upload", outcome: "pass" }] }),
+    runRecorded(3, [flake], { complete: false }),
+  );
+  expect(renderBody(h.state())).toContain("0/20 consecutive passes");
+  await h.append(runRecorded(4, [record("chat upload", "pass")], { branch: "some-pr" }));
+  expect(renderBody(h.state())).toContain("chat upload |");
+  await h.append(runRecorded(5, [record("chat upload", "pass")]));
+  expect(renderBody(h.state())).not.toContain("chat upload |");
+  expect(renderBody(h.state())).toContain("`chat upload` |");
+});
+
+test("a late retry cannot undo newer wrapper adoption on main", async () => {
+  const h = makeHarness();
+  const flake = record("chat upload", "retried-pass", { kind: "unknown" });
+  await h.append(
+    birth(),
+    runRecorded(2, [record("chat upload", "pass")]),
+    runRecorded(3, [record("chat upload", "pass")]),
+    runRecorded(1, [flake]),
+  );
+  expect(renderBody(h.state())).not.toContain("chat upload |");
+  expect(renderBody(h.state())).toContain("`chat upload` |");
+  expect(h.state().tests["chat upload"]).toMatchObject({
+    kind: "flake",
+    defaultBranchStreak: { outcome: "pass", runs: 2 },
+    counts: { "retried-pass": 1 },
+  });
+  // A newer unwrapped retry is fresh evidence, not a stale pre-adoption run.
+  await h.append(runRecorded(4, [flake]));
+  expect(renderBody(h.state())).toContain("chat upload |");
+});
+
+test("late retries keep history chronological without moving last flake backwards", async () => {
+  const h = makeHarness();
+  await h.append(
+    birth(),
+    runRecorded(2, [record("chat upload", "flake-fail", { at: day(2) })]),
+    runRecorded(3, [
+      record("chat upload", "unexpected-error", { at: day(3), error: "new error" }),
+      record("signup", "retried-pass", { kind: "unknown", at: day(3), error: "new signup error" }),
+    ]),
     runRecorded(1, [
-      record("chat upload", "retried-pass", {
-        at: day(0),
-        kind: "unknown",
-        error: "Timeout 30000ms exceeded | waiting\nfor getByLabel('attachment')",
-      }),
+      record("chat upload", "retried-pass", { kind: "unknown", at: day(1), error: "old error" }),
+      record("signup", "retried-pass", { kind: "unknown", at: day(1), error: "old signup error" }),
     ]),
   );
-  const fresh = renderBody(h.state(), Date.parse(day(2)));
-  // The error sample is the copy-paste material for a createFlake pattern —
-  // rendered as code, with the table-breaking pipe escaped and the
-  // row-splitting newline collapsed.
-  expect(fresh).toContain("`Timeout 30000ms exceeded \\| waiting for getByLabel('attachment')`");
-  expect(fresh).toContain("flakes: 1<br>last flake: Jan 1, 12:00am");
-
-  // Unknown rows only record when they flake, so absence-from-runs cannot
-  // retire them; time does instead.
-  const stale = renderBody(h.state(), Date.parse(day(15)));
-  expect(stale).not.toContain("`chat upload`");
-  expect(stale).toContain("1 retired test hidden");
+  expect(h.state().tests["chat upload"]).toMatchObject({
+    kind: "flake",
+    lastFlakeAt: day(2),
+    lastRecordedAt: day(3),
+    recent: [{ commit: "commit-1" }, { commit: "commit-2" }, { commit: "commit-3" }],
+    recentErrors: [{ error: "old error" }, { error: "new error" }],
+    counts: { "retried-pass": 1, "flake-fail": 1, "unexpected-error": 1 },
+  });
+  expect(renderBody(h.state())).toContain("last flake: Jan 3, 12:00am");
+  expect(h.state().unknownFlakes.unit!.signup).toMatchObject({
+    record: { error: "new signup error", at: day(3) },
+    recent: [{ commit: "commit-1" }, { commit: "commit-3" }],
+  });
 });
 
 test("sentinel streaks never propose transitions", async () => {
@@ -273,37 +471,26 @@ test("default-branch streaks ignore other branches and reset on unexpected error
   expect(h.state().tests.deploy!.defaultBranchStreak).toBeNull();
 });
 
-test("a long passing streak proposes exactly one unwrap", async () => {
+test("20 main passes propose unwrapping, even within one hour, and only once", async () => {
   const h = makeHarness();
   await h.append(birth());
-  // 50 consecutive main passes spread over 10 days: crosses both the run
-  // count and the minimum span.
-  for (let i = 0; i < 50; i++) {
-    await h.append(runRecorded(i, [record("deploy", "pass", { at: day(i / 5) })]));
+  for (let i = 0; i < 19; i++) {
+    await h.append(runRecorded(i, [record("deploy", "pass", { at: day(i / 1440) })]));
   }
+  expect(h.events(flakeEventTypes.transitionProposed)).toHaveLength(0);
+  await h.append(runRecorded(19, [record("deploy", "pass", { at: day(19 / 1440) })]));
   const proposals = h.events(flakeEventTypes.transitionProposed);
   expect(proposals).toHaveLength(1);
   expect(proposals[0]!.payload).toMatchObject({
     testName: "deploy",
     transition: "unwrap",
-    evidence: { consecutiveRuns: 50, firstAt: day(0) },
+    evidence: { consecutiveRuns: 20, firstAt: day(0) },
   });
 
   // The streak keeps growing; the proposal does not repeat.
-  await h.append(runRecorded(50, [record("deploy", "pass", { at: day(11) })]));
+  await h.append(runRecorded(20, [record("deploy", "pass", { at: day(20 / 1440) })]));
   expect(h.events(flakeEventTypes.transitionProposed)).toHaveLength(1);
   expect(h.state().tests.deploy!.proposed).toEqual([`unwrap:${day(0)}`]);
-});
-
-test("a fast passing streak proposes nothing until the span threshold is met", async () => {
-  const h = makeHarness();
-  await h.append(birth());
-  // 60 passes within one day: plenty of runs, not enough elapsed time — the
-  // sentinel-derived guard against unwrapping on a lucky burst.
-  for (let i = 0; i < 60; i++) {
-    await h.append(runRecorded(i, [record("deploy", "pass", { at: day(i / 100) })]));
-  }
-  expect(h.events(flakeEventTypes.transitionProposed)).toHaveLength(0);
 });
 
 test("a never-passing test proposes switch-to-failing", async () => {
@@ -417,7 +604,12 @@ function birth() {
 function runRecorded(
   n: number,
   records: ReturnType<typeof record>[],
-  overrides?: { branch?: string; suite?: string },
+  overrides?: {
+    branch?: string;
+    suite?: string;
+    complete?: boolean;
+    tests?: { name: string; outcome: "pass" | "fail" | "skip" }[];
+  },
 ) {
   return {
     type: flakeEventTypes.runRecorded,
@@ -428,6 +620,19 @@ function runRecorded(
       branch: overrides?.branch || "main",
       commit: `commit-${n}`,
       records,
+      summary: {
+        headSha: `commit-${n}`,
+        branch: overrides?.branch || "main",
+        status: overrides?.complete === false ? "incomplete" : "complete",
+        startedAt: day(n),
+        finishedAt: day(n + 0.001),
+        testCount: overrides?.tests?.length || Math.max(1, records.length),
+        tests: overrides?.tests,
+        unknownFlakeCount: records.filter((record) => record.kind === "unknown").length,
+        failedCount: 0,
+        diagnostics: overrides?.complete === false ? ["test runner interrupted"] : [],
+        runUrl: `https://depot.dev/runs/run-${n}`,
+      },
     },
   } as const;
 }
@@ -514,6 +719,62 @@ test("a completed workflow_run's flake artifacts become one run-recorded event p
       ],
     },
   });
+});
+
+test.each(["clean", "torn record", "missing retry record", "missing test result"])(
+  "%s artifact carries an honest completeness result through webhook ingestion",
+  async (scenario) => {
+    const summary = {
+      headSha: "abc123",
+      branch: "main",
+      status: "complete",
+      startedAt: day(1),
+      finishedAt: day(1.001),
+      testCount: 10,
+      tests: Array.from({ length: scenario === "missing test result" ? 9 : 10 }, (_, i) => ({
+        name: `test ${i}`,
+        outcome: "pass",
+      })),
+      failedCount: 0,
+      unknownFlakeCount: scenario === "missing retry record" ? 1 : 0,
+      diagnostics: [],
+      runUrl: "https://depot.dev/runs/run-77",
+    };
+    const { itx, appended } = fakeItx({
+      artifacts: [{ artifactId: "summary", name: "flake-records-specs", sizeBytes: 1000 }],
+      zips: {
+        summary: zipSync({
+          "suite-summary.json": strToU8(JSON.stringify(summary)),
+          ...(scenario === "torn record" && { "partial.jsonl": strToU8("{broken") }),
+        }),
+      },
+    });
+    await makeApp(itx).processEvent(webhookEvent());
+    expect(appended[1]).toMatchObject({
+      payload: {
+        suite: "specs",
+        records: [],
+        summary: {
+          status: scenario === "clean" ? "complete" : "incomplete",
+          tests: summary.tests,
+        },
+      },
+    });
+  },
+);
+
+test("a main webhook cannot relabel a branch artifact at the same SHA", async () => {
+  const summary = {
+    ...runRecorded(1, []).payload.summary,
+    headSha: "abc123",
+    branch: "ci/validation",
+  };
+  const { itx, appended } = fakeItx({
+    artifacts: [{ artifactId: "branch", name: "flake-records-specs", sizeBytes: 1000 }],
+    zips: { branch: zipSync({ "suite-summary.json": strToU8(JSON.stringify(summary)) }) },
+  });
+  await makeApp(itx).processEvent(webhookEvent());
+  expect(appended[1]).toMatchObject({ payload: { branch: "ci/validation", commit: "abc123" } });
 });
 
 test("runs without flake artifacts append nothing, not even a birth", async () => {

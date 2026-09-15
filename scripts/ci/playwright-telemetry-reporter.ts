@@ -71,11 +71,8 @@ export default class PlaywrightTelemetryReporter implements Reporter {
     // record it for the test-health dashboard, error sample included, so it
     // can be adopted into createFlake (see shared flake-record.ts). The bare
     // test title keys the record so a later createFlake wrap keeps the row.
-    for (const [index, telemetryRecord] of tests.entries()) {
-      const unknownFlake = unknownFlakeRecordFromTelemetry({
-        ...telemetryRecord,
-        leafName: testCases[index]?.title,
-      });
+    for (const telemetryRecord of tests) {
+      const unknownFlake = unknownFlakeRecordFromTelemetry(telemetryRecord);
       if (unknownFlake) await appendFlakeRecord(unknownFlake);
     }
     const durationMs = nonnegativeDuration(result.duration);
@@ -151,6 +148,7 @@ function toTestRecord(test: TestCase, runStartedAtMs: number): TestTelemetryReco
   const testProject = test.parent.project()?.name;
   return {
     fullName: test.titlePath().filter(Boolean).join(" › "),
+    leafName: test.title,
     moduleId: test.location.file,
     testLine: test.location.line,
     testColumn: test.location.column,

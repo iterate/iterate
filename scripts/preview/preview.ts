@@ -47,14 +47,30 @@ import {
   type WorkerSizeInfo,
 } from "./worker-size.ts";
 import { PreviewE2eTelemetryArtifact } from "./e2e-telemetry.ts";
+import {
+  readPullRequestBody,
+  writePullRequestBody,
+  readPreviewPullRequest,
+  makeDefaultWorkflowRunUrl,
+  splitRepositoryFullName,
+  withGithubRetry,
+} from "./github.ts";
+import { createMainPreview, PreviewReport, type PreviewRun, type PreviewTarget } from "./target.ts";
+import {
+  CloudflarePreviewAppEntry,
+  CloudflarePreviewSlotDisplay,
+  CloudflarePreviewState,
+} from "./state.ts";
 
 // Flake-hunt notes for the preview e2e lane live in
 // docs/preview-e2e-flake-hunt.md.
-type PullRequestCommandOptions = {
+type PreviewCommandOptions = {
   /** GitHub token. Defaults to GITHUB_TOKEN. */
   githubToken?: string;
   /** Pull request number. Defaults to GITHUB_PR_NUMBER. */
   pullRequestNumber?: number;
+  /** Exact checked-out commit for the serialized main preview workflow, instead of a PR. */
+  commit?: string;
 };
 
 // Cloudflare documents that a Worker/DO code update is globally eventually
@@ -68,7 +84,7 @@ type PullRequestCommandOptions = {
 const previewMinimumDeploymentAgeMs = 90_000;
 const previewRolloutRemainingSecondsEnvironment = "PREVIEW_APP_ROLLOUT_REMAINING_SECONDS";
 
-type DeployCommandOptions = PullRequestCommandOptions & {
+type DeployCommandOptions = PreviewCommandOptions & {
   /**
    * Deploy every preview app regardless of the diff. Diff selection only
    * redeploys apps affected since their LAST DEPLOYED head. A caller that
@@ -79,40 +95,97 @@ type DeployCommandOptions = PullRequestCommandOptions & {
   allApps?: boolean;
 };
 
-/** One PR context + runtime shared by every phase of a preview command. */
-async function resolvePreviewCommandSetup(options: PullRequestCommandOptions) {
+/** Resolve the source once. Commands below use the same target for PRs and workflow commits. */
+async function resolvePreviewCommandSetup(
+  options: PreviewCommandOptions & { requireCleanCheckout: boolean },
+) {
   const runtime = createPreviewRuntime();
-  const context = await resolvePullRequestPreviewContext({
-    commandEnvironment: runtime.commandEnvironment,
-    githubToken: resolveGithubToken(options, runtime.commandEnvironment),
-    pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
+  if (options.commit && options.pullRequestNumber) {
+    throw new Error("Choose --commit or --pull-request-number, not both.");
+  }
+  const githubToken = resolveGithubToken(options, runtime.commandEnvironment);
+  if (options.commit) {
+    return {
+      target: createMainPreview({
+        commit: options.commit,
+        requireCleanCheckout: options.requireCleanCheckout,
+        githubToken,
+        repositoryRoot: runtime.repositoryRoot,
+        environment: runtime.commandEnvironment,
+      }),
+      runtime,
+    };
+  }
+  const pullRequestNumber =
+    options.pullRequestNumber || Number(runtime.commandEnvironment.GITHUB_PR_NUMBER);
+  if (!Number.isInteger(pullRequestNumber) || pullRequestNumber <= 0) {
+    throw new Error(
+      "Provide --pull-request-number (or GITHUB_PR_NUMBER), or --commit for the main workflow.",
+    );
+  }
+  const github = {
+    githubToken,
+    repositoryFullName: runtime.commandEnvironment.GITHUB_REPOSITORY || defaultRepositoryFullName,
+    pullRequestNumber,
+  };
+  const pullRequest = await readPreviewPullRequest(github);
+  const run: PreviewRun = {
+    githubToken,
+    repositoryFullName: github.repositoryFullName,
+    workflowRunUrl: makeDefaultWorkflowRunUrl(runtime.commandEnvironment) || pullRequest.url,
+    headSha: pullRequest.headSha,
+    branch: pullRequest.branch,
+    holder: pullRequestHolder(pullRequest.number),
+    pullRequestNumber: pullRequest.number,
+  };
+  const report = new PreviewReport(parseCloudflarePreviewState(pullRequest.body), async (state) => {
+    // Preserve human edits to the surrounding body, but use this run's state.
+    const body = await readPullRequestBody(github);
+    await writePullRequestBody({
+      ...github,
+      body: renderCloudflarePreviewPullRequestBody(body, state, pullRequest.number),
+    });
   });
-  return { context, runtime };
+  const target: PreviewTarget = {
+    run,
+    report,
+    baseSha: pullRequest.baseSha,
+    // Only deployment consumes the directive. A typo must not block cleanup.
+    get requestedEnvironment() {
+      return resolveRequestedPreviewEnvironment(pullRequest.body);
+    },
+    reviewProject: `pr${pullRequest.number}`,
+  };
+  return { target, runtime };
 }
 
 /**
- * Deploy affected preview apps for a pull request without running preview e2e.
+ * Deploy affected preview apps without running preview e2e.
  */
 export async function deploy(options: DeployCommandOptions = {}) {
-  const { context, runtime } = await resolvePreviewCommandSetup(options);
-  return await withPreviewE2eTelemetry(context, runtime, "deploy", (telemetry) =>
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: true,
+  });
+  return await withPreviewE2eTelemetry(target.run, runtime, "deploy", (telemetry) =>
     measurePreviewDeployRun(telemetry, () =>
-      deployPreviewApps({ context, options, runtime, telemetry }),
+      deployPreviewApps({ target, runtime, allApps: Boolean(options.allApps), telemetry }),
     ),
   );
 }
 
-/**
- * Run preview e2e against deployed apps recorded in the managed PR preview section.
- */
-export async function test(options: PullRequestCommandOptions = {}) {
-  const { context, runtime } = await resolvePreviewCommandSetup(options);
-  return await withPreviewE2eTelemetry(context, runtime, "test", (telemetry) =>
-    testPreviewApps({ context, runtime, telemetry }),
+/** Run preview e2e against the target's recorded deployment. */
+export async function test(options: PreviewCommandOptions = {}) {
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: true,
+  });
+  return await withPreviewE2eTelemetry(target.run, runtime, "test", (telemetry) =>
+    testPreviewApps({ target, runtime, telemetry }),
   );
 }
 
-type TestTargetOptions = PullRequestCommandOptions & {
+type TestTargetOptions = PreviewCommandOptions & {
   /** Test runner to invoke against the deployed OS preview. */
   runner: PreviewTestTargetRunner;
   /** Test file path, relative to the repository root for Playwright or apps/os for Vitest. */
@@ -124,7 +197,7 @@ type TestTargetOptions = PullRequestCommandOptions & {
 };
 
 /**
- * Run one OS Vitest file or Playwright spec against an already-deployed PR
+ * Run one OS Vitest file or Playwright spec against an already-deployed
  * preview. This renews the existing lease but never deploys, erases data, or
  * marks the app's full preview suite green.
  */
@@ -137,9 +210,13 @@ export async function testTarget(options: TestTargetOptions) {
       target: z.string().trim().min(1),
     })
     .parse(options);
-  const { context, runtime } = await resolvePreviewCommandSetup(options);
-  const recorded = (await readCloudflarePreviewState(context)).state;
-  const holder = pullRequestHolder(context.pullRequestNumber);
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: true,
+  });
+  const { run, report } = target;
+  const recorded = report.state;
+  const holder = run.holder;
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
   const displaySlot = recorded.environmentConfigLease;
   const environmentConfigLease =
@@ -153,28 +230,28 @@ export async function testTarget(options: TestTargetOptions) {
       holder,
       leaseMs: defaultPreviewLeaseMs,
       // Tests only renew — the deployment on a lapsed-but-free slot is this
-      // PR's own, and nothing is deployed after this.
+      // holder's own, and nothing is deployed after this.
       onRetaken: async () => true,
       recordedSlug: displaySlot?.slug ?? null,
       semaphore,
     }));
   if (!environmentConfigLease) {
     throw new Error(
-      `Cannot run a targeted preview test: PR #${context.pullRequestNumber} does not hold its recorded preview slot. Run preview deploy first.`,
+      `Cannot run a targeted preview test: ${run.holder} does not hold its recorded preview slot. Run preview deploy first.`,
     );
   }
 
   const app = cloudflarePreviewApps.os;
   const entry = recorded.apps.os;
-  if (!canRunPreviewTests(entry) || entry?.headSha !== context.pullRequestHeadSha) {
+  if (!canRunPreviewTests(entry) || entry?.headSha !== run.headSha) {
     throw new Error(
-      `Cannot run a targeted preview test: OS is not recorded as deployed at head ${context.pullRequestHeadSha.slice(0, 7)}. Run preview deploy first.`,
+      `Cannot run a targeted preview test: OS is not recorded as deployed at head ${run.headSha.slice(0, 7)}. Run preview deploy first.`,
     );
   }
   const baseUrlEnvironment = resolvePreviewTestBaseUrlEnvironment({
     app,
     apps: recorded.apps,
-    requiredDeploymentHeadSha: context.pullRequestHeadSha,
+    requiredDeploymentHeadSha: run.headSha,
   });
   // Match the full preview lane: RPC-only dependencies such as auth need an
   // exact version pin even though they do not contribute a public base URL.
@@ -183,7 +260,7 @@ export async function testTarget(options: TestTargetOptions) {
     apps: recorded.apps,
     appSlugs: versionedAppSlugs,
     dopplerConfig: environmentConfigLease.dopplerConfig,
-    requiredDeploymentHeadSha: context.pullRequestHeadSha,
+    requiredDeploymentHeadSha: run.headSha,
   });
   const plan = resolvePreviewTestTargetPlan({
     ...selection,
@@ -191,7 +268,7 @@ export async function testTarget(options: TestTargetOptions) {
   });
   const telemetryIdentityEnvironment = resolvePreviewTestTelemetryEnvironment({
     app: app.slug,
-    context,
+    run,
     previewSlot: environmentConfigLease.slug,
   });
   await Promise.all(
@@ -264,7 +341,7 @@ export async function testTarget(options: TestTargetOptions) {
 
 /**
  * Deploy then test, in one process — the shape CI runs. The two phases share
- * ONE resolved PR context (head sha) and the deploy's final recorded state,
+ * ONE pinned run identity and its in-process report,
  * so the class of two-step hazards — a push racing into the gap between the
  * deploy and test steps, and the skip machinery needed to explain it — is
  * structurally gone. The lease is shared through the semaphore itself (same
@@ -273,31 +350,33 @@ export async function testTarget(options: TestTargetOptions) {
  * runs.
  */
 export async function run(options: DeployCommandOptions = {}) {
-  const { context, runtime } = await resolvePreviewCommandSetup(options);
-  return await withPreviewE2eTelemetry(context, runtime, "run", async (telemetry) => {
-    const deployResult = await measurePreviewDeployRun(telemetry, () =>
-      deployPreviewApps({ context, options, runtime, telemetry }),
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: true,
+  });
+  return await withPreviewE2eTelemetry(target.run, runtime, "run", async (telemetry) => {
+    await measurePreviewDeployRun(telemetry, () =>
+      deployPreviewApps({ target, runtime, allApps: Boolean(options.allApps), telemetry }),
     );
-    // A "nothing to deploy" skip still tests. Unchanged apps may reuse their
-    // exact recorded Worker versions, but every PR head earns its own e2e
-    // result; a previous head's green is never promoted to this check.
-    return await testPreviewApps({ context, runtime, state: deployResult.state, telemetry });
+    // A no-deploy result still tests the current head. Both phases use the
+    // same report in memory, so GitHub read-after-write lag cannot lose work.
+    return await testPreviewApps({ target, runtime, telemetry });
   });
 }
 
 async function withPreviewE2eTelemetry<T>(
-  context: PullRequestPreviewContext,
+  run: PreviewRun,
   runtime: PreviewRuntime,
   operation: "deploy" | "test" | "run",
   execute: (telemetry: PreviewE2eTelemetryArtifact) => Promise<T>,
 ): Promise<T> {
   const telemetry = new PreviewE2eTelemetryArtifact({
-    branch: context.pullRequestHeadRef,
+    branch: run.branch,
     environment: runtime.commandEnvironment,
-    headSha: context.pullRequestHeadSha,
+    headSha: run.headSha,
     operation,
-    pullRequestNumber: context.pullRequestNumber,
-    runUrl: context.workflowRunUrl,
+    pullRequestNumber: run.pullRequestNumber,
+    runUrl: run.workflowRunUrl,
   });
   const startedAt = Date.now();
   let result!: T;
@@ -375,45 +454,49 @@ function previewResultSlot(result: unknown): string | undefined {
 }
 
 async function deployPreviewApps({
-  context,
-  options,
+  target,
+  allApps,
   runtime,
   telemetry,
 }: {
-  context: PullRequestPreviewContext;
-  options: DeployCommandOptions;
+  target: PreviewTarget;
+  allApps: boolean;
   runtime: PreviewRuntime;
   telemetry: PreviewE2eTelemetryArtifact;
 }) {
+  const { run, report } = target;
+  const selectedApps =
+    allApps || !target.baseSha
+      ? Object.values(cloudflarePreviewApps)
+      : await selectPreviewAppsByDiff({
+          githubToken: run.githubToken,
+          repositoryFullName: run.repositoryFullName,
+          baseSha: target.baseSha,
+          headSha: run.headSha,
+          previousState: report.state,
+        });
   logPreview(
-    `deploy for PR #${context.pullRequestNumber} (head ${context.pullRequestHeadSha.slice(0, 7)}) — holder ${pullRequestHolder(context.pullRequestNumber)}, semaphore ${defaultSemaphoreBaseUrl}`,
+    `deploy for ${run.holder} (head ${run.headSha.slice(0, 7)}) — holder ${run.holder}, semaphore ${defaultSemaphoreBaseUrl}`,
   );
 
-  const current = await readCloudflarePreviewState(context);
+  const current = report.state;
   logPreview(
-    current.state.environmentConfigLease
-      ? `PR body shows slot ${current.state.environmentConfigLease.slug} (doppler config ${current.state.environmentConfigLease.dopplerConfig}) — display only; the semaphore decides ownership`
-      : "PR body shows no slot — this PR has not recorded a deploy yet",
+    current.environmentConfigLease
+      ? `Preview report shows slot ${current.environmentConfigLease.slug} (doppler config ${current.environmentConfigLease.dopplerConfig}) — display only; the semaphore decides ownership`
+      : "Preview report shows no slot — no deployment recorded yet",
   );
 
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
-  const holder = pullRequestHolder(context.pullRequestNumber);
-  const selectedApps = options.allApps
-    ? (logPreview("--all-apps: deploying the full preview fleet regardless of diff"),
-      Object.values(cloudflarePreviewApps))
-    : await selectPreviewAppsForPullRequest({
-        ...context,
-        previousState: current.state,
-      });
+  const holder = run.holder;
 
   if (selectedApps.length === 0) {
     logPreview(
-      "nothing to deploy: no preview apps are affected by this diff, no failed apps need a retry, and every recorded app is still serving — leaving lease and PR body untouched",
+      "nothing to deploy: no preview apps are affected by this diff, no failed apps need a retry, and every recorded app is still serving — leaving lease and report untouched",
     );
     return {
       ok: true,
       skipped: true,
-      state: current.state,
+      state: current,
     };
   }
   logPreview(
@@ -422,14 +505,14 @@ async function deployPreviewApps({
       .join(" then ")}`,
   );
 
-  const requestedEnvironment = resolveRequestedPreviewEnvironment(context.pullRequestBody);
+  const requestedEnvironment = target.requestedEnvironment;
   if (requestedEnvironment) {
-    logPreview(`PR body requests ${requestedEnvironment}`);
+    logPreview(`requested slot: ${requestedEnvironment}`);
   }
 
   let environmentConfigLease: EnvironmentConfigLease;
   try {
-    const recordedSlug = current.state.environmentConfigLease?.slug ?? null;
+    const recordedSlug = current.environmentConfigLease?.slug ?? null;
     environmentConfigLease = requestedEnvironment
       ? (
           await assignEnvironmentConfigLease({
@@ -445,13 +528,12 @@ async function deployPreviewApps({
           eraseSlotData: makePreviewSlotDataEraser(runtime),
           holder,
           leaseMs: defaultPreviewLeaseMs,
-          // Surface the wait in the PR body the moment every slot is busy, not
-          // only in workflow logs nobody has open.
+          // Surface the wait in the report as soon as every slot is busy.
           onFirstWait: async (holderTable) => {
-            await updatePreviewState(context, (state) => ({
+            await report.update((state) => ({
               ...state,
               notice: [
-                `All preview slots are leased — this PR is waiting in line for one (since ${new Date().toISOString()}).`,
+                `All preview slots are leased — this run is waiting for one (since ${new Date().toISOString()}).`,
                 holderTable,
               ].join("\n"),
             }));
@@ -461,7 +543,7 @@ async function deployPreviewApps({
           waitTotalMs: resolveSlotWaitTotalMs(runtime.commandEnvironment),
         });
   } catch (error) {
-    await updatePreviewState(context, (state) => ({
+    await report.update((state) => ({
       ...state,
       notice: `No preview slot could be claimed at ${new Date().toISOString()}. ${formatPreviewErrorMessage(error)}`,
     }));
@@ -470,7 +552,7 @@ async function deployPreviewApps({
   // A slot move invalidates every previously recorded deployment, not just
   // the diff-selected apps: anything left undeployed would keep old-slot URLs
   // and e2e would run against another slot's deployment.
-  const previousSlug = current.state.environmentConfigLease?.slug ?? null;
+  const previousSlug = current.environmentConfigLease?.slug ?? null;
   const slotMoved = previousSlug !== null && previousSlug !== environmentConfigLease.slug;
   // Every claim erased the slot (fresh-per-deploy contract), so the apps whose
   // state that wiped must redeploy regardless of the diff: OS is parked at
@@ -482,7 +564,7 @@ async function deployPreviewApps({
       ...selectedApps.map((app) => app.slug),
       ...erasedApps,
       ...(slotMoved
-        ? Object.keys(current.state.apps).filter(
+        ? Object.keys(current.apps).filter(
             // The recorded state can name apps this branch no longer knows;
             // membership in the fleet map is the narrowing.
             (appSlug): appSlug is CloudflarePreviewAppSlugType => appSlug in cloudflarePreviewApps,
@@ -510,7 +592,7 @@ async function deployPreviewApps({
     previousSlug,
     requestedEnvironment,
   });
-  const leaseUpdate = await updatePreviewState(context, (state) => ({
+  await report.update((state) => ({
     ...state,
     environmentConfigLease: toSlotDisplay(environmentConfigLease),
     notice: claimNotice,
@@ -520,19 +602,19 @@ async function deployPreviewApps({
   // deploy fleet. A missing size baseline only costs the "vs main" delta;
   // uncertainty about container inputs safely chooses Wrangler's full rollout.
   const [workerSizeBaselines, osContainerRollout] = await Promise.all([
-    fetchMainWorkerSizeBaselines(context).catch((error): Record<string, WorkerSizeInfo> => {
+    fetchMainWorkerSizeBaselines(run).catch((error): Record<string, WorkerSizeInfo> => {
       logPreview(`worker-size baselines unavailable: ${formatPreviewErrorMessage(error)}`);
       return {};
     }),
     appsToDeploy.some((app) => app.slug === "os")
       ? resolvePreviewOsContainerRollout({
           dopplerConfig: environmentConfigLease.dopplerConfig,
-          githubToken: context.githubToken,
+          githubToken: run.githubToken,
           nextSlotSlug: environmentConfigLease.slug,
           previousSlotSlug: previousSlug,
-          previousState: current.state,
-          pullRequestHeadSha: context.pullRequestHeadSha,
-          repositoryFullName: context.repositoryFullName,
+          previousState: current,
+          headSha: run.headSha,
+          repositoryFullName: run.repositoryFullName,
         })
       : Promise.resolve(null),
   ]);
@@ -541,12 +623,6 @@ async function deployPreviewApps({
   }
 
   let ok = true;
-  let latestState = leaseUpdate.state;
-  // Pin the lease, notice, and every batch's entries in each write: the
-  // GitHub read inside updatePreviewState can be stale (read-after-write
-  // lag), and a stale read would otherwise drop earlier batch results or
-  // resurrect a pre-claim "waiting for a slot" banner.
-  const accumulatedEntries: Record<string, CloudflarePreviewAppEntry> = {};
   for (const batch of orderPreviewDeployBatches(appsToDeploy)) {
     const completedDeploys = await mapWithConcurrency(
       batch,
@@ -554,7 +630,7 @@ async function deployPreviewApps({
       async (app) => {
         const entry = await deployPreviewAppWithStatus({
           app,
-          existingEntry: current.state.apps[app.slug] ?? null,
+          existingEntry: current.apps[app.slug] ?? null,
           commandEnvironment: {
             ...runtime.commandEnvironment,
             // apps/os/scripts/deploy.ts turns this into
@@ -563,15 +639,15 @@ async function deployPreviewApps({
             // head's builds, not @main. The sha, not @<pr>: pkg.pr.new PR refs
             // are moving targets, while the sha pins the exact builds this
             // deploy shipped.
-            PREVIEW_PULL_REQUEST_HEAD_SHA: context.pullRequestHeadSha,
+            PLATFORM_DEPLOY_HEAD_SHA: run.headSha,
             ...(app.slug === "os" &&
               osContainerRollout && { OS_CONTAINERS_ROLLOUT: osContainerRollout.mode }),
           },
           dopplerConfig: environmentConfigLease.dopplerConfig,
           mainWorkerSize: workerSizeBaselines[app.slug] ?? null,
-          pullRequestHeadSha: context.pullRequestHeadSha,
+          headSha: run.headSha,
           repositoryRoot: runtime.repositoryRoot,
-          runUrl: context.workflowRunUrl,
+          runUrl: run.workflowRunUrl,
           signal: runtime.signal,
         });
         // Capture this before waiting for slower siblings in the batch. The
@@ -586,7 +662,6 @@ async function deployPreviewApps({
     }
 
     for (const { entry, finishedAt } of completedDeploys) {
-      accumulatedEntries[entry.appSlug] = entry;
       telemetry.deployAppFinished({
         app: entry.appSlug,
         finishedAt,
@@ -601,46 +676,46 @@ async function deployPreviewApps({
         workerVersion: entry.deployedWorkerVersion,
       });
     }
-    const update = await updatePreviewState(context, (state) => ({
+    await report.update((state) => ({
       ...state,
       environmentConfigLease: toSlotDisplay(environmentConfigLease),
       notice: claimNotice,
       apps: {
         ...state.apps,
-        ...accumulatedEntries,
+        ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
       },
     }));
-    latestState = update.state;
   }
 
-  const deployedEntries = Object.values(latestState.apps).filter(
-    (entry) => entry.headSha === context.pullRequestHeadSha,
+  const deployedEntries = Object.values(report.state.apps).filter(
+    (entry) => entry.headSha === run.headSha,
   );
   logPreview(
     [
-      `deploy finished: ${deployedEntries.filter((entry) => entry.status === "awaiting-tests").length} ok, ${deployedEntries.filter((entry) => entry.status === "deploy-failed").length} failed (details in the PR body's preview section)`,
+      `deploy finished: ${deployedEntries.filter((entry) => entry.status === "awaiting-tests").length} ok, ${deployedEntries.filter((entry) => entry.status === "deploy-failed").length} failed (details in the preview report)`,
       ...deployedEntries.map(
         (entry) =>
           `  ${entry.appSlug}: ${entry.status}${entry.publicUrl ? ` ${entry.publicUrl}` : ""}`,
       ),
     ].join("\n"),
   );
-  if (ok) {
-    await seedPreviewTestLogin({
-      lease: toSlotDisplay(environmentConfigLease),
-      pullRequestNumber: context.pullRequestNumber,
-    });
-  }
 
   const result = {
     ok,
-    state: latestState,
+    state: report.state,
   };
 
   if (!result.ok) {
     throw new Error(
-      "Failed to deploy Cloudflare preview apps — see per-app output above and the failure details in the PR body.",
+      "Failed to deploy Cloudflare preview apps — see per-app output above and the failure details in the preview report.",
     );
+  }
+
+  if (target.reviewProject) {
+    await seedPreviewTestLogin({
+      lease: toSlotDisplay(environmentConfigLease),
+      project: target.reviewProject,
+    });
   }
 
   return result;
@@ -657,9 +732,9 @@ async function deployPreviewApps({
  */
 async function seedPreviewTestLogin(input: {
   lease: CloudflarePreviewSlotDisplay;
-  pullRequestNumber: number;
+  project: string;
 }) {
-  const url = previewLoginUrl(input.lease, input.pullRequestNumber);
+  const url = previewLoginUrl(input.lease, input.project);
   if (!url) {
     return;
   }
@@ -670,7 +745,7 @@ async function seedPreviewTestLogin(input: {
     });
     if (response.status >= 300 && response.status < 400) {
       logPreview(
-        `test-login seeded: pr${input.pullRequestNumber}+test@nustom.com user, org, and project exist on ${input.lease.slug}`,
+        `test-login seeded: ${input.project}+test@nustom.com user, org, and project exist on ${input.lease.slug}`,
       );
     } else {
       const detail = (await response.text().catch(() => "")).slice(0, 200);
@@ -829,34 +904,27 @@ function resolvePreviewRolloutReadyAtMs(input: {
 }
 
 async function testPreviewApps({
-  context,
+  target,
   runtime,
-  state: knownState,
   telemetry,
 }: {
-  context: PullRequestPreviewContext;
+  target: PreviewTarget;
   runtime: PreviewRuntime;
   telemetry: PreviewE2eTelemetryArtifact;
-  /**
-   * In-process state from a just-finished deploy (the `run` path). A fresh
-   * PR-body read can lag deploy's write (GitHub read-after-write lag) and
-   * would miss entries deploy just recorded; the shared state cannot.
-   * Standalone `test` reads the PR body instead.
-   */
-  state?: CloudflarePreviewState;
 }) {
+  const { run, report } = target;
   logPreview(
-    `test for PR #${context.pullRequestNumber} (head ${context.pullRequestHeadSha.slice(0, 7)}) — holder ${pullRequestHolder(context.pullRequestNumber)}, semaphore ${defaultSemaphoreBaseUrl}`,
+    `test for ${run.holder} (head ${run.headSha.slice(0, 7)}) — holder ${run.holder}, semaphore ${defaultSemaphoreBaseUrl}`,
   );
-  const recorded = knownState ?? (await readCloudflarePreviewState(context)).state;
+  const recorded = report.state;
 
   // The semaphore is the single source of lease truth: resolve ownership
   // FIRST, from what the semaphore attributes to this holder right now. The
-  // PR body's slot record is display only — it never authorizes tests and is
+  // report's slot record is display only — it never authorizes tests and is
   // never a reason to skip them (a recorded copy once got nulled after a slot
   // steal, and the next run then skipped "no lease" instead of seeing the
   // steal).
-  const holder = pullRequestHolder(context.pullRequestNumber);
+  const holder = run.holder;
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
   const displaySlot = recorded.environmentConfigLease;
   const environmentConfigLease =
@@ -870,7 +938,7 @@ async function testPreviewApps({
       holder,
       leaseMs: defaultPreviewLeaseMs,
       // Tests only renew — the deployment on a lapsed-but-free slot is this
-      // PR's own, and nothing is deployed after this.
+      // holder's own, and nothing is deployed after this.
       onRetaken: async () => true,
       recordedSlug: displaySlot?.slug ?? null,
       semaphore,
@@ -882,11 +950,11 @@ async function testPreviewApps({
     if (!displaySlot && !hasTestableRecordedApps) {
       const message = `Refusing to report preview e2e success: the semaphore leases no slot to ${holder} and no runnable deployment is recorded. E2e was NOT run. Run preview deploy first.`;
       logPreview(message);
-      await updatePreviewState(context, (state) => ({ ...state, notice: message }));
+      await report.update((state) => ({ ...state, notice: message }));
       throw new Error(message);
     }
 
-    // This PR has deployments on record but no slot: the slot was stolen (or
+    // This target has deployments on record but no slot: the slot was stolen (or
     // lapsed and taken). Testing would hammer someone else's deployment, and
     // skipping would hide the steal — refuse loudly instead.
     const message = describeLostSlotOwnership({
@@ -901,7 +969,7 @@ async function testPreviewApps({
     // claim-failed so deploy's retry selection redeploys them; the next test
     // run consults the semaphore again, so nothing written here can cause a
     // skip.
-    await updatePreviewState(context, (state) => ({
+    await report.update((state) => ({
       ...state,
       notice: `${message} E2e was NOT run. Re-run preview deploy to claim a slot and redeploy.`,
       apps: Object.fromEntries(
@@ -909,7 +977,7 @@ async function testPreviewApps({
           appSlug,
           // Older-head entries are already superseded; only current-head
           // entries are marked so deploy's retry selection picks them up.
-          entry.headSha === context.pullRequestHeadSha
+          entry.headSha === run.headSha
             ? {
                 ...entry,
                 status: "claim-failed" as const,
@@ -930,7 +998,7 @@ async function testPreviewApps({
     displaySlot?.slug !== environmentConfigLease.slug ||
     displaySlot?.dopplerConfig !== environmentConfigLease.dopplerConfig
   ) {
-    await updatePreviewState(context, (state) => ({
+    await report.update((state) => ({
       ...state,
       environmentConfigLease: toSlotDisplay(environmentConfigLease),
     }));
@@ -939,16 +1007,16 @@ async function testPreviewApps({
   const testableApps = selectPreviewAppsForTesting(recorded.apps);
 
   if (testableApps.length === 0) {
-    const notice = `Refusing to report preview e2e success for head ${context.pullRequestHeadSha.slice(0, 7)}: no runnable app deployment is recorded. E2e was NOT run. Run preview deploy first.`;
+    const notice = `Refusing to report preview e2e success for head ${run.headSha.slice(0, 7)}: no runnable app deployment is recorded. E2e was NOT run. Run preview deploy first.`;
     logPreview(notice);
-    await updatePreviewState(context, (state) => ({
+    await report.update((state) => ({
       ...state,
       notice,
     }));
     throw new Error(notice);
   }
   logPreview(
-    `testable apps for head ${context.pullRequestHeadSha.slice(0, 7)}: ${testableApps
+    `testable apps for head ${run.headSha.slice(0, 7)}: ${testableApps
       .map((app) => {
         const deployedHead = recorded.apps[app.slug]?.headSha;
         return `${app.slug}@${deployedHead?.slice(0, 7) ?? "unknown"}`;
@@ -1029,7 +1097,7 @@ async function testPreviewApps({
         ...runtime.commandEnvironment,
         ...resolvePreviewTestTelemetryEnvironment({
           app: app.slug,
-          context,
+          run,
           previewSlot: environmentConfigLease.slug,
         }),
         ...(telemetryArtifactDirectory && {
@@ -1076,7 +1144,7 @@ async function testPreviewApps({
       appDisplayName: app.displayName,
       appSlug: app.slug,
       message: testFailure,
-      runUrl: context.workflowRunUrl ?? existingEntry.runUrl ?? null,
+      runUrl: run.workflowRunUrl || existingEntry.runUrl || null,
       status: testFailure ? "tests-failed" : "deployed",
       testDurationMs,
       testRetries: renderPreviewRetrySummary(testSummary),
@@ -1093,7 +1161,7 @@ async function testPreviewApps({
     ].join("\n"),
   );
   if (entries.length > 0) {
-    const update = await updatePreviewState(context, (state) => ({
+    const update = await report.update((state) => ({
       ...state,
       apps: {
         ...state.apps,
@@ -1102,12 +1170,12 @@ async function testPreviewApps({
     }));
     const result = {
       ok,
-      state: update.state,
+      state: update,
     };
 
     if (!result.ok) {
       throw new Error(
-        "Preview tests failed — see per-app output above and the failure details in the PR body.",
+        "Preview tests failed — see per-app output above and the failure details in the preview report.",
       );
     }
 
@@ -1121,7 +1189,7 @@ async function testPreviewApps({
 
   if (!result.ok) {
     throw new Error(
-      "Preview tests failed — see per-app output above and the failure details in the PR body.",
+      "Preview tests failed — see per-app output above and the failure details in the preview report.",
     );
   }
 
@@ -1129,18 +1197,14 @@ async function testPreviewApps({
 }
 
 /**
- * Tear down deployed apps recorded in the managed PR preview section and release the environment config lease.
+ * Tear down recorded preview apps and release the environment config lease.
  */
-export async function cleanup(options: PullRequestCommandOptions = {}) {
-  const runtime = createPreviewRuntime();
-  const result = await cleanupPreviewForPullRequest({
-    ...runtime,
-    context: await resolvePullRequestPreviewContext({
-      commandEnvironment: runtime.commandEnvironment,
-      githubToken: resolveGithubToken(options, runtime.commandEnvironment),
-      pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
-    }),
+export async function cleanup(options: PreviewCommandOptions = {}) {
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: false,
   });
+  const result = await cleanupPreviewApps({ target, runtime });
 
   // Exit-code contract (the only consumer is the cleanup workflow's
   // red/green — nothing gates on it): exit non-zero ONLY when the lease
@@ -1162,18 +1226,21 @@ export async function cleanup(options: PullRequestCommandOptions = {}) {
   return result;
 }
 
-type EraseOptions = PullRequestCommandOptions & {
-  /** The PR head this run tested. When the PR has moved on since, the erase is skipped: that push's own run erases before it deploys, and erasing now would race its deploy. Omit to erase regardless. */
+type EraseOptions = PreviewCommandOptions & {
+  /** The head this run tested. Skip if the target has moved on: erasing would race its newer deployment. Omit to erase regardless. */
   ranHeadSha?: string;
 };
 
 /**
- * Erase the slot this PR holds and keep the lease. CI runs it right after the e2e, so the test projects a run created stop burning the moment it ends.
+ * Erase the target's slot and keep the lease. CI runs this after e2e to stop test projects spending.
  */
 export async function erase(options: EraseOptions = {}) {
-  const { context, runtime } = await resolvePreviewCommandSetup(options);
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: false,
+  });
   return await eraseHeldSlotAfterRun({
-    context,
+    target,
     eraseSlotData: makePreviewSlotDataEraser(runtime),
     ranHeadSha: options.ranHeadSha || null,
     semaphore: runtime.createPreviewSemaphoreResourceClient(),
@@ -1181,46 +1248,39 @@ export async function erase(options: EraseOptions = {}) {
 }
 
 async function eraseHeldSlotAfterRun(input: {
-  context: Pick<
-    PullRequestPreviewContext,
-    "pullRequestBody" | "pullRequestHeadSha" | "pullRequestNumber"
-  >;
+  target: PreviewTarget;
   eraseSlotData: EraseSlotData;
   ranHeadSha: string | null;
   semaphore: PreviewSemaphoreResourceClient;
 }) {
-  const holder = pullRequestHolder(input.context.pullRequestNumber);
-  if (input.ranHeadSha && input.ranHeadSha !== input.context.pullRequestHeadSha) {
+  const { run, report } = input.target;
+  if (input.ranHeadSha && input.ranHeadSha !== run.headSha) {
     logPreview(
-      `erase skipped: PR #${input.context.pullRequestNumber} moved on from ${input.ranHeadSha.slice(0, 7)} to ${input.context.pullRequestHeadSha.slice(0, 7)} — that push's run erases ${holder}'s slot before it deploys`,
+      `erase skipped: ${run.holder} moved on from ${input.ranHeadSha.slice(0, 7)} to ${run.headSha.slice(0, 7)} — that push's run erases its slot before it deploys`,
     );
     return { erased: false, reason: "superseded", slug: null };
   }
-  // Ownership comes from the semaphore, as everywhere; the PR body's slot is
-  // only the affinity hint for a holder that somehow has two.
   const lease = await adoptLeaseHeldBySemaphore({
-    holder,
+    holder: run.holder,
     leaseMs: defaultPreviewLeaseMs,
-    preferSlug:
-      parseCloudflarePreviewState(input.context.pullRequestBody).environmentConfigLease?.slug ||
-      null,
+    preferSlug: report.state.environmentConfigLease?.slug || null,
     semaphore: input.semaphore,
   });
   if (!lease) {
-    logPreview(`erase skipped: the semaphore leases no slot to ${holder} — nothing to erase`);
+    logPreview(`erase skipped: the semaphore leases no slot to ${run.holder} — nothing to erase`);
     return { erased: false, reason: "no-lease", slug: null };
   }
   await input.eraseSlotData({ dopplerConfig: lease.dopplerConfig, slug: lease.slug });
   logPreview(
-    `erased ${lease.slug} after the run; ${holder} keeps the lease until ${formatUntil(lease.leasedUntil)}`,
+    `erased ${lease.slug} after the run; ${run.holder} keeps the lease until ${formatUntil(lease.leasedUntil)}`,
   );
   return { erased: true, reason: null, slug: lease.slug };
 }
 
 /**
- * Assign a preview slot to a PR — a specific slot or whatever is free — and record it in the PR body's managed preview section.
+ * Assign a preview slot to a target — a specific slot or whatever is free — and record it in the report.
  */
-type AssignOptions = PullRequestCommandOptions & {
+type AssignOptions = PreviewCommandOptions & {
   /** Preview slot: a number (3) or slug (preview-3 / preview_3). Omit to take any free slot. */
   slot?: string;
   /** Evict the slot's current holder first. Their deployment on the slot will be clobbered. */
@@ -1228,40 +1288,39 @@ type AssignOptions = PullRequestCommandOptions & {
 };
 
 export async function assign(options: AssignOptions = {}) {
-  const runtime = createPreviewRuntime();
-  const context = await resolvePullRequestPreviewContext({
-    commandEnvironment: runtime.commandEnvironment,
-    githubToken: resolveGithubToken(options, runtime.commandEnvironment),
-    pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: true,
   });
+  const { run, report } = target;
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
-  const holder = pullRequestHolder(context.pullRequestNumber);
+  const holder = run.holder;
   const wantedSlug = options.slot ? normalizePreviewSlotSlug(options.slot) : null;
   logPreview(
-    `assign for PR #${context.pullRequestNumber} — ${wantedSlug ? `wants ${wantedSlug}` : "wants any free slot"}, holder ${holder}`,
+    `assign for ${holder} — ${wantedSlug ? `wants ${wantedSlug}` : "wants any free slot"}`,
   );
 
-  const current = await readCloudflarePreviewState(context);
+  const current = report.state;
   const result = await assignEnvironmentConfigLease({
     eraseSlotData: makePreviewSlotDataEraser(runtime),
     force: options.force,
     holder,
     leaseMs: defaultPreviewLeaseMs,
-    recordedSlug: current.state.environmentConfigLease?.slug ?? null,
+    recordedSlug: current.environmentConfigLease?.slug ?? null,
     semaphore,
     wantedSlug,
   });
 
   // Every outcome needs a redeploy now: taking a slot erases it, and that
-  // includes keeping the one this PR already held (fresh on every acquire).
+  // includes keeping the one this target already held (fresh on every acquire).
   // A changed slug additionally means the recorded apps point at the wrong
   // hostname.
   const redeployMessage = result.changedFromSlug
     ? `Slot reassigned from ${result.changedFromSlug} to ${result.lease.slug}; run preview deploy to redeploy here.`
     : result.outcome === "kept"
       ? `Slot ${result.lease.slug} kept and erased — taking a slot always erases it. Run preview deploy to redeploy.`
-      : `Slot ${result.lease.slug} was re-acquired after this PR's lease lapsed — previous deployments there may have been replaced. Run preview deploy to redeploy.`;
-  const update = await updatePreviewState(context, (state) => ({
+      : `Slot ${result.lease.slug} was re-acquired after this target's lease lapsed — previous deployments there may have been replaced. Run preview deploy to redeploy.`;
+  const update = await report.update((state) => ({
     ...state,
     environmentConfigLease: toSlotDisplay(result.lease),
     notice: `${redeployMessage} (preview assign at ${new Date().toISOString()})`,
@@ -1278,11 +1337,11 @@ export async function assign(options: AssignOptions = {}) {
     ),
   }));
   logPreview(
-    `PR body updated: PR #${context.pullRequestNumber} now records ${result.lease.slug} (doppler config ${result.lease.dopplerConfig})`,
+    `Preview report updated: ${holder} now records ${result.lease.slug} (doppler config ${result.lease.dopplerConfig})`,
   );
 
   return {
-    pullRequestNumber: context.pullRequestNumber,
+    pullRequestNumber: run.pullRequestNumber,
     slot: result.lease.slug,
     dopplerConfig: result.lease.dopplerConfig,
     holder,
@@ -1290,8 +1349,8 @@ export async function assign(options: AssignOptions = {}) {
     outcome: result.outcome,
     previousSlot: result.changedFromSlug,
     previousLeaseReleased: result.previousLeaseReleased,
-    appsMarkedForRedeploy: Object.keys(update.state.apps),
-    nextStep: `doppler run --project _shared --config prd -- pnpm preview deploy --pull-request-number ${context.pullRequestNumber}`,
+    appsMarkedForRedeploy: Object.keys(update.apps),
+    nextStep: `Run preview deploy with the same target options to deploy to ${result.lease.slug}.`,
   };
 }
 
@@ -2574,14 +2633,11 @@ const cloudflarePreviewSectionLabel = "CLOUDFLARE_PREVIEW";
 const cloudflarePreviewStateLabel = "CLOUDFLARE_PREVIEW_STATE";
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
 const defaultRepositoryFullName = "iterate/iterate";
-// A preview slot belongs to its PR for the PR's whole life: every `preview
-// deploy` and `preview test` run renews the lease for this long, and closing
-// the PR releases it. Expiry is only the safety valve for abandoned PRs — a
-// PR that pushes nothing for this long loses its slot (the GC sweep reclaims
-// it; see docs/preview-resource-gc.md). While a lease is live, nothing takes
-// the slot without a human --force. 3h keeps idle slots (and the Cloudflare
-// resources behind them) from costing us for a full day after a PR goes quiet;
-// a deploy/e2e cycle is minutes, so an active PR never lapses mid-run.
+// Deploy and test renew the target's lease; cleanup releases it. Expiry is
+// the backstop for abandoned previews: 3h limits idle resource costs while
+// leaving ample time for a deploy/e2e run. Main and PR targets use this same
+// policy. While a lease is live, nothing takes it without an explicit --force.
+// See docs/preview-resource-gc.md.
 const defaultPreviewLeaseMs = 3 * 60 * 60 * 1000;
 // Routed previews can be healthy before Cloudflare has finished issuing edge
 // certificates for newly-created hostnames. Some apps record a separate
@@ -2622,88 +2678,14 @@ export type EnvironmentConfigLease = {
 };
 
 /**
- * The PR body's record of which slot a PR's previews live on — DISPLAY ONLY.
+ * The report records where the preview lives — DISPLAY ONLY.
  * It tells humans where to look (slot, doppler config) and lets deploy prefer
  * its previous slot; it is never lease authority and never a reason to skip
  * tests. Ownership questions always go to the semaphore.
  */
-export const CloudflarePreviewSlotDisplay = z.object({
-  dopplerConfig: z.string().trim().min(1),
-  slug: z.string().trim().min(1),
-});
-export type CloudflarePreviewSlotDisplay = z.infer<typeof CloudflarePreviewSlotDisplay>;
-
 function toSlotDisplay(lease: EnvironmentConfigLease): CloudflarePreviewSlotDisplay {
   return { dopplerConfig: lease.dopplerConfig, slug: lease.slug };
 }
-
-const CloudflarePreviewStatus = z.enum([
-  "awaiting-tests",
-  "claim-failed",
-  "cleanup-failed",
-  "deploy-failed",
-  "deployed",
-  "released",
-  "tests-failed",
-]);
-
-export const CloudflarePreviewAppEntry = z.object({
-  appDisplayName: z.string().trim().min(1),
-  appSlug: z.string().trim().min(1),
-  status: CloudflarePreviewStatus,
-  updatedAt: z.string().trim().min(1),
-  /** When the successful app deploy command completed for this exact version. */
-  deployedAt: z.iso.datetime({ offset: true }).nullable().optional(),
-  headSha: z.string().trim().min(1).nullable().optional(),
-  message: z.string().trim().min(1).nullable().optional(),
-  publicUrl: z.string().trim().url().nullable().optional(),
-  runUrl: z.string().trim().url().nullable().optional(),
-  shortSha: z.string().trim().min(1).nullable().optional(),
-  cleanupDurationMs: z.number().nonnegative().finite().nullable().optional(),
-  deployDurationMs: z.number().nonnegative().finite().nullable().optional(),
-  /** Time spent resolving the Doppler-backed public URL and Worker identity. */
-  deployConfigDurationMs: z.number().nonnegative().finite().nullable().optional(),
-  /** Time spent in the app's build, Cloudflare mutation, and app-level smoke command. */
-  deployCommandDurationMs: z.number().nonnegative().finite().nullable().optional(),
-  /** Time from a successful deploy command to exact-version readiness. */
-  deployReadinessDurationMs: z.number().nonnegative().finite().nullable().optional(),
-  /** Time spent proving that a content-identical recorded deployment can be reused. */
-  deployReuseProofDurationMs: z.number().nonnegative().finite().nullable().optional(),
-  /** Public Worker script and immutable Wrangler version proven by this entry. */
-  deployedWorkerName: z.string().trim().min(1).nullable().optional(),
-  deployedWorkerVersion: z.uuid().nullable().optional(),
-  testDurationMs: z.number().nonnegative().finite().nullable().optional(),
-  /** Rendered retry telemetry for the last test run (renderPreviewRetrySummary). */
-  testRetries: z.string().trim().min(1).nullable().optional(),
-  /** Wrangler-reported "Total Upload" of the deployed worker, in KiB. */
-  workerSizeKib: z.number().nonnegative().finite().nullable().optional(),
-  /** Wrangler-reported gzip size of the deployed worker, in KiB. */
-  workerGzipKib: z.number().nonnegative().finite().nullable().optional(),
-  /** Content fingerprint of the deployed sources (contentFingerprintPaths). */
-  deployedFingerprint: z.string().trim().min(1).nullable().optional(),
-  /**
-   * Main's deployed gzip size in KiB at deploy time, read from the
-   * `worker-size/<app>` commit status main deploys publish — the baseline for
-   * the table's "vs main" delta. Absent until the first post-merge main
-   * deploy publishes one.
-   */
-  mainWorkerGzipKib: z.number().nonnegative().finite().nullable().optional(),
-});
-export type CloudflarePreviewAppEntry = z.infer<typeof CloudflarePreviewAppEntry>;
-
-const CloudflarePreviewState = z.object({
-  apps: z.record(z.string().trim().min(1), CloudflarePreviewAppEntry).default({}),
-  // Display only (see CloudflarePreviewSlotDisplay). Bodies written before
-  // the semaphore became the single lease truth carry extra lease fields
-  // (leaseId, leasedUntil, type); z.object strips them on parse.
-  environmentConfigLease: CloudflarePreviewSlotDisplay.nullable().default(null),
-  /**
-   * Prominent banner rendered at the top of the managed PR-body section —
-   * slot exhaustion, slot takeovers, and moves land here so they are
-   * impossible to miss. Cleared by the next successful deploy claim.
-   */
-  notice: z.string().trim().min(1).nullable().default(null),
-});
 
 const CloudflareZonesResponse = z
   .object({
@@ -2735,8 +2717,6 @@ const CloudflareZonesResponse = z
       .default([]),
   })
   .passthrough();
-
-type CloudflarePreviewState = z.infer<typeof CloudflarePreviewState>;
 
 type EnvironmentConfigLeaseResourceData = {
   dopplerConfig: string;
@@ -2808,9 +2788,9 @@ function describePreviewSlotChange(input: {
 }): string | null {
   if (!input.previousSlug || input.previousSlug === input.nextSlug) return null;
   if (input.requestedEnvironment === input.nextSlug) {
-    return `This PR requested ${input.nextSlug} via preview_environment, so its slot changed from ${input.previousSlug} to ${input.nextSlug} at ${input.changedAt}. Everything below refers to the new slot.`;
+    return `This preview requested ${input.nextSlug} via preview_environment, so its slot changed from ${input.previousSlug} to ${input.nextSlug} at ${input.changedAt}. Everything below refers to the new slot.`;
   }
-  return `This PR's slot changed from ${input.previousSlug} to ${input.nextSlug} at ${input.changedAt} (the old lease lapsed and someone else took the slot). Everything below refers to the new slot.`;
+  return `The preview slot changed from ${input.previousSlug} to ${input.nextSlug} at ${input.changedAt} (the old lease lapsed and someone else took the slot). Everything below refers to the new slot.`;
 }
 
 type PreviewSemaphoreLease = {
@@ -2863,30 +2843,19 @@ type PreviewRuntime = {
   signal?: AbortSignal;
 };
 
-type PullRequestPreviewContext = {
-  githubToken: string;
-  pullRequestBaseSha: string;
-  pullRequestBody: string;
-  pullRequestHeadSha: string;
-  pullRequestHeadRef?: string;
-  pullRequestNumber: number;
-  repositoryFullName: string;
-  workflowRunUrl: string | null;
-};
-
 function resolvePreviewTestTelemetryEnvironment(input: {
   app: string;
-  context: PullRequestPreviewContext;
+  run: Pick<PreviewRun, "headSha" | "branch" | "pullRequestNumber">;
   previewSlot: string;
 }): Record<string, string> {
   return {
     TEST_TELEMETRY_KIND: "e2e",
     TEST_TELEMETRY_APP: input.app,
-    TEST_TELEMETRY_HEAD_SHA: input.context.pullRequestHeadSha,
-    ...(input.context.pullRequestHeadRef && {
-      TEST_TELEMETRY_BRANCH: input.context.pullRequestHeadRef,
-    }),
-    TEST_TELEMETRY_PULL_REQUEST_NUMBER: String(input.context.pullRequestNumber),
+    TEST_TELEMETRY_HEAD_SHA: input.run.headSha,
+    TEST_TELEMETRY_BRANCH: input.run.branch,
+    TEST_TELEMETRY_PULL_REQUEST_NUMBER: input.run.pullRequestNumber
+      ? String(input.run.pullRequestNumber)
+      : "",
     TEST_TELEMETRY_PREVIEW_SLOT: input.previewSlot,
   };
 }
@@ -3029,36 +2998,6 @@ function isSameResourceData(
   }
 }
 
-async function readCloudflarePreviewState(params: {
-  githubToken: string;
-  repositoryFullName: string;
-  pullRequestNumber: number;
-}) {
-  const body = await readPullRequestBody(params);
-
-  return {
-    body,
-    state: parseCloudflarePreviewState(body),
-  };
-}
-
-async function updateCloudflarePreviewState(params: {
-  githubToken: string;
-  repositoryFullName: string;
-  pullRequestNumber: number;
-  update: (state: CloudflarePreviewState) => CloudflarePreviewState;
-}) {
-  const current = await readCloudflarePreviewState(params);
-  const nextState = CloudflarePreviewState.parse(params.update(current.state));
-
-  await writePullRequestBody({
-    ...params,
-    body: renderCloudflarePreviewPullRequestBody(current.body, nextState, params.pullRequestNumber),
-  });
-
-  return { state: nextState };
-}
-
 /**
  * Read the leased slot display out of a PR body this script maintains — for
  * other CI that wants to point at the PR's preview env (the mobile QR
@@ -3107,7 +3046,7 @@ function renderCloudflarePreviewPullRequestBody(
  */
 function previewLoginUrl(
   lease: CloudflarePreviewSlotDisplay,
-  pullRequestNumber: number,
+  project: string,
   // Optional post-login destination on the os app (a same-origin path like
   // `/new-project?template=codemode-tag`) — rides the relying-party login's
   // own `return_to`, so one click lands signed-in on that page.
@@ -3126,8 +3065,8 @@ function previewLoginUrl(
   const osLogin = new URL("/api/iterate-auth/login", osBaseUrl);
   if (osReturnToPath) osLogin.searchParams.set("return_to", osReturnToPath);
   const url = new URL("/test-login", authBaseUrl);
-  url.searchParams.set("email", `pr${pullRequestNumber}+test@nustom.com`);
-  url.searchParams.set("project", `pr${pullRequestNumber}`);
+  url.searchParams.set("email", `${project}+test@nustom.com`);
+  url.searchParams.set("project", project);
   url.searchParams.set("return_to", osLogin.toString());
   return url.toString();
 }
@@ -3143,7 +3082,7 @@ function previewQuickLaunchLine(lease: CloudflarePreviewSlotDisplay, pullRequest
     const shortName = path.replace(/^configs\//, "");
     const url = previewLoginUrl(
       lease,
-      pullRequestNumber,
+      `pr${pullRequestNumber}`,
       `/new-project?template=${encodeURIComponent(shortName)}`,
     );
     return url === null ? null : `[${label} ↗](${url})`;
@@ -3164,7 +3103,7 @@ function renderCloudflarePreviewSection(state: CloudflarePreviewState, pullReque
     : null;
 
   const loginUrl = state.environmentConfigLease
-    ? previewLoginUrl(state.environmentConfigLease, pullRequestNumber)
+    ? previewLoginUrl(state.environmentConfigLease, `pr${pullRequestNumber}`)
     : null;
 
   return [
@@ -3360,47 +3299,6 @@ function unwrapHiddenStateBlock(contents: string) {
   }
 
   return contents;
-}
-
-async function readPullRequestBody(params: {
-  githubToken: string;
-  repositoryFullName: string;
-  pullRequestNumber: number;
-}) {
-  const octokit = new Octokit({
-    auth: params.githubToken,
-  });
-  const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
-  const pullRequest = await withGithubRetry("pulls.get (body)", () =>
-    octokit.rest.pulls.get({
-      owner,
-      repo,
-      pull_number: params.pullRequestNumber,
-    }),
-  );
-
-  return pullRequest.data.body || "";
-}
-
-async function writePullRequestBody(params: {
-  body: string;
-  githubToken: string;
-  repositoryFullName: string;
-  pullRequestNumber: number;
-}) {
-  const octokit = new Octokit({
-    auth: params.githubToken,
-  });
-  const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
-  // Body-only changes use the pull request's Issue representation.
-  await withGithubRetry("issues.update", () =>
-    octokit.rest.issues.update({
-      body: params.body,
-      owner,
-      repo,
-      issue_number: params.pullRequestNumber,
-    }),
-  );
 }
 
 /**
@@ -4076,23 +3974,11 @@ function tryReadGhAuthToken() {
   }
 }
 
-function resolveGithubToken(options: PullRequestCommandOptions, env: NodeJS.ProcessEnv): string {
+function resolveGithubToken(options: { githubToken?: string }, env: NodeJS.ProcessEnv): string {
   return requireValue(
     options.githubToken || env.GITHUB_TOKEN?.trim() || tryReadGhAuthToken(),
     "GITHUB_TOKEN is required (or authenticate the gh CLI).",
   );
-}
-
-function resolvePullRequestNumber(
-  options: PullRequestCommandOptions,
-  env: NodeJS.ProcessEnv,
-): number {
-  const value = options.pullRequestNumber || Number(env.GITHUB_PR_NUMBER);
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error("A pull request number is required.");
-  }
-
-  return value;
 }
 
 function normalizePreviewSlotSlug(slot: string) {
@@ -4100,35 +3986,23 @@ function normalizePreviewSlotSlug(slot: string) {
   return /^\d+$/.test(trimmed) ? `preview-${trimmed}` : trimmed;
 }
 
-function splitRepositoryFullName(repositoryFullName: string) {
-  const parts = repositoryFullName.split("/");
-  if (parts.length !== 2 || !parts[0] || !parts[1]) {
-    throw new Error(
-      `Expected repository full name to look like owner/repo. Got: ${repositoryFullName}`,
-    );
-  }
-
-  return parts as [string, string];
-}
-
-async function cleanupPreviewForPullRequest(
-  params: PreviewRuntime & { context: PullRequestPreviewContext },
-) {
-  logPreview(
-    `cleanup for PR #${params.context.pullRequestNumber} — holder ${pullRequestHolder(params.context.pullRequestNumber)}, semaphore ${defaultSemaphoreBaseUrl}`,
-  );
-  const current = await readCloudflarePreviewState({
-    githubToken: params.context.githubToken,
-    repositoryFullName: params.context.repositoryFullName,
-    pullRequestNumber: params.context.pullRequestNumber,
-  });
-  // Never destroy a slot this PR does not hold: ownership comes from the
-  // semaphore (single source of lease truth), not from the PR body — which
+async function cleanupPreviewApps({
+  target,
+  runtime,
+}: {
+  target: PreviewTarget;
+  runtime: PreviewRuntime;
+}) {
+  const { run, report } = target;
+  logPreview(`cleanup for ${run.holder} — semaphore ${defaultSemaphoreBaseUrl}`);
+  const current = report.state;
+  // Never destroy a slot this run does not hold: ownership comes from the
+  // semaphore (single source of lease truth), not from the report — which
   // also heals the case where a cancelled run claimed a slot but died before
   // recording it (the slot still gets torn down and released here).
-  const holder = pullRequestHolder(params.context.pullRequestNumber);
-  const semaphore = params.createPreviewSemaphoreResourceClient();
-  const displaySlot = current.state.environmentConfigLease;
+  const holder = run.holder;
+  const semaphore = runtime.createPreviewSemaphoreResourceClient();
+  const displaySlot = current.environmentConfigLease;
   const environmentConfigLease =
     (await adoptLeaseHeldBySemaphore({
       holder,
@@ -4136,7 +4010,7 @@ async function cleanupPreviewForPullRequest(
       preferSlug: displaySlot?.slug ?? null,
       semaphore,
     })) ??
-    // A lapsed-but-free recorded slot still carries this PR's deployment;
+    // A lapsed-but-free recorded slot still carries this target's deployment;
     // take it back (non-force) so the teardown can erase it.
     (await retakeRecordedSlotIfFree({
       holder,
@@ -4152,7 +4026,7 @@ async function cleanupPreviewForPullRequest(
         ok: true,
         released: false,
         teardownFailed: false,
-        state: current.state,
+        state: current,
       };
     }
 
@@ -4164,7 +4038,7 @@ async function cleanupPreviewForPullRequest(
       holder,
     })}`;
     logPreview(`cleanup skipped: ${message}`);
-    const update = await updatePreviewState(params.context, (state) => ({
+    const update = await report.update((state) => ({
       ...state,
       environmentConfigLease: null,
       notice: message,
@@ -4185,18 +4059,15 @@ async function cleanupPreviewForPullRequest(
       released: false,
       skippedTeardown: true,
       teardownFailed: false,
-      state: update.state,
+      state: update,
     };
   }
 
   let ok = true;
-  let latestState = current.state;
-  const appsToCleanUp = (Object.keys(current.state.apps) as CloudflarePreviewAppSlugType[])
-    .map((appSlug) => cloudflarePreviewApps[appSlug])
-    .filter((app): app is PreviewAppRuntime => app != null);
+  const appsToCleanUp = Object.values(cloudflarePreviewApps).filter(
+    (app) => current.apps[app.slug],
+  );
   const cleanupBatches = [...orderPreviewDeployBatches(appsToCleanUp)].reverse();
-  // Same stale-read guard as deploy: keep every batch's entries in each write.
-  const accumulatedEntries: Record<string, CloudflarePreviewAppEntry> = {};
   for (const batch of cleanupBatches) {
     const entries = await mapWithConcurrency(
       batch,
@@ -4208,17 +4079,17 @@ async function cleanupPreviewForPullRequest(
         );
         const destroyResult = await runPreviewDeployCommand({
           app,
-          commandEnvironment: params.commandEnvironment,
+          commandEnvironment: runtime.commandEnvironment,
           dopplerConfig: environmentConfigLease.dopplerConfig,
           operation: "down",
-          repositoryRoot: params.repositoryRoot,
-          signal: params.signal,
+          repositoryRoot: runtime.repositoryRoot,
+          signal: runtime.signal,
         });
         const cleanupDurationMs = Date.now() - startedAt;
         console.error(
           `[preview] cleanup ${destroyResult.exitCode === 0 ? "passed" : "failed"}: ${app.slug} (${formatDurationMs(cleanupDurationMs)})`,
         );
-        const existingEntry = latestState.apps[app.slug];
+        const existingEntry = report.state.apps[app.slug];
         return CloudflarePreviewAppEntry.parse({
           ...existingEntry,
           appDisplayName: app.displayName,
@@ -4237,17 +4108,13 @@ async function cleanupPreviewForPullRequest(
       ok = false;
     }
 
-    for (const entry of entries) {
-      accumulatedEntries[entry.appSlug] = entry;
-    }
-    const update = await updatePreviewState(params.context, (state) => ({
+    await report.update((state) => ({
       ...state,
       apps: {
         ...state.apps,
-        ...accumulatedEntries,
+        ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
       },
     }));
-    latestState = update.state;
   }
 
   // Cleanup's contract: RELEASING THE LEASE is the load-bearing outcome, not
@@ -4265,16 +4132,16 @@ async function cleanupPreviewForPullRequest(
     teardownOk: ok,
   });
   if (!releaseResult.ok) {
-    // Keep the recorded lease in the PR body so a cleanup re-run still finds
+    // Keep the recorded lease in the report so a cleanup re-run still finds
     // the slot to release.
     return {
       ok: false,
       released: false,
       teardownFailed: !ok,
-      state: latestState,
+      state: report.state,
     };
   }
-  const update = await updatePreviewState(params.context, (state) => ({
+  const update = await report.update((state) => ({
     ...state,
     environmentConfigLease: null,
     notice: ok
@@ -4286,7 +4153,7 @@ async function cleanupPreviewForPullRequest(
     ok: true,
     released: releaseResult.released,
     teardownFailed: !ok,
-    state: update.state,
+    state: update,
   };
 }
 
@@ -4348,11 +4215,11 @@ async function deployPreviewAppWithStatus(input: {
   app: PreviewAppRuntime;
   commandEnvironment: NodeJS.ProcessEnv;
   dopplerConfig: string;
-  /** This app's entry from the PR's recorded state, for the unchanged-skip. */
+  /** This app's entry from the recorded deployment, for the unchanged-skip. */
   existingEntry: CloudflarePreviewAppEntry | null;
   /** Main's published size baseline for this app, when one exists. */
   mainWorkerSize: WorkerSizeInfo | null;
-  pullRequestHeadSha: string;
+  headSha: string;
   repositoryRoot: string;
   runUrl: string | null;
   signal?: AbortSignal;
@@ -4383,10 +4250,10 @@ async function deployPreviewAppWithStatus(input: {
       appDisplayName: input.app.displayName,
       appSlug: input.app.slug,
       deployDurationMs,
-      headSha: input.pullRequestHeadSha,
+      headSha: input.headSha,
       message: formatPreviewErrorMessage(error),
       runUrl: input.runUrl,
-      shortSha: input.pullRequestHeadSha.slice(0, 7),
+      shortSha: input.headSha.slice(0, 7),
       status: "deploy-failed",
       updatedAt: new Date().toISOString(),
     });
@@ -4399,7 +4266,7 @@ async function deployPreviewApp(input: {
   dopplerConfig: string;
   existingEntry: CloudflarePreviewAppEntry | null;
   mainWorkerSize: WorkerSizeInfo | null;
-  pullRequestHeadSha: string;
+  headSha: string;
   repositoryRoot: string;
   runUrl: string | null;
   signal?: AbortSignal;
@@ -4414,10 +4281,10 @@ async function deployPreviewApp(input: {
     appDisplayName: input.app.displayName,
     appSlug: input.app.slug,
     deployConfigDurationMs,
-    headSha: input.pullRequestHeadSha,
+    headSha: input.headSha,
     publicUrl: appConfig.baseUrl,
     runUrl: input.runUrl,
-    shortSha: input.pullRequestHeadSha.slice(0, 7),
+    shortSha: input.headSha.slice(0, 7),
     updatedAt: new Date().toISOString(),
   } as const;
 
@@ -5162,23 +5029,12 @@ async function acquireAnyEnvironmentConfigLease(input: {
 }
 
 /**
- * Claim a slot for a PR deploy: adopt-or-claim, with the semaphore as the
+ * Claim a slot for a preview deploy: adopt-or-claim, with the semaphore as the
  * single source of lease truth.
  *
- * 1. Adopt whatever the semaphore already attributes to this holder — a live
- *    lease from a previous run, or one a cancelled run claimed but never
- *    recorded (observed 2026-07-04: pr-1634 and pr-1636 each held two slots
- *    and every deploy queued for 20 minutes; adopting instead of acquiring a
- *    second slot is what prevents that). Adoption re-issues the lease, which
- *    doubles as the renewal, so no stored leaseId is ever consulted. The PR
- *    body's recorded slug is only a data-provenance hint here: an adopted
- *    slot that IS the recorded one carries this PR's own deployment and is
- *    never wiped; any other adopted slot has unknown provenance (the run
- *    that acquired it died before recording — possibly mid-erase) and is
- *    erased before handover.
- * 2. Re-take the recorded slot when its lease lapsed but nobody else claimed
- *    it — slot affinity keeps a lapsed PR on its own deployment instead of
- *    forcing a full redeploy elsewhere.
+ * 1. Adopt and renew a slot already held by this run's holder, including one
+ *    a cancelled run acquired before recording it. Erase before deploying.
+ * 2. Re-take the recorded slot if its lease lapsed and nobody else holds it.
  * 3. Otherwise queue for any free slot.
  */
 async function claimEnvironmentConfigLease(input: {
@@ -5495,8 +5351,8 @@ async function adoptLeaseHeldBySemaphore(input: {
 }
 
 /**
- * Slot affinity for a lapsed lease: the PR body says this PR's deployment
- * lives on recordedSlug, and if the semaphore says nobody holds that slot,
+ * Slot affinity for a lapsed lease: the report says the deployment lives
+ * on recordedSlug, and if the semaphore says nobody holds that slot,
  * take it back. Non-force, so the semaphore still arbitrates — a slot someone
  * else holds returns null and the caller refuses or moves elsewhere; the
  * recorded slug is only a hint about where to look, never authority.
@@ -5613,7 +5469,7 @@ async function resolvePreviewOsContainerRollout(input: {
   nextSlotSlug: string;
   previousSlotSlug: string | null;
   previousState: CloudflarePreviewState;
-  pullRequestHeadSha: string;
+  headSha: string;
   repositoryFullName: string;
   /** Injectable for unit tests; defaults to GitHub's commit comparison. */
   fetchCompare?: PreviewCompareFetcher;
@@ -5638,7 +5494,7 @@ async function resolvePreviewOsContainerRollout(input: {
   ) {
     return immediate("the same slot has no exact prior OS deployment identity");
   }
-  if (previous.headSha === input.pullRequestHeadSha) {
+  if (previous.headSha === input.headSha) {
     return {
       mode: "none",
       reason: "the exact OS revision is already proven on this slot",
@@ -5648,7 +5504,7 @@ async function resolvePreviewOsContainerRollout(input: {
   const fetchCompare = input.fetchCompare ?? makeGithubCompareFetcher(input);
   let compared: Awaited<ReturnType<PreviewCompareFetcher>>;
   try {
-    compared = await fetchCompare(`${previous.headSha}...${input.pullRequestHeadSha}`);
+    compared = await fetchCompare(`${previous.headSha}...${input.headSha}`);
   } catch (error) {
     return immediate(
       `the OS ancestry comparison was unavailable: ${formatPreviewErrorMessage(error)}`,
@@ -5781,12 +5637,11 @@ async function selectRecordedGreenAppsNotServing(params: {
   return notServing;
 }
 
-async function selectPreviewAppsForPullRequest(input: {
+async function selectPreviewAppsByDiff(input: {
   githubToken: string;
   previousState: CloudflarePreviewState;
-  pullRequestBaseSha: string;
-  pullRequestHeadSha: string;
-  pullRequestNumber: number;
+  baseSha: string;
+  headSha: string;
   repositoryFullName: string;
   /** Injectable for tests; defaults to {@link makeGithubCompareFetcher}. */
   fetchCompare?: PreviewCompareFetcher;
@@ -5805,7 +5660,7 @@ async function selectPreviewAppsForPullRequest(input: {
 
   const compareBaseSha = resolvePreviewCompareBaseSha(input);
   const diffSelectedSlugs: CloudflarePreviewAppSlugType[] = [];
-  if (compareBaseSha === input.pullRequestHeadSha) {
+  if (compareBaseSha === input.headSha) {
     logPreview(
       retryApps.length > 0
         ? `head sha unchanged since the last run — retrying apps that didn't reach a green state: ${retryApps.map((app) => app.slug).join(", ")}`
@@ -5814,13 +5669,13 @@ async function selectPreviewAppsForPullRequest(input: {
   } else {
     let compared: Awaited<ReturnType<PreviewCompareFetcher>>;
     try {
-      compared = await fetchCompare(`${compareBaseSha}...${input.pullRequestHeadSha}`);
+      compared = await fetchCompare(`${compareBaseSha}...${input.headSha}`);
     } catch (error) {
       if (!isGithubNotFoundError(error)) {
         throw error;
       }
       logPreview(
-        `compare ${compareBaseSha.slice(0, 7)}...${input.pullRequestHeadSha.slice(0, 7)} returned 404 — a force-push rewrote the last deployed head out of history, so no diff can be trusted; deploying ALL preview apps`,
+        `compare ${compareBaseSha.slice(0, 7)}...${input.headSha.slice(0, 7)} returned 404 — a force-push rewrote the last deployed head out of history, so no diff can be trusted; deploying ALL preview apps`,
       );
       return Object.values(cloudflarePreviewApps);
     }
@@ -5831,7 +5686,7 @@ async function selectPreviewAppsForPullRequest(input: {
       return Object.values(cloudflarePreviewApps);
     }
     logPreview(
-      `selecting apps by diff ${compareBaseSha.slice(0, 7)}...${input.pullRequestHeadSha.slice(0, 7)} (${compared.changedFilenames.length} changed files)`,
+      `selecting apps by diff ${compareBaseSha.slice(0, 7)}...${input.headSha.slice(0, 7)} (${compared.changedFilenames.length} changed files)`,
     );
 
     // GitHub's compare response caps its file list at 300, and the list is
@@ -6266,44 +6121,14 @@ function isDnsLookupError(error: unknown) {
   );
 }
 
-async function resolvePullRequestPreviewContext(params: {
-  commandEnvironment: NodeJS.ProcessEnv;
-  githubToken: string;
-  pullRequestNumber: number;
-}): Promise<PullRequestPreviewContext> {
-  const repositoryFullName =
-    params.commandEnvironment.GITHUB_REPOSITORY?.trim() || defaultRepositoryFullName;
-  const octokit = new Octokit({ auth: params.githubToken });
-  const [owner, repo] = splitRepositoryFullName(repositoryFullName);
-  const pullRequest = await withGithubRetry("pulls.get (context)", () =>
-    octokit.rest.pulls.get({
-      owner,
-      repo,
-      pull_number: params.pullRequestNumber,
-    }),
-  );
-
-  return {
-    githubToken: params.githubToken,
-    pullRequestBaseSha: pullRequest.data.base.sha,
-    pullRequestBody: pullRequest.data.body || "",
-    pullRequestHeadSha: pullRequest.data.head.sha,
-    pullRequestHeadRef: pullRequest.data.head.ref,
-    pullRequestNumber: params.pullRequestNumber,
-    repositoryFullName,
-    workflowRunUrl:
-      makeDefaultWorkflowRunUrl(params.commandEnvironment) || pullRequest.data.html_url || null,
-  };
-}
-
 function resolvePreviewCompareBaseSha(params: {
   previousState: CloudflarePreviewState;
-  pullRequestBaseSha: string;
+  baseSha: string;
 }) {
   const previousHeadSha = Object.values(params.previousState.apps)
     .map((entry) => entry.headSha)
     .find((headSha): headSha is string => typeof headSha === "string" && headSha.length > 0);
-  return previousHeadSha ?? params.pullRequestBaseSha;
+  return previousHeadSha || params.baseSha;
 }
 
 export const previewInternals = {
@@ -6355,7 +6180,7 @@ export const previewInternals = {
   resolvePreviewTestTargetPlan,
   resolvePreviewTestTelemetryEnvironment,
   resolvePreviewTestWorkerVersionOverrides,
-  selectPreviewAppsForPullRequest,
+  selectPreviewAppsByDiff,
   selectPreviewAppsNeedingRetry,
   selectPreviewAppsForTesting,
   selectPreviewSlotDataOwners,
@@ -6371,16 +6196,6 @@ function matchesPreviewPath(filename: string, patterns: readonly string[]) {
     }
 
     return filename === pattern;
-  });
-}
-
-async function updatePreviewState(
-  context: PullRequestPreviewContext,
-  update: (state: CloudflarePreviewState) => CloudflarePreviewState,
-) {
-  return await updateCloudflarePreviewState({
-    ...context,
-    update,
   });
 }
 
@@ -6417,40 +6232,6 @@ async function sleep(ms: number, signal?: AbortSignal) {
   });
 }
 
-/**
- * Retry a GitHub REST call through transient failures. GitHub's API
- * intermittently returns 5xx/429/408 — its "Unicorn!" 503 page failed a
- * preview `test` step mid-flight fetching the PR (2026-07-02) — and without a
- * retry a single blip fails the whole deploy+e2e and costs a full re-run.
- * Only transient statuses retry with exponential backoff; deterministic 4xx
- * (404, 422, …) throw immediately.
- */
-async function withGithubRetry<T>(
-  label: string,
-  call: () => Promise<T>,
-  opts: { attempts?: number; baseDelayMs?: number; signal?: AbortSignal } = {},
-): Promise<T> {
-  const attempts = opts.attempts ?? 4;
-  const baseDelayMs = opts.baseDelayMs ?? 1_000;
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      return await call();
-    } catch (error) {
-      const status = (error as { status?: number } | null)?.status;
-      const transient = status != null && (status >= 500 || status === 429 || status === 408);
-      lastError = error;
-      if (!transient || attempt === attempts) throw error;
-      const delayMs = baseDelayMs * 2 ** (attempt - 1);
-      console.error(
-        `[preview] GitHub ${label} failed with ${status} (attempt ${attempt}/${attempts}); retrying in ${delayMs}ms...`,
-      );
-      await sleep(delayMs, opts.signal);
-    }
-  }
-  throw lastError;
-}
-
 function commandFailureMessage(
   result: {
     stderr?: string;
@@ -6474,14 +6255,6 @@ function commandFailureMessage(
   }
 
   return `...(truncated)\n${text.slice(-maxLength)}`;
-}
-
-function makeDefaultWorkflowRunUrl(env: NodeJS.ProcessEnv) {
-  if (!env.GITHUB_SERVER_URL || !env.GITHUB_REPOSITORY || !env.GITHUB_RUN_ID) {
-    return undefined;
-  }
-
-  return `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`;
 }
 
 function requireValue<T>(value: T | null | undefined, message: string): T {

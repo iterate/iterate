@@ -809,3 +809,42 @@ the failure remains diagnosable. Normalize runner placeholders before schema
 validation: for example, Playwright uses negative durations for steps that were
 still active at interruption, so the reporter records zero duration plus an
 explicit `PlaywrightIncompleteStepError` instead of losing the whole artifact.
+
+## Current unknown flakes
+
+Any test that fails then passes on retry on **main** enters Unknown flakes,
+including when the rest of its suite is interrupted. It stays until **20
+consecutive clean main passes** in that suite, with no time window. Another
+retry or final failure resets the streak. If it is absent from a complete main
+run's **full test list**, remove the row immediately instead. PR results,
+skips and incomplete runs cannot advance its streak or prove its deletion.
+Adding a wrapper on main moves it to Flakes or Failures. History remains in
+the stream after a row disappears.
+
+Keep the latest full main test list per suite, even when a newer summary only
+has counts. A late retry from before proven deletion cannot restore the row;
+a new retry after that inventory can. A newer observation of the test also
+prevents an older inventory from falsely declaring it absent.
+
+Known `createFlake` tests suggest removing their wrapper after the same 20 main
+passes, without a minimum elapsed time. They remain wrapped until someone
+changes the code. Sentinels never propose unwrapping; `createFailing` proposals
+retain their separate thresholds.
+
+Full CI finalizers write `suite-summary.json` alongside the flake JSONL,
+including zero-flake runs. Summaries include each test's bare title and result;
+the reporters use that same title for retries and wrappers. Multiple instances
+sharing a title count as one run, and all must pass to advance it. Missing
+reporters, unexecuted tests, wrong commits, interrupted runs and damaged/missing
+records cannot certify a clean result. Old summaries containing only counts
+cannot advance per-test streaks or prove deletion. Focused local runs do not publish complete
+suite summaries.
+
+Each suite shows its latest complete main commit, run, test count and failure
+count. An incomplete attempt keeps that provenance visible with a warning,
+while any observed retry/failure still adds or resets its unknown-flake row.
+
+`cloudflare-main-preview.yml` exercises the same deploy/readiness/test/erase
+functions as PR CI. Main claims an ordinary preview slot under `main-preview`,
+keeps its renewable 3-hour lease after cleanup, and serializes runs without
+cancelling the active workflow. No slot is reserved.
