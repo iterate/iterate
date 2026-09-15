@@ -809,3 +809,24 @@ the failure remains diagnosable. Normalize runner placeholders before schema
 validation: for example, Playwright uses negative durations for steps that were
 still active at interruption, so the reporter records zero duration plus an
 explicit `PlaywrightIncompleteStepError` instead of losing the whole artifact.
+
+## Current unknown flakes
+
+The flake dashboard's Unknown flakes table uses the latest **complete main
+result per suite** (`unit`, `specs`, `preview-e2e`). It does not accumulate PR
+retries or apply a 14-day window. Each suite shows the commit, run link, test
+count and failure count behind its rows. A clean run removes prior unknown
+rows; that means “did not recur,” not “root cause fixed.”
+
+Full CI finalizers write `suite-summary.json` alongside the existing flake
+JSONL records, including zero-flake runs. Missing reporters, unexecuted tests,
+wrong commits, interrupted runs or damaged/missing retry records cannot
+certify a clean result. An incomplete main attempt leaves the previous complete
+snapshot visible with a warning. Historical per-test counts and events remain.
+Focused local tests do not publish complete-suite summaries.
+
+`cloudflare-main-preview.yml` exercises the same deploy/readiness/test/erase
+functions as PR CI, with main's reserved preview-1 and no cancellation of the
+active workflow. Deploying this dashboard change initially shows “awaiting a
+complete main result” until the new CI summaries arrive; old records cannot
+prove full-suite coverage.

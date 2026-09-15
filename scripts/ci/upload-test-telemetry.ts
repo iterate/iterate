@@ -10,6 +10,7 @@ import {
   type TestTelemetryCompleteness,
 } from "./test-telemetry-completeness.ts";
 import { testTelemetryEvents, testTelemetryFinalizerEvent } from "./test-telemetry-events.ts";
+import { writeFlakeSuiteSummaries } from "./flake-suite-summary.ts";
 
 const DEFAULT_ARTIFACT_ROOT = "test-results/ci-telemetry";
 
@@ -35,6 +36,7 @@ export async function finalizeTestTelemetry(options: {
   cancelled?: boolean;
   dryRun?: boolean;
   expectedWorkspaces?: readonly string[];
+  flakeSuites?: "unit" | "preview";
 }) {
   const artifactRoot = resolve(options.artifactRoot);
   const rawDirectory = join(artifactRoot, "raw");
@@ -98,6 +100,19 @@ export async function finalizeTestTelemetry(options: {
     observedArtifactSources,
     observedWorkspaces,
   });
+  if (options.flakeSuites) {
+    const headSha = process.env.TEST_TELEMETRY_HEAD_SHA;
+    if (!headSha)
+      throw new Error("TEST_TELEMETRY_HEAD_SHA is required for full flake suite summaries");
+    await writeFlakeSuiteSummaries({
+      directory: resolve(artifactRoot, "../flake-records"),
+      group: options.flakeSuites,
+      artifacts: loaded.map(({ artifact }) => artifact),
+      expectedWorkspaces: [...(options.expectedWorkspaces || [])],
+      cancelled: options.cancelled || false,
+      headSha,
+    });
+  }
   console.log(
     `[test-telemetry] normalized ${loaded.length} artifact(s) into ${events.length} event(s)`,
   );
@@ -205,6 +220,14 @@ function duplicateValues(values: readonly string[]) {
 }
 
 if (isMainModule(import.meta.url)) {
+  const flakeSuitesIndex = process.argv.indexOf("--flake-suites");
+  let flakeSuites: "unit" | "preview" | undefined;
+  if (flakeSuitesIndex !== -1) {
+    const group = process.argv[flakeSuitesIndex + 1];
+    if (group !== "unit" && group !== "preview")
+      throw new Error("--flake-suites requires unit or preview");
+    flakeSuites = group;
+  }
   const rootFlagIndex = process.argv.indexOf("--artifact-root");
   const artifactRoot =
     rootFlagIndex === -1
@@ -223,5 +246,6 @@ if (isMainModule(import.meta.url)) {
     cancelled,
     dryRun: cancelled || process.argv.includes("--dry-run"),
     expectedWorkspaces,
+    flakeSuites,
   });
 }

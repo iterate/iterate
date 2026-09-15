@@ -5,7 +5,7 @@ size: large
 
 # Main preview runs and a current flake dashboard
 
-Status: scope agreed; implementation has not started. The work adds a main preview run through the existing PR machinery and makes the dashboard show current, complete main results. Slot ownership, result completeness and preview validation are the main remaining work.
+Status: implementation and focused tests are in place. Main shares the existing preview runner, slot reservation is enforced in Semaphore, and unknown flakes now use complete main snapshots. Full repository checks, real preview validation and review remain.
 
 ## Agreed behavior
 
@@ -36,3 +36,5 @@ Status: scope agreed; implementation has not started. The work adds a main previ
 - 2026-09-15: Created this scope from the agreed dashboard and main-preview design before implementation. Starting from main commit `611c3769bfe50cace2601e9315cc415911f6decc`.
 
 Codex session: `01a0a1e6-0135-7902-91aa-b4bb07026de2`.
+
+- 2026-09-15: Added complete-suite summaries with retry-record count validation, main-only current snapshots and dashboard layout changes; 29 dashboard tests and 162 focused CI/runner tests pass. Extracted GitHub transport, revision/report context and preview state from the CLI. Main refuses to start against a Semaphore that lacks the reservation policy. GC remains allowed to acquire an expired main slot without force, so cancellation still has a cost-control backstop.

@@ -461,6 +461,20 @@ operator capability, so use current `main` for manual preview deployments.
 
 ### Story 1: CI previews my PR
 
+Main also runs the full preview fleet after each push, through
+`pnpm preview run-main --commit <full-sha>`. It uses **preview-1**, reserved in
+Semaphore for `main-preview`; PRs and manual allocations use the other slots.
+The main workflow finishes its active deploy/test/erase before starting the
+newest queued commit. PR cancellation behavior is unchanged.
+
+`run-main` requires a clean checkout at that exact SHA and a Semaphore that
+already enforces the reservation. On first rollout, let the current preview-1
+holder finish/release and deploy the new Semaphore before rerunning main.
+A branch dispatch validates the same workflow but keeps the branch's identity,
+so it cannot replace the dashboard's main results. The report is retained as
+`test-results/main-preview-state.json`. Expiry-based GC can still clean an
+abandoned main slot; it cannot force-acquire one while a run holds it.
+
 Opening/pushing a PR that touches preview-relevant paths triggers the
 `Cloudflare Previews` workflow, which runs `pnpm preview run` — deploy then
 e2e as one step, sharing one resolved PR head so a push cannot race into a

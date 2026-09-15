@@ -191,6 +191,13 @@ const ReleaseResourceResult = z.object({
 export const semaphoreContract = oc.router({
   __internal: internalContract,
   resources: oc.router({
+    policy: oc
+      .route({ method: "GET", path: "/resources/policy/{type}", tags: ["/resources"] })
+      .input(z.object({ type: z.string().min(1) }))
+      .output(
+        z.object({ reservations: z.array(z.object({ slug: z.string(), holder: z.string() })) }),
+      ),
+
     add: oc
       .route({
         method: "POST",

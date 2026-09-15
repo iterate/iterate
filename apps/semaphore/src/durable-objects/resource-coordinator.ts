@@ -1,3 +1,4 @@
+import { resourceAllowedForHolder, resourceReservations } from "~/resource-reservations.ts";
 import { DurableObject } from "cloudflare:workers";
 import {
   AcquireResourceInput,
@@ -38,6 +39,10 @@ export class ResourceCoordinator extends DurableObject<Env> {
       this.initializeSql();
       await this.scheduleNextAlarm();
     });
+  }
+
+  policy(params: { type: string }) {
+    return { reservations: resourceReservations(parseType(params.type)) };
   }
 
   async acquire(params: {
@@ -153,6 +158,14 @@ export class ResourceCoordinator extends DurableObject<Env> {
     const parsed = AcquireSpecificResourceInput.parse(params);
 
     this.rememberCoordinatorType(parsed.type);
+    if (!resourceAllowedForHolder(parsed.type, parsed.slug, parsed.holder || null)) return null;
+    if (
+      parsed.type === "environment-config-lease" &&
+      parsed.slug === "preview-1" &&
+      parsed.holder === "gc" &&
+      parsed.force
+    )
+      return null;
     if (parsed.allowedSlugs && !parsed.allowedSlugs.includes(parsed.slug)) {
       return null;
     }
@@ -361,6 +374,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
     const candidates = inventory
       .filter(
         (resource) =>
+          resourceAllowedForHolder(type, resource.slug, holder) &&
           !activeLeases.has(resource.slug) &&
           (allowedSlugSet === null || allowedSlugSet.has(resource.slug)),
       )

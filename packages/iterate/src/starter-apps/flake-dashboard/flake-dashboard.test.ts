@@ -45,7 +45,7 @@ test("a renamed test's old row retires once absent from 3 suite runs, not before
       branch: "some-pr",
     }),
   );
-  expect(renderBody(h.state(), Date.UTC(2026, 0, 10))).toContain("`old name`");
+  expect(renderBody(h.state())).toContain("`old name`");
 
   // Two runs carrying only the new name: the old row is still within the
   // suite's 3-run window, so it stays.
@@ -57,7 +57,7 @@ test("a renamed test's old row retires once absent from 3 suite runs, not before
       }),
     );
   }
-  expect(renderBody(h.state(), Date.UTC(2026, 0, 10))).toContain("`old name`");
+  expect(renderBody(h.state())).toContain("`old name`");
 
   // The third absent run pushes the old name out of the window: retired —
   // hidden from the table, never deleted from state.
@@ -67,7 +67,7 @@ test("a renamed test's old row retires once absent from 3 suite runs, not before
       branch: "another-pr",
     }),
   );
-  const body = renderBody(h.state(), Date.UTC(2026, 0, 10));
+  const body = renderBody(h.state());
   expect(body).not.toContain("`old name`");
   expect(body).toContain("`new name`");
   expect(body).toContain("1 retired test hidden");
@@ -83,11 +83,11 @@ test("a transiently-absent test survives the window and returns with its history
     // not retire the row — one absent run is inside the 3-run window...
     runRecorded(2, [record("boot", "pass", { at: day(1) })]),
   );
-  expect(renderBody(h.state(), Date.UTC(2026, 0, 10))).toContain("`deploy`");
+  expect(renderBody(h.state())).toContain("`deploy`");
   // ...and its next record resets the window, counts accumulated across the
   // gap — expiry is a projection choice over the log, nothing was deleted.
   await h.append(runRecorded(3, [record("deploy", "pass", { at: day(2) })]));
-  expect(renderBody(h.state(), Date.UTC(2026, 0, 10))).toContain("`deploy`");
+  expect(renderBody(h.state())).toContain("`deploy`");
   expect(h.state().tests.deploy!.counts).toMatchObject({ pass: 1, "flake-fail": 1 });
 });
 
@@ -103,7 +103,7 @@ test("a multi-suite test stays visible while any of its suites still carries it"
     runRecorded(4, [record("boot", "pass", { at: day(1) })], { suite: "unit" }),
     runRecorded(5, [record("boot", "pass", { at: day(1) })], { suite: "unit" }),
   );
-  expect(renderBody(h.state(), Date.UTC(2026, 0, 10))).toContain("`flake sentinel`");
+  expect(renderBody(h.state())).toContain("`flake sentinel`");
 });
 
 test("streak squares show up to 10 outcomes from any branch, oldest first", async () => {
@@ -120,7 +120,7 @@ test("streak squares show up to 10 outcomes from any branch, oldest first", asyn
       branch: "some-pr",
     }),
   );
-  const row = renderBody(h.state(), Date.UTC(2026, 0, 10))
+  const row = renderBody(h.state())
     .split("\n")
     .find((line) => line.startsWith("`deploy`"))!;
   // Squares in recorded order, each linking to the commit that produced it.
@@ -142,7 +142,7 @@ test("streak squares show up to 10 outcomes from any branch, oldest first", asyn
 test("info and stats render as line-per-fact cells with readable dates", async () => {
   const h = makeHarness();
   await h.append(birth(), runRecorded(1, [record("deploy", "flake-fail", { at: day(0) })]));
-  const row = renderBody(h.state(), Date.UTC(2026, 0, 10))
+  const row = renderBody(h.state())
     .split("\n")
     .find((line) => line.startsWith("`deploy`"))!;
   expect(row).toContain("pattern: `/CPU startup time exceeded/`<br>suites: unit");
@@ -164,20 +164,24 @@ test("rows group into sections by kind, sentinels split out of Flakes", async ()
       }),
     ]),
   );
-  const body = renderBody(h.state(), Date.parse(day(1)));
+  const body = renderBody(h.state());
   // Section order and membership: each row under its own heading.
   const order = [
     "## Flakes",
     "`deploy`",
     "## Failures",
     "`stale facet`",
+    "## Unknown flakes",
+    "chat upload |",
     "## Sentinels",
     "`flake sentinel`",
-    "## Unknown flakes",
-    "`chat upload`",
   ];
   const positions = order.map((needle) => body.indexOf(needle));
+  expect(positions.every((position) => position >= 0)).toBe(true);
   expect(positions).toEqual([...positions].toSorted((a, b) => a - b));
+  expect(body).toContain("❌ failed differently than expected");
+  expect(body).toContain("<details>\n<summary>1 test · unit: 1</summary>");
+  expect(body).not.toContain("`chat upload`");
   expect(positions.every((position) => position >= 0)).toBe(true);
 });
 
@@ -192,7 +196,7 @@ test("failure rows show pin-held stats and pinned since dates the pin, not the f
     runRecorded(2, [record("stale facet", "pinned-fail", { at: day(2), kind: "failing" })]),
     runRecorded(3, [record("stale facet", "unexpected-pass", { at: day(3), kind: "failing" })]),
   );
-  const row = renderBody(h.state(), Date.parse(day(4)))
+  const row = renderBody(h.state())
     .split("\n")
     .find((line) => line.startsWith("`stale facet`"))!;
   expect(row).toContain(
@@ -203,30 +207,27 @@ test("failure rows show pin-held stats and pinned since dates the pin, not the f
   expect(row.match(/🟥|🟩|❌/gu)).toEqual(["🟥", "🟥", "🟥", "🟩"]);
 });
 
-test("unknown-flake rows show error samples and retire after 14 quiet days", async () => {
+test("unknown flakes follow complete main results; PR and interrupted runs cannot clear them", async () => {
   const h = makeHarness();
-  await h.append(
-    birth(),
-    runRecorded(1, [
-      record("chat upload", "retried-pass", {
-        at: day(0),
-        kind: "unknown",
-        error: "Timeout 30000ms exceeded | waiting\nfor getByLabel('attachment')",
-      }),
-    ]),
-  );
-  const fresh = renderBody(h.state(), Date.parse(day(2)));
-  // The error sample is the copy-paste material for a createFlake pattern —
-  // rendered as code, with the table-breaking pipe escaped and the
-  // row-splitting newline collapsed.
+  const flake = record("chat upload", "retried-pass", {
+    at: day(0),
+    kind: "unknown",
+    error: "Timeout 30000ms exceeded | waiting\nfor getByLabel('attachment')",
+  });
+  await h.append(birth(), runRecorded(1, [flake], { branch: "some-pr" }));
+  expect(renderBody(h.state())).not.toContain("chat upload |");
+  await h.append(runRecorded(2, [flake]));
+  const fresh = renderBody(h.state());
+  expect(fresh).toContain("chat upload |");
   expect(fresh).toContain("`Timeout 30000ms exceeded \\| waiting for getByLabel('attachment')`");
-  expect(fresh).toContain("flakes: 1<br>last flake: Jan 1, 12:00am");
-
-  // Unknown rows only record when they flake, so absence-from-runs cannot
-  // retire them; time does instead.
-  const stale = renderBody(h.state(), Date.parse(day(15)));
-  expect(stale).not.toContain("`chat upload`");
-  expect(stale).toContain("1 retired test hidden");
+  await h.append(runRecorded(3, [], { complete: false }));
+  expect(renderBody(h.state())).toContain("chat upload |");
+  expect(renderBody(h.state())).toContain("incomplete");
+  await h.append(runRecorded(4, []));
+  const clean = renderBody(h.state());
+  expect(clean).not.toContain("chat upload |");
+  expect(clean).toContain("No unknown flakes in these complete main results");
+  expect(h.state().tests["chat upload"]!.counts).toMatchObject({ "retried-pass": 2 });
 });
 
 test("sentinel streaks never propose transitions", async () => {
@@ -417,7 +418,7 @@ function birth() {
 function runRecorded(
   n: number,
   records: ReturnType<typeof record>[],
-  overrides?: { branch?: string; suite?: string },
+  overrides?: { branch?: string; suite?: string; complete?: boolean },
 ) {
   return {
     type: flakeEventTypes.runRecorded,
@@ -428,6 +429,16 @@ function runRecorded(
       branch: overrides?.branch || "main",
       commit: `commit-${n}`,
       records,
+      summary: {
+        status: overrides?.complete === false ? "incomplete" : "complete",
+        startedAt: day(n),
+        finishedAt: day(n + 0.001),
+        testCount: Math.max(1, records.length),
+        unknownFlakeCount: records.filter((record) => record.kind === "unknown").length,
+        failedCount: 0,
+        diagnostics: overrides?.complete === false ? ["test runner interrupted"] : [],
+        runUrl: `https://depot.dev/runs/run-${n}`,
+      },
     },
   } as const;
 }
@@ -515,6 +526,39 @@ test("a completed workflow_run's flake artifacts become one run-recorded event p
     },
   });
 });
+
+test.each(["clean", "torn record", "missing retry record"])(
+  "%s artifact carries an honest completeness result through webhook ingestion",
+  async (scenario) => {
+    const summary = {
+      status: "complete",
+      startedAt: day(1),
+      finishedAt: day(1.001),
+      testCount: 10,
+      failedCount: 0,
+      unknownFlakeCount: scenario === "missing retry record" ? 1 : 0,
+      diagnostics: [],
+      runUrl: "https://depot.dev/runs/run-77",
+    };
+    const { itx, appended } = fakeItx({
+      artifacts: [{ artifactId: "summary", name: "flake-records-specs", sizeBytes: 1000 }],
+      zips: {
+        summary: zipSync({
+          "suite-summary.json": strToU8(JSON.stringify(summary)),
+          ...(scenario === "torn record" ? { "partial.jsonl": strToU8("{broken") } : {}),
+        }),
+      },
+    });
+    await makeApp(itx).processEvent(webhookEvent());
+    expect(appended[1]).toMatchObject({
+      payload: {
+        suite: "specs",
+        records: [],
+        summary: { status: scenario === "clean" ? "complete" : "incomplete" },
+      },
+    });
+  },
+);
 
 test("runs without flake artifacts append nothing, not even a birth", async () => {
   const { itx, appended } = fakeItx({

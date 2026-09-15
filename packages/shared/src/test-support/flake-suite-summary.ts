@@ -1,0 +1,19 @@
+import { z } from "zod";
+
+/** A full CI suite publishes this even when its flake record list is empty. */
+export const FlakeSuiteSummary = z
+  .object({
+    status: z.enum(["complete", "incomplete"]),
+    startedAt: z.iso.datetime(),
+    finishedAt: z.iso.datetime(),
+    testCount: z.number().int().nonnegative(),
+    unknownFlakeCount: z.number().int().nonnegative(),
+    failedCount: z.number().int().nonnegative(),
+    diagnostics: z.array(z.string()),
+    runUrl: z.url(),
+  })
+  .refine(
+    (summary) =>
+      summary.status !== "complete" || (summary.testCount > 0 && summary.diagnostics.length === 0),
+    "A complete suite needs executed tests and no missing-result diagnostics",
+  );

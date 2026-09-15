@@ -16,6 +16,7 @@ import {
   FlakeDashboardProcessorContract,
   flakeEventTypes,
   FlakeRecord,
+  FlakeSuiteSummary,
   flakeTransitionThresholds,
   CheckRunWebhookEvent,
   type FlakeDashboardRenderResult,
@@ -205,6 +206,7 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
           throw new Error(`artifact download failed: HTTP ${zipResponse.status}`);
         }
         const files = await unzip(new Uint8Array(await zipResponse.arrayBuffer()));
+        const malformedRecords: string[] = [];
         const records = Object.entries(files)
           .filter(([name]) => name.endsWith(".jsonl"))
           .flatMap(([name, bytes]) =>
@@ -213,27 +215,39 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
               .split("\n")
               .filter((line) => line.trim() !== "")
               .flatMap((line) => {
-                // A torn line from a crashed test worker skips, never aborts.
+                // Keep valid history, but a torn record prevents a clean snapshot.
                 let json: unknown;
                 try {
                   json = JSON.parse(line);
                 } catch {
-                  console.warn(
-                    `[flake-ingest] skipping malformed line in ${artifact.name}/${name}`,
-                  );
+                  malformedRecords.push(`Malformed record in ${name}`);
                   return [];
                 }
                 const parsed = FlakeRecord.safeParse(json);
                 if (!parsed.success) {
-                  console.warn(
-                    `[flake-ingest] skipping malformed line in ${artifact.name}/${name}`,
-                  );
+                  malformedRecords.push(`Malformed record in ${name}`);
                   return [];
                 }
                 return [parsed.data];
               }),
           );
-        if (records.length === 0) continue;
+        const summaryBytes = Object.entries(files).find(
+          ([name]) => name === "suite-summary.json" || name.endsWith("/suite-summary.json"),
+        )?.[1];
+        const summary = summaryBytes
+          ? FlakeSuiteSummary.parse(JSON.parse(new TextDecoder().decode(summaryBytes)))
+          : undefined;
+        if (
+          summary &&
+          summary.unknownFlakeCount !== records.filter((record) => record.kind === "unknown").length
+        ) {
+          malformedRecords.push("Unknown flake records do not match the full runner result");
+        }
+        if (summary && malformedRecords.length > 0) {
+          summary.status = "incomplete";
+          summary.diagnostics.push(...new Set(malformedRecords));
+        }
+        if (records.length === 0 && !summary) continue;
 
         const runId = `${run.runId}-${artifact.attempt || 1}`;
         try {
@@ -246,6 +260,7 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
               branch: checkRun.check_suite?.head_branch || "unknown",
               commit: checkRun.head_sha,
               records,
+              ...(summary && { summary }),
             },
           });
         } catch (error) {
@@ -371,7 +386,24 @@ export class FlakeDashboardProcessor extends StreamProcessor<
             ].slice(-3),
           },
         };
-        return { ...state, tests, suites, lastDataOffset: event.offset };
+        const mainRuns = { ...state.mainRuns };
+        const { summary, suite, runId, commit, records } = event.payload;
+        if (onDefaultBranch && summary) {
+          const previous = mainRuns[suite];
+          const incoming = { runId, commit, summary };
+          mainRuns[suite] = {
+            latest:
+              !previous || summary.startedAt >= previous.latest.summary.startedAt
+                ? incoming
+                : previous.latest,
+            complete:
+              summary.status === "complete" &&
+              (!previous?.complete || summary.startedAt >= previous.complete.summary.startedAt)
+                ? { ...incoming, records }
+                : previous?.complete || null,
+          };
+        }
+        return { ...state, tests, suites, mainRuns, lastDataOffset: event.offset };
       }
 
       case flakeEventTypes.transitionProposed: {
@@ -545,7 +577,7 @@ async function renderFlakeDashboardIssue(
   }
   const octokit = itx.integrations.github.get(link.connection).octokit;
   const params = { owner: config.repository.owner, repo: config.repository.repo };
-  const body = renderBody(state, Date.now());
+  const body = renderBody(state);
 
   const rememberedIssueNumber = state.render?.issueNumber || null;
   if (rememberedIssueNumber !== null) {
@@ -601,9 +633,6 @@ const OUTCOME_EMOJI = {
   "unexpected-error": "❌",
 } as const;
 
-/** Unknown-flake rows only exist while they keep flaking: quiet ones retire. */
-const UNKNOWN_ROW_TTL_MS = 14 * 24 * 60 * 60 * 1000;
-
 /**
  * The deliberate canary flakes are identified by naming convention — every
  * suite's sentinel test contains this phrase ("flake sentinel",
@@ -626,31 +655,25 @@ function shortDate(iso: string) {
 }
 
 /** Exported for tests: the table is a pure projection of folded state. */
-export function renderBody(state: FlakeDashboardState, nowMs: number): string {
+export function renderBody(state: FlakeDashboardState): string {
   const tests = Object.entries(state.tests).sort(([a], [b]) => a.localeCompare(b));
-  const lastRecordedAt = tests
-    .map(([, test]) => test.lastRecordedAt)
+  const lastRecordedAt = [
+    ...tests.map(([, test]) => test.lastRecordedAt),
+    ...Object.values(state.mainRuns).map((result) => result.latest.summary.finishedAt),
+  ]
     .sort()
     .at(-1);
-  // The test name is the identity: a renamed or deleted test is simply absent
-  // from its suite's recent runs, and its row retires. A tracked test (flake,
-  // failing, sentinel) stays visible while it appeared in at least one of the
-  // last 3 ingested runs of one of its suites (any branch — the specs and
-  // preview-e2e suites never run on main, see the suites field's contract
-  // docstring). Unknown flakes are absent from most runs by nature — they
-  // only record when they flake — so they expire by time instead. Hidden,
-  // never deleted: the events stay in the log, so a transiently-absent test
-  // returns with full history on its next record, and a genuinely retired
-  // name stays readable in the issue's edit history.
-  const visible = tests.filter(([, test]) =>
-    test.kind === "unknown"
-      ? nowMs - Date.parse(test.lastRecordedAt) <= UNKNOWN_ROW_TTL_MS
-      : Object.entries(test.lastSeenOffset).some(([suite, seen]) => {
-          const windowStart = state.suites[suite]?.recentRunOffsets[0];
-          return windowStart === undefined || seen >= windowStart;
-        }),
+  // Tracked tests remain visible while present in the last three ingested
+  // results for their suite. Unknowns use complete main snapshots below.
+  // History remains in the event log and folded counts after a row disappears.
+  const tracked = tests.filter(([, test]) => test.kind !== "unknown");
+  const visible = tracked.filter(([, test]) =>
+    Object.entries(test.lastSeenOffset).some(([suite, seen]) => {
+      const windowStart = state.suites[suite]?.recentRunOffsets[0];
+      return windowStart === undefined || seen >= windowStart;
+    }),
   );
-  const retiredCount = tests.length - visible.length;
+  const retiredCount = tracked.length - visible.length;
   const config = state.birthCertificate?.config;
 
   const count = (test: (typeof tests)[number][1], outcome: string) => test.counts[outcome] || 0;
@@ -663,9 +686,7 @@ export function renderBody(state: FlakeDashboardState, nowMs: number): string {
     const cellCode = (text: string) =>
       `\`${text.replaceAll(/\s+/gu, " ").replaceAll("`", "'").replaceAll("|", "\\|")}\``;
     const info = [
-      ...(test.kind === "unknown"
-        ? test.recentErrors.map((sample) => cellCode(sample.error.slice(0, 140)))
-        : [`pattern: ${cellCode(`/${test.pattern}/`)}`]),
+      `pattern: ${cellCode(`/${test.pattern}/`)}`,
       `suites: ${test.suites.join(", ")}`,
       ...(test.proposed.length === 0
         ? []
@@ -680,16 +701,11 @@ export function renderBody(state: FlakeDashboardState, nowMs: number): string {
             `unexpected passes: ${count(test, "unexpected-pass")}`,
             `pinned since: ${shortDate(test.firstRecordedAt)}`,
           ]
-        : test.kind === "unknown"
-          ? [
-              `flakes: ${count(test, "retried-pass")}`,
-              `last flake: ${test.lastFlakeAt === null ? "never" : shortDate(test.lastFlakeAt)}`,
-            ]
-          : [
-              `runs: ${runs}`,
-              `flake rate: ${gated === 0 ? "—" : `${Math.round((count(test, "flake-fail") / gated) * 100)}%`}`,
-              `last flake: ${test.lastFlakeAt === null ? "never" : shortDate(test.lastFlakeAt)}`,
-            ]
+        : [
+            `runs: ${runs}`,
+            `flake rate: ${gated === 0 ? "—" : `${Math.round((count(test, "flake-fail") / gated) * 100)}%`}`,
+            `last flake: ${test.lastFlakeAt === null ? "never" : shortDate(test.lastFlakeAt)}`,
+          ]
     ).join("<br>");
     // Tests only exist after birth, so config is always set here; the plain
     // emoji fallback keeps the render total rather than throwing over a link.
@@ -715,25 +731,21 @@ export function renderBody(state: FlakeDashboardState, nowMs: number): string {
   const sections = [
     {
       title: "Flakes",
-      legend: "_createFlake-wrapped: 🟩 pass, 🟥 the known flake struck._",
+      legend:
+        "_createFlake-wrapped: 🟩 passed · 🟥 the known flake struck · ❌ failed differently than expected._",
       tests: visible.filter(([name, test]) => test.kind === "flake" && !isSentinel(name)),
     },
     {
       title: "Failures",
       legend:
-        "_createFailing pins: 🟥 the pinned bug is present (expected), 🟩 passed unexpectedly — the bug may be fixed._",
+        "_createFailing pins: 🟥 the pinned bug is present · 🟩 passed unexpectedly — the bug may be fixed · ❌ failed differently than expected._",
       tests: visible.filter(([, test]) => test.kind === "failing"),
     },
     {
       title: "Sentinels",
-      legend: "_Deliberate ~10% canary flakes proving the recording pipeline works._",
-      tests: visible.filter(([name, test]) => test.kind === "flake" && isSentinel(name)),
-    },
-    {
-      title: "Unknown flakes",
       legend:
-        "_Plain tests that failed then passed on a CI retry. Wrap them with createFlake, using the error samples as the pattern; rows retire after 14 quiet days._",
-      tests: visible.filter(([, test]) => test.kind === "unknown"),
+        "_Deliberate canary flakes proving the recording pipeline works: 🟩 passed · 🟥 the known flake struck · ❌ failed differently than expected._",
+      tests: visible.filter(([name, test]) => test.kind === "flake" && isSentinel(name)),
     },
   ].filter((section) => section.tests.length > 0);
 
@@ -741,23 +753,89 @@ export function renderBody(state: FlakeDashboardState, nowMs: number): string {
     DASHBOARD_MARKER,
     "Test health, folded from CI-reported runs: [`createFlake`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/flake-test.ts) wraps, [`createFailing`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/failing-test.ts) pins, and unclassified flaky tests caught by CI retries. Maintained automatically — edits to this body will be overwritten. Streak = last 10 recorded outcomes on any branch, oldest→newest; each square links to the commit that produced it.",
     ...(sections.length === 0 ? ["", "_no tests recorded yet_"] : []),
-    ...sections.flatMap((section) => [
-      "",
-      `## ${section.title}`,
-      section.legend,
-      "",
-      "test | info | stats | streak",
-      "--- | --- | --- | ---",
-      ...section.tests.map(row),
-    ]),
+    ...sections.filter((section) => section.title !== "Sentinels").flatMap(renderSection),
+    ...renderUnknownFlakes(state),
+    ...sections.filter((section) => section.title === "Sentinels").flatMap(renderSection),
     "",
     `_Last recorded outcome: ${lastRecordedAt || "none"}._`,
     ...(retiredCount === 0
       ? []
       : [
-          `_${retiredCount} retired ${retiredCount === 1 ? "test" : "tests"} hidden (absent from the last 3 runs of their suite; unknown flakes, quiet for 14 days)._`,
+          `_${retiredCount} retired ${retiredCount === 1 ? "test" : "tests"} hidden (absent from the last 3 runs of their suite)._`,
         ]),
   ].join("\n");
+
+  function renderSection(section: (typeof sections)[number]) {
+    const collapsed = section.title === "Failures" || section.title === "Sentinels";
+    const suiteCounts = new Map<string, number>();
+    for (const [, test] of section.tests) {
+      for (const suite of test.suites) suiteCounts.set(suite, (suiteCounts.get(suite) || 0) + 1);
+    }
+    const summary = [
+      `${section.tests.length} ${section.tests.length === 1 ? "test" : "tests"}`,
+      ...[...suiteCounts]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([suite, count]) => `${suite}: ${count}`),
+    ].join(" · ");
+    return [
+      "",
+      `## ${section.title}`,
+      "",
+      ...(collapsed ? ["<details>", `<summary>${summary}</summary>`, ""] : []),
+      section.legend,
+      "",
+      "test | info | stats | streak",
+      "--- | --- | --- | ---",
+      ...section.tests.map(row),
+      ...(collapsed ? ["", "</details>"] : []),
+    ];
+  }
+}
+
+function renderUnknownFlakes(state: FlakeDashboardState): string[] {
+  const suites = [
+    ...new Set([...Object.keys(state.suites), ...Object.keys(state.mainRuns)]),
+  ].sort();
+  const escape = (text: string) =>
+    text.replaceAll(/\s+/gu, " ").replaceAll(/([\\`*_[\]|<>])/gu, "\\$1");
+  const rows = suites.flatMap((suite) =>
+    (state.mainRuns[suite]?.complete?.records || [])
+      .filter((record) => record.kind === "unknown")
+      .map((record) =>
+        [
+          escape(record.name),
+          `\`${(record.error || "No error sample recorded").replaceAll(/\s+/gu, " ").replaceAll("`", "'").replaceAll("|", "\\|").slice(0, 300)}\``,
+          escape(suite),
+        ].join(" | "),
+      ),
+  );
+  const completeCount = suites.filter((suite) => state.mainRuns[suite]?.complete).length;
+  return [
+    "",
+    "## Unknown flakes",
+    "",
+    "_Tests that failed then passed on retry in the latest complete main result for each suite. PR history is retained but does not populate this table._",
+    "",
+    ...suites.map((suite) => {
+      const result = state.mainRuns[suite];
+      if (!result) return `- **${escape(suite)}:** awaiting a complete main result.`;
+      const complete = result.complete;
+      const incomplete =
+        result.latest.summary.status === "incomplete"
+          ? ` Latest attempt [${result.latest.commit.slice(0, 7)}](${result.latest.summary.runUrl}) incomplete: ${escape(result.latest.summary.diagnostics.join("; "))}.`
+          : "";
+      if (!complete) return `- **${escape(suite)}:** awaiting a complete main result.${incomplete}`;
+      return `- **${escape(suite)}:** [${complete.commit.slice(0, 7)}](${complete.summary.runUrl}) · ${shortDate(complete.summary.finishedAt)} UTC · ${complete.summary.testCount} tests · ${complete.summary.failedCount} failed.${incomplete}`;
+    }),
+    "",
+    ...(rows.length > 0
+      ? ["test | first failure | suite", "--- | --- | ---", ...rows]
+      : [
+          completeCount === 0
+            ? "_Awaiting the first complete main results._"
+            : "_No unknown flakes in these complete main results. A clean run does not prove earlier bugs fixed._",
+        ]),
+  ];
 }
 
 /**

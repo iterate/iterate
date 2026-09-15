@@ -1,3 +1,5 @@
+import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
+export { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 import { z } from "zod";
 import { defineProcessorContract } from "../../processors/index.ts";
 
@@ -56,7 +58,15 @@ const FlakeRunRecorded = z.object({
   suite: z.string().min(1).max(200),
   branch: z.string().min(1).max(500),
   commit: z.string().min(1).max(100),
-  records: z.array(FlakeRecord).min(1).max(10_000),
+  records: z.array(FlakeRecord).max(10_000),
+  // Historical events have records only; they cannot certify a complete suite.
+  summary: FlakeSuiteSummary.optional(),
+});
+
+const MainSuiteRun = z.object({
+  runId: z.string(),
+  commit: z.string(),
+  summary: FlakeSuiteSummary,
 });
 
 export const FlakeTransition = z.enum(["unwrap", "switch-to-failing", "unwrap-failing"]);
@@ -150,15 +160,19 @@ const TrackedTest = z.object({
 export const FlakeDashboardState = z.object({
   birthCertificate: z.object({ config: FlakeDashboardConfig }).nullable().default(null),
   tests: z.record(z.string(), TrackedTest).default({}),
+  mainRuns: z
+    .record(
+      z.string(),
+      z.object({
+        latest: MainSuiteRun,
+        complete: MainSuiteRun.extend({ records: z.array(FlakeRecord) }).nullable(),
+      }),
+    )
+    .default({}),
   /**
-   * Per suite, the offsets of its newest (up to 3) run-recorded events across
-   * ALL branches, oldest first — the reference window for retiring absent
-   * tests. All branches because the specs and preview-e2e suites only ever
-   * run on pull requests (cloudflare-previews.yml has no push trigger), so a
-   * default-branch reference point would never exist for them and their rows
-   * could never retire. A window of 3 rather than the single latest run so
-   * one PR push that deletes or renames a test — or a partial, push-cancelled
-   * run — cannot hide a row repo-wide by itself.
+   * The newest three ingested results across all branches retire absent
+   * tracked tests. This preserves visibility during partial PR runs. Unknown
+   * flakes instead use the complete main snapshots in mainRuns.
    */
   suites: z
     .record(z.string(), z.object({ recentRunOffsets: z.array(StreamOffset).max(3).default([]) }))

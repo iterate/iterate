@@ -1,12 +1,11 @@
+import { CloudflarePreviewAppEntry, CloudflarePreviewSlotDisplay } from "./state.ts";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import {
-  CloudflarePreviewAppEntry,
   CloudflarePreviewAppSlug,
-  CloudflarePreviewSlotDisplay,
   cloudflarePreviewApps,
   cloudflarePreviewAdditionalTriggerPaths,
   cloudflarePreviewSharedPaths,
@@ -908,7 +907,7 @@ describe("preview test commands", () => {
     expect(
       resolvePreviewTestTelemetryEnvironment({
         app: "os",
-        context: {
+        context: previewInternals.previewContextForPullRequest({
           githubToken: "token",
           pullRequestBaseSha: "base-sha",
           pullRequestBody: "",
@@ -917,7 +916,7 @@ describe("preview test commands", () => {
           pullRequestNumber: 2237,
           repositoryFullName: "iterate/iterate",
           workflowRunUrl: "https://github.com/iterate/iterate/actions/runs/123",
-        },
+        }),
         previewSlot: "preview-19",
       }),
     ).toEqual({
@@ -2357,7 +2356,9 @@ describe("claimEnvironmentConfigLease", () => {
     expect(lease.dopplerConfig).toBe("preview_5");
     expect(semaphore.acquire).toHaveBeenCalledWith(
       expect.objectContaining({
-        allowedSlugs: environmentConfigLeaseInventory.map((resource) => resource.slug),
+        allowedSlugs: environmentConfigLeaseInventory
+          .map((resource) => resource.slug)
+          .filter((slug) => slug !== "preview-1"),
         holder: "pr-1600",
       }),
     );

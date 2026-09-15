@@ -16,7 +16,7 @@ type RunContext = {
   environment: NodeJS.ProcessEnv;
   headSha: string;
   operation: "deploy" | "test" | "run";
-  pullRequestNumber: number;
+  pullRequestNumber: number | null;
   runUrl: string | null;
 };
 
@@ -45,13 +45,13 @@ export class PreviewE2eTelemetryArtifact {
     this.environment = context.environment;
     const ci = ciTelemetrySourceFromEnvironment(
       context.environment,
-      `local-preview-${context.pullRequestNumber}-${context.headSha.slice(0, 12)}-${this.startedAtMs}`,
+      `local-preview-${context.pullRequestNumber || "main"}-${context.headSha.slice(0, 12)}-${this.startedAtMs}`,
     );
     this.ci = {
       ...ci,
       ...(context.branch && { branch: context.branch }),
       headSha: context.headSha,
-      pullRequestNumber: context.pullRequestNumber,
+      ...(context.pullRequestNumber && { pullRequestNumber: context.pullRequestNumber }),
       ...(context.runUrl && { workflowRunUrl: context.runUrl }),
     };
     this.artifactId = testTelemetryArtifactId(
