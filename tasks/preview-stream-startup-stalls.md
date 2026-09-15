@@ -31,3 +31,9 @@ The stress-run OS audit recorded five registry alarm-arming errors, two ITX `Liv
 
 
 The callback's repository was checked at 09:31:23 UTC: `repo` and `feed` both confirmed offset 17/17, active, zero lag, zero retry attempt, no next attempt/deadline/error. Recovery of those inspected subscribers is confirmed (`review-repo-recovery-probe.json`); the original latency and alarm/subscription errors still need explanation.
+
+## Conditional-edit follow-up: 2026-09-15
+
+All 84 deployed follow-up checks passed with zero retries on OS `01073dfa-5417-4ec4-ba6c-d83aa139c1c9`, source/SDK `067718dd9cf104caad7f4b6df1b5797747c1df6a`. The audit from 09:46:27–09:55:11 UTC still found three registry alarm-arming errors: traces `efdf97c45f4117a11b77bf753210d906`, `a0b530c388d6dbc63a1b4084b10d5d14`, `0deebdb1d3142b0815e372a556db6980`. The first is a background alarm/processor trace, with no Workspace.edit call. Its log still contains only a getAlarm stack, not a useful error cause. Preserve this as unresolved work; passing edit tests do not explain the alarm failure. Evidence: `followup-final-errors.json` and `edit-followup-alarm.json` in the retained validation folder.
+
+The old full Workspace suite also deliberately provoked 13 rejected operations (uncreated workspaces, invalid/read-only paths, ambiguous or empty commits, conflicting creation/configuration), plus a stream kill. Those calls are still labelled ITX server errors. They are explained test outcomes, but their telemetry classification remains separate debt; do not recreate a method-name/message whitelist. Conditional Workspace.edit conflicts now return typed results and are recorded as successful requests.
