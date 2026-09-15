@@ -135,3 +135,5 @@ The user approved replacing the expected conflict exceptions with explicit resul
 - [ ] Validate the existing auth test and extend the real Todo CRUD spec for overlapping changes and persistence. Run repeated Todo/mobile sign-ins against a fresh preview with zero retries, inspect failures/telemetry, erase and release the preview, then commit/push the validation record.
 
 No new component extraction or dedicated loading-state tests. Nullable `oldString` was discussed but is not part of these two approved changes.
+
+- Todo/auth red-green evidence: the expanded existing OTP handler test failed at request 101 with the previous limit; the new configuration admits requests 1–600 and rejects request 601. All 108 auth tests, Auth/SDK/specs typechecks, 13 existing Todo/Notes tests and changed-file lint pass. The deployed Todo spec failed on its second Add click while the first request was held, proving the old global lock prevents overlapping additions. Baseline OS version `38ac0b4a-c1ca-4334-8a58-4564c43b6f14`, SDK `067718dd9`, new Auth version `37b7a8f1-6b2d-411c-a54d-50f4eaaefd7c`; evidence `.flake-validation.ignoreme/todo-operations-red/`.
