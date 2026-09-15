@@ -6894,7 +6894,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       const prospective = this.#props;
       registered = await timedStep(
         "create-timing",
-        { slug: prospective.prospectiveSlug },
+        { projectId: args.projectId, slug: prospective.prospectiveSlug },
         "auth-register",
         () =>
           this.#registerProject({

@@ -38,7 +38,6 @@ import {
   E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV,
   renderCloudflareWorkerVersionOverrides,
 } from "../../packages/shared/src/test-support/cloudflare-worker-version-overrides.ts";
-import { PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV } from "../../packages/shared/src/test-support/preview-rollout-gate.ts";
 import {
   parseWorkerSizeFromDeployOutput,
   parseWorkerSizeStatusDescription,
@@ -57,16 +56,11 @@ type PullRequestCommandOptions = {
   pullRequestNumber?: number;
 };
 
-// Cloudflare documents that a Worker/DO code update is globally eventually
-// consistent after the new edge Worker version is serving. A newly addressed
-// Durable Object can therefore still be assigned the prior code for seconds
-// to minutes, and an in-flight RPC is reset when that assignment changes.
-// Keep live e2e work that creates or calls Durable Objects behind a bounded
-// deployment-age gate. Apps still start concurrently; long suites can overlap
-// independent setup with this clock while short DO suites wait at their own
-// boundary, so the gate does not serialize the fleet.
+// Supporting apps still use an age gate for eventual DO code propagation.
+// OS instead checks the actual receiving object on each call; see
+// apps/os/src/lib/deployment-readiness.ts. Keep the other apps' existing rule
+// until they have their own version-aware calls.
 const previewMinimumDeploymentAgeMs = 90_000;
-const previewRolloutRemainingSecondsEnvironment = "PREVIEW_APP_ROLLOUT_REMAINING_SECONDS";
 
 type DeployCommandOptions = PullRequestCommandOptions & {
   /**
@@ -982,11 +976,6 @@ async function testPreviewApps({
       // rerun, but it cannot release a genuinely fresh deployment early.
       deployedAt: rolloutDeploymentTimestamp,
     });
-    const rolloutReadyAtMs = resolvePreviewRolloutReadyAtMs({
-      appSlug: app.slug,
-      deployedAt: rolloutDeploymentTimestamp,
-    });
-
     const startedAt = Date.now();
     const telemetryArtifactDirectory = runtime.commandEnvironment.TEST_TELEMETRY_ARTIFACT_DIR
       ? resolve(runtime.repositoryRoot, runtime.commandEnvironment.TEST_TELEMETRY_ARTIFACT_DIR)
@@ -1015,12 +1004,6 @@ async function testPreviewApps({
         "--",
         "env",
         `${E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV}=${workerVersionOverrides}`,
-        ...(app.previewTestRolloutGate === "inside-suite"
-          ? [
-              `${previewRolloutRemainingSecondsEnvironment}=${rolloutRemainingSeconds}`,
-              `${PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV}=${rolloutReadyAtMs}`,
-            ]
-          : []),
         ...baseUrlEnvironment,
         ...app.previewTestCommandArgs,
       ],
@@ -1863,10 +1846,9 @@ export type CloudflarePreviewApp = {
   /**
    * Cloudflare Worker and Durable Object code propagation is eventually
    * consistent after deploy. Live suites that call a DO either wait before
-   * their short command starts, or consume the absolute boundary inside a
-   * longer command so independent setup can overlap it.
+   * their short command starts. OS checks receiving object versions instead.
    */
-  previewTestRolloutGate?: "before-suite" | "inside-suite";
+  previewTestRolloutGate?: "before-suite";
   previewTestBaseUrlEnvVar: string;
   /** Every canonical artifact the app-level test command must produce once. */
   previewTestArtifactSources: readonly TestTelemetryArtifactSource[];
@@ -2220,7 +2202,6 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // preview deploy waits the full 10min readiness timeout on a 404 and fails.
     previewReadyUrlPath: "/api/health",
     previewReadyWorkerVersion: true,
-    previewTestRolloutGate: "inside-suite",
     paths: [
       "apps/os/**",
       // New-project template seeding pins github references to the DEPLOYED
@@ -2278,51 +2259,31 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // previous run on the same machine (marathon loops), and
         // collectRetryTelemetry runs pass or fail, so a leftover file would
         // report a previous run's retries against this one.
-        `rm -f ${osVitestRetryTelemetryFile} ${osTuiRetryTelemetryFile} ${osAgentSmokeTelemetryFile} ../../test-results/playwright-results.json`,
+        `rm -f ${osAgentSmokeTelemetryFile}.projects.json ${osVitestRetryTelemetryFile} ${osTuiRetryTelemetryFile} ${osAgentSmokeTelemetryFile} ../../test-results/playwright-results.json`,
         // The chromium download hits no deployed slot, so start it first and
         // let it overlap the smoke and TUI lanes; it's ready by the
         // time we reach the specs instead of adding ~4s in front of them.
         "pnpm --dir ../.. exec playwright install chromium > /tmp/os-preview-pw-install.log 2>&1 & PW_INSTALL_PID=$!",
-        // Install Chromium and run the isolated smoke/TUI checks alongside
-        // the rollout clock. Both test runners start only after the smoke and
-        // deployment-age checks pass. This keeps shared readiness time out
-        // of individual Playwright and Vitest test durations.
-        // Edge readiness cannot prove global Durable Object propagation;
-        // retain the existing 90-second rule until readiness is improved.
-        //
-        // The `timeout` on the vitest lane is a WATCHDOG, not a retry
-        // (docs/testing.md#retries-and-timeouts): it sits just above a
-        // healthy lane (the itx monolith plus the heavy tests' own 240s
-        // per-test caps, concurrently) and covers the one hang vitest's own
-        // testTimeout can't — a startup wedge before any test runs. Retries
-        // live in exactly one layer (the individual test), so a lane killed
-        // here fails the run visibly and is re-run from the outer edge. An
-        // rc=124 auto-retry used to live here; it fired zero times in ~200
-        // Depot runs and was the one place retry layers could stack.
-        //
-        // Retry telemetry: the TUI and vitest lanes write the same compact
-        // JSON shape (stale files were removed at the top of this script) for
-        // preview.ts to fold into the PR body alongside Playwright's report.
+        // Edge-version readiness was checked by the orchestrator. Actual OS
+        // DO calls verify their receiving version before executing. Smoke is
+        // an independent required test, not a prerequisite for either suite.
+        // Each runner retains its existing watchdog and one test retry layer.
         'run_logged_lane() { local lane="$1"; local log="$2"; shift 2; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" > "$log" 2>&1 || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
         'run_visible_lane() { local lane="$1"; shift; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
-        'READY_STARTED="$SECONDS"; echo "[preview:os] environment readiness start"',
-        `run_visible_lane rollout-settle sleep "$${previewRolloutRemainingSecondsEnvironment}" & ROLLOUT_PID=$!`,
         `run_logged_lane smoke /tmp/os-preview-smoke.log env TEST_TELEMETRY_LANE=agent-smoke TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osAgentSmokeTelemetryFile} timeout ${OS_AGENT_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/agent-smoke.ts & SMOKE_PID=$!`,
         `run_logged_lane tui /tmp/os-preview-tui.log env TEST_TELEMETRY_LANE=tui TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts & TUI_PID=$!`,
+        `run_logged_lane vitest /tmp/os-preview-vitest.log env TEST_TELEMETRY_LANE=vitest TEST_TELEMETRY_WORKSPACE=@iterate-com/os FLAKE_RECORD_DIR=test-results/flake-records/preview-e2e TEST_TELEMETRY_ARTIFACT_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!`,
         'PW_INSTALL_OK=0; wait "$PW_INSTALL_PID" || PW_INSTALL_OK=$?',
-        'SMOKE_OK=0; wait "$SMOKE_PID" || SMOKE_OK=$?',
-        'ROLLOUT_OK=0; wait "$ROLLOUT_PID" || ROLLOUT_OK=$?',
-        'READY_OK="$SMOKE_OK"; if [ "$READY_OK" -eq 0 ]; then READY_OK="$ROLLOUT_OK"; fi',
-        'echo "[preview:os] environment readiness finish: ($((SECONDS - READY_STARTED))s, exit $READY_OK)"',
-        `SPEC_OK="$READY_OK"; SPEC_PID=""; if [ "$SPEC_OK" -eq 0 ]; then SPEC_OK="$PW_INSTALL_OK"; if [ "$SPEC_OK" -eq 0 ]; then run_visible_lane playwright env TEST_TELEMETRY_LANE=playwright TEST_TELEMETRY_WORKSPACE=iterate-root FLAKE_RECORD_DIR=test-results/flake-records/specs PLAYWRIGHT_PREVIEW_SLOW_FIRST=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec & SPEC_PID=$!; else cat /tmp/os-preview-pw-install.log; fi; fi`,
-        `E2E_OK="$READY_OK"; E2E_PID=""; if [ "$E2E_OK" -eq 0 ]; then run_logged_lane vitest /tmp/os-preview-vitest.log env TEST_TELEMETRY_LANE=vitest TEST_TELEMETRY_WORKSPACE=@iterate-com/os FLAKE_RECORD_DIR=test-results/flake-records/preview-e2e TEST_TELEMETRY_ARTIFACT_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!; fi`,
-        'if [ -n "$E2E_PID" ]; then wait "$E2E_PID" || E2E_OK=$?; fi',
+        `SPEC_OK="$PW_INSTALL_OK"; SPEC_PID=""; if [ "$SPEC_OK" -eq 0 ]; then run_visible_lane playwright env TEST_TELEMETRY_LANE=playwright TEST_TELEMETRY_WORKSPACE=iterate-root FLAKE_RECORD_DIR=test-results/flake-records/specs PLAYWRIGHT_PREVIEW_SLOW_FIRST=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec & SPEC_PID=$!; else cat /tmp/os-preview-pw-install.log; fi`,
+        'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
         'if [ -n "$SPEC_PID" ]; then wait "$SPEC_PID" || SPEC_OK=$?; fi',
+        'SMOKE_OK=0; wait "$SMOKE_PID" || SMOKE_OK=$?',
         'TUI_OK=0; wait "$TUI_PID" || TUI_OK=$?',
         "cat /tmp/os-preview-smoke.log",
         "if [ -f /tmp/os-preview-vitest.log ]; then cat /tmp/os-preview-vitest.log; fi",
         "cat /tmp/os-preview-tui.log",
-        '[ "$ROLLOUT_OK" -eq 0 ] && [ "$SMOKE_OK" -eq 0 ] && [ "$E2E_OK" -eq 0 ] && [ "$TUI_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
+        `pnpm exec tsx ../../scripts/preview/project-creation-traces.ts ${osAgentSmokeTelemetryFile}.projects.json`,
+        '[ "$SMOKE_OK" -eq 0 ] && [ "$E2E_OK" -eq 0 ] && [ "$TUI_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
       ].join("; "),
     ],
     collectTestTelemetry: async ({ repositoryRoot }) => {

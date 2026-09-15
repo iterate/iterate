@@ -17,6 +17,8 @@
  * silently absorbed — the 90s tail is a real product-latency signal.
  */
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import {
   ciTelemetrySourceFromEnvironment,
   normalizeTestTelemetryError,
@@ -27,7 +29,6 @@ import {
   type TestTelemetryAttempt,
 } from "@iterate-com/shared/test-support/ci-telemetry";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
-import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/test-support/preview-rollout-gate";
 import { connectItx } from "iterate/node";
 import { resolveBaseUrl } from "../test-support/dev-server.ts";
 
@@ -39,26 +40,56 @@ const baseUrl = (process.argv[2] ?? resolveBaseUrl(appRoot) ?? "http://localhost
 const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
 if (!secret) throw new Error("need APP_CONFIG_ADMIN_API_SECRET (run under doppler)");
 
+const creationLookups: Array<{ projectId: string; slug: string; from: number }> = [];
+
 type SmokePhase = { name: string; durationMs: number; category: string };
 
 async function attemptAgentSmoke(phases: SmokePhase[]): Promise<void> {
   const marker = Math.random().toString(36).slice(2, 8);
 
-  // Edge readiness does not mean a freshly deployed Durable Object namespace
-  // has finished propagating globally. Use the same absolute deployment
-  // boundary as Playwright so this early lane cannot create an object while
-  // Cloudflare is still replacing its assigned worker version.
-  await waitForPreviewRolloutBeforeProjectCreation();
+  const connectionStartedAt = Date.now();
   using session = connectItx({
     baseUrl,
     headers: cloudflareWorkerVersionOverrideHeaders(process.env),
   });
-  const start = Date.now();
   using root = session.authenticate({ type: "admin-secret", secret: secret! });
-  using project = await root.projects.get(`agent-smoke-${marker}`).create({});
+  await root.__describe();
+  phases.push({
+    name: "connect and authenticate",
+    category: "fixture",
+    durationMs: Date.now() - connectionStartedAt,
+  });
+  const createStartedAt = Date.now();
+  const slug = `agent-smoke-${marker}`;
+  const projectId = `prj_${randomUUID().replaceAll("-", "")}`;
+  creationLookups.push({ projectId, slug, from: connectionStartedAt });
+  if (process.env.TEST_TELEMETRY_ARTIFACT_FILE) {
+    writeFileSync(
+      `${process.env.TEST_TELEMETRY_ARTIFACT_FILE}.projects.json`,
+      JSON.stringify(creationLookups),
+    );
+  }
+  console.log("project creation start", {
+    slug,
+    startedAt: new Date(createStartedAt).toISOString(),
+  });
+  using project = await root.projects.get(slug).create({ projectId });
+  const createMs = Date.now() - createStartedAt;
+  phases.push({ name: "create project", category: "fixture", durationMs: createMs });
+  const describeStartedAt = Date.now();
   const description = await project.__describe();
-  phases.push({ name: "create project", category: "fixture", durationMs: Date.now() - start });
-  console.log(`project created in ${Date.now() - start}ms:`, description.projectId);
+  phases.push({
+    name: "describe project",
+    category: "fixture",
+    durationMs: Date.now() - describeStartedAt,
+  });
+  console.log(`project created in ${createMs}ms:`, description.projectId);
+  console.log("project creation trace lookup", {
+    projectId: description.projectId,
+    slug,
+    from: new Date(connectionStartedAt).toISOString(),
+    to: new Date().toISOString(),
+  });
 
   using agent = project.agents.get("/agents/smoke");
   const readyStartedAt = Date.now();
@@ -79,7 +110,7 @@ async function attemptAgentSmoke(phases: SmokePhase[]): Promise<void> {
     category: "runtime",
     durationMs: Date.now() - replyStartedAt,
   });
-  console.log(`agent replied in ${Date.now() - start}ms:`);
+  console.log(`agent replied in ${Date.now() - replyStartedAt}ms:`);
   console.log(JSON.stringify(reply.payload, null, 2));
 
   const events = await agent.stream.getEvents({});

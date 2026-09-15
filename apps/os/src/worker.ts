@@ -17,6 +17,7 @@
 import handler from "@tanstack/react-start/server-entry";
 import { newHttpBatchRpcResponse, RpcSession } from "capnweb";
 import type { Env } from "./env.ts";
+import { deploymentReadyEnv, withDeploymentReadiness } from "./lib/deployment-readiness.ts";
 import { createItxWebSocketTransport, registerItxSessionTransport } from "./session-transport.ts";
 import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname } from "./project-hostname-directory.ts";
@@ -40,6 +41,24 @@ import { schedulePosthogException, withPosthogExceptionCapture } from "./observa
 import { STREAM_CONTEXT_HEADER } from "./domains/projects/stream-context.ts";
 import { bridgeProjectRequestBody } from "./project-request-body-bridge.ts";
 
+import { DeviceDurableObject as DeviceDurableObjectImplementation } from "./domains/devices/device-durable-object.ts";
+import {
+  SandboxBasicDurableObject as SandboxBasicDurableObjectImplementation,
+  SandboxLiteDurableObject as SandboxLiteDurableObjectImplementation,
+  SandboxStandard1DurableObject as SandboxStandard1DurableObjectImplementation,
+  SandboxStandard2DurableObject as SandboxStandard2DurableObjectImplementation,
+  SandboxStandard3DurableObject as SandboxStandard3DurableObjectImplementation,
+  SandboxStandard4DurableObject as SandboxStandard4DurableObjectImplementation,
+} from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
+import { ProjectDurableObject as ProjectDurableObjectImplementation } from "./domains/projects/project-durable-object.ts";
+import { RepoDurableObject as RepoDurableObjectImplementation } from "./domains/repos/repo-durable-object.ts";
+import { SchedulerDurableObject as SchedulerDurableObjectImplementation } from "./domains/scheduler/scheduler-durable-object.ts";
+import { SecretDurableObject as SecretDurableObjectImplementation } from "./domains/secrets/secret-durable-object.ts";
+import { WorkerBuildCoordinatorDurableObject as WorkerBuildCoordinatorDurableObjectImplementation } from "./domains/workers/worker-build-coordinator-durable-object.ts";
+import { StatefulWorkerDurableObject as StatefulWorkerDurableObjectImplementation } from "./domains/workers/stateful-worker-durable-object.ts";
+import { StreamDurableObject as StreamDurableObjectImplementation } from "./domains/streams/stream-durable-object.ts";
+import { WorkspaceV2DurableObject as WorkspaceV2DurableObjectImplementation } from "./domains/workspaces/workspace-durable-object.ts";
+
 // Every Durable Object class in the product, plus the loopback entrypoints
 // (`ctx.exports`) shared by the itx runtime.
 // The facet host for ALL first-party stream processors: the Stream DO looks
@@ -47,24 +66,41 @@ import { bridgeProjectRequestBody } from "./project-request-body-bridge.ts";
 // (stream-durable-object.ts's facet dial) — never rename the export.
 export { ProcessorFacet } from "./domains/processor-facet-durable-object.ts";
 export { FeedFacet } from "./domains/streams/feed-entrypoint.ts";
-export { DeviceDurableObject } from "./domains/devices/device-durable-object.ts";
+export const DeviceDurableObject = withDeploymentReadiness(DeviceDurableObjectImplementation);
 // One sandbox container class per instance type — see src/domains/sandboxes/instance-types.ts.
-export {
-  SandboxBasicDurableObject,
-  SandboxLiteDurableObject,
-  SandboxStandard1DurableObject,
-  SandboxStandard2DurableObject,
-  SandboxStandard3DurableObject,
-  SandboxStandard4DurableObject,
-} from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
-export { ProjectDurableObject } from "./domains/projects/project-durable-object.ts";
-export { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
-export { SchedulerDurableObject } from "./domains/scheduler/scheduler-durable-object.ts";
-export { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts";
-export { WorkerBuildCoordinatorDurableObject } from "./domains/workers/worker-build-coordinator-durable-object.ts";
-export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
-export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
-export { WorkspaceV2DurableObject } from "./domains/workspaces/workspace-durable-object.ts";
+export const SandboxBasicDurableObject = withDeploymentReadiness(
+  SandboxBasicDurableObjectImplementation,
+);
+export const SandboxLiteDurableObject = withDeploymentReadiness(
+  SandboxLiteDurableObjectImplementation,
+);
+export const SandboxStandard1DurableObject = withDeploymentReadiness(
+  SandboxStandard1DurableObjectImplementation,
+);
+export const SandboxStandard2DurableObject = withDeploymentReadiness(
+  SandboxStandard2DurableObjectImplementation,
+);
+export const SandboxStandard3DurableObject = withDeploymentReadiness(
+  SandboxStandard3DurableObjectImplementation,
+);
+export const SandboxStandard4DurableObject = withDeploymentReadiness(
+  SandboxStandard4DurableObjectImplementation,
+);
+
+export const ProjectDurableObject = withDeploymentReadiness(ProjectDurableObjectImplementation);
+export const RepoDurableObject = withDeploymentReadiness(RepoDurableObjectImplementation);
+export const SchedulerDurableObject = withDeploymentReadiness(SchedulerDurableObjectImplementation);
+export const SecretDurableObject = withDeploymentReadiness(SecretDurableObjectImplementation);
+export const WorkerBuildCoordinatorDurableObject = withDeploymentReadiness(
+  WorkerBuildCoordinatorDurableObjectImplementation,
+);
+export const StatefulWorkerDurableObject = withDeploymentReadiness(
+  StatefulWorkerDurableObjectImplementation,
+);
+export const StreamDurableObject = withDeploymentReadiness(StreamDurableObjectImplementation);
+export const WorkspaceV2DurableObject = withDeploymentReadiness(
+  WorkspaceV2DurableObjectImplementation,
+);
 export { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
 export { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
 export { ScriptExecutionEntrypoint } from "./domains/capability-host/script-execution-entrypoint.ts";
@@ -79,6 +115,7 @@ export { ContainerProxy } from "@cloudflare/sandbox";
 
 export default {
   async fetch(inbound: Request, env: Env, ctx: ExecutionContext) {
+    env = deploymentReadyEnv(env);
     // This is the trust boundary: the internal routing headers are only ever
     // set by our own routing below. Strip whatever the outside world sent so
     // downstream code can rely on them.
@@ -95,6 +132,7 @@ export default {
   // the permanent-failure channel; a thrown error is a temporary failure the
   // sending MTA retries — so infra errors deliberately propagate.
   async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext) {
+    env = deploymentReadyEnv(env);
     const config = parseConfig(env);
     await withPosthogExceptionCapture(
       { config, operation: ctx, waitUntil: (promise) => ctx.waitUntil(promise) },

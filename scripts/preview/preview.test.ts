@@ -950,7 +950,7 @@ describe("preview test commands", () => {
     expect(collector).not.toContain("runner-telemetry");
   });
 
-  test("starts both test runners after shared environment readiness", () => {
+  test("starts both test runners independently of smoke", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
     const smokeLane = "pnpm exec tsx e2e/vitest/agent-smoke.ts";
@@ -968,54 +968,35 @@ describe("preview test commands", () => {
     );
     expect(script).toContain('wait "$PW_INSTALL_PID"');
     expect(script).toContain("SMOKE_PID");
-    expect(script).toContain("ROLLOUT_PID");
+    expect(script).not.toContain("ROLLOUT_PID");
     expect(script).toContain("TUI_PID");
     expect(script).toContain("E2E_PID");
     expect(script).toContain("SPEC_PID");
     expect(script).toContain('wait "$SMOKE_PID"');
-    expect(script).toContain('wait "$ROLLOUT_PID"');
+    expect(script).not.toContain("ROLLOUT_PID");
     expect(script).toContain('wait "$TUI_PID"');
     expect(script).toContain('wait "$E2E_PID"');
-    expect(script).toContain('READY_OK="$SMOKE_OK"');
+    expect(script).not.toContain("READY_OK");
     expect(script).toContain('[ "$TUI_OK" -eq 0 ]');
     expect(script).toContain('[ "$E2E_OK" -eq 0 ]');
     // Browser installation overlaps readiness; neither test runner includes
     // the shared wait in individual test durations.
-    for (const lane of ["run_visible_lane rollout-settle sleep", smokeLane, tuiLane]) {
+    for (const lane of [smokeLane, tuiLane]) {
       expect(script.indexOf(lane)).toBeLessThan(script.indexOf('wait "$PW_INSTALL_PID"'));
     }
     expect(script.indexOf('wait "$PW_INSTALL_PID"')).toBeLessThan(script.indexOf(playwrightSpec));
-    expect(script.indexOf('wait "$ROLLOUT_PID"')).toBeLessThan(script.indexOf(playwrightSpec));
-    expect(script.indexOf('wait "$SMOKE_PID"')).toBeLessThan(script.indexOf('wait "$ROLLOUT_PID"'));
-    expect(script.indexOf('wait "$ROLLOUT_PID"')).toBeLessThan(script.indexOf(e2eLane));
-    expect(script.indexOf('wait "$SMOKE_PID"')).toBeLessThan(script.indexOf(e2eLane));
+    expect(script).not.toContain('wait "$ROLLOUT_PID"');
+    expect(script.indexOf(e2eLane)).toBeLessThan(script.indexOf('wait "$SMOKE_PID"'));
     expect(script.indexOf(playwrightSpec)).toBeLessThan(script.indexOf('wait "$E2E_PID"'));
-    expect(script).toContain(
-      'run_visible_lane rollout-settle sleep "$PREVIEW_APP_ROLLOUT_REMAINING_SECONDS"',
-    );
+    expect(script).not.toContain("rollout-settle");
   });
 
-  test("waits at most 90 seconds for fresh deployments whose live suites call Durable Objects", () => {
+  test("OS checks actual object versions; other apps retain the age gate", () => {
     const deployedAt = "2026-07-22T23:05:30.000Z";
     const now = Date.parse(deployedAt);
-
     expect(resolvePreviewRolloutRemainingSeconds({ appSlug: "os", deployedAt, nowMs: now })).toBe(
-      90,
+      0,
     );
-    expect(
-      resolvePreviewRolloutRemainingSeconds({
-        appSlug: "os",
-        deployedAt,
-        nowMs: now + 20_001,
-      }),
-    ).toBe(70);
-    expect(
-      resolvePreviewRolloutRemainingSeconds({
-        appSlug: "os",
-        deployedAt,
-        nowMs: now + 90_000,
-      }),
-    ).toBe(0);
     for (const appSlug of ["semaphore", "streams-example-app", "dummy-petshop"] as const) {
       expect(resolvePreviewRolloutRemainingSeconds({ appSlug, deployedAt, nowMs: now })).toBe(90);
       expect(resolvePreviewRolloutReadyAtMs({ appSlug, deployedAt })).toBe(now + 90_000);
@@ -1024,11 +1005,11 @@ describe("preview test commands", () => {
       0,
     );
     expect(resolvePreviewRolloutRemainingSeconds({ appSlug: "os", nowMs: now })).toBe(0);
-    expect(resolvePreviewRolloutReadyAtMs({ appSlug: "os", deployedAt })).toBe(now + 90_000);
+    expect(resolvePreviewRolloutReadyAtMs({ appSlug: "os", deployedAt })).toBe(0);
     expect(resolvePreviewRolloutReadyAtMs({ appSlug: "auth", deployedAt })).toBe(0);
     expect(() =>
       resolvePreviewRolloutRemainingSeconds({
-        appSlug: "os",
+        appSlug: "semaphore",
         deployedAt: "not-a-timestamp",
         nowMs: now,
       }),
@@ -1039,7 +1020,6 @@ describe("preview test commands", () => {
     expect(cloudflarePreviewApps.os).toMatchObject({
       previewDeployBudgetMs: 90_000,
       previewReadyWorkerVersion: true,
-      previewTestRolloutGate: "inside-suite",
       previewTestBudgetMs: 100_000,
     });
     expect(cloudflarePreviewApps["streams-example-app"]).toMatchObject({

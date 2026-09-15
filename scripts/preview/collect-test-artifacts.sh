@@ -16,6 +16,7 @@ mkdir -p "$artifact_root"
   echo "- apps/streams-example-app/test-results"
   echo "- /tmp/os-e2e-*"
   echo "- /tmp/os-preview-*.log"
+  echo "- /tmp/os-preview-*.projects.json"
   echo "- /tmp/marathon"
   echo
 } > "$manifest"
@@ -63,7 +64,7 @@ copy_dir_contents "/tmp/marathon" "$artifact_root/marathon"
 
 shopt -s nullglob
 os_e2e_roots=(/tmp/os-e2e-*)
-os_preview_logs=(/tmp/os-preview-*.log)
+os_preview_logs=(/tmp/os-preview-*.log /tmp/os-preview-*.projects.json)
 # Named /tmp telemetry files exist only for the orchestrator's immediate retry
 # summary. Every reporter also writes the canonical copy under the artifact
 # root's ci-telemetry/raw directory, so copying a second hard-coded file list

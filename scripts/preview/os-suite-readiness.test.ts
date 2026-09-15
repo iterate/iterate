@@ -5,30 +5,33 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import { cloudflarePreviewApps } from "./preview.ts";
 
-test("both OS suites start after readiness and can run concurrently", async () => {
-  await using run = await previewCommands({ smokeExit: 0, rolloutExit: 0 });
+test("both OS suites run while smoke is still pending", async () => {
+  await using run = await previewCommands({ smokeExit: 0, installExit: 0 });
   const result = await run.result;
   expect(result, result.output).toMatchObject({ code: 0 });
   expect(await run.events()).toEqual(
-    expect.arrayContaining(["install", "smoke-ready", "rollout-ready", "playwright", "vitest"]),
+    expect.arrayContaining(["install", "smoke-ready", "playwright", "vitest"]),
   );
-  expect(result.output).toContain("environment readiness finish:");
+  expect(result.output).not.toContain("rollout-settle");
 });
 
-test.each([
-  { smokeExit: 1, rolloutExit: 0 },
-  { smokeExit: 0, rolloutExit: 1 },
-])("neither suite starts when readiness fails: %j", async (failure) => {
-  await using run = await previewCommands(failure);
+test("smoke failure still fails the run after both suites execute", async () => {
+  await using run = await previewCommands({ smokeExit: 1, installExit: 0 });
+  expect(await run.result).toMatchObject({ code: 1 });
+  expect(await run.events()).toEqual(expect.arrayContaining(["playwright", "vitest"]));
+});
+
+test("browser installation failure does not block Vitest or smoke", async () => {
+  await using run = await previewCommands({ smokeExit: 0, installExit: 1 });
   expect(await run.result).toMatchObject({ code: 1 });
   expect(await run.events()).not.toContain("playwright");
-  expect(await run.events()).not.toContain("vitest");
+  expect(await run.events()).toEqual(expect.arrayContaining(["vitest", "smoke-ready"]));
 });
 
 // Run the actual preview shell against controllable command-line services.
 // The test commands reject an early start and wait for each other, so a
 // sequential implementation cannot pass either.
-async function previewCommands(failure: { smokeExit: number; rolloutExit: number }) {
+async function previewCommands(failure: { smokeExit: number; installExit: number }) {
   const directory = await mkdtemp(join(tmpdir(), "os-suite-readiness-"));
   await mkdir(join(directory, "apps/os"), { recursive: true });
   await mkdir(join(directory, "bin"));
@@ -52,19 +55,16 @@ const wait = async (name) => {
   });
 };
 const command = process.argv.slice(2).join(" ");
-if (basename(process.argv[1]) === "sleep") {
-  await wait("install");
-  // Model a rollout that finishes after browser installation. This timer is
-  // the fake deployment service, not a timing assertion in the test.
-  await new Promise((resolve) => setTimeout(resolve, 200));
-  mark("rollout-ready");
-  process.exit(Number(process.env.ROLLOUT_EXIT));
-} else if (command.includes("install chromium")) {
+if (command.includes("install chromium")) {
   mark("install");
+  process.exit(Number(process.env.INSTALL_EXIT));
 } else if (command.includes("agent-smoke.ts")) {
-  await wait("rollout-ready");
+  await wait("vitest");
+  if (process.env.INSTALL_EXIT === "0") await wait("playwright");
   mark("smoke-ready");
   process.exit(Number(process.env.SMOKE_EXIT));
+} else if (command.includes("project-creation-traces.ts")) {
+  mark("trace-lookup");
 } else if (command.includes("tui-test/run.ts")) {
   mark("tui");
 } else {
@@ -72,15 +72,15 @@ if (basename(process.argv[1]) === "sleep") {
     : command.endsWith(" spec") ? "playwright" : null;
   if (!name) throw new Error("Unexpected command: " + command);
   mark(name);
-  if (!existsSync(join(directory, "smoke-ready")) || !existsSync(join(directory, "rollout-ready"))) {
-    throw new Error(name + " started before environment readiness");
+  if (name === "playwright" && !existsSync(join(directory, "install"))) {
+    throw new Error("browser started before installation");
   }
-  await wait(name === "vitest" ? "playwright" : "vitest");
+  await wait("smoke-ready");
 }
 `,
   );
-  for (const name of ["pnpm", "sleep"]) {
-    // Use separate files so the fake sleep knows which service was invoked.
+  for (const name of ["pnpm"]) {
+    // Put the controllable CLI ahead of the real package manager on PATH.
     await writeFile(
       join(directory, "bin", name),
       `#!${process.execPath}\n${await readFile(join(directory, "bin/command.mjs"), "utf8")}`,
@@ -101,7 +101,7 @@ if (basename(process.argv[1]) === "sleep") {
       PATH: `${directory}/bin:${process.env.PATH}`,
       TEST_DIRECTORY: directory,
       SMOKE_EXIT: String(failure.smokeExit),
-      ROLLOUT_EXIT: String(failure.rolloutExit),
+      INSTALL_EXIT: String(failure.installExit),
       PREVIEW_APP_ROLLOUT_REMAINING_SECONDS: "90",
     },
     detached: true,

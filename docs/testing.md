@@ -174,17 +174,19 @@ What we do NOT want:
 
 ## Shared preview setup
 
-OS preview CI waits for the deployment-age clock and agent smoke before
-starting either Playwright or Vitest. This shared readiness time belongs to
-CI setup, not individual test durations. Both suites run concurrently once
-ready; browser installation overlaps the wait.
+OS preview CI verifies the deployed edge Worker version, then starts smoke,
+Vitest and Chromium installation concurrently. Playwright starts after Chromium
+is installed. There is no fixed OS deployment-age sleep: calls to actual
+Durable Objects verify their receiving code version before work begins.
 
 Root Playwright's `globalSetup` loads and validates auth configuration once,
 using the supplied environment or the existing apps/os Doppler configuration.
 The prepared values are inherited by workers, including when running
 `pnpm spec` locally. Fixtures read those settings synchronously and mint their
 own sessions. An auth configuration error fails Playwright setup before tests
-start. A rollout/smoke failure prevents both preview suites from starting.
+start. OS smoke runs independently of both suites and remains required. Each actual
+Durable Object call checks its receiving version; version waits are visible in
+traces and logs. A failed mutation is never replayed by this readiness check.
 
 ## Test dimensions (DRAFT — under discussion)
 

@@ -1,5 +1,6 @@
 import { env as workerEnv } from "cloudflare:workers";
 import type { AuthWorker } from "@iterate-com/auth-contract/worker";
+import { deploymentReadyEnv } from "./lib/deployment-readiness.ts";
 import type { SendEmailBinding } from "./domains/email/utils.ts";
 
 /**
@@ -176,7 +177,7 @@ export interface Env {
   >;
 }
 
-export const itxEnv = workerEnv as unknown as Env;
+export const itxEnv = deploymentReadyEnv(workerEnv as unknown as Env);
 
 /** The deploy's version id, for the processor hosts' crash-loop breaker.
  * "unversioned" in environments without the version_metadata binding. */

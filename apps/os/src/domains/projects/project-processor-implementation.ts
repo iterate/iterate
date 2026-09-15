@@ -218,7 +218,7 @@ export class ProjectProcessor extends StreamProcessor<
             return;
           }
 
-          const timing = { projectId: this.deps.itx.projectId };
+          const timing = { projectId: this.deps.itx.projectId, createRequestedAtOffset };
           let seedCommitOid: string;
           try {
             seedCommitOid = await timedStep("create-timing", timing, "worker-probe", () =>
@@ -427,7 +427,10 @@ export class ProjectProcessor extends StreamProcessor<
     config: NonNullable<ProjectProcessorState["createRequest"]>["config"],
   ): Promise<void> {
     const { append, appendTo } = args;
-    const timing = { projectId: this.deps.itx.projectId };
+    const timing = {
+      projectId: this.deps.itx.projectId,
+      createRequestedAtOffset: args.state.createRequestedAtOffset,
+    };
     // The root capability host, primary scheduler, config repo, and email
     // router are explicit sibling processors created by the project's birth
     // saga. A physical child stream never implies any processor identity.

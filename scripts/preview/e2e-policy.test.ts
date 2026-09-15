@@ -149,12 +149,10 @@ describe("retries live in exactly one layer", () => {
     expect(script.split("pnpm exec tsx e2e/vitest/agent-smoke.ts")).toHaveLength(2);
   });
 
-  it("the agent smoke gets one retry and waits at its project-creation boundary", () => {
+  it("the agent smoke keeps one retry without a deployment-age sleep", () => {
     const source = readFileSync(resolve(repoRoot, "apps/os/e2e/vitest/agent-smoke.ts"), "utf8");
     expect(source).toContain("const ATTEMPTS = 2;");
-    const rolloutGate = "await waitForPreviewRolloutBeforeProjectCreation();";
-    expect(source).toContain(rolloutGate);
-    expect(source.indexOf(rolloutGate)).toBeLessThan(source.indexOf("root.projects.get("));
+    expect(source).not.toContain("waitForPreviewRolloutBeforeProjectCreation");
   });
 
   it("bounds the agent smoke as a joined background lane", () => {

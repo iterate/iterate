@@ -33,6 +33,7 @@ import {
   type ProcessorFacetIdentity,
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
+import { deploymentReadyEnv } from "../lib/deployment-readiness.ts";
 import type { ProjectAiInterceptor } from "../lib/model-interception.ts";
 import { trustedInternalAuthContext } from "../auth.ts";
 import { parseConfig } from "../config.ts";
@@ -163,7 +164,9 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
     // Rpc-mapped signatures don't match plain method declarations, and
     // keeping the full stub type here would deep-instantiate the Stream DO's
     // surface through this facet's fields.
-    return this.env.STREAM.getByName(identity.parentName) as unknown as ParentStreamStub;
+    return deploymentReadyEnv(this.env).STREAM.getByName(
+      identity.parentName,
+    ) as unknown as ParentStreamStub;
   }
 
   protected createHost(identity: ProcessorFacetIdentity): ProcessorFacetHost {
@@ -549,7 +552,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       // (itx.ai.intercept); the slot lives on the Project DO so both egress
       // paths share one handler, and this hop only happens for intercepted/* models.
       consultAiInterceptor: (input: ProjectAiInterceptor.Input) =>
-        projectStub(this.env.PROJECT, projectId).consultAiInterceptor(input),
+        projectStub(deploymentReadyEnv(this.env).PROJECT, projectId).consultAiInterceptor(input),
       // Resolved per attempt (not at construction) so a config problem
       // fails the turn with a journaled error instead of bricking the host.
       // The OpenAI prompt_cache_key is per agent stream: repeated turns
@@ -591,9 +594,9 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         },
         maximumBytes: number,
       ) => {
-        const result = await this.env.REPO.getByName(
-          DurableObjectNameCodec.stringify({ projectId, path: target.repoPath }),
-        ).readHeadFilePrefix({ path: target.path, maximumBytes });
+        const result = await deploymentReadyEnv(this.env)
+          .REPO.getByName(DurableObjectNameCodec.stringify({ projectId, path: target.repoPath }))
+          .readHeadFilePrefix({ path: target.path, maximumBytes });
         return result === null
           ? null
           : {
@@ -615,12 +618,14 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         path: string;
       }) => {
         const absolutePath = `/workspace/${filePath}`;
-        await this.env.WORKSPACE_V2.getByName(
-          DurableObjectNameCodec.stringify({
-            path,
-            projectId,
-          }),
-        ).writeFile(absolutePath, content);
+        await deploymentReadyEnv(this.env)
+          .WORKSPACE_V2.getByName(
+            DurableObjectNameCodec.stringify({
+              path,
+              projectId,
+            }),
+          )
+          .writeFile(absolutePath, content);
         return { absolutePath };
       },
     };
@@ -921,9 +926,9 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         // revoke ride the same chain), so the facet dials its door instead of
         // clearing the Secret itself.
         clearPushToken: (input) =>
-          this.env.DEVICE.getByName(
-            DurableObjectNameCodec.stringify({ path, projectId }),
-          ).processorClearPushToken(input),
+          deploymentReadyEnv(this.env)
+            .DEVICE.getByName(DurableObjectNameCodec.stringify({ path, projectId }))
+            .processorClearPushToken(input),
         getReceipt: getExpoPushReceipt,
         repointGraceAlarm: (atMs: number | null) =>
           registry.setAlarmSlice("device-approval-grace", atMs),
@@ -942,7 +947,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
           ) {
             throw new Error("device push token changed before the attempt began");
           }
-          const secret = this.env.SECRET.getByName(
+          const secret = deploymentReadyEnv(this.env).SECRET.getByName(
             DurableObjectNameCodec.stringify({ path: pushTokenSecretPath, projectId }),
           );
           return await sendExpoPushNotification(
@@ -1010,7 +1015,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   ): void {
     const { path, projectId } = identity;
     const repoStub = () =>
-      this.env.REPO.getByName(
+      deploymentReadyEnv(this.env).REPO.getByName(
         DurableObjectNameCodec.stringify({ path, projectId }, { allowNullProjectId: true }),
       );
     // Registered WITH recovery: creation and GitHub imports are consequential

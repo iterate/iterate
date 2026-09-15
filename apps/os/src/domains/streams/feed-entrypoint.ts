@@ -4,6 +4,7 @@ import {
   type ProcessorFacetIdentity,
 } from "iterate/processors/cloudflare";
 import { createJsonByteLength } from "@iterate-com/shared/json-byte-length";
+import { deploymentReadyEnv } from "../../lib/deployment-readiness.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
@@ -19,7 +20,7 @@ const feedReductionCache = {
 /** One presentation owner per stream, independent of the stream's domain processors. */
 export class FeedFacet extends ProcessorFacet<Env> {
   protected parentAlarms({ parentName }: ProcessorFacetIdentity) {
-    return this.env.STREAM.getByName(parentName);
+    return deploymentReadyEnv(this.env).STREAM.getByName(parentName);
   }
 
   protected createHost(identity: ProcessorFacetIdentity): ProcessorFacetHost {

@@ -15,13 +15,12 @@ The preview lifecycle has two barriers:
    and readiness check finishes.
 2. Start every selected app test lane together; wait until every lane finishes.
 
-Every freshly deployed live suite that addresses Durable Objects respects one
-bounded deployment-age clock. Short Semaphore, Streams, and Petshop suites wait
-at their own command boundary. OS starts its agent smoke, explicit TUI
-quarantine marker, and Chromium installation immediately. Playwright and
-Vitest both start after the rollout clock and agent smoke succeed. Readiness
-is timed outside both runners, so individual test durations measure their own
-setup and checks. Healthy wall time should approach:
+Short Semaphore, Streams, and Petshop suites still wait at their own
+deployment-age boundary. OS checks actual object versions instead: its preview
+bindings poll an object's reported version, then the receiving object checks
+again before executing the requested method or fetch. There is no fixed OS
+sleep. Smoke and Vitest start immediately; Playwright starts when Chromium is
+installed. All three remain required. Healthy wall time should approach:
 
 ```text
 pickup + setup + slowest deploy + slowest test lane + reporting
@@ -32,6 +31,30 @@ sub-lanes. Soft warnings currently fire above 90 seconds for OS deploy or 100
 seconds for OS tests; crossing one is evidence to investigate, not a reason to
 raise the budget automatically.
 
+## Object readiness and creation traces
+
+OS preview bindings require `CF_VERSION_METADATA.id`. Each object reports its
+version before first use; the receiving object checks again in the operation
+that executes the method, getter or fetch. Only an explicit mismatch is polled,
+for at most 90 seconds. A failed mutation or transport error propagates to the
+existing operation/test policy; readiness never replays it.
+
+Strict equality applies to leased `preview_*` deployments. Production keeps
+its existing mixed-version compatibility behavior. Constructors, alarms and
+WebSocket callbacks retain Cloudflare's lifecycle behavior: an admitted call
+can still be interrupted by a later deployment. This check does not claim that
+all objects have updated, or replace idempotent recovery from a reset.
+
+Creation steps are native `create-timing.<step>` spans, with `iterate.projectId`
+and (where available) the creation event's offset. Background processing can
+land in another trace; the shared project ID connects those traces. Concurrent
+step durations must not be added to estimate wall time.
+
+Agent smoke reports connection/authentication, create, describe, agent-create
+and reply waits separately. After all runners finish, CI searches the creation
+spans and prints their Cloudflare links. The `.projects.json` artifact retains
+IDs and timestamps when indexing is delayed or the diagnostic lookup fails.
+
 ## Parallel execution
 
 - `previewDependencies` co-selects apps so a slot contains one coherent head;
@@ -41,17 +64,18 @@ raise the budget automatically.
 - The short Semaphore, Streams, and Petshop commands wait independently at
   their own rollout boundary; this does not serialize them with OS or with one
   another. Auth has no live Durable Object suite and starts immediately.
-- OS smoke, the explicit TUI quarantine marker, Chromium installation, and
-  the rollout-age clock run concurrently. Both Playwright and Vitest wait
-  for successful smoke and rollout completion, then run concurrently. Every
-  background process is joined even after a failure.
+- OS smoke, Vitest, the explicit TUI quarantine marker and Chromium installation
+  start concurrently. Playwright waits only for Chromium. Smoke failure still
+  fails the run, but does not prevent the other suites from collecting evidence.
+  Every background process is joined even after a failure.
 - Playwright loads and validates its auth configuration once in global setup,
   before workers start. Workers inherit the prepared environment; fixtures
   neither fetch Doppler secrets nor wait for deployment propagation. Test
   identities, signed tokens and projects remain specific to each test.
-- Chromium installation overlaps readiness. Browser startup and authentication
-  now happen after readiness, so this change improves duration reporting but
-  may add time previously hidden by overlapping setup.
+- Actual object-version waits appear as `durable_object.wait_for_version` spans
+  and `deployment_wait` / `deployment_ready` logs, with object and version IDs.
+  These waits can occur during fixture work when an object is first reached;
+  there is no claim that one health probe proves the whole fleet ready.
 - OS Vitest gives every current file a worker immediately and permits at most
   two concurrent tests per file in CI. Each file owns isolated projects; the
   examples matrix still overlaps its isolated runtimes inside each case.
@@ -85,17 +109,12 @@ serially because they intentionally share one warm container.
   final version on the health probe (no multi-second dwell after first match).
   The probe is a cheap public health request and never wakes synthetic Durable
   Objects.
-- **Global Durable Object rollout gets a bounded age gate.** Cloudflare
-  documents that Worker/DO updates are globally eventually consistent even
-  after the new edge Worker answers, and changing an object's assigned version
-  resets that object. Every freshly deployed app whose live suite calls Durable
-  Objects therefore waits until 90 seconds after its successful deploy command.
-  Short suites wait immediately before their command. OS has one visible
-  readiness step outside Playwright and Vitest: the remaining deployment age
-  plus the successful agent smoke. Both runners start after this step. The
-  smoke still receives the absolute deadline so its own project creation
-  respects the same clock. Reused old deployments wait zero seconds for age.
-  Improving the readiness condition is separate from choosing where to wait.
+- **OS readiness checks the object handling each call.** The edge version does
+  not prove every Durable Object has updated. OS preview bindings check the
+  actual receiver before executing requested work, including objects first
+  reached later in a test. Only an explicit version mismatch permits polling;
+  a successful canary or elapsed time does not admit other objects. Supporting
+  apps still wait until 90 seconds after deployment before their own suites.
 - **Warm OS deploys skip only proven-unchanged container work.** Wrangler
   otherwise builds and reconciles the six stock sandbox image applications
   serially even when all six report `no changes`. The orchestrator requests
@@ -104,9 +123,8 @@ serially because they intentionally share one warm container.
   cap, package, or Wrangler-config input. New slots, bootstraps, force-pushes,
   truncated/unavailable comparisons, and relevant changes use the full
   rollout.
-- **Product operations still handle lifecycle resets.** The CI age gate avoids
-  deliberately launching the densest test burst during the documented rollout
-  window; it cannot make arbitrary in-flight product operations replay-safe.
+- **Product operations still handle lifecycle resets.** Checking a receiver's
+  version cannot make arbitrary in-flight product operations replay-safe.
   Idempotent operations must still redeliver after an explicit lifecycle
   outcome without committing terminal failure state.
 - **Readiness retries are bounded and diagnostic.** Each request has a short
@@ -138,10 +156,10 @@ serially because they intentionally share one warm container.
 - `depot ci metrics --run <run-id> --org 0p91s0lz49` shows host CPU and memory.
 - `[preview] deploy passed: <app> (Ns)` and `[preview] test passed: <app> (Ns)`
   in the run log show phase wall times.
-- `[preview:os] lane start/finish` lines show the overlapping OS work, including
-  the visible `rollout-settle` clock. `environment readiness start/finish`
-  records the shared preparation boundary before both runners start;
+- `[preview:os] lane start/finish` lines show the overlapping OS work.
   `[playwright] auth setup complete` records suite-wide auth preparation.
+  `deployment_wait` / `deployment_ready` record actual object-version waits;
+  agent smoke records project creation separately and prints trace links.
 - `[preview] rollout settle start/finish` lines expose the independent boundary
   for each short Durable Object-backed app suite.
 - The managed preview block in the PR body records per-app deploy duration,

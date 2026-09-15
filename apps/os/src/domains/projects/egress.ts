@@ -1,4 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { deploymentReadyEnv } from "../../lib/deployment-readiness.ts";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { withStreamContext, type StreamContext } from "./stream-context.ts";
@@ -41,7 +42,7 @@ export class ProjectEgressEntrypoint extends WorkerEntrypoint<
   { projectId: string; streamContext: StreamContext }
 > {
   fetch(request: Request): Promise<Response> {
-    return projectStub(this.env.PROJECT, this.ctx.props.projectId).fetch(
+    return projectStub(deploymentReadyEnv(this.env).PROJECT, this.ctx.props.projectId).fetch(
       withStreamContext(request, this.ctx.props.streamContext),
     );
   }

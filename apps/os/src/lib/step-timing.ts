@@ -1,25 +1,29 @@
-/**
- * Log a single structured timing line for one awaited saga step.
- *
- * Emits `[<label>] {"...fields, step, ms}` on completion (success or failure),
- * so `wrangler tail --format json | grep create-timing` reconstructs per-step
- * saga cost on any deployment. Deliberately console.log-only: creates are rare
- * and the lines are the cheapest instrument that survives production.
- */
+import { tracing } from "cloudflare:workers";
+
+/** Time one creation step, including its awaited work. Project identity lets
+ * operators find related spans even when an alarm continues in another trace.
+ * Keep the structured completion log for unsampled invocations and tail users. */
 export async function timedStep<T>(
   label: string,
-  fields: Record<string, string | null | undefined>,
+  fields: Record<string, string | number | null | undefined>,
   step: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const start = Date.now();
-  let ok = true;
-  try {
-    return await fn();
-  } catch (error) {
-    ok = false;
-    throw error;
-  } finally {
-    console.log(`[${label}]`, JSON.stringify({ ...fields, step, ms: Date.now() - start, ok }));
-  }
+  return tracing.enterSpan(`${label}.${step}`, async (span) => {
+    for (const [key, value] of Object.entries(fields)) {
+      if (value !== null) span.setAttribute(`iterate.${key}`, value);
+    }
+    span.setAttribute("iterate.step", step);
+    const start = Date.now();
+    let ok = true;
+    try {
+      return await fn();
+    } catch (error) {
+      ok = false;
+      throw error;
+    } finally {
+      span.setAttribute("iterate.outcome", ok ? "ok" : "error");
+      console.log(`[${label}]`, JSON.stringify({ ...fields, step, ms: Date.now() - start, ok }));
+    }
+  });
 }
