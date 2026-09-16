@@ -27,3 +27,6 @@ Run the nine-job experiment: prepare, six identical 16-worker Playwright shards,
 
 ## Implementation log
 
+- Restored historical sharding components from `2996ffc9c`; moved setup before an in-job readiness barrier. Finalizer starts after prepare and polls all seven consumers in one API call per cycle.
+- Confirmed the existing Doppler organization token can read Depot GetWorkflow, including workflow execution IDs and concrete producer attempts. No credentials printed or added to Depot.
+- HTTP boundary tests cover milestone delivery while the producer runs, termination without a milestone, stale attempts/commits, bounded waiting, final-signal ordering and collecting failures without cleaning up live consumers.
