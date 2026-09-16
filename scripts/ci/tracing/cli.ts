@@ -64,7 +64,7 @@ export default class CiTrace {
   ) {
     const execution = [...workflow.executions].sort((a, b) => b.execution - a.execution)[0];
     if (!execution) throw new Error("Workflow has no execution");
-    const url = `https://iterate.iterate.app/depot/artifacts/${artifactId}${file ? `/${file}` : ""}`;
+    let url = `https://iterate.iterate.app/depot/artifacts/${artifactId}${file ? `/${file}` : ""}`;
     // A successful upload alone is not the user's acceptance check: verify the host.
     for (let attempt = 0; ; attempt++) {
       const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
@@ -72,8 +72,10 @@ export default class CiTrace {
       if (
         response.ok &&
         html.includes(context === "CI trace" ? 'id="data"' : "playwrightReportBase64")
-      )
+      ) {
+        url = response.url;
         break;
+      }
       if (attempt === 4)
         throw new Error(`Published report is not viewable: HTTP ${response.status}`);
       await delay(3_000);
