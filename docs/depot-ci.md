@@ -389,13 +389,15 @@ and OTLP JSON export.
 ## Browser reports from artifacts
 
 The preview finalizer uploads the merged Playwright HTML directory as
-`public-playwright-report`, even after test failures. The existing report
-collector adds a **Playwright report** commit status alongside **CI trace**.
+`public-playwright-report`, even after test failures. The config project handles Depot
+`check_run.completed` webhooks and adds a **Playwright report** commit status
+alongside **CI trace**. CI only uploads the artifacts.
 These statuses mean the reports are available; the preview check retains the
 actual test outcome. Links use Depot artifact UUIDs and expire with their
 30-day retention.
 
-The config worker serves `https://iterate.iterate.app/depot/artifacts/<id>`.
+The config worker serves `https://depot-<id>--iterate.iterate.app/`.
+`/foo.xyz` serves ZIP entry `foo.xyz`; old `/depot/artifacts/<id>` links redirect.
 It opens a root `index.html`, redirects a single-file artifact to that file,
 or generates an index linking all files. Relative assets and binary attachments
 are served from the ZIP using range reads. Each artifact gets a separate
@@ -404,5 +406,7 @@ and service workers without sharing the project's origin.
 
 Additional artifacts opt into public serving with a `public-` name prefix.
 The viewer only accepts artifacts from `iterate/iterate`; existing `ci-trace-*`
-artifacts remain supported. Upload only files intended to be public. Append
+artifacts remain supported. Only `public-playwright-report` and the named CI
+trace artifacts automatically get commit statuses; other `public-*` artifacts
+remain browsable without adding checks. Upload only files intended to be public. Append
 `?download` to a file link to download it instead of displaying it.

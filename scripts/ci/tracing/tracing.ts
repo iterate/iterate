@@ -376,46 +376,6 @@ export function stepCommands(source: string) {
   return commands;
 }
 
-/** A rerun can retain old jobs: only publish an attempt started in this execution. */
-export function reportAttempt(
-  workflow: {
-    executions: { execution: number; createdAt: string }[];
-    jobs: {
-      jobKey: string;
-      attempts: { attemptId: string; attempt: number; startedAt: string }[];
-    }[];
-  },
-  producer: string,
-) {
-  const execution = [...workflow.executions].sort((a, b) => b.execution - a.execution)[0];
-  if (!execution) throw new Error("Workflow has no execution");
-  const job = workflow.jobs.find((job) => job.jobKey.endsWith(`:${producer}`));
-  return [...(job?.attempts || [])]
-    .filter((attempt) => Date.parse(attempt.startedAt) >= Date.parse(execution.createdAt))
-    .sort((a, b) => b.attempt - a.attempt)[0];
-}
-
-/** The status says the report is available; preview checks retain the test outcome. */
-export function reportCommitStatus(
-  previous: { description: string | null; target_url: string | null } | undefined,
-  run: { headSha: string; createdAt: string; url: string; context: string },
-) {
-  // Store the source execution's time, not publication time: reconciliation can
-  // revisit old runs. Normalized ISO dates sort chronologically in this format.
-  const createdAt = new Date(run.createdAt).toISOString();
-  const description = `Open report · ${createdAt}`;
-  const previousTime = previous?.description?.split(" · ").at(-1) || "";
-  if (previous?.target_url === run.url || previousTime >= createdAt) return null;
-  return {
-    sha: run.headSha,
-    context: run.context,
-    // GitHub accepts this literal union; preserve it when inferring the result.
-    state: "success" as const,
-    description,
-    target_url: run.url,
-  };
-}
-
 export async function renderTrace(trace: ReturnType<typeof assembleTrace>) {
   const template = await readFile(new URL("./viewer.html", import.meta.url), "utf8");
   // Escaping '<' prevents test names containing </script> from executing as HTML.
