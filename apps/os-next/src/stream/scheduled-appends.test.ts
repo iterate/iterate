@@ -173,7 +173,7 @@ test("a due-work pass writes nothing until it completes, then arms once for what
   expect(alarms).toEqual([retryAt]);
 });
 
-test("a non-string type passes the normalizer untouched — the append door refuses it with its own message", () => {
+test("a non-string type passes the normalizer untouched — Stream.append refuses it with its own message", () => {
   // The e2e guard test appends `{ type: 12345 }`: the stream's "non-empty type" refusal, never a
   // TypeError out of the scheduling prefix check.
   const event = { type: 12345 as unknown as string };
