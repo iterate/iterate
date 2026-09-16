@@ -5,14 +5,14 @@
 // mount's repo facet at its tip; a write shadows until `gitCommit` lands ONE mount's changes on its
 // repo's `main`; a delete is a whiteout until then; `/workspace/…` is scratch — never committed.
 // `create()` lands the creation facts: the certificate on its path, cross-posted to `/`, so
-// `itx.workspaces.list()` knows it. Locally the physical tier is a FAKE `itx.git` lent to each repo's
-// context (support/fake-git.ts); against the deployed worker the last test runs the same story on
-// real Artifacts (`WORKER_BASE_URL=https://os.iterate2.com pnpm e2e workspaces`).
+// `itx.workspaces.list()` knows it. Locally the physical tier is a FAKE `itx.cfArtifacts` lent to each
+// repo's context (support/fake-artifacts.ts), keyed by the repo's PATH as the real one is; against the
+// deployed worker the last test runs the same story on real Artifacts
+// (`WORKER_BASE_URL=https://os.iterate2.com pnpm e2e workspaces`).
 
 import { expect, test } from "vitest";
-import { repoArtifactName } from "../src/repo/contract.ts";
 import { freshCtx, openItx, readAll, rejection } from "./support/client.ts";
-import { FakeGit, type FakeCommit } from "./support/fake-git.ts";
+import { FakeArtifacts, type FakeCommit } from "./support/fake-artifacts.ts";
 import { deployedOnly } from "./support/project-host.ts";
 
 /** A log as its repo facts' short type names, in order. */
@@ -23,29 +23,25 @@ const types = (log: { type: string }[]) =>
 
 const SEED = { "/repos/config": { "worker.ts": "export default 1;\n", "notes/log.md": "# log\n" } };
 
-/** A fresh project whose repos (seeded by PATH) are CREATED over one fake `itx.git` lent to each
- *  repo's context, and the workspace at `/workspaces/<name>`, created too. */
-async function workspaceOverFakeGit(
+/** A fresh project whose repos (seeded by PATH) are CREATED over one fake `itx.cfArtifacts` lent to
+ *  each repo's context, and the workspace at `/workspaces/<name>`, created too. */
+async function workspaceOverFakeArtifacts(
   name: string,
   seed: Record<string, Record<string, string>> = SEED,
 ) {
   const itx = openItx(freshCtx("ws"));
-  const git = new FakeGit(
-    Object.fromEntries(
-      Object.entries(seed).map(([path, files]) => [repoArtifactName(path), files]),
-    ),
-  );
+  const artifacts = new FakeArtifacts(seed);
   for (const path of Object.keys(seed)) {
-    await itx.cd(path).provide("itx.git", git);
+    await itx.cd(path).provide("itx.cfArtifacts", artifacts);
     await itx.repos.get(path).create();
   }
   const workspace = itx.workspaces.get(`/workspaces/${name}`);
   await workspace.create();
-  return { itx, git, workspace };
+  return { itx, artifacts, workspace };
 }
 
 test("reads fall through to the mounted repo at its tip; a write shadows; the merged listing and the status say which is which", async () => {
-  const { workspace } = await workspaceOverFakeGit("one");
+  const { workspace } = await workspaceOverFakeArtifacts("one");
   expect(await workspace.mounts()).toEqual({ "/repos/config": { repo: "/repos/config" } });
   expect(await workspace.readFile("/repos/config/worker.ts")).toBe("export default 1;\n");
   expect(await workspace.readFile("/repos/config/missing.ts")).toBeNull();
@@ -83,7 +79,7 @@ test("reads fall through to the mounted repo at its tip; a write shadows; the me
 });
 
 test("gitCommit lands one mount's changes as ONE commit on its repo and clears the overlay; the fall-through then reads the new tip; gitLog shows it", async () => {
-  const { workspace, git } = await workspaceOverFakeGit("two");
+  const { workspace, artifacts } = await workspaceOverFakeArtifacts("two");
   await workspace.writeFile("/repos/config/notes/log.md", "# log\n- one\n");
   await workspace.deleteFile("/repos/config/worker.ts");
   await workspace.writeFile("/workspace/scratch.md", "mine"); // scratch never commits
@@ -93,7 +89,7 @@ test("gitCommit lands one mount's changes as ONE commit on its repo and clears t
     repo: "/repos/config",
     changedPaths: ["/repos/config/worker.ts", "/repos/config/notes/log.md"], // deletes land first
   });
-  expect(git.snapshot("repos--config")?.files).toEqual({ "notes/log.md": "# log\n- one\n" });
+  expect(artifacts.snapshot("/repos/config")?.files).toEqual({ "notes/log.md": "# log\n- one\n" });
   expect(await workspace.gitStatus()).toEqual({
     mounts: [{ path: "/repos/config", repo: "/repos/config", changes: [] }],
     unmounted: [{ path: "/workspace/scratch.md", change: "added" }],
@@ -112,7 +108,7 @@ test("gitCommit lands one mount's changes as ONE commit on its repo and clears t
 });
 
 test("deleteFile whites a repo file out until committed; revert lifts the whiteout, and a shadowing write", async () => {
-  const { workspace } = await workspaceOverFakeGit("three");
+  const { workspace } = await workspaceOverFakeArtifacts("three");
   expect(await workspace.deleteFile("/repos/config/worker.ts")).toBe(true);
   expect(await workspace.readFile("/repos/config/worker.ts")).toBeNull();
   expect(await workspace.listAllFiles()).toEqual(["/repos/config/notes/log.md"]);
@@ -126,7 +122,7 @@ test("deleteFile whites a repo file out until committed; revert lifts the whiteo
 });
 
 test("create() lands the request and ONE certificate on its path, the same certificate on /, and the catalog lists it; a workspace not created refuses before it stores anything", async () => {
-  const { itx } = await workspaceOverFakeGit("four");
+  const { itx } = await workspaceOverFakeArtifacts("four");
   const events = await readAll(itx.cd("/workspaces/four"));
   const born = (log: { type: string; payload?: unknown }[]) =>
     log.filter((e) => e.type === "events.iterate.com/workspace/created").map((e) => e.payload);
@@ -156,7 +152,7 @@ test("create() lands the request and ONE certificate on its path, the same certi
 });
 
 test("a repo beneath another's path wins beneath it: the listing, reads and status route to the longest mount; a commit never spans mounts", async () => {
-  const { workspace, git } = await workspaceOverFakeGit("nested", {
+  const { workspace, artifacts } = await workspaceOverFakeArtifacts("nested", {
     "/repos/config": { "worker.ts": "w", "vendor/x.txt": "from config" },
     "/repos/config/vendor": { "y.txt": "from lib" },
   });
@@ -182,18 +178,18 @@ test("a repo beneath another's path wins beneath it: the listing, reads and stat
   );
   const commit = await workspace.gitCommit({ message: "z", scope: "/repos/config/vendor" });
   expect(commit.changedPaths).toEqual(["/repos/config/vendor/z.txt"]);
-  expect(git.snapshot("repos--config--vendor")?.files).toEqual({
+  expect(artifacts.snapshot("/repos/config/vendor")?.files).toEqual({
     "y.txt": "from lib",
     "z.txt": "z",
   });
-  expect(git.snapshot("repos--config")?.files).toEqual({
+  expect(artifacts.snapshot("/repos/config")?.files).toEqual({
     "worker.ts": "w",
     "vendor/x.txt": "from config",
   });
 });
 
 test("a workspace is its path: a second session opens the same overlay, uncommitted work included", async () => {
-  const { itx } = await workspaceOverFakeGit("five");
+  const { itx } = await workspaceOverFakeArtifacts("five");
   await itx.workspaces.get("/workspaces/five").writeFile("/workspace/draft.md", "draft");
   const again = openItx((await itx.whoami()).projectId);
   expect(await again.workspaces.get("/workspaces/five").readFile("/workspace/draft.md")).toBe(
@@ -208,8 +204,8 @@ test("a workspace is its path: a second session opens the same overlay, uncommit
 
 test("the Notes app's story, spelled as apps/notes spells it: create the repo and the workspace (idempotent), read the file through the workspace, write it and commit ONE commit on the repo's main", async () => {
   const itx = openItx(freshCtx("notes"));
-  const git = new FakeGit({});
-  await itx.cd("/repos/config").provide("itx.git", git);
+  const artifacts = new FakeArtifacts({});
+  await itx.cd("/repos/config").provide("itx.cfArtifacts", artifacts);
   const REPO = "/repos/config";
   const WORKSPACE = "/workspaces/notes";
   const FILE = `${REPO}/notes/log.md`;
@@ -223,7 +219,7 @@ test("the Notes app's story, spelled as apps/notes spells it: create the repo an
     };
   };
   expect(await load()).toEqual({ note: null, tip: null }); // an unborn repo: no note yet
-  expect(git.created).toEqual(["repos--config"]);
+  expect(artifacts.created).toEqual(["/repos/config"]);
   // Save and commit.
   await itx.invoke([
     "itx",
@@ -238,7 +234,7 @@ test("the Notes app's story, spelled as apps/notes spells it: create the repo an
     ["gitCommit", { message: "notes: save", scope: REPO }],
   ]);
   expect(committed).toMatchObject({ mount: REPO, repo: REPO, changedPaths: [FILE] });
-  expect(git.snapshot("repos--config")?.files).toEqual({ "notes/log.md": "# log\n- one\n" });
+  expect(artifacts.snapshot("/repos/config")?.files).toEqual({ "notes/log.md": "# log\n- one\n" });
   // The next load reads the committed file at the new tip; nothing more was appended by the loads.
   expect(await load()).toEqual({ note: "# log\n- one\n", tip: committed.commitOid });
   expect(types(await readAll(itx.cd(REPO)))).toEqual([
@@ -285,7 +281,7 @@ deployedOnly(
         "/repos/config/worker.ts",
       ]);
       expect(await repo.readFile("notes/log.md")).toBe("# log\n");
-      expect((await itx.git.snapshot("repos--config")).files).toEqual({
+      expect((await itx.cfArtifacts.snapshot("/repos/config")).files).toEqual({
         "notes/log.md": "# log\n",
         "worker.ts": "export default 2;\n",
       }); // the physical tier agrees
@@ -314,7 +310,7 @@ deployedOnly(
         "/workspaces/deployed",
       ]);
     } finally {
-      await itx.cfArtifacts.delete("repos--config"); // teardown — the path's Artifacts name
+      await itx.cfArtifacts.delete("/repos/config"); // teardown — the repo, by its path
     }
   },
   120_000,

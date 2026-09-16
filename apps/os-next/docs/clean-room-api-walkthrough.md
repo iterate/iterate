@@ -169,8 +169,8 @@ packages/v3/project-worker/
                                  relay), LentRpcStub; fetch-shaped calls — the x-itx-expression lane and the
                                  101 tunnel on a lent stub (fenced WORKAROUND, delete-day checklist inside)
       worker-loader.ts           prepareConfinedWorker, facetLoaderOwner, WorkerSource
-      repos.ts                   itx.git (a repo's files by path, stateless), itx.cfArtifacts
-                                 (ArtifactsScope), and the git-over-HTTPS engine beneath them
+      repos.ts                   itx.cfArtifacts (ArtifactsScope: the repos by PATH — the binding's
+                                 verbs + git on main, stateless) and the git-over-HTTPS engine beneath
     stream/                      chapter 3 — the log and what reduces it
       stream.ts                  Stream (the commit pipeline), the typed SQL tables (StreamStorage),
                                  ReachableContext
