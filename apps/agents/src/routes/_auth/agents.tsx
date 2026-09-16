@@ -165,7 +165,7 @@ function AgentsPage() {
             <input
               name="name"
               placeholder="new agent name, e.g. support"
-              pattern="[a-z0-9-]+"
+              pattern="[a-z0-9\-]+"
               required
             />
             <input name="prompt" placeholder="system prompt (optional)" />
@@ -327,19 +327,30 @@ function Conversation({ project, path }: { project: string; path: string }) {
     });
   useEffect(() => {
     let disposed = false;
-    let stub: Project | undefined;
-    let agent: Context | undefined;
-    let subscription: { [Symbol.dispose](): void } | undefined;
+    // What the connect holds so far; released on unmount AND again after the connect settles, since
+    // an unmount mid-await comes before the handle that await returns.
+    const held: {
+      stub?: Project;
+      agent?: Context;
+      subscription?: { [Symbol.dispose](): void };
+    } = {};
+    const release = () => {
+      held.subscription?.[Symbol.dispose]();
+      held.agent?.[Symbol.dispose]();
+      held.stub?.[Symbol.dispose]();
+      held.subscription = held.agent = held.stub = undefined;
+    };
     (async () => {
-      stub = await api.projects.get(project);
-      agent = await stub.cd(path);
+      held.stub = await api.projects.get(project);
+      if (disposed) return;
+      const agent = (held.agent = await held.stub.cd(path));
       if (disposed) return;
       // A capnweb stub is a callable proxy: handed to a state setter directly, React would take it
       // for an updater and CALL it (an empty method call the server refuses).
       setContext(() => agent);
       // Subscribe BEFORE the catch-up read, so nothing lands between the two; a push is a batch of
       // committed events, deduped into the map by offset.
-      subscription = await agent.subscribe({
+      held.subscription = await agent.subscribe({
         consumes: FEED_TYPES,
         target: (batch: unknown[]) => !disposed && merge(batch),
       });
@@ -351,12 +362,12 @@ function Conversation({ project, path }: { project: string; path: string }) {
         after = page.scannedThroughOffset;
       }
       setCaughtUp(true);
-    })().catch((e: unknown) => !disposed && setError(e instanceof Error ? e.message : String(e)));
+    })()
+      .catch((e: unknown) => !disposed && setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => disposed && release());
     return () => {
       disposed = true;
-      subscription?.[Symbol.dispose]();
-      agent?.[Symbol.dispose]();
-      stub?.[Symbol.dispose]();
+      release();
     };
   }, [api, project, path]);
 
@@ -388,7 +399,7 @@ function Conversation({ project, path }: { project: string; path: string }) {
           ? { text: `Thinking · ${view.data.openRequest.model}`, dot: "dot-green dot-live" }
           : view.data.pendingLlmRequestTrigger
             ? { text: "About to think", dot: "dot-green dot-live" }
-            : { text: `Idle${feed.activity ? ` · ${feed.activity}` : ""}`, dot: "" };
+            : { text: "Idle", dot: "" };
 
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -407,7 +418,7 @@ function Conversation({ project, path }: { project: string; path: string }) {
         {feed.rows.map((row) => (
           <FeedRow key={row.offset} row={row} context={context} />
         ))}
-        <div ref={end} />
+        <div ref={end} className="feed-end" />
       </div>
       <Composer project={project} path={path} />
     </>
@@ -555,7 +566,7 @@ function Composer({ project, path }: { project: string; path: string }) {
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
+          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault();
             void send();
           }

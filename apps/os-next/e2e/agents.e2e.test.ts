@@ -59,12 +59,14 @@ test("create() births the agent — the processor row, the certificate on / and 
   expect(await agent.create({ systemPrompt: "Be terse." })).toEqual({ path: "/agents/support" });
   const own = await readAll(itx.cd("/agents/support"));
   expect(short(own)).toEqual(["agent/created", "agents/context-added"]);
-  expect(
-    own.filter((e) => e.type === "events.iterate.com/agents/context-added")[0].payload,
-  ).toEqual({
-    role: "system",
-    content: "Be terse.",
-  });
+  // The caller's prompt is ADDED to the platform's rules — an agent told only "be terse" still
+  // knows the codemode format and the itx surface.
+  const systemItem = own.filter((e) => e.type === "events.iterate.com/agents/context-added")[0]
+    .payload as { role: string; content: string };
+  expect(systemItem.role).toBe("system");
+  expect(systemItem.content).toMatch(/^You are an agent on the iterate platform/);
+  expect(systemItem.content).toMatch(/<codemode/);
+  expect(systemItem.content).toMatch(/INSTRUCTIONS FROM THE OPERATOR[^\n]*\nBe terse\.$/);
   // ONE processor row for the agent (the other row on any context is the project's config funnel).
   expect(
     own

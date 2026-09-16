@@ -87,6 +87,10 @@ nav.agents a[aria-current="page"] {
   flex-direction: column;
   gap: 14px;
 }
+/* The end marker scrolls into view above the sticky composer, never under it. */
+.feed-end {
+  scroll-margin-bottom: 200px;
+}
 .row {
   max-width: 100%;
 }
