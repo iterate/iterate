@@ -21,11 +21,12 @@ import { oauthResponse } from "./api.ts";
 import { consoleHandler } from "./control-plane.ts";
 import { appConfigOf } from "./app-config.ts";
 import { projectHostOf, hostnameLabelsUnderBase } from "./hosts.ts";
+import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
 import { directory } from "./directory.ts";
 import { registerPipelinedRpcBrand } from "./context/expression.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./iterate-context.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./iterate-context.ts";
 import { IterateRpcTarget, SessionTeardown, type SessionInput } from "./session.ts";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "./principal.ts";
 import { authorizationForToken, recordGrantUse, cleanGrantActivity } from "./oauth.ts";
@@ -247,6 +248,16 @@ export default {
           { status: 421 },
         );
       const projectId = project.id;
+      // THE FILES HOST (context/file-urls.ts): `files--<project>` serves a signed file URL straight
+      // from the bucket, before any session or DO — the token in the URL is the authorization.
+      if (projectHost.app === FILES_APP_LABEL)
+        return serveProjectFileRequest({
+          bucket: env.FILES,
+          secret: appConfig.sessionSecret.exposeSecret(),
+          project: projectId,
+          keyPrefix: `${resourceScope(projectId, "/").id}/`,
+          request,
+        });
       const browserResponse = await browserClient(request, env, ctx);
       if (browserResponse) return browserResponse;
       const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];

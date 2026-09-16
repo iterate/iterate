@@ -153,7 +153,7 @@ packages/v3/project-worker/
     library.ts                   THE LIBRARY: connectToMcp, connectToOpenApi, connectToCapnweb; the memo
                                  table
     context/                     chapter 1 — the context: rpc stubs, expressions, rewrite rules
-      built-ins.ts               the kernel roots: whoami, kv, secrets, ai, cfArtifacts, repos, append, readEvents,
+      built-ins.ts               the kernel roots: whoami, kv, secrets, ai, browser, cfArtifacts, repos, append, readEvents,
                                  waitForEvent, cd, fetch, rpcStubs, rewriteRules, facets, subscriptions, workers,
                                  connectToMcp, connectToOpenApi, connectToCapnweb (library.ts)
       expression.ts              the codec: "itx.a.b(1)" ⇄ ["itx","a",["b",1]]; ItxExpression /

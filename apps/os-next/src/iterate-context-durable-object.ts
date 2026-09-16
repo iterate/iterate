@@ -77,6 +77,7 @@ import {
   BUILT_IN_ROOTS,
 } from "./context/itx-expression-rewriting.ts";
 import { ITX_PRINCIPAL_HEADER, stampPrincipal, type Caller, type Principal } from "./principal.ts";
+import { signedFileUrl } from "./context/file-urls.ts";
 import {
   buildBuiltIns,
   type RewriteRuleListEntry,
@@ -142,7 +143,7 @@ export type AlarmTrace = {
 };
 
 /** The bindings THE DO reads (wrangler.jsonc): the DO namespace, the Worker Loader, the kv namespaces,
- *  Workers AI, Artifacts — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
+ *  Workers AI, Browser Run, Artifacts — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
  *  vars worker.ts's `parseAppConfig` parses. control-plane.ts's `Env` extends this with the
  *  in-process control plane's own (D1, OAuth KV, …): the one worker's env. */
 export interface Env extends AppConfigEnv {
@@ -151,6 +152,10 @@ export interface Env extends AppConfigEnv {
   ITX_KV: KVNamespace;
   /** Workers AI — the built-in root `itx.ai`, the binding verbatim (context/built-ins.ts). */
   AI: Ai;
+  /** Browser Run — the built-in root `itx.browser` (context/built-ins.ts). */
+  BROWSER: BrowserRun;
+  /** The one R2 bucket — the built-in root `itx.r2`, every owner under its own prefix (context/built-ins.ts). */
+  FILES: R2Bucket;
   /** Cloudflare Artifacts (beta) — the ONE bound namespace behind `itx.cfArtifacts`, project-scoped. */
   ARTIFACTS: ArtifactsNamespace;
   /** THE SECRETS (secret-durable-object.ts): one Durable Object per secret, `<owner>:<name>` —
@@ -461,6 +466,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     deployId: this.#appConfig.deployId,
     artifactsAccountId: this.#appConfig.artifactsAccountId,
     artifactsNamespace: this.#appConfig.artifactsNamespace,
+    signFileUrl: (input) =>
+      signedFileUrl({
+        ...input,
+        secret: this.#appConfig.sessionSecret.exposeSecret(),
+        platformOrigin: this.#appConfig.platformOrigin,
+        projectHostnameBase: this.#appConfig.projectHostnameBase,
+      }),
     secrets: () =>
       Object.entries(this.#stream.coreReducedState.secrets).map(([name, secret]) => ({
         name,

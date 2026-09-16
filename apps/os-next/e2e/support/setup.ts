@@ -10,5 +10,6 @@ process.env.WORKER_BASE_URL = inject("workerBaseUrl");
 process.env.ADMIN_API_SECRET = inject("adminApiSecret");
 process.env.PROJECT_HOSTNAME_BASE = inject("projectHostnameBase");
 process.env.MCP_BASE_URL = inject("mcpBaseUrl");
+process.env.OPENAI_API_KEY = inject("openaiApiKey");
 
 afterEach(() => disposeSessions());

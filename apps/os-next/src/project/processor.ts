@@ -1,6 +1,6 @@
 // src/project/processor.ts — the project processor's PURE class (the triplet's middle): folds the
-// birth certificates cross-posted to `/` into the catalog. First certificate wins; a repo or
-// workspace is born once. Imports only the pure kernel, so a unit test constructs it with `new`
+// birth certificates cross-posted to `/` into the catalog. First certificate wins; a repo, a
+// workspace or an agent is born once. Imports only the pure kernel, so a unit test constructs it with `new`
 // (processor.test.ts, in node); the host (durable-object.ts) reduces it on demand through `snapshot()`.
 import {
   type ConsumedEvent,
@@ -33,6 +33,14 @@ export class ProjectProcessor extends StreamProcessor<
       return {
         ...state,
         workspaces: { ...state.workspaces, [event.payload.path]: { createdAt: event.createdAt } },
+      };
+    }
+
+    if (event.type === "events.iterate.com/agent/created") {
+      if (state.agents[event.payload.path]) return undefined;
+      return {
+        ...state,
+        agents: { ...state.agents, [event.payload.path]: { createdAt: event.createdAt } },
       };
     }
     return undefined;

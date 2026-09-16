@@ -1,7 +1,7 @@
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (the one list
 // is context/itx-expression-rewriting.ts). Three kinds of key, one record: the AXIOMS (the log, the stub
 // registry, the rule table, the two hosts, addressing), the BINDINGS (`kv`, `secrets`, `ai`,
-// `cfArtifacts`, `repos` — a Cloudflare binding only this env holds, exposed or scoped) and THE
+// `browser`, `cfArtifacts`, `repos` — a Cloudflare binding only this env holds, exposed or scoped) and THE
 // LIBRARY (`connectTo*`, library.ts — code a user could write, taking only `itx`).
 // THE RECORD IS `itx.builtins`, the reserved root: `itx.builtins.<root>…` runs against it directly
 // and never reads the rule table; a short `itx.<root>…` reaches it through the IMPLICIT PLATFORM ROW
@@ -55,6 +55,7 @@ import {
   RpcStubHandle,
 } from "./expression.ts";
 import type { BuiltInRoot } from "./itx-expression-rewriting.ts";
+import { cfBrowser } from "./browser.ts";
 import { projectScopedArtifacts, type ArtifactsNamespace, type ArtifactsScope } from "./repos.ts";
 
 /** One row of `itx.rewriteRules.list()`: a context row (`target` a string, or `null` for a mask) or an
@@ -81,6 +82,22 @@ export type SubscriptionListEntry = {
   halted?: { afterOffset: number; attempts: number; error?: string };
 };
 
+/** An `R2Object` as `itx.r2` answers it: every field the class carries, as data — the key with the
+ *  owner prefix stripped, dates as ISO strings, checksums as hex. */
+export type R2ObjectRecord = {
+  key: string;
+  version: string;
+  size: number;
+  etag: string;
+  httpEtag: string;
+  checksums: Record<string, string>;
+  uploaded: string;
+  httpMetadata: R2HTTPMetadata;
+  customMetadata: Record<string, string>;
+  range?: R2Range;
+  storageClass: string;
+};
+
 /** THE built-in scope, as ONE interface — the clean-room's whole kernel surface; the library's verbs
  *  come in by `extends` (library.ts). The record is a PLAIN OBJECT of own-enumerable closures,
  *  not an RpcTarget class, on purpose: the resolver gates on `Object.hasOwn`, so a prototype-method
@@ -101,6 +118,48 @@ export interface BuiltInScope extends LibraryRoots {
     put(key: string, value: string): Promise<{ ok: true }>;
     delete(key: string): Promise<{ ok: true }>;
     list(prefix?: string): Promise<{ keys: string[] }>;
+  };
+  /** THE OBJECT STORE: the R2 bucket binding, verbatim, on the resource owner's slice of ONE bucket
+   *  (`FILES`) — every key prefixed `<owner.id>/` as kv's are `<owner.id>:`, the prefix applied to
+   *  every key and `prefix`/`startAfter` option and stripped from every key and prefix answered.
+   *  The binding's own verbs, arguments and pagination (`list` is ONE page, with its cursor); what
+   *  cannot cross the wire is answered as data — an `R2Object` as its fields, a body as its bytes.
+   *  `presign` is the one verb the binding lacks: a signed URL on the project host (file-urls.ts),
+   *  a download or an upload, the platform serving the bytes itself — R2's own presigned URLs need
+   *  S3 credentials this worker does not hold. Multipart uploads are not here yet. */
+  r2: {
+    head(key: string): Promise<R2ObjectRecord | null>;
+    get(
+      key: string,
+      options?: { range?: R2Range },
+    ): Promise<(R2ObjectRecord & { data: Uint8Array }) | null>;
+    put(
+      key: string,
+      value: ArrayBuffer | ArrayBufferView | string | null,
+      options?: {
+        httpMetadata?: R2HTTPMetadata;
+        customMetadata?: Record<string, string>;
+        storageClass?: string;
+      },
+    ): Promise<R2ObjectRecord>;
+    delete(keys: string | string[]): Promise<void>;
+    list(options?: {
+      limit?: number;
+      prefix?: string;
+      cursor?: string;
+      delimiter?: string;
+      startAfter?: string;
+    }): Promise<{
+      objects: R2ObjectRecord[];
+      delimitedPrefixes: string[];
+      truncated: boolean;
+      cursor?: string;
+    }>;
+    presign(input: {
+      key: string;
+      method?: "GET" | "PUT";
+      expiresInSeconds?: number;
+    }): Promise<{ url: string; expiresAt: string }>;
   };
   /** The resource owner's secrets for egress (a project's; a global user's or organization's own —
    *  never a catalog shared across users) — each one its own Durable Object (secrets.ts,
@@ -145,6 +204,9 @@ export interface BuiltInScope extends LibraryRoots {
    *  model with `@` (`itx.fable ⇒ itx.ai.run('@cf/…', @)`). A test shadows it with `provide("itx.ai",
    *  fake)`; the physical door stays `itx.builtins.ai`. */
   ai: Ai;
+  /** Cloudflare Browser Run (`apps/os` `itx.browser`): `.quickAction(action, options)` returns the
+   *  action's RESULT; `.fetch(input, init)` is the raw CDP door. */
+  browser: ReturnType<typeof cfBrowser>;
   /** THE ARTIFACTS PROXY (repos.ts `ArtifactsScope`): Cloudflare Artifacts, project-scoped and
    *  addressed BY THE REPO'S PATH — the binding's own verbs only: `create`, `get` (a handle with
    *  `createToken` and `remote()`), `list`, `delete`. Git itself is the repo facet's (src/repo/, the
@@ -270,21 +332,42 @@ type RootsAreTheSameSet = [Exclude<keyof BuiltInScope, "builtins">] extends [Bui
 const _rootsAreTheSameSet: RootsAreTheSameSet = true;
 void _rootsAreTheSameSet;
 
+/** An `R2Object` as data, the owner prefix off its key. */
+function r2ObjectRecord(object: R2Object, prefix: string): R2ObjectRecord {
+  return {
+    key: object.key.slice(prefix.length),
+    version: object.version,
+    size: object.size,
+    etag: object.etag,
+    httpEtag: object.httpEtag,
+    // R2Checksums.toJSON: the hex forms — the class holds ArrayBuffers, which are not data over the wire.
+    checksums: object.checksums.toJSON() as Record<string, string>,
+    uploaded: object.uploaded.toISOString(),
+    httpMetadata: object.httpMetadata || {},
+    customMetadata: object.customMetadata || {},
+    range: object.range,
+    storageClass: object.storageClass,
+  };
+}
+
 /** What the CONTEXT (the DO) injects: identity, the bindings, and the seams only it can serve. */
 interface BuildBuiltInsDeps {
   projectId: string;
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
   iterateContextName: string;
-  /** The bindings the built-ins reach (the workers lane binds neither AI nor Artifacts; nothing
-   *  there calls them). */
+  /** The bindings the built-ins reach (the workers lane binds neither AI, Browser Run, nor Artifacts;
+   *  nothing there calls them). */
   env: {
     LOADER: WorkerLoader;
     ITX_KV: KVNamespace;
+    /** The one R2 bucket, every owner's objects under its own prefix — the built-in root `itx.r2`. */
+    FILES: R2Bucket;
     /** The secrets' Durable Objects (secret-durable-object.ts): one per secret, `<owner.id>:<name>` — the
      *  resource owner's id (iterate-context.ts `resourceScope`). */
     SECRET: DurableObjectNamespace<SecretDurableObject>;
     AI: Ai;
+    BROWSER: BrowserRun;
     ARTIFACTS: ArtifactsNamespace;
   };
   /** The deploy identity every loader cacheKey folds in (worker.ts `AppConfig`). */
@@ -292,6 +375,14 @@ interface BuildBuiltInsDeps {
   /** The Artifacts account + namespace `itx.cfArtifacts` names git remotes with (worker.ts `AppConfig`). */
   artifactsAccountId: string;
   artifactsNamespace: string;
+  /** A signed file URL on the project host (file-urls.ts `signedFileUrl`, closed over the app
+   *  config's secret and hosts) — `itx.r2.presign`. */
+  signFileUrl: (input: {
+    project: string;
+    key: string;
+    method: "GET" | "PUT";
+    expiresInSeconds?: number;
+  }) => Promise<{ url: string; expiresAt: string }>;
   /** The secrets catalog — names, pins and strategy kinds, from the core reduce (strongly
    *  consistent; never a value). */
   secrets: () => SecretCatalogEntry[];
@@ -339,6 +430,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   // `owner.id`; the secrets catalog lives in the log at `owner.rootPath`.
   const owner = resourceScope(projectId, path);
   const kvPrefix = `${owner.id}:`;
+  const r2Prefix = `${owner.id}/`;
   const ownContext = () => deps.context(path);
   // A secret's Durable Object is `<owner.id>:<name>` — the one the context DO's `#egress` forwards a
   // placeholder-bearing request to, by the same derivation (an owner id never holds a `:`). The
@@ -414,6 +506,46 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         }
       },
     },
+    r2: {
+      head: async (key) => {
+        const object = await env.FILES.head(r2Prefix + key);
+        return object ? r2ObjectRecord(object, r2Prefix) : null;
+      },
+      get: async (key, options = {}) => {
+        const object = await env.FILES.get(r2Prefix + key, options);
+        if (!object) return null;
+        return {
+          ...r2ObjectRecord(object, r2Prefix),
+          data: new Uint8Array(await object.arrayBuffer()),
+        };
+      },
+      put: async (key, value, options = {}) =>
+        r2ObjectRecord(await env.FILES.put(r2Prefix + key, value, options), r2Prefix),
+      delete: (keys) =>
+        env.FILES.delete(
+          typeof keys === "string" ? r2Prefix + keys : keys.map((key) => r2Prefix + key),
+        ),
+      list: async (options = {}) => {
+        const page = await env.FILES.list({
+          ...options,
+          prefix: r2Prefix + (options.prefix || ""),
+          ...(options.startAfter && { startAfter: r2Prefix + options.startAfter }),
+        });
+        return {
+          objects: page.objects.map((object) => r2ObjectRecord(object, r2Prefix)),
+          delimitedPrefixes: page.delimitedPrefixes.map((prefix) => prefix.slice(r2Prefix.length)),
+          truncated: page.truncated,
+          ...(page.truncated && { cursor: page.cursor }),
+        };
+      },
+      presign: (input) =>
+        deps.signFileUrl({
+          project: owner.id,
+          key: input.key,
+          method: input.method || "GET",
+          expiresInSeconds: input.expiresInSeconds,
+        }),
+    },
     secrets: {
       set: (name, material, options) =>
         onRootContext(["set", name, material, options], () =>
@@ -485,6 +617,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       list: () => onRootContext(["list"], async () => deps.secrets()),
     },
     ai: env.AI, // the binding object itself — dispatch walks its methods
+    browser: cfBrowser(env.BROWSER),
     cfArtifacts: projectScopedArtifacts({
       namespace: env.ARTIFACTS,
       projectId: owner.id,
