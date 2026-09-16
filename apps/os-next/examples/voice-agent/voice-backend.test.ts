@@ -53,7 +53,7 @@ async function run(replies: string[], scriptResults: string[] = []) {
     complete: async (messages) => {
       completions.push(messages.map((m) => ({ ...m })));
       const reply = replies.shift();
-      if (reply === undefined) throw new Error("no more replies");
+      if (!reply) throw new Error("no more replies");
       return reply;
     },
     runScript: async (script) => {

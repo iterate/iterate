@@ -21,8 +21,7 @@ const args = new Map<string, string>();
 for (let i = 2; i < process.argv.length; i += 2) {
   const key = process.argv[i];
   const value = process.argv[i + 1];
-  if (!key?.startsWith("--") || value === undefined)
-    throw new Error(`usage: --flag value…, got ${key}`);
+  if (!key?.startsWith("--") || !value) throw new Error(`usage: --flag value…, got ${key}`);
   args.set(key.slice(2), value);
 }
 const PROJECT = process.env.PROJECT || "prj-voice";
