@@ -9,7 +9,7 @@ end and the relay's live state on screen.
 
 - `src/worker.ts` — the Notes app's worker verbatim: `appAuth` (the OAuth client in a `BrowserSession`
   durable object), static assets, the server entry.
-- `src/routes/_auth/call.tsx` — the one page. `useLiveState` from `os-next/react` subscribes to the
+- `src/routes/_auth/call.tsx` — the one page. `useLiveState` from `iterate/next/react` subscribes to the
   relay's `voice-agent` live view (phase, answering, transcript, last end) on the call's context.
 - `src/call.ts` — one call: `itx.voice.setupVoiceAgent({streamPath, activation})` on a fresh
   context, a subscription for `spk-frame` and the call facts, ephemeral `mic-frame` appends twenty a
