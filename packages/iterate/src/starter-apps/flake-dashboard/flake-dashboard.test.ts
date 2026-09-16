@@ -398,6 +398,26 @@ test("a late retry cannot undo newer wrapper adoption on main", async () => {
   expect(renderBody(h.state())).toContain("chat upload |");
 });
 
+test("a late wrapper cannot duplicate a newer unknown flake row", async () => {
+  const h = makeHarness();
+  await h.append(
+    birth(),
+    runRecorded(3, [record("chat upload", "retried-pass", { kind: "unknown", at: day(3) })]),
+    runRecorded(1, [record("chat upload", "pass", { at: day(1) })]),
+  );
+  expect(renderBody(h.state())).toContain("chat upload |");
+  expect(renderBody(h.state())).not.toContain("`chat upload` |");
+  expect(h.state().tests["chat upload"]).toMatchObject({
+    kind: "unknown",
+    pattern: "",
+    defaultBranchStreak: { outcome: "retried-pass", runs: 1 },
+    counts: { "retried-pass": 1, pass: 1 },
+  });
+  await h.append(runRecorded(4, [record("chat upload", "pass", { at: day(4) })]));
+  expect(renderBody(h.state())).not.toContain("chat upload |");
+  expect(renderBody(h.state())).toContain("`chat upload` |");
+});
+
 test("late retries keep history chronological without moving last flake backwards", async () => {
   const h = makeHarness();
   await h.append(
@@ -776,6 +796,31 @@ test("a main webhook cannot relabel a branch artifact at the same SHA", async ()
   await makeApp(itx).processEvent(webhookEvent());
   expect(appended[1]).toMatchObject({ payload: { branch: "ci/validation", commit: "abc123" } });
 });
+
+test.each(["{broken", JSON.stringify({ status: "complete" })])(
+  "an invalid suite summary %s does not drop the following suite",
+  async (invalidSummary) => {
+    const { itx, appended } = fakeItx({
+      artifacts: [
+        { artifactId: "bad", name: "flake-records-specs", sizeBytes: 1000 },
+        { artifactId: "good", name: "flake-records-preview-e2e", sizeBytes: 1000 },
+      ],
+      zips: {
+        bad: zipSync({ "suite-summary.json": strToU8(invalidSummary) }),
+        good: zipSync({
+          "records.jsonl": strToU8(
+            JSON.stringify(record("backend retry", "retried-pass", { kind: "unknown" })),
+          ),
+        }),
+      },
+    });
+    await makeApp(itx).processEvent(webhookEvent());
+    expect(appended).toHaveLength(2);
+    expect(appended[1]).toMatchObject({
+      payload: { suite: "preview-e2e", records: [{ name: "backend retry", kind: "unknown" }] },
+    });
+  },
+);
 
 test("runs without flake artifacts append nothing, not even a birth", async () => {
   const { itx, appended } = fakeItx({

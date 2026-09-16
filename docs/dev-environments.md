@@ -461,8 +461,9 @@ operator capability, so use current `main` for manual preview deployments.
 
 ### Main preview runs
 
-Main runs the full preview fleet after each push, through
-`pnpm preview run --commit <full-sha>`. It leases an ordinary slot with the
+Main runs the full preview fleet after each push through the same distributed
+`preview-run.yml` workflow as PRs. Its commands use `--commit <full-sha>`.
+It leases an ordinary slot with the
 holder `main-preview`. Each run renews that holder's existing lease when present,
 then erases test data after the tests without releasing the slot. The same 3h
 expiry applies as for PRs: after a quiet period, main may get a different slot.
@@ -473,10 +474,10 @@ newest queued commit. PR cancellation behavior is unchanged. Dispatch it with
 `depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow cloudflare-main-preview.yml --ref <branch>`.
 Local `--commit` invocations are refused because they bypass that workflow lock.
 
-`preview run --commit` requires a clean checkout at the exact SHA and that commit's
+`preview ci-prepare --commit` requires a clean checkout at the exact SHA and that commit's
 pkg.pr.new packages (published by main/PR CI). A branch dispatch keeps its branch
 identity, so validation cannot replace the dashboard's main results.
-The same `deploy`, `test`, `run`, `test-target`, `assign`, `erase`, and `cleanup`
+The same `ci-prepare`, `ci-test`, `ci-finish`, `deploy`, `test`, `run`, `test-target`, `assign`, `erase`, and `cleanup`
 commands accept either `--pull-request-number <n>` or `--commit <full-sha>`.
 Target setup supplies the revision, lease holder, comparison base, review login
 and report. PRs compare against their base; the workflow target deploys the full
@@ -486,19 +487,22 @@ PR state lives in the managed PR body. Main saves its report atomically in
 `test-results/main-preview-state.json`; subsequent commands in the same job
 attempt reload it. A new job/attempt starts fresh, while Semaphore independently
 retains the lease. These are job-local reports, not a cross-job deployment store.
+The immutable `preview-ci-plan.json` carries the deployment between jobs;
+consumers validate its commit, attempt, holder and branch before using it.
 
-Both workflows call `preview erase` in an `always()` step after `preview run`.
+Both workflows call `preview erase` only after every test job has settled,
+in parallel with report collection. Cleanup does not depend on downloading reports.
 It keeps the lease; `preview cleanup` erases and releases it. Main erase failures
-fail the job. Cleanup still runs if the build dirtied tracked files; deploy/test
-retain the clean-checkout check. Main's fixed concurrency group covers the whole
-job, including erase. PRs retain their existing superseded-head erase guard.
+fail the finalizer job. Cleanup still runs if the build dirtied tracked files;
+preparation requires a clean checkout. Main's fixed concurrency group covers the
+whole called workflow, including erase. PRs retain their existing superseded-head erase guard.
 
 ### Story 1: CI previews my PR
 
 Opening/pushing a PR that touches preview-relevant paths triggers the
-`Preview` workflow, which runs `pnpm preview run` — deploy then
-e2e as one step, sharing one resolved PR head so a push cannot race into a
-gap between them. The PR body's managed "Environment Config Lease" section
+`Preview` workflow. Preparation deploys once, then app tests and six browser
+shards consume the same immutable deployment plan. The caller holds the lifecycle
+lock through result collection and cleanup. The PR body's managed "Environment Config Lease" section
 records the slot, per-app URLs and statuses; the workflow logs narrate every
 decision (which apps were selected and why, lease transitions, slot waits).
 Diff selection may reuse an unchanged app's exact recorded Worker deployment,

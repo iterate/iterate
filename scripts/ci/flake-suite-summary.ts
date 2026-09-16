@@ -17,29 +17,35 @@ export async function writeFlakeSuiteSummaries(input: {
 }) {
   const suites = input.group === "unit" ? ["unit"] : ["specs", "preview-e2e"];
   for (const suite of suites) {
-    const artifacts = input.artifacts.filter((artifact) => {
-      if (suite === "unit") return artifact.context.testKind === "unit";
+    const matchesSuite = (source: { producer: string; testKind: string; workspace?: string }) => {
+      if (suite === "unit") return source.testKind === "unit";
       return suite === "specs"
-        ? artifact.producer === "playwright-telemetry-reporter" &&
-            artifact.context.workspace === "iterate-root"
-        : artifact.producer === "vitest-retry-telemetry-reporter" &&
-            artifact.context.workspace === "@iterate-com/os";
+        ? source.producer === "playwright-telemetry-reporter" && source.workspace === "iterate-root"
+        : source.producer === "vitest-retry-telemetry-reporter" &&
+            source.workspace === "@iterate-com/os";
+    };
+    // Keep this suite's declarations as well as its runners. A missing sibling
+    // suite must not prevent this one from proving its own test inventory.
+    const evidence = input.artifacts.flatMap((artifact) => {
+      const expectedArtifactSources = (artifact.expectedArtifactSources || []).filter(matchesSuite);
+      return matchesSuite({ ...artifact.context, producer: artifact.producer }) ||
+        expectedArtifactSources.length
+        ? [{ ...artifact, expectedArtifactSources }]
+        : [];
     });
+    const artifacts = evidence.filter((artifact) =>
+      matchesSuite({ ...artifact.context, producer: artifact.producer }),
+    );
     const source = artifacts[0] || input.artifacts[0];
     if (!source) throw new Error("Cannot identify the CI run for the flake suite summary");
     const branch = source.ci.branch || "";
     const completeness = analyzeTestTelemetryCompleteness(
-      input.artifacts,
+      evidence,
       suite === "unit" ? input.expectedWorkspaces : [],
       input.scope,
     );
-    const expectedRunners = completeness.expectedArtifactSources.filter((source) =>
-      suite === "specs"
-        ? source.producer === "playwright-telemetry-reporter" && source.workspace === "iterate-root"
-        : source.producer === "vitest-retry-telemetry-reporter" &&
-          source.workspace === "@iterate-com/os",
-    ).length;
-    const expectedCount = input.scope === "workflow" ? expectedRunners : 1;
+    const expectedCount =
+      input.scope === "workflow" ? completeness.expectedArtifactSources.length : 1;
     const diagnostics = [
       ...(!branch ? ["Missing source branch"] : []),
       ...(input.cancelled ? ["CI run cancelled"] : []),
@@ -53,11 +59,6 @@ export async function writeFlakeSuiteSummaries(input: {
       ...completeness.missingWorkspaces.map((name) => `Missing workspace: ${name}`),
       ...completeness.incompleteArtifactIds.map((id) => `Incomplete runner result: ${id}`),
       ...completeness.foreignArtifactIds.map((id) => `Result belongs to another CI run: ${id}`),
-      ...input.artifacts.flatMap((artifact) =>
-        artifact.producer === "preview-e2e-orchestrator" && artifact.run.error
-          ? [`Preview result collection failed: ${artifact.run.error.message}`]
-          : [],
-      ),
       ...artifacts.flatMap((artifact) => [
         ...(artifact.ci.branch !== branch
           ? [`Result belongs to another branch: ${artifact.artifactId}`]

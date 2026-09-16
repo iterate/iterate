@@ -5,7 +5,7 @@ size: large
 
 # Main preview runs and a current flake dashboard
 
-Status: the original implementation passed full acceptance at `64085197f`. Merging main's #2659 now moves main onto the same distributed preview workflow as PRs and makes suite completeness account for all browser shards. Local integration tests pass; fresh distributed PR/main preview validation remains. The live dashboard still needs its normal package update/deployment after merge.
+Status: latest main (#2659) is merged. Both distributed PR/main workflows passed at `33fa8e639`, including all six browser shards, app tests, complete summaries and cleanup. Three review edge cases are fixed and locally verified; their follow-up commit still needs CI. The live dashboard needs its normal package update/deployment after merge.
 
 ## Current scope
 
@@ -23,7 +23,8 @@ Status: the original implementation passed full acceptance at `64085197f`. Mergi
 - [x] Complete checks and commit/push the common-target refactor for compare-link review. *Implementation pushed as `170a85b7c`; local checks and partial deployed validation are recorded below. PR stayed closed during compare-link review.*
 - [x] Reopen PR #2658 after the final human-review fixes, with a current description and risk map. *Reopened at `f951e6897`; global monitoring is active through September 16.*
 - [x] Inspect successful CI artifacts for the final retention/absence changes and finish review. *Run `9hdx326789` at `64085197f`: all three suite summaries complete; every result matches raw telemetry, including one unknown E2E retry and one known flake strike. Cleanup and retained lease verified; all review threads resolved.*
-- [ ] Merge #2659's distributed workflow from latest main and validate both PR/main callers plus complete sharded summaries. *Local regression tests pass; deployed acceptance pending.*
+- [x] Merge #2659's distributed workflow from latest main and validate both PR/main callers plus complete sharded summaries. *At `33fa8e639`, PR run `r2rxcv57jj` and main-workflow trial `qwlvgkp1n5` passed all nine jobs. Both reported 92 specs and 232 E2E tests; cleanup retained ordinary leases.*
+- [ ] Finish CI/review for the follow-up dashboard edge-case fixes. *42 dashboard tests, 12 summary tests, affected typechecks and scoped lint pass; real distributed artifacts replay with unchanged complete results.*
 
 ## Decisions and limits
 
@@ -104,3 +105,12 @@ Codex session: `01a0a1e6-0135-7902-91aa-b4bb07026de2`.
 - Main now calls the same reusable workflow as PRs rather than retaining the old single-runner copy. The distributed commands resolve `PreviewTarget`; plans identify their holder and branch rather than assuming every source is a PR. Consumer reports start from the validated immutable plan. The fixed main holder remains protected by the caller's non-cancelling workflow lock, and cleanup stays independent of result downloads.
 - The summary regression reproduced six healthy browser reports being rejected as multiple full suites. Summary generation now uses the workflow's declared runner count and shared completeness analysis; tests cover all six reports, missing/extra shards and another run attempt. Existing retention rules are unchanged. Local integration suite: 224 passing tests; scripts typecheck passes.
 - Pre-push merge checks: all 347 scripts tests and 39 dashboard tests pass; full-workspace typechecking, lint, formatting and Knip pass. Native CLI help exposes both target forms on `ci-prepare`. #2659's deployed artifacts confirm called jobs preserve the caller's workflow name, so the main workflow guard remains effective across its child jobs.
+
+
+### September 16 — distributed integration acceptance and review
+
+- Merged #2659 without rewriting history at `33fa8e639`. Full workspace tests, typechecking, lint, formatting and Knip pass. PR CI passed all checks, including 5,611 unit results and the nine-job preview workflow: https://depot.dev/orgs/0p91s0lz49/workflows/spv0jn38vd. The main-specific trial also passed: https://depot.dev/orgs/0p91s0lz49/workflows/884m77wf5v. The dispatch retains its honest feature-branch identity; main reporting begins only after merge.
+- Downloaded both workflows' artifacts. Each has all six browser reporters, 92 browser results, 232 OS E2E results and complete summaries with no missing-result diagnostics. Every test identity matches raw telemetry. PR has no unknown retry; the main trial records one retry in “hosted delivery intersects the stored filter with the processor's announced event types” (99s stream wait timeout). Both preserve the known facet-staleness strike and pinned failures. These are recorded defects, not erased by green CI.
+- Both finalizers waited for all test jobs, erased DO/D1/KV state and kept leases (PR preview-13 until 18:47:12Z; main preview-7 until 18:47:50Z). The PR's inert artifact repositories hit the existing bounded cleanup deadline and remain for a later release; main cleanup completed. No cleanup policy was changed.
+- Assessed all three Bugbot findings independently and reproduced them. A missing suite no longer blocks healthy sibling-suite completeness; malformed JSON/schema skips only the damaged artifact with an error log; a late older wrapper cannot duplicate a newer unknown row. Processor 0.8.0 refolds cached state. All 42 dashboard and 12 summary tests pass, as do affected typechecks and scoped lint. Replaying the final summary code against both downloaded workflows preserves complete 92/232 results and the main trial's retry count.
+- Evidence: `/tmp/main-preview-merge-{pr,main}-complete.zip`, `/tmp/main-preview-merge-unit.zip`, `/tmp/main-preview-merge-{pr,main}-replayed/`, `/tmp/main-preview-finish-{f5dcd79hnn,hjv5s40mkz}.log`.

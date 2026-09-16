@@ -145,6 +145,46 @@ test.each(["complete", "missing shard", "foreign attempt", "extra shard"])(
   },
 );
 
+test.each(["specs", "preview-e2e"])(
+  "missing %s results leave the other suite complete",
+  async (missing) => {
+    using output = temporaryDirectory();
+    const browser = browserResult();
+    const backend = TestTelemetryArtifact.parse({
+      ...browser,
+      artifactId: "vitest",
+      producer: "vitest-retry-telemetry-reporter",
+      context: { ...browser.context, framework: "vitest", workspace: "@iterate-com/os" },
+    });
+    const finalizer = TestTelemetryArtifact.parse({
+      ...browser,
+      artifactId: "finalizer",
+      producer: "preview-e2e-orchestrator",
+      context: { ...browser.context, framework: "mixed" },
+      expectedArtifactSources: [browser, backend].map((a) => ({
+        producer: a.producer,
+        ...a.context,
+      })),
+      run: { ...browser.run, status: "failed", error: { message: "Missing consumer result" } },
+      tests: [],
+    });
+    await writeFlakeSuiteSummaries({
+      directory: output.path,
+      group: "preview",
+      scope: "workflow",
+      artifacts: [finalizer, missing === "specs" ? backend : browser],
+      expectedWorkspaces: [],
+      cancelled: false,
+      headSha: "abc123",
+    });
+    for (const suite of ["specs", "preview-e2e"]) {
+      expect(
+        JSON.parse(readFileSync(join(output.path, suite, "suite-summary.json"), "utf8")),
+      ).toMatchObject({ status: suite === missing ? "incomplete" : "complete" });
+    }
+  },
+);
+
 function temporaryDirectory() {
   const path = mkdtempSync(join(tmpdir(), "flake-summary-"));
   return {

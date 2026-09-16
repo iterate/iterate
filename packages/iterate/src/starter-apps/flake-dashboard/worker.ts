@@ -1,3 +1,4 @@
+import type { z } from "zod";
 import {
   isIdempotencyConflict,
   StreamProcessor,
@@ -234,9 +235,19 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
         const summaryBytes = Object.entries(files).find(
           ([name]) => name === "suite-summary.json" || name.endsWith("/suite-summary.json"),
         )?.[1];
-        const summary = summaryBytes
-          ? FlakeSuiteSummary.parse(JSON.parse(new TextDecoder().decode(summaryBytes)))
-          : undefined;
+        let summary: z.infer<typeof FlakeSuiteSummary> | undefined;
+        if (summaryBytes) {
+          try {
+            summary = FlakeSuiteSummary.parse(JSON.parse(new TextDecoder().decode(summaryBytes)));
+          } catch {
+            // Its provenance and test inventory cannot be trusted. Keep the
+            // previous suite state and continue ingesting independent artifacts.
+            console.error(
+              `[flake-ingest] invalid suite-summary.json in ${artifact.name}; skipping artifact`,
+            );
+            continue;
+          }
+        }
         if (
           summary &&
           summary.unknownFlakeCount !== records.filter((record) => record.kind === "unknown").length
@@ -336,18 +347,19 @@ export class FlakeDashboardProcessor extends StreamProcessor<
           const existing = tests[record.name];
           const runAt = summary?.startedAt || record.at;
           const wrapperAt = existing?.lastMainWrapperAt[suite];
-          const staleUnknown =
+          const unknownAt = state.unknownFlakes[suite]?.[record.name]?.lastRunAt;
+          const staleKind =
             existing &&
             onDefaultBranch &&
-            record.kind === "unknown" &&
-            wrapperAt &&
-            runAt < wrapperAt;
-          const kind = staleUnknown ? existing.kind : record.kind;
+            (record.kind === "unknown"
+              ? wrapperAt && runAt < wrapperAt
+              : unknownAt && runAt < unknownAt);
+          const kind = staleKind ? existing.kind : record.kind;
           const counts = { ...existing?.counts };
           counts[record.outcome] = (counts[record.outcome] || 0) + 1;
           const streak = existing?.defaultBranchStreak || null;
           const nextStreak =
-            !onDefaultBranch || staleUnknown
+            !onDefaultBranch || staleKind
               ? streak
               : record.outcome === "unexpected-error"
                 ? null
@@ -365,7 +377,7 @@ export class FlakeDashboardProcessor extends StreamProcessor<
               : null;
           tests[record.name] = {
             kind,
-            pattern: record.pattern || existing?.pattern || "",
+            pattern: staleKind ? existing.pattern : record.pattern || existing?.pattern || "",
             suites: existing?.suites.includes(event.payload.suite)
               ? existing.suites
               : [...(existing?.suites || []), event.payload.suite],
