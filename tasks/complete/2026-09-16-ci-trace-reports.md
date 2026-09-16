@@ -5,7 +5,7 @@ size: medium
 
 # Clickable CI trace reports
 
-Implemented in PR #2681. Reports now upload to Depot artifacts and are served by an independent route in `iterate/config`; generated Git commits and use of the explainer host have been removed. Local trace and route checks pass; the new upload → public URL → commit-status path is being verified live.
+Implemented in PR #2681. Reports now upload to Depot artifacts and are served by an independent route in `iterate/config`; generated Git commits and use of the explainer host have been removed. Local trace and route checks pass. A real collector uploaded a Depot artifact, verified its public URL and created a CI trace commit status automatically; browser drilldown and OTLP download are verified. A fresh preview is queued behind the existing main preview.
 
 ## Request
 
@@ -54,3 +54,6 @@ Session: `01a09f64-ea4e-7c61-ab0a-c15eb65df3bc`.
 - Consolidated tracing under `scripts/ci/tracing/`: `tracing.ts`, `cli.ts`, `shell.sh`, `viewer.html` and one `tracing.test.ts`. Updated imports, Playwright reporters, workflow commands and change-detection paths. All 357 scripts tests, scripts/specs typechecks and scoped lint passed; the moved CLI reproduced the published real run’s 203 spans exactly.
 
 - Replaced generated artifact-branch commits with the standard Depot-compatible artifact upload action and a config-repo route that unpacks reports on demand. Dropped Git contents write permission. The scheduled repair dispatches collectors only for missing execution statuses. Earlier explainer/PR-body notes above describe superseded publication designs.
+
+- Live acceptance: config `878c828` serves the Depot archive independently of explainers. Collector `rrm65p27zc` uploaded artifact `01a0ac01-8b6c-7633-a515-c7558aa9540c` and automatically created status `54321271382` on the source commit. The newer completed preview’s artifact `01a0abfc-45e7-7da2-b4fa-f3f1cae2e1d7` has 207 unique spans with valid parents; browser download equals the JSON endpoint. Drilldown works with no browser errors and the sandbox denies host storage access. Unrelated artifacts return 404; post-fix route error telemetry is empty.
+- Merged main without rewriting history. The only conflict was the Kit Knip comment, now identical to main. A local Workers-runtime probe identified the initial config serving error (calling global fetch with the wrong receiver); the deployed fix passed the same probe and live requests. Full preview `p62xxs9fz2` on `183bd829b` was dispatched through the serialized main workflow because GitHub’s PR head metadata lagged the pushed branch. The global PR monitor is tracking it.

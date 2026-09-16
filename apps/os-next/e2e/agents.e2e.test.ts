@@ -97,9 +97,13 @@ test("the loop: a person's words → the model → a script run against itx → 
     offset: expect.any(Number),
   });
 
+  // Wait for the LAST derived fact, the prose's web-message-sent — appended a beat after the
+  // assistant item it derives from; reading at the assistant's words raced it on the deployed worker.
   const log = await until("the prose that ends the turn", async () => {
     const all = await readAll(support);
-    return assistantWords(all).length === 2 ? all : undefined;
+    return all.filter((e) => e.type === "events.iterate.com/agents/web-message-sent").length === 2
+      ? all
+      : undefined;
   }).catch(async (error: unknown) => {
     const all = await readAll(support);
     console.log(
