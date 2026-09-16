@@ -2615,6 +2615,27 @@ bool iterate_kit_voice_loop_init(
 }
 
 /*
+ * Names the class of a retained Cap'n Web failure. The peer library keeps only
+ * this status; the finer reason ("CAPNWEB_E_TOKEN_LIMIT",
+ * "CAPNWEB_E_EXPORT_LIMIT", ...) exists only in the abort message it sends.
+ */
+static const char *capnweb_status_name(int32_t status) {
+  switch ((enum capnweb_status)status) {
+    case CAPNWEB_OK: return "CAPNWEB_OK";
+    case CAPNWEB_E_INVALID_ARGUMENT: return "CAPNWEB_E_INVALID_ARGUMENT";
+    case CAPNWEB_E_INVALID_MESSAGE: return "CAPNWEB_E_INVALID_MESSAGE";
+    case CAPNWEB_E_LIMIT: return "CAPNWEB_E_LIMIT";
+    case CAPNWEB_E_TRANSPORT: return "CAPNWEB_E_TRANSPORT";
+    case CAPNWEB_E_REMOTE_ABORT: return "CAPNWEB_E_REMOTE_ABORT";
+    case CAPNWEB_E_CLOSED: return "CAPNWEB_E_CLOSED";
+    case CAPNWEB_E_UNSUPPORTED: return "CAPNWEB_E_UNSUPPORTED";
+    case CAPNWEB_E_STATE: return "CAPNWEB_E_STATE";
+    case CAPNWEB_E_CANCELED: return "CAPNWEB_E_CANCELED";
+  }
+  return "?";
+}
+
+/*
  * ONE PASS OF THE DEVICE.
  *
  * `now_ms` is a parameter rather than a call, because a step that is handed
@@ -2754,7 +2775,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
             " wsErrType=%" PRId32 " tlsErr=%" PRId32 " errno=%" PRId32
             " protoFail=%" PRIu32 " recvFail=%" PRIu32 " sendFail=%" PRIu32
             " inboxDiscard=%" PRIu32 " outboxDiscard=%" PRIu32
-            " appCapnweb=%" PRId32,
+            " appCapnweb=%" PRId32 " (%s)",
             metrics.last_control_receive_status,
             metrics.last_websocket_close_status_code,
             metrics.last_websocket_error_type,
@@ -2765,7 +2786,8 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
             metrics.control_send_failures,
             metrics.control_inbox_discarded,
             metrics.control_outbox_discarded,
-            metrics.last_application_capnweb_status);
+            metrics.last_application_capnweb_status,
+            capnweb_status_name(metrics.last_application_capnweb_status));
       }
       if (transport.state == ITERATE_KIT_ESP_IDF_ITX_READY) {
         /* The socket is up, so DNS and UDP work: a good moment to ask what
@@ -2786,7 +2808,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
             tag,
             "mount diagnosis: connection=%d mount=%s failure=%s "
             "protoFail=%" PRIu32 " lastRecvStatus=%" PRId32
-            " wsClose=%" PRId32 " appCapnweb=%" PRId32 "@%" PRIu32
+            " wsClose=%" PRId32 " appCapnweb=%" PRId32 "@%" PRIu32 " (%s)"
             " recvFail=%" PRIu32 " sendFail=%" PRIu32,
             (int)runtime.connection.state,
             iterate_kit_itx_mount_state_name(runtime.connection.mount.state),
@@ -2797,6 +2819,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
             metrics.last_websocket_close_status_code,
             metrics.last_application_capnweb_status,
             metrics.last_application_capnweb_generation,
+            capnweb_status_name(metrics.last_application_capnweb_status),
             metrics.control_receive_failures,
             metrics.control_send_failures);
       }
