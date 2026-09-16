@@ -256,7 +256,7 @@ static void quiescent(void) {
  * ANSWER WHATEVER THE DEVICE ASKED, THE WAY A LIVE /api WOULD.
  *
  * The mount is a chain of one-way pushes each followed by a pull —
- * authenticate, projects.connect, projects.get, streams.get, openConnection —
+ * authenticate, projects.get, provide, cd, subscribe —
  * and every one of them resolves to a capability. Replying to each pull by id
  * is the whole of it, which is why this is a loop rather than a script: the
  * chain's length is the device's business, not this test's.
@@ -360,7 +360,7 @@ static bool copy_setup_stream_path(const char *message, char *out, size_t capaci
 }
 
 static bool copy_stream_get_path(const char *message, char *out, size_t capacity) {
-  const char *call = strstr(message, "[\"streams\",\"get\"]");
+  const char *call = strstr(message, "[\"cd\"]");
   const char *path;
   size_t length;
   if (call == NULL) return false;
@@ -417,7 +417,7 @@ static void pump(void) {
       const char *message = iterate_kit_fake_platform_sent(answered);
       const char *pull = strstr(message, "[\"pull\",");
       ++answered;
-      if (strstr(message, "\"openConnection\"") != NULL) {
+      if (strstr(message, "[\"subscribe\"]") != NULL) {
         const char *exported = strstr(message, "[\"export\",");
         long target;
         assert(exported != NULL);
@@ -447,7 +447,7 @@ static void pump(void) {
         assert(copy_setup_stream_path(
             message, setup_stream_path, sizeof(setup_stream_path)));
       }
-      if (strstr(message, "[\"streams\",\"get\"]") != NULL) {
+      if (strstr(message, "[\"cd\"]") != NULL) {
         assert(copy_stream_get_path(
             message, stream_get_path, sizeof(stream_get_path)));
       }
@@ -662,14 +662,14 @@ static void deliver_spk_chunk(bool last) {
   (void)snprintf(
       message,
       sizeof(message),
-      "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
+      "[\"push\",[\"pipeline\",%ld,[],[[["
       "{\"type\":\"events.iterate.com/voice-agent/spk-frame\","
       "\"offset\":%ld,"
       "\"payload\":{\"activation\":\"%s\",\"conversationId\":\"convdial\",\"deviceSpeakerFrameSeq\":%ld,%s"
       "\"pcm\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}}"
-      "]],\"scannedThroughOffset\":%ld,\"state\":null}]]]",
+      "]],{\"after\":%ld,\"through\":%ld}]]]",
       export_id, offset, current_activation(), offset,
-      last ? "\"lastFrameOfAnswer\":true," : "", offset);
+      last ? "\"lastFrameOfAnswer\":true," : "", offset - 1, offset);
   deliver(connection, message);
   {
     char release[64];
@@ -691,12 +691,12 @@ static void deliver_accepted_latest(void) {
   (void)snprintf(
       message,
       sizeof(message),
-      "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
+      "[\"push\",[\"pipeline\",%ld,[],[[["
       "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
       "\"offset\":%ld,"
       "\"payload\":{\"activation\":\"%s\",\"conversationId\":\"convdial\",\"handshakeTookMs\":2000}}"
-      "]],\"scannedThroughOffset\":%ld,\"state\":null}]]]",
-      export_id, offset, current_activation(), offset);
+      "]],{\"after\":%ld,\"through\":%ld}]]]",
+      export_id, offset, current_activation(), offset - 1, offset);
   deliver(connection, message);
   {
     char release[64];
@@ -717,12 +717,12 @@ static void deliver_ended_latest(void) {
   (void)snprintf(
       message,
       sizeof(message),
-      "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
+      "[\"push\",[\"pipeline\",%ld,[],[[["
       "{\"type\":\"events.iterate.com/voice-agent/conversation-ended\","
       "\"offset\":%ld,"
       "\"payload\":{\"activation\":\"%s\",\"reason\":\"server-ended\"}}"
-      "]],\"scannedThroughOffset\":%ld,\"state\":null}]]]",
-      export_id, offset, current_activation(), offset);
+      "]],{\"after\":%ld,\"through\":%ld}]]]",
+      export_id, offset, current_activation(), offset - 1, offset);
   deliver(connection, message);
   (void)snprintf(
       message, sizeof(message), "[\"release\",%lld,1]",
@@ -916,7 +916,7 @@ static void delayed_a_setup_cannot_cancel_or_mount_b(void) {
   assert(strcmp(board.last_view.status, "voice setup failed") != 0);
   assert(sent_after_contains(before, "\"pcm\":"));
   assert(sent_microphone_to_stream(after_b_setup, paths[1]));
-  assert(!sent_after_contains(after_b_setup, "openConnection"));
+  assert(!sent_after_contains(after_b_setup, "[\"subscribe\"]"));
   deferred_voice_setup_count = 0U;
   quiescent();
 }
@@ -963,6 +963,49 @@ static void queued_terminal_survives_session_loss_before_b(void) {
   quiescent();
 }
 
+/* A call cannot outlive the session under it: once the next session is up the loop
+ * ends the call, its terminal rides that session, and the next press opens a NEW
+ * child instead of streaming into the dead one (measured 2026-09-16: a deploy roll
+ * cut the session mid-call and the board sat wanting the old call for 20 minutes). */
+static void losing_the_session_ends_the_call_and_the_next_press_opens_a_new_one(void) {
+  size_t after_reconnect;
+  quiescent();
+  remote_call("conversation", "start");
+  step();
+  pump();
+  speak_frames(1U);
+  run_ms(100U);
+  deliver_accepted_latest();
+  step();
+  assert(board.last_view.wants_call);
+
+  iterate_kit_itx_connection_lost(iterate_kit_fake_platform_connection());
+  iterate_kit_fake_platform_drain_control_outbox();
+  next_inbound_call_id = 1;
+  pending_open_connection_count = 0U;
+  pending_stream_path_count = 0U;
+  memset(open_connections, 0, sizeof(open_connections));
+  memset(stream_capabilities, 0, sizeof(stream_capabilities));
+  iterate_kit_fake_platform_connect();
+  after_reconnect = iterate_kit_fake_platform_sent_count();
+  pump();
+  step();
+  step(); /* the end lands in one pass; the board sees the view on the next */
+  assert(!board.last_view.wants_call);
+  assert(sent_after_count(
+      after_reconnect, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\"") == 1U);
+  assert(sent_after_contains(after_reconnect, "\"reason\":\"session-lost\""));
+
+  remote_call("conversation", "start");
+  step();
+  pump();
+  speak_frames(1U);
+  run_ms(100U);
+  assert(board.last_view.wants_call);
+  assert(sent_after_contains(after_reconnect, "\"pcm\":"));
+  quiescent();
+}
+
 /* B may already have captured while A's terminal waits for outbox space, but
  * that PCM waits for B's own newly opened child rather than using A's stub. */
 static void b_pcm_waits_for_its_own_child_after_a_terminal(void) {
@@ -993,7 +1036,7 @@ static void b_pcm_waits_for_its_own_child_after_a_terminal(void) {
   step();
   pump();
   run_ms(100U);
-  b_open = first_sent_after_containing(after_b_capture, "openConnection");
+  b_open = first_sent_after_containing(after_b_capture, "[\"subscribe\"]");
   b_microphone = first_sent_after_containing(after_b_capture, "\"pcm\":");
   assert(sent_after_contains(
       after_b_capture, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
@@ -1034,7 +1077,7 @@ static void rejected_stream_can_be_reused_by_an_immediate_new_activation(void) {
   run_ms(50U);
   assert(board.last_view.wants_call);
   assert(strcmp(activation_a, current_activation()) != 0);
-  assert(sent_after_count(before, "[\"streams\",\"get\"]") == 2U);
+  assert(sent_after_count(before, "[\"cd\"]") == 2U);
   assert(sent_after_contains(before, "\"pcm\":"));
   quiescent();
 }
@@ -1189,7 +1232,7 @@ static void an_idle_accepted_call_is_not_recycled_for_silence(void) {
   run_ms(1000U);
   after_answer = iterate_kit_fake_platform_sent_count();
   run_ms(ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS * 3U);
-  assert(!sent_after_contains(after_answer, "openConnection"));
+  assert(!sent_after_contains(after_answer, "[\"subscribe\"]"));
 }
 
 /*
@@ -1214,7 +1257,7 @@ static void a_lane_silent_mid_answer_is_recycled(void) {
   deliver_spk_chunk(false);
   after_chunk = iterate_kit_fake_platform_sent_count();
   run_ms(ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS + 2000U);
-  assert(sent_after_contains(after_chunk, "openConnection"));
+  assert(sent_after_contains(after_chunk, "[\"subscribe\"]"));
 }
 
 /* The frame that was in a blocking read when wake arrived remains behind the
@@ -1260,11 +1303,63 @@ static void an_unaccepted_activation_times_out_once(void) {
   assert(sent_after_contains(before, "opening-timeout"));
 }
 
+/*
+ * AN IDLE BOARD KEEPS ITS OWN SOCKET, AND THIS IS THE ONE THING THAT DOES IT.
+ *
+ * Between calls this device sends no application message at all, which is the
+ * only kind os-next's idle close counts (voice_device_profile.h), so the period
+ * has to be reached from the loop's own clock while NOTHING else is happening.
+ *
+ * PINNED BECAUSE THE FIRST ATTEMPT GOT IT WRONG. The probe was first put beside
+ * the call keepalive, inside a block that runs only while a voicelab is bound
+ * and ready — that is, only while the socket was busy anyway. It would have
+ * passed every conversation test and kept exactly the connections that did not
+ * need keeping.
+ */
+static void an_idle_session_probes_the_root_once_a_period(void) {
+  size_t before;
+  quiescent();
+  before = iterate_kit_fake_platform_sent_count();
+  assert(!sent_after_contains(before, "[\"whoami\"]"));
+
+  run_ms(ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS + 500U);
+  assert(sent_after_contains(before, "[\"whoami\"]"));
+  /* One probe, not one a tick: an unanswered probe must not become a storm. */
+  assert(sent_after_count(before, "[\"whoami\"]") == 1U);
+  /* Answer it, so the next scenario starts with an empty pending-call table. */
+  pump();
+}
+
+/*
+ * AND AN ANSWERED PROBE IS LIVENESS, WHICH A PONG-ONLY WATCHDOG MISSED.
+ *
+ * The 420 s liveness watchdog restarts the chip when a READY transport shows no
+ * answered round trip. The transport originates its PING only after inbound
+ * SILENCE, and a probe answer on the same period is inbound — so a healthy
+ * mounted board suppressed the very PINGs the watchdog was counting and rebooted
+ * itself on a good network. This fake reports zero PONGs forever, which is
+ * exactly that board: eight answered periods, well past the restart bound.
+ */
+static void answered_probes_are_liveness_without_any_pong(void) {
+  size_t before;
+  unsigned period;
+  quiescent();
+  before = iterate_kit_fake_platform_sent_count();
+  for (period = 0U; period < 8U; ++period) {
+    run_ms(ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS + 500U);
+    pump();
+  }
+  assert(sent_after_count(before, "[\"whoami\"]") >= 7U);
+  assert(!iterate_kit_fake_esp_idf_restart_requested());
+}
+
 int main(void) {
   boot();
   conversation_start_raises_wants_call_with_no_button();
   conversation_control_opens_and_ends_a_call();
   nothing_physical_was_involved();
+  an_idle_session_probes_the_root_once_a_period();
+  answered_probes_are_liveness_without_any_pong();
 
   pre_mount_speech_is_preserved_and_sent_immediately();
   rejected_stream_can_be_reused_by_an_immediate_new_activation();
@@ -1286,6 +1381,7 @@ int main(void) {
   assert(sent_after_count(0U, "\"authenticate\"") == 1U);
   assert(iterate_kit_fake_platform_connection()->generation == 1U);
   queued_terminal_survives_session_loss_before_b();
+  losing_the_session_ends_the_call_and_the_next_press_opens_a_new_one();
   b_pcm_waits_for_its_own_child_after_a_terminal();
   failed_microphone_append_ends_the_activation();
   return 0;

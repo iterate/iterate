@@ -145,7 +145,7 @@ struct iterate_kit_voicelab;
 
 /**
  * The device end of the voicelab stream protocol over ONE Cap'n Web session:
- * a caller-owned child `streams.get(path)` and logical subscription, then
+ * a caller-owned child `cd(path)` context and its subscription, then
  * one-way `append` calls carrying ephemeral
  * `events.iterate.com/voice-agent/mic-frame` events (base64 PCM16, one event
  * per wall-clock flush, any even byte length).
@@ -197,6 +197,13 @@ struct iterate_kit_voicelab {
   uint32_t spk_frames_received;
   uint32_t spk_decode_failures;
   int64_t last_event_offset;
+  /**
+   * The `through` of the last delivery this subscription saw, and how many
+   * times the next delivery's `after` did not match it. The only symptom a
+   * dropped push has, delivery being fire-and-forget (stream_subscription.h).
+   */
+  int64_t last_delivery_through;
+  uint32_t delivery_gaps;
   char args_buffer[ITERATE_KIT_VOICELAB_ARGS_CAPACITY];
   char b64_buffer[ITERATE_KIT_VOICELAB_B64_CAPACITY];
   /*
@@ -233,11 +240,14 @@ enum capnweb_status iterate_kit_voicelab_recycle_subscription(
     struct iterate_kit_stream_subscription *fresh_subscription);
 
 /** Generic-subscription callback for a bound call. The owner is the voicelab;
- * its epoch identifies one current or overlapping predecessor subscription. */
+ * its epoch identifies one current or overlapping predecessor subscription.
+ * `events` is the delivery's events array itself — os-next calls the lent stub
+ * as a bare `(events, range)` function — and `range` is `{after, through}`. */
 void iterate_kit_voicelab_on_subscription_update(
     void *owner,
     uint32_t owner_epoch,
-    const struct capnweb_value *batch);
+    const struct capnweb_value *events,
+    const struct capnweb_value *range);
 
 /**
  * One-way append of up to MAX_FRAMES_PER_APPEND consecutive mic frames as

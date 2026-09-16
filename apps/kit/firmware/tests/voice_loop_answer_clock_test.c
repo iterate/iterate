@@ -238,7 +238,7 @@ static void pump(void) {
       const char *message = iterate_kit_fake_platform_sent(answered);
       const char *pull = strstr(message, "[\"pull\",");
       ++answered;
-      if (strstr(message, "\"openConnection\"") != NULL) {
+      if (strstr(message, "[\"subscribe\"]") != NULL) {
         const char *exported = strstr(message, "[\"export\",");
         assert(exported != NULL);
         pending_open_callback =
@@ -285,7 +285,7 @@ static void pump(void) {
 /*
  * THE CAPABILITY THE DEVICE ITSELF EXPORTED, FOUND THE WAY THE SERVER FINDS IT.
  *
- * `openConnection` hands the stream a `processEventBatch` capability, and its
+ * `subscribe` hands the context a `target` capability, and its
  * id is the device's to choose — so it is read out of the message the device
  * SENT rather than assumed. A hard-coded id would be a test that passes because
  * the export table happened to be in a particular order.
@@ -408,16 +408,17 @@ static void deliver_chunk(bool drop, bool last, size_t frames) {
   (void)snprintf(
       message,
       sizeof(message),
-      "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
+      "[\"push\",[\"pipeline\",%ld,[],[[["
       "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":%lld,"
       "\"payload\":{\"activation\":\"%s\",%s%s\"pcm\":\"%s\"}}"
-      "]],\"scannedThroughOffset\":%lld,\"state\":null}]]]",
+      "]],{\"after\":%lld,\"through\":%lld}]]]",
       callback_export_id(),
       offset,
       test_activation(),
       drop ? "\"clearSpeakerBufferBeforeFrame\":true," : "",
       last ? "\"lastFrameOfAnswer\":true," : "",
       frames_b64(frames),
+      offset - 1,
       offset);
   assert(
       iterate_kit_itx_connection_receive_text(
@@ -447,14 +448,15 @@ static void deliver_accepted(void) {
   (void)snprintf(
       message,
       sizeof(message),
-      "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
+      "[\"push\",[\"pipeline\",%ld,[],[[["
       "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
       "\"offset\":%lld,"
       "\"payload\":{\"activation\":\"%s\",\"conversationId\":\"convtest\",\"handshakeTookMs\":1}}"
-      "]],\"scannedThroughOffset\":%lld,\"state\":null}]]]",
+      "]],{\"after\":%lld,\"through\":%lld}]]]",
       callback_export_id(),
       offset,
       test_activation(),
+      offset - 1,
       offset);
   assert(
       iterate_kit_itx_connection_receive_text(

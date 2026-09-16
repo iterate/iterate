@@ -5,6 +5,8 @@
 //   capnweb     — `itx.connectToCapnweb(url)`: a remote capnweb API as a pipelinable handle
 //   mcp         — `itx.connectToMcp(url)`: an MCP client over Streamable HTTP
 //   openapi     — `itx.connectToOpenApi(spec)`: an OpenAPI 3 service as an RpcTarget of operationIds
+//   repos       — `itx.repos.get(path)` / `.list()`: a repo as a stream on any path — its `repo` facet
+//   workspaces  — `itx.workspaces.get(path)` / `.list()`: the workspace of any context — its `workspace` facet
 
 import {
   RpcSession,
@@ -16,6 +18,12 @@ import {
 import { z } from "zod";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/expression.ts";
+import { WORKSPACE_PROCESSOR_SOURCE } from "./generated/workspace-processor-source.ts";
+import { REPO_PROCESSOR_SOURCE } from "./generated/repo-processor-source.ts";
+import { PROJECT_PROCESSOR_SOURCE } from "./generated/project-processor-source.ts";
+import type { ProjectView } from "./project/contract.ts";
+import type { RepoDurableObject } from "./repo/durable-object.ts";
+import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 
 // ── the library ── THE LIBRARY: the built-ins that could be userspace. context/built-ins.ts has TWO
 // groups: ROOTS, implemented against ctx/env (the log, the stub registry, the rule table, the two
@@ -28,8 +36,9 @@ import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/e
 // from the stream, the DO or the context folder, except context/expression.ts — the codec and the
 // pipelinable handle).
 //
-// The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb`. `run` is sugar over
-// `itx.workers.get` (the run section). The three connectors each
+// The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `repos.get`/`list` ·
+// `workspaces.get`/`list`. `run` is sugar over `itx.workers.get` (the run section); the entity handles
+// over `itx.cd(path).facets.get` (the entities section). The three connectors each
 // return a connection RpcTarget a caller can hold across calls, and each does ALL its HTTP through
 // `itx.fetch` (egress: `getSecret("/secrets/NAME")` placeholders in headers substitute for free; a user
 // rule shadowing `itx.fetch` redirects the library too, which is how a test fakes a remote). The
@@ -46,9 +55,10 @@ import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/e
 // reopens itself on its next use (the mcp and capnweb sections), so a memoized one is never dead.
 
 /** What a library module is handed: the itx handle (the record's own dotted surface), narrowed to
- *  what the library uses today — `fetch`, the connectors' HTTP, and `workers`, the host `run` loads
- *  into. Widen it HERE when a module needs more of itx — never by importing something else. */
-export type LibraryItx = Pick<BuiltInScope, "fetch" | "workers">;
+ *  what the library uses today — `fetch`, the connectors' HTTP; `workers`, the host `run` loads
+ *  into; `cd`, the sibling a repo or workspace facet is hosted on. Widen it HERE when a module needs
+ *  more of itx — never by importing something else. */
+export type LibraryItx = Pick<BuiltInScope, "fetch" | "workers" | "cd">;
 
 /** The library's roots, exactly as the built-ins record spreads them in: each verb closed over ONE
  *  `itx`. `BuiltInScope` (context/built-ins.ts) extends this, so the typed surface has them once. */
@@ -74,7 +84,49 @@ export interface LibraryRoots {
    *  (default) or one HTTP batch per chain (`{ transport: "batch" }`); dotted calls chain with no round
    *  trip per step. */
   connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
+  /** THE REPOS (src/repo/): a repo as a DOMAIN OBJECT — a stream on ANY path (`/repos/<name>` by
+   *  convention) whose `repo` facet lands the creation facts and the commit facts and memoizes the
+   *  tip — git spoken from inside the facet, its token and remote from `itx.cfArtifacts` (which derives the Artifacts repo's name from the path). `get(path)` is that
+   *  facet, hosted on its first call and addressed after; `create()` births it, and every other
+   *  method refuses until it has. Every call on the handle is one dotted expression on the facet
+   *  (`RepoDurableObject`'s methods: `create` `tip` `readFile` `listFiles` `commitFiles` `writeFile`
+   *  `log`). `list()` is the project catalog: the birth certificates cross-posted to `/`, folded by
+   *  the project processor (src/project/). */
+  repos: {
+    get(path: string): InvokeHandle & RepoFacet;
+    list(): Promise<{ path: string; createdAt: string }[]>;
+  };
+  /** THE WORKSPACES (src/workspace/): the workspace of ANY context, at most one per path —
+   *  `get(path)` is the `workspace` facet on `itx.cd(path)`, hosted on its first call and addressed
+   *  after — a workspace IS its path; `create()` births it, and every other method refuses until
+   *  it has. Every call on the handle is one dotted expression on that facet
+   *  (`WorkspaceDurableObject`'s methods: `readFile` `readBase` `writeFile` `deleteFile` `revert`
+   *  `listAllFiles` `mounts` `gitStatus` `gitCommit` `gitLog`). `list()` is the project catalog (as for repos). */
+  workspaces: {
+    get(path: string): InvokeHandle & WorkspaceFacet;
+    list(): Promise<{ path: string; createdAt: string }[]>;
+  };
 }
+
+/** What a repo handle's dotted members reach: the repo facet's own methods. */
+export type RepoFacet = Pick<
+  RepoDurableObject,
+  "create" | "tip" | "readFile" | "listFiles" | "commitFiles" | "writeFile" | "log"
+>;
+/** What a workspace handle's dotted members reach: the workspace facet's own methods. */
+export type WorkspaceFacet = Pick<
+  WorkspaceDurableObject,
+  | "mounts"
+  | "readFile"
+  | "readBase"
+  | "writeFile"
+  | "deleteFile"
+  | "revert"
+  | "listAllFiles"
+  | "gitStatus"
+  | "gitCommit"
+  | "gitLog"
+>;
 
 /** The library, built once per context: the verbs closed over one `itx`, memoizing the live
  *  connections the connectors open, and the one release door. Nothing is constructed here: a wake
@@ -108,6 +160,22 @@ export function buildLibrary(itx: LibraryItx): {
         memoized(["openapi", specOrUrl, options], () => connectToOpenApi(itx, specOrUrl, options)),
       connectToCapnweb: (url, options) =>
         memoized(["capnweb", url, options], () => connectToCapnweb(itx, url, options)),
+      repos: {
+        get: (path) => repoHandle(itx, path),
+        list: async () =>
+          Object.entries((await projectCatalog(itx)).repos).map(([path, repo]) => ({
+            path,
+            ...repo,
+          })),
+      },
+      workspaces: {
+        get: (path) => workspaceHandle(itx, path),
+        list: async () =>
+          Object.entries((await projectCatalog(itx)).workspaces).map(([path, workspace]) => ({
+            path,
+            ...workspace,
+          })),
+      },
     },
     hasOpenConnections: () => liveConnections.size > 0,
     releaseConnections: () => {
@@ -172,6 +240,67 @@ export function runScript(itx: LibraryItx, script: unknown): Promise<unknown> {
     };
     return worker.run();
   })();
+}
+
+// ── the entities ── `itx.repos.get(path)`, `itx.workspaces.get(path)`: a repo (src/repo/) and a
+// workspace (src/workspace/) are each a FACET hosted on their own context — a facet named with a
+// spec is hosted on its first call and addressed after (the DO's startup memo; an unchanged spec never
+// restarts it), so nothing is appended to get one; `create()` appends the birth certificate (on its
+// path, cross-posted to `/`). Every call on the handle is one dotted expression
+// on that facet, run in the sibling under ITS rules (a test lends a fake `itx.cfArtifacts` on a repo's
+// context). The specs' sources are the SDK-bundled facets (build-sdk.mjs) — strings a userspace worker
+// could carry just the same. `list()` for both reads THE CATALOG: the `project` facet on `/`
+// (src/project/), which folds the cross-posted certificates; hosted the same way, on first read.
+
+/** A facet on the context at `path`: the call's steps, relative to the facet, as one dispatch there. */
+function facetHandle(
+  itx: LibraryItx,
+  path: string,
+  name: string,
+  spec: { source: Record<string, string>; className: string },
+): InvokeHandle {
+  return new InvokeHandle(async (itxExpressionSteps) => {
+    // TWO dotted calls, never one chain (the `run` section says why): the sibling's handle first —
+    // in-process a VALUE — then the facet chain relative to it.
+    const context = await itx.cd(path);
+    return context.invoke(["facets", ["get", name, spec], ...itxExpressionSteps]);
+  });
+}
+
+// An InvokeHandle's dotted members are DYNAMIC (expression.ts: every unknown member reduces to one
+// dispatch), so a handle types as the facet it dispatches to — the class the spec names — by
+// assertion: `InvokeHandle & RepoFacet` says what `handle.readFile(…)` lands on, which the runtime
+// guarantees (the spec's `className` IS that class) and the type system cannot see.
+
+/** The `workspace` facet on the context at `path`. */
+function workspaceHandle(itx: LibraryItx, path: string): InvokeHandle & WorkspaceFacet {
+  return facetHandle(itx, path, "workspace", {
+    source: WORKSPACE_PROCESSOR_SOURCE,
+    className: "WorkspaceDurableObject",
+  }) as InvokeHandle & WorkspaceFacet;
+}
+
+/** The `repo` facet on the context at `path` — any path; the facet derives the Artifacts name from
+ *  it and refuses one it cannot back. */
+function repoHandle(itx: LibraryItx, path: string): InvokeHandle & RepoFacet {
+  return facetHandle(itx, path, "repo", {
+    source: REPO_PROCESSOR_SOURCE,
+    className: "RepoDurableObject",
+  }) as InvokeHandle & RepoFacet;
+}
+
+/** THE CATALOG: the `project` facet's view on `/` — what `repos.list()` and `workspaces.list()` read. */
+async function projectCatalog(itx: LibraryItx): Promise<ProjectView> {
+  const context = await itx.cd("/");
+  const snapshot = await context.invoke([
+    "facets",
+    ["get", "project", { source: PROJECT_PROCESSOR_SOURCE, className: "ProjectDurableObject" }],
+    ["snapshot"],
+  ]);
+  // The facet is the platform's own ProjectDurableObject and `snapshot()` is the engine's
+  // `{ offset, state }`, its state the contract's parsed view — the shape is ours, so the read is
+  // asserted, not re-validated.
+  return (snapshot as { state: ProjectView }).state;
 }
 
 // ── what the three connectors share ──

@@ -216,12 +216,12 @@ static void local_hangup_fences_late_acceptance_and_audio(void) {
    * report its server-side call live, but the CLI must not reopen or queue it. */
   (void)snprintf(
       delayed_delivery, sizeof(delayed_delivery),
-      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "[\"push\",[\"pipeline\",-1,[],[[["
       "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
       "\"offset\":39,\"payload\":{\"activation\":\"" ACTIVATION "\",\"conversationId\":\"wsdev\"}},"
       "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":40,"
       "\"payload\":{\"activation\":\"" ACTIVATION "\",\"pcm\":\"AQIDBA==\"}}"
-      "]],\"scannedThroughOffset\":40,\"state\":null}]]]" );
+      "]],{\"after\":39,\"through\":40}]]]" );
   receive(&fixture, delayed_delivery);
   receive(&fixture, "[\"release\",1,1]");
   assert(runtime.hanging_up);

@@ -154,7 +154,7 @@ describe("retries live in exactly one layer", () => {
     expect(source).toContain("const ATTEMPTS = 2;");
     const rolloutGate = "await waitForPreviewRolloutBeforeProjectCreation();";
     expect(source).toContain(rolloutGate);
-    expect(source.indexOf(rolloutGate)).toBeLessThan(source.indexOf("root.projects.get("));
+    expect(source.indexOf(rolloutGate)).toBeLessThan(source.search(/root\.projects\s*\.get\(/));
   });
 
   it("bounds the agent smoke as a joined background lane", () => {

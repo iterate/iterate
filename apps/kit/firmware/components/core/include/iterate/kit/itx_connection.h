@@ -52,12 +52,10 @@ struct iterate_kit_itx_connection_options {
   void *send_text_context;
   const char *project_id;
   const char *project_api_key;
-  /** This device's client path, e.g. "/clients/stackchan" — see itx_mount.h. */
-  const char *client_path;
+  /** The itx expression this device answers, e.g.
+   * "itx.clients.home_assistant_voice_preview_edition" — see itx_mount.h. */
+  const char *capability_match;
   struct capnweb_capability capability;
-  /** Human label for this client; journals as the provision's instructions. */
-  const char *description;
-  const char *types;
   iterate_kit_itx_connection_session_ended_fn session_ended;
   void *session_ended_context;
 };

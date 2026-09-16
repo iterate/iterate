@@ -9,6 +9,18 @@ import {
   writeGeneratedWranglerConfig,
 } from "../../../scripts/lib/wrangler-config.ts";
 
+// The same bindings at the top level (local dev) and in every deployed env.
+const bindings = {
+  compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
+  durable_objects: { bindings: [{ name: "BROWSER_SESSION", class_name: "BrowserSession" }] },
+  exports: { BrowserSession: { type: "durable-object", storage: "sqlite" } },
+  vars: { ITERATE_ORIGIN: "https://os.iterate2.com" },
+  observability: OBSERVABILITY,
+  // public/ (the favicon and the synced firmware binaries) is served by the worker's
+  // ASSETS fallback; the Vite plugin fills in the built directory.
+  assets: { binding: "ASSETS", not_found_handling: "none", run_worker_first: true },
+};
+
 function envBlock(env: KitEnv) {
   const host = new URL(env.baseUrl).hostname;
   return {
@@ -18,19 +30,16 @@ function envBlock(env: KitEnv) {
     // Keep the explicitly requested kiterate.iterate.workers.dev origin live
     // alongside the friendly k.iterate.com route.
     workers_dev: true,
-    observability: OBSERVABILITY,
+    ...bindings,
   };
 }
 
 const config = {
   $schema: "node_modules/wrangler/config-schema.json",
   name: "kit",
-  main: "@tanstack/react-start/server-entry",
-  compatibility_date: "2026-06-17",
-  compatibility_flags: ["nodejs_compat"],
-  // The Vite plugin injects public/ (including generated firmware binaries)
-  // into the built config's assets block.
-  observability: OBSERVABILITY,
+  main: "src/worker.ts",
+  compatibility_date: "2026-09-01",
+  ...bindings,
   env: Object.fromEntries(Object.entries(kitEnvs).map(([name, env]) => [name, envBlock(env)])),
 };
 

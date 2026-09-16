@@ -5,8 +5,8 @@ size: large
 
 # Optional project lifetimes
 
-New review branch from `codex/playwright-full-parallel`, replacing the design
-in `codex/preview-run-retirement`. No PR and no live rollout.
+Review branch against `main`, replacing the design in
+`codex/preview-run-retirement`. PR #2659 has merged. No PR and no live rollout.
 
 Status: review implementation complete. Generic lifetimes, ordinary creation
 metadata, runtime guards and the opt-in CI path are implemented. Local checks
@@ -42,7 +42,7 @@ defer full data deletion to environment handover/release.
 - [x] Guard recurring runtime work and prove retirement survives Stream eviction/rearming. _Stream, Scheduler, StatefulWorker and Sandbox use the generic decision; Stream behaviour is exercised with the real runtime fixture._
 - [x] Connect test creation and opt-in CI lifecycle without adding test concepts to runtime code. _Explicit test creation metadata, browser Auth-request fixture, and scripts/lib/preview-lifetimes.ts; workflow switch stays false._
 - [x] Document remaining live proof and run relevant tests/type/lint checks. _34 runtime/creation tests, 13 Auth tests and 214 preview/tooling tests; OS, Auth, Auth-contract, scripts, streams, shared and specs type checks. CLI help and scoped lint/format checked._
-- [x] Commit, push and provide a compare link against the parallelisation branch. _codex/project-lifetimes against codex/playwright-full-parallel; no PR._
+- [x] Commit, push and provide a compare link against main. _codex/project-lifetimes against main; no PR._
 
 ## Implementation notes
 
@@ -56,3 +56,6 @@ in eventually consistent KV. The runtime needs no knowledge of how CI names it.
   one exact entry. No server/Node dependencies were introduced there.
 - Explicit-ID admin recreation is KV-backed; its concurrency needs deployed
   proof before enabling, alongside custom clients and retained global state.
+
+- Merged main at `17e937695` after PR #2659 landed. The restored old branch
+  is no longer the comparison base.

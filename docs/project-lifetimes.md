@@ -4,8 +4,8 @@ A project may have a deadline for recurring background work. Expiry keeps its
 data and deployed application available; it does not delete resources or kill
 finite work already running. Projects without a lifetime behave as before.
 
-This is a fresh alternative to `codex/preview-run-retirement`, based on
-`codex/playwright-full-parallel`. **The CI experiment is off. No live environment
+This is a fresh alternative to `codex/preview-run-retirement`, based on `main`
+after the Playwright parallelisation work merged in PR #2659. **The CI experiment is off. No live environment
 was changed.**
 
 ## Start here
