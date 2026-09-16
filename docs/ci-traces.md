@@ -34,21 +34,29 @@ and lifecycle records, and publishes the report. A 15-minute scheduled pass
 repairs missed callbacks from the latest 200 workflows within 24 hours,
 including cancellations. Collector failures fail that workflow visibly.
 
-Reports live on `codex/ci-trace-artifacts`, separately from application source.
-Each execution adds an HTML file and OTLP JSON under `explainers/`. URLs pin the
-artifact commit SHA and use the existing `iterate.iterate.app/explainers/` host;
-no app deploy or third-party artifact viewer is required. Repeated publication
-reuses the report and status. The status description includes the source execution
-time so reconciliation cannot replace a newer run's link with an older one on
-the same commit. Collectors are serialized by the workflow concurrency group.
-A successful status means the report is available; preview checks still carry
-the test outcome. Publication failures fail the collector visibly. The collector
-does not read or edit PR bodies and needs `statuses: write`, not PR write access.
+Reports are Depot artifacts containing `trace.html` and `trace.json`, uploaded
+with `actions/upload-artifact`. No generated files or per-run commits go into Git.
+The public `iterate/config` worker serves `/depot/artifacts/<artifact-id>`:
+it uses the existing `/secrets/depot-ci-token` secret to download and unpack the
+archive on demand. It verifies the artifact belongs to `iterate/iterate`'s
+`ci-trace.yml` workflow and is a named CI trace before serving either fixed file.
+The HTML runs in a CSP sandbox without access to the host's cookies or storage.
+
+The collector verifies that the public report is viewable before setting the
+**CI trace** commit status. Its description stores the source execution time,
+so reconciliation skips already-published executions and older runs cannot
+replace newer links on the same commit. A scheduled repair dispatches the same
+render/upload/link workflow for missing reports. Collectors are serialized.
+A successful status means the report is available; preview checks carry the
+test outcome. Publication failures fail the collector visibly. Permissions
+are `contents: read` and `statuses: write`; PR bodies are never edited.
 
 Only timings, status, source names and locations are published. No raw logs,
-exception payloads or credentials are copied. Reports are public, like this
-repository. Generated reports are retained on the artifact branch; there is no
-automated pruning yet.
+exception payloads, credentials or signed URLs are copied. Reports are public,
+like this repository. Uploads request 30-day retention from Depot; links depend
+on the artifact remaining available and return 404 after it expires or is deleted.
+HTML and JSON responses can be cached for an hour. This is report hosting, not
+permanent archival storage.
 
 ## Replay
 
@@ -61,13 +69,12 @@ depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
   --workflow ci-trace.yml --ref <branch> --input source-workflow=<workflow-id>
 ```
 
-Local commands require `DEPOT_CI_TELEMETRY_TOKEN`; publishing also needs
-`GITHUB_TOKEN` with repository contents and commit-status write access. CI obtains
-the Depot token from Doppler `_shared/preview`.
+Local rendering requires `DEPOT_CI_TELEMETRY_TOKEN`. CI obtains it from Doppler
+`_shared/preview`. Publication runs after the upload action inside the collector
+and also needs `GITHUB_TOKEN` with commit-status write access.
 
 ```sh
 pnpm exec trpc-cli scripts/ci/tracing/cli.ts render <workflow-id> /tmp/ci-trace
-pnpm exec trpc-cli scripts/ci/tracing/cli.ts publish <workflow-id>
 ```
 
 ## Timing limits

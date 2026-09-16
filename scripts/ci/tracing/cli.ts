@@ -19,13 +19,7 @@ export default class CiTrace {
       .string()
       .regex(/^[a-z0-9]+$/)
       .parse(source.pathname.split("/").at(-1));
-    await this.depot("DispatchWorkflow", {
-      orgId: org,
-      repo: repository,
-      workflow: "ci-trace.yml",
-      ref,
-      inputs: { "source-workflow": workflowId },
-    });
+    await this.dispatchCollector(ref, workflowId);
     console.log(`Dispatched trace collector for ${workflowId}`);
   }
 
@@ -35,14 +29,26 @@ export default class CiTrace {
     const execution = [...workflow.executions].sort((a, b) => b.execution - a.execution)[0];
     if (!execution) throw new Error("Workflow has no execution");
     const name = `ci-trace-${workflow.workflowId}-${execution.executionId}`;
-    const path = `explainers/${name}.html`;
-    let commit = await this.existingReport(path);
-    if (!commit) {
-      const report = await this.collect(workflow);
-      const html = await renderTrace(report);
-      commit = await this.commitReport(path, html, JSON.stringify(report));
-    }
-    const url = `https://iterate.iterate.app/explainers/${name}?sha=${commit}`;
+    const collectorId = new URL(z.url().parse(process.env.DEPOT_JOB_URL)).pathname
+      .split("/")
+      .at(-1);
+    const collector = z
+      .object({ runId: z.string() })
+      .parse(await this.depot("GetWorkflow", { workflowId: collectorId }));
+    const { artifacts } = z
+      .object({
+        artifacts: z.array(z.object({ artifactId: z.string(), name: z.string() })).default([]),
+      })
+      .parse(
+        await this.depot("ListArtifacts", {
+          runId: collector.runId,
+          workflowId: collectorId,
+          pageSize: 100,
+        }),
+      );
+    const artifact = artifacts.find((item) => item.name === name);
+    if (!artifact) throw new Error(`Collector did not upload ${name}`);
+    const url = `https://iterate.iterate.app/depot/artifacts/${artifact.artifactId}`;
     // A successful upload alone is not the user's acceptance check: verify the host.
     for (let attempt = 0; ; attempt++) {
       const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
@@ -69,7 +75,7 @@ export default class CiTrace {
   }
 
   /** Repair missed callbacks (including cancelled workflows) from the last 24 hours. */
-  async reconcile() {
+  async reconcile(ref: string) {
     const { workflows } = z
       .object({
         workflows: z
@@ -92,7 +98,26 @@ export default class CiTrace {
         Date.parse(item.createdAt) > Date.now() - 86_400_000,
     )) {
       try {
-        await this.publish(workflow.workflowId);
+        const source = await this.waitForWorkflow(workflow.workflowId);
+        const execution = [...source.executions].sort((a, b) => b.execution - a.execution)[0];
+        if (!execution) throw new Error("Workflow has no execution");
+        const octokit = this.github();
+        const statuses = await octokit.paginate(octokit.repos.listCommitStatusesForRef, {
+          ...repo,
+          ref: source.headSha,
+          per_page: 100,
+        });
+        if (
+          traceCommitStatus(
+            statuses.find((item) => item.context === "CI trace"),
+            {
+              headSha: source.headSha,
+              createdAt: execution.createdAt,
+              url: "",
+            },
+          )
+        )
+          await this.dispatchCollector(ref, workflow.workflowId);
       } catch (error) {
         failures.push(
           new Error(`Trace publication failed for ${workflow.workflowId}`, { cause: error }),
@@ -104,11 +129,17 @@ export default class CiTrace {
 
   /** Build local HTML/OTLP files without publishing or changing a commit status. */
   async render(workflowId: string, directory: string) {
-    const report = await this.collect(await this.waitForWorkflow(workflowId));
+    const workflow = await this.waitForWorkflow(workflowId);
+    const report = await this.collect(workflow);
     await mkdir(directory, { recursive: true });
     await writeFile(`${directory}/trace.json`, JSON.stringify(report, null, 2));
     await writeFile(`${directory}/trace.html`, await renderTrace(report));
-    return { directory };
+    const execution = [...workflow.executions].sort((a, b) => b.execution - a.execution)[0];
+    if (!execution) throw new Error("Workflow has no execution");
+    const name = `ci-trace-${workflow.workflowId}-${execution.executionId}`;
+    if (process.env.GITHUB_OUTPUT)
+      await appendFile(process.env.GITHUB_OUTPUT, `artifact-name=${name}\n`);
+    return { directory, name };
   }
 
   private async collect(workflow: z.infer<typeof Workflow>) {
@@ -174,82 +205,14 @@ export default class CiTrace {
     }
   }
 
-  private async existingReport(path: string) {
-    try {
-      const { data } = await this.github().repos.listCommits({
-        ...repo,
-        sha: artifactBranch,
-        path,
-        per_page: 1,
-      });
-      return data[0]?.sha || null;
-    } catch (error) {
-      if (APIError.safeParse(error).data?.status === 404) return null;
-      // GitHub returns 404 for a missing branch; all other failures are actionable.
-      throw error;
-    }
-  }
-
-  private async commitReport(path: string, html: string, json: string) {
-    const octokit = this.github();
-    const files = [
-      { path, content: html },
-      { path: path.replace(/\.html$/, ".json"), content: json },
-    ];
-    const blobs = await Promise.all(
-      files.map(async (file) => ({
-        path: file.path,
-        mode: "100644" as const,
-        type: "blob" as const,
-        sha: (
-          await octokit.git.createBlob({
-            ...repo,
-            content: Buffer.from(file.content).toString("base64"),
-            encoding: "base64",
-          })
-        ).data.sha,
-      })),
-    );
-    for (let attempt = 0; attempt < 4; attempt++) {
-      let parent: string | null = null;
-      try {
-        parent = (await octokit.git.getRef({ ...repo, ref: `heads/${artifactBranch}` })).data.object
-          .sha;
-      } catch (error) {
-        if (APIError.safeParse(error).data?.status !== 404) throw error;
-      }
-      const baseTree = parent
-        ? (await octokit.git.getCommit({ ...repo, commit_sha: parent })).data.tree.sha
-        : undefined;
-      const tree = await octokit.git.createTree({ ...repo, base_tree: baseTree, tree: blobs });
-      const commit = await octokit.git.createCommit({
-        ...repo,
-        message: `Publish ${path}`,
-        tree: tree.data.sha,
-        parents: parent ? [parent] : [],
-      });
-      try {
-        if (parent)
-          await octokit.git.updateRef({
-            ...repo,
-            ref: `heads/${artifactBranch}`,
-            sha: commit.data.sha,
-            force: false,
-          });
-        else
-          await octokit.git.createRef({
-            ...repo,
-            ref: `refs/heads/${artifactBranch}`,
-            sha: commit.data.sha,
-          });
-        return commit.data.sha;
-      } catch (error) {
-        // A concurrent publisher may advance/create the branch; never force-push it.
-        if (attempt === 3 || ![409, 422].includes(APIError.safeParse(error).data?.status || 0))
-          throw error;
-      }
-    }
-    throw new Error("Could not publish report after four attempts");
+  private async dispatchCollector(ref: string, workflowId: string) {
+    await this.depot("DispatchWorkflow", {
+      orgId: org,
+      repo: repository,
+      workflow: "ci-trace.yml",
+      ref,
+      inputs: { "source-workflow": workflowId },
+    });
   }
 
   private github() {
@@ -276,9 +239,7 @@ export default class CiTrace {
 const repository = "iterate/iterate";
 const repo = { owner: "iterate", repo: "iterate" };
 const org = "0p91s0lz49";
-const artifactBranch = "codex/ci-trace-artifacts";
 const terminal = new Set(["finished", "failed", "cancelled", "skipped"]);
-const APIError = z.object({ status: z.number() });
 const LogPage = z.object({
   lines: z
     .array(

@@ -361,6 +361,8 @@ test("the trace status points at the tested commit and keeps the newest executio
   expect(next).toMatchObject({ target_url: run.url.replace("run1", "run2") });
   expect(traceCommitStatus(next!, run)).toBeNull();
   expect(traceCommitStatus(first!, run)).toBeNull();
+  // Reconciliation can decide that an execution already has a report before uploading.
+  expect(traceCommitStatus(first!, { ...run, url: "" })).toBeNull();
 });
 
 test("the standalone report embeds OTLP without allowing source names to break out of JSON", async () => {

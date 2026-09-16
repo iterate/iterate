@@ -5,7 +5,7 @@ size: medium
 
 # Clickable CI trace reports
 
-Implemented in PR #2681. Real preview runs automatically published interactive reports; the latest follow-up moves the link from the PR body to a **CI trace** commit status. The anonymous browser click-through, drilldown and OTLP download work. Commands come from the triggering workflow revision with Doppler wrappers removed. Built on main after #2658 and #2659.
+Implemented in PR #2681. Reports now upload to Depot artifacts and are served by an independent route in `iterate/config`; generated Git commits and use of the explainer host have been removed. Local trace and route checks pass; the new upload → public URL → commit-status path is being verified live.
 
 ## Request
 
@@ -15,7 +15,7 @@ Automatically publish a **CI trace** commit status whose Details link opens an i
 
 - Produce a self-contained HTML report plus standard OTLP JSON with the same spans. Reuse the previous explainer's setup/wait/test grouping and expand-one-level behavior.
 - Use actual Depot workflow/job/attempt identities and timestamps, plus existing Playwright reporter evidence. Retain retries and distinguish incomplete/cancelled evidence. Never infer a quiet command's entire duration from its stdout.
-- Publish through the existing branch-aware Iterate explainer host. Keep generated run reports separate from application source commits; determine the smallest durable storage mechanism during implementation.
+- Upload generated HTML/OTLP JSON to Depot. Serve it through the config worker’s `/depot/artifacts/<id>` route with its existing Depot token. No generated Git commits.
 - Prefer completed-run reports initially. A collector outside the observed workflow must handle its final timestamps; the existing periodic CI telemetry workflow can provide reconciliation for cancellation/missing finalizers.
 - Only sanitized names, timings, statuses and source locations belong in the public report. No raw logs, error payloads, auth data or signed download URLs.
 - Publish to the tested head SHA, with one **CI trace** status per commit. Replays are idempotent and older executions must not replace newer links. The collector no longer needs PR write access.
@@ -52,3 +52,5 @@ Session: `01a09f64-ea4e-7c61-ab0a-c15eb65df3bc`.
 - Follow-up: publish the report as a **CI trace** commit status with an external target URL. Removed PR-body writes and changed collector permissions to `statuses: write`; replay/newest-execution coverage remains. Replayed the real published run and verified its status ID was unchanged, then checked its external target URL. 357 scripts tests, scripts typecheck and scoped lint passed.
 
 - Consolidated tracing under `scripts/ci/tracing/`: `tracing.ts`, `cli.ts`, `shell.sh`, `viewer.html` and one `tracing.test.ts`. Updated imports, Playwright reporters, workflow commands and change-detection paths. All 357 scripts tests, scripts/specs typechecks and scoped lint passed; the moved CLI reproduced the published real run’s 203 spans exactly.
+
+- Replaced generated artifact-branch commits with the standard Depot-compatible artifact upload action and a config-repo route that unpacks reports on demand. Dropped Git contents write permission. The scheduled repair dispatches collectors only for missing execution statuses. Earlier explainer/PR-body notes above describe superseded publication designs.
