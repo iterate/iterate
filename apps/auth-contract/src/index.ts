@@ -1,3 +1,4 @@
+import { ProjectMetadata } from "@iterate-com/shared/lifetime";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import { oc, type ContractRouterClient } from "@orpc/contract";
@@ -169,7 +170,7 @@ export const InternalCreateProjectForOrganizationInput = z.object({
   organizationSlug: z.string().min(1),
   name: z.string().min(1).max(100),
   slug: z.string().min(1).max(50).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  metadata: ProjectMetadata.optional(),
 });
 export type InternalCreateProjectForOrganizationInput = z.infer<
   typeof InternalCreateProjectForOrganizationInput
@@ -430,7 +431,7 @@ export const authContract = oc.router({
           ...OrgInput.shape,
           name: z.string().min(1).max(100),
           slug: z.string().min(1).max(50).optional(),
-          metadata: z.record(z.string(), z.unknown()).optional(),
+          metadata: ProjectMetadata.optional(),
         }),
       )
       .output(ProjectRecord),
@@ -446,7 +447,7 @@ export const authContract = oc.router({
           ...ProjectInput.shape,
           name: z.string().min(1).max(100).optional(),
           slug: z.string().min(1).max(50).optional(),
-          metadata: z.record(z.string(), z.unknown()).optional(),
+          metadata: ProjectMetadata.optional(),
         }),
       )
       .output(ProjectRecord),

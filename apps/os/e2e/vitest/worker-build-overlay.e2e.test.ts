@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
@@ -12,7 +13,7 @@ test(
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
     using project = await itx.projects
       .get(`build-overlay-${crypto.randomUUID().slice(0, 8)}`)
-      .create({});
+      .create({ metadata: testProjectMetadata() });
     const { projectId } = await project.__describe();
 
     const fetchHome = async () => {

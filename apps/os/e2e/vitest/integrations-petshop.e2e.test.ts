@@ -15,6 +15,7 @@
 // Requires a deployed OS (APP_CONFIG_BASE_URL) and a reachable dummy-petshop
 // (the exact PETSHOP_BASE_URL supplied by preview orchestration).
 
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -52,7 +53,9 @@ test.skipIf(shouldSkipPetshopE2e())(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects.get(`petshop-${run}`).create({});
+    using project = await itx.projects
+      .get(`petshop-${run}`)
+      .create({ metadata: testProjectMetadata() });
     await project.__describe();
 
     for (const instance of instances) {
@@ -134,7 +137,9 @@ test.skipIf(shouldSkipPetshopE2e())(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects.get(`petshop-fp-${run}`).create({});
+    using project = await itx.projects
+      .get(`petshop-fp-${run}`)
+      .create({ metadata: testProjectMetadata() });
     await project.__describe();
 
     const code = await petshopAuthorize({ clientId, redirectUri: REDIRECT_URI });

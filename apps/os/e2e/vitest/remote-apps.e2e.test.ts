@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import { SignJWT } from "jose";
 import {
@@ -23,11 +24,11 @@ test("an external client authenticates with the project-secret credential and ge
   using session = withItxSession();
   using admin = session.authenticate({ type: "admin-secret", secret: adminSecret() });
   const projectSlug = `remote-ingress-${crypto.randomUUID().slice(0, 8)}`;
-  using project = await admin.projects.get(projectSlug).create({});
+  using project = await admin.projects.get(projectSlug).create({ metadata: testProjectMetadata() });
   const projectId = await project.projectId;
   using other = await admin.projects
     .get(`remote-ingress-other-${crypto.randomUUID().slice(0, 8)}`)
-    .create({});
+    .create({ metadata: testProjectMetadata() });
   const otherProjectId = await other.projectId;
 
   // The pairing ceremony: the born ingress secret has visibility
@@ -109,11 +110,11 @@ test.skipIf(!process.env.APP_CONFIG_PROJECT_APP_SESSION_SECRET?.trim())(
     using admin = session.authenticate({ type: "admin-secret", secret: adminSecret() });
     using project = await admin.projects
       .get(`remote-session-${crypto.randomUUID().slice(0, 8)}`)
-      .create({});
+      .create({ metadata: testProjectMetadata() });
     const projectId = await project.projectId;
     using other = await admin.projects
       .get(`remote-session-other-${crypto.randomUUID().slice(0, 8)}`)
-      .create({});
+      .create({ metadata: testProjectMetadata() });
     const otherProjectId = await other.projectId;
 
     const sign = (claims: Record<string, unknown>, expiresInSeconds = 900) =>

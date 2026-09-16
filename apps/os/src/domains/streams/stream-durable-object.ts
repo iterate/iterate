@@ -47,6 +47,7 @@ import {
   StreamConnectionRpcTarget,
 } from "../../rpc-targets.ts";
 import { canonicalizeStreamPath, DurableObjectNameCodec } from "../durable-object-names.ts";
+import { ProjectLifetime } from "../../lib/project-lifetime.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { sameCapabilityPath } from "../capability-host/capability-path.ts";
@@ -977,6 +978,11 @@ export class StreamDurableObject extends DurableObject<Env> {
   #liveState!: LiveState<StreamRuntimeDebugState>;
   #liveStateRefreshScheduled = false;
   readonly name = readStreamDurableObjectName(this.ctx);
+  #lifetime = new ProjectLifetime(
+    this.ctx.storage.kv,
+    this.env.PROJECT_LIFETIMES,
+    this.name.projectId,
+  );
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   /** Ephemeral event bodies scoped to this one Durable Object incarnation. */
   readonly #ephemeralEvents = new EphemeralEventBuffer();
@@ -1000,7 +1006,11 @@ export class StreamDurableObject extends DurableObject<Env> {
   });
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
-  readonly #alarmArmer = new StreamAlarmArmer(this.ctx.storage);
+  readonly #alarmArmer = new StreamAlarmArmer({
+    setAlarm: (atMs) =>
+      this.#lifetime.expired ? Promise.resolve() : this.ctx.storage.setAlarm(atMs),
+    deleteAlarm: () => this.ctx.storage.deleteAlarm(),
+  });
   readonly #deliveryAlarmBoundary = new StreamDeliveryAlarmBoundary({
     armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
     now: () => Date.now(),
@@ -1216,7 +1226,14 @@ export class StreamDurableObject extends DurableObject<Env> {
     const loaded = this.#readCoreProcessorState();
     if (loaded.kind === "ready") {
       this.#coreProcessorState = loaded.state;
-      this.#finishInitialization();
+      if (this.#lifetime.enabled) {
+        void ctx.blockConcurrencyWhile(async () => {
+          if (await this.#lifetime.hasExpired()) await this.ctx.storage.deleteAlarm();
+          this.#finishInitialization();
+        });
+      } else {
+        this.#finishInitialization();
+      }
       return;
     }
 
@@ -1228,6 +1245,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // initialization reset.
     this.#coreProcessorState = CoreProcessorContract.stateSchema.parse({});
     void this.ctx.blockConcurrencyWhile(async () => {
+      if (await this.#lifetime.hasExpired()) await this.ctx.storage.deleteAlarm();
       this.#coreProcessorState = await this.#recoverCoreProcessorStateFromEventLog();
       this.#finishInitialization();
     });
@@ -1235,6 +1253,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #finishInitialization(): void {
     this.#liveState = new LiveState(this.#readRuntimeState());
+    if (this.#lifetime.expired) return;
 
     // Re-create keyed facet lanes for watcher sockets that hibernated across
     // an eviction: their hibernation tags name the lane, and a lane object
@@ -1356,6 +1375,10 @@ export class StreamDurableObject extends DurableObject<Env> {
    * {@link #fireDueFacetAlarms}).
    */
   async alarm(alarmInfo?: AlarmInvocationInfo) {
+    if (await this.#lifetime.hasExpired()) {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
     this.#alarmArmer.markFired();
     let facetReplays: Promise<FacetAlarmReplayFailure[]> | undefined;
     this.#deliveryAlarmBoundary.runAlarmTurn(() => {
@@ -2609,6 +2632,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     alarmTurn?: boolean;
     justCommittedEvents?: Parameters<StreamEventSender["sendDue"]>[0];
   }): void {
+    if (this.#lifetime.expired) return;
     let repairNeeded = false;
     const attempt = (operation: string, work: () => void | boolean) => {
       try {

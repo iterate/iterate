@@ -1488,6 +1488,8 @@ const plugin: StrictPlugin = {
           // Canonical Iterate auth claim schemas (zod-only module) — the auth
           // contract's introspection output must match token claims exactly.
           "@iterate-com/shared/auth-claims",
+          // Pure Zod creation metadata, shared by Auth contracts and runtime policy.
+          "@iterate-com/shared/lifetime",
         ];
         const compiledRegex = ALLOWED_RUNTIME_IMPORT_REGEX.map(
           (pattern) => new RegExp(`^${pattern}$`),

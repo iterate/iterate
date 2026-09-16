@@ -42,6 +42,8 @@ export interface Env {
   /** Slug -> project id (+ metadata) cache in front of the auth worker's
    * project directory (project-directory.ts). */
   PROJECT_DIRECTORY: KVNamespace;
+  /** Optional policy source for projects with bounded background lifetimes. */
+  PROJECT_LIFETIMES?: KVNamespace;
   /**
    * Auth's default Worker binding. Its project-directory and token-
    * introspection methods are private RPC capabilities; auth's public HTTP

@@ -1,3 +1,4 @@
+import { ProjectMetadata, haveSameLifetime } from "@iterate-com/shared/lifetime";
 import { ORPCError } from "@orpc/server";
 import { slugify } from "@iterate-com/shared/slug";
 import {
@@ -57,6 +58,14 @@ const create = os.project.create
   });
 
 const update = os.project.update.use(projectAdminMiddleware).handler(async ({ context, input }) => {
+  if (input.metadata) {
+    input.metadata = ProjectMetadata.parse(input.metadata);
+    if (!haveSameLifetime(context.project.metadata, input.metadata)) {
+      throw new ORPCError("BAD_REQUEST", {
+        message: "A project's lifetime cannot be changed after creation.",
+      });
+    }
+  }
   const updated = await updateProjectReturning(
     context.db,
     {

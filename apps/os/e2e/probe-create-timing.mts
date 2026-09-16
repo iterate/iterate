@@ -9,6 +9,7 @@
  *
  *   doppler run --project os --config prd -- pnpm exec tsx e2e/probe-create-timing.mts [runs]
  */
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { connectItx } from "iterate/node";
 
 const baseUrl = (process.env.APP_CONFIG_BASE_URL ?? "").replace(/\/+$/, "");
@@ -23,7 +24,9 @@ for (let i = 0; i < runs; i++) {
   using session = connectItx({ baseUrl, auth: { type: "admin-secret", secret } });
   await session.__describe();
   const t1 = performance.now();
-  using project = session.projects.get(slug).create({}, { waitUntilCreated: false });
+  using project = session.projects
+    .get(slug)
+    .create({ metadata: testProjectMetadata() }, { waitUntilCreated: false });
   const identity = await project.identity();
   const t2 = performance.now();
   console.log(

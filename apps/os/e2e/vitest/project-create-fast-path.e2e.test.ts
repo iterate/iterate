@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { test } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -12,7 +13,9 @@ test(
 
     // The dashboard form's exact shape: identity() pipelined through the
     // non-blocking create — one round trip, resolving pre-birth.
-    using project = session.projects.get(slug).create({}, { waitUntilCreated: false });
+    using project = session.projects
+      .get(slug)
+      .create({ metadata: testProjectMetadata() }, { waitUntilCreated: false });
     const identity = await project.identity();
     expect(identity).toMatchObject({ slug });
 

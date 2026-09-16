@@ -3,6 +3,7 @@
 // runs in a dynamic worker with project-root authority, and both the outcome
 // and the script's cross-stream side effect land as events.
 
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/processors";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -23,7 +24,7 @@ test("a near-future schedule triggers, runs its itx script, and records the outc
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
   using project = await itx.projects
     .get(`scheduler-e2e-${RUN_SUFFIX}-${marker.slice(0, 8)}`)
-    .create({});
+    .create({ metadata: testProjectMetadata() });
 
   const view = await project.scheduler.set({
     key,
@@ -110,7 +111,7 @@ test("manual trigger runs a far-future schedule now; cancel removes it", async (
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
   using project = await itx.projects
     .get(`scheduler-manual-e2e-${RUN_SUFFIX}-${marker.slice(0, 8)}`)
-    .create({});
+    .create({ metadata: testProjectMetadata() });
 
   const definition = {
     key,

@@ -1,5 +1,6 @@
 // Deployed Firecracker proof; local fixtures are not container-reachable.
 
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import type { RpcStub } from "capnweb";
 import { expect, test } from "vitest";
 import { z } from "zod";
@@ -46,7 +47,9 @@ test(
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
     using project = await measurePhase("create test project", "fixture", () =>
-      itx.projects.get(`sandbox-timeout-${crypto.randomUUID()}`).create({}),
+      itx.projects
+        .get(`sandbox-timeout-${crypto.randomUUID()}`)
+        .create({ metadata: testProjectMetadata() }),
     );
 
     const sandboxPath = `/sandboxes/timeout-proof-${crypto.randomUUID()}`;

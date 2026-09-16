@@ -10,6 +10,7 @@
 // Bot messages never trigger agents, so the synthetic webhook is a HUMAN
 // message (see incident_agent_anchor_skips_first_input).
 
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/processors";
 import { INTEGRATION_DIRECTORY_STREAM_PATH } from "../../src/domains/integrations/utils.ts";
@@ -42,7 +43,9 @@ test.skipIf(signingSecret === null)(
 
     using session = withItxSession();
     using root = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await root.projects.get(`slack-agent-e2e-${runSuffix}`).create({});
+    using project = await root.projects
+      .get(`slack-agent-e2e-${runSuffix}`)
+      .create({ metadata: testProjectMetadata() });
     const { projectId } = await project.__describe();
 
     // --- Seed a claimed workspace without OAuth: fake bot token secret +

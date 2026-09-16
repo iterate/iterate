@@ -12,6 +12,7 @@
 // deployment code over the vendored client — so its slug is reserved here;
 // the builtin's surface is asserted below without dialing the vendor.)
 
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startEgressEcho } from "./itx-capability-fixtures.ts";
@@ -29,7 +30,9 @@ test("a project mounts ocado into the collection; connections + secret confineme
       type: "admin-secret",
       secret: adminSecret(),
     });
-    using project = await itx.projects.get(`ocado-${runSuffix}`).create({});
+    using project = await itx.projects
+      .get(`ocado-${runSuffix}`)
+      .create({ metadata: testProjectMetadata() });
     await project.__describe();
     const integrations = project.integrations as any;
 
@@ -192,7 +195,9 @@ test("builtin waitrose: grammar, __describe, and method-miss stay loud", async (
   const runSuffix = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`waitrose-builtin-${runSuffix}`).create({});
+  using project = await itx.projects
+    .get(`waitrose-builtin-${runSuffix}`)
+    .create({ metadata: testProjectMetadata() });
   await project.__describe();
   const integrations = project.integrations as any;
 
@@ -246,7 +251,9 @@ test.skipIf(shouldSkipPetshopE2e())(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects.get(`waitrose-live-${runSuffix}`).create({});
+    using project = await itx.projects
+      .get(`waitrose-live-${runSuffix}`)
+      .create({ metadata: testProjectMetadata() });
     await project.__describe();
 
     // The connection secret: the account credential and NOTHING token-shaped.

@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { expect, test, vi } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -12,7 +13,9 @@ test("itx.ai.run('intercepted/…') is served by the live interceptor; releasing
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`ai-intercept-${crypto.randomUUID()}`).create({});
+  using project = await itx.projects
+    .get(`ai-intercept-${crypto.randomUUID()}`)
+    .create({ metadata: testProjectMetadata() });
 
   using interception = await project.ai.intercept(async (input) => {
     return Response.json({ served: input });
@@ -36,7 +39,9 @@ test("itx.ai.run('intercepted/…') is served by the live interceptor; releasing
 test("ai.run decodes JSON, preserves binary/SSE streams and raw responses, and rejects HTTP errors", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`ai-response-${crypto.randomUUID()}`).create({});
+  using project = await itx.projects
+    .get(`ai-response-${crypto.randomUUID()}`)
+    .create({ metadata: testProjectMetadata() });
   using _interception = await project.ai.intercept(async (call) => {
     if (call.source !== "ai-run") throw new Error("Expected ai-run source");
     expect(call.request).toMatchObject({
@@ -227,7 +232,9 @@ createFailing(test, /producer should observe cancellation/)(
 test("an interceptor returning a plain object rejects without losing the session", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`ai-invalid-${crypto.randomUUID()}`).create({});
+  using project = await itx.projects
+    .get(`ai-invalid-${crypto.randomUUID()}`)
+    .create({ metadata: testProjectMetadata() });
   using _interception = await project.ai.intercept(async (call) => {
     if (!call.request.body.invalid) return Response.json({ healthy: true });
     return { body: "invalid" } as any;
@@ -246,7 +253,9 @@ createFailing(
 )("an interceptor returning a consumed body rejects without losing the session", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`ai-invalid-${crypto.randomUUID()}`).create({});
+  using project = await itx.projects
+    .get(`ai-invalid-${crypto.randomUUID()}`)
+    .create({ metadata: testProjectMetadata() });
   using _interception = await project.ai.intercept(async (call) => {
     if (!call.request.body.invalid) return Response.json({ healthy: true });
     const response = Response.json({ value: "test" });
@@ -267,7 +276,9 @@ createFailing(
 )("an interceptor returning a locked body rejects without losing the session", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`ai-invalid-${crypto.randomUUID()}`).create({});
+  using project = await itx.projects
+    .get(`ai-invalid-${crypto.randomUUID()}`)
+    .create({ metadata: testProjectMetadata() });
   const response = Response.json({ value: "test" });
   const lockedReader = response.body!.getReader();
   using _interception = await project.ai.intercept(async (call) => {
@@ -295,7 +306,9 @@ createFailing(
 test("a root stream DO restart closes the installing session with 4901; reconnect + re-install restores interception", async () => {
   using driver = withItxSession();
   using itx = driver.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`ai-intercept-revival-${crypto.randomUUID()}`).create({});
+  using project = await itx.projects
+    .get(`ai-intercept-revival-${crypto.randomUUID()}`)
+    .create({ metadata: testProjectMetadata() });
   const description = await project.__describe();
 
   const closes: { code: number; reason: string }[] = [];
@@ -353,7 +366,7 @@ test("a newer intercept() supersedes the older one; the older handle's release c
   using itx = driver.authenticate({ type: "admin-secret", secret: adminSecret() });
   using project = await itx.projects
     .get(`ai-intercept-supersede-${crypto.randomUUID()}`)
-    .create({});
+    .create({ metadata: testProjectMetadata() });
   const description = await project.__describe();
 
   using firstSession = withItxSession({
@@ -379,7 +392,9 @@ async function createStreamInterception() {
   const session = resources.use(withItxSession());
   const itx = resources.use(session.authenticate({ type: "admin-secret", secret: adminSecret() }));
   const project = resources.use(
-    await itx.projects.get(`ai-stream-${crypto.randomUUID()}`).create({}),
+    await itx.projects
+      .get(`ai-stream-${crypto.randomUUID()}`)
+      .create({ metadata: testProjectMetadata() }),
   );
   const description = await project.__describe();
   const provider = resources.use(

@@ -17,6 +17,7 @@
  * silently absorbed — the 90s tail is a real product-latency signal.
  */
 import { fileURLToPath } from "node:url";
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import {
   ciTelemetrySourceFromEnvironment,
   normalizeTestTelemetryError,
@@ -63,7 +64,9 @@ async function attemptAgentSmoke(phases: SmokePhase[]): Promise<void> {
     durationMs: Date.now() - connectionStartedAt,
   });
   const createStartedAt = Date.now();
-  using project = await root.projects.get(`agent-smoke-${marker}`).create({});
+  using project = await root.projects
+    .get(`agent-smoke-${marker}`)
+    .create({ metadata: testProjectMetadata() });
   const createMs = Date.now() - createStartedAt;
   phases.push({ name: "create project", category: "fixture", durationMs: createMs });
   const describeStartedAt = Date.now();

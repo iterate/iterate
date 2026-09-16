@@ -4,6 +4,7 @@
 // crash-loop the stream. This is now its deployed regression test.
 
 import { createHash } from "node:crypto";
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import type { Stream } from "../../src/itx-api.generated.ts";
 import { adminSecret, deployedBaseUrl, withItxSession } from "./test-helpers.ts";
@@ -21,7 +22,7 @@ survivesReset(
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
     using project = await itx.projects
       .get(`oversized-reset-${crypto.randomUUID().slice(0, 8)}`)
-      .create({});
+      .create({ metadata: testProjectMetadata() });
     await using stream = withTestReset(project.streams.get("/"));
 
     // Six separately appended 14MB bodies exceed the former replay-memory

@@ -6,6 +6,7 @@
  *
  *   doppler run --project os --config preview_1 -- pnpm exec tsx e2e/probe-agent-stall.mts [rounds] [concurrency]
  */
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { setTimeout as sleep } from "node:timers/promises";
 import { connectItx } from "iterate/node";
 
@@ -30,7 +31,7 @@ async function probeOne(tag: string): Promise<{ ok: boolean; ms: number; tag: st
   const slug = `stall-probe-${tag}-${Math.random().toString(36).slice(2, 7)}`;
   const { session, root } = connectAdmin();
   try {
-    using created = await root.projects.get(slug).create({});
+    using created = await root.projects.get(slug).create({ metadata: testProjectMetadata() });
     const { projectId } = await created.__describe();
     const agentPath = "/agents/probe";
     using agent = connectItx({ agentPath, auth, baseUrl, projectId });

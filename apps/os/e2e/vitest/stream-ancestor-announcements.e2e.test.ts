@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import { internalStreamId } from "../../src/domains/streams/stream-delivery-utils.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -12,7 +13,9 @@ test("a newborn stream announces itself to every ancestor", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`announce-birth-${marker}`).create({});
+  using project = await itx.projects
+    .get(`announce-birth-${marker}`)
+    .create({ metadata: testProjectMetadata() });
   using root = project.streams.get("/");
   using parent = project.streams.get(`/announce-birth-${marker}`);
   using child = project.streams.get(childPath);
@@ -52,7 +55,9 @@ test("a failed ancestor announcement retries on the child stream's next append",
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`announce-heal-${marker}`).create({});
+  using project = await itx.projects
+    .get(`announce-heal-${marker}`)
+    .create({ metadata: testProjectMetadata() });
   using root = project.streams.get("/");
   using child = project.streams.get(childPath);
 

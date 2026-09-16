@@ -15,7 +15,7 @@
  * alias, so the class lives in this script.
  */
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { streamsExampleEnvs, type StreamsExampleEnv } from "../../../envs.ts";
+import { envs, type EnvName, streamsExampleEnvs, type StreamsExampleEnv } from "../../../envs.ts";
 import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
@@ -69,9 +69,19 @@ function workerBindings() {
   };
 }
 
-function envBlock(env: StreamsExampleEnv) {
+function envBlock(name: EnvName, env: StreamsExampleEnv) {
   return {
     name: env.workerName,
+    kv_namespaces:
+      process.env.ENABLE_PROJECT_LIFETIMES === "1"
+        ? [
+            {
+              binding: "PROJECT_LIFETIMES",
+              // Both apps read the same immutable project metadata and group retirement.
+              id: envs[name].resources.projectDirectoryKvId,
+            },
+          ]
+        : [],
     account_id: env.cloudflareAccountId,
     routes: [
       {
@@ -122,7 +132,11 @@ const config = {
     ],
   },
   env: Object.fromEntries(
-    Object.entries(streamsExampleEnvs).map(([name, env]) => [name, envBlock(env)]),
+    Object.keys(streamsExampleEnvs).map((name) => {
+      // Object.keys preserves the keys of this typed environment map.
+      const envName = name as EnvName;
+      return [name, envBlock(envName, streamsExampleEnvs[envName])];
+    }),
   ),
 };
 

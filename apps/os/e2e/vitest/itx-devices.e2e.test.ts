@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -7,7 +8,9 @@ test("public itx discovers an enrolled device and appends a notification request
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`device-itx-${crypto.randomUUID()}`).create({});
+  using project = await itx.projects
+    .get(`device-itx-${crypto.randomUUID()}`)
+    .create({ metadata: testProjectMetadata() });
   const projectId = (await project.__describe()).projectId;
   using phone = project.devices.get("phone-test-installation");
 

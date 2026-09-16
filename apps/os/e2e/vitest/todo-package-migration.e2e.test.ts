@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import type { StatefulDynamicWorkerRef } from "iterate/sdk";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -10,7 +11,7 @@ test("the packaged Todo adopts rows from the config-owned worker", async () => {
   });
   using project = await itx.projects
     .get(`todo-package-migration-${crypto.randomUUID().slice(0, 8)}`)
-    .create({});
+    .create({ metadata: testProjectMetadata() });
 
   const title = `created-before-packaging-${crypto.randomUUID().slice(0, 8)}`;
   {

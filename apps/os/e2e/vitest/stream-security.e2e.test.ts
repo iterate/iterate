@@ -3,6 +3,7 @@
 // Each test is written to FAIL against the pre-fix code and pass afterwards, so
 // the fix is pinned by observable behaviour rather than by inspection.
 
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import { isStreamOffsetConflictError } from "iterate/processors";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -18,7 +19,9 @@ test("project users cannot reach stream test controls or the raw Durable Object"
 
   using adminSession = withItxSession();
   using admin = adminSession.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using adminProject = await admin.projects.get(projectSlug).create({});
+  using adminProject = await admin.projects
+    .get(projectSlug)
+    .create({ metadata: testProjectMetadata() });
   const { projectId } = await adminProject.__describe();
   using adminStream = adminProject.streams.get(streamPath);
   const [durableMarker] = await adminStream.append({
@@ -80,7 +83,9 @@ test("project.processor does not expose the host-only ingest method over RPC", a
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`sec-ingest-${RUN_SUFFIX}-${marker}`).create({});
+  using project = await itx.projects
+    .get(`sec-ingest-${RUN_SUFFIX}-${marker}`)
+    .create({ metadata: testProjectMetadata() });
 
   // Reach past the typed surface exactly as a hostile caller would.
   const processor = project.processor as unknown as {
@@ -118,7 +123,9 @@ test("append accepts an offset assertion on a subscription configuration event",
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`sec-offset-${RUN_SUFFIX}-${marker}`).create({});
+  using project = await itx.projects
+    .get(`sec-offset-${RUN_SUFFIX}-${marker}`)
+    .create({ metadata: testProjectMetadata() });
   using stream = project.streams.get(streamPath);
 
   // Feed publications can advance the head between reading it and appending.
@@ -164,7 +171,9 @@ test("openConnection rejects a malformed callback owner before installing the ca
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`sec-subscriber-${RUN_SUFFIX}-${marker}`).create({});
+  using project = await itx.projects
+    .get(`sec-subscriber-${RUN_SUFFIX}-${marker}`)
+    .create({ metadata: testProjectMetadata() });
   using stream = project.streams.get(streamPath);
 
   // An explicit key makes the rejected attempt identifiable in the state
@@ -204,7 +213,9 @@ test("a processor read for an unconfigured name does not mint a facet", async ()
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`sec-facet-${RUN_SUFFIX}-${marker}`).create({});
+  using project = await itx.projects
+    .get(`sec-facet-${RUN_SUFFIX}-${marker}`)
+    .create({ metadata: testProjectMetadata() });
   using stream = project.streams.get(streamPath);
 
   await expect(async () => {
@@ -222,7 +233,9 @@ test("repo create and read refuse paths claimed by another processor family", as
   const marker = crypto.randomUUID();
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`sec-repo-path-${RUN_SUFFIX}-${marker}`).create({});
+  using project = await itx.projects
+    .get(`sec-repo-path-${RUN_SUFFIX}-${marker}`)
+    .create({ metadata: testProjectMetadata() });
 
   await expect(async () => {
     await project.repos.get(`/agents/${marker}`).create({ type: "empty" });

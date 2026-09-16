@@ -14,6 +14,7 @@ import {
   type RegisteredProcessorReads,
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
+import { ProjectLifetime } from "../../../lib/project-lifetime.ts";
 import { trustedInternalAuthContext } from "../../../auth.ts";
 import { workerVersion, type Env } from "../../../env.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../../rpc-targets.ts";
@@ -738,6 +739,17 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * when a caller enabled keepAlive; the field is private, hence the cast).
    */
   override async onActivityExpired(): Promise<void> {
+    // The lifetime decision is shared; the container must keep its shutdown alarm.
+    if (
+      this.#record() &&
+      (await new ProjectLifetime(
+        this.ctx.storage.kv,
+        this.env.PROJECT_LIFETIMES,
+        this.#identity().projectId,
+      ).hasExpired())
+    ) {
+      await this.setKeepAlive(false);
+    }
     const keepAlive = (this as unknown as { keepAliveEnabled?: boolean }).keepAliveEnabled === true;
     if (keepAlive) {
       return super.onActivityExpired();

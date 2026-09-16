@@ -62,7 +62,7 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
   expect(
     workflow.jobs.finish.steps
       .flatMap((step: any) => step.parallel || [])
-      .find((step: any) => step.name === "Erase slot data after all tests"),
+      .find((step: any) => step.run?.includes("pnpm preview ci-dispose")),
   ).toMatchObject({ if: "always() && steps.consumers.outputs.settled == 'true'" });
 });
 

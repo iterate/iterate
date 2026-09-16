@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { testStreamProjectId } from "@iterate-com/shared/test-support/project-lifetime";
 import type { Locator, Page } from "@playwright/test";
 import { e2eStreamPath, streamRoute } from "../helpers.ts";
 import { expect, test } from "./test.ts";
@@ -1199,7 +1200,7 @@ async function isWriter(page: Page) {
 }
 
 async function holdCurrentWriterLock(page: Page, streamPath: string) {
-  const lockName = `stream-event-sync:${databasePathFor("default", streamPath)}`;
+  const lockName = `stream-event-sync:${databasePathFor(testStreamProjectId(), streamPath)}`;
   await page.evaluate(async (name) => {
     // Derive this from the same cache path as the live browser database. A
     // stale lock name makes the test vacuous because the page elects itself.

@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { connectItx } from "iterate/node";
@@ -83,7 +84,7 @@ test(
     const slug = uniqueFixtureSlug("garple-storefront");
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects.get(slug).create({});
+    using project = await itx.projects.get(slug).create({ metadata: testProjectMetadata() });
     await project.__describe();
 
     // 1. The website: Garple's project worker replaces the seeded template's

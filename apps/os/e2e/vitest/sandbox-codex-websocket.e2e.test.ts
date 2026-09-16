@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import type { RpcStub } from "capnweb";
 import { expect, test } from "vitest";
 import type { SandboxLiteDurableObject } from "../../src/domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
@@ -18,7 +19,9 @@ test.skipIf(deployedBaseUrl() === null || !exactCodexProofEnabled)(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects.get(`sandbox-codex-${crypto.randomUUID()}`).create({});
+    using project = await itx.projects
+      .get(`sandbox-codex-${crypto.randomUUID()}`)
+      .create({ metadata: testProjectMetadata() });
     using secret = project.secrets.get(secretPath);
     await secret.create({
       egress: { urls: ["https://api.openai.com"] },

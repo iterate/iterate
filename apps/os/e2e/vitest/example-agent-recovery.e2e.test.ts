@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import type { StreamEventInput } from "iterate/processors";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -29,7 +30,7 @@ test(
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
     using project = await itx.projects
       .get(`example-agent-${crypto.randomUUID().slice(0, 8)}`)
-      .create({});
+      .create({ metadata: testProjectMetadata() });
     await project.projectId;
 
     const streamPath = "/example-agent";

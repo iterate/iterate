@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -12,7 +13,9 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 test("lazy commits, reads, and clone-lane writes share one history", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`repo-lazy-${crypto.randomUUID()}`).create({});
+  using project = await itx.projects
+    .get(`repo-lazy-${crypto.randomUUID()}`)
+    .create({ metadata: testProjectMetadata() });
 
   await waitForCondition(
     async () => {

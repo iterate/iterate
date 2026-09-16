@@ -9,6 +9,37 @@ import {
   userCanAccessProject,
 } from "./project-directory.ts";
 
+it("a create retry cannot change the lifetime of an existing project", async () => {
+  const result = await createProjectForOrganization(
+    {
+      organizationSlug: "one",
+      name: "Existing",
+      metadata: { lifetime: { expiresAt: Date.now() + 60_000 } },
+    },
+    fakeDb((query) => {
+      if (query.name === "getOrganizationBySlug")
+        return [{ id: "org_one", name: "One", slug: "one" }];
+      if (query.name === "getProjectBySlug")
+        return [
+          {
+            id: "prj_existing",
+            organizationId: "org_one",
+            name: "Existing",
+            slug: "existing",
+            metadata: "{}",
+            archivedAt: null,
+          },
+        ];
+      throw new Error(`Unexpected query ${query.name}`);
+    }),
+  );
+  assert.deepEqual(result, {
+    ok: false,
+    reason: "conflict",
+    message: "A project's lifetime cannot be changed after creation.",
+  });
+});
+
 type Query = { name: string; args: unknown[] };
 
 function fakeDb(respond: (query: Query) => unknown[]) {

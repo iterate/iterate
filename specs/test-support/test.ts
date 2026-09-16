@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { test as base, type Page, type TestInfo as _TestInfo } from "@playwright/test";
 import {
   CLOUDFLARE_WORKERS_VERSION_OVERRIDES_HEADER,
@@ -79,6 +80,17 @@ export const test = base.extend<{
         const headers = request.headers();
         delete headers[CLOUDFLARE_WORKERS_VERSION_OVERRIDES_HEADER.toLowerCase()];
         await route.continue({ headers });
+      });
+    }
+    if (testProjectMetadata().lifetime) {
+      // Add ordinary creation metadata to the real Auth request, including
+      // onboarding popups. The deployed apps have no test-only ingress path.
+      await context.route("**/api/orpc/project/create", async (route) => {
+        const request = route.request();
+        if (request.method() !== "POST") return route.fallback();
+        const body = request.postDataJSON();
+        body.json.metadata = { ...body.json.metadata, ...testProjectMetadata() };
+        await route.fallback({ postData: JSON.stringify(body) });
       });
     }
     await use(context);

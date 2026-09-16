@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import WebSocket from "ws";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
@@ -70,7 +71,9 @@ test.skip("the boundary, pinned: a socket-carrying Response dies crossing the wo
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`live-ws-pin-${marker}`).create({});
+  using project = await itx.projects
+    .get(`live-ws-pin-${marker}`)
+    .create({ metadata: testProjectMetadata() });
   await project.__describe();
 
   using _provision = await project.provideCapability({
@@ -115,7 +118,7 @@ test.skip(
       type: "admin-secret",
       secret: adminSecret(),
     });
-    using project = await itx.projects.get(slug).create({});
+    using project = await itx.projects.get(slug).create({ metadata: testProjectMetadata() });
     await project.__describe();
 
     using _provision = await project.provideCapability({

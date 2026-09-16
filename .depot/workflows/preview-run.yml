@@ -21,6 +21,9 @@ permissions:
   pull-requests: write
   statuses: write
 env:
+  # Review experiment. Enable only after the ownership/quieting rollout proof
+  # in docs/project-lifetimes.md; full cleanup remains the default.
+  PROJECT_LIFETIMES_EXPERIMENT: "false"
   CI_HEAD_SHA: ${{ inputs.head-sha }}
   TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
 jobs:
@@ -72,7 +75,8 @@ jobs:
         run: >-
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
           pnpm preview ci-prepare --pull-request-number "${{ inputs.pull-request-number }}"
-          ${{ inputs.all-apps && '--all-apps' || '' }}
+          ${{ (inputs.all-apps || env.PROJECT_LIFETIMES_EXPERIMENT == 'true') && '--all-apps' || '' }}
+          ${{ env.PROJECT_LIFETIMES_EXPERIMENT == 'true' && '--project-lifetimes' || '' }}
       - name: Publish prepared deployment identity
         uses: actions/upload-artifact@v4
         with:
@@ -227,6 +231,12 @@ jobs:
           pnpm exec trpc-cli scripts/ci/status.ts wait-for-jobs apps
           playwright:matrix-0 playwright:matrix-1 playwright:matrix-2
           playwright:matrix-3 playwright:matrix-4 playwright:matrix-5
+      - name: Download cleanup identity before parallel report collection
+        if: always() && steps.consumers.outputs.settled == 'true' && needs.prepare.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: preview-ci-plan
+          path: test-results/cleanup
       - if: always() && steps.consumers.outputs.settled == 'true'
         fail-fast: false
         parallel:
@@ -246,17 +256,16 @@ jobs:
                 run: >-
                   doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
                   pnpm preview ci-finish --pull-request-number "${{ inputs.pull-request-number }}"
-          - name: Erase slot data after all tests
+          - name: Retire test work or erase slot data
             if: always() && steps.consumers.outputs.settled == 'true'
             env:
               DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
               GITHUB_TOKEN: ${{ github.token }}
-            # No result files are needed by erase. A crashed/failed producer is
-            # safe only after the all-settled barrier. Cancellation still relies
-            # on the next run's pre-deploy erase as its backstop.
+            # The immutable plan selects retirement only for opted-in attempts.
+            # Ordinary runs and failed preparation retain the erase backstop.
             run: >-
               doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
-              pnpm preview erase --pull-request-number "${{ inputs.pull-request-number }}"
+              pnpm preview ci-dispose --pull-request-number "${{ inputs.pull-request-number }}"
               --ran-head-sha "${{ inputs.head-sha }}"
       - name: Normalize and send preview test telemetry
         if: always()

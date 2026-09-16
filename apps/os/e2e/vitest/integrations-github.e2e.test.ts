@@ -24,6 +24,7 @@
 // (the exact PETSHOP_BASE_URL supplied by preview orchestration).
 
 import { generateKeyPairSync } from "node:crypto";
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -59,7 +60,9 @@ test.skipIf(shouldSkipPetshopE2e())(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects.get(`github-${run}`).create({});
+    using project = await itx.projects
+      .get(`github-${run}`)
+      .create({ metadata: testProjectMetadata() });
     await project.__describe();
 
     const connectionPath = `/secrets/integrations/mygithub-${run}/acme`;

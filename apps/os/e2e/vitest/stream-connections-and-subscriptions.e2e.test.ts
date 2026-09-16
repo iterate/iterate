@@ -8,6 +8,7 @@
 // callback behavior belong here. Local runs skip the two destructive-lifecycle
 // proofs that require a preview deployment.
 
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import {
   MAX_COPIED_FROM_HOPS,
@@ -585,7 +586,7 @@ test("callback capabilities cross the worker proxy and disappear with their sess
   });
   using project = await observerItx.projects
     .get(`stream-subscriptions-${RUN_SUFFIX}-${marker}`)
-    .create({});
+    .create({ metadata: testProjectMetadata() });
   const { projectId } = await project.__describe();
   using observerStream = project.streams.get(streamPath);
 
@@ -672,7 +673,7 @@ test("newly appended events cross the callback owner's WebSocket in one directio
   });
   using project = await publisherItx.projects
     .get(`stream-subscriptions-${RUN_SUFFIX}-${marker}`)
-    .create({});
+    .create({ metadata: testProjectMetadata() });
   const { projectId } = await project.__describe();
 
   const frames: ItxWebSocketMessage[] = [];
@@ -724,7 +725,7 @@ test("warm live delivery remains bounded across repeated appends", async () => {
   });
   using project = await publisherItx.projects
     .get(`stream-subscriptions-${RUN_SUFFIX}-${marker}`)
-    .create({});
+    .create({ metadata: testProjectMetadata() });
   const { projectId } = await project.__describe();
 
   using callbackProject = withItxSession({
@@ -3588,7 +3589,9 @@ async function openTestProject(marker: string) {
   );
   try {
     const project = resources.adopt(
-      await itx.projects.get(`subscriptions-${RUN_SUFFIX}-${marker}`).create({}),
+      await itx.projects
+        .get(`subscriptions-${RUN_SUFFIX}-${marker}`)
+        .create({ metadata: testProjectMetadata() }),
       disposeRpc,
     );
     return {

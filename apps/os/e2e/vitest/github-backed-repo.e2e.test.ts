@@ -6,6 +6,7 @@
 // push, create-on-link, syncFromGithub) authenticates against real GitHub and
 // is proven by production smoke, not here.
 
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -22,7 +23,9 @@ test("github pushes about a linked repository reach the repo stream", async () =
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`os-github-repo-${RUN_SUFFIX}-${marker}`).create({});
+  using project = await itx.projects
+    .get(`os-github-repo-${RUN_SUFFIX}-${marker}`)
+    .create({ metadata: testProjectMetadata() });
 
   // A real repo, so the repo processor is live on the target stream and must
   // coexist with (ignore) the received webhook events.

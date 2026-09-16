@@ -9,6 +9,7 @@
 // must carry a valid P-256 signature over the canonical approval.v2 message
 // — an unsigned decision is ignored and only the signed one releases.
 
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import {
   APPROVAL_BODY_INSPECTION_LIMIT_BYTES,
@@ -38,7 +39,9 @@ test("hold → approve releases, hold → reject refuses, short timeouts expire"
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
 
   try {
-    using project = await itx.projects.get(`egress-approvals-${crypto.randomUUID()}`).create({});
+    using project = await itx.projects
+      .get(`egress-approvals-${crypto.randomUUID()}`)
+      .create({ metadata: testProjectMetadata() });
     const stream = project.streams.get("/");
     const echoHost = new URL(echo.url).hostname;
 
@@ -244,7 +247,7 @@ test("an agent codemode script carries one durable source through bare and scope
   try {
     using project = await itx.projects
       .get(`egress-approval-source-${crypto.randomUUID()}`)
-      .create({});
+      .create({ metadata: testProjectMetadata() });
     const root = project.streams.get("/");
     const agentPath = "/agents/refund-agent";
     const agent = await project.agents.get(agentPath).create();
@@ -370,7 +373,9 @@ test("a script run's parked hold survives a stream Durable Object restart", asyn
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
 
   try {
-    using project = await itx.projects.get(`egress-hold-restart-${crypto.randomUUID()}`).create({});
+    using project = await itx.projects
+      .get(`egress-hold-restart-${crypto.randomUUID()}`)
+      .create({ metadata: testProjectMetadata() });
     const root = project.streams.get("/");
     const agent = await project.agents.get("/agents/patient-agent").create();
     const echoHost = new URL(echo.url).hostname;
@@ -458,7 +463,7 @@ test("an approved fetch never succeeds without its durable settlement fact", asy
   try {
     using project = await itx.projects
       .get(`egress-settlement-required-${crypto.randomUUID()}`)
-      .create({});
+      .create({ metadata: testProjectMetadata() });
     const root = project.streams.get("/");
     await root.append({
       type: RULES_CONFIGURED,
@@ -526,7 +531,7 @@ test("approved worker WebSocket egress stays on the fetch-native transport", asy
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
   using project = await itx.projects
     .get(`egress-approval-websocket-${crypto.randomUUID()}`)
-    .create({});
+    .create({ metadata: testProjectMetadata() });
   const root = project.streams.get("/");
   const agent = await project.agents.get("/agents/websocket-agent").create();
   const websocketUrl = new URL(echo.url);
@@ -607,7 +612,7 @@ test("a script's burst coalesces into ONE batch event, one push, and one decisio
   try {
     using project = await itx.projects
       .get(`egress-approval-batch-${crypto.randomUUID()}`)
-      .create({});
+      .create({ metadata: testProjectMetadata() });
     const root = project.streams.get("/");
     const agent = await project.agents.get("/agents/burst-agent").create();
     const echoHost = new URL(echo.url).hostname;
@@ -700,7 +705,7 @@ test("mixed verdicts in one decision: approved indexes release, rejected indexes
   try {
     using project = await itx.projects
       .get(`egress-approval-mixed-${crypto.randomUUID()}`)
-      .create({});
+      .create({ metadata: testProjectMetadata() });
     const root = project.streams.get("/");
     const agent = await project.agents.get("/agents/mixed-agent").create();
     const echoHost = new URL(echo.url).hostname;
@@ -774,7 +779,7 @@ test("enrolled approval keys make unsigned approvals inert; a signed decision re
   try {
     using project = await itx.projects
       .get(`egress-approvals-signed-${crypto.randomUUID()}`)
-      .create({});
+      .create({ metadata: testProjectMetadata() });
     // The signed message binds the real prj_… id (what the DO verifies with).
     const projectId = (await project.__describe()).projectId;
     const stream = project.streams.get("/");

@@ -25,6 +25,7 @@ export type ProjectDirectoryRecord = {
   slug: string;
   organizationId: string | null;
   name: string;
+  metadata?: Record<string, unknown>;
 };
 
 /**
@@ -116,6 +117,7 @@ export async function readProjectBySlug(
         slug: project.slug,
         organizationId: project.organizationId,
         name: project.name,
+        metadata: project.metadata,
       }
     : null;
   memoize(slug, record);

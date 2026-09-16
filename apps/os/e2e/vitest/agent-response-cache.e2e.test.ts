@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -59,7 +60,7 @@ type LlmCompletionEvidence = {
 async function runAgentTurn(slug: string): Promise<LlmCompletionEvidence> {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(slug).create({});
+  using project = await itx.projects.get(slug).create({ metadata: testProjectMetadata() });
   using agent = project.agents.get("/agents/cache-probe");
   await agent.create();
   await agent.message("Reply with exactly: cache probe");

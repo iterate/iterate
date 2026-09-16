@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { test, type Page } from "@playwright/test";
 import type {
   IterateAuthAccessTokenOrganizationClaim,
@@ -445,7 +446,9 @@ async function createAdminProjectAfterPreviewRollout(input: {
   // lifecycle poll is needed. The shared helper retries the initial admin
   // connection while a preview deployment finishes converging.
   using session = await connectPlaywrightAdminItx(input);
-  using created = await session.projects.get(input.slug).create({});
+  using created = await session.projects
+    .get(input.slug)
+    .create({ metadata: testProjectMetadata() });
   const description = await created.__describe();
   const project = { id: description.projectId, slug: input.slug };
 

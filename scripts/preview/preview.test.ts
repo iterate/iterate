@@ -2183,6 +2183,28 @@ describe("eraseHeldSlotAfterRun", () => {
 });
 
 describe("claimEnvironmentConfigLease", () => {
+  test("reuses a live same-owner slot only when its retirement protocol is recognised", async () => {
+    const erased: string[] = [];
+    const semaphore = fakeSemaphore({
+      acquireSpecific: async () => fakeLease(),
+      list: async () => [leasedResource("preview-2", "pr-1600")],
+    });
+    const common = {
+      eraseSlotData: async ({ slug }: { slug: string }) => {
+        erased.push(slug);
+      },
+      holder: "pr-1600",
+      leaseMs: 1000,
+      recordedSlug: "preview-2",
+      semaphore,
+      waitTotalMs: 0,
+    };
+    await claimEnvironmentConfigLease({ ...common, reuseHeldSlotData: async () => true });
+    expect(erased).toEqual([]);
+    await claimEnvironmentConfigLease({ ...common, reuseHeldSlotData: async () => false });
+    expect(erased).toEqual(["preview-2"]);
+  });
+
   test("adopts (and thereby renews) the slot the semaphore attributes to this holder", async () => {
     // The PR body's copy is never consulted for ownership: the semaphore says
     // pr-1600 holds preview-2, so the claim re-issues that lease. The slot

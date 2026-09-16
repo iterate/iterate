@@ -27,6 +27,7 @@
  *   shortcuts onto it); `itx.capabilityHosts.get(path)` addresses any other
  *   scope's host, including the project root at `"/"`.
  */
+import { ProjectMetadata, haveSameLifetime } from "@iterate-com/shared/lifetime";
 import { RpcTarget } from "cloudflare:workers";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
@@ -6879,10 +6880,16 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * same handle, and addressing an unknown slug is side-effect free.
    */
   async create(
-    args: { configRepoTemplate?: string; organizationSlug?: string; projectId?: string } = {},
+    args: {
+      configRepoTemplate?: string;
+      organizationSlug?: string;
+      projectId?: string;
+      metadata?: Record<string, unknown>;
+    } = {},
     options?: { waitUntilCreated?: boolean },
   ): Promise<ProjectRpcTarget> {
     const projectCreateDeadline = Date.now() + PROJECT_CREATE_TIMEOUT_MS;
+    const metadata = args.metadata && ProjectMetadata.parse(args.metadata);
     const explicitConfigRepoTemplate =
       args.configRepoTemplate === undefined
         ? undefined
@@ -6891,7 +6898,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       throw new Error("project create() is only available on the project-root handle");
     }
 
-    let registered: { organizationId: string | null; projectId: string; slug: string };
+    let registered: {
+      organizationId: string | null;
+      projectId: string;
+      slug: string;
+      metadata: Record<string, unknown>;
+    };
     if ("prospectiveSlug" in this.#props) {
       const prospective = this.#props;
       registered = await timedStep(
@@ -6904,6 +6916,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
               ? {}
               : { organizationSlug: args.organizationSlug }),
             ...(args.projectId === undefined ? {} : { projectId: args.projectId }),
+            metadata,
             slug: prospective.prospectiveSlug,
           }),
       );
@@ -6915,6 +6928,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           slug: registered.slug,
           organizationId: registered.organizationId,
           name: registered.slug,
+          metadata: registered.metadata,
         }),
       );
       const existing: ExistingProjectRpcTargetProps = {
@@ -6942,7 +6956,22 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         organizationId: identity.organizationId,
         projectId: identity.projectId,
         slug: identity.slug,
+        metadata:
+          (await readProjectById(env.PROJECT_DIRECTORY, identity.projectId))?.metadata || {},
       };
+      if (metadata && !haveSameLifetime(registered.metadata, metadata))
+        throw new Error("A project's lifetime cannot be changed after creation.");
+    }
+
+    const lifetime = ProjectMetadata.parse(registered.metadata).lifetime;
+    if (lifetime) {
+      if (!env.PROJECT_LIFETIMES)
+        throw new Error("Project lifetimes are not configured for this deployment.");
+      const groupRetired =
+        lifetime.group &&
+        (await env.PROJECT_LIFETIMES.get(`lifetime:group:${lifetime.group}`)) === "retired";
+      if (lifetime.expiresAt <= Date.now() || groupRetired)
+        throw new Error("Project lifetime has expired.");
     }
 
     // The `-template-<name>` slug convention (docs/dev-environments.md):
@@ -7053,10 +7082,16 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** Register a prospective project with the auth-owned directory/id authority. */
   async #registerProject(args: {
+    metadata: Record<string, unknown> | undefined;
     organizationSlug?: string;
     projectId?: string;
     slug: string;
-  }): Promise<{ organizationId: string | null; projectId: string; slug: string }> {
+  }): Promise<{
+    organizationId: string | null;
+    projectId: string;
+    slug: string;
+    metadata: Record<string, unknown>;
+  }> {
     const userPrincipal = userPrincipalOf(this.#props.auth);
     if (userPrincipal) {
       const organizationSlug = resolveOrganizationSlugForCreate(
@@ -7067,6 +7102,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         organizationSlug,
         name: args.slug,
         slug: args.slug,
+        metadata: args.metadata,
         ...(args.projectId === undefined ? {} : { id: args.projectId }),
       });
       if (!result.ok) throw new Error(result.message);
@@ -7074,6 +7110,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         organizationId: result.project.organizationId,
         projectId: result.project.id,
         slug: result.project.slug,
+        metadata: result.project.metadata,
       };
     }
     if (!this.#props.auth.isAdmin()) {
@@ -7084,6 +7121,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         organizationSlug: args.organizationSlug,
         name: args.slug,
         slug: args.slug,
+        metadata: args.metadata,
         ...(args.projectId === undefined ? {} : { id: args.projectId }),
       });
       if (!result.ok) throw new Error(result.message);
@@ -7091,13 +7129,30 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         organizationId: result.project.organizationId,
         projectId: result.project.id,
         slug: result.project.slug,
+        metadata: result.project.metadata,
       };
     }
     if (args.projectId !== undefined) {
-      return { organizationId: null, projectId: args.projectId, slug: args.slug };
+      const existing = await readProjectById(env.PROJECT_DIRECTORY, args.projectId);
+      if (existing) {
+        if (args.metadata && !haveSameLifetime(existing.metadata || {}, args.metadata))
+          throw new Error("A project's lifetime cannot be changed after creation.");
+        return {
+          organizationId: existing.organizationId,
+          projectId: existing.id,
+          slug: existing.slug,
+          metadata: existing.metadata || {},
+        };
+      }
     }
+    const metadata = ProjectMetadata.parse(args.metadata || {});
+    if (metadata.lifetime && metadata.lifetime.expiresAt <= Date.now()) {
+      throw new Error("Cannot create a project with an expired lifetime.");
+    }
+    if (args.projectId)
+      return { organizationId: null, projectId: args.projectId, slug: args.slug, metadata };
     const minted = await env.AUTH.mintProjectId();
-    return { organizationId: null, projectId: minted.id, slug: args.slug };
+    return { organizationId: null, projectId: minted.id, slug: args.slug, metadata };
   }
 
   /**

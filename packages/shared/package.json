@@ -42,7 +42,9 @@
     "./slug": "./src/slug.ts",
     "./name-suggestions": "./src/name-suggestions.ts",
     "./default-avatar": "./src/default-avatar.ts",
-    "./signup-allowlist": "./src/signup-allowlist.ts"
+    "./signup-allowlist": "./src/signup-allowlist.ts",
+    "./lifetime": "./src/lifetime.ts",
+    "./test-support/project-lifetime": "./src/test-support/project-lifetime.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

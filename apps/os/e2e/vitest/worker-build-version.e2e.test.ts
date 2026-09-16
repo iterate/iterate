@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import type { DynamicWorkerRef } from "../../src/domains/workers/schemas.ts";
 import { inlineJsSource } from "./itx-test-support.ts";
@@ -12,7 +13,7 @@ test("a dynamic worker's env carries its content-addressed runtime version", asy
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
   using project = await itx.projects
     .get(`worker-version-${crypto.randomUUID().slice(0, 8)}`)
-    .create({});
+    .create({ metadata: testProjectMetadata() });
   await project.projectId;
 
   const probeRef = (marker: string): DynamicWorkerRef => ({

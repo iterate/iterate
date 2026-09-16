@@ -97,7 +97,12 @@ export interface Project {
    * same handle, and addressing an unknown slug is side-effect free.
    */
   create(
-    args: { configRepoTemplate?: string; organizationSlug?: string; projectId?: string },
+    args: {
+      configRepoTemplate?: string;
+      organizationSlug?: string;
+      projectId?: string;
+      metadata?: Record<string, unknown>;
+    },
     options?: { waitUntilCreated?: boolean },
   ): Promise<Project>;
   /**

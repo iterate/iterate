@@ -22,6 +22,27 @@ function directoryWithPut(
   return { delete: deleteKey, put } as unknown as KVNamespace;
 }
 
+it("Auth-first lookup preserves lifetime metadata for project-scoped objects", async () => {
+  const metadata = { lifetime: { group: "batch", expiresAt: Date.now() + 60_000 } };
+  const project = { ...record, id: "prj_lifetime", slug: "lifetime-from-auth", metadata };
+  auth.getProjectBySlug.mockResolvedValueOnce(project);
+  const values = new Map<string, string>();
+  const directory = {
+    get: async (key: string, type?: string) => {
+      const value = values.get(key);
+      return value ? (type === "json" ? JSON.parse(value) : value) : null;
+    },
+    put: async (key: string, value: string) => {
+      values.set(key, value);
+    },
+    delete: async (key: string) => {
+      values.delete(key);
+    },
+  } as any;
+  expect(await readProjectBySlug(directory, project.slug)).toMatchObject({ metadata });
+  expect(JSON.parse(values.get(`project:${project.id}`)!)).toMatchObject({ metadata });
+});
+
 describe("primeProjectDirectory", () => {
   beforeEach(() => auth.getProjectBySlug.mockReset());
 

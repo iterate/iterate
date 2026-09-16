@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -10,7 +11,9 @@ test("Worker build pipeline bundles multi-file TypeScript inline sources", async
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`ts-inline-build-${crypto.randomUUID()}`).create({});
+  using project = await itx.projects
+    .get(`ts-inline-build-${crypto.randomUUID()}`)
+    .create({ metadata: testProjectMetadata() });
 
   const inlineTsFiles = {
     // Salted per run so this test proves a cold build instead of finding an
@@ -70,7 +73,9 @@ test("Worker builds let worker-bundler install and bundle package dependencies",
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`dependency-build-${crypto.randomUUID()}`).create({});
+  using project = await itx.projects
+    .get(`dependency-build-${crypto.randomUUID()}`)
+    .create({ metadata: testProjectMetadata() });
   using worker = project.workers.get({
     entrypoint: "Probe",
     path: "/",
@@ -109,7 +114,7 @@ test("Worker build fails loudly on unresolved imports", async () => {
   });
   using project = await itx.projects
     .get(`unresolved-import-${crypto.randomUUID().slice(0, 8)}`)
-    .create({});
+    .create({ metadata: testProjectMetadata() });
 
   using broken = project.workers.get({
     entrypoint: "Broken",
@@ -151,7 +156,7 @@ test("Worker builds keep runtime-provided imports working", async () => {
   });
   using project = await itx.projects
     .get(`builtin-import-${crypto.randomUUID().slice(0, 8)}`)
-    .create({});
+    .create({ metadata: testProjectMetadata() });
 
   using worker = project.workers.get({
     entrypoint: "Builtins",

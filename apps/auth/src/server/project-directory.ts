@@ -1,3 +1,4 @@
+import { ProjectMetadata, haveSameLifetime } from "@iterate-com/shared/lifetime";
 import {
   InternalCreateProjectForOrganizationInput,
   ProjectInput,
@@ -66,15 +67,33 @@ export async function createProject(
     metadata?: Record<string, unknown>;
   },
 ): Promise<ProjectCreationResult> {
+  if (input.metadata) input.metadata = ProjectMetadata.parse(input.metadata);
   const target = await resolveProjectCreateTarget(client, input);
   if (target.kind === "conflict") {
     return { ok: false, reason: "conflict", message: target.message };
   }
   if (target.kind === "existing") {
+    if (
+      input.metadata &&
+      !haveSameLifetime(parseProjectMetadata(target.project.metadata), input.metadata)
+    ) {
+      return {
+        ok: false,
+        reason: "conflict",
+        message: "A project's lifetime cannot be changed after creation.",
+      };
+    }
     return { ok: true, project: toProjectRecordFromReturnedRow(target.project) };
   }
 
   const now = Date.now();
+  const lifetime = ProjectMetadata.parse(input.metadata || {}).lifetime;
+  if (lifetime && lifetime.expiresAt <= now)
+    return {
+      ok: false,
+      reason: "conflict",
+      message: "Cannot create a project with an expired lifetime.",
+    };
   const created = await insertProjectReturning(client, {
     id: input.id ?? generateId("prj"),
     organizationId: input.organizationId,

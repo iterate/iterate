@@ -310,6 +310,14 @@ function workerBindings(input: {
       bindings: Object.entries(DO_CLASSES).map(([name, class_name]) => ({ name, class_name })),
     },
     kv_namespaces: [
+      ...(process.env.ENABLE_PROJECT_LIFETIMES === "1"
+        ? [
+            {
+              binding: "PROJECT_LIFETIMES",
+              id: input.kvId || "local-dev-project-directory",
+            },
+          ]
+        : []),
       {
         binding: "PROJECT_DIRECTORY",
         // Local dev has no real namespace; miniflare only needs a stable id.

@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import type {
   DynamicWorkerCapability,
@@ -26,7 +27,7 @@ test(
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
     using project = await itx.projects
       .get(`worker-alarm-${crypto.randomUUID().slice(0, 8)}`)
-      .create({});
+      .create({ metadata: testProjectMetadata() });
     await project.projectId;
 
     const ref: DynamicWorkerRef = {

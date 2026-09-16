@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import { expect, test } from "vitest";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
@@ -23,7 +24,9 @@ test("projects.connect registers a connected client whose live capability is inv
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await providerItx.projects.get(`clients-${marker}`).create({});
+  using project = await providerItx.projects
+    .get(`clients-${marker}`)
+    .create({ metadata: testProjectMetadata() });
   const { projectId } = await project.__describe();
 
   // Before ANY client ever connected, the catalog answers empty — never a
@@ -102,7 +105,9 @@ test("projects.connect upgrades a legacy client subscription once and copies its
   }
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`clients-legacy-${marker}`).create({});
+  using project = await itx.projects
+    .get(`clients-legacy-${marker}`)
+    .create({ metadata: testProjectMetadata() });
   const { projectId } = await project.__describe();
 
   // This is the exact immutable subscription event installed before v2. A
@@ -207,7 +212,9 @@ test("projects.connect upgrades a legacy client subscription once and copies its
 test("a client path is one identity: guards hold and canonicalization applies before them", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`clients-guards-${crypto.randomUUID()}`).create({});
+  using project = await itx.projects
+    .get(`clients-guards-${crypto.randomUUID()}`)
+    .create({ metadata: testProjectMetadata() });
   const { projectId } = await project.__describe();
 
   await expect(
@@ -231,7 +238,9 @@ test("disconnecting flips the catalog to connected: false; reconnecting flips it
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await observerItx.projects.get(`clients-lifecycle-${marker}`).create({});
+  using project = await observerItx.projects
+    .get(`clients-lifecycle-${marker}`)
+    .create({ metadata: testProjectMetadata() });
   const { projectId } = await project.__describe();
 
   const connectRobot = (session: ReturnType<typeof withItxSession>) => {
@@ -279,7 +288,9 @@ test("an abruptly terminated client transport still durably disconnects its live
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await observerItx.projects.get(`clients-abrupt-disconnect-${marker}`).create({});
+  using project = await observerItx.projects
+    .get(`clients-abrupt-disconnect-${marker}`)
+    .create({ metadata: testProjectMetadata() });
   const { projectId } = await project.__describe();
 
   // This uses the public /api WebSocket directly so terminate() simulates an

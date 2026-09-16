@@ -1,3 +1,4 @@
+import { testProjectMetadata } from "@iterate-com/shared/test-support/project-lifetime";
 import type { RpcStub } from "capnweb";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
@@ -21,7 +22,7 @@ export async function createTestProject(opts: { slugPrefix: string }) {
   const slug = uniqueFixtureSlug(opts.slugPrefix, { maxPrefixLength: 20 });
 
   using session = createAdminOsItx({ baseUrl });
-  using created = await session.projects.get(slug).create({});
+  using created = await session.projects.get(slug).create({ metadata: testProjectMetadata() });
   const description = await created.__describe();
   const project = { id: description.projectId, slug };
 

@@ -17,7 +17,60 @@ import { expect, test, vi } from "vitest";
 import type { LiveStateRead } from "iterate/sdk/capnweb";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { primeProjectDirectory } from "../../project-directory.ts";
 import { StreamDurableObject } from "./stream-durable-object.ts";
+
+test("an expired project stream skips facet alarms and cannot rearm them after eviction", async () => {
+  const harness = await bootStreamWithAgentFacet();
+  try {
+    const values = new Map<string, string>();
+    const directory = {
+      get: async (key: string) => values.get(key) || null,
+      delete: async (key: string) => {
+        values.delete(key);
+      },
+      put: async (key: string, value: string) => {
+        values.set(key, value);
+      },
+    };
+    await primeProjectDirectory(directory as any, {
+      id: PROJECT_ID,
+      slug: "ephemeral",
+      name: "Ephemeral",
+      organizationId: null,
+      metadata: { lifetime: { group: "batch-1", expiresAt: Date.now() + 60_000 } },
+    });
+    const environment = {
+      ...fakeEnv(),
+      PROJECT_LIFETIMES: directory,
+    } as Env;
+    const stream = new StreamDurableObject(harness.context.ctx, environment);
+    await harness.context.waitForInitialization();
+    await harness.context.settle();
+    stream.proxySetAlarm(Date.now() - 1);
+    await stream.alarm();
+    expect(harness.facet.handleAlarmCalls).toBeGreaterThan(0);
+    stream.proxySetAlarm(Date.now() - 1);
+    const callsBefore = harness.facet.handleAlarmCalls;
+
+    await directory.put("lifetime:group:batch-1", "retired");
+    await stream.alarm();
+    expect(harness.context.pendingAlarm).toBeNull();
+    expect(harness.facet.handleAlarmCalls).toBe(callsBefore);
+
+    const armsBefore = harness.context.alarms.length;
+    const rebooted = new StreamDurableObject(harness.context.ctx, environment);
+    await harness.context.waitForInitialization();
+    await harness.context.settle();
+    rebooted.proxySetAlarm(Date.now() - 1); // Late work cannot restart the chain.
+    await rebooted.alarm();
+    expect(harness.context.alarms).toHaveLength(armsBefore);
+    expect(harness.facet.handleAlarmCalls).toBe(callsBefore);
+    expect(rebooted.name).toMatchObject({ projectId: PROJECT_ID, path: AGENT_PATH });
+  } finally {
+    harness.context.close();
+  }
+});
 
 test.each([false, true])(
   "a watched facet releases its RPC reads without dropping watchers (dispose throws: %s)",
@@ -285,6 +338,7 @@ function durableObjectContext(name: string, facetStub: object) {
   const values = new Map<string, unknown>();
   const backgroundWork: Promise<unknown>[] = [];
   const alarms: number[] = [];
+  let pendingAlarm: number | null = null;
   let latestInitialization: Promise<unknown> | undefined;
   const storage = {
     sql: wrapSqlStorage(db),
@@ -301,10 +355,12 @@ function durableObjectContext(name: string, facetStub: object) {
       },
     },
     setAlarm(atMs: number): Promise<void> {
+      pendingAlarm = atMs;
       alarms.push(atMs);
       return Promise.resolve();
     },
     deleteAlarm(): Promise<void> {
+      pendingAlarm = null;
       return Promise.resolve();
     },
     sync(): Promise<void> {
@@ -342,6 +398,9 @@ function durableObjectContext(name: string, facetStub: object) {
 
   return {
     alarms,
+    get pendingAlarm() {
+      return pendingAlarm;
+    },
     close: () => db.close(),
     ctx,
     async waitForInitialization(): Promise<void> {
