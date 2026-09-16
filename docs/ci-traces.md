@@ -19,8 +19,8 @@ explicit failed command results mark the operation failed; missing end records
 remain visibly incomplete. Names and status are recorded, not exception text.
 
 `preview-run.yml` emits small lifecycle records into Depot logs using
-`scripts/ci/trace-shell.sh` (`BASH_ENV`) and `trace-reporter.ts`. Keep explicit
-step IDs: these join timings to the authored commands. Reports show those
+`scripts/ci/tracing/shell.sh` (`BASH_ENV`) and `TraceReporter` in
+`scripts/ci/tracing/tracing.ts`. Keep explicit step IDs: these join timings to the authored commands. Reports show those
 commands with the Doppler wrapper stripped; the friendly step name is in the
 details. Commands come from the workflow YAML at the run's triggering SHA (the merge revision on PR runs),
 never expanded runner logs. `wait_for_preview`, `consumers`,
@@ -66,8 +66,8 @@ Local commands require `DEPOT_CI_TELEMETRY_TOKEN`; publishing also needs
 the Depot token from Doppler `_shared/preview`.
 
 ```sh
-pnpm exec trpc-cli scripts/ci/trace.ts render <workflow-id> /tmp/ci-trace
-pnpm exec trpc-cli scripts/ci/trace.ts publish <workflow-id>
+pnpm exec trpc-cli scripts/ci/tracing/cli.ts render <workflow-id> /tmp/ci-trace
+pnpm exec trpc-cli scripts/ci/tracing/cli.ts publish <workflow-id>
 ```
 
 ## Timing limits

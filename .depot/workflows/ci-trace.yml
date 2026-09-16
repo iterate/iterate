@@ -36,8 +36,8 @@ jobs:
         run: |-
           if [ -n "$SOURCE_WORKFLOW" ]; then
             doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN -- \
-              pnpm exec trpc-cli scripts/ci/trace.ts publish "$SOURCE_WORKFLOW"
+              pnpm exec trpc-cli scripts/ci/tracing/cli.ts publish "$SOURCE_WORKFLOW"
           else
             doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN -- \
-              pnpm exec trpc-cli scripts/ci/trace.ts reconcile
+              pnpm exec trpc-cli scripts/ci/tracing/cli.ts reconcile
           fi

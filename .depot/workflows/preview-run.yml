@@ -24,7 +24,7 @@ defaults:
   run:
     shell: bash
 env:
-  BASH_ENV: ${{ github.workspace }}/scripts/ci/trace-shell.sh
+  BASH_ENV: ${{ github.workspace }}/scripts/ci/tracing/shell.sh
   CI_TRACE_ENABLED: "1"
   CI_HEAD_SHA: ${{ inputs.head-sha }}
   TEST_TELEMETRY_HEAD_SHA: ${{ inputs.head-sha }}
@@ -336,4 +336,4 @@ jobs:
           CI_TRACE_REF: ${{ github.head_ref || github.ref_name }}
         run: >-
           doppler run --project _shared --config preview --
-          pnpm exec trpc-cli scripts/ci/trace.ts dispatch "$CI_TRACE_REF"
+          pnpm exec trpc-cli scripts/ci/tracing/cli.ts dispatch "$CI_TRACE_REF"

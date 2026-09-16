@@ -23,8 +23,8 @@ Automatically publish a **CI trace** commit status whose Details link opens an i
 
 ## Acceptance
 
-- [x] Assemble correct parent relationships from measured CI/test evidence, including retries and missing evidence. *`trace-model.ts`; regression coverage for quiet steps, retries and cancelled runners.*
-- [x] Render an interactive trace with readable setup/wait/test phases, drilldown, search and mobile support. *`trace-viewer.html`; desktop/mobile, expand, search, details, zoom and OTLP download checked in isolated Playwriter.*
+- [x] Assemble correct parent relationships from measured CI/test evidence, including retries and missing evidence. *`scripts/ci/tracing/tracing.ts`; regression coverage for quiet steps, retries and cancelled runners.*
+- [x] Render an interactive trace with readable setup/wait/test phases, drilldown, search and mobile support. *`scripts/ci/tracing/viewer.html`; desktop/mobile, expand, search, details, zoom and OTLP download checked in isolated Playwriter.*
 - [x] Publish immutable report links and automatically update the correct PR's body. *Preview `7rlclr2zqf` automatically dispatched collector `r5fxsp0gq5`; published in 26s and added the link to #2681.*
 - [x] Wire automatic collection and cancellation reconciliation, with visible reporting failures. *`ci-trace.yml` callback plus bounded 24h scheduled scan; cancellation model regressions.*
 - [x] Exercise the real publication path on this PR's own CI run and verify its body link in an isolated browser. *Clicked the auto-added GitHub link anonymously, inspected a recovered retry, zoomed and downloaded the OTLP file. 93 attempts, unique span IDs, valid parent links.*
@@ -50,3 +50,5 @@ Session: `01a09f64-ea4e-7c61-ab0a-c15eb65df3bc`.
 - Live follow-up found progress output without a newline joining two operation markers; the regression now reproduces that exact output shape and markers start on a fresh line. Also declared Kit’s actual Worker entry in Knip: removing the generated Wrangler config reproduced CI’s unused-file failure, and the explicit entry fixes the race with parallel typecheck generation.
 
 - Follow-up: publish the report as a **CI trace** commit status with an external target URL. Removed PR-body writes and changed collector permissions to `statuses: write`; replay/newest-execution coverage remains. Replayed the real published run and verified its status ID was unchanged, then checked its external target URL. 357 scripts tests, scripts typecheck and scoped lint passed.
+
+- Consolidated tracing under `scripts/ci/tracing/`: `tracing.ts`, `cli.ts`, `shell.sh`, `viewer.html` and one `tracing.test.ts`. Updated imports, Playwright reporters, workflow commands and change-detection paths. All 357 scripts tests, scripts/specs typechecks and scoped lint passed; the moved CLI reproduced the published real run’s 203 spans exactly.

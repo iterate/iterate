@@ -39,7 +39,7 @@ import {
   renderCloudflareWorkerVersionOverrides,
 } from "../../packages/shared/src/test-support/cloudflare-worker-version-overrides.ts";
 import { PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV } from "../../packages/shared/src/test-support/preview-rollout-gate.ts";
-import { traceOperation } from "../ci/trace-operation.ts";
+import { traceOperation } from "../ci/tracing/tracing.ts";
 import {
   parseWorkerSizeFromDeployOutput,
   parseWorkerSizeStatusDescription,
@@ -2600,7 +2600,7 @@ export const cloudflarePreviewSharedPaths = [
   ...cloudflareAppSharedPaths,
   "scripts/preview/**",
   "scripts/ci/status.ts",
-  "scripts/ci/trace*",
+  "scripts/ci/tracing/**",
   ".depot/workflows/ci-trace.yml",
   // Every app's generated wrangler config (routes, worker names, resource
   // IDs) derives from the root envs.ts — an envs.ts change (e.g. recreating a

@@ -1,5 +1,82 @@
-import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { relative } from "node:path";
+import type { Reporter, TestCase, TestResult } from "@playwright/test/reporter";
+import { parse } from "yaml";
 import { z } from "zod";
+
+/** Measured work inside a CI step. Parallel operations keep their own parent. */
+export async function traceOperation<T>(
+  name: string,
+  operation: (span: { fail(): void }) => Promise<T>,
+) {
+  const enabled = process.env.CI_TRACE_ENABLED === "1";
+  const id = randomUUID();
+  let status = "passed";
+  // Build tools write progress without a newline. Keep each marker on its own line.
+  if (enabled)
+    console.log(
+      `\n@@ci-trace ${JSON.stringify({
+        kind: "span-start",
+        id,
+        parentId: parent.getStore() || "",
+        name,
+        time: Date.now(),
+      })}`,
+    );
+  try {
+    return await parent.run(id, () =>
+      operation({
+        fail() {
+          status = "failed";
+        },
+      }),
+    );
+  } catch (error) {
+    status = "failed";
+    throw error;
+  } finally {
+    // Names, status and times only: never copy exception payloads into public reports.
+    if (enabled)
+      console.log(
+        `\n@@ci-trace ${JSON.stringify({ kind: "span-end", id, status, time: Date.now() })}`,
+      );
+  }
+}
+
+/** Lifecycle records survive a killed test run in Depot's existing log storage. */
+export default class TraceReporter implements Reporter {
+  onTestBegin(test: TestCase, result: TestResult) {
+    if (process.env.CI_TRACE_ENABLED !== "1") return;
+    console.log(
+      `@@ci-trace ${JSON.stringify({
+        kind: "test-start",
+        id: `${test.id}/${test.repeatEachIndex}/${result.retry}`,
+        time: result.startTime.getTime(),
+        title: test.title,
+        file: relative(process.cwd(), test.location.file),
+        line: test.location.line,
+        project: test.parent.project()?.name || "default",
+        retry: result.retry,
+      })}`,
+    );
+  }
+
+  onTestEnd(test: TestCase, result: TestResult) {
+    if (process.env.CI_TRACE_ENABLED !== "1") return;
+    console.log(
+      `@@ci-trace ${JSON.stringify({
+        kind: "test-end",
+        id: `${test.id}/${test.repeatEachIndex}/${result.retry}`,
+        time: result.startTime.getTime() + result.duration,
+        status: result.status,
+        expectedStatus: test.expectedStatus,
+        worker: result.workerIndex,
+      })}`,
+    );
+  }
+}
 
 /** ExportTraceServiceRequest (OTLP/JSON). IDs are deterministic per Depot execution. */
 export function assembleTrace(
@@ -270,8 +347,56 @@ export function assembleTrace(
   };
 }
 
-export type Trace = ReturnType<typeof assembleTrace>;
-export type Span = {
+/** Use source YAML, never expanded runner commands that could contain credentials. */
+export function stepCommands(source: string) {
+  const workflow = SourceWorkflow.parse(parse(source));
+  const commands = new Map<string, string>();
+  for (const [job, definition] of Object.entries(workflow.jobs)) {
+    function visit(value: unknown) {
+      const step = Step.parse(value);
+      if (step.id && step.run) {
+        commands.set(
+          `${job}/${step.id}`,
+          step.run
+            .replace(/\\\r?\n\s*/g, " ")
+            .replace(/(^|\n)[ \t]*doppler run\b[^\n]*? --[ \t]+/g, "$1")
+            .trim(),
+        );
+      }
+      for (const child of [...(step.parallel || []), ...(step.sequential || [])]) visit(child);
+    }
+    for (const step of definition.steps) visit(step);
+  }
+  return commands;
+}
+
+/** The status says the report is available; preview checks retain the test outcome. */
+export function traceCommitStatus(
+  previous: { description: string | null; target_url: string | null } | undefined,
+  run: { headSha: string; createdAt: string; url: string },
+) {
+  // Store the source execution's time, not publication time: reconciliation can
+  // revisit old runs. Normalized ISO dates sort chronologically in this format.
+  const description = `Open trace · ${new Date(run.createdAt).toISOString()}`;
+  if (previous?.target_url === run.url || (previous?.description || "") > description) return null;
+  return {
+    sha: run.headSha,
+    context: "CI trace",
+    state: "success" as const,
+    description,
+    target_url: run.url,
+  };
+}
+
+export async function renderTrace(trace: ReturnType<typeof assembleTrace>) {
+  const template = await readFile(new URL("./viewer.html", import.meta.url), "utf8");
+  // Escaping '<' prevents test names containing </script> from executing as HTML.
+  return template.replace("__TRACE_DATA__", JSON.stringify(trace).replaceAll("<", "\\u003c"));
+}
+
+const parent = new AsyncLocalStorage<string>();
+
+type Span = {
   traceId: string;
   spanId: string;
   parentSpanId: string;
@@ -366,3 +491,13 @@ const TraceEvent = z.discriminatedUnion("kind", [
 function hash(value: string, length: number) {
   return createHash("sha256").update(value).digest("hex").slice(0, length);
 }
+
+const SourceWorkflow = z.object({
+  jobs: z.record(z.string(), z.object({ steps: z.array(z.unknown()) })),
+});
+const Step = z.object({
+  id: z.string().optional(),
+  run: z.string().optional(),
+  parallel: z.array(z.unknown()).optional(),
+  sequential: z.array(z.unknown()).optional(),
+});

@@ -2,12 +2,15 @@ import { mkdir, writeFile, appendFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
-import { assembleTrace, Workflow } from "./trace-model.ts";
-import { renderTrace } from "./trace-viewer.ts";
-import { traceCommitStatus } from "./trace-publication.ts";
-import { stepCommands } from "./trace-commands.ts";
+import {
+  assembleTrace,
+  Workflow,
+  renderTrace,
+  traceCommitStatus,
+  stepCommands,
+} from "./tracing.ts";
 
-/** Completed-run CI traces. Invoke with `pnpm exec trpc-cli scripts/ci/trace.ts`. */
+/** Completed-run CI traces. Invoke with `pnpm exec trpc-cli scripts/ci/tracing/cli.ts`. */
 export default class CiTrace {
   /** Start the independent collector before this workflow's final step exits. */
   async dispatch(ref: string) {
