@@ -22,6 +22,7 @@
 // (Stream.appendBirthRecord / appendWakeRecord); the pause exemptions are Stream.append's.
 //   subscriptions — a literal `subscription-configured` event, THE SUBSCRIPTIONS TABLE's one command (the rows are core state)
 
+import { firstPartyFacetClassOf } from "../first-party-facets.ts";
 import { isRefreshKind, type SecretCatalogEntry } from "../secrets.ts";
 import {
   normalizedItxExpression,
@@ -52,7 +53,8 @@ import type { StreamEvent, ReduceArgs, StreamEventInput } from "./processor.ts";
 /** A hosting spec, read off a RESOLVED target. */
 export type HostingFacetSpec = {
   name: string;
-  source: unknown;
+  /** Absent for a first-party facet: its class is this worker's own (first-party-facets.ts). */
+  source?: unknown;
   className: string;
   cacheKey?: string;
 };
@@ -67,15 +69,18 @@ export function facetSpecFromHostingTarget(
 ): HostingFacetSpec | undefined {
   const getStep = resolvedTarget[3];
   if (
-    resolvedTarget[1] === "builtins" &&
-    resolvedTarget[2] === "facets" &&
-    Array.isArray(getStep) &&
-    getStep[0] === "get" &&
-    getStep.length >= 3 &&
-    typeof getStep[1] === "string" &&
-    typeof getStep[2] === "object" &&
-    getStep[2] !== null
-  ) {
+    resolvedTarget[1] !== "builtins" ||
+    resolvedTarget[2] !== "facets" ||
+    !Array.isArray(getStep) ||
+    getStep[0] !== "get" ||
+    typeof getStep[1] !== "string"
+  )
+    return undefined;
+  // A FIRST-PARTY facet hosts this worker's own class: the target names it and carries no spec.
+  const firstPartyClassName = firstPartyFacetClassOf(getStep[1]);
+  if (getStep.length === 2 && firstPartyClassName)
+    return { name: getStep[1], className: firstPartyClassName };
+  if (getStep.length >= 3 && typeof getStep[2] === "object" && getStep[2] !== null) {
     const spec = getStep[2] as { source: unknown; className: string; cacheKey?: string };
     return {
       name: getStep[1],

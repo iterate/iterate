@@ -90,34 +90,9 @@ async function bundleFacet(entryPoint, constName, generatedPath) {
   console.log(`${constName}: ${(text.length / 1024).toFixed(1)} KiB`);
 }
 await bundleFacet(
-  "src/account/durable-object.ts",
-  "ACCOUNT_PROCESSOR_SOURCE",
-  "src/generated/account-processor-source.ts",
-);
-await bundleFacet(
   "src/client/presence/durable-object.ts",
   "PRESENCE_PROCESSOR_SOURCE",
   "src/generated/presence-processor-source.ts",
-);
-await bundleFacet(
-  "src/workspace/durable-object.ts",
-  "WORKSPACE_PROCESSOR_SOURCE",
-  "src/generated/workspace-processor-source.ts",
-);
-await bundleFacet(
-  "src/repo/durable-object.ts",
-  "REPO_PROCESSOR_SOURCE",
-  "src/generated/repo-processor-source.ts",
-);
-await bundleFacet(
-  "src/project/durable-object.ts",
-  "PROJECT_PROCESSOR_SOURCE",
-  "src/generated/project-processor-source.ts",
-);
-await bundleFacet(
-  "src/agent/durable-object.ts",
-  "AGENT_PROCESSOR_SOURCE",
-  "src/generated/agent-processor-source.ts",
 );
 
 // The hosted demo page: bundle src/client/demo.tsx (React + react-dom + the capnweb fork + the

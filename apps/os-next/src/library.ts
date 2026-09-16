@@ -25,10 +25,6 @@ import {
   print,
   walkStepsOnRpcStub,
 } from "./context/expression.ts";
-import { WORKSPACE_PROCESSOR_SOURCE } from "./generated/workspace-processor-source.ts";
-import { REPO_PROCESSOR_SOURCE } from "./generated/repo-processor-source.ts";
-import { PROJECT_PROCESSOR_SOURCE } from "./generated/project-processor-source.ts";
-import { AGENT_PROCESSOR_SOURCE } from "./generated/agent-processor-source.ts";
 import type { AgentDurableObject } from "./agent/durable-object.ts";
 import type { ProjectView } from "./project/contract.ts";
 import type { RepoDurableObject } from "./repo/durable-object.ts";
@@ -335,17 +331,12 @@ export function runScript(itx: LibraryItx, script: unknown): Promise<unknown> {
 // folds the cross-posted certificates; hosted the same way, on first read.
 
 /** A facet on the context at `path`: the call's steps, relative to the facet, as one dispatch there. */
-function facetHandle(
-  itx: LibraryItx,
-  path: string,
-  name: string,
-  spec: { source: Record<string, string>; className: string },
-): InvokeHandle {
+function facetHandle(itx: LibraryItx, path: string, name: string): InvokeHandle {
   return new InvokeHandle(async (itxExpressionSteps) => {
     // TWO dotted calls, never one chain (the `run` section says why): the sibling's handle first —
     // in-process a VALUE — then the facet chain relative to it.
     const context = await itx.cd(path);
-    return context.invoke(["facets", ["get", name, spec], ...itxExpressionSteps]);
+    return context.invoke(["facets", ["get", name], ...itxExpressionSteps]);
   });
 }
 
@@ -356,10 +347,7 @@ function facetHandle(
 
 /** The `workspace` facet on the context at `path`. */
 function workspaceHandle(itx: LibraryItx, path: string): InvokeHandle & WorkspaceFacet {
-  return facetHandle(itx, path, "workspace", {
-    source: WORKSPACE_PROCESSOR_SOURCE,
-    className: "WorkspaceDurableObject",
-  }) as InvokeHandle & WorkspaceFacet;
+  return facetHandle(itx, path, "workspace") as InvokeHandle & WorkspaceFacet;
 }
 
 // ── the files ── `itx.files.get(path)`: the path's object in `itx.r2` (already the owner's slice),
@@ -436,7 +424,6 @@ function fileHandle(itx: LibraryItx, path: string): InvokeHandle & FileHandle {
 
 /** The `agent` facet's spec — ONE object for the library's hosting and the processor row it enables,
  *  so the facet's startup memo never changes between the two. */
-const AGENT_FACET_SPEC = { source: AGENT_PROCESSOR_SOURCE, className: "AgentDurableObject" };
 
 /** The `agent` facet on the context at `path`. A `create` is TWO appends there: the processor row —
  *  `itx.processors.enable`, spelled HERE because the library is what knows the facet's spec; DURABLE,
@@ -449,30 +436,23 @@ function agentHandle(itx: LibraryItx, path: string): InvokeHandle & AgentFacet {
     if (Array.isArray(first) && first[0] === "create") {
       const rows = (await context.invoke(["processors", ["list"]])) as { name: string }[];
       if (!rows.some((row) => row.name === "agent"))
-        await context.invoke(["processors", ["enable", "agent", AGENT_FACET_SPEC]]);
+        await context.invoke(["processors", ["enable", "agent"]]);
     }
-    return context.invoke(["facets", ["get", "agent", AGENT_FACET_SPEC], ...itxExpressionSteps]);
+    return context.invoke(["facets", ["get", "agent"], ...itxExpressionSteps]);
   }) as InvokeHandle & AgentFacet;
 }
 
 /** The `repo` facet on the context at `path` — any path; the facet derives the Artifacts name from
  *  it and refuses one it cannot back. */
 function repoHandle(itx: LibraryItx, path: string): InvokeHandle & RepoFacet {
-  return facetHandle(itx, path, "repo", {
-    source: REPO_PROCESSOR_SOURCE,
-    className: "RepoDurableObject",
-  }) as InvokeHandle & RepoFacet;
+  return facetHandle(itx, path, "repo") as InvokeHandle & RepoFacet;
 }
 
 /** THE CATALOG: the `project` facet's view on `/` — what `repos.list()`, `workspaces.list()` and
  *  `agents.list()` read. */
 async function projectCatalog(itx: LibraryItx): Promise<ProjectView> {
   const context = await itx.cd("/");
-  const snapshot = await context.invoke([
-    "facets",
-    ["get", "project", { source: PROJECT_PROCESSOR_SOURCE, className: "ProjectDurableObject" }],
-    ["snapshot"],
-  ]);
+  const snapshot = await context.invoke(["facets", ["get", "project"], ["snapshot"]]);
   // The facet is the platform's own ProjectDurableObject and `snapshot()` is the engine's
   // `{ offset, state }`, its state the contract's parsed view — the shape is ours, so the read is
   // asserted, not re-validated.

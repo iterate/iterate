@@ -114,6 +114,20 @@ export abstract class StreamProcessorDurableObject<
     return this.#engine.waitUntilProcessed(input);
   }
 
+  /** The loopback to this facet's context: a LOADED class gets it as `env.ITX` (the loader bakes the
+   *  stub in, worker-loader.ts); a class of THIS worker hosted through `ctx.exports` has the
+   *  worker's real env and mints the same stub itself from its props — `ctx.exports` is populated
+   *  inside a facet (__workers-tests__/facet-props.test.ts). */
+  #itxEntrypoint(): Service<ItxEntrypoint> {
+    return (
+      this.env.ITX ??
+      (
+        this.ctx.exports as {
+          ItxEntrypoint: (options: { props: object }) => Service<ItxEntrypoint>;
+        }
+      ).ItxEntrypoint({ props: { iterateContextName: this.ctx.props.iterateContextName } })
+    );
+  }
   // ── the engine: one ProcessorEngine over `processor` and this object's storage, built on first use —
   // `processor` is a subclass field, which does not exist yet while this base class constructs. ──
   #engineBuiltOnFirstUse?: ProcessorEngine<State>;
@@ -136,7 +150,7 @@ export abstract class StreamProcessorDurableObject<
    *  then dispose the call AND the get. Protected: a host with methods of its own (the workspace,
    *  src/workspace/durable-object.ts) reaches its context the same way. */
   protected async withItx<T>(call: (itx: ItxScope) => T): Promise<Awaited<T>> {
-    const itx = this.env.ITX.get();
+    const itx = this.#itxEntrypoint().get();
     const result = call(itx);
     try {
       return await result;

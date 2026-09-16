@@ -10,6 +10,7 @@
 // Dynamic code has two doors, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
+import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   ScheduleKey,
   ScheduleReceipt,
@@ -299,7 +300,10 @@ export interface BuiltInScope extends LibraryRoots {
    *  so loaded code (`env.ITX.get().processors.enable(…)`) and a sibling (`itx.cd(p).processors…`) do
    *  it through the same door as a client. */
   processors: {
-    enable(name: string, spec: FacetSpec & { consumes?: string[] }): Promise<{ name: string }>;
+    enable(
+      name: string,
+      spec?: (FacetSpec & { consumes?: string[] }) | { consumes?: string[] },
+    ): Promise<{ name: string }>;
     disable(name: string): Promise<void>;
     list(): SubscriptionListEntry[];
   };
@@ -690,14 +694,24 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     subscriptions: deps.subscriptions,
     processors: {
       enable: async (name, spec) => {
-        // Refused HERE, before anything is appended: a spec names the source's host class (there are
-        // no built-in processors to name), and its literal source is under the ceiling.
-        // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of a caller-supplied spec (its static type is a claim, not a guarantee, across the capability boundary)
-        if (typeof spec !== "object" || spec === null || typeof spec.className !== "string")
-          throw new Error(
-            `processors.enable(${JSON.stringify(name)}, { source, className, consumes? }): name the host class the source exports — there are no built-in processors to enable by name`,
-          );
-        assertFacetSourceWithinCeiling(spec, `processors.enable("${name}")`);
+        // Refused HERE, before anything is appended. A FIRST-PARTY name (first-party-facets.ts) hosts
+        // this worker's own class: `consumes` at most, never a source; any other name's spec names
+        // the source's host class, and its literal source is under the ceiling.
+        const firstPartyClassName = firstPartyFacetClassOf(name);
+        const loaded = spec as (FacetSpec & { consumes?: string[] }) | undefined;
+        if (firstPartyClassName) {
+          if (loaded && ("source" in loaded || "className" in loaded))
+            throw new Error(
+              `processors.enable(${JSON.stringify(name)}): "${name}" is first-party — hosted from this worker's own ${firstPartyClassName}; pass { consumes? } at most, never a source`,
+            );
+        } else {
+          // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of a caller-supplied spec (its static type is a claim, not a guarantee, across the capability boundary)
+          if (typeof loaded !== "object" || loaded === null || typeof loaded.className !== "string")
+            throw new Error(
+              `processors.enable(${JSON.stringify(name)}, { source, className, consumes? }): name the host class the source exports — only a first-party name (${Object.keys(FIRST_PARTY_FACET_CLASSES).join(", ")}) is enabled without one`,
+            );
+          assertFacetSourceWithinCeiling(loaded, `processors.enable("${name}")`);
+        }
         await append({
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
@@ -706,10 +720,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               "itx",
               "builtins",
               "facets",
-              ["get", name, facetSpecOf(spec)],
+              firstPartyClassName ? ["get", name] : ["get", name, facetSpecOf(loaded!)],
               "processEventBatch",
             ],
-            consumes: spec.consumes,
+            consumes: spec?.consumes,
           },
         });
         return { name };

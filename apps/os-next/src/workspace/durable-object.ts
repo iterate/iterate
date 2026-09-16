@@ -12,7 +12,8 @@
 // ONE writer, no policies. The repo facets speak git themselves (src/repo/git-wire.ts) and reach the
 // Artifacts binding — their token and remote — as `itx.cfArtifacts` through THEIR context's rules, so
 // a test lends a fake proxy there (`provide("itx.cfArtifacts", …)`, e2e/support/fake-artifacts.ts).
-// build-sdk.mjs bundles THIS module into WORKSPACE_PROCESSOR_SOURCE, the spec library.ts hands to `facets.get`.
+// Hosted from `ctx.exports` (first-party-facets.ts): ordinary bundled worker code, reached as
+// `itx.facets.get("workspace")` (library.ts).
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
 import type { RepoFileChange, RepoLogEntry } from "../repo/git-wire.ts";
 import type { WorkspaceView } from "./contract.ts";

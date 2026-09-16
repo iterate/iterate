@@ -6,7 +6,8 @@
 // plus the two doors a client calls: `create()`, which lands the birth (the certificate cross-posted to
 // `/` first, then on this path with the system prompt beside it), and `message(text)`, a person's words.
 // The library enables the processor row beside `create()`: subscribed, the loop runs on every commit
-// and after every eviction. build-sdk.mjs bundles THIS module into AGENT_PROCESSOR_SOURCE.
+// and after every eviction. Hosted from `ctx.exports` (first-party-facets.ts):
+// ordinary bundled worker code.
 import { z } from "zod";
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
 import type { StreamEvent } from "../stream/processor.ts";
