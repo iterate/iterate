@@ -4931,6 +4931,18 @@ function makePreviewSlotDataEraser(runtime: {
   return async ({ dopplerConfig, slug }) => {
     const startedAt = Date.now();
     logPreview(`erasing ${slug} data (doppler config ${dopplerConfig})`);
+    if (runtime.commandEnvironment.PREVIEW_DO_STORAGE_RESET === "1") {
+      const { resetPreviewStorage } = await import("./storage-cleanup.ts");
+      const result = await resetPreviewStorage({ env: dopplerConfig, allowUnsupported: true });
+      if (result.supported) {
+        logPreview(
+          `cleared ${slug} object storage without redeploying (${formatDurationMs(Date.now() - startedAt)})`,
+        );
+        return;
+      }
+      // The first run may inherit a parked or older Worker without the reset
+      // endpoint. Existing full erase bootstraps that slot; reset failures do not.
+    }
     for (const app of selectPreviewSlotDataOwners()) {
       const result = await runPreviewDeployCommand({
         app,

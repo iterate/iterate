@@ -9,6 +9,7 @@ import { createStreamsIterateAuth, resolveRequestAdmin } from "./iterate-auth.ts
 import { trustedInternalAuthContext } from "~/auth.ts";
 import { STREAM_DURABLE_OBJECT_STUB, StreamRpcTarget } from "~/rpc-targets.ts";
 import { resolveStreamPath } from "~/domains/streams/utils.ts";
+import { resetStorageRequest } from "~/lib/reset-storage-request.ts";
 
 export { StreamDurableObject } from "~/domains/streams/stream-durable-object.ts";
 export { FeedFacet } from "~/domains/streams/feed-entrypoint.ts";
@@ -103,6 +104,19 @@ export default createServerEntry({
     const admin = auth ? await resolveRequestAdmin({ auth, headers }) : null;
     const withAuthHeaders = (response: Response) =>
       admin ? withAuthenticationResponseHeaders(response, admin.responseHeaders) : response;
+
+    if (url.pathname === "/api/__internal/reset-storage") {
+      if (!admin?.isAdmin) return new Response("Unauthorized", { status: 401 });
+      if (
+        !config.baseUrl ||
+        !new URL(config.baseUrl).hostname.match(/^streams\.iterate-preview-\d+\.com$/)
+      ) {
+        return new Response("Not a preview", { status: 403 });
+      }
+      return resetStorageRequest(request, workerEnv.CF_VERSION_METADATA?.id || "unversioned", {
+        StreamDurableObject: workerEnv.STREAM,
+      });
+    }
 
     if (url.pathname === "/api/streams") {
       if (auth && !admin?.isAdmin) {

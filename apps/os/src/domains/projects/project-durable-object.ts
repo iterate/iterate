@@ -1,6 +1,6 @@
-import { DurableObject } from "cloudflare:workers";
 import { disposeIgnoredRpcResult, LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import type { StreamEvent } from "iterate/processors";
+import { StorageResetDurableObject } from "../../lib/durable-object-storage-reset.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
@@ -49,13 +49,13 @@ import {
 import { StreamDatabase, type TouchInput } from "./stream-database.ts";
 import type { ProjectLiveState } from "./project-live-state.ts";
 
-export class ProjectDurableObject extends DurableObject<Env> {
+export class ProjectDurableObject extends StorageResetDurableObject<Env> {
   /** Report this incarnation's code version for the deployment rollout gate. */
   deploymentVersion(): string {
     return workerVersion(this.env);
   }
 
-  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  readonly #name = DurableObjectNameCodec.parse(this.objectName!);
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
   // Last time #egressRules paid a facade snapshot — bounds rules staleness to ~5s.
   #egressRulesFreshAt = 0;
@@ -162,7 +162,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   describe() {
     return {
       projectId: this.#name.projectId,
-      name: this.ctx.id.name!,
+      name: this.objectName!,
     };
   }
 

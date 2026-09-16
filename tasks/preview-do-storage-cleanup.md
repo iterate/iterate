@@ -5,9 +5,9 @@ size: large
 
 # Experiment: clear preview DO storage without replacing the deployment
 
-Spec committed first. Implementation and live experiments are pending. The
-deliverable is an evidence-backed viability report, including a negative result
-if safe cleanup needs disproportionate product machinery.
+Draft PR #2693 is open. The operator sweep and real-runtime probes are in place;
+five runtime checks pass. Baseline full erase took 69 seconds. Live storage-wipe
+experiments, interruption cases and the viability report remain.
 
 ## Request
 
@@ -41,8 +41,8 @@ post-cleanup DO active time with Cloudflare GraphQL. Do not merge automatically.
 
 ## Work
 
-- [ ] Implement the smallest useful cleanup experiment with a real runtime test.
-- [ ] Open a draft PR and register it with the global review monitor.
+- [x] Implement the smallest useful cleanup experiment with a real runtime test. *`storage-cleanup.ts` plus five Miniflare probes; live proof pending.*
+- [x] Open a draft PR and register it with the global review monitor. *PR #2693, registered through September 17.*
 - [ ] Establish a baseline and test normal post-test cleanup and reuse.
 - [ ] Push during preparation, active tests and cleanup; record outcomes.
 - [ ] Probe active alarms, late delivery, in-flight work and container teardown.
@@ -57,3 +57,14 @@ post-cleanup DO active time with Cloudflare GraphQL. Do not merge automatically.
   Existing Stream `reset()` already implements deleteAll/sync/abort. Several
   other DO constructors expect a name, while the Cloudflare inventory returns
   opaque IDs; discovery and cleanup after cold restart need explicit proof.
+
+- 2026-09-16 22:29 UTC: real-runtime probes cover opaque-ID lookup after
+  eviction, SQL/KV/alarm/memory wipe, version mismatch, in-flight request
+  cancellation, explicit facet deletion and late recreation. Reset leaves no
+  retirement marker. Product DOs persist their original name so ID-only operator
+  calls can initialize them after eviction. Auth and artifact state is retained.
+- Baseline run `v11zj80d0s`: all six browser shards passed. App tests failed on
+  the existing `abandoned-project-goes-quiet` expected-failure test (its setup
+  timed out). Full erase succeeded in 69.0 seconds (71.2s command wrapper).
+  Namespace deletion prevents a complete delayed GraphQL cost baseline; do not
+  misreport empty/deleted namespace metrics as zero usage.

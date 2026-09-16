@@ -1,4 +1,5 @@
-import { DurableObject, tracing } from "cloudflare:workers";
+import { tracing } from "cloudflare:workers";
+import { StorageResetDurableObject } from "../../lib/durable-object-storage-reset.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
@@ -35,13 +36,13 @@ function statefulWorkerVersion(ref: StatefulDynamicWorkerRef, sourceCacheKey: st
  * stable facet name (`target`) so source changes do not create a new storage
  * identity; instead the facet is aborted and re-created against the same DO.
  */
-export class StatefulWorkerDurableObject extends DurableObject<Env> {
+export class StatefulWorkerDurableObject extends StorageResetDurableObject<Env> {
   /** Report this incarnation's code version for the deployment rollout gate. */
   deploymentVersion(): string {
     return workerVersion(this.env);
   }
 
-  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  readonly #name = DurableObjectNameCodec.parse(this.objectName!);
   // The hosted Durable Object class sees the same scoped itx binding as a
   // stateless worker at this path. That is what lets a provided durable
   // capability call sibling capabilities through `this.env.ITX.get()`.
@@ -167,6 +168,11 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
 
   getAlarm(): Promise<number | null> {
     return this.ctx.storage.getAlarm();
+  }
+
+  override async resetStorage(): Promise<void> {
+    this.ctx.facets.delete(FACET_NAME);
+    await super.resetStorage();
   }
 
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {

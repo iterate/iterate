@@ -1,4 +1,4 @@
-import { DurableObject } from "cloudflare:workers";
+import { StorageResetDurableObject } from "../../lib/durable-object-storage-reset.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { type WorkerBuildFailure, type WorkerBuildResult } from "./artifact-store.ts";
 import {
@@ -14,7 +14,7 @@ const QUEUED_BUILD_STORAGE_KEY = "worker-build:queued-request";
 const TERMINAL_BUILD_FAILURE_STORAGE_KEY = "worker-build:terminal-failure";
 
 /** One globally addressed coordinator per immutable worker build key. */
-export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
+export class WorkerBuildCoordinatorDurableObject extends StorageResetDurableObject<Env> {
   readonly #coordinator = new WorkerBuildCoordinator(
     async (request) => {
       const result = await executeCoordinatedWorkerBuild(request, this.env);

@@ -26,6 +26,8 @@ defaults:
 env:
   BASH_ENV: ${{ github.workspace }}/scripts/ci/tracing/shell.sh
   CI_TRACE_ENABLED: "1"
+  # Experiment only: other PRs/main keep the existing full erase backstop.
+  PREVIEW_DO_STORAGE_RESET: ${{ inputs.pull-request-number == '2693' && '1' || '0' }}
   CI_HEAD_SHA: ${{ inputs.head-sha }}
   TEST_TELEMETRY_HEAD_SHA: ${{ inputs.head-sha }}
   PREVIEW_TARGET_ARGS: ${{ inputs.pull-request-number && format('--pull-request-number {0}', inputs.pull-request-number) || format('--commit {0}', inputs.head-sha) }}

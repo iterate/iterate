@@ -39,6 +39,9 @@ import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
 import { schedulePosthogException, withPosthogExceptionCapture } from "./observability/posthog.ts";
 import { STREAM_CONTEXT_HEADER } from "./domains/projects/stream-context.ts";
 import { bridgeProjectRequestBody } from "./project-request-body-bridge.ts";
+import { authenticateAdminApiSecret } from "./auth/admin.ts";
+import { resetStorageRequest } from "./lib/reset-storage-request.ts";
+import { workerVersion } from "./env.ts";
 
 // Every Durable Object class in the product, plus the loopback entrypoints
 // (`ctx.exports`) shared by the itx runtime.
@@ -109,6 +112,29 @@ async function fetchWithoutWideLog(
   ctx: ExecutionContext,
   config: AppConfig,
 ) {
+  if (new URL(request.url).pathname === "/api/__internal/reset-storage") {
+    if (!config.environmentName.startsWith("preview_"))
+      return new Response("Not a preview", { status: 403 });
+    if (!authenticateAdminApiSecret({ config }, request))
+      return new Response("Unauthorized", { status: 401 });
+    return resetStorageRequest(request, workerVersion(env), {
+      DeviceDurableObject: env.DEVICE,
+      ProjectDurableObject: env.PROJECT,
+      RepoDurableObject: env.REPO,
+      SchedulerDurableObject: env.SCHEDULER,
+      SecretDurableObject: env.SECRET,
+      StreamDurableObject: env.STREAM,
+      WorkerBuildCoordinatorDurableObject: env.WORKER_BUILD_COORDINATOR,
+      StatefulWorkerDurableObject: env.WORKER,
+      WorkspaceV2DurableObject: env.WORKSPACE_V2,
+      SandboxBasicDurableObject: env.SANDBOX_BASIC,
+      SandboxLiteDurableObject: env.SANDBOX_LITE,
+      SandboxStandard1DurableObject: env.SANDBOX_STANDARD_1,
+      SandboxStandard2DurableObject: env.SANDBOX_STANDARD_2,
+      SandboxStandard3DurableObject: env.SANDBOX_STANDARD_3,
+      SandboxStandard4DurableObject: env.SANDBOX_STANDARD_4,
+    });
+  }
   const mcpRequest = rewriteMcpHostRequest({ config, request });
   if (mcpRequest) {
     wideLogger.set({ ingress: { lane: "mcp" } });

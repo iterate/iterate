@@ -1,4 +1,4 @@
-import { DurableObject, RpcTarget } from "cloudflare:workers";
+import { RpcTarget } from "cloudflare:workers";
 import { z } from "zod";
 import type {
   ProcessorRuntimeState,
@@ -37,6 +37,7 @@ import type {
   LiveStateSubscriptionOptions,
   LiveUpdate,
 } from "iterate/sdk/capnweb";
+import { StorageResetDurableObject } from "../../lib/durable-object-storage-reset.ts";
 import { streamDeliveryAuthContext } from "../../auth.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
@@ -968,7 +969,7 @@ class ExpressionProcessorFacadeRpcTarget extends RpcTarget {
  * here are storage/runtime implementation methods, and the append/read methods
  * that touch SQLite/KV must remain synchronous.
  */
-export class StreamDurableObject extends DurableObject<Env> {
+export class StreamDurableObject extends StorageResetDurableObject<Env> {
   /** Report this incarnation's code version for the deployment rollout gate. */
   deploymentVersion(): string {
     return workerVersion(this.env);
@@ -976,7 +977,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #liveState!: LiveState<StreamRuntimeDebugState>;
   #liveStateRefreshScheduled = false;
-  readonly name = readStreamDurableObjectName(this.ctx);
+  readonly name = readStreamDurableObjectName(this.ctx, this.objectName);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   /** Ephemeral event bodies scoped to this one Durable Object incarnation. */
   readonly #ephemeralEvents = new EphemeralEventBuffer();
@@ -3486,6 +3487,16 @@ export class StreamDurableObject extends DurableObject<Env> {
     await this.ctx.storage.sync();
     this.kill();
   }
+
+  override async resetStorage(): Promise<void> {
+    for (const [name, subscription] of Object.entries(
+      this.#coreProcessorState.subscriptions.outbound.byName,
+    )) {
+      if (subscription.configuration.receiver.action === "facet-processor")
+        this.ctx.facets.delete(name);
+    }
+    await super.resetStorage();
+  }
 }
 
 /** Idempotency deduplicates one logical event, not arbitrary writes sharing a
@@ -3502,8 +3513,8 @@ const StreamAppendInput = StreamEventInputSchema.safeExtend({
   offset: z.number().int().nonnegative().optional(),
 }).strict();
 
-function readStreamDurableObjectName(ctx: DurableObjectState) {
-  if (ctx.id.name) return DurableObjectNameCodec.parse(ctx.id.name, { allowNullProjectId: true });
+function readStreamDurableObjectName(ctx: DurableObjectState, name: string | undefined) {
+  if (name) return DurableObjectNameCodec.parse(name, { allowNullProjectId: true });
   // Alarm/hibernation wakes can arrive without the original getByName hint.
   // The committed birth event is the durable identity of this stream.
   const first = new StreamEventLog(ctx.storage.sql, "/").getByOffset(1);

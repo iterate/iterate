@@ -1,7 +1,7 @@
-import { DurableObject } from "cloudflare:workers";
 import { Workspace } from "@cloudflare/shell";
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
+import { StorageResetDurableObject } from "../../lib/durable-object-storage-reset.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
@@ -112,13 +112,13 @@ type RepoHead = {
   contentHash: string;
 };
 
-export class RepoDurableObject extends DurableObject<Env> {
+export class RepoDurableObject extends StorageResetDurableObject<Env> {
   /** Report this incarnation's code version for the deployment rollout gate. */
   deploymentVersion(): string {
     return workerVersion(this.env);
   }
 
-  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!, { allowNullProjectId: true });
+  readonly #name = DurableObjectNameCodec.parse(this.objectName!, { allowNullProjectId: true });
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,
@@ -505,7 +505,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     sql: this.ctx.storage.sql,
     name: () => this.ctx.id.name,
     r2: this.env.FILES_BUCKET,
-    r2Prefix: `repo-head-cache/${this.ctx.id.name!}`,
+    r2Prefix: `repo-head-cache/${this.objectName!}`,
   });
   // ONE chain serializes every cache read AND materialization: a reader can
   // never interleave a refresh's wipe-and-rewrite, so no read observes a

@@ -61,7 +61,7 @@ describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
     await expect(value.build(request, 0)).resolves.toEqual({ artifact, ok: true });
 
     expect(h.execute).toHaveBeenCalledOnce();
-    expect(records.size).toBe(0);
+    expect([...records.values()]).toEqual([request.buildKey]);
     expect(setAlarm).not.toHaveBeenCalled();
   });
 
@@ -74,12 +74,12 @@ describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
       name: "WorkerBuildInProgressError",
     });
 
-    expect([...records.values()]).toEqual([request]);
+    expect([...records.values()]).toEqual([request.buildKey, request]);
     expect(setAlarm).toHaveBeenCalledOnce();
 
     build.resolve({ artifact, ok: true });
     await value.alarm();
-    expect(records.size).toBe(0);
+    expect([...records.values()]).toEqual([request.buildKey]);
   });
 
   it("persists and arms without starting the build in the caller RPC", async () => {
@@ -88,13 +88,13 @@ describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
     await value.enqueue(request);
 
     expect(h.execute).not.toHaveBeenCalled();
-    expect([...records.values()]).toEqual([request]);
+    expect([...records.values()]).toEqual([request.buildKey, request]);
     expect(setAlarm).toHaveBeenCalledOnce();
 
     await value.alarm();
 
     expect(h.execute).toHaveBeenCalledWith(request, expect.anything());
-    expect(records.size).toBe(0);
+    expect([...records.values()]).toEqual([request.buildKey]);
   });
 
   it("leaves durable work queued when infrastructure fails for native alarm retry", async () => {
@@ -104,10 +104,10 @@ describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
     await value.enqueue(request);
 
     await expect(value.alarm()).rejects.toBe(failure);
-    expect([...records.values()]).toEqual([request]);
+    expect([...records.values()]).toEqual([request.buildKey, request]);
 
     await expect(value.alarm()).resolves.toBeUndefined();
-    expect(records.size).toBe(0);
+    expect([...records.values()]).toEqual([request.buildKey]);
   });
 
   it("classifies invalid source as terminal instead of starting an alarm retry storm", async () => {
@@ -119,7 +119,10 @@ describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
     await value.enqueue(request);
 
     await expect(value.alarm()).resolves.toBeUndefined();
-    expect([...records.values()]).toEqual([{ kind: "source", message: "invalid source" }]);
+    expect([...records.values()]).toEqual([
+      request.buildKey,
+      { kind: "source", message: "invalid source" },
+    ]);
   });
 
   it("does not replay a terminal failure already delivered to a foreground caller", async () => {
@@ -133,7 +136,7 @@ describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
       failure: { kind: "source", message: "invalid source" },
       ok: false,
     });
-    expect(records.size).toBe(0);
+    expect([...records.values()]).toEqual([request.buildKey]);
 
     await expect(value.build(request)).resolves.toEqual({ artifact, ok: true });
     expect(h.execute).toHaveBeenCalledTimes(2);
@@ -162,7 +165,7 @@ describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
     });
     expect(h.execute).not.toHaveBeenCalled();
     expect(nextIncarnation.setAlarm).not.toHaveBeenCalled();
-    expect(records.size).toBe(0);
+    expect([...records.values()]).toEqual([request.buildKey]);
 
     await expect(nextIncarnation.value.build(request)).resolves.toEqual({ artifact, ok: true });
     expect(h.execute).toHaveBeenCalledOnce();

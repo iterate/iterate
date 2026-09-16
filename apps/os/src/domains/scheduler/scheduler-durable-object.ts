@@ -1,10 +1,10 @@
-import { DurableObject } from "cloudflare:workers";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type {
   ProcessorSnapshot,
   StreamProcessorWakeRequest,
   StreamProcessorWakeResponse,
 } from "iterate/processors";
+import { StorageResetDurableObject } from "../../lib/durable-object-storage-reset.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
@@ -49,13 +49,13 @@ const INGEST_WAIT_TIMEOUT_MS = 15_000;
  * append, pull the event through ingestion, and only then return — so a
  * successful set is read-your-writes visible AND provably alarm-armed.
  */
-export class SchedulerDurableObject extends DurableObject<Env> {
+export class SchedulerDurableObject extends StorageResetDurableObject<Env> {
   /** Report this incarnation's code version for the deployment rollout gate. */
   deploymentVersion(): string {
     return workerVersion(this.env);
   }
 
-  readonly #name = parseSchedulerDurableObjectName(this.ctx.id.name!);
+  readonly #name = parseSchedulerDurableObjectName(this.objectName!);
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,

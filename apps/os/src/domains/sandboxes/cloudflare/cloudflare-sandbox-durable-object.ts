@@ -14,6 +14,7 @@ import {
   type RegisteredProcessorReads,
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
+import { resetDurableObjectStorage } from "../../../lib/durable-object-storage-reset.ts";
 import { trustedInternalAuthContext } from "../../../auth.ts";
 import { workerVersion, type Env } from "../../../env.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../../rpc-targets.ts";
@@ -387,6 +388,12 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
 
   wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {
     return this.#processorResources().registry.wakeStreamProcessor(args);
+  }
+
+  /** Operator cleanup: discard the disposable container before erasing its host. */
+  async resetStorage(): Promise<void> {
+    await super.destroy();
+    await resetDurableObjectStorage(this.ctx);
   }
 
   // Do not override alarm(): @cloudflare/containers owns this object's one

@@ -1,8 +1,8 @@
-import { DurableObject } from "cloudflare:workers";
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import { isStreamOffsetConflictError } from "iterate/processors";
 import type { StreamEventInput } from "iterate/processors";
 import type { ProcessorState } from "iterate/processors";
+import { StorageResetDurableObject } from "../../lib/durable-object-storage-reset.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
@@ -67,13 +67,13 @@ const INGEST_WAIT_TIMEOUT_MS = 15_000;
  * headers or URL are substituted before opening the pinned upstream socket.
  * Application frames are opaque and are never scanned for placeholders.
  */
-export class SecretDurableObject extends DurableObject<Env> {
+export class SecretDurableObject extends StorageResetDurableObject<Env> {
   /** Report this incarnation's code version for the deployment rollout gate. */
   deploymentVersion(): string {
     return workerVersion(this.env);
   }
 
-  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  readonly #name = DurableObjectNameCodec.parse(this.objectName!);
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,

@@ -1,9 +1,9 @@
-import { DurableObject } from "cloudflare:workers";
 import { Workspace } from "@cloudflare/shell";
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import type { StreamEventInput } from "iterate/processors";
 import { isStreamOffsetConflictError } from "iterate/processors";
 import { minimatch } from "minimatch";
+import { StorageResetDurableObject } from "../../lib/durable-object-storage-reset.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import {
@@ -91,13 +91,13 @@ const INGEST_WAIT_TIMEOUT_MS = 15_000;
  * disposable by contract (committed state lives on main), so that namespace
  * is simply dropped.
  */
-export class WorkspaceV2DurableObject extends DurableObject<Env> {
+export class WorkspaceV2DurableObject extends StorageResetDurableObject<Env> {
   /** Report this incarnation's code version for the deployment rollout gate. */
   deploymentVersion(): string {
     return workerVersion(this.env);
   }
 
-  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  readonly #name = DurableObjectNameCodec.parse(this.objectName!);
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,
@@ -117,7 +117,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     // overlay-workspace namespace used "workspace/" and could mint the SAME
     // name string for the same path; their bucket objects must never collide.
     r2: this.env.FILES_BUCKET,
-    r2Prefix: `workspace-v2/${this.ctx.id.name!}`,
+    r2Prefix: `workspace-v2/${this.objectName!}`,
   });
   readonly #core = new WorkspaceCore({
     kv: this.ctx.storage.kv,

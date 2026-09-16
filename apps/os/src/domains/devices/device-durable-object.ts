@@ -1,6 +1,6 @@
-import { DurableObject } from "cloudflare:workers";
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import { type ProcessorState, type StreamEventInput } from "iterate/processors";
+import { StorageResetDurableObject } from "../../lib/durable-object-storage-reset.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
@@ -30,13 +30,13 @@ type DeviceProcessorFacade = {
  * Stream Durable Object; this DO reads the committed fold back through the
  * stream's processor facade.
  */
-export class DeviceDurableObject extends DurableObject<Env> {
+export class DeviceDurableObject extends StorageResetDurableObject<Env> {
   /** Report this incarnation's code version for the deployment rollout gate. */
   deploymentVersion(): string {
     return workerVersion(this.env);
   }
 
-  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  readonly #name = DurableObjectNameCodec.parse(this.objectName!);
   readonly #deviceId = deviceIdFromPath(this.#name.path);
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
