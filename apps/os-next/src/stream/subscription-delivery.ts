@@ -126,6 +126,12 @@ type SubscriptionDeliveryRecord = {
    *  PASS RENEWS WHAT IT COULD NOT SETTLE, so a row held in a long call or a budget wait is claimed
    *  afresh from then, never from a time now past. */
   behindSince?: number;
+  /** The row DANGLES: its target evaluated to NO_ITX_EXPRESSION_MATCH under this rule table (a
+   *  `subscribe` before its `provide`, a rule since removed). Discovered by evaluating, never
+   *  statically — a name only a rule can resolve looks the same as one nothing resolves. A dangling
+   *  row claims nothing and is never halted for it: it waits for its rule, and the commit that
+   *  lands the rule replaces the table, so the memo lapses and the row (behind since) is delivered. */
+  danglingUnder?: object;
   /** The evaluated target head, reused across pushes: a row delivered every commit (a PCM stream,
    *  an audio call) would otherwise re-walk its target and re-mint a Facet/RpcStub handle on EVERY
    *  push. Valid while the row's identity (`configuredAtOffset`) AND the rewrite-rule table (its
@@ -259,6 +265,7 @@ export class SubscriptionDelivery {
     for (const [name, row] of Object.entries(state.subscriptions)) {
       if (row.halted || targetOwnsProgress(state, row)) continue;
       const record = this.#deliveryRecordFor(name);
+      if (record.danglingUnder === state.itxExpressionRewriteRules) continue;
       const { cursor } = record;
       const inFlight = this.#cursorDeliveryRunning.has(name);
       const confirmedOffset = cursor?.confirmedOffset ?? row.afterOffset ?? row.configuredAtOffset;
@@ -901,6 +908,11 @@ export class SubscriptionDelivery {
             );
           } catch (error) {
             if (!this.cursor(name)) continue; // replaced mid-flight: re-evaluated for the new row
+            // The target DANGLES (`danglingUnder` says what follows): no rung, no halt, no claim.
+            if (errorCode(error) === "NO_ITX_EXPRESSION_MATCH") {
+              record.danglingUnder = this.#stream.coreReducedState.itxExpressionRewriteRules;
+              return;
+            }
             // A delivery-resumed that landed DURING this attempt is not yet applied: loop back and apply
             // it instead of arming the old ladder or, worse, appending a halt on top of the operator's resume.
             const latest = this.#stream.coreReducedState.subscriptions[name];

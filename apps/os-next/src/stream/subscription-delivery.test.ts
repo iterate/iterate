@@ -952,6 +952,40 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): derived f
     expect(second.delivery.cursor("s")?.confirmedOffset).toBe(second.stream.highestDurableOffset());
   });
 
+  test("a row whose target NO rule resolves dangles: it claims nothing and is never halted for it; the commit that lands its rule wakes it, and every durable since is delivered", async () => {
+    let provided = false;
+    const delivered: number[][] = [];
+    const rig = incarnation(
+      (printed) =>
+        printed === "itx.later" && provided
+          ? { push: (events: { payload?: { n?: number } }[]) => void delivered.push(ns(events)) }
+          : undefined, // NO_ITX_EXPRESSION_MATCH, exactly as the resolver refuses a name nothing provides
+    );
+    rig.stream.append(
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "s", target: "itx.later.push", consumes: ["demo/ping"] },
+      }),
+    );
+    rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+    await settled();
+    expect(delivered).toEqual([]);
+    expect(rig.stream.coreReducedState.subscriptions.s.halted).toBeUndefined();
+    expect(rig.delivery.cursor("s")).toMatchObject({ attempt: 0 }); // no rung: not a failure, a wait
+    expect(rig.delivery.deadlines()).toEqual([]); // no claim: nothing to wake for until the rule lands
+    expect(rig.coordinator.snapshot().armedAt).toBeNull();
+    // THE RULE LANDS: a new rule table — the memo lapses, the row is behind, the commit itself
+    // kicks its loop, and the ping that waited is delivered.
+    provided = true;
+    rig.stream.append({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.later", target: "itx.kv" },
+    });
+    await settled();
+    expect(delivered).toEqual([[1]]);
+    expect(rig.delivery.deadlines()).toEqual([]);
+  });
+
   test("a cursor row re-pointed at a facet drops its cursor and its claim on that rule commit; the delivery loop never pays for a target that owns its progress", async () => {
     const rig = parkedSinkRig();
     rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
