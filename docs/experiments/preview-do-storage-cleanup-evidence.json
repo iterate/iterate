@@ -72,5 +72,316 @@
     "Reset completion timestamps come from the deliberate post-sync abort exception, corroborated by reset:true in the CI artifact.",
     "Failed or unseen actors may have sent new work to successfully reset objects.",
     "This is not evidence that a complete simultaneous wipe would resume."
-  ]
+  ],
+  "interruptions": [
+    {
+      "event": "push-during-prepare",
+      "sourceWorkflow": "ddx7qrf5pn",
+      "sourceRun": "340pfs6rxw",
+      "sourceSha": "a614c4a11",
+      "replacementSha": "e474dafb8",
+      "observedAt": "2026-09-16T22:53:06.024530+00:00",
+      "stage": "prepare pre-deploy storage sweep",
+      "inventoryCount": 6329,
+      "sweepInventoryAt": "2026-09-16T22:52:43.311Z"
+    },
+    {
+      "event": "push-during-tests",
+      "sourceWorkflow": "8jp447qqgm",
+      "sourceRun": "7zzc4tr2fv",
+      "sourceSha": "e474dafb8",
+      "replacementSha": "b1c9ca14c",
+      "observedAt": "2026-09-16T23:06:26.823701+00:00",
+      "environment": "preview_16",
+      "evidence": "c-playwright1.log has active16-test execution and completions through23:06:15; prepare diagnostics safely downloaded"
+    },
+    {
+      "event": "push-during-post-test-cleanup",
+      "sourceWorkflow": "0z958pn7qw",
+      "sourceRun": "4bgd89g8qg",
+      "sourceSha": "b1c9ca14c",
+      "replacementSha": "8bac0d467",
+      "observedAt": "2026-09-16T23:16:49Z",
+      "environment": "preview_16",
+      "inventoryCount": 4876,
+      "sweepInventoryAt": "2026-09-16T23:13:58.657Z",
+      "evidence": "D post-test cleanup active; four Standard sandbox groups completed 39 resets by23:14:07; replacement uses normal erase."
+    }
+  ],
+  "postTestInterruption": {
+    "inventoried": 4876,
+    "completedClassGroups": 13,
+    "loggedSuccessfulResets": 1638,
+    "cancelledAt": "2026-09-16T23:16:57Z",
+    "completeResultManifest": false
+  },
+  "normalRunQuietWindow": {
+    "start": "2026-09-16T22:43:50Z",
+    "end": "2026-09-16T22:46:50Z",
+    "captureStartedAt": "2026-09-16T23:16:50.005Z",
+    "captureFinishedAt": "2026-09-16T23:16:58.972Z",
+    "metrics": {
+      "doHours": 113.61084178749975,
+      "gbSeconds": 52351.875895680125,
+      "periodicRows": 3122,
+      "invocationRows": 188,
+      "periodicSampleIntervals": [1]
+    },
+    "interpretation": "Reported active-time equivalents and raw GB-seconds; not verified invoice cost or physical concurrency. Periodic records can include facets and cross window boundaries.",
+    "nativeTrace": {
+      "invocations": 80,
+      "objectIds": 6,
+      "alarms": 37
+    },
+    "serverSideAggregateCrossCheck": {
+      "capturedAt": "2026-09-16T23:19:08.863Z",
+      "uniqueNamespaces": 16,
+      "periodicEvents": 7143,
+      "activeEquivalentHours": 113.61084178750001,
+      "durationGbSeconds": 52351.87589568
+    },
+    "sameTotalsOnLaterQuery": true
+  },
+  "discoveryLag": {
+    "objectId": "7a4606836da4dfad0df5ce639658c990400ac4cae38b66207af334499e9bba93",
+    "namespace": {
+      "id": "48e5b1d38bbb46fd9e8361c85c36432c",
+      "name": "os-preview-15_StreamDurableObject",
+      "script": "os-preview-15",
+      "class": "StreamDurableObject"
+    },
+    "successfulAppendAt": "2026-09-16T22:40:12.927000+00:00",
+    "absentFromInventories": [
+      {
+        "start": "2026-09-16T22:40:35.845Z",
+        "end": "2026-09-16T22:40:50.133Z",
+        "present": false
+      },
+      {
+        "start": "2026-09-16T22:42:15.719Z",
+        "end": "2026-09-16T22:42:29.465Z",
+        "present": false
+      },
+      {
+        "start": "2026-09-16T22:44:06.074Z",
+        "end": "2026-09-16T22:44:25.711Z",
+        "present": false
+      }
+    ],
+    "firstObservedInventoryAppearance": {
+      "start": "2026-09-16T22:46:25.714Z",
+      "end": "2026-09-16T22:46:51.667Z"
+    },
+    "namespaceIdentityUnchanged": true
+  },
+  "knownPairNativeTrace": {
+    "objects": {
+      "scheduler": "3da1137a0f8ed9e092e56a2ab00fe9a29e618645b4282b27180132a19cce09a5",
+      "sourceStream": "e2314aced90604112c12f45c8fe264840721796ff4db05ac6d256efceeb1ea3a"
+    },
+    "windows": [
+      {
+        "label": "seed_to_scheduler_reset",
+        "start": "2026-09-16T22:47:00Z",
+        "end": "2026-09-16T22:48:38.522Z",
+        "counts": [
+          {
+            "entrypoint": "FeedFacet",
+            "method": "configure",
+            "outcome": "ok",
+            "count": 1
+          },
+          {
+            "entrypoint": "StreamDurableObject",
+            "method": "alarm",
+            "outcome": "ok",
+            "count": 41
+          },
+          {
+            "entrypoint": "StreamDurableObject",
+            "method": "appendIfStreamId",
+            "outcome": "ok",
+            "count": 27
+          },
+          {
+            "entrypoint": "StreamDurableObject",
+            "method": "getEventPage",
+            "outcome": "ok",
+            "count": 139
+          },
+          {
+            "entrypoint": "StreamDurableObject",
+            "method": "append",
+            "outcome": "ok",
+            "count": 3
+          },
+          {
+            "entrypoint": "FeedFacet",
+            "method": "wakeStreamProcessor",
+            "outcome": "ok",
+            "count": 3
+          },
+          {
+            "entrypoint": "SchedulerDurableObject",
+            "method": "",
+            "outcome": "ok",
+            "count": 1
+          },
+          {
+            "entrypoint": "SchedulerDurableObject",
+            "method": "setSchedule",
+            "outcome": "ok",
+            "count": 2
+          },
+          {
+            "entrypoint": "StreamDurableObject",
+            "method": "getEvent",
+            "outcome": "ok",
+            "count": 20
+          },
+          {
+            "entrypoint": "StreamDurableObject",
+            "method": "",
+            "outcome": "ok",
+            "count": 10
+          },
+          {
+            "entrypoint": "StreamDurableObject",
+            "method": "alarm",
+            "outcome": "canceled",
+            "count": 1
+          },
+          {
+            "entrypoint": "StreamDurableObject",
+            "method": "runtimeState",
+            "outcome": "ok",
+            "count": 1
+          },
+          {
+            "entrypoint": "SchedulerDurableObject",
+            "method": "alarm",
+            "outcome": "ok",
+            "count": 14
+          },
+          {
+            "entrypoint": "SchedulerDurableObject",
+            "method": "wakeStreamProcessor",
+            "outcome": "ok",
+            "count": 1
+          },
+          {
+            "entrypoint": "SchedulerDurableObject",
+            "method": "processor",
+            "outcome": "ok",
+            "count": 1
+          },
+          {
+            "entrypoint": "SchedulerDurableObject",
+            "method": "wakeStreamProcessor",
+            "outcome": "aborted",
+            "count": 1
+          }
+        ],
+        "observedEvents": 266
+      },
+      {
+        "label": "scheduler_reset",
+        "start": "2026-09-16T22:48:38.522Z",
+        "end": "2026-09-16T22:48:40.133Z",
+        "counts": [
+          {
+            "entrypoint": "SchedulerDurableObject",
+            "method": "resetStorage",
+            "outcome": "aborted",
+            "count": 1
+          }
+        ],
+        "observedEvents": 1
+      },
+      {
+        "label": "after_scheduler_reset",
+        "start": "2026-09-16T22:48:40.133Z",
+        "end": "2026-09-16T22:49:44Z",
+        "counts": [
+          {
+            "entrypoint": "StreamDurableObject",
+            "method": "alarm",
+            "outcome": "ok",
+            "count": 1
+          },
+          {
+            "entrypoint": "SchedulerDurableObject",
+            "method": "alarm",
+            "outcome": "canceled",
+            "count": 1
+          }
+        ],
+        "observedEvents": 2
+      },
+      {
+        "label": "source_reset",
+        "start": "2026-09-16T22:49:44Z",
+        "end": "2026-09-16T22:49:46.213Z",
+        "counts": [
+          {
+            "entrypoint": "StreamDurableObject",
+            "method": "alarm",
+            "outcome": "canceled",
+            "count": 1
+          },
+          {
+            "entrypoint": "StreamDurableObject",
+            "method": "resetStorage",
+            "outcome": "aborted",
+            "count": 1
+          }
+        ],
+        "observedEvents": 2
+      },
+      {
+        "label": "after_pair_reset",
+        "start": "2026-09-16T22:49:46.213Z",
+        "end": "2026-09-16T22:51:50Z",
+        "counts": [],
+        "observedEvents": 0
+      }
+    ],
+    "samplingLimit": "Zero observed events is not proof of permanent inactivity."
+  },
+  "knownPairDelayedMetrics": {
+    "capturedAt": "2026-09-16T23:21:52.422Z",
+    "sourceWindow": {
+      "start": "2026-09-16T22:43:50Z",
+      "end": "2026-09-16T22:51:50Z"
+    },
+    "scheduler": {
+      "lastPeriodic": "2026-09-16T22:48:40Z",
+      "lastInvocation": "2026-09-16T22:48:40Z"
+    },
+    "sourceStream": {
+      "lastPeriodic": "2026-09-16T22:49:45Z",
+      "lastInvocation": "2026-09-16T22:49:46Z"
+    },
+    "rowsAfterResetsThroughWindowEnd": 0,
+    "interpretation": "Corroborates the 124-second quiet window; does not prove permanent retirement."
+  },
+  "normalRecovery": {
+    "run": "321b5c1lr0",
+    "workflow": "lvrsxt4bsj",
+    "slot": "preview-16",
+    "prepareEraseSeconds": 16.4,
+    "postTestEraseSeconds": 17.3,
+    "browserShardsPassed": 6,
+    "appSuite": "failed",
+    "appFailure": "userspace-facet-source-version.e2e.test.ts: stream-wait-timeout after98451ms, outside allowed SAME-BOOT STALENESS pattern",
+    "workflowFinishedAt": "2026-09-16T23:23:20Z"
+  },
+  "observationSlotRetirement": {
+    "slot": "preview-15",
+    "erased": true,
+    "released": true,
+    "fullCleanupSeconds": 69.8,
+    "previousHolder": "manual-pr2693-storage-observation",
+    "retainedInertData": "Existing R2 file/backup lifecycle expiry3hours"
+  }
 }

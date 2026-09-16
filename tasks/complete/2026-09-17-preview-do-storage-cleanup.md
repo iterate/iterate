@@ -1,14 +1,15 @@
 ---
-status: in-progress
+status: complete
 size: large
 ---
 
 # Experiment: clear preview DO storage without replacing the deployment
 
-Draft PR #2693 contains the experiment and a negative provisional verdict.
-The normal sweep missed fresh actors; a later 6,339-object sweep took 7m38s,
-failed 17 requests, and successfully reset objects still received work.
-Final cancellation, mature metrics, full recovery and the report remain.
+Experiment complete; do not adopt the inventory-and-wipe implementation.
+PR #2693 includes the implementation, six runtime probes, all three controlled
+cancellations, mature usage observations and a measured report. Normal cleanup
+is restored; the observed slot was fully reclaimed. Final CI/PR-lease release
+is tracked in the PR. The conditional planner follow-up is separate.
 
 ## Request
 
@@ -42,15 +43,17 @@ post-cleanup DO active time with Cloudflare GraphQL. Do not merge automatically.
 
 ## Work
 
-- [x] Implement the smallest useful cleanup experiment with a real runtime test. *`storage-cleanup.ts` plus six Miniflare probes; live proof pending.*
+- [x] Implement the smallest useful cleanup experiment with a real runtime test. *`storage-cleanup.ts` plus six Miniflare probes and live trials.*
 - [x] Open a draft PR and register it with the global review monitor. *PR #2693, registered through September 17.*
-- [ ] Establish a baseline and test normal post-test cleanup and reuse.
-- [ ] Push during preparation, active tests and cleanup; record outcomes.
-- [ ] Probe active alarms, late delivery, in-flight work and container teardown.
-- [ ] Measure post-cleanup active time and inspect relevant logs/errors.
-- [ ] Run required checks and obtain an independent review; address findings.
-- [ ] Write the viability report and leave the experiment resources clean.
-- [ ] If time permits before 05:00, stack the change-type planner without a PR.
+- [x] Establish a baseline and test normal post-test cleanup and reuse. *Baseline/full normal trials and fresh heartbeat on the unchanged deployment; reuse proof is limited to a partial sweep.*
+- [x] Push during preparation, active tests and cleanup; record outcomes. *Runs B/C/D deliberately cancelled at all three phases; E used normal erase afterward.*
+- [x] Probe active alarms, late delivery, in-flight work and container teardown. *Local runtime tests plus known-ID heartbeat and native reset-to-alarm correlation.*
+- [x] Measure post-cleanup active time and inspect relevant logs/errors. *Stable30/35-minute GraphQL captures, confirmed discovery delay,17 failed resets,21 successfully reset IDs with later work.*
+- [x] Run required checks and obtain an independent review; address findings. *All checks passed at98f89966e; independent code/report review addressed. E app timeout recorded without weakening tests; final CI on PR.*
+- [x] Write the viability report and leave the experiment resources clean. *docs/experiments/preview-do-storage-cleanup.md; preview15 fully reclaimed, preview16 normal erase completed; final lease release follows CI.*
+The conditional change-type planner follows in its own stacked worktree/task.
+It must retain fallback deployment: this experiment did not unblock general
+preview reuse.
 
 ## Implementation log
 
@@ -112,3 +115,16 @@ post-cleanup DO active time with Cloudflare GraphQL. Do not merge automatically.
 - Pushed `b1c9ca14c` during actual tests at 23:06:24. Replacement D is
   `4bgd89g8qg` / `0z958pn7qw`. Prepared a final push that removes automatic
   opt-in; it will interrupt post-test cleanup and exercise normal full erase.
+
+- 23:16 UTC: third push interrupted D post-test sweep after4,876 inventory
+  entries and at least1,638 logged successful resets. Replacement E normal
+  erase took16.4s before deploy and17.3s afterward. All browser shards passed;
+  one existing facet-source-version test failed with a different stream-timeout
+  error. The report records this; no test changes were made.
+- Mature observations:113.61 reported active-time-equivalent hours in the first
+  post-sweep window; separate aggregate query agrees. Known scheduler/source
+  pair has no later rows through the124s quiet interval. Report distinguishes
+  analytics sums from verified billing and complete retirement.
+- Observation lease15 fully reclaimed in69.8s after snapshots were saved.
+  Collectors and tails stopped. Final report review narrowed the registry
+  recommendation and added the central discovery/pair proofs to checked-in JSON.
