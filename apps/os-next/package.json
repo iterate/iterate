@@ -6,6 +6,7 @@
   "exports": {
     "./types": "./src/types.ts",
     "./client": "./src/client/live-state.ts",
+    "./react": "./src/client/react.tsx",
     "./app": "./src/client/browser.ts",
     "./app-server": "./src/client/app-auth.ts",
     "./app-session": "./src/browser-session.ts",
