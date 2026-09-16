@@ -169,7 +169,7 @@ packages/v3/project-worker/
                                  relay), LentRpcStub; fetch-shaped calls — the x-itx-expression lane and the
                                  101 tunnel on a lent stub (fenced WORKAROUND, delete-day checklist inside)
       worker-loader.ts           prepareConfinedWorker, facetLoaderOwner, WorkerSource
-      repos.ts                   itx.repos (readFile / writeFile, one file at a time), itx.cfArtifacts
+      repos.ts                   itx.git (a repo's files by path, stateless), itx.cfArtifacts
                                  (ArtifactsScope), and the git-over-HTTPS engine beneath them
     stream/                      chapter 3 — the log and what reduces it
       stream.ts                  Stream (the commit pipeline), the typed SQL tables (StreamStorage),
@@ -610,7 +610,7 @@ interface BuiltInScope {
     list(options?: { limit?: number; cursor?: string }): Promise<ArtifactListResult>;
     delete(name: string): Promise<boolean>;
   };
-  repos: ReposScope; // readFile(repo, path) · writeFile(repo, path, content)
+  git: GitScope; // list · create · tip · snapshot · readFile · listFiles · commitFiles · writeFile · log
 
   /** This context's log — the same commit pipeline the edge's verbs write through. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
@@ -1492,7 +1492,7 @@ Bindings (`wrangler.jsonc`):
 | `ITERATE_CONTEXT`     | DO namespace → `IterateContextDurableObject` | every context, `getByName(codec)`                                                                                                                                                                                                                                                                                                                                                      |
 | `LOADER`              | Worker Loader                                | `itx.workers.get`, processors                                                                                                                                                                                                                                                                                                                                                          |
 | `AI`                  | Workers AI                                   | `itx.ai`, the binding verbatim                                                                                                                                                                                                                                                                                                                                                         |
-| `ARTIFACTS`           | Cloudflare Artifacts namespace               | `itx.cfArtifacts` (project-scoped), `itx.repos`                                                                                                                                                                                                                                                                                                                                        |
+| `ARTIFACTS`           | Cloudflare Artifacts namespace               | `itx.cfArtifacts` (project-scoped), `itx.git`                                                                                                                                                                                                                                                                                                                                          |
 | `ITX_KV`              | KV                                           | `itx.kv`, keys prefixed `${projectId}:`                                                                                                                                                                                                                                                                                                                                                |
 | `SECRET`              | Durable Object (`SecretDurableObject`)       | THE SECRET CELL, one per secret of a project (`<projectId>:<name>`): the material, its pin and its refresh strategy; `itx.secrets` writes it, egress forwards a placeholder-bearing request to it (src/secrets.ts, src/secret-durable-object.ts)                                                                                                                                       |
 | `DB`                  | D1                                           | the control plane's directory (`definitions.sql`)                                                                                                                                                                                                                                                                                                                                      |
