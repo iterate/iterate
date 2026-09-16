@@ -86,7 +86,7 @@ export interface LibraryRoots {
   connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
   /** THE REPOS (src/repo/): a repo as a DOMAIN OBJECT — a stream on ANY path (`/repos/<name>` by
    *  convention) whose `repo` facet lands the creation facts and the commit facts and memoizes the
-   *  tip over `itx.git` (the Artifacts repo's name derives from the path). `get(path)` is that
+   *  tip over `itx.cfArtifacts` (which derives the Artifacts repo's name from the path). `get(path)` is that
    *  facet, hosted on its first call and addressed after; `create()` births it, and every other
    *  method refuses until it has. Every call on the handle is one dotted expression on the facet
    *  (`RepoDurableObject`'s methods: `create` `tip` `readFile` `listFiles` `commitFiles` `writeFile`
@@ -247,7 +247,7 @@ export function runScript(itx: LibraryItx, script: unknown): Promise<unknown> {
 // spec is hosted on its first call and addressed after (the DO's startup memo; an unchanged spec never
 // restarts it), so nothing is appended to get one; `create()` appends the birth certificate (on its
 // path, cross-posted to `/`). Every call on the handle is one dotted expression
-// on that facet, run in the sibling under ITS rules (a test lends a fake `itx.git` on a repo's
+// on that facet, run in the sibling under ITS rules (a test lends a fake `itx.cfArtifacts` on a repo's
 // context). The specs' sources are the SDK-bundled facets (build-sdk.mjs) — strings a userspace worker
 // could carry just the same. `list()` for both reads THE CATALOG: the `project` facet on `/`
 // (src/project/), which folds the cross-posted certificates; hosted the same way, on first read.

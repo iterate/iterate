@@ -153,7 +153,7 @@ export abstract class StreamProcessorDurableObject<
 // stream's committed batch; a project host that names no app (the apex `<project>.<base>`,
 // src/worker.ts) lands on `itx.worker.fetch(request)`, so `fetch` routes by hostname. `itx.worker` is
 // a platform row (itx-expression-rewriting.ts) a project re-points at its own source —
-// `itx.provide("itx.worker", "itx.workers.get({ source: itx.repos.get('config').readFile('worker.ts'), cacheKey })")`
+// `itx.provide("itx.worker", "itx.workers.get({ source: itx.repos.get('/repos/config').readFile('worker.ts'), cacheKey })")`
 // — with no className: the module's DEFAULT export is the class, as in the bundled no-op default.
 // An author writes:
 //

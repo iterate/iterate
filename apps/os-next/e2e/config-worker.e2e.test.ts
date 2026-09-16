@@ -7,7 +7,7 @@
 //     `itx.worker.processEventBatch` — a ping commits, the worker's processEvent appends a pong
 //   • THE FUNNEL: every stream auto-subscribes the "/" context's worker (the DO constructor appends the
 //     `config` row), so a CHILD context's ping reaches the ROOT's config worker with no manual wiring
-//   • A COMMIT TAKES EFFECT: with the source in a repo (a fake `itx.git` locally), a commit to that repo
+//   • A COMMIT TAKES EFFECT: with the source in a repo (a fake `itx.cfArtifacts` locally), a commit to that repo
 //     re-points `itx.worker` at the new commit — the base ConfigWorker's one convention — so the next
 //     event is answered by the new code
 //   • DEPLOYED ONLY: the same worker with its source in a real Artifacts repo — the rewrite's producer
@@ -16,7 +16,7 @@
 
 import { expect, test } from "vitest";
 import { append, freshCtx, openItx, readAll, until } from "./support/client.ts";
-import { FakeGit } from "./support/fake-git.ts";
+import { FakeArtifacts } from "./support/fake-artifacts.ts";
 import { deployedOnly } from "./support/project-host.ts";
 
 // ── source in KV, on ONE context ──
@@ -142,7 +142,7 @@ export default class Config extends ConfigWorker {
 
 test("a commit to the repo itx.worker reads from takes effect: the base ConfigWorker re-points the rule at the new commit", async () => {
   const itx = openItx(freshCtx("follow"));
-  await itx.cd("/repos/config").provide("itx.git", new FakeGit({}));
+  await itx.cd("/repos/config").provide("itx.cfArtifacts", new FakeArtifacts({}));
   const repo = itx.repos.get("/repos/config");
   await repo.create();
   await repo.writeFile("worker.ts", followSource("v1"));
@@ -199,7 +199,7 @@ test("a commit to the repo itx.worker reads from takes effect: the base ConfigWo
 
 test("a rule the commit-follow cannot spell out is skipped, never halting /'s worker: the old code keeps answering", async () => {
   const itx = openItx(freshCtx("follow-skip"));
-  await itx.cd("/repos/config").provide("itx.git", new FakeGit({}));
+  await itx.cd("/repos/config").provide("itx.cfArtifacts", new FakeArtifacts({}));
   const repo = itx.repos.get("/repos/config");
   await repo.create();
   await repo.writeFile("worker.ts", followSource("v1"));
@@ -314,7 +314,7 @@ deployedOnly(
         15_000,
       );
     } finally {
-      await itx.cfArtifacts.delete("repos--config"); // teardown — the path's Artifacts name
+      await itx.cfArtifacts.delete("/repos/config"); // teardown — the repo, by its path
     }
   },
 );

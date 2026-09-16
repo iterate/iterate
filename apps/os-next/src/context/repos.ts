@@ -1,26 +1,25 @@
-// repos.ts — THE PROJECT'S REPOS, the PHYSICAL half: the Artifacts binding and git-over-HTTPS. Two
-// roots, one prefix:
-//   • `itx.cfArtifacts` (`projectScopedArtifacts`) — the RAW Cloudflare Artifacts binding, project-
-//     scoped and shaped like the real binding: the control-plane escape hatch (create / get / list /
-//     delete a repo; a repo's bytes are git-over-HTTPS, below);
-//   • `itx.git` (`projectScopedGit`) — the stateless git layer built ON TOP of it + the git wire
-//     section below (`createGitWireTransport`, the copied git-over-HTTPS engine): a repo's files on
-//     `main`, by repo-relative path —
-//       create(repo)                            — the Artifacts repo, `main` unborn;
-//       tip(repo)                               — `main`'s tip, one ls-refs;
-//       snapshot(repo)                          — the tip's every file, one shallow fetch;
-//       commitFiles(repo, { message, changes }) — ONE commit on `main` (the repo created on first write);
-//       log(repo, { limit? })                   — the newest commits.
-//   The DOMAIN half — `itx.repos.get(name)`, a repo as a stream on `/repos/<name>` with its birth
+// repos.ts — THE PROJECT'S REPOS, the PHYSICAL half: ONE root, `itx.cfArtifacts`
+// (`projectScopedArtifacts`) — Cloudflare Artifacts, project-scoped, addressed BY THE REPO'S PATH
+// (`/repos/config`; the Artifacts repo NAME is derived here and nowhere else). It carries the binding's
+// own verbs and git on `main` over the wire section below (`createGitWireTransport`, the copied
+// git-over-HTTPS engine):
+//       create(path)                            — the Artifacts repo, `main` unborn;
+//       get(path)                               — the raw handle (`createToken`), the escape hatch;
+//       list() / delete(path)                   — this project's repos, as paths; teardown;
+//       tip(path)                               — `main`'s tip, one ls-refs;
+//       snapshot(path)                          — the tip's every file, one shallow fetch;
+//       commitFiles(path, { message, changes }) — ONE commit on `main` (the repo created on first write);
+//       log(path, { limit? })                   — the newest commits.
+//   The DOMAIN half — `itx.repos.get(path)`, a repo as a stream on its path with its birth
 //   certificate, its commit facts and the tip memoized — is the repo facet (src/repo/), a library root
-//   (library.ts) over this adapter.
+//   (library.ts) over this one. THAT is how a project interacts with its repos; this root is the
+//   physical door the facet reaches (and a test lends a fake at, `provide("itx.cfArtifacts", …)`).
 //
-// SCOPE of `itx.git`, deliberately small: branch `main` only; stateless — a read is ONE shallow fetch
-// of the whole tip (`deepen: 1`; the repo facet is what memoizes it); a commit is compare-and-swapped
-// on the tip (a concurrent push refuses it — no merge); text content only. Both roots address the
-// very same repos under the ONE `${projectId}.` name prefix (`ArtifactsScope` says why `.`); the
-// remote is built from the account + namespace vars, and Artifacts hands the same URL back from
-// `create`, so the two always agree.
+// SCOPE, deliberately small: branch `main` only; stateless — a read is ONE shallow fetch of the whole
+// tip (`deepen: 1`; the repo facet is what memoizes it); a commit is compare-and-swapped on the tip
+// (a concurrent push refuses it — no merge); text content only. Every repo lives under the ONE
+// `${projectId}.` name prefix (`ArtifactsScope` says why `.`); the remote is built from the account +
+// namespace vars, and Artifacts hands the same URL back from `create`, so the two always agree.
 
 import { RpcTarget } from "capnweb";
 import { deflate, Inflate } from "pako";
@@ -58,7 +57,7 @@ interface ArtifactListResult {
   cursor?: string;
 }
 /** What `itx.cfArtifacts.get` returns: a genuine capnweb `RpcTarget`, so a client can pipeline
- *  `get(name).createToken(...)` ACROSS the /api hop exactly like the real binding's handle — a plain
+ *  `get(path).createToken(...)` ACROSS the /api hop exactly like the real binding's handle — a plain
  *  object cannot (its `createToken` closure is NonPipelinable and fails to serialize; expression.ts's `InvokeHandle`). */
 export class ScopedArtifactRepo extends RpcTarget {
   readonly #handle: ArtifactRepoHandle;
@@ -71,48 +70,79 @@ export class ScopedArtifactRepo extends RpcTarget {
   }
 }
 
-/** `itx.cfArtifacts` — the RAW Artifacts binding, project-scoped, and shaped like the real binding:
- *  its methods return the SAME SHAPES (`create` a repo → its initial git token; `get` a repo's handle;
- *  `list` this project's repos; `delete` one — project teardown deletes a project's repos). THE
- *  ISOLATION WALL, enforced here and not by the binding: every repo name is forced under this
- *  project's `${projectId}.` prefix (like `itx.kv`'s `${projectId}:`). The delimiter is `.` ON
- *  PURPOSE: project IDs are `[A-Za-z0-9_-]` (no `.`), so `${projectId}.` cannot collide even when IDs
- *  contain `-` (a `--` delimiter could: `a` + `b--x` == `a--b` + `x`), and repo names allow `.`. `list`
- *  is filtered to the prefix LOCALLY (the binding returns EVERY project's repos), and `get` returns a
- *  `ScopedArtifactRepo` exposing only `createToken`: the real handle's `fork(name)` takes an
- *  UNPREFIXED name — walked by the dispatcher regardless of the narrowed type — and would escape the
- *  wall, so it is withheld. */
+/** The Artifacts repo a PATH is backed by: the path's segments joined with `--` (`/repos/config` →
+ *  `repos--config`, `/vendor/lib` → `vendor--lib`), which Artifacts' name grammar
+ *  (`[a-zA-Z0-9][a-zA-Z0-9._-]*`) accepts. Injective because a segment may not contain `--`
+ *  (refused, as is a segment outside the grammar and the root itself); `repoPathOf` is its inverse.
+ *  THE ONE PLACE a name is spelled — every itx surface speaks paths. */
+export function repoArtifactName(path: string): string {
+  const segments = path.split("/").filter((segment) => segment !== "");
+  if (segments.length === 0)
+    throw new Error("itx.cfArtifacts: the project's root context is not a repo");
+  for (const segment of segments)
+    if (segment.includes("--") || !/^[a-zA-Z0-9._-]+$/.test(segment))
+      throw new Error(
+        `itx.cfArtifacts: "${path}" cannot back an Artifacts repo — a path segment is [a-zA-Z0-9._-]+ without "--" (got "${segment}")`,
+      );
+  const name = segments.join("--");
+  if (!/^[a-zA-Z0-9]/.test(name))
+    throw new Error(
+      `itx.cfArtifacts: "${path}" cannot back an Artifacts repo — its name must start with a letter or digit`,
+    );
+  return name;
+}
+
+/** The path an Artifacts repo NAME (unprefixed) backs — `repoArtifactName`'s inverse. */
+export function repoPathOf(name: string): string {
+  return `/${name.split("--").join("/")}`;
+}
+
+/** `itx.cfArtifacts` — Cloudflare Artifacts, project-scoped, BY PATH: the physical half of the
+ *  project's repos, beneath `itx.repos.get(path)`. The binding's own verbs (`create`, `get` — the raw
+ *  handle, `list`, `delete` — project teardown deletes a project's repos) and git on `main` over the
+ *  wire (`tip`, `snapshot`, `commitFiles`, `log`). Data in, data out (no handles cross /api but the
+ *  raw one). THE ISOLATION WALL, enforced here and not by the binding: every repo name is forced
+ *  under this project's `${projectId}.` prefix (like `itx.kv`'s `${projectId}:`). The delimiter is
+ *  `.` ON PURPOSE: project IDs are `[A-Za-z0-9_-]` (no `.`), so `${projectId}.` cannot collide even
+ *  when IDs contain `-` (a `--` delimiter could: `a` + `b--x` == `a--b` + `x`), and repo names allow
+ *  `.`. `list` is filtered to the prefix LOCALLY (the binding returns EVERY project's repos), and
+ *  `get` returns a `ScopedArtifactRepo` exposing only `createToken`: the real handle's `fork(name)`
+ *  takes an UNPREFIXED name — walked by the dispatcher regardless of the narrowed type — and would
+ *  escape the wall, so it is withheld. */
 export interface ArtifactsScope {
-  create(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
-  get(name: string): Promise<ScopedArtifactRepo>;
-  list(options?: { limit?: number; cursor?: string }): Promise<ArtifactListResult>;
-  delete(name: string): Promise<boolean>;
-}
-
-/** Pure and namespace-injected: unit-tests alone (repos.test.ts). */
-export function projectScopedArtifacts(
-  namespace: ArtifactsNamespace,
-  projectId: string,
-): ArtifactsScope {
-  const prefix = `${projectId}.`;
-  return {
-    create: (name, options) => namespace.create(prefix + name, options),
-    get: async (name) => new ScopedArtifactRepo(await namespace.get(prefix + name)),
-    list: async (options) => {
-      const page = await namespace.list(options);
-      return {
-        repos: page.repos.flatMap((r) =>
-          r.name.startsWith(prefix) ? [{ name: r.name.slice(prefix.length) }] : [],
-        ),
-        // oxlint-disable-next-line iterate/simple-truthiness-check -- a wire view: an absent cursor stays ABSENT (capnweb serializes an undefined-valued key as present)
-        ...(page.cursor !== undefined && { cursor: page.cursor }),
-      };
+  /** The Artifacts repo, `main` unborn until the first commit; false when it already existed. */
+  create(path: string): Promise<{ created: boolean }>;
+  /** The raw repo handle — `createToken` only. */
+  get(path: string): Promise<ScopedArtifactRepo>;
+  /** This project's repos, as paths (one page of the binding's unfiltered list). */
+  list(options?: { limit?: number; cursor?: string }): Promise<{
+    repos: { path: string }[];
+    cursor?: string;
+  }>;
+  delete(path: string): Promise<boolean>;
+  /** `main`'s tip — one ls-refs; null when there is no such repo or `main` is unborn. */
+  tip(path: string): Promise<string | null>;
+  /** The tip's every file as text, one shallow fetch (a submodule pointer has no text and is left
+   *  out); null when there is no such repo or `main` is unborn. */
+  snapshot(path: string): Promise<{ commitOid: string; files: Record<string, string> } | null>;
+  /** ONE commit on `main` applying `changes` (the repo is created on its first write) → the new
+   *  commit and the paths it changed. Changes that leave the tree as it was commit nothing:
+   *  `changedPaths` is empty and `commitOid` the tip (null on an unborn repo). The push is
+   *  compare-and-swapped on the tip the changes were applied to: a `main` that moved in the
+   *  meantime refuses the commit — read again and retry. */
+  commitFiles(
+    path: string,
+    input: {
+      message: string;
+      changes: RepoFileChange[];
+      author?: { name: string; email: string };
     },
-    delete: (name) => namespace.delete(prefix + name),
-  };
+  ): Promise<{ commitOid: string | null; changedPaths: string[] }>;
+  /** The newest `limit` commits of `main` (default 20), newest first — a shallow fetch that deep. */
+  log(path: string, options?: { limit?: number }): Promise<RepoLogEntry[]>;
 }
 
-// ── `itx.git` — a repo's files, over git-wire ──
+// ── `itx.cfArtifacts` — the repos' files, over the binding and git-wire ──
 
 const REF = "refs/heads/main";
 const ZERO_OID = "0".repeat(40);
@@ -139,32 +169,6 @@ export type RepoLogEntry = {
   parents: string[];
 };
 
-/** `itx.git` — a project's git repos on `main`, by file. Data in, data out (no handles cross /api). */
-export interface GitScope {
-  /** The Artifacts repo, `main` unborn until the first commit; false when it already existed. */
-  create(repo: string): Promise<{ created: boolean }>;
-  /** `main`'s tip — one ls-refs; null when there is no such repo or `main` is unborn. */
-  tip(repo: string): Promise<string | null>;
-  /** The tip's every file as text, one shallow fetch (a submodule pointer has no text and is left
-   *  out); null when there is no such repo or `main` is unborn. */
-  snapshot(repo: string): Promise<{ commitOid: string; files: Record<string, string> } | null>;
-  /** ONE commit on `main` applying `changes` (the repo is created on its first write) → the new
-   *  commit and the paths it changed. Changes that leave the tree as it was commit nothing:
-   *  `changedPaths` is empty and `commitOid` the tip (null on an unborn repo). The push is
-   *  compare-and-swapped on the tip the changes were applied to: a `main` that moved in the
-   *  meantime refuses the commit — read again and retry. */
-  commitFiles(
-    repo: string,
-    input: {
-      message: string;
-      changes: RepoFileChange[];
-      author?: { name: string; email: string };
-    },
-  ): Promise<{ commitOid: string | null; changedPaths: string[] }>;
-  /** The newest `limit` commits of `main` (default 20), newest first — a shallow fetch that deep. */
-  log(repo: string, options?: { limit?: number }): Promise<RepoLogEntry[]>;
-}
-
 /** A tip's tree FLATTENED: repo-relative path → its entry (blob oid + mode). Every tree object is in
  *  the snapshot pack (`deepen 1` carries everything reachable from the tip), so the walk fetches
  *  nothing. A submodule pointer (mode 160000) is kept — a re-encoded tree must not drop it — and has
@@ -182,7 +186,7 @@ export function manifestOf(
     if (entry.mode === "40000") {
       const tree = objects.get(entry.oid);
       if (tree?.type !== "tree")
-        throw new Error(`itx.git: the pack omitted the tree ${entry.oid} (${path}/)`);
+        throw new Error(`itx.cfArtifacts: the pack omitted the tree ${entry.oid} (${path}/)`);
       for (const [nested, nestedEntry] of manifestOf(parseTree(tree.payload), objects, `${path}/`))
         manifest.set(nested, nestedEntry);
     } else manifest.set(path, { oid: entry.oid, mode: entry.mode });
@@ -262,21 +266,24 @@ export function parseCommit(payload: Uint8Array): {
       }
     }
   }
-  if (!tree) throw new Error("itx.git: a commit without a tree header");
+  if (!tree) throw new Error("itx.cfArtifacts: a commit without a tree header");
   return { tree, parents, author, timestamp, message };
 }
 
-export function projectScopedGit(input: {
+/** Pure and namespace-injected: unit-tests alone (repos.test.ts). Every `path` is a repo's context
+ *  path (`/repos/config`); `boundName` is the one step from it to the bound Artifacts name. */
+export function projectScopedArtifacts(input: {
   namespace: ArtifactsNamespace;
   projectId: string;
   accountId: string;
   namespaceName: string;
-}): GitScope {
+}): ArtifactsScope {
   const prefix = `${input.projectId}.`;
+  const boundName = (path: string): string => prefix + repoArtifactName(path);
 
-  /** A repo-relative path, `notes/log.md`: no leading slash, no empty, `.` or `..` segment. */
-  const repoPath = (path: string): string => {
-    const refusal = `itx.git: not a repo-relative path (${JSON.stringify(path)})`;
+  /** A repo-relative FILE path, `notes/log.md`: no leading slash, no empty, `.` or `..` segment. */
+  const filePath = (path: string): string => {
+    const refusal = `itx.cfArtifacts: not a repo-relative path (${JSON.stringify(path)})`;
     // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of a wire-fed argument (its static type is a claim, not a guarantee, across the capability boundary)
     if (typeof path !== "string") throw new Error(refusal);
     if (path.split("/").some((s) => s === "" || s === "." || s === "..")) throw new Error(refusal);
@@ -286,27 +293,28 @@ export function projectScopedGit(input: {
   /** A read/write transport for one repo: a token minted on the existing repo, or — a write on a
    *  repo that does not exist yet — the initial write token of a `create` (Artifacts defaults the
    *  branch to `main`, our REF). Anything else (an outage, an auth failure) surfaces as what it is. */
-  const transportFor = async (repo: string, scope: "read" | "write") => {
+  const transportFor = async (path: string, scope: "read" | "write") => {
+    const name = boundName(path);
     let token: string;
     try {
       ({ plaintext: token } = await (
-        await input.namespace.get(prefix + repo)
+        await input.namespace.get(name)
       ).createToken(scope, TOKEN_TTL_SECONDS));
     } catch (error) {
       if (scope !== "write" || !isRepoNotFound(error)) throw error;
-      ({ token } = await input.namespace.create(prefix + repo));
+      ({ token } = await input.namespace.create(name));
     }
     return createGitWireTransport({
-      remote: `https://${input.accountId}.artifacts.cloudflare.net/git/${input.namespaceName}/${prefix}${repo}.git`,
+      remote: `https://${input.accountId}.artifacts.cloudflare.net/git/${input.namespaceName}/${name}.git`,
       token,
     });
   };
 
   /** A READ's transport, or null for a repo that does not exist — the one failure that legitimately
    *  means "no files"; an outage or an auth failure surfaces as what it is. */
-  const readTransport = async (repo: string) => {
+  const readTransport = async (path: string) => {
     try {
-      return await transportFor(repo, "read");
+      return await transportFor(path, "read");
     } catch (error) {
       if (isRepoNotFound(error)) return null;
       throw error;
@@ -326,26 +334,28 @@ export function projectScopedGit(input: {
     );
     const commit = objects.get(tip);
     if (commit?.type !== "commit")
-      throw new Error(`itx.git: the pack omitted the tip commit ${tip} of ${REF}`);
+      throw new Error(`itx.cfArtifacts: the pack omitted the tip commit ${tip} of ${REF}`);
     const tree = objects.get(parseCommit(commit.payload).tree);
     if (tree?.type !== "tree")
-      throw new Error(`itx.git: the pack omitted the tree of the tip commit ${tip}`);
+      throw new Error(`itx.cfArtifacts: the pack omitted the tree of the tip commit ${tip}`);
     return { manifest: manifestOf(parseTree(tree.payload), objects), objects };
   };
 
   /** What a read starts from: the tip and its snapshot — null for no such repo or an unborn `main`. */
-  const readSnapshot = async (repo: string) => {
-    const transport = await readTransport(repo);
+  const readSnapshot = async (path: string) => {
+    const transport = await readTransport(path);
     if (!transport) return null;
     const tip = await transport.tipOf(REF);
     if (!tip) return null;
     return { tip, ...(await tipSnapshot(transport, tip)) };
   };
 
-  const commitFiles: GitScope["commitFiles"] = async (repo, { message, changes, author }) => {
-    if (!message.trim()) throw new Error("itx.git.commitFiles: message must be a non-empty string");
-    if (changes.length === 0) throw new Error("itx.git.commitFiles: changes must name a file");
-    const transport = await transportFor(repo, "write");
+  const commitFiles: ArtifactsScope["commitFiles"] = async (path, { message, changes, author }) => {
+    if (!message.trim())
+      throw new Error("itx.cfArtifacts.commitFiles: message must be a non-empty string");
+    if (changes.length === 0)
+      throw new Error("itx.cfArtifacts.commitFiles: changes must name a file");
+    const transport = await transportFor(path, "write");
     const tip = await transport.tipOf(REF);
     // The tip's snapshot, or an unborn repo's empty one. (A tip whose commit or tree the pack omits
     // THROWS in tipSnapshot — never a fresh root commit that would repoint `main` at an orphan.)
@@ -361,23 +371,23 @@ export function projectScopedGit(input: {
     // delete in the same batch frees (a directory replaced by a file, or the reverse).
     for (const change of changes) {
       if (!("delete" in change)) continue;
-      const path = repoPath(change.path);
-      if (manifest.delete(path)) changedPaths.push(path);
+      const file = filePath(change.path);
+      if (manifest.delete(file)) changedPaths.push(file);
     }
     for (const change of changes) {
       if ("delete" in change) continue;
-      const path = repoPath(change.path);
+      const file = filePath(change.path);
       // A file is never written where a directory is, nor under a file.
       for (const existing of manifest.keys())
-        if (existing.startsWith(`${path}/`) || path.startsWith(`${existing}/`))
-          throw new Error(`itx.git.commitFiles: "${path}" collides with "${existing}"`);
+        if (existing.startsWith(`${file}/`) || file.startsWith(`${existing}/`))
+          throw new Error(`itx.cfArtifacts.commitFiles: "${file}" collides with "${existing}"`);
       const blob = textEncoder.encode(change.content);
       const oid = await hashObject("blob", blob);
-      const current = manifest.get(path);
+      const current = manifest.get(file);
       if (current?.oid === oid) continue;
-      manifest.set(path, { oid, mode: current ? current.mode : "100644" });
+      manifest.set(file, { oid, mode: current ? current.mode : "100644" });
       if (!objects.has(oid)) toPush.push({ payload: blob, type: "blob" });
-      changedPaths.push(path);
+      changedPaths.push(file);
     }
     if (changedPaths.length === 0) return { commitOid: tip || null, changedPaths };
 
@@ -401,46 +411,64 @@ export function projectScopedGit(input: {
     // The push is compare-and-swapped on the tip read above: `main` having moved in the meantime (a
     // concurrent push) is a refusal like any other — the server's words, and the caller retries.
     // oxlint-disable-next-line iterate/simple-truthiness-check -- push() returns null only on success; an empty-string refusal reason (an `ng <ref>` line with no message) is still a refusal and must throw
-    if (refused !== null) throw new Error(`itx.git: the commit to ${repo} was refused: ${refused}`);
+    if (refused !== null)
+      throw new Error(`itx.cfArtifacts: the commit to ${path} was refused: ${refused}`);
     return { commitOid, changedPaths };
   };
 
   return {
-    create: async (repo) => {
-      if (await readTransport(repo)) return { created: false };
-      await input.namespace.create(prefix + repo);
+    create: async (path) => {
+      if (await readTransport(path)) return { created: false };
+      await input.namespace.create(boundName(path));
       return { created: true };
     },
 
-    tip: async (repo) => {
-      const transport = await readTransport(repo);
+    get: async (path) => new ScopedArtifactRepo(await input.namespace.get(boundName(path))),
+
+    list: async (options) => {
+      const page = await input.namespace.list(options);
+      return {
+        repos: page.repos.flatMap((r) =>
+          r.name.startsWith(prefix) ? [{ path: repoPathOf(r.name.slice(prefix.length)) }] : [],
+        ),
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- a wire view: an absent cursor stays ABSENT (capnweb serializes an undefined-valued key as present)
+        ...(page.cursor !== undefined && { cursor: page.cursor }),
+      };
+    },
+
+    delete: (path) => input.namespace.delete(boundName(path)),
+
+    tip: async (path) => {
+      const transport = await readTransport(path);
       if (!transport) return null;
       return (await transport.tipOf(REF)) || null;
     },
 
-    snapshot: async (repo) => {
-      const snapshot = await readSnapshot(repo);
+    snapshot: async (path) => {
+      const snapshot = await readSnapshot(path);
       if (!snapshot) return null;
       const files: Record<string, string> = {};
-      for (const [path, entry] of snapshot.manifest) {
+      for (const [file, entry] of snapshot.manifest) {
         if (entry.mode === "160000") continue;
         const blob = snapshot.objects.get(entry.oid);
         if (blob?.type !== "blob")
           throw new Error(
-            `itx.git: the pack for ${repo} omitted the blob of ${path} (${entry.oid})`,
+            `itx.cfArtifacts: the pack for ${path} omitted the blob of ${file} (${entry.oid})`,
           );
-        files[path] = textDecoder.decode(blob.payload);
+        files[file] = textDecoder.decode(blob.payload);
       }
       return { commitOid: snapshot.tip, files };
     },
 
     commitFiles,
 
-    log: async (repo, options = {}) => {
+    log: async (path, options = {}) => {
       const limit = options.limit ?? 20;
       if (!Number.isInteger(limit) || limit < 1)
-        throw new Error(`itx.git.log: limit must be a positive integer (got ${String(limit)})`);
-      const transport = await readTransport(repo);
+        throw new Error(
+          `itx.cfArtifacts.log: limit must be a positive integer (got ${String(limit)})`,
+        );
+      const transport = await readTransport(path);
       if (!transport) return [];
       const tip = await transport.tipOf(REF);
       if (!tip) return [];

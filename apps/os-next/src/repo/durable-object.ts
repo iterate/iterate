@@ -1,35 +1,37 @@
 // src/repo/durable-object.ts — THE REPO: the facet a context at ANY path hosts under the name `repo`
 // (`itx.repos.get(path)`, library.ts; `/repos/<name>` is the convention, not a rule). A repo's files
-// live in git, in Artifacts, behind the stateless `itx.git`; this host is what makes a repo a DOMAIN
-// OBJECT: `create()` lands the creation facts on its path (the certificate cross-posted to `/`, where
-// the project catalog folds it), every commit through it is a `repo/commit-completed` fact, and every
-// other method refuses until it is created. The tip's snapshot is memoized in memory under the tip
-// it was read at: one `itx.git.tip` per read, the pack only when the tip moved.
+// live in git, in Artifacts, behind the stateless `itx.cfArtifacts` (addressed by this same path);
+// this host is what makes a repo a DOMAIN OBJECT: `create()` lands the creation facts on its path (the
+// certificate cross-posted to `/`, where the project catalog folds it), every commit through it is a
+// `repo/commit-completed` fact, and every other method refuses until it is created. The tip's snapshot
+// is memoized in memory under the tip it was read at: one `itx.cfArtifacts.tip` per read, the pack
+// only when the tip moved.
 // build-sdk.mjs bundles THIS module into REPO_PROCESSOR_SOURCE, the spec library.ts hands to `facets.get`.
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
 import type { RepoFileChange, RepoLogEntry } from "../context/repos.ts";
-import { repoArtifactName, type RepoIdentity, type RepoView } from "./contract.ts";
+import type { RepoIdentity, RepoView } from "./contract.ts";
 import { RepoProcessor } from "./processor.ts";
 
 export class RepoDurableObject extends StreamProcessorDurableObject<RepoView> {
   processor = new RepoProcessor();
 
-  /** The context this facet is hosted on IS the repo; its Artifacts name derives from the path. */
-  #identityRead?: RepoIdentity & { name: string };
-  async #identity(): Promise<RepoIdentity & { name: string }> {
-    if (this.#identityRead) return this.#identityRead;
+  /** The context this facet is hosted on IS the repo: its path is the one name it goes by, here and
+   *  at `itx.cfArtifacts` (which derives the Artifacts name from it). */
+  #pathRead?: string;
+  async #path(): Promise<string> {
+    if (this.#pathRead) return this.#pathRead;
     const { path } = await this.withItx((itx) => itx.whoami());
-    return (this.#identityRead = { path, name: repoArtifactName(path) });
+    return (this.#pathRead = path);
   }
 
   /** The tip's snapshot under the tip it was read at — dropped by a commit through this facet,
    *  re-fetched when the remote's tip is not the memo's. */
   #snapshotMemo: { tip: string | null; files: Record<string, string> } | null = null;
   async #fresh(): Promise<{ tip: string | null; files: Record<string, string> }> {
-    const { name } = await this.#identity();
-    const tip = await this.withItx((itx) => itx.git.tip(name));
+    const path = await this.#path();
+    const tip = await this.withItx((itx) => itx.cfArtifacts.tip(path));
     if (this.#snapshotMemo && this.#snapshotMemo.tip === tip) return this.#snapshotMemo;
-    const snapshot = await this.withItx((itx) => itx.git.snapshot(name));
+    const snapshot = await this.withItx((itx) => itx.cfArtifacts.snapshot(path));
     this.#snapshotMemo = snapshot
       ? { tip: snapshot.commitOid, files: snapshot.files }
       : { tip: null, files: {} };
@@ -41,13 +43,13 @@ export class RepoDurableObject extends StreamProcessorDurableObject<RepoView> {
    *  `repos/create-failed`, thrown; a later `create()` is a new attempt. Idempotent: a created repo
    *  answers at once. Every other method refuses until this has completed. */
   async create(): Promise<RepoIdentity> {
-    const { path, name } = await this.#identity();
+    const path = await this.#path();
     if ((await this.snapshot()).state.creation === "created") return { path };
     await this.withItx((itx) =>
       itx.append({ type: "events.iterate.com/repos/create-requested", payload: { path } }),
     );
     try {
-      await this.withItx((itx) => itx.git.create(name));
+      await this.withItx((itx) => itx.cfArtifacts.create(path));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.withItx((itx) =>
@@ -74,14 +76,14 @@ export class RepoDurableObject extends StreamProcessorDurableObject<RepoView> {
   /** Every method past `create()` starts here: a repo not yet created refuses. Creation is terminal,
    *  so one confirming read per incarnation. */
   #confirmedCreated = false;
-  async #created(): Promise<RepoIdentity & { name: string }> {
-    const identity = await this.#identity();
+  async #created(): Promise<string> {
+    const path = await this.#path();
     if (!this.#confirmedCreated) {
       if ((await this.snapshot()).state.creation !== "created")
-        throw new Error(`repo ${identity.path}: not created — call create() first`);
+        throw new Error(`repo ${path}: not created — call create() first`);
       this.#confirmedCreated = true;
     }
-    return identity;
+    return path;
   }
 
   /** `main`'s tip at the remote, or null. */
@@ -102,17 +104,17 @@ export class RepoDurableObject extends StreamProcessorDurableObject<RepoView> {
     return { commitOid: tip, paths: Object.keys(files).sort() };
   }
 
-  /** ONE commit on `main` (`itx.git.commitFiles`: compare-and-swapped on the tip, so a concurrent
-   *  push refuses it — call again) and `repo/commit-completed` on this path. A batch that changes
-   *  nothing commits nothing and appends nothing. */
+  /** ONE commit on `main` (`itx.cfArtifacts.commitFiles`: compare-and-swapped on the tip, so a
+   *  concurrent push refuses it — call again) and `repo/commit-completed` on this path. A batch that
+   *  changes nothing commits nothing and appends nothing. */
   async commitFiles(input: {
     message: string;
     changes: RepoFileChange[];
     author?: { name: string; email: string };
   }): Promise<{ commitOid: string | null; changedPaths: string[] }> {
-    const { name } = await this.#created();
+    const path = await this.#created();
     this.#snapshotMemo = null; // whatever the outcome, the next read re-fetches
-    const committed = await this.withItx((itx) => itx.git.commitFiles(name, input));
+    const committed = await this.withItx((itx) => itx.cfArtifacts.commitFiles(path, input));
     if (committed.changedPaths.length === 0 || !committed.commitOid) return committed;
     await this.withItx((itx) =>
       itx.append({
@@ -136,7 +138,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<RepoView> {
   }
 
   async log(options: { limit?: number } = {}): Promise<RepoLogEntry[]> {
-    const { name } = await this.#created();
-    return this.withItx((itx) => itx.git.log(name, options));
+    const path = await this.#created();
+    return this.withItx((itx) => itx.cfArtifacts.log(path, options));
   }
 }

@@ -1,12 +1,12 @@
-// src/repo/processor.test.ts — the RepoProcessor's executable spec: `repoArtifactName`'s mapping and
-// refusals, then the reduce as declarative `{ events → view }` rows (stream/test-support.ts
-// `reduceProcessor`). The creation itself — `create()` landing the facts — is pinned end to end in
+// src/repo/processor.test.ts — the RepoProcessor's executable spec: the reduce as declarative
+// `{ events → view }` rows (stream/test-support.ts `reduceProcessor`). The path → Artifacts-name
+// mapping lives with the physical root (context/repos.test.ts). The creation itself — `create()` landing the facts — is pinned end to end in
 // e2e/repos.e2e.test.ts.
 
 import { describe, expect, test } from "vitest";
 import { reduceProcessor } from "../stream/test-support.ts";
 import { RepoProcessor } from "./processor.ts";
-import { repoArtifactName, type RepoView } from "./contract.ts";
+import type { RepoView } from "./contract.ts";
 
 const identity = { path: "/repos/config" };
 const requested = { type: "events.iterate.com/repos/create-requested", payload: identity };
@@ -20,20 +20,6 @@ const committed = {
   payload: { commitOid: "a", message: "m", changedPaths: ["worker.ts"] },
 };
 const initial: RepoView = { path: null, creation: null, error: null };
-
-describe("repoArtifactName — the Artifacts repo a path is backed by", () => {
-  test("segments joined with `--`; the convention and any other path alike", () => {
-    expect(repoArtifactName("/repos/config")).toBe("repos--config");
-    expect(repoArtifactName("/vendor/lib")).toBe("vendor--lib");
-    expect(repoArtifactName("/a/b.c/d_e-f")).toBe("a--b.c--d_e-f");
-  });
-  test("injective: a segment may not contain `--`; the grammar and the root are refused", () => {
-    expect(() => repoArtifactName("/repos/a--b")).toThrow(/without "--"/);
-    expect(() => repoArtifactName("/repos/with space")).toThrow(/a path segment is/);
-    expect(() => repoArtifactName("/")).toThrow(/root context is not a repo/);
-    expect(() => repoArtifactName("/.hidden")).toThrow(/start with a letter or digit/);
-  });
-});
 
 describe("RepoProcessor — the reduce", () => {
   const rows: { name: string; events: { type: string; payload?: unknown }[]; view: RepoView }[] = [
