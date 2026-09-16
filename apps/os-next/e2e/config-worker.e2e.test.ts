@@ -7,12 +7,13 @@
 //     `itx.worker.processEventBatch` — a ping commits, the worker's processEvent appends a pong
 //   • THE FUNNEL: every stream auto-subscribes the "/" context's worker (the DO constructor appends the
 //     `config` row), so a CHILD context's ping reaches the ROOT's config worker with no manual wiring
-//   • A COMMIT TAKES EFFECT: with the source in a repo (a fake `itx.cfArtifacts` locally), a commit to that repo
-//     re-points `itx.worker` at the new commit — the base ConfigWorker's one convention — so the next
-//     event is answered by the new code
+//   • A COMMIT TAKES EFFECT: with the source in a repo (locally a fake `itx.cfArtifacts` proxy over a
+//     fake git REMOTE, support/fake-artifacts.ts — the repo facet speaks the real wire to it), a commit
+//     to that repo re-points `itx.worker` at the new commit — the base ConfigWorker's one convention —
+//     so the next event is answered by the new code
 //   • DEPLOYED ONLY: the same worker with its source in a real Artifacts repo — the rewrite's producer
-//     is `itx.repos.get('/repos/config').readFile('worker.ts')` and nothing else changes (Artifacts has no local
-//     implementation; `WORKER_BASE_URL=https://os.iterate2.com pnpm e2e config-worker`)
+//     is `itx.repos.get('/repos/config').readFile('worker.ts')` and nothing else changes
+//     (`WORKER_BASE_URL=https://os.iterate2.com pnpm e2e config-worker`)
 
 import { expect, test } from "vitest";
 import { append, freshCtx, openItx, readAll, until } from "./support/client.ts";
@@ -142,7 +143,7 @@ export default class Config extends ConfigWorker {
 
 test("a commit to the repo itx.worker reads from takes effect: the base ConfigWorker re-points the rule at the new commit", async () => {
   const itx = openItx(freshCtx("follow"));
-  await itx.cd("/repos/config").provide("itx.cfArtifacts", new FakeArtifacts({}));
+  await itx.cd("/repos/config").provide("itx.cfArtifacts", await FakeArtifacts.start());
   const repo = itx.repos.get("/repos/config");
   await repo.create();
   await repo.writeFile("worker.ts", followSource("v1"));
@@ -199,7 +200,7 @@ test("a commit to the repo itx.worker reads from takes effect: the base ConfigWo
 
 test("a rule the commit-follow cannot spell out is skipped, never halting /'s worker: the old code keeps answering", async () => {
   const itx = openItx(freshCtx("follow-skip"));
-  await itx.cd("/repos/config").provide("itx.cfArtifacts", new FakeArtifacts({}));
+  await itx.cd("/repos/config").provide("itx.cfArtifacts", await FakeArtifacts.start());
   const repo = itx.repos.get("/repos/config");
   await repo.create();
   await repo.writeFile("worker.ts", followSource("v1"));

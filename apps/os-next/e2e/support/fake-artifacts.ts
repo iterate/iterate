@@ -1,105 +1,114 @@
-// fake-artifacts.ts — `itx.cfArtifacts` in memory, lent to a repo's context with
-// `itx.cd(path).provide("itx.cfArtifacts", …)`: the repo facet reaches its physical tier through its
-// context's rules, so a test fakes it the way it fakes `itx.ai`. Keyed by the repo's context PATH
-// (`/repos/config`) — the Artifacts repo NAME is src/context/repos.ts's own detail and never crosses
-// here. Each repo is a path → content map plus its commits; the shapes are `ArtifactsScope`'s
-// (src/context/repos.ts), deletes applied before writes as the real one does. `snapshots` counts the
-// full fetches — what the repo facet's memo avoids.
+// fake-artifacts.ts — `itx.cfArtifacts` in memory: the binding PROXY and nothing more, lent to a
+// repo's context with `itx.cd(path).provide("itx.cfArtifacts", …)` — the repo facet reaches its
+// physical tier through its context's rules, so a test fakes it the way it fakes `itx.ai`. Behind it
+// a fake git REMOTE (fake-git-server.ts, one per `start()`), which the facet speaks REAL git protocol
+// v2 to over HTTP — the same wire codec as against Cloudflare Artifacts, run locally. Keyed by the
+// repo's context PATH (`/repos/config`); the Artifacts NAME behind it is derived exactly as the
+// platform derives it (src/context/repos.ts `repoArtifactName`) and is the remote's URL path. The
+// shapes are `ArtifactsScope`'s: `create` / `get(path).{createToken, remote}` / `list` / `delete`.
+// `snapshots` counts the FULL fetches the remote served (a `command=fetch`, never an `ls-refs`) —
+// what the repo facet's memo avoids. The remote's own side — `remoteTip`, `remoteFiles`,
+// `pushFromOutside` — is for a test's eyes, and is never on the real proxy.
 import { RpcTarget } from "capnweb";
-import type { RepoFileChange, RepoLogEntry } from "../../src/context/repos.ts";
+import { repoArtifactName, repoPathOf } from "../../src/context/repos.ts";
+import type { RepoFileChange, RepoLogEntry } from "../../src/repo/git-wire.ts";
+import { FakeGitServer } from "./fake-git-server.ts";
 
-/** One commit as the fake's `log` lists it — the real `RepoLogEntry`, newest first. */
+/** One commit as the repo facet's `log` lists it — the real `RepoLogEntry`, newest first. */
 export type FakeCommit = RepoLogEntry;
 
 /** What the fake's `get(path)` hands back — an `RpcTarget` like the real `ScopedArtifactRepo`, so it
- *  crosses the wire and `get(path).createToken(…)` pipelines; the credential is a placeholder. */
+ *  crosses the wire and `get(path).createToken(…)` / `.remote()` pipeline; the credential is a
+ *  placeholder (the fake remote ignores auth), the remote is the fake server's URL for that repo. */
 class FakeArtifactRepo extends RpcTarget {
-  createToken(_scope: "read" | "write", _ttlSeconds: number): Promise<{ plaintext: string }> {
-    return Promise.resolve({ plaintext: "fake" });
+  readonly #remote: string;
+  constructor(remote: string) {
+    super();
+    this.#remote = remote;
+  }
+  createToken(_scope: "read" | "write", _ttlSeconds: number): { plaintext: string } {
+    return { plaintext: "fake" };
+  }
+  remote(): string {
+    return this.#remote;
   }
 }
 
 export class FakeArtifacts extends RpcTarget {
-  readonly #repos = new Map<string, { files: Map<string, string>; commits: FakeCommit[] }>();
+  readonly #server: FakeGitServer;
   /** Every repo path `create` made (not the seeded ones). */
   readonly created: string[] = [];
-  /** How many times a whole tip was fetched. */
-  snapshots = 0;
   /** How many `create` calls still fail (the creation's failure story). */
   failCreates = 0;
 
-  /** `seed`: repo PATH → its files, each seeded repo born with ONE commit ("seed"). */
-  constructor(seed: Record<string, Record<string, string>>) {
+  private constructor(server: FakeGitServer) {
     super();
-    for (const [path, files] of Object.entries(seed))
-      this.#repos.set(path, {
-        files: new Map(Object.entries(files)),
-        commits: [this.#commit("seed", [])],
-      });
+    this.#server = server;
   }
-  #commit(message: string, parents: string[]): FakeCommit {
-    return {
-      oid: `c${Math.random().toString(36).slice(2, 10)}`,
-      message,
-      author: { name: "iterate", email: "config@iterate.com" },
-      timestamp: Date.now(),
-      parents,
-    };
+
+  /** A listening fake remote, `seed`'s repos (PATH → files) each born with ONE commit ("seed"). */
+  static async start(seed: Record<string, Record<string, string>> = {}): Promise<FakeArtifacts> {
+    const server = new FakeGitServer();
+    await server.start();
+    for (const [path, files] of Object.entries(seed)) {
+      const name = repoArtifactName(path);
+      server.createRepo(name);
+      await server.seed(name, files);
+    }
+    return new FakeArtifacts(server);
   }
-  create(path: string) {
+
+  /** How many times a whole tip was fetched, across every repo — a `command=fetch` served by the
+   *  remote (the facet's snapshot after a tip move, and its `log`); never an `ls-refs`. */
+  get snapshots(): number {
+    return this.#server.totalFetches();
+  }
+
+  close(): Promise<void> {
+    return this.#server.close();
+  }
+
+  // ── `ArtifactsScope` (src/context/repos.ts) ──
+
+  create(path: string): { created: boolean } {
     if (this.failCreates > 0) {
       this.failCreates -= 1;
       throw new Error("artifacts down");
     }
-    if (this.#repos.has(path)) return { created: false };
-    this.#repos.set(path, { files: new Map(), commits: [] });
+    if (!this.#server.createRepo(repoArtifactName(path))) return { created: false };
     this.created.push(path);
     return { created: true };
   }
-  get(_path: string) {
-    return new FakeArtifactRepo();
+  get(path: string): FakeArtifactRepo {
+    const name = repoArtifactName(path);
+    if (!this.#server.hasRepo(name)) throw new Error(`Repository not found: ${path} (${name})`);
+    return new FakeArtifactRepo(this.#server.remote(name));
   }
   /** Every repo, as paths — ONE page, never a cursor. */
-  list(_options: { limit?: number; cursor?: string } = {}) {
-    return { repos: [...this.#repos.keys()].map((path) => ({ path })) };
+  list(_options: { limit?: number; cursor?: string } = {}): { repos: { path: string }[] } {
+    return { repos: this.#server.repos().map((name) => ({ path: repoPathOf(name) })) };
   }
-  delete(path: string) {
-    return this.#repos.delete(path);
+  delete(path: string): boolean {
+    return this.#server.deleteRepo(repoArtifactName(path));
   }
-  tip(path: string) {
-    return this.#repos.get(path)?.commits.at(-1)?.oid ?? null;
+
+  // ── the remote's side, for a test's eyes ──
+
+  /** `main`'s tip at the remote, or null while unborn. */
+  remoteTip(path: string): string | null {
+    return this.#server.tip(repoArtifactName(path)) ?? null;
   }
-  snapshot(path: string) {
-    const known = this.#repos.get(path);
-    const tip = known?.commits.at(-1);
-    if (!known || !tip) return null;
-    this.snapshots += 1;
-    return { commitOid: tip.oid, files: Object.fromEntries(known.files) };
+  /** The tip's files at the remote, as text — or null while unborn. */
+  remoteFiles(path: string): Record<string, string> | null {
+    return this.#server.files(repoArtifactName(path));
   }
-  commitFiles(path: string, input: { message: string; changes: RepoFileChange[] }) {
-    let known = this.#repos.get(path);
-    if (!known) {
-      this.create(path);
-      known = this.#repos.get(path)!;
-    }
-    const changedPaths: string[] = [];
-    for (const change of input.changes) {
-      if ("delete" in change && known.files.delete(change.path)) changedPaths.push(change.path);
-    }
-    for (const change of input.changes) {
-      if ("delete" in change) continue;
-      if (known.files.get(change.path) !== change.content) {
-        known.files.set(change.path, change.content);
-        changedPaths.push(change.path);
-      }
-    }
-    const tip = known.commits.at(-1);
-    if (changedPaths.length === 0) return { commitOid: tip?.oid ?? null, changedPaths };
-    const commit = this.#commit(input.message, tip ? [tip.oid] : []);
-    known.commits.push(commit);
-    return { commitOid: commit.oid, changedPaths };
-  }
-  log(path: string, options: { limit?: number } = {}) {
-    return [...(this.#repos.get(path)?.commits ?? [])].reverse().slice(0, options.limit ?? 20);
+  /** A commit landing on the remote from OUTSIDE any facet — what a facet's next read must notice. */
+  async pushFromOutside(
+    path: string,
+    input: { message: string; changes: RepoFileChange[] },
+  ): Promise<{ commitOid: string }> {
+    return {
+      commitOid: await this.#server.commit(repoArtifactName(path), input.message, input.changes),
+    };
   }
 }

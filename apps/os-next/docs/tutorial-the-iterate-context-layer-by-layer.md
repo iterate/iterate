@@ -1500,14 +1500,16 @@ await until(async () =>
 
 A repo is addressed by its PATH everywhere — `/repos/config` — and `itx.repos.get(path)` is how a
 project interacts with it: the repo as a domain object, a stream on any path with its creation
-facts, a `commit-completed` fact per commit, and the tip memoized. Beneath it sits ONE physical root,
-`itx.cfArtifacts`: Cloudflare Artifacts, project-scoped and by that same path — the binding's own
-verbs (`create`, `get(path)` for a handle whose `createToken` pipelines across `/api`; its `fork`,
-whose name escapes the wall, is withheld; `list`, answering in paths; `delete`) and git on `main`
-over git-over-HTTPS (`tip`, `snapshot`, `commitFiles`, `log`), stateless. The Artifacts repo NAME
+facts, a `commit-completed` fact per commit, the tip memoized — and the ONLY thing that speaks git.
+The facet carries the git client itself (`src/repo/git-wire.ts`: object and pack codecs, protocol
+v2 over HTTPS) and needs two facts from the platform, which `itx.cfArtifacts` provides: Cloudflare
+Artifacts as a PROXY, project-scoped and by that same path — `create`, `get(path)` for a handle
+whose `createToken` and `remote()` pipeline across `/api` (its `fork`, whose name escapes the wall,
+is withheld), `list` answering in paths, `delete`. Nothing else. The Artifacts repo NAME
 (`repos--config`, every name forced under `${projectId}.`) is derived inside `repos.ts` and spelled
-nowhere else. Artifacts has no local implementation, so the physical tier runs deployed-only in the
-lane; locally a test lends a fake `itx.cfArtifacts` to the repo's context.
+nowhere else. Artifacts has no local implementation, so locally a test lends a fake proxy to the
+repo's context whose `remote()` points at an in-memory git remote (`e2e/support/fake-git-server.ts`)
+— the real wire codec runs in both lanes; only the binding is deployed-only.
 
 ```ts
 const repo = itx.repos.get("/repos/config");
@@ -1516,7 +1518,7 @@ expect(await repo.readFile("worker.ts")).toBeNull(); // an unborn repo reads as 
 const first = await repo.writeFile("worker.ts", source); // one commit on main
 expect(first.commitOid).toMatch(/^[0-9a-f]{40}$/);
 expect(await repo.readFile("worker.ts")).toBe(source);
-await itx.cfArtifacts.delete("/repos/config"); // the physical root speaks the same path
+await itx.cfArtifacts.delete("/repos/config"); // the proxy speaks the same path
 // e2e/repos.e2e.test.ts (deployed only)
 const tok = await a.cfArtifacts.get(path).createToken("read", 300); // pipelined server-side
 // e2e/cfartifacts.e2e.test.ts (deployed only)

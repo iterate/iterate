@@ -63,7 +63,7 @@ export const AppConfig = z.object({
    *  on that read, so the old key can be dropped once every record has been read once. Blank when
    *  not rotating. */
   secretsKeyPrevious: redacted(z.string().trim().default("")),
-  /** The Cloudflare account + Artifacts namespace `itx.cfArtifacts` builds git remotes from; blank
+  /** The Cloudflare account + Artifacts namespace `itx.cfArtifacts` names git remotes with; blank
    *  where no Artifacts binding exists (the vitest workers project). */
   artifactsAccountId: z.string().trim().default(""),
   artifactsNamespace: z.string().trim().default(""),

@@ -9,11 +9,12 @@
 // creation facts, the certificate cross-posted to `/` for the catalog `itx.workspaces.list()` reads.
 // Storage is this facet's own SQLite: one `files` table, a row per touched path — its content, or the
 // `deleted` flag that makes it a whiteout. Text only,
-// ONE writer, no policies. The repo facets reach git as `itx.cfArtifacts` through THEIR context's
-// rules, so a test lends a fake there (`provide("itx.cfArtifacts", …)`, e2e/workspaces.e2e.test.ts).
+// ONE writer, no policies. The repo facets speak git themselves (src/repo/git-wire.ts) and reach the
+// Artifacts binding — their token and remote — as `itx.cfArtifacts` through THEIR context's rules, so
+// a test lends a fake proxy there (`provide("itx.cfArtifacts", …)`, e2e/support/fake-artifacts.ts).
 // build-sdk.mjs bundles THIS module into WORKSPACE_PROCESSOR_SOURCE, the spec library.ts hands to `facets.get`.
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
-import type { RepoFileChange, RepoLogEntry } from "../context/repos.ts";
+import type { RepoFileChange, RepoLogEntry } from "../repo/git-wire.ts";
 import type { WorkspaceView } from "./contract.ts";
 import { WorkspaceProcessor } from "./processor.ts";
 

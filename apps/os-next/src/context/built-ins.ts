@@ -145,12 +145,11 @@ export interface BuiltInScope extends LibraryRoots {
    *  model with `@` (`itx.fable ⇒ itx.ai.run('@cf/…', @)`). A test shadows it with `provide("itx.ai",
    *  fake)`; the physical door stays `itx.builtins.ai`. */
   ai: Ai;
-  /** THE REPOS' PHYSICAL HALF (repos.ts `ArtifactsScope`): Cloudflare Artifacts, project-scoped and
-   *  addressed BY THE REPO'S PATH — the binding's own verbs (`create`, `get` the raw handle, `list`,
-   *  `delete`) and git on `main` over git-over-HTTPS (`tip`, `snapshot`, `commitFiles` — one commit,
-   *  many files — `log`). Stateless: every read fetches the tip. The domain half — `itx.repos.get(path)`,
-   *  the repo as a stream on its path with its birth, its commit facts and the tip cache — is the
-   *  repo facet (src/repo/), a library root over this one, and THE way a project touches its repos. */
+  /** THE ARTIFACTS PROXY (repos.ts `ArtifactsScope`): Cloudflare Artifacts, project-scoped and
+   *  addressed BY THE REPO'S PATH — the binding's own verbs only: `create`, `get` (a handle with
+   *  `createToken` and `remote()`), `list`, `delete`. Git itself is the repo facet's (src/repo/, the
+   *  domain object `itx.repos.get(path)` — THE way a project touches its repos): it mints its token and
+   *  learns its remote here, then speaks git-over-HTTPS from inside its own worker. */
   cfArtifacts: ArtifactsScope;
   /** Append to this context's append-only event log (the facets that REDUCE it are
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
@@ -290,7 +289,7 @@ interface BuildBuiltInsDeps {
   };
   /** The deploy identity every loader cacheKey folds in (worker.ts `AppConfig`). */
   deployId: string;
-  /** The Artifacts account + namespace `itx.cfArtifacts` builds git remotes from (worker.ts `AppConfig`). */
+  /** The Artifacts account + namespace `itx.cfArtifacts` names git remotes with (worker.ts `AppConfig`). */
   artifactsAccountId: string;
   artifactsNamespace: string;
   /** The secrets catalog — names, pins and strategy kinds, from the core reduce (strongly
