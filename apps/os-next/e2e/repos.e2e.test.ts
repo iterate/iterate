@@ -6,10 +6,13 @@
 // `/`, where the `project` facet (src/project/) folds every certificate into the catalog
 // `itx.repos.list()` reads — or `repos/create-failed`, thrown; a later `create()` is a new attempt.
 // Every other method refuses until then. Every commit that lands through it is a
-// `repo/commit-completed` fact on its path; the tip's snapshot is memoized under its oid — one
-// `itx.cfArtifacts.tip` per read, the pack only when the tip moved. Locally the physical tier is a
-// FAKE lent to the repo's context (`provide("itx.cfArtifacts", …)`, support/fake-artifacts.ts);
-// against the deployed worker the last test runs the story on real Artifacts.
+// `repo/commit-completed` fact on its path. The facet is the ONLY thing that speaks git (git protocol
+// v2 over HTTP, src/repo/git-wire.ts): `itx.cfArtifacts` — the binding proxy, by the same path —
+// hands it a token and the remote URL; the tip's snapshot is memoized under its oid — one `ls-refs`
+// per read, the pack only when the tip moved. Locally the physical tier is a fake git REMOTE
+// (support/fake-git-server.ts) behind a fake `itx.cfArtifacts` proxy lent to the repo's context
+// (`provide("itx.cfArtifacts", …)`, support/fake-artifacts.ts), so the real wire codec runs locally
+// too; against the deployed worker the last test runs the story on real Artifacts.
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, readAll, rejection } from "./support/client.ts";
@@ -26,7 +29,7 @@ const types = (log: { type: string }[]) =>
 
 test("create() lands the request and the certificate on the repo's path AND on /, the catalog lists it; a repo not created refuses; any path can host one", async () => {
   const itx = openItx(freshCtx("repo"));
-  const artifacts = new FakeArtifacts({});
+  const artifacts = await FakeArtifacts.start();
   await itx.cd("/repos/config").provide("itx.cfArtifacts", artifacts);
   const repo = itx.repos.get("/repos/config");
 
@@ -76,7 +79,7 @@ test("create() lands the request and the certificate on the repo's path AND on /
 
 test("provisioning fails: create-failed lands on the repo's path and create() throws it; the next create() is a new attempt that succeeds", async () => {
   const itx = openItx(freshCtx("repo"));
-  const artifacts = new FakeArtifacts({});
+  const artifacts = await FakeArtifacts.start();
   artifacts.failCreates = 1;
   await itx.cd("/repos/flaky").provide("itx.cfArtifacts", artifacts);
   const repo = itx.repos.get("/repos/flaky");
@@ -108,37 +111,46 @@ test("provisioning fails: create-failed lands on the repo's path and create() th
 
 test("commits through the facet: commit-completed on the repo's path; the memo fetches the tip once after a commit and once when a push from outside moved it", async () => {
   const itx = openItx(freshCtx("repo"));
-  const artifacts = new FakeArtifacts({});
+  const artifacts = await FakeArtifacts.start();
   await itx.cd("/repos/config").provide("itx.cfArtifacts", artifacts);
   const repo = itx.repos.get("/repos/config");
   await repo.create();
 
+  // The first commit on an unborn main: an ls-refs, a push — no tip to fetch.
   const first = await repo.writeFile("worker.ts", "export default 1;\n");
-  expect(first).toEqual({ commitOid: artifacts.tip("/repos/config"), changedPaths: ["worker.ts"] });
+  expect(first).toEqual({
+    commitOid: artifacts.remoteTip("/repos/config"),
+    changedPaths: ["worker.ts"],
+  });
+  expect(artifacts.remoteFiles("/repos/config")).toEqual({ "worker.ts": "export default 1;\n" }); // the remote agrees
+  expect(artifacts.snapshots).toBe(0);
   const committed = (await readAll(itx.cd("/repos/config"))).filter((e) => e.type === COMMITTED);
   expect(committed.map((e) => e.payload)).toEqual([
     { commitOid: first.commitOid, message: "write worker.ts", changedPaths: ["worker.ts"] },
   ]);
 
-  // The first read after a commit fetches the tip; reads at the same tip fetch nothing more.
+  // The first read after a commit fetches the tip; reads at the same tip fetch nothing more (an
+  // ls-refs each, which is not a fetch).
   expect(await repo.readFile("worker.ts")).toBe("export default 1;\n");
   expect(await repo.listFiles()).toEqual({ commitOid: first.commitOid, paths: ["worker.ts"] });
   expect(await repo.tip()).toBe(first.commitOid);
   expect(artifacts.snapshots).toBe(1);
 
   // A push from OUTSIDE the facet moves the tip: the next read sees it, with ONE more fetch.
-  artifacts.commitFiles("/repos/config", {
+  const outside = await artifacts.pushFromOutside("/repos/config", {
     message: "outside",
     changes: [{ path: "b.txt", content: "b" }],
   });
   expect(await repo.listFiles()).toEqual({
-    commitOid: artifacts.tip("/repos/config"),
+    commitOid: outside.commitOid,
     paths: ["b.txt", "worker.ts"],
   });
   expect(await repo.readFile("b.txt")).toBe("b");
   expect(artifacts.snapshots).toBe(2);
 
-  // A batch through the facet: deletes before writes; the memo is dropped, the next read re-fetches.
+  // A batch through the facet: deletes before writes. The commit fetches the tip it builds on (the
+  // tree its changes apply to) and drops the memo, so the next read fetches the NEW tip; the read
+  // after that fetches nothing.
   const second = await repo.commitFiles({
     message: "swap",
     changes: [
@@ -147,16 +159,26 @@ test("commits through the facet: commit-completed on the repo's path; the memo f
     ],
   });
   expect(second.changedPaths).toEqual(["worker.ts", "c.txt"]);
+  expect(second.commitOid).toBe(artifacts.remoteTip("/repos/config"));
+  expect(artifacts.snapshots).toBe(3);
   expect(await repo.listFiles()).toEqual({
     commitOid: second.commitOid,
     paths: ["b.txt", "c.txt"],
   });
   expect(await repo.readFile("worker.ts")).toBeNull();
-  expect(artifacts.snapshots).toBe(3);
+  expect(await repo.readFile("c.txt")).toBe("c");
+  expect(artifacts.snapshots).toBe(4);
+  expect(artifacts.remoteFiles("/repos/config")).toEqual({ "b.txt": "b", "c.txt": "c" });
+  // log is its own shallow fetch, that deep — newest first, the outside commit in its place.
   expect((await repo.log()).map((c: FakeCommit) => c.message)).toEqual([
     "swap",
     "outside",
     "write worker.ts",
+  ]);
+  expect((await repo.log()).map((c: FakeCommit) => c.parents)).toEqual([
+    [outside.commitOid],
+    [first.commitOid],
+    [],
   ]);
 
   // A batch that changes nothing commits nothing and appends nothing.
@@ -195,11 +217,10 @@ deployedOnly(
         commitOid: first.commitOid,
         paths: ["notes/log.md", "worker.ts"],
       });
-      expect(await itx.cfArtifacts.snapshot("/repos/config")).toEqual({
-        commitOid: first.commitOid,
-        files: { "worker.ts": "export default 1;\n", "notes/log.md": "# log\n" },
-      }); // the physical tier agrees
-      expect((await repo.log()).map((c: FakeCommit) => c.message)).toEqual(["first"]);
+      expect(await repo.readFile("worker.ts")).toBe("export default 1;\n"); // the nested tree round-trips whole
+      expect((await repo.log()).map((c: FakeCommit) => [c.message, c.parents])).toEqual([
+        ["first", []],
+      ]);
       expect(await itx.repos.list()).toEqual([
         { path: "/repos/config", createdAt: expect.any(String) },
       ]);

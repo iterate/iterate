@@ -4,7 +4,7 @@
 // by the host's `create()`: `repos/create-requested`, then `repos/created` — the birth certificate,
 // cross-posted to `/` for the project catalog — or `repos/create-failed`. Every commit that lands
 // through the repo is `repo/commit-completed`. The bytes are not here — they are git, in Artifacts,
-// behind `itx.cfArtifacts` (context/repos.ts), addressed by this same path.
+// spoken by the host (durable-object.ts over git-wire.ts) with a token and remote from `itx.cfArtifacts`.
 import { z } from "zod";
 import { defineProcessorContract } from "../stream/processor.ts";
 

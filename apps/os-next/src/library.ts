@@ -86,7 +86,7 @@ export interface LibraryRoots {
   connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
   /** THE REPOS (src/repo/): a repo as a DOMAIN OBJECT — a stream on ANY path (`/repos/<name>` by
    *  convention) whose `repo` facet lands the creation facts and the commit facts and memoizes the
-   *  tip over `itx.cfArtifacts` (which derives the Artifacts repo's name from the path). `get(path)` is that
+   *  tip — git spoken from inside the facet, its token and remote from `itx.cfArtifacts` (which derives the Artifacts repo's name from the path). `get(path)` is that
    *  facet, hosted on its first call and addressed after; `create()` births it, and every other
    *  method refuses until it has. Every call on the handle is one dotted expression on the facet
    *  (`RepoDurableObject`'s methods: `create` `tip` `readFile` `listFiles` `commitFiles` `writeFile`

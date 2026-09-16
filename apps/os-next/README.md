@@ -62,7 +62,7 @@ one is warned about at boot and ignored). The two secrets are wrangler secrets o
 | `APP_CONFIG_SECRETS_KEY_PREVIOUS`                                   | no       | the key before a rotation, decrypt-only; records are rewritten under the current key as read |
 | `APP_CONFIG_PROJECT_HOSTNAME_BASE`                                  | no       | the base project hosts hang under; blank ⇒ no project-host ingress                           |
 | `APP_CONFIG_TEST_EMAIL_LOGIN`                                       | no       | `true` permits unverified email sign-in; disabled remotely by default                        |
-| `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`, `APP_CONFIG_ARTIFACTS_NAMESPACE` | no       | `itx.cfArtifacts`'s git remotes                                                              |
+| `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`, `APP_CONFIG_ARTIFACTS_NAMESPACE` | no       | the git remotes `itx.cfArtifacts` names for the repo facet                                   |
 
 ## The console
 

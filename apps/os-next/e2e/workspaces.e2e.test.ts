@@ -5,10 +5,11 @@
 // mount's repo facet at its tip; a write shadows until `gitCommit` lands ONE mount's changes on its
 // repo's `main`; a delete is a whiteout until then; `/workspace/…` is scratch — never committed.
 // `create()` lands the creation facts: the certificate on its path, cross-posted to `/`, so
-// `itx.workspaces.list()` knows it. Locally the physical tier is a FAKE `itx.cfArtifacts` lent to each
-// repo's context (support/fake-artifacts.ts), keyed by the repo's PATH as the real one is; against the
-// deployed worker the last test runs the same story on real Artifacts
-// (`WORKER_BASE_URL=https://os.iterate2.com pnpm e2e workspaces`).
+// `itx.workspaces.list()` knows it. Locally the physical tier is a fake git REMOTE
+// (support/fake-git-server.ts) behind a FAKE `itx.cfArtifacts` proxy lent to each repo's context
+// (support/fake-artifacts.ts), keyed by the repo's PATH as the real one is — the repo facet speaks
+// the real wire codec to it; against the deployed worker the last test runs the same story on real
+// Artifacts (`WORKER_BASE_URL=https://os.iterate2.com pnpm e2e workspaces`).
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, readAll, rejection } from "./support/client.ts";
@@ -30,7 +31,7 @@ async function workspaceOverFakeArtifacts(
   seed: Record<string, Record<string, string>> = SEED,
 ) {
   const itx = openItx(freshCtx("ws"));
-  const artifacts = new FakeArtifacts(seed);
+  const artifacts = await FakeArtifacts.start(seed);
   for (const path of Object.keys(seed)) {
     await itx.cd(path).provide("itx.cfArtifacts", artifacts);
     await itx.repos.get(path).create();
@@ -89,7 +90,7 @@ test("gitCommit lands one mount's changes as ONE commit on its repo and clears t
     repo: "/repos/config",
     changedPaths: ["/repos/config/worker.ts", "/repos/config/notes/log.md"], // deletes land first
   });
-  expect(artifacts.snapshot("/repos/config")?.files).toEqual({ "notes/log.md": "# log\n- one\n" });
+  expect(artifacts.remoteFiles("/repos/config")).toEqual({ "notes/log.md": "# log\n- one\n" }); // the remote agrees
   expect(await workspace.gitStatus()).toEqual({
     mounts: [{ path: "/repos/config", repo: "/repos/config", changes: [] }],
     unmounted: [{ path: "/workspace/scratch.md", change: "added" }],
@@ -178,11 +179,11 @@ test("a repo beneath another's path wins beneath it: the listing, reads and stat
   );
   const commit = await workspace.gitCommit({ message: "z", scope: "/repos/config/vendor" });
   expect(commit.changedPaths).toEqual(["/repos/config/vendor/z.txt"]);
-  expect(artifacts.snapshot("/repos/config/vendor")?.files).toEqual({
+  expect(artifacts.remoteFiles("/repos/config/vendor")).toEqual({
     "y.txt": "from lib",
     "z.txt": "z",
   });
-  expect(artifacts.snapshot("/repos/config")?.files).toEqual({
+  expect(artifacts.remoteFiles("/repos/config")).toEqual({
     "worker.ts": "w",
     "vendor/x.txt": "from config",
   });
@@ -204,7 +205,7 @@ test("a workspace is its path: a second session opens the same overlay, uncommit
 
 test("the Notes app's story, spelled as apps/notes spells it: create the repo and the workspace (idempotent), read the file through the workspace, write it and commit ONE commit on the repo's main", async () => {
   const itx = openItx(freshCtx("notes"));
-  const artifacts = new FakeArtifacts({});
+  const artifacts = await FakeArtifacts.start();
   await itx.cd("/repos/config").provide("itx.cfArtifacts", artifacts);
   const REPO = "/repos/config";
   const WORKSPACE = "/workspaces/notes";
@@ -234,7 +235,7 @@ test("the Notes app's story, spelled as apps/notes spells it: create the repo an
     ["gitCommit", { message: "notes: save", scope: REPO }],
   ]);
   expect(committed).toMatchObject({ mount: REPO, repo: REPO, changedPaths: [FILE] });
-  expect(artifacts.snapshot("/repos/config")?.files).toEqual({ "notes/log.md": "# log\n- one\n" });
+  expect(artifacts.remoteFiles("/repos/config")).toEqual({ "notes/log.md": "# log\n- one\n" });
   // The next load reads the committed file at the new tip; nothing more was appended by the loads.
   expect(await load()).toEqual({ note: "# log\n- one\n", tip: committed.commitOid });
   expect(types(await readAll(itx.cd(REPO)))).toEqual([
@@ -281,10 +282,7 @@ deployedOnly(
         "/repos/config/worker.ts",
       ]);
       expect(await repo.readFile("notes/log.md")).toBe("# log\n");
-      expect((await itx.cfArtifacts.snapshot("/repos/config")).files).toEqual({
-        "notes/log.md": "# log\n",
-        "worker.ts": "export default 2;\n",
-      }); // the physical tier agrees
+      expect(await repo.readFile("worker.ts")).toBe("export default 2;\n"); // the repo, at the new tip, agrees
       expect(await repo.listFiles()).toEqual({
         commitOid: commit.commitOid,
         paths: ["notes/log.md", "worker.ts"],
