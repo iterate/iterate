@@ -377,17 +377,20 @@ export function stepCommands(source: string) {
 }
 
 /** The status says the report is available; preview checks retain the test outcome. */
-export function traceCommitStatus(
+export function reportCommitStatus(
   previous: { description: string | null; target_url: string | null } | undefined,
-  run: { headSha: string; createdAt: string; url: string },
+  run: { headSha: string; createdAt: string; url: string; context: string },
 ) {
   // Store the source execution's time, not publication time: reconciliation can
   // revisit old runs. Normalized ISO dates sort chronologically in this format.
-  const description = `Open trace · ${new Date(run.createdAt).toISOString()}`;
-  if (previous?.target_url === run.url || (previous?.description || "") >= description) return null;
+  const createdAt = new Date(run.createdAt).toISOString();
+  const description = `Open report · ${createdAt}`;
+  const previousTime = previous?.description?.split(" · ").at(-1) || "";
+  if (previous?.target_url === run.url || previousTime >= createdAt) return null;
   return {
     sha: run.headSha,
-    context: "CI trace",
+    context: run.context,
+    // GitHub accepts this literal union; preserve it when inferring the result.
     state: "success" as const,
     description,
     target_url: run.url,

@@ -56,3 +56,8 @@ jobs:
         run: >-
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
           pnpm exec trpc-cli scripts/ci/tracing/cli.ts publish "$SOURCE_WORKFLOW"
+      - name: Link Playwright HTML report
+        if: ${{ always() && inputs.source-workflow }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/ci/tracing/cli.ts publish-playwright "$SOURCE_WORKFLOW"

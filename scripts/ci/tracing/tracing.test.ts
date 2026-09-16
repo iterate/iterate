@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { expect, test } from "vitest";
-import { assembleTrace, renderTrace, stepCommands, traceCommitStatus } from "./tracing.ts";
+import { assembleTrace, renderTrace, stepCommands, reportCommitStatus } from "./tracing.ts";
 
 test("the shell hook preserves failures and does not double-count nested bash", async () => {
   const result = await promisify(execFile)("bash", ["-c", "bash -c 'echo nested'; exit 7"], {
@@ -400,30 +400,34 @@ jobs:
   });
 });
 
-test("the trace status points at the tested commit and keeps the newest execution on replay", () => {
-  const run = {
-    headSha: "tested-head",
-    createdAt: "2026-09-16T12:00:00Z",
-    url: "https://iterate.iterate.app/explainers/ci-trace-run1?sha=abc",
-  };
-  const first = traceCommitStatus(undefined, run);
-  expect(first).toMatchObject({
-    sha: "tested-head",
-    context: "CI trace",
-    state: "success",
-    target_url: run.url,
-  });
-  const next = traceCommitStatus(first!, {
-    ...run,
-    createdAt: "2026-09-16T13:00:00Z",
-    url: run.url.replace("run1", "run2"),
-  });
-  expect(next).toMatchObject({ target_url: run.url.replace("run1", "run2") });
-  expect(traceCommitStatus(next!, run)).toBeNull();
-  expect(traceCommitStatus(first!, run)).toBeNull();
-  // Reconciliation can decide that an execution already has a report before uploading.
-  expect(traceCommitStatus(first!, { ...run, url: "" })).toBeNull();
-});
+test.for(["CI trace", "Playwright report"])(
+  "the trace status points at the tested commit and keeps the newest execution on replay",
+  (context) => {
+    const run = {
+      context,
+      headSha: "tested-head",
+      createdAt: "2026-09-16T12:00:00Z",
+      url: "https://iterate.iterate.app/depot/artifacts/run1",
+    };
+    const first = reportCommitStatus(undefined, run);
+    expect(first).toMatchObject({
+      sha: "tested-head",
+      context,
+      state: "success",
+      target_url: run.url,
+    });
+    const next = reportCommitStatus(first!, {
+      ...run,
+      createdAt: "2026-09-16T13:00:00Z",
+      url: run.url.replace("run1", "run2"),
+    });
+    expect(next).toMatchObject({ target_url: run.url.replace("run1", "run2") });
+    expect(reportCommitStatus(next!, run)).toBeNull();
+    expect(reportCommitStatus(first!, run)).toBeNull();
+    // Reconciliation can decide that an execution already has a report before uploading.
+    expect(reportCommitStatus(first!, { ...run, url: "" })).toBeNull();
+  },
+);
 
 test("the standalone report embeds OTLP without allowing source names to break out of JSON", async () => {
   const report = assembleTrace(

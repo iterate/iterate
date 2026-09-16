@@ -6,7 +6,7 @@ import {
   assembleTrace,
   Workflow,
   renderTrace,
-  traceCommitStatus,
+  reportCommitStatus,
   stepCommands,
 } from "./tracing.ts";
 
@@ -29,30 +29,51 @@ export default class CiTrace {
     const execution = [...workflow.executions].sort((a, b) => b.execution - a.execution)[0];
     if (!execution) throw new Error("Workflow has no execution");
     const name = `ci-trace-${workflow.workflowId}-${execution.executionId}`;
-    const collectorId = new URL(z.url().parse(process.env.DEPOT_JOB_URL)).pathname
-      .split("/")
-      .at(-1);
-    const collector = z
-      .object({ runId: z.string() })
-      .parse(await this.depot("GetWorkflow", { workflowId: collectorId }));
-    const { artifacts } = z
-      .object({
-        artifacts: z.array(z.object({ artifactId: z.string(), name: z.string() })).default([]),
-      })
-      .parse(
-        await this.depot("ListArtifacts", {
-          runId: collector.runId,
-          workflowId: collectorId,
-          pageSize: 100,
-        }),
-      );
-    const artifact = artifacts.find((item) => item.name === name);
+    const collectorUrl = new URL(z.url().parse(process.env.DEPOT_JOB_URL));
+    const collectorId = collectorUrl.pathname.split("/").at(-1);
+    const artifact = await this.uploadedArtifact(
+      z.string().parse(collectorId),
+      name,
+      z.string().min(1).parse(collectorUrl.searchParams.get("attempt")),
+    );
     if (!artifact) throw new Error(`Collector did not upload ${name}`);
-    const url = `https://iterate.iterate.app/depot/artifacts/${artifact.artifactId}`;
+    return this.linkReport(workflow, artifact.artifactId, "CI trace", "trace.html");
+  }
+
+  /** Link the merged HTML report, including reports from failed test runs. */
+  async publishPlaywright(workflowId: string) {
+    const workflow = await this.waitForWorkflow(workflowId);
+    const finish = workflow.jobs.find((job) => job.jobKey.endsWith(":finish"));
+    const attempt = [...(finish?.attempts || [])].sort((a, b) => b.attempt - a.attempt)[0];
+    if (!attempt) return { skipped: "No finish job attempt" };
+    const artifact = await this.uploadedArtifact(
+      workflowId,
+      "public-playwright-report",
+      attempt.attemptId,
+    );
+    // Preparation/merge can fail before an HTML report exists. Never link another attempt.
+    if (!artifact) return { skipped: "No merged Playwright report in this finish attempt" };
+    return this.linkReport(workflow, artifact.artifactId, "Playwright report", "");
+  }
+
+  private async linkReport(
+    workflow: z.infer<typeof Workflow>,
+    artifactId: string,
+    context: string,
+    file: string,
+  ) {
+    const execution = [...workflow.executions].sort((a, b) => b.execution - a.execution)[0];
+    if (!execution) throw new Error("Workflow has no execution");
+    const url = `https://iterate.iterate.app/depot/artifacts/${artifactId}${file ? `/${file}` : ""}`;
     // A successful upload alone is not the user's acceptance check: verify the host.
     for (let attempt = 0; ; attempt++) {
       const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
-      if (response.ok && (await response.text()).includes('id="data"')) break;
+      const html = await response.text();
+      if (
+        response.ok &&
+        html.includes(context === "CI trace" ? 'id="data"' : "playwrightReportBase64")
+      )
+        break;
       if (attempt === 4)
         throw new Error(`Published report is not viewable: HTTP ${response.status}`);
       await delay(3_000);
@@ -63,13 +84,13 @@ export default class CiTrace {
       ref: workflow.headSha,
       per_page: 100,
     });
-    const status = traceCommitStatus(
-      statuses.find((item) => item.context === "CI trace"),
-      { headSha: workflow.headSha, createdAt: execution.createdAt, url },
+    const status = reportCommitStatus(
+      statuses.find((item) => item.context === context),
+      { headSha: workflow.headSha, createdAt: execution.createdAt, url, context },
     );
     if (status) await octokit.repos.createCommitStatus({ ...repo, ...status });
     if (process.env.GITHUB_STEP_SUMMARY)
-      await appendFile(process.env.GITHUB_STEP_SUMMARY, `\n[Open CI trace](${url})\n`);
+      await appendFile(process.env.GITHUB_STEP_SUMMARY, `\n[Open ${context}](${url})\n`);
     console.log(url);
     return { url };
   }
@@ -108,9 +129,10 @@ export default class CiTrace {
           per_page: 100,
         });
         if (
-          traceCommitStatus(
+          reportCommitStatus(
             statuses.find((item) => item.context === "CI trace"),
             {
+              context: "CI trace",
               headSha: source.headSha,
               createdAt: execution.createdAt,
               url: "",
@@ -140,6 +162,36 @@ export default class CiTrace {
     if (process.env.GITHUB_OUTPUT)
       await appendFile(process.env.GITHUB_OUTPUT, `artifact-name=${name}\n`);
     return { directory, name };
+  }
+
+  private async uploadedArtifact(workflowId: string, name: string, attemptId: string) {
+    const workflow = z
+      .object({ runId: z.string() })
+      .parse(await this.depot("GetWorkflow", { workflowId }));
+    let pageToken = "";
+    do {
+      const page = z
+        .object({
+          artifacts: z
+            .array(z.object({ artifactId: z.string(), name: z.string(), attemptId: z.string() }))
+            .default([]),
+          nextPageToken: z.string().default(""),
+        })
+        .parse(
+          await this.depot("ListArtifacts", {
+            runId: workflow.runId,
+            workflowId,
+            pageSize: 100,
+            pageToken,
+          }),
+        );
+      const artifact = page.artifacts.find(
+        (item) => item.name === name && item.attemptId === attemptId,
+      );
+      if (artifact) return artifact;
+      pageToken = page.nextPageToken;
+    } while (pageToken);
+    return null;
   }
 
   private async collect(workflow: z.infer<typeof Workflow>) {
