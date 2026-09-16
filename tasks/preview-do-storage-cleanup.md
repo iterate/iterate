@@ -102,8 +102,8 @@ post-cleanup DO active time with Cloudflare GraphQL. Do not merge automatically.
   Known heartbeat pair had no native invocations for 124s after both resets;
   this is positive primitive evidence, separate from incomplete discovery.
 
-- 23:09 UTC: C completed 6,322/6,339 reset requests in 457.9s; 17 Stream
-  requests failed. Existing acquisition retried on fresh preview-16, so its
+- 23:09 UTC: C completed 6,322/6,339 reset requests in 457.9s; 11 Scheduler
+  and six Stream requests failed. Existing acquisition retried on fresh preview-16, so its
   later readiness is not proof of repaired preview-15. Held preview-15 under
   `manual-pr2693-storage-observation` while collecting delayed analytics.
 - All 256 native DO calls observed in preview-15 from 23:02–23:04:49 hit

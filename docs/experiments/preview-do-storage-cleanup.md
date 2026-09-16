@@ -112,8 +112,8 @@ continued through 22:46:44. These are active leftovers, not just retained bytes.
 
 The replacement prepare job tried all 6,339 inventoried objects in preview-15.
 It took 457.9 seconds internally (7m38s), with 6,322 successful responses and
-17 failures: 14 HTTP 500 responses and three request timeouts. All 17 were
-Streams. There were ten concurrent requests per class; more concurrency could
+17 failures: 14 HTTP 500 responses and three request timeouts. Eleven were
+Schedulers and six were Streams (four OS, two streams-example). There were ten concurrent requests per class; more concurrency could
 reduce elapsed time, but cannot establish discovery or quiescence.
 
 The preview acquisition loop did **not** stop the whole workflow. It released
