@@ -12,9 +12,11 @@
 // through `itx.run`, `script-run-settled`, its result the next developer `context-added`, which
 // triggers the next turn; prose alone ends the turn. Bounded: an open request or
 // script expires, N consecutive model failures pause, N consecutive self-triggered turns pause, and
-// a person's next words resume. Dropped from apps/os on purpose: streaming chunks, debounce and
-// backoff, interrupts, compaction, token accounting, summaries, mentions, files, and the capability
-// host with its typecheck and preambles — the script runs against this context's `itx` as it is.
+// a person's next words resume. A request is DEBOUNCED as in apps/os: one window after the trigger
+// (more words inside it move the trigger; one request answers them all), a failure's backoff folded
+// into the same window. Dropped from apps/os on purpose: streaming chunks, interrupts, compaction,
+// token accounting, summaries, mentions, and the capability host with its typecheck and preambles —
+// the script runs against this context's `itx` as it is.
 import { z } from "zod";
 import { defineProcessorContract } from "../stream/processor.ts";
 
@@ -147,9 +149,17 @@ const AgentConfig = z.object({
     .int()
     .positive()
     .default(10 * 60_000),
-  /** Consecutive model failures before the loop pauses (no backoff: the retry is the next pass). */
+  /** apps/os's window: a request waits this long after its trigger for more content — a second
+   *  message inside the window moves the trigger and ONE request answers both. */
+  llmRequestDebounceMs: z.number().int().nonnegative().default(250),
+  /** Consecutive model failures before the loop pauses; between attempts, apps/os's backoff —
+   *  `backoffBaseMs · 2^(failures−1)`, capped at `backoffMaxMs` — folded into the debounce window. */
   llmRequestRetryPolicy: z
-    .object({ maxAttempts: z.number().int().positive().default(3) })
+    .object({
+      maxAttempts: z.number().int().positive().default(3),
+      backoffBaseMs: z.number().int().nonnegative().default(10_000),
+      backoffMaxMs: z.number().int().nonnegative().default(60_000),
+    })
     .prefault({}),
 });
 
@@ -230,8 +240,13 @@ export const AgentContract = defineProcessorContract({
           llm: z.object({ model: z.string().min(1).optional() }).optional(),
           maxAutonomousTurns: z.number().int().positive().optional(),
           llmRequestExpiryMs: z.number().int().positive().optional(),
+          llmRequestDebounceMs: z.number().int().nonnegative().optional(),
           llmRequestRetryPolicy: z
-            .object({ maxAttempts: z.number().int().positive().optional() })
+            .object({
+              maxAttempts: z.number().int().positive().optional(),
+              backoffBaseMs: z.number().int().nonnegative().optional(),
+              backoffMaxMs: z.number().int().nonnegative().optional(),
+            })
             .optional(),
         }),
       }),
@@ -266,8 +281,12 @@ export const AgentContract = defineProcessorContract({
     },
     "events.iterate.com/agent/llm-request-requested": {
       description:
-        "The loop recorded its intent to run the model; the event's offset is the request's identity.",
-      payloadSchema: z.object({ model: z.string().min(1), expiresAt: z.number() }),
+        "The loop recorded its intent to run the model for ONE trigger (the offset it names); the event's offset is the request's identity. An intent whose trigger has moved on is a harmless fact.",
+      payloadSchema: z.object({
+        model: z.string().min(1),
+        expiresAt: z.number(),
+        triggerOffset: z.number().int().positive(),
+      }),
     },
     "events.iterate.com/agent/llm-request-settled": {
       description: "The request's terminal fact: the model's text, its failure, or its expiry.",

@@ -69,6 +69,7 @@ export class AgentDurableObject extends StreamProcessorDurableObject<AgentView> 
     runScript: (code) => this.withItx((itx) => itx.run(code)),
     readFile: (path) => this.withItx((itx) => itx.files.get(path).bytes()),
     now: () => Date.now(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
 
   #pathRead?: string;
