@@ -37,8 +37,10 @@ export async function signedFileUrl(input: {
 }): Promise<{ url: string; expiresAt: string }> {
   if (!input.projectHostnameBase)
     throw new Error("files: this deployment has no project-host ingress to serve a signed URL on");
-  const exp =
-    Math.floor(Date.now() / 1000) + (input.expiresInSeconds ?? DEFAULT_FILE_URL_TTL_SECONDS);
+  // The whole sum floored: the claim's `exp` is an integer, whatever TTL a caller spelled.
+  const exp = Math.floor(
+    Date.now() / 1000 + (input.expiresInSeconds ?? DEFAULT_FILE_URL_TTL_SECONDS),
+  );
   const token = await signClaims(
     { kind: "file-url", project: input.project, key: input.key, method: input.method, exp },
     input.secret,

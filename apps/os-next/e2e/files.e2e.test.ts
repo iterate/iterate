@@ -163,6 +163,10 @@ test("a signed URL downloads the file from the project host — content type, et
   });
   expect(textOf(await itx.files.get("/uploads/note.txt").bytes())).toBe("uploaded");
 
+  // A TTL that is not a whole number still mints a URL that works (the claim's exp is floored).
+  const fractional = await itx.files.get("/docs/readme.md").url({ expiresInSeconds: 90.5 });
+  expect((await fetchProjectHost(...hostAndPath(fractional.url))).status).toBe(200);
+
   // Refusals: a GET token used to PUT, a PUT token used to GET, a tampered token, a missing one.
   expect((await fetchProjectHost(host, path, {}, { method: "PUT", body: "x" })).status).toBe(403);
   expect((await fetchProjectHost(uhost, upath)).status).toBe(403);
