@@ -95,7 +95,11 @@ export class IterateRpcTarget extends RpcTarget {
     if (credentials.data.type === "from-server-cookie" || credentials.data.type === "bearer") {
       if (!this.#resolved)
         throw codedError("UNAUTHENTICATED", "this transport carries no session — sign in first.");
-      this.#publishAuthenticationFact(this.#resolved.principal, credentials.data.type);
+      // A person signing in is an account fact; a device or script presenting its token on every
+      // reconnect is not (the grant's last use already records it) — so only the browser form
+      // publishes one.
+      if (credentials.data.type === "from-server-cookie")
+        this.#publishAuthenticationFact(this.#resolved.principal, "from-server-cookie");
       return new SessionRpcTarget(this.#input, this.#sessionTeardown, this.#resolved);
     }
     const admin = await verifyAdminSecret(
@@ -123,7 +127,7 @@ export class IterateRpcTarget extends RpcTarget {
    *  a later refinement. Attribution is the user's until the platform principal lands. */
   #publishAuthenticationFact(
     principal: SessionPrincipal,
-    credential: AuthenticationFact["credential"],
+    credential: "from-server-cookie" | "admin-secret",
   ): void {
     if (!principal.email) return;
     const name = DurableObjectNameCodec.stringify({

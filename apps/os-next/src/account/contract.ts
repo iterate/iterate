@@ -18,7 +18,7 @@ import { defineProcessorContract } from "../stream/processor.ts";
  *  `authenticated/<operationId>`). NO credential material — only which KIND, when, and a stable op id
  *  (dedup on retry). Once the append type-gate is enforced a client cannot forge this type. */
 const AuthenticationFact = z.object({
-  credential: z.enum(["from-server-cookie", "bearer", "admin-secret"]),
+  credential: z.enum(["from-server-cookie", "admin-secret"]),
   at: z.number(),
   operationId: z.string(),
 });
