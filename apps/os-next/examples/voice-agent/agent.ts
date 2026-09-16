@@ -8,6 +8,12 @@
  * Separate from the relay on purpose: the turn's answer is durable, so an eviction mid-turn is
  * recovered from this facet's own fold on the next catch-up, and the voice socket dying does not
  * take the answer with it.
+ *
+ * It is an AGENT to the project: on its first caught-up pass — the press's `call-started` is its
+ * first delivery — it lands `agent/created { path }` (the platform's src/agent/contract.ts, spelled
+ * literally here) cross-posted to `/` first, where the project processor folds it into
+ * `itx.agents.list()`, and on this path last, where its own fold marks it born. Both keyed by path,
+ * so an eviction between the two re-announces for free.
  */
 import {
   StreamProcessor,
@@ -17,6 +23,7 @@ import {
   type ConsumedEvent,
   type ProcessEventArgs,
   type ReduceArgs,
+  type StreamEventInput,
 } from "./processor.js";
 import {
   completeWithOpenAi,
@@ -39,6 +46,8 @@ const PendingDelegation = z.object({
 });
 
 const AgentState = z.object({
+  /** Whether `agent/created` has landed on this path — the announcement runs until it has. */
+  created: z.boolean().default(false),
   /** Raised by `delegation-requested`, removed by the `commentary` that answers it; newest first.
    * The recovery ground: a pending row still here after an eviction is re-run. */
   pending: z.array(PendingDelegation).max(MAX_PENDING_DELEGATIONS).default([]),
@@ -51,6 +60,16 @@ const AgentContract = defineProcessorContract({
     "Answers the voice relay's delegations with one chat-model turn, on the conversation context beside it.",
   stateSchema: AgentState,
   events: {
+    "events.iterate.com/voice-agent/call-started": {
+      description:
+        "The press's birth of the call (the relay's event): consumed so the agent's first delivery is the press, not the first delegation.",
+      payloadSchema: z.looseObject({ activation: Activation, conversationId: z.string() }),
+    },
+    "events.iterate.com/agent/created": {
+      description:
+        "The agent's birth certificate (src/agent/contract.ts): cross-posted to / first, landed here last.",
+      payloadSchema: z.object({ path: z.string().min(1) }),
+    },
     "events.iterate.com/voice-agent/delegation-requested": {
       description: "The live model handed a request to the backend, with the words said so far.",
       payloadSchema: z.looseObject({
@@ -79,11 +98,19 @@ const AgentContract = defineProcessorContract({
     },
   },
   consumes: [
+    /* The press: the first delivery, so the birth is announced before any delegation. */
+    "events.iterate.com/voice-agent/call-started",
+    /* Its own certificate: consumed so the fold knows it is born. */
+    "events.iterate.com/agent/created",
     "events.iterate.com/voice-agent/delegation-requested",
     /* Its own answer: consumed so the pending row it settles leaves the fold. */
     "events.iterate.com/voice-agent/commentary",
   ],
-  emits: ["events.iterate.com/voice-agent/commentary", "events.iterate.com/voice-agent/thinking"],
+  emits: [
+    "events.iterate.com/agent/created",
+    "events.iterate.com/voice-agent/commentary",
+    "events.iterate.com/voice-agent/thinking",
+  ],
 });
 type AgentContract = typeof AgentContract;
 
@@ -94,6 +121,10 @@ type AgentArgs = ProcessEventArgs<AgentState, ConsumedEvent<AgentContract>>;
 export type AgentDeps = {
   complete: DelegationTurnDeps["complete"];
   runScript: DelegationTurnDeps["runScript"];
+  /** This context's path — the certificate's payload. */
+  contextPath: () => Promise<string>;
+  /** Append on `/`, the project's root — where the certificate is cross-posted. */
+  appendToRoot: (event: StreamEventInput) => Promise<unknown>;
 };
 
 class AgentProcessor extends StreamProcessor<AgentState, ConsumedEvent<AgentContract>> {
@@ -107,8 +138,14 @@ class AgentProcessor extends StreamProcessor<AgentState, ConsumedEvent<AgentCont
    * pass does not start a second turn for one already running. */
   readonly #turnsInFlight = new Set<string>();
 
+  /** Whether this incarnation's birth announcement is in flight (the durable ground is `created`). */
+  #announcing = false;
+
   reduce({ state, event }: ReduceArgs<AgentState, ConsumedEvent<AgentContract>>) {
     switch (event.type) {
+      case "events.iterate.com/agent/created":
+        return state.created ? state : { ...state, created: true };
+
       case "events.iterate.com/voice-agent/delegation-requested": {
         const { activation, delegationId, transcript } = event.payload;
         if (state.pending.some((row) => row.delegationId === delegationId)) return state;
@@ -139,10 +176,31 @@ class AgentProcessor extends StreamProcessor<AgentState, ConsumedEvent<AgentCont
      * caught up, so a live request answers with no added latency, and one that outlived an eviction
      * (its commentary never landed) re-runs here on the next catch-up. */
     if (!args.delivery.caughtUp) return;
+    if (!args.state.created && !this.#announcing) {
+      this.#announcing = true;
+      args.runInBackground(() => this.#announce(args.append));
+    }
     for (const pending of args.state.pending) {
       if (this.#turnsInFlight.has(pending.delegationId)) continue;
       this.#turnsInFlight.add(pending.delegationId);
       args.runInBackground(() => this.#answer(pending, args.append));
+    }
+  }
+
+  /** The birth certificate: `/` first (the catalog), this path last (the fold). Both keyed by path,
+   * so a retry after a failure, or an eviction between the two, appends nothing twice. */
+  async #announce(append: AgentArgs["append"]): Promise<void> {
+    try {
+      const path = await this.deps.contextPath();
+      const certificate = {
+        type: "events.iterate.com/agent/created",
+        idempotencyKey: `agent/created:${path}`,
+        payload: { path },
+      };
+      await this.deps.appendToRoot(certificate);
+      await append(certificate);
+    } finally {
+      this.#announcing = false;
     }
   }
 
@@ -181,6 +239,8 @@ class AgentProcessor extends StreamProcessor<AgentState, ConsumedEvent<AgentCont
 export class AgentDurableObject extends StreamProcessorDurableObject<AgentState> {
   processor = new AgentProcessor({
     complete: completeWithOpenAi,
+    contextPath: async () => (await this.withItx((itx) => itx.whoami())).path,
+    appendToRoot: (event) => this.withItx((itx) => itx.cd("/").append(event)),
     runScript: async (script) => {
       const itx = this.env.ITX.get() as unknown as { run(script: string): Promise<unknown> };
       try {

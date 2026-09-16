@@ -114,6 +114,11 @@ await bundleFacet(
   "PROJECT_PROCESSOR_SOURCE",
   "src/generated/project-processor-source.ts",
 );
+await bundleFacet(
+  "src/agent/durable-object.ts",
+  "AGENT_PROCESSOR_SOURCE",
+  "src/generated/agent-processor-source.ts",
+);
 
 // The hosted demo page: bundle src/client/demo.tsx (React + react-dom + the capnweb fork + the
 // useLiveState hook, all inlined — no CDN) into ONE module script, inline it in an HTML doc, and

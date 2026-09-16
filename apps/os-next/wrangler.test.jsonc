@@ -5,7 +5,7 @@
   //
   //  1. no "build" block: the plugin imports the worker through Vite (same isolate as the tests).
   //     The generated SDK bundle (src/generated/*) is built by vitest.global-setup.ts.
-  //  2. no `ai` binding (see the note by the bindings below); the in-process control plane's D1 +
+  //  2. no `ai` / `browser` binding (see the note by the bindings below); the in-process control plane's D1 +
   //     OAuth KV are fresh local namespaces with no schema — control-plane.test.ts applies
   //     control-plane.sql itself (the e2e lane does the same in its global-setup).
   //
@@ -22,11 +22,13 @@
     "global_fetch_strictly_public",
   ],
   "worker_loaders": [{ "binding": "LOADER" }],
-  // NO `ai` binding here, on purpose: Workers AI is REMOTE-ONLY in local dev, and vitest-pool-workers
-  // starts a remote proxy session for it at boot (an account to pick, a network to reach). The
-  // workers lane never calls `itx.ai`; the e2e lane boots from wrangler.jsonc (support/worker-config.ts)
-  // and carries the binding, and its AI tests shadow it locally / call it only against the deployed
-  // worker (e2e/ai-root-shadow-and-fable.e2e.test.ts). `env.AI` is undefined in this lane.
+  // NO `ai` or `browser` binding here, on purpose: Workers AI and Browser Run are REMOTE-ONLY in
+  // local dev, and vitest-pool-workers starts a remote proxy session for them at boot (an account to
+  // pick, a network to reach). The workers lane never calls `itx.ai` / `itx.browser`; the e2e lane
+  // boots from wrangler.jsonc (support/worker-config.ts) and carries the bindings, and its tests
+  // shadow them locally / call them only against the deployed worker
+  // (e2e/ai-root-shadow-and-fable.e2e.test.ts, e2e/browser-root.e2e.test.ts). `env.AI` and
+  // `env.BROWSER` are undefined in this lane.
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "durable_objects": {
     "bindings": [
