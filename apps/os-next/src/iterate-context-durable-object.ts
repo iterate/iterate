@@ -77,6 +77,7 @@ import {
   BUILT_IN_ROOTS,
 } from "./context/itx-expression-rewriting.ts";
 import { ITX_PRINCIPAL_HEADER, stampPrincipal, type Caller, type Principal } from "./principal.ts";
+import { signedFileUrl } from "./context/file-urls.ts";
 import {
   buildBuiltIns,
   type RewriteRuleListEntry,
@@ -464,6 +465,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     deployId: this.#appConfig.deployId,
     artifactsAccountId: this.#appConfig.artifactsAccountId,
     artifactsNamespace: this.#appConfig.artifactsNamespace,
+    signFileUrl: (input) =>
+      signedFileUrl({
+        ...input,
+        secret: this.#appConfig.sessionSecret.exposeSecret(),
+        platformOrigin: this.#appConfig.platformOrigin,
+        projectHostnameBase: this.#appConfig.projectHostnameBase,
+      }),
     secrets: () =>
       Object.entries(this.#stream.coreReducedState.secrets).map(([name, secret]) => ({
         name,

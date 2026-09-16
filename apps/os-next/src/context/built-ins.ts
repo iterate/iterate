@@ -82,13 +82,20 @@ export type SubscriptionListEntry = {
   halted?: { afterOffset: number; attempts: number; error?: string };
 };
 
-/** One stored object as `itx.r2` answers it: the key (owner prefix stripped), its size and metadata. */
+/** An `R2Object` as `itx.r2` answers it: every field the class carries, as data — the key with the
+ *  owner prefix stripped, dates as ISO strings, checksums as hex. */
 export type R2ObjectRecord = {
   key: string;
+  version: string;
   size: number;
-  contentType: string;
-  customMetadata: Record<string, string>;
+  etag: string;
+  httpEtag: string;
+  checksums: Record<string, string>;
   uploaded: string;
+  httpMetadata: R2HTTPMetadata;
+  customMetadata: Record<string, string>;
+  range?: R2Range;
+  storageClass: string;
 };
 
 /** THE built-in scope, as ONE interface — the clean-room's whole kernel surface; the library's verbs
@@ -112,19 +119,47 @@ export interface BuiltInScope extends LibraryRoots {
     delete(key: string): Promise<{ ok: true }>;
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
-  /** THE OBJECT STORE: the resource owner's slice of ONE R2 bucket (`FILES`), keys prefixed
-   *  `<owner.id>/` like kv's — the bucket's own verbs, answered as plain data (an R2 object is a
-   *  stream; over the wire it is its bytes). `itx.files` (library.ts) is the file semantics on top. */
+  /** THE OBJECT STORE: the R2 bucket binding, verbatim, on the resource owner's slice of ONE bucket
+   *  (`FILES`) — every key prefixed `<owner.id>/` as kv's are `<owner.id>:`, the prefix applied to
+   *  every key and `prefix`/`startAfter` option and stripped from every key and prefix answered.
+   *  The binding's own verbs, arguments and pagination (`list` is ONE page, with its cursor); what
+   *  cannot cross the wire is answered as data — an `R2Object` as its fields, a body as its bytes.
+   *  `presign` is the one verb the binding lacks: a signed URL on the project host (file-urls.ts),
+   *  a download or an upload, the platform serving the bytes itself — R2's own presigned URLs need
+   *  S3 credentials this worker does not hold. Multipart uploads are not here yet. */
   r2: {
+    head(key: string): Promise<R2ObjectRecord | null>;
+    get(
+      key: string,
+      options?: { range?: R2Range },
+    ): Promise<(R2ObjectRecord & { data: Uint8Array }) | null>;
     put(
       key: string,
-      data: Uint8Array | ArrayBuffer | string,
-      options?: { contentType?: string; customMetadata?: Record<string, string> },
-    ): Promise<{ key: string; size: number; etag: string }>;
-    get(key: string): Promise<(R2ObjectRecord & { data: Uint8Array }) | null>;
-    head(key: string): Promise<R2ObjectRecord | null>;
-    list(prefix?: string): Promise<{ objects: R2ObjectRecord[] }>;
-    delete(key: string): Promise<{ ok: true }>;
+      value: ArrayBuffer | ArrayBufferView | string | null,
+      options?: {
+        httpMetadata?: R2HTTPMetadata;
+        customMetadata?: Record<string, string>;
+        storageClass?: string;
+      },
+    ): Promise<R2ObjectRecord>;
+    delete(keys: string | string[]): Promise<void>;
+    list(options?: {
+      limit?: number;
+      prefix?: string;
+      cursor?: string;
+      delimiter?: string;
+      startAfter?: string;
+    }): Promise<{
+      objects: R2ObjectRecord[];
+      delimitedPrefixes: string[];
+      truncated: boolean;
+      cursor?: string;
+    }>;
+    presign(input: {
+      key: string;
+      method?: "GET" | "PUT";
+      expiresInSeconds?: number;
+    }): Promise<{ url: string; expiresAt: string }>;
   };
   /** The resource owner's secrets for egress (a project's; a global user's or organization's own —
    *  never a catalog shared across users) — each one its own Durable Object (secrets.ts,
@@ -297,14 +332,21 @@ type RootsAreTheSameSet = [Exclude<keyof BuiltInScope, "builtins">] extends [Bui
 const _rootsAreTheSameSet: RootsAreTheSameSet = true;
 void _rootsAreTheSameSet;
 
-/** An R2 object's head as `itx.r2` answers it, the owner prefix stripped off the key. */
+/** An `R2Object` as data, the owner prefix off its key. */
 function r2ObjectRecord(object: R2Object, prefix: string): R2ObjectRecord {
   return {
     key: object.key.slice(prefix.length),
+    version: object.version,
     size: object.size,
-    contentType: object.httpMetadata?.contentType || "application/octet-stream",
-    customMetadata: object.customMetadata || {},
+    etag: object.etag,
+    httpEtag: object.httpEtag,
+    // R2Checksums.toJSON: the hex forms — the class holds ArrayBuffers, which are not data over the wire.
+    checksums: object.checksums.toJSON() as Record<string, string>,
     uploaded: object.uploaded.toISOString(),
+    httpMetadata: object.httpMetadata || {},
+    customMetadata: object.customMetadata || {},
+    range: object.range,
+    storageClass: object.storageClass,
   };
 }
 
@@ -333,6 +375,14 @@ interface BuildBuiltInsDeps {
   /** The Artifacts account + namespace `itx.cfArtifacts` names git remotes with (worker.ts `AppConfig`). */
   artifactsAccountId: string;
   artifactsNamespace: string;
+  /** A signed file URL on the project host (file-urls.ts `signedFileUrl`, closed over the app
+   *  config's secret and hosts) — `itx.r2.presign`. */
+  signFileUrl: (input: {
+    project: string;
+    key: string;
+    method: "GET" | "PUT";
+    expiresInSeconds?: number;
+  }) => Promise<{ url: string; expiresAt: string }>;
   /** The secrets catalog — names, pins and strategy kinds, from the core reduce (strongly
    *  consistent; never a value). */
   secrets: () => SecretCatalogEntry[];
@@ -457,39 +507,44 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       },
     },
     r2: {
-      put: async (key, data, options = {}) => {
-        const object = await env.FILES.put(r2Prefix + key, data, {
-          httpMetadata: { contentType: options.contentType || "application/octet-stream" },
-          customMetadata: options.customMetadata || {},
-        });
-        return { key, size: object.size, etag: object.etag };
+      head: async (key) => {
+        const object = await env.FILES.head(r2Prefix + key);
+        return object ? r2ObjectRecord(object, r2Prefix) : null;
       },
-      get: async (key) => {
-        const object = await env.FILES.get(r2Prefix + key);
+      get: async (key, options = {}) => {
+        const object = await env.FILES.get(r2Prefix + key, options);
         if (!object) return null;
         return {
           ...r2ObjectRecord(object, r2Prefix),
           data: new Uint8Array(await object.arrayBuffer()),
         };
       },
-      head: async (key) => {
-        const object = await env.FILES.head(r2Prefix + key);
-        return object ? r2ObjectRecord(object, r2Prefix) : null;
+      put: async (key, value, options = {}) =>
+        r2ObjectRecord(await env.FILES.put(r2Prefix + key, value, options), r2Prefix),
+      delete: (keys) =>
+        env.FILES.delete(
+          typeof keys === "string" ? r2Prefix + keys : keys.map((key) => r2Prefix + key),
+        ),
+      list: async (options = {}) => {
+        const page = await env.FILES.list({
+          ...options,
+          prefix: r2Prefix + (options.prefix || ""),
+          ...(options.startAfter && { startAfter: r2Prefix + options.startAfter }),
+        });
+        return {
+          objects: page.objects.map((object) => r2ObjectRecord(object, r2Prefix)),
+          delimitedPrefixes: page.delimitedPrefixes.map((prefix) => prefix.slice(r2Prefix.length)),
+          truncated: page.truncated,
+          ...(page.truncated && { cursor: page.cursor }),
+        };
       },
-      list: async (prefix = "") => {
-        // Paginate on the cursor, as kv does: one R2 page is at most 1000 objects.
-        const objects: R2ObjectRecord[] = [];
-        for (let cursor: string | undefined; ; ) {
-          const page = await env.FILES.list({ prefix: r2Prefix + prefix, cursor });
-          for (const object of page.objects) objects.push(r2ObjectRecord(object, r2Prefix));
-          if (!page.truncated) return { objects };
-          cursor = page.cursor;
-        }
-      },
-      delete: async (key) => {
-        await env.FILES.delete(r2Prefix + key);
-        return { ok: true };
-      },
+      presign: (input) =>
+        deps.signFileUrl({
+          project: owner.id,
+          key: input.key,
+          method: input.method || "GET",
+          expiresInSeconds: input.expiresInSeconds,
+        }),
     },
     secrets: {
       set: (name, material, options) =>

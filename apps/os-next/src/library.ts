@@ -129,10 +129,11 @@ export interface LibraryRoots {
   };
   /** THE FILES (apps/os's `itx.files`, lean): project file storage as a PATH namespace over `itx.r2`
    *  — a file is its path (leading slash), its bytes and a content type; last write wins, no
-   *  events, no URLs (a model gets an image's bytes as a data: URL; a script reads them with
-   *  `bytes()`). `get(path)` is a handle: `.put({ contentType, data })` (data: bytes, or a string that
-   *  is base64 or a `data:` URL) → the record, `.bytes()`, `.head()` (null when absent), `.delete()`.
-   *  `list(prefix?)` is what apps/os lacks and an agent needs: the records under a prefix. */
+   *  events. `get(path)` is a handle: `.put({ contentType, data })` (data: bytes, or a string that
+   *  is base64 or a `data:` URL) → the record, `.bytes()`, `.head()` (null when absent), `.delete()`,
+   *  and `.url({ method?, expiresInSeconds? })` — a signed URL on the project host that downloads
+   *  (`GET`, the default) or uploads (`PUT`) the file, `itx.r2.presign` underneath. `list(prefix?)`
+   *  is what apps/os lacks and an agent needs: the records under a prefix. */
   files: {
     get(path: string): InvokeHandle & FileHandle;
     list(prefix?: string): Promise<FileRecord[]>;
@@ -149,7 +150,11 @@ export type FileHandle = {
   }): Promise<FileRecord>;
   bytes(): Promise<Uint8Array>;
   head(): Promise<FileRecord | null>;
-  delete(): Promise<{ ok: true }>;
+  delete(): Promise<void>;
+  url(input?: {
+    method?: "GET" | "PUT";
+    expiresInSeconds?: number;
+  }): Promise<{ url: string; expiresAt: string }>;
 };
 
 /** What a repo handle's dotted members reach: the repo facet's own methods. */
@@ -224,12 +229,16 @@ export function buildLibrary(itx: LibraryItx): {
       },
       files: {
         get: (path) => fileHandle(itx, path),
-        list: async (prefix = "") =>
-          (await itx.r2.list(fileKey(prefix))).objects.map((object) => ({
-            path: `/${object.key}`,
-            contentType: object.contentType,
-            size: object.size,
-          })),
+        list: async (prefix = "") => {
+          // Every page: the semantic layer answers the whole set under a prefix.
+          const records: FileRecord[] = [];
+          for (let cursor: string | undefined; ; ) {
+            const page = await itx.r2.list({ prefix: fileKey(prefix), cursor });
+            for (const object of page.objects) records.push(fileRecord(object));
+            if (!page.truncated) return records;
+            cursor = page.cursor;
+          }
+        },
       },
       agents: {
         get: (path) => agentHandle(itx, path),
@@ -366,24 +375,30 @@ function fileBytes(data: Uint8Array | ArrayBuffer | string): {
   return { bytes, ...(dataUrl?.[1] && { contentType: dataUrl[1] }) };
 }
 
+/** A stored object as a file record: its key as a path, its content type from the HTTP metadata. */
+const fileRecord = (object: {
+  key: string;
+  size: number;
+  httpMetadata: { contentType?: string };
+}): FileRecord => ({
+  path: `/${object.key}`,
+  contentType: object.httpMetadata.contentType || "application/octet-stream",
+  size: object.size,
+});
+
 /** The file at `path`: every dotted member is one of the handle's verbs over `itx.r2`. */
 function fileHandle(itx: LibraryItx, path: string): InvokeHandle & FileHandle {
   const key = fileKey(path);
-  const record = (object: { size: number; contentType: string }): FileRecord => ({
-    path: `/${key}`,
-    contentType: object.contentType,
-    size: object.size,
-  });
   const verbs: FileHandle = {
     put: async (input) => {
       const { bytes, contentType } = fileBytes(input.data);
-      const stored = await itx.r2.put(key, bytes, {
-        contentType: input.contentType || contentType || "application/octet-stream",
-      });
-      return record({
-        size: stored.size,
-        contentType: input.contentType || contentType || "application/octet-stream",
-      });
+      return fileRecord(
+        await itx.r2.put(key, bytes, {
+          httpMetadata: {
+            contentType: input.contentType || contentType || "application/octet-stream",
+          },
+        }),
+      );
     },
     bytes: async () => {
       const object = await itx.r2.get(key);
@@ -392,15 +407,16 @@ function fileHandle(itx: LibraryItx, path: string): InvokeHandle & FileHandle {
     },
     head: async () => {
       const object = await itx.r2.head(key);
-      return object ? record(object) : null;
+      return object ? fileRecord(object) : null;
     },
     delete: () => itx.r2.delete(key),
+    url: (input = {}) => itx.r2.presign({ key, ...input }),
   };
   return new InvokeHandle(async (itxExpressionSteps) => {
     const [step, ...rest] = itxExpressionSteps;
     if (rest.length > 0 || !Array.isArray(step) || !(step[0] in verbs))
       throw new Error(
-        `files.get(path): one of put({ contentType, data }) · bytes() · head() · delete(), got ${print(itxExpressionSteps)}`,
+        `files.get(path): one of put({ contentType, data }) · bytes() · head() · delete() · url({ method?, expiresInSeconds? }), got ${print(itxExpressionSteps)}`,
       );
     const [verb, ...args] = step as [keyof FileHandle, ...unknown[]];
     // The verb's argument is wire-fed (an InvokeHandle's steps carry no validation); each verb
