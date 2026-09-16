@@ -7,53 +7,57 @@ import { expect, test } from "vitest";
 import { createMainPreview } from "./target.ts";
 import { run } from "./preview.ts";
 
-test("a main preview pins its checkout and records state without a PR", async () => {
-  using repo = repository();
-  const workflow = parseYaml(
-    readFileSync(
-      resolve(import.meta.dirname, "../../.depot/workflows/cloudflare-main-preview.yml"),
-      "utf8",
-    ),
-  );
-  expect(workflow).toMatchObject({
-    concurrency: { group: "cloudflare-main-preview", "cancel-in-progress": false },
-    on: { push: { branches: ["main"] } },
-  });
-  expect(workflow.jobs.preview).toBeDefined();
-  repo.preview.environment.GITHUB_WORKFLOW = workflow.name;
-  const { run, report } = createMainPreview(repo.preview);
-  expect(run).toMatchObject({
-    headSha: repo.sha,
-    branch: "main",
-    holder: "main-preview",
-    pullRequestNumber: null,
-  });
-  await report.update((state) => ({ ...state, notice: "Tests failed" }));
-  await report.update((state) => ({
-    ...state,
-    environmentConfigLease: { slug: "preview-8", dopplerConfig: "preview_8" },
-    apps: {
-      os: {
-        appSlug: "os",
-        appDisplayName: "OS",
-        status: "awaiting-tests",
-        updatedAt: new Date().toISOString(),
-        headSha: repo.sha,
-        publicUrl: "https://os.iterate-preview-8.com",
+test.each(["prepare", "apps", "playwright", "finish"])(
+  "main preview job %s pins its checkout and records state without a PR",
+  async (job) => {
+    using repo = repository();
+    const workflow = parseYaml(
+      readFileSync(
+        resolve(import.meta.dirname, "../../.depot/workflows/cloudflare-main-preview.yml"),
+        "utf8",
+      ),
+    );
+    expect(workflow).toMatchObject({
+      concurrency: { group: "cloudflare-main-preview", "cancel-in-progress": false },
+      on: { push: { branches: ["main"] } },
+    });
+    expect(workflow.jobs.preview).toMatchObject({ uses: "./.depot/workflows/preview-run.yml" });
+    repo.preview.environment.GITHUB_JOB = job;
+    repo.preview.environment.GITHUB_WORKFLOW = workflow.name;
+    const { run, report } = createMainPreview(repo.preview);
+    expect(run).toMatchObject({
+      headSha: repo.sha,
+      branch: "main",
+      holder: "main-preview",
+      pullRequestNumber: null,
+    });
+    await report.update((state) => ({ ...state, notice: "Tests failed" }));
+    await report.update((state) => ({
+      ...state,
+      environmentConfigLease: { slug: "preview-8", dopplerConfig: "preview_8" },
+      apps: {
+        os: {
+          appSlug: "os",
+          appDisplayName: "OS",
+          status: "awaiting-tests",
+          updatedAt: new Date().toISOString(),
+          headSha: repo.sha,
+          publicUrl: "https://os.iterate-preview-8.com",
+        },
       },
-    },
-  }));
-  expect(report.state).toMatchObject({ notice: "Tests failed" });
-  expect(
-    JSON.parse(readFileSync(join(repo.path, "test-results/main-preview-state.json"), "utf8")),
-  ).toMatchObject({
-    headSha: repo.sha,
-    state: { notice: "Tests failed", environmentConfigLease: { slug: "preview-8" } },
-  });
-  // A separate command must recover the deployment, not start an empty report.
-  const resumed = createMainPreview(repo.preview);
-  expect(resumed.report.state).toEqual(report.state);
-});
+    }));
+    expect(report.state).toMatchObject({ notice: "Tests failed" });
+    expect(
+      JSON.parse(readFileSync(join(repo.path, "test-results/main-preview-state.json"), "utf8")),
+    ).toMatchObject({
+      headSha: repo.sha,
+      state: { notice: "Tests failed", environmentConfigLease: { slug: "preview-8" } },
+    });
+    // A separate command must recover the deployment, not start an empty report.
+    const resumed = createMainPreview(repo.preview);
+    expect(resumed.report.state).toEqual(report.state);
+  },
+);
 
 test.each([
   { DEPOT_JOB_URL: "https://depot.dev/jobs/next" },

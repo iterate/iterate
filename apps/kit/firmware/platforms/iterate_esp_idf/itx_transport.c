@@ -698,10 +698,14 @@ static void send_control_messages(
 }
 
 /*
- * Fleet forensics on the upgrade request itself: which radio conditions and
- * which build dialed. Written before every open so RSSI is this handshake's,
- * not boot's; the server reads them before the first Cap'n Web frame exists.
- * Failure here must never block dialing — a blank header beats no socket.
+ * THE CREDENTIAL RIDES THE UPGRADE. os-next gates `/api` with its OAuth
+ * provider: the blob's key is a personal access token the Kit page minted,
+ * sent as `Authorization: Bearer`, and the provider resolves it before the
+ * first Cap'n Web frame exists — the session then only asks for what the
+ * gate resolved (itx_mount.c). The rest is fleet forensics: which radio
+ * conditions and which build dialed, written before every open so RSSI is
+ * this handshake's, not boot's. Failure here must never block dialing — a
+ * blank header beats no socket.
  */
 static void refresh_handshake_headers(
     struct iterate_kit_esp_idf_itx_transport *transport) {
@@ -715,9 +719,11 @@ static void refresh_handshake_headers(
   (void)snprintf(
       transport->websocket_headers,
       sizeof(transport->websocket_headers),
+      "Authorization: Bearer %s\r\n"
       "X-Iterate-Mac: %02x:%02x:%02x:%02x:%02x:%02x\r\n"
       "X-Iterate-Fw: %s\r\n"
       "X-Wifi-Rssi: %d\r\n",
+      transport->options.configuration->project_api_key,
       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
       esp_app_get_description()->version,
       rssi);

@@ -467,7 +467,7 @@ test("row isolation — one halted row never blocks its neighbor", async () => {
   expect([...good.offsets()].sort((a, b) => a - b)).toEqual([m1.offset, m2.offset]); // no dups
 });
 
-test("cursor subscriptions enable no processor and mint no facet; a row appears per name, cursor-less until a delivery", async () => {
+test("cursor subscriptions enable no processor and mint no facet; a row appears per name, its cursor at rest at its configure offset until a delivery", async () => {
   // The cursor lane is kernel code in the DO over its own kv and alarm — nothing to auto-enable,
   // nothing to list as a processor.
   const itx = openItx(freshCtx("auto"));
@@ -484,8 +484,11 @@ test("cursor subscriptions enable no processor and mint no facet; a row appears 
   // the config-worker funnel's birth subscription rides alongside the three under test
   expect(listed.map((r) => r.name).sort()).toEqual(["auto-1", "auto-2", "auto-3", "config"]);
   for (const r of listed) {
-    if (r.name === "config") continue; // config consumes '*' and delivers, so it owns a cursor; the three under test consume "never"
-    expect(r.cursor).toBeUndefined(); // nothing consumed yet ⇒ nothing delivered ⇒ no cursor row
+    if (r.name === "config") continue; // config consumes '*' and delivers; the three under test consume "never"
+    // Nothing consumed yet ⇒ nothing delivered: the cursor sits at rest (attempt 0) — a durable
+    // commit a row does not consume (its own configure included) moves its cursor along without a
+    // call, so the row is never behind the durable mark and never a claim on the alarm.
+    expect(r.cursor).toMatchObject({ attempt: 0 });
     expect(r.halted).toBeUndefined();
   }
   // and the core snapshot's subscription rows are the same truth, as reduced state
@@ -502,8 +505,8 @@ test("subscribe resolves without probing the receiver; an unusable target fails 
   // A deliberate non-guarantee, kept on purpose (apps/os documents the same one): configure appends
   // the row and returns — "the receiver learns about the subscription when its first copy arrives".
   // A fat-fingered target therefore fails LATE: the loop fails to evaluate `itx.does-not-exist` on
-  // the first consumed commit (NO_ITX_EXPRESSION_MATCH, a reported issue), and — the head never
-  // evaluating — the row never grows a cursor and never halts.
+  // the first consumed commit (NO_ITX_EXPRESSION_MATCH) and the row DANGLES — its cursor stays at
+  // rest (no rung, no claim on the alarm) and it never halts: it waits for its rule.
   const itx = openItx(freshCtx("noverify"));
   const sub = await itx.subscribe({
     name: "unusable",
@@ -515,7 +518,7 @@ test("subscribe resolves without probing the receiver; an unusable target fails 
   await sleep(800);
   const r = await row(itx, "unusable");
   expect(r).not.toBeNull(); // the row stands…
-  expect(r.cursor).toBeUndefined(); // …with no cursor (the head never evaluated)…
+  expect(r.cursor).toMatchObject({ attempt: 0 }); // …its cursor at rest (no rung: a wait, not a failure)…
   expect(r.halted).toBeUndefined(); // …and no halt fact for an operator to find
 });
 

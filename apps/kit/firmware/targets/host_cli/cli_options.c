@@ -85,7 +85,7 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    "required)\n"},
   {"--name", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_NAME,
    "ITERATE_KIT_CAPABILITY_NAME",
-   "  --name NAME           Mount capability as kit.NAME "
+   "  --name NAME           Provide capability at itx.clients.NAME "
    "(ITERATE_KIT_CAPABILITY_NAME; default host)\n"},
   {"--speaker-wav", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_SPEAKER_WAV,
    NULL,
@@ -176,7 +176,7 @@ static void cli_options_fill_defaults(struct cli_options *out);
 /**
  * Whether `name` can be a capability mount segment.
  *
- * ORIGINATING FAILURE. The name becomes `kit.<name>`, and a hyphen in it is
+ * ORIGINATING FAILURE. The name becomes `itx.clients.<name>`, and a hyphen is
  * rejected by the platform as an invalid argument. The rig did not find out
  * until the Cap'n Web mount failed five seconds into the run, reporting
  * `capnweb=-1` and a URL — nothing about names, nothing about which argument.
@@ -431,7 +431,7 @@ static enum cli_options_status cli_options_check(
   if (out->name != NULL && !cli_options_name_is_mountable(out->name)) {
     cli_options_note(
         problem, problem_bytes,
-        "--name becomes the mount kit.<name>: use a-z, 0-9 or _ only");
+        "--name becomes itx.clients.<name>: use a-z, 0-9 or _ only");
     return CLI_OPTIONS_ERR_INCOMPATIBLE;
   }
   /*

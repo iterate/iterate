@@ -21,8 +21,10 @@ enum {
   ITERATE_KIT_OS_BASE_URL_CAPACITY = 129,
   ITERATE_KIT_PROJECT_ID_CAPACITY = 65,
   ITERATE_KIT_PROJECT_API_KEY_CAPACITY = 129,
+  /* "https://" (8) becomes "wss://" (6) and the fixed operator path
+   * "/api" (4) is appended: two bytes more than the base URL. */
   ITERATE_KIT_ITX_WEBSOCKET_URL_CAPACITY =
-      ITERATE_KIT_OS_BASE_URL_CAPACITY + 2,
+      ITERATE_KIT_OS_BASE_URL_CAPACITY + 11,
 };
 
 /**
@@ -69,7 +71,10 @@ enum iterate_kit_configuration_error iterate_kit_configuration_decode(
 
 /**
  * Converts a validated HTTP(S) OS base URL to the corresponding WS(S) `/api`
- * endpoint in caller-owned storage. The destination is cleared on error.
+ * endpoint in caller-owned storage. That is os-next's public door: its OAuth
+ * gate resolves the blob's key, sent as `Authorization: Bearer` on the
+ * upgrade, before the first Cap'n Web frame. The destination is cleared on
+ * error.
  * Source and destination may not alias because an in-place prefix contraction
  * would make partial failure semantics ambiguous.
  */

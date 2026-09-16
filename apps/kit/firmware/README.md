@@ -48,9 +48,11 @@ Reuse the shared I2S codec, session grammar, LED ring, playout and health path.
 
 Confirm from vendor source, then measure: microphone slot and sample shape,
 clock master/MCLK, GPIO polarity, amplifier polarity, gain, DMA sizes, and AEC
-reference. Give a new board a stable `facts.device_name`; firmware derives its
-client `/clients/<device_name>` and conversation namespace
-`/agents/voice/v23/<device_name>` from it.
+reference. Give a new board a stable `facts.device_name`; firmware derives the
+itx expression it answers, `itx.clients.<device_name>` (every character outside
+`[A-Za-z0-9_]` replaced by `_`, because the far end spells that name in
+JavaScript), and its conversation namespace `/agents/voice/v23/<device_name>`
+from it.
 
 Register the board once in `apps/kit/src/firmware/catalog.ts`: device identity,
 ESP-IDF target, chip and flash plan, including its configuration partition.
@@ -85,12 +87,35 @@ The browser then writes Wi-Fi, OS URL, canonical project
 ID and project API key into the versioned `iterate_kit` partition on the
 connected board. Credentials never enter the Kit worker or a URL.
 
-At boot, firmware rejects a missing or invalid partition, joins Wi-Fi,
-authenticates with the project key and mounts `/clients/<device_name>`. Health
-classifies provisioning, Wi-Fi/authentication, mount and audio failures.
+To write that partition by hand instead — which is how an os-next bench board
+is provisioned — use `tools/make-config-image.py`. Its `--offset-for <target>`
+reads the offset out of the target's own partition CSV; assuming one corrupts
+the application and leaves the board looking absent rather than offline.
+
+```sh
+python3 tools/make-config-image.py \
+  --wifi-ssid <ssid> --wifi-password <password> \
+  --os-base-url https://os.iterate2.com \
+  --project-id prj-voice --project-api-key "$OPERATOR_SECRET" \
+  --out /tmp/cfg.bin
+python -m esptool --chip esp32s3 -p /dev/cu.usbmodem2101 \
+  write_flash "$(python3 tools/make-config-image.py --offset-for havpe)" /tmp/cfg.bin
+```
+
+At boot, firmware rejects a missing or invalid partition, joins Wi-Fi and
+mounts. Health classifies provisioning, Wi-Fi/authentication, mount and audio
+failures.
+
+The device dials `wss://<os base url host>/api` — os-next's public door — with
+the blob's key as `Authorization: Bearer` on the upgrade: a personal access
+token the Kit page minted for the person who set the device up, scoped to the
+one project, revocable from that person's sessions list. The blob's project id
+is a bare DNS-safe slug (`prj-voice`). The mount's three calls, the subscription shape
+and the delivery contract are documented where they live:
+`components/core/include/iterate/kit/itx_mount.h` and `stream_subscription.h`.
 
 The device keeps one authenticated WebSocket and Cap'n Web session. Stream
-`openConnection()` and live-state `subscribe()` create independent subscription
+`subscribe()` and live-state `subscribe()` create independent subscription
 handles on that session; neither means opening another WebSocket. Releasing a
 subscription must leave the session, device mount and other subscriptions alive.
 

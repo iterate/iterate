@@ -180,6 +180,5 @@ export function nodeSqliteDurableObjectStorage(): DurableObjectStorageSlice {
         throw error;
       }
     },
-    setAlarm: async () => {},
   };
 }

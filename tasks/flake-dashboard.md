@@ -26,6 +26,6 @@ Design decisions were grilled and approved 2026-09-01; see `tasks/create-flake.m
 
 ## Follow-ups
 
-- [ ] Wire the remaining lanes (preview e2e in `cloudflare-previews.yml`, playwright specs) with the same env + post-step recipe
+- [ ] Wire the remaining lanes (preview e2e in `preview.yml`, playwright specs) with the same env + post-step recipe
 - [ ] The transition-acting agent: consume `transition-proposed`, apply the file-edit guard (streak only trustworthy if the test file didn't change during it — the fold can't see git history), and open the unwrap / switch-to-`failing` PR via the GitHub capability
 - [ ] Monthly sentinel roll: when a sentinel's month ends the unwrap proposal fires — roll it forward instead of merging the unwrap

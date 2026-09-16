@@ -5,12 +5,11 @@
 
 #include <string.h>
 
-static const char *const streams_get_path[] = {"streams", "get"};
+static const char *const context_cd_path[] = {"cd"};
 static const char *const append_path[] = {"append"};
-static const char *const open_connection_path[] = {"openConnection"};
+static const char *const subscribe_path[] = {"subscribe"};
 static const char *const live_state_subscribe_path[] = {"liveState", "subscribe"};
 static const char *const unsubscribe_path[] = {"unsubscribe"};
-static const char *const close_path[] = {"close"};
 
 static bool take_capability(
     const struct capnweb_result *result,
@@ -70,33 +69,52 @@ static void callback_disposed(void *context) {
   }
 }
 
+/*
+ * THE CALLEE IS THE STUB ITSELF, AND IT TAKES TWO ARGUMENTS. os-next evaluates
+ * a lent target whose last step is a call, so `method` is undefined and the
+ * wire call carries an EMPTY path — which is why nothing here reads
+ * `call->path`. The argument shape is in stream_subscription.h.
+ */
 static enum capnweb_status callback_dispatch(
     void *context,
     const struct capnweb_call *call,
     struct capnweb_reply *reply) {
   struct iterate_kit_stream_subscription *const subscription = context;
   struct capnweb_value update;
+  struct capnweb_value range;
   if (subscription != NULL &&
       (subscription->state == ITERATE_KIT_SUBSCRIPTION_OPENING ||
        subscription->state == ITERATE_KIT_SUBSCRIPTION_OPEN) &&
       subscription->on_update != NULL && call->has_arguments &&
       capnweb_value_array_at(&call->arguments, 0U, &update)) {
+    const bool has_range =
+        capnweb_value_array_at(&call->arguments, 1U, &range);
     subscription->on_update(
-        subscription->owner, subscription->owner_epoch, &update);
+        subscription->owner, subscription->owner_epoch, &update,
+        has_range ? &range : NULL);
   }
+  /* Protocol hygiene, never back-pressure: delivery is fire-and-forget (the
+   * contract is in stream_subscription.h) and nobody waits for this reply. */
   return capnweb_reply_set_null(reply);
 }
 
+/*
+ * RELEASING A SUBSCRIPTION HANDLE IS HOW IT CLOSES. os-next's handle has no
+ * `close()`: a Cap'n Web release triggers its `Symbol.dispose`, which un-sets
+ * the row. Calling a method that is not there would reject, and a rejection on
+ * this client is indistinguishable from a network fault. Live state still has
+ * an explicit `unsubscribe`, so that kind keeps its one-way call.
+ */
 static enum capnweb_status close_handle(
     struct iterate_kit_stream_subscription *subscription) {
-  const char *const *path = subscription->kind == ITERATE_KIT_SUBSCRIPTION_LIVE_STATE
-      ? unsubscribe_path : close_path;
-  const size_t path_count = subscription->kind == ITERATE_KIT_SUBSCRIPTION_LIVE_STATE
-      ? sizeof(unsubscribe_path) / sizeof(unsubscribe_path[0])
-      : sizeof(close_path) / sizeof(close_path[0]);
-  const enum capnweb_status close_status = capnweb_session_call_oneway_path(
-      subscription->session, subscription->handle, path, path_count, "[]", 2U);
-  const enum capnweb_status release_status = capnweb_session_release_remote(
+  enum capnweb_status close_status = CAPNWEB_OK;
+  enum capnweb_status release_status;
+  if (subscription->kind == ITERATE_KIT_SUBSCRIPTION_LIVE_STATE) {
+    close_status = capnweb_session_call_oneway_path(
+        subscription->session, subscription->handle, unsubscribe_path,
+        sizeof(unsubscribe_path) / sizeof(unsubscribe_path[0]), "[]", 2U);
+  }
+  release_status = capnweb_session_release_remote(
       subscription->session, subscription->handle);
   if (release_status == CAPNWEB_OK) subscription->has_handle = false;
   return close_status == CAPNWEB_OK ? release_status : close_status;
@@ -228,8 +246,8 @@ enum capnweb_status iterate_kit_stream_get(
   stream->get.stream = stream;
   stream->get.session = session;
   status = capnweb_session_call_expressions(
-      session, project, streams_get_path,
-      sizeof(streams_get_path) / sizeof(streams_get_path[0]), &argument, 1U,
+      session, project, context_cd_path,
+      sizeof(context_cd_path) / sizeof(context_cd_path[0]), &argument, 1U,
       stream_get_completed, &stream->get);
   if (status != CAPNWEB_OK) {
     stream->get.pending = false;
@@ -265,63 +283,60 @@ enum capnweb_status iterate_kit_stream_close(struct iterate_kit_stream *stream) 
 enum capnweb_status iterate_kit_stream_subscription_open(
     struct iterate_kit_stream_subscription *subscription,
     struct iterate_kit_stream *stream,
-    const char *connection_key,
-    const char *const *event_types,
-    size_t event_type_count,
-    int64_t max_delivery_events,
-    int64_t max_delivery_bytes,
+    const char *subscription_name,
+    const char *const *consumed_event_types,
+    size_t consumed_event_type_count,
     iterate_kit_subscription_update_fn on_update,
     void *owner,
     uint32_t owner_epoch) {
   struct capnweb_expression type_items[8];
-  struct capnweb_expression types;
-  struct capnweb_expression key;
-  struct capnweb_expression max_events;
-  struct capnweb_expression max_bytes;
-  struct capnweb_expression no_state;
-  struct capnweb_expression callback;
-  struct capnweb_object_field fields[6];
+  struct capnweb_expression consumes;
+  struct capnweb_expression name;
+  struct capnweb_expression target;
+  struct capnweb_object_field fields[3];
   struct capnweb_expression argument;
   enum capnweb_status status;
   size_t index;
   if (stream == NULL || stream->state != ITERATE_KIT_STREAM_READY ||
-      !stream->has_capability || connection_key == NULL || connection_key[0] == '\0' ||
-      event_types == NULL || event_type_count == 0U ||
-      event_type_count > sizeof(type_items) / sizeof(type_items[0])) return CAPNWEB_E_INVALID_ARGUMENT;
-  for (index = 0U; index < event_type_count; ++index) {
-    if (event_types[index] == NULL || event_types[index][0] == '\0') {
+      !stream->has_capability || subscription_name == NULL ||
+      subscription_name[0] == '\0' || consumed_event_types == NULL ||
+      consumed_event_type_count == 0U ||
+      consumed_event_type_count > sizeof(type_items) / sizeof(type_items[0])) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
+  }
+  for (index = 0U; index < consumed_event_type_count; ++index) {
+    if (consumed_event_types[index] == NULL ||
+        consumed_event_types[index][0] == '\0') {
       return CAPNWEB_E_INVALID_ARGUMENT;
     }
   }
   status = prepare_subscription(subscription, stream->session,
       ITERATE_KIT_SUBSCRIPTION_STREAM, on_update, owner, owner_epoch);
   if (status != CAPNWEB_OK) return status;
-  for (index = 0U; index < event_type_count; ++index) {
+  for (index = 0U; index < consumed_event_type_count; ++index) {
     type_items[index] = (struct capnweb_expression){CAPNWEB_EXPRESSION_STRING,
-        {.string = {event_types[index], strlen(event_types[index])}}};
+        {.string = {consumed_event_types[index],
+                    strlen(consumed_event_types[index])}}};
   }
-  types = (struct capnweb_expression){CAPNWEB_EXPRESSION_ARRAY,
-      {.array = {type_items, event_type_count}}};
-  key = (struct capnweb_expression){CAPNWEB_EXPRESSION_STRING,
-      {.string = {connection_key, strlen(connection_key)}}};
-  max_events = (struct capnweb_expression){CAPNWEB_EXPRESSION_INT64,
-      {.integer = max_delivery_events}};
-  max_bytes = (struct capnweb_expression){CAPNWEB_EXPRESSION_INT64,
-      {.integer = max_delivery_bytes}};
-  no_state = (struct capnweb_expression){CAPNWEB_EXPRESSION_BOOLEAN,
-      {.boolean = false}};
-  callback = (struct capnweb_expression){CAPNWEB_EXPRESSION_CAPABILITY,
+  consumes = (struct capnweb_expression){CAPNWEB_EXPRESSION_ARRAY,
+      {.array = {type_items, consumed_event_type_count}}};
+  name = (struct capnweb_expression){CAPNWEB_EXPRESSION_STRING,
+      {.string = {subscription_name, strlen(subscription_name)}}};
+  /*
+   * THE CAPABILITY IS THE TARGET, not a named member of the argument object.
+   * os-next looks at what `target` evaluates to: a live stub owns its own
+   * progress and is pushed to directly, which is what makes the callback a
+   * bare two-argument function rather than a `processEventBatch` method.
+   */
+  target = (struct capnweb_expression){CAPNWEB_EXPRESSION_CAPABILITY,
       {.capability = subscription->callback}};
-  fields[0] = (struct capnweb_object_field){{"connectionKey", 13U}, &key};
-  fields[1] = (struct capnweb_object_field){{"eventTypes", 10U}, &types};
-  fields[2] = (struct capnweb_object_field){{"maxDeliveryEvents", 17U}, &max_events};
-  fields[3] = (struct capnweb_object_field){{"maxDeliveryBytes", 16U}, &max_bytes};
-  fields[4] = (struct capnweb_object_field){{"state", 5U}, &no_state};
-  fields[5] = (struct capnweb_object_field){{"processEventBatch", 17U}, &callback};
+  fields[0] = (struct capnweb_object_field){{"name", 4U}, &name};
+  fields[1] = (struct capnweb_object_field){{"consumes", 8U}, &consumes};
+  fields[2] = (struct capnweb_object_field){{"target", 6U}, &target};
   argument = (struct capnweb_expression){CAPNWEB_EXPRESSION_OBJECT,
-      {.object = {fields, 6U}}};
+      {.object = {fields, 3U}}};
   return call_subscription_open(subscription, stream->capability,
-      open_connection_path, sizeof(open_connection_path) / sizeof(open_connection_path[0]),
+      subscribe_path, sizeof(subscribe_path) / sizeof(subscribe_path[0]),
       &argument, 1U);
 }
 

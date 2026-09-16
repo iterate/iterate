@@ -1,0 +1,95 @@
+# Preview deploy + e2e on open/reopen/synchronize lives here on Depot CI;
+# cleanup on close lives in cloudflare-preview-cleanup.yml. Depot CI picks up
+# jobs in ~7s where GitHub Actions runner assignment took 20s-3m39s (measured
+# 2026-07-02, once ~40min during a webhook incident).
+#
+# Cleanup is a SEPARATE workflow because every run of a workflow re-emits all
+# of its job check names on the head SHA: when deploy and cleanup shared this
+# file with complementary `if:`s, the `closed`-event run re-reported
+# "Preview / deploy + e2e" as skipped, clobbering the earlier success on every
+# merged PR (GitHub displays the latest check run per name). The two workflows
+# still coordinate through the same concurrency groups (copied verbatim in the
+# cleanup file): closing a PR mid-deploy cancels the in-flight deploy run
+# (cancel-in-progress on the shared workflow-level group) and the job-level
+# lifecycle group serializes whatever remains. The two never race the same
+# preview slot.
+#
+# Depot registers automatic triggers when this file is on the default branch —
+# branch-only changes to the `on:` block do not take effect until merged. Test
+# a branch with:
+#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+#     --workflow preview.yml --ref <branch> \
+#     --input pull-request-number=<pr>
+#
+# The only Depot secret is DOPPLER_TOKEN. GitHub supplies the job-scoped token;
+# Doppler supplies every other credential.
+#
+# Keep the `paths` list below in sync with `cloudflarePreviewSharedPaths` +
+# `cloudflarePreviewAdditionalTriggerPaths` + each app's `paths` in
+# scripts/preview/preview.ts (asserted in scripts/preview/preview.test.ts).
+
+name: Preview
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+    paths:
+      - .depot/workflows/preview.yml
+      - .depot/workflows/preview-run.yml
+      - packages/shared/**
+      - packages/ui/**
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - patches/**
+      - scripts/preview/**
+      - scripts/ci/status.ts
+      - envs.ts
+      - scripts/lib/**
+      - apps/auth-example/**
+      - apps/os/**
+      - configs/**
+      - specs/**
+      - playwright.config.ts
+      - apps/mobile/**
+      - packages/iterate/**
+      - apps/auth/**
+      - apps/auth-contract/**
+      - apps/os/src/domains/streams/**
+      - apps/docs/**
+      - packages/workspace-documents/**
+      - apps/semaphore/**
+      - apps/streams-example-app/**
+      - apps/dummy-petshop/**
+  workflow_dispatch:
+    inputs:
+      pull-request-number:
+        description: PR number to deploy + test
+        required: true
+
+# Keep existing lock keys: older branches and close-PR cleanup share them.
+concurrency:
+  group: cloudflare-previews-${{ github.event.pull_request.number || inputs.pull-request-number }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    name: Preview / deploy + e2e
+    # Hold the lifecycle lock for the entire called workflow, including all
+    # shards and final cleanup. Putting this lock on each shard serializes them.
+    concurrency:
+      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
+      cancel-in-progress: false
+    uses: ./.depot/workflows/preview-run.yml
+    with:
+      pull-request-number: ${{ format('{0}', github.event.pull_request.number || inputs.pull-request-number) }}
+      head-sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      all-apps: ${{ github.event_name == 'workflow_dispatch' }}
+    secrets: inherit

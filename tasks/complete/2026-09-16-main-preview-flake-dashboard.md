@@ -1,11 +1,11 @@
 ---
-status: complete
+status: awaiting-ci
 size: large
 ---
 
 # Main preview runs and a current flake dashboard
 
-Status: implementation and acceptance are complete. All checks passed at `64085197f` (nine successful, two skipped), and all seven review threads are resolved. Downloaded unit, preview E2E and specs artifacts prove complete per-test results, matching names and honest branch/commit provenance. The PR remains open for human review; the live dashboard still needs its normal package update/deployment after merge.
+Status: the original implementation passed full acceptance at `64085197f`. Merging main's #2659 now moves main onto the same distributed preview workflow as PRs and makes suite completeness account for all browser shards. Local integration tests pass; fresh distributed PR/main preview validation remains. The live dashboard still needs its normal package update/deployment after merge.
 
 ## Current scope
 
@@ -23,6 +23,7 @@ Status: implementation and acceptance are complete. All checks passed at `640851
 - [x] Complete checks and commit/push the common-target refactor for compare-link review. *Implementation pushed as `170a85b7c`; local checks and partial deployed validation are recorded below. PR stayed closed during compare-link review.*
 - [x] Reopen PR #2658 after the final human-review fixes, with a current description and risk map. *Reopened at `f951e6897`; global monitoring is active through September 16.*
 - [x] Inspect successful CI artifacts for the final retention/absence changes and finish review. *Run `9hdx326789` at `64085197f`: all three suite summaries complete; every result matches raw telemetry, including one unknown E2E retry and one known flake strike. Cleanup and retained lease verified; all review threads resolved.*
+- [ ] Merge #2659's distributed workflow from latest main and validate both PR/main callers plus complete sharded summaries. *Local regression tests pass; deployed acceptance pending.*
 
 ## Decisions and limits
 
@@ -96,3 +97,10 @@ Codex session: `01a0a1e6-0135-7902-91aa-b4bb07026de2`.
 - The unknown retry is `a root stream DO restart closes the installing session with 4901; reconnect + re-install restores interception`: the first attempt expected `No AI interceptor installed` but received a Durable Object storage error; it passed on one retry. The existing wrapped `a userspace facet rebuilds on a source commit and only on a source commit` hit `SAME-BOOT STALENESS`. These remain product/test issues; green CI does not mean zero flakes. This PR records both honestly rather than fixing their causes.
 - Preview-13 cleanup retired OS/playground DO classes, wiped D1/KV, and kept the PR lease until `2026-09-16T02:04:31.822Z`. Artifact cleanup deleted 552 repositories and explicitly hit its existing deadline with some remaining for the next sweep; R2 data retains its 3h lifecycle. Cleanup was bounded and reported its remaining work, not a claim that all stored data was gone.
 - Evidence: [preview check](https://github.com/iterate/iterate/runs/104596944873), [Depot preview attempt](https://depot.dev/orgs/0p91s0lz49/workflows/q5h15jhczm?job=ssjw2c170f&attempt=fbwnw665qd), local `/tmp/retention-64085197f-acceptance.json`, `/tmp/retention-64085197f-preview.log`, and downloaded `/tmp/retention-64085197f-*.zip`. Earlier main-specific dispatch at `128804816` proves the main runner path; this successful PR run proves the subsequent retention artifact changes. The task-completion commit changes documentation only.
+
+### September 16 — merge parallel preview CI from #2659
+
+- Read #2659's implementation, measurements and cleanup policy before merging main `17e937695`. Preserve its six fixed browser shards, overlapped setup, immutable deployment plan/receipts, workflow-scoped telemetry and all-consumers-settled cleanup barrier.
+- Main now calls the same reusable workflow as PRs rather than retaining the old single-runner copy. The distributed commands resolve `PreviewTarget`; plans identify their holder and branch rather than assuming every source is a PR. Consumer reports start from the validated immutable plan. The fixed main holder remains protected by the caller's non-cancelling workflow lock, and cleanup stays independent of result downloads.
+- The summary regression reproduced six healthy browser reports being rejected as multiple full suites. Summary generation now uses the workflow's declared runner count and shared completeness analysis; tests cover all six reports, missing/extra shards and another run attempt. Existing retention rules are unchanged. Local integration suite: 224 passing tests; scripts typecheck passes.
+- Pre-push merge checks: all 347 scripts tests and 39 dashboard tests pass; full-workspace typechecking, lint, formatting and Knip pass. Native CLI help exposes both target forms on `ci-prepare`. #2659's deployed artifacts confirm called jobs preserve the caller's workflow name, so the main workflow guard remains effective across its child jobs.

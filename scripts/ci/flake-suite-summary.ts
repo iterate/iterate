@@ -9,6 +9,7 @@ import { analyzeTestTelemetryCompleteness } from "./test-telemetry-completeness.
 export async function writeFlakeSuiteSummaries(input: {
   directory: string;
   group: "unit" | "preview";
+  scope: "job" | "workflow";
   artifacts: TestTelemetryArtifact[];
   expectedWorkspaces: string[];
   cancelled: boolean;
@@ -28,15 +29,23 @@ export async function writeFlakeSuiteSummaries(input: {
     if (!source) throw new Error("Cannot identify the CI run for the flake suite summary");
     const branch = source.ci.branch || "";
     const completeness = analyzeTestTelemetryCompleteness(
-      artifacts,
+      input.artifacts,
       suite === "unit" ? input.expectedWorkspaces : [],
+      input.scope,
     );
+    const expectedRunners = completeness.expectedArtifactSources.filter((source) =>
+      suite === "specs"
+        ? source.producer === "playwright-telemetry-reporter" && source.workspace === "iterate-root"
+        : source.producer === "vitest-retry-telemetry-reporter" &&
+          source.workspace === "@iterate-com/os",
+    ).length;
+    const expectedCount = input.scope === "workflow" ? expectedRunners : 1;
     const diagnostics = [
       ...(!branch ? ["Missing source branch"] : []),
       ...(input.cancelled ? ["CI run cancelled"] : []),
       ...(artifacts.length === 0 ? ["No test runner result received"] : []),
-      ...(suite !== "unit" && artifacts.length > 1
-        ? ["More than one full-suite runner result received"]
+      ...(suite !== "unit" && (!expectedCount || artifacts.length !== expectedCount)
+        ? [`Expected ${expectedCount} full-suite runner results, received ${artifacts.length}`]
         : []),
       ...completeness.missingArtifactSources.map(
         ({ source }) => `Missing runner: ${source.producer}@${source.workspace}`,
@@ -44,6 +53,11 @@ export async function writeFlakeSuiteSummaries(input: {
       ...completeness.missingWorkspaces.map((name) => `Missing workspace: ${name}`),
       ...completeness.incompleteArtifactIds.map((id) => `Incomplete runner result: ${id}`),
       ...completeness.foreignArtifactIds.map((id) => `Result belongs to another CI run: ${id}`),
+      ...input.artifacts.flatMap((artifact) =>
+        artifact.producer === "preview-e2e-orchestrator" && artifact.run.error
+          ? [`Preview result collection failed: ${artifact.run.error.message}`]
+          : [],
+      ),
       ...artifacts.flatMap((artifact) => [
         ...(artifact.ci.branch !== branch
           ? [`Result belongs to another branch: ${artifact.artifactId}`]

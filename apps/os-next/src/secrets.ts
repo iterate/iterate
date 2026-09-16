@@ -1,12 +1,15 @@
-// secrets.ts — THE SECRET CELL, its pure half: what a project secret IS (material + a URL pin + an
-// optional refresh strategy), the placeholder grammar egress substitutes, and the two refresh
-// strategies, each a plain function of (strategy, material, fetch). No Cloudflare import — the node
-// unit tests cover every row. The host that keeps a record and runs these is secret-durable-object.ts.
+// secrets.ts — a project secret, the pure half: what a secret IS (material + a URL pin + an optional
+// refresh strategy), the placeholder grammar egress substitutes, and the two refresh strategies,
+// each a plain function of (strategy, material, fetch). No Cloudflare import — the node unit tests
+// cover every row, and Node's type-stripping child in memory-budget.test.ts loads this module through
+// the core reduce, so only erasable TypeScript syntax is used here. The host that keeps a record and
+// runs these is secret-durable-object.ts.
 //
-// apps/os's cell invariant (apps/os/docs/adr/0005-the-secret-cell-invariant.md), carried over whole:
+// The invariant, apps/os's (apps/os/docs/adr/0005-the-secret-cell-invariant.md), carried over whole:
 // material goes in; nothing comes out except a request to a pinned host. Refresh runs INSIDE the
-// cell — a named strategy in trusted code whose exchange endpoint must itself be pinned — so a
-// credential that expires (an OAuth access token, a Waitrose session) is one secret, not a worker.
+// secret's own Durable Object — a named strategy in trusted code whose exchange endpoint must itself
+// be pinned — so a credential that expires (an OAuth access token, a Waitrose session) is one secret,
+// not a worker.
 
 /** A secret's material: one string (`getSecret("/secrets/NAME")` is the whole value) or a JSON
  *  object whose string fields `getSecret("/secrets/NAME", { field: "a.b" })` picks — the
@@ -15,26 +18,32 @@
  *  (`set(name, JSON.stringify({...}))`). */
 export type SecretMaterial = string | Record<string, unknown>;
 
-/** How the cell re-mints an expired credential, in its own trusted code: the exchange reads this
- *  secret's own material, POSTs to an endpoint within the pin, and writes the answer back into the
- *  material — `accessToken` (and a rotated `refreshToken`). Triggered on a 401 from the pinned
- *  host, and on first use when the placeholder's field is not there yet (the mint-on-first-use). */
+/** How a token endpoint wants the client credential — the RFC 8414 `token_endpoint_auth_methods_supported`
+ *  registry values, so a provider's discovery document pastes straight in: `client_secret_basic`
+ *  (HTTP Basic — Google, Slack, the petshop; the default), `client_secret_post` (`client_id` +
+ *  `client_secret` as form fields — GitHub, Linear), `none` (a public client: `client_id` alone,
+ *  PKCE stands in for the secret). RFC 6749 §2.3.1 forbids sending two forms at once. */
+export type ClientAuth = "client_secret_basic" | "client_secret_post" | "none";
+
+/** How the secret's Durable Object re-mints an expired credential, in its own trusted code: the
+ *  exchange reads this secret's own material, POSTs to an endpoint within the pin, and writes the
+ *  answer back into the material — `accessToken` (and a rotated `refreshToken`). Triggered on a 401
+ *  from the pinned host, and on first use when the placeholder's field is not there yet. */
 export type SecretRefresh =
   /** RFC 6749 §6, the refresh_token grant: `refreshToken` + `clientId` (+ `clientSecret` for a
    *  confidential client) from the material → `accessToken` (+ the newest `refreshToken`). Google,
-   *  GitHub, an MCP server's authorization server, the petshop fixture. `clientAuth` is how the
-   *  token endpoint wants the client credential (RFC 6749 §2.3.1 allows both): `"basic"` (the
-   *  default — HTTP Basic; Google, Slack, the petshop) or `"body"` (`client_id` + `client_secret`
-   *  as form fields — GitHub, Linear). A public client (no secret) always sends `client_id` in the body. */
-  | { kind: "oauth-refresh-token"; tokenEndpoint: string; clientAuth?: "basic" | "body" }
-  /** The username/password → session-token archetype, Waitrose's login: POST the app's `NewSession`
-   *  GraphQL mutation with `username`/`password` from the material → `accessToken`. Waitrose has no
-   *  refresh grant — re-login IS the refresh — so one strategy covers the first-use mint and the
-   *  401 re-mint. */
+   *  GitHub, an MCP server's authorization server, the petshop fixture. */
+  | { kind: "oauth-refresh-token"; tokenEndpoint: string; clientAuth?: ClientAuth }
+  /** The username/password → session-token archetype's one instance so far, Waitrose's login: POST
+   *  the Android app's `NewSession` GraphQL mutation with `username`/`password` from the material →
+   *  `accessToken`. Waitrose has no refresh grant — re-login IS the refresh — so one strategy covers
+   *  the first-use mint and the 401 re-mint. Vendor-specific on purpose: a caller-supplied login
+   *  template would put an arbitrary request body in trusted code; a second vendor of this shape
+   *  earns the generalization, not before. */
   | { kind: "waitrose-session"; graphqlUrl: string };
 
-/** What the cell stores: the material, the ORIGINS it may be sent to (empty = unbound: the value
- *  goes wherever the caller aims), and the refresh strategy or none. */
+/** What the secret's Durable Object stores: the material, the ORIGINS it may be sent to (never
+ *  empty — a secret is always pinned), and the refresh strategy or none. */
 export type SecretRecord = {
   material: SecretMaterial;
   urls: string[];
@@ -46,7 +55,7 @@ export type SecretRecord = {
 export type SecretCatalogEntry = { name: string; urls?: string[]; refresh?: SecretRefresh["kind"] };
 
 /** A name is what the placeholder can spell. */
-export const SECRET_NAME = /^[a-zA-Z0-9._-]+$/;
+const SECRET_NAME = /^[a-zA-Z0-9._-]+$/;
 
 export function assertSecretName(name: string): string {
   if (!SECRET_NAME.test(name))
@@ -56,38 +65,51 @@ export function assertSecretName(name: string): string {
   return name;
 }
 
-/** A plain JSON object, as `typeof` sees it (an array is one too; a field read on it is undefined). */
+/** A plain JSON object — not an array, which `typeof` also calls an object. */
 export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && !!value;
+  return typeof value === "object" && !!value && !Array.isArray(value);
 }
 
 const REFRESH_KINDS: readonly SecretRefresh["kind"][] = ["oauth-refresh-token", "waitrose-session"];
+const CLIENT_AUTHS: readonly ClientAuth[] = ["client_secret_basic", "client_secret_post", "none"];
 
-/** The strategy kinds the cell implements — the one place a kind is admitted from untyped input
- *  (a `set` option, a `secrets/changed` payload). */
+/** The strategy kinds implemented — the one place a kind is admitted from untyped input (a `set`
+ *  option, a `secrets/changed` payload). */
 export function isRefreshKind(kind: unknown): kind is SecretRefresh["kind"] {
   return REFRESH_KINDS.some((known) => known === kind);
 }
 
-/** The URL a strategy exchanges at. */
-export function refreshEndpointOf(refresh: SecretRefresh): string {
-  return refresh.kind === "oauth-refresh-token" ? refresh.tokenEndpoint : refresh.graphqlUrl;
+/** The client-auth method as given, or the default; anything else is refused by name. */
+export function clientAuthOf(value: unknown): ClientAuth {
+  if (value === undefined) return "client_secret_basic";
+  const known = CLIENT_AUTHS.find((method) => method === value);
+  if (!known)
+    throw new Error(
+      `secrets: clientAuth is one of ${CLIENT_AUTHS.join(", ")} (RFC 8414 token_endpoint_auth_methods_supported), got ${JSON.stringify(value)}`,
+    );
+  return known;
 }
 
-/** The record as `itx.secrets.set(name, material, { urls?, refresh? })` spells it, validated and
- *  normalized: a URL pin is a list of ORIGINS (a path or query on one is dropped), the strategy is
- *  one of the named kinds with an http(s) endpoint that falls within the pin when there is one. */
+/** The ORIGINS of a list of URLs, deduplicated — what a pin stores (a path or query on one is dropped). */
+export function originsOf(urls: unknown): string[] {
+  if (!Array.isArray(urls)) throw new Error("secrets: urls is a list of URLs");
+  return [...new Set(urls.map((url) => new URL(String(url)).origin))];
+}
+
+/** The record as `itx.secrets.set(name, material, { urls, refresh? })` spells it, validated and
+ *  normalized: the pin is required and stored as origins, the strategy is one of the named kinds
+ *  with an http(s) endpoint that falls within the pin. */
 export function normalizeSecretRecord(
   material: unknown,
   options: { urls?: unknown; refresh?: unknown } | undefined,
 ): SecretRecord {
   if (typeof material !== "string" && !isRecord(material))
     throw new Error("secrets: material is a string or a JSON object");
-  let urls: string[] = [];
-  if (options?.urls !== undefined) {
-    if (!Array.isArray(options.urls)) throw new Error("secrets: urls is a list of URLs");
-    urls = [...new Set(options.urls.map((url) => new URL(String(url)).origin))];
-  }
+  const urls = options?.urls === undefined ? [] : originsOf(options.urls);
+  if (urls.length === 0)
+    throw new Error(
+      "secrets: urls is required — the origins this secret may be sent to; a secret is never sent anywhere else",
+    );
   let refresh: SecretRefresh | null = null;
   if (options?.refresh) {
     if (!isRecord(options.refresh) || !isRefreshKind(options.refresh.kind))
@@ -99,7 +121,7 @@ export function normalizeSecretRecord(
     const endpoint = new URL(String(options.refresh[endpointKey]));
     if (endpoint.protocol !== "http:" && endpoint.protocol !== "https:")
       throw new Error(`secrets: refresh.${endpointKey} must be an http(s) URL`);
-    if (urls.length > 0 && !urls.includes(endpoint.origin))
+    if (!urls.includes(endpoint.origin))
       throw new Error(
         `secrets: refresh.${endpointKey} ${endpoint.origin} is outside the pin ${urls.join(", ")} — a refresh only ever sends the material toward a pinned host`,
       );
@@ -108,7 +130,7 @@ export function normalizeSecretRecord(
         ? {
             kind,
             tokenEndpoint: endpoint.href,
-            ...(options.refresh.clientAuth === "body" && { clientAuth: "body" as const }),
+            clientAuth: clientAuthOf(options.refresh.clientAuth),
           }
         : { kind, graphqlUrl: endpoint.href };
   }
@@ -135,7 +157,7 @@ const SECRET_PLACEHOLDER = new RegExp(
 const placeholderOf = (name: string, field: string | undefined): string =>
   !field ? `getSecret("/secrets/${name}")` : `getSecret("/secrets/${name}", { field: "${field}" })`;
 
-/** A placeholder the cell cannot honour — no secret stored, a `field` the material has no string
+/** A placeholder the secret cannot honour — no secret stored, a `field` the material has no string
  *  at, a secret pinned to other origins — answered with a 502 to the CALLER, never the destination.
  *  `mintable` marks the two misses a refresh strategy can fill (no material yet, a field not there
  *  yet): the mint-on-first-use. */
@@ -176,8 +198,8 @@ function secretFieldOf(
   return value;
 }
 
-/** The DISTINCT secret names a request's URL and headers reference — how egress knows which cell a
- *  request belongs to (one request, one secret). */
+/** The DISTINCT secret names a request's URL and headers reference — how egress knows which
+ *  secret's Durable Object a request belongs to (one request, one secret). */
 export function secretNamesReferenced(request: Request): string[] {
   const names = new Set<string>();
   const scan = (value: string) => {
@@ -259,15 +281,15 @@ export async function substituteProjectSecrets(
 
 // ── the pin ──
 
-/** A secret with a pin is sent to those origins ONLY — a mis-typed URL cannot mail a credential to
- *  a stranger. An empty pin binds nothing. */
+/** A secret is sent to its pinned origins ONLY — a mis-typed URL cannot mail a credential to a
+ *  stranger, and an app that forwards a visitor's headers cannot be made to mail it either. */
 export function originPinned(url: string, urls: string[]): boolean {
-  return urls.length === 0 || urls.includes(new URL(url).origin);
+  return urls.includes(new URL(url).origin);
 }
 
 export function pinRefusal(name: string, url: string, urls: string[]): ProjectSecretRefused {
   return new ProjectSecretRefused(
-    `itx.fetch: project secret ${name} is bound to ${urls.join(", ")} — not sent to ${new URL(url).origin}`,
+    `itx.fetch: project secret ${name} is pinned to ${urls.join(", ")} — not sent to ${new URL(url).origin}`,
   );
 }
 
@@ -276,7 +298,7 @@ export function pinRefusal(name: string, url: string, urls: string[]): ProjectSe
 // ONE at a time per secret and stores the answer. A credential never appears in an error message.
 
 /** The material as a record — a JSON string parses, a plain string has no fields. */
-export function materialRecordOf(material: SecretMaterial | null): Record<string, unknown> {
+function materialRecordOf(material: SecretMaterial | null): Record<string, unknown> {
   if (!material) return {};
   if (typeof material !== "string") return material;
   try {
@@ -295,7 +317,7 @@ function stringField(record: Record<string, unknown>, field: string, kind: strin
 }
 
 /** The Waitrose Android app's login mutation, verbatim (apps/os carries the same string). */
-export const WAITROSE_NEW_SESSION_MUTATION =
+const WAITROSE_NEW_SESSION_MUTATION =
   "mutation NewSession($input: SessionInput) { generateSession(session: $input) { __typename ...SessionPayload failures { type message } } }  fragment SessionPayload on SetSessionPayload { accessToken refreshToken customerId customerOrderId customerOrderState defaultBranchId expiresIn }";
 
 /** A provider's JSON answer, read as a record — anything else (not JSON, a bare value) is `{}`, so
@@ -306,24 +328,25 @@ async function jsonRecordOf(response: Response): Promise<Record<string, unknown>
 }
 
 /** ONE request to an OAuth token endpoint — the refresh grant here, the authorization-code grant in
- *  secret-connect.ts — with the client credential the way the endpoint wants it: HTTP Basic, or
- *  `client_id` + `client_secret` in the form body; a public client (no secret) identifies itself with
- *  `client_id` in the body either way (RFC 6749 §2.3.1, §6). */
+ *  secret-oauth.ts — with the client credential the way the endpoint wants it (`ClientAuth`); a
+ *  client with no secret is treated as `none` whatever it declared. */
 export function oauthTokenRequest(input: {
   tokenEndpoint: string;
   clientId: string;
   clientSecret: string;
-  clientAuth: "basic" | "body";
+  clientAuth: ClientAuth;
   params: Record<string, string>;
 }): Request {
+  const method = input.clientSecret ? input.clientAuth : "none";
   const body = new URLSearchParams(input.params);
-  const basic = input.clientAuth === "basic" && !!input.clientSecret;
-  if (!basic) body.set("client_id", input.clientId);
-  if (!basic && input.clientSecret) body.set("client_secret", input.clientSecret);
+  if (method !== "client_secret_basic") body.set("client_id", input.clientId);
+  if (method === "client_secret_post") body.set("client_secret", input.clientSecret);
   return new Request(input.tokenEndpoint, {
     method: "POST",
     headers: {
-      ...(basic && { authorization: `Basic ${btoa(`${input.clientId}:${input.clientSecret}`)}` }),
+      ...(method === "client_secret_basic" && {
+        authorization: `Basic ${btoa(`${input.clientId}:${input.clientSecret}`)}`,
+      }),
       "content-type": "application/x-www-form-urlencoded",
       accept: "application/json",
     },
@@ -362,7 +385,7 @@ export async function refreshSecretMaterial(
         tokenEndpoint: refresh.tokenEndpoint,
         clientId,
         clientSecret,
-        clientAuth: refresh.clientAuth || "basic",
+        clientAuth: refresh.clientAuth || "client_secret_basic",
         params: { grant_type: "refresh_token", refresh_token: refreshToken },
       }),
     );

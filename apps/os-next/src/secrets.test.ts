@@ -1,9 +1,18 @@
-// secrets.test.ts — the secret cell's pure half (secrets.ts): the placeholder substitution as a
-// table, the record normalization, and the two refresh strategies against a scripted fetch.
+// secrets.test.ts — a project secret's pure half (secrets.ts + secret-oauth.ts + secret-at-rest.ts):
+// the placeholder substitution as a table, the record normalization, the two refresh strategies
+// against a scripted fetch, the OAuth first-token flow's two halves, and the material at rest.
 
 import { expect, test } from "vitest";
 import {
+  beginSecretOAuth,
+  completeSecretOAuth,
+  isSecretOAuthState,
+  normalizeSecretOAuth,
+} from "./secret-oauth.ts";
+import { decryptSecretMaterial, encryptSecretMaterial } from "./secret-at-rest.ts";
+import {
   normalizeSecretRecord,
+  originPinned,
   ProjectSecretRefused,
   refreshSecretMaterial,
   secretNamesReferenced,
@@ -18,8 +27,8 @@ import {
 // header); a placeholder with no stored secret, or a field the value has no string at, refuses,
 // naming the placeholder and where it sat; substituted values are never rescanned; a NEW Request
 // only when something changed (the rebuild is WS-safe — method, Upgrade and body survive it).
-// `becomes` is what the door answered: the rebuilt Request's URL and headers (a subset),
-// "unchanged" (the ORIGINAL Request — no rebuild), or `{ refused }` — the `ProjectSecretRefused` message.
+// `becomes` is what came back: the rebuilt Request's URL and headers (a subset), "unchanged" (the
+// ORIGINAL Request — no rebuild), or `{ refused }` — the `ProjectSecretRefused` message.
 
 const secrets: Record<string, SecretMaterial> = {
   a: "alpha",
@@ -159,7 +168,7 @@ for (const row of rows)
     else expect(became).toMatchObject(row.becomes);
   });
 
-test("a mintable miss (no material, a missing field) is marked so the cell knows a strategy may fill it; the other refusals are not", async () => {
+test("a mintable miss (no material, a missing field) is marked so the Durable Object knows a strategy may fill it; the other refusals are not", async () => {
   const miss = (resolve: (name: string) => SecretMaterial | null, header: string) =>
     substituteProjectSecrets(
       new Request("https://api.example.com/", { headers: { authorization: header } }),
@@ -192,18 +201,26 @@ test("secretNamesReferenced: the distinct names a request's URL and headers name
   expect(secretNamesReferenced(new Request("https://api.example.com/"))).toEqual([]);
 });
 
+// ── the pin ── never empty: a secret goes to its origins and nowhere else.
+test("originPinned: only a pinned origin passes; an empty pin passes nothing", () => {
+  expect(originPinned("https://api.example.com/v1/x", ["https://api.example.com"])).toBe(true);
+  expect(originPinned("https://evil.example/", ["https://api.example.com"])).toBe(false);
+  expect(originPinned("https://api.example.com/", [])).toBe(false);
+});
+
 // ── the record ── `normalizeSecretRecord`: what `itx.secrets.set(name, material, options)` stores.
-test("normalizeSecretRecord: pins are origins (deduped), a strategy is named and lies within the pin", () => {
+test("normalizeSecretRecord: the pin is required and stored as origins (deduped); a strategy is named, lies within the pin, and names its client-auth method from the registry", () => {
   expect(
     normalizeSecretRecord("v", {
       urls: ["https://api.example.com/v1/x", "https://api.example.com"],
     }),
   ).toEqual({ material: "v", urls: ["https://api.example.com"], refresh: null });
-  expect(normalizeSecretRecord({ a: "b" }, undefined)).toEqual({
-    material: { a: "b" },
-    urls: [],
-    refresh: null,
-  });
+  expect(() => normalizeSecretRecord({ a: "b" }, undefined)).toThrow(/urls is required/);
+  expect(() => normalizeSecretRecord("v", { urls: [] })).toThrow(/urls is required/);
+  expect(() => normalizeSecretRecord("v", { urls: ["not a url"] })).toThrow();
+  expect(() => normalizeSecretRecord([1], { urls: ["https://x.example"] })).toThrow(
+    /string or a JSON object/,
+  );
   expect(
     normalizeSecretRecord(
       { username: "u", password: "p" },
@@ -213,10 +230,28 @@ test("normalizeSecretRecord: pins are origins (deduped), a strategy is named and
       },
     ).refresh,
   ).toEqual({ kind: "waitrose-session", graphqlUrl: "https://www.waitrose.com/api/graphql" });
-  expect(() => normalizeSecretRecord("v", { urls: ["not a url"] })).toThrow();
-  expect(() => normalizeSecretRecord(42, undefined)).toThrow(/string or a JSON object/);
+  expect(
+    normalizeSecretRecord(
+      { clientId: "c", clientSecret: "s", refreshToken: "r" },
+      {
+        urls: ["https://github.com"],
+        refresh: {
+          kind: "oauth-refresh-token",
+          tokenEndpoint: "https://github.com/login/oauth/access_token",
+          clientAuth: "client_secret_post",
+        },
+      },
+    ).refresh,
+  ).toEqual({
+    kind: "oauth-refresh-token",
+    tokenEndpoint: "https://github.com/login/oauth/access_token",
+    clientAuth: "client_secret_post",
+  });
   expect(() =>
-    normalizeSecretRecord("v", { refresh: { kind: "magic", tokenEndpoint: "https://x" } }),
+    normalizeSecretRecord("v", {
+      urls: ["https://x.example"],
+      refresh: { kind: "magic", tokenEndpoint: "https://x.example" },
+    }),
   ).toThrow(/refresh\.kind is one of oauth-refresh-token, waitrose-session/);
   expect(() =>
     normalizeSecretRecord("v", {
@@ -224,10 +259,20 @@ test("normalizeSecretRecord: pins are origins (deduped), a strategy is named and
       refresh: { kind: "oauth-refresh-token", tokenEndpoint: "https://elsewhere.example/token" },
     }),
   ).toThrow(/outside the pin/);
+  expect(() =>
+    normalizeSecretRecord("v", {
+      urls: ["https://x.example"],
+      refresh: {
+        kind: "oauth-refresh-token",
+        tokenEndpoint: "https://x.example",
+        clientAuth: "body",
+      },
+    }),
+  ).toThrow(/clientAuth is one of client_secret_basic, client_secret_post, none/);
 });
 
 // ── the strategies ── `refreshSecretMaterial(strategy, material, fetch)`: a scripted fetch records
-// the exchange and answers; the NEXT material is what the cell would store.
+// the exchange and answers; the NEXT material is what the Durable Object would store.
 type Exchange = { url: string; headers: Record<string, string>; body: string };
 const scripted = (answer: (exchange: Exchange) => Response) => {
   const exchanges: Exchange[] = [];
@@ -357,4 +402,242 @@ test("waitrose-session: the NewSession login mints the accessToken; a failures[]
       unauthorized.fetchFn,
     ),
   ).rejects.toThrow(/HTTP 401.*username\/password/);
+});
+
+// ── the OAuth first-token flow (secret-oauth.ts) ──
+const PROVIDER = {
+  authorizationEndpoint: "https://auth.example/oauth/authorize",
+  tokenEndpoint: "https://auth.example/oauth/token",
+};
+
+test("normalizeSecretOAuth: the pin defaults to the token endpoint's origin, must contain it when given, and the client-auth method defaults to client_secret_basic", () => {
+  expect(normalizeSecretOAuth({ ...PROVIDER, clientId: "c" })).toMatchObject({
+    urls: ["https://auth.example"],
+    clientAuth: "client_secret_basic",
+    clientSecret: "",
+    extra: {},
+  });
+  expect(
+    normalizeSecretOAuth({
+      ...PROVIDER,
+      clientId: "c",
+      clientSecret: "s",
+      clientAuth: "client_secret_post",
+      scope: "repo",
+      urls: ["https://api.example/v1", "https://auth.example/x"],
+      extra: { access_type: "offline" },
+    }),
+  ).toEqual({
+    authorizationEndpoint: PROVIDER.authorizationEndpoint,
+    tokenEndpoint: PROVIDER.tokenEndpoint,
+    clientId: "c",
+    clientSecret: "s",
+    clientAuth: "client_secret_post",
+    scope: "repo",
+    urls: ["https://api.example", "https://auth.example"],
+    extra: { access_type: "offline" },
+  });
+  expect(() =>
+    normalizeSecretOAuth({ ...PROVIDER, clientId: "c", urls: ["https://api.example"] }),
+  ).toThrow(/outside the pin/);
+  expect(() => normalizeSecretOAuth({ ...PROVIDER, clientId: "" })).toThrow(/clientId/);
+  expect(() =>
+    normalizeSecretOAuth({ ...PROVIDER, authorizationEndpoint: "ftp://x", clientId: "c" }),
+  ).toThrow(/http\(s\)/);
+  expect(() => normalizeSecretOAuth({ ...PROVIDER, clientId: "c", clientAuth: "basic" })).toThrow(
+    /clientAuth is one of/,
+  );
+});
+
+test("beginSecretOAuth: the authorize URL carries the code request with PKCE S256, the signed state, the scope and the extra parameters; the pending attempt keeps the options and the verifier, never on the URL", async () => {
+  const options = normalizeSecretOAuth({
+    ...PROVIDER,
+    clientId: "c",
+    clientSecret: "sekrit-value",
+    scope: "repo",
+    extra: { access_type: "offline", prompt: "consent" },
+  });
+  const { pending, authorizationUrl } = await beginSecretOAuth(options, {
+    redirectUri: "https://os.example/.secrets/oauth/callback",
+    state: "signed-state",
+    nonce: "n1",
+    now: 1000,
+  });
+  const url = new URL(authorizationUrl);
+  expect(url.origin + url.pathname).toBe(PROVIDER.authorizationEndpoint);
+  expect(Object.fromEntries(url.searchParams)).toMatchObject({
+    response_type: "code",
+    client_id: "c",
+    redirect_uri: "https://os.example/.secrets/oauth/callback",
+    state: "signed-state",
+    code_challenge_method: "S256",
+    scope: "repo",
+    access_type: "offline",
+    prompt: "consent",
+  });
+  // the challenge is the S256 of the verifier the pending attempt keeps
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(pending.codeVerifier),
+  );
+  const challenge = btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+  expect(url.searchParams.get("code_challenge")).toBe(challenge);
+  expect(pending).toMatchObject({
+    options,
+    redirectUri: "https://os.example/.secrets/oauth/callback",
+    nonce: "n1",
+    until: 1000 + 10 * 60_000,
+  });
+  expect(authorizationUrl).not.toContain("sekrit-value");
+  expect(authorizationUrl).not.toContain(pending.codeVerifier);
+});
+
+test("completeSecretOAuth: the code exchange (HTTP Basic, PKCE verifier, redirect_uri) yields the secret's first record with the refresh strategy at the same endpoint", async () => {
+  const options = normalizeSecretOAuth({ ...PROVIDER, clientId: "c", clientSecret: "s" });
+  const { pending } = await beginSecretOAuth(options, {
+    redirectUri: "https://os.example/.secrets/oauth/callback",
+    state: "st",
+    nonce: "n",
+  });
+  const provider = scripted(() =>
+    Response.json({ access_token: "AT", refresh_token: "RT", token_type: "bearer" }),
+  );
+  const record = await completeSecretOAuth(pending, "the-code", provider.fetchFn);
+  expect(record).toEqual({
+    material: { clientId: "c", clientSecret: "s", accessToken: "AT", refreshToken: "RT" },
+    urls: ["https://auth.example"],
+    refresh: {
+      kind: "oauth-refresh-token",
+      tokenEndpoint: PROVIDER.tokenEndpoint,
+      clientAuth: "client_secret_basic",
+    },
+  });
+  expect(provider.exchanges).toEqual([
+    {
+      url: PROVIDER.tokenEndpoint,
+      headers: expect.objectContaining({
+        authorization: `Basic ${btoa("c:s")}`,
+        "content-type": "application/x-www-form-urlencoded",
+      }),
+      body: `grant_type=authorization_code&code=the-code&redirect_uri=${encodeURIComponent("https://os.example/.secrets/oauth/callback")}&code_verifier=${pending.codeVerifier}`,
+    },
+  ]);
+  const refused = scripted(() => new Response("", { status: 400 }));
+  await expect(completeSecretOAuth(pending, "bad", refused.fetchFn)).rejects.toThrow(
+    /oauth: the token endpoint answered 400/,
+  );
+});
+
+test("client_secret_post puts client_id + client_secret in the form for both grants (GitHub's shape) and sends no Basic header; none (a public client) sends client_id alone", async () => {
+  const options = normalizeSecretOAuth({
+    ...PROVIDER,
+    clientId: "c",
+    clientSecret: "s",
+    clientAuth: "client_secret_post",
+  });
+  const { pending } = await beginSecretOAuth(options, {
+    redirectUri: "https://os.example/cb",
+    state: "st",
+    nonce: "n",
+  });
+  const exchange = scripted(() => Response.json({ access_token: "AT", refresh_token: "RT" }));
+  const record = await completeSecretOAuth(pending, "code", exchange.fetchFn);
+  expect(exchange.exchanges[0]!.headers.authorization).toBeUndefined();
+  expect(exchange.exchanges[0]!.body).toContain("client_id=c&client_secret=s");
+  expect(record.refresh).toEqual({
+    kind: "oauth-refresh-token",
+    tokenEndpoint: PROVIDER.tokenEndpoint,
+    clientAuth: "client_secret_post",
+  });
+  // the refresh strategy honours the same method
+  const refresh = scripted(() => Response.json({ access_token: "AT2" }));
+  await refreshSecretMaterial(record.refresh!, record.material, refresh.fetchFn);
+  expect(refresh.exchanges[0]!.headers.authorization).toBeUndefined();
+  expect(refresh.exchanges[0]!.body).toBe(
+    "grant_type=refresh_token&refresh_token=RT&client_id=c&client_secret=s",
+  );
+  // a public client, whatever it declared, identifies itself with client_id alone
+  const publicOptions = normalizeSecretOAuth({ ...PROVIDER, clientId: "p" });
+  const { pending: publicPending } = await beginSecretOAuth(publicOptions, {
+    redirectUri: "https://os.example/cb",
+    state: "st",
+    nonce: "n",
+  });
+  const publicExchange = scripted(() => Response.json({ access_token: "AT" }));
+  await completeSecretOAuth(publicPending, "code", publicExchange.fetchFn);
+  expect(publicExchange.exchanges[0]!.headers.authorization).toBeUndefined();
+  expect(publicExchange.exchanges[0]!.body).toContain("client_id=p");
+  expect(publicExchange.exchanges[0]!.body).not.toContain("client_secret");
+});
+
+test("isSecretOAuthState: the signed claims must carry the kind and every field with its type — another claim set signed by the same key is not a state", () => {
+  const state = { kind: "secret-oauth", owner: "p", name: "n", nonce: "x", exp: 1 };
+  expect(isSecretOAuthState(state)).toBe(true);
+  expect(isSecretOAuthState({ ...state, kind: "google-login" })).toBe(false);
+  expect(isSecretOAuthState({ ...state, exp: "1" })).toBe(false);
+  expect(isSecretOAuthState([state])).toBe(false);
+  expect(isSecretOAuthState(null)).toBe(false);
+});
+
+// ── at rest (secret-at-rest.ts) ── the material never sits in storage in the clear, and a ciphertext
+// opens only at the binding it was written for.
+const binding = {
+  owner: "prj_1",
+  name: "tok",
+  urls: ["https://a.example", "https://b.example"],
+  revision: 3,
+};
+const keys = { current: "key-one" };
+
+test("encryptSecretMaterial / decryptSecretMaterial: a string and an object round-trip; the ciphertext carries neither", async () => {
+  // The needles are long: a two-letter one ("AT") shows up in a random base64 IV about once in a
+  // hundred runs and made this test flaky (CI, 2026-09-16).
+  for (const material of [
+    "hunter2",
+    { accessToken: "ACCESS-TOKEN-PLAINTEXT", nested: { deep: "DEEP-PLAINTEXT" } },
+  ] as const) {
+    const encrypted = await encryptSecretMaterial(material, binding, keys);
+    expect(encrypted.algorithm).toBe("AES-256-GCM+SECRET-V1");
+    expect(JSON.stringify(encrypted)).not.toContain("hunter2");
+    expect(JSON.stringify(encrypted)).not.toContain("ACCESS-TOKEN-PLAINTEXT");
+    expect(JSON.stringify(encrypted)).not.toContain("DEEP-PLAINTEXT");
+    expect(await decryptSecretMaterial(encrypted, binding, keys)).toEqual({
+      material,
+      rotated: false,
+    });
+  }
+});
+
+test("the binding: another object, another name, another pin or another revision does not open it; the pin's spelling order does not matter", async () => {
+  const encrypted = await encryptSecretMaterial("v", binding, keys);
+  for (const elsewhere of [
+    { ...binding, owner: "prj_2" },
+    { ...binding, name: "other" },
+    { ...binding, urls: ["https://a.example"] },
+    { ...binding, revision: 4 },
+  ])
+    await expect(decryptSecretMaterial(encrypted, elsewhere, keys)).rejects.toThrow();
+  expect(
+    (
+      await decryptSecretMaterial(
+        encrypted,
+        { ...binding, urls: ["https://b.example", "https://a.example"] },
+        keys,
+      )
+    ).material,
+  ).toBe("v");
+});
+
+test("rotation: the previous key opens what the current cannot and says so; without a previous key a foreign ciphertext is refused", async () => {
+  const encrypted = await encryptSecretMaterial("v", binding, { current: "old-key" });
+  expect(
+    await decryptSecretMaterial(encrypted, binding, { current: "new-key", previous: "old-key" }),
+  ).toEqual({
+    material: "v",
+    rotated: true,
+  });
+  await expect(decryptSecretMaterial(encrypted, binding, { current: "new-key" })).rejects.toThrow();
 });

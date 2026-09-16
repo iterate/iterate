@@ -115,8 +115,10 @@ class FakePagerWebSocket {
   readonly #listeners = new Map<string, Set<(e: unknown) => void>>();
   accept(): void {}
   send(_data: string): void {}
-  close(): void {
-    this.#emit("close", {});
+  /** Close with `code` — 1000 is a deliberate close (this side's dispose, the DO's "replaced");
+   *  anything else is the leg dropping under a live lend. */
+  close(code = 1000): void {
+    this.#emit("close", { code, reason: "" });
   }
   addEventListener(type: string, cb: (e: unknown) => void): void {
     let set = this.#listeners.get(type);
@@ -158,7 +160,7 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
   };
 
   const relay = await lendRpcStubOverPager(
-    context as unknown as Parameters<typeof lendRpcStubOverPager>[0],
+    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
     provider as unknown as Parameters<typeof lendRpcStubOverPager>[1],
     "key-1",
     [], // the events that name the key — none for a bare pager
@@ -173,6 +175,101 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
   expect(onRpcBrokenRegistrations).toBeLessThanOrEqual(1);
 
   relay.dispose();
+});
+
+// ── rpc stub relay ── THE LEND IS THE SESSION'S, NOT THE SOCKET'S. The pager is a connection between
+// the /api isolate and the DO, never the client's own socket, so it drops while the session lives (a
+// fault on the hop between colos; a DO reset kills every hibernatable socket). What a close MEANS is
+// its code: 1000 is deliberate — this side's dispose, the DO replacing the pager with a newer one —
+// and ends the lend; anything else is a drop, and the relay dials the DO again (bounded: three
+// tries) while the session's dup stays lent.
+
+/** A relay over a DO whose `fetch` answers each dial from `answerDial`: every pager it hands out is
+ *  kept (a test drops one, pages the next), every lend and the dup's disposal are counted, and the
+ *  relay's `waitUntil` promises are kept so a test awaits the re-dial it fired. */
+async function relayOverFakeDurableObject(
+  answerDial: (dial: number) => FakePagerWebSocket | Error,
+) {
+  const fake = {
+    pagers: [] as FakePagerWebSocket[],
+    lends: 0,
+    disposed: 0,
+    waitedUntil: [] as Promise<unknown>[],
+    dials: 0,
+  };
+  const lent = {
+    onRpcBroken() {},
+    [Symbol.dispose]() {
+      fake.disposed += 1;
+    },
+  };
+  const context = {
+    fetch: async () => {
+      const answer = answerDial(++fake.dials);
+      if (answer instanceof Error) throw answer;
+      fake.pagers.push(answer);
+      return { status: 101, webSocket: answer };
+    },
+    lendRpcStub: async () => {
+      fake.lends += 1;
+    },
+  };
+  const relay = await lendRpcStubOverPager(
+    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
+    { dup: () => lent } as unknown as Parameters<typeof lendRpcStubOverPager>[1],
+    "key-4",
+    [],
+    (p) => void fake.waitedUntil.push(p),
+  );
+  return Object.assign(fake, { relay });
+}
+
+describe("a pager that closes under a live session", () => {
+  test.each([
+    {
+      closes: "with 1006 (the leg dropped: the DO reset, the hop failed)",
+      code: 1006,
+      becomes: "RE-DIALED — a second pager attaches, its page lends, the session's dup stays",
+      redialed: true,
+    },
+    {
+      closes: "with 1000 (a deliberate close: the DO replaced it with a newer pager)",
+      code: 1000,
+      becomes: "the lend ENDS — no re-dial, the session's dup released",
+      redialed: false,
+    },
+  ])("closing $closes → $becomes", async ({ code, redialed }) => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fake = await relayOverFakeDurableObject(() => new FakePagerWebSocket());
+    expect(fake.pagers).toHaveLength(1);
+
+    fake.pagers[0].close(code);
+    await Promise.all(fake.waitedUntil); // the re-dial, if one was fired
+    expect(fake.pagers).toHaveLength(redialed ? 2 : 1);
+    expect(fake.disposed).toBe(redialed ? 0 : 1);
+    if (redialed) {
+      fake.pagers[1].page(); // the DO pages down the NEW pager, and the relay still lends
+      await Promise.all(fake.waitedUntil);
+      expect(fake.lends).toBe(1);
+    }
+  });
+
+  test("a re-dial the DO never answers is given up after three tries, two seconds apart: the dup is released, the lend ends", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fake = await relayOverFakeDurableObject((dial) =>
+      dial === 1 ? new FakePagerWebSocket() : new Error("Durable Object reset"),
+    );
+
+    fake.pagers[0].close(1006);
+    const redial = fake.waitedUntil[0]!; // try 1 is immediate; tries 2 and 3 wait two seconds each
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await redial;
+    expect(fake.dials).toBe(4); // the first dial and three re-dials
+    expect(fake.disposed).toBe(1);
+  });
 });
 
 // The pager upgrade carries the events that name the key, and the DO appends them as it accepts the
@@ -205,7 +302,7 @@ test("a refused pager upgrade (the DO would not append what names the key) lends
   };
 
   const refusal = await lendRpcStubOverPager(
-    context as unknown as Parameters<typeof lendRpcStubOverPager>[0],
+    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
     provider as unknown as Parameters<typeof lendRpcStubOverPager>[1],
     "key-2",
     [{ type: "events.iterate.com/itx/rewrite-rule-configured", payload: {} }],
@@ -242,7 +339,7 @@ test("a DO fetch that REJECTS releases the session's dup before the error propag
   };
   await expect(
     lendRpcStubOverPager(
-      context as unknown as Parameters<typeof lendRpcStubOverPager>[0],
+      (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
       provider as unknown as Parameters<typeof lendRpcStubOverPager>[1],
       "key-3",
       [],

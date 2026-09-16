@@ -11,6 +11,7 @@ test("a complete clean browser run publishes a summary even without flake record
   await writeFlakeSuiteSummaries({
     directory: output.path,
     group: "preview",
+    scope: "job",
     artifacts: [browserResult()],
     expectedWorkspaces: [],
     cancelled: false,
@@ -47,6 +48,7 @@ test("per-test evidence uses the retry record's identity and never counts retrie
   await writeFlakeSuiteSummaries({
     directory: output.path,
     group: "preview",
+    scope: "job",
     artifacts: [artifact],
     expectedWorkspaces: [],
     cancelled: false,
@@ -79,6 +81,7 @@ test.each(["interrupted", "missing workspace", "wrong commit", "unexecuted test"
     await writeFlakeSuiteSummaries({
       directory: output.path,
       group: "unit",
+      scope: "job",
       artifacts: [artifact],
       expectedWorkspaces: failure === "missing workspace" ? ["another-package"] : [],
       cancelled: false,
@@ -90,6 +93,55 @@ test.each(["interrupted", "missing workspace", "wrong commit", "unexecuted test"
         diagnostics: expect.arrayContaining([expect.any(String)]),
       },
     );
+  },
+);
+
+test.each(["complete", "missing shard", "foreign attempt", "extra shard"])(
+  "distributed browser results: %s preserves honest suite completeness",
+  async (scenario) => {
+    using output = temporaryDirectory();
+    const base = browserResult();
+    const shards = Array.from({ length: 6 }, (_, index) => ({
+      ...base,
+      artifactId: `playwright-${index + 1}`,
+      ci: { ...base.ci, jobName: `playwright-${index + 1}` },
+      tests: [{ ...base.tests[0]!, leafName: `browser test ${index + 1}` }],
+    }));
+    const finalizer = TestTelemetryArtifact.parse({
+      ...base,
+      artifactId: "preview-finalizer",
+      producer: "preview-e2e-orchestrator",
+      ci: { ...base.ci, jobName: "finish" },
+      // iterate-lint-disable-next-line terminology/no-metaphorical-lane-door-seam -- existing test telemetry wire field
+      context: { framework: "mixed", testKind: "e2e", lane: "preview" },
+      expectedArtifactSources: shards.map(() => ({
+        producer: base.producer,
+        ...base.context,
+      })),
+      tests: [],
+    });
+    if (scenario === "missing shard") shards.pop();
+    if (scenario === "foreign attempt") shards[5]!.ci.workflowRunAttempt = "2";
+    if (scenario === "extra shard") shards.push({ ...shards[0]!, artifactId: "extra" });
+    await writeFlakeSuiteSummaries({
+      directory: output.path,
+      group: "preview",
+      scope: "workflow",
+      artifacts: [finalizer, ...shards],
+      expectedWorkspaces: [],
+      cancelled: false,
+      headSha: "abc123",
+    });
+    expect(
+      JSON.parse(readFileSync(join(output.path, "specs/suite-summary.json"), "utf8")),
+    ).toMatchObject({
+      status: scenario === "complete" ? "complete" : "incomplete",
+      testCount: shards.length,
+      tests: shards.map((_, index) => ({
+        name: `browser test ${index === 6 ? 1 : index + 1}`,
+        outcome: "pass",
+      })),
+    });
   },
 );
 

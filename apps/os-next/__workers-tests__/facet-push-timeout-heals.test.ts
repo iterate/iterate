@@ -141,6 +141,7 @@ test(
     expect(healed.seen.map((row) => Number(row.slept))).toEqual([0, 1]);
     const [checkpoint] = healed.checkpoints;
     expect(checkpoint?.slug).toBe(name);
+    // Every durable event, each incarnation's wake record included: what a "*" row sees.
     const durableEvents = (
       (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: unknown[] }
     ).events.length;

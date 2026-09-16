@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promises as dns } from "node:dns";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { userInfo } from "node:os";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -61,6 +61,8 @@ import {
   CloudflarePreviewSlotDisplay,
   CloudflarePreviewState,
 } from "./state.ts";
+import { assertPreviewCiIdentity, PreviewCiIdentity, readPreviewCiResults } from "./ci-identity.ts";
+import { previewPlaywrightShards } from "./playwright-capacity-reporter.ts";
 
 // Flake-hunt notes for the preview e2e lane live in
 // docs/preview-e2e-flake-hunt.md.
@@ -340,7 +342,7 @@ export async function testTarget(options: TestTargetOptions) {
 }
 
 /**
- * Deploy then test, in one process — the shape CI runs. The two phases share
+ * Deploy then test in one process for local runs. The two phases share
  * ONE pinned run identity and its in-process report,
  * so the class of two-step hazards — a push racing into the gap between the
  * deploy and test steps, and the skip machinery needed to explain it — is
@@ -361,6 +363,382 @@ export async function run(options: DeployCommandOptions = {}) {
     // A no-deploy result still tests the current head. Both phases use the
     // same report in memory, so GitHub read-after-write lag cannot lose work.
     return await testPreviewApps({ target, runtime, telemetry });
+  });
+}
+
+/** Deploy once and publish only non-secret inputs for this workflow attempt. */
+export async function ciPrepare(options: DeployCommandOptions = {}) {
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: true,
+  });
+  const { run } = target;
+  const checkedOutSha = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: runtime.repositoryRoot,
+    encoding: "utf8",
+  }).trim();
+  if (checkedOutSha !== run.headSha)
+    throw new Error("Preview head changed before CI preparation; refusing to deploy.");
+  return await withPreviewE2eTelemetry(run, runtime, "deploy", async (telemetry) => {
+    const { state } = await measurePreviewDeployRun(telemetry, () =>
+      deployPreviewApps({ target, runtime, allApps: Boolean(options.allApps), telemetry }),
+    );
+    const slot = state.environmentConfigLease;
+    if (!slot) throw new Error("Preview deployment produced no slot.");
+    const apps = selectPreviewAppsForTesting(state.apps);
+    if (!apps.length) throw new Error("Preview deployment produced no testable apps.");
+    const plan = PreviewCiPlan.parse({
+      headSha: run.headSha,
+      runId: process.env.GITHUB_RUN_ID,
+      runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+      slot: slot.slug,
+      holder: run.holder,
+      branch: run.branch,
+      state,
+      preparedAt: new Date().toISOString(),
+      playwrightTestCount: z
+        .object({ testCount: z.number().int().positive() })
+        .parse(
+          JSON.parse(
+            await readFile(
+              resolve(runtime.repositoryRoot, "test-results/playwright-catalogue.json"),
+              "utf8",
+            ),
+          ),
+        ).testCount,
+      workerVersionOverrides: resolvePreviewTestWorkerVersionOverrides({
+        apps: state.apps,
+        appSlugs: apps.map((app) => app.slug),
+        dopplerConfig: slot.dopplerConfig,
+      }),
+    });
+    // This invokes the very same readiness commands as the single-machine
+    // preview run. The environment flag exits after all setup processes join.
+    if (apps.some((app) => app.slug === "os")) {
+      const result = await runPreviewCiCommand(
+        plan,
+        run,
+        runtime,
+        "os",
+        cloudflarePreviewApps.os.previewTestCommandArgs,
+        { PREVIEW_OS_READINESS_ONLY: "1" },
+      );
+      if (result.exitCode !== 0)
+        throw new Error(commandFailureMessage(result, "OS readiness failed"));
+    }
+    await mkdir(resolve(runtime.repositoryRoot, "test-results"), { recursive: true });
+    await writeFile(
+      resolve(runtime.repositoryRoot, "test-results/preview-ci-plan.json"),
+      JSON.stringify(plan),
+    );
+    const output = z.string().min(1).parse(process.env.GITHUB_OUTPUT);
+    await appendFile(output, `playwright=${apps.some((app) => app.slug === "os")}\n`);
+    return { headSha: plan.headSha, slot: plan.slot };
+  });
+}
+
+/** Run other app suites or exactly one browser shard using the prepared deployment. */
+export async function ciTest(options: PreviewCommandOptions & { shard?: number }) {
+  const { target, runtime, plan } = await resolvePreviewCiSetup(options);
+  const { run } = target;
+  // Deployment acquired the lease for the whole workflow. Shards only read
+  // ownership: parallel force-renewals race while replacing the same lease.
+  const holder = await findEnvironmentConfigLeaseHolder(
+    runtime.createPreviewSemaphoreResourceClient(),
+    plan.slot,
+  );
+  if (holder !== run.holder) {
+    throw new Error(
+      `Preview slot ${plan.slot} is no longer owned by ${run.holder}; refusing to run tests.`,
+    );
+  }
+  const shard = options.shard;
+  if (shard && !previewPlaywrightShards.includes(shard))
+    throw new Error("Unknown Playwright shard.");
+  const apps = selectPreviewAppsForTesting(plan.state.apps);
+  const targets = shard ? apps.filter((app) => app.slug === "os") : apps;
+  if (shard && !targets.length) {
+    console.log(`Playwright shard ${shard}: OS was not selected by the deployment plan.`);
+    return [];
+  }
+  if (!targets.length) throw new Error("No prepared tests selected.");
+  const results = await Promise.all(
+    targets.map(async (app) => {
+      const key = shard ? `playwright-${shard}` : app.slug;
+      const startedAt = Date.now();
+      const extraEnvironment: Record<string, string> = {};
+      let args = app.previewTestCommandArgs;
+      if (shard) {
+        Object.assign(extraEnvironment, {
+          PLAYWRIGHT_SHARD_INDEX: String(shard),
+          PLAYWRIGHT_PREVIEW_SLOW_FIRST: "1",
+          TEST_TELEMETRY_LANE: "playwright",
+          TEST_TELEMETRY_WORKSPACE: "iterate-root",
+          TEST_TELEMETRY_ARTIFACT_DIR: resolve(
+            runtime.repositoryRoot,
+            `test-results/ci-telemetry/raw/playwright-${shard}`,
+          ),
+          FLAKE_RECORD_DIR: resolve(
+            runtime.repositoryRoot,
+            `test-results/flake-records/specs/shard-${shard}`,
+          ),
+        });
+        args = [
+          "bash",
+          "-c",
+          `timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec --shard=${shard}/${previewPlaywrightShards.length}`,
+        ];
+      } else if (app.slug === "os") {
+        Object.assign(extraEnvironment, {
+          TEST_TELEMETRY_LANE: "vitest",
+          TEST_TELEMETRY_WORKSPACE: "@iterate-com/os",
+          TEST_TELEMETRY_ARTIFACT_FILE: osVitestRetryTelemetryFile,
+          FLAKE_RECORD_DIR: resolve(
+            runtime.repositoryRoot,
+            "test-results/flake-records/preview-e2e",
+          ),
+        });
+        args = [
+          "timeout",
+          String(OS_PREVIEW_LANE_TIMEOUT_SECS),
+          "pnpm",
+          "e2e",
+          "--project",
+          "node",
+        ];
+      }
+      let exitCode = 1;
+      let error: string | null = null;
+      try {
+        const result = await runPreviewCiCommand(
+          plan,
+          run,
+          runtime,
+          app.slug,
+          args,
+          extraEnvironment,
+        );
+        exitCode = result.exitCode || (result.exitCode === 0 ? 0 : 1);
+        if (exitCode) error = commandFailureMessage(result, `${key} failed`);
+      } catch (cause) {
+        error = String(cause);
+      }
+      const receipt = {
+        headSha: plan.headSha,
+        runId: plan.runId,
+        runAttempt: plan.runAttempt,
+        slot: plan.slot,
+        key,
+        exitCode,
+        error,
+        durationMs: Date.now() - startedAt,
+      };
+      await mkdir(resolve(runtime.repositoryRoot, "test-results/preview-ci-results"), {
+        recursive: true,
+      });
+      await writeFile(
+        resolve(runtime.repositoryRoot, `test-results/preview-ci-results/${key}.json`),
+        JSON.stringify(receipt),
+      );
+      return receipt;
+    }),
+  );
+  const failed = results.filter((result) => result.exitCode !== 0);
+  if (failed.length) throw new Error(failed.map((result) => result.error).join("\n"));
+  return results;
+}
+
+/** Join local results and publish outcomes. No live lease is needed: erase runs concurrently. */
+export async function ciFinish(options: PreviewCommandOptions = {}) {
+  const { target, runtime, plan } = await resolvePreviewCiSetup(options);
+  const { run } = target;
+  return await withPreviewE2eTelemetry(run, runtime, "test", async (telemetry) => {
+    const apps = selectPreviewAppsForTesting(plan.state.apps);
+    const osSelected = apps.some((app) => app.slug === "os");
+    let mergeFailure: string | null = null;
+    if (osSelected) {
+      const merged = await runCommand({
+        command: "pnpm",
+        args: [
+          "exec",
+          "playwright",
+          "merge-reports",
+          "--config",
+          "scripts/preview/playwright-merge.config.ts",
+          "test-results/playwright-blobs",
+        ],
+        workingDirectory: runtime.repositoryRoot,
+        environment: runtime.commandEnvironment,
+        signal: runtime.signal,
+      });
+      if (merged.exitCode !== 0) {
+        mergeFailure = commandFailureMessage(merged, "Playwright report merge failed");
+      } else {
+        const report = await readPlaywrightTestTelemetry(
+          resolve(runtime.repositoryRoot, "test-results/playwright-results.json"),
+          "playwright",
+        );
+        if (report.testCount !== plan.playwrightTestCount) {
+          mergeFailure = `Expected ${plan.playwrightTestCount} Playwright tests, received ${report.testCount} in merged report`;
+        }
+      }
+    }
+    // The artifact collector folds this app-local report into the shared root.
+    let streamsReportError: string | null = null;
+    const streamsReport = resolve(
+      runtime.repositoryRoot,
+      "test-results/apps-streams-example-app-test-results/playwright-results.json",
+    );
+    if (apps.some((app) => app.slug === "streams-example-app")) {
+      const target = resolve(
+        runtime.repositoryRoot,
+        "apps/streams-example-app/test-results/playwright-results.json",
+      );
+      await mkdir(dirname(target), { recursive: true });
+      try {
+        await copyFile(streamsReport, target);
+      } catch (error) {
+        streamsReportError = `Could not collect streams Playwright report: ${String(error)}`;
+      }
+    }
+    const entries = await Promise.all(
+      apps.map(async (app) => {
+        telemetry.appStarted(
+          app.previewTestArtifactSources.flatMap((source) =>
+            app.slug === "os" && source.framework === "playwright"
+              ? previewPlaywrightShards.map(() => source)
+              : [source],
+          ),
+        );
+        const keys = [
+          app.slug,
+          ...(app.slug === "os"
+            ? previewPlaywrightShards.map((shard) => `playwright-${shard}`)
+            : []),
+        ];
+        const { failures, durationMs } = await readPreviewCiResults(
+          plan,
+          keys,
+          resolve(runtime.repositoryRoot, "test-results/preview-ci-results"),
+        );
+        if (app.slug === "streams-example-app" && streamsReportError)
+          failures.push(streamsReportError);
+        if (app.slug === "os" && mergeFailure) failures.push(mergeFailure);
+        const summary = await app.collectTestTelemetry({ repositoryRoot: runtime.repositoryRoot });
+        failures.push(...summary.collectionErrors);
+        announceRetryTelemetry(app.slug, summary);
+        const message = failures.length ? failures.join("; ") : null;
+        if (!message) warnIfOverBudget("e2e", app.slug, durationMs, app.previewTestBudgetMs);
+        telemetry.appFinished({
+          app: app.slug,
+          slot: plan.slot,
+          status: message ? "failed" : "passed",
+          durationMs,
+          exitCode: message ? 1 : 0,
+          testCount: summary.testCount,
+          retryCount: summary.retried.reduce((sum, test) => sum + test.retryCount, 0),
+          collectionErrors: summary.collectionErrors,
+        });
+        return CloudflarePreviewAppEntry.parse({
+          ...plan.state.apps[app.slug],
+          status: message ? "tests-failed" : "deployed",
+          message,
+          testDurationMs: durationMs,
+          testRetries: renderPreviewRetrySummary(summary),
+          updatedAt: new Date().toISOString(),
+          runUrl: run.workflowRunUrl,
+        });
+      }),
+    );
+    await target.report.update((state) => ({
+      ...state,
+      apps: {
+        ...state.apps,
+        ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
+      },
+    }));
+    if (entries.some((entry) => entry.status === "tests-failed"))
+      throw new Error(
+        "Preview tests failed or a required shard result was missing; see the app results.",
+      );
+    return { ok: true };
+  });
+}
+
+async function resolvePreviewCiSetup(options: PreviewCommandOptions) {
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: false,
+  });
+  const { run } = target;
+  const plan = PreviewCiPlan.parse(
+    JSON.parse(
+      await readFile(resolve(runtime.repositoryRoot, "test-results/preview-ci-plan.json"), "utf8"),
+    ),
+  );
+  assertPreviewCiIdentity(plan, {
+    headSha: run.headSha,
+    runId: z.string().min(1).parse(process.env.GITHUB_RUN_ID),
+    runAttempt: z.string().min(1).parse(process.env.GITHUB_RUN_ATTEMPT),
+    slot: plan.slot,
+  });
+  if (plan.holder !== run.holder || plan.branch !== run.branch)
+    throw new Error("Preview CI plan belongs to another target.");
+  const checkedOutSha = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: runtime.repositoryRoot,
+    encoding: "utf8",
+  }).trim();
+  if (checkedOutSha !== plan.headSha)
+    throw new Error("Preview CI checkout does not match prepared head.");
+  // Consumers start from the immutable prepared report, not mutable PR prose
+  // or a different runner's local report cache.
+  target.report.state = plan.state;
+  return { target, runtime, plan };
+}
+
+async function runPreviewCiCommand(
+  plan: z.infer<typeof PreviewCiPlan>,
+  run: PreviewRun,
+  runtime: PreviewRuntime,
+  slug: CloudflarePreviewAppSlugType,
+  args: readonly [string, ...string[]],
+  extraEnvironment: Record<string, string>,
+) {
+  const app = cloudflarePreviewApps[slug];
+  const slot = plan.state.environmentConfigLease;
+  if (!slot) throw new Error("Prepared preview has no slot.");
+  const entry = plan.state.apps[slug];
+  const remaining = resolvePreviewRolloutRemainingSeconds({
+    appSlug: slug,
+    deployedAt: entry.deployedAt || entry.updatedAt,
+  });
+  if (app.previewTestRolloutGate === "before-suite" && remaining)
+    await sleep(remaining * 1_000, runtime.signal);
+  const baseUrlEnvironment = resolvePreviewTestBaseUrlEnvironment({ app, apps: plan.state.apps });
+  return await runCommand({
+    command: "doppler",
+    args: [
+      "run",
+      "--project",
+      app.dopplerProject,
+      "--config",
+      slot.dopplerConfig,
+      "--",
+      "env",
+      `${E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV}=${plan.workerVersionOverrides}`,
+      `${previewRolloutRemainingSecondsEnvironment}=${remaining}`,
+      `${PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV}=${resolvePreviewRolloutReadyAtMs({ appSlug: slug, deployedAt: entry.deployedAt || entry.updatedAt })}`,
+      ...baseUrlEnvironment,
+      ...args,
+    ],
+    workingDirectory: resolve(runtime.repositoryRoot, app.appPath),
+    environment: {
+      ...runtime.commandEnvironment,
+      ...resolvePreviewTestTelemetryEnvironment({ app: slug, run, previewSlot: slot.slug }),
+      TEST_TELEMETRY_ARTIFACT_DIR: resolve(runtime.repositoryRoot, "test-results/ci-telemetry/raw"),
+      ...extraEnvironment,
+    },
+    signal: runtime.signal,
   });
 }
 
@@ -1978,18 +2356,41 @@ export type PreviewTestSummary = PreviewRetrySummary & {
  * removes the file before running so a previous run on the same machine
  * (marathon loops) can't leak stale telemetry.
  */
-const osVitestRetryTelemetryFile = "/tmp/os-preview-vitest-retries.json";
+const osVitestRetryTelemetryFile = resolve(
+  import.meta.dirname,
+  "../../test-results/preview-summaries/os-preview-vitest-retries.json",
+);
 /** Structured timing for the standalone agent smoke's logical test. */
-const osAgentSmokeTelemetryFile = "/tmp/os-preview-agent-smoke.json";
+const osAgentSmokeTelemetryFile = resolve(
+  import.meta.dirname,
+  "../../test-results/preview-summaries/os-preview-agent-smoke.json",
+);
 /** Same JSON shape, written by the Microsoft TUI Test wrapper. */
-const osTuiRetryTelemetryFile = "/tmp/os-preview-tui-retries.json";
+const osTuiRetryTelemetryFile = resolve(
+  import.meta.dirname,
+  "../../test-results/preview-summaries/os-preview-tui-retries.json",
+);
 /** Same contract for the streams-example-app lane's vitest sub-lane. */
-const streamsExampleVitestRetryTelemetryFile =
-  "/tmp/os-preview-streams-example-vitest-retries.json";
-const docsVitestTelemetryFile = "/tmp/docs-preview-vitest-results.json";
-const authVitestTelemetryFile = "/tmp/auth-preview-vitest-results.json";
-const semaphoreVitestTelemetryFile = "/tmp/semaphore-preview-vitest-results.json";
-const dummyPetshopVitestTelemetryFile = "/tmp/dummy-petshop-preview-vitest-results.json";
+const streamsExampleVitestRetryTelemetryFile = resolve(
+  import.meta.dirname,
+  "../../test-results/preview-summaries/os-preview-streams-example-vitest-retries.json",
+);
+const docsVitestTelemetryFile = resolve(
+  import.meta.dirname,
+  "../../test-results/preview-summaries/docs-preview-vitest-results.json",
+);
+const authVitestTelemetryFile = resolve(
+  import.meta.dirname,
+  "../../test-results/preview-summaries/auth-preview-vitest-results.json",
+);
+const semaphoreVitestTelemetryFile = resolve(
+  import.meta.dirname,
+  "../../test-results/preview-summaries/semaphore-preview-vitest-results.json",
+);
+const dummyPetshopVitestTelemetryFile = resolve(
+  import.meta.dirname,
+  "../../test-results/preview-summaries/dummy-petshop-preview-vitest-results.json",
+);
 
 /** Reads an immediate preview summary from any runner's canonical artifact. */
 async function readCanonicalTestTelemetry(
@@ -2183,9 +2584,11 @@ export const cloudflarePreviewSharedPaths = [
   // paths. Keep this in sync with both files' `on.pull_request.paths` lists:
   // a change to the workflow (or the shared preview orchestration) triggers a
   // full-fleet preview.
-  ".depot/workflows/cloudflare-previews.yml",
+  ".depot/workflows/preview.yml",
+  ".depot/workflows/preview-run.yml",
   ...cloudflareAppSharedPaths,
   "scripts/preview/**",
+  "scripts/ci/status.ts",
   // Every app's generated wrangler config (routes, worker names, resource
   // IDs) derives from the root envs.ts — an envs.ts change (e.g. recreating a
   // slot's deleted D1) must redeploy the fleet or the fix never ships.
@@ -2373,6 +2776,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         'ROLLOUT_OK=0; wait "$ROLLOUT_PID" || ROLLOUT_OK=$?',
         'READY_OK="$SMOKE_OK"; if [ "$READY_OK" -eq 0 ]; then READY_OK="$ROLLOUT_OK"; fi',
         'echo "[preview:os] environment readiness finish: ($((SECONDS - READY_STARTED))s, exit $READY_OK)"',
+        'if [ "${PREVIEW_OS_READINESS_ONLY:-0}" = "1" ]; then TUI_OK=0; wait "$TUI_PID" || TUI_OK=$?; cat /tmp/os-preview-smoke.log /tmp/os-preview-tui.log; [ "$READY_OK" -eq 0 ] && [ "$TUI_OK" -eq 0 ]; exit; fi',
         `SPEC_OK="$READY_OK"; SPEC_PID=""; if [ "$SPEC_OK" -eq 0 ]; then SPEC_OK="$PW_INSTALL_OK"; if [ "$SPEC_OK" -eq 0 ]; then run_visible_lane playwright env TEST_TELEMETRY_LANE=playwright TEST_TELEMETRY_WORKSPACE=iterate-root FLAKE_RECORD_DIR=test-results/flake-records/specs PLAYWRIGHT_PREVIEW_SLOW_FIRST=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec & SPEC_PID=$!; else cat /tmp/os-preview-pw-install.log; fi; fi`,
         `E2E_OK="$READY_OK"; E2E_PID=""; if [ "$E2E_OK" -eq 0 ]; then run_logged_lane vitest /tmp/os-preview-vitest.log env TEST_TELEMETRY_LANE=vitest TEST_TELEMETRY_WORKSPACE=@iterate-com/os FLAKE_RECORD_DIR=test-results/flake-records/preview-e2e TEST_TELEMETRY_ARTIFACT_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!; fi`,
         'if [ -n "$E2E_PID" ]; then wait "$E2E_PID" || E2E_OK=$?; fi',
@@ -2687,6 +3091,14 @@ function toSlotDisplay(lease: EnvironmentConfigLease): CloudflarePreviewSlotDisp
   return { dopplerConfig: lease.dopplerConfig, slug: lease.slug };
 }
 
+const PreviewCiPlan = PreviewCiIdentity.extend({
+  holder: z.string().min(1),
+  branch: z.string().min(1),
+  state: CloudflarePreviewState,
+  preparedAt: z.iso.datetime(),
+  playwrightTestCount: z.number().int().positive(),
+  workerVersionOverrides: z.string().min(1),
+});
 const CloudflareZonesResponse = z
   .object({
     success: z.boolean(),

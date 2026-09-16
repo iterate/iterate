@@ -1416,7 +1416,7 @@ no-op ConfigWorker>, cacheKey: 'config:default' })`, shown by `itx.rewriteRules.
 
 ```ts
 // iterate-context-durable-object.ts — the constructor, abridged
-this.#stream.appendCreatedAndWokenEvents();
+this.#stream.appendBirthRecord(); // created + woken on a fresh store; a store with rows records its wake at its first door
 this.#stream.append({
   ...subscriptionConfiguredEvent({
     name: "config",
@@ -1498,34 +1498,47 @@ await until(async () =>
 
 ### `itx.repos` and `itx.cfArtifacts`: where code lives
 
-`itx.cfArtifacts` is Cloudflare Artifacts, project-scoped: every repo name is forced under
-`${projectId}.`, `list` is filtered locally, and `get(name)` returns a handle whose `createToken`
-pipelines across `/api` (its `fork`, whose name escapes the wall, is withheld). `itx.repos` is the
-primary door built on top: a repo's file bytes, git-over-HTTPS, one root-level path on `main`. Both
-are deployed-only in the lane — Artifacts has no local implementation.
+A repo is addressed by its PATH everywhere — `/repos/config` — and `itx.repos.get(path)` is how a
+project interacts with it: the repo as a domain object, a stream on any path with its creation
+facts, a `commit-completed` fact per commit, the tip memoized — and the ONLY thing that speaks git.
+The facet carries the git client itself (`src/repo/git-wire.ts`: object and pack codecs, protocol
+v2 over HTTPS) and needs two facts from the platform, which `itx.cfArtifacts` provides: Cloudflare
+Artifacts as a PROXY, project-scoped and by that same path — `create`, `get(path)` for a handle
+whose `createToken` and `remote()` pipeline across `/api` (its `fork`, whose name escapes the wall,
+is withheld), `list` answering in paths, `delete`. Nothing else. The Artifacts repo NAME
+(`repos--config`, every name forced under `${projectId}.`) is derived inside `repos.ts` and spelled
+nowhere else. Artifacts has no local implementation, so locally a test lends a fake proxy to the
+repo's context whose `remote()` points at an in-memory git remote (`e2e/support/fake-git-server.ts`)
+— the real wire codec runs in both lanes; only the binding is deployed-only.
 
 ```ts
-expect(await itx.repos.readFile(repo, "worker.ts")).toBeNull(); // an unborn repo reads as null
-const first = await itx.repos.writeFile(repo, "worker.ts", source); // creates the repo, commits on main
+const repo = itx.repos.get("/repos/config");
+await repo.create(); // repos/create-requested, then repos/created on its path and on /
+expect(await repo.readFile("worker.ts")).toBeNull(); // an unborn repo reads as null
+const first = await repo.writeFile("worker.ts", source); // one commit on main
 expect(first.commitOid).toMatch(/^[0-9a-f]{40}$/);
-expect(await itx.repos.readFile(repo, "worker.ts")).toBe(source);
-await itx.cfArtifacts.delete(repo); // repos and cfArtifacts address the same repo
-// e2e/cfartifacts.e2e.test.ts (deployed only)
-const tok = await a.cfArtifacts.get(repo).createToken("read", 300); // pipelined server-side
+expect(await repo.readFile("worker.ts")).toBe(source);
+await itx.cfArtifacts.delete("/repos/config"); // the proxy speaks the same path
+// e2e/repos.e2e.test.ts (deployed only)
+const tok = await a.cfArtifacts.get(path).createToken("read", 300); // pipelined server-side
 // e2e/cfartifacts.e2e.test.ts (deployed only)
 ```
 
 The payoff is the config worker with its source moved out of KV and into a real repo, nothing else
-changed — the `itx.worker` rewrite is the seam:
+changed — the `itx.worker` rewrite is what points at it, and a commit to that repo re-points it
+(the base `ConfigWorker` follows `repo/commit-completed` with a new `cacheKey`):
 
 ```ts
-await itx.repos.writeFile("config", "worker.ts", CONFIG_WORKER_SRC);
+await itx.repos.get("/repos/config").writeFile("worker.ts", CONFIG_WORKER_SRC);
 await itx.provide("itx.worker", [
   "itx",
   "workers",
-  ["get", { source: `itx.repos.readFile('config','worker.ts')`, cacheKey: "config:repo:v1" }],
+  [
+    "get",
+    { source: `itx.repos.get('/repos/config').readFile('worker.ts')`, cacheKey: "config:repo:v1" },
+  ],
 ]);
-// e2e/config-worker.e2e.test.ts (deployed only)
+// e2e/config-worker.e2e.test.ts
 ```
 
 **What this brick leaves on the table:** everything so far spoke capnweb or Workers RPC. The web
@@ -1546,17 +1559,19 @@ with a value the caller never sees, and `getSecret("/secrets/NAME", { field: "a.
 field out of a JSON secret — apps/os's grammar for a URL or a header (the path and the query alike,
 `:` kept in a spliced value; NOT its `Basic base64(user:getSecret(…))` peeling nor its JSON-body
 template — the body is never scanned); `/secrets/NAME` is the name
-`itx.secrets.set(NAME, …)` stored. `itx.secrets` is the WRITE-ONLY door to those values — `set`,
-`delete`, and a `list` of names and origins, never a value. Every change appends
-`events.iterate.com/secrets/changed` without the value:
+`itx.secrets.set(NAME, …)` stored. `itx.secrets` is the WRITE-ONLY surface for those values — `set`
+(material, a required pin of origins, an optional refresh strategy the secret's own Durable Object
+runs on a 401), `beginOAuth` (the provider's authorize URL; the platform's callback and the object
+obtain the first tokens), `delete`, and a `list` of names, pins and strategy kinds, never a value.
+Every change appends `events.iterate.com/secrets/changed` without the value:
 
 ```ts
 expect(await itx.secrets.list()).toEqual([]);
-await itx.secrets.set("api.key_v-2", "hunter2");
-await itx.secrets.set("stripe", "sk_live", { origin: "https://api.stripe.com/v1/x" });
+await itx.secrets.set("api.key_v-2", "hunter2", { urls: ["https://api.example.com"] });
+await itx.secrets.set("stripe", "sk_live", { urls: ["https://api.stripe.com/v1/x"] });
 expect(await itx.secrets.list()).toEqual([
-  { name: "api.key_v-2" },
-  { name: "stripe", origin: "https://api.stripe.com" }, // the ORIGIN of the URL given, path dropped
+  { name: "api.key_v-2", urls: ["https://api.example.com"] },
+  { name: "stripe", urls: ["https://api.stripe.com"] }, // the ORIGIN of the URL given, path dropped
 ]);
 const changes = (await readAll(itx))
   .filter((e) => e.type === "events.iterate.com/secrets/changed")
@@ -1565,19 +1580,19 @@ expect(JSON.stringify(changes)).not.toContain("hunter2");
 // e2e/secrets.e2e.test.ts
 ```
 
-A secret set with an `origin` is sent to that origin ONLY. A placeholder with no stored secret, or a
-secret bound to another origin, is a 502 to the CALLER, before the terminal fetch, naming the
-placeholder and where it sat, never the value:
+A secret is sent to its pinned origins ONLY (a set without `urls` is refused). A placeholder with no
+stored secret, or a secret pinned to other origins, is a 502 to the CALLER, before the terminal fetch,
+naming the placeholder and where it sat, never the value:
 
 ```ts
-await itx.secrets.set("bound", "v", { origin: "https://api.example.com" });
+await itx.secrets.set("bound", "v", { urls: ["https://api.example.com"] });
 const res = await itx.fetch(
   new Request("https://egress.invalid/", {
     headers: { authorization: 'getSecret("/secrets/bound")' },
   }),
 );
 expect(res.status).toBe(502);
-expect(await res.text()).toContain("bound to https://api.example.com"); // and "not sent to https://egress.invalid"
+expect(await res.text()).toContain("pinned to https://api.example.com"); // and "not sent to https://egress.invalid"
 const missing = await openItx("acme-support").fetch(
   new Request("https://egress.invalid/hunt", {
     headers: { "x-hunt-auth": 'Bearer getSecret("/secrets/GHOST")' },
@@ -2066,18 +2081,19 @@ the DO. Losing the borrowed stubs at idle costs exactly one page on the next cal
 ### The idle quiesce
 
 Three things pin a context awake: a materialized facet, a borrowed stub, a held library connection.
-Sixty seconds without a call, a delivery or a borrow, the alarm aborts every idle facet, returns
-every borrowed stub and releases every connection, so the actor can hibernate:
+The pins carry the clock: sixty seconds after the last use of one — a facet call finishing, a
+borrowed stub called, a library connection used; a request, an append or a delivery moves nothing —
+the alarm aborts every idle facet, returns every borrowed stub and releases every connection, so the
+actor can hibernate:
 
 ```ts
 // iterate-context-durable-object.ts — alarm(), abridged
 const IDLE_QUIESCE_AFTER_MS = 60_000;
 async alarm(): Promise<void> {
-  await this.#subscriptionDelivery.deliverEveryCursorSubscription(); // 1. due retries — AWAITED, so a re-arm lands before hibernation
-  // …the self-wake breaker (below)
-  const quiet = Date.now() - this.#lastActivityMs >= IDLE_QUIESCE_AFTER_MS; // 2. the idle QUIESCE
-  if ((quiet || this.#stream.selfWakeHalted()) && this.#facetWorkInFlight === 0) {
-    for (const facetName of this.#liveFacetNames) this.#abortFacetIfRunning(facetName, "idle quiesce");
+  await this.#subscriptionDelivery.deliverEveryCursorSubscription(); // 1. due retries — AWAITED, so the deadline it leaves is the one derived after
+  const lastPinUseMs = this.#lastPinUseMs(); // null with nothing pinned; a facet call in flight counts as used now
+  if (lastPinUseMs !== null && Date.now() - lastPinUseMs >= IDLE_QUIESCE_AFTER_MS) { // 2. the idle QUIESCE
+    for (const facetName of this.#liveFacetNames.keys()) this.#abortFacetIfRunning(facetName, "idle quiesce");
     this.#liveFacetNames.clear(); // aborted facets re-materialize on their next call
     this.#rpcStubs.returnBorrowedRpcStubs();
     this.#library.releaseConnections();
@@ -2093,11 +2109,13 @@ append and read for the same reason.
 
 ### Alarms only while something is owed
 
-The quiet clock is armed only when there is something to quiesce — a live facet or a borrowed stub —
-and never re-armed otherwise; a bare probe never pays a storage write plus a billed wake for nothing.
-The cursor lane arms the alarm itself whenever a delivery is owed — a batch queued for a row it does
-not know as a push row, and before every awaited call — so an eviction mid-call leaves the alarm
-behind to re-derive its obligations from the rows and the log.
+The idle deadline exists only while something is pinned — a live facet, a borrowed stub, an open
+connection — so a bare probe never pays a storage write plus a billed wake for nothing. A cursor
+row's claim is derived, never remembered: the row is owed while its cursor sits behind the durable
+mark (20 s from when it was first seen so), and before every awaited call it is written with the
+attempt and a time to come back by, so an eviction mid-call leaves both the alarm and the claim
+behind for the next incarnation. The wake record itself is an ordinary durable event every `*` row
+receives; a wake makes no loop because delivering it creates no reason to wake again.
 
 ### The watchdog on facet calls
 
@@ -2112,12 +2130,15 @@ bounded by its own 20 s watchdog, and a push subscriber that stops reading is no
 pending across all rows and 8 MiB in flight per context — the oldest events are dropped and the
 push's `after` moves up, the span the subscriber heals from the log.
 
-### The self-wake breaker
+### The one alarm
 
-One control exists beyond these: a context whose alarm fires five times in a row with no public door
-touched in between has woken itself for nothing, and `stream/self-wake-halted { streak }` is appended
-once and the alarm stops arming until a real request clears the streak
-(`e2e/stream.e2e.test.ts` is the opt-in deployed observation).
+The alarm itself is DERIVED, never requested: `src/alarm-coordinator.ts` arms the earliest of three
+deadlines — the next scheduled append (core state), the earliest owed cursor delivery
+(`subscription-delivery.ts` `deadlines()`), the idle quiesce — and deletes it when there is none, so
+a context with nothing owed never wakes itself. Every alarm pass is traced as ephemeral `stream/trace/alarm`
+events (live through `waitForEvent`, after the fact through `readEvents(…, { includeEphemeral })`),
+and `stream/woken { reason }` says what woke each incarnation; `docs/scheduled-appends.md`
+has the model.
 
 ### Where it is proven
 
@@ -2147,7 +2168,7 @@ only, in `e2e/isolate-ceilings-deployed.e2e.test.ts` and `e2e/isolate-ceilings-d
 | 8       | fetch in the context of this project (secrets), project hosts, the upgrade leg | `src/iterate-context-durable-object.ts`, `src/context/rpc-stubs.ts`, `src/worker.ts`                         |
 | 9       | the library                                                                    | `src/library.ts`                                                                                             |
 | 10      | identity, OAuth grants, personal access tokens, the control plane              | `src/principal.ts`, `src/session.ts`, `src/oauth.ts`, `src/grants.ts`, `src/control-plane.ts`                |
-| 11      | pagers, the quiesce, alarms, the watchdog, the breaker                         | `src/iterate-context-durable-object.ts`, `src/stream/stream.ts`                                              |
+| 11      | pagers, the quiesce, the one alarm, the watchdog                               | `src/iterate-context-durable-object.ts`, `src/stream/stream.ts`                                              |
 
 The invariants a reader should now be able to state:
 
@@ -2174,8 +2195,8 @@ The invariants a reader should now be able to state:
   host, answered by the config worker's `fetch`.
 - **Identity is attribution.** The DO stamps `source.principal`; the session's reach is its grant's;
   membership is the directory's; loaded code speaks for the project.
-- **The DO holds nothing across idle.** Pagers, the quiesce, alarms only while something is owed, a
-  watchdog on every facet call, one breaker on self-wakes.
+- **The DO holds nothing across idle.** Pagers, the quiesce, an alarm only while something is owed
+  (derived, never requested), a watchdog on every facet call.
 
 ---
 
@@ -2222,6 +2243,6 @@ table of chapter 3 was checked by running `src/context/itx-expression-rewriting.
   `src/context/rpc-stubs.ts`; the e2e lane proves the capnweb-provider half end to end and marks
   the dynamic-worker-provider half `test.fails`; the workerd-provider half is
   `__workers-tests__/ws-fetch-live-101.test.ts`.
-- **The self-wake breaker's streak of five** is stated from `src/stream/stream.ts`
-  (`SELF_WAKE_HALT_STREAK`) and `src/stream/stream.test.ts`; the e2e observation is opt-in and
-  eviction-rate dependent.
+- **The one alarm's hold** (nothing written during a pass; the alarm read at construction is only
+  the dedupe seed) is stated from `src/alarm-coordinator.ts` and its table test; the e2e wake
+  observation is opt-in and deployed only.

@@ -2,6 +2,7 @@
 // point. Its reduced state is everything the DO needs SYNCHRONOUSLY at its doors, event-sourced from
 // the context's own control events and nothing else:
 //
+//   future event batches     stream/append-scheduled · append-schedule-{cancelled,completed,failed} → schedules
 //   who this context is       stream/created { projectId, path }            → projectId · path · createdAt
 //   which incarnation runs    stream/woken { incarnation }                  → incarnation
 //   may appends land          stream/paused { reason } · stream/resumed     → paused        (one `if` in Stream.append)
@@ -18,7 +19,7 @@
 // pauses — so a POLICY processor (a token-bucket breaker, a quota) runs as an ordinary facet and
 // trips the stream by appending `paused`. Core knows nothing about it; e2e/support/sources.ts's
 // BreakerProcessor is that pattern. created/woken come from the DO constructor
-// (Stream.appendCreatedAndWokenEvents); the pause exemptions are Stream.append's.
+// (Stream.appendBirthRecord / appendWakeRecord); the pause exemptions are Stream.append's.
 //   subscriptions — a literal `subscription-configured` event, THE SUBSCRIPTIONS TABLE's one command (the rows are core state)
 
 import { isRefreshKind, type SecretCatalogEntry } from "../secrets.ts";
@@ -39,6 +40,13 @@ import {
   type ItxExpressionRewriteRule,
 } from "../context/itx-expression-rewriting.ts";
 import { jsonEqual } from "../lib.ts";
+import {
+  ScheduledAppendInput,
+  ScheduledAppendCancelled,
+  ScheduledAppendSettled,
+  reduceScheduledAppends,
+  type ScheduledAppend,
+} from "./scheduled-appends.ts";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "./processor.ts";
 
 /** A hosting spec, read off a RESOLVED target. */
@@ -148,6 +156,25 @@ function facetAddressedBy(resolvedTarget: ItxExpression): string | undefined {
     : undefined;
 }
 
+/** Does a row's target OWN ITS PROGRESS — a facet (its own checkpoint) or a lent rpc stub (a live
+ *  client's own offset), so the stream keeps no cursor for it and its deliveries are PUSHES? Decided
+ *  from the rules alone, never by evaluating the target: a fresh incarnation classifies every row
+ *  before anything runs, so a facet row is never a cursor row's claim on the alarm (the delivery
+ *  loop). A target that cannot be resolved yet (a `subscribe` before its `provide`) cannot own
+ *  progress: the stream keeps its cursor, as for any plain target. */
+export function targetOwnsProgress(state: CoreState, row: Subscription): boolean {
+  const resolved = resolveThroughState(state, row.target);
+  if (!resolved) return false;
+  const getStep = resolved[3];
+  return (
+    resolved[1] === "builtins" &&
+    (resolved[2] === "facets" || resolved[2] === "rpcStubs") &&
+    Array.isArray(getStep) &&
+    getStep[0] === "get" &&
+    typeof getStep[1] === "string"
+  );
+}
+
 /** THE DRAFT TABLES OF ONE BATCH: a table is copied ONCE per batch, on its first touch, and mutated
  *  in place from then on, so a page of N control events costs O(rows + N), not N copies of the whole
  *  table (the O(rows²) constructor re-reduce memory-budget.test.ts pins). The set is fresh per batch
@@ -245,6 +272,7 @@ export type CoreState = {
   itxExpressionRewriteRules: Record<string, ItxExpressionRewriteRule>;
   /** THE SUBSCRIPTIONS TABLE, by name. */
   subscriptions: Record<string, Subscription>;
+  schedules: Record<string, ScheduledAppend>;
   /** THE SECRETS CATALOG, by name — the origins a secret is pinned to and its refresh strategy's
    *  kind, never a value (the value is physical, in the secret's own Durable Object):
    *  `itx.secrets.list()` reads this, strongly consistent. */
@@ -269,11 +297,12 @@ function parseSubscriptionName(name: string): string {
  *  state. The reduce below is the one list of the types it consumes. */
 export const CoreContract = {
   slug: "core",
-  version: "8.0.0",
+  version: "10.0.0",
   initialState: (): CoreState => ({
     paused: null,
     itxExpressionRewriteRules: {},
     subscriptions: {},
+    schedules: {},
     secrets: {},
   }),
 };
@@ -316,6 +345,13 @@ export function reduceCoreEvent(
     return { ...state, subscriptions };
   };
   switch (event.type) {
+    case "events.iterate.com/stream/append-scheduled":
+    case "events.iterate.com/stream/append-schedule-cancelled":
+    case "events.iterate.com/stream/append-schedule-completed":
+    case "events.iterate.com/stream/append-schedule-failed": {
+      const schedules = reduceScheduledAppends(state.schedules, event);
+      return schedules === state.schedules ? undefined : { ...state, schedules };
+    }
     case "events.iterate.com/secrets/changed": {
       const name = payload.name as string;
       const next = payload.deleted
@@ -508,6 +544,26 @@ function normalizeSubscriptionConfigured(input: {
  *  committing a durable no-op. Every other event passes through untouched. The DO runs this on every
  *  append (iterate-context-durable-object.ts). */
 export function normalizeControlEvent(event: StreamEventInput): StreamEventInput {
+  // `String(…)`: a non-string type (a client's `{ type: 12345 }`) is Stream.append's to refuse, with
+  // its own message — this prefix check runs first and must not throw a TypeError of its own.
+  if (String(event.type).startsWith("events.iterate.com/stream/append-schedule")) {
+    if (event.ephemeral) throw new Error("scheduled append control events must be durable");
+    if (event.type === "events.iterate.com/stream/append-scheduled") {
+      const payload = ScheduledAppendInput.parse(event.payload);
+      return {
+        ...event,
+        payload: { ...payload, events: payload.events.map(normalizeControlEvent) },
+      };
+    }
+    if (event.type === "events.iterate.com/stream/append-schedule-cancelled")
+      return { ...event, payload: ScheduledAppendCancelled.parse(event.payload) };
+    if (
+      event.type === "events.iterate.com/stream/append-schedule-completed" ||
+      event.type === "events.iterate.com/stream/append-schedule-failed"
+    )
+      return { ...event, payload: ScheduledAppendSettled.parse(event.payload) };
+    throw new Error(`unknown scheduled append control event: ${event.type}`);
+  }
   if (event.type === "events.iterate.com/stream/subscription-configured")
     return {
       ...event,

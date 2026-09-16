@@ -57,6 +57,8 @@ run("pnpm", [
   "--var",
   "APP_CONFIG_SESSION_SECRET:dev-session-secret",
   "--var",
+  "APP_CONFIG_SECRETS_KEY:dev-secrets-key",
+  "--var",
   "APP_CONFIG_ADMIN_API_SECRET:dev-admin-api-secret",
   ...args,
 ]);
