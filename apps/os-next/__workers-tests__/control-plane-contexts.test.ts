@@ -1,16 +1,22 @@
-// The control-plane-on-contexts SHAPE, and its SECURITY REQUIREMENTS captured as expected-fails.
+// The control-plane-on-contexts SHAPE, and its SECURITY REQUIREMENTS.
 //
-// The shape is in place and INSECURE on purpose: a global context (projectId === GLOBAL_PROJECT_ID)
-// is an ordinary context with the full itx surface, exactly like a project's. The path-mask access
-// policy — which global paths a caller may reach, and which event types it may append — is NOT yet
-// enforced. Every "naughty thing" a caller can currently do is written here as `test.fails`: the body
-// asserts the SECURE outcome, so while the code is insecure the assertion fails and the expected-fail
-// passes; when enforcement lands the assertion passes, the expected-fail turns into a real failure,
-// and whoever wired the fix deletes the `.fails`. See apps/os-next/docs/control-plane-context-resolved-design.md.
+// A global context (projectId === GLOBAL_PROJECT_ID) is an ordinary context with the full itx
+// surface, exactly like a project's — except that THE GLOBAL NAMESPACE IS NOT NAVIGABLE: a session
+// holds a global context by IDENTITY only (`session.user`, `session.organizations.get` by
+// membership), a global edge handle's `cd` is refused for everyone, and inside a global DO the
+// built-in `cd` admits one hop — the kernel's config funnel `itx.cd('/').worker…` under no principal
+// (src/iterate-context.ts, src/context/built-ins.ts, src/session.ts). That is the whole path mask:
+// nobody can NAME another user's path. Beneath it, every project-scoped RESOURCE (`itx.kv`, the
+// secret cells and catalog, the Artifacts repos) is keyed by the RESOURCE OWNER — a project, or in
+// the global namespace the user's/organization's subtree (`resourceScope`, src/iterate-context.ts)
+// — so a name is never shared across users. What remains open is the append type-gate, still a
+// `test.fails` here: the body asserts the SECURE outcome, so while the code is insecure the assertion
+// fails and the expected-fail passes; whoever wires the fix deletes the `.fails`.
+// See apps/os-next/docs/control-plane-context-resolved-design.md.
 import { beforeAll, describe, expect, test } from "vitest";
 import { AccountProcessor } from "../src/account/processor.ts";
 import { ACCOUNT_PROCESSOR_SOURCE } from "../src/generated/account-processor-source.ts";
-import { adminCredentials, applyDirectorySchema, openSession, until } from "./support.ts";
+import { adminCredentials, applyDirectorySchema, openSession, stub, until } from "./support.ts";
 
 beforeAll(applyDirectorySchema);
 
@@ -21,18 +27,22 @@ async function userSession(email: string): Promise<any> {
   return root.authenticate({ ...adminCredentials(), as: { email } });
 }
 
-/** Assert `thunk` is REFUSED. While the code is insecure it resolves, so this throws and the
- *  enclosing `test.fails` passes; once enforcement lands it rejects, the assertion passes, and the
- *  `test.fails` turns red — whoever wires the fix deletes the `.fails`. (Explicit try/catch, not
- *  `expect().rejects`, because a capnweb stub is a custom thenable `.rejects` doesn't handle.) */
-async function refuses(thunk: () => Promise<unknown>): Promise<void> {
-  let refused = false;
+/** Assert `thunk` is REFUSED with a coded error (the code the refusal must carry, so a broken
+ *  pipeline or a typo never passes as a refusal). Explicit try/catch, not `expect().rejects`,
+ *  because a capnweb stub is a custom thenable `.rejects` doesn't handle. Under a `test.fails` the
+ *  thunk resolving is what keeps the expected-fail passing while that gap is open. */
+async function refuses(
+  thunk: () => Promise<unknown>,
+  code: "FORBIDDEN" | "PROJECT_NAME_RESERVED" = "FORBIDDEN",
+): Promise<void> {
+  let refusal: unknown;
   try {
     await thunk();
-  } catch {
-    refused = true;
+  } catch (error) {
+    refusal = error;
   }
-  expect(refused, "expected this to be refused, but it was allowed — still insecure").toBe(true);
+  expect(refusal, "expected this to be refused, but it was allowed — still insecure").toBeDefined();
+  expect((refusal as { code?: string }).code).toBe(code);
 }
 
 describe("shape — a global context is an ordinary context (passing)", () => {
@@ -54,11 +64,19 @@ describe("shape — a global context is an ordinary context (passing)", () => {
     expect(page.events.some((event) => event.type === "note")).toBe(true);
   });
 
-  test("session.organizations.get vends the org's context at (global, /organizations/<id>)", async () => {
+  test("session.organizations.get vends the org's context at (global, /organizations/<id>) — by membership", async () => {
     const s = await userSession("org-shape@sec.test");
-    expect(await s.organizations.get("org_demo").whoami()).toEqual({
+    const org = (await s.createOrg("org-shape")) as { id: string };
+    expect(await s.organizations.get(org.id).whoami()).toEqual({
       projectId: "global",
-      path: "/organizations/org_demo",
+      path: `/organizations/${org.id}`,
+    });
+    // The admin reaches every organization.
+    const root = await openSession();
+    const admin = await root.authenticate(adminCredentials());
+    expect(await admin.organizations.get(org.id).whoami()).toEqual({
+      projectId: "global",
+      path: `/organizations/${org.id}`,
     });
   });
 
@@ -135,15 +153,24 @@ describe("account — foundation shape (passing)", () => {
   });
 });
 
-describe("security requirements — currently INSECURE, captured as expected-fails", () => {
-  test.fails("a user cannot READ another user's context", async () => {
+describe("security requirements — the global namespace is not navigable", () => {
+  test("organizations.get refuses a path in place of an id — the admin reaches every org, so the id must be one segment", async () => {
+    const admin = await (await openSession()).authenticate(adminCredentials());
+    const b = await userSession("traverse-b@sec.test");
+    const bId = (await b.whoami()).actor;
+    await refuses(() => admin.organizations.get(`../users/${bId}`));
+    await refuses(() => admin.organizations.get(".."));
+    await refuses(() => admin.organizations.get(`x/../users/${bId}`));
+  });
+
+  test("a user cannot READ another user's context", async () => {
     const a = await userSession("read-a@sec.test");
     const b = await userSession("read-b@sec.test");
     const bId = (await b.whoami()).actor;
     await refuses(() => a.user.cd(`/users/${bId}`).invoke(["itx", ["readEvents"]]));
   });
 
-  test.fails("a user cannot APPEND to another user's context", async () => {
+  test("a user cannot APPEND to another user's context", async () => {
     const a = await userSession("write-a@sec.test");
     const b = await userSession("write-b@sec.test");
     const bId = (await b.whoami()).actor;
@@ -162,16 +189,127 @@ describe("security requirements — currently INSECURE, captured as expected-fai
     );
   });
 
-  test.fails("a user cannot reach the global ROOT context", async () => {
+  test("a user cannot reach the global ROOT context — not by cd, not through the project catalog", async () => {
     const a = await userSession("root-reach@sec.test");
     await refuses(() => a.user.cd("/").invoke(["itx", ["readEvents"]]));
+    await refuses(() => a.projects.get("global").invoke(["itx", ["readEvents"]]));
+    // The admin's catalog is every project — but the global namespace is no project.
+    const root = await openSession();
+    const admin = await root.authenticate(adminCredentials());
+    await refuses(() => admin.projects.get("global").invoke(["itx", ["readEvents"]]));
   });
 
-  test.fails("a project named 'global' must not collide with the deployment-global namespace", async () => {
+  test("a project named 'global' must not collide with the deployment-global namespace", async () => {
     const s = await userSession("collide@sec.test");
-    // With prj_-prefixed project ids (or a reserved-word guard) this create is refused; today the
-    // slug IS the id, so `projects.get('global')` would address (global, "/") — the global root.
-    await refuses(() => s.projects.create({ project: "global" }));
+    // The slug IS the id, so the word is reserved at the catalog: `Global` slugs to it too.
+    await refuses(() => s.projects.create({ project: "Global" }), "PROJECT_NAME_RESERVED");
+  });
+
+  test("a user cannot reach an organization they do not belong to", async () => {
+    const a = await userSession("org-a@sec.test");
+    const b = await userSession("org-b@sec.test");
+    const org = (await a.createOrg("a's org")) as { id: string };
+    await refuses(() => b.organizations.get(org.id).invoke(["itx", ["readEvents"]]));
+  });
+
+  test("a rule written into your own context cannot navigate for you: `itx.spy ⇒ itx.cd('/users/<other>').readEvents` is refused inside the DO", async () => {
+    const a = await userSession("spy-a@sec.test");
+    const b = await userSession("spy-b@sec.test");
+    const bId = (await b.whoami()).actor;
+    using _spy = await a.user.provide("itx.spy", `itx.cd('/users/${bId}').readEvents`);
+    await refuses(() => a.user.invoke("itx.spy()"));
+    // The same rule aimed at the root is refused too — a person's hop, whatever the target.
+    using _rootSpy = await a.user.provide("itx.rootSpy", "itx.cd('/').readEvents");
+    await refuses(() => a.user.invoke("itx.rootSpy()"));
+  });
+
+  test("a subscription written into your own context cannot append into another user's: the kernel's delivery runs under no principal, but its one hop is the config funnel — the row HALTS", async () => {
+    const a = await userSession("launder-a@sec.test");
+    const b = await userSession("launder-b@sec.test");
+    const bId = (await b.whoami()).actor;
+    using _launder = await a.user.subscribe({
+      name: "launder",
+      target: `itx.cd('/users/${bId}').append`,
+      consumes: ["smuggled"],
+    });
+    await a.user.invoke(["itx", ["append", { type: "smuggled" }]]);
+    const row = await until("the launder row is halted", async () => {
+      const rows = (await a.user.invoke("itx.subscriptions.list()")) as {
+        name: string;
+        halted?: unknown;
+      }[];
+      const launderRow = rows.find((entry) => entry.name === "launder");
+      return launderRow?.halted ? launderRow : undefined;
+    });
+    expect(row.halted).toBeDefined();
+    const bPage = (await b.user.invoke(["itx", ["readEvents"]])) as { events: { type: string }[] };
+    expect(bPage.events.some((event) => event.type === "smuggled")).toBe(false);
+  });
+
+  test("the kernel's config funnel still delivers a user context's commits to the global root: the `config` row's cursor confirms past the append", async () => {
+    const a = await userSession("funnel@sec.test");
+    const [mark] = (await a.user.invoke(["itx", ["append", { type: "funnel-mark" }]])) as {
+      offset: number;
+    }[];
+    const config = await until("config cursor past the mark", async () => {
+      const rows = (await a.user.invoke("itx.subscriptions.list()")) as {
+        name: string;
+        halted?: unknown;
+        cursor?: { confirmedOffset: number; attempt: number };
+      }[];
+      const configRow = rows.find((entry) => entry.name === "config");
+      return configRow?.cursor && configRow.cursor.confirmedOffset >= mark.offset
+        ? configRow
+        : undefined;
+    });
+    expect(config.halted).toBeUndefined();
+    expect(config.cursor!.attempt).toBe(0);
+  });
+
+  // The RESOURCE OWNER beneath the mask (`resourceScope`): a user's kv, secrets and repos are keyed
+  // by their own subtree, so a name is never another user's nor the global root's. The global root
+  // and a context BELOW a user are reached through the lane's raw DO door (`stub`): no session can
+  // navigate there — `session.user.cd` is refused, `projects.get('global')` too.
+
+  test("a user's kv is their own: A's put is A's get, not B's, not the global root's — and a context below A reads A's", async () => {
+    const a = await userSession("kv-a@sec.test");
+    const b = await userSession("kv-b@sec.test");
+    const aId = (await a.whoami()).actor;
+    await a.user.kv.put("k", "a");
+    expect(await a.user.kv.get("k")).toBe("a");
+    expect(await b.user.kv.get("k")).toBeNull();
+    expect(await stub("global").invoke(["itx", "kv", ["get", "k"]])).toBeNull();
+    expect(
+      await stub(`global.iterate/users/${aId}/notes`).invoke(["itx", "kv", ["get", "k"]]),
+    ).toBe("a");
+    expect((await b.user.kv.list()).keys).toEqual([]);
+  });
+
+  test("a user's secrets are their own: A's set is in A's catalog (A's context IS its secrets root), not B's, not the global root's — a context below A shares A's catalog", async () => {
+    const a = await userSession("secret-a@sec.test");
+    const b = await userSession("secret-b@sec.test");
+    const aId = (await a.whoami()).actor;
+    await a.user.secrets.set("x", "value-a", { urls: ["https://example.test"] });
+    expect(await a.user.secrets.list()).toEqual([{ name: "x", urls: ["https://example.test"] }]);
+    expect(await b.user.secrets.list()).toEqual([]);
+    expect(await stub("global").invoke(["itx", "secrets", ["list"]])).toEqual([]);
+    expect(
+      await stub(`global.iterate/users/${aId}/notes`).invoke(["itx", "secrets", ["list"]]),
+    ).toEqual([{ name: "x", urls: ["https://example.test"] }]);
+    // The catalog fact landed in A's own log, attributed to A — not in the global root's.
+    const aPage = (await a.user.invoke(["itx", ["readEvents"]])) as {
+      events: { type: string; payload?: { name?: string } }[];
+    };
+    expect(
+      aPage.events.some(
+        (event) =>
+          event.type === "events.iterate.com/secrets/changed" && event.payload?.name === "x",
+      ),
+    ).toBe(true);
+    // B setting the same NAME is B's own row, and leaves A's untouched.
+    await b.user.secrets.set("x", "value-b", { urls: ["https://b.example.test"] });
+    expect(await b.user.secrets.list()).toEqual([{ name: "x", urls: ["https://b.example.test"] }]);
+    expect(await a.user.secrets.list()).toEqual([{ name: "x", urls: ["https://example.test"] }]);
   });
 
   // parked: these need machinery from later increments (the privileged account facet and the

@@ -36,6 +36,7 @@ const desktopWebUse = {
 
 export default defineConfig({
   testDir: "specs",
+  globalSetup: "./specs/setup.ts",
   testMatch: "**/*.spec.ts",
   // Stateful specs provision isolated fixture projects; local-only helper
   // specs share no remote state. Parallel in CI against a deployed slot;
@@ -46,11 +47,9 @@ export default defineConfig({
   // (docs/testing.md#retries-and-timeouts). A burst that defeats it fails
   // the run on purpose: platform weather should be visible, not absorbed.
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
-  // Sixteen workers put the isolated catalogue at its measured longest-case
-  // floor: the latest zero-retry run carried ~1,554s of aggregate work while
-  // its longest case took ~117s, so 1,554 / 16 no longer sets the critical
-  // path. More workers should not shorten the suite and would only add local
-  // browser pressure to the 16-core preview runner.
+  // Keep the existing CI concurrency. Earlier aggregate/longest-test timings
+  // included the shared rollout wait inside fixtures; remeasure with readiness
+  // outside the runner before using those timings to change worker counts.
   workers: process.env.CI ? 16 : 1,
   outputDir: "test-results/playwright-output",
   reporter: [

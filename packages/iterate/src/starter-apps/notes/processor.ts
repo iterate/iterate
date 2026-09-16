@@ -8,6 +8,7 @@
 // nothing durable). Invariant: nothing lives only in the stream — the fold
 // holds obligations, never note content; files are truth.
 import { z } from "zod";
+import type { EditWorkspaceFileResult } from "../../itx-api.generated.ts";
 import {
   defineProcessorContract,
   isIdempotencyConflict,
@@ -40,7 +41,7 @@ const AnalysisResult = z.discriminatedUnion("status", [
     status: z.literal("superseded"),
     reason: z
       .string()
-      .meta({ description: "Why nothing was written (file changed/gone/expired)." }),
+      .meta({ description: "Why nothing was written (file empty/changed/gone/expired)." }),
   }),
   z.object({ status: z.literal("failed"), error: z.string() }),
 ]);
@@ -110,7 +111,7 @@ export const NotesProcessorContract = defineProcessorContract({
       description:
         "Terminal settlement of one analysis obligation. `succeeded` means the title/tags were " +
         "ALSO written into the file's frontmatter (the durable artifact); `superseded` means the " +
-        "body changed or the file vanished before write-back; `failed` carries the error. Exactly " +
+        "body was empty or changed, or the file vanished before write-back; `failed` carries the error. Exactly " +
         "one per obligation, keyed on path + requestOffset.",
       payloadSchema: z.object({
         path: z.string(),
@@ -165,7 +166,11 @@ export type NotesAnalysis = { title: string; tags: string[]; processedBy: string
  * with an in-memory file map and the worker wires it over itx per call. */
 export type NotesWorkspace = {
   readFile(path: string): Promise<string | null>;
-  writeFile(path: string, content: string): Promise<void>;
+  edit(input: {
+    path: string;
+    oldString: string;
+    newString: string;
+  }): Promise<EditWorkspaceFileResult>;
   /** Paths dirty in the notes mount (relative to git truth). */
   dirtyNotePaths(): Promise<string[]>;
   commit(input: { message: string; scope: string }): Promise<void>;
@@ -329,6 +334,9 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
       return { status: "superseded", reason: "note file no longer exists" };
     }
     const note = parseNoteFile(content);
+    if (!note.body.trim()) {
+      return { status: "superseded", reason: "note has no text to analyze" };
+    }
     const analysis = await this.deps.analyze({ text: note.body });
 
     const current = await this.deps.workspace.readFile(path);
@@ -339,13 +347,20 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
     if (currentNote.body !== note.body) {
       return { status: "superseded", reason: "note body changed during analysis" };
     }
-    await this.deps.workspace.writeFile(
+    // The final read and this write cross an RPC boundary. An unconditional
+    // write can still replace a user's edit committed after the guard read.
+    // Workspace.edit checks the old contents inside its serialized write.
+    const edited = await this.deps.workspace.edit({
       path,
-      composeNoteFile(
+      oldString: current,
+      newString: composeNoteFile(
         { ...currentNote.frontmatter, title: analysis.title, tags: analysis.tags },
         currentNote.body,
       ),
-    );
+    });
+    if (edited.status === "not-applied") {
+      return { status: "superseded", reason: edited.reason };
+    }
     return { status: "succeeded", ...analysis };
   }
 

@@ -25,10 +25,10 @@ Every snippet assumes this preamble — exactly how the lane opens a session. Th
 ```ts
 import { newWebSocketRpcSession } from "capnweb";
 
-const wsApi = new URL("/api", WORKER_BASE_URL); // the one worker under test: a local boot, or the deployed one
+const wsApi = new URL("/internal/rpc", WORKER_BASE_URL); // the operator door of the one worker under test (a local boot, or the deployed one); the public door is /api, behind the OAuth gate
 wsApi.protocol = "ws:";
 
-/** A fresh session — an UnauthenticatedSession stub. Hold it with `using`: a capnweb stub is
+/** A fresh session — an IterateRpcTarget stub. Hold it with `using`: a capnweb stub is
  *  disposable, and disposing the session says goodbye — every stub it lent is recalled, every
  *  handle it holds disposed (chapter 1). */
 export const session = () => newWebSocketRpcSession(wsApi.toString());
@@ -80,25 +80,24 @@ DO and reaches it only over Workers RPC. Everything you hold is minted at the ed
 
 ### A client is a capnweb peer, and the door is `authenticate(credentials)`
 
-`/api` serves an `UnauthenticatedSession` whose only door is `authenticate(credentials)`. It answers
-a `Session`: a catalog that vends contexts, never a context itself. `Session.projects.get(project)`
-and `Session.projects.create({ project })` vend a project's ROOT context — the `IterateContext` you
+`/api` — and the operator door `/internal/rpc`, the e2e lane's — serves an `IterateRpcTarget` whose
+only door is `authenticate(credentials)`. It answers a `SessionRpcTarget`: a catalog that vends
+contexts, never a context itself. `session.projects.get(project)` and
+`session.projects.create({ project })` vend a project's ROOT context — the `IterateContext` you
 will call `itx` from here on. The credential names where the identity already is, or the secret
-that proves it (chapter 10 has the four kinds).
+that proves it (chapter 10 has the two kinds).
 
 ```ts
 // session.ts — what /api hands a client BEFORE it holds a context (abridged)
 export type SessionCredentials =
-  | { type: "from-server-cookie" } // a browser: the login cookie rode the handshake, same origin only
-  | { type: "project-token"; token: string } // one user on one project
-  | { type: "project-secret"; project: ProjectIdOrSlug; secret: string } // the project itself: a device, a headless app
-  | { type: "admin-secret"; secret: string; as?: { sub: string; email: string } }; // every project; `as` impersonates
-export class UnauthenticatedSession extends RpcTarget {
-  async authenticate(credentials: SessionCredentials): Promise<Session> {
+  | { type: "from-server-cookie" } // the OAuth grant the transport already resolved: a browser's cookie on the handshake, or a bearer access token
+  | { type: "admin-secret"; secret: string; as?: { email: string } }; // every project; `as` a user's session without a login
+export class IterateRpcTarget extends RpcTarget {
+  async authenticate(credentials: SessionCredentials): Promise<SessionRpcTarget> {
     /* … */
   }
 }
-class Session extends RpcTarget {
+export class SessionRpcTarget extends RpcTarget {
   whoami(): SessionPrincipal {
     /* … */
   }
@@ -139,15 +138,15 @@ other — an open design, not a decision:
 // PROPOSED, not built — the names are placeholders; the layering is the point
 using iterate = await connectToIterate({
   baseUrl: "https://<worker>",
-  credentials: { type: "project-token", token },
-}); // a Session: whoami, projects
+  credentials: { type: "admin-secret", secret }, // or a personal access token as the handshake's bearer
+}); // a SessionRpcTarget: whoami, projects
 using itx = await connectToIterateProject({ baseUrl, credentials, project: "acme-support" }); // the project's root context, on a session of its own
 ```
 
 `connectToIterate` opens `/api` and authenticates: one session, many projects, the thing you
 dispose. `connectToIterateProject` is that plus `projects.get(project)`, for the client that lives
 in one project; disposing it disposes the session it opened. Both take the `credentials` union
-`authenticate` takes, so a browser, a script and a device differ in one field.
+`authenticate` takes, so a browser and an operator script differ in one field.
 
 > **Landing:** an open design — today's clients import `capnweb` and write the two lines
 > themselves (`e2e/support/client.ts`).
@@ -164,8 +163,8 @@ for the next match — chapter 4.
 
 ### The explicit door and the dotted sugar
 
-`IterateContext` declares only a handful of methods (`cd`, `invoke`, `provide`, `subscribe`,
-`mintToken`, `rotateApiKey`). Everything else you write on `itx` — `itx.whoami()`,
+`IterateContext` declares only a handful of methods (`cd`, `invoke`, `provide`, `subscribe`).
+Everything else you write on `itx` — `itx.whoami()`,
 `itx.kv.put('k','v')`, `itx.slack.chat.postMessage(…)` — is a prototype hop that accumulates the
 unknown segments into ONE `invoke(expression)` (`installPrototypeInvokeFallback`,
 `src/context/expression.ts`). The two spellings are the same call:
@@ -1497,36 +1496,45 @@ await until(async () =>
 // e2e/config-worker.e2e.test.ts
 ```
 
-### `itx.repos` and `itx.cfArtifacts`: where code lives
+### `itx.git`, `itx.repos` and `itx.cfArtifacts`: where code lives
 
 `itx.cfArtifacts` is Cloudflare Artifacts, project-scoped: every repo name is forced under
 `${projectId}.`, `list` is filtered locally, and `get(name)` returns a handle whose `createToken`
-pipelines across `/api` (its `fork`, whose name escapes the wall, is withheld). `itx.repos` is the
-primary door built on top: a repo's file bytes, git-over-HTTPS, one root-level path on `main`. Both
-are deployed-only in the lane — Artifacts has no local implementation.
+pipelines across `/api` (its `fork`, whose name escapes the wall, is withheld). `itx.git` is the
+stateless adapter built on top — a repo's files on `main` over git-over-HTTPS (`create`, `tip`,
+`snapshot`, `commitFiles`, `log`) — and `itx.repos.get(path)` the repo as a domain object over it: a
+stream on any path with its creation facts, a `commit-completed` fact per commit, and the tip
+memoized. Artifacts has no local implementation, so the physical tier runs deployed-only in the
+lane; locally a test lends a fake `itx.git` to the repo's context.
 
 ```ts
-expect(await itx.repos.readFile(repo, "worker.ts")).toBeNull(); // an unborn repo reads as null
-const first = await itx.repos.writeFile(repo, "worker.ts", source); // creates the repo, commits on main
+const repo = itx.repos.get("/repos/config");
+await repo.create(); // repos/create-requested, then repos/created on its path and on /
+expect(await repo.readFile("worker.ts")).toBeNull(); // an unborn repo reads as null
+const first = await repo.writeFile("worker.ts", source); // one commit on main
 expect(first.commitOid).toMatch(/^[0-9a-f]{40}$/);
-expect(await itx.repos.readFile(repo, "worker.ts")).toBe(source);
-await itx.cfArtifacts.delete(repo); // repos and cfArtifacts address the same repo
-// e2e/cfartifacts.e2e.test.ts (deployed only)
+expect(await repo.readFile("worker.ts")).toBe(source);
+await itx.cfArtifacts.delete("repos--config"); // the path's Artifacts name: segments joined with --
+// e2e/repos.e2e.test.ts (deployed only)
 const tok = await a.cfArtifacts.get(repo).createToken("read", 300); // pipelined server-side
 // e2e/cfartifacts.e2e.test.ts (deployed only)
 ```
 
 The payoff is the config worker with its source moved out of KV and into a real repo, nothing else
-changed — the `itx.worker` rewrite is the seam:
+changed — the `itx.worker` rewrite is what points at it, and a commit to that repo re-points it
+(the base `ConfigWorker` follows `repo/commit-completed` with a new `cacheKey`):
 
 ```ts
-await itx.repos.writeFile("config", "worker.ts", CONFIG_WORKER_SRC);
+await itx.repos.get("/repos/config").writeFile("worker.ts", CONFIG_WORKER_SRC);
 await itx.provide("itx.worker", [
   "itx",
   "workers",
-  ["get", { source: `itx.repos.readFile('config','worker.ts')`, cacheKey: "config:repo:v1" }],
+  [
+    "get",
+    { source: `itx.repos.get('/repos/config').readFile('worker.ts')`, cacheKey: "config:repo:v1" },
+  ],
 ]);
-// e2e/config-worker.e2e.test.ts (deployed only)
+// e2e/config-worker.e2e.test.ts
 ```
 
 **What this brick leaves on the table:** everything so far spoke capnweb or Workers RPC. The web
@@ -1547,17 +1555,19 @@ with a value the caller never sees, and `getSecret("/secrets/NAME", { field: "a.
 field out of a JSON secret — apps/os's grammar for a URL or a header (the path and the query alike,
 `:` kept in a spliced value; NOT its `Basic base64(user:getSecret(…))` peeling nor its JSON-body
 template — the body is never scanned); `/secrets/NAME` is the name
-`itx.secrets.set(NAME, …)` stored. `itx.secrets` is the WRITE-ONLY door to those values — `set`,
-`delete`, and a `list` of names and origins, never a value. Every change appends
-`events.iterate.com/secrets/changed` without the value:
+`itx.secrets.set(NAME, …)` stored. `itx.secrets` is the WRITE-ONLY surface for those values — `set`
+(material, a required pin of origins, an optional refresh strategy the secret's own Durable Object
+runs on a 401), `beginOAuth` (the provider's authorize URL; the platform's callback and the object
+obtain the first tokens), `delete`, and a `list` of names, pins and strategy kinds, never a value.
+Every change appends `events.iterate.com/secrets/changed` without the value:
 
 ```ts
 expect(await itx.secrets.list()).toEqual([]);
-await itx.secrets.set("api.key_v-2", "hunter2");
-await itx.secrets.set("stripe", "sk_live", { origin: "https://api.stripe.com/v1/x" });
+await itx.secrets.set("api.key_v-2", "hunter2", { urls: ["https://api.example.com"] });
+await itx.secrets.set("stripe", "sk_live", { urls: ["https://api.stripe.com/v1/x"] });
 expect(await itx.secrets.list()).toEqual([
-  { name: "api.key_v-2" },
-  { name: "stripe", origin: "https://api.stripe.com" }, // the ORIGIN of the URL given, path dropped
+  { name: "api.key_v-2", urls: ["https://api.example.com"] },
+  { name: "stripe", urls: ["https://api.stripe.com"] }, // the ORIGIN of the URL given, path dropped
 ]);
 const changes = (await readAll(itx))
   .filter((e) => e.type === "events.iterate.com/secrets/changed")
@@ -1566,19 +1576,19 @@ expect(JSON.stringify(changes)).not.toContain("hunter2");
 // e2e/secrets.e2e.test.ts
 ```
 
-A secret set with an `origin` is sent to that origin ONLY. A placeholder with no stored secret, or a
-secret bound to another origin, is a 502 to the CALLER, before the terminal fetch, naming the
-placeholder and where it sat, never the value:
+A secret is sent to its pinned origins ONLY (a set without `urls` is refused). A placeholder with no
+stored secret, or a secret pinned to other origins, is a 502 to the CALLER, before the terminal fetch,
+naming the placeholder and where it sat, never the value:
 
 ```ts
-await itx.secrets.set("bound", "v", { origin: "https://api.example.com" });
+await itx.secrets.set("bound", "v", { urls: ["https://api.example.com"] });
 const res = await itx.fetch(
   new Request("https://egress.invalid/", {
     headers: { authorization: 'getSecret("/secrets/bound")' },
   }),
 );
 expect(res.status).toBe(502);
-expect(await res.text()).toContain("bound to https://api.example.com"); // and "not sent to https://egress.invalid"
+expect(await res.text()).toContain("pinned to https://api.example.com"); // and "not sent to https://egress.invalid"
 const missing = await openItx("acme-support").fetch(
   new Request("https://egress.invalid/hunt", {
     headers: { "x-hunt-auth": 'Bearer getSecret("/secrets/GHOST")' },
@@ -1593,8 +1603,7 @@ The door (`src/iterate-context-durable-object.ts`) scans the URL first, then eve
 placeholder as written, or as the URL parser percent-encodes it in a path or a query — splices a URL
 value as ONE component so a secret can never add a query parameter, and preserves method, `Upgrade`
 and body, so a 101 flows through it. A `{ field }` placeholder whose value is not JSON, or has no
-string at that path, is the same 502; the project's own API key (chapter 10) lives outside the
-catalog, so `getSecret("/secrets/project-api-key")` finds nothing. The catalog is the PROJECT's: a
+string at that path, is the same 502. The catalog is the PROJECT's: a
 secret set from `/a` is listed from `/b` and the root, and the change events live in the root's log.
 Deployed, the value arrives at the bound origin — proven by fetching one of the project's own apps
 on its real host.
@@ -1816,32 +1825,34 @@ appended from a browser tab, a `provide` from a laptop, an MCP client's tool cal
 
 ## 10. identity: who is calling
 
-### One door, four credential kinds
+### One door, two credential kinds
 
 `authenticate(credentials)` takes a `SessionCredentials` — where the identity already is, or the
-secret that proves it — and every lane reads the same kinds off a request:
+secret that proves it — and every door reads the same two kinds:
 
-- `from-server-cookie`: the control plane owns a signed session cookie (`__Host-itx-control-plane-session`);
-  `/login` is a form that verifies nothing (enter an email and you become that user — attribution,
-  not authentication). A browser cannot set a header on a WebSocket, so the cookie rides the
-  handshake and the call NAMES it — never implicit. It counts on a same-origin request only
-  (`isSameOriginBrowserRequest`, `src/worker.ts`: the `Origin` header is this origin, or absent);
-  a foreign site's socket carries the cookie too and is refused `UNAUTHENTICATED` — the one guard
-  that makes an ambient cookie safe over RPC. `projects.get` admits members of the owning org only.
-- `project-token`: one user on one project, below.
-- `admin-secret`: the deployment's `APP_CONFIG_ADMIN_API_SECRET` (a wrangler secret) — `{ actor:
-"admin" }`, every project, `list()` is the whole directory, `create()` lands in `org_admin`. With
-  `as: { sub, email }` it is that user's session without a login (the row upserted like `/login`
-  does), which is how a confinement test signs in. The e2e lane runs on it.
-- `project-secret`: the project itself (a device, a headless app) — its own long-lived key, minted
-  by `projects.get(project).rotateApiKey()`, below. The session is `{ actor: "project:<id>" }`,
-  bound to that one project exactly like a token's.
+- `from-server-cookie`: the OAuth grant the transport already resolved. `/api` sits behind the one
+  OAuth provider gate (`src/api.ts`, `src/oauth.ts`): the gate admits an `Authorization: Bearer`
+  access token, or the console's own browser session — an opaque HttpOnly `__Host-itx-session`
+  cookie whose `BrowserSession` Durable Object holds the tokens (`src/client/app-auth.ts`) — before
+  capnweb ever opens, and the call only says "hand me that session". A browser cannot set a header on
+  a WebSocket, so the cookie rides the handshake and the call NAMES it — never implicit; it counts on
+  a same-origin request only (`isSameOriginBrowserRequest`, `src/lib.ts`: the `Origin` header is this
+  origin, or absent), so a foreign site's socket is refused `UNAUTHENTICATED` — the one guard that
+  makes an ambient cookie safe over RPC. Who the grant is comes from the issuer's login (`/login`:
+  Google, or an assumed email where `APP_CONFIG_TEST_EMAIL_LOGIN` is on). `projects.get` admits
+  members of the owning org only.
+- `admin-secret`: the deployment's `APP_CONFIG_ADMIN_API_SECRET` (a wrangler secret), verified
+  in-band on the operator door `/internal/rpc` — `{ actor: "admin" }`, every project, `list()` is
+  the whole directory, `create()` lands in `org_admin`. With `as: { email }` it is that user's
+  session without a login (the row upserted like `/login` does), which is how a confinement test
+  signs in. The e2e lane runs on it. On `/api`, `/mcp` and a project host the same secret is a
+  bearer like any other (`resolveExternalToken`, `src/oauth.ts`).
 
-The fetch lane — a project host — is bearer and token only: this project's token, its secret or the
-admin secret as `Authorization: Bearer`, or the host cookie a token was turned into (below). The
-platform's login cookie is never a lane credential (`projectHostIdentityOf`, `src/worker.ts`): on a lane a
-cross-site navigation would carry it with no `Origin` to check. `/mcp` is behind the OAuth AS and
-takes the same bearers.
+There is no third kind. A script, a device, a coding agent — anything that is not a browser — holds
+an OAuth grant too: a PERSONAL ACCESS TOKEN (below) or an MCP client's consent grant, presented as
+`Authorization: Bearer` on `/api`, `/mcp` and a project host. A project host takes exactly those
+bearers, or the app's own browser session (below); the console's cookie never crosses to a project
+host.
 
 ### The control plane, and MCP through the one login
 
@@ -1864,10 +1875,10 @@ DCR), and sends the user to `/authorize`; the consent page is the project select
 as checkboxes, all checked — and approving mints a grant whose props name her and the checked
 projects. The token then reaches ONE tool: `run({ project?, script })` — the text of
 `async (itx) => …` run (`itx.run`) in THAT project's root context, in-process, under her
-principal (`invokeAs`), so what it appends carries her; `project` is
+principal, so what it appends carries her; `project` is
 optional when the grant reaches exactly one, required for the admin secret (which reaches every
-project as a bearer, `resolveExternalToken`), refused outside the grant. A project's own secret is a
-bearer too — it names its project with `?project=<id>` on the `/mcp` URL — and acts as `project:<id>`. MCP is not a parallel capability
+project as a bearer, `resolveExternalToken`), refused outside the grant. A personal access token
+(below) is the same bearer on `/mcp`, reaching the projects it was minted for. MCP is not a parallel capability
 API: a tool call reaches what an expression reaches, for any project the grant names:
 
 ```ts
@@ -1893,111 +1904,88 @@ expect((await invoke({ expression: "itx.whoami()" })).text).toMatch(
 // __workers-tests__/control-plane.test.ts
 ```
 
-### Project tokens, the admin secret, and `Session.whoami`
+### An OAuth grant, the admin secret, and `whoami`
 
-A PROJECT TOKEN is a signed claim `{ projectId, actor, email?, expiresAt }` — HMAC-SHA256 under
-`APP_CONFIG_PROJECT_TOKEN_SECRET`, minted by whoever fronts the users after their membership check.
-`authenticate({ type: "project-token", token })` answers a session that knows who it is and is bound
-to the token's one project; the admin secret answers `{ actor: "admin" }`, and `as` a user:
+A session knows who it is from the gate, never from the caller. An OAuth grant's session — the
+browser's cookie, a bearer access token — is `{ actor: <userId>, email }` with the grant's reach:
+the projects the consent chose, else the projects of the user's orgs; the admin secret answers
+`{ actor: "admin" }`, and `as` a user. A bearer that does not verify, or a grant that has ended,
+is refused at the HTTP door before capnweb ever opens:
 
 ```ts
-const principal = { actor: "user_ada", email: "ada@example.com" };
-const token = await mintProjectToken({ projectId, ...principal }); // e2e/support/principal.ts signs with the lane's secret
-using api = session();
-const authenticated = api.authenticate({ type: "project-token", token });
-expect(await authenticated.whoami()).toEqual({ projectId, ...principal });
-expect((await rejection(authenticated.projects.get(`${projectId}-other`).whoami())).code).toBe(
-  "FORBIDDEN",
-); // the token names ONE project
-expect(
-  (await rejection(api.authenticate({ type: "project-token", token: `${token}x` }).whoami())).code,
-).toBe("INVALID_CREDENTIALS");
-const admin = api.authenticate(adminCredentials()); // { type: "admin-secret", secret }
+const { api, token, principal } = await oauthSession(projectId, member); // e2e/support/principal.ts: the real login, consent and code exchange; the bearer on /api
+expect(principal.email).toBe(member.email);
+expect(codeOf(await rejection(api.projects.get(`${projectId}-other`).whoami()))).toBe("FORBIDDEN"); // the grant names its projects
+const bad = await fetch(workerUrl("/api"), {
+  method: "POST",
+  headers: { Authorization: `Bearer ${token}x` },
+});
+expect(bad.status).toBe(401);
+await api.logout(); // ends the grant
+const revoked = await fetch(workerUrl("/api"), {
+  method: "POST",
+  headers: { Authorization: `Bearer ${token}` },
+});
+expect(revoked.status).toBe(401);
+using operator = session(); // the operator door, /internal/rpc
+const admin = operator.authenticate(adminCredentials()); // { type: "admin-secret", secret }
 expect(await admin.whoami()).toEqual({ actor: "admin" });
-const ada = api.authenticate(
-  adminCredentials({ sub: "user_ada@example.com", email: "ada@example.com" }),
-);
-expect((await rejection(ada.projects.get(projectId).whoami())).code).toBe("FORBIDDEN"); // the admin's project, not hers
-expect((await rejection(api.authenticate({ type: "from-server-cookie" }).whoami())).code).toBe(
-  "UNAUTHENTICATED",
-); // no cookie on this socket
-// e2e/session.e2e.test.ts
+const ada = operator.authenticate(adminCredentials({ email: "ada@example.com" }));
+expect(codeOf(await rejection(ada.projects.get(projectId).whoami()))).toBe("FORBIDDEN"); // the member's org's project, not hers
+// e2e/session.e2e.test.ts (composed)
 ```
 
-A bound session lists its one project and cannot `create()` — the catalog's writer is a control-plane
-user (or the admin).
+A grant that chose projects lists exactly those and cannot `create()` — the catalog's writer is a
+user's unnarrowed session (or the admin).
 
-### The project secret, and minting tokens
+### Personal access tokens: `grants.mint`
 
-Two doors ride the root context `projects.get(project)` vends, so `get`'s admission — a member, the
-admin, the project's own secret — is their gate, and neither touches a Durable Object.
-
-`rotateApiKey()` mints the project's own key: 32 random bytes as base64url, answered ONCE. Only the
-SHA-256 hash is stored, in `SECRETS_KV` under `project-api-key:<projectId>` — outside the
-`secret:<projectId>:` prefix `itx.fetch` substitutes from, so no `getSecret("/secrets/…")`
-placeholder can ever mail it out. A reveal IS a rotation: the previous key stops verifying at once, and a project
-has no key until the first call. `authenticate({ type: "project-secret", project, secret })` hashes
-the candidate and compares in constant time (`verifyProjectSecret`, `src/principal.ts`); the session
-it opens IS the project:
+A script, a device or a coding agent that is not a browser needs a credential it can hold. It is not
+a third kind: it is ONE more OAuth grant of the user's, minted by the user's own session —
+`session.grants.mint({ name, projects })` (`src/grants.ts`; the console's sessions page,
+`src/routes/_auth/sessions.tsx`, is its one form). The grant is finite (30 days), scoped to the
+projects named (each one the user reaches), and carries no refresh credential; its access token is
+answered ONCE and never stored readable. It is listed by `session.grants.list()` beside the browser's
+own session (kind "Personal access token") and ended by `session.grants.end(grantId)` like any
+grant. The bearer IS the user, with the token's project ceiling, on `/api`, `/mcp` and a covered
+project host; minting needs an HTTPS issuer or the local worker:
 
 ```ts
-const key = await mintProjectApiKey(projectId); // e2e/support/principal.ts: projects.get(project).rotateApiKey() on the admin session
-const device = api.authenticate({ type: "project-secret", project: projectId, secret: key });
-expect(await device.whoami()).toEqual({ projectId, actor: `project:${projectId}` });
-await device.projects.get(projectId).append({ type: "reading", payload: { celsius: 21 } }); // stamped { actor: "project:<id>" }
-expect((await device.projects.list()).map((p) => p.id)).toEqual([projectId]); // bound: list is the one project…
-expect((await rejection(device.projects.get(`${projectId}-other`).whoami())).code).toBe(
-  "FORBIDDEN",
-); // …get elsewhere refused
-const next = await device.projects.get(projectId).rotateApiKey(); // any handle that reaches the project may rotate
-expect(
-  (
-    await rejection(
-      api.authenticate({ type: "project-secret", project: projectId, secret: key }).whoami(),
-    )
-  ).code,
-).toBe("INVALID_CREDENTIALS"); // the old key died
+using minter = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest()); // the account's own session: the login cookie on /api
+const { token, expiresAt } = await minter
+  .authenticate({ type: "from-server-cookie" })
+  .grants.mint({ name: "E2E personal access token", projects: [projectId] });
+const api = publicSession(token); // /api with `Authorization: Bearer <token>` on the handshake
+expect(await api.whoami()).toEqual(principal); // the bearer IS the user…
+expect((await api.projects.list()).map((project) => project.id)).toEqual([projectId]); // …with the token's ceiling
+expect(codeOf(await rejection(api.projects.get(other).whoami()))).toBe("FORBIDDEN"); // a project the user reaches, the token does not
+const bearer = { Authorization: `Bearer ${token}` };
+const covered = await fetchProjectHost(`echo--${projectId}.${base}`, "/", bearer); // the same bearer on a project host
+expect(JSON.parse(covered.text)).toEqual({ principal, authorization: null }); // the app sees the stamp, never the bearer
+expect((await fetchProjectHost(`echo--${other}.${base}`, "/", bearer)).status).toBe(403);
+using lister = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
+const listed = await lister.authenticate({ type: "from-server-cookie" }).grants.list();
+const grant = listed.items.find((item) => item.name === "E2E personal access token");
+expect(grant?.kind).toBe("Personal access token");
+using ender = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
+await ender.authenticate({ type: "from-server-cookie" }).grants.end(grant!.id); // refused on /api, /mcp and the host at once
+expect((await fetch(workerUrl("/api"), { method: "POST", headers: bearer })).status).toBe(401);
 // e2e/session.e2e.test.ts
 ```
 
-`mintToken({ ttlSeconds? })` signs a project token for that project as whoever holds the handle —
-the admin, a member, the project itself — 15 minutes by default, 24 hours at most; it is what the
-console links a project host through (`/.itx/session?token=`, below), and what a script presents
-as a bearer:
-
-```ts
-const adminToken = await itx.mintToken(); // the admin's handle ⇒ { projectId, actor: "admin" }
-expect(await api.authenticate({ type: "project-token", token: adminToken }).whoami()).toEqual({
-  projectId,
-  actor: "admin",
-});
-const hers = await ada.projects.get(own).mintToken({ ttlSeconds: 60 }); // a member's ⇒ her principal, her project
-const asItself = await api
-  .authenticate({ type: "project-secret", project: projectId, secret: next })
-  .projects.get(projectId)
-  .mintToken();
-expect(await api.authenticate({ type: "project-token", token: asItself }).whoami()).toEqual({
-  projectId,
-  actor: `project:${projectId}`,
-});
-// e2e/session.e2e.test.ts
-```
-
-Two handles have neither door (`FORBIDDEN`). One no session vended — a loaded worker's `env.ITX`:
-loaded code speaks for the project and signs as nobody. And a project-TOKEN session's: a token is a
-delegation, minutes long, and mints no further token and rotates no key — the member, the admin, or
-the project-secret session for its own project does (`src/session.ts` hands a token session no
-project doors).
+Two handles have no credential door at all. A loaded worker's `env.ITX` speaks for the project and
+signs as nobody. And the admin secret's session manages no grants (`session.grants` is `FORBIDDEN`
+there): a personal access token is a person's, minted from their own signed-in session.
 
 ### The principal is stamped on events, and carried by `cd`
 
-The principal rides every dispatch the session makes (`invokeAs`, a DO-only Workers-RPC verb; the
-`x-itx-principal` header on a terminal fetch), and the DO's append root stamps it as
+The principal rides every dispatch the session makes (the caller of `IterateContextDurableObject.invoke`,
+a DO-only Workers-RPC verb; the `x-itx-principal` header on a terminal fetch), and the DO's append root stamps it as
 `source.principal` on every event. It is the DO's field: a client's own `source.principal` is
 overwritten — the admin session's with `{ actor: "admin" }` — and the platform's own rows carry it too:
 
 ```ts
-const itx = authenticated.projects.get(projectId);
+const itx = api.projects.get(projectId); // the OAuth grant's session, above
 await itx.append({ type: "note", payload: { n: 1 }, source: { principal: { actor: "forged" } } });
 await itx.provide("itx.demo", "itx.builtins.kv"); // the platform's own row, appended for this session
 await openItx(projectId).append({
@@ -2029,40 +2017,43 @@ NO principal: it speaks for the project, and the request's principal reaches an 
 `x-itx-principal` for the app to attribute what it appends itself. A secret's change event is
 attributed the same way (`e2e/secrets.e2e.test.ts`).
 
-### On a project host: the cookie and the bearer
+### On a project host: the browser session and the bearer
 
-`/.itx/session?token=<projectToken>&next=<path>` turns a token for THIS project into the host-scoped
-`itx-project-session` cookie (HttpOnly, Secure, SameSite=Lax, until the token expires) and redirects,
-never off the host; `?logout` clears it. A valid token — the cookie (a browser) or
-`Authorization: Bearer <projectToken>` (a script; the bearer wins) —
-stamps `x-itx-principal` on the Request the app sees. The token itself never reaches the app. The
-project's own secret as the bearer is THE DEVICE LANE (the kit's provisioning partition carries the
-project slug and this key): the app sees `{ actor: "project:<id>" }`, never the key; another
-project's secret is nobody here and passes through as the app's own bearer would:
+A project host takes the same OAuth grants, two ways. A browser signs in through the app's own
+`/.auth/*` adapter on that host (`src/client/app-auth.ts`: `/.auth/login` sends it to the issuer,
+`/.auth/callback` exchanges the code, `/.auth/logout` ends it) and holds one opaque HttpOnly
+`__Host-itx-session` cookie whose `BrowserSession` Durable Object keeps the tokens
+(`browserAuthorization`, `src/browser-client.ts`; the browser half is proven by `specs/auth.spec.ts`);
+a script sends `Authorization: Bearer` — an access token, a personal access token included, or the
+admin secret (the bearer wins when both are present). The edge admits either through the one
+provider gate (`authorizationForToken`, `src/worker.ts`): a bearer that does not verify is 401, a
+grant that does not reach THIS project is 403, and the verified principal is stamped as
+`x-itx-principal` on the Request the app sees. The credential itself never reaches the app — every
+`__Host-itx-*` cookie and the platform's bearer are stripped; a visitor's own cookies, and an
+`Authorization` header in another scheme, pass through — and a visitor's own `x-itx-principal` is
+stripped with every inbound `x-itx-*`:
 
 ```ts
-const door = await fetchProjectHost(host, `/.itx/session?token=${token}&next=/w`);
-expect(door.status).toBe(303);
-expect(door.headers["set-cookie"]).toContain(`itx-project-session=${token}`);
-const seen = JSON.parse(
-  (await fetchProjectHost(host, "/echo", { cookie: `${cookieHeader}; theme=dark` })).text,
-);
+const { token, principal } = await oauthSession(projectId, member);
+const echo = await fetchProjectHost(host, "/echo", {
+  Authorization: `Bearer ${token}`,
+  cookie: "theme=dark",
+  "x-itx-principal": '{"actor":"forged"}',
+});
+const seen = JSON.parse(echo.text);
 expect(seen.principal).toEqual(principal); // the verified stamp…
-expect(seen.cookie).toBe("theme=dark"); // …never the platform's cookie; the visitor's own cookies still reach the app
-expect((await fetchProjectHost(host, `/.itx/session?token=${foreign}&next=/`)).status).toBe(401); // another project's token; a visitor's own x-itx-principal is stripped
-const device = JSON.parse(
-  (
-    await fetchProjectHost(host, "/echo", {
-      authorization: `Bearer ${await mintProjectApiKey(projectId)}`,
-    })
-  ).text,
-);
-expect(device.principal).toEqual({ actor: `project:${projectId}` }); // the device lane…
-expect(device.authorization).toBeNull(); // …the platform's credential, stripped
+expect(seen.cookie).toBe("theme=dark"); // …the visitor's own cookies still reach the app
+expect(seen.authorization).toBeNull(); // the platform's credential, stripped
+const forged = await fetchProjectHost(host, "/echo", { "x-itx-principal": '{"actor":"forged"}' });
+expect(JSON.parse(forged.text).principal).toBeNull(); // a visitor's own stamp is nobody
+const foreign = await oauthSession(other, member); // the same user, a grant for another project
+expect(
+  (await fetchProjectHost(host, "/echo", { Authorization: `Bearer ${foreign.token}` })).status,
+).toBe(403);
 // e2e/ingress-project-host.e2e.test.ts
 ```
 
-On `/mcp`, the bearer's principal — the grant's user, `admin`, `project:<id>` — is what a
+On `/mcp`, the bearer's principal — the grant's user, or `admin` — is what a
 `tools/call` appends under (the control plane section above); there is no unauthenticated MCP
 door: the provider refuses a request with no bearer, or a token for another resource, before a
 tool runs.
@@ -2168,7 +2159,7 @@ only, in `e2e/isolate-ceilings-deployed.e2e.test.ts` and `e2e/isolate-ceilings-d
 | 7       | loaded workers, `env.ITX`, the loader, the config worker, repos                | `src/context/worker-loader.ts`, `src/iterate-context.ts`, `src/sdk/index.ts`, `src/context/repos.ts`         |
 | 8       | fetch in the context of this project (secrets), project hosts, the upgrade leg | `src/iterate-context-durable-object.ts`, `src/context/rpc-stubs.ts`, `src/worker.ts`                         |
 | 9       | the library                                                                    | `src/library.ts`                                                                                             |
-| 10      | identity, tokens, the control plane                                            | `src/principal.ts`, `src/session.ts`, `src/control-plane.ts`                                                 |
+| 10      | identity, OAuth grants, personal access tokens, the control plane              | `src/principal.ts`, `src/session.ts`, `src/oauth.ts`, `src/grants.ts`, `src/control-plane.ts`                |
 | 11      | pagers, the quiesce, the one alarm, the watchdog                               | `src/iterate-context-durable-object.ts`, `src/stream/stream.ts`                                              |
 
 The invariants a reader should now be able to state:
@@ -2194,7 +2185,7 @@ The invariants a reader should now be able to state:
 - **A fetch-shaped capability is always a terminal `.fetch(request)`.** `itx.fetch` is fetch in the
   context of this project — secrets substituted, refusals to the caller; the way in is a project
   host, answered by the config worker's `fetch`.
-- **Identity is attribution.** The DO stamps `source.principal`; the session is bound by its token;
+- **Identity is attribution.** The DO stamps `source.principal`; the session's reach is its grant's;
   membership is the directory's; loaded code speaks for the project.
 - **The DO holds nothing across idle.** Pagers, the quiesce, an alarm only while something is owed
   (derived, never requested), a watchdog on every facet call.
@@ -2219,7 +2210,7 @@ Every client snippet above is lifted from, or composed of calls made by, these f
 | 7        | `e2e/session.e2e.test.ts`, `e2e/workers-and-facets.e2e.test.ts`, `e2e/stream.e2e.test.ts`, `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/config-worker.e2e.test.ts`, `e2e/cfartifacts.e2e.test.ts` (deployed only), `e2e/config-worker.e2e.test.ts` (deployed only) |
 | 8        | `e2e/secrets.e2e.test.ts`, `e2e/fetch-door.e2e.test.ts`, `e2e/session.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts`                                                                                                                                     |
 | 9        | `e2e/library-connectors.e2e.test.ts` (against the deployed pet shop; the WebSocket transports deployed only)                                                                                                                                                   |
-| 10       | `e2e/session.e2e.test.ts`, `e2e/secrets.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts`, `__workers-tests__/control-plane.test.ts` (the `/mcp` rows)                                                                                                      |
+| 10       | `e2e/session.e2e.test.ts`, `e2e/support/principal.ts` (the OAuth login fixture), `e2e/secrets.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts`, `__workers-tests__/control-plane.test.ts` (the `/mcp` rows)                                                |
 | 11       | `e2e/stream.e2e.test.ts` (opt-in, deployed only), `__workers-tests__/hibernation-at-scale.test.ts`, `__workers-tests__/alarm-quiesce.test.ts`                                                                                                                  |
 
 The server snippets are abridged from the files named in each code block's first comment. The rule
@@ -2237,9 +2228,9 @@ table of chapter 3 was checked by running `src/context/itx-expression-rewriting.
   refusal.
 - **`useLiveState`** (chapter 6) is described from `src/client/demo.tsx` and is exercised by
   `specs/live-state-demo.spec.ts` (Playwright over `/demo`), not by the e2e lane.
-- **The cookie credential** (chapter 10) is described from `src/session.ts`, `src/worker.ts` and
-  `src/control-plane.ts`; the e2e lane runs on the admin secret throughout, and the cookie's
-  admissions (the same-origin check, membership) are pinned in `__workers-tests__/control-plane.test.ts`.
+- **The browser cookie** (chapter 10) is described from `src/client/app-auth.ts`, `src/browser-client.ts`
+  and `src/session.ts`; the e2e lane presents bearers (the login cookie only to consent and to mint),
+  and the browser flows are `specs/auth.spec.ts` and `specs/personal-access-tokens.spec.ts` (Playwright).
 - **The fetch-upgrade leg's mechanism** (chapter 8) is described from the doctrine header of
   `src/context/rpc-stubs.ts`; the e2e lane proves the capnweb-provider half end to end and marks
   the dynamic-worker-provider half `test.fails`; the workerd-provider half is

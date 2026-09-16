@@ -12,7 +12,8 @@ vi.mock("cloudflare:workers", () => ({
   RpcPromise: class {},
   RpcProperty: class {},
 }));
-import { DurableObjectNameCodec } from "./iterate-context.ts";
+import { DurableObjectNameCodec, resourceScope } from "./iterate-context.ts";
+import { projectSlug } from "./directory.ts";
 
 // ── durable object names ── the codec's projectId charset gate, applied at parse:
 // `[A-Za-z0-9_-]` only, because a ":" in a projectId would breach the `${projectId}:` kv/secret
@@ -59,4 +60,52 @@ test("`/a`, `/a/`, `/a/./`, `a` and `//a` are ONE name — the codec canonicaliz
     "prj_t.iterate/..",
   ])
     expect(DurableObjectNameCodec.parse(name).name).toBe("prj_t.iterate/");
+});
+
+// ── the resource owner ── `resourceScope(projectId, path)`: the ONE derivation behind every
+// resource key (the kv prefix, a secret cell's name, the Artifacts prefix) and the secrets root.
+// A project owns its resources whole; the global namespace splits by owner subtree.
+
+test.each([
+  // a project: byte-identical keys, whatever the path — even its own `/users/<id>` context
+  { projectId: "prj_demo", path: "/", becomes: { id: "prj_demo", rootPath: "/" } },
+  { projectId: "prj_demo", path: "/agents/x", becomes: { id: "prj_demo", rootPath: "/" } },
+  { projectId: "prj_demo", path: "/users/u1", becomes: { id: "prj_demo", rootPath: "/" } },
+  // the global namespace: the owner subtree, its root the secrets root
+  {
+    projectId: "global",
+    path: "/users/u1",
+    becomes: { id: "global--users--u1", rootPath: "/users/u1" },
+  },
+  {
+    projectId: "global",
+    path: "/users/u1/notes",
+    becomes: { id: "global--users--u1", rootPath: "/users/u1" },
+  },
+  {
+    projectId: "global",
+    path: "/organizations/o1",
+    becomes: { id: "global--organizations--o1", rootPath: "/organizations/o1" },
+  },
+  // the global root, and any global path not under an owner: the kernel's own
+  { projectId: "global", path: "/", becomes: { id: "global", rootPath: "/" } },
+  { projectId: "global", path: "/other", becomes: { id: "global", rootPath: "/" } },
+  { projectId: "global", path: "/users", becomes: { id: "global", rootPath: "/" } },
+])("resourceScope($projectId, $path) is $becomes", ({ projectId, path, becomes }) => {
+  expect(resourceScope(projectId, path)).toEqual(becomes);
+});
+
+test("a global owner's id keeps the codec's charset (the `:`/`.` delimiters cannot collide), an owner id outside it is refused, and no project slug can spell it", () => {
+  for (const path of [
+    "/users/user_google_1234",
+    "/users/user_8f3a-1c2d",
+    "/organizations/org_admin",
+  ]) {
+    const { id } = resourceScope("global", path);
+    expect(() => DurableObjectNameCodec.address({ projectId: id, path: "/" })).not.toThrow();
+    // a project's id is its slug, and a slug collapses every dash run — `global--…` is unspellable
+    expect(projectSlug(id)).not.toBe(id);
+  }
+  expect(() => resourceScope("global", "/users/a:b")).toThrow(/only \[A-Za-z0-9_-\]/);
+  expect(() => resourceScope("global", "/organizations/o.1")).toThrow(/only \[A-Za-z0-9_-\]/);
 });

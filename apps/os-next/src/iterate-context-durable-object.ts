@@ -4,7 +4,7 @@
 // (stream/subscription-delivery.ts), the facets (`ctx.facets`, context/worker-loader.ts), the rpc
 // stubs (context/rpc-stubs.ts), and the fetch door (the pager upgrade, the fetch lane,
 // egress). Each module's header says what it does; this file is the wiring and the doors.
-//   egress — `#egress`: a `getSecret("/secrets/NAME")` request is forwarded to its secret cell (secrets.ts)
+//   egress — `#egress`: a `getSecret("/secrets/NAME")` request is forwarded to its secret's own Durable Object (secrets.ts)
 //
 // PURE WORKERS-RPC: capnweb never terminates here — the stateless `/api` worker relays. Dispatch is
 // ONE door, `invoke(call)`; every OTHER change to this context is an appended event (the edge's
@@ -63,7 +63,7 @@ import {
   type StreamPage,
 } from "./stream/stream.ts";
 import { AlarmCoordinator } from "./alarm-coordinator.ts";
-import { DurableObjectNameCodec, itxEntrypointFor } from "./iterate-context.ts";
+import { DurableObjectNameCodec, itxEntrypointFor, resourceScope } from "./iterate-context.ts";
 import { secretNamesReferenced } from "./secrets.ts";
 import type { SecretDurableObject } from "./secret-durable-object.ts";
 import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
@@ -154,8 +154,8 @@ export interface Env extends AppConfigEnv {
   AI: Ai;
   /** Cloudflare Artifacts (beta) — the ONE bound namespace behind `itx.cfArtifacts`, project-scoped. */
   ARTIFACTS: ArtifactsNamespace;
-  /** THE SECRET CELLS (secret-durable-object.ts): one per project secret, `<projectId>:<name>` —
-   *  egress forwards a placeholder-bearing request to its cell. */
+  /** THE SECRETS (secret-durable-object.ts): one Durable Object per secret, `<owner>:<name>` —
+   *  egress forwards a placeholder-bearing request to its object. */
   SECRET: DurableObjectNamespace<SecretDurableObject>;
 }
 
@@ -290,8 +290,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,
-   *  `onCommit`, is the post-commit fan-out — the delivery loop, then the alarm (a commit may have
-   *  changed the schedules or queued a delivery). */
+   *  `onCommit`, is the post-commit fan-out — the delivery loop, run as THE KERNEL: under
+   *  `{ principal: null }` explicitly, whatever the committing call's caller was. The commit lands
+   *  inside that call's `#callerStorage.run`, and the async store would otherwise ride every
+   *  continuation the loop schedules — so a user's append would deliver their config funnel under
+   *  THEIR principal, which the global namespace's `cd` (built-ins.ts) rightly refuses. The kernel
+   *  hop is told from a person's by exactly this null. Then the alarm: a commit may have changed the
+   *  schedules or queued a delivery. */
   readonly #stream = new Stream({
     storage: this.ctx.storage,
     path: this.#durableObjectAddress.path,
@@ -301,7 +306,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // An alarm trace answers waitForEvent, never a subscription (AlarmTrace says why).
       const events = freshEvents.filter((event) => event.type !== STREAM_ALARM_TRACE_EVENT);
       if (events.length === 0) return;
-      this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
+      this.#callerStorage.run({ principal: null }, () =>
+        this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset),
+      );
       this.#alarms.reconcile();
     },
   });
@@ -1009,9 +1016,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** THE ONE DISPATCH DOOR. `caller` is WHO is calling (and, later, what they may reach) — carried
    *  for the whole call so every append it makes stamps `source.principal`, and threaded across each
    *  sibling `cd` hop. A DO-only Workers-RPC verb (never capnweb-exposed), so a client cannot forge
-   *  the caller. `args`/`caller` default, so a bare `invoke(call)` is an anonymous probe. NOTE: the
-   *  path-mask authority that would READ `caller` to allow/refuse the call is not yet enforced (its
-   *  requirements are the control-plane security spec's expected-fails). */
+   *  the caller. `args`/`caller` default, so a bare `invoke(call)` is an anonymous probe. What READS
+   *  the caller: `append` (the stamp) and, in the global namespace, `cd` (built-ins.ts — a person's
+   *  path hop is refused there; the append type-gate is the security spec's remaining expected-fail). */
   async invoke(
     call: ItxExpressionInput,
     args: unknown[] = [],
@@ -1113,7 +1120,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** EGRESS: a request that names a secret — `getSecret("/secrets/NAME")` in its URL or headers —
-   *  is FORWARDED to that secret's cell (secret-durable-object.ts), which substitutes, pins,
+   *  is FORWARDED to that secret's Durable Object (secret-durable-object.ts), which substitutes, pins,
    *  dispatches, and refreshes on a 401; one request, one secret (a second name is a 502 — no
    *  cross-secret chaining). A request naming none goes straight to the terminal fetch. Either way
    *  the platform's own headers never leave: the principal stamp (actor + email) and the expression
@@ -1134,9 +1141,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           { status: 502 },
         ),
       );
-    return this.env.SECRET.getByName(`${this.#durableObjectAddress.projectId}:${names[0]}`).fetch(
-      outbound,
+    // The object is the RESOURCE OWNER's (iterate-context.ts `resourceScope`) — the one derivation
+    // `itx.secrets` keys it by, so a user's placeholder reaches the user's own secret, never a shared one.
+    const owner = resourceScope(
+      this.#durableObjectAddress.projectId,
+      this.#durableObjectAddress.path,
     );
+    return this.env.SECRET.getByName(`${owner.id}:${names[0]}`).fetch(outbound);
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {

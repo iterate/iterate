@@ -276,6 +276,7 @@ export function AgentPillComposer({
         {isExamples ? null : (
           <Button
             size="icon-lg"
+            data-spinner={showInterrupt ? "true" : undefined}
             title={
               showInterrupt
                 ? "Stop generation"

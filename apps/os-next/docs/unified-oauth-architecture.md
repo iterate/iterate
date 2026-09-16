@@ -10,8 +10,8 @@ The Cloudflare OAuth provider owns authorization codes, PKCE, access tokens,
 refresh tokens and grants. Both public `/api` Cap’n Web and MCP run the same
 provider gate, then derive one verified authorization: principal, membership
 reach, project ceiling, scopes and grant identity. A supplied bearer can also be
-the configured operator secret. Legacy project credentials are not public API
-credentials. `/internal/rpc` remains an explicit operator/test gate.
+the configured operator secret. There is no other credential kind. `/internal/rpc`
+remains an explicit operator/test gate.
 
 Each app runs the same `appAuth` adapter and `BrowserSession` Durable Object.
 The browser holds only an opaque HttpOnly cookie; the DO holds tokens and makes

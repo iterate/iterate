@@ -26,7 +26,12 @@
 //     invoke its replacement.
 
 import { describe, expect, test, vi } from "vitest";
-import { print, type ItxExpression, FacetHandle } from "../context/expression.ts";
+import {
+  print,
+  registerPipelinedRpcBrand,
+  type ItxExpression,
+  FacetHandle,
+} from "../context/expression.ts";
 import { codedError } from "../lib.ts";
 import { AlarmCoordinator } from "../alarm-coordinator.ts";
 import type { StreamEvent, ScannedRange } from "./processor.ts";
@@ -280,6 +285,40 @@ describe("halt once, for the right row", () => {
     expect(facetMethods.slice(1).sort()).toEqual(["catchUpFromLog", "processEventBatch"]); // both refused …
     expect(haltFactsFor(rig.stream, "poison")).toHaveLength(2); // … one fact between them
     expect(rig.stream.coreReducedState.subscriptions.poison.halted).toBeDefined();
+  });
+
+  test("a push answered with a PIPELINED refusal (a sibling hop's FORBIDDEN) is settled before it is released — the row halts, the batch is never acked as delivered", async () => {
+    // On workerd a call on a sibling context answers with a branded promise the step walk hands back
+    // UNAWAITED (expression.ts). Before the delivery loop settled it, the branded rejection was
+    // released unseen and the push counted as delivered. A brand registered here stands in for it.
+    class PipelinedAnswer<T> extends Promise<T> {}
+    registerPipelinedRpcBrand(PipelinedAnswer);
+    const facetMethods: string[] = [];
+    const rig = incarnation(
+      () =>
+        new FacetHandle((steps) => {
+          const [call] = steps;
+          facetMethods.push(Array.isArray(call) ? call[0] : call);
+          if (Array.isArray(call) && call[0] === "processEventBatch")
+            return PipelinedAnswer.reject(
+              codedError("FORBIDDEN", "a global context is reached by identity, never by path"),
+            );
+          return Promise.resolve();
+        }),
+    );
+    rig.stream.append(
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "laundered", target: facetTarget("laundered") },
+      }),
+    );
+    await settled();
+    expect(facetMethods).toEqual(["catchUpFromLog", "processEventBatch"]);
+    expect(rig.stream.coreReducedState.subscriptions.laundered.halted).toMatchObject({
+      attempts: 1,
+      error: "a global context is reached by identity, never by path",
+    });
+    expect(haltFactsFor(rig.stream, "laundered")).toHaveLength(1);
   });
 
   test("a refusal of a call made for a row since REPLACED halts nothing — the replacement is not its predecessor", async () => {

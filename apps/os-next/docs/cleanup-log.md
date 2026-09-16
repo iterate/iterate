@@ -69,10 +69,12 @@ pins it + a note here; API/abstraction/concept questions → research + note her
   onto (a) and deleting (b)+(c)'s duplication; the owner explicitly wants the LiveState (c) path for the
   live UX. DECISION NEEDED: which is canonical, and does the LiveState token become a real credential
   (a minting EFFECT that writes a hash) or stay a readable placeholder? (codex #4, #8)
-- **Account/organization handles are unrestricted global itx.** `session.user` / `session.organizations`
-  return full global-context itx; `.cd("/users/<other>")` reaches any subtree. This is the KNOWN deferred
-  path-mask enforcement (already pinned as control-plane security-spec expected-fails). Left as-is until
-  the enforcement pass. (codex #1, src/session.ts:260)
+- **Account/organization handles are unrestricted global itx.** RESOLVED 2026-09-14, structurally:
+  the global namespace is not navigable — a global handle's `cd` is refused (edge and, for a
+  principal, DO), `session.organizations.get` checks membership, `global` is a reserved project name;
+  the kernel's config funnel is the one hop, under a null principal
+  (docs/control-plane-context-resolved-design.md). What is still shared across global contexts is
+  the project-scoped resources (`itx.kv`, `itx.secrets`, `itx.repos`), not a path. (codex #1)
 
 ### Deferred — cleanup (do in a later round)
 
@@ -199,12 +201,13 @@ already logged). Each re-verified here, then fixed with a test where determinist
   poisoned the held rev and silently wedged every later frame. Now zod-parsed at the boundary; a
   malformed frame HEALS through the seed door (the store's existing gap recovery). Failing-mode test
   added. This is version-skew robustness, not malicious-client defense. (client/live-state.ts)
-- **[bug] #1 deleted secrets could reappear** (P1). set/delete each do append-THEN-KV as two awaits,
-  unserialized on the root DO; a concurrent pair could land the KV writes opposite to the log order,
-  leaving egress a value the catalog says is gone. Serialized per name on the root DO (the chain lives
-  in #builtIns, one per DO instance). FOLLOW-UP: an eviction BETWEEN a delete's append and its KV
-  delete can still strand a value — a durable reconciliation sweep on startup (walk catalog-deleted
-  secrets, ensure KV deleted) is the deeper fix; deferred. (context/built-ins.ts)
+- **[bug] #1 deleted secrets could reappear** (P1). set/delete each do append-THEN-write as two awaits
+  (the write lands in the secret's own Durable Object), unserialized on the root DO; a concurrent pair
+  could land the object writes opposite to the log order, leaving egress a value the catalog says is
+  gone. Serialized per name on the root DO (the chain lives in #builtIns, one per DO instance).
+  FOLLOW-UP: an eviction BETWEEN a delete's append and the object's clear can still strand a value —
+  a reconciliation sweep (walk the catalog's deleted names, clear their objects) is the deeper fix;
+  deferred. (context/built-ins.ts)
 - **[bug] #2 an older facet load could clobber a newer one.** A stale load's post-load check only
   confirmed the facet still existed; a reconfigure during the load then had its newer code aborted and
   replaced by the older. Now the post-load check compares the desired spec (facet:<name>) to what was

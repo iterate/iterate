@@ -198,6 +198,17 @@ export function getAuthPlugins(options: AuthPluginOptions) {
         ]
       : []),
     oauthProvider({
+      // Parallel preview sign-ins share one IP, even with distinct users.
+      ...(options.fixedTestOtpEnabled && {
+        rateLimit: {
+          token: { window: 60, max: 600 },
+          authorize: { window: 60, max: 600 },
+          introspect: { window: 60, max: 600 },
+          revoke: { window: 60, max: 600 },
+          register: { window: 60, max: 600 },
+          userinfo: { window: 60, max: 600 },
+        },
+      }),
       loginPage: "/login",
       consentPage: "/consent",
       selectAccount: {

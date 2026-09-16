@@ -33,7 +33,7 @@ picks the projects the token may reach, and it exposes ONE tool, `run({ project?
 — the text of `async (itx) => …` evaluated in that project's context under the caller's
 principal (`run(script)` when the token reaches exactly one project). Whatever a caller might read —
 who it is, which projects — is a one-line script; a project is created on the console or over `/api`. The
-admin secret and a project's own secret (`/mcp?project=<id>`) are bearers on `/mcp` too.
+admin secret is a bearer on `/mcp` too (it reaches every project, so `run` must name one).
 
 ## Read next
 
@@ -60,7 +60,7 @@ one is warned about at boot and ignored). The two secrets are wrangler secrets o
 | `APP_CONFIG_ADMIN_API_SECRET`                                       | yes      | the admin secret: `authenticate({ type: "admin-secret" })`, the lanes' admin bearer (secret) |
 | `APP_CONFIG_PROJECT_HOSTNAME_BASE`                                  | no       | the base project hosts hang under; blank ⇒ no project-host ingress                           |
 | `APP_CONFIG_TEST_EMAIL_LOGIN`                                       | no       | `true` permits unverified email sign-in; disabled remotely by default                        |
-| `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`, `APP_CONFIG_ARTIFACTS_NAMESPACE` | no       | `itx.repos`' git remotes                                                                     |
+| `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`, `APP_CONFIG_ARTIFACTS_NAMESPACE` | no       | `itx.git`'s git remotes                                                                      |
 
 ## The console
 
@@ -85,8 +85,9 @@ permission through explicit consent, but cannot approve grants. All apps use the
 `/.auth/*` adapter, opaque HttpOnly cookie, public token exchange and `/api` proxy.
 
 See [the current OAuth design](docs/unified-oauth-architecture.md) for boundaries,
-revocation and the deferred impersonation design. The historical walkthroughs describe the
-pre-unification project-credential interface; they are not the public authorization contract.
+revocation and the deferred impersonation design. Dated design and review docs under `docs/`
+may still describe the pre-unification project credentials; they are history, not the public
+authorization contract.
 
 ## Build, run, deploy
 

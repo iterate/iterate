@@ -30,9 +30,20 @@ direction. **All six increments landed as SHAPE** (typecheck + full workers lane
 
 Deferred — the ENFORCEMENT and heavy plumbing (by direction; the expected-fails are its spec):
 
-- **Path-mask authorization** — the `authorize(caller, path)` that READS the carried `Caller` to
-  allow/refuse (the destination floor at `resolver.invoke` + the pager attach) plus the append
-  type-gate. This is the "threading permissions" to wire when we enforce.
+- **Path-mask authorization** — LANDED 2026-09-14 as STRUCTURE, not as an `authorize(caller, path)`:
+  the global namespace is NOT NAVIGABLE. A session holds a global context by identity only
+  (`session.user`; `session.organizations.get` by membership — `SessionRpcTarget.#reachesOrg`), a
+  global edge handle's `cd` is refused for everyone, the admin included
+  (`IterateContextRpcTarget.cd`), and inside a global DO the built-in `cd` admits exactly one hop —
+  the kernel's config funnel `itx.cd('/').worker…` under `{ principal: null }` (context/built-ins.ts;
+  the DO runs its delivery loop under that null explicitly, `onCommit`, because the committing call's
+  async-local caller would otherwise ride every continuation). `global` is a reserved project name
+  (`projects.create` / `projects.get`). No policy table: nobody can NAME another user's path. Four of
+  the five expected-fails flipped to passing pins; the pager attach needs no floor (the pager is
+  minted from the handle a session already holds). Still open: the append type-gate (the remaining
+  `test.fails`), and the global namespace's SHARED project-scoped resources — `itx.kv` (`global:`
+  prefix), `itx.secrets` (the root's catalog, over the `onRootContext` hop), `itx.repos` — which
+  every global context sees alike; those are the next gap, not a path.
 - **Privileged `ctx.exports` account facet + D1/OAuth** — for the token-workflow effects (Phase 2);
   the foundation processor needs none.
 - **Full `/internal/rpc` deletion** — needs the OAuth-gate admission rework (admin via `/api`).

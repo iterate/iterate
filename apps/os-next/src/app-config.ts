@@ -55,7 +55,7 @@ export const AppConfig = z.object({
   /** The deployment's admin secret — `authenticate({ type: "admin-secret" })` and the project host's
    *  admin bearer: every project. */
   adminApiSecret: requiredSecret,
-  /** The Cloudflare account + Artifacts namespace `itx.repos` builds git remotes from; blank where no
+  /** The Cloudflare account + Artifacts namespace `itx.git` builds git remotes from; blank where no
    *  Artifacts binding exists (the workers lane). */
   artifactsAccountId: z.string().trim().default(""),
   artifactsNamespace: z.string().trim().default(""),
