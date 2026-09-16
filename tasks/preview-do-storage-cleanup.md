@@ -5,10 +5,10 @@ size: large
 
 # Experiment: clear preview DO storage without replacing the deployment
 
-Draft PR #2693 is open. The operator sweep and real-runtime probes are in place;
-six runtime checks pass. The first live suite passed, but REST discovery missed
-at least 1,045 new DOs and reset only 403 old sandbox objects. Reuse probes,
-interruption cases, delayed metrics and the final recommendation remain.
+Draft PR #2693 contains the experiment and a negative provisional verdict.
+The normal sweep missed fresh actors; a later 6,339-object sweep took 7m38s,
+failed 17 requests, and successfully reset objects still received work.
+Final cancellation, mature metrics, full recovery and the report remain.
 
 ## Request
 
@@ -101,3 +101,14 @@ post-cleanup DO active time with Cloudflare GraphQL. Do not merge automatically.
   `8jp447qqgm`) inventoried 6,339 objects and is progressing through its sweep.
   Known heartbeat pair had no native invocations for 124s after both resets;
   this is positive primitive evidence, separate from incomplete discovery.
+
+- 23:09 UTC: C completed 6,322/6,339 reset requests in 457.9s; 17 Stream
+  requests failed. Existing acquisition retried on fresh preview-16, so its
+  later readiness is not proof of repaired preview-15. Held preview-15 under
+  `manual-pr2693-storage-observation` while collecting delayed analytics.
+- All 256 native DO calls observed in preview-15 from 23:02–23:04:49 hit
+  21 successfully reset IDs, including 97 alarms. No root product reads
+  contaminated this interval. Unreset actors may still be driving them.
+- Pushed `b1c9ca14c` during actual tests at 23:06:24. Replacement D is
+  `4bgd89g8qg` / `0z958pn7qw`. Prepared a final push that removes automatic
+  opt-in; it will interrupt post-test cleanup and exercise normal full erase.

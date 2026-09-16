@@ -26,8 +26,6 @@ defaults:
 env:
   BASH_ENV: ${{ github.workspace }}/scripts/ci/tracing/shell.sh
   CI_TRACE_ENABLED: "1"
-  # Experiment only: other PRs/main keep the existing full erase backstop.
-  PREVIEW_DO_STORAGE_RESET: ${{ inputs.pull-request-number == '2693' && '1' || '0' }}
   CI_HEAD_SHA: ${{ inputs.head-sha }}
   TEST_TELEMETRY_HEAD_SHA: ${{ inputs.head-sha }}
   PREVIEW_TARGET_ARGS: ${{ inputs.pull-request-number && format('--pull-request-number {0}', inputs.pull-request-number) || format('--commit {0}', inputs.head-sha) }}
@@ -35,9 +33,6 @@ env:
 jobs:
   prepare:
     name: Deploy and readiness
-    env:
-      # Only acquisition may need to replace an older/parked deployment.
-      PREVIEW_DO_STORAGE_RESET: ${{ inputs.pull-request-number == '2693' && 'allow-bootstrap' || '0' }}
     runs-on:
       size: 16x64
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree

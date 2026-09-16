@@ -1,9 +1,13 @@
 # Preview storage cleanup experiment
 
-Status: running. The first live sweep missed new objects, so the current
-REST-inventory approach is not safe to adopt. PR #2693 keeps the Worker
-code deployed and replaces the slot's class-retirement cleanup with per-object
-`deleteAll()`, `sync()` and abort. Only this PR enables it.
+Status: finishing measurements. **Do not adopt the current inventory-and-wipe
+implementation.** It can miss active objects, and successfully wiped objects
+can receive more work. The primitive remains useful for known objects; this
+experiment does not show that all storage-based cleanup is impossible.
+
+PR #2693 tested `deleteAll()`, `sync()` and abort instead of replacing the
+Worker. Automatic opt-in is now removed; normal CI uses the existing full
+erase. The diagnostic implementation remains for review and explicit trials.
 
 The question is whether old test compute stops cheaply **and** new tests can use
 the same deployment. Completely deleting inert data is a separate question.
@@ -103,6 +107,36 @@ accurate run-owned registry would be a separate architecture change.
 During the untouched 22:43:50–22:46:50 observation window, the native trace
 recorded 80 invocations on six IDs, including 37 alarms. Stream alarms
 continued through 22:46:44. These are active leftovers, not just retained bytes.
+
+## Larger sweep and activity after successful resets
+
+The replacement prepare job tried all 6,339 inventoried objects in preview-15.
+It took 457.9 seconds internally (7m38s), with 6,322 successful responses and
+17 failures: 14 HTTP 500 responses and three request timeouts. All 17 were
+Streams. There were ten concurrent requests per class; more concurrency could
+reduce elapsed time, but cannot establish discovery or quiescence.
+
+The preview acquisition loop did **not** stop the whole workflow. It released
+preview-15 and bootstrapped preview-16, where readiness passed at 23:05:26.
+That is fresh-slot recovery, not successful storage-only recovery on the
+original deployment. Preview-15 was reserved separately for read-only
+observations so another run would not erase its evidence.
+
+Between 23:02:00 and 23:04:49, with no new product calls from the experiment,
+the original slot's native trace recorded 256 DO invocations on 21 IDs whose
+resets had returned success. This included 97 native alarms. None of those
+observed IDs were among the 17 failed resets or absent from the inventory.
+
+This proves successful individual wipes did not leave those objects quiet.
+Failed or unseen actors may have sent them new work; the data does not show
+that a perfectly complete simultaneous wipe would resume. Cold constructors,
+ancestor announcements and late deliveries are concrete reasons a per-object
+sweep needs more than deletion to establish that old work has stopped.
+
+The next push, at 23:06:24, interrupted actual Playwright/app execution on
+preview-16. Run `4bgd89g8qg` / workflow `0z958pn7qw` is the replacement. A final
+post-test-cleanup interruption and normal full-erase recovery remain to be
+recorded below.
 
 ## Limits to investigate
 
