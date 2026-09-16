@@ -1,4 +1,4 @@
-// cfartifacts.e2e.test.ts — `itx.cfArtifacts` and `itx.repos` against the REAL Cloudflare Artifacts
+// cfartifacts.e2e.test.ts — `itx.cfArtifacts` and `itx.git` against the REAL Cloudflare Artifacts
 // binding on the DEPLOYED worker (env.ARTIFACTS → the `project-worker-repos` namespace): what the unit
 // test over a fake (src/context/repos.test.ts) cannot prove — the binding is wired and the
 // project scoping holds end to end across /api. DEPLOYED-TARGET ONLY: Artifacts has no local
@@ -11,9 +11,9 @@
 //     returns ONE namespace-wide page + a cursor (the binding does not filter by name), so membership
 //     is asserted over ALL pages, never page one alone
 //   • isolation: one project never sees another's repos
-//   • `itx.repos.writeFile → readFile` round-trips a file through real git-over-HTTPS (context/repos.ts's git wire):
-//     an absent repo or path reads null (no throw across the tree walk), the first write CREATES the repo
-//     and commits on main (parentless), a second write commits onto the tip's tree
+//   • `itx.git.commitFiles → snapshot` round-trips a file through real git-over-HTTPS (context/repos.ts's git
+//     wire): an absent repo snapshots as null (no throw across the tree walk), the first commit CREATES the
+//     repo and lands on main (parentless), a second commit lands onto the tip's tree
 
 import { expect } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
@@ -77,36 +77,55 @@ deployedOnly("cfArtifacts isolation: one project never sees another's repos", as
   }
 });
 
-// ── `itx.repos`: the git-over-HTTPS layer that holds a config worker's source ──
+// ── `itx.git`: the stateless git-over-HTTPS adapter the repo facet is built on ──
 
 deployedOnly(
-  "itx.repos writeFile → readFile round-trips a file through real git-over-HTTPS",
+  "itx.git commitFiles → snapshot round-trips a file through real git-over-HTTPS",
   async () => {
     const itx = openItx(freshCtx("repos"));
     const repo = `cfg-${rnd()}`;
     const source = `export default { note: "from a real Artifacts repo ${rnd()}" };\n`;
 
     try {
-      // An unborn/absent repo reads as null (no throw across the whole tree walk).
-      expect(await itx.repos.readFile(repo, "worker.ts")).toBeNull();
+      // An absent repo snapshots as null (no throw across the whole tree walk).
+      expect(await itx.git.snapshot(repo)).toBeNull();
+      expect(await itx.git.tip(repo)).toBeNull();
 
-      // First write CREATES the repo and commits worker.ts on main (parentless first commit).
-      const first = await itx.repos.writeFile(repo, "worker.ts", source);
-      expect(first.commitOid).toMatch(/^[0-9a-f]{40}$/);
+      // The first commit CREATES the repo and lands worker.ts on main (parentless first commit).
+      const first = await itx.git.commitFiles(repo, {
+        message: "first",
+        changes: [{ path: "worker.ts", content: source }],
+      });
+      expect(first).toEqual({
+        commitOid: expect.stringMatching(/^[0-9a-f]{40}$/),
+        changedPaths: ["worker.ts"],
+      });
 
       // Read it back — tip commit → tree → the blob's bytes, verbatim.
-      expect(await itx.repos.readFile(repo, "worker.ts")).toBe(source);
+      expect(await itx.git.snapshot(repo)).toEqual({
+        commitOid: first.commitOid,
+        files: { "worker.ts": source },
+      });
 
-      // A second write updates the same path (merge onto the tip's tree, parent = the first commit).
+      // A second commit updates the same path (onto the tip's tree, parent = the first commit).
       const source2 = `${source}// v2\n`;
-      const second = await itx.repos.writeFile(repo, "worker.ts", source2);
+      const second = await itx.git.commitFiles(repo, {
+        message: "second",
+        changes: [{ path: "worker.ts", content: source2 }],
+      });
       expect(second.commitOid).not.toBe(first.commitOid);
-      expect(await itx.repos.readFile(repo, "worker.ts")).toBe(source2);
-
-      // A path that was never written is absent (null), even though the repo has a commit.
-      expect(await itx.repos.readFile(repo, "missing.ts")).toBeNull();
+      expect((await itx.git.snapshot(repo))?.files).toEqual({ "worker.ts": source2 });
+      expect(
+        (await itx.git.log(repo)).map((c: { oid: string; parents: string[] }) => [
+          c.oid,
+          c.parents,
+        ]),
+      ).toEqual([
+        [second.commitOid, [first.commitOid]],
+        [first.commitOid, []],
+      ]);
     } finally {
-      await itx.cfArtifacts.delete(repo); // teardown — repos and cfArtifacts address the same repo
+      await itx.cfArtifacts.delete(repo); // teardown — git and cfArtifacts address the same repo
     }
   },
 );
