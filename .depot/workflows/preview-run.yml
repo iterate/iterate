@@ -301,6 +301,14 @@ jobs:
           path: test-results
           include-hidden-files: true
           if-no-files-found: error
+      - name: Upload public Playwright HTML report
+        if: ${{ always() && hashFiles('test-results/playwright-html/index.html') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-playwright-report
+          path: test-results/playwright-html
+          if-no-files-found: error
+          retention-days: 30
       - name: Upload specs flake records
         if: always()
         uses: actions/upload-artifact@v4

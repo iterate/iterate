@@ -2,13 +2,7 @@ import { mkdir, writeFile, appendFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
-import {
-  assembleTrace,
-  Workflow,
-  renderTrace,
-  traceCommitStatus,
-  stepCommands,
-} from "./tracing.ts";
+import { assembleTrace, Workflow, renderTrace, stepCommands } from "./tracing.ts";
 
 /** Completed-run CI traces. Invoke with `pnpm exec trpc-cli scripts/ci/tracing/cli.ts`. */
 export default class CiTrace {
@@ -21,57 +15,6 @@ export default class CiTrace {
       .parse(source.pathname.split("/").at(-1));
     await this.dispatchCollector(ref, workflowId);
     console.log(`Dispatched trace collector for ${workflowId}`);
-  }
-
-  /** Collect a completed workflow, publish an immutable report and link it from a commit status. */
-  async publish(workflowId: string) {
-    const workflow = await this.waitForWorkflow(workflowId);
-    const execution = [...workflow.executions].sort((a, b) => b.execution - a.execution)[0];
-    if (!execution) throw new Error("Workflow has no execution");
-    const name = `ci-trace-${workflow.workflowId}-${execution.executionId}`;
-    const collectorId = new URL(z.url().parse(process.env.DEPOT_JOB_URL)).pathname
-      .split("/")
-      .at(-1);
-    const collector = z
-      .object({ runId: z.string() })
-      .parse(await this.depot("GetWorkflow", { workflowId: collectorId }));
-    const { artifacts } = z
-      .object({
-        artifacts: z.array(z.object({ artifactId: z.string(), name: z.string() })).default([]),
-      })
-      .parse(
-        await this.depot("ListArtifacts", {
-          runId: collector.runId,
-          workflowId: collectorId,
-          pageSize: 100,
-        }),
-      );
-    const artifact = artifacts.find((item) => item.name === name);
-    if (!artifact) throw new Error(`Collector did not upload ${name}`);
-    const url = `https://iterate.iterate.app/depot/artifacts/${artifact.artifactId}`;
-    // A successful upload alone is not the user's acceptance check: verify the host.
-    for (let attempt = 0; ; attempt++) {
-      const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
-      if (response.ok && (await response.text()).includes('id="data"')) break;
-      if (attempt === 4)
-        throw new Error(`Published report is not viewable: HTTP ${response.status}`);
-      await delay(3_000);
-    }
-    const octokit = this.github();
-    const statuses = await octokit.paginate(octokit.repos.listCommitStatusesForRef, {
-      ...repo,
-      ref: workflow.headSha,
-      per_page: 100,
-    });
-    const status = traceCommitStatus(
-      statuses.find((item) => item.context === "CI trace"),
-      { headSha: workflow.headSha, createdAt: execution.createdAt, url },
-    );
-    if (status) await octokit.repos.createCommitStatus({ ...repo, ...status });
-    if (process.env.GITHUB_STEP_SUMMARY)
-      await appendFile(process.env.GITHUB_STEP_SUMMARY, `\n[Open CI trace](${url})\n`);
-    console.log(url);
-    return { url };
   }
 
   /** Repair missed callbacks (including cancelled workflows) from the last 24 hours. */
@@ -107,20 +50,16 @@ export default class CiTrace {
           ref: source.headSha,
           per_page: 100,
         });
-        if (
-          traceCommitStatus(
-            statuses.find((item) => item.context === "CI trace"),
-            {
-              headSha: source.headSha,
-              createdAt: execution.createdAt,
-              url: "",
-            },
-          )
-        )
+        const publishedAt =
+          statuses
+            .find((item) => item.context === "CI trace")
+            ?.description?.split(" · ")
+            .at(-1) || "";
+        if (publishedAt < new Date(execution.createdAt).toISOString())
           await this.dispatchCollector(ref, workflow.workflowId);
       } catch (error) {
         failures.push(
-          new Error(`Trace publication failed for ${workflow.workflowId}`, { cause: error }),
+          new Error(`Trace reconciliation failed for ${workflow.workflowId}`, { cause: error }),
         );
       }
     }

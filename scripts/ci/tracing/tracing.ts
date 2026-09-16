@@ -376,24 +376,6 @@ export function stepCommands(source: string) {
   return commands;
 }
 
-/** The status says the report is available; preview checks retain the test outcome. */
-export function traceCommitStatus(
-  previous: { description: string | null; target_url: string | null } | undefined,
-  run: { headSha: string; createdAt: string; url: string },
-) {
-  // Store the source execution's time, not publication time: reconciliation can
-  // revisit old runs. Normalized ISO dates sort chronologically in this format.
-  const description = `Open trace · ${new Date(run.createdAt).toISOString()}`;
-  if (previous?.target_url === run.url || (previous?.description || "") >= description) return null;
-  return {
-    sha: run.headSha,
-    context: "CI trace",
-    state: "success" as const,
-    description,
-    target_url: run.url,
-  };
-}
-
 export async function renderTrace(trace: ReturnType<typeof assembleTrace>) {
   const template = await readFile(new URL("./viewer.html", import.meta.url), "utf8");
   // Escaping '<' prevents test names containing </script> from executing as HTML.
