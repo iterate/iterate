@@ -23,7 +23,9 @@ export type ProjectView = z.infer<typeof ProjectView>;
 
 export const ProjectContract = defineProcessorContract({
   slug: "project",
-  version: "1",
+  // 2: the catalog grew `agents`. A checkpoint reduced under 1 has no such slot and is reused
+  // as-is by the engine, so the bump is what re-reduces every existing catalog from its log.
+  version: "2",
   description:
     "The project's catalog: every repo, workspace and agent born under it, from the birth certificates cross-posted to /.",
   stateSchema: ProjectView,

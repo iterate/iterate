@@ -153,6 +153,39 @@ test("the loop: a person's words → the model → a script run against itx → 
   expect(await itx.agents.list()).toHaveLength(1);
 });
 
+test("a script that returns nothing ends the turn: no result item, no further request — over every RPC hop", async () => {
+  const itx = openItx(freshCtx("agent-quiet"));
+  const support = itx.cd("/agents/support");
+  const ai = new ScriptedAi([
+    'On it.\n<codemode status="Writing">\nawait itx.kv.put("note", "written")\n</codemode>',
+    "SHOULD NEVER BE ASKED",
+  ]);
+  await support.provide("itx.ai", ai);
+  const agent = itx.agents.get("/agents/support");
+  await agent.create({ systemPrompt: "Be terse." });
+  await agent.message("Write the note.");
+  const settled = await until("the script's settlement", async () => {
+    const all = await readAll(support);
+    return all.find((e) => e.type === "events.iterate.com/capability-host/script-run-settled");
+  });
+  expect(settled.payload.settlement).toEqual({ status: "succeeded" }); // no result — undefined, not null
+  expect(await itx.kv.get("note")).toBe("written");
+  await sleep(1_500);
+  const log = await readAll(support);
+  expect(ai.calls).toHaveLength(1); // the turn ended: the model was never asked again
+  expect(short(log).filter((t) => t === "agent/llm-request-requested")).toHaveLength(1);
+  expect(
+    log
+      .filter((e) => e.type === "events.iterate.com/agents/context-added")
+      .map((e) => e.payload.role),
+  ).toEqual(["system", "user", "assistant"]);
+  expect((await support.facets.get("agent").snapshot()).state).toMatchObject({
+    pendingLlmRequestTrigger: null,
+    openRequest: null,
+    activeScriptExecutions: {},
+  });
+});
+
 test("bounded: a model that never stops scripting trips the autonomous-turn breaker; a person's next words resume it; a model that then keeps failing pauses again", async () => {
   const itx = openItx(freshCtx("agent-breaker"));
   const support = itx.cd("/agents/support");
