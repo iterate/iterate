@@ -89,3 +89,9 @@ post-cleanup DO active time with Cloudflare GraphQL. Do not merge automatically.
   correlation proves at least 1,045 new non-container DOs were omitted. A
   subsequent inventory starts returning those objects only after the sweep.
   This invalidates the current discovery strategy despite a green job.
+
+- 22:52 UTC: starting controlled cancellation run B at `a614c4a11`, workflow
+  `ddx7qrf5pn`. The next push will intentionally interrupt its prepare phase.
+  Before this push, a fresh project ran a real five-second heartbeat on the
+  unchanged deployment; direct scheduler and source-stream resets returned
+  success and the native tail showed no subsequent calls to that pair.
