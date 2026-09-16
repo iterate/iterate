@@ -1,11 +1,11 @@
 ---
-status: in-progress
+status: complete
 size: medium
 ---
 
 # Clickable CI trace reports
 
-The collector, OTLP model, interactive viewer and publication workflow are implemented. Local checks pass; live CI publication and browser verification are in progress. Build on main after #2658 and #2659, not the Cloudflare tracing experiment.
+Implemented in PR #2681. Real preview runs automatically published interactive reports and updated the PR; the anonymous browser click-through, drilldown and OTLP download work. Commands come from the triggering workflow revision with Doppler wrappers removed. Built on main after #2658 and #2659.
 
 ## Request
 
@@ -28,7 +28,7 @@ Automatically add a link to each PR body that opens a useful interactive trace o
 - [x] Publish immutable report links and automatically update the correct PR's body. *Preview `7rlclr2zqf` automatically dispatched collector `r5fxsp0gq5`; published in 26s and added the link to #2681.*
 - [x] Wire automatic collection and cancellation reconciliation, with visible reporting failures. *`ci-trace.yml` callback plus bounded 24h scheduled scan; cancellation model regressions.*
 - [x] Exercise the real publication path on this PR's own CI run and verify its body link in an isolated browser. *Clicked the auto-added GitHub link anonymously, inspected a recovered retry, zoomed and downloaded the OTLP file. 93 attempts, unique span IDs, valid parent links.*
-- [ ] Run required checks, handle review feedback, document operating/replay commands and include a screenshot in the PR.
+- [x] Run required checks, handle review feedback, document operating/replay commands and include a screenshot in the PR. *Full typecheck/lint/knip/format and tests passed; CI lint/test/autofix and Bugbot passed on `399b70346`. `docs/ci-traces.md` covers replay; PR includes the published report screenshot. The shell argument-index bot claim was disproved with an executable check and resolved.*
 
 ## Implementation log
 
@@ -40,3 +40,7 @@ Session: `01a09f64-ea4e-7c61-ab0a-c15eb65df3bc`.
 
 - Human PR feedback requested commands instead of `run / run 2`. Added authored commands from the triggering workflow revision, stripping Doppler wrappers without copying expanded log commands. Checked the real run data with the updated viewer.
 - Local full typecheck/lint/knip/format passed. Full suite passed with two concurrent workspaces; scripts suite now has 356 passing tests. The next push includes the one-line logical-spread autofix requested by CI.
+
+- The second complete preview (`lm7pqp0q35`) published automatically in 21 seconds after collector startup, with 92 test attempts and no retries. The third run verifies authored command labels.
+- Count only jobs with real runner attempts in the header, so a cancellation before runner startup does not inflate the count. Unstarted jobs remain visible with zero duration and explicit evidence.
+- Reports are immutable, public files on the separate `codex/ci-trace-artifacts` branch. Pruning and live OTLP export remain separate future work; shell/Playwright instrumentation is complete for this scope.
