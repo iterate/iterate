@@ -589,16 +589,24 @@ interface BuiltInScope {
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
 
-  /** The project's secrets for egress: `getSecret("/secrets/NAME")` in an outbound request's URL or
-   *  headers substitutes to the value at the egress door (`fetch`); `getSecret("/secrets/NAME",
-   *  { field: "a.b" })` to one field of a JSON value. WRITE-ONLY — `set`, `delete`, and a `list` of
-   *  names and origins, never a value. A secret `set` with an `origin` is sent to that origin ONLY.
-   *  Every change appends `events.iterate.com/secrets/changed` with the name (and origin, or
-   *  `deleted`) — the value never enters the log. A name is `[a-zA-Z0-9._-]+`. */
+  /** The project's secrets for egress, each its own Durable Object: `getSecret("/secrets/NAME")` in
+   *  an outbound request's URL or headers substitutes to the value at egress (`fetch`);
+   *  `getSecret("/secrets/NAME", { field: "a.b" })` to one field of a JSON material. WRITE-ONLY —
+   *  `set(name, material, { urls, refresh? })` (the pin is required: a secret is sent to those
+   *  origins ONLY; `refresh` is `oauth-refresh-token` or `waitrose-session`, run by the object on a
+   *  401), `beginOAuth(name, options)` (the provider's authorize URL; the platform's callback and the
+   *  object obtain the first tokens), `delete`, and a `list` of names, pins and strategy kinds, never
+   *  a value. Every change appends `events.iterate.com/secrets/changed { name, urls, refresh? }` (or
+   *  `{ name, deleted: true }`) — the value never enters the log. A name is `[a-zA-Z0-9._-]+`. */
   secrets: {
-    set(name: string, value: string, options?: { origin?: string }): Promise<{ ok: true }>;
+    set(
+      name: string,
+      material: string | object,
+      options: { urls: string[]; refresh?: SecretRefresh },
+    ): Promise<{ ok: true }>;
+    beginOAuth(name: string, options: SecretOAuthOptions): Promise<{ authorizationUrl: string }>;
     delete(name: string): Promise<{ ok: true }>;
-    list(): Promise<{ name: string; origin?: string }[]>;
+    list(): Promise<{ name: string; urls?: string[]; refresh?: string }[]>;
   };
 
   /** Workers AI, the binding verbatim; Cloudflare Artifacts project-scoped (the escape hatch); the
@@ -623,9 +631,10 @@ interface BuiltInScope {
    *  Own path → same isolate; anything else → a Workers-RPC call to that DO. */
   cd(path: string): InvokeHandle;
 
-  /** Egress: getSecret("/secrets/NAME") placeholders substituted in the URL and headers (a
-   *  placeholder with no stored secret, or a secret bound to another origin, is a 502 to the caller —
-   *  never sent), then the terminal `fetch` — the same door a loaded worker's globalOutbound lands on. */
+  /** Egress: a request naming a secret is forwarded to that secret's Durable Object, which substitutes
+   *  the placeholders in the URL and headers (a placeholder with no stored secret, or a secret pinned
+   *  to other origins, is a 502 to the caller — never sent), refreshes on a 401, then the terminal
+   *  `fetch` — the same path a loaded worker's globalOutbound lands on. */
   fetch(request: Request): Promise<Response>;
 
   /** The rpc-stub REGISTRY — physical, never event-sourced: a client's live value lent under an
@@ -782,9 +791,9 @@ type CoreState = {
       resumed?: { afterOffset?: number; atOffset: number };
     }
   >;
-  // THE SECRETS CATALOG: by name — the origin a secret is bound to, never a value (the value is
+  // THE SECRETS CATALOG: by name — the pin and the strategy kind, never a value (the value is
   // physical, in the secret's own Durable Object); `itx.secrets.list()` reads this, strongly consistent
-  secrets: Record<string, { origin?: string }>;
+  secrets: Record<string, { urls?: string[]; refresh?: string }>;
 };
 
 type ItxExpressionRewriteRule = CoreState["itxExpressionRewriteRules"][string];

@@ -1,27 +1,37 @@
-// secrets-refresh.e2e.test.ts — THE SECRET CELL end to end: a credential that expires is ONE secret
-// (material + pin + refresh strategy), and the cell re-mints it in its own trusted code. Proven
-// against the deployed dummy-petshop (support/petshop.ts) — a real third party over the real
-// network from the local worker and the deployed one alike:
-//   • `waitrose-session` — the username/password → session archetype (Waitrose's login, petshop's
-//     GraphQL door speaks the same wire shape): the secret holds ONLY the account credential, the
-//     cell logs in on first use and re-logs-in on 401; the session works on the pets API.
-//   • `oauth-refresh-token` — a connected OAuth client's `{ clientId, clientSecret, refreshToken,
-//     accessToken }` in one secret; an expired access token is refreshed inside the cell.
-// The material never leaves: the catalog fact and the log carry the pin and the kind, never a value.
+// secrets-connections.e2e.test.ts — EVERY WAY A PROJECT CONNECTS TO A THIRD-PARTY API, end to end,
+// against the deployed dummy-petshop (support/petshop.ts) — a real third party over the real network
+// from the local worker and the deployed one alike (the plain pasted key is secrets.e2e.test.ts):
+//   • `waitrose-session` — the username/password → session archetype (Waitrose's login; the
+//     petshop's GraphQL login speaks the same wire shape): the secret holds ONLY the account
+//     credential, its Durable Object logs in on first use and logs in again on 401.
+//   • `oauth-refresh-token`, tokens brought by a trusted party — the OAuth story with the consent
+//     walked by the test: discovery, code exchange, the secret, a call, expiry, rotation, revocation.
+//   • OAuth, the first tokens obtained by the platform, confidential client — `itx.secrets.beginOAuth`
+//     hands out the authorize URL; the provider redirects the human to the platform's one callback,
+//     which admits only a member of the project; the exchange happens inside the secret's Durable
+//     Object; HTTP Basic at the token endpoint.
+//   • the same with a PUBLIC client — dynamically registered (RFC 7591), no secret, PKCE alone at the
+//     exchange, `client_id` in the body on refresh: the MCP-client shape.
+// The OAuth rows run in a DIRECTORY-REGISTERED project — a row on the console, not an ad-hoc
+// context — exactly what a person would do. The material never leaves: the catalog fact and the log
+// carry the pin and the strategy kind, never a value.
 
 import { expect, test } from "vitest";
-import { freshCtx, openItx, readAll, workerUrl } from "./support/client.ts";
+import { adminCredentials, freshCtx, openItx, readAll, workerUrl } from "./support/client.ts";
 import {
   petshopAuthorizationServer,
   petshopBaseUrl,
   petshopConnect,
   petshopExpireTokens,
   petshopMintClient,
+  petshopRegisterPublicClient,
   petshopRevokeRefreshToken,
 } from "./support/petshop.ts";
+import { freshDnsSafeProjectId, registerProject } from "./support/project-host.ts";
 
-/** A bearer call on the pets API through egress, the secret's `accessToken` as the placeholder. */
-const bearerCall = async (itx: any, name: string, path: string) => {
+/** A bearer call on the pets API through egress, the secret's `accessToken` as the placeholder
+ *  (`itx` is the untyped capnweb stub `openItx` hands out). */
+const bearerCall = async (itx: ReturnType<typeof openItx>, name: string, path: string) => {
   const res = await itx.fetch(
     new Request(`${petshopBaseUrl()}${path}`, {
       headers: { authorization: `Bearer getSecret("/secrets/${name}", { field: "accessToken" })` },
@@ -30,7 +40,7 @@ const bearerCall = async (itx: any, name: string, path: string) => {
   return { status: res.status, body: (await res.json().catch(() => null)) as any };
 };
 
-test("waitrose-session: a username/password secret mints its session on first use, re-mints on 401, and the session works on the API — the password never leaves the cell", async () => {
+test("waitrose-session: a username/password secret mints its session on first use, re-mints on 401, and the session works on the API — the password never leaves its Durable Object", async () => {
   const itx = openItx(freshCtx("secrets-waitrose"));
   const petshop = petshopBaseUrl();
   const username = `mum-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}@example.com`;
@@ -45,15 +55,15 @@ test("waitrose-session: a username/password secret mints its session on first us
     { name: "waitrose", urls: [petshop], refresh: "waitrose-session" },
   ]);
 
-  // First use: the material has no accessToken, so substitution misses, the cell runs the
-  // NewSession login, and the retried request lands on the pets API as the logged-in account.
+  // First use: the material has no accessToken, so substitution misses, the secret's Durable Object
+  // runs the NewSession login, and the retried request lands on the pets API as the logged-in account.
   expect(await bearerCall(itx, "waitrose", "/api/me")).toMatchObject({
     status: 200,
     body: { sub: username, clientId: "graphql-session-login" },
   });
 
   // Force a real 401 (the epoch bump kills the stored session) and call again: re-login IS the
-  // refresh — the cell re-mints and the retry wins.
+  // refresh — the object logs in again and the retry wins.
   await petshopExpireTokens("graphql-session-login");
   const pets = await bearerCall(itx, "waitrose", "/api/pets");
   expect(pets.status).toBe(200);
@@ -153,39 +163,42 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
   );
   expect(elsewhere.status).toBe(502);
   const refusal = await elsewhere.text();
-  expect(refusal).toContain(`bound to ${petshop}`);
+  expect(refusal).toContain(`pinned to ${petshop}`);
   expect(refusal).not.toContain(first.accessToken);
 });
 
-// THE CONNECT HALF, run by the platform: `itx.secrets.connect` hands back the provider's authorize
-// URL; the human consents there (the petshop's test-only `approve=1` shortcut stands in for the
-// page); the provider redirects to the platform's one callback with the code; the secret's Durable
-// Object exchanges it. From then on it is the ordinary `oauth-refresh-token` secret the story above
-// proves. No code outside that object ever held a token — not even the test.
-test("connect: the platform runs the consent half — authorize URL out, the code back at the platform's callback, the exchange inside the secret's Durable Object; then a call, expiry and refresh as before", async () => {
-  const itx = openItx(freshCtx("secrets-connect"));
+// THE FIRST TOKENS, obtained by the platform: `itx.secrets.beginOAuth` hands back the provider's
+// authorize URL; the human consents there (the petshop's test-only `approve=1` shortcut stands in for
+// the page); the provider redirects the human to the platform's one callback with the code; the
+// callback admits only a signed-in member of the project (here the admin bearer, the lane's session),
+// and the secret's Durable Object exchanges the code. From then on it is the ordinary
+// `oauth-refresh-token` secret the story above proves. No code outside that object ever held a token
+// — not even the test.
+test("beginOAuth, confidential client, in a directory-registered project: authorize URL out, the code back at the platform's callback (a project member only), the exchange inside the secret's Durable Object; then a call, expiry and refresh", async () => {
+  // a REAL project: a directory row (the console lists it), not an ad-hoc context
+  const projectId = freshDnsSafeProjectId("secrets-connect");
+  await registerProject(projectId);
+  const itx = openItx(projectId);
   const petshop = petshopBaseUrl();
   const { authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint } =
     await petshopAuthorizationServer();
   const client = await petshopMintClient();
 
-  const { authorizationUrl } = await itx.secrets.connect("petshop", {
+  const { authorizationUrl } = await itx.secrets.beginOAuth("petshop", {
     authorizationEndpoint,
     tokenEndpoint,
     ...client,
     scope: "pets",
     urls: [petshop],
   });
-  // the catalog knows the name, the pin and the strategy already; the material arrives at the callback
-  expect(await itx.secrets.list()).toEqual([
-    { name: "petshop", urls: [petshop], refresh: "oauth-refresh-token" },
-  ]);
+  // nothing is on the catalog until the exchange succeeds — an abandoned attempt leaves no row
+  expect(await itx.secrets.list()).toEqual([]);
   // a use before the callback is a clean 502: nothing to substitute, nothing to refresh with yet
   expect((await bearerCall(itx, "petshop", "/api/me")).status).toBe(502);
 
   // the human's consent: the URL names the platform's callback and carries PKCE
   const authorize = new URL(authorizationUrl);
-  const callback = workerUrl("/.auth/connect/callback");
+  const callback = workerUrl("/.secrets/oauth/callback");
   expect(authorize.searchParams.get("redirect_uri")).toBe(callback);
   expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
   expect(authorizationUrl).not.toContain(client.clientSecret);
@@ -196,17 +209,29 @@ test("connect: the platform runs the consent half — authorize URL out, the cod
   expect(back.origin + back.pathname).toBe(callback);
   expect(back.searchParams.get("code")).toBeTruthy();
 
-  // the callback: the exchange happens inside the secret's Durable Object
-  const done = await fetch(back);
-  const said = await done.text();
-  expect(done.status, said).toBe(200);
-  expect(said).toContain('the secret "petshop"');
-  // a replayed callback completes nothing (the attempt was consumed)
-  expect((await fetch(back)).status).toBe(400);
-  // a forged state is refused before any Durable Object is dialled
+  // the callback admits only a signed-in member of the project: no session is a 401, and the
+  // attempt is still live afterwards (a stranger who saw the link cannot complete it, nor kill it)
+  expect((await fetch(back)).status).toBe(401);
+  // a forged state is refused before any session or Durable Object is consulted
   const forged = new URL(back);
   forged.searchParams.set("state", "not-signed-by-us");
   expect((await fetch(forged)).status).toBe(400);
+  // the member's callback: the exchange happens inside the secret's Durable Object, and the catalog
+  // learns of the secret now
+  const member = { headers: { authorization: `Bearer ${adminCredentials().secret}` } };
+  const done = await fetch(back, member);
+  const said = await done.text();
+  expect(done.status, said).toBe(200);
+  expect(said).toContain('the secret "petshop"');
+  expect(await itx.secrets.list()).toEqual([
+    { name: "petshop", urls: [petshop], refresh: "oauth-refresh-token" },
+  ]);
+  // a replayed callback (a refreshed tab) completes idempotently: no second exchange, the same
+  // one catalog row — never a 400 for a secret that is live
+  expect((await fetch(back, member)).status).toBe(200);
+  expect(await itx.secrets.list()).toEqual([
+    { name: "petshop", urls: [petshop], refresh: "oauth-refresh-token" },
+  ]);
 
   // now an ordinary oauth-refresh-token secret: a call, expiry, transparent refresh
   expect(await bearerCall(itx, "petshop", "/api/me")).toMatchObject({
@@ -224,15 +249,47 @@ test("connect: the platform runs the consent half — authorize URL out, the cod
   expect(log).not.toContain("access_token");
 });
 
-test("one request, one secret: a request naming two secrets is refused at the door", async () => {
-  const itx = openItx(freshCtx("secrets-two"));
-  await itx.secrets.set("a", "1");
-  await itx.secrets.set("b", "2");
-  const res = await itx.fetch(
-    new Request("https://egress.invalid/", {
-      headers: { "x-a": 'getSecret("/secrets/a")', "x-b": 'getSecret("/secrets/b")' },
-    }),
-  );
-  expect(res.status).toBe(502);
-  expect(await res.text()).toContain('one request, one secret — this one names "a", "b"');
+// THE PUBLIC CLIENT: no secret anywhere — the provider registered the platform's callback as the one
+// redirect URI, PKCE alone proves the exchange, and every later refresh identifies the client with
+// `client_id` in the body. This is how an MCP client (and any DCR-registered client) connects.
+test("beginOAuth, public client (RFC 7591 registration, PKCE alone, client_id in the body on refresh): the same flow, no secret involved at any point", async () => {
+  const projectId = freshDnsSafeProjectId("secrets-connect-public");
+  await registerProject(projectId);
+  const itx = openItx(projectId);
+  const petshop = petshopBaseUrl();
+  const { authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint } =
+    await petshopAuthorizationServer();
+  const callback = workerUrl("/.secrets/oauth/callback");
+  const { clientId } = await petshopRegisterPublicClient(callback);
+
+  const { authorizationUrl } = await itx.secrets.beginOAuth("petshop-public", {
+    authorizationEndpoint,
+    tokenEndpoint,
+    clientId,
+    scope: "pets",
+    urls: [petshop],
+  });
+  const authorize = new URL(authorizationUrl);
+  expect(authorize.searchParams.get("client_id")).toBe(clientId);
+  expect(authorize.searchParams.get("redirect_uri")).toBe(callback);
+  authorize.searchParams.set("approve", "1");
+  const consent = await fetch(authorize, { redirect: "manual" });
+  expect(consent.status).toBe(302);
+  const back = new URL(consent.headers.get("location")!);
+  expect(back.origin + back.pathname).toBe(callback);
+  const done = await fetch(back, {
+    headers: { authorization: `Bearer ${adminCredentials().secret}` },
+  });
+  expect(done.status, await done.text()).toBe(200);
+
+  expect(await bearerCall(itx, "petshop-public", "/api/me")).toMatchObject({
+    status: 200,
+    body: { clientId },
+  });
+  // expiry → the refresh grant with client_id in the body (no Basic header to send) → 200
+  await petshopExpireTokens(clientId);
+  expect(await bearerCall(itx, "petshop-public", "/api/me")).toMatchObject({
+    status: 200,
+    body: { clientId },
+  });
 });

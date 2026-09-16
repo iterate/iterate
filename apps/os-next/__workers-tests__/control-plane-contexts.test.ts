@@ -307,8 +307,8 @@ describe("security requirements — the global namespace is not navigable", () =
       ),
     ).toBe(true);
     // B setting the same NAME is B's own row, and leaves A's untouched.
-    await b.user.secrets.set("x", "value-b");
-    expect(await b.user.secrets.list()).toEqual([{ name: "x" }]);
+    await b.user.secrets.set("x", "value-b", { urls: ["https://b.example.test"] });
+    expect(await b.user.secrets.list()).toEqual([{ name: "x", urls: ["https://b.example.test"] }]);
     expect(await a.user.secrets.list()).toEqual([{ name: "x", urls: ["https://example.test"] }]);
   });
 
