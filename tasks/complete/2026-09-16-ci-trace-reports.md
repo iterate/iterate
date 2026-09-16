@@ -44,3 +44,5 @@ Session: `01a09f64-ea4e-7c61-ab0a-c15eb65df3bc`.
 - The second complete preview (`lm7pqp0q35`) published automatically in 21 seconds after collector startup, with 92 test attempts and no retries. The third run verifies authored command labels.
 - Count only jobs with real runner attempts in the header, so a cancellation before runner startup does not inflate the count. Unstarted jobs remain visible with zero duration and explicit evidence.
 - Reports are immutable, public files on the separate `codex/ci-trace-artifacts` branch. Pruning and live OTLP export remain separate future work; shell/Playwright instrumentation is complete for this scope.
+
+- Follow-up: preparation now has measured nested operations for provisioning/deployment, slot acquisition and erase, per-app build/deploy and HTTP readiness, and shared rollout/smoke/TUI readiness. Async context keeps concurrent app children under the right parent; failed results and incomplete operations remain visible. A child-process integration regression exercises recording through OTLP assembly, alongside the preview regressions.

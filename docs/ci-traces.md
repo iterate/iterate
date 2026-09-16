@@ -5,6 +5,19 @@ workflow finishes. The report shows jobs, setup/wait/test/finish phases, measure
 shell steps and individual Playwright attempts. Expand rows, search for a test,
 click a bar, or zoom to a selected span. Download the same trace as OTLP JSON.
 
+Expand the `pnpm preview ci-prepare` step to compare **Provision and deploy
+preview** with **Shared readiness: rollout, agent smoke and TUI**. Deployment
+contains slot acquisition/cleanup and each app's parallel build/deploy command
+and HTTP readiness check. Build/deploy command timings include any smoke checks
+owned by that app's deploy script; the subsequent shared readiness span includes
+the remaining rollout wait and concurrent smoke/TUI work. Overlapping app spans
+must not be added together as wall time.
+
+`traceOperation()` records these nested operations at their actual start/end
+points, preserving async parents across parallel work. Thrown errors and
+explicit failed command results mark the operation failed; missing end records
+remain visibly incomplete. Names and status are recorded, not exception text.
+
 `preview-run.yml` emits small lifecycle records into Depot logs using
 `scripts/ci/trace-shell.sh` (`BASH_ENV`) and `trace-reporter.ts`. Keep explicit
 step IDs: these join timings to the authored commands. Reports show those

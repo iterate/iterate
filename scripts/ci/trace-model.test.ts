@@ -43,6 +43,13 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
           time: ms(3),
         }),
         line("install_dependencies", {
+          kind: "span-start",
+          id: "interrupted-child",
+          parentId: "",
+          name: "Interrupted setup operation",
+          time: ms(4),
+        }),
+        line("install_dependencies", {
           kind: "shell-end",
           id: "install",
           time: ms(33),
@@ -91,6 +98,13 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
   const spans = report.resourceSpans[0].scopeSpans[0].spans;
   const install = spans.find((span) => span.name === "install dependencies")!;
   expect(Number(install.endTimeUnixNano) - Number(install.startTimeUnixNano)).toBe(30e9);
+  expect(spans.find((span) => span.name === "Interrupted setup operation")).toMatchObject({
+    parentSpanId: install.spanId,
+    endTimeUnixNano: install.endTimeUnixNano,
+    attributes: expect.arrayContaining([
+      { key: "ci.status", value: { stringValue: "incomplete" } },
+    ]),
+  });
   const tests = spans.filter((span) => span.name.startsWith("greets"));
   expect(tests).toHaveLength(2);
   expect(tests[0].spanId).not.toBe(tests[1].spanId);

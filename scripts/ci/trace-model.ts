@@ -172,6 +172,7 @@ export function assembleTrace(
             }))
           : [];
       const stepParents = new Map<string, string>();
+      const stepEnds = new Map<string, number>();
       for (const shell of shells) {
         const done = shellEnds.get(shell.id);
         const parent =
@@ -196,6 +197,37 @@ export function assembleTrace(
           !!done?.exitCode,
         );
         stepParents.set(shell.stepKey, id);
+        stepEnds.set(shell.stepKey, done?.time || end);
+      }
+      const operations = events.filter((event) => event.kind === "span-start");
+      const operationIds = new Map(
+        operations.map((event) => [
+          event.id,
+          hash(`${traceId}/${attempt.attemptId}/operation/${event.id}`, 16),
+        ]),
+      );
+      const operationEnds = new Map(
+        events.filter((event) => event.kind === "span-end").map((event) => [event.id, event]),
+      );
+      for (const operation of operations) {
+        const done = operationEnds.get(operation.id);
+        if (operation.parentId && !operationIds.has(operation.parentId))
+          throw new Error(`Missing parent for CI operation: ${operation.name}`);
+        add(
+          `${attempt.attemptId}/operation/${operation.id}`,
+          operationIds.get(operation.parentId) || stepParents.get(operation.stepKey) || jobSpan,
+          operation.name,
+          operation.time,
+          done?.time || stepEnds.get(operation.stepKey) || end,
+          {
+            "ci.kind": "operation",
+            "ci.status": done?.status || "incomplete",
+            "ci.evidence": done
+              ? "Measured operation start/end"
+              : "incomplete; end bounded by enclosing step/job finish",
+          },
+          done?.status === "failed",
+        );
       }
       for (const test of events.filter((event) => event.kind === "test-start")) {
         const done = testEnds.get(test.id);
@@ -286,6 +318,19 @@ export const Workflow = z.object({
 });
 
 const TraceEvent = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("span-start"),
+    id: z.string(),
+    parentId: z.string(),
+    name: z.string(),
+    time: z.number().finite(),
+  }),
+  z.object({
+    kind: z.literal("span-end"),
+    id: z.string(),
+    status: z.enum(["passed", "failed"]),
+    time: z.number().finite(),
+  }),
   z.object({
     kind: z.literal("shell-start"),
     id: z.string(),
