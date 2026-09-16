@@ -1078,6 +1078,10 @@ const ALLOWED_RUNTIME_IMPORTS = new Set([
   "cloudflare:workers",
   "zod", // an npm package a userspace worker could bundle too — used to PARSE untrusted MCP responses
   "./context/expression.ts",
+  // the facets' bundled sources: STRINGS, data a userspace worker could carry too
+  "./generated/workspace-processor-source.ts",
+  "./generated/repo-processor-source.ts",
+  "./generated/project-processor-source.ts",
 ]);
 
 describe("the library boundary", () => {

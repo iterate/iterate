@@ -1496,36 +1496,45 @@ await until(async () =>
 // e2e/config-worker.e2e.test.ts
 ```
 
-### `itx.repos` and `itx.cfArtifacts`: where code lives
+### `itx.git`, `itx.repos` and `itx.cfArtifacts`: where code lives
 
 `itx.cfArtifacts` is Cloudflare Artifacts, project-scoped: every repo name is forced under
 `${projectId}.`, `list` is filtered locally, and `get(name)` returns a handle whose `createToken`
-pipelines across `/api` (its `fork`, whose name escapes the wall, is withheld). `itx.repos` is the
-primary door built on top: a repo's file bytes, git-over-HTTPS, one root-level path on `main`. Both
-are deployed-only in the lane — Artifacts has no local implementation.
+pipelines across `/api` (its `fork`, whose name escapes the wall, is withheld). `itx.git` is the
+stateless adapter built on top — a repo's files on `main` over git-over-HTTPS (`create`, `tip`,
+`snapshot`, `commitFiles`, `log`) — and `itx.repos.get(path)` the repo as a domain object over it: a
+stream on any path with its creation facts, a `commit-completed` fact per commit, and the tip
+memoized. Artifacts has no local implementation, so the physical tier runs deployed-only in the
+lane; locally a test lends a fake `itx.git` to the repo's context.
 
 ```ts
-expect(await itx.repos.readFile(repo, "worker.ts")).toBeNull(); // an unborn repo reads as null
-const first = await itx.repos.writeFile(repo, "worker.ts", source); // creates the repo, commits on main
+const repo = itx.repos.get("/repos/config");
+await repo.create(); // repos/create-requested, then repos/created on its path and on /
+expect(await repo.readFile("worker.ts")).toBeNull(); // an unborn repo reads as null
+const first = await repo.writeFile("worker.ts", source); // one commit on main
 expect(first.commitOid).toMatch(/^[0-9a-f]{40}$/);
-expect(await itx.repos.readFile(repo, "worker.ts")).toBe(source);
-await itx.cfArtifacts.delete(repo); // repos and cfArtifacts address the same repo
-// e2e/cfartifacts.e2e.test.ts (deployed only)
+expect(await repo.readFile("worker.ts")).toBe(source);
+await itx.cfArtifacts.delete("repos--config"); // the path's Artifacts name: segments joined with --
+// e2e/repos.e2e.test.ts (deployed only)
 const tok = await a.cfArtifacts.get(repo).createToken("read", 300); // pipelined server-side
 // e2e/cfartifacts.e2e.test.ts (deployed only)
 ```
 
 The payoff is the config worker with its source moved out of KV and into a real repo, nothing else
-changed — the `itx.worker` rewrite is the seam:
+changed — the `itx.worker` rewrite is what points at it, and a commit to that repo re-points it
+(the base `ConfigWorker` follows `repo/commit-completed` with a new `cacheKey`):
 
 ```ts
-await itx.repos.writeFile("config", "worker.ts", CONFIG_WORKER_SRC);
+await itx.repos.get("/repos/config").writeFile("worker.ts", CONFIG_WORKER_SRC);
 await itx.provide("itx.worker", [
   "itx",
   "workers",
-  ["get", { source: `itx.repos.readFile('config','worker.ts')`, cacheKey: "config:repo:v1" }],
+  [
+    "get",
+    { source: `itx.repos.get('/repos/config').readFile('worker.ts')`, cacheKey: "config:repo:v1" },
+  ],
 ]);
-// e2e/config-worker.e2e.test.ts (deployed only)
+// e2e/config-worker.e2e.test.ts
 ```
 
 **What this brick leaves on the table:** everything so far spoke capnweb or Workers RPC. The web
@@ -1546,17 +1555,19 @@ with a value the caller never sees, and `getSecret("/secrets/NAME", { field: "a.
 field out of a JSON secret — apps/os's grammar for a URL or a header (the path and the query alike,
 `:` kept in a spliced value; NOT its `Basic base64(user:getSecret(…))` peeling nor its JSON-body
 template — the body is never scanned); `/secrets/NAME` is the name
-`itx.secrets.set(NAME, …)` stored. `itx.secrets` is the WRITE-ONLY door to those values — `set`,
-`delete`, and a `list` of names and origins, never a value. Every change appends
-`events.iterate.com/secrets/changed` without the value:
+`itx.secrets.set(NAME, …)` stored. `itx.secrets` is the WRITE-ONLY surface for those values — `set`
+(material, a required pin of origins, an optional refresh strategy the secret's own Durable Object
+runs on a 401), `beginOAuth` (the provider's authorize URL; the platform's callback and the object
+obtain the first tokens), `delete`, and a `list` of names, pins and strategy kinds, never a value.
+Every change appends `events.iterate.com/secrets/changed` without the value:
 
 ```ts
 expect(await itx.secrets.list()).toEqual([]);
-await itx.secrets.set("api.key_v-2", "hunter2");
-await itx.secrets.set("stripe", "sk_live", { origin: "https://api.stripe.com/v1/x" });
+await itx.secrets.set("api.key_v-2", "hunter2", { urls: ["https://api.example.com"] });
+await itx.secrets.set("stripe", "sk_live", { urls: ["https://api.stripe.com/v1/x"] });
 expect(await itx.secrets.list()).toEqual([
-  { name: "api.key_v-2" },
-  { name: "stripe", origin: "https://api.stripe.com" }, // the ORIGIN of the URL given, path dropped
+  { name: "api.key_v-2", urls: ["https://api.example.com"] },
+  { name: "stripe", urls: ["https://api.stripe.com"] }, // the ORIGIN of the URL given, path dropped
 ]);
 const changes = (await readAll(itx))
   .filter((e) => e.type === "events.iterate.com/secrets/changed")
@@ -1565,19 +1576,19 @@ expect(JSON.stringify(changes)).not.toContain("hunter2");
 // e2e/secrets.e2e.test.ts
 ```
 
-A secret set with an `origin` is sent to that origin ONLY. A placeholder with no stored secret, or a
-secret bound to another origin, is a 502 to the CALLER, before the terminal fetch, naming the
-placeholder and where it sat, never the value:
+A secret is sent to its pinned origins ONLY (a set without `urls` is refused). A placeholder with no
+stored secret, or a secret pinned to other origins, is a 502 to the CALLER, before the terminal fetch,
+naming the placeholder and where it sat, never the value:
 
 ```ts
-await itx.secrets.set("bound", "v", { origin: "https://api.example.com" });
+await itx.secrets.set("bound", "v", { urls: ["https://api.example.com"] });
 const res = await itx.fetch(
   new Request("https://egress.invalid/", {
     headers: { authorization: 'getSecret("/secrets/bound")' },
   }),
 );
 expect(res.status).toBe(502);
-expect(await res.text()).toContain("bound to https://api.example.com"); // and "not sent to https://egress.invalid"
+expect(await res.text()).toContain("pinned to https://api.example.com"); // and "not sent to https://egress.invalid"
 const missing = await openItx("acme-support").fetch(
   new Request("https://egress.invalid/hunt", {
     headers: { "x-hunt-auth": 'Bearer getSecret("/secrets/GHOST")' },

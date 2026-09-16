@@ -58,7 +58,7 @@ one is warned about at boot and ignored). The two secrets are wrangler secrets o
 | `APP_CONFIG_ADMIN_API_SECRET`                                       | yes      | the admin secret: `authenticate({ type: "admin-secret" })`, the lanes' admin bearer (secret) |
 | `APP_CONFIG_PROJECT_HOSTNAME_BASE`                                  | no       | the base project hosts hang under; blank ⇒ no project-host ingress                           |
 | `APP_CONFIG_TEST_EMAIL_LOGIN`                                       | no       | `true` permits unverified email sign-in; disabled remotely by default                        |
-| `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`, `APP_CONFIG_ARTIFACTS_NAMESPACE` | no       | `itx.repos`' git remotes                                                                     |
+| `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`, `APP_CONFIG_ARTIFACTS_NAMESPACE` | no       | `itx.git`'s git remotes                                                                      |
 
 ## The console
 

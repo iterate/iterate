@@ -1,26 +1,31 @@
-// secret-durable-object.ts — THE SECRET CELL's host: one Durable Object per project secret, named
-// `<projectId>:<name>`, holding one `SecretRecord` (secrets.ts) in its own storage. Its ONLY
+// secret-durable-object.ts — a project secret's Durable Object: one per secret, named
+// `<owner>:<name>`, holding one `SecretRecord` (secrets.ts) in its own storage. Its ONLY
 // material-touching verb is `fetch`: a request that names this secret arrives from the context DO's
-// egress (iterate-context-durable-object.ts `#egress`), the placeholders are substituted HERE,
-// the pin checked, the request dispatched — and when the pinned host answers 401, or the material
-// has no `accessToken` yet, the refresh strategy re-mints in this same trusted code and the request
-// is retried ONCE. One object = one writer: a rotating refresh token is never raced by two contexts.
+// egress (iterate-context-durable-object.ts `#egress`), the placeholders are substituted HERE, the
+// pin checked, the request dispatched — and when the pinned host answers 401, or the material has
+// no `accessToken` yet, the refresh strategy re-mints in this same trusted code and the request is
+// retried ONCE. One object = one writer: a rotating refresh token is never raced by two contexts.
 //
-// The catalog (name, pin, strategy kind) is a fact on the project's log (`secrets/changed`); this
-// object is the physical value — apps/os's Secret DO, minus its stream (the material sits in this
-// object's storage, never on a log). `beginConnect` + `completeConnect` are the OAuth connect half
-// (secret-connect.ts): the pending attempt lives here too, and the code exchange writes the record.
+// The catalog (name, pin, strategy kind) is a fact on the owner's root log (`secrets/changed`);
+// this object is the physical value — apps/os's Secret DO, minus its stream (the material sits in
+// this object's storage, never on a log). `beginOAuth` + `completeOAuth` are the OAuth first-token
+// flow (secret-oauth.ts): the pending attempt lives here too, and the code exchange writes the
+// record; the catalog fact is the root context's, appended by `itx.secrets.completeOAuth`
+// (built-ins.ts) in the same per-name order as `set` and `delete`. A refresh's outcome is a fact
+// this object appends itself (`secrets/refreshed`).
 
 import { DurableObject } from "cloudflare:workers";
 import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
+import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import { signClaims } from "./principal.ts";
 import {
-  beginSecretConnect,
-  completeSecretConnect,
-  normalizeSecretConnect,
-  SECRET_CONNECT_CALLBACK_PATH,
-  type PendingSecretConnect,
-} from "./secret-connect.ts";
+  beginSecretOAuth,
+  completeSecretOAuth,
+  SECRET_OAUTH_CALLBACK_PATH,
+  type NormalizedSecretOAuthOptions,
+  type PendingSecretOAuth,
+  type SecretOAuthState,
+} from "./secret-oauth.ts";
 import {
   originPinned,
   pinRefusal,
@@ -31,13 +36,19 @@ import {
 } from "./secrets.ts";
 
 /** What sits in storage. `stored` is the record with the revision it was written at; `revision` is
- *  THE WRITE COUNTER every change to this object bumps (`set`, `beginConnect`; `clear` resets it with
- *  everything else) — a refresh commits only against the revision it read, and a code exchange only
- *  against the counter it started at, so a `set` or `clear` racing either never has its outcome
- *  overwritten by a mint or an exchange from before it. `pending` is the connect attempt in flight. */
+ *  THE WRITE COUNTER every change to this object bumps (`set`, `clear`, `beginOAuth`) — a refresh
+ *  commits only against the revision it read, and a code exchange only against the counter it
+ *  started at, so a `set` or `clear` racing either never has its outcome overwritten by a mint or an
+ *  exchange from before it. The counter is never reset: a `clear` bumps it too, so a delete followed
+ *  by a new `set` can never present the number a stale mint is waiting for. `pending` is the OAuth
+ *  attempt in flight; `completed` the last one finished (its nonce and the revision it wrote), so its
+ *  callback completes idempotently instead of exchanging twice.
+ *  `catalog` is the owner's root context — the log the facts about this secret go to. */
 type Stored = { record: SecretRecord; revision: number };
 
-export class SecretDurableObject extends DurableObject<AppConfigEnv> {
+type Env = AppConfigEnv & { ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject> };
+
+export class SecretDurableObject extends DurableObject<Env> {
   /** The one refresh in flight, keyed by the revision it read (single-flight: N callers who 401
    *  together on the same material share ONE mint). A caller holding a NEWER revision — a `set`
    *  landed while a mint for the old material was running, and the fence will drop that mint — is
@@ -45,12 +56,15 @@ export class SecretDurableObject extends DurableObject<AppConfigEnv> {
   #refreshing: { revision: number; promise: Promise<void> } | undefined;
 
   /** Replace the record whole — material always travels with its complete policy (apps/os's
-   *  `update` rule), so a value never inherits a pin or a strategy it was not set with. */
-  async set(record: SecretRecord): Promise<void> {
+   *  `update` rule), so a value never inherits a pin or a strategy it was not set with. `catalog` is
+   *  the owner's root context name, where this object appends its own facts. */
+  async set(record: SecretRecord, catalog: string): Promise<number> {
     const revision = await this.#bump();
     await this.ctx.storage.put<Stored>("stored", { record, revision });
-    // A set supersedes any connect attempt in flight: its callback must not overwrite this material.
+    await this.ctx.storage.put("catalog", catalog);
+    // A set supersedes any OAuth attempt in flight: its callback must not overwrite this material.
     await this.ctx.storage.delete("pending");
+    return revision;
   }
 
   /** The write counter, bumped: the number the write that follows is fenced by. */
@@ -60,59 +74,93 @@ export class SecretDurableObject extends DurableObject<AppConfigEnv> {
     return revision;
   }
 
+  /** Forget the record and any attempt — a write like any other (the counter moves on, so a mint or
+   *  an exchange started before the clear cannot land after it, even under a new `set`). */
   async clear(): Promise<void> {
-    await this.ctx.storage.deleteAll();
+    await this.#bump();
+    await this.ctx.storage.delete(["stored", "pending", "completed"]);
   }
 
-  /** THE CONNECT HALF, step one: keep the pending attempt, hand back the authorize URL. The `state`
-   *  is a platform-signed claim naming this secret plus a nonce only this attempt knows; the
-   *  redirect URI is the platform's one callback (secret-connect.ts). A new attempt replaces an
-   *  unfinished one; the record, if any, stays until the exchange writes over it. */
-  async beginConnect(options: unknown): Promise<{ authorizationUrl: string }> {
+  /** OAUTH, step one: keep the pending attempt, hand back the authorize URL. The `state` is a
+   *  platform-signed claim naming this secret plus a nonce only this attempt knows; the redirect URI
+   *  is the platform's one callback (secret-oauth.ts). A new attempt replaces an unfinished one; the
+   *  record, if any, stays until the exchange writes over it. Nothing lands on the catalog until the
+   *  exchange succeeds — an abandoned attempt leaves no trace. */
+  async beginOAuth(
+    options: NormalizedSecretOAuthOptions,
+    catalog: string,
+  ): Promise<{ authorizationUrl: string }> {
     const config = appConfigOf(this.env);
-    const { projectId, name } = this.#address();
+    const { owner, name } = this.#address();
     const nonce = crypto.randomUUID();
-    const state = { projectId, name, nonce, exp: Date.now() + 10 * 60_000 };
-    const { pending, authorizationUrl } = await beginSecretConnect(
-      normalizeSecretConnect(options),
-      {
-        redirectUri: `${config.platformOrigin}${SECRET_CONNECT_CALLBACK_PATH}`,
-        state: await signClaims(state, config.sessionSecret.exposeSecret()),
-        nonce,
-      },
-    );
+    const state: SecretOAuthState = {
+      kind: "secret-oauth",
+      owner,
+      name,
+      nonce,
+      exp: Date.now() + 10 * 60_000,
+    };
+    const { pending, authorizationUrl } = await beginSecretOAuth(options, {
+      redirectUri: `${config.platformOrigin}${SECRET_OAUTH_CALLBACK_PATH}`,
+      state: await signClaims(state, config.sessionSecret.exposeSecret()),
+      nonce,
+    });
     await this.#bump(); // a new attempt is a write: an exchange started before it will not land
-    await this.ctx.storage.put<PendingSecretConnect>("pending", pending);
+    await this.ctx.storage.put<PendingSecretOAuth>("pending", pending);
+    await this.ctx.storage.put("catalog", catalog);
     return { authorizationUrl };
   }
 
-  /** THE CONNECT HALF, step two (the callback): the code for the pending attempt the nonce names →
-   *  the exchange → the record, as a `set`. The attempt is consumed once its nonce matched — a stale
-   *  or foreign callback (a back button, an older authorize URL) fails without touching the live
-   *  attempt — and the exchange lands only if nothing else wrote this object while the provider was
-   *  answering: a `set` or `clear` in that window wins and the tokens are discarded. */
-  async completeConnect(input: { code: string; nonce: string }): Promise<void> {
-    const pending = await this.ctx.storage.get<PendingSecretConnect>("pending");
+  /** OAUTH, step two (the callback, through `itx.secrets.completeOAuth` on the owner's root
+   *  context): the code for the pending attempt the nonce names → the exchange → the record, as a
+   *  `set`. A stale or foreign callback (a back button, an older authorize URL, a replay with a junk
+   *  code) fails without touching the live attempt; the attempt is consumed only when its exchange
+   *  succeeds. The exchange lands only if nothing else wrote this object while the provider was
+   *  answering: a `set` or `clear` in that window wins and the tokens are discarded (from the fence
+   *  to the completion mark only storage awaits follow, which the input gate holds together).
+   *  Answers the pin the record was stored with — what the catalog fact carries; never the
+   *  material. IDEMPOTENT for the attempt it completed: the same callback again (a refreshed tab,
+   *  or the root context retrying after its catalog append failed) runs no second exchange and
+   *  answers the same pin, as long as the record is still the one this attempt wrote — so the
+   *  catalog can always catch up with a live object. `exchanged` says which happened: THIS call
+   *  wrote the record (the caller may undo it if its catalog write fails), or a replay found it. */
+  async completeOAuth(input: {
+    code: string;
+    nonce: string;
+  }): Promise<{ urls: string[]; exchanged: boolean }> {
+    const completed = await this.ctx.storage.get<{ nonce: string; revision: number }>("completed");
+    if (completed?.nonce === input.nonce) {
+      const stored = await this.ctx.storage.get<Stored>("stored");
+      if (stored?.revision === completed.revision)
+        return { urls: stored.record.urls, exchanged: false };
+      throw new Error(
+        "this attempt completed, but the secret was written or cleared since — begin again",
+      );
+    }
+    const pending = await this.ctx.storage.get<PendingSecretOAuth>("pending");
     if (!pending || pending.nonce !== input.nonce)
-      throw new Error("no pending connection matches this callback — start the connection again");
-    await this.ctx.storage.delete("pending");
-    if (pending.until <= Date.now())
-      throw new Error("the connection attempt expired — start the connection again");
+      throw new Error("no pending attempt matches this callback — begin again");
+    if (pending.until <= Date.now()) {
+      await this.ctx.storage.delete("pending");
+      throw new Error("the attempt expired — begin again");
+    }
     const started = await this.ctx.storage.get<number>("revision");
-    const record = await completeSecretConnect(pending, input.code, (exchange) => {
-      if (!originPinned(exchange.url, pending.urls))
+    const record = await completeSecretOAuth(pending, input.code, (exchange) => {
+      if (!originPinned(exchange.url, pending.options.urls))
         throw new Error(`the token endpoint ${new URL(exchange.url).origin} is outside the pin`);
       return dispatch(exchange);
     });
     if ((await this.ctx.storage.get<number>("revision")) !== started)
       throw new Error(
-        "the secret was changed while the provider was answering — the tokens were discarded; connect again",
+        "the secret was changed while the provider was answering — the tokens were discarded; begin again",
       );
-    await this.set(record);
+    const revision = await this.set(record, (await this.ctx.storage.get<string>("catalog")) ?? "");
+    await this.ctx.storage.put("completed", { nonce: input.nonce, revision });
+    return { urls: record.urls, exchanged: true };
   }
 
-  /** THE CELL: substitute, pin, dispatch — refresh and retry once on a mintable miss or a 401. A
-   *  refusal is a 502 to the caller with the reason (never the destination, never the value). */
+  /** Substitute, pin, dispatch — refresh and retry once on a mintable miss or a 401. A refusal is
+   *  a 502 to the caller with the reason (never the destination, never the value). */
   override async fetch(request: Request): Promise<Response> {
     const { name } = this.#address();
     // The record AS OF NOW, its pin checked against THIS request every time it is read — after a
@@ -126,7 +174,15 @@ export class SecretDurableObject extends DurableObject<AppConfigEnv> {
     };
     try {
       let stored = await read();
-      const resolve = () => stored?.record.material ?? null;
+      // This object answers for ONE secret: a placeholder naming another is refused here, not only
+      // at the egress that routed the request (the object is the boundary that holds the bytes).
+      const resolve = (named: string) => {
+        if (named !== name)
+          throw new ProjectSecretRefused(
+            `itx.fetch: getSecret("/secrets/${named}") does not belong to the secret ${name}`,
+          );
+        return stored?.record.material ?? null;
+      };
       // A refresh-and-retry needs the request twice; clone while it is undisturbed. (The cast is
       // workers-types' Request<Cf> vs the bare Request the pure half takes.)
       let retry: Request | null = stored?.record.refresh
@@ -169,13 +225,13 @@ export class SecretDurableObject extends DurableObject<AppConfigEnv> {
     }
   }
 
-  /** This object's name, `<projectId>:<name>` — the left half is the RESOURCE OWNER's id
+  /** This object's name, `<owner>:<name>` — the left half is the RESOURCE OWNER's id
    *  (iterate-context.ts `resourceScope`: a project's id, or `global--users--<id>` /
    *  `global--organizations--<id>`), which never holds a `:`. */
-  #address(): { projectId: string; name: string } {
+  #address(): { owner: string; name: string } {
     const id = this.ctx.id.name ?? ":";
     const colon = id.indexOf(":");
-    return { projectId: id.slice(0, colon), name: id.slice(colon + 1) };
+    return { owner: id.slice(0, colon), name: id.slice(colon + 1) };
   }
 
   #refresh(revision: number): Promise<void> {
@@ -193,7 +249,8 @@ export class SecretDurableObject extends DurableObject<AppConfigEnv> {
   }
 
   /** Run the strategy against the record AS READ NOW; commit only if nothing was `set` meanwhile
-   *  (the revision fence) — a stale mint must never resurrect material a set replaced. */
+   *  (the revision fence) — a stale mint must never resurrect material a set replaced. The outcome,
+   *  either way, is a fact on the catalog: `secrets/refreshed { name, kind, ok, error? }`. */
   async #doRefresh(revision: number): Promise<void> {
     const stored = await this.ctx.storage.get<Stored>("stored");
     // A set landed first: whatever it stored (new material, or no strategy any more) is the answer,
@@ -201,22 +258,70 @@ export class SecretDurableObject extends DurableObject<AppConfigEnv> {
     if (stored?.revision !== revision) return;
     const { refresh, urls } = stored.record;
     if (!refresh) throw new Error("no refresh strategy"); // unreachable: this revision was read with one
-    const next = await refreshSecretMaterial(refresh, stored.record.material, (exchange) => {
-      // Refresh moves bytes only toward pinned hosts, like any use.
-      if (!originPinned(exchange.url, urls))
-        throw new Error(`the exchange endpoint ${new URL(exchange.url).origin} is outside the pin`);
-      return dispatch(exchange);
-    });
+    const { name } = this.#address();
+    let next: Record<string, unknown>;
+    try {
+      next = await refreshSecretMaterial(refresh, stored.record.material, (exchange) => {
+        // Refresh moves bytes only toward pinned hosts, like any use.
+        if (!originPinned(exchange.url, urls))
+          throw new Error(
+            `the exchange endpoint ${new URL(exchange.url).origin} is outside the pin`,
+          );
+        return dispatch(exchange);
+      });
+    } catch (error) {
+      await this.#appendOutcome({
+        type: "events.iterate.com/secrets/refreshed",
+        payload: {
+          name,
+          kind: refresh.kind,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+      throw error;
+    }
     const current = await this.ctx.storage.get<Stored>("stored");
     if (current?.revision !== revision) return;
     await this.ctx.storage.put<Stored>("stored", {
       ...current,
       record: { ...current.record, material: next },
     });
+    await this.#appendOutcome({
+      type: "events.iterate.com/secrets/refreshed",
+      payload: { name, kind: refresh.kind, ok: true },
+    });
+  }
+
+  /** A refresh's outcome onto the owner's root log — the platform's own append, no principal,
+   *  through THE one write (`itx.builtins.append`, iterate-context.ts), which no context can mask.
+   *  Best-effort: the outcome already happened, and a lost fact must not fail the request that
+   *  caused it. */
+  async #appendOutcome(event: { type: string; payload: Record<string, unknown> }): Promise<void> {
+    const catalog = await this.ctx.storage.get<string>("catalog");
+    if (!catalog) return;
+    try {
+      await this.env.ITERATE_CONTEXT.getByName(catalog).invoke(
+        ["itx", "builtins", ["append", event]],
+        [],
+        { principal: null },
+      );
+    } catch (error) {
+      console.error("secrets.catalog_append_failed", { type: event.type, error: String(error) });
+    }
   }
 }
 
 /** The terminal fetch. A substituted secret follows NO redirect: a 3xx to another origin would carry
  *  the credential there (the Fetch standard strips `Authorization` on a cross-origin redirect, not
- *  other headers). WS-safe — only the URL and headers were rewritten, so a 101 flows straight back. */
-const dispatch = (request: Request) => fetch(request, { redirect: "manual" });
+ *  other headers) — the caller sees the 3xx. A network failure is answered generically: the runtime's
+ *  own error quotes the request URL, which may by now carry the substituted secret. */
+const dispatch = async (request: Request): Promise<Response> => {
+  try {
+    return await fetch(request, { redirect: "manual" });
+  } catch {
+    throw new ProjectSecretRefused(
+      `itx.fetch: the pinned host ${new URL(request.url).origin} could not be reached`,
+    );
+  }
+};

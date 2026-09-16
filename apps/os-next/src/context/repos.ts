@@ -1,18 +1,26 @@
-// repos.ts — THE PROJECT'S REPOS: the Artifacts binding, one file at a time. Two roots, one prefix:
+// repos.ts — THE PROJECT'S REPOS, the PHYSICAL half: the Artifacts binding and git-over-HTTPS. Two
+// roots, one prefix:
 //   • `itx.cfArtifacts` (`projectScopedArtifacts`) — the RAW Cloudflare Artifacts binding, project-
 //     scoped and shaped like the real binding: the control-plane escape hatch (create / get / list /
 //     delete a repo; a repo's bytes are git-over-HTTPS, below);
-//   • `itx.repos` (`projectScopedRepos`) — the MINIMAL git-backed layer built ON TOP of it +
-//     the git wire section below (`createGitWireTransport`, the copied git-over-HTTPS engine): just enough to move the config worker's
-//     source out of KV and into a real repo —
-//       readFile(repo, path)  — the tip commit's tree → the path's blob (the `itx.worker` source producer);
-//       writeFile(repo, path, content) — one commit on `main` (create the repo on first write; seeding).
+//   • `itx.git` (`projectScopedGit`) — the stateless git layer built ON TOP of it + the git wire
+//     section below (`createGitWireTransport`, the copied git-over-HTTPS engine): a repo's files on
+//     `main`, by repo-relative path —
+//       create(repo)                            — the Artifacts repo, `main` unborn;
+//       tip(repo)                               — `main`'s tip, one ls-refs;
+//       snapshot(repo)                          — the tip's every file, one shallow fetch;
+//       commitFiles(repo, { message, changes }) — ONE commit on `main` (the repo created on first write);
+//       log(repo, { limit? })                   — the newest commits.
+//   The DOMAIN half — `itx.repos.get(name)`, a repo as a stream on `/repos/<name>` with its birth
+//   certificate, its commit facts and the tip memoized — is the repo facet (src/repo/), a library root
+//   (library.ts) over this adapter.
 //
-// SCOPE of `itx.repos`, deliberately tiny: root-level paths only (no nested trees), branch `main`, no
-// history walk (a shallow `deepen: 1` fetch is the whole snapshot), no merge conflict handling (writes
-// to the config repo are single-writer). Both roots address the very same repos under the ONE
-// `${projectId}.` name prefix (`ArtifactsScope` says why `.`); the remote is built from the account +
-// namespace vars, and Artifacts hands the same URL back from `create`, so the two always agree.
+// SCOPE of `itx.git`, deliberately small: branch `main` only; stateless — a read is ONE shallow fetch
+// of the whole tip (`deepen: 1`; the repo facet is what memoizes it); a commit is compare-and-swapped
+// on the tip (a concurrent push refuses it — no merge); text content only. Both roots address the
+// very same repos under the ONE `${projectId}.` name prefix (`ArtifactsScope` says why `.`); the
+// remote is built from the account + namespace vars, and Artifacts hands the same URL back from
+// `create`, so the two always agree.
 
 import { RpcTarget } from "capnweb";
 import { deflate, Inflate } from "pako";
@@ -104,7 +112,7 @@ export function projectScopedArtifacts(
   };
 }
 
-// ── `itx.repos` — one file at a time, over git-wire ──
+// ── `itx.git` — a repo's files, over git-wire ──
 
 const REF = "refs/heads/main";
 const ZERO_OID = "0".repeat(40);
@@ -119,25 +127,159 @@ const textEncoder = new TextEncoder();
 const isRepoNotFound = (error: unknown): boolean =>
   /not found|10200/i.test(String((error as { message?: unknown })?.message ?? error));
 
-/** `itx.repos` — a project's git repos, one file at a time. Data in, data out (no handles cross /api). */
-export interface ReposScope {
-  /** The bytes of `path` at the tip of `main`, or null if the repo is unborn / the file is absent. */
-  readFile(repo: string, path: string): Promise<string | null>;
-  /** Commit `content` to `path` on `main` (creating the repo on first write); returns the new commit. */
-  writeFile(repo: string, path: string, content: string): Promise<{ commitOid: string }>;
+/** One file mutation for `commitFiles`: `content` written at `path`, or `path` deleted. */
+export type RepoFileChange = { path: string; content: string } | { path: string; delete: true };
+
+/** One commit as `log` lists it, newest first (`timestamp` is epoch milliseconds). */
+export type RepoLogEntry = {
+  oid: string;
+  message: string;
+  author: { name: string; email: string };
+  timestamp: number;
+  parents: string[];
+};
+
+/** `itx.git` — a project's git repos on `main`, by file. Data in, data out (no handles cross /api). */
+export interface GitScope {
+  /** The Artifacts repo, `main` unborn until the first commit; false when it already existed. */
+  create(repo: string): Promise<{ created: boolean }>;
+  /** `main`'s tip — one ls-refs; null when there is no such repo or `main` is unborn. */
+  tip(repo: string): Promise<string | null>;
+  /** The tip's every file as text, one shallow fetch (a submodule pointer has no text and is left
+   *  out); null when there is no such repo or `main` is unborn. */
+  snapshot(repo: string): Promise<{ commitOid: string; files: Record<string, string> } | null>;
+  /** ONE commit on `main` applying `changes` (the repo is created on its first write) → the new
+   *  commit and the paths it changed. Changes that leave the tree as it was commit nothing:
+   *  `changedPaths` is empty and `commitOid` the tip (null on an unborn repo). The push is
+   *  compare-and-swapped on the tip the changes were applied to: a `main` that moved in the
+   *  meantime refuses the commit — read again and retry. */
+  commitFiles(
+    repo: string,
+    input: {
+      message: string;
+      changes: RepoFileChange[];
+      author?: { name: string; email: string };
+    },
+  ): Promise<{ commitOid: string | null; changedPaths: string[] }>;
+  /** The newest `limit` commits of `main` (default 20), newest first — a shallow fetch that deep. */
+  log(repo: string, options?: { limit?: number }): Promise<RepoLogEntry[]>;
 }
 
-export function projectScopedRepos(input: {
+/** A tip's tree FLATTENED: repo-relative path → its entry (blob oid + mode). Every tree object is in
+ *  the snapshot pack (`deepen 1` carries everything reachable from the tip), so the walk fetches
+ *  nothing. A submodule pointer (mode 160000) is kept — a re-encoded tree must not drop it — and has
+ *  no blob. Exported for the codec pin in repos.test.ts. */
+export type RepoManifest = Map<string, { oid: string; mode: string }>;
+
+export function manifestOf(
+  entries: TreeEntry[],
+  objects: Map<string, RawGitObject>,
+  prefix = "",
+): RepoManifest {
+  const manifest: RepoManifest = new Map();
+  for (const entry of entries) {
+    const path = prefix + entry.name;
+    if (entry.mode === "40000") {
+      const tree = objects.get(entry.oid);
+      if (tree?.type !== "tree")
+        throw new Error(`itx.git: the pack omitted the tree ${entry.oid} (${path}/)`);
+      for (const [nested, nestedEntry] of manifestOf(parseTree(tree.payload), objects, `${path}/`))
+        manifest.set(nested, nestedEntry);
+    } else manifest.set(path, { oid: entry.oid, mode: entry.mode });
+  }
+  return manifest;
+}
+
+/** The tree objects of a manifest — every directory encoded, children before their parent. Content-
+ *  addressed: an unchanged directory hashes to the object the tip already has, which a commit skips. */
+export async function treeObjectsOf(
+  manifest: RepoManifest,
+): Promise<{ rootOid: string; trees: { oid: string; payload: Uint8Array }[] }> {
+  // directory path ("" = root) → its files and its subdirectories
+  const directories = new Map<string, { files: TreeEntry[]; subdirectories: Set<string> }>();
+  const directory = (path: string) => {
+    let known = directories.get(path);
+    if (!known) directories.set(path, (known = { files: [], subdirectories: new Set() }));
+    return known;
+  };
+  directory("");
+  for (const [path, entry] of manifest) {
+    const segments = path.split("/");
+    let parent = "";
+    for (const segment of segments.slice(0, -1)) {
+      directory(parent).subdirectories.add(segment);
+      parent = parent === "" ? segment : `${parent}/${segment}`;
+    }
+    directory(parent).files.push({
+      mode: entry.mode,
+      name: segments[segments.length - 1]!,
+      oid: entry.oid,
+    });
+  }
+  const trees: { oid: string; payload: Uint8Array }[] = [];
+  const encodeDirectory = async (path: string): Promise<string> => {
+    const { files, subdirectories } = directory(path);
+    const entries = [...files];
+    for (const name of subdirectories)
+      entries.push({
+        mode: "40000",
+        name,
+        oid: await encodeDirectory(path === "" ? name : `${path}/${name}`),
+      });
+    const payload = encodeTree(entries);
+    const oid = await hashObject("tree", payload);
+    trees.push({ oid, payload });
+    return oid;
+  };
+  return { rootOid: await encodeDirectory(""), trees };
+}
+
+/** A commit's headers and message: `tree`, the `parent`s, and the author line
+ *  `Name <email> <unix seconds> <tz>` (the timestamp in epoch milliseconds). */
+export function parseCommit(payload: Uint8Array): {
+  tree: string;
+  parents: string[];
+  author: { name: string; email: string };
+  timestamp: number;
+  message: string;
+} {
+  const text = textDecoder.decode(payload);
+  const blank = text.indexOf("\n\n");
+  const header = blank === -1 ? text : text.slice(0, blank);
+  const message = blank === -1 ? "" : text.slice(blank + 2).replace(/\n$/, "");
+  let tree = "";
+  const parents: string[] = [];
+  let author = { name: "", email: "" };
+  let timestamp = 0;
+  for (const line of header.split("\n")) {
+    if (line.startsWith("tree ")) tree = line.slice(5);
+    else if (line.startsWith("parent ")) parents.push(line.slice(7));
+    else if (line.startsWith("author ")) {
+      const stamp = /^author (.*) <([^>]*)> (\d+) [+-]\d{4}$/.exec(line);
+      if (stamp) {
+        author = { name: stamp[1]!, email: stamp[2]! };
+        timestamp = Number(stamp[3]) * 1000;
+      }
+    }
+  }
+  if (!tree) throw new Error("itx.git: a commit without a tree header");
+  return { tree, parents, author, timestamp, message };
+}
+
+export function projectScopedGit(input: {
   namespace: ArtifactsNamespace;
   projectId: string;
   accountId: string;
   namespaceName: string;
-}): ReposScope {
+}): GitScope {
   const prefix = `${input.projectId}.`;
 
-  const rootName = (path: string): string => {
-    if (path.includes("/"))
-      throw new Error(`itx.repos: nested paths are not supported yet ("${path}")`);
+  /** A repo-relative path, `notes/log.md`: no leading slash, no empty, `.` or `..` segment. */
+  const repoPath = (path: string): string => {
+    const refusal = `itx.git: not a repo-relative path (${JSON.stringify(path)})`;
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of a wire-fed argument (its static type is a claim, not a guarantee, across the capability boundary)
+    if (typeof path !== "string") throw new Error(refusal);
+    if (path.split("/").some((s) => s === "" || s === "." || s === "..")) throw new Error(refusal);
     return path;
   };
 
@@ -160,98 +302,161 @@ export function projectScopedRepos(input: {
     });
   };
 
-  /** The tip's SNAPSHOT — one shallow fetch: the tip commit's tree entries, and every object the pack
-   *  carried by oid (the endpoint sends every blob reachable from the tip, so a file's bytes are
-   *  already here — `readFile` never fetches twice). A pack that omits the commit or its tree is an
-   *  OUTAGE, not an empty tree — git drops wants for missing oids silently, so receipt is verified
-   *  here. */
+  /** A READ's transport, or null for a repo that does not exist — the one failure that legitimately
+   *  means "no files"; an outage or an auth failure surfaces as what it is. */
+  const readTransport = async (repo: string) => {
+    try {
+      return await transportFor(repo, "read");
+    } catch (error) {
+      if (isRepoNotFound(error)) return null;
+      throw error;
+    }
+  };
+
+  /** The tip's SNAPSHOT — one shallow fetch: the tip's manifest, and every object the pack carried by
+   *  oid (the endpoint sends every blob reachable from the tip, so a file's bytes are already here —
+   *  `readFile` never fetches twice). A pack that omits the commit or its tree is an OUTAGE, not an
+   *  empty tree — git drops wants for missing oids silently, so receipt is verified here. */
   const tipSnapshot = async (
     transport: Awaited<ReturnType<typeof transportFor>>,
     tip: string,
-  ): Promise<{ entries: TreeEntry[]; objects: Map<string, RawGitObject> }> => {
+  ): Promise<{ manifest: RepoManifest; objects: Map<string, RawGitObject> }> => {
     const objects = new Map<string, RawGitObject>(
       (await transport.fetchObjects({ wants: [tip], deepen: 1 })).map((o) => [o.oid, o]),
     );
     const commit = objects.get(tip);
     if (commit?.type !== "commit")
-      throw new Error(`itx.repos: the pack omitted the tip commit ${tip} of ${REF}`);
-    // A commit's tree oid is its `tree <oid>` header — read from the header block (before the blank
-    // line), never a body line that happens to start "tree ".
-    const header = textDecoder.decode(commit.payload).split("\n\n", 1)[0]!;
-    const treeOid = header
-      .split("\n")
-      .find((line) => line.startsWith("tree "))
-      ?.slice(5);
-    if (!treeOid) throw new Error(`itx.repos: the tip commit ${tip} of ${REF} has no tree header`);
-    const tree = objects.get(treeOid);
+      throw new Error(`itx.git: the pack omitted the tip commit ${tip} of ${REF}`);
+    const tree = objects.get(parseCommit(commit.payload).tree);
     if (tree?.type !== "tree")
-      throw new Error(`itx.repos: the pack omitted the tree of the tip commit ${tip}`);
-    return { entries: parseTree(tree.payload), objects };
+      throw new Error(`itx.git: the pack omitted the tree of the tip commit ${tip}`);
+    return { manifest: manifestOf(parseTree(tree.payload), objects), objects };
+  };
+
+  /** What a read starts from: the tip and its snapshot — null for no such repo or an unborn `main`. */
+  const readSnapshot = async (repo: string) => {
+    const transport = await readTransport(repo);
+    if (!transport) return null;
+    const tip = await transport.tipOf(REF);
+    if (!tip) return null;
+    return { tip, ...(await tipSnapshot(transport, tip)) };
+  };
+
+  const commitFiles: GitScope["commitFiles"] = async (repo, { message, changes, author }) => {
+    if (!message.trim()) throw new Error("itx.git.commitFiles: message must be a non-empty string");
+    if (changes.length === 0) throw new Error("itx.git.commitFiles: changes must name a file");
+    const transport = await transportFor(repo, "write");
+    const tip = await transport.tipOf(REF);
+    // The tip's snapshot, or an unborn repo's empty one. (A tip whose commit or tree the pack omits
+    // THROWS in tipSnapshot — never a fresh root commit that would repoint `main` at an orphan.)
+    const { manifest, objects } = tip
+      ? await tipSnapshot(transport, tip)
+      : {
+          manifest: new Map<string, { oid: string; mode: string }>(),
+          objects: new Map<string, RawGitObject>(),
+        };
+    const toPush: { payload: Uint8Array; type: GitObjectType }[] = [];
+    const changedPaths: string[] = [];
+    // Deletes first, whatever the order given: a batch is one tree, so a write may take a path a
+    // delete in the same batch frees (a directory replaced by a file, or the reverse).
+    for (const change of changes) {
+      if (!("delete" in change)) continue;
+      const path = repoPath(change.path);
+      if (manifest.delete(path)) changedPaths.push(path);
+    }
+    for (const change of changes) {
+      if ("delete" in change) continue;
+      const path = repoPath(change.path);
+      // A file is never written where a directory is, nor under a file.
+      for (const existing of manifest.keys())
+        if (existing.startsWith(`${path}/`) || path.startsWith(`${existing}/`))
+          throw new Error(`itx.git.commitFiles: "${path}" collides with "${existing}"`);
+      const blob = textEncoder.encode(change.content);
+      const oid = await hashObject("blob", blob);
+      const current = manifest.get(path);
+      if (current?.oid === oid) continue;
+      manifest.set(path, { oid, mode: current ? current.mode : "100644" });
+      if (!objects.has(oid)) toPush.push({ payload: blob, type: "blob" });
+      changedPaths.push(path);
+    }
+    if (changedPaths.length === 0) return { commitOid: tip || null, changedPaths };
+
+    const { rootOid, trees } = await treeObjectsOf(manifest);
+    for (const tree of trees)
+      if (!objects.has(tree.oid)) toPush.push({ payload: tree.payload, type: "tree" });
+    const commitBytes = encodeCommit({
+      author: { ...(author || AUTHOR), date: new Date() },
+      message,
+      parents: tip ? [tip] : [],
+      tree: rootOid,
+    });
+    const commitOid = await hashObject("commit", commitBytes);
+    toPush.push({ payload: commitBytes, type: "commit" });
+    const refused = await transport.push({
+      newOid: commitOid,
+      oldOid: tip || ZERO_OID,
+      pack: await buildPack(toPush),
+      ref: REF,
+    });
+    // The push is compare-and-swapped on the tip read above: `main` having moved in the meantime (a
+    // concurrent push) is a refusal like any other — the server's words, and the caller retries.
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- push() returns null only on success; an empty-string refusal reason (an `ng <ref>` line with no message) is still a refusal and must throw
+    if (refused !== null) throw new Error(`itx.git: the commit to ${repo} was refused: ${refused}`);
+    return { commitOid, changedPaths };
   };
 
   return {
-    readFile: async (repo, path) => {
-      const name = rootName(path);
-      let transport: Awaited<ReturnType<typeof transportFor>>;
-      try {
-        transport = await transportFor(repo, "read");
-      } catch (error) {
-        if (isRepoNotFound(error)) return null; // no such repo → no file
-        throw error; // an outage / auth failure must surface, not read as an absent file
-      }
-      const tip = await transport.tipOf(REF);
-      if (!tip) return null; // unborn repo (no commit on main)
-      const { entries, objects } = await tipSnapshot(transport, tip);
-      const entry = entries.find((e) => e.name === name);
-      if (!entry) return null; // absent: the tip's tree does not name it
-      const blob = objects.get(entry.oid);
-      if (blob?.type !== "blob")
-        throw new Error(
-          `itx.repos: the pack for ${repo} omitted the blob of ${name} (${entry.oid})`,
-        );
-      return textDecoder.decode(blob.payload);
+    create: async (repo) => {
+      if (await readTransport(repo)) return { created: false };
+      await input.namespace.create(prefix + repo);
+      return { created: true };
     },
 
-    writeFile: async (repo, path, content) => {
-      const name = rootName(path);
-      const transport = await transportFor(repo, "write");
-      const blob = textEncoder.encode(content);
-      const blobOid = await hashObject("blob", blob);
+    tip: async (repo) => {
+      const transport = await readTransport(repo);
+      if (!transport) return null;
+      return (await transport.tipOf(REF)) || null;
+    },
 
-      // Merge onto the tip's tree if the repo already has a commit; otherwise this is the first commit.
-      // (A tip whose commit or tree the pack omits THROWS in tipSnapshot — never a fresh root commit
-      // that would repoint `main` at an orphan.)
+    snapshot: async (repo) => {
+      const snapshot = await readSnapshot(repo);
+      if (!snapshot) return null;
+      const files: Record<string, string> = {};
+      for (const [path, entry] of snapshot.manifest) {
+        if (entry.mode === "160000") continue;
+        const blob = snapshot.objects.get(entry.oid);
+        if (blob?.type !== "blob")
+          throw new Error(
+            `itx.git: the pack for ${repo} omitted the blob of ${path} (${entry.oid})`,
+          );
+        files[path] = textDecoder.decode(blob.payload);
+      }
+      return { commitOid: snapshot.tip, files };
+    },
+
+    commitFiles,
+
+    log: async (repo, options = {}) => {
+      const limit = options.limit ?? 20;
+      if (!Number.isInteger(limit) || limit < 1)
+        throw new Error(`itx.git.log: limit must be a positive integer (got ${String(limit)})`);
+      const transport = await readTransport(repo);
+      if (!transport) return [];
       const tip = await transport.tipOf(REF);
-      const entries: TreeEntry[] = tip
-        ? (await tipSnapshot(transport, tip)).entries.filter((e) => e.name !== name)
-        : [];
-      const parents = tip ? [tip] : [];
-      entries.push({ mode: "100644", name, oid: blobOid });
-
-      const treeBytes = encodeTree(entries);
-      const treeOid = await hashObject("tree", treeBytes);
-      const commitBytes = encodeCommit({
-        author: { ...AUTHOR, date: new Date() },
-        message: `itx.repos: write ${name}`,
-        parents,
-        tree: treeOid,
-      });
-      const commitOid = await hashObject("commit", commitBytes);
-
-      const objects: { payload: Uint8Array; type: GitObjectType }[] = [
-        { payload: commitBytes, type: "commit" },
-        { payload: treeBytes, type: "tree" },
-        { payload: blob, type: "blob" },
-      ];
-      const refused = await transport.push({
-        newOid: commitOid,
-        oldOid: tip || ZERO_OID,
-        pack: await buildPack(objects),
-        ref: REF,
-      });
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- push() returns null only on success; an empty-string refusal reason (an `ng <ref>` line with no message) is still a refusal and must throw
-      if (refused !== null) throw new Error(`itx.repos: push of ${name} was refused: ${refused}`);
-      return { commitOid };
+      if (!tip) return [];
+      const objects = new Map<string, RawGitObject>(
+        (await transport.fetchObjects({ wants: [tip], deepen: limit })).map((o) => [o.oid, o]),
+      );
+      const entries: RepoLogEntry[] = [];
+      let oid: string | undefined = tip;
+      while (oid && entries.length < limit) {
+        const commit = objects.get(oid);
+        if (commit?.type !== "commit") break; // past the shallow boundary
+        const { parents, author, timestamp, message } = parseCommit(commit.payload);
+        entries.push({ oid, message, author, timestamp, parents });
+        oid = parents[0];
+      }
+      return entries;
     },
   };
 }
@@ -355,7 +560,7 @@ function pktText(payload: Uint8Array): string {
 
 // -- object identity ----------------------------------------------------------
 
-async function hashObject(type: GitObjectType, payload: Uint8Array): Promise<string> {
+export async function hashObject(type: GitObjectType, payload: Uint8Array): Promise<string> {
   const framed = concat([textEncoder.encode(`${type} ${payload.length}\0`), payload]);
   return toHex(new Uint8Array(await crypto.subtle.digest("SHA-1", framed as BufferSource)));
 }
@@ -383,7 +588,7 @@ export interface TreeEntry {
   oid: string;
 }
 
-function parseTree(payload: Uint8Array): TreeEntry[] {
+export function parseTree(payload: Uint8Array): TreeEntry[] {
   const entries: TreeEntry[] = [];
   let cursor = 0;
   while (cursor < payload.length) {
@@ -413,7 +618,7 @@ function encodeTree(entries: TreeEntry[]): Uint8Array {
   );
 }
 
-function encodeCommit(input: {
+export function encodeCommit(input: {
   author: { date: Date; email: string; name: string };
   message: string;
   parents: string[];
