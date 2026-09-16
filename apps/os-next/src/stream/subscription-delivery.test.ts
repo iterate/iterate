@@ -49,8 +49,8 @@ const settled = async () => {
  *  does; `evaluated` records every expression the loop asked for. Pass a previous incarnation's
  *  storage to build THE NEXT ONE over it: a fresh Stream and a fresh loop that find the rows, the
  *  log, the kv and the cursor table — and nothing in memory. That is an eviction, deterministically.
- *  The DO's alarm is stood in for by a real coordinator over the lane's `deadlines()`, wired as the
- *  DO wires it (every commit and every lane-reported change reconciles): `alarms` is every instant
+ *  The DO's alarm is stood in for by a real coordinator over the loop's `deadlines()`, wired as the
+ *  DO wires it (every commit and every change the loop reports reconciles): `alarms` is every instant
  *  it armed, `deletes` every deletion, `pass(work)` an alarm pass. */
 function incarnation(
   resolve: (printedExpression: string) => unknown,
@@ -99,7 +99,7 @@ function incarnation(
     alarms,
     deletes,
     evaluated,
-    /** An alarm pass, as the DO runs it: the cursor lane under the coordinator's hold. */
+    /** An alarm pass, as the DO runs it: the stream-kept cursors under the coordinator's hold. */
     pass: () => coordinator.pass(() => delivery.deliverEveryCursorSubscription()),
   };
 }
@@ -701,7 +701,7 @@ describe("a superseded evaluation can neither classify nor invoke its replacemen
   });
 });
 
-describe("the lane's deadline on the DO's alarm (`deadlines()`)", () => {
+describe("the delivery loop's deadline on the DO's alarm (`deadlines()`)", () => {
   /** A cursor row `s` on `itx.sink.push`, whose pushes park until released (each call resolves in
    *  order); `durable` commits one `demo/ping`. */
   function parkedSinkRig(previous?: { storage: DurableObjectStorageSlice }) {
@@ -836,6 +836,60 @@ describe("the lane's deadline on the DO's alarm (`deadlines()`)", () => {
     expect(first.delivery.deadlines()).toMatchObject([{ at: failed.nextAttemptAtMs }]);
     const second = incarnation(() => undefined, first.storage);
     expect(second.delivery.deadlines()).toMatchObject([{ name: "s", at: failed.nextAttemptAtMs }]);
+  });
+
+  test("a DUE ladder time is no claim — the pass acts on it; one the pass could not act on never re-arms an alarm into the same state", async () => {
+    let refuse = true;
+    const rig = incarnation((printed) =>
+      printed === "itx.sink"
+        ? {
+            push: () => {
+              if (refuse) throw new Error("sink down");
+            },
+          }
+        : undefined,
+    );
+    rig.stream.append(
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
+      }),
+    );
+    rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+    await settled();
+    const failed = rig.delivery.cursor("s")!;
+    expect(rig.delivery.deadlines()).toMatchObject([{ at: failed.nextAttemptAtMs }]); // ahead: a claim
+    vi.useFakeTimers({ now: failed.nextAttemptAtMs! + 1, toFake: ["Date"] });
+    try {
+      expect(rig.delivery.deadlines()).toEqual([]); // due: the pass's, not the alarm's
+      await rig.pass(); // the retry fails again → a new rung, ahead again
+      const again = rig.delivery.cursor("s")!;
+      expect(again.attempt).toBe(2);
+      expect(rig.delivery.deadlines()).toMatchObject([{ at: again.nextAttemptAtMs }]);
+      expect(rig.alarms.at(-1)).toBe(again.nextAttemptAtMs);
+      refuse = false;
+      vi.setSystemTime(again.nextAttemptAtMs! + 1);
+      await rig.pass(); // acked: caught up, nothing claimed — and the spent alarm needs no delete
+      expect(rig.delivery.deadlines()).toEqual([]);
+      expect(rig.coordinator.snapshot().armedAt).toBeNull();
+      expect(rig.deletes).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a cursor row whose subscription is gone claims nothing", async () => {
+    const first = incarnation(() => undefined);
+    // A removal whose cursor delete did not outlive the incarnation: the row is gone, the cursor stays.
+    first.stream.storage.writeSubscriptionCursor("gone", {
+      confirmedOffset: 1,
+      attempt: 3,
+      nextAttemptAtMs: Date.now() + 60_000,
+    });
+    const second = incarnation(() => undefined, first.storage);
+    expect(second.delivery.cursor("gone")).toBeDefined();
+    expect(second.delivery.deadlines()).toEqual([]);
+    expect(second.alarms).toEqual([]);
   });
 
   test("a HALTED row owes nothing — even one whose persisted cursor still carries the retry time that halted it", async () => {

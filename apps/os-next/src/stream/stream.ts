@@ -64,8 +64,8 @@ const READ_PAGE_MAX_EVENTS = 1000;
  *  whole budget is not kept. Per incarnation, like every ephemeral offset. */
 const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
 
-/** THE ALARM TRACE — the DO's ephemeral record of one alarm decision (iterate-context-durable-object.ts
- *  `AlarmTrace`), appended only while an exact `waitForEvent` waiter for it is registered. */
+/** THE ALARM TRACE — the DO's ephemeral record of one alarm pass (iterate-context-durable-object.ts
+ *  `AlarmTrace`); pause-exempt, so a paused context's passes stay observable. */
 export const STREAM_ALARM_TRACE_EVENT = "events.iterate.com/stream/trace/alarm" as const;
 
 /** The waitForEvent selector: `type` is an exact event-type match (absent = any type); only events
@@ -232,7 +232,7 @@ export class Stream {
     );
   }
 
-  #rememberEphemeral(event: StreamEvent, chars: number): void {
+  #rememberEphemeral(event: StreamEvent, chars: number) {
     if (chars > this.#recentEphemeralsBudgetChars) return;
     this.#recentEphemerals.push({ event, chars });
     this.#recentEphemeralsChars += chars;
@@ -286,7 +286,7 @@ export class Stream {
   append(...events: StreamEventInput[]): StreamEvent[] {
     if (events.length === 0) return []; // a pure no-op: nothing checked, minted, or fanned out
     // 1. may this land? — this runtime check is the SOLE enforcement (no boundary validator).
-    const charsByEphemeralInput = new Map<StreamEventInput, number>(); // measured once, for the ring too
+    const charsByEphemeralInput = new Map<StreamEventInput, number>(); // measured once, for the ring too (step 5)
     for (const event of events) {
       // oxlint-disable-next-line iterate/simple-truthiness-check -- append is the SOLE enforcement door (no boundary validator); event.type arrives from callers/the wire, so the static string type is not a runtime guarantee
       if (typeof event.type !== "string" || event.type.trim() === "")
@@ -340,6 +340,7 @@ export class Stream {
     const committedEvents: StreamEvent[] = []; // one per appended event, in order (a dedupe hit echoes the existing event)
     const freshEvents: StreamEvent[] = []; // the events NEW to the log, in offset order — what commits, reduces, fans out
     const eventsByIdempotencyKey = new Map<string, StreamEvent>(); // keys landing earlier in THIS batch
+    const freshEphemerals: { event: StreamEvent; chars: number }[] = []; // for the ring, once the batch lands
     let throughOffset = afterOffset;
     for (const event of events) {
       const { offset: expectedOffset, ...eventInput } = event;
@@ -385,7 +386,11 @@ export class Stream {
       committedEvents.push(committedEvent);
       freshEvents.push(committedEvent);
       if (committedEvent.ephemeral)
-        this.#rememberEphemeral(committedEvent, charsByEphemeralInput.get(event) ?? 0);
+        freshEphemerals.push({
+          event: committedEvent,
+          // measured in step 1 on the input (the committed event adds its offset, createdAt and path)
+          chars: charsByEphemeralInput.get(event) ?? JSON.stringify(committedEvent).length,
+        });
     }
     if (freshEvents.length === 0) return committedEvents; // every event deduped to an existing one
     // Only definitions can grow the projection. Completion/cancellation shrink it or advance a
@@ -458,7 +463,9 @@ export class Stream {
       this.#highestAssignedOffset = throughOffset;
       this.#highestDurableOffset = throughOffset;
     }
-    // 5. after the commit
+    // 5. after the commit — the ring first: an ephemeral is remembered only once its batch has
+    //    landed (a refusal above would leave a phantom at an offset a later batch reuses).
+    for (const { event, chars } of freshEphemerals) this.#rememberEphemeral(event, chars);
     this.#resolveWaitForEventWaiters(freshEvents); // waiters first: onCommit may append again (a nested commit)
     this.#onCommit(freshEvents, afterOffset, throughOffset);
     // Core's live-state delta rides this stream's own append (a nested commit). LOSSY BY CONTRACT:

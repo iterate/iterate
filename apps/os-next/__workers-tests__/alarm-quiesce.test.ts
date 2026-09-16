@@ -290,7 +290,7 @@ test("A BARE PROBE ON A DORMANT CONTEXT LEAVES NO ALARM: the config delivery ack
   const ctx = "prj_q_bare_probe";
   const s = stub(ctx);
   // The probe materializes the context: created, woken, the config row — whose delivery is owed
-  // from that commit (the +20 s insurance is the alarm do-doors sees armed from birth)…
+  // from that commit (the +20 s insurance is the alarm armed from birth)…
   await s.invoke("itx.schedules.list()");
   // …until the config worker (the bundled no-op default) acks and the row is caught up.
   await untilRow(ctx, "config", (r) => (r?.cursor?.confirmedOffset ?? 0) > 0);

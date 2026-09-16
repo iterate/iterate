@@ -105,8 +105,8 @@ const FACET_CALL_WATCHDOG_MS = 60_000;
  *  next, or `alarm-abandoned` with what it threw). Only a pass traces: a reconcile outside one —
  *  a commit, activity, a delivery settling — consumes no offset, so an incarnation that never
  *  wakes by alarm leaves offsets exactly as its own events placed them. An ordinary ephemeral:
- *  `waitForEvent` sees it live, the stream's recent-ephemerals ring
- *  (`itx.facets.get('core').recentEphemerals()`) after the fact. NEVER an input: the DO's commit
+ *  `waitForEvent` sees it live, `readEvents(…, { includeEphemeral: true })` reads it back from the
+ *  stream's recent-ephemerals ring. NEVER an input: the DO's commit
  *  hook hands no trace to subscription delivery, and appending one is not activity — either would
  *  trace the tracing. Gone with the incarnation, as every ephemeral is. */
 export type AlarmTrace = {
@@ -396,7 +396,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     options: { includeEphemeral?: boolean } = {},
   ): Promise<StreamPage> {
     this.#lastExternalRequestMs = Date.now();
-    return this.#stream.read(afterOffset, limit, options); // sync on the Stream, async at this cross-hop door
+    return this.#stream.read(afterOffset, limit, options); // sync on the Stream, a promise over Workers RPC
   }
 
   /** THE EFFECTIVE rule table, read: the context's own rows (masks as `target: null`, a template's
@@ -553,7 +553,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #traceAlarm(
     reason: AlarmTrace["reason"],
     extra: Pick<AlarmTrace, "error" | "dueSchedules"> & { before: number | null },
-  ): void {
+  ) {
     const { before, ...rest } = extra;
     const { armedAt: after, inheritedAt, passInProgress } = this.#alarms.snapshot();
     const delivery = this.#subscriptionDelivery.deadlines();
@@ -577,7 +577,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       borrowedRpcStubs: this.#rpcStubs.hasBorrowedRpcStubs(),
       openLibraryConnections: this.#library.hasOpenConnections(),
     };
-    // Straight onto the stream, not through the append door (a trace is not activity); a trace
+    // Straight onto the stream, not through `append` (a trace is not activity); a trace
     // must never fail an alarm pass.
     try {
       this.#stream.append({ type: STREAM_ALARM_TRACE_EVENT, ephemeral: true, payload: trace });
@@ -654,7 +654,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #facetWorkInFlight = 0;
 
   /** THE ALARM PASS, three jobs in order, under the coordinator's hold (nothing re-arms until it
-   *  completes; a pass that dies is retried by the runtime): the due schedules, the cursor lane's
+   *  completes; a pass that dies is retried by the runtime): the due schedules, the stream-kept cursors'
    *  owed deliveries, the idle quiesce. Then the next deadline is derived from what is left. */
   async alarm(): Promise<void> {
     const { armedAt: fired } = this.#alarms.snapshot();
@@ -729,7 +729,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             reportIssue("scheduled-append.failed", error, payload);
           }
         }
-        // The cursor lane's due retries, and anything an eviction left mid-delivery — AWAITED so
+        // The stream-kept cursors' due retries, and anything an eviction left mid-delivery — AWAITED so
         // the deadline it leaves is the one derived below. A cursor delivery pins nothing local (a
         // facet it calls into is counted by #facetWorkInFlight), so the quiesce needs no count of its own.
         await this.#subscriptionDelivery.deliverEveryCursorSubscription();

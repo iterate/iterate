@@ -12,7 +12,7 @@
 //
 // AT-LEAST-ONCE survives an eviction because the alarm's pass re-derives its obligations from the
 // ROWS and the log — never from the cursor table, which a first delivery has not written yet — and
-// because this lane REPORTS A DEADLINE to the DO's alarm (alarm-coordinator.ts) whenever a delivery
+// because this delivery loop REPORTS A DEADLINE to the DO's alarm (alarm-coordinator.ts) whenever a delivery
 // is owed: a row's `deadlineAt` is the +20 s insurance set when a durable batch is queued for a row
 // not known as a push row and before every awaited call, cleared once the row is caught up; a row
 // on its retry ladder is covered by the cursor's own `nextAttemptAtMs`. Die mid-call and the alarm
@@ -245,16 +245,25 @@ export class SubscriptionDelivery {
     return record;
   }
 
-  /** Every row with a claim on the alarm, earliest first: the lane's deadline is `[0]?.at`. A HALTED
-   *  row owes nothing — its persisted cursor may still carry the retry time of the attempt that
-   *  halted it (a cursor written before that time was stripped at the halt). */
+  /** Every row with a claim on the alarm, earliest first: the delivery loop's deadline is `[0]?.at`.
+   *  A HALTED row owes nothing (its persisted cursor may still carry the retry time of the attempt
+   *  that halted it), nor does a cursor row whose subscription is gone (a removal the delete did
+   *  not outlive). A ladder time is a claim only while it is AHEAD: once due it is the alarm pass's
+   *  or the next commit's to act on, and one left in the past — the pass found the row held by a
+   *  running loop, or its read threw — must not re-arm an alarm into the same state. */
   deadlines(): DeliveryDeadline[] {
     const rows = this.#stream.coreReducedState.subscriptions;
+    const now = Date.now();
     const deadlines: DeliveryDeadline[] = [];
     for (const [name, record] of this.#deliveryRecordByName) {
-      if (rows[name]?.halted) continue;
+      const row = rows[name];
+      if (!row || row.halted) continue;
       const { deadlineAt, cursor } = record;
-      const at = Math.min(deadlineAt ?? Infinity, cursor?.nextAttemptAtMs ?? Infinity);
+      const ladderAt = cursor?.nextAttemptAtMs;
+      const at = Math.min(
+        deadlineAt ?? Infinity,
+        ladderAt !== undefined && ladderAt > now ? ladderAt : Infinity,
+      );
       if (at === Infinity) continue;
       deadlines.push({
         name,
@@ -329,7 +338,7 @@ export class SubscriptionDelivery {
         // Remembered for the CURSOR lane only; a row known to own its progress would just retain the
         // batch until its next delivery.
         record.pushedEventBatch = { events, after, through: throughOffset };
-        // A DURABLE delivery is owed from here: an eviction before the cursor lane even evaluates
+        // A DURABLE delivery is owed from here: an eviction before the cursor delivery even evaluates
         // the target must leave an alarm behind to come back (this commit's tail reconciles it). An
         // ephemeral-only batch is uninsurable — the log holds nothing to redeliver — and a row on
         // its ladder is covered by the ladder.
@@ -484,10 +493,10 @@ export class SubscriptionDelivery {
     this.#reconcileAlarm();
   }
 
-  /** The row's target OWNS ITS PROGRESS (a facet, a lent rpc stub): nothing of the cursor lane's
-   *  applies — the cursor (born as this lane's guess, or before a rule re-point), the pushed batch
+  /** The row's target OWNS ITS PROGRESS (a facet, a lent rpc stub): nothing of the stream-kept
+   *  cursor's applies — the cursor (born as this loop's guess, or before a rule re-point), the pushed batch
    *  and the insurance all go. */
-  #rowOwnsItsProgress(name: string): void {
+  #rowOwnsItsProgress(name: string) {
     const record = this.#deliveryRecordFor(name);
     record.targetOwnsProgress = true;
     record.pushedEventBatch = undefined;
@@ -744,7 +753,7 @@ export class SubscriptionDelivery {
         if (row.halted) return;
         if (cursor.nextAttemptAtMs !== undefined && Date.now() < cursor.nextAttemptAtMs) {
           // The ladder's own time is the row's deadline; an insurance set meanwhile would only wake
-          // this lane into this same wait.
+          // this loop into this same wait.
           this.#deliveryRecordFor(name).deadlineAt = undefined;
           this.#reconcileAlarm();
           return;

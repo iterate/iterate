@@ -223,6 +223,28 @@ test("a CUT page carries only the ephemerals inside its proven span; `limit` cou
   expect(second.atHead).toBe(true);
 });
 
+test("a refused batch leaves no phantom in the ring: an ephemeral is remembered only once its batch has landed", () => {
+  const stream = bareStream();
+  stream.append({ type: "seed" });
+  // The ephemeral passes step 1; the durable beside it is refused inside the transaction.
+  expect(() =>
+    stream.append(
+      { type: "would-be-phantom", ephemeral: true },
+      { type: "too-big", payload: { blob: "x".repeat(8 * 1024 * 1024 + 1) } },
+    ),
+  ).toThrow("over the 8 MiB ceiling");
+  expect(stream.read(0, 500, { includeEphemeral: true }).events.map((e) => e.type)).toEqual([
+    "seed",
+  ]);
+  // The offsets the refused batch would have taken are handed out again, to nothing's confusion.
+  const [next] = stream.append({ type: "next", ephemeral: true });
+  expect(next.offset).toBe(2);
+  expect(stream.read(0, 500, { includeEphemeral: true }).events.map((e) => e.type)).toEqual([
+    "seed",
+    "next",
+  ]);
+});
+
 test("the ring is byte-bounded and configurable: oldest out first, an event over the whole budget is not kept", () => {
   const stream = bareStream({ recentEphemeralsBudgetChars: 1000 });
   stream.append({ type: "seed" });

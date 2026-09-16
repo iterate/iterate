@@ -40,7 +40,7 @@ export class AlarmCoordinator {
   }
 
   /** Seed from storage once, before the first append can reconcile. */
-  restore(at: number | null): void {
+  restore(at: number | null) {
     this.#armedAt = at;
     this.#inheritedAt = at;
   }
@@ -61,7 +61,7 @@ export class AlarmCoordinator {
     this.reconcile();
   }
 
-  reconcile(): void {
+  reconcile() {
     if (this.#passInProgress) return;
     let wanted = this.#inheritedAt;
     for (const at of this.#deps.deadlines())
