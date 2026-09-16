@@ -4,6 +4,7 @@ import type {
   IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import { previewTestRunHeaders } from "@iterate-com/shared/preview-test-run";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import {
   connectItxReady,
@@ -470,7 +471,10 @@ async function connectPlaywrightAdminItx(input: {
       {
         auth: { type: "admin-secret", secret: input.config.adminApiSecret },
         baseUrl: input.baseUrl,
-        headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+        headers: {
+          ...cloudflareWorkerVersionOverrideHeaders(process.env),
+          ...previewTestRunHeaders(process.env),
+        },
         ...(input.onWebSocketClose === undefined
           ? {}
           : { onWebSocketClose: input.onWebSocketClose }),

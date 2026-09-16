@@ -3,6 +3,7 @@ import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
+import { previewTestRunHeaders } from "@iterate-com/shared/preview-test-run";
 
 import { createAuthContractClient } from "@iterate-com/auth-contract";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
@@ -149,7 +150,10 @@ export async function capture(options: CaptureOptions) {
       secret: requireEnvironment("APP_CONFIG_ADMIN_API_SECRET"),
     },
     baseUrl: resolveOsBaseUrl(options.baseUrl),
-    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+    headers: {
+      ...cloudflareWorkerVersionOverrideHeaders(process.env),
+      ...previewTestRunHeaders(process.env),
+    },
   });
   const project = await session.projects.get(selector);
   const identity = await project.identity();
@@ -378,7 +382,10 @@ export async function apply(options: SeedOptions) {
       secret: requireEnvironment("APP_CONFIG_ADMIN_API_SECRET"),
     },
     baseUrl: resolveOsBaseUrl(options.baseUrl),
-    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+    headers: {
+      ...cloudflareWorkerVersionOverrideHeaders(process.env),
+      ...previewTestRunHeaders(process.env),
+    },
   });
   const project = await session.projects.get(seed.slug).create({
     projectId: seed.id,

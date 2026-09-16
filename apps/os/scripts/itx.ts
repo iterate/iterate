@@ -11,6 +11,7 @@
 import { readFile } from "node:fs/promises";
 import process from "node:process";
 import repl from "node:repl";
+import { previewTestRunHeaders } from "@iterate-com/shared/preview-test-run";
 
 import { RpcTarget } from "capnweb";
 
@@ -252,7 +253,10 @@ function adminConnection(options: { baseUrl?: string }) {
   return {
     auth: { type: "admin-secret" as const, secret },
     baseUrl,
-    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+    headers: {
+      ...cloudflareWorkerVersionOverrideHeaders(process.env),
+      ...previewTestRunHeaders(process.env),
+    },
   };
 }
 

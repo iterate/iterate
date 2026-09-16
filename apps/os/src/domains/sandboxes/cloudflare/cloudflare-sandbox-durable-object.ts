@@ -14,6 +14,7 @@ import {
   type RegisteredProcessorReads,
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
+import { PreviewTestRuns } from "../../preview-test-runs.ts";
 import { trustedInternalAuthContext } from "../../../auth.ts";
 import { workerVersion, type Env } from "../../../env.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../../rpc-targets.ts";
@@ -738,6 +739,18 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * when a caller enabled keepAlive; the field is private, hence the cast).
    */
   override async onActivityExpired(): Promise<void> {
+    // Keep the SDK's alarm running: it is what shuts the container down.
+    // A retired test cannot use keepAlive to preserve an idle container.
+    if (
+      this.env.PREVIEW_TEST_RETIREMENT === "1" &&
+      this.env.DEPLOYMENT_ENV?.startsWith("preview_") &&
+      this.#record() &&
+      (await new PreviewTestRuns(this.env.PROJECT_DIRECTORY).isProjectRetired(
+        this.#identity().projectId,
+      ))
+    ) {
+      await this.setKeepAlive(false);
+    }
     const keepAlive = (this as unknown as { keepAliveEnabled?: boolean }).keepAliveEnabled === true;
     if (keepAlive) {
       return super.onActivityExpired();

@@ -452,7 +452,13 @@ function envBlock(envName: string, env: DeployedEnv) {
     account_id: env.cloudflareAccountId,
     routes: routes(env),
     ...bindings,
-    vars: { ...bindings.vars, ...envShapedVars(env), DEPLOYMENT_ENV: envName },
+    vars: {
+      ...bindings.vars,
+      ...envShapedVars(env),
+      DEPLOYMENT_ENV: envName,
+      PREVIEW_TEST_RETIREMENT:
+        !isProduction && process.env.PREVIEW_TEST_RETIREMENT === "1" ? "1" : "0",
+    },
   };
 }
 

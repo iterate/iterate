@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+import { previewTestRunHeaders } from "@iterate-com/shared/preview-test-run";
 /**
  * Smoke: create a project as admin, create an agent, and receive one reply.
  * Runs manually and as an independent preview sub-lane alongside the other
@@ -16,7 +18,6 @@
  * reply that needs attempt 2 is logged as retry telemetry rather than
  * silently absorbed — the 90s tail is a real product-latency signal.
  */
-import { fileURLToPath } from "node:url";
 import {
   ciTelemetrySourceFromEnvironment,
   normalizeTestTelemetryError,
@@ -52,7 +53,10 @@ async function attemptAgentSmoke(phases: SmokePhase[]): Promise<void> {
   const connectionStartedAt = Date.now();
   using session = connectItx({
     baseUrl,
-    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+    headers: {
+      ...cloudflareWorkerVersionOverrideHeaders(process.env),
+      ...previewTestRunHeaders(process.env),
+    },
   });
   using root = session.authenticate({ type: "admin-secret", secret: secret! });
   // authenticate() returns a lazy handle; await a round trip before timing create.

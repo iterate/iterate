@@ -29,6 +29,8 @@ export interface Env {
   APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES?: string;
   /** Present only in generated deployed env blocks; absent in local dev. */
   DEPLOYMENT_ENV?: string;
+  /** Review experiment; deployed only with preview --retire-test-runs. */
+  PREVIEW_TEST_RETIREMENT?: string;
   /** Required in deployed config; optional in the local runtime binding shape. */
   APP_CONFIG_CLOUDFLARE__API_TOKEN?: string;
   ARTIFACTS: Artifacts;

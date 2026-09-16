@@ -62,6 +62,7 @@ import type {
   ValidatedProjectAppSession,
 } from "@iterate-com/auth-contract/worker";
 import { decodeMessageMentions, type Message } from "@iterate-com/shared/message";
+import { PreviewTestRun, PREVIEW_TEST_RUN_HEADER } from "@iterate-com/shared/preview-test-run";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import { closeItxSessionTransport } from "./session-transport.ts";
@@ -464,6 +465,10 @@ import {
   type ProjectAiInterceptor,
 } from "./lib/model-interception.ts";
 import { resolveSlugConventionTemplate } from "./lib/slug-config-template.ts";
+
+// Attached only after a test connection authenticates in a preview. Internal
+// DO calls keep ordinary project IDs; ownership lives in the project KV record.
+const previewTestRunByAuth = new WeakMap<ItxAuth, PreviewTestRun>();
 
 /**
  * The root of every itx-facing RpcTarget. Extending it (directly, or through
@@ -6945,6 +6950,13 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       };
     }
 
+    const testRun = previewTestRunByAuth.get(this.#props.auth);
+    if (testRun) {
+      await rootStream({ auth: this.#props.auth, projectId: registered.projectId })[
+        STREAM_DURABLE_OBJECT_STUB
+      ].registerPreviewTestRun(testRun);
+    }
+
     // The `-template-<name>` slug convention (docs/dev-environments.md):
     // covers creates that never see a template field — the auth app's
     // first-run form and the welcome page's ?ensureBirth retry. An explicit
@@ -8090,6 +8102,13 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
         return claims === null ? null : { projectId: claims.projectId, userId: claims.userId };
       },
     });
+    const testRunHeader = this.props.headers.get(PREVIEW_TEST_RUN_HEADER);
+    if (testRunHeader) {
+      if (env.PREVIEW_TEST_RETIREMENT !== "1" || !env.DEPLOYMENT_ENV?.startsWith("preview_")) {
+        throw new Error("Test ownership is only available on preview environments.");
+      }
+      previewTestRunByAuth.set(auth, PreviewTestRun.parse(JSON.parse(testRunHeader)));
+    }
     return new SessionRpcTarget({ auth, config: this.props.config, ctx: this.props.ctx });
   }
 }

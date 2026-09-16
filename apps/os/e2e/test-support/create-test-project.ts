@@ -1,3 +1,4 @@
+import { previewTestRunHeaders } from "@iterate-com/shared/preview-test-run";
 import type { RpcStub } from "capnweb";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
@@ -36,7 +37,10 @@ export async function createTestProject(opts: { slugPrefix: string }) {
         agentPath,
         auth: adminAuth(),
         baseUrl,
-        headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+        headers: {
+          ...cloudflareWorkerVersionOverrideHeaders(process.env),
+          ...previewTestRunHeaders(process.env),
+        },
         projectId: project.id,
       });
     },

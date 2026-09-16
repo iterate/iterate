@@ -1,6 +1,7 @@
 import { DurableObject, tracing } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { PreviewTestRetirement } from "../preview-test-retirement.ts";
 import {
   invokeFlattenedPath,
   invokePreferringFlattenedPath,
@@ -42,6 +43,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   }
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  #testRetirement = new PreviewTestRetirement(this.ctx, this.env, this.#name.projectId);
   // The hosted Durable Object class sees the same scoped itx binding as a
   // stateless worker at this path. That is what lets a provided durable
   // capability call sibling capabilities through `this.env.ITX.get()`.
@@ -153,6 +155,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
    */
   async setAlarm({ atMs, ref }: { atMs: number | null; ref: StatefulDynamicWorkerRef }) {
     this.#assertRefMatchesName(ref);
+    if (await this.#testRetirement.check()) return;
     if (atMs === null) {
       await this.ctx.storage.deleteAlarm();
       this.ctx.storage.kv.delete(ALARM_REF_STORAGE_KEY);
@@ -170,6 +173,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   }
 
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    if (await this.#testRetirement.check()) return;
     const ref = this.ctx.storage.kv.get<StatefulDynamicWorkerRef>(ALARM_REF_STORAGE_KEY);
     // No armed ref (disarmed after the fire was scheduled) — a stray
     // platform fire is a no-op.

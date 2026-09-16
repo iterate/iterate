@@ -1,7 +1,13 @@
 import { mergeCloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import { PreviewTestRun, previewTestStreamProjectId } from "@iterate-com/shared/preview-test-run";
 import { withStreamConnectionFromNode as connectFromNode } from "../src/lib/node-stream-connection.ts";
 import { streamViewSearch } from "../src/lib/stream-view-search.ts";
 import { normalizeStreamPath, streamRpcPath } from "../src/lib/stream-rpc.ts";
+
+export function e2eStreamProjectId() {
+  const raw = process.env.PREVIEW_TEST_RUN;
+  return raw ? previewTestStreamProjectId(PreviewTestRun.parse(JSON.parse(raw))) : "default";
+}
 
 export function e2eWorkerUrl() {
   return process.env.WORKER_URL ?? "http://localhost:5173";
@@ -18,7 +24,10 @@ export function e2eStreamPathLabel(label: string) {
 
 export function toStreamWebSocketUrl(args: { path: string; projectId?: string }) {
   const path = e2eStreamPath(args.path);
-  const url = new URL(streamRpcPath({ path, projectId: args.projectId }), e2eWorkerUrl());
+  const url = new URL(
+    streamRpcPath({ path, projectId: args.projectId || e2eStreamProjectId() }),
+    e2eWorkerUrl(),
+  );
   if (url.protocol === "http:") url.protocol = "ws:";
   if (url.protocol === "https:") url.protocol = "wss:";
   // Deployed playgrounds are admin-only; WebSockets cannot carry headers from
@@ -39,7 +48,7 @@ export function withStreamConnectionFromNode(args: { url: string | URL }) {
 export function streamRoute(args: { path: string; projectId?: string; view?: string }) {
   const search = streamViewSearch({
     path: e2eStreamPath(args.path),
-    projectId: args.projectId,
+    projectId: args.projectId || e2eStreamProjectId(),
     view: args.view,
   });
   const params = new URLSearchParams({

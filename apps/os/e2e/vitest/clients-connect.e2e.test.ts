@@ -1,3 +1,4 @@
+import { previewTestRunHeaders } from "@iterate-com/shared/preview-test-run";
 import { expect, test } from "vitest";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
@@ -286,7 +287,10 @@ test("an abruptly terminated client transport still durably disconnects its live
   // ungraceful transport loss, rather than a local stub disposal.
   const socket = new WebSocket(buildUrl({ path: "/api", protocol: "ws" }), {
     handshakeTimeout: 15_000,
-    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+    headers: {
+      ...cloudflareWorkerVersionOverrideHeaders(process.env),
+      ...previewTestRunHeaders(process.env),
+    },
   });
   try {
     await new Promise<void>((resolve, reject) => {

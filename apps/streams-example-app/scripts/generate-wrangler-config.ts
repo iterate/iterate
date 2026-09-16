@@ -15,7 +15,7 @@
  * alias, so the class lives in this script.
  */
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { streamsExampleEnvs, type StreamsExampleEnv } from "../../../envs.ts";
+import { envs, streamsExampleEnvs, type StreamsExampleEnv, type EnvName } from "../../../envs.ts";
 import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
@@ -69,7 +69,7 @@ function workerBindings() {
   };
 }
 
-function envBlock(env: StreamsExampleEnv) {
+function envBlock(name: EnvName, env: StreamsExampleEnv) {
   return {
     name: env.workerName,
     account_id: env.cloudflareAccountId,
@@ -82,7 +82,17 @@ function envBlock(env: StreamsExampleEnv) {
     workers_dev: false,
     ...workerBindings(),
     secrets: { required: REQUIRED_SECRETS },
-    vars: envShapedVars(env),
+    vars: {
+      ...envShapedVars(env),
+      DEPLOYMENT_ENV: name,
+      PREVIEW_TEST_RETIREMENT:
+        name !== "prd" && process.env.PREVIEW_TEST_RETIREMENT === "1" ? "1" : "0",
+    },
+    // The shared Stream DO reads the same retirement records as OS. No extra
+    // namespace or separate lease is needed for the playground's test objects.
+    kv_namespaces: [
+      { binding: "PROJECT_DIRECTORY", id: envs[name].resources.projectDirectoryKvId },
+    ],
   };
 }
 
@@ -122,7 +132,11 @@ const config = {
     ],
   },
   env: Object.fromEntries(
-    Object.entries(streamsExampleEnvs).map(([name, env]) => [name, envBlock(env)]),
+    // Every entry comes from envs.ts and its Doppler config is its EnvName.
+    Object.entries(streamsExampleEnvs).map(([name, env]) => [
+      name,
+      envBlock(env.dopplerConfig as EnvName, env),
+    ]),
   ),
 };
 

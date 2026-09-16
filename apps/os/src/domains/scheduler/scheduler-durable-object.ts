@@ -9,6 +9,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
+import { PreviewTestRetirement } from "../preview-test-retirement.ts";
 import { sameScheduleDefinition, type ScheduleView } from "./types.ts";
 import { SchedulerProcessor } from "./scheduler-processor-implementation.ts";
 import {
@@ -56,6 +57,7 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   }
 
   readonly #name = parseSchedulerDurableObjectName(this.ctx.id.name!);
+  #testRetirement = new PreviewTestRetirement(this.ctx, this.env, this.#name.projectId);
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,
@@ -99,7 +101,10 @@ export class SchedulerDurableObject extends DurableObject<Env> {
       // earliest across all of them. Early fires (another slice's) run
       // alarm() below, which is idempotent and re-arms this slice.
       readAlarm: async () => this.#registry.getAlarmSlice("scheduler"),
-      repointAlarm: (atMs) => this.#registry.setAlarmSlice("scheduler", atMs),
+      repointAlarm: (atMs) =>
+        this.#testRetirement.retired
+          ? Promise.resolve()
+          : this.#registry.setAlarmSlice("scheduler", atMs),
       // Runner-backed committed-state reads (triggerDue, executions, views): lazy
       // closures because #reads is built from the registered processor below.
       // The explicit return annotations break the field-initializer inference
@@ -119,6 +124,7 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   #writeChain: Promise<unknown> = Promise.resolve();
 
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    if (await this.#testRetirement.check()) return;
     // The shared alarm may be firing for a keepalive slice, the scheduler's,
     // or both — run both handlers; each is idempotent and re-derives its own
     // next fire time (the registry services every runner, then the scheduler

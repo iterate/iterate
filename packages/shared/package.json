@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./preview-test-run": "./src/preview-test-run.ts",
     "./chunked-text": "./src/chunked-text.ts",
     "./json-byte-length": "./src/json-byte-length.ts",
     "./message": "./src/message.ts",

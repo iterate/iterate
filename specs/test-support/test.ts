@@ -1,3 +1,7 @@
+import {
+  previewTestRunHeaders,
+  PREVIEW_TEST_RUN_HEADER,
+} from "@iterate-com/shared/preview-test-run";
 import { test as base, type Page, type TestInfo as _TestInfo } from "@playwright/test";
 import {
   CLOUDFLARE_WORKERS_VERSION_OVERRIDES_HEADER,
@@ -55,7 +59,12 @@ export const test = base.extend<{
   page: Awaited<ReturnType<typeof addPagePlugins>>;
 }>({
   context: async ({ context }, use) => {
-    if (Object.keys(cloudflareWorkerVersionOverrideHeaders(process.env)).length > 0) {
+    if (
+      Object.keys({
+        ...cloudflareWorkerVersionOverrideHeaders(process.env),
+        ...previewTestRunHeaders(process.env),
+      }).length > 0
+    ) {
       await context.route("**/*", async (route) => {
         const request = route.request();
 
@@ -78,6 +87,7 @@ export const test = base.extend<{
 
         const headers = request.headers();
         delete headers[CLOUDFLARE_WORKERS_VERSION_OVERRIDES_HEADER.toLowerCase()];
+        delete headers[PREVIEW_TEST_RUN_HEADER];
         await route.continue({ headers });
       });
     }

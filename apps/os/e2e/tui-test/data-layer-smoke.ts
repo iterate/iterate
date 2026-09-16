@@ -1,3 +1,5 @@
+import process from "node:process";
+import { previewTestRunHeaders } from "@iterate-com/shared/preview-test-run";
 // Headless smoke of the chat TUI's data layer — the exact modules the OpenTUI
 // adapter renders from, minus the PTY: point the shared one-socket keeper
 // (`iterate/client`, same code path the TUI's `configureIterateSession` sets
@@ -10,7 +12,6 @@
 // Requires Workers AI on the deployment under test (local dev or a preview).
 // Exits 0 on PASS, 1 on timeout/failure.
 
-import process from "node:process";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import NodeWebSocket from "ws";
 import {
@@ -29,7 +30,10 @@ const AGENT_PATH = "/agents/tui-smoke";
 const REPLY_TIMEOUT_MS = 120_000;
 const startedAt = Date.now();
 
-const workerVersionHeaders = cloudflareWorkerVersionOverrideHeaders(process.env);
+const workerVersionHeaders = {
+  ...cloudflareWorkerVersionOverrideHeaders(process.env),
+  ...previewTestRunHeaders(process.env),
+};
 if (Object.keys(workerVersionHeaders).length > 0) {
   // Node's browser-compatible global WebSocket cannot attach handshake
   // headers. Preview CI swaps in the repo's existing Node transport so this

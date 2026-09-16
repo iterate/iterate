@@ -7,6 +7,7 @@ import {
   SPEC_TEST_TIMEOUT_MS,
 } from "@iterate-com/shared/test-support/e2e-policy";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import { previewTestRunHeaders } from "@iterate-com/shared/preview-test-run";
 import { previewPlaywrightWorkers } from "./scripts/preview/playwright-capacity-reporter.ts";
 import { localOsDevServer } from "./apps/os/scripts/dev.ts";
 
@@ -76,7 +77,10 @@ export default defineConfig({
     // explains why there is no video-mode or per-project override).
     actionTimeout: SPEC_ACTION_TIMEOUT_MS,
     baseURL: osBaseUrl,
-    extraHTTPHeaders: cloudflareWorkerVersionOverrideHeaders(process.env),
+    extraHTTPHeaders: {
+      ...cloudflareWorkerVersionOverrideHeaders(process.env),
+      ...previewTestRunHeaders(process.env),
+    },
     screenshot: "only-on-failure",
     // Preserve the original failure's network evidence; successful attempts
     // still discard their traces.

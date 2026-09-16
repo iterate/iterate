@@ -1,3 +1,5 @@
+import process from "node:process";
+import { previewTestRunHeaders } from "@iterate-com/shared/preview-test-run";
 // `pnpm cli config-repo reset --project <slug-or-id>` — overwrite a project's
 // config repo (`/repos/config`) so its tree matches the CURRENT template at
 // configs/default. Run it from `apps/os`; the active Doppler
@@ -11,8 +13,6 @@
 // deletes anything the project still carries that the template no longer
 // ships. Config-repo commits land on main and redeploy the project worker
 // automatically, so the reset takes effect on the next build — no extra step.
-
-import process from "node:process";
 
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { connectItx } from "iterate/node";
@@ -119,6 +119,9 @@ function adminConnection(options: { baseUrl?: string }) {
   return {
     auth: { type: "admin-secret" as const, secret },
     baseUrl,
-    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+    headers: {
+      ...cloudflareWorkerVersionOverrideHeaders(process.env),
+      ...previewTestRunHeaders(process.env),
+    },
   };
 }

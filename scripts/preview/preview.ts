@@ -8,6 +8,7 @@ import { request as httpsRequest } from "node:https";
 import { dirname, resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
+import { PreviewTestRun, previewTestStreamProjectId } from "@iterate-com/shared/preview-test-run";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
 import { CONFIG_REPO_TEMPLATE_CATALOG } from "../../apps/os/src/domains/repos/config-repo-template-catalog.generated.ts";
 import {
@@ -39,6 +40,7 @@ import {
   renderCloudflareWorkerVersionOverrides,
 } from "../../packages/shared/src/test-support/cloudflare-worker-version-overrides.ts";
 import { PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV } from "../../packages/shared/src/test-support/preview-rollout-gate.ts";
+import { previewTestRunsForEnvironment } from "../lib/preview-test-runs.ts";
 import {
   parseWorkerSizeFromDeployOutput,
   parseWorkerSizeStatusDescription,
@@ -79,6 +81,8 @@ type DeployCommandOptions = PullRequestCommandOptions & {
    * happening to touch a fleet-shared path.
    */
   allApps?: boolean;
+  /** Review experiment: retire test compute instead of erasing a same-owner slot. Not enabled by the workflow until coverage and deployed quieting are proved. */
+  retireTestRuns?: boolean;
 };
 
 /** One PR context + runtime shared by every phase of a preview command. */
@@ -289,6 +293,7 @@ export async function run(options: DeployCommandOptions = {}) {
 
 /** Deploy once and publish only non-secret inputs for this workflow attempt. */
 export async function ciPrepare(options: DeployCommandOptions = {}) {
+  if (options.retireTestRuns) options = { ...options, allApps: true };
   const { context, runtime } = await resolvePreviewCommandSetup(options);
   const checkedOutSha = execFileSync("git", ["rev-parse", "HEAD"], {
     cwd: runtime.repositoryRoot,
@@ -304,7 +309,20 @@ export async function ciPrepare(options: DeployCommandOptions = {}) {
     if (!slot) throw new Error("Preview deployment produced no slot.");
     const apps = selectPreviewAppsForTesting(state.apps);
     if (!apps.length) throw new Error("Preview deployment produced no testable apps.");
+    const testRun = options.retireTestRuns
+      ? PreviewTestRun.parse({
+          id: `${context.pullRequestNumber}/${z.string().min(1).parse(process.env.GITHUB_RUN_ID)}/${z.string().min(1).parse(process.env.GITHUB_RUN_ATTEMPT)}`,
+          expiresAt: Date.now() + defaultPreviewLeaseMs,
+        })
+      : null;
+    if (testRun) {
+      const runs = await previewTestRunsForEnvironment(slot.dopplerConfig);
+      await runs.begin(testRun);
+      await runs.registerProject(previewTestStreamProjectId(testRun), testRun);
+      await runs.markEnvironmentReusable(pullRequestHolder(context.pullRequestNumber));
+    }
     const plan = PreviewCiPlan.parse({
+      testRun,
       headSha: context.pullRequestHeadSha,
       runId: process.env.GITHUB_RUN_ID,
       runAttempt: process.env.GITHUB_RUN_ATTEMPT,
@@ -633,6 +651,7 @@ async function runPreviewCiCommand(
       "--",
       "env",
       `${E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV}=${plan.workerVersionOverrides}`,
+      ...(plan.testRun ? [`PREVIEW_TEST_RUN=${JSON.stringify(plan.testRun)}`] : []),
       `${previewRolloutRemainingSecondsEnvironment}=${remaining}`,
       `${PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV}=${resolvePreviewRolloutReadyAtMs({ appSlug: slug, deployedAt: entry.deployedAt || entry.updatedAt })}`,
       ...baseUrlEnvironment,
@@ -753,6 +772,7 @@ async function deployPreviewApps({
     `deploy for PR #${context.pullRequestNumber} (head ${context.pullRequestHeadSha.slice(0, 7)}) — holder ${pullRequestHolder(context.pullRequestNumber)}, semaphore ${defaultSemaphoreBaseUrl}`,
   );
 
+  runtime.commandEnvironment.PREVIEW_TEST_RETIREMENT = options.retireTestRuns ? "1" : "0";
   const current = await readCloudflarePreviewState(context);
   logPreview(
     current.state.environmentConfigLease
@@ -794,9 +814,19 @@ async function deployPreviewApps({
   let environmentConfigLease: EnvironmentConfigLease;
   try {
     const recordedSlug = current.state.environmentConfigLease?.slug ?? null;
+    const reuseHeldSlotData = options.retireTestRuns
+      ? async (lease: PreviewSemaphoreLease) =>
+          lease.slug === recordedSlug &&
+          (
+            await previewTestRunsForEnvironment(
+              parseEnvironmentConfigLeaseData(lease.data).dopplerConfig,
+            )
+          ).canReuseEnvironment(holder)
+      : undefined;
     environmentConfigLease = requestedEnvironment
       ? (
           await assignEnvironmentConfigLease({
+            reuseHeldSlotData,
             eraseSlotData: makePreviewSlotDataEraser(runtime),
             holder,
             leaseMs: defaultPreviewLeaseMs,
@@ -806,6 +836,7 @@ async function deployPreviewApps({
           })
         ).lease
       : await claimEnvironmentConfigLease({
+          reuseHeldSlotData,
           eraseSlotData: makePreviewSlotDataEraser(runtime),
           holder,
           leaseMs: defaultPreviewLeaseMs,
@@ -1542,6 +1573,33 @@ export async function erase(options: EraseOptions = {}) {
     ranHeadSha: options.ranHeadSha || null,
     semaphore: runtime.createPreviewSemaphoreResourceClient(),
   });
+}
+
+/** Finish this exact test attempt; experimental runs keep their deployment usable. */
+export async function ciDispose(options: EraseOptions = {}) {
+  const planPath = resolve("test-results/cleanup/preview-ci-plan.json");
+  // Failed preparation may never publish a plan. Keep the current erase backstop.
+  const raw = await readFile(planPath, "utf8").catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  const plan = raw ? PreviewCiPlan.parse(JSON.parse(raw)) : null;
+  if (!plan?.testRun) return erase(options);
+  if (plan.testRun.id !== `${plan.pullRequestNumber}/${plan.runId}/${plan.runAttempt}`) {
+    throw new Error("Cleanup test-run ID does not match its CI attempt.");
+  }
+  assertPreviewCiIdentity(plan, {
+    headSha: z.string().min(1).parse(options.ranHeadSha),
+    runId: z.string().min(1).parse(process.env.GITHUB_RUN_ID),
+    runAttempt: z.string().min(1).parse(process.env.GITHUB_RUN_ATTEMPT),
+    slot: plan.slot,
+  });
+  const slot = plan.state.environmentConfigLease;
+  if (!slot) throw new Error("Test run has no preview slot.");
+  // No PR-head check or lease renewal: retiring an old run is safe even if its
+  // PR has advanced or its old slot has changed owners. Run IDs never repeat.
+  await (await previewTestRunsForEnvironment(slot.dopplerConfig)).retire(plan.testRun.id);
+  return { retired: plan.testRun.id, slot: slot.slug, deploymentPreserved: true };
 }
 
 async function eraseHeldSlotAfterRun(input: {
@@ -3096,6 +3154,7 @@ const CloudflarePreviewState = z.object({
 });
 
 const PreviewCiPlan = PreviewCiIdentity.extend({
+  testRun: PreviewTestRun.nullable().default(null),
   pullRequestNumber: z.number().int().positive(),
   state: CloudflarePreviewState,
   preparedAt: z.iso.datetime(),
@@ -5405,7 +5464,7 @@ function parsePullRequestHolder(holder: string | null | undefined) {
  * Erase a just-acquired slot before it is handed to the caller, giving the
  * lease back on failure. Returns true when the slot is clean and ours.
  *
- * This runs on EVERY claim — a renewed lease this PR already held included,
+ * By default this runs on EVERY claim — a renewed lease this PR already held included,
  * not just handovers and reclaims — so a preview slot is fresh on every
  * deploy, never just on entry. Within one PR each push otherwise stacks a
  * new population of abandoned test projects (whose Durable Objects keep
@@ -5559,26 +5618,13 @@ async function acquireAnyEnvironmentConfigLease(input: {
 }
 
 /**
- * Claim a slot for a PR deploy: adopt-or-claim, with the semaphore as the
- * single source of lease truth.
- *
- * 1. Adopt whatever the semaphore already attributes to this holder — a live
- *    lease from a previous run, or one a cancelled run claimed but never
- *    recorded (observed 2026-07-04: pr-1634 and pr-1636 each held two slots
- *    and every deploy queued for 20 minutes; adopting instead of acquiring a
- *    second slot is what prevents that). Adoption re-issues the lease, which
- *    doubles as the renewal, so no stored leaseId is ever consulted. The PR
- *    body's recorded slug is only a data-provenance hint here: an adopted
- *    slot that IS the recorded one carries this PR's own deployment and is
- *    never wiped; any other adopted slot has unknown provenance (the run
- *    that acquired it died before recording — possibly mid-erase) and is
- *    erased before handover.
- * 2. Re-take the recorded slot when its lease lapsed but nobody else claimed
- *    it — slot affinity keeps a lapsed PR on its own deployment instead of
- *    forcing a full redeploy elsewhere.
- * 3. Otherwise queue for any free slot.
+ * Claim a slot with the semaphore as the ownership authority.
+ * A live same-owner lease may preserve data when the caller recognises its
+ * retirement protocol. Otherwise adoption erases. Taking back an expired
+ * lease or acquiring a different slot always erases before deployment.
  */
 async function claimEnvironmentConfigLease(input: {
+  reuseHeldSlotData?: (lease: PreviewSemaphoreLease) => Promise<boolean>;
   eraseSlotData: EraseSlotData;
   holder: string;
   leaseMs: number;
@@ -5590,12 +5636,13 @@ async function claimEnvironmentConfigLease(input: {
   const adopted = await adoptLeaseHeldBySemaphore({
     holder: input.holder,
     leaseMs: input.leaseMs,
-    onAdopted: (lease) =>
-      eraseAcquiredSlotOrGiveItBack({
+    onAdopted: async (lease) =>
+      (await input.reuseHeldSlotData?.(lease)) ||
+      (await eraseAcquiredSlotOrGiveItBack({
         eraseSlotData: input.eraseSlotData,
         lease,
         semaphore: input.semaphore,
-      }),
+      })),
     preferSlug: input.recordedSlug,
     semaphore: input.semaphore,
   });
@@ -5641,6 +5688,7 @@ async function claimEnvironmentConfigLease(input: {
  * comes from the semaphore; the recorded slug is only an affinity hint.
  */
 async function assignEnvironmentConfigLease(input: {
+  reuseHeldSlotData?: (lease: PreviewSemaphoreLease) => Promise<boolean>;
   eraseSlotData: EraseSlotData;
   force?: boolean;
   holder: string;
@@ -5658,14 +5706,14 @@ async function assignEnvironmentConfigLease(input: {
     (await adoptLeaseHeldBySemaphore({
       holder: input.holder,
       leaseMs: input.leaseMs,
-      // Every adoption erases — a preview slot is fresh on every deploy (see
-      // claimEnvironmentConfigLease).
-      onAdopted: (lease) =>
-        eraseAcquiredSlotOrGiveItBack({
+      // Same-owner preservation is an explicit opt-in; legacy callers erase.
+      onAdopted: async (lease) =>
+        (await input.reuseHeldSlotData?.(lease)) ||
+        (await eraseAcquiredSlotOrGiveItBack({
           eraseSlotData: input.eraseSlotData,
           lease,
           semaphore: input.semaphore,
-        }),
+        })),
       preferSlug: input.recordedSlug,
       semaphore: input.semaphore,
     })) ??

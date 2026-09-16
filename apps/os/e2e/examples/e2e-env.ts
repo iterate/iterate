@@ -1,7 +1,8 @@
+import { fileURLToPath } from "node:url";
+import { previewTestRunHeaders } from "@iterate-com/shared/preview-test-run";
 // Shared environment plumbing for the itx e2e suites: which deployed worker
 // to talk to and how to authenticate against it.
 
-import { fileURLToPath } from "node:url";
 import type { RpcStub } from "capnweb";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { connectItx } from "iterate/node";
@@ -31,7 +32,10 @@ export function connectGlobal(): RpcStub<Session> {
   return connectItx({
     auth: { secret: adminApiSecret(), type: "admin-secret" },
     baseUrl: baseUrl(),
-    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+    headers: {
+      ...cloudflareWorkerVersionOverrideHeaders(process.env),
+      ...previewTestRunHeaders(process.env),
+    },
   });
 }
 
@@ -40,7 +44,10 @@ export function connectProject(projectId: string): RpcStub<ProjectRpcTarget> {
   return connectItx({
     auth: { secret: adminApiSecret(), type: "admin-secret" },
     baseUrl: baseUrl(),
-    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+    headers: {
+      ...cloudflareWorkerVersionOverrideHeaders(process.env),
+      ...previewTestRunHeaders(process.env),
+    },
     projectId,
   });
 }

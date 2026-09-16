@@ -37,6 +37,7 @@ import type {
   LiveStateSubscriptionOptions,
   LiveUpdate,
 } from "iterate/sdk/capnweb";
+import { PreviewTestRun } from "@iterate-com/shared/preview-test-run";
 import { streamDeliveryAuthContext } from "../../auth.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
@@ -47,6 +48,8 @@ import {
   StreamConnectionRpcTarget,
 } from "../../rpc-targets.ts";
 import { canonicalizeStreamPath, DurableObjectNameCodec } from "../durable-object-names.ts";
+import { PreviewTestRetirement } from "../preview-test-retirement.ts";
+import { PreviewTestRuns } from "../preview-test-runs.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { sameCapabilityPath } from "../capability-host/capability-path.ts";
@@ -977,6 +980,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   #liveState!: LiveState<StreamRuntimeDebugState>;
   #liveStateRefreshScheduled = false;
   readonly name = readStreamDurableObjectName(this.ctx);
+  #testRetirement = new PreviewTestRetirement(this.ctx, this.env, this.name.projectId);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   /** Ephemeral event bodies scoped to this one Durable Object incarnation. */
   readonly #ephemeralEvents = new EphemeralEventBuffer();
@@ -1000,7 +1004,11 @@ export class StreamDurableObject extends DurableObject<Env> {
   });
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
-  readonly #alarmArmer = new StreamAlarmArmer(this.ctx.storage);
+  readonly #alarmArmer = new StreamAlarmArmer({
+    setAlarm: (atMs) =>
+      this.#testRetirement.retired ? Promise.resolve() : this.ctx.storage.setAlarm(atMs),
+    deleteAlarm: () => this.ctx.storage.deleteAlarm(),
+  });
   readonly #deliveryAlarmBoundary = new StreamDeliveryAlarmBoundary({
     armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
     now: () => Date.now(),
@@ -1216,7 +1224,14 @@ export class StreamDurableObject extends DurableObject<Env> {
     const loaded = this.#readCoreProcessorState();
     if (loaded.kind === "ready") {
       this.#coreProcessorState = loaded.state;
-      this.#finishInitialization();
+      if (this.#testRetirement.enabled) {
+        void ctx.blockConcurrencyWhile(async () => {
+          await this.#testRetirement.check();
+          this.#finishInitialization();
+        });
+      } else {
+        this.#finishInitialization();
+      }
       return;
     }
 
@@ -1228,6 +1243,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // initialization reset.
     this.#coreProcessorState = CoreProcessorContract.stateSchema.parse({});
     void this.ctx.blockConcurrencyWhile(async () => {
+      await this.#testRetirement.check();
       this.#coreProcessorState = await this.#recoverCoreProcessorStateFromEventLog();
       this.#finishInitialization();
     });
@@ -1235,6 +1251,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #finishInitialization(): void {
     this.#liveState = new LiveState(this.#readRuntimeState());
+    if (this.#testRetirement.retired) return;
 
     // Re-create keyed facet lanes for watcher sockets that hibernated across
     // an eviction: their hibernation tags name the lane, and a lane object
@@ -1347,6 +1364,37 @@ export class StreamDurableObject extends DurableObject<Env> {
     ]);
   }
 
+  /** OS project creation calls this before appending its birth request.
+   * Auth may already have allocated the UUID and directory entry. Only this
+   * root stream can tell whether the project has actually begun running.
+   */
+  async registerPreviewTestRun(input: PreviewTestRun): Promise<void> {
+    const run = PreviewTestRun.parse(input);
+    const projectId = this.name.projectId;
+    if (!this.#testRetirement.enabled || !projectId || this.name.path !== "/") {
+      throw new Error("Test ownership must be registered on a preview project's root stream.");
+    }
+    await this.ctx.blockConcurrencyWhile(async () => {
+      if (run.expiresAt <= Date.now() || this.#testRetirement.retired) {
+        throw new Error("Test run has finished.");
+      }
+      const owner = this.ctx.storage.kv.get<PreviewTestRun>("ci:project-test-run");
+      if (owner && (owner.id !== run.id || owner.expiresAt !== run.expiresAt)) {
+        throw new Error("A project cannot move between test runs or extend its expiry.");
+      }
+      if (owner) return; // A birth retry must not rewrite the same KV key repeatedly.
+      if (
+        !owner &&
+        this.getEvents({ eventTypes: ["events.iterate.com/project/create-requested"], limit: 1 })
+          .length
+      ) {
+        throw new Error("Cannot attach a test run to an existing human project.");
+      }
+      await new PreviewTestRuns(this.env.PROJECT_DIRECTORY).registerProject(projectId, run);
+      this.ctx.storage.kv.put("ci:project-test-run", run);
+    });
+  }
+
   /**
    * Use Cloudflare's native alarm invocation as the trace root; reconcile and
    * delivery retry work remains background, but facet alarm replays are
@@ -1356,6 +1404,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * {@link #fireDueFacetAlarms}).
    */
   async alarm(alarmInfo?: AlarmInvocationInfo) {
+    if (await this.#testRetirement.check()) return;
     this.#alarmArmer.markFired();
     let facetReplays: Promise<FacetAlarmReplayFailure[]> | undefined;
     this.#deliveryAlarmBoundary.runAlarmTurn(() => {
@@ -2609,6 +2658,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     alarmTurn?: boolean;
     justCommittedEvents?: Parameters<StreamEventSender["sendDue"]>[0];
   }): void {
+    if (this.#testRetirement.retired) return;
     let repairNeeded = false;
     const attempt = (operation: string, work: () => void | boolean) => {
       try {

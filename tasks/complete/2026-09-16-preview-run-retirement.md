@@ -1,12 +1,15 @@
 ---
-status: in-progress
+status: complete
 size: large
 ---
 
 # Stop finished test runs without erasing their preview deployment
 
 Review branch, stacked on `codex/playwright-full-parallel` (PR #2659). No PR.
-The first commit records the intended change; implementation and local proof follow.
+Review implementation complete: run ownership, DO retirement, container idle shutdown,
+and an opt-in CI path are implemented and locally checked. The experiment remains
+off pending live quieting, client-coverage and retained-state proof; see
+`docs/preview-test-retirement.md`. No live environment was changed.
 
 ## Request
 
@@ -39,13 +42,13 @@ that cannot silently lose ownership when one DO addresses another.
 
 ## Scope and proof
 
-- [ ] Choose and explain ownership propagation without changing project IDs.
-- [ ] Implement the retirement decision and meaningful behaviour tests.
-- [ ] Connect it to recurring DO work, including constructor rearming.
-- [ ] Show test ownership registration and CI lifecycle wiring in the diff.
-- [ ] Document containers, shared state and rollout limitations explicitly.
-- [ ] Run focused tests, type checks and lint/format checks for changed code.
-- [ ] Self-review the complete diff and publish a compare link, without a PR.
+- [x] Choose and explain ownership propagation without changing project IDs. _KV ownership keyed by Auth-generated ID; root Stream serialises registration before birth. Query-name alternative is explained in the design note._
+- [x] Implement the retirement decision and meaningful behaviour tests. _PreviewTestRuns covers predecessor retirement, stale finalizers, expiry and immutable ownership._
+- [x] Connect it to recurring DO work, including constructor rearming. _Stream, Scheduler and StatefulWorker guards; the real Stream fixture proves retirement survives eviction and rejects late rearming._
+- [x] Show test ownership registration and CI lifecycle wiring in the diff. _Authenticated test header, root birth registration, shared attempt plan, optional same-owner preservation and ci-dispose._
+- [x] Document containers, shared state and rollout limitations explicitly. _The design note lists live acceptance checks; sandbox idle expiry disables test keepalive without suppressing SDK alarms._
+- [x] Run focused tests, type checks and lint/format checks for changed code. _Runtime tests and preview tooling tests pass; OS, streams, scripts, shared and spec type checks pass. CLI help and changed-file lint/format checked._
+- [x] Self-review the complete diff and publish a compare link, without a PR. _Reviewed ownership/identity races, initializer rearming, artifact-download races, expiry and default-off gating; compare against codex/playwright-full-parallel._
 
 This is a review implementation, not an instruction to change live previews.
 Full cleanup remains the default until the new path has deployed evidence
@@ -60,3 +63,7 @@ switch and remaining deployment proof must be visible in the final report.
   properties. Adding a run query parameter only at initial creation is unsafe.
 - `Auth.mintProjectId()` owns normal project IDs; this branch will preserve it.
 
+
+- Chose stored ownership rather than changing names: every internal caller already carries the project ID. Root-stream registration also supports Auth-first signup and refuses to relabel a born human project.
+- Control records use per-attempt retirement markers instead of a mutable timestamp cutoff, so stale finalizers cannot retire a newer attempt. A fixed deadline handles cancellation without a subsequent run.
+- CLI imports exposed an existing Node strip-types incompatibility in `CloudflareApiError`; replaced constructor parameter properties with equivalent fields.
