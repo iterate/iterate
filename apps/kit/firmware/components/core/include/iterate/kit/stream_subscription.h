@@ -51,13 +51,23 @@ struct iterate_kit_stream {
   } get;
 };
 
-/* Receives the first argument of a remote callback. It is borrowed only for
- * this call. `owner_epoch` lets callers reject a callback after they have
- * repurposed their own higher-level call storage. */
+/* Receives a remote callback's arguments, borrowed only for this call.
+ *
+ * TWO POSITIONAL ARGUMENTS, NOT ONE OBJECT. os-next calls a lent subscription
+ * stub as a BARE FUNCTION with `(events, range)`: `update` is argument 0 — for
+ * a stream subscription, the events array itself — and `range` is argument 1,
+ * `{after, through}`, or NULL when the callee passed none (live state does).
+ * The range is the only way a client learns that a delivery it never saw
+ * existed, because delivery is fire-and-forget and an ephemeral dropped in
+ * flight cannot be read back.
+ *
+ * `owner_epoch` lets callers reject a callback after they have repurposed their
+ * own higher-level call storage. */
 typedef void (*iterate_kit_subscription_update_fn)(
     void *owner,
     uint32_t owner_epoch,
-    const struct capnweb_value *update);
+    const struct capnweb_value *update,
+    const struct capnweb_value *range);
 
 struct iterate_kit_stream_subscription {
   enum iterate_kit_subscription_state state;
@@ -83,8 +93,9 @@ struct iterate_kit_stream_subscription {
   } open;
 };
 
-/** Begin `project.streams.get(path)`. The borrowed project capability and
- * session must outlive the returned completion. */
+/** Begin `itx.cd(path)` on a context — pure addressing, since a context IS its
+ * stream. The borrowed context capability and session must outlive the
+ * returned completion. */
 enum capnweb_status iterate_kit_stream_get(
     struct iterate_kit_stream *stream,
     struct capnweb_session *session,
@@ -103,18 +114,24 @@ enum capnweb_status iterate_kit_stream_close(struct iterate_kit_stream *stream);
 bool iterate_kit_stream_reclaimable(const struct iterate_kit_stream *stream);
 
 /**
- * Open a stream's `openConnection` subscription. `connection_key` must be
- * unique among simultaneously open subscriptions. Batches arriving before
- * the open reply are delivered to this subscription's callback context.
+ * Open a context's `subscribe({name, consumes, target})` subscription.
+ * `subscription_name` must be unique among simultaneously open subscriptions —
+ * the same name REPLACES the row. Deliveries arriving before the open reply are
+ * delivered to this subscription's callback context.
+ *
+ * THERE IS NO DELIVERY BOUND TO ASK FOR. `openConnection` took
+ * maxDeliveryEvents/maxDeliveryBytes and the device sized its inbox slot to
+ * match; os-next has no such knob — commits landing behind an in-flight
+ * delivery fold into one call. The device's protection is the sender appending
+ * one speaker frame per append, plus its own bounded inbox, which drops and
+ * counts what will not fit.
  */
 enum capnweb_status iterate_kit_stream_subscription_open(
     struct iterate_kit_stream_subscription *subscription,
     struct iterate_kit_stream *stream,
-    const char *connection_key,
-    const char *const *event_types,
-    size_t event_type_count,
-    int64_t max_delivery_events,
-    int64_t max_delivery_bytes,
+    const char *subscription_name,
+    const char *const *consumed_event_types,
+    size_t consumed_event_type_count,
     iterate_kit_subscription_update_fn on_update,
     void *owner,
     uint32_t owner_epoch);
@@ -130,7 +147,10 @@ enum capnweb_status iterate_kit_live_state_subscription_open(
     void *owner,
     uint32_t owner_epoch);
 
-/** Releases the remote handle then the local callback hold. Storage remains
+/** Releases the remote handle then the local callback hold. A stream
+ * subscription handle has no `close()` — a Cap'n Web release IS its disposal,
+ * which un-does the row — so only live state still calls `unsubscribe`.
+ * Storage remains
  * unreusable until a pending open completion and the server callback release
  * have both occurred; call `reclaimable()` before assigning it to another
  * logical subscription. */

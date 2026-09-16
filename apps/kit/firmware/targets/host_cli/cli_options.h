@@ -48,7 +48,7 @@ struct cli_options {
   const char *project_api_key;
   const char *os_base_url;
   const char *stream_path;
-  /** Mounted as kit.<name>, and used as this run's call id. */
+  /** Provided at itx.clients.<name>, and this run's call id. */
   const char *name;
   const char *utterance_dir;
   /**

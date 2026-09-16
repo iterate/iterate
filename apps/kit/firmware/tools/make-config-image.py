@@ -47,15 +47,21 @@ FIELDS = {
     "project-id": 4,
     "project-api-key": 5,
 }
-# The firmware's own bounds (configuration.h). Refusing here means a board
-# rejects nothing at boot — a truncated field is a device that silently never
-# connects, with no symptom but silence.
+# The firmware's own bounds (configuration.h), copied EXACTLY: these are the C
+# array sizes, so the longest value each holds is one less. Refusing here means
+# a board rejects nothing at boot — a truncated field is a device that silently
+# never connects, with no symptom but silence.
+#
+# Four of these were one short of the header, which cost nothing while the key
+# was a 60-character `itxk_` string and refuses a 128-byte one outright. An
+# operator secret is long; a tool that will not write a value the firmware
+# accepts is the same silent failure pointed the other way.
 CAPACITY = {
     "wifi-ssid": 33,
-    "wifi-password": 64,
-    "os-base-url": 128,
-    "project-id": 64,
-    "project-api-key": 128,
+    "wifi-password": 65,
+    "os-base-url": 129,
+    "project-id": 65,
+    "project-api-key": 129,
 }
 
 

@@ -99,6 +99,12 @@ static void rejects_truncated_and_wrong_version_images(void) {
  * heap-building URL helper would add fragmentation and another failure mode.
  * Convert only the transport scheme into a caller-sized fixed buffer and prove
  * both production TLS and local cleartext development forms.
+ *
+ * THE PATH IS `/internal/rpc`, NOT `/api`. os-next gates `/api` with its OAuth
+ * provider, so an unauthenticated upgrade never reaches capnweb at all; the
+ * operator door serves the same capnweb root with no HTTP gate and
+ * authenticates in-band. That is why this firmware needs no Authorization
+ * header, and why the endpoint is eleven bytes longer than the base URL.
  */
 static void builds_the_itx_websocket_endpoint_without_allocation(void) {
   char endpoint[ITERATE_KIT_ITX_WEBSOCKET_URL_CAPACITY];
@@ -106,12 +112,12 @@ static void builds_the_itx_websocket_endpoint_without_allocation(void) {
   CHECK(iterate_kit_configuration_build_itx_websocket_url(
       "https://os.iterate.com", endpoint, sizeof(endpoint)) ==
       ITERATE_KIT_CONFIGURATION_OK);
-  CHECK(strcmp(endpoint, "wss://os.iterate.com/api") == 0);
+  CHECK(strcmp(endpoint, "wss://os.iterate.com/internal/rpc") == 0);
 
   CHECK(iterate_kit_configuration_build_itx_websocket_url(
       "http://localhost:8787", endpoint, sizeof(endpoint)) ==
       ITERATE_KIT_CONFIGURATION_OK);
-  CHECK(strcmp(endpoint, "ws://localhost:8787/api") == 0);
+  CHECK(strcmp(endpoint, "ws://localhost:8787/internal/rpc") == 0);
 }
 
 /*
@@ -136,8 +142,41 @@ static void rejects_invalid_or_truncated_itx_websocket_endpoints(void) {
   CHECK(endpoint[0] == '\0');
 }
 
+/*
+ * THE BLOB A BOARD IS ACTUALLY FLASHED WITH FOR os-next.
+ *
+ * Two things in it were refused until now, and each refusal is a board that
+ * boots, reads its own partition, rejects it and never dials — which from
+ * outside is exactly a dead board. A project id here is a DNS-safe SLUG,
+ * because in this deployment a project's id IS its slug; and an operator secret
+ * runs to the field's full 128 bytes, where the writer's capacity table used to
+ * stop one byte short. This image comes from tools/make-config-image.py, so it
+ * is the same cross-language proof the TypeScript golden image gives.
+ */
+static void decodes_the_os_next_image_with_a_slug_and_a_full_length_key(void) {
+  struct iterate_kit_configuration configuration;
+  char key[ITERATE_KIT_PROJECT_API_KEY_CAPACITY];
+  size_t index;
+  const enum iterate_kit_configuration_error error =
+      iterate_kit_configuration_decode(
+          &configuration,
+          iterate_kit_test_os_next_configuration_image,
+          sizeof(iterate_kit_test_os_next_configuration_image));
+
+  for (index = 0U; index + 1U < sizeof(key); ++index) key[index] = 'k';
+  key[sizeof(key) - 1U] = '\0';
+
+  CHECK(error == ITERATE_KIT_CONFIGURATION_OK);
+  CHECK(strcmp(configuration.os_base_url, "https://os.iterate2.com") == 0);
+  CHECK(strcmp(configuration.project_id, "prj-voice") == 0);
+  CHECK(strlen(configuration.project_api_key) ==
+      ITERATE_KIT_PROJECT_API_KEY_CAPACITY - 1U);
+  CHECK(strcmp(configuration.project_api_key, key) == 0);
+}
+
 int main(void) {
   decodes_the_typescript_golden_image();
+  decodes_the_os_next_image_with_a_slug_and_a_full_length_key();
   classifies_corruption_without_partial_credentials();
   rejects_truncated_and_wrong_version_images();
   builds_the_itx_websocket_endpoint_without_allocation();

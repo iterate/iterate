@@ -11,9 +11,10 @@
  * the caller's perspective: every failure clears the entire destination.
  *
  * CRC32 detects transfer/storage corruption; it is not a MAC and does not make
- * a project key safe against someone who can read or rewrite flash. Device-
- * scoped OAuth credentials can replace the project secret later without
- * changing the bounded container/parser.
+ * the key safe against someone who can read or rewrite flash. The key field
+ * carries the os-next deployment admin secret today, which is why a board
+ * holding one is a bench board: device-scoped OAuth credentials can replace it
+ * later without changing the bounded container/parser.
  */
 enum {
   CONFIGURATION_FIELD_HEADER_SIZE = 3,
@@ -126,7 +127,7 @@ static bool valid_base_url(const char *value) {
         *cursor == '#') {
       /*
        * Store only an origin-like base. Allowing paths, userinfo, fragments, or
-       * escaped control characters would make fixed `/api` endpoint
+       * escaped control characters would make fixed `/internal/rpc` endpoint
        * construction ambiguous and could redirect credentials unexpectedly.
        */
       return false;
@@ -135,15 +136,25 @@ static bool valid_base_url(const char *value) {
   return true;
 }
 
+/*
+ * A PROJECT ID IS A SLUG, AND THE `prj_` PREFIX IS GONE.
+ *
+ * This demanded `prj_`, which was true of the minted ids apps/os handed out
+ * and is true of nothing on os-next: there a project's id IS its DNS-safe
+ * slug (`prj-voice`, `templestein`), and `projects.get` validates exactly
+ * `/^[A-Za-z0-9_-]+$/`. A board flashed with a slug refused its own blob at
+ * boot with INVALID_VALUE and never dialled, which from outside is
+ * indistinguishable from a dead board.
+ *
+ * Mirror the server's rule rather than a narrower guess: the same character
+ * set, non-empty, and no opinion about what it starts with.
+ */
 static bool valid_project_id(const char *value) {
   const char *cursor;
-  if (strncmp(value, "prj_", sizeof("prj_") - 1U) != 0 ||
-      value[sizeof("prj_") - 1U] == '\0') {
+  if (value[0] == '\0') {
     return false;
   }
-  for (cursor = value + sizeof("prj_") - 1U;
-       *cursor != '\0';
-       ++cursor) {
+  for (cursor = value; *cursor != '\0'; ++cursor) {
     const bool alpha_numeric =
         (*cursor >= 'a' && *cursor <= 'z') ||
         (*cursor >= 'A' && *cursor <= 'Z') ||
@@ -233,7 +244,7 @@ iterate_kit_configuration_build_itx_websocket_url(
     char *destination,
     size_t destination_capacity) {
   return build_websocket_url(
-      os_base_url, "/api", destination, destination_capacity);
+      os_base_url, "/internal/rpc", destination, destination_capacity);
 }
 
 enum iterate_kit_configuration_error iterate_kit_configuration_decode(

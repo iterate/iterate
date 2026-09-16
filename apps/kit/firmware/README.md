@@ -48,9 +48,11 @@ Reuse the shared I2S codec, session grammar, LED ring, playout and health path.
 
 Confirm from vendor source, then measure: microphone slot and sample shape,
 clock master/MCLK, GPIO polarity, amplifier polarity, gain, DMA sizes, and AEC
-reference. Give a new board a stable `facts.device_name`; firmware derives its
-client `/clients/<device_name>` and conversation namespace
-`/agents/voice/v23/<device_name>` from it.
+reference. Give a new board a stable `facts.device_name`; firmware derives the
+itx expression it answers, `itx.clients.<device_name>` (every character outside
+`[A-Za-z0-9_]` replaced by `_`, because the far end spells that name in
+JavaScript), and its conversation namespace `/agents/voice/v23/<device_name>`
+from it.
 
 Register the board once in `apps/kit/src/firmware/catalog.ts`: device identity,
 ESP-IDF target, chip and flash plan, including its configuration partition.
@@ -85,12 +87,88 @@ The browser then writes Wi-Fi, OS URL, canonical project
 ID and project API key into the versioned `iterate_kit` partition on the
 connected board. Credentials never enter the Kit worker or a URL.
 
-At boot, firmware rejects a missing or invalid partition, joins Wi-Fi,
-authenticates with the project key and mounts `/clients/<device_name>`. Health
-classifies provisioning, Wi-Fi/authentication, mount and audio failures.
+To write that partition by hand instead — which is how an os-next bench board
+is provisioned — use `tools/make-config-image.py`. Its `--offset-for <target>`
+reads the offset out of the target's own partition CSV; assuming one corrupts
+the application and leaves the board looking absent rather than offline.
+
+```sh
+python3 tools/make-config-image.py \
+  --wifi-ssid <ssid> --wifi-password <password> \
+  --os-base-url https://os.iterate2.com \
+  --project-id prj-voice --project-api-key "$OPERATOR_SECRET" \
+  --out /tmp/cfg.bin
+python -m esptool --chip esp32s3 -p /dev/cu.usbmodem2101 \
+  write_flash "$(python3 tools/make-config-image.py --offset-for havpe)" /tmp/cfg.bin
+```
+
+At boot, firmware rejects a missing or invalid partition, joins Wi-Fi and
+mounts. Health classifies provisioning, Wi-Fi/authentication, mount and audio
+failures.
+
+## The protocol, as os-next speaks it
+
+The device dials **`wss://<os base url host>/internal/rpc`** — the operator
+door, which carries no HTTP gate, so the upgrade needs no header at all. The
+blob's project id is a bare DNS-safe **slug** (`prj-voice`); its key field is
+the deployment **admin secret**, which reaches every project and is therefore a
+bench credential, never a fleet one. A device-scoped grant will replace it
+without changing any call below.
+
+The mount is three calls and nothing else:
+
+```
+authenticate({ type: "admin-secret", secret })   -> the session
+projects.get("<project id>")                     -> the project's ROOT itx
+provide("itx.clients.<device_name>", <this device's capability>)
+                                                 -> a rewrite-rule handle
+```
+
+`projects.get` is pure addressing — one bare string, no options object.
+`provide` is os-next's ONE front door for making a name mean this device: after
+it, a caller reaches the board as
+`root.clients.<device_name>.health()` or `.conversation.start(...)`, and the
+remaining steps arrive as the ordinary Cap'n Web path the device's capability
+modules already dispatch — no flattening envelope. The rule handle IS the live
+provision: releasing it un-does the match and recalls the lent stub, so it is
+released before the project handle. Reconnect re-runs all three.
+
+A press then addresses one conversation:
+
+```
+root.voice.setupVoiceAgent({ streamPath, visemes })  -> { streamPath }
+root.cd(streamPath)                                  -> that context
+context.subscribe({ name, consumes: [...], target: <callback> })
+context.append({ type, ephemeral, payload })
+```
+
+`cd` replaces `streams.get` and makes no call of its own — **a context IS its
+stream**. `subscribe` replaces `openConnection`: `connectionKey` is `name`,
+`eventTypes` is `consumes`, and the exported callback is the `target` itself.
+There is no `maxDeliveryEvents`/`maxDeliveryBytes` to ask for, and a
+subscription handle has no `close()` — releasing it is its disposal. Types are
+named one by one because `"*"` never sweeps an **ephemeral**, and `spk-frame`
+is one.
+
+The server calls that lent callback as a **bare function** with two positional
+arguments, `(events, range)`: argument 0 is the events array itself, and
+`range` is `{ after, through }`. Delivery is fire-and-forget — nothing is
+awaited, nothing is retried, a push past the server's in-flight budget is
+dropped, and `readEvents` never returns an ephemeral — so a lost speaker frame
+is gone. The device cannot heal that; it counts it (`deliveryGaps` in health)
+by checking each `after` against the last `through`, so a gap is visible
+rather than silent. The sender's side of that bargain is one speaker frame per
+append.
+
+Liveness is two probes on one period
+(`ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS`, 60 s, which must stay well inside
+os-next's ~100 s idle close). The transport's WebSocket PING asks whether the
+TCP hop is half-open, and its PONG is what the liveness watchdog keys on. The
+mount's `whoami()` on the project root asks whether the SESSION is there — and
+being an application message, it is the kind the idle close actually counts.
 
 The device keeps one authenticated WebSocket and Cap'n Web session. Stream
-`openConnection()` and live-state `subscribe()` create independent subscription
+`subscribe()` and live-state `subscribe()` create independent subscription
 handles on that session; neither means opening another WebSocket. Releasing a
 subscription must leave the session, device mount and other subscriptions alive.
 

@@ -21,6 +21,9 @@ struct observer {
   int64_t revision;
   int64_t from;
   int64_t to;
+  /* The delivery range a stream push carried as its SECOND argument. */
+  int64_t after;
+  int64_t through;
   char path[96];
   bool snapshot;
   bool patch;
@@ -228,58 +231,72 @@ static void resolve_latest_pull(struct fixture *fixture, int64_t capability) {
 static int64_t callback_from(
     const struct fixture *fixture, const char *open_marker) {
   return number_after(
-      latest_with(fixture, open_marker), "[\"export\",");
+      latest_with(fixture, open_marker), "\"export\",");
 }
 
 static void start_mount(struct fixture *fixture) {
   const struct iterate_kit_itx_mount_options options = {
     .session = &fixture->session,
-    .project_id = "prj_test",
-    .project_api_key = "itxk_secret-never-log",
-    .client_path = "/clients/multiplex-host-test",
+    .project_id = "prj-voice",
+    .project_api_key = "operator-secret-never-log",
+    .capability_match = "itx.clients.multiplex_host_test",
     .capability = {inert_dispatch, fixture, NULL},
-    .description = "ITX multiplex host test",
-    .types = "export interface TestDevice { ping(): Promise<void> }",
   };
 
   check(iterate_kit_itx_mount_start(&fixture->mount, &options) == CAPNWEB_OK);
   check(messages_with(fixture, "\"authenticate\"") == 1U);
   resolve_latest_pull(fixture, -101);
   resolve_latest_pull(fixture, -102);
+  resolve_latest_pull(fixture, -103);
   check(fixture->mount.state == ITERATE_KIT_ITX_MOUNT_READY);
   check(fixture->mount.has_project_capability);
   check(fixture->mount.project_capability.id == -102);
+  check(fixture->mount.has_rule_capability);
+  check(fixture->mount.rule_capability.id == -103);
   check(calls_used(fixture) == 0U);
 }
 
+/*
+ * ONE DISPATCHER, TWO ARGUMENT SHAPES. A stream push arrives as the bare
+ * `(events, range)` os-next calls a lent stub with — argument 0 IS the events
+ * array — while live state still hands over one state object and no range.
+ * Telling them apart on the array, rather than on a field that happened to be
+ * in the old batch envelope, is what makes this seam honest.
+ */
 static void observe(
     void *owner,
     uint32_t owner_epoch,
-    const struct capnweb_value *update) {
+    const struct capnweb_value *update,
+    const struct capnweb_value *range) {
   struct observer *observer = owner;
   struct capnweb_value value;
+  struct capnweb_value events;
 
   check(observer != NULL);
   check(owner_epoch == observer->epoch);
   ++observer->calls;
 
-  if (capnweb_value_object_get(update, "path", &value)) {
-    struct capnweb_value batches;
-    struct capnweb_value batch;
+  if (capnweb_value_get_expression_array(update, &events)) {
     struct capnweb_value event;
     size_t length = 0U;
 
+    check(range != NULL);
+    check(capnweb_value_object_get(range, "after", &value));
+    check(capnweb_value_get_int64(&value, &observer->after));
+    check(capnweb_value_object_get(range, "through", &value));
+    check(capnweb_value_get_int64(&value, &observer->through));
+    check(capnweb_value_array_at(&events, 0U, &event));
+    /* The path now rides the EVENT, which is where an event's identity lives. */
+    check(capnweb_value_object_get(&event, "path", &value));
     check(capnweb_value_copy_string(
         &value, observer->path, sizeof(observer->path), &length) == CAPNWEB_OK);
     check(length > 0U);
-    check(capnweb_value_object_get(update, "events", &batches));
-    check(capnweb_value_array_at(&batches, 0U, &batch));
-    check(capnweb_value_array_at(&batch, 0U, &event));
     check(capnweb_value_object_get(&event, "offset", &value));
     check(capnweb_value_get_int64(&value, &observer->offset));
     return;
   }
 
+  check(range == NULL);
   check(capnweb_value_object_get(update, "type", &value));
   if (capnweb_value_string_equals(&value, "snapshot")) {
     check(capnweb_value_object_get(update, "revision", &value));
@@ -343,18 +360,23 @@ static void opens_on_one_mounted_session(struct fixture *fixture) {
   fixture->a.epoch = 11U;
   check(iterate_kit_stream_subscription_open(
       &fixture->subscription_a, &fixture->stream_a, "multiplex-a",
-      event_types, sizeof(event_types) / sizeof(event_types[0]),
-      16, 13000, observe, &fixture->a, fixture->a.epoch) == CAPNWEB_OK);
+      event_types, sizeof(event_types) / sizeof(event_types[0]), observe, &fixture->a, fixture->a.epoch) == CAPNWEB_OK);
+  /* `{name, consumes, target}` — and the CAPABILITY is the target itself. */
   check(strstr(
-      latest_with(fixture, "\"connectionKey\":\"multiplex-a\""),
-      "\"processEventBatch\":[\"export\",") != NULL);
+      latest_with(fixture, "\"name\":\"multiplex-a\""),
+      "[\"subscribe\"]") != NULL);
+  check(strstr(
+      latest_with(fixture, "\"name\":\"multiplex-a\""),
+      "\"consumes\":[[\"events.iterate.com/voice-agent/spk-frame\"]]") != NULL);
+  check(strstr(
+      latest_with(fixture, "\"name\":\"multiplex-a\""),
+      "\"target\":[\"export\",") != NULL);
   resolve_latest_pull(fixture, -301);
 
   fixture->b.epoch = 12U;
   check(iterate_kit_stream_subscription_open(
       &fixture->subscription_b, &fixture->stream_b, "multiplex-b",
-      event_types, sizeof(event_types) / sizeof(event_types[0]),
-      16, 13000, observe, &fixture->b, fixture->b.epoch) == CAPNWEB_OK);
+      event_types, sizeof(event_types) / sizeof(event_types[0]), observe, &fixture->b, fixture->b.epoch) == CAPNWEB_OK);
   resolve_latest_pull(fixture, -302);
 
   fixture->live.epoch = 13U;
@@ -383,8 +405,8 @@ static void multiplexes_and_reclaims(void) {
   mounted_imports = imports_used(&fixture);
   opens_on_one_mounted_session(&fixture);
 
-  callback_a = callback_from(&fixture, "\"connectionKey\":\"multiplex-a\"");
-  callback_b = callback_from(&fixture, "\"connectionKey\":\"multiplex-b\"");
+  callback_a = callback_from(&fixture, "\"name\":\"multiplex-a\"");
+  callback_b = callback_from(&fixture, "\"name\":\"multiplex-b\"");
   callback_live = callback_from(&fixture, "[\"liveState\",\"subscribe\"]");
   check(callback_a < 0 && callback_b < 0 && callback_live < 0);
   check(callback_a != callback_b);
@@ -405,15 +427,13 @@ static void multiplexes_and_reclaims(void) {
   check(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
 
   deliver(&fixture, callback_a,
-      "{\"projectId\":\"prj_test\",\"path\":\"/agents/voice/v24/multiplex-a\","
-      "\"streamId\":\"a\",\"events\":[[{\"type\":\"events.iterate.test/a\","
-      "\"offset\":40,\"payload\":{\"round\":1}}]],"
-      "\"scannedThroughOffset\":40,\"streamMaxOffset\":40,\"state\":null}");
+      "[[{\"type\":\"events.iterate.test/a\",\"offset\":40,"
+      "\"path\":\"/agents/voice/v24/multiplex-a\","
+      "\"payload\":{\"round\":1}}]],{\"after\":39,\"through\":40}");
   deliver(&fixture, callback_b,
-      "{\"projectId\":\"prj_test\",\"path\":\"/agents/voice/v24/multiplex-b\","
-      "\"streamId\":\"b\",\"events\":[[{\"type\":\"events.iterate.test/b\","
-      "\"offset\":41,\"payload\":{\"round\":1}}]],"
-      "\"scannedThroughOffset\":41,\"streamMaxOffset\":41,\"state\":null}");
+      "[[{\"type\":\"events.iterate.test/b\",\"offset\":41,"
+      "\"path\":\"/agents/voice/v24/multiplex-b\","
+      "\"payload\":{\"round\":1}}]],{\"after\":40,\"through\":41}");
   deliver(&fixture, callback_live,
       "{\"type\":\"snapshot\",\"revision\":7,\"state\":{\"active\":true}}");
   deliver(&fixture, callback_live,
@@ -423,9 +443,11 @@ static void multiplexes_and_reclaims(void) {
   check(fixture.a.calls == 1U);
   check(strcmp(fixture.a.path, "/agents/voice/v24/multiplex-a") == 0);
   check(fixture.a.offset == 40);
+  check(fixture.a.after == 39 && fixture.a.through == 40);
   check(fixture.b.calls == 1U);
   check(strcmp(fixture.b.path, "/agents/voice/v24/multiplex-b") == 0);
   check(fixture.b.offset == 41);
+  check(fixture.b.after == 40 && fixture.b.through == 41);
   check(fixture.live.calls == 2U);
   check(fixture.live.snapshot && fixture.live.patch);
   check(fixture.live.revision == 7);
@@ -444,10 +466,12 @@ static void multiplexes_and_reclaims(void) {
   }
   check(fixture.subscription_a.state == ITERATE_KIT_SUBSCRIPTION_CLOSING);
   deliver(&fixture, callback_a,
-      "{\"path\":\"/agents/voice/v24/multiplex-a\",\"events\":[[{\"offset\":42}]]}");
+      "[[{\"offset\":42,\"path\":\"/agents/voice/v24/multiplex-a\"}]],"
+      "{\"after\":41,\"through\":42}");
   check(fixture.a.calls == 1U);
   deliver(&fixture, callback_b,
-      "{\"path\":\"/agents/voice/v24/multiplex-b\",\"events\":[[{\"offset\":43}]]}");
+      "[[{\"offset\":43,\"path\":\"/agents/voice/v24/multiplex-b\"}]],"
+      "{\"after\":42,\"through\":43}");
   check(fixture.b.calls == 2U);
   deliver(&fixture, callback_live,
       "{\"type\":\"patch\",\"from\":8,\"to\":9,\"patch\":{}}");
@@ -464,7 +488,8 @@ static void multiplexes_and_reclaims(void) {
   check(iterate_kit_stream_subscription_reclaimable(&fixture.live_state));
 
   deliver(&fixture, callback_b,
-      "{\"path\":\"/agents/voice/v24/multiplex-b\",\"events\":[[{\"offset\":44}]]}");
+      "[[{\"offset\":44,\"path\":\"/agents/voice/v24/multiplex-b\"}]],"
+      "{\"after\":43,\"through\":44}");
   check(fixture.b.calls == 3U);
 
   check(iterate_kit_stream_subscription_close(&fixture.subscription_b) == CAPNWEB_OK);
@@ -505,8 +530,7 @@ static void pending_open_close_waits_for_remote_callback_release(void) {
   fixture.a.epoch = 21U;
   check(iterate_kit_stream_subscription_open(
       &fixture.subscription_a, &fixture.stream_a, "pending-stream",
-      event_types, sizeof(event_types) / sizeof(event_types[0]),
-      16, 13000, observe, &fixture.a, fixture.a.epoch) == CAPNWEB_OK);
+      event_types, sizeof(event_types) / sizeof(event_types[0]), observe, &fixture.a, fixture.a.epoch) == CAPNWEB_OK);
   stream_pull = latest_pull(&fixture);
   callback_stream = fixture.subscription_a.callback.id;
 
@@ -537,10 +561,16 @@ static void pending_open_close_waits_for_remote_callback_release(void) {
     receive(&fixture, message);
   }
 
-  check(latest_with(&fixture, "[\"close\"]") != NULL);
+  /*
+   * A STREAM SUBSCRIPTION IS CLOSED BY BEING RELEASED. os-next's handle has no
+   * `close()`, so calling one would reject — and on this client a rejection is
+   * indistinguishable from a network fault. Live state still has `unsubscribe`.
+   */
+  check(latest_with(&fixture, "[\"close\"]") == NULL);
   check(latest_with(&fixture, "[\"unsubscribe\"]") != NULL);
   deliver(&fixture, callback_stream,
-      "{\"path\":\"/agents/voice/v24/pending\",\"events\":[[{\"offset\":1}]]}");
+      "[[{\"offset\":1,\"path\":\"/agents/voice/v24/pending\"}]],"
+      "{\"after\":0,\"through\":1}");
   deliver(&fixture, callback_live,
       "{\"type\":\"snapshot\",\"revision\":1,\"state\":{}}");
   check(fixture.a.calls == 0U);
@@ -574,7 +604,7 @@ static void invalid_types_and_export_exhaustion_leave_reclaimable_storage(void) 
     check(iterate_kit_stream_subscription_open(
         &fixture.subscription_a, &fixture.stream_a, "invalid-types",
         invalid_types, sizeof(invalid_types) / sizeof(invalid_types[0]),
-        16, 13000, observe, &fixture.a, 31U) == CAPNWEB_E_INVALID_ARGUMENT);
+        observe, &fixture.a, 31U) == CAPNWEB_E_INVALID_ARGUMENT);
   }
   check(exports_used(&fixture) == 0U);
   check(iterate_kit_stream_subscription_reclaimable(&fixture.subscription_a));
@@ -587,8 +617,7 @@ static void invalid_types_and_export_exhaustion_leave_reclaimable_storage(void) 
   check(exports_used(&fixture) == ITERATE_KIT_VOICE_EXPORT_CAPACITY);
   check(iterate_kit_stream_subscription_open(
       &fixture.subscription_b, &fixture.stream_a, "exhausted",
-      event_types, sizeof(event_types) / sizeof(event_types[0]),
-      16, 13000, observe, &fixture.b, 32U) == CAPNWEB_E_LIMIT);
+      event_types, sizeof(event_types) / sizeof(event_types[0]), observe, &fixture.b, 32U) == CAPNWEB_E_LIMIT);
   check(fixture.subscription_b.state == ITERATE_KIT_SUBSCRIPTION_FAILED);
   check(iterate_kit_stream_subscription_close(&fixture.subscription_b) == CAPNWEB_OK);
   check(iterate_kit_stream_subscription_reclaimable(&fixture.subscription_b));
@@ -618,8 +647,7 @@ static void session_loss_clears_pending_children_before_new_session(void) {
   fixture.a.epoch = 41U;
   check(iterate_kit_stream_subscription_open(
       &fixture.subscription_a, &fixture.stream_a, "lost-open",
-      event_types, sizeof(event_types) / sizeof(event_types[0]),
-      16, 13000, observe, &fixture.a, fixture.a.epoch) == CAPNWEB_OK);
+      event_types, sizeof(event_types) / sizeof(event_types[0]), observe, &fixture.a, fixture.a.epoch) == CAPNWEB_OK);
   check(iterate_kit_stream_get(
       &fixture.stream_b, &fixture.session,
       (struct capnweb_remote_capability){-702},
@@ -637,14 +665,13 @@ static void session_loss_clears_pending_children_before_new_session(void) {
       (struct capnweb_remote_capability){-703},
       "/agents/voice/v24/new-session") == CAPNWEB_OK);
   check(strstr(
-      latest_with(&fixture, "[\"streams\",\"get\"]"),
+      latest_with(&fixture, "[\"cd\"]"),
       "-703") != NULL);
   resolve_latest_pull(&fixture, -704);
   fixture.b.epoch = 42U;
   check(iterate_kit_stream_subscription_open(
       &fixture.subscription_a, &fixture.stream_b, "new-session",
-      event_types, sizeof(event_types) / sizeof(event_types[0]),
-      16, 13000, observe, &fixture.b, fixture.b.epoch) == CAPNWEB_OK);
+      event_types, sizeof(event_types) / sizeof(event_types[0]), observe, &fixture.b, fixture.b.epoch) == CAPNWEB_OK);
   resolve_latest_pull(&fixture, -705);
   check(fixture.subscription_a.state == ITERATE_KIT_SUBSCRIPTION_OPEN);
   check(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);

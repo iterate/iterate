@@ -56,8 +56,6 @@ enum {
 };
 
 #define CLI_MAIN_CALL_END_REASON "host-cli"
-#define CLI_MAIN_CONNECTION_INSTRUCTIONS \
-  "Iterate voice device (macOS CLI target)"
 
 static struct cli_runtime cli_main_runtime;
 static volatile sig_atomic_t cli_main_interrupted = 0;
@@ -576,12 +574,15 @@ static bool cli_main_init_device_controls(struct cli_runtime *runtime)
 static bool cli_main_init_connection(struct cli_runtime *runtime)
 {
   assert(runtime != NULL);
+  /* `--name` is already restricted to a-z, 0-9 and _, which is exactly what a
+   * dotted itx match segment may hold — so there is nothing to sanitize here,
+   * only a length to bound. */
   if ((size_t)snprintf(
-          runtime->client_path,
-          sizeof(runtime->client_path),
-          "/clients/%s",
-          runtime->options.name) >= sizeof(runtime->client_path)) {
-    cli_runtime_log("error", "device name too long for a client path");
+          runtime->capability_match,
+          sizeof(runtime->capability_match),
+          "itx.clients.%s",
+          runtime->options.name) >= sizeof(runtime->capability_match)) {
+    cli_runtime_log("error", "device name too long for a capability match");
     return false;
   }
   const struct iterate_kit_itx_connection_options options = {
@@ -599,9 +600,8 @@ static bool cli_main_init_connection(struct cli_runtime *runtime)
     .send_text_context = &runtime->transport,
     .project_id = runtime->configuration.project_id,
     .project_api_key = runtime->configuration.project_api_key,
-    .client_path = runtime->client_path,
+    .capability_match = runtime->capability_match,
     .capability = iterate_kit_peer_capability(&runtime->peer),
-    .description = CLI_MAIN_CONNECTION_INSTRUCTIONS,
     .session_ended = cli_capabilities_session_ended,
     .session_ended_context = runtime,
   };
@@ -861,7 +861,7 @@ static bool cli_main_init_runtime(struct cli_runtime *runtime)
   iterate_kit_voice_playout_init(&runtime->playout);
   cli_runtime_log(
       "info", "iterate-kit-cli ready client=%s stream=%s staticBytes=%zu outbox=%u",
-      runtime->client_path, runtime->options.stream_path, sizeof(*runtime),
+      runtime->capability_match, runtime->options.stream_path, sizeof(*runtime),
       ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS);
   return true;
 }
@@ -1730,6 +1730,14 @@ static void cli_main_reconcile_call(
   if (!runtime->hanging_up && runtime->voicelab.call_active &&
       outbox_free >= CLI_MAIN_CALL_OUTBOX_SLOTS) {
     (void)iterate_kit_voicelab_keepalive_if_due(&runtime->voicelab);
+  }
+  /*
+   * And the session's own pulse, which needs no call: os-next closes a socket
+   * carrying no application message at about a hundred seconds, and neither a
+   * WebSocket ping nor a quiet terminal is one.
+   */
+  if (outbox_free >= CLI_MAIN_CALL_OUTBOX_SLOTS) {
+    (void)iterate_kit_itx_mount_probe_if_due(&runtime->connection.mount, now_ms);
   }
   if (!runtime->hanging_up || !runtime->activation_active ||
       outbox_free < CLI_MAIN_CALL_OUTBOX_SLOTS) return;

@@ -21,8 +21,10 @@ enum {
   ITERATE_KIT_OS_BASE_URL_CAPACITY = 129,
   ITERATE_KIT_PROJECT_ID_CAPACITY = 65,
   ITERATE_KIT_PROJECT_API_KEY_CAPACITY = 129,
+  /* "https://" (8) becomes "wss://" (6) and the fixed operator path
+   * "/internal/rpc" (13) is appended: eleven bytes more than the base URL. */
   ITERATE_KIT_ITX_WEBSOCKET_URL_CAPACITY =
-      ITERATE_KIT_OS_BASE_URL_CAPACITY + 2,
+      ITERATE_KIT_OS_BASE_URL_CAPACITY + 11,
 };
 
 /**
@@ -68,8 +70,11 @@ enum iterate_kit_configuration_error iterate_kit_configuration_decode(
     size_t image_size);
 
 /**
- * Converts a validated HTTP(S) OS base URL to the corresponding WS(S) `/api`
- * endpoint in caller-owned storage. The destination is cleared on error.
+ * Converts a validated HTTP(S) OS base URL to the corresponding WS(S)
+ * `/internal/rpc` endpoint in caller-owned storage. That is os-next's OPERATOR
+ * door: it carries no HTTP gate, so the upgrade needs no header, and the
+ * session is authenticated in-band with the blob's key as the admin secret.
+ * The destination is cleared on error.
  * Source and destination may not alias because an in-place prefix contraction
  * would make partial failure semantics ambiguous.
  */
