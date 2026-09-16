@@ -1017,7 +1017,7 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
       }
       const entries = Object.entries(runs);
       const comparisonEntries = [
-        ...entries.filter(([key, r]) => r.workers),
+        ...entries.filter(([key, r]) => r.workers).sort((a, b) => a[1].workers - b[1].workers),
         ...entries.filter(([key, r]) => !r.workers),
       ];
       document.getElementById("run-picker").innerHTML = entries

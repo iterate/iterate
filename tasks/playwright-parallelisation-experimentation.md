@@ -5,7 +5,7 @@ size: large
 
 # Playwright parallelisation experimentation
 
-Status: six controlled trials plus the simplified 32-worker configuration measured. All three 32-worker browser runs needed one retry, while both 16-worker controls needed none. Testing 24 as a narrower compromise before choosing the final count; the permanent traces and small telemetry lint correction are ready.
+Status: the 24-worker follow-up passed every body with no retries, finishing Playwright before Vitest at 120.5s / 126.5s and using 18.3 GB peak memory. Repeating the unchanged configuration next. All earlier trials, including failures, are published; final recommendation and completion remain.
 
 ## Request and assumptions
 
@@ -68,3 +68,5 @@ The user wants PR #2659 renamed and used for an overnight experiment: push commi
 - Evidence-led follow-up: all three measured 32-worker browser runs passed but each needed one retry (dashboard, mobile signup, REPL click). Both 16-worker controls needed none. Add one 24-worker trial; repeat if it stays near/below the concurrent Vitest duration without retries. This tests a compromise, not a claim that concurrency caused each failure. Application/spec code and retry/timeout policy remain frozen.
 
 - Simplified 32-worker evidence: `d07758ade`, run `cj5ss7ntq6`, preview success in 634.5s; Playwright 111.0s, Vitest 129.3s. One REPL click retry. The deliberately random monthly flake sentinel fired once and is labeled separately from real failures; no other final body failures. The lint correction ships with the 24-worker follow-up.
+
+- First 24-worker follow-up: `543b8eea4`, run `br3nx3qc7d`, all checks pass; preview 559.3s, Playwright 120.5s, Vitest 126.5s. All 88 non-skipped browser bodies passed; zero browser/app retries, 18.3 GB peak memory. This meets the criterion for an unchanged repeat.
