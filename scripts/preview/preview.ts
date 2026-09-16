@@ -49,6 +49,8 @@ import {
 import { PreviewE2eTelemetryArtifact } from "./e2e-telemetry.ts";
 import { assertPreviewCiIdentity, PreviewCiIdentity, readPreviewCiResults } from "./ci-identity.ts";
 import { previewPlaywrightShards } from "./playwright-capacity-reporter.ts";
+import { CommitHistory } from "./commit-history.ts";
+import { planPreview } from "./change-plan.ts";
 
 // Flake-hunt notes for the preview e2e lane live in
 // docs/preview-e2e-flake-hunt.md.
@@ -287,8 +289,40 @@ export async function run(options: DeployCommandOptions = {}) {
   });
 }
 
-/** Deploy once and publish only non-secret inputs for this workflow attempt. */
-export async function ciPrepare(options: DeployCommandOptions = {}) {
+/** Classify the head commit and choose whether to skip, deploy, or reuse a preview. */
+export async function ciPlan(options: PullRequestCommandOptions = {}) {
+  const { context, runtime } = await resolvePreviewCommandSetup(options);
+  const history = new CommitHistory(runtime.repositoryRoot, "HEAD", "origin/main");
+  const decision = await planPreview(history, async (commit) => {
+    const state = await findPreviewDeployment(commit, context, runtime);
+    return state ? { commit, slot: state.environmentConfigLease!.slug } : null;
+  });
+  const outputs = {
+    tests: decision.action !== "skip",
+    deploy: decision.action === "deploy",
+    commit: decision.action === "reuse" ? decision.deployment.commit : "",
+    slot: decision.action === "reuse" ? decision.deployment.slot : "",
+  };
+  if (process.env.GITHUB_OUTPUT) {
+    await appendFile(
+      process.env.GITHUB_OUTPUT,
+      Object.entries(outputs)
+        .map(([key, value]) => `${key}=${value}\n`)
+        .join(""),
+    );
+  }
+  return { head: history.head, ...decision, ...outputs };
+}
+
+/** Prepare the selected preview, then publish only non-secret inputs for this attempt. */
+export async function ciPrepare(
+  options: PullRequestCommandOptions & {
+    /** Ancestor selected by ci-plan; candidate tests still run from HEAD. */
+    reuseCommit?: string;
+    /** Slot selected by ci-plan. It must still be held by this PR. */
+    reuseSlot?: string;
+  } = {},
+) {
   const { context, runtime } = await resolvePreviewCommandSetup(options);
   const checkedOutSha = execFileSync("git", ["rev-parse", "HEAD"], {
     cwd: runtime.repositoryRoot,
@@ -297,9 +331,19 @@ export async function ciPrepare(options: DeployCommandOptions = {}) {
   if (checkedOutSha !== context.pullRequestHeadSha)
     throw new Error("Preview head changed before CI preparation; refusing to deploy.");
   return await withPreviewE2eTelemetry(context, runtime, "deploy", async (telemetry) => {
-    const { state } = await measurePreviewDeployRun(telemetry, () =>
-      deployPreviewApps({ context, options, runtime, telemetry }),
-    );
+    if (Boolean(options.reuseCommit) !== Boolean(options.reuseSlot))
+      throw new Error("Reuse requires both a commit and a slot.");
+    let state = options.reuseCommit
+      ? await findPreviewDeployment(options.reuseCommit, context, runtime)
+      : null;
+    if (state?.environmentConfigLease?.slug !== options.reuseSlot) state = null;
+    if (options.reuseCommit && !state)
+      logPreview("Selected preview is no longer reusable; deploying the head instead.");
+    if (!state) {
+      ({ state } = await measurePreviewDeployRun(telemetry, () =>
+        deployPreviewApps({ context, options: { ...options, allApps: true }, runtime, telemetry }),
+      ));
+    }
     const slot = state.environmentConfigLease;
     if (!slot) throw new Error("Preview deployment produced no slot.");
     const apps = selectPreviewAppsForTesting(state.apps);
@@ -577,6 +621,67 @@ export async function ciFinish(options: PullRequestCommandOptions = {}) {
       );
     return { ok: true };
   });
+}
+
+/**
+ * A current PR's complete, live fleet is reusable. Historic PR-body rows are
+ * not enough: erase parks the worker, and expired slots can belong to others.
+ * Main has no preview registry yet; production is never used as a substitute.
+ */
+async function findPreviewDeployment(
+  commit: string,
+  context: PullRequestPreviewContext,
+  runtime: PreviewRuntime,
+) {
+  const state = parseCloudflarePreviewState(context.pullRequestBody);
+  const slot = state.environmentConfigLease;
+  if (!slot) return null;
+  const apps = Object.values(cloudflarePreviewApps);
+  for (const app of apps) {
+    const entry = state.apps[app.slug];
+    const config = app.resolvePreviewAppConfig(slot.dopplerConfig);
+    if (
+      !canRunPreviewTests(entry) ||
+      entry?.headSha !== commit ||
+      entry.publicUrl !== config.baseUrl ||
+      entry.deployedWorkerName !== config.workerName ||
+      !entry.deployedWorkerVersion
+    )
+      return null;
+  }
+  const resources = await runtime.createPreviewSemaphoreResourceClient().list({
+    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+  });
+  const resource = resources.find((item) => item.slug === slot.slug);
+  // No force-renewal: only borrow our own lease with enough remaining time
+  // for the 20-minute prepare + 25-minute finish watchdogs, with headroom.
+  if (
+    resource?.leaseState !== "leased" ||
+    resource.holder !== pullRequestHolder(context.pullRequestNumber) ||
+    !resource.leasedUntil ||
+    resource.leasedUntil < Date.now() + 60 * 60_000
+  )
+    return null;
+  const serving = await Promise.all(
+    apps.map(async (app) => {
+      const entry = state.apps[app.slug];
+      const url = new URL(app.previewReadyUrlPath || defaultPreviewReadyUrlPath, entry.publicUrl!);
+      const response = await fetchReadinessResponse(url, {
+        signal: runtime.signal,
+        timeoutMs: previewServingProbeTimeoutMs,
+      });
+      const ok =
+        response.status >= 200 &&
+        response.status < 300 &&
+        (!app.previewReadyWorkerVersion || response.workerVersion === entry.deployedWorkerVersion);
+      if (!ok)
+        logPreview(
+          `Cannot reuse ${commit}: ${app.slug} is not serving its recorded preview (HTTP ${response.status}).`,
+        );
+      return ok;
+    }),
+  );
+  return serving.every(Boolean) ? state : null;
 }
 
 async function resolvePreviewCiSetup(options: PullRequestCommandOptions) {
@@ -2506,11 +2611,8 @@ export const cloudflareAppSharedPaths = [
 ] as const;
 
 export const cloudflarePreviewSharedPaths = [
-  // The preview deploy + e2e lifecycle is one Depot CI workflow; cleanup on
-  // close lives in cloudflare-preview-cleanup.yml, which mirrors the same
-  // paths. Keep this in sync with both files' `on.pull_request.paths` lists:
-  // a change to the workflow (or the shared preview orchestration) triggers a
-  // full-fleet preview.
+  // Manual per-app deploy selection uses these shared paths. CI's head-commit
+  // policy lives in change-types.yml and deploys the complete fleet.
   ".depot/workflows/preview.yml",
   ".depot/workflows/preview-run.yml",
   ...cloudflareAppSharedPaths,

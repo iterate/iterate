@@ -1,0 +1,20 @@
+# Last matching type wins. Docs skip preview work; Tests run tests;
+# every other type deploys and tests. Unmatched paths use Default.
+Default: "**/*"
+Product: "apps/os/**/*"
+Scripts: ["**/scripts/**/*"]
+Frontend: ["**/components/**", "**/*.tsx"]
+Mobile: "apps/mobile/**/*"
+Tests:
+  [
+    "**/*.test.ts",
+    "**/test/**",
+    "**/*.spec.ts",
+    "specs/**/*",
+    "**/e2e/**/*",
+    "**/*.test.tsx",
+    "packages/test-support/**/*",
+  ]
+Docs: ["**/*.md", "explainers/**/*"]
+CI: [".depot/**", "scripts/ci/**/*"]
+Generated: ["**/*generated*", "*lock*"]

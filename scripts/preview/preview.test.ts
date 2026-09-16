@@ -407,12 +407,6 @@ describe("preview workflow scope", () => {
       projectHostnameBases: [],
       workerName: "dummy-petshop-preview-3",
     });
-    // Only the deploy workflow is path-filtered; cleanup deliberately has no
-    // paths list (it must run for every closed PR — see the cleanup-trigger
-    // test below), so it is not asserted here.
-    expect(readFileSync(resolve(repoRoot, ".depot/workflows/preview.yml"), "utf8")).toContain(
-      "- apps/dummy-petshop/**",
-    );
   });
 
   test("resolves repository-owned preview origins without duplicating them in Doppler", () => {
@@ -451,12 +445,6 @@ describe("preview workflow scope", () => {
         "dummy-petshop": "PETSHOP_BASE_URL",
       },
     });
-    expect(readFileSync(resolve(repoRoot, ".depot/workflows/preview.yml"), "utf8")).toContain(
-      "- packages/iterate/**",
-    );
-    expect(readFileSync(resolve(repoRoot, ".depot/workflows/preview.yml"), "utf8")).toContain(
-      "- specs/**",
-    );
     expect(
       resolvePreviewTestBaseUrlEnvironment({
         app: os,
@@ -757,10 +745,13 @@ describe("preview workflow scope", () => {
 });
 
 describe("preview workflow dispatch", () => {
-  test("a manual dispatch redeploys the full fleet", () => {
+  test("automatic and manual runs use the same planner, without path prefilters", () => {
     const workflow = readFileSync(resolve(repoRoot, ".depot/workflows/preview.yml"), "utf8");
 
-    expect(workflow).toContain("all-apps: ${{ github.event_name == 'workflow_dispatch' }}");
+    const parsed = parseYaml(workflow);
+    expect(parsed.on.pull_request).toEqual({ types: ["opened", "reopened", "synchronize"] });
+    expect(parsed.on.workflow_dispatch.inputs["pull-request-number"].required).toBe(true);
+    expect(parsed.jobs.preview.with["all-apps"]).toBeUndefined();
   });
 });
 

@@ -53,11 +53,17 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
     strategy: { "fail-fast": false, matrix: { shard: previewPlaywrightShards } },
   });
   expect(workflow.jobs.playwright.concurrency).toBeUndefined();
-  expect(workflow.jobs.apps.needs).toBeUndefined();
-  expect(workflow.jobs.playwright.needs).toBeUndefined();
+  expect(caller.on.pull_request.paths).toBeUndefined();
+  expect(workflow.jobs.plan.steps[0].with["fetch-depth"]).toBe(0);
+  for (const job of ["prepare", "apps", "playwright"]) {
+    expect(workflow.jobs[job]).toMatchObject({
+      needs: "plan",
+      if: "needs.plan.outputs.tests == 'true'",
+    });
+  }
   expect(workflow.jobs.finish).toMatchObject({
-    needs: "prepare",
-    if: "always()",
+    needs: ["plan", "prepare"],
+    if: "always() && needs.plan.outputs.tests == 'true'",
   });
   expect(
     workflow.jobs.finish.steps

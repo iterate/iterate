@@ -1,7 +1,8 @@
 # Preview CI performance
 
-The **Preview** check deploys every affected app to one leased
-preview slot and runs its deployed e2e coverage. Its target is **under 3m30s
+The **Preview** check selects work from the head commit, then tests a leased
+preview slot. Docs skip it; tests-only changes may reuse an ancestor preview;
+other changes deploy the full fleet. See [Preview change selection](preview-change-selection.md). Its target is **under 3m30s
 end-to-end**. The 20-minute workflow timeout is only a runaway backstop.
 
 For workflow commands, logs, and metrics, see [Depot CI](depot-ci.md). This

@@ -377,3 +377,8 @@ secret or copy a personal token. GitHub milestones use the job token with
 For this experiment, use a fresh push or workflow dispatch, not retry/rerun:
 individual test retries would reuse an erased deployment, and old plan artifacts
 must not be accepted. Normal Playwright/Vitest test retries are unchanged.
+
+## Head-commit preview selection
+
+Preview begins with a small planning job before the parallel preview jobs. See [Preview change selection](preview-change-selection.md)
+for the ordered globs, ancestor search, CLI and current reuse limits.

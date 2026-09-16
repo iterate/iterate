@@ -461,10 +461,11 @@ operator capability, so use current `main` for manual preview deployments.
 
 ### Story 1: CI previews my PR
 
-Opening/pushing a PR that touches preview-relevant paths triggers the
-`Preview` workflow, which runs `pnpm preview run` — deploy then
-e2e as one step, sharing one resolved PR head so a push cannot race into a
-gap between them. The PR body's managed "Environment Config Lease" section
+Opening or pushing a PR triggers the `Preview` workflow. It classifies the
+head commit: Docs skip preview work, Tests look for a usable ancestor preview,
+and other changes deploy the full fleet before testing. Prepare and test runners
+share one pinned head; setup overlaps readiness and cleanup waits for every
+consumer. See [Preview change selection](preview-change-selection.md). The PR body's managed "Environment Config Lease" section
 records the slot, per-app URLs and statuses; the workflow logs narrate every
 decision (which apps were selected and why, lease transitions, slot waits).
 Diff selection may reuse an unchanged app's exact recorded Worker deployment,
