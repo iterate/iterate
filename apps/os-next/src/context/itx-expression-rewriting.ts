@@ -95,7 +95,7 @@ export const BUILT_IN_ROOTS = [
   "secrets",
   "ai",
   "cfArtifacts",
-  "repos",
+  "git",
   "append",
   "readEvents",
   "waitForEvent",
@@ -112,6 +112,8 @@ export const BUILT_IN_ROOTS = [
   "connectToMcp",
   "connectToOpenApi",
   "connectToCapnweb",
+  "repos",
+  "workspaces",
 ] as const;
 
 export type BuiltInRoot = (typeof BUILT_IN_ROOTS)[number];
@@ -130,7 +132,7 @@ export type ItxExpressionRewriteRule = { match: ItxExpressionPrefix; target: Itx
  *  that subscription would halt on a project that never set one up. The default loads this bundled
  *  NO-OP ConfigWorker (its processEventBatch does nothing, so a project with no config worker set up
  *  delivers quietly); a context OVERRIDES it with its own rule, picked before this fallback —
- *  `itx.provide("itx.worker", "itx.workers.get({ source: itx.repos.readFile('config','worker.ts') })")`
+ *  `itx.provide("itx.worker", "itx.workers.get({ source: itx.repos.get('config').readFile('worker.ts') })")`
  *  — or MASKS it with `null` (kept as a row: core-processor.ts), which is default-deny, never the no-op. */
 const DEFAULT_CONFIG_WORKER_SPEC = {
   source: {

@@ -46,10 +46,10 @@ import {
 import type { BuiltInRoot } from "./itx-expression-rewriting.ts";
 import {
   projectScopedArtifacts,
-  projectScopedRepos,
+  projectScopedGit,
   type ArtifactsNamespace,
   type ArtifactsScope,
-  type ReposScope,
+  type GitScope,
 } from "./repos.ts";
 
 /** One row of `itx.rewriteRules.list()`: a context row (`target` a string, or `null` for a mask) or an
@@ -133,12 +133,15 @@ export interface BuiltInScope extends LibraryRoots {
    *  fake)`; the physical door stays `itx.builtins.ai`. */
   ai: Ai;
   /** THE ESCAPE HATCH: the raw Cloudflare Artifacts binding, project-scoped (repos.ts
-   *  `ArtifactsScope`); `itx.repos` is built on top of it. */
+   *  `ArtifactsScope`); `itx.git` is built on top of it. */
   cfArtifacts: ArtifactsScope;
-  /** THE PRIMARY REPO DOOR (repos.ts `ReposScope`): a repo's file BYTES over git-over-HTTPS —
-   *  `readFile`/`writeFile` one root-level path on `main`, enough to hold the config worker's source
-   *  (`itx.provide("itx.worker", "…itx.repos.readFile(…)")`). */
-  repos: ReposScope;
+  /** THE GIT ROOT (repos.ts `GitScope`), built on `cfArtifacts` — the PHYSICAL half of repos: a
+   *  repo's files on `main` over git-over-HTTPS, by repo-relative path — `list()`, `create`, `tip`,
+   *  `snapshot`, `readFile`, `listFiles`, `commitFiles` (one commit, many files), `writeFile`,
+   *  `log`. Stateless: every read fetches the tip. The domain half — `itx.repos.get(name)`, the repo
+   *  as a stream on `/repos/<name>` with its birth, its commit facts and the tip cache — is the
+   *  repo facet (src/repo/), a library root over this one. */
+  git: GitScope;
   /** Append to this context's append-only event log (the facets that REDUCE it are
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
    *  RpcTarget exactly: `itx.append({...})` is one spelling on every hop. */
@@ -259,7 +262,7 @@ interface BuildBuiltInsDeps {
   };
   /** The deploy identity every loader cacheKey folds in (worker.ts `AppConfig`). */
   deployId: string;
-  /** The Artifacts account + namespace `itx.repos` builds git remotes from (worker.ts `AppConfig`). */
+  /** The Artifacts account + namespace `itx.git` builds git remotes from (worker.ts `AppConfig`). */
   artifactsAccountId: string;
   artifactsNamespace: string;
   /** The secrets catalog — names, pins and strategy kinds, from the core reduce (strongly
@@ -428,7 +431,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     },
     ai: env.AI, // the binding object itself — dispatch walks its methods
     cfArtifacts: projectScopedArtifacts(env.ARTIFACTS, owner.id),
-    repos: projectScopedRepos({
+    git: projectScopedGit({
       namespace: env.ARTIFACTS,
       projectId: owner.id,
       accountId: deps.artifactsAccountId,
