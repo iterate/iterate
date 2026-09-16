@@ -1,29 +1,24 @@
 // src/workspace/durable-object.ts — THE WORKSPACE: the facet any context hosts under the name
 // `workspace` (`itx.workspaces.get(path)`, library.ts — at most one per path, nothing appended to
-// get it). ONE private overlay over a table of REPO MOUNTS: a read tries the overlay, then falls
-// through to the mounted repo's `main` at its tip (the repo facet, `itx.repos.get(path)` — its tip
-// cache, shared by every workspace of the project); a write shadows the repo's file until
-// `gitCommit` lands ONE mount's changes as one commit on that repo's `main` and clears them; a delete
-// of a repo file is a WHITEOUT until then. Mounts are DERIVED — every repo in the project catalog at
-// its own path (`itx.repos.list()`; the workspace is a view of the project's one path namespace) —
-// plus what `configure` adds, the reduce in processor.ts
-// folding `workspace/configured` into the view. A path under no mount is the workspace's own scratch
-// (`/workspace/…` by convention): writable, never committed. `create()` runs the creation saga: the
-// certificate (`workspace/created { path }`) crosses to `/`, where the project processor keeps the
-// catalog `itx.workspaces.list()` reads, and lands on this path.
-//
-// Storage is this facet's own SQLite: `files` (the overlay) and `whiteouts`. Text only, one file at
-// most a mebibyte (a SQLite value holds 2 MB). ONE writer, no collab, no policies. The repo facets
-// reach git as `itx.git` through THEIR context's rules, so a test lends a fake there
-// (`provide("itx.git", …)` on the repo's path, e2e/workspaces.e2e.test.ts) exactly as it fakes `itx.ai`.
-//
-// THE SINGLE SOURCE: build-sdk.mjs bundles THIS module — pulling `WorkspaceProcessor` from
-// ./processor.ts (the tested spec) — into the generated WORKSPACE_PROCESSOR_SOURCE string, the SDK
-// imports left external as "./processor.js"; library.ts hands that string to `facets.get` as the spec.
+// get it). ONE private overlay over the MOUNT TABLE — every repo in the project catalog at its own
+// path (`itx.repos.list()`: the workspace is a view of the project's one path namespace): a read
+// tries the overlay, then falls through to the mounted repo's `main` at its tip (the repo facet); a
+// write shadows the repo's file until `gitCommit` lands ONE mount's changes as one commit on that
+// repo's `main` and clears them; a delete of a repo file is a WHITEOUT until then. A path under no
+// mount is scratch (`/workspace/…` by convention): writable, never committed. `create()` lands the
+// creation facts, the certificate cross-posted to `/` for the catalog `itx.workspaces.list()` reads.
+// Storage is this facet's own SQLite: one `files` table, a row per touched path — its content, or the
+// `deleted` flag that makes it a whiteout. Text only,
+// ONE writer, no policies. The repo facets reach git as `itx.git` through THEIR context's rules, so a
+// test lends a fake there (`provide("itx.git", …)`, e2e/workspaces.e2e.test.ts).
+// build-sdk.mjs bundles THIS module into WORKSPACE_PROCESSOR_SOURCE, the spec library.ts hands to `facets.get`.
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
 import type { RepoFileChange, RepoLogEntry } from "../context/repos.ts";
-import type { WorkspaceMount, WorkspaceView } from "./contract.ts";
+import type { WorkspaceView } from "./contract.ts";
 import { WorkspaceProcessor } from "./processor.ts";
+
+/** One mount: the PATH of the project repo whose `main` shows through at the mount path (its own). */
+export type WorkspaceMount = { repo: string };
 
 /** One overlay entry as `gitStatus` reports it, against its mount at HEAD (scratch is "added"). */
 export type WorkspaceChange = { path: string; change: "added" | "deleted" | "modified" };
@@ -31,24 +26,20 @@ export type WorkspaceChange = { path: string; change: "added" | "deleted" | "mod
 /** One mount as `gitStatus` reports it: its path, its repo, and the overlay's changes under it. */
 export type WorkspaceMountStatus = { path: string; repo: string; changes: WorkspaceChange[] };
 
-/** An absolute workspace path with `.`/`..` resolved and slashes collapsed — the ONE spelling the
- *  overlay, the whiteouts and the mount table are keyed by. */
+/** An absolute workspace path — the ONE spelling the overlay and the mount table are keyed by:
+ *  starts with `/`, no empty, `.` or `..` segment. */
 export function absolutePath(path: string): string {
-  // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of a wire-fed argument (its static type is a claim, not a guarantee, across the capability boundary)
-  if (typeof path !== "string") throw new Error("workspace: a path is a string");
-  const resolved: string[] = [];
-  for (const segment of path.split("/")) {
-    if (segment === "" || segment === ".") continue;
-    if (segment === "..") resolved.pop();
-    else resolved.push(segment);
-  }
-  return `/${resolved.join("/")}`;
+  const segments = path.slice(1).split("/");
+  const malformed =
+    !path.startsWith("/") ||
+    (path !== "/" && segments.some((s) => s === "" || s === "." || s === ".."));
+  if (malformed) throw new Error(`workspace: not an absolute path (${JSON.stringify(path)})`);
+  return path;
 }
 
-/** The mount a FILE path falls under — the LONGEST mount path that is a proper ancestor of it — with
- *  the repo-relative remainder; null under no mount, and null for a mount point itself: a mount
- *  point is a directory, never a file, so an overlay row AT one (scratch written before the mount
- *  existed) stays scratch — listed as unmounted, never handed to a repo as the path "". */
+/** The mount a FILE path falls under — the LONGEST mount path that is a proper ancestor of it (a
+ *  repo may live at a path beneath another's) — with the repo-relative remainder; null under no
+ *  mount, and null for a mount point itself: a mount point is a directory, never a file. */
 export function routeMount(
   mounts: Record<string, WorkspaceMount>,
   path: string,
@@ -63,135 +54,90 @@ export function routeMount(
 }
 
 export class WorkspaceDurableObject extends StreamProcessorDurableObject<WorkspaceView> {
-  processor = new WorkspaceProcessor({
-    crossPost: (event) => this.withItx((itx) => itx.cd("/").append(event)),
-  });
+  processor = new WorkspaceProcessor();
 
   #pathRead?: string;
   async #path(): Promise<string> {
     return (this.#pathRead ??= (await this.withItx((itx) => itx.whoami())).path);
   }
 
-  // ── the overlay and the whiteouts: this facet's own SQLite ──
+  // ── the overlay: this facet's own SQLite, one row per touched path — content, or a whiteout (`deleted`) ──
 
-  #tablesCreated = false;
+  #tableCreated = false;
   get #sql() {
     const sql = this.ctx.storage.sql;
-    if (!this.#tablesCreated) {
-      sql.exec("CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, content TEXT NOT NULL)");
-      sql.exec("CREATE TABLE IF NOT EXISTS whiteouts (path TEXT PRIMARY KEY)");
-      this.#tablesCreated = true;
+    if (!this.#tableCreated) {
+      sql.exec(
+        "CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, content TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0)",
+      );
+      this.#tableCreated = true;
     }
     return sql;
   }
-  /** The overlay's row for a path — `{ content }` (an empty file is a row too), or undefined. */
-  #overlayRow(path: string): { content: string } | undefined {
+  #row(path: string): { content: string; deleted: number } | undefined {
     return this.#sql
-      .exec<{ content: string }>("SELECT content FROM files WHERE path = ?", path)
+      .exec<{ content: string; deleted: number }>(
+        "SELECT content, deleted FROM files WHERE path = ?",
+        path,
+      )
       .toArray()[0];
   }
-  /** Every overlay row, path-sorted. */
-  #overlayRows(): { path: string; content: string }[] {
+  #rows(): { path: string; content: string; deleted: number }[] {
     return this.#sql
-      .exec<{ path: string; content: string }>("SELECT path, content FROM files ORDER BY path")
+      .exec<{ path: string; content: string; deleted: number }>(
+        "SELECT path, content, deleted FROM files ORDER BY path",
+      )
       .toArray();
   }
-  /** Every whiteout, path-sorted. */
-  #whiteouts(): string[] {
-    return this.#sql
-      .exec<{ path: string }>("SELECT path FROM whiteouts ORDER BY path")
-      .toArray()
-      .map((row) => row.path);
-  }
-  #isWhiteout(path: string): boolean {
-    return (
-      this.#sql.exec<{ path: string }>("SELECT path FROM whiteouts WHERE path = ?", path).toArray()
-        .length > 0
-    );
-  }
-  #forget(path: string): void {
-    this.#sql.exec("DELETE FROM files WHERE path = ?", path);
-    this.#sql.exec("DELETE FROM whiteouts WHERE path = ?", path);
-  }
 
-  // ── the creation saga ──
+  // ── creation ──
 
-  /** Bring the workspace into being — the saga, as apps/os runs it: append
-   *  `workspace/create-requested` unless a request is open or done (a new attempt after a failure,
-   *  keyed by the attempt), let the catch-up drive the processor's effect (nothing to provision yet:
-   *  the certificate alone), re-read for the terminal fact (it lands one page past the request),
-   *  then answer with the identity — or throw the recorded failure. Idempotent: a created workspace
-   *  answers at once. Every other method refuses until the saga has completed. */
+  /** Bring the workspace into being: `workspace/create-requested` on this path, then the
+   *  certificate on `/` (the catalog) and on this path — nothing to provision, so nothing fails.
+   *  Idempotent: a created workspace answers at once. Every other method refuses until this has run. */
   async create(): Promise<{ path: string }> {
     const path = await this.#path();
-    let { state } = await this.snapshot();
-    if (state.creation !== "requested" && state.creation !== "created") {
-      await this.withItx((itx) =>
-        itx.append({
-          type: "events.iterate.com/workspace/create-requested",
-          payload: { path },
-          idempotencyKey: `workspace/create-requested:${path}:${state.attempts}`,
-        }),
-      );
-      ({ state } = await this.snapshot()); // reduces the request and drives the effect
-    }
-    for (let reads = 0; reads < 5 && state.creation === "requested"; reads++)
-      ({ state } = await this.snapshot());
-    if (state.creation === "created") return { path };
-    if (state.creation === "failed")
-      throw new Error(`workspace ${path}: creation failed — ${state.error}`);
-    throw new Error(`workspace ${path}: creation still owed after the request landed`);
-  }
-
-  // ── the mount table ──
-
-  /** Every method past `create()` starts here: a workspace the saga has not completed refuses. */
-  async #created(): Promise<WorkspaceView> {
-    const { state } = await this.snapshot();
-    if (state.creation !== "created")
-      throw new Error(`workspace ${await this.#path()}: not created — call create() first`);
-    return state;
-  }
-
-  /** The EFFECTIVE mounts: every repo in the project catalog at its OWN path (derived — the
-   *  workspace is a view of the project's one path namespace), the configured ones over them. */
-  async mounts(): Promise<Record<string, WorkspaceMount>> {
-    const [repos, state] = await Promise.all([
-      this.withItx((itx) => itx.repos.list()),
-      this.#created(),
-    ]);
-    const mounts: Record<string, WorkspaceMount> = {};
-    for (const { path } of repos) mounts[path] = { repo: path };
-    return { ...mounts, ...state.mounts };
-  }
-
-  /** Patch the configured mounts — ONE `workspace/configured` event on this context: a path →
-   *  `{ repo }` adds or replaces a mount, → null removes one. Returns the effective table. */
-  async configure(input: {
-    mounts: Record<string, WorkspaceMount | null>;
-  }): Promise<Record<string, WorkspaceMount>> {
-    await this.#created(); // refused BEFORE anything is appended: an uncreated workspace takes no patch
-    const mounts: Record<string, WorkspaceMount | null> = {};
-    for (const [path, mount] of Object.entries(input.mounts)) {
-      const mountPath = absolutePath(path);
-      if (mountPath === "/")
-        throw new Error('workspace: "/" is the workspace itself, never a mount');
-      mounts[mountPath] = mount;
-    }
+    if ((await this.snapshot()).state.creation === "created") return { path };
     await this.withItx((itx) =>
-      itx.append({ type: "events.iterate.com/workspace/configured", payload: { mounts } }),
+      itx.append({ type: "events.iterate.com/workspace/create-requested", payload: { path } }),
     );
-    return this.mounts();
+    const certificate = {
+      type: "events.iterate.com/workspace/created",
+      payload: { path },
+      idempotencyKey: `workspace/created:${path}`,
+    };
+    await this.withItx((itx) => itx.cd("/").append(certificate));
+    await this.withItx((itx) => itx.append(certificate));
+    this.#confirmedCreated = true;
+    return { path };
+  }
+
+  /** Every method past `create()` starts here: a workspace not yet created refuses. Creation is
+   *  terminal, so one confirming read per incarnation. */
+  #confirmedCreated = false;
+  async #created(): Promise<void> {
+    if (this.#confirmedCreated) return;
+    if ((await this.snapshot()).state.creation !== "created")
+      throw new Error(`workspace ${await this.#path()}: not created — call create() first`);
+    this.#confirmedCreated = true;
+  }
+
+  /** The mount table: every repo in the project catalog at its OWN path. */
+  async mounts(): Promise<Record<string, WorkspaceMount>> {
+    await this.#created();
+    const mounts: Record<string, WorkspaceMount> = {};
+    for (const { path } of await this.withItx((itx) => itx.repos.list()))
+      mounts[path] = { repo: path };
+    return mounts;
   }
 
   // ── files: the merged view ──
 
-  /** The overlay's copy, a whiteout (null), else the mounted repo's file at its tip; null when absent. */
+  /** The overlay's copy (a whiteout reads null), else the mounted repo's file at its tip; null when absent. */
   async readFile(path: string): Promise<string | null> {
     const resolved = absolutePath(path);
-    const row = this.#overlayRow(resolved);
-    if (row) return row.content;
-    if (this.#isWhiteout(resolved)) return null;
+    const row = this.#row(resolved);
+    if (row) return row.deleted ? null : row.content;
     return this.#readMounted(resolved, await this.mounts());
   }
 
@@ -206,52 +152,51 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
     return this.withItx((itx) => itx.repos.get(route.repo).readFile(route.relativePath));
   }
 
-  /** Write into the overlay (an empty string is a file); a whiteout at the path is lifted. */
+  /** Write into the overlay (an empty string is a file); a whiteout at the path is overwritten. */
   async writeFile(path: string, content: string): Promise<void> {
     const resolved = absolutePath(path);
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of a wire-fed argument (its static type is a claim, not a guarantee, across the capability boundary)
-    if (typeof content !== "string") throw new Error("workspace: content is a string");
-    if (content.length > 1_048_576)
-      throw new Error(`workspace: "${resolved}" is over a mebibyte — one SQLite value holds 2 MB`);
     if (resolved === "/" || resolved in (await this.mounts()))
       throw new Error(`workspace: "${resolved}" is a directory`);
     this.#sql.exec(
-      "INSERT INTO files (path, content) VALUES (?, ?) ON CONFLICT(path) DO UPDATE SET content = excluded.content",
+      "INSERT INTO files (path, content, deleted) VALUES (?, ?, 0) ON CONFLICT(path) DO UPDATE SET content = excluded.content, deleted = 0",
       resolved,
       content,
     );
-    this.#sql.exec("DELETE FROM whiteouts WHERE path = ?", resolved);
   }
 
   /** Delete from the merged view: the overlay row goes; a file the mount has is WHITED OUT until
    *  committed. False when the path was not a file of the view. */
   async deleteFile(path: string): Promise<boolean> {
     const resolved = absolutePath(path);
-    const hadRow = !!this.#overlayRow(resolved);
-    const wasWhiteout = this.#isWhiteout(resolved);
-    this.#sql.exec("DELETE FROM files WHERE path = ?", resolved);
+    const row = this.#row(resolved);
     const route = routeMount(await this.mounts(), resolved);
     const mounted =
       !!route &&
       (await this.withItx((itx) => itx.repos.get(route.repo).listFiles())).paths.includes(
         route.relativePath,
       );
-    if (mounted) this.#sql.exec("INSERT OR IGNORE INTO whiteouts (path) VALUES (?)", resolved);
-    return hadRow || (mounted && !wasWhiteout);
+    if (mounted)
+      this.#sql.exec(
+        "INSERT INTO files (path, content, deleted) VALUES (?, '', 1) ON CONFLICT(path) DO UPDATE SET content = '', deleted = 1",
+        resolved,
+      );
+    else this.#sql.exec("DELETE FROM files WHERE path = ?", resolved);
+    return row ? !row.deleted : mounted;
   }
 
-  /** Back to the mount's version: the overlay row and the whiteout both go. */
+  /** Back to the mount's version: the overlay row — a shadowing write or a whiteout — goes. */
   async revert(path: string): Promise<void> {
-    this.#forget(absolutePath(path));
+    this.#sql.exec("DELETE FROM files WHERE path = ?", absolutePath(path));
   }
 
   /** Every file path of the merged view — the overlay plus every mount's tip, minus whiteouts —
-   *  sorted. A tip path is listed only where it ROUTES to that mount: under a nested mount the
-   *  nested repo's files show, the parent repo's are hidden, as `readFile` and a commit see them. */
+   *  sorted. A tip path is listed only where it ROUTES to that mount (a repo beneath another's path
+   *  hides the parent's files under it), as `readFile` and a commit see them. */
   async listAllFiles(): Promise<string[]> {
     const mounts = await this.mounts();
-    const whiteouts = new Set(this.#whiteouts());
-    const paths = new Set(this.#overlayRows().map((row) => row.path));
+    const paths = new Set<string>();
+    const whiteouts = new Set<string>();
+    for (const row of this.#rows()) (row.deleted ? whiteouts : paths).add(row.path);
     await Promise.all(
       Object.entries(mounts).map(async ([mountPath, { repo }]) => {
         for (const relativePath of (await this.withItx((itx) => itx.repos.get(repo).listFiles()))
@@ -283,10 +228,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
     // The tip's paths of every TOUCHED mount, read once: an overlay row over a file the tip has is
     // "modified", over one it lacks "added"; a whiteout is "deleted".
     const tipPaths = new Map<string, Set<string>>();
-    for (const { path, deleted } of [
-      ...this.#overlayRows().map((row) => ({ path: row.path, deleted: false })),
-      ...this.#whiteouts().map((path) => ({ path, deleted: true })),
-    ]) {
+    for (const { path, deleted } of this.#rows()) {
       const route = routeMount(mounts, path);
       if (!route) {
         unmounted.push({ path, change: deleted ? "deleted" : "added" });
@@ -325,33 +267,30 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
           `workspace: no mount at "${scope}" (mounts: ${status.mounts.map((m) => `"${m.path}"`).join(", ")})`,
         );
     } else {
-      if (dirty.length === 0)
-        throw new Error("workspace: nothing to commit — no mount has changes");
-      if (dirty.length > 1)
+      if (dirty.length !== 1)
         throw new Error(
-          `workspace: changes span ${dirty.length} mounts (${dirty.map((m) => `"${m.path}"`).join(", ")}) — a commit never spans mounts; pass { scope }`,
+          dirty.length === 0
+            ? "workspace: nothing to commit — no mount has changes"
+            : `workspace: changes span ${dirty.length} mounts (${dirty.map((m) => `"${m.path}"`).join(", ")}) — a commit never spans mounts; pass { scope }`,
         );
       mount = dirty[0]!;
     }
     if (mount.changes.length === 0)
       throw new Error(`workspace: nothing to commit under "${mount.path}"`);
     const mountPath = mount.path;
-    const relative = (path: string) => path.slice(mountPath.length + 1);
-    const changes: RepoFileChange[] = [
-      ...this.#overlayRows()
-        .filter((row) => routeMount(mounts, row.path)?.mountPath === mountPath)
-        .map((row) => ({ path: relative(row.path), content: row.content })),
-      ...this.#whiteouts()
-        .filter((path) => routeMount(mounts, path)?.mountPath === mountPath)
-        .map((path) => ({ path: relative(path), delete: true as const })),
-    ];
+    const changes: RepoFileChange[] = this.#rows()
+      .filter((row) => routeMount(mounts, row.path)?.mountPath === mountPath)
+      .map((row) => {
+        const path = row.path.slice(mountPath.length + 1);
+        return row.deleted ? { path, delete: true as const } : { path, content: row.content };
+      });
     const committed = await this.withItx((itx) =>
       itx.repos
         .get(mount.repo)
         .commitFiles({ message: input.message, changes, author: input.author }),
     );
     // The commit landed: the overlay under this mount IS the tip now — drop it, whiteouts included.
-    for (const { path } of mount.changes) this.#forget(path);
+    for (const { path } of mount.changes) this.#sql.exec("DELETE FROM files WHERE path = ?", path);
     return {
       commitOid: committed.commitOid,
       mount: mountPath,

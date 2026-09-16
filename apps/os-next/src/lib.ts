@@ -42,8 +42,7 @@ type ErrorCode =
   | "NO_FACET" // no facet of that name has been loaded into this context
   | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (iterate-context-durable-object.ts #invokeFacet)
   | "WAIT_TIMEOUT" // waitForEvent expired with no matching event committed
-  | "TIMEOUT" // lib.ts withTimeout: the call did not answer within its deadline
-  | "TIP_MOVED"; // context/repos.ts commitFiles: `main` is not at the tip the caller built on — refresh and retry
+  | "TIMEOUT"; // lib.ts withTimeout: the call did not answer within its deadline
 // (There is no separate boundary-validation library: the append door's own runtime guards
 // throw plain Errors; a client is JUST capnweb, so malformed args surface as ordinary errors.)
 

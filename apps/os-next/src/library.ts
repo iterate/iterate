@@ -85,10 +85,10 @@ export interface LibraryRoots {
    *  trip per step. */
   connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
   /** THE REPOS (src/repo/): a repo as a DOMAIN OBJECT — a stream on ANY path (`/repos/<name>` by
-   *  convention) whose `repo` facet keeps the creation saga, the commit facts and the tip cache over
-   *  `itx.git` (the Artifacts repo's name derives from the path). `get(path)` is that facet, hosted
-   *  on its first call and addressed after; `create()` runs the saga, and every other method
-   *  refuses until it has. Every call on the handle is one dotted expression on the facet
+   *  convention) whose `repo` facet lands the creation facts and the commit facts and memoizes the
+   *  tip over `itx.git` (the Artifacts repo's name derives from the path). `get(path)` is that
+   *  facet, hosted on its first call and addressed after; `create()` births it, and every other
+   *  method refuses until it has. Every call on the handle is one dotted expression on the facet
    *  (`RepoDurableObject`'s methods: `create` `tip` `readFile` `listFiles` `commitFiles` `writeFile`
    *  `log`). `list()` is the project catalog: the birth certificates cross-posted to `/`, folded by
    *  the project processor (src/project/). */
@@ -98,10 +98,10 @@ export interface LibraryRoots {
   };
   /** THE WORKSPACES (src/workspace/): the workspace of ANY context, at most one per path —
    *  `get(path)` is the `workspace` facet on `itx.cd(path)`, hosted on its first call and addressed
-   *  after — a workspace IS its path; its first use births it. Every call on the handle is one
-   *  dotted expression on that facet (`WorkspaceDurableObject`'s methods: `readFile` `readBase`
-   *  `writeFile` `deleteFile` `revert` `listAllFiles` `mounts` `configure` `gitStatus` `gitCommit`
-   *  `gitLog`). `list()` is the project catalog (as for repos). */
+   *  after — a workspace IS its path; `create()` births it, and every other method refuses until
+   *  it has. Every call on the handle is one dotted expression on that facet
+   *  (`WorkspaceDurableObject`'s methods: `readFile` `readBase` `writeFile` `deleteFile` `revert`
+   *  `listAllFiles` `mounts` `gitStatus` `gitCommit` `gitLog`). `list()` is the project catalog (as for repos). */
   workspaces: {
     get(path: string): InvokeHandle & WorkspaceFacet;
     list(): Promise<{ path: string; createdAt: string }[]>;
@@ -117,7 +117,6 @@ export type RepoFacet = Pick<
 export type WorkspaceFacet = Pick<
   WorkspaceDurableObject,
   | "mounts"
-  | "configure"
   | "readFile"
   | "readBase"
   | "writeFile"
@@ -246,8 +245,8 @@ export function runScript(itx: LibraryItx, script: unknown): Promise<unknown> {
 // ── the entities ── `itx.repos.get(path)`, `itx.workspaces.get(path)`: a repo (src/repo/) and a
 // workspace (src/workspace/) are each a FACET hosted on their own context — a facet named with a
 // spec is hosted on its first call and addressed after (the DO's startup memo; an unchanged spec never
-// restarts it), so nothing is appended to get one, and the facet appends its own birth certificate
-// on first use (on its path, cross-posted to `/`). Every call on the handle is one dotted expression
+// restarts it), so nothing is appended to get one; `create()` appends the birth certificate (on its
+// path, cross-posted to `/`). Every call on the handle is one dotted expression
 // on that facet, run in the sibling under ITS rules (a test lends a fake `itx.git` on a repo's
 // context). The specs' sources are the SDK-bundled facets (build-sdk.mjs) — strings a userspace worker
 // could carry just the same. `list()` for both reads THE CATALOG: the `project` facet on `/`
@@ -273,8 +272,8 @@ function facetHandle(
 // assertion: `InvokeHandle & RepoFacet` says what `handle.readFile(…)` lands on, which the runtime
 // guarantees (the spec's `className` IS that class) and the type system cannot see.
 
-/** The `workspace` facet on the context at `path`. Exported for the unit pin. */
-export function workspaceHandle(itx: LibraryItx, path: string): InvokeHandle & WorkspaceFacet {
+/** The `workspace` facet on the context at `path`. */
+function workspaceHandle(itx: LibraryItx, path: string): InvokeHandle & WorkspaceFacet {
   return facetHandle(itx, path, "workspace", {
     source: WORKSPACE_PROCESSOR_SOURCE,
     className: "WorkspaceDurableObject",
@@ -282,8 +281,8 @@ export function workspaceHandle(itx: LibraryItx, path: string): InvokeHandle & W
 }
 
 /** The `repo` facet on the context at `path` — any path; the facet derives the Artifacts name from
- *  it and refuses one it cannot back. Exported for the unit pin. */
-export function repoHandle(itx: LibraryItx, path: string): InvokeHandle & RepoFacet {
+ *  it and refuses one it cannot back. */
+function repoHandle(itx: LibraryItx, path: string): InvokeHandle & RepoFacet {
   return facetHandle(itx, path, "repo", {
     source: REPO_PROCESSOR_SOURCE,
     className: "RepoDurableObject",
@@ -291,7 +290,7 @@ export function repoHandle(itx: LibraryItx, path: string): InvokeHandle & RepoFa
 }
 
 /** THE CATALOG: the `project` facet's view on `/` — what `repos.list()` and `workspaces.list()` read. */
-export async function projectCatalog(itx: LibraryItx): Promise<ProjectView> {
+async function projectCatalog(itx: LibraryItx): Promise<ProjectView> {
   const context = await itx.cd("/");
   const snapshot = await context.invoke([
     "facets",

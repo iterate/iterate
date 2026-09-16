@@ -13,16 +13,9 @@ import {
   connectToMcp,
   type McpConnection,
   connectToOpenApi,
-  projectCatalog,
-  repoHandle,
   runScript,
   runScriptModule,
-  workspaceHandle,
 } from "./library.ts";
-import { InvokeHandle } from "./context/expression.ts";
-import { WORKSPACE_PROCESSOR_SOURCE } from "./generated/workspace-processor-source.ts";
-import { REPO_PROCESSOR_SOURCE } from "./generated/repo-processor-source.ts";
-import { PROJECT_PROCESSOR_SOURCE } from "./generated/project-processor-source.ts";
 
 // ── the library ── the memo `buildLibrary` keeps over the three verbs: a connect with the same
 // (verb, url, options) is ONE live connection for the context's life; `releaseConnections()` (the
@@ -1071,76 +1064,6 @@ describe("openapi", () => {
         /not an OpenAPI 3 document/,
       );
     });
-  });
-});
-
-// ── the entities ── `workspaces.get(path)` and `repos.get(name)`: a facet on `itx.cd(path)`, every
-// call on the handle ONE dispatch there of the facet chain plus the call, with the SDK-bundled spec;
-// `list()` reads the `project` facet's snapshot on `/`.
-
-describe("the entities", () => {
-  /** A fake `itx` whose `cd` records the path and hands back one recording sibling. */
-  function siblings(answer: unknown) {
-    const dispatched: unknown[] = [];
-    const sibling = new InvokeHandle((steps) => {
-      dispatched.push(steps);
-      return answer;
-    });
-    const itx = {
-      cd: (path: string) => {
-        dispatched.push(["cd", path]);
-        return sibling;
-      },
-    } as unknown as LibraryItx;
-    return { itx, dispatched };
-  }
-
-  test("workspaces.get(path) is the workspace facet on itx.cd(path): one dispatch, relative to the facet, with the bundled spec", async () => {
-    const { itx, dispatched } = siblings("answer");
-    const handle = workspaceHandle(itx, "/workspaces/one");
-    expect(await handle.invoke([["readFile", "/repos/config/worker.ts"]])).toBe("answer");
-    expect(dispatched).toEqual([
-      ["cd", "/workspaces/one"],
-      [
-        "facets",
-        [
-          "get",
-          "workspace",
-          { source: WORKSPACE_PROCESSOR_SOURCE, className: "WorkspaceDurableObject" },
-        ],
-        ["readFile", "/repos/config/worker.ts"],
-      ],
-    ]);
-    expect(WORKSPACE_PROCESSOR_SOURCE["cap.js"]).toContain("WorkspaceDurableObject");
-  });
-
-  test("repos.get(path) is the repo facet on itx.cd(path) — any path, /repos/ is the convention", async () => {
-    const { itx, dispatched } = siblings("tip");
-    expect(await repoHandle(itx, "/vendor/lib").invoke([["tip"]])).toBe("tip");
-    expect(dispatched).toEqual([
-      ["cd", "/vendor/lib"],
-      [
-        "facets",
-        ["get", "repo", { source: REPO_PROCESSOR_SOURCE, className: "RepoDurableObject" }],
-        ["tip"],
-      ],
-    ]);
-    expect(REPO_PROCESSOR_SOURCE["cap.js"]).toContain("RepoDurableObject");
-  });
-
-  test("the catalog is the project facet's snapshot on /", async () => {
-    const view = { repos: { "/repos/config": { createdAt: "t" } }, workspaces: {} };
-    const { itx, dispatched } = siblings({ offset: 3, state: view });
-    expect(await projectCatalog(itx)).toEqual(view);
-    expect(dispatched).toEqual([
-      ["cd", "/"],
-      [
-        "facets",
-        ["get", "project", { source: PROJECT_PROCESSOR_SOURCE, className: "ProjectDurableObject" }],
-        ["snapshot"],
-      ],
-    ]);
-    expect(PROJECT_PROCESSOR_SOURCE["cap.js"]).toContain("ProjectDurableObject");
   });
 });
 

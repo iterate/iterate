@@ -6,21 +6,17 @@
 //   • `itx.git` (`projectScopedGit`) — the stateless git layer built ON TOP of it + the git wire
 //     section below (`createGitWireTransport`, the copied git-over-HTTPS engine): a repo's files on
 //     `main`, by repo-relative path —
-//       list()                                  — this project's repos in the namespace;
 //       create(repo)                            — the Artifacts repo, `main` unborn;
 //       tip(repo)                               — `main`'s tip, one ls-refs;
 //       snapshot(repo)                          — the tip's every file, one shallow fetch;
-//       readFile(repo, path)                    — the tip's tree → the path's blob;
-//       listFiles(repo)                         — every path at the tip;
 //       commitFiles(repo, { message, changes }) — ONE commit on `main` (the repo created on first write);
-//       writeFile(repo, path, content)          — commitFiles for one file;
 //       log(repo, { limit? })                   — the newest commits.
 //   The DOMAIN half — `itx.repos.get(name)`, a repo as a stream on `/repos/<name>` with its birth
-//   certificate, its commit facts and the tip CACHE — is the repo facet (src/repo/), a library root
+//   certificate, its commit facts and the tip memoized — is the repo facet (src/repo/), a library root
 //   (library.ts) over this adapter.
 //
 // SCOPE of `itx.git`, deliberately small: branch `main` only; stateless — a read is ONE shallow fetch
-// of the whole tip (`deepen: 1`; the repo facet is what caches it); a commit is compare-and-swapped
+// of the whole tip (`deepen: 1`; the repo facet is what memoizes it); a commit is compare-and-swapped
 // on the tip (a concurrent push refuses it — no merge); text content only. Both roots address the
 // very same repos under the ONE `${projectId}.` name prefix (`ArtifactsScope` says why `.`); the
 // remote is built from the account + namespace vars, and Artifacts hands the same URL back from
@@ -28,7 +24,6 @@
 
 import { RpcTarget } from "capnweb";
 import { deflate, Inflate } from "pako";
-import { codedError } from "../lib.ts";
 
 // ── `itx.cfArtifacts` — the raw binding, project-scoped ──
 
@@ -146,8 +141,6 @@ export type RepoLogEntry = {
 
 /** `itx.git` — a project's git repos on `main`, by file. Data in, data out (no handles cross /api). */
 export interface GitScope {
-  /** Every repo of this project in the Artifacts namespace (its prefix), born or not. */
-  list(): Promise<string[]>;
   /** The Artifacts repo, `main` unborn until the first commit; false when it already existed. */
   create(repo: string): Promise<{ created: boolean }>;
   /** `main`'s tip — one ls-refs; null when there is no such repo or `main` is unborn. */
@@ -155,31 +148,18 @@ export interface GitScope {
   /** The tip's every file as text, one shallow fetch (a submodule pointer has no text and is left
    *  out); null when there is no such repo or `main` is unborn. */
   snapshot(repo: string): Promise<{ commitOid: string; files: Record<string, string> } | null>;
-  /** The text of `path` (repo-relative, nested) at the tip of `main` — null when there is no such
-   *  repo, `main` is unborn, or the file is absent. */
-  readFile(repo: string, path: string): Promise<string | null>;
-  /** Every file path at the tip of `main`, sorted; `commitOid` null when the repo is absent or unborn. */
-  listFiles(repo: string): Promise<{ commitOid: string | null; paths: string[] }>;
   /** ONE commit on `main` applying `changes` (the repo is created on its first write) → the new
    *  commit and the paths it changed. Changes that leave the tree as it was commit nothing:
-   *  `changedPaths` is empty and `commitOid` the tip (null on an unborn repo). `expectedTip` is the
-   *  tip the caller built on (null for an unborn `main`): a `main` that moved past it is refused
-   *  with `TIP_MOVED` before anything is fetched or pushed — a cache that applies its own batch
-   *  onto what it read can never fold in a write it never saw. */
+   *  `changedPaths` is empty and `commitOid` the tip (null on an unborn repo). The push is
+   *  compare-and-swapped on the tip the changes were applied to: a `main` that moved in the
+   *  meantime refuses the commit — read again and retry. */
   commitFiles(
     repo: string,
     input: {
       message: string;
       changes: RepoFileChange[];
       author?: { name: string; email: string };
-      expectedTip?: string | null;
     },
-  ): Promise<{ commitOid: string | null; changedPaths: string[] }>;
-  /** `commitFiles` for one file. */
-  writeFile(
-    repo: string,
-    path: string,
-    content: string,
   ): Promise<{ commitOid: string | null; changedPaths: string[] }>;
   /** The newest `limit` commits of `main` (default 20), newest first — a shallow fetch that deep. */
   log(repo: string, options?: { limit?: number }): Promise<RepoLogEntry[]>;
@@ -293,7 +273,6 @@ export function projectScopedGit(input: {
   namespaceName: string;
 }): GitScope {
   const prefix = `${input.projectId}.`;
-  const artifacts = projectScopedArtifacts(input.namespace, input.projectId);
 
   /** A repo-relative path, `notes/log.md`: no leading slash, no empty, `.` or `..` segment. */
   const repoPath = (path: string): string => {
@@ -363,20 +342,11 @@ export function projectScopedGit(input: {
     return { tip, ...(await tipSnapshot(transport, tip)) };
   };
 
-  const commitFiles: GitScope["commitFiles"] = async (
-    repo,
-    { message, changes, author, expectedTip },
-  ) => {
+  const commitFiles: GitScope["commitFiles"] = async (repo, { message, changes, author }) => {
     if (!message.trim()) throw new Error("itx.git.commitFiles: message must be a non-empty string");
     if (changes.length === 0) throw new Error("itx.git.commitFiles: changes must name a file");
     const transport = await transportFor(repo, "write");
     const tip = await transport.tipOf(REF);
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- a protocol distinction: an ABSENT expectedTip means no guard, null means "I built on an unborn main"
-    if (expectedTip !== undefined && (tip || null) !== expectedTip)
-      throw codedError(
-        "TIP_MOVED",
-        `itx.git.commitFiles: TIP_MOVED — ${repo}'s main is at ${tip || "(unborn)"}, not the ${expectedTip || "(unborn)"} the changes were built on; refresh and retry`,
-      );
     // The tip's snapshot, or an unborn repo's empty one. (A tip whose commit or tree the pack omits
     // THROWS in tipSnapshot — never a fresh root commit that would repoint `main` at an orphan.)
     const { manifest, objects } = tip
@@ -428,35 +398,14 @@ export function projectScopedGit(input: {
       pack: await buildPack(toPush),
       ref: REF,
     });
+    // The push is compare-and-swapped on the tip read above: `main` having moved in the meantime (a
+    // concurrent push) is a refusal like any other — the server's words, and the caller retries.
     // oxlint-disable-next-line iterate/simple-truthiness-check -- push() returns null only on success; an empty-string refusal reason (an `ng <ref>` line with no message) is still a refusal and must throw
-    if (refused !== null) {
-      // The push is compare-and-swapped on the tip read above: a refusal because `main` moved in
-      // the meantime (during the fetch, the encode, the push) is the SAME `TIP_MOVED` as the guard
-      // above — one code for "refresh and retry", whenever the move happened. Anything else (a
-      // permission, an unpack failure) is the refusal in the server's words.
-      const tipNow = (await transport.tipOf(REF)) || null;
-      if (tipNow !== (tip || null))
-        throw codedError(
-          "TIP_MOVED",
-          `itx.git.commitFiles: TIP_MOVED — ${repo}'s main moved to ${tipNow || "(unborn)"} while the commit was built on ${tip || "(unborn)"}; refresh and retry`,
-        );
-      throw new Error(`itx.git: the commit to ${repo} was refused: ${refused}`);
-    }
+    if (refused !== null) throw new Error(`itx.git: the commit to ${repo} was refused: ${refused}`);
     return { commitOid, changedPaths };
   };
 
   return {
-    list: async () => {
-      // Drain the cursor: the binding pages the WHOLE namespace, and the project's repos may sit on any page.
-      const names: string[] = [];
-      for (let cursor: string | undefined; ; ) {
-        const page = await artifacts.list(cursor ? { cursor } : undefined);
-        names.push(...page.repos.map((r) => r.name));
-        if (!page.cursor) return names.sort();
-        cursor = page.cursor;
-      }
-    },
-
     create: async (repo) => {
       if (await readTransport(repo)) return { created: false };
       await input.namespace.create(prefix + repo);
@@ -485,28 +434,7 @@ export function projectScopedGit(input: {
       return { commitOid: snapshot.tip, files };
     },
 
-    readFile: async (repo, path) => {
-      const name = repoPath(path);
-      const snapshot = await readSnapshot(repo);
-      const entry = snapshot?.manifest.get(name);
-      if (!snapshot || !entry || entry.mode === "160000") return null; // no repo, unborn, absent — or a submodule pointer, which has no blob
-      const blob = snapshot.objects.get(entry.oid);
-      if (blob?.type !== "blob")
-        throw new Error(`itx.git: the pack for ${repo} omitted the blob of ${name} (${entry.oid})`);
-      return textDecoder.decode(blob.payload);
-    },
-
-    listFiles: async (repo) => {
-      const snapshot = await readSnapshot(repo);
-      return snapshot
-        ? { commitOid: snapshot.tip, paths: [...snapshot.manifest.keys()].sort() }
-        : { commitOid: null, paths: [] };
-    },
-
     commitFiles,
-
-    writeFile: (repo, path, content) =>
-      commitFiles(repo, { message: `itx.git: write ${path}`, changes: [{ path, content }] }),
 
     log: async (repo, options = {}) => {
       const limit = options.limit ?? 20;

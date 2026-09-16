@@ -1501,31 +1501,40 @@ await until(async () =>
 `itx.cfArtifacts` is Cloudflare Artifacts, project-scoped: every repo name is forced under
 `${projectId}.`, `list` is filtered locally, and `get(name)` returns a handle whose `createToken`
 pipelines across `/api` (its `fork`, whose name escapes the wall, is withheld). `itx.git` is the
-primary door built on top: a repo's file bytes, git-over-HTTPS, one root-level path on `main`. Both
-are deployed-only in the lane — Artifacts has no local implementation.
+stateless adapter built on top — a repo's files on `main` over git-over-HTTPS (`create`, `tip`,
+`snapshot`, `commitFiles`, `log`) — and `itx.repos.get(path)` the repo as a domain object over it: a
+stream on any path with its creation facts, a `commit-completed` fact per commit, and the tip
+memoized. Artifacts has no local implementation, so the physical tier runs deployed-only in the
+lane; locally a test lends a fake `itx.git` to the repo's context.
 
 ```ts
-expect(await itx.git.readFile(repo, "worker.ts")).toBeNull(); // an unborn repo reads as null
-const first = await itx.git.writeFile(repo, "worker.ts", source); // creates the repo, commits on main
+const repo = itx.repos.get("/repos/config");
+await repo.create(); // repos/create-requested, then repos/created on its path and on /
+expect(await repo.readFile("worker.ts")).toBeNull(); // an unborn repo reads as null
+const first = await repo.writeFile("worker.ts", source); // one commit on main
 expect(first.commitOid).toMatch(/^[0-9a-f]{40}$/);
-expect(await itx.git.readFile(repo, "worker.ts")).toBe(source);
-await itx.cfArtifacts.delete(repo); // repos and cfArtifacts address the same repo
-// e2e/cfartifacts.e2e.test.ts (deployed only)
+expect(await repo.readFile("worker.ts")).toBe(source);
+await itx.cfArtifacts.delete("repos--config"); // the path's Artifacts name: segments joined with --
+// e2e/repos.e2e.test.ts (deployed only)
 const tok = await a.cfArtifacts.get(repo).createToken("read", 300); // pipelined server-side
 // e2e/cfartifacts.e2e.test.ts (deployed only)
 ```
 
 The payoff is the config worker with its source moved out of KV and into a real repo, nothing else
-changed — the `itx.worker` rewrite is the seam:
+changed — the `itx.worker` rewrite is what points at it, and a commit to that repo re-points it
+(the base `ConfigWorker` follows `repo/commit-completed` with a new `cacheKey`):
 
 ```ts
-await itx.git.writeFile("config", "worker.ts", CONFIG_WORKER_SRC);
+await itx.repos.get("/repos/config").writeFile("worker.ts", CONFIG_WORKER_SRC);
 await itx.provide("itx.worker", [
   "itx",
   "workers",
-  ["get", { source: `itx.git.readFile('config','worker.ts')`, cacheKey: "config:repo:v1" }],
+  [
+    "get",
+    { source: `itx.repos.get('/repos/config').readFile('worker.ts')`, cacheKey: "config:repo:v1" },
+  ],
 ]);
-// e2e/config-worker.e2e.test.ts (deployed only)
+// e2e/config-worker.e2e.test.ts
 ```
 
 **What this brick leaves on the table:** everything so far spoke capnweb or Workers RPC. The web

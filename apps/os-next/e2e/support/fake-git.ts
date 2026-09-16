@@ -2,7 +2,7 @@
 // facet reaches git through its context's rules, so a test fakes the physical tier the way it fakes
 // `itx.ai`. Each repo is a path → content map plus its commits; the shapes are `GitScope`'s
 // (src/context/repos.ts), deletes applied before writes as the real one does. `snapshots` counts the
-// full fetches, the thing the repo facet's tip cache is meant to avoid.
+// full fetches — what the repo facet's memo avoids.
 import { RpcTarget } from "capnweb";
 
 export type FakeCommit = {
@@ -21,12 +21,8 @@ export class FakeGit extends RpcTarget {
   readonly created: string[] = [];
   /** How many times a whole tip was fetched. */
   snapshots = 0;
-  /** How many `create` calls still fail (the saga's failure story). */
+  /** How many `create` calls still fail (the creation's failure story). */
   failCreates = 0;
-  /** A write from OUTSIDE that lands inside the next `commitFiles` — after the `expectedTip` guard
-   *  passed, before the push — so the compare-and-swapped push is what refuses it, as the real
-   *  adapter's does: the race the repo facet's refresh-and-retry exists for. */
-  driftOnNextCommit: { path: string; content: string } | null = null;
 
   constructor(seed: Record<string, Record<string, string>>) {
     super();
@@ -44,9 +40,6 @@ export class FakeGit extends RpcTarget {
       timestamp: Date.now(),
       parents,
     };
-  }
-  list() {
-    return [...this.#repos.keys()].sort();
   }
   create(name: string) {
     if (this.failCreates > 0) {
@@ -68,44 +61,12 @@ export class FakeGit extends RpcTarget {
     this.snapshots += 1;
     return { commitOid: tip.oid, files: Object.fromEntries(known.files) };
   }
-  readFile(repo: string, path: string) {
-    return this.#repos.get(repo)?.files.get(path) ?? null;
-  }
-  listFiles(repo: string) {
-    const known = this.#repos.get(repo);
-    return {
-      commitOid: known?.commits.at(-1)?.oid ?? null,
-      paths: known ? [...known.files.keys()].sort() : [],
-    };
-  }
-  commitFiles(
-    repo: string,
-    input: { message: string; changes: FakeChange[]; expectedTip?: string | null },
-  ) {
+  commitFiles(repo: string, input: { message: string; changes: FakeChange[] }) {
     let known = this.#repos.get(repo);
     if (!known) {
       this.create(repo);
       known = this.#repos.get(repo)!;
     }
-    const tipAtStart = known.commits.at(-1)?.oid ?? null;
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- the adapter's protocol: an absent expectedTip means no guard, null means "built on an unborn main"
-    const guarded = input.expectedTip !== undefined;
-    if (guarded && tipAtStart !== input.expectedTip)
-      throw Object.assign(new Error("itx.git.commitFiles: TIP_MOVED — refresh and retry"), {
-        code: "TIP_MOVED",
-      });
-    if (this.driftOnNextCommit) {
-      const drift = this.driftOnNextCommit;
-      this.driftOnNextCommit = null;
-      known.files.set(drift.path, drift.content);
-      known.commits.push(this.#commit("outside, mid-commit", [tipAtStart || ""]));
-    }
-    // The compare-and-swapped push: `main` moved since the tip this batch was built on was read.
-    if ((known.commits.at(-1)?.oid ?? null) !== tipAtStart)
-      throw Object.assign(
-        new Error("itx.git.commitFiles: TIP_MOVED — main moved while the commit was built"),
-        { code: "TIP_MOVED" },
-      );
     const changedPaths: string[] = [];
     for (const change of input.changes) {
       if ("delete" in change && known.files.delete(change.path)) changedPaths.push(change.path);
@@ -122,9 +83,6 @@ export class FakeGit extends RpcTarget {
     const commit = this.#commit(input.message, tip ? [tip.oid] : []);
     known.commits.push(commit);
     return { commitOid: commit.oid, changedPaths };
-  }
-  writeFile(repo: string, path: string, content: string) {
-    return this.commitFiles(repo, { message: `write ${path}`, changes: [{ path, content }] });
   }
   log(repo: string, options: { limit?: number } = {}) {
     return [...(this.#repos.get(repo)?.commits ?? [])].reverse().slice(0, options.limit ?? 20);
