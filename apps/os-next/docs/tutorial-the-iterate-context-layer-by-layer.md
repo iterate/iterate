@@ -1555,17 +1555,19 @@ with a value the caller never sees, and `getSecret("/secrets/NAME", { field: "a.
 field out of a JSON secret — apps/os's grammar for a URL or a header (the path and the query alike,
 `:` kept in a spliced value; NOT its `Basic base64(user:getSecret(…))` peeling nor its JSON-body
 template — the body is never scanned); `/secrets/NAME` is the name
-`itx.secrets.set(NAME, …)` stored. `itx.secrets` is the WRITE-ONLY door to those values — `set`,
-`delete`, and a `list` of names and origins, never a value. Every change appends
-`events.iterate.com/secrets/changed` without the value:
+`itx.secrets.set(NAME, …)` stored. `itx.secrets` is the WRITE-ONLY surface for those values — `set`
+(material, a required pin of origins, an optional refresh strategy the secret's own Durable Object
+runs on a 401), `beginOAuth` (the provider's authorize URL; the platform's callback and the object
+obtain the first tokens), `delete`, and a `list` of names, pins and strategy kinds, never a value.
+Every change appends `events.iterate.com/secrets/changed` without the value:
 
 ```ts
 expect(await itx.secrets.list()).toEqual([]);
-await itx.secrets.set("api.key_v-2", "hunter2");
-await itx.secrets.set("stripe", "sk_live", { origin: "https://api.stripe.com/v1/x" });
+await itx.secrets.set("api.key_v-2", "hunter2", { urls: ["https://api.example.com"] });
+await itx.secrets.set("stripe", "sk_live", { urls: ["https://api.stripe.com/v1/x"] });
 expect(await itx.secrets.list()).toEqual([
-  { name: "api.key_v-2" },
-  { name: "stripe", origin: "https://api.stripe.com" }, // the ORIGIN of the URL given, path dropped
+  { name: "api.key_v-2", urls: ["https://api.example.com"] },
+  { name: "stripe", urls: ["https://api.stripe.com"] }, // the ORIGIN of the URL given, path dropped
 ]);
 const changes = (await readAll(itx))
   .filter((e) => e.type === "events.iterate.com/secrets/changed")
@@ -1574,19 +1576,19 @@ expect(JSON.stringify(changes)).not.toContain("hunter2");
 // e2e/secrets.e2e.test.ts
 ```
 
-A secret set with an `origin` is sent to that origin ONLY. A placeholder with no stored secret, or a
-secret bound to another origin, is a 502 to the CALLER, before the terminal fetch, naming the
-placeholder and where it sat, never the value:
+A secret is sent to its pinned origins ONLY (a set without `urls` is refused). A placeholder with no
+stored secret, or a secret pinned to other origins, is a 502 to the CALLER, before the terminal fetch,
+naming the placeholder and where it sat, never the value:
 
 ```ts
-await itx.secrets.set("bound", "v", { origin: "https://api.example.com" });
+await itx.secrets.set("bound", "v", { urls: ["https://api.example.com"] });
 const res = await itx.fetch(
   new Request("https://egress.invalid/", {
     headers: { authorization: 'getSecret("/secrets/bound")' },
   }),
 );
 expect(res.status).toBe(502);
-expect(await res.text()).toContain("bound to https://api.example.com"); // and "not sent to https://egress.invalid"
+expect(await res.text()).toContain("pinned to https://api.example.com"); // and "not sent to https://egress.invalid"
 const missing = await openItx("acme-support").fetch(
   new Request("https://egress.invalid/hunt", {
     headers: { "x-hunt-auth": 'Bearer getSecret("/secrets/GHOST")' },

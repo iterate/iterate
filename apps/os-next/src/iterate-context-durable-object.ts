@@ -4,7 +4,7 @@
 // (stream/subscription-delivery.ts), the facets (`ctx.facets`, context/worker-loader.ts), the rpc
 // stubs (context/rpc-stubs.ts), and the fetch door (the pager upgrade, the fetch lane,
 // egress). Each module's header says what it does; this file is the wiring and the doors.
-//   egress — `#egress`: a `getSecret("/secrets/NAME")` request is forwarded to its secret cell (secrets.ts)
+//   egress — `#egress`: a `getSecret("/secrets/NAME")` request is forwarded to its secret's own Durable Object (secrets.ts)
 //
 // PURE WORKERS-RPC: capnweb never terminates here — the stateless `/api` worker relays. Dispatch is
 // ONE door, `invoke(call)`; every OTHER change to this context is an appended event (the edge's
@@ -106,8 +106,8 @@ export interface Env extends AppConfigEnv {
   AI: Ai;
   /** Cloudflare Artifacts (beta) — the ONE bound namespace behind `itx.cfArtifacts`, project-scoped. */
   ARTIFACTS: ArtifactsNamespace;
-  /** THE SECRET CELLS (secret-durable-object.ts): one per project secret, `<projectId>:<name>` —
-   *  egress forwards a placeholder-bearing request to its cell. */
+  /** THE SECRETS (secret-durable-object.ts): one Durable Object per secret, `<owner>:<name>` —
+   *  egress forwards a placeholder-bearing request to its object. */
   SECRET: DurableObjectNamespace<SecretDurableObject>;
 }
 
@@ -950,7 +950,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** EGRESS: a request that names a secret — `getSecret("/secrets/NAME")` in its URL or headers —
-   *  is FORWARDED to that secret's cell (secret-durable-object.ts), which substitutes, pins,
+   *  is FORWARDED to that secret's Durable Object (secret-durable-object.ts), which substitutes, pins,
    *  dispatches, and refreshes on a 401; one request, one secret (a second name is a 502 — no
    *  cross-secret chaining). A request naming none goes straight to the terminal fetch. Either way
    *  the platform's own headers never leave: the principal stamp (actor + email) and the expression
@@ -971,8 +971,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           { status: 502 },
         ),
       );
-    // The cell is the RESOURCE OWNER's (iterate-context.ts `resourceScope`) — the one derivation
-    // `itx.secrets` keys it by, so a user's placeholder reaches the user's own cell, never a shared one.
+    // The object is the RESOURCE OWNER's (iterate-context.ts `resourceScope`) — the one derivation
+    // `itx.secrets` keys it by, so a user's placeholder reaches the user's own secret, never a shared one.
     const owner = resourceScope(
       this.#durableObjectAddress.projectId,
       this.#durableObjectAddress.path,
