@@ -525,11 +525,9 @@ function normalizeSubscriptionConfigured(input: {
  *  committing a durable no-op. Every other event passes through untouched. The DO runs this on every
  *  append (iterate-context-durable-object.ts). */
 export function normalizeControlEvent(event: StreamEventInput): StreamEventInput {
-  // Stream.append validates event types after normalization; malformed wire inputs must reach it.
-  if (
-    typeof event.type === "string" &&
-    event.type.startsWith("events.iterate.com/stream/append-schedule")
-  ) {
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- RPC inputs can violate StreamEventInput; let Stream.append validate non-string types after normalization
+  if (typeof event.type !== "string") return event;
+  if (event.type.startsWith("events.iterate.com/stream/append-schedule")) {
     if (event.ephemeral) throw new Error("scheduled append control events must be durable");
     if (event.type === "events.iterate.com/stream/append-scheduled") {
       const payload = ScheduledAppendInput.parse(event.payload);
