@@ -797,7 +797,7 @@ async function deployPreviewApps({
     environmentConfigLease = requestedEnvironment
       ? (
           await assignEnvironmentConfigLease({
-            eraseSlotData: makePreviewSlotDataEraser(runtime),
+            eraseSlotData: makePreviewSlotDataEraser(runtime, "reset"),
             holder,
             leaseMs: defaultPreviewLeaseMs,
             recordedSlug,
@@ -806,7 +806,7 @@ async function deployPreviewApps({
           })
         ).lease
       : await claimEnvironmentConfigLease({
-          eraseSlotData: makePreviewSlotDataEraser(runtime),
+          eraseSlotData: makePreviewSlotDataEraser(runtime, "reset"),
           holder,
           leaseMs: defaultPreviewLeaseMs,
           // Surface the wait in the PR body the moment every slot is busy, not
@@ -840,7 +840,7 @@ async function deployPreviewApps({
   // state that wiped must redeploy regardless of the diff: OS is parked at
   // 503 by its tombstone deploy, the streams playground lost its DO
   // namespace, and auth's D1 lost the OS client it re-seeds on deploy.
-  const erasedApps = [...selectPreviewSlotDataOwners().map((app) => app.slug), "auth" as const];
+  const erasedApps = [...selectPreviewCleanupApps([]).map((app) => app.slug), "auth" as const];
   const appsToDeploy = expandPreviewDependencies([
     ...new Set([
       ...selectedApps.map((app) => app.slug),
@@ -1538,7 +1538,7 @@ export async function erase(options: EraseOptions = {}) {
   const { context, runtime } = await resolvePreviewCommandSetup(options);
   return await eraseHeldSlotAfterRun({
     context,
-    eraseSlotData: makePreviewSlotDataEraser(runtime),
+    eraseSlotData: makePreviewSlotDataEraser(runtime, "reset"),
     ranHeadSha: options.ranHeadSha || null,
     semaphore: runtime.createPreviewSemaphoreResourceClient(),
   });
@@ -1607,7 +1607,7 @@ export async function assign(options: AssignOptions = {}) {
 
   const current = await readCloudflarePreviewState(context);
   const result = await assignEnvironmentConfigLease({
-    eraseSlotData: makePreviewSlotDataEraser(runtime),
+    eraseSlotData: makePreviewSlotDataEraser(runtime, "down"),
     force: options.force,
     holder,
     leaseMs: defaultPreviewLeaseMs,
@@ -1934,7 +1934,10 @@ export async function reclaim(options: ReclaimOptions = {}) {
   if (!taken) {
     throw new Error(`Could not take ${slug} from ${slot.holder ?? "its holder"} — retry.`);
   }
-  await makePreviewSlotDataEraser(runtime)({
+  await makePreviewSlotDataEraser(
+    runtime,
+    "down",
+  )({
     dopplerConfig: slot.dopplerConfig,
     slug,
   });
@@ -2025,7 +2028,7 @@ export async function gc(options: GcOptions = {}) {
   const resources = await semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
   const expired = selectExpiredLeasesForGc(resources, now);
   const holdMs = (options.holdMinutes ?? 30) * 60_000;
-  const eraseSlotData = makePreviewSlotDataEraser(runtime);
+  const eraseSlotData = makePreviewSlotDataEraser(runtime, "down");
 
   const outcomes: Array<{
     slug: string;
@@ -4588,9 +4591,7 @@ async function cleanupPreviewForPullRequest(
 
   let ok = true;
   let latestState = current.state;
-  const appsToCleanUp = (Object.keys(current.state.apps) as CloudflarePreviewAppSlugType[])
-    .map((appSlug) => cloudflarePreviewApps[appSlug])
-    .filter((app): app is PreviewAppRuntime => app != null);
+  const appsToCleanUp = selectPreviewCleanupApps(Object.keys(current.state.apps));
   const cleanupBatches = [...orderPreviewDeployBatches(appsToCleanUp)].reverse();
   // Same stale-read guard as deploy: keep every batch's entries in each write.
   const accumulatedEntries: Record<string, CloudflarePreviewAppEntry> = {};
@@ -4965,7 +4966,7 @@ async function runPreviewDeployCommand(input: {
   app: PreviewAppRuntime;
   commandEnvironment: NodeJS.ProcessEnv;
   dopplerConfig: string;
-  operation: "up" | "down";
+  operation: "up" | "down" | "reset";
   repositoryRoot: string;
   signal?: AbortSignal;
 }) {
@@ -4974,9 +4975,16 @@ async function runPreviewDeployCommand(input: {
   // script must never pick its target from ambient shell state). Deploys
   // resolve the env from the DOPPLER_CONFIG the `doppler run` wrapper sets.
   const commandArgs =
-    input.operation === "down"
-      ? [...input.app.destroyCommandArgs, "--env", input.dopplerConfig]
-      : input.app.deployCommandArgs;
+    input.operation === "up"
+      ? input.app.deployCommandArgs
+      : [
+          ...input.app.destroyCommandArgs,
+          "--env",
+          input.dopplerConfig,
+          ...(input.operation === "reset" && input.app.slug === "os"
+            ? ["--preserve-artifacts"]
+            : []),
+        ];
 
   return await runCommand({
     args: [
@@ -4996,6 +5004,10 @@ async function runPreviewDeployCommand(input: {
 }
 
 /**
+ * Reset removes active state but retains Artifacts repositories until PR-close
+ * cleanup or explicit reclaim/expiry GC ("down"). Repos are isolated by project
+ * ID and path; tests using deployment-wide repos must choose unique paths.
+ *
  * Erase a preview slot's user data. It runs at both ends of a run: before
  * every deploy (so a slot is fresh whatever the previous run left, including
  * one a push SIGKILLed mid-e2e) and after the e2e (so the test projects a run
@@ -5010,27 +5022,35 @@ async function runPreviewDeployCommand(input: {
 type EraseSlotData = (input: { dopplerConfig: string; slug: string }) => Promise<void>;
 
 /**
- * Every app that owns slot-persistent data. OS wipes the shared data plane;
- * the streams playground separately owns its StreamDurableObject namespace.
+ * Always include the slot's data owners, even if preparation failed before
+ * recording its apps. OS owns retained Artifacts; Streams owns a separate DO namespace.
  */
-function selectPreviewSlotDataOwners() {
-  return [cloudflarePreviewApps.os, cloudflarePreviewApps["streams-example-app"]] as const;
+function selectPreviewCleanupApps(recordedAppSlugs: string[]) {
+  const slugs = new Set([...recordedAppSlugs, "os", "streams-example-app"]);
+  return [...slugs]
+    .filter((slug): slug is CloudflarePreviewAppSlugType =>
+      Object.hasOwn(cloudflarePreviewApps, slug),
+    )
+    .map((slug) => cloudflarePreviewApps[slug]);
 }
 
-function makePreviewSlotDataEraser(runtime: {
-  commandEnvironment: NodeJS.ProcessEnv;
-  repositoryRoot: string;
-  signal?: AbortSignal;
-}): EraseSlotData {
+function makePreviewSlotDataEraser(
+  runtime: {
+    commandEnvironment: NodeJS.ProcessEnv;
+    repositoryRoot: string;
+    signal?: AbortSignal;
+  },
+  operation: "reset" | "down",
+): EraseSlotData {
   return async ({ dopplerConfig, slug }) => {
     const startedAt = Date.now();
     logPreview(`erasing ${slug} data (doppler config ${dopplerConfig})`);
-    for (const app of selectPreviewSlotDataOwners()) {
+    for (const app of selectPreviewCleanupApps([])) {
       const result = await runPreviewDeployCommand({
         app,
         commandEnvironment: runtime.commandEnvironment,
         dopplerConfig,
-        operation: "down",
+        operation,
         repositoryRoot: runtime.repositoryRoot,
         signal: runtime.signal,
       });
@@ -6755,7 +6775,8 @@ export const previewInternals = {
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
   selectPreviewAppsForTesting,
-  selectPreviewSlotDataOwners,
+  selectPreviewCleanupApps,
+  makePreviewSlotDataEraser,
   splitRepositoryFullName,
   syncPreviewInventory,
   waitForHttpReadiness,

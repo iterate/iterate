@@ -32,16 +32,23 @@ resources is a separate, lazy, rate-limited job.
 
 Teardown splits by what it costs to leave running:
 
-| Concern                                                                                                                              | Reaped by                                                                                                                            | When                                                                 |
-| ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
-| Orphaned **compute** — Durable Object scheduler alarms keep firing agent turns (real LLM spend) against erased projects              | one O(1) parked-worker deploy that tombstones every DO class (`do-reset.ts`)                                                         | **promptly**, on PR-close cleanup, and as a backstop in the GC sweep |
-| **R2 storage** — itx.files + sandbox backups                                                                                         | Cloudflare **lifecycle rules** (server-side, zero control-plane calls)                                                               | continuously, 3h after last write                                    |
-| **D1 rows / KV keys**                                                                                                                | O(1) batched wipe                                                                                                                    | on cleanup / erase-on-acquire                                        |
-| **Artifacts repos** — the git repos backing project repos (`<worker>-repos` namespace), each minting a 365-day write token on create | budgeted delete pass in erase-data (oldest first; partial progress carries over). One-off backlog: `apps/os/scripts/artifacts-gc.ts` | on cleanup / erase-on-acquire                                        |
+| Concern                                                                                                                              | Reaped by                                                                                                                            | When                                                                              |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| Orphaned **compute** — Durable Object scheduler alarms keep firing agent turns (real LLM spend) against erased projects              | one O(1) parked-worker deploy that tombstones every DO class (`do-reset.ts`)                                                         | **promptly**, on PR-close cleanup, and as a backstop in the GC sweep              |
+| **R2 storage** — itx.files + sandbox backups                                                                                         | Cloudflare **lifecycle rules** (server-side, zero control-plane calls)                                                               | continuously, 3h after last write                                                 |
+| **D1 rows / KV keys**                                                                                                                | O(1) batched wipe                                                                                                                    | on cleanup / erase-on-acquire                                                     |
+| **Artifacts repos** — the git repos backing project repos (`<worker>-repos` namespace), each minting a 365-day write token on create | budgeted delete pass in erase-data (oldest first; partial progress carries over). One-off backlog: `apps/os/scripts/artifacts-gc.ts` | on PR-close cleanup, explicit reclaim and expiry GC; normal resets preserve repos |
 
-The expensive, rate-limit-prone operations were the **per-item** R2 deletes.
-Everything else is one or a few bounded calls. Moving R2 to lifecycle rules
-keeps cleanup within the account-wide control-plane budget.
+Normal pre/post-test resets pass `--preserve-artifacts`. Project IDs and unique
+paths isolate new tests from old repos, so per-repository deletion need not
+block a run. PR-close cleanup includes OS even if preparation was interrupted
+before app entries were recorded, so inherited repositories are still swept.
+R2 uses lifecycle rules.
+
+Artifacts sweeps keep their existing 90-second budget; a large backlog or failed
+cleanup can leave repositories for a later full sweep. Available slots are not
+visited by expiry GC, and normal acquisition now preserves Artifacts too.
+Explicit `artifacts-gc` remains the backlog cleanup tool.
 
 ## Everything disposable expires 3 hours after last use
 
@@ -82,8 +89,8 @@ runs `pnpm preview gc`, which:
 
 1. Lists every slot and selects those whose lease is **leased but past its
    expiry** (`selectExpiredLeasesForGc`). An expired lease means no live tenant,
-   so the whole slot is fair game. (Available slots are cleaned by their next
-   acquirer's erase-on-acquire, not here.)
+   so the whole slot is fair game. Available slots are not visited: their next
+   acquirer resets active state but leaves Artifacts for later full cleanup.
 2. For each, takes it under a fresh lease with a **non-force** acquire. This is
    the entire race story: a non-force acquire succeeds _only if the slot is
    genuinely free_. If a new PR grabbed the slot between the snapshot and the

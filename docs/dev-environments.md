@@ -388,9 +388,11 @@ invariants:
   teardown is decoupled from releasing the slot (and how disposable data
   expires 3h after last use).
 - **A slot is only populated while a run is in progress.** `preview deploy`
-  erases the slot's data (Durable Objects, D1, KV, Artifacts repos —
-  `erase-data`) before every deploy, not just when the slot changes hands,
-  and CI runs `preview erase` again after the e2e. Each run otherwise leaves a
+  resets the slot's active state (Durable Objects, D1 and KV) before every
+  deploy, not just when the slot changes hands, and CI runs `preview erase`
+  again after the e2e. These normal resets pass `--preserve-artifacts`:
+  repository sweeps wait until PR-close cleanup, explicit reclaim or expiry GC.
+  Each run otherwise leaves a
   population of test projects whose Durable Objects keep waking until the
   next push or the lease expiry (~$15–25/hour per slot; the 2026-09-01
   runaway), and a push that cancels a running e2e SIGKILLs it, so in-test
@@ -472,8 +474,8 @@ but never its test result: every triggered PR head reruns every recorded app's
 e2e suite, and a run with no runnable deployment fails instead of reporting a
 green `deploy + e2e` check.
 Closing or merging the PR runs `pnpm preview cleanup`, which destroys the
-PR's apps (for os that means erasing the slot's data — auth D1 and
-project-directory KV) and releases the slot — after verifying the PR still
+PR's apps (including OS Durable Objects, auth D1, project-directory KV and
+Artifacts repositories) and releases the slot — after verifying the PR still
 holds it.
 
 Slot cleanliness is an **invariant of entry**, not a promise about exits:
@@ -481,8 +483,9 @@ every handover — a fresh acquire, an adopted lease, a reclaim, an
 `assign`ed slot — erases the slot's data before the new holder gets it. So
 even when an exit path skips the cleanup erase (failed cleanup followed by
 lease expiry, `release --force`, a run cancelled mid-claim), the next tenant
-never sees the previous one's data; they just pay the ~half-minute wipe on
-their first deploy to that slot. The one deliberate exception is manual
+starts with fresh application state. Orphaned Artifacts repositories remain
+until a full cleanup; new project IDs isolate subsequent tests, and tests of
+deployment-wide repos use unique paths. The one deliberate exception is manual
 `preview acquire` (Story 4): it parks a slot without wiping it, so you can
 lease a slot precisely to inspect what's on it.
 
