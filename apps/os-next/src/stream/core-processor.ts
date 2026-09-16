@@ -19,7 +19,7 @@
 // pauses — so a POLICY processor (a token-bucket breaker, a quota) runs as an ordinary facet and
 // trips the stream by appending `paused`. Core knows nothing about it; e2e/support/sources.ts's
 // BreakerProcessor is that pattern. created/woken come from the DO constructor
-// (Stream.appendCreatedAndWokenEvents); the pause exemptions are Stream.append's.
+// (Stream.appendBirthRecord / appendWakeRecord); the pause exemptions are Stream.append's.
 //   subscriptions — a literal `subscription-configured` event, THE SUBSCRIPTIONS TABLE's one command (the rows are core state)
 
 import { isRefreshKind, type SecretCatalogEntry } from "../secrets.ts";
@@ -154,6 +154,25 @@ function facetAddressedBy(resolvedTarget: ItxExpression): string | undefined {
     typeof getStep[1] === "string"
     ? getStep[1]
     : undefined;
+}
+
+/** Does a row's target OWN ITS PROGRESS — a facet (its own checkpoint) or a lent rpc stub (a live
+ *  client's own offset), so the stream keeps no cursor for it and its deliveries are PUSHES? Decided
+ *  from the rules alone, never by evaluating the target: a fresh incarnation classifies every row
+ *  before anything runs, so a facet row is never a cursor row's claim on the alarm (the delivery
+ *  loop). A target that cannot be resolved yet (a `subscribe` before its `provide`) cannot own
+ *  progress: the stream keeps its cursor, as for any plain target. */
+export function targetOwnsProgress(state: CoreState, row: Subscription): boolean {
+  const resolved = resolveThroughState(state, row.target);
+  if (!resolved) return false;
+  const getStep = resolved[3];
+  return (
+    resolved[1] === "builtins" &&
+    (resolved[2] === "facets" || resolved[2] === "rpcStubs") &&
+    Array.isArray(getStep) &&
+    getStep[0] === "get" &&
+    typeof getStep[1] === "string"
+  );
 }
 
 /** THE DRAFT TABLES OF ONE BATCH: a table is copied ONCE per batch, on its first touch, and mutated

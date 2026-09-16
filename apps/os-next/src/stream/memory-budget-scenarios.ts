@@ -428,7 +428,6 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       stream,
       evaluateItxExpression: async () =>
         new FacetHandle(() => new Promise((resolve) => callsInFlight.push(resolve))),
-      recordActivityForQuietClock: () => {},
       reconcileAlarm: () => {},
     });
     stream.append(
@@ -478,7 +477,6 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
           callsStarted++;
           return new Promise((resolve) => callsInFlight.push(resolve));
         }),
-      recordActivityForQuietClock: () => {},
       reconcileAlarm: () => {},
     });
     const typeOf = (i: number) => (args.disjointTypes ? `blob-${i % args.rowCount}` : "blob");
@@ -558,7 +556,6 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
           }, args.callMs ?? 250),
         );
       },
-      recordActivityForQuietClock: () => {},
       reconcileAlarm: () => {},
     });
     stream.append({ type: "blob", payload: { n: -1 } }); // ONE commit
@@ -592,7 +589,6 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
         callsStarted++;
         return new Promise((resolve) => callsInFlight.push(resolve));
       },
-      recordActivityForQuietClock: () => {},
       reconcileAlarm: () => {},
     });
     stream.append(

@@ -93,26 +93,33 @@ business event, use `at: new Date(Date.parse(event.createdAt) + delayMs).toISOSt
 A context has one native alarm and three reasons to want it. None of them is stored as an alarm
 request: each source answers "when next?" from state it already keeps, and `AlarmCoordinator`
 (`src/alarm-coordinator.ts`, ~40 lines) arms the earliest answer or deletes the alarm when there is
-none. Reconciliation runs after every commit, every activity note and every delivery change.
+none. Reconciliation runs after every commit, every pin use and every delivery change.
 
-| Source                | Its deadline                                                                                                                                                                                                                                 |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Scheduled appends     | the earliest pending `nextAt` in core state (none while paused or when every definition is parked)                                                                                                                                           |
-| Subscription delivery | per cursor row: a memory-only `deadlineAt` (+20 s insurance while a durable delivery is owed or in flight) or the persisted ladder time `nextAttemptAtMs`, ahead or due alike; a halted row, or one whose subscription is gone, owes nothing |
-| Idle quiesce          | `lastActivity + 60 s`, rounded up to the next 10 s, only while a facet, a borrowed rpc stub or a library connection pins the context                                                                                                         |
+| Source                | Its deadline                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scheduled appends     | the earliest pending `nextAt` in core state (none while paused or when every definition is parked)                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Subscription delivery | per cursor row (a target that, through the rules, resolves to neither a facet nor a lent rpc stub — decided statically, never by evaluating it): the time its cursor carries — a ladder rung, or the claim written before every awaited call (attempt + 1, now + 30 s, durable: a death mid-call is retried by the next incarnation, fifteen deaths halt the row) — else, while the cursor sits behind the durable mark, 20 s from when it was first seen behind; a row a loop holds claims that 20 s, renewed at every pass end; a halted row owes nothing |
+| Idle quiesce          | the pins' last use + 60 s, rounded up to the next 10 s — a facet call finishing, a borrowed rpc stub called, a library connection used, a facet call in flight; nothing else moves it — and none while nothing is pinned                                                                                                                                                                                                                                                                                                                                    |
 
-A wake makes no work: `stream/woken` is swept by no `*` subscription (`consumesEvent`, the one
-consumes rule) — only a row that names it sees it. On a project root the config row's target is a
-facet in the same context, and an alarm-only incarnation that delivered its own wake materialized
-that facet, counted the loopback as activity and re-armed: every root woke itself every 20 s.
+A wake makes no loop: `stream/woken` is a durable event like any other, and every `*` subscription
+receives it (`consumesEvent`, the one consumes rule, has no carve-out). What keeps it from looping is
+that delivering it creates no reason to wake again: the config row's delivery is claimed only while
+owed and acked at once; a request — a loaded worker's `env.ITX` loopback included — moves no clock;
+only a pin's own use keeps the idle deadline. The alarm handler records the wake itself
+(`stream/woken { reason: "alarm" }`, inside its pass — workerd hides a firing alarm from `getAlarm()`
+for the whole run, so no constructor can tell; every other door records `"request"`), and its
+delivery acks within the pass, so an alarm wake that finds nothing else owed writes no alarm at all.
+The one accepted cost: a `*` row whose target is a facet materializes it for the wake, and one idle
+alarm 60 s later, in the same incarnation, releases it.
 
-Two holds keep the alarm from being moved under a handler. An alarm read at construction is kept
-until a pass completes: workerd runs the constructor first, and a stored time later than the firing
-one cancels that run. Nothing is written while `alarm()` runs: its alarm stays stored, so a pass that
-throws is retried by the runtime (2s·2ⁿ, six tries) with the inherited hold intact, and a completed
-pass sets the next deadline once. No past delivery claim leaves a pass: a row a loop still holds is
-insured afresh and its due retry moves with it, a row the pass could not deliver waits for the next
-commit, and a row an unreadable event stops is halted. There is no clamp (the
+One hold keeps the alarm from being moved under a handler: nothing is written while `alarm()` runs —
+its alarm stays stored, so a pass that throws is retried by the runtime (2s·2ⁿ, six tries), and a
+completed pass sets the next deadline once. The alarm read at construction is only the dedupe seed:
+every reason is derived again by the constructor's first reconcile — a due schedule or claim derives
+the same time (no write), and a stale idle deadline of a dead incarnation is superseded, which
+cancels a run nothing durable wanted. No past delivery claim leaves a pass: a pass renews what it
+could not settle (a row a loop still holds is claimed 20 s from the pass end), and a row an
+unreadable event stops is halted. There is no clamp (the
 runtime clamps a past time to now and refuses one at or before the epoch, which schedule validation
 rejects) and no keep-earlier rule; every `setAlarm` is a billed write, so the only dedupe is "the
 wanted time is what we last wrote".
@@ -121,8 +128,8 @@ Every alarm pass is traced as ephemeral `events.iterate.com/stream/trace/alarm` 
 payload is an `AlarmTrace` (`src/iterate-context-durable-object.ts`): `alarm-fired` with what was
 armed and every deadline the pass found (each source's, with the claiming delivery rows), `quiesce`
 when it releases the idle context, `alarm-pass` with what it armed next or `alarm-abandoned` with
-what it threw — plus the durable head, the last activity and last external request, and what is
-pinned. Only a pass traces: a reconcile outside one consumes no offset. `waitForEvent({ type })`
+what it threw — plus the durable head, the pins' last use, and what is pinned. Only a pass traces:
+a reconcile outside one consumes no offset. `waitForEvent({ type })`
 sees a trace live; `itx.readEvents(afterOffset, limit, { includeEphemeral: true })` reads it back
 afterwards, merged in offset order with the durable rows — the stream keeps the current
 incarnation's ephemerals of every kind (live-state deltas, rpc-stub presence, traces) in a ring of
@@ -130,7 +137,7 @@ incarnation's ephemerals of every kind (live-state deltas, rpc-stub presence, tr
 proof stays the log's: `scannedThroughOffset` never names an ephemeral, and an ephemeral past the
 durable mark comes back on every at-head read until a durable takes the head or the ring evicts it.
 A trace is never subscription input and never activity, so observing a context cannot keep it
-awake. The durable `stream/woken { incarnation, reason, alarmAt? }` says what woke each incarnation:
+awake. The durable `stream/woken { incarnation, reason }` says what woke each incarnation:
 the native alarm stored as it started, and `reason: "alarm"` when that alarm was due (workerd runs
 the constructor before the alarm handler), else `reason: "request"`.
 

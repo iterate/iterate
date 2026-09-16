@@ -136,10 +136,10 @@ describe("consumesEvent — THE ONE consumes rule (engine, delivery loop, inline
     expect(consumesEvent(undefined, { type: "eph", ephemeral: true })).toBe(false);
   });
 
-  test('the wake record (stream/woken) is never swept by default or "*" — delivering it is work, and a wake must not make work', () => {
+  test("the wake record (stream/woken) is an ordinary durable event: swept by default and by \"*\" like any other — that a wake makes no LOOP is the delivery loop's and the alarm's to keep, never a carve-out here", () => {
     const t = "events.iterate.com/stream/woken";
-    expect(consumesEvent(undefined, { type: t })).toBe(false);
-    expect(consumesEvent(["*"], { type: t })).toBe(false);
+    expect(consumesEvent(undefined, { type: t })).toBe(true);
+    expect(consumesEvent(["*"], { type: t })).toBe(true);
     expect(consumesEvent([t], { type: t })).toBe(true);
   });
 

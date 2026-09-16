@@ -1227,7 +1227,9 @@ the held rev triggers one single-flight re-read of the door.
   resumes from the last durable mark, and `stream/woken` (durable, appended by
   each incarnation's constructor) marks the boundary. Every persisted checkpoint
   in the package advances only on a batch that carried a durable.
-- The wake record: the DO's constructor calls `Stream.appendCreatedAndWokenEvents()` synchronously,
+- The wake record: the DO's constructor calls `Stream.appendBirthRecord()` synchronously (a
+  store with rows records its wake at the first door that opens, `appendWakeRecord` — the alarm
+  handler says `"alarm"`, every other door `"request"`),
   before any door opens. The first incarnation appends
   `stream/created { projectId, path }` at offset 1 and `stream/woken { incarnation }`
   at offset 2; every later incarnation appends its `woken` first. So the first
@@ -1259,8 +1261,8 @@ await itx.append({ type: "events.iterate.com/stream/resumed" });
 | `events.iterate.com/stream/subscription-delivery-resumed`       | `{ name, afterOffset? }`                            | you, to un-halt and optionally seek                                                                                                           |
 | `events.iterate.com/rpc-stub/attached` / `detached` (ephemeral) | `{ rpcStubKey }`                                    | the rpc-stub directory, first/last pager of a key                                                                                             |
 | `events.iterate.com/live-state/changed` (ephemeral)             | `{ key, from, to, patch }`                          | `LiveState.set`                                                                                                                               |
-| `events.iterate.com/stream/created`                             | `{ projectId, path }`                               | the DO constructor (`Stream.appendCreatedAndWokenEvents`), offset 1, once                                                                     |
-| `events.iterate.com/stream/woken`                               | `{ incarnation, reason, alarmAt? }`                 | the DO constructor (`Stream.appendCreatedAndWokenEvents`), every incarnation                                                                  |
+| `events.iterate.com/stream/created`                             | `{ projectId, path }`                               | the DO constructor (`Stream.appendBirthRecord`), offset 1, once                                                                               |
+| `events.iterate.com/stream/woken`                               | `{ incarnation, reason }`                           | the first door of every incarnation (`Stream.appendWakeRecord`; the alarm handler says `"alarm"`)                                             |
 | `events.iterate.com/stream/paused` / `resumed`                  | `{ reason }` / `{}`                                 | you, or a policy facet such as `BreakerProcessor`                                                                                             |
 
 Refusals surface as coded errors (`src/lib.ts`): `STREAM_PAUSED`,
@@ -1357,8 +1359,9 @@ clamped to the stream head. Every subscription made through `subscribe` is
 removed when its handle is disposed or the session ends (capnweb disposes the
 exported handle); `processors.enable` returns no handle, so a processor's row
 stays until `processors.disable`. The DO's
-quiet clock is 60 s: an alarm that finds no delivery or facet call in flight
-and no activity for a minute aborts every live facet and returns every borrowed
+idle quiesce is 60 s from the last use of a pin (a facet call finishing, a
+borrowed stub called, a library connection used — a request moves nothing): the
+alarm then aborts every live facet and returns every borrowed
 stub; the next call re-materializes them (a facet delete — `processors.disable`'s
 one effect — that lands while a facet's source is loading wins: the load refuses with `NO_FACET` instead of
 resurrecting an orphan), and a context with no live facet and no borrowed stub

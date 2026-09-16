@@ -579,7 +579,7 @@ export default class Waiter extends WorkerEntrypoint {
   expect(got.offset).toBeGreaterThan(head);
 });
 
-// ── THE WAKE TRACE PROBE (opt-in, deployed): `stream/woken { reason, alarmAt }` is the durable
+// ── THE WAKE TRACE PROBE (opt-in, deployed): `stream/woken { reason }` is the durable
 // incarnation boundary and says what woke it; every alarm pass of the CURRENT incarnation is an
 // ephemeral `events.iterate.com/stream/trace/alarm`, read back with `readEvents(…, { includeEphemeral })`.
 // A stuck cursor delivery is the fastest self-waker (its ladder is 1s·2ⁿ); this prints each wake's
@@ -619,9 +619,9 @@ probe(
         .map(
           (t) =>
             `  ${new Date(t.at).toISOString()} ${t.reason} ` +
-            `${t.alarm.before}→${t.alarm.after} inherited=${t.alarm.inheritedAt} idle=${t.deadlines.idle} ` +
+            `${t.alarm.before}→${t.alarm.after} idle=${t.deadlines.idle} ` +
             `delivery=${JSON.stringify(t.deadlines.delivery.map((d) => [d.name, d.at, d.attempt]))} ` +
-            `facets=${JSON.stringify(t.liveFacets)} external=${t.lastExternalRequestMs}`,
+            `facets=${JSON.stringify(t.liveFacets)} lastPinUse=${t.lastPinUseMs}`,
         )
         .join("\n");
     let itx = openItx(ctx);

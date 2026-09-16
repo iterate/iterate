@@ -1416,7 +1416,7 @@ no-op ConfigWorker>, cacheKey: 'config:default' })`, shown by `itx.rewriteRules.
 
 ```ts
 // iterate-context-durable-object.ts — the constructor, abridged
-this.#stream.appendCreatedAndWokenEvents();
+this.#stream.appendBirthRecord(); // created + woken on a fresh store; a store with rows records its wake at its first door
 this.#stream.append({
   ...subscriptionConfiguredEvent({
     name: "config",
@@ -2081,17 +2081,19 @@ the DO. Losing the borrowed stubs at idle costs exactly one page on the next cal
 ### The idle quiesce
 
 Three things pin a context awake: a materialized facet, a borrowed stub, a held library connection.
-Sixty seconds without a call, a delivery or a borrow, the alarm aborts every idle facet, returns
-every borrowed stub and releases every connection, so the actor can hibernate:
+The pins carry the clock: sixty seconds after the last use of one — a facet call finishing, a
+borrowed stub called, a library connection used; a request, an append or a delivery moves nothing —
+the alarm aborts every idle facet, returns every borrowed stub and releases every connection, so the
+actor can hibernate:
 
 ```ts
 // iterate-context-durable-object.ts — alarm(), abridged
 const IDLE_QUIESCE_AFTER_MS = 60_000;
 async alarm(): Promise<void> {
   await this.#subscriptionDelivery.deliverEveryCursorSubscription(); // 1. due retries — AWAITED, so the deadline it leaves is the one derived after
-  const quiet = Date.now() - this.#lastActivityMs >= IDLE_QUIESCE_AFTER_MS; // 2. the idle QUIESCE
-  if (quiet && this.#facetWorkInFlight === 0) {
-    for (const facetName of this.#liveFacetNames) this.#abortFacetIfRunning(facetName, "idle quiesce");
+  const lastPinUseMs = this.#lastPinUseMs(); // null with nothing pinned; a facet call in flight counts as used now
+  if (lastPinUseMs !== null && Date.now() - lastPinUseMs >= IDLE_QUIESCE_AFTER_MS) { // 2. the idle QUIESCE
+    for (const facetName of this.#liveFacetNames.keys()) this.#abortFacetIfRunning(facetName, "idle quiesce");
     this.#liveFacetNames.clear(); // aborted facets re-materialize on their next call
     this.#rpcStubs.returnBorrowedRpcStubs();
     this.#library.releaseConnections();
@@ -2107,11 +2109,13 @@ append and read for the same reason.
 
 ### Alarms only while something is owed
 
-The quiet clock is armed only when there is something to quiesce — a live facet or a borrowed stub —
-and never re-armed otherwise; a bare probe never pays a storage write plus a billed wake for nothing.
-The cursor lane arms the alarm itself whenever a delivery is owed — a batch queued for a row it does
-not know as a push row, and before every awaited call — so an eviction mid-call leaves the alarm
-behind to re-derive its obligations from the rows and the log.
+The idle deadline exists only while something is pinned — a live facet, a borrowed stub, an open
+connection — so a bare probe never pays a storage write plus a billed wake for nothing. A cursor
+row's claim is derived, never remembered: the row is owed while its cursor sits behind the durable
+mark (20 s from when it was first seen so), and before every awaited call it is written with the
+attempt and a time to come back by, so an eviction mid-call leaves both the alarm and the claim
+behind for the next incarnation. The wake record itself is an ordinary durable event every `*` row
+receives; a wake makes no loop because delivering it creates no reason to wake again.
 
 ### The watchdog on facet calls
 
@@ -2133,7 +2137,7 @@ deadlines — the next scheduled append (core state), the earliest owed cursor d
 (`subscription-delivery.ts` `deadlines()`), the idle quiesce — and deletes it when there is none, so
 a context with nothing owed never wakes itself. Every alarm pass is traced as ephemeral `stream/trace/alarm`
 events (live through `waitForEvent`, after the fact through `readEvents(…, { includeEphemeral })`),
-and `stream/woken { reason, alarmAt }` says what woke each incarnation; `docs/scheduled-appends.md`
+and `stream/woken { reason }` says what woke each incarnation; `docs/scheduled-appends.md`
 has the model.
 
 ### Where it is proven
@@ -2239,6 +2243,6 @@ table of chapter 3 was checked by running `src/context/itx-expression-rewriting.
   `src/context/rpc-stubs.ts`; the e2e lane proves the capnweb-provider half end to end and marks
   the dynamic-worker-provider half `test.fails`; the workerd-provider half is
   `__workers-tests__/ws-fetch-live-101.test.ts`.
-- **The one alarm's holds** (an inherited alarm kept until a pass completes; nothing written during
-  a pass) are stated from `src/alarm-coordinator.ts` and its table test; the e2e wake observation is
-  opt-in and deployed only.
+- **The one alarm's hold** (nothing written during a pass; the alarm read at construction is only
+  the dedupe seed) is stated from `src/alarm-coordinator.ts` and its table test; the e2e wake
+  observation is opt-in and deployed only.

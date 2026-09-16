@@ -201,36 +201,41 @@ export class Stream {
     );
   }
 
-  /** THE WAKE RECORD — the DO constructor calls this before any door opens, so a probe on a
-   *  never-seen context materializes it (what is worth reaching is worth recording). The first
-   *  incarnation appends `stream/created { projectId, path }` at offset 1, every incarnation
-   *  `stream/woken { incarnation, reason, alarmAt? }` — WHY it woke: `alarmAt` is the native alarm
-   *  stored as this incarnation started (workerd runs the constructor before the alarm handler),
-   *  and an alarm at or before now is the one being delivered, so the reason is `"alarm"`; any
-   *  other wake is `"request"` (an RPC, a fetch, a message on a hibernated socket). Both events
-   *  are exempt from pause: a paused stream still records its wake. */
-  appendCreatedAndWokenEvents(alarmAt: number | null = null): void {
-    const born = this.#highestDurableOffset === 0;
+  /** THE BIRTH RECORD — the DO constructor calls this before any door opens, so a probe on a
+   *  never-seen context materializes it (what is worth reaching is worth recording): a FRESH store
+   *  gets `stream/created { projectId, path }` at offset 1 and the first incarnation's wake record
+   *  in the same batch (a birth is always a request's — nothing has an alarm before it exists). A
+   *  store with rows gets nothing here: its wake is recorded by the first door that opens
+   *  (`appendWakeRecord`), because only that door knows WHY it woke — workerd hides a firing alarm
+   *  from `getAlarm()` for the whole run, the constructor included. Both events are exempt from
+   *  pause: a paused stream still records its wake. */
+  appendBirthRecord(): void {
+    if (this.#highestDurableOffset !== 0) return;
+    this.#wakeRecorded = true;
     this.append(
-      ...(born
-        ? [
-            {
-              type: "events.iterate.com/stream/created",
-              payload: { projectId: this.#projectId, path: this.#path },
-            },
-          ]
-        : []),
+      {
+        type: "events.iterate.com/stream/created",
+        payload: { projectId: this.#projectId, path: this.#path },
+      },
       {
         type: "events.iterate.com/stream/woken",
-        payload: {
-          incarnation: this.storage.incarnation,
-          reason: alarmAt !== null && alarmAt <= Date.now() ? "alarm" : "request",
-          // oxlint-disable-next-line iterate/simple-truthiness-check -- a durable record: an absent alarm stays ABSENT, never `alarmAt: null`
-          ...(alarmAt !== null && { alarmAt }),
-        },
+        payload: { incarnation: this.storage.incarnation, reason: "request" },
       },
     );
   }
+
+  /** THE WAKE RECORD, once per incarnation: `stream/woken { incarnation, reason }` — `"alarm"` from
+   *  the alarm handler, `"request"` from every other door (an RPC, a fetch, a message on a hibernated
+   *  socket). The first door to open appends it, before its own work; the ones after find it done. */
+  appendWakeRecord(reason: "alarm" | "request"): void {
+    if (this.#wakeRecorded) return;
+    this.#wakeRecorded = true;
+    this.append({
+      type: "events.iterate.com/stream/woken",
+      payload: { incarnation: this.storage.incarnation, reason },
+    });
+  }
+  #wakeRecorded = false;
 
   #rememberEphemeral(event: StreamEvent, chars: number) {
     if (chars > this.#recentEphemeralsBudgetChars) return;
