@@ -157,9 +157,12 @@ const BIRTH_CONFIG_SUBSCRIPTION = {
   cursor: expect.objectContaining({ attempt: 0 }),
 };
 /** Expected tally counts = groupBy(type) over the DURABLE log (tally consumes "*", durable only). */
+/** What a "*" processor reduces: every durable event but the wake record — `stream/woken` is swept
+ *  by no "*" subscription (a wake makes no work; processor.ts `consumesEvent`). */
 const durableCountsByType = (events: any[]): Record<string, number> => {
   const counts: Record<string, number> = {};
-  for (const e of events) counts[e.type] = (counts[e.type] ?? 0) + 1;
+  for (const e of events)
+    if (e.type !== "events.iterate.com/stream/woken") counts[e.type] = (counts[e.type] ?? 0) + 1;
   return counts;
 };
 
