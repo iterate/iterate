@@ -7,6 +7,7 @@
 //   openapi     — `itx.connectToOpenApi(spec)`: an OpenAPI 3 service as an RpcTarget of operationIds
 //   repos       — `itx.repos.get(path)` / `.list()`: a repo as a stream on any path — its `repo` facet
 //   workspaces  — `itx.workspaces.get(path)` / `.list()`: the workspace of any context — its `workspace` facet
+//   agents      — `itx.agents.get(path)` / `.list()`: an agent on any path — its `agent` facet, the loop that acts by scripts
 
 import {
   RpcSession,
@@ -21,6 +22,8 @@ import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/e
 import { WORKSPACE_PROCESSOR_SOURCE } from "./generated/workspace-processor-source.ts";
 import { REPO_PROCESSOR_SOURCE } from "./generated/repo-processor-source.ts";
 import { PROJECT_PROCESSOR_SOURCE } from "./generated/project-processor-source.ts";
+import { AGENT_PROCESSOR_SOURCE } from "./generated/agent-processor-source.ts";
+import type { AgentDurableObject } from "./agent/durable-object.ts";
 import type { ProjectView } from "./project/contract.ts";
 import type { RepoDurableObject } from "./repo/durable-object.ts";
 import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
@@ -37,7 +40,7 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 // pipelinable handle).
 //
 // The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `repos.get`/`list` ·
-// `workspaces.get`/`list`. `run` is sugar over `itx.workers.get` (the run section); the entity handles
+// `workspaces.get`/`list` · `agents.get`/`list`. `run` is sugar over `itx.workers.get` (the run section); the entity handles
 // over `itx.cd(path).facets.get` (the entities section). The three connectors each
 // return a connection RpcTarget a caller can hold across calls, and each does ALL its HTTP through
 // `itx.fetch` (egress: `getSecret("/secrets/NAME")` placeholders in headers substitute for free; a user
@@ -106,6 +109,18 @@ export interface LibraryRoots {
     get(path: string): InvokeHandle & WorkspaceFacet;
     list(): Promise<{ path: string; createdAt: string }[]>;
   };
+  /** THE AGENTS (src/agent/): an agent as a DOMAIN OBJECT — a conversation on the context at ANY
+   *  path (`/agents/<name>` by convention), driven by a model that acts by writing scripts against
+   *  that context's `itx`; apps/os's agent, lean. `get(path)` is the `agent` facet there, hosted on
+   *  its first call and addressed after; `create({ systemPrompt? })` births it — the processor row
+   *  (the loop runs on every commit) and the certificate, cross-posted to `/` — and `message(text)`
+   *  is a person's words, the trigger of a turn; everything the loop does is an event on the path.
+   *  `list()` is the project catalog: every `agent/created` cross-posted to `/`, folded by the
+   *  project processor (src/project/) — a userspace agent that announces itself lists the same. */
+  agents: {
+    get(path: string): InvokeHandle & AgentFacet;
+    list(): Promise<{ path: string; createdAt: string }[]>;
+  };
 }
 
 /** What a repo handle's dotted members reach: the repo facet's own methods. */
@@ -113,6 +128,8 @@ export type RepoFacet = Pick<
   RepoDurableObject,
   "create" | "tip" | "readFile" | "listFiles" | "commitFiles" | "writeFile" | "log"
 >;
+/** What an agent handle's dotted members reach: the agent facet's own doors. */
+export type AgentFacet = Pick<AgentDurableObject, "create" | "message">;
 /** What a workspace handle's dotted members reach: the workspace facet's own methods. */
 export type WorkspaceFacet = Pick<
   WorkspaceDurableObject,
@@ -174,6 +191,14 @@ export function buildLibrary(itx: LibraryItx): {
           Object.entries((await projectCatalog(itx)).workspaces).map(([path, workspace]) => ({
             path,
             ...workspace,
+          })),
+      },
+      agents: {
+        get: (path) => agentHandle(itx, path),
+        list: async () =>
+          Object.entries((await projectCatalog(itx)).agents).map(([path, agent]) => ({
+            path,
+            ...agent,
           })),
       },
     },
@@ -249,8 +274,9 @@ export function runScript(itx: LibraryItx, script: unknown): Promise<unknown> {
 // path, cross-posted to `/`). Every call on the handle is one dotted expression
 // on that facet, run in the sibling under ITS rules (a test lends a fake `itx.cfArtifacts` on a repo's
 // context). The specs' sources are the SDK-bundled facets (build-sdk.mjs) — strings a userspace worker
-// could carry just the same. `list()` for both reads THE CATALOG: the `project` facet on `/`
-// (src/project/), which folds the cross-posted certificates; hosted the same way, on first read.
+// could carry just the same. `list()` for both — and `agents.list()`, the agents having no
+// first-party facet to `get` — reads THE CATALOG: the `project` facet on `/` (src/project/), which
+// folds the cross-posted certificates; hosted the same way, on first read.
 
 /** A facet on the context at `path`: the call's steps, relative to the facet, as one dispatch there. */
 function facetHandle(
@@ -280,6 +306,27 @@ function workspaceHandle(itx: LibraryItx, path: string): InvokeHandle & Workspac
   }) as InvokeHandle & WorkspaceFacet;
 }
 
+/** The `agent` facet's spec — ONE object for the library's hosting and the processor row it enables,
+ *  so the facet's startup memo never changes between the two. */
+const AGENT_FACET_SPEC = { source: AGENT_PROCESSOR_SOURCE, className: "AgentDurableObject" };
+
+/** The `agent` facet on the context at `path`. A `create` is TWO appends there: the processor row —
+ *  `itx.processors.enable`, spelled HERE because the library is what knows the facet's spec; DURABLE,
+ *  so the loop runs on every commit and outlives this session; enabled ONCE, a row already there is
+ *  left alone — and then the facet's own birth, idempotent on its side. */
+function agentHandle(itx: LibraryItx, path: string): InvokeHandle & AgentFacet {
+  return new InvokeHandle(async (itxExpressionSteps) => {
+    const context = await itx.cd(path);
+    const [first] = itxExpressionSteps;
+    if (Array.isArray(first) && first[0] === "create") {
+      const rows = (await context.invoke(["processors", ["list"]])) as { name: string }[];
+      if (!rows.some((row) => row.name === "agent"))
+        await context.invoke(["processors", ["enable", "agent", AGENT_FACET_SPEC]]);
+    }
+    return context.invoke(["facets", ["get", "agent", AGENT_FACET_SPEC], ...itxExpressionSteps]);
+  }) as InvokeHandle & AgentFacet;
+}
+
 /** The `repo` facet on the context at `path` — any path; the facet derives the Artifacts name from
  *  it and refuses one it cannot back. */
 function repoHandle(itx: LibraryItx, path: string): InvokeHandle & RepoFacet {
@@ -289,7 +336,8 @@ function repoHandle(itx: LibraryItx, path: string): InvokeHandle & RepoFacet {
   }) as InvokeHandle & RepoFacet;
 }
 
-/** THE CATALOG: the `project` facet's view on `/` — what `repos.list()` and `workspaces.list()` read. */
+/** THE CATALOG: the `project` facet's view on `/` — what `repos.list()`, `workspaces.list()` and
+ *  `agents.list()` read. */
 async function projectCatalog(itx: LibraryItx): Promise<ProjectView> {
   const context = await itx.cd("/");
   const snapshot = await context.invoke([

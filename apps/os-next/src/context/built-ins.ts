@@ -1,7 +1,7 @@
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (the one list
 // is context/itx-expression-rewriting.ts). Three kinds of key, one record: the AXIOMS (the log, the stub
 // registry, the rule table, the two hosts, addressing), the BINDINGS (`kv`, `secrets`, `ai`,
-// `cfArtifacts`, `repos` — a Cloudflare binding only this env holds, exposed or scoped) and THE
+// `browser`, `cfArtifacts`, `repos` — a Cloudflare binding only this env holds, exposed or scoped) and THE
 // LIBRARY (`connectTo*`, library.ts — code a user could write, taking only `itx`).
 // THE RECORD IS `itx.builtins`, the reserved root: `itx.builtins.<root>…` runs against it directly
 // and never reads the rule table; a short `itx.<root>…` reaches it through the IMPLICIT PLATFORM ROW
@@ -55,6 +55,7 @@ import {
   RpcStubHandle,
 } from "./expression.ts";
 import type { BuiltInRoot } from "./itx-expression-rewriting.ts";
+import { cfBrowser } from "./browser.ts";
 import { projectScopedArtifacts, type ArtifactsNamespace, type ArtifactsScope } from "./repos.ts";
 
 /** One row of `itx.rewriteRules.list()`: a context row (`target` a string, or `null` for a mask) or an
@@ -145,6 +146,9 @@ export interface BuiltInScope extends LibraryRoots {
    *  model with `@` (`itx.fable ⇒ itx.ai.run('@cf/…', @)`). A test shadows it with `provide("itx.ai",
    *  fake)`; the physical door stays `itx.builtins.ai`. */
   ai: Ai;
+  /** Cloudflare Browser Run (`apps/os` `itx.browser`): `.quickAction(action, options)` returns the
+   *  action's RESULT; `.fetch(input, init)` is the raw CDP door. */
+  browser: ReturnType<typeof cfBrowser>;
   /** THE ARTIFACTS PROXY (repos.ts `ArtifactsScope`): Cloudflare Artifacts, project-scoped and
    *  addressed BY THE REPO'S PATH — the binding's own verbs only: `create`, `get` (a handle with
    *  `createToken` and `remote()`), `list`, `delete`. Git itself is the repo facet's (src/repo/, the
@@ -276,8 +280,8 @@ interface BuildBuiltInsDeps {
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
   iterateContextName: string;
-  /** The bindings the built-ins reach (the workers lane binds neither AI nor Artifacts; nothing
-   *  there calls them). */
+  /** The bindings the built-ins reach (the workers lane binds neither AI, Browser Run, nor Artifacts;
+   *  nothing there calls them). */
   env: {
     LOADER: WorkerLoader;
     ITX_KV: KVNamespace;
@@ -285,6 +289,7 @@ interface BuildBuiltInsDeps {
      *  resource owner's id (iterate-context.ts `resourceScope`). */
     SECRET: DurableObjectNamespace<SecretDurableObject>;
     AI: Ai;
+    BROWSER: BrowserRun;
     ARTIFACTS: ArtifactsNamespace;
   };
   /** The deploy identity every loader cacheKey folds in (worker.ts `AppConfig`). */
@@ -485,6 +490,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       list: () => onRootContext(["list"], async () => deps.secrets()),
     },
     ai: env.AI, // the binding object itself — dispatch walks its methods
+    browser: cfBrowser(env.BROWSER),
     cfArtifacts: projectScopedArtifacts({
       namespace: env.ARTIFACTS,
       projectId: owner.id,

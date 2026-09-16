@@ -42,6 +42,7 @@ export type { IterateContextRpcTarget } from "./iterate-context.ts";
 /** The itx surface every context exposes — the verbs `IterateContextRpcTarget` carries (`append`,
  *  `readEvents`, `kv`, `secrets`, `facets`, `workers`, `rpcStubs`, `subscriptions`, `fetch`, …). */
 export type { BuiltInScope } from "./context/built-ins.ts";
+export type { CfBrowserQuickAction, CfBrowserQuickActionOptions } from "./context/browser.ts";
 /** An itx call as the wire carries it: a dotted string (`"itx.kv.get('k')"`) or the parsed array
  *  form (`["itx", "kv", ["get", "k"]]`). `invoke(expression)` is the un-sugared twin of the dotted
  *  surface — `ctx.kv.get('k')` compiles to `ctx.invoke(["itx","kv",["get","k"]])`. */

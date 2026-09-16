@@ -141,7 +141,7 @@ export type AlarmTrace = {
 };
 
 /** The bindings THE DO reads (wrangler.jsonc): the DO namespace, the Worker Loader, the kv namespaces,
- *  Workers AI, Artifacts — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
+ *  Workers AI, Browser Run, Artifacts — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
  *  vars worker.ts's `parseAppConfig` parses. control-plane.ts's `Env` extends this with the
  *  in-process control plane's own (D1, OAuth KV, …): the one worker's env. */
 export interface Env extends AppConfigEnv {
@@ -150,6 +150,8 @@ export interface Env extends AppConfigEnv {
   ITX_KV: KVNamespace;
   /** Workers AI — the built-in root `itx.ai`, the binding verbatim (context/built-ins.ts). */
   AI: Ai;
+  /** Browser Run — the built-in root `itx.browser` (context/built-ins.ts). */
+  BROWSER: BrowserRun;
   /** Cloudflare Artifacts (beta) — the ONE bound namespace behind `itx.cfArtifacts`, project-scoped. */
   ARTIFACTS: ArtifactsNamespace;
   /** THE SECRETS (secret-durable-object.ts): one Durable Object per secret, `<owner>:<name>` —

@@ -14,17 +14,26 @@ const workspaceBorn = (path: string) => ({
   type: "events.iterate.com/workspace/created",
   payload: { path },
 });
+const agentBorn = (path: string) => ({
+  type: "events.iterate.com/agent/created",
+  payload: { path },
+});
 
 describe("ProjectProcessor — the catalog folded from cross-posted birth certificates", () => {
   const rows: { name: string; events: { type: string; payload?: unknown }[]; view: ProjectView }[] =
     [
-      { name: "the empty catalog", events: [], view: { repos: {}, workspaces: {} } },
+      { name: "the empty catalog", events: [], view: { repos: {}, workspaces: {}, agents: {} } },
       {
-        name: "a repo's and a workspace's certificates each add one entry, by path, stamped with the event's time",
-        events: [repoBorn("/repos/config"), workspaceBorn("/workspaces/notes")],
+        name: "a repo's, a workspace's and an agent's certificates each add one entry, by path, stamped with the event's time",
+        events: [
+          repoBorn("/repos/config"),
+          workspaceBorn("/workspaces/notes"),
+          agentBorn("/agents/support"),
+        ],
         view: {
           repos: { "/repos/config": { createdAt: expect.any(String) } },
           workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
+          agents: { "/agents/support": { createdAt: expect.any(String) } },
         },
       },
       {
@@ -34,6 +43,8 @@ describe("ProjectProcessor — the catalog folded from cross-posted birth certif
           repoBorn("/repos/config"),
           { type: "note" },
           repoBorn("/vendor/lib"),
+          agentBorn("/agents/support"),
+          agentBorn("/agents/support"),
         ],
         view: {
           repos: {
@@ -41,15 +52,17 @@ describe("ProjectProcessor — the catalog folded from cross-posted birth certif
             "/vendor/lib": { createdAt: expect.any(String) },
           },
           workspaces: {},
+          agents: { "/agents/support": { createdAt: expect.any(String) } },
         },
       },
       {
         name: "a malformed certificate is skipped by the contract, never reduced",
         events: [
           { type: "events.iterate.com/repos/created", payload: { path: 1 } },
+          { type: "events.iterate.com/agent/created", payload: {} },
           workspaceBorn("/w"),
         ],
-        view: { repos: {}, workspaces: { "/w": { createdAt: expect.any(String) } } },
+        view: { repos: {}, workspaces: { "/w": { createdAt: expect.any(String) } }, agents: {} },
       },
     ];
   for (const { name, events, view } of rows)

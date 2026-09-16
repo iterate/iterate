@@ -7,7 +7,8 @@
  * ONE append on the conversation's fresh context: the two facet subscription rows (the voice
  * relay and the agent that answers its delegations — what `processors.enable` writes) and the
  * call's birth, so the relay materialises, reads `call-started` from its log and dials the provider
- * before the first microphone frame arrives. The device carries no source and no class name; the
+ * before the first microphone frame arrives. That same event is the agent's first delivery: it
+ * lands `agent/created` on `/`, so `itx.agents.list()` knows the conversation. The device carries no source and no class name; the
  * bundles live in the project's KV.
  *
  * The funnel delivers every durable event of every context here too (`processEvent`); nothing
@@ -86,8 +87,11 @@ export default class VoiceWorker extends ConfigWorker {
             ],
             "processEventBatch",
           ],
-          /* The relay's delegations, and the agent's own answers (to settle the pending fold). */
+          /* The press (its first delivery: the birth announced to /), its own certificate, the
+           * relay's delegations, and its own answers (to settle the pending fold). */
           consumes: [
+            "events.iterate.com/voice-agent/call-started",
+            "events.iterate.com/agent/created",
             "events.iterate.com/voice-agent/delegation-requested",
             "events.iterate.com/voice-agent/commentary",
           ],
