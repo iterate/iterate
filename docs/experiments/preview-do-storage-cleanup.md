@@ -67,7 +67,37 @@ work can run without redeployment.
 `scripts/preview/cleanup-probe.ts seed-heartbeat` creates this controlled work.
 It intentionally releases client handles without cancelling the schedule, so
 cleanup has actual recurring work to stop. The active scheduler was then
-reset directly by its known ID at 22:48:40; observation is still in progress.
+reset directly by its known ID at 22:48:40, and its source stream at 22:49:46.
+Before reset, the native trace recorded 14 successful scheduler alarms and
+41 source-stream alarms. After the scheduler reset, it recorded one cancelled
+scheduler alarm and one remaining stream alarm. After both resets there were
+no observed invocations on either ID for 124 seconds, while unrelated trace
+traffic continued. Delayed GraphQL checks are still pending.
+
+This supports wiping a known dependency set. It does not establish complete
+project cleanup or make an incomplete inventory safe.
+
+## Discovery and cancellation timeline
+
+| Time (UTC) | Observation                                                                                                                                                            |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 22:42:29   | REST still lists only the 403 old sandbox objects, while the new test objects are actively used.                                                                       |
+| 22:43:49   | Normal cleanup succeeds after resetting those 403 objects.                                                                                                             |
+| 22:44:25   | REST now lists 224 non-container objects missed by the sweep.                                                                                                          |
+| 22:46:51   | REST lists 2,400 objects, including 1,997 non-container objects.                                                                                                       |
+| 22:52:43   | The next prepare job inventories 6,329 objects in the same namespaces.                                                                                                 |
+| 22:53:06   | Push `e474dafb8` interrupts that active pre-deploy wipe (run `340pfs6rxw`, workflow `ddx7qrf5pn`). All old jobs cancel; no complete per-object result file is written. |
+| 22:54:27   | Replacement run `7zzc4tr2fv`, workflow `8jp447qqgm`, inventories 6,339 objects and begins recovery.                                                                    |
+
+No complete existing registry can replace REST discovery cheaply. The
+project directory is a capped KV listing and omits some impersonated test
+projects. Stream lists are asynchronous projections. Stateful-worker keys,
+build hashes and global stream paths have no exhaustive list. Building an
+accurate run-owned registry would be a separate architecture change.
+
+During the untouched 22:43:50–22:46:50 observation window, the native trace
+recorded 80 invocations on six IDs, including 37 alarms. Stream alarms
+continued through 22:46:44. These are active leftovers, not just retained bytes.
 
 ## Limits to investigate
 
@@ -108,6 +138,14 @@ invocations and periodic activity for an explicit UTC window.
 - `duration` is already GB-seconds. Do not multiply by memory again.
 - Returned sums already account for sampling. Do not multiply by sampleInterval.
 - Invocation wall times can overlap; summing them is not billed duration.
+- Periodic groups can contain multiple records for one object ID and minute.
+  For example, one Stream group contains six records totalling 360 active
+  seconds. Facets inherit the parent ID and may explain this aggregation, but
+  the public docs do not establish invoice-level interpretation. Report raw
+  returned GB-seconds and active-time equivalents; do not infer physical
+  concurrency or a dollar saving from these rows.
+- Reporting periods can cross experiment boundaries. A narrow query's totals
+  are not necessarily all incremental activity after cleanup.
 - Query a finished window again after 30–60 minutes. Empty recent data does not
   prove quietness.
 - Retiring a namespace removes historical analytics. In this baseline only
@@ -123,3 +161,9 @@ The branch subsequently merged `a9f5eddef6` from main. This includes #2680,
 which defers artifact deletion during normal preview runs. The original 69s
 baseline therefore includes work current main no longer does; it is not a
 controlled comparison for the final branch.
+
+Primary references: [storage deletion](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/#deleteall),
+[alarm behavior](https://developers.cloudflare.com/durable-objects/api/alarms/),
+[object inventory](https://developers.cloudflare.com/api/resources/durable_objects/subresources/namespaces/subresources/objects/),
+[facet identity](https://developers.cloudflare.com/dynamic-workers/usage/durable-object-facets/),
+and [metrics and ingestion](https://developers.cloudflare.com/durable-objects/observability/metrics-and-analytics/).

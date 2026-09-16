@@ -95,3 +95,9 @@ post-cleanup DO active time with Cloudflare GraphQL. Do not merge automatically.
   Before this push, a fresh project ran a real five-second heartbeat on the
   unchanged deployment; direct scheduler and source-stream resets returned
   success and the native tail showed no subsequent calls to that pair.
+
+- 22:56 UTC: pushed `e474dafb8` at 22:53:06 while B's pre-deploy sweep was
+  active. Depot cancelled all B jobs. Replacement C (`7zzc4tr2fv` /
+  `8jp447qqgm`) inventoried 6,339 objects and is progressing through its sweep.
+  Known heartbeat pair had no native invocations for 124s after both resets;
+  this is positive primitive evidence, separate from incomplete discovery.
