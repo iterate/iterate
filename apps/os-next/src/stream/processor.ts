@@ -93,12 +93,18 @@ export type ProcessEventArgs<State, Event = StreamEvent> = {
  *  reduces all call this; there is no second copy to drift. `consumes` undefined = every durable event
  *  (a subscriber's default). "*" = every durable event. A NAMED type opts that type in, INCLUDING
  *  ephemerals ("*" NEVER sweeps ephemerals) — so a live-state watcher spells
- *  `consumes: ["events.iterate.com/live-state/changed"]` and filters `payload.key` itself. */
+ *  `consumes: ["events.iterate.com/live-state/changed"]` and filters `payload.key` itself. The WAKE
+ *  RECORD is swept by nobody either: A WAKE MUST MAKE NO WORK. Delivering `stream/woken` to a "*"
+ *  row is work — on a project root the config row's target is a facet in the same DO, so an
+ *  alarm-only incarnation that delivered its own wake materialized that facet, counted its loopback
+ *  as activity and re-armed: every root woke itself every 20 s, forever. Only a subscriber that
+ *  NAMES the wake record sees it. */
 export function consumesEvent(
   consumes: readonly string[] | undefined,
   event: { type: string; ephemeral?: boolean },
 ): boolean {
-  if (event.ephemeral) return consumes?.includes(event.type) ?? false;
+  if (event.ephemeral || event.type === "events.iterate.com/stream/woken")
+    return consumes?.includes(event.type) ?? false;
   return !consumes || consumes.includes("*") || consumes.includes(event.type);
 }
 
@@ -587,6 +593,14 @@ export type StreamEventInput = {
    *  `append` — and WHO: the session's verified principal (src/principal.ts), set by the DO's append
    *  root from the session's project token and never taken from a client. */
   source?: {
+    /** The durable schedule definition responsible for this occurrence. */
+    schedule?: {
+      key: string;
+      scheduledAtOffset: number;
+      at: string;
+      /** Attribution of the definition, distinct from the platform writing the occurrence. */
+      definedBy?: Omit<NonNullable<StreamEventInput["source"]>, "schedule">;
+    };
     processor?: {
       slug: string;
       version: string;

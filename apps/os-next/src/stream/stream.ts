@@ -16,10 +16,14 @@
 // page's `scannedThroughOffset` is the mark, not the in-memory head — so nothing a reader persists
 // (a facet's checkpoint, a subscription cursor) can name an offset a later incarnation could hand
 // to a durable. Pushes still carry the full head in their ranges; only the log's own proof is capped.
+// THE RECENT-EPHEMERALS RING is the one place an ephemeral outlives its append: an incarnation keeps
+// its last RECENT_EPHEMERALS_BUDGET_CHARS of them, and `read(…, { includeEphemeral: true })` merges
+// them into a page — under the same proof, which never names one.
 
 import { codedError, errorCode, reportIssue } from "../lib.ts";
 import type { ItxExpressionInput } from "../context/expression.ts";
 import type { Caller } from "../principal.ts";
+import { reduceScheduledAppends } from "./scheduled-appends.ts";
 import { CoreContract, reduceCoreEventBatch, type CoreState } from "./core-processor.ts";
 import {
   idempotencyConflictMessage,
@@ -54,21 +58,15 @@ const READ_PAGE_BUDGET_BYTES = 8 * 1024 * 1024;
 /** The most rows one page returns whatever `limit` asks — the object overhead of tiny events, which
  *  the byte budget cannot see. */
 const READ_PAGE_MAX_EVENTS = 1000;
+/** THE RECENT-EPHEMERALS RING's default size, in serialized JS chars (`StreamDeps` overrides it):
+ *  what an incarnation keeps of its ephemerals after the moment they were appended — the one way to
+ *  see one after the fact, since no ephemeral ever reaches a row. Oldest out first; an event over the
+ *  whole budget is not kept. Per incarnation, like every ephemeral offset. */
+const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
 
-/** THE SELF-WAKE HALT STREAK — the billing circuit-breaker (wave-0 3b, Jonas: "we need runaway
- *  billing controls"). A context that fires its alarm this many times IN A ROW with NO public door
- *  touched in between has woken itself for nothing — a retry ladder grinding on a context no one is
- *  using, or any arm that fires and re-arms with nothing to show for it. (The loop it was measured
- *  on — the constructor appends `woken`, the `config` cursor row arms the lane's insurance alarm to
- *  deliver it, that alarm found nothing due and the DO's alarm() re-armed its quiet clock with
- *  nothing to quiesce, the isolate was evicted in between, the alarm re-created it every minute —
- *  is closed at its root: alarm() re-arms only while a facet is live or a stub is borrowed.) Past
- *  this, `armAlarmNoLaterThan` stops arming (below) — one billed wake per minute becomes zero —
- *  until a real request clears the streak. Low, because each self-wake is a billed wake and a durable
- *  row: five is a few minutes of a loop, not hours. A live retry ladder is self-limiting anyway (≤ 15
- *  attempts, then it halts on its own); this bounds the UNBOUNDED case. The durable count lives in
- *  stream-storage's `stream_meta`. */
-const SELF_WAKE_HALT_STREAK = 5;
+/** THE ALARM TRACE — the DO's ephemeral record of one alarm pass (iterate-context-durable-object.ts
+ *  `AlarmTrace`); pause-exempt, so a paused context's passes stay observable. */
+export const STREAM_ALARM_TRACE_EVENT = "events.iterate.com/stream/trace/alarm" as const;
 
 /** The waitForEvent selector: `type` is an exact event-type match (absent = any type); only events
  *  with offset strictly greater than `afterOffset` match (default = the head at call time — "the
@@ -89,7 +87,7 @@ type WaitForEventWaiter = {
 
 /** Everything the stream needs from its host. */
 interface StreamDeps {
-  /** The DO's whole `ctx.storage` — sync SQLite, the sync transaction, the alarm. */
+  /** The DO's whole `ctx.storage` — sync SQLite and the sync transaction. */
   storage: DurableObjectStorageSlice;
   /** The event-identity stamp on every StreamEvent. */
   path: string;
@@ -98,6 +96,8 @@ interface StreamDeps {
   /** The post-commit fan-out, once per offset-advancing commit with the newly committed events in
    *  offset order, ephemerals included (the waitForEvent waiters settle before it). */
   onCommit: (freshEvents: StreamEvent[], afterOffset: number, throughOffset: number) => void;
+  /** The recent-ephemerals ring's size, serialized JS chars (RECENT_EPHEMERALS_BUDGET_CHARS). */
+  recentEphemeralsBudgetChars?: number;
 }
 
 /** THE STREAM — the commit point: SQLite rows + ONE durable mark, idempotency at the door, one
@@ -119,11 +119,10 @@ export class Stream {
   #highestDurableOffset: number;
   /** FIFO; resolved from `freshEvents` in append's step 5. */
   readonly #waitForEventWaiters: WaitForEventWaiter[] = [];
-  #alarmArmedForMs: number | null = null;
-  /** The self-wake streak (SELF_WAKE_HALT_STREAK), durable in `stream_meta` and loaded once at
-   *  construction so `armAlarmNoLaterThan` can gate on it synchronously; the host DO drives it. */
-  #selfWakeStreak = 0;
-
+  /** This incarnation's newest ephemerals, oldest first, within the budget. */
+  readonly #recentEphemerals: { event: StreamEvent; chars: number }[] = [];
+  #recentEphemeralsChars = 0;
+  readonly #recentEphemeralsBudgetChars: number;
   // ── THE CORE REDUCE's state: rehydrated by the constructor from the versioned checkpoint and caught
   // up to the durable mark, reduced inside every durable commit and checkpointed with it (the cursor
   // every batch, the state on change). Durable events only, so it rebuilds bit-identically. ──
@@ -134,10 +133,11 @@ export class Stream {
 
   constructor(deps: StreamDeps) {
     this.storage = new StreamStorage(deps.storage);
-    this.#selfWakeStreak = this.storage.readSelfWakeStreak(); // durable across incarnations
     this.#path = deps.path;
     this.#projectId = deps.projectId;
     this.#onCommit = deps.onCommit;
+    this.#recentEphemeralsBudgetChars =
+      deps.recentEphemeralsBudgetChars ?? RECENT_EPHEMERALS_BUDGET_CHARS;
     // THE DURABLE HEAD is the core checkpoint's offset — written every durable commit anyway (the
     // reduce inside the transaction below), so there is no separate mark to write. Read WHATEVER
     // version wrote it: a core-version bump still recovers the head and re-reduces the log up to it.
@@ -204,8 +204,12 @@ export class Stream {
   /** THE WAKE RECORD — the DO constructor calls this before any door opens, so a probe on a
    *  never-seen context materializes it (what is worth reaching is worth recording). The first
    *  incarnation appends `stream/created { projectId, path }` at offset 1, every incarnation
-   *  `stream/woken { incarnation }`. Both are exempt from pause: a paused stream still records its wake. */
-  appendCreatedAndWokenEvents(): void {
+   *  `stream/woken { incarnation, reason, alarmAt? }` — WHY it woke: `alarmAt` is the native alarm
+   *  stored as this incarnation started (workerd runs the constructor before the alarm handler),
+   *  and an alarm at or before now is the one being delivered, so the reason is `"alarm"`; any
+   *  other wake is `"request"` (an RPC, a fetch, a message on a hibernated socket). Both events
+   *  are exempt from pause: a paused stream still records its wake. */
+  appendCreatedAndWokenEvents(alarmAt: number | null = null): void {
     const born = this.#highestDurableOffset === 0;
     this.append(
       ...(born
@@ -218,9 +222,25 @@ export class Stream {
         : []),
       {
         type: "events.iterate.com/stream/woken",
-        payload: { incarnation: this.storage.incarnation },
+        payload: {
+          incarnation: this.storage.incarnation,
+          reason: alarmAt !== null && alarmAt <= Date.now() ? "alarm" : "request",
+          // oxlint-disable-next-line iterate/simple-truthiness-check -- a durable record: an absent alarm stays ABSENT, never `alarmAt: null`
+          ...(alarmAt !== null && { alarmAt }),
+        },
       },
     );
+  }
+
+  #rememberEphemeral(event: StreamEvent, chars: number) {
+    if (chars > this.#recentEphemeralsBudgetChars) return;
+    this.#recentEphemerals.push({ event, chars });
+    this.#recentEphemeralsChars += chars;
+    while (this.#recentEphemeralsChars > this.#recentEphemeralsBudgetChars) {
+      const oldest = this.#recentEphemerals.shift();
+      if (!oldest) break;
+      this.#recentEphemeralsChars -= oldest.chars;
+    }
   }
 
   highestAssignedOffset(): number {
@@ -266,6 +286,7 @@ export class Stream {
   append(...events: StreamEventInput[]): StreamEvent[] {
     if (events.length === 0) return []; // a pure no-op: nothing checked, minted, or fanned out
     // 1. may this land? — this runtime check is the SOLE enforcement (no boundary validator).
+    const charsByEphemeralInput = new Map<StreamEventInput, number>(); // measured once, for the ring too (step 5)
     for (const event of events) {
       // oxlint-disable-next-line iterate/simple-truthiness-check -- append is the SOLE enforcement door (no boundary validator); event.type arrives from callers/the wire, so the static string type is not a runtime guarantee
       if (typeof event.type !== "string" || event.type.trim() === "")
@@ -287,6 +308,7 @@ export class Stream {
       // the same delivery memory — the same ceiling, measured here (a durable is measured at its insert).
       if (event.ephemeral) {
         const chars = JSON.stringify(event).length;
+        charsByEphemeralInput.set(event, chars);
         if (chars > EVENT_BODY_MAX_CHARS)
           throw codedError(
             "EVENT_TOO_LARGE",
@@ -306,14 +328,19 @@ export class Stream {
       "events.iterate.com/stream/woken",
       "events.iterate.com/stream/paused",
       "events.iterate.com/stream/resumed",
+      "events.iterate.com/stream/append-schedule-cancelled",
       // the delivery loop's own record of a halted row — a paused stream's ladder must still end
       "events.iterate.com/stream/subscription-delivery-halted",
+      // Alarm traces are kernel diagnostics, not user work; an operator must still be able to
+      // inspect a paused context's current incarnation.
+      STREAM_ALARM_TRACE_EVENT,
     ];
     const afterOffset = this.#highestAssignedOffset;
     const createdAt = new Date().toISOString();
     const committedEvents: StreamEvent[] = []; // one per appended event, in order (a dedupe hit echoes the existing event)
     const freshEvents: StreamEvent[] = []; // the events NEW to the log, in offset order — what commits, reduces, fans out
     const eventsByIdempotencyKey = new Map<string, StreamEvent>(); // keys landing earlier in THIS batch
+    const freshEphemerals: { event: StreamEvent; chars: number }[] = []; // for the ring, once the batch lands
     let throughOffset = afterOffset;
     for (const event of events) {
       const { offset: expectedOffset, ...eventInput } = event;
@@ -358,8 +385,38 @@ export class Stream {
         eventsByIdempotencyKey.set(eventInput.idempotencyKey, committedEvent);
       committedEvents.push(committedEvent);
       freshEvents.push(committedEvent);
+      if (committedEvent.ephemeral)
+        freshEphemerals.push({
+          event: committedEvent,
+          // measured in step 1 on the input (the committed event adds its offset, createdAt and path)
+          chars: charsByEphemeralInput.get(event) ?? JSON.stringify(committedEvent).length,
+        });
     }
     if (freshEvents.length === 0) return committedEvents; // every event deduped to an existing one
+    // Only definitions can grow the projection. Completion/cancellation shrink it or advance a
+    // fixed-width nextAt; bounded failure diagnostics are excluded from the definition budget.
+    if (freshEvents.some((event) => event.type === "events.iterate.com/stream/append-scheduled")) {
+      const scheduledAppends = freshEvents.reduce(
+        reduceScheduledAppends,
+        this.#coreReducedState.schedules,
+      );
+      if (
+        Object.keys(scheduledAppends).length > 100 ||
+        JSON.stringify(
+          Object.fromEntries(
+            Object.entries(scheduledAppends).map(([key, { failure: _failure, ...definition }]) => [
+              key,
+              definition,
+            ]),
+          ),
+        ).length >
+          1024 * 1024
+      )
+        throw codedError(
+          "SCHEDULE_LIMIT",
+          "a context may retain at most 100 schedules and 1,048,576 serialized characters; cancel failed definitions before adding more",
+        );
+    }
     // 3 + 4. reduce and commit
     let coreReducedStateChanged = false;
     if (freshEvents.every((event) => event.ephemeral)) {
@@ -406,7 +463,9 @@ export class Stream {
       this.#highestAssignedOffset = throughOffset;
       this.#highestDurableOffset = throughOffset;
     }
-    // 5. after the commit
+    // 5. after the commit — the ring first: an ephemeral is remembered only once its batch has
+    //    landed (a refusal above would leave a phantom at an offset a later batch reuses).
+    for (const { event, chars } of freshEphemerals) this.#rememberEphemeral(event, chars);
     this.#resolveWaitForEventWaiters(freshEvents); // waiters first: onCommit may append again (a nested commit)
     this.#onCommit(freshEvents, afterOffset, throughOffset);
     // Core's live-state delta rides this stream's own append (a nested commit). LOSSY BY CONTRACT:
@@ -425,12 +484,18 @@ export class Stream {
     );
   }
 
-  /** One page after `afterOffset`: at most `limit` rows AND at most READ_PAGE_BUDGET_BYTES of
-   *  bodies — the SERVER decides the page, `limit` only shrinks it. SYNCHRONOUS: the stream's own
-   *  single-turn scans call it inline, and cross-hop callers get a promise from Workers RPC
-   *  regardless. The budget bounds ONE read; many large reads at once are an accepted
-   *  client-behaviour limit (e2e/isolate-ceilings-deployed, CONCURRENT READERS, says why). */
-  read(afterOffset = 0, limit = 500): StreamPage {
+  /** One page after `afterOffset`: at most `limit` DURABLE rows AND at most READ_PAGE_BUDGET_BYTES
+   *  of bodies — the SERVER decides the page, `limit` only shrinks it. With `includeEphemeral`, the
+   *  ephemerals this incarnation still holds (the ring) ride the page too, in offset order: the ones
+   *  inside the page's proven span, and — on the page that reaches the head — the head's tail beyond
+   *  the durable mark. They count against no limit (the ring bounds them), and THE PROOF IS THE
+   *  LOG'S: `scannedThroughOffset` never names an ephemeral, so a head ephemeral comes back on every
+   *  at-head read until a durable takes the head or the ring evicts it — persist
+   *  `scannedThroughOffset`, never an event's offset. SYNCHRONOUS: the stream's own single-turn
+   *  scans call it inline, and cross-hop callers get a promise from Workers RPC regardless. The
+   *  budget bounds ONE read; many large reads at once are an accepted client-behaviour limit
+   *  (e2e/isolate-ceilings-deployed, CONCURRENT READERS, says why). */
+  read(afterOffset = 0, limit = 500, options: { includeEphemeral?: boolean } = {}): StreamPage {
     limit = Math.min(Math.max(1, limit), READ_PAGE_MAX_EVENTS); // limit 0 crashed the cut check (userspace-reachable)
     const { rows, nextRowDidNotFit } = this.storage.readEventPage(
       afterOffset,
@@ -460,7 +525,14 @@ export class Stream {
     const lastOffset = events.length ? events[events.length - 1].offset : afterOffset;
     const atHead =
       !nextRowDidNotFit && (events.length < limit || lastOffset >= highestDurableOffset);
-    return { events, scannedThroughOffset: atHead ? highestDurableOffset : lastOffset, atHead };
+    const scannedThroughOffset = atHead ? highestDurableOffset : lastOffset;
+    if (options.includeEphemeral) {
+      const ceiling = atHead ? Infinity : scannedThroughOffset;
+      for (const { event } of this.#recentEphemerals)
+        if (event.offset > afterOffset && event.offset <= ceiling) events.push(event);
+      events.sort((a, b) => a.offset - b.offset);
+    }
+    return { events, scannedThroughOffset, atHead };
   }
 
   /** Resolve with the next event matching `filter` — or the first COMMITTED durable match already in
@@ -519,57 +591,23 @@ export class Stream {
     }
   }
 
-  // ── the alarm armer ──
-
-  /** ONE alarm write per quiet-period start, never per append (an ephemeral flood arms once).
-   *  Memo-only: a fresh incarnation writes one redundant setAlarm and a later target may overwrite
-   *  an earlier one, which is safe because every alarm() pass re-derives its obligations and re-arms. */
-  armAlarmNoLaterThan(atMs: number): void {
-    // The single chokepoint every arm site goes through, so a halted context (SELF_WAKE_HALT_STREAK)
-    // cannot re-arm from anywhere. A real request clears the streak before its work, so this only
-    // ever suppresses an ALARM-driven arm.
-    if (this.selfWakeHalted()) return;
-    if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
-    this.#alarmArmedForMs = atMs;
-    // Not awaited: the native output gate owns the write and turns an async failure into an
-    // invocation failure — and a lost memo just re-arms on the next alarm() pass.
-    void this.storage.setAlarm(atMs);
-  }
-
-  noteAlarmFired(): void {
-    this.#alarmArmedForMs = null;
-  }
-
-  /** True once the self-wake streak has hit its ceiling — `armAlarmNoLaterThan` is a no-op until a
-   *  public door clears it. */
-  selfWakeHalted(): boolean {
-    return this.#selfWakeStreak >= SELF_WAKE_HALT_STREAK;
-  }
-
-  /** One more self-wake (the host's alarm-only pass). `justHalted` is true for THE call that crossed
-   *  the ceiling, so the host records the durable fact exactly once even if a pre-armed alarm fires
-   *  once more after the halt. */
-  noteSelfWake(): { streak: number; justHalted: boolean } {
-    const before = this.#selfWakeStreak;
-    this.#selfWakeStreak += 1;
-    this.storage.writeSelfWakeStreak(this.#selfWakeStreak);
-    return {
-      streak: this.#selfWakeStreak,
-      justHalted: this.selfWakeHalted() && before < SELF_WAKE_HALT_STREAK,
-    };
-  }
-
-  /** A real request: the loop is broken, so reset the streak and lift the halt. NO write when
-   *  already zero, so the common request path pays nothing. */
-  notePublicDoor(): void {
-    if (this.#selfWakeStreak === 0) return;
-    this.#selfWakeStreak = 0;
-    this.storage.writeSelfWakeStreak(0);
+  /** The schedules' deadline for the DO's alarm (alarm-coordinator.ts): the earliest pending
+   *  batch's `nextAt`, epoch ms — none while paused (pause holds every scheduled append) or when
+   *  every definition is parked by a failure. */
+  nextScheduledAppendAt(): number | null {
+    if (this.#coreReducedState.paused) return null;
+    let earliest: number | null = null;
+    for (const row of Object.values(this.#coreReducedState.schedules)) {
+      if (row.failure) continue;
+      const at = Date.parse(row.nextAt);
+      earliest = earliest === null ? at : Math.min(earliest, at);
+    }
+    return earliest;
   }
 }
 
 // ── stream storage ── THE STREAM'S TABLES, typed: every SQL statement the stream runs lives here,
-// over the ONE platform handle — `ctx.storage.sql`, `transactionSync` and `setAlarm`. Workerd's kv
+// over the ONE platform handle — `ctx.storage.sql` and `transactionSync`. Workerd's kv
 // is itself a SQLite table, so the stream keeps none of its own: the whole seam is SQL, and a
 // node:sqlite stand-in satisfies it in a screen (test-support.ts `nodeSqliteDurableObjectStorage`).
 //
@@ -577,7 +615,7 @@ export class Stream {
 //   event_chunks          offset · chunk_index · chunk      a body over EVENT_CHUNK_SIZE, sliced —
 //                         the events row keeps an EMPTY body as the chunked marker (a real body is
 //                         never empty JSON); reads and the idempotency lookup reassemble it
-//   stream_meta           key · value                       the incarnation counter, the self-wake streak
+//   stream_meta           key · value                       the incarnation counter
 //   subscription_cursors  name · cursor (JSON)              the delivery loop's at-least-once cursors
 //   reduce_checkpoints    ReduceCheckpointTable (processor.ts) the core reduce's checkpoint (a facet host
 //                                                           keeps its own, in its own storage)
@@ -587,7 +625,6 @@ export class Stream {
 export type DurableObjectStorageSlice = {
   sql: SqlStorageHandle;
   transactionSync<T>(closure: () => T): T;
-  setAlarm(scheduledTime: number | Date): Promise<void>;
 };
 
 /** A serialized body longer than this (chars) is split across `event_chunks` rows instead of one
@@ -660,25 +697,6 @@ class StreamStorage {
 
   transactionSync<T>(closure: () => T): T {
     return this.#storage.transactionSync(closure);
-  }
-
-  setAlarm(atMs: number): Promise<void> {
-    return this.#storage.setAlarm(atMs);
-  }
-
-  /** The self-wake streak (stream.ts SELF_WAKE_HALT_STREAK): one `stream_meta` row, read once at
-   *  construction and written only when it MOVES, so normal request operation pays no extra write. */
-  readSelfWakeStreak(): number {
-    const row = this.#sql
-      .exec<{ value: string }>("SELECT value FROM stream_meta WHERE key = 'selfWakeStreak'")
-      .toArray()[0];
-    return row ? Number(row.value) : 0;
-  }
-  writeSelfWakeStreak(streak: number): void {
-    this.#sql.exec(
-      "INSERT OR REPLACE INTO stream_meta (key, value) VALUES ('selfWakeStreak', ?)",
-      String(streak),
-    );
   }
 
   /** The highest offset in the log — 0 on an empty one. The stream's constructor reads it once: a
@@ -805,7 +823,11 @@ class StreamStorage {
  *  `DurableObjectStub<IterateContextDurableObject>`, an off-platform `RpcTarget` over capnweb. */
 export interface ReachableContext {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  read(afterOffset?: number, limit?: number): Promise<StreamPage>;
+  read(
+    afterOffset?: number,
+    limit?: number,
+    options?: { includeEphemeral?: boolean },
+  ): Promise<StreamPage>;
   /** THE dispatch door. `caller` (WHO is calling) is what a `cd(path)` hop carries across to a
    *  sibling — the same identity, so a sibling append is attributed too; `args` are the expression's
    *  positional args. Both optional, so a bare `invoke(call)` is an anonymous probe. */

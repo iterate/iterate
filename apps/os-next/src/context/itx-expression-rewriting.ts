@@ -97,6 +97,7 @@ export const BUILT_IN_ROOTS = [
   "cfArtifacts",
   "git",
   "append",
+  "schedules",
   "readEvents",
   "waitForEvent",
   "cd",

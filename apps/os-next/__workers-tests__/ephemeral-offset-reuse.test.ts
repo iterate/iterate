@@ -161,10 +161,11 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
     offset: number;
     state: { n: number };
   };
-  // n = created + woken + config-subscription + configured + tick + note: the configured push's gap
-  // repair read the log from 0 (so the filter's unsent created@1, woken@2 and the config subscription
-  // were reduced too), the push reduced tick, this wake read note.
-  expect(mid.state.n).toBe(6);
+  // n = created + config-subscription + configured + tick + note: the configured push's gap repair
+  // read the log from 0 (so the filter's unsent created@1 and the config subscription were reduced
+  // too — never a woken: the wake record is swept by no "*" row), the push reduced tick, this wake
+  // read note.
+  expect(mid.state.n).toBe(5);
   expect(p0.scannedThroughOffset).toBe(highestDurableOffset); // read() proves the durable log only
   expect(mid.offset).toBe(highestDurableOffset); // so the checkpoint the wake persisted is the mark, not the head
   await sleep(400);
@@ -181,8 +182,8 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
     offset: number;
     state: { n: number };
   };
-  // the pushed tick@mark+3 is reduced exactly once, and the new incarnation's woken@mark+1 exactly
-  // once via the engine's durable gap repair (the push range starts past the cursor; the contract
-  // consumes "*") → n grows by exactly 2.
-  expect(after.state.n).toBe(mid.state.n + 2);
+  // the pushed tick@mark+3 is reduced exactly once; the new incarnation's woken@mark+1 is the
+  // engine's durable gap repair's to skip (the push range starts past the cursor; "*" never sweeps
+  // the wake record) → n grows by exactly 1.
+  expect(after.state.n).toBe(mid.state.n + 1);
 });

@@ -12,9 +12,11 @@
 //
 // AT-LEAST-ONCE survives an eviction because the alarm's pass re-derives its obligations from the
 // ROWS and the log — never from the cursor table, which a first delivery has not written yet — and
-// because this lane ARMS THE ALARM ITSELF whenever a delivery is owed: when a batch is queued for a
-// row it does not know as a push row, and before every awaited call, for the call's own watchdog
-// horizon. Die mid-call and the alarm survives to come back.
+// because this delivery loop REPORTS A DEADLINE to the DO's alarm (alarm-coordinator.ts) whenever a delivery
+// is owed: a row's `deadlineAt` is the +20 s insurance set when a durable batch is queued for a row
+// not known as a push row and before every awaited call, cleared once the row is caught up; a row
+// on its retry ladder is covered by the cursor's own `nextAttemptAtMs`. Die mid-call and the alarm
+// survives to come back; `deadlines()` is what the DO reconciles against.
 //
 // Nothing here reads a "kind" off an event: the kind is the evaluated value's brand, minted by the
 // built-in that produced it. Every delivery carries `{ after, through }`; per subscription the loop
@@ -32,11 +34,11 @@ import {
 import { errorCode, reportIssue, withTimeout } from "../lib.ts";
 import { type StreamEvent, consumesEvent, type ScannedRange } from "./processor.ts";
 import type { Subscription } from "./core-processor.ts";
-import type { Stream, SubscriptionCursor } from "./stream.ts";
+import type { Stream, StreamPage, SubscriptionCursor } from "./stream.ts";
 
-/** A cursor delivery's awaited call is bounded by this; it is also how far ahead the lane arms the
- *  alarm before the call — by the time it fires the call has acked (the cursor row is written) or
- *  failed (the ladder armed), and an eviction in between leaves the alarm behind to re-derive. */
+/** A cursor delivery's awaited call is bounded by this; it is also how far ahead a row's insurance
+ *  deadline sits — by the time it fires the call has acked (the cursor row is written) or failed
+ *  (the ladder took over), and an eviction in between leaves the alarm behind to re-derive. */
 const CURSOR_DELIVERY_CALL_WATCHDOG_MS = 20_000;
 
 /** THE IN-FLIGHT BUDGET, per context: the most serialized event chars ALL rows together may have
@@ -124,6 +126,11 @@ type SubscriptionDeliveryRecord = {
    *  the last durable boundary and durables are redelivered from there, which at-least-once allows).
    *  Absent for a push target. */
   cursor?: SubscriptionCursor;
+  /** THE INSURANCE: the instant by which the alarm must revisit this row if this incarnation dies
+   *  or stalls — set while a durable delivery is owed or in flight, absent once the row is caught up,
+   *  halted, forgotten or known to own its progress. In memory only: the alarm's pass re-derives the
+   *  obligation from the rows and the log. */
+  deadlineAt?: number;
   /** THE PUSH/CURSOR BIT: true once the target LAST evaluated to a handle that OWNS ITS PROGRESS (a
    *  facet, a lent rpc stub) this incarnation. SET where the head is evaluated, never derived: a
    *  materialization's or resume's catch-up, the alarm's row pass, and the push path — which
@@ -179,18 +186,35 @@ class DeliveryCharsBudget {
 }
 
 type SubscriptionDeliveryDeps = {
-  /** The stream: its rows (`coreReducedState.subscriptions`), its log, its durable mark, its alarm. */
+  /** The stream: its rows (`coreReducedState.subscriptions`), its log, its durable mark. */
   stream: Stream;
   /** Evaluate an itx expression through the context's own dispatch — a handle, a function, a value. */
   evaluateItxExpression: (expression: ItxExpression) => Promise<unknown>;
   /** A delivery finished — the quiet clock restarts (the quiesce must not fire mid-traffic). */
   recordActivityForQuietClock: () => void;
+  /** A row's deadline changed OFF the commit path (a commit's own tail reconciles): the DO
+   *  reconciles its alarm against `deadlines()`. */
+  reconcileAlarm: () => void;
+};
+
+/** One row's claim on the DO's alarm, for `deadlines()`: `at` is the earlier of its insurance and
+ *  its ladder; the rest is what a trace shows about the row. */
+export type DeliveryDeadline = {
+  name: string;
+  at: number;
+  deadlineAt?: number;
+  nextAttemptAtMs?: number;
+  attempt?: number;
+  confirmedOffset?: number;
+  /** A `#deliverFromCursor` loop holds the row: a call or a budget wait is in progress. */
+  inFlight: boolean;
 };
 
 export class SubscriptionDelivery {
   readonly #stream: Stream;
   readonly #evaluateItxExpression: SubscriptionDeliveryDeps["evaluateItxExpression"];
   readonly #recordActivityForQuietClock: () => void;
+  readonly #reconcileAlarm: SubscriptionDeliveryDeps["reconcileAlarm"];
   /** What the loop remembers per row, by name (SubscriptionDeliveryRecord). */
   readonly #deliveryRecordByName = new Map<string, SubscriptionDeliveryRecord>();
   /** The cursor lane's lock, per NAME and outside the record on purpose: one `#deliverFromCursor`
@@ -206,6 +230,7 @@ export class SubscriptionDelivery {
     this.#stream = deps.stream;
     this.#evaluateItxExpression = deps.evaluateItxExpression;
     this.#recordActivityForQuietClock = deps.recordActivityForQuietClock;
+    this.#reconcileAlarm = deps.reconcileAlarm;
     // The persisted cursors seed memory once, here — after this, memory is the one truth.
     for (const [name, cursor] of this.#stream.storage.listSubscriptionCursors())
       this.#deliveryRecordFor(name).cursor = cursor;
@@ -219,6 +244,34 @@ export class SubscriptionDelivery {
       this.#deliveryRecordByName.set(name, record);
     }
     return record;
+  }
+
+  /** Every row with a claim on the alarm, earliest first: the delivery loop's deadline is `[0]?.at`.
+   *  A HALTED row owes nothing (its persisted cursor may still carry the retry time of the attempt
+   *  that halted it), nor does a cursor row whose subscription is gone (a removal the delete did
+   *  not outlive). A ladder time is a claim ahead or due alike — a due one keeps the alarm armed
+   *  until its pass runs, whatever else reconciles meanwhile — and no due one outlives a pass
+   *  (`deliverEveryCursorSubscription`'s sweep). */
+  deadlines(): DeliveryDeadline[] {
+    const rows = this.#stream.coreReducedState.subscriptions;
+    const deadlines: DeliveryDeadline[] = [];
+    for (const [name, record] of this.#deliveryRecordByName) {
+      const row = rows[name];
+      if (!row || row.halted) continue;
+      const { deadlineAt, cursor } = record;
+      const at = Math.min(deadlineAt ?? Infinity, cursor?.nextAttemptAtMs ?? Infinity);
+      if (at === Infinity) continue;
+      deadlines.push({
+        name,
+        at,
+        deadlineAt,
+        nextAttemptAtMs: cursor?.nextAttemptAtMs,
+        attempt: cursor?.attempt,
+        confirmedOffset: cursor?.confirmedOffset,
+        inFlight: this.#cursorDeliveryRunning.has(name),
+      });
+    }
+    return deadlines.sort((a, b) => a.at - b.at);
   }
 
   /** The post-commit hook: one pass over the rows. Fire-and-forget from append's view. */
@@ -281,9 +334,15 @@ export class SubscriptionDelivery {
         // Remembered for the CURSOR lane only; a row known to own its progress would just retain the
         // batch until its next delivery.
         record.pushedEventBatch = { events, after, through: throughOffset };
-        // A delivery is owed from here: an eviction before the cursor lane even evaluates the
-        // target must leave an alarm behind to come back.
-        this.#stream.armAlarmNoLaterThan(Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
+        // A DURABLE delivery is owed from here: an eviction before the cursor delivery even evaluates
+        // the target must leave an alarm behind to come back (this commit's tail reconciles it). An
+        // ephemeral-only batch is uninsurable — the log holds nothing to redeliver — and a row on
+        // its ladder is covered by the ladder.
+        if (
+          record.cursor?.nextAttemptAtMs === undefined &&
+          events.some((event) => !event.ephemeral)
+        )
+          record.deadlineAt ??= Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS;
       }
       this.#queuePushBehindInFlightDelivery(name, events, { after, through: throughOffset });
     }
@@ -306,9 +365,7 @@ export class SubscriptionDelivery {
     // cursor-lane memo, UNBOUNDED by the delivery budgets. A burst to freshly-enabled facets would
     // otherwise pin one ephemeral per facet there (10 × 7 MiB) on top of the args workerd is
     // deserializing, and reset the parent (the large-ephemeral fan-out: 0 facets absorbed, 10 not).
-    const record = this.#deliveryRecordFor(name);
-    record.targetOwnsProgress = true;
-    record.pushedEventBatch = undefined;
+    this.#rowOwnsItsProgress(name);
     try {
       await head.invoke([["catchUpFromLog"]]);
     } catch (error) {
@@ -407,6 +464,35 @@ export class SubscriptionDelivery {
           ),
         ),
     );
+    // NO PAST CLAIM LEAVES A PASS — the alarm this pass ends with would be due at once and fire
+    // again into the same state. A row a loop still holds (a call in flight, a budget wait) is
+    // insured afresh, and a due retry of its moves with it (the loop retries once its call
+    // settles). The insurance of a row nobody holds is left to the next commit, which queues the
+    // row again. A due retry nobody acted on has no path here that this loop knows: it is reported
+    // and spent, so that next commit re-insures the row instead of an alarm re-firing into it.
+    const rows = this.#stream.coreReducedState.subscriptions;
+    const now = Date.now();
+    for (const [name, record] of this.#deliveryRecordByName) {
+      const held = this.#cursorDeliveryRunning.has(name);
+      if (record.deadlineAt !== undefined && record.deadlineAt <= now)
+        record.deadlineAt = held ? now + CURSOR_DELIVERY_CALL_WATCHDOG_MS : undefined;
+      const { cursor } = record;
+      if (!cursor || cursor.nextAttemptAtMs === undefined || cursor.nextAttemptAtMs > now) continue;
+      if (rows[name]?.halted) continue;
+      if (held)
+        record.cursor = { ...cursor, nextAttemptAtMs: now + CURSOR_DELIVERY_CALL_WATCHDOG_MS };
+      else {
+        const { nextAttemptAtMs, ...settled } = cursor;
+        record.cursor = settled;
+        reportIssue(
+          "subscription-delivery.retry-unactioned",
+          new Error(
+            `subscription "${name}": a due retry the alarm pass could not act on was spent`,
+          ),
+          { name, nextAttemptAtMs },
+        );
+      }
+    }
   }
 
   /** The cursor of a subscription the stream delivers at-least-once — absent for a push target. */
@@ -419,12 +505,22 @@ export class SubscriptionDelivery {
   #forgetSubscription(name: string): void {
     this.#stream.storage.deleteSubscriptionCursor(name);
     this.#deliveryRecordByName.delete(name);
+    this.#reconcileAlarm();
   }
 
-  #dropCursor(name: string): void {
-    const record = this.#deliveryRecordByName.get(name);
-    if (record) record.cursor = undefined;
-    this.#stream.storage.deleteSubscriptionCursor(name);
+  /** The row's target OWNS ITS PROGRESS (a facet, a lent rpc stub): nothing of the stream-kept
+   *  cursor's applies — the cursor (born as this loop's guess, or before a rule re-point), the pushed batch
+   *  and the insurance all go. */
+  #rowOwnsItsProgress(name: string) {
+    const record = this.#deliveryRecordFor(name);
+    record.targetOwnsProgress = true;
+    record.pushedEventBatch = undefined;
+    record.deadlineAt = undefined;
+    if (record.cursor) {
+      record.cursor = undefined;
+      this.#stream.storage.deleteSubscriptionCursor(name);
+    }
+    this.#reconcileAlarm();
   }
 
   /** Memory always; the table only when `persist` (a durable boundary moved, a ladder step, a halt,
@@ -454,14 +550,10 @@ export class SubscriptionDelivery {
       )
         return;
       const record = this.#deliveryRecordFor(name);
-      if (head instanceof FacetHandle || head instanceof RpcStubHandle) {
-        record.targetOwnsProgress = true;
-        // A cursor born while the target evaluated to something else (a rule re-point): not this row's.
-        if (record.cursor) this.#dropCursor(name);
-      } else {
-        // Re-pointed at a target that cannot own its progress: the alarm's pass must see it again.
-        record.targetOwnsProgress = false;
-      }
+      if (head instanceof FacetHandle || head instanceof RpcStubHandle)
+        this.#rowOwnsItsProgress(name);
+      // Re-pointed at a target that cannot own its progress: the alarm's pass must see it again.
+      else record.targetOwnsProgress = false;
       if (head instanceof RpcStubHandle) {
         // A LIVE CLIENT owns its offset: fire-and-forget — the pager socket is the queue, and a
         // stalled client blocks nothing but itself. RPC_STUB_OFFLINE is the benign heal-by-pull case
@@ -568,7 +660,12 @@ export class SubscriptionDelivery {
     error: unknown,
   ): void {
     const current = this.#stream.coreReducedState.subscriptions[name];
-    if (current?.configuredAtOffset !== configuredAtOffset || current.halted) return;
+    if (current?.configuredAtOffset !== configuredAtOffset || current.halted) {
+      this.#reconcileAlarm(); // the failed attempt's insurance may be this row's last claim
+      return;
+    }
+    // A halted row owes nothing; the fact's own commit reconciles the alarm.
+    this.#deliveryRecordFor(name).deadlineAt = undefined;
     this.#stream.append({
       type: "events.iterate.com/stream/subscription-delivery-halted",
       payload: {
@@ -675,7 +772,10 @@ export class SubscriptionDelivery {
         }
         if (row.halted) return;
         if (cursor.nextAttemptAtMs !== undefined && Date.now() < cursor.nextAttemptAtMs) {
-          this.#stream.armAlarmNoLaterThan(cursor.nextAttemptAtMs);
+          // The ladder's own time is the row's deadline; an insurance set meanwhile would only wake
+          // this loop into this same wait.
+          this.#deliveryRecordFor(name).deadlineAt = undefined;
+          this.#reconcileAlarm();
           return;
         }
         // The batch: the pushed one when contiguous (ephemerals ride it); else a page of the log, read
@@ -698,11 +798,36 @@ export class SubscriptionDelivery {
           } else {
             await this.#cursorReadCharsInFlight.acquire(CURSOR_READ_BUDGET_CHARS);
             inFlightRoomHeld = CURSOR_READ_BUDGET_CHARS;
-            const page = this.#stream.read(cursor.confirmedOffset, 100);
+            let page: StreamPage;
+            try {
+              page = this.#stream.read(cursor.confirmedOffset, 100);
+            } catch (error) {
+              // A row this subscription can never read past (EVENT_UNREADABLE) is a refusal that
+              // can only repeat: halt now, as the ladder's end would — never a retry into it.
+              this.#haltRow(
+                name,
+                row.configuredAtOffset,
+                cursor.confirmedOffset,
+                cursor.attempt + 1,
+                error,
+              );
+              return;
+            }
             const ceiling = pushedEventBatch
               ? Math.min(page.scannedThroughOffset, pushedEventBatch.after)
               : page.scannedThroughOffset;
-            if (ceiling <= cursor.confirmedOffset) return; // caught up (the finally releases the room)
+            if (ceiling <= cursor.confirmedOffset) {
+              // CAUGHT UP: nothing owed, no deadline (the finally releases the room). This is the
+              // row's normal end — a wake that found nothing to do must not arm another. A ladder
+              // still set (its batch was ephemeral, and is gone) is spent with it.
+              record.deadlineAt = undefined;
+              if (cursor.nextAttemptAtMs !== undefined) {
+                const { nextAttemptAtMs: _spent, ...settled } = cursor;
+                this.#adoptCursor(name, { ...settled, attempt: 0 }, true);
+              }
+              this.#reconcileAlarm();
+              return;
+            }
             eventBatch = {
               events: page.events.filter(
                 (event) => event.offset <= ceiling && consumesEvent(row.consumes, event),
@@ -740,7 +865,12 @@ export class SubscriptionDelivery {
           )
             continue;
           if (eventBatch.events.length === 0) {
-            this.#adoptCursor(name, { ...cursor, confirmedOffset: range.through }, true); // a log page: durable ground
+            // A log page the filter emptied (or the span up to a pushed batch): durable ground,
+            // advanced without a call; the loop goes on to whatever is owed, and every way out of
+            // it settles the row's deadline. A due ladder time that reached here is spent — kept, it
+            // would be a past deadline.
+            const { nextAttemptAtMs: _spent, ...settled } = cursor;
+            this.#adoptCursor(name, { ...settled, confirmedOffset: range.through }, true);
             continue;
           }
           try {
@@ -749,15 +879,19 @@ export class SubscriptionDelivery {
               if (head instanceof FacetHandle || head instanceof RpcStubHandle) {
                 // Reached by the alarm's row-driven pass: a target that owns its progress is never this
                 // lane's — remember that, and drop the birth cursor above (this lane's guess).
-                this.#deliveryRecordFor(name).targetOwnsProgress = true;
-                this.#dropCursor(name);
+                this.#rowOwnsItsProgress(name);
                 return;
               }
               evaluatedTarget = { call, forRowConfiguredAtOffset: row.configuredAtOffset };
               if (!this.cursor(name)) continue; // replaced while the target was evaluated
             }
-            // Die mid-call and the alarm survives to re-derive from the rows.
-            this.#stream.armAlarmNoLaterThan(Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
+            // Die mid-call and the alarm survives to re-derive from the rows: a durable batch is
+            // insured before its call (a frontier's earlier insurance still stands; an ephemeral-only
+            // batch cannot be redelivered, so it is not).
+            if (durable) {
+              record.deadlineAt ??= Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS;
+              this.#reconcileAlarm();
+            }
             const target = evaluatedTarget;
             await withTimeout(
               target.call([eventBatch.events, range]),
@@ -776,6 +910,8 @@ export class SubscriptionDelivery {
               },
               durable, // an ephemeral-only batch never touches storage
             );
+            // The insurance stands until the loop finds the row caught up (above): a commit that
+            // landed during the call is still owed.
             this.#recordActivityForQuietClock();
           } catch (error) {
             if (!this.cursor(name)) continue; // replaced mid-flight: re-evaluated for the new row
@@ -787,15 +923,19 @@ export class SubscriptionDelivery {
             const attempt = cursor.attempt + 1;
             // A failure that can only repeat halts now, not in half an hour.
             if (deterministicFailure(error) || attempt >= 15) {
-              this.#adoptCursor(name, { ...cursor, attempt: 0 }, true);
+              // The halted cursor claims no retry time: a resume starts a fresh ladder.
+              const { nextAttemptAtMs: _spent, ...settled } = cursor;
+              this.#adoptCursor(name, { ...settled, attempt: 0 }, true);
               this.#haltRow(name, row.configuredAtOffset, cursor.confirmedOffset, attempt, error);
               return;
             }
             const backoff =
               Math.min(1000 * 2 ** (attempt - 1), 1_800_000) * (0.8 + Math.random() * 0.4);
             const nextAttemptAtMs = Date.now() + Math.round(backoff);
+            // The ladder's time IS the row's deadline from here (durable, so it survives eviction).
             this.#adoptCursor(name, { ...cursor, attempt, nextAttemptAtMs }, true);
-            this.#stream.armAlarmNoLaterThan(nextAttemptAtMs);
+            record.deadlineAt = undefined;
+            this.#reconcileAlarm();
             return;
           }
         } finally {

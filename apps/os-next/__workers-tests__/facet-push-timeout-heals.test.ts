@@ -141,9 +141,10 @@ test(
     expect(healed.seen.map((row) => Number(row.slept))).toEqual([0, 1]);
     const [checkpoint] = healed.checkpoints;
     expect(checkpoint?.slug).toBe(name);
+    // Every durable a "*" row sees: the wake record is swept by nobody (a wake makes no work).
     const durableEvents = (
-      (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: unknown[] }
-    ).events.length;
+      (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: { type: string }[] }
+    ).events.filter((event) => event.type !== "events.iterate.com/stream/woken").length;
     expect(JSON.parse(checkpoint!.state)).toEqual({ n: durableEvents });
 
     // And the row is live: the next append lands as an ordinary push, once.

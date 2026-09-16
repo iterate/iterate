@@ -136,6 +136,13 @@ describe("consumesEvent — THE ONE consumes rule (engine, delivery loop, inline
     expect(consumesEvent(undefined, { type: "eph", ephemeral: true })).toBe(false);
   });
 
+  test('the wake record (stream/woken) is never swept by default or "*" — delivering it is work, and a wake must not make work', () => {
+    const t = "events.iterate.com/stream/woken";
+    expect(consumesEvent(undefined, { type: t })).toBe(false);
+    expect(consumesEvent(["*"], { type: t })).toBe(false);
+    expect(consumesEvent([t], { type: t })).toBe(true);
+  });
+
   test("a NAMED type opts that type in, INCLUDING when ephemeral", () => {
     expect(consumesEvent(["eph"], { type: "eph", ephemeral: true })).toBe(true);
     expect(consumesEvent(["eph"], { type: "other", ephemeral: true })).toBe(false);
