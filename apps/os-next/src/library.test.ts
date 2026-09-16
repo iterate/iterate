@@ -1082,6 +1082,7 @@ const ALLOWED_RUNTIME_IMPORTS = new Set([
   "./generated/workspace-processor-source.ts",
   "./generated/repo-processor-source.ts",
   "./generated/project-processor-source.ts",
+  "./generated/agent-processor-source.ts",
 ]);
 
 describe("the library boundary", () => {

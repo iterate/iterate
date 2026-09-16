@@ -2,11 +2,11 @@
 // INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, a capnweb session
 // over SELF's /api (disposed at teardown — importing this module registers the afterAll), a live
 // value to lend (`Echo`, tagged per instance), the directory schema into this lane's empty D1, the
-// production 60s idle quiesce reproduced on demand, and the one poll-until.
-import { runDurableObjectAlarm, SELF } from "cloudflare:test";
+// production idle quiesce's release on demand, and the one poll-until.
+import { runInDurableObject, SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
-import { afterAll, vi } from "vitest";
+import { afterAll } from "vitest";
 import definitionsSql from "../src/control-plane.sql?raw";
 import { DurableObjectNameCodec } from "../src/iterate-context.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
@@ -96,25 +96,18 @@ afterAll(async () => {
   }
 });
 
-/** Reproduce the production 60s idle quiesce ON DEMAND: fake Date ONLY (+61s — sockets, the alarm
- *  scheduler and real timers stay real), fire the armed alarm (runDurableObjectAlarm runs a
- *  scheduled alarm immediately), restore real time. The alarm's quiesce branch aborts every idle
- *  facet and returns every borrowed stub, making the DO dormant — which is also
- *  evictDurableObject's de-facto precondition: a materialized facet or a borrowed stub PINS the DO
+/** The idle quiesce's RELEASE, run directly: every live facet aborted, every borrowed stub
+ *  returned, every library connection closed — making the DO dormant, which is evictDurableObject's
+ *  de-facto precondition here: workerd keeps a DO with a materialized facet or a borrowed stub
  *  non-hibernatable (workerd#6800), and evicting such a DO times out after 30s on "still has active
- *  references". You must quiesce BEFORE you can evict — the exact production sequence.
- *
- *  NOTE the precondition: the quiet clock ARMS only while a facet is live or a stub is borrowed (the
- *  cursor lane arms the alarm for its own deliveries, subscription-delivery.ts), so a context with
- *  none of those has no alarm and this is a no-op. */
+ *  references". You must release BEFORE you can evict. Run directly and not through the alarm
+ *  because a FACET ARMS NO ALARM (on the edge it does not keep the actor resident, so the production
+ *  release for facets is the actor's own end); a test that wants the alarm PASS itself fakes Date
+ *  and calls `runDurableObjectAlarm`. */
 export async function quiesce(ctx: string): Promise<void> {
-  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
-  try {
-    vi.setSystemTime(Date.now() + 61_000);
-    await runDurableObjectAlarm(stub(ctx));
-  } finally {
-    vi.useRealTimers();
-  }
+  await runInDurableObject(stub(ctx), (instance) => {
+    (instance as IterateContextDurableObject).releasePins();
+  });
 }
 
 /** Poll `fn` until it returns a defined, non-false value (bounded). Physical facts arrive a beat
