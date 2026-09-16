@@ -1,102 +1,74 @@
+// alarm-coordinator.ts — THE ONE NATIVE ALARM of a context, derived: it holds no deadline of its
+// own. `reconcile()` asks the deadline sources — the earliest pending schedule (core state), the
+// earliest owed cursor delivery (subscription-delivery.ts), the idle quiesce (the DO) — and arms the
+// earliest, or deletes the alarm when they report none. Two HOLDS keep the alarm from being moved
+// under a handler:
+//   • an alarm read at construction is kept until a pass completes — it may be the wake that started
+//     this incarnation (workerd runs the constructor first, and a stored value later than the firing
+//     time CANCELS that run) or a previous incarnation's obligation nothing in memory can re-derive yet;
+//   • nothing is written while `alarm()` runs — the pass's own alarm stays stored, so a pass that dies
+//     is retried by the runtime, and the next deadline is set ONCE when the pass completes.
+// No clamp: the runtime clamps a past time to now. Every `setAlarm` call bills a write unit, so the
+// only dedupe is `wanted === armedAt`; a fired alarm is forgotten (workerd deletes it after a completed
+// handler, and after exhausting its retries) so the same time can be armed again.
+
 type AlarmCoordinatorDeps = {
   setAlarm: (at: number) => Promise<void>;
-  deleteAlarm?: () => Promise<void>;
-  scheduledAt: () => number | null;
+  deleteAlarm: () => Promise<void>;
+  /** Every source's earliest deadline, epoch ms, `null` for none. */
+  deadlines: () => (number | null)[];
 };
-export type AlarmOwner = string;
 
-/** One physical alarm for a context. Durable scheduling state is queried on every reconciliation;
- *  delivery watchdogs and idle cleanup contribute deadlines for the current incarnation. */
 export class AlarmCoordinator {
+  /** What storage holds, as far as this incarnation knows. */
   #armedAt: number | null = null;
-  #inheritedAlarm = false;
-  #requested = new Map<AlarmOwner, number>();
-  #deferred = 0;
-
+  /** The alarm read at construction — held until a pass completes. */
+  #inheritedAt: number | null = null;
+  #passInProgress = false;
   readonly #deps: AlarmCoordinatorDeps;
 
   constructor(deps: AlarmCoordinatorDeps) {
     this.#deps = deps;
   }
 
-  /** Seed once before startup work can arm. An existing alarm may be the wake starting this
-   *  incarnation; replacing it with a later watchdog would cancel it before the handler runs. */
+  snapshot(): { armedAt: number | null; inheritedAt: number | null; passInProgress: boolean } {
+    return {
+      armedAt: this.#armedAt,
+      inheritedAt: this.#inheritedAt,
+      passInProgress: this.#passInProgress,
+    };
+  }
+
+  /** Seed from storage once, before the first append can reconcile. */
   restore(at: number | null): void {
     this.#armedAt = at;
-    this.#inheritedAlarm = at !== null;
+    this.#inheritedAt = at;
   }
 
-  request(owner: AlarmOwner, at: number): void {
-    this.#requested.set(owner, Math.min(this.#requested.get(owner) ?? at, at));
-    this.reconcile();
-  }
-
-  /** Replace one owner's current deadline. `null` withdraws it after the corresponding durable or
-   * in-memory obligation has settled. */
-  replace(owner: AlarmOwner, at: number | null): void {
-    if (at === null) {
-      this.#requested.delete(owner);
-      this.reconcile();
-      return;
-    }
-    const previous = this.#requested.get(owner);
-    this.#requested.set(owner, at);
-    // If this owner held the current non-inherited minimum and its work moved later, replace the
-    // physical alarm too. An obsolete early fire is safe, but retaining it obscures the current
-    // deadline and creates avoidable wake evidence.
-    if (
-      previous !== undefined &&
-      this.#armedAt === previous &&
-      !this.#inheritedAlarm &&
-      at > previous
-    )
-      this.#armedAt = null;
-    this.reconcile();
-  }
-
-  clear(owner: AlarmOwner): void {
-    this.replace(owner, null);
-  }
-
-  fired(now = Date.now()): void {
-    this.#armedAt = null;
-    this.#inheritedAlarm = false;
-    // The native wake consumed every owner deadline at or before its firing time. Handlers rebuild
-    // any still-outstanding obligation from durable state; retaining a past request would hot-loop
-    // a context when a handler exits before its normal clear/replace path.
-    for (const [owner, at] of this.#requested) if (at <= now) this.#requested.delete(owner);
-  }
-
-  /** Commit a synchronous batch of due work before selecting the next deadline. */
-  batch(work: () => void): void {
-    this.#deferred++;
+  /** Run one alarm pass. Its alarm is forgotten either way: a completed pass has spent it (the
+   *  runtime deletes it) and arms what is left; a pass that threw leaves it stored for the runtime's
+   *  retries (2s·2ⁿ, six tries, then deleted) and keeps the inherited hold — the next reconcile arms
+   *  whatever is wanted, the same time included. */
+  async pass(work: () => Promise<void>): Promise<void> {
+    this.#passInProgress = true;
     try {
-      work();
+      await work();
     } finally {
-      this.#deferred--;
-      this.reconcile();
+      this.#passInProgress = false;
+      this.#armedAt = null;
     }
+    this.#inheritedAt = null;
+    this.reconcile();
   }
 
   reconcile(): void {
-    if (this.#deferred) return;
-    const scheduledAt = this.#deps.scheduledAt();
-    const deadlines = [...this.#requested.values()];
-    if (scheduledAt !== null) deadlines.push(scheduledAt);
-    if (!deadlines.length) {
-      // A native alarm read during construction is recovery insurance. Keep it until that alarm
-      // fires once; after that, an owner with no deadline really has no work and can withdraw it.
-      if (this.#armedAt !== null && !this.#inheritedAlarm) {
-        this.#armedAt = null;
-        void this.#deps.deleteAlarm?.();
-      }
-      return;
-    }
-    const at = Math.max(Date.now(), Math.min(...deadlines));
-    if (this.#armedAt !== null && this.#armedAt <= at) return;
-    this.#armedAt = at;
-    // The native output gate makes a failed storage write fail the invocation. An obsolete early
-    // alarm is harmless: its handler rechecks durable state before doing any work.
-    void this.#deps.setAlarm(at);
+    if (this.#passInProgress) return;
+    let wanted = this.#inheritedAt;
+    for (const at of this.#deps.deadlines())
+      if (at !== null && (wanted === null || at < wanted)) wanted = at;
+    if (wanted === this.#armedAt) return;
+    this.#armedAt = wanted;
+    // The output gate makes a failed storage write fail the invocation.
+    void (wanted === null ? this.#deps.deleteAlarm() : this.#deps.setAlarm(wanted));
   }
 }

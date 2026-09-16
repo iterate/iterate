@@ -17,7 +17,6 @@
 // (a facet's checkpoint, a subscription cursor) can name an offset a later incarnation could hand
 // to a durable. Pushes still carry the full head in their ranges; only the log's own proof is capped.
 
-import { AlarmCoordinator } from "../alarm-coordinator.ts";
 import { codedError, errorCode, reportIssue } from "../lib.ts";
 import type { ItxExpressionInput } from "../context/expression.ts";
 import type { Caller } from "../principal.ts";
@@ -57,49 +56,9 @@ const READ_PAGE_BUDGET_BYTES = 8 * 1024 * 1024;
  *  the byte budget cannot see. */
 const READ_PAGE_MAX_EVENTS = 1000;
 
-/** An opt-in, in-memory trace of the alarm coordinator and its host. Trace events are deliberately
- * ephemeral: they make the current incarnation inspectable without becoming work for the durable
- * log, the core reducer, or a wildcard subscription. An exact subscription to this type is still
- * allowed to observe it, so the payload is bounded and callers should sample or detach promptly. */
+/** THE ALARM TRACE — the DO's ephemeral record of one alarm decision (iterate-context-durable-object.ts
+ *  `AlarmTrace`), appended only while an exact `waitForEvent` waiter for it is registered. */
 export const STREAM_ALARM_TRACE_EVENT = "events.iterate.com/stream/trace/alarm" as const;
-export type AlarmTracePayload = {
-  phase: "fire" | "reconcile" | "delivery" | "quiesce";
-  reason: string;
-  [key: string]: unknown;
-};
-const traceMaxKeys = 32;
-const traceMaxString = 256;
-const traceMaxArray = 32;
-const traceMaxDepth = 3;
-const traceMaxChars = 64 * 1024;
-
-function boundedTraceValue(value: unknown, depth: number): unknown {
-  if (typeof value === "string") return value.slice(0, traceMaxString);
-  if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
-  if (depth >= traceMaxDepth) return value ? "[truncated]" : String(value);
-  if (Array.isArray(value))
-    return value.slice(0, traceMaxArray).map((item) => boundedTraceValue(item, depth + 1));
-  // oxlint-disable-next-line iterate/simple-truthiness-check -- values are unknown JSON fragments; the object check is the runtime narrowing before Object.entries
-  if (value && typeof value === "object") {
-    const bounded: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value).slice(0, traceMaxKeys))
-      bounded[key.slice(0, traceMaxString)] = boundedTraceValue(item, depth + 1);
-    return bounded;
-  }
-  return String(value).slice(0, traceMaxString);
-}
-
-function boundAlarmTracePayload(payload: AlarmTracePayload): Record<string, unknown> {
-  // boundedTraceValue only returns a record for this root object: AlarmTracePayload is a plain
-  // object, and the helper has already recursively bounded every value before this narrowing.
-  const bounded = boundedTraceValue(payload, 0) as Record<string, unknown>;
-  if (JSON.stringify(bounded).length <= traceMaxChars) return bounded;
-  return {
-    phase: payload.phase,
-    reason: String(payload.reason).slice(0, traceMaxString),
-    truncated: true,
-  };
-}
 
 /** The waitForEvent selector: `type` is an exact event-type match (absent = any type); only events
  *  with offset strictly greater than `afterOffset` match (default = the head at call time — "the
@@ -120,7 +79,7 @@ type WaitForEventWaiter = {
 
 /** Everything the stream needs from its host. */
 interface StreamDeps {
-  /** The DO's whole `ctx.storage` — sync SQLite, the sync transaction, the alarm. */
+  /** The DO's whole `ctx.storage` — sync SQLite and the sync transaction. */
   storage: DurableObjectStorageSlice;
   /** The event-identity stamp on every StreamEvent. */
   path: string;
@@ -150,9 +109,6 @@ export class Stream {
   #highestDurableOffset: number;
   /** FIFO; resolved from `freshEvents` in append's step 5. */
   readonly #waitForEventWaiters: WaitForEventWaiter[] = [];
-  readonly alarms: AlarmCoordinator;
-  /** Prevent an observer that reacts synchronously to a trace from recursively tracing itself. */
-  #emittingAlarmTrace = false;
   // ── THE CORE REDUCE's state: rehydrated by the constructor from the versioned checkpoint and caught
   // up to the durable mark, reduced inside every durable commit and checkpointed with it (the cursor
   // every batch, the state on change). Durable events only, so it rebuilds bit-identically. ──
@@ -163,11 +119,6 @@ export class Stream {
 
   constructor(deps: StreamDeps) {
     this.storage = new StreamStorage(deps.storage);
-    this.alarms = new AlarmCoordinator({
-      setAlarm: (at) => deps.storage.setAlarm(at),
-      deleteAlarm: deps.storage.deleteAlarm ? () => deps.storage.deleteAlarm!() : undefined,
-      scheduledAt: () => this.nextScheduledAppendAt(),
-    });
     this.#path = deps.path;
     this.#projectId = deps.projectId;
     this.#onCommit = deps.onCommit;
@@ -256,34 +207,10 @@ export class Stream {
     );
   }
 
-  /** Emit one bounded, ephemeral alarm trace. Diagnostics are best effort by design: an observer
-   * must never make the alarm path fail or wedge a context. Failures are still reported through the
-   * issue channel, with the phase and reason retained for classification. The trace is lazy: normal
-   * contexts have no trace offset traffic unless an exact waitForEvent observer opted in. */
-  emitAlarmTrace(payload: AlarmTracePayload): StreamEvent | undefined {
-    if (!this.#waitForEventWaiters.some((waiter) => waiter.type === STREAM_ALARM_TRACE_EVENT))
-      return undefined;
-    if (this.#emittingAlarmTrace) return undefined;
-    this.#emittingAlarmTrace = true;
-    try {
-      let trace: StreamEvent | undefined;
-      this.alarms.batch(() => {
-        trace = this.append({
-          type: STREAM_ALARM_TRACE_EVENT,
-          ephemeral: true,
-          payload: boundAlarmTracePayload(payload),
-        })[0];
-      });
-      return trace;
-    } catch (error) {
-      reportIssue("stream.alarm-trace", error, {
-        phase: payload.phase,
-        reason: payload.reason,
-      });
-      return undefined;
-    } finally {
-      this.#emittingAlarmTrace = false;
-    }
+  /** Whether a `waitForEvent` caller is waiting for exactly `type` right now — what makes the DO's
+   *  alarm trace lazy: no waiter, no ephemeral, no offset consumed. */
+  hasWaitForEventWaiter(type: string): boolean {
+    return this.#waitForEventWaiters.some((waiter) => waiter.type === type);
   }
 
   highestAssignedOffset(): number {
@@ -333,11 +260,6 @@ export class Stream {
       // oxlint-disable-next-line iterate/simple-truthiness-check -- append is the SOLE enforcement door (no boundary validator); event.type arrives from callers/the wire, so the static string type is not a runtime guarantee
       if (typeof event.type !== "string" || event.type.trim() === "")
         throw new Error("append: every event needs a non-empty type");
-      if (
-        event.type === STREAM_ALARM_TRACE_EVENT &&
-        (!event.ephemeral || !this.#emittingAlarmTrace)
-      )
-        throw new Error("append: alarm trace events are kernel-owned and must use emitAlarmTrace");
       // RESERVED NAMES, refused at the one append door (parseSubscriptionName refuses them at the
       // command door too): `core` — a raw `subscription-configured { name: "core" }` would install an
       // undeliverable row that climbs the retry ladder to a halt — and any key of `Object.prototype`,
@@ -504,7 +426,6 @@ export class Stream {
     }
     // 5. after the commit
     this.#resolveWaitForEventWaiters(freshEvents); // waiters first: onCommit may append again (a nested commit)
-    this.alarms.reconcile();
     this.#onCommit(freshEvents, afterOffset, throughOffset);
     // Core's live-state delta rides this stream's own append (a nested commit). LOSSY BY CONTRACT:
     // LiveState.set contains every refusal (a PAUSED stream refuses the delta) as a revision-chain
@@ -616,10 +537,9 @@ export class Stream {
     }
   }
 
-  // ── the alarm armer ──
-
-  /** The earliest outstanding scheduled batch is durable; always include it when another
-   *  subsystem arms, including during reconstruction before the platform alarm is read. */
+  /** The schedules' deadline for the DO's alarm (alarm-coordinator.ts): the earliest pending
+   *  batch's `nextAt`, epoch ms — none while paused (pause holds every scheduled append) or when
+   *  every definition is parked by a failure. */
   nextScheduledAppendAt(): number | null {
     if (this.#coreReducedState.paused) return null;
     let earliest: number | null = null;
@@ -633,7 +553,7 @@ export class Stream {
 }
 
 // ── stream storage ── THE STREAM'S TABLES, typed: every SQL statement the stream runs lives here,
-// over the ONE platform handle — `ctx.storage.sql`, `transactionSync` and `setAlarm`. Workerd's kv
+// over the ONE platform handle — `ctx.storage.sql` and `transactionSync`. Workerd's kv
 // is itself a SQLite table, so the stream keeps none of its own: the whole seam is SQL, and a
 // node:sqlite stand-in satisfies it in a screen (test-support.ts `nodeSqliteDurableObjectStorage`).
 //
@@ -651,8 +571,6 @@ export class Stream {
 export type DurableObjectStorageSlice = {
   sql: SqlStorageHandle;
   transactionSync<T>(closure: () => T): T;
-  setAlarm(scheduledTime: number | Date): Promise<void>;
-  deleteAlarm?: () => Promise<void>;
 };
 
 /** A serialized body longer than this (chars) is split across `event_chunks` rows instead of one

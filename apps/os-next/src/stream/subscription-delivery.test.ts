@@ -28,6 +28,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { print, type ItxExpression, FacetHandle } from "../context/expression.ts";
 import { codedError } from "../lib.ts";
+import { AlarmCoordinator } from "../alarm-coordinator.ts";
 import type { StreamEvent, ScannedRange } from "./processor.ts";
 import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
@@ -48,22 +49,30 @@ const settled = async () => {
  *  does; `evaluated` records every expression the loop asked for. Pass a previous incarnation's
  *  storage to build THE NEXT ONE over it: a fresh Stream and a fresh loop that find the rows, the
  *  log, the kv and the cursor table — and nothing in memory. That is an eviction, deterministically.
- *  `alarms` is every instant the stream armed (node's storage slice has no alarm of its own). */
+ *  The DO's alarm is stood in for by a real coordinator over the lane's `deadlines()`, wired as the
+ *  DO wires it (every commit and every lane-reported change reconciles): `alarms` is every instant
+ *  it armed, `deletes` every deletion, `pass(work)` an alarm pass. */
 function incarnation(
   resolve: (printedExpression: string) => unknown,
   storage: DurableObjectStorageSlice = nodeSqliteDurableObjectStorage(),
 ) {
   const alarms: number[] = [];
+  const deletes: number[] = [];
   const evaluated: string[] = [];
   let delivery!: SubscriptionDelivery;
+  const coordinator = new AlarmCoordinator({
+    setAlarm: async (at) => void alarms.push(at),
+    deleteAlarm: async () => void deletes.push(1),
+    deadlines: () => [delivery.deadlines()[0]?.at ?? null],
+  });
   const stream = new Stream({
-    storage: {
-      ...storage,
-      setAlarm: async (atMs: number | Date) => void alarms.push(Number(atMs)),
-    },
+    storage,
     path: "/",
     projectId: "prj_delivery",
-    onCommit: (fresh, after, through) => delivery.onCommit(fresh, after, through),
+    onCommit: (fresh, after, through) => {
+      delivery.onCommit(fresh, after, through);
+      coordinator.reconcile();
+    },
   });
   delivery = new SubscriptionDelivery({
     stream,
@@ -79,9 +88,20 @@ function incarnation(
       return value;
     },
     recordActivityForQuietClock: () => {},
+    reconcileAlarm: () => coordinator.reconcile(),
   });
   stream.appendCreatedAndWokenEvents();
-  return { storage, stream, delivery, alarms, evaluated };
+  return {
+    storage,
+    stream,
+    delivery,
+    coordinator,
+    alarms,
+    deletes,
+    evaluated,
+    /** An alarm pass, as the DO runs it: the cursor lane under the coordinator's hold. */
+    pass: () => coordinator.pass(() => delivery.deliverEveryCursorSubscription()),
+  };
 }
 
 /** A stream with ONE facet subscription (`slow`, `consumes: ["blob"]`) whose facet answers only when
@@ -627,5 +647,168 @@ describe("a superseded evaluation can neither classify nor invoke its replacemen
     rig.stream.append({ type: "blob", payload: { n: 3 } });
     await settled();
     expect(sink).toEqual([[1], [3]]);
+  });
+});
+
+describe("the lane's deadline on the DO's alarm (`deadlines()`)", () => {
+  /** A cursor row `s` on `itx.sink.push`, whose pushes park until released (each call resolves in
+   *  order); `durable` commits one `demo/ping`. */
+  function parkedSinkRig(previous?: { storage: DurableObjectStorageSlice }) {
+    const parked: (() => void)[] = [];
+    const pushes: number[][] = [];
+    const rig = incarnation(
+      (printed) =>
+        printed === "itx.sink"
+          ? {
+              push: (events: { payload?: { n?: number } }[]) => {
+                pushes.push(ns(events));
+                return new Promise<void>((resolve) => parked.push(resolve));
+              },
+            }
+          : undefined,
+      previous?.storage,
+    );
+    if (!previous)
+      rig.stream.append(
+        normalizeControlEvent({
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
+        }),
+      );
+    const release = async () => {
+      parked.splice(0).forEach((resolve) => resolve());
+      await settled();
+    };
+    return { ...rig, pushes, release };
+  }
+
+  test("a queued durable delivery is insured, an acked one is not: the alarm is armed once and deleted once, a burst mid-call included", async () => {
+    const rig = parkedSinkRig();
+    expect(rig.delivery.deadlines()).toEqual([]);
+    expect(rig.alarms).toEqual([]);
+    rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+    expect(rig.delivery.deadlines()).toMatchObject([{ name: "s" }]);
+    expect(rig.alarms).toHaveLength(1);
+    await settled();
+    rig.stream.append({ type: "demo/ping", payload: { n: 2 } }); // lands while n=1 is in flight
+    expect(rig.alarms).toHaveLength(1); // the insurance already stands: no second write
+    await rig.release(); // acks n=1; the loop takes n=2
+    await rig.release(); // acks n=2; caught up
+    expect(rig.pushes).toEqual([[1], [2]]);
+    expect(rig.delivery.deadlines()).toEqual([]);
+    expect(rig.deletes).toEqual([1]);
+    expect(rig.alarms).toHaveLength(1);
+  });
+
+  test("an ephemeral-only push to a caught-up cursor row is uninsurable: it arms nothing", async () => {
+    const rig = parkedSinkRig();
+    rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+    await settled();
+    await rig.release(); // caught up: armed once, deleted once
+    expect({ alarms: rig.alarms.length, deletes: rig.deletes }).toEqual({
+      alarms: 1,
+      deletes: [1],
+    });
+    rig.stream.append({ type: "demo/ping", ephemeral: true });
+    await settled();
+    expect(rig.pushes).toEqual([[1], [-1]]); // `ns` reads -1 for a payload-less event
+    expect(rig.delivery.deadlines()).toEqual([]);
+    expect({ alarms: rig.alarms.length, deletes: rig.deletes }).toEqual({
+      alarms: 1,
+      deletes: [1],
+    });
+    await rig.release();
+  });
+
+  test("a pass that finds a call in flight past its insurance re-arms AHEAD, never in the past; a row nobody holds is released", async () => {
+    const rig = parkedSinkRig();
+    rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+    await settled();
+    const [insured] = rig.delivery.deadlines();
+    expect(insured.inFlight).toBe(true);
+    vi.useFakeTimers({ now: insured.at + 5_000, toFake: ["Date"] });
+    try {
+      await rig.pass();
+      const [swept] = rig.delivery.deadlines();
+      expect(swept.at).toBeGreaterThan(Date.now());
+      expect(rig.alarms.at(-1)).toBe(swept.at);
+    } finally {
+      vi.useRealTimers();
+    }
+    await rig.release();
+    expect(rig.delivery.deadlines()).toEqual([]);
+  });
+
+  test("a facet row classified on a fresh incarnation leaves no deadline behind", async () => {
+    const first = stuckFacetRig();
+    first.release();
+    await settled();
+    const second = stuckFacetRig(first);
+    second.stream.append({ type: "blob", payload: { blob: "x" } });
+    // Queued for a row this incarnation does not yet know as a push row: insured…
+    expect(second.delivery.deadlines()).toMatchObject([{ name: "slow" }]);
+    await settled();
+    // …until its target evaluates to a facet: the row owns its progress, the insurance goes.
+    expect(second.delivery.deadlines()).toEqual([]);
+    expect(second.deletes).toEqual([1]);
+    second.release();
+    await settled();
+  });
+
+  test("the ladder's next attempt IS the row's deadline, and survives an eviction before any pass", async () => {
+    const first = incarnation((printed) =>
+      printed === "itx.sink"
+        ? {
+            push: () => {
+              throw new Error("sink down");
+            },
+          }
+        : undefined,
+    );
+    first.stream.append(
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
+      }),
+    );
+    first.stream.append({ type: "demo/ping", payload: { n: 1 } });
+    await settled();
+    const failed = first.delivery.cursor("s")!;
+    expect(failed.attempt).toBe(1);
+    expect(first.delivery.deadlines()).toMatchObject([
+      { name: "s", at: failed.nextAttemptAtMs, deadlineAt: undefined },
+    ]);
+    expect(first.alarms.at(-1)).toBe(failed.nextAttemptAtMs);
+    // A commit during the wait insures nothing: the ladder covers the row.
+    first.stream.append({ type: "demo/ping", payload: { n: 2 } });
+    await settled();
+    expect(first.delivery.deadlines()).toMatchObject([{ at: failed.nextAttemptAtMs }]);
+    const second = incarnation(() => undefined, first.storage);
+    expect(second.delivery.deadlines()).toMatchObject([{ name: "s", at: failed.nextAttemptAtMs }]);
+  });
+
+  test("a HALTED row owes nothing — even one whose persisted cursor still carries the retry time that halted it", async () => {
+    const first = incarnation(() => undefined);
+    first.stream.append(
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
+      }),
+    );
+    // A cursor as an earlier build persisted it at the halt: attempt 0, a past retry time kept.
+    first.stream.storage.writeSubscriptionCursor("s", {
+      confirmedOffset: 1,
+      attempt: 0,
+      nextAttemptAtMs: Date.now() - 60_000,
+    });
+    first.stream.append({
+      type: "events.iterate.com/stream/subscription-delivery-halted",
+      payload: { name: "s", afterOffset: 1, attempts: 15, error: "sink down" },
+    });
+    const second = incarnation(() => undefined, first.storage);
+    expect(second.delivery.cursor("s")?.nextAttemptAtMs).toBeLessThan(Date.now());
+    expect(second.delivery.deadlines()).toEqual([]);
+    await second.pass();
+    expect(second.alarms).toEqual([]);
   });
 });

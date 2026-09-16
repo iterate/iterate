@@ -150,3 +150,5 @@ export type {
   ScheduledAppendInput,
   ScheduledAppend,
 } from "./stream/scheduled-appends.ts";
+
+export type { AlarmTrace } from "./iterate-context-durable-object.ts";

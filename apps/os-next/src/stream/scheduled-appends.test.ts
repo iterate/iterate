@@ -1,6 +1,7 @@
 import { expect, test, vi } from "vitest";
+import { AlarmCoordinator } from "../alarm-coordinator.ts";
 import { CoreContract, normalizeControlEvent, reduceCoreEventBatch } from "./core-processor.ts";
-import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
+import { Stream } from "./stream.ts";
 import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
 
 const scheduled = (key = "reminder", at = "2030-01-01T00:00:00Z") =>
@@ -12,21 +13,31 @@ const scheduled = (key = "reminder", at = "2030-01-01T00:00:00Z") =>
       events: [{ type: "reminder", payload: { n: 1 } }, { type: "audit" }],
     },
   });
+/** A Stream wired to its own coordinator as the DO wires them — every commit reconciles against
+ *  the schedules' deadline plus `otherDeadlines` (a stand-in for delivery and idle). `alarms` and
+ *  `deletes` record every write the coordinator issued; `create()` is the next incarnation over
+ *  the same store. */
 function setup() {
-  const base = nodeSqliteDurableObjectStorage();
+  const storage = nodeSqliteDurableObjectStorage();
   const alarms: number[] = [];
   const deletes: number[] = [];
-  const storage: DurableObjectStorageSlice = {
-    ...base,
-    setAlarm: async (at) => {
-      alarms.push(Number(at));
-    },
-    deleteAlarm: async () => {
-      deletes.push(1);
-    },
+  const otherDeadlines: (number | null)[] = [];
+  const create = () => {
+    let stream!: Stream;
+    const coordinator = new AlarmCoordinator({
+      setAlarm: async (at) => void alarms.push(at),
+      deleteAlarm: async () => void deletes.push(1),
+      deadlines: () => [stream.nextScheduledAppendAt(), ...otherDeadlines],
+    });
+    stream = new Stream({
+      storage,
+      path: "/",
+      projectId: "prj_schedule",
+      onCommit: () => coordinator.reconcile(),
+    });
+    return { stream, coordinator };
   };
-  const create = () => new Stream({ storage, path: "/", projectId: "prj_schedule", onCommit() {} });
-  return { stream: create(), create, alarms, deletes, storage };
+  return { ...create(), create, alarms, deletes, otherDeadlines, storage };
 }
 
 test("a schedule, replacement, stale cancellation and atomic completion reconstruct from the log", () => {
@@ -37,7 +48,7 @@ test("a schedule, replacement, stale cancellation and atomic completion reconstr
     type: "events.iterate.com/stream/append-schedule-cancelled",
     payload: { key: "reminder", ifScheduledAtOffset: first.offset },
   });
-  expect(create().coreReducedState.schedules.reminder.scheduledAtOffset).toBe(second.offset);
+  expect(create().stream.coreReducedState.schedules.reminder.scheduledAtOffset).toBe(second.offset);
   stream.append(
     { type: "reminder", payload: { n: 1 } },
     { type: "audit" },
@@ -46,7 +57,7 @@ test("a schedule, replacement, stale cancellation and atomic completion reconstr
       payload: { key: "reminder", scheduledAtOffset: second.offset },
     },
   );
-  expect(create().coreReducedState.schedules).toEqual({});
+  expect(create().stream.coreReducedState.schedules).toEqual({});
   const log = stream.read(0, 100).events;
   expect(
     reduceCoreEventBatch(log, CoreContract.initialState(), (error) => {
@@ -56,36 +67,25 @@ test("a schedule, replacement, stale cancellation and atomic completion reconstr
   expect(log.filter((event) => event.type === "reminder")).toHaveLength(1);
 });
 
-test("delivery deadlines can be replaced and withdrawn without retaining a stale native alarm", () => {
-  const { stream, alarms, deletes } = setup();
-  const first = Date.now() + 1_000;
-  const later = first + 60_000;
-  stream.alarms.request("delivery:one", first);
-  expect(alarms).toHaveLength(1);
-  stream.alarms.fired();
-  stream.alarms.replace("delivery:one", later);
-  expect(alarms.at(-1)).toBe(later);
-  stream.alarms.clear("delivery:one");
-  expect(deletes).toHaveLength(1);
-});
-
-test("reconstruction cannot postpone a scheduled deadline when delivery arms later", () => {
-  const { stream, create, alarms } = setup();
+test("a reborn incarnation arms the schedule ahead of a later delivery deadline", () => {
+  const { stream, create, alarms, otherDeadlines } = setup();
   stream.append(scheduled());
   const deadline = Date.parse("2030-01-01T00:00:00Z");
-  create().alarms.request("delivery", deadline + 60_000);
+  otherDeadlines.push(deadline + 60_000);
+  create().coordinator.reconcile();
   expect(alarms).toEqual([deadline, deadline]);
 });
 
-test("scheduled work survives an alarm pass; pause holds it and resume rearms", () => {
-  const { stream, alarms } = setup();
+test("scheduled work survives an alarm pass; pause holds it and resume rearms", async () => {
+  const { stream, coordinator, alarms, deletes } = setup();
   stream.append(scheduled());
   expect(alarms).toHaveLength(1);
-  stream.alarms.fired();
-  stream.append({ type: "events.iterate.com/stream/paused", payload: { reason: "maintenance" } });
-  stream.alarms.reconcile();
+  await coordinator.pass(async () => {
+    stream.append({ type: "events.iterate.com/stream/paused", payload: { reason: "maintenance" } });
+  });
   expect(stream.nextScheduledAppendAt()).toBeNull();
-  expect(alarms).toHaveLength(1);
+  expect(alarms).toHaveLength(1); // the pass spent its alarm; a paused schedule wants none
+  expect(deletes).toEqual([]);
   stream.append({ type: "events.iterate.com/stream/resumed" });
   expect(alarms).toHaveLength(2);
 });
@@ -144,40 +144,33 @@ test("a failing SQL write rolls back both occurrence events and completion", () 
       },
     ),
   ).toThrow("injected failure");
-  expect(create().coreReducedState.schedules.reminder.scheduledAtOffset).toBe(definition.offset);
+  expect(create().stream.coreReducedState.schedules.reminder.scheduledAtOffset).toBe(
+    definition.offset,
+  );
   expect(stream.read().events.filter((event) => event.type === "reminder")).toEqual([]);
 });
 
-test("pre-epoch deadlines arm immediately instead of writing a negative platform timestamp", () => {
-  const { stream, alarms } = setup();
-  const before = Date.now();
-  stream.append(scheduled("ancient", "0001-01-01T00:00:00Z"));
-  expect(alarms[0]).toBeGreaterThanOrEqual(before);
-  expect(alarms[0]).toBeLessThanOrEqual(Date.now());
+test("a pre-epoch deadline is refused: the native alarm takes no time at or before zero", () => {
+  expect(() => scheduled("ancient", "0001-01-01T00:00:00Z")).toThrow("invalid instant");
 });
 
-test("a due-work pass arms once for its final obligations, preserving another subsystem's deadline", () => {
-  const { stream, alarms } = setup();
+test("a due-work pass writes nothing until it completes, then arms once for what is left", async () => {
+  const { stream, coordinator, alarms, otherDeadlines } = setup();
   const [a] = stream.append(scheduled("a"));
   const [b] = stream.append(scheduled("b"));
   stream.append(scheduled("later", "2032-01-01T00:00:00Z"));
-  stream.alarms.fired();
   alarms.length = 0;
   const retryAt = Date.parse("2031-01-01T00:00:00Z");
-  stream.alarms.batch(() => {
-    for (const row of [a, b]) {
+  await coordinator.pass(async () => {
+    for (const row of [a, b])
       stream.append({
         type: "events.iterate.com/stream/append-schedule-completed",
-        payload: {
-          key: row.payload!.key,
-          scheduledAtOffset: row.offset,
-        },
+        payload: { key: row.payload!.key, scheduledAtOffset: row.offset },
       });
-      stream.alarms.request("delivery", retryAt);
-    }
+    otherDeadlines.push(retryAt); // a delivery's retry, reported mid-pass
+    expect(alarms).toEqual([]);
   });
   expect(alarms).toEqual([retryAt]);
-  expect(alarms).not.toContain(Date.parse("2030-01-01T00:00:00Z"));
 });
 
 test.each([
@@ -185,7 +178,6 @@ test.each([
   "resumed",
   "created",
   "woken",
-  "self-wake-halted",
   "subscription-delivery-halted",
   "subscription-delivery-resumed",
 ])("runtime control %s cannot be scheduled", (type) => {
@@ -254,7 +246,7 @@ test("relative deadlines resolve once from the committed definition, including r
   const expected = new Date(Date.parse(definition.createdAt) + 30_000).toISOString();
   expect(stream.coreReducedState.schedules[key].nextAt).toBe(expected);
   expect(stream.append(input)[0].offset).toBe(definition.offset);
-  expect(create().coreReducedState.schedules[key].nextAt).toBe(expected);
+  expect(create().stream.coreReducedState.schedules[key].nextAt).toBe(expected);
   expect(
     reduceCoreEventBatch(stream.read().events, CoreContract.initialState(), (error) => {
       throw error;
@@ -341,7 +333,7 @@ test("replacing an interval anchors its new cadence and ignores the old completi
       when: { everyMs: 5000 },
       events: [{ type: "new/tick" }],
     };
-    expect(create().coreReducedState.schedules.tick).toMatchObject(expected);
+    expect(create().stream.coreReducedState.schedules.tick).toMatchObject(expected);
     expect(
       reduceCoreEventBatch(stream.read().events, CoreContract.initialState(), (error) => {
         throw error;

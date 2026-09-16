@@ -83,12 +83,42 @@ business event, use `at: new Date(Date.parse(event.createdAt) + delayMs).toISOSt
   Failure to persist the failure itself throws to the platform's existing bounded alarm recovery.
 - Pause holds scheduled work without repeatedly arming it. Resume makes overdue work eligible;
   intervals coalesce the paused gap. Setting a definition is refused while paused, cancellation is
-  allowed. The delivery self-wake breaker does not suppress explicitly scheduled work.
-- Each alarm processes at most 32 due definitions, ordered by deadline then defining offset.
-  The alarm coordinator reconciles once against the final batch state and other requested deadlines.
-  Replacement or cancellation can leave one obsolete early wake, which rechecks durable state.
-  Cold startup restores the stored physical alarm before appending wake events, so startup delivery
-  bookkeeping cannot postpone the alarm that woke the context.
+  allowed.
+- Each alarm processes at most 32 due definitions, ordered by deadline then defining offset, and
+  arms the next deadline once, when the pass completes (see below). Replacement or cancellation can
+  leave one obsolete early wake, which rechecks durable state.
+
+## The one alarm
+
+A context has one native alarm and three reasons to want it. None of them is stored as an alarm
+request: each source answers "when next?" from state it already keeps, and `AlarmCoordinator`
+(`src/alarm-coordinator.ts`, ~40 lines) arms the earliest answer or deletes the alarm when there is
+none. Reconciliation runs after every commit, every activity note and every delivery change.
+
+| Source                | Its deadline                                                                                                                                                                         |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Scheduled appends     | the earliest pending `nextAt` in core state (none while paused or when every definition is parked)                                                                                   |
+| Subscription delivery | per cursor row: a memory-only `deadlineAt` (+20 s insurance while a durable delivery is owed or in flight) or the persisted ladder time `nextAttemptAtMs`; a halted row owes nothing |
+| Idle quiesce          | `lastActivity + 60 s`, rounded up to the next 10 s, only while a facet, a borrowed rpc stub or a library connection pins the context                                                 |
+
+Two holds keep the alarm from being moved under a handler. An alarm read at construction is kept
+until a pass completes: workerd runs the constructor first, and a stored time later than the firing
+one cancels that run. Nothing is written while `alarm()` runs: its alarm stays stored, so a pass that
+throws is retried by the runtime (2s·2ⁿ, six tries) with the inherited hold intact, and a completed
+pass sets the next deadline once. No past delivery deadline leaves a pass: a row a loop still holds is
+insured afresh, a row the pass could not deliver waits for the next commit. There is no clamp (the
+runtime clamps a past time to now and refuses one at or before the epoch, which schedule validation
+rejects) and no keep-earlier rule; every `setAlarm` is a billed write, so the only dedupe is "the
+wanted time is what we last wrote".
+
+Every decision is an `AlarmTrace` (`src/iterate-context-durable-object.ts`): reason, the alarm before
+and after, the inherited hold, each source's deadline with the claiming rows, the durable head, the
+last activity and last external request, what is pinned. The current incarnation keeps its last 128
+in `itx.facets.get('core').alarmTraces()`; while an exact `waitForEvent({ type:
+"events.iterate.com/stream/trace/alarm" })` observer waits, each decision is also an ephemeral event
+(no waiter, no offset). A trace is never subscription input and never activity, so observing a
+context cannot keep it awake. Routine reconciles that moved nothing are not recorded; every alarm
+pass is (`alarm-fired`, `quiesce`, `alarm-pass`, `alarm-abandoned`).
 
 ## Bounds
 
@@ -109,9 +139,14 @@ schedules leave the projection; history remains in the log.
   alarm storage. `start(job, when)` supports both deadlines and intervals; `finish(receipt)` cancels.
 - `__workers-tests__/scheduled-appends.test.ts`: eviction, duplicate alarms, paused recovery,
   atomic refusal, bounded batches, coalesced intervals, parked interval failures, post-commit effect
-  failures, and preservation of existing physical alarms during cold startup.
-- `src/stream/scheduled-appends.test.ts`: replay, deadline reconstruction, breaker independence,
-  relative timestamp anchoring, interval replacement, recurrence identity, validation and transactional limits.
+  failures (the abandoned pass leaves its alarm stored), and preservation of existing physical
+  alarms during cold startup. `__workers-tests__/alarm-quiesce.test.ts`: a bare probe leaves no
+  alarm; an observed pass yields one ephemeral trace and a ring holding the whole pass.
+- `src/stream/scheduled-appends.test.ts`: replay, deadline reconstruction, the pass holding its
+  alarm, relative timestamp anchoring, interval replacement, recurrence identity, validation and
+  transactional limits. `src/alarm-coordinator.test.ts`: the two holds and the dedupe, as a table.
+  `src/stream/subscription-delivery.test.ts`: the lane's deadline lifecycle (insured, acked, in
+  flight past its deadline, classified, on its ladder, halted).
 
 ```sh
 pnpm --dir apps/os-next test scheduled-appends

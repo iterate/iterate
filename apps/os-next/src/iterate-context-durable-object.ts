@@ -56,7 +56,13 @@ import {
   type BorrowedRpcStub,
 } from "./context/rpc-stubs.ts";
 import { buildLibrary, type LibraryItx } from "./library.ts";
-import { Stream, type ReachableContext, type StreamPage } from "./stream/stream.ts";
+import {
+  STREAM_ALARM_TRACE_EVENT,
+  Stream,
+  type ReachableContext,
+  type StreamPage,
+} from "./stream/stream.ts";
+import { AlarmCoordinator } from "./alarm-coordinator.ts";
 import { DurableObjectNameCodec, itxEntrypointFor } from "./iterate-context.ts";
 import { secretNamesReferenced } from "./secrets.ts";
 import type { SecretDurableObject } from "./secret-durable-object.ts";
@@ -77,7 +83,7 @@ import {
   type SubscriptionListEntry,
 } from "./context/built-ins.ts";
 import type { ArtifactsNamespace } from "./context/repos.ts";
-import { SubscriptionDelivery } from "./stream/subscription-delivery.ts";
+import { SubscriptionDelivery, type DeliveryDeadline } from "./stream/subscription-delivery.ts";
 
 function parseIterateContextDurableObjectName(name: string | undefined) {
   if (!name)
@@ -93,6 +99,57 @@ const IDLE_QUIESCE_AFTER_MS = 60_000;
 /** How long one facet call may take before the facet is aborted (a call that never answers would
  *  hold the quiesce, and with it this actor, forever). */
 const FACET_CALL_WATCHDOG_MS = 60_000;
+/** How many alarm traces an incarnation keeps (`itx.facets.get('core').alarmTraces()`). */
+const ALARM_TRACE_RING = 128;
+
+/** ONE ALARM DECISION, as the DO saw it — the ring entry and the payload of the ephemeral
+ *  `stream/trace/alarm` event. Recorded when the physical alarm moved and for every alarm pass; a
+ *  `commit`/`activity`/`delivery` reconcile that moved nothing is not. The event is appended only
+ *  while an exact `waitForEvent` waiter for it is registered (no waiter, no offset consumed), and
+ *  the ring is the history that waiter cannot see (one event per wait). NEVER an input: the DO's
+ *  commit hook hands no trace to subscription delivery, and appending one is not activity — either
+ *  would trace the tracing. Gone with the incarnation, as every ephemeral is. */
+export type AlarmTrace = {
+  at: number;
+  incarnation: number;
+  reason:
+    | "commit"
+    | "activity"
+    | "delivery"
+    | "alarm-fired"
+    | "alarm-pass"
+    | "alarm-abandoned"
+    | "quiesce";
+  /** The row a `delivery` reconcile was for. */
+  subscription?: string;
+  /** What an abandoned pass threw. */
+  error?: string;
+  /** The physical alarm before and after: `before === after` is a pass that left it, or a pass phase. */
+  alarm: {
+    before: number | null;
+    after: number | null;
+    inheritedAt: number | null;
+    passInProgress: boolean;
+  };
+  deadlines: {
+    schedule: number | null;
+    idle: number | null;
+    /** The rows holding a claim, earliest first, at most 32. */
+    delivery: DeliveryDeadline[];
+    deliveryOmitted: number;
+  };
+  durableHead: number;
+  /** On `alarm-fired`: how many schedules this pass will append. */
+  dueSchedules?: number;
+  lastActivityMs: number;
+  /** The last append/read/invoke/fetch from outside — 0 for an incarnation only the alarm has touched. */
+  lastExternalRequestMs: number;
+  facetWorkInFlight: number;
+  /** Names, at most 32. */
+  liveFacets: string[];
+  borrowedRpcStubs: boolean;
+  openLibraryConnections: boolean;
+};
 
 /** The bindings THE DO reads (wrangler.jsonc): the DO namespace, the Worker Loader, the kv namespaces,
  *  Workers AI, Artifacts — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
@@ -217,9 +274,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
       ),
     );
-    // Keep constructor-time delivery from replacing the alarm that woke this incarnation.
+    // The stored alarm is read BEFORE the first commit can reconcile: it is held until a pass
+    // completes (alarm-coordinator.ts), so constructor-time delivery cannot replace the alarm that
+    // woke this incarnation — workerd runs the constructor first, and a later stored time cancels it.
     this.ctx.blockConcurrencyWhile(async () => {
-      this.#stream.alarms.restore(await this.ctx.storage.getAlarm());
+      this.#alarms.restore(await this.ctx.storage.getAlarm());
       // Initialize the log before accepting requests. The root config worker subscribes once;
       // its idempotency key preserves that subscription across incarnations.
       this.#stream.appendCreatedAndWokenEvents();
@@ -238,20 +297,26 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,
-   *  `onCommit`, is the post-commit fan-out — the delivery loop. */
+   *  `onCommit`, is the post-commit fan-out — the delivery loop, then the alarm (a commit may have
+   *  changed the schedules or queued a delivery). */
   readonly #stream = new Stream({
     storage: this.ctx.storage,
     path: this.#durableObjectAddress.path,
     projectId: this.#durableObjectAddress.projectId,
-    onCommit: (freshEvents, afterOffset, throughOffset) =>
-      this.#subscriptionDelivery.onCommit(freshEvents, afterOffset, throughOffset),
+    onCommit: (freshEvents, afterOffset, throughOffset) => {
+      // An alarm trace answers waitForEvent, never a subscription (AlarmTrace says why).
+      const events = freshEvents.filter((event) => event.type !== STREAM_ALARM_TRACE_EVENT);
+      if (events.length === 0) return;
+      this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
+      this.#reconcileAlarm("commit");
+    },
   });
 
   /** The append door — a thin wrapper over Stream.append. The activity note runs on every LANDED
    *  append; a REFUSED one pays nothing (arming the quiet-clock alarm is a storage write a rejected
    *  probe must not pay). */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    this.#noteExternalRequest();
+    this.#lastExternalRequestMs = Date.now();
     return this.#appendAndRunCommittedEffects(events);
   }
 
@@ -332,7 +397,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** One BUDGETED page of the log (Stream.read). */
   async read(afterOffset = 0, limit = 500): Promise<StreamPage> {
-    this.#noteExternalRequest();
+    this.#lastExternalRequestMs = Date.now();
     return this.#stream.read(afterOffset, limit); // sync on the Stream, async at this cross-hop door
   }
 
@@ -370,8 +435,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     new InvokeHandle((steps) => this.invoke(["itx", ...steps])) as unknown as LibraryItx,
   );
 
-  /** The own-context adapter used by built-ins. Internal loopback calls keep caller attribution and
-   * committed effects, but do not pass through external-request activity/self-wake bookkeeping. */
+  /** The own-context adapter used by built-ins: a loopback (`itx.cd(<own path>)`, the config
+   *  delivery) keeps caller attribution and committed effects but is not an external request. */
   readonly #localContext: ReachableContext = {
     append: async (...events) => this.#appendAndRunCommittedEffects(events),
     read: async (afterOffset, limit) => this.#stream.read(afterOffset, limit),
@@ -472,7 +537,68 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // every row's target once, can never postpone its own quiesce.
     evaluateItxExpression: (itxExpression) => this.#itxExpressionResolver.invoke(itxExpression),
     recordActivityForQuietClock: () => this.#recordActivityForQuietClock(),
+    reconcileAlarm: (subscription) => this.#reconcileAlarm("delivery", subscription),
   });
+
+  // ── THE ONE ALARM (alarm-coordinator.ts): derived from three deadline sources, traced ──
+
+  readonly #alarms = new AlarmCoordinator({
+    setAlarm: (at) => this.ctx.storage.setAlarm(at),
+    deleteAlarm: () => this.ctx.storage.deleteAlarm(),
+    deadlines: () => [
+      this.#stream.nextScheduledAppendAt(),
+      this.#subscriptionDelivery.deadlines()[0]?.at ?? null,
+      this.#idleDeadlineAt(),
+    ],
+  });
+  /** This incarnation's last ALARM_TRACE_RING decisions, oldest first. */
+  readonly #alarmTraces: AlarmTrace[] = [];
+
+  /** Reconcile the alarm against the sources; a move is traced. */
+  #reconcileAlarm(reason: AlarmTrace["reason"], subscription?: string): void {
+    const { armedAt: before } = this.#alarms.snapshot();
+    this.#alarms.reconcile();
+    if (this.#alarms.snapshot().armedAt !== before)
+      this.#traceAlarm(reason, { before, subscription });
+  }
+
+  #traceAlarm(
+    reason: AlarmTrace["reason"],
+    extra: Pick<AlarmTrace, "subscription" | "error" | "dueSchedules"> & { before: number | null },
+  ): void {
+    const { before, ...rest } = extra;
+    const { armedAt: after, inheritedAt, passInProgress } = this.#alarms.snapshot();
+    const delivery = this.#subscriptionDelivery.deadlines();
+    const trace: AlarmTrace = {
+      at: Date.now(),
+      incarnation: this.#stream.storage.incarnation,
+      reason,
+      ...rest,
+      alarm: { before, after, inheritedAt, passInProgress },
+      deadlines: {
+        schedule: this.#stream.nextScheduledAppendAt(),
+        idle: this.#idleDeadlineAt(),
+        delivery: delivery.slice(0, 32),
+        deliveryOmitted: Math.max(0, delivery.length - 32),
+      },
+      durableHead: this.#stream.highestDurableOffset(),
+      lastActivityMs: this.#lastActivityMs,
+      lastExternalRequestMs: this.#lastExternalRequestMs,
+      facetWorkInFlight: this.#facetWorkInFlight,
+      liveFacets: [...this.#liveFacetNames].slice(0, 32),
+      borrowedRpcStubs: this.#rpcStubs.hasBorrowedRpcStubs(),
+      openLibraryConnections: this.#library.hasOpenConnections(),
+    };
+    if (this.#alarmTraces.push(trace) > ALARM_TRACE_RING) this.#alarmTraces.shift();
+    if (!this.#stream.hasWaitForEventWaiter(STREAM_ALARM_TRACE_EVENT)) return;
+    // Straight onto the stream, not through the append door (a trace is not activity); an observer
+    // must never fail an alarm pass.
+    try {
+      this.#stream.append({ type: STREAM_ALARM_TRACE_EVENT, ephemeral: true, payload: trace });
+    } catch (error) {
+      reportIssue("iterate-context.alarm-trace", error, { reason });
+    }
+  }
 
   /** The `itx.subscriptions` view: the reduced table joined with the delivery loop's cursors. */
   #subscriptionList(): SubscriptionListEntry[] {
@@ -507,28 +633,26 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   // ── the #6800 quiesce: idle facets un-pinned so this actor can hibernate ──
 
   #lastActivityMs = 0;
+  /** For the trace only: an incarnation nothing outside has touched is the self-wake signature. */
+  #lastExternalRequestMs = 0;
   #recordActivityForQuietClock(): void {
     this.#lastActivityMs = Date.now();
-    // NOTHING TO QUIESCE, NO ALARM: with no live facet, no borrowed stub and no library connection,
-    // arming is one storage write plus one billed wake for nothing — a bare probe must not pay that.
-    // `#lastActivityMs` still updates, so the first materialization / borrow / connection arms with an
-    // honest quiet-period start.
+    this.#reconcileAlarm("activity");
+  }
+
+  /** THE IDLE DEADLINE: none with nothing to release — no live facet, no borrowed stub, no library
+   *  connection — so a bare probe arms nothing (one storage write and one billed wake for nothing);
+   *  else the end of the quiet period, rounded UP to the next 10 s: a flood of activity on a pinned
+   *  context then moves the alarm six times a minute at most (every `setAlarm` is a billed write,
+   *  and an ephemeral-only append must stay near zero-write). */
+  #idleDeadlineAt(): number | null {
     if (
       this.#liveFacetNames.size === 0 &&
       !this.#rpcStubs.hasBorrowedRpcStubs() &&
       !this.#library.hasOpenConnections()
-    ) {
-      this.#stream.alarms.clear("idle");
-      return;
-    }
-    this.#stream.alarms.replace("idle", this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS);
-  }
-
-  /** Whether an external request touched this incarnation, included in alarm traces for
-   * correlation. Same-context loopbacks intentionally do not set it. */
-  #externalRequestTouched = false;
-  #noteExternalRequest(): void {
-    this.#externalRequestTouched = true;
+    )
+      return null;
+    return Math.ceil((this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS) / 10_000) * 10_000;
   }
 
   /** EVERY facet materialized this incarnation — the set the quiesce alarm aborts so no LIVE facet
@@ -543,156 +667,109 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  reduce would have to repair from the log — never cause it. */
   #facetWorkInFlight = 0;
 
+  /** THE ALARM PASS, three jobs in order, under the coordinator's hold (nothing re-arms until it
+   *  completes; a pass that dies is retried by the runtime): the due schedules, the cursor lane's
+   *  owed deliveries, the idle quiesce. Then the next deadline is derived from what is left. */
   async alarm(): Promise<void> {
-    this.#stream.alarms.fired();
-    // Append each occurrence locally before awaiting subscriber RPC. A completion in the SAME
-    // transaction removes the obligation, so eviction or duplicate alarm delivery cannot repeat it.
-    const now = Date.now();
-    const due = Object.values(this.#stream.coreReducedState.schedules)
-      .filter((row) => !row.failure && Date.parse(row.nextAt) <= now)
-      .sort(
-        (a, b) =>
-          Date.parse(a.nextAt) - Date.parse(b.nextAt) || a.scheduledAtOffset - b.scheduledAtOffset,
-      )
-      .slice(0, 32);
-    this.#stream.emitAlarmTrace({
-      phase: "fire",
-      reason: "native-alarm-fired",
-      now,
-      dueSchedules: due.length,
-      schedules: Object.keys(this.#stream.coreReducedState.schedules).length,
-      subscriptions: Object.keys(this.#stream.coreReducedState.subscriptions).length,
-      liveFacets: this.#liveFacetNames.size,
-      borrowedStubs: this.#rpcStubs.hasBorrowedRpcStubs(),
-      openLibraryConnections: this.#library.hasOpenConnections(),
-    });
-    let scheduledProgress = false;
-    this.#stream.alarms.batch(() => {
-      for (const row of due) {
-        if (this.#stream.coreReducedState.paused) break;
-        if (
-          this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
-          row.scheduledAtOffset
-        )
-          continue;
-        const payload = { key: row.key, scheduledAtOffset: row.scheduledAtOffset, at: row.nextAt };
-        try {
-          this.#appendAndRunCommittedEffects([
-            ...row.events.map((event) => ({
-              ...event,
-              source: {
-                schedule: {
-                  ...payload,
-                  ...((row.source?.processor || row.source?.principal) && {
-                    definedBy: {
-                      ...(row.source?.processor && { processor: row.source.processor }),
-                      ...(row.source?.principal && { principal: row.source.principal }),
-                    },
-                  }),
-                },
-              },
-            })),
-            { type: "events.iterate.com/stream/append-schedule-completed", payload },
-          ]);
-          scheduledProgress = true;
-          console.log({
-            event: "scheduled-append.completed",
-            namespace: "iterate-context",
-            ...payload,
-            count: row.events.length,
-            latenessMs: now - Date.parse(row.nextAt),
-          });
-        } catch (error) {
-          // If the commit succeeded but a subsequent effect threw, preserve the completion and let
-          // the platform retry recovery. Otherwise park this definition visibly, without a loop.
+    const { armedAt: fired } = this.#alarms.snapshot();
+    try {
+      await this.#alarms.pass(async () => {
+        // Append each occurrence locally before awaiting subscriber RPC. A completion in the SAME
+        // transaction removes the obligation, so eviction or duplicate alarm delivery cannot repeat it.
+        const now = Date.now();
+        const due = Object.values(this.#stream.coreReducedState.schedules)
+          .filter((row) => !row.failure && Date.parse(row.nextAt) <= now)
+          .sort(
+            (a, b) =>
+              Date.parse(a.nextAt) - Date.parse(b.nextAt) ||
+              a.scheduledAtOffset - b.scheduledAtOffset,
+          )
+          .slice(0, 32);
+        this.#traceAlarm("alarm-fired", { before: fired, dueSchedules: due.length });
+        for (const row of due) {
+          if (this.#stream.coreReducedState.paused) break;
           if (
-            this.#stream.coreReducedState.schedules[row.key]?.nextAt !== row.nextAt ||
             this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
-              row.scheduledAtOffset
-          ) {
-            reportIssue("scheduled-append.effect-failed", error, payload);
-            throw error;
+            row.scheduledAtOffset
+          )
+            continue;
+          const payload = {
+            key: row.key,
+            scheduledAtOffset: row.scheduledAtOffset,
+            at: row.nextAt,
+          };
+          try {
+            this.#appendAndRunCommittedEffects([
+              ...row.events.map((event) => ({
+                ...event,
+                source: {
+                  schedule: {
+                    ...payload,
+                    ...((row.source?.processor || row.source?.principal) && {
+                      definedBy: {
+                        ...(row.source?.processor && { processor: row.source.processor }),
+                        ...(row.source?.principal && { principal: row.source.principal }),
+                      },
+                    }),
+                  },
+                },
+              })),
+              { type: "events.iterate.com/stream/append-schedule-completed", payload },
+            ]);
+            console.log({
+              event: "scheduled-append.completed",
+              namespace: "iterate-context",
+              ...payload,
+              count: row.events.length,
+              latenessMs: now - Date.parse(row.nextAt),
+            });
+          } catch (error) {
+            // If the commit succeeded but a subsequent effect threw, preserve the completion and let
+            // the platform retry recovery. Otherwise park this definition visibly, without a loop.
+            if (
+              this.#stream.coreReducedState.schedules[row.key]?.nextAt !== row.nextAt ||
+              this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
+                row.scheduledAtOffset
+            ) {
+              reportIssue("scheduled-append.effect-failed", error, payload);
+              throw error;
+            }
+            this.#appendAndRunCommittedEffects([
+              {
+                type: "events.iterate.com/stream/append-schedule-failed",
+                payload: { ...payload, error: String(error).slice(0, 2000) },
+              },
+            ]);
+            reportIssue("scheduled-append.failed", error, payload);
           }
-          this.#appendAndRunCommittedEffects([
-            {
-              type: "events.iterate.com/stream/append-schedule-failed",
-              payload: { ...payload, error: String(error).slice(0, 2000) },
-            },
-          ]);
-          reportIssue("scheduled-append.failed", error, payload);
         }
-      }
-    });
-    // The cursor lane's due retries, and anything an eviction left mid-delivery — AWAITED so a
-    // re-arm for a later retry lands before this actor hibernates. A cursor delivery pins nothing
-    // local (a facet it calls into is counted by #facetWorkInFlight), so the quiesce below needs no
-    // count of its own. The cursor lane arms this alarm itself while a delivery is owed; the quiet
-    // clock arms it for facets and borrowed stubs.
-    await this.#subscriptionDelivery.deliverEveryCursorSubscription();
-    this.#stream.emitAlarmTrace({
-      phase: "delivery",
-      reason: "cursor-pass-settled",
-      schedules: Object.keys(this.#stream.coreReducedState.schedules).length,
-      subscriptions: Object.keys(this.#stream.coreReducedState.subscriptions).length,
-      liveFacets: this.#liveFacetNames.size,
-      borrowedStubs: this.#rpcStubs.hasBorrowedRpcStubs(),
-      openLibraryConnections: this.#library.hasOpenConnections(),
-    });
-    this.#stream.emitAlarmTrace({
-      phase: "reconcile",
-      reason: "alarm-pass-complete",
-      externalRequestTouched: this.#externalRequestTouched,
-      scheduledProgress,
-      nextScheduledAppendAt: this.#stream.nextScheduledAppendAt(),
-    });
-    const quiet = Date.now() - this.#lastActivityMs >= IDLE_QUIESCE_AFTER_MS;
-    if (quiet && this.#facetWorkInFlight === 0) {
-      this.#stream.alarms.clear("idle");
-      this.#stream.emitAlarmTrace({
-        phase: "quiesce",
-        reason: "quiet-resources-released",
-        quiet,
-        facetWorkInFlight: this.#facetWorkInFlight,
-        liveFacets: this.#liveFacetNames.size,
-        borrowedStubs: this.#rpcStubs.hasBorrowedRpcStubs(),
-        openLibraryConnections: this.#library.hasOpenConnections(),
+        // The cursor lane's due retries, and anything an eviction left mid-delivery — AWAITED so
+        // the deadline it leaves is the one derived below. A cursor delivery pins nothing local (a
+        // facet it calls into is counted by #facetWorkInFlight), so the quiesce needs no count of its own.
+        await this.#subscriptionDelivery.deliverEveryCursorSubscription();
+        // THE QUIET BOUNDARY (the #6800 quiesce). Work in flight at the boundary is activity: the
+        // next look is a full quiet period later (the facet watchdog bounds the call, and its own
+        // finish records activity too) — never a re-fire into the same in-flight call.
+        if (Date.now() - this.#lastActivityMs < IDLE_QUIESCE_AFTER_MS) return;
+        if (this.#facetWorkInFlight > 0) {
+          this.#lastActivityMs = Date.now();
+          return;
+        }
+        if (this.#idleDeadlineAt() === null) return; // nothing pinned, nothing to release
+        for (const facetName of this.#liveFacetNames)
+          this.#abortFacetIfRunning(facetName, "idle quiesce");
+        this.#liveFacetNames.clear(); // aborted facets re-materialize on their next call
+        // Borrowed stubs and the library's live connections pin this actor the same way: returned
+        // and released here, borrowed and reopened on use.
+        this.#rpcStubs.returnBorrowedRpcStubs();
+        this.#library.releaseConnections();
+        this.#traceAlarm("quiesce", { before: fired });
       });
-      for (const facetName of this.#liveFacetNames)
-        this.#abortFacetIfRunning(facetName, "idle quiesce");
-      this.#liveFacetNames.clear(); // aborted facets re-materialize on their next call
-      // Borrowed stubs and the library's live connections pin this actor the same way: returned
-      // and released here, borrowed and reopened on use.
-      this.#rpcStubs.returnBorrowedRpcStubs();
-      this.#library.releaseConnections();
-      this.#stream.emitAlarmTrace({
-        phase: "quiesce",
-        reason: "resources-released",
-        liveFacets: this.#liveFacetNames.size,
-        borrowedStubs: this.#rpcStubs.hasBorrowedRpcStubs(),
-        openLibraryConnections: this.#library.hasOpenConnections(),
-      });
-    } else if (
-      this.#liveFacetNames.size > 0 ||
-      this.#rpcStubs.hasBorrowedRpcStubs() ||
-      this.#library.hasOpenConnections()
-    ) {
-      // Look again when the quiet period would end — never in the PAST (work in flight for over a
-      // minute would otherwise re-fire this alarm in a tight, billed loop). With NOTHING to quiesce
-      // there is no re-arm (the #recordActivityForQuietClock rule): re-arming regardless was the
-      // every-minute `woken` loop that this deadline lifecycle is intended to make observable and
-      // finite.
-      const idleAt = Math.max(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS, Date.now() + 10_000);
-      this.#stream.alarms.replace("idle", idleAt);
-      this.#stream.emitAlarmTrace({
-        phase: "reconcile",
-        reason: "resources-still-live",
-        idleAt,
-        facetWorkInFlight: this.#facetWorkInFlight,
-        liveFacets: this.#liveFacetNames.size,
-        borrowedStubs: this.#rpcStubs.hasBorrowedRpcStubs(),
-        openLibraryConnections: this.#library.hasOpenConnections(),
-      });
+    } catch (error) {
+      this.#traceAlarm("alarm-abandoned", { before: fired, error: String(error).slice(0, 256) });
+      throw error;
     }
+    this.#traceAlarm("alarm-pass", { before: fired });
   }
 
   // ── FACETS: loaded DurableObject classes hosted here ──
@@ -740,6 +817,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             value: {
               snapshot: () => this.#stream.coreReducedStateSnapshot(),
               liveSnapshot: () => this.#stream.coreLiveStateSnapshot(),
+              alarmTraces: () => [...this.#alarmTraces],
             },
             receiver: undefined,
           },
@@ -954,7 +1032,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     args: unknown[] = [],
     caller: Caller = { principal: null },
   ): Promise<unknown> {
-    this.#noteExternalRequest();
+    this.#lastExternalRequestMs = Date.now();
     this.#recordActivityForQuietClock();
     try {
       return await this.#callerStorage.run(caller, () =>
@@ -967,9 +1045,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** Same-context dispatch for kernel loopbacks (not an externally reachable request). It preserves
-   * the caller AsyncLocalStorage used to stamp appends, while leaving external activity and
-   * self-wake accounting to the request that initiated the work. */
+  /** Same-context dispatch for kernel loopbacks (not an externally reachable request): the caller
+   *  defaults to the one already in AsyncLocalStorage, so a loopback's appends stay attributed. */
   async #invokeLocal(
     call: ItxExpressionInput,
     args: unknown[] = [],
@@ -982,7 +1059,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   // ── native fetch: the rpc-stub pager door, the fetch lane, egress ──
 
   async fetch(request: Request): Promise<Response> {
-    this.#noteExternalRequest();
+    this.#lastExternalRequestMs = Date.now();
     // The doors, in order — each answers or declines: the rpc-stub pager and the rpc-stub fetch
     // upgrade leg; THE FETCH LANE (`x-itx-expression` names an itx expression — JSON from a session's
     // terminal `fetch(request)`, dotted text from a project host (`itx.apps.<app>`, `itx.worker`) or

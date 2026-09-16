@@ -29,6 +29,7 @@
 
 import { expect, test } from "vitest";
 import type { LiveStateDelta } from "../src/client/live-state.ts";
+import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
 import {
   append,
   collector,
@@ -577,11 +578,11 @@ export default class Waiter extends WorkerEntrypoint {
   expect(got.offset).toBeGreaterThan(head);
 });
 
-// ── THE WAKE TRACE PROBE: `stream/woken` remains the durable incarnation boundary. Alarm internals
-// are available only through an exact `events.iterate.com/stream/trace/alarm` waitForEvent observer,
-// so ordinary wake delivery keeps its durable offsets stable. Keep this probe opt-in and correlate
-// trace phases with the context's resource state before attributing a recurring wake to a lifecycle
-// bug:
+// ── THE WAKE TRACE PROBE (opt-in, deployed): `stream/woken` is the durable incarnation boundary;
+// every alarm decision of the CURRENT incarnation is in `itx.facets.get('core').alarmTraces()` (an
+// ephemeral `events.iterate.com/stream/trace/alarm` rides each one while an exact waitForEvent
+// observer waits). A stuck cursor delivery is the fastest self-waker (its ladder is 1s·2ⁿ); this
+// prints each wake's story from the ring, landing inside the incarnation each wake made:
 //
 //   RUN_WAKE_LOOP_PROBE=1 WORKER_BASE_URL=https://os.iterate2.com \
 //     pnpm e2e stream.e2e ──
@@ -589,7 +590,6 @@ export default class Waiter extends WorkerEntrypoint {
 const OPT_IN = process.env.RUN_WAKE_LOOP_PROBE === "1";
 const probe = test.skipIf(projectHostsAreLocal() || !OPT_IN);
 const WOKEN = "events.iterate.com/stream/woken";
-const HALTED = "events.iterate.com/stream/self-wake-halted";
 
 /** A cursor target that ALWAYS throws a plain (retryable) error — the stuck delivery whose retry
  *  ladder self-wakes fastest (the stream keeps its cursor; an entrypoint cannot own progress). */
@@ -600,14 +600,24 @@ export default class Thrower extends WorkerEntrypoint {
 }`,
 };
 
-const IDLE_MS = 11 * 60_000; // long enough for several evicted no-door self-wakes to accrue toward N
-
 probe(
-  "OBSERVE (opt-in): a stuck cursor delivery on a dormant context self-wakes; the circuit-breaker halts it — records streak reached",
-  { timeout: IDLE_MS + 120_000 },
+  "OBSERVE (opt-in): a stuck cursor delivery on a dormant context self-wakes on its ladder — each wake's alarm decisions, printed from the ring",
+  { timeout: 5 * 60_000 },
   async () => {
     const ctx = freshCtx("wake-loop");
-    const itx = openItx(ctx);
+    const traces = (client: ReturnType<typeof openItx>) =>
+      client.invoke("itx.facets.get('core').alarmTraces()") as Promise<AlarmTrace[]>;
+    const story = (ring: AlarmTrace[]) =>
+      ring
+        .map(
+          (t) =>
+            `  ${new Date(t.at).toISOString()} ${t.reason}${t.subscription ? `(${t.subscription})` : ""} ` +
+            `${t.alarm.before}→${t.alarm.after} inherited=${t.alarm.inheritedAt} idle=${t.deadlines.idle} ` +
+            `delivery=${JSON.stringify(t.deadlines.delivery.map((d) => [d.name, d.at, d.attempt]))} ` +
+            `facets=${JSON.stringify(t.liveFacets)} external=${t.lastExternalRequestMs}`,
+        )
+        .join("\n");
+    let itx = openItx(ctx);
     await itx.provide("itx.faildeliver", ["itx", "workers", ["get", { source: THROWING_WORKER }]]);
     await itx.subscribe({
       name: "faildeliver",
@@ -615,23 +625,26 @@ probe(
       consumes: ["kick"],
     });
     await append(itx, { type: "kick", payload: { n: 1 } }); // kicks the ladder
+    await sleep(2_000); // the first attempt fails and the ladder arms
+    let ring = await traces(itx);
+    console.log(`kick:\n${story(ring)}`);
+    let nextWakeAt = ring.at(-1)?.alarm.after ?? null;
     disposeSessions(); // disconnect — the ladder runs off the DO's own alarm, untouched
-    await sleep(IDLE_MS);
-
-    const events = await readAll(openItx(ctx)); // one read at the end (the halt, if any, already happened)
-    const selfWakeHalts = events.filter((e) => e.type === HALTED).length;
-    const woken = events.filter((e) => e.type === WOKEN).length;
-    const streakReached = Number(
-      (events.find((e) => e.type === HALTED)?.payload as { streak?: number } | undefined)?.streak ??
-        0,
-    );
-    console.log(
-      `wake-loop OBSERVE: over ${IDLE_MS / 60000}min — woken=${woken}, self-wake-halted=${selfWakeHalts}, streak reached=${streakReached || "<N (drip too slow this run)"}`,
-    );
-    // The context is never poisoned by the loop or the halt; the durable log survives.
+    // Six wakes: ladder rungs 1s…32s, about a minute.
+    for (let wake = 1; wake <= 6 && nextWakeAt !== null; wake++) {
+      await sleep(Math.max(0, nextWakeAt + 5_000 - Date.now()));
+      itx = openItx(ctx);
+      ring = await traces(itx);
+      console.log(
+        `wake ${wake} (expected at ${new Date(nextWakeAt).toISOString()}):\n${story(ring)}`,
+      );
+      nextWakeAt = ring.at(-1)?.alarm.after ?? null;
+      disposeSessions();
+    }
+    const events = await readAll(openItx(ctx));
+    console.log(`wake-loop OBSERVE: woken=${events.filter((e) => e.type === WOKEN).length}`);
+    // The context is never poisoned by the loop; the durable log survives.
     const [ev] = await append(openItx(ctx), { type: "after-observe" });
     expect(ev.offset).toBeGreaterThan(0);
-    // If the drip reached N this run, the halt was recorded exactly once — the control fired.
-    if (selfWakeHalts > 0) expect(selfWakeHalts).toBe(1);
   },
 );

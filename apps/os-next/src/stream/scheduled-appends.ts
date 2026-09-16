@@ -18,9 +18,10 @@ export const ScheduleReceipt = z.object({
   scheduledAtOffset: z.number().int().positive(),
 });
 export type ScheduleReceipt = z.infer<typeof ScheduleReceipt>;
+// After the epoch: the native alarm refuses a time at or before it (and clamps a past one to now).
 const instant = z.iso
   .datetime({ offset: true })
-  .refine((value) => Number.isFinite(Date.parse(value)), "invalid instant");
+  .refine((value) => Date.parse(value) > 0, "invalid instant");
 // Bound arithmetic and make the smallest recurring cadence explicit. Missed ticks coalesce.
 const delay = z
   .number()
@@ -34,7 +35,6 @@ const runtimeEvents = new Set([
   "events.iterate.com/stream/woken",
   "events.iterate.com/stream/paused",
   "events.iterate.com/stream/resumed",
-  "events.iterate.com/stream/self-wake-halted",
   "events.iterate.com/stream/subscription-delivery-halted",
   "events.iterate.com/stream/subscription-delivery-resumed",
   // Kernel diagnostics are ephemeral and are never a durable schedule payload.

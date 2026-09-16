@@ -2093,10 +2093,9 @@ every borrowed stub and releases every connection, so the actor can hibernate:
 // iterate-context-durable-object.ts — alarm(), abridged
 const IDLE_QUIESCE_AFTER_MS = 60_000;
 async alarm(): Promise<void> {
-  await this.#subscriptionDelivery.deliverEveryCursorSubscription(); // 1. due retries — AWAITED, so a re-arm lands before hibernation
-  // …the self-wake breaker (below)
+  await this.#subscriptionDelivery.deliverEveryCursorSubscription(); // 1. due retries — AWAITED, so the deadline it leaves is the one derived after
   const quiet = Date.now() - this.#lastActivityMs >= IDLE_QUIESCE_AFTER_MS; // 2. the idle QUIESCE
-  if ((quiet || this.#stream.selfWakeHalted()) && this.#facetWorkInFlight === 0) {
+  if (quiet && this.#facetWorkInFlight === 0) {
     for (const facetName of this.#liveFacetNames) this.#abortFacetIfRunning(facetName, "idle quiesce");
     this.#liveFacetNames.clear(); // aborted facets re-materialize on their next call
     this.#rpcStubs.returnBorrowedRpcStubs();
@@ -2132,12 +2131,14 @@ bounded by its own 20 s watchdog, and a push subscriber that stops reading is no
 pending across all rows and 8 MiB in flight per context — the oldest events are dropped and the
 push's `after` moves up, the span the subscriber heals from the log.
 
-### The self-wake breaker
+### The one alarm
 
-One control exists beyond these: a context whose alarm fires five times in a row with no public door
-touched in between has woken itself for nothing, and `stream/self-wake-halted { streak }` is appended
-once and the alarm stops arming until a real request clears the streak
-(`e2e/stream.e2e.test.ts` is the opt-in deployed observation).
+The alarm itself is DERIVED, never requested: `src/alarm-coordinator.ts` arms the earliest of three
+deadlines — the next scheduled append (core state), the earliest owed cursor delivery
+(`subscription-delivery.ts` `deadlines()`), the idle quiesce — and deletes it when there is none, so
+a context with nothing owed never wakes itself. Every decision is an `AlarmTrace`
+(`itx.facets.get('core').alarmTraces()`, and an ephemeral event while an observer waits);
+`docs/scheduled-appends.md` has the model.
 
 ### Where it is proven
 
@@ -2167,7 +2168,7 @@ only, in `e2e/isolate-ceilings-deployed.e2e.test.ts` and `e2e/isolate-ceilings-d
 | 8       | fetch in the context of this project (secrets), project hosts, the upgrade leg | `src/iterate-context-durable-object.ts`, `src/context/rpc-stubs.ts`, `src/worker.ts`                         |
 | 9       | the library                                                                    | `src/library.ts`                                                                                             |
 | 10      | identity, tokens, the control plane                                            | `src/principal.ts`, `src/session.ts`, `src/control-plane.ts`                                                 |
-| 11      | pagers, the quiesce, alarms, the watchdog, the breaker                         | `src/iterate-context-durable-object.ts`, `src/stream/stream.ts`                                              |
+| 11      | pagers, the quiesce, the one alarm, the watchdog                               | `src/iterate-context-durable-object.ts`, `src/stream/stream.ts`                                              |
 
 The invariants a reader should now be able to state:
 
@@ -2194,8 +2195,8 @@ The invariants a reader should now be able to state:
   host, answered by the config worker's `fetch`.
 - **Identity is attribution.** The DO stamps `source.principal`; the session is bound by its token;
   membership is the directory's; loaded code speaks for the project.
-- **The DO holds nothing across idle.** Pagers, the quiesce, alarms only while something is owed, a
-  watchdog on every facet call, one breaker on self-wakes.
+- **The DO holds nothing across idle.** Pagers, the quiesce, an alarm only while something is owed
+  (derived, never requested), a watchdog on every facet call.
 
 ---
 
@@ -2242,6 +2243,6 @@ table of chapter 3 was checked by running `src/context/itx-expression-rewriting.
   `src/context/rpc-stubs.ts`; the e2e lane proves the capnweb-provider half end to end and marks
   the dynamic-worker-provider half `test.fails`; the workerd-provider half is
   `__workers-tests__/ws-fetch-live-101.test.ts`.
-- **The self-wake breaker's streak of five** is stated from `src/stream/stream.ts`
-  (`SELF_WAKE_HALT_STREAK`) and `src/stream/stream.test.ts`; the e2e observation is opt-in and
-  eviction-rate dependent.
+- **The one alarm's holds** (an inherited alarm kept until a pass completes; nothing written during
+  a pass) are stated from `src/alarm-coordinator.ts` and its table test; the e2e wake observation is
+  opt-in and deployed only.

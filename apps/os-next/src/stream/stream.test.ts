@@ -171,46 +171,24 @@ test("waitForEvent: an EPHEMERAL event resolves a waiting caller (and never hits
   expect(stream.read(0).events.some((e) => e.type === "blip")).toBe(false);
 });
 
-test("alarm traces are bounded ephemeral events and leave the durable stream untouched", async () => {
-  const storage = nodeSqliteDurableObjectStorage();
-  const batches: StreamEvent[][] = [];
-  const stream = bareStream({ storage, batches });
+test("a waitForEvent waiter for a type is visible to the host (what keeps an alarm trace lazy) and gone once it settles", async () => {
+  const stream = bareStream();
   stream.append({ type: "seed" });
-  const rowsBefore = persistedEventRows(storage);
-  const markBefore = persistedDurableMark(storage);
+  expect(stream.hasWaitForEventWaiter(STREAM_ALARM_TRACE_EVENT)).toBe(false);
   const pending = stream.waitForEvent({ type: STREAM_ALARM_TRACE_EVENT, timeoutMs: 5_000 });
-  const trace = stream.emitAlarmTrace({
-    phase: "fire",
-    reason: "unit-test",
-    huge: "x".repeat(100_000),
-    nested: { values: Array.from({ length: 100 }, (_, i) => i) },
-  });
-  expect(trace?.type).toBe(STREAM_ALARM_TRACE_EVENT);
-  expect(trace?.ephemeral).toBe(true);
-  expect(JSON.stringify(trace?.payload).length).toBeLessThanOrEqual(64 * 1024);
-  expect(persistedEventRows(storage)).toBe(rowsBefore);
-  expect(persistedDurableMark(storage)).toBe(markBefore);
-  expect(batches.at(-1)?.[0]).toMatchObject({
+  expect(stream.hasWaitForEventWaiter(STREAM_ALARM_TRACE_EVENT)).toBe(true);
+  expect(stream.hasWaitForEventWaiter("other")).toBe(false);
+  const [trace] = stream.append({
     type: STREAM_ALARM_TRACE_EVENT,
     ephemeral: true,
+    payload: { reason: "unit-test" },
   });
-  const observed = await pending;
-  expect(observed.offset).toBe(trace!.offset);
-  // The trace is incarnation-local: it is not returned by the durable read after emission.
+  expect((await pending).offset).toBe(trace.offset);
+  expect(stream.hasWaitForEventWaiter(STREAM_ALARM_TRACE_EVENT)).toBe(false);
+  // Ephemeral: the trace never reached a row.
   expect(stream.read(0).events.some((event) => event.type === STREAM_ALARM_TRACE_EVENT)).toBe(
     false,
   );
-});
-
-test("alarm trace events cannot be smuggled through the ordinary append interface", () => {
-  const stream = bareStream();
-  stream.append({ type: "seed" });
-  expect(stream.emitAlarmTrace({ phase: "fire", reason: "unobserved" })).toBeUndefined();
-  expect(stream.append({ type: "next" })[0].offset).toBe(2);
-  expect(() => stream.append({ type: STREAM_ALARM_TRACE_EVENT, ephemeral: true })).toThrow(
-    "kernel-owned",
-  );
-  expect(() => stream.append({ type: STREAM_ALARM_TRACE_EVENT })).toThrow("kernel-owned");
 });
 
 test("waitForEvent: one event resolves MULTIPLE waiters, in registration order", async () => {
@@ -518,7 +496,6 @@ test("a warm ephemeral-only append runs NO SQL at all (no read, no write, no tra
         counts.txn++;
         return base.transactionSync(closure);
       },
-      setAlarm: base.setAlarm,
     },
   });
   stream.append({ type: "tick" }); // the incarnation's first commit is durable — warms every cache
