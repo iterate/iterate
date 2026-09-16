@@ -40,20 +40,35 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
 });
 
 test("a first-party facet name refuses a spec — no source ever names a class of this worker", async () => {
-  const context = stub("prj_facet_exports_refusal");
-  await expect(
-    (context as unknown as { invoke(call: unknown): Promise<unknown> }).invoke([
-      "itx",
-      "facets",
-      ["get", "repo", { source: { "cap.js": "export class X {}" }, className: "X" }],
-      ["tip"],
-    ]),
-  ).rejects.toThrow(/first-party/);
-  await expect(
-    (context as unknown as { invoke(call: unknown): Promise<unknown> }).invoke([
-      "itx",
-      "processors",
-      ["enable", "agent", { source: { "cap.js": "export class X {}" }, className: "X" }],
-    ]),
-  ).rejects.toThrow(/first-party/);
+  // Refused INSIDE the object (runInDurableObject): a rejected RPC promise crossing to the test is
+  // reported as unhandled in the object whatever the caller does with it (the facet-door lesson).
+  const refusals = await runInDurableObject(
+    stub("prj_facet_exports_refusal"),
+    async (instance: unknown) => {
+      const context = instance as { invoke(call: unknown): Promise<unknown> };
+      const refusal = async (call: unknown) => {
+        try {
+          await context.invoke(call);
+          return null;
+        } catch (error) {
+          return String(error);
+        }
+      };
+      return {
+        facet: await refusal([
+          "itx",
+          "facets",
+          ["get", "repo", { source: { "cap.js": "export class X {}" }, className: "X" }],
+          ["tip"],
+        ]),
+        processor: await refusal([
+          "itx",
+          "processors",
+          ["enable", "agent", { source: { "cap.js": "export class X {}" }, className: "X" }],
+        ]),
+      };
+    },
+  );
+  expect(refusals.facet).toMatch(/first-party/);
+  expect(refusals.processor).toMatch(/first-party/);
 });
