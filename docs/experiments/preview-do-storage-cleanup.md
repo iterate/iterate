@@ -13,7 +13,8 @@ the same deployment. Completely deleting inert data is a separate question.
 - Inventory the OS and streams-example namespaces through Cloudflare REST.
 - Stop disposable containers, then wipe scheduler/stateful/domain objects and
   finally streams. Delete known hosted facets before their parent is wiped.
-- Fail on an incomplete sweep. Save each object result and the deployment IDs.
+- Fail when an attempted reset fails. Save each object result and deployment ID;
+  inventory completeness needs independent evidence.
 - Inspect the inventory again without calling the objects. Observe native
   invocations and billed duration through GraphQL after ingestion settles.
 - Create fresh work against the same deployment, then clean that up too.
@@ -51,10 +52,11 @@ index is delayed enough to miss objects created and used within an entire
 short test run. A successful per-object reset cannot compensate for an
 incomplete inventory.
 
-The same delayed index also still marked wiped sandbox objects as having
-stored data. That flag alone therefore cannot prove either failed deletion
-or current activity. Native invocations and delayed GraphQL activity are the
-separate checks below.
+The REST response also still marked many successfully reset sandbox objects
+as having stored data. That could be delayed index propagation or new writes
+after reset; these observations do not distinguish them. The flag alone does
+not establish current activity. Native invocations and delayed GraphQL
+activity are the separate checks below.
 
 ## Reuse probe
 
