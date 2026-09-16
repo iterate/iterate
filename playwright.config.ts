@@ -61,12 +61,14 @@ export default defineConfig({
         ["blob", { outputDir: "test-results/playwright-blobs" }],
         ["./scripts/preview/playwright-capacity-reporter.ts"],
         ["./scripts/ci/playwright-telemetry-reporter.ts"],
+        ["./scripts/ci/trace-reporter.ts"],
       ]
     : [
         ["list"],
         ["html", { outputFolder: "test-results/playwright-html", open: "never" }],
         ["json", { outputFile: "test-results/playwright-results.json" }],
         ["./scripts/ci/playwright-telemetry-reporter.ts"],
+        ["./scripts/ci/trace-reporter.ts"],
       ],
   timeout: SPEC_TEST_TIMEOUT_MS,
   expect: { timeout: SPEC_EXPECT_TIMEOUT_MS },

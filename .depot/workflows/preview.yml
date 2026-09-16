@@ -51,6 +51,8 @@ on:
       - patches/**
       - scripts/preview/**
       - scripts/ci/status.ts
+      - scripts/ci/trace*
+      - .depot/workflows/ci-trace.yml
       - envs.ts
       - scripts/lib/**
       - apps/auth-example/**
