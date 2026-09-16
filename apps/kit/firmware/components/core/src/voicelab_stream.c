@@ -7,7 +7,13 @@
 #include <stdio.h>
 #include <string.h>
 
-static const char *const direct_event_types[] = {
+/*
+ * NAMED ONE BY ONE, BECAUSE "*" NEVER SWEEPS AN EPHEMERAL. `spk-frame` is
+ * ephemeral and os-next's `consumesEvent` is explicit that a wildcard does not
+ * reach one, so the type that carries every syllable of every answer is the
+ * one a shorthand would silently drop.
+ */
+static const char *const consumed_event_types[] = {
   "events.iterate.com/voice-agent/spk-frame",
   "events.iterate.com/voice-agent/conversation-ended",
   "events.iterate.com/voice-agent/conversation-accepted",
@@ -343,15 +349,39 @@ static void handle_spk_frame(
   }
 }
 
+/* What the server believes it has sent, checked against what we have seen.
+ * A gap cannot be healed — an ephemeral is never re-read — so counting is the
+ * whole remedy; see stream_subscription.h for why there is no other symptom. */
+static void observe_delivery_range(
+    struct iterate_kit_voicelab *voicelab,
+    const struct capnweb_value *range) {
+  struct capnweb_value field;
+  int64_t after = -1;
+  int64_t through = -1;
+  if (range == NULL ||
+      !capnweb_value_object_get(range, "after", &field) ||
+      !capnweb_value_get_int64(&field, &after) ||
+      !capnweb_value_object_get(range, "through", &field) ||
+      !capnweb_value_get_int64(&field, &through)) {
+    return;
+  }
+  if (voicelab->last_delivery_through >= 0 &&
+      after != voicelab->last_delivery_through &&
+      voicelab->delivery_gaps < UINT32_MAX) {
+    ++voicelab->delivery_gaps;
+  }
+  voicelab->last_delivery_through = through;
+}
+
 static void process_batch(
     struct iterate_kit_voicelab *voicelab,
-    const struct capnweb_value *batch,
+    const struct capnweb_value *delivered_events,
+    const struct capnweb_value *range,
     bool counts_for_current_subscription) {
-  struct capnweb_value events_wrapper;
   struct capnweb_value events;
   size_t event_count;
   size_t index;
-  if (voicelab == NULL || batch == NULL) return;
+  if (voicelab == NULL || delivered_events == NULL) return;
   /*
    * Stamped for the BATCH, before its contents are inspected and regardless
    * of what it holds: this is the proof that the delivery lane still exists,
@@ -362,10 +392,11 @@ static void process_batch(
     ++voicelab->batches_on_connection;
     voicelab->last_batch_ms =
         voicelab->options.now_ms(voicelab->options.clock_context);
+    observe_delivery_range(voicelab, range);
   }
-  /* Application arrays ride the wire escaped as [[item, ...]]. */
-  if (!capnweb_value_object_get(batch, "events", &events_wrapper) ||
-      !capnweb_value_get_expression_array(&events_wrapper, &events)) {
+  /* Argument 0 IS the events array (stream_subscription.h). Application arrays
+   * ride the wire escaped as [[item, ...]], which is what this unwraps. */
+  if (!capnweb_value_get_expression_array(delivered_events, &events)) {
     return;
   }
   event_count = capnweb_value_array_size(&events);
@@ -465,7 +496,8 @@ static void process_batch(
 void iterate_kit_voicelab_on_subscription_update(
     void *owner,
     uint32_t owner_epoch,
-    const struct capnweb_value *batch) {
+    const struct capnweb_value *events,
+    const struct capnweb_value *range) {
   struct iterate_kit_voicelab *const voicelab = owner;
   const bool current = voicelab != NULL && voicelab->subscription != NULL &&
       owner_epoch == voicelab->subscription->owner_epoch;
@@ -475,7 +507,7 @@ void iterate_kit_voicelab_on_subscription_update(
   if (voicelab == NULL || (!current && !previous) ||
       (voicelab->state != ITERATE_KIT_VOICELAB_OPENING_CONNECTION &&
        voicelab->state != ITERATE_KIT_VOICELAB_READY)) return;
-  process_batch(voicelab, batch, current);
+  process_batch(voicelab, events, range, current);
 }
 
 
@@ -503,6 +535,7 @@ enum capnweb_status iterate_kit_voicelab_bind(
   voicelab->subscription = subscription;
   voicelab->state = ITERATE_KIT_VOICELAB_OPENING_CONNECTION;
   voicelab->last_event_offset = -1;
+  voicelab->last_delivery_through = -1;
   voicelab->subscription_epoch = voicelab->connection_generation;
   key_length = snprintf(key, sizeof(key), "kit-voice-%s-%" PRIu32,
       options->activation, voicelab->subscription_epoch);
@@ -510,8 +543,9 @@ enum capnweb_status iterate_kit_voicelab_bind(
     return fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL, CAPNWEB_E_LIMIT);
   }
   status = iterate_kit_stream_subscription_open(subscription, stream, key,
-      direct_event_types, sizeof(direct_event_types) / sizeof(direct_event_types[0]),
-      16, 13000, iterate_kit_voicelab_on_subscription_update, voicelab,
+      consumed_event_types,
+      sizeof(consumed_event_types) / sizeof(consumed_event_types[0]),
+      iterate_kit_voicelab_on_subscription_update, voicelab,
       voicelab->connection_generation);
   if (status != CAPNWEB_OK) {
     return fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL, status);
@@ -563,11 +597,16 @@ enum capnweb_status iterate_kit_voicelab_recycle_subscription(
   voicelab->subscription = fresh_subscription;
   voicelab->state = ITERATE_KIT_VOICELAB_OPENING_CONNECTION;
   voicelab->batches_on_connection = 0U;
+  /* A fresh subscription starts a fresh range; the predecessor's `through`
+   * belongs to a different delivery lane and comparing across them would
+   * manufacture a gap on every recycle. */
+  voicelab->last_delivery_through = -1;
   voicelab->last_batch_ms =
       voicelab->options.now_ms(voicelab->options.clock_context);
   status = iterate_kit_stream_subscription_open(fresh_subscription, voicelab->stream,
-      key, direct_event_types, sizeof(direct_event_types) / sizeof(direct_event_types[0]),
-      16, 13000, iterate_kit_voicelab_on_subscription_update, voicelab,
+      key, consumed_event_types,
+      sizeof(consumed_event_types) / sizeof(consumed_event_types[0]),
+      iterate_kit_voicelab_on_subscription_update, voicelab,
       voicelab->connection_generation);
   if (status != CAPNWEB_OK) {
     (void)iterate_kit_stream_subscription_close(fresh_subscription);
@@ -700,6 +739,17 @@ enum capnweb_status iterate_kit_voicelab_append_raw(
 
 /* --- the face, pulled out of the processor's own runtime bag ------------- */
 
+/*
+ * A PLAIN METHOD NAME ON THE CONVERSATION'S CONTEXT, exactly like
+ * `setupVoiceAgent` on the project root. os-next has no `getProcessorRuntimeState`
+ * built-in; anything that is not a built-in resolves through the context's
+ * rewrite rules, so the voice worker owns this name the same way it owns setup.
+ * The device keeps the call and the reply shape and expresses no opinion about
+ * which worker answers.
+ *
+ * It is armed only on a board with a mouth (`observe_answer`), so a deployment
+ * whose worker has not claimed the name yet costs the HAVPE nothing.
+ */
 static const char *const runtime_state_path[] = {"getProcessorRuntimeState"};
 
 /**

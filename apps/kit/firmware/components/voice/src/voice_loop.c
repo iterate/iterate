@@ -197,7 +197,8 @@ EXT_RAM_BSS_ATTR static uint8_t
 
 /* One fresh child stream per activation; the client mount itself is stable. */
 static char stream_path[160];
-static char client_path[96];
+/* "itx.clients.<device name>" — the itx expression this board answers. */
+static char capability_match[ITERATE_KIT_ITX_MOUNT_CAPABILITY_MATCH_CAPACITY];
 
 enum opening_outcome {
   OPENING_IDLE = 0,
@@ -1431,13 +1432,16 @@ static void start_voice_setup(struct voice_setup_ticket *ticket) {
     CAPNWEB_EXPRESSION_STRING,
     {.string = {ticket->stream_path, strlen(ticket->stream_path)}},
   };
-  const struct capnweb_expression visemes = {
-    CAPNWEB_EXPRESSION_BOOLEAN,
-    {.boolean = runtime.board->observe_answer != NULL},
+  /* The activation travels with setup so the server can start the call in the
+   * stream's birth batch and dial the provider before the first microphone
+   * frame arrives; the frames carry the same id. */
+  const struct capnweb_expression activation = {
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {ticket->activation, strlen(ticket->activation)}},
   };
   const struct capnweb_object_field fields[] = {
     {{"streamPath", sizeof("streamPath") - 1U}, &path},
-    {{"visemes", sizeof("visemes") - 1U}, &visemes},
+    {{"activation", sizeof("activation") - 1U}, &activation},
   };
   const struct capnweb_expression args = {
     CAPNWEB_EXPRESSION_OBJECT,
@@ -1891,21 +1895,18 @@ static bool initialise_connection(void) {
   options.send_text_context = &transport;
   options.project_id = runtime.configuration.project_id;
   options.project_api_key = runtime.configuration.project_api_key;
-  options.client_path = client_path;
+  options.capability_match = capability_match;
   options.capability = iterate_kit_peer_capability(&runtime.peer);
   /*
-   * THE ONLY DESCRIPTION A MODEL EVER SEES.
+   * THERE IS NO DESCRIPTION TO SEND ANY MORE.
    *
-   * Not `facts->peer_description` — the capability host flattens this mount and
-   * reports `children: {}` because sub-paths are routes the device interprets,
-   * not members the host can list. So `peer_description` documents it for
-   * people reading this file, and THIS string is what an agent discovers in
-   * itx.__describe().capabilities. It was one 46-character line, which is why a
-   * back-office agent asked for the device's metrics went looking through
-   * telemetry streams instead of calling health(): nothing told it the call
-   * existed.
+   * `projects.connect` took one and journalled it as the provision's
+   * instructions; `provide` takes a match and a stub and nothing else. What a
+   * model discovers about this board is now whatever the project's own rows
+   * say about `clients.<device>` — the device asserts only that the name works.
+   * `facts->peer_description` still documents the surface for people reading
+   * this file.
    */
-  options.description = "Voice device";
   options.session_ended = on_session_ended;
   options.session_ended_context = NULL;
   if (iterate_kit_itx_connection_init(&runtime.connection, &options) !=
@@ -2110,8 +2111,17 @@ static size_t health_json(char *out, size_t capacity) {
      */
     {"batches", runtime.voicelab->batches_on_connection},
     {"connGeneration", runtime.voicelab->connection_generation},
+    /* Deliveries that never arrived: the times a range did not continue the
+     * last one. Nothing else can show one (stream_subscription.h). */
+    {"deliveryGaps", runtime.voicelab->delivery_gaps},
     /* Hop liveness only — never application delivery credit. */
     {"wsPongs", metrics.websocket_pongs_received},
+    /* The session's own pulse, sent and answered, and the liveness watchdog's
+     * stronger evidence. Sent climbing while answered stands still is a socket
+     * that is open and a server that is not there. Counted per connection
+     * generation, unlike wsPongs, which counts per transport lifetime. */
+    {"rootProbes", runtime.connection.mount.probes_sent},
+    {"rootProbeAnswers", runtime.connection.mount.probes_answered},
     /* Inbound capability dispatches served — the reachability proof. */
     {"servedDispatches", iterate_kit_peer_served_dispatches(&runtime.peer)},
     {"bridgeAgeMs",
@@ -2462,11 +2472,23 @@ bool iterate_kit_voice_loop_init(
   if (facts->device_name == NULL || facts->device_name[0] == '\0') {
     return false;
   }
-  const int client_path_length = snprintf(
-      client_path, sizeof(client_path), "/clients/%s", facts->device_name);
-  if (client_path_length < 0 ||
-      (size_t)client_path_length >= sizeof(client_path)) {
+  /* A device slug's hyphens become underscores: the far end writes this name
+   * out in JavaScript (itx_mount.h), where a hyphen cannot be spelled. */
+  const int capability_match_length = snprintf(
+      capability_match, sizeof(capability_match), "itx.clients.%s",
+      facts->device_name);
+  if (capability_match_length < 0 ||
+      (size_t)capability_match_length >= sizeof(capability_match)) {
     return false;
+  }
+  for (size_t index = sizeof("itx.clients.") - 1U;
+       capability_match[index] != '\0'; ++index) {
+    const char character = capability_match[index];
+    const bool identifier_safe =
+        (character >= 'a' && character <= 'z') ||
+        (character >= 'A' && character <= 'Z') ||
+        (character >= '0' && character <= '9') || character == '_';
+    if (!identifier_safe) capability_match[index] = '_';
   }
   iterate_kit_voice_playout_init(&runtime.playout);
   /* Drain the control inbox at the WebSocket task's priority so producer and
@@ -2590,6 +2612,27 @@ bool iterate_kit_voice_loop_init(
       (unsigned int)sizeof(runtime),
       (unsigned int)sizeof(transport));
   return true;
+}
+
+/*
+ * Names the class of a retained Cap'n Web failure. The peer library keeps only
+ * this status; the finer reason ("CAPNWEB_E_TOKEN_LIMIT",
+ * "CAPNWEB_E_EXPORT_LIMIT", ...) exists only in the abort message it sends.
+ */
+static const char *capnweb_status_name(int32_t status) {
+  switch ((enum capnweb_status)status) {
+    case CAPNWEB_OK: return "CAPNWEB_OK";
+    case CAPNWEB_E_INVALID_ARGUMENT: return "CAPNWEB_E_INVALID_ARGUMENT";
+    case CAPNWEB_E_INVALID_MESSAGE: return "CAPNWEB_E_INVALID_MESSAGE";
+    case CAPNWEB_E_LIMIT: return "CAPNWEB_E_LIMIT";
+    case CAPNWEB_E_TRANSPORT: return "CAPNWEB_E_TRANSPORT";
+    case CAPNWEB_E_REMOTE_ABORT: return "CAPNWEB_E_REMOTE_ABORT";
+    case CAPNWEB_E_CLOSED: return "CAPNWEB_E_CLOSED";
+    case CAPNWEB_E_UNSUPPORTED: return "CAPNWEB_E_UNSUPPORTED";
+    case CAPNWEB_E_STATE: return "CAPNWEB_E_STATE";
+    case CAPNWEB_E_CANCELED: return "CAPNWEB_E_CANCELED";
+  }
+  return "?";
 }
 
 /*
@@ -2732,7 +2775,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
             " wsErrType=%" PRId32 " tlsErr=%" PRId32 " errno=%" PRId32
             " protoFail=%" PRIu32 " recvFail=%" PRIu32 " sendFail=%" PRIu32
             " inboxDiscard=%" PRIu32 " outboxDiscard=%" PRIu32
-            " appCapnweb=%" PRId32,
+            " appCapnweb=%" PRId32 " (%s)",
             metrics.last_control_receive_status,
             metrics.last_websocket_close_status_code,
             metrics.last_websocket_error_type,
@@ -2743,7 +2786,8 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
             metrics.control_send_failures,
             metrics.control_inbox_discarded,
             metrics.control_outbox_discarded,
-            metrics.last_application_capnweb_status);
+            metrics.last_application_capnweb_status,
+            capnweb_status_name(metrics.last_application_capnweb_status));
       }
       if (transport.state == ITERATE_KIT_ESP_IDF_ITX_READY) {
         /* The socket is up, so DNS and UDP work: a good moment to ask what
@@ -2764,7 +2808,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
             tag,
             "mount diagnosis: connection=%d mount=%s failure=%s "
             "protoFail=%" PRIu32 " lastRecvStatus=%" PRId32
-            " wsClose=%" PRId32 " appCapnweb=%" PRId32 "@%" PRIu32
+            " wsClose=%" PRId32 " appCapnweb=%" PRId32 "@%" PRIu32 " (%s)"
             " recvFail=%" PRIu32 " sendFail=%" PRIu32,
             (int)runtime.connection.state,
             iterate_kit_itx_mount_state_name(runtime.connection.mount.state),
@@ -2775,6 +2819,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
             metrics.last_websocket_close_status_code,
             metrics.last_application_capnweb_status,
             metrics.last_application_capnweb_generation,
+            capnweb_status_name(metrics.last_application_capnweb_status),
             metrics.control_receive_failures,
             metrics.control_send_failures);
       }
@@ -2829,39 +2874,52 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
      * believing it has a session and a call, lights "listening" and "speaking"
      * at the user, and sends every word into a void for hours.
      *
-     * THE EVIDENCE IS A WEBSOCKET PONG, and it took two tries to get right.
+     * THE EVIDENCE IS AN ANSWERED ROUND TRIP, of which there are two kinds and
+     * either will do.
      *
-     * It was a pulled application-level `voice-agent/ping` append, which was a
-     * third liveness mechanism above the two that measure the hop honestly, and
-     * it woke a processor twelve times a minute to be told it was awake. That
-     * went. But deleting it left NOTHING watching this failure, because both
-     * ends of the connection answered pings and neither asked — so the device
-     * now originates a WebSocket PING when the hop has been quiet both ways
-     * (see the keepalive in websocket_connection.c) and this watches the PONGs.
+     * An ANSWERED `whoami()` PROBE is the stronger one: the mount asks the
+     * project root once a period (itx_mount.h) and an answer proves the session,
+     * the socket and the hop in one. A WEBSOCKET PONG is the weaker fallback,
+     * and it is what covers the window where the transport is ready but no
+     * mount exists yet — the only window on this device that is genuinely quiet.
+     *
+     * KEYING ON THE PONG ALONE WAS A RACE. The transport originates its PING
+     * only after inbound silence (websocket_connection.c), and an answered probe
+     * IS inbound traffic on the same period — so a healthy mounted board could
+     * suppress every PING it needed and reboot itself at 420 s on a good
+     * network. Reading the probe answers here removes the race without a second
+     * constant: a mounted board is kept alive by its probes, an unmounted one by
+     * its PONGs, and neither has to win a timing argument with the other.
      *
      * WHY NOT ANY INBOUND APPLICATION SIGNAL: delivery batches and served
      * dispatches both stop on a perfectly healthy IDLE board, so re-keying on
      * them would restart every idle device on a timer. The mount watchdog made
      * exactly that mistake; the note in voice_device_profile.h is what it cost.
-     * A PONG keeps arriving on an idle board, which is the whole point.
+     * A probe answer and a PONG both keep arriving on an idle board, which is
+     * the whole point.
      *
-     * A PONG IS NOT DELIVERY CREDIT. It proves the hop parsed a frame in order
-     * and nothing more — the rule at iterate_kit_websocket_tx_queue_control is
-     * unchanged and this must never become an application acknowledgement. It
-     * is read here, by a watchdog asking whether the hop is alive at all, and
-     * nowhere else.
+     * NEITHER IS DELIVERY CREDIT. They prove the hop is alive and nothing more —
+     * the rule at iterate_kit_websocket_tx_queue_control is unchanged and this
+     * must never become an application acknowledgement.
      */
     {
       static uint64_t last_liveness_ms;
       /** When the transport last stopped being ready; 0 while it is ready. */
       static uint64_t not_ready_since_ms;
       static uint32_t last_pong_count;
+      static uint32_t last_probe_answer_count;
+      const uint32_t probe_answers = runtime.connection.mount.probes_answered;
       struct iterate_kit_esp_idf_itx_transport_metrics liveness;
       iterate_kit_esp_idf_itx_transport_metrics(&transport, &liveness);
       if (last_liveness_ms == 0U) last_liveness_ms = now;
       if (liveness.websocket_pongs_received != last_pong_count) {
         last_pong_count = liveness.websocket_pongs_received;
         last_liveness_ms = now;
+      }
+      if (probe_answers != last_probe_answer_count) {
+        /* A remount zeroes the counter, so only a RISE is a fresh round trip. */
+        if (probe_answers > last_probe_answer_count) last_liveness_ms = now;
+        last_probe_answer_count = probe_answers;
       }
       /*
        * A TRANSPORT THAT IS NEVER READY MUST NOT DISABLE THE RESTART.
@@ -2893,9 +2951,27 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
           NO_LIVENESS_RESTART_MS) {
         ESP_LOGE(
             tag,
-            "no pong in %us despite a ready transport — restarting",
+            "no answered round trip in %us despite a ready transport — restarting",
             (unsigned int)(NO_LIVENESS_RESTART_MS / 1000U));
         iterate_kit_esp_restart_with_note("hop dead on a ready transport");
+      }
+    }
+
+    /*
+     * AND THE SESSION'S OWN PULSE, WHICH AN IDLE BOARD NEEDS MOST.
+     *
+     * Deliberately OUTSIDE the voicelab's gate below: that block runs only
+     * while a conversation is bound and ready, which is precisely when the
+     * socket is busy anyway. The connection this keeps alive is the one
+     * between calls (itx_mount.h). Gated on outbox headroom like every other
+     * producer: exhaustion is session-fatal in this peer, and a probe that
+     * cannot be queued is simply the next period's probe.
+     */
+    if (runtime.connection.state == ITERATE_KIT_ITX_CONNECTION_READY) {
+      struct iterate_kit_spsc_ring_metrics probe_outbox;
+      iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &probe_outbox);
+      if (CONTROL_OUTBOX_SLOTS - probe_outbox.current_slots >= 3U) {
+        (void)iterate_kit_itx_mount_probe_if_due(&runtime.connection.mount, now);
       }
     }
 

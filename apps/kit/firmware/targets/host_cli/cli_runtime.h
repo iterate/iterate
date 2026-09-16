@@ -85,8 +85,9 @@ struct cli_runtime {
   struct iterate_kit_stream_subscription voice_subscription;
   struct iterate_kit_stream_subscription recycled_voice_subscription;
   uint32_t voicelab_generation;
-  /* The connection borrows this buffer until process shutdown. */
-  char client_path[96];
+  /* The connection borrows this buffer until process shutdown:
+   * "itx.clients.<name>", the itx expression this CLI answers. */
+  char capability_match[ITERATE_KIT_ITX_MOUNT_CAPABILITY_MATCH_CAPACITY];
   enum iterate_kit_posix_itx_transport_state announced_transport;
   enum iterate_kit_voicelab_state announced_voicelab;
   enum iterate_kit_voicelab_failure announced_failure;

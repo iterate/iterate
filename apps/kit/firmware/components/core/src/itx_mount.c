@@ -2,22 +2,10 @@
 
 #include <string.h>
 
+#include "iterate/kit/voice_device_profile.h"
+
 /*
- * Mounting is a small asynchronous ownership state machine:
- *
- *   bootstrap.authenticate(project-secret)
- *     -> authenticated session capability
- *     -> projects.connect(projectId, {path, description, capabilities})
- *     -> project capability, with the live provision hung off it
- *
- * TWO ROUND TRIPS, NOT THREE. Connecting as a client is what provides the
- * capability, so the old separate provideCapability stage is gone; the saved
- * trip is on the boot and reconnect path of every board.
- *
- * The project capability is therefore what READY owns: `connect` attaches the
- * provision to it as an owned disposable, so releasing it revokes the mount
- * and merely dropping it strands the mount as a zombie. Every `has_*` flag is
- * an ownership ledger used by both success transitions and cleanup.
+ * The three-call mount and its ownership ledger are documented in itx_mount.h.
  * Collapsing the chain into nested generic helpers or retrying stages in place
  * was rejected: each rejection/result/protocol failure needs a stable,
  * diagnosable class, and retry belongs to a fresh outer connection generation.
@@ -27,57 +15,38 @@
  * only until capnweb_session_call_expressions returns.
  */
 static const char *const authenticate_path[] = {"authenticate"};
-static const char *const connect_path[] = {"projects", "connect"};
+static const char *const projects_get_path[] = {"projects", "get"};
+static const char *const provide_path[] = {"provide"};
+static const char *const whoami_path[] = {"whoami"};
 
 static bool nonempty(const char *value) {
   return value != NULL && value[0] != '\0';
 }
 
-static bool valid_client_path(const char *path) {
+/*
+ * A profile that forgot to spell its device name as an itx expression must fail
+ * before authentication bytes leave the device, rather than become a reconnect
+ * loop mislabeled as networking. Both callers already produce identifier-safe
+ * segments (voice_loop.c sanitizes, cli_options.c refuses), so this bounds the
+ * shape and nothing more: rooted at "itx.", within the capacity, no empty
+ * segment, and at least one segment past the root.
+ */
+static bool valid_capability_match(const char *match) {
   size_t index;
-  unsigned char character;
-  if (!nonempty(path)) {
-    return false;
-  }
-
-  /*
-   * A client path is a STREAM path, not a capability name, so the JavaScript
-   * member grammar the old mount enforced no longer applies — hyphenated
-   * device slugs are exactly what belongs here. What the server will reject is
-   * different: `projects.connect` canonicalizes the path and refuses the
-   * project root, and the stream layer refuses relative segments.
-   *
-   * Mirror those rules here rather than relying on the remote rejection. A
-   * configuration defect must fail before authentication bytes leave the
-   * device and must never become a reconnect loop mislabeled as networking.
-   *
-   * Explicit ASCII tests are intentional. ctype predicates are locale-aware
-   * while the server contract is not, so accepting a locale-specific letter
-   * would recreate that cross-peer disagreement for non-ASCII bytes.
-   */
-  if (path[0] != '/' || path[1] == '\0') {
-    return false;
-  }
-  for (index = 0U; path[index] != '\0'; ++index) {
-    if (index >= ITERATE_KIT_ITX_MOUNT_CLIENT_PATH_CAPACITY) {
-      return false;
+  bool at_segment_start = true;
+  if (!nonempty(match)) return false;
+  if (strncmp(match, "itx.", sizeof("itx.") - 1U) != 0) return false;
+  for (index = sizeof("itx.") - 1U; match[index] != '\0'; ++index) {
+    if (index >= ITERATE_KIT_ITX_MOUNT_CAPABILITY_MATCH_CAPACITY) return false;
+    if (match[index] != '.') {
+      at_segment_start = false;
+      continue;
     }
-    character = (unsigned char)path[index];
-    /* Printable ASCII only, and no spaces: a path is not a label. */
-    if (character <= (unsigned char)' ' || character >= (unsigned char)0x7F) {
-      return false;
-    }
-    /* No empty segment, and no "." / ".." to canonicalize away. */
-    if (character == (unsigned char)'/') {
-      if (path[index + 1U] == '/' || path[index + 1U] == '\0') {
-        return false;
-      }
-      if (path[index + 1U] == '.') {
-        return false;
-      }
-    }
+    if (at_segment_start) return false;
+    at_segment_start = true;
   }
-  return true;
+  /* "itx." alone names the whole surface, and a trailing dot names nothing. */
+  return !at_segment_start;
 }
 
 static bool valid_options(
@@ -86,9 +55,7 @@ static bool valid_options(
       options->session != NULL &&
       nonempty(options->project_id) &&
       nonempty(options->project_api_key) &&
-      /* `connect` requires a description and rejects an empty one. */
-      nonempty(options->description) &&
-      valid_client_path(options->client_path) &&
+      valid_capability_match(options->capability_match) &&
       options->capability.dispatch != NULL;
 }
 
@@ -152,113 +119,62 @@ static bool take_result_capability(
           &result->value, capability);
 }
 
-static void connect_completed(
+static void provide_completed(
     void *context, const struct capnweb_result *result);
 
-static enum capnweb_status begin_connect(
+static enum capnweb_status begin_provide(
     struct iterate_kit_itx_mount *mount) {
-  static const struct capnweb_expression flatten_nested_paths = {
-    CAPNWEB_EXPRESSION_BOOLEAN,
-    {.boolean = true},
-  };
-  struct capnweb_expression project_id;
-  struct capnweb_expression path;
-  struct capnweb_expression capabilities;
-  struct capnweb_expression description;
-  struct capnweb_expression types;
-  struct capnweb_object_field fields[5];
+  struct capnweb_expression match;
+  struct capnweb_expression capability;
   struct capnweb_expression arguments[2];
-  size_t field_count = 0U;
   enum capnweb_status status;
 
-  project_id = (struct capnweb_expression){
+  /*
+   * Export the device's capability BEFORE the call that carries it. `provide`
+   * lends the stub the argument names; there is nothing else the call needs.
+   */
+  status = capnweb_session_export_capability(
+      mount->options.session,
+      mount->options.capability,
+      &mount->local_capability);
+  if (status != CAPNWEB_OK) {
+    return fail(
+        mount, ITERATE_KIT_ITX_MOUNT_FAILURE_PROVIDE_CALL, status);
+  }
+  mount->has_local_capability = true;
+
+  match = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
     {.string = {
-      mount->options.project_id,
-      strlen(mount->options.project_id),
+      mount->options.capability_match,
+      strlen(mount->options.capability_match),
     }},
   };
-  path = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {
-      mount->options.client_path,
-      strlen(mount->options.client_path),
-    }},
-  };
-  capabilities = (struct capnweb_expression){
+  capability = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_CAPABILITY,
     {.capability = mount->local_capability},
   };
-  description = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {
-      mount->options.description,
-      strlen(mount->options.description),
-    }},
-  };
-  fields[field_count++] = (struct capnweb_object_field){
-    {"path", sizeof("path") - 1U},
-    &path,
-  };
-  fields[field_count++] = (struct capnweb_object_field){
-    {"description", sizeof("description") - 1U},
-    &description,
-  };
-  fields[field_count++] = (struct capnweb_object_field){
-    {"capabilities", sizeof("capabilities") - 1U},
-    &capabilities,
-  };
-  /*
-   * An exported Cap'n Web capability is a path-building proxy, not a material
-   * JavaScript object tree. The capability host's ordinary nested replay
-   * awaits each intermediate member; awaiting `conversation` would therefore
-   * issue an incomplete remote call before it ever reaches `start`. Ask the
-   * host to preserve the complete dotted path as one invocation envelope. The
-   * peer unwraps that envelope allocation-free into its existing static method
-   * table, so this compatibility boundary adds no queue or realtime work.
-   */
-  fields[field_count++] = (struct capnweb_object_field){
-    {"flattenNestedPaths", sizeof("flattenNestedPaths") - 1U},
-    &flatten_nested_paths,
-  };
-  if (mount->options.types != NULL) {
-    types = (struct capnweb_expression){
-      CAPNWEB_EXPRESSION_STRING,
-      {.string = {
-        mount->options.types,
-        strlen(mount->options.types),
-      }},
-    };
-    fields[field_count++] = (struct capnweb_object_field){
-      {"types", sizeof("types") - 1U},
-      &types,
-    };
-  }
-  arguments[0] = project_id;
-  arguments[1] = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_OBJECT,
-    {.object = {fields, field_count}},
-  };
+  arguments[0] = match;
+  arguments[1] = capability;
 
-  mount->state = ITERATE_KIT_ITX_MOUNT_CONNECTING;
+  mount->state = ITERATE_KIT_ITX_MOUNT_PROVIDING;
   status = capnweb_session_call_expressions(
       mount->options.session,
-      mount->session_capability,
-      connect_path,
-      sizeof(connect_path) / sizeof(connect_path[0]),
+      mount->project_capability,
+      provide_path,
+      sizeof(provide_path) / sizeof(provide_path[0]),
       arguments,
       2U,
-      connect_completed,
+      provide_completed,
       mount);
   if (status != CAPNWEB_OK) {
     return fail(
-        mount, ITERATE_KIT_ITX_MOUNT_FAILURE_CONNECT_CALL, status);
+        mount, ITERATE_KIT_ITX_MOUNT_FAILURE_PROVIDE_CALL, status);
   }
   /*
    * The pending call now owns the exported capability reference. Release our
-   * temporary local export immediately instead of holding duplicate ownership
-   * for the entire live provision. The returned PROJECT capability is the
-   * durable revocation handle — `connect` hangs the provision off it.
+   * temporary local hold immediately instead of holding duplicate ownership
+   * for the whole live provision; the RULE handle is what revokes it.
    */
   status = release_local(mount);
   if (status != CAPNWEB_OK) {
@@ -268,10 +184,41 @@ static enum capnweb_status begin_connect(
   return CAPNWEB_OK;
 }
 
+static void project_completed(
+    void *context, const struct capnweb_result *result);
+
+static enum capnweb_status begin_get_project(
+    struct iterate_kit_itx_mount *mount) {
+  struct capnweb_expression project_id;
+  enum capnweb_status status;
+
+  project_id = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {
+      mount->options.project_id,
+      strlen(mount->options.project_id),
+    }},
+  };
+  mount->state = ITERATE_KIT_ITX_MOUNT_GETTING_PROJECT;
+  status = capnweb_session_call_expressions(
+      mount->options.session,
+      mount->session_capability,
+      projects_get_path,
+      sizeof(projects_get_path) / sizeof(projects_get_path[0]),
+      &project_id,
+      1U,
+      project_completed,
+      mount);
+  if (status != CAPNWEB_OK) {
+    return fail(
+        mount, ITERATE_KIT_ITX_MOUNT_FAILURE_PROJECT_CALL, status);
+  }
+  return CAPNWEB_OK;
+}
+
 static void authenticated(
     void *context, const struct capnweb_result *result) {
   struct iterate_kit_itx_mount *mount = context;
-  enum capnweb_status status;
   if (mount->state == ITERATE_KIT_ITX_MOUNT_CLOSED) {
     return;
   }
@@ -298,26 +245,10 @@ static void authenticated(
     return;
   }
   mount->has_session_capability = true;
-  /*
-   * Export the device's capability BEFORE the call that carries it. Connect
-   * both addresses the project and provides the capability, so unlike the old
-   * three-stage chain there is no intermediate project handle to acquire
-   * first — the export is the only thing the call still needs.
-   */
-  status = capnweb_session_export_capability(
-      mount->options.session,
-      mount->options.capability,
-      &mount->local_capability);
-  if (status != CAPNWEB_OK) {
-    (void)fail(
-        mount, ITERATE_KIT_ITX_MOUNT_FAILURE_CONNECT_CALL, status);
-    return;
-  }
-  mount->has_local_capability = true;
-  (void)begin_connect(mount);
+  (void)begin_get_project(mount);
 }
 
-static void connect_completed(
+static void project_completed(
     void *context, const struct capnweb_result *result) {
   struct iterate_kit_itx_mount *mount = context;
   enum capnweb_status status;
@@ -334,7 +265,7 @@ static void connect_completed(
   if (result->kind == CAPNWEB_RESULT_REJECTION) {
     (void)fail(
         mount,
-        ITERATE_KIT_ITX_MOUNT_FAILURE_CONNECT_REJECTED,
+        ITERATE_KIT_ITX_MOUNT_FAILURE_PROJECT_REJECTED,
         CAPNWEB_OK);
     return;
   }
@@ -347,7 +278,7 @@ static void connect_completed(
      */
     (void)fail(
         mount,
-        ITERATE_KIT_ITX_MOUNT_FAILURE_CONNECT_RESULT,
+        ITERATE_KIT_ITX_MOUNT_FAILURE_PROJECT_RESULT,
         CAPNWEB_E_INVALID_MESSAGE);
     return;
   }
@@ -366,12 +297,43 @@ static void connect_completed(
         mount, ITERATE_KIT_ITX_MOUNT_FAILURE_RELEASE, status);
     return;
   }
+  (void)begin_provide(mount);
+}
+
+static void provide_completed(
+    void *context, const struct capnweb_result *result) {
+  struct iterate_kit_itx_mount *mount = context;
+  if (mount->state == ITERATE_KIT_ITX_MOUNT_CLOSED) {
+    return;
+  }
+  if (result->kind == CAPNWEB_RESULT_SESSION_ENDED) {
+    (void)fail(
+        mount,
+        ITERATE_KIT_ITX_MOUNT_FAILURE_SESSION_ENDED,
+        result->status);
+    return;
+  }
+  if (result->kind == CAPNWEB_RESULT_REJECTION) {
+    (void)fail(
+        mount,
+        ITERATE_KIT_ITX_MOUNT_FAILURE_PROVIDE_REJECTED,
+        CAPNWEB_OK);
+    return;
+  }
+  if (!take_result_capability(result, &mount->rule_capability)) {
+    (void)fail(
+        mount,
+        ITERATE_KIT_ITX_MOUNT_FAILURE_PROVIDE_RESULT,
+        CAPNWEB_E_INVALID_MESSAGE);
+    return;
+  }
+  mount->has_rule_capability = true;
   mount->state = ITERATE_KIT_ITX_MOUNT_READY;
   /*
-   * READY means the server returned and we retain the project capability that
-   * owns the live provision; it does not prove future network liveness. The
+   * READY means the server returned and we retain the rule handle that owns
+   * the live provision; it does not prove future network liveness. The
    * enclosing connection/session must still demote READY immediately on
-   * terminal transport state.
+   * terminal transport state, and `probe_if_due` keeps asking.
    */
   mount->failure = ITERATE_KIT_ITX_MOUNT_FAILURE_NONE;
   mount->capnweb_status = CAPNWEB_OK;
@@ -380,16 +342,15 @@ static void connect_completed(
 enum capnweb_status iterate_kit_itx_mount_start(
     struct iterate_kit_itx_mount *mount,
     const struct iterate_kit_itx_mount_options *options) {
-  static const struct capnweb_expression project_secret = {
+  static const struct capnweb_expression admin_secret = {
     CAPNWEB_EXPRESSION_STRING,
     {.string = {
-      "project-secret",
-      sizeof("project-secret") - 1U,
+      "admin-secret",
+      sizeof("admin-secret") - 1U,
     }},
   };
-  struct capnweb_expression project_id;
   struct capnweb_expression secret;
-  struct capnweb_object_field auth_fields[3];
+  struct capnweb_object_field auth_fields[2];
   struct capnweb_expression auth;
   enum capnweb_status status;
 
@@ -407,15 +368,16 @@ enum capnweb_status iterate_kit_itx_mount_start(
   mount->options = *options;
   mount->state = ITERATE_KIT_ITX_MOUNT_AUTHENTICATING;
   /*
-   * Project-secret auth is the agreed MVP bootstrap contract. Keeping the auth
-   * object construction isolated here makes the future device-scoped OAuth
-   * substitution explicit; it must not be mistaken for a permanent credential
-   * or silently fall back to another auth mechanism.
+   * ADMIN-SECRET IS THE OPERATOR DOOR'S CREDENTIAL, AND THAT IS ALL IT IS.
+   *
+   * `/internal/rpc` carries no HTTP gate, so the upgrade needs no header and
+   * this two-field object is the whole of authentication. The secret it
+   * carries reaches every project in the deployment, which is why a board
+   * holding one is a bench board. Keeping the auth object construction
+   * isolated here makes the future device-scoped grant substitution explicit;
+   * it must not be mistaken for a permanent credential or silently fall back
+   * to another auth mechanism.
    */
-  project_id = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {options->project_id, strlen(options->project_id)}},
-  };
   secret = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
     {.string = {
@@ -425,19 +387,15 @@ enum capnweb_status iterate_kit_itx_mount_start(
   };
   auth_fields[0] = (struct capnweb_object_field){
     {"type", sizeof("type") - 1U},
-    &project_secret,
+    &admin_secret,
   };
   auth_fields[1] = (struct capnweb_object_field){
-    {"projectId", sizeof("projectId") - 1U},
-    &project_id,
-  };
-  auth_fields[2] = (struct capnweb_object_field){
     {"secret", sizeof("secret") - 1U},
     &secret,
   };
   auth = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_OBJECT,
-    {.object = {auth_fields, 3U}},
+    {.object = {auth_fields, 2U}},
   };
   status = capnweb_session_call_expressions(
       options->session,
@@ -453,6 +411,62 @@ enum capnweb_status iterate_kit_itx_mount_start(
         mount, ITERATE_KIT_ITX_MOUNT_FAILURE_AUTH_CALL, status);
   }
   return CAPNWEB_OK;
+}
+
+static void probe_completed(
+    void *context, const struct capnweb_result *result) {
+  struct iterate_kit_itx_mount *mount = context;
+  if (mount == NULL || !mount->probe_pending) {
+    return;
+  }
+  mount->probe_pending = false;
+  /*
+   * A PROBE IS EVIDENCE, NOT POLICY. An answer proves the session and feeds the
+   * liveness watchdog (voice_loop.c); a rejection or a lost session is already
+   * the business of the stage that owns recovery, and demoting READY from here
+   * would turn one unlucky round trip into a remount.
+   */
+  if (result->kind == CAPNWEB_RESULT_VALUE &&
+      result->status == CAPNWEB_OK &&
+      mount->probes_answered < UINT32_MAX) {
+    ++mount->probes_answered;
+  }
+}
+
+bool iterate_kit_itx_mount_probe_if_due(
+    struct iterate_kit_itx_mount *mount, uint64_t now_ms) {
+  static const char no_arguments[] = "[]";
+  enum capnweb_status status;
+  if (mount == NULL ||
+      mount->state != ITERATE_KIT_ITX_MOUNT_READY ||
+      !mount->has_project_capability ||
+      mount->probe_pending) {
+    return false;
+  }
+  if (mount->last_probe_ms != 0U &&
+      iterate_kit_voice_elapsed_ms(now_ms, mount->last_probe_ms) <
+          ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS) {
+    return false;
+  }
+  status = capnweb_session_call_path(
+      mount->options.session,
+      mount->project_capability,
+      whoami_path,
+      sizeof(whoami_path) / sizeof(whoami_path[0]),
+      no_arguments,
+      sizeof(no_arguments) - 1U,
+      probe_completed,
+      mount);
+  /*
+   * Stamp the attempt whether or not the call was accepted. A session with no
+   * room for one more pending call must not be asked again on the very next
+   * tick; the period is the bound on how hard this tries.
+   */
+  mount->last_probe_ms = now_ms == 0U ? 1U : now_ms;
+  if (status != CAPNWEB_OK) return false;
+  mount->probe_pending = true;
+  if (mount->probes_sent < UINT32_MAX) ++mount->probes_sent;
+  return true;
 }
 
 enum capnweb_status iterate_kit_itx_mount_close(
@@ -471,17 +485,23 @@ enum capnweb_status iterate_kit_itx_mount_close(
    * handles before the enclosing session is unconditionally closed.
    */
   /*
-   * The project capability goes first because it IS the live mount: releasing
-   * it disposes the provision `connect` hung off it, which revokes the mount
-   * and lets the now-empty pager journal the disconnect the clients
-   * catalogue reduces. Dropping it instead would leave a zombie mount that no
-   * later connect can displace.
+   * The rule handle goes first because it IS the live provision: releasing it
+   * un-does the match and recalls the lent stub, which lets the now-empty
+   * registry journal the disconnect. Dropping it instead would leave a match
+   * naming a stub this session no longer answers for.
    */
+  status = release_remote(
+      mount,
+      &mount->rule_capability,
+      &mount->has_rule_capability);
+  if (status != CAPNWEB_OK) {
+    first_error = status;
+  }
   status = release_remote(
       mount,
       &mount->project_capability,
       &mount->has_project_capability);
-  if (status != CAPNWEB_OK) {
+  if (first_error == CAPNWEB_OK && status != CAPNWEB_OK) {
     first_error = status;
   }
   status = release_remote(
@@ -510,8 +530,10 @@ const char *iterate_kit_itx_mount_state_name(
       return "idle";
     case ITERATE_KIT_ITX_MOUNT_AUTHENTICATING:
       return "authenticating";
-    case ITERATE_KIT_ITX_MOUNT_CONNECTING:
-      return "connecting as client";
+    case ITERATE_KIT_ITX_MOUNT_GETTING_PROJECT:
+      return "getting project";
+    case ITERATE_KIT_ITX_MOUNT_PROVIDING:
+      return "providing capability";
     case ITERATE_KIT_ITX_MOUNT_READY:
       return "ready";
     case ITERATE_KIT_ITX_MOUNT_FAILED:
@@ -535,12 +557,18 @@ const char *iterate_kit_itx_mount_failure_name(
       return "authentication rejected";
     case ITERATE_KIT_ITX_MOUNT_FAILURE_AUTH_RESULT:
       return "invalid authentication result";
-    case ITERATE_KIT_ITX_MOUNT_FAILURE_CONNECT_CALL:
-      return "client connect call failed";
-    case ITERATE_KIT_ITX_MOUNT_FAILURE_CONNECT_REJECTED:
-      return "client connect rejected";
-    case ITERATE_KIT_ITX_MOUNT_FAILURE_CONNECT_RESULT:
-      return "invalid client connect result";
+    case ITERATE_KIT_ITX_MOUNT_FAILURE_PROJECT_CALL:
+      return "project get call failed";
+    case ITERATE_KIT_ITX_MOUNT_FAILURE_PROJECT_REJECTED:
+      return "project get rejected";
+    case ITERATE_KIT_ITX_MOUNT_FAILURE_PROJECT_RESULT:
+      return "invalid project get result";
+    case ITERATE_KIT_ITX_MOUNT_FAILURE_PROVIDE_CALL:
+      return "capability provide call failed";
+    case ITERATE_KIT_ITX_MOUNT_FAILURE_PROVIDE_REJECTED:
+      return "capability provide rejected";
+    case ITERATE_KIT_ITX_MOUNT_FAILURE_PROVIDE_RESULT:
+      return "invalid capability provide result";
     case ITERATE_KIT_ITX_MOUNT_FAILURE_RELEASE:
       return "capability release failed";
     case ITERATE_KIT_ITX_MOUNT_FAILURE_SESSION_ENDED:

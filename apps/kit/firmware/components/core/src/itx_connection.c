@@ -6,8 +6,7 @@
 /*
  * This object is the protocol half of one control WebSocket. The ESP platform
  * owns socket connection/retry and serializes all calls; this layer owns one
- * bounded Cap'n Web session plus the authenticate -> project -> live-provision
- * mount.
+ * bounded Cap'n Web session plus the authenticate -> project -> provide mount.
  * Keeping transport and protocol lifecycles separate lets a lost socket close
  * local state without attempting I/O, while an intentional shutdown can still
  * release its live provision.
@@ -33,8 +32,7 @@ static bool valid_options(
       options->send_text != NULL &&
       options->project_id != NULL &&
       options->project_api_key != NULL &&
-      options->client_path != NULL &&
-      options->description != NULL &&
+      options->capability_match != NULL &&
       options->capability.dispatch != NULL;
 }
 
@@ -170,10 +168,8 @@ enum capnweb_status iterate_kit_itx_connection_open(
     &connection->session,
     connection->options.project_id,
     connection->options.project_api_key,
-    connection->options.client_path,
+    connection->options.capability_match,
     connection->options.capability,
-    connection->options.description,
-    connection->options.types,
   };
   status = iterate_kit_itx_mount_start(
       &connection->mount, &mount_options);

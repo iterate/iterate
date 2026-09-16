@@ -5,7 +5,9 @@ import * as cloudflareWorkers from "cloudflare:workers";
 import {
   newWorkersRpcResponse,
   RpcPromise as CapnwebRpcPromise,
+  RpcSession,
   RpcStub as CapnwebRpcStub,
+  WebSocketTransport,
 } from "capnweb";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 // the one worker's env: the DO's bindings plus the in-process control plane's (control-plane.ts `Env`)
@@ -295,14 +297,38 @@ export default {
 
     // Explicit operator fixtures. Public clients authenticate at the HTTP boundary.
     if (url.pathname === "/internal/rpc") {
-      // newWorkersRpcResponse serves BOTH a WebSocket upgrade AND a one-shot HTTP batch —
-      // a CLI script or cron does one POST, no socket handshake. (Batch sessions cannot hold
-      // live capabilities: a live provide needs the relay to outlive the response —
-      // the relay's lend call simply fails there, which is the honest error.)
-      return newWorkersRpcResponse(
-        request,
-        new IterateRpcTarget(sessionInput, new SessionTeardown(), null),
+      const root = new IterateRpcTarget(sessionInput, new SessionTeardown(), null);
+      // A one-shot HTTP batch — a CLI script or cron does one POST, no socket handshake. (Batch
+      // sessions cannot hold live capabilities: a live provide needs the relay to outlive the
+      // response — the relay's lend call simply fails there, which is the honest error.)
+      if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
+        return newWorkersRpcResponse(request, root);
+      // The WebSocket session spelled out (what newWorkersRpcResponse does) so the transport is ours:
+      // a peer's `["abort", …]` frame is its only word on WHY it left — the ESP32's C client says
+      // CAPNWEB_E_TOKEN_LIMIT and kin there — and capnweb consumes it without a hook.
+      const pair = new WebSocketPair();
+      pair[0].accept();
+      const transport = new WebSocketTransport(pair[0] as unknown as WebSocket);
+      new RpcSession(
+        {
+          send: (message) => transport.send(message),
+          receive: async () => {
+            const message = await transport.receive();
+            if (message.startsWith('["abort"'))
+              console.warn({
+                event: "rpc-session-aborted-by-peer",
+                namespace: "worker",
+                message: "the client aborted its capnweb session and said why",
+                door: "internal-rpc",
+                reason: (JSON.parse(message) as [string, unknown])[1],
+              });
+            return message;
+          },
+          abort: (reason) => transport.abort(reason),
+        },
+        root,
       );
+      return new Response(null, { status: 101, webSocket: pair[1] });
     }
 
     // A project secret's OAuth callback (secret-oauth.ts): the provider sends the human back here
