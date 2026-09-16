@@ -11,6 +11,12 @@
     "lib": ["ES2022", "ESNext.Disposable", "DOM", "DOM.Iterable"],
     "types": ["@cloudflare/workers-types", "node", "react", "react-dom", "vite/client"]
   },
-  "include": ["src/routes", "src/router.tsx", "src/routeTree.gen.ts", "src/client/demo.tsx", "src/virtual-modules.d.ts"],
+  "include": [
+    "src/routes",
+    "src/router.tsx",
+    "src/routeTree.gen.ts",
+    "src/client/demo.tsx",
+    "src/virtual-modules.d.ts"
+  ],
   "exclude": []
 }
