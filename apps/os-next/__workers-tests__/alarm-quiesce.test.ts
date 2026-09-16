@@ -362,14 +362,13 @@ test("A WAKE MAKES NO LOOP: an incarnation the alarm woke delivers its own wake 
     ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events.filter(
       (event) => event.type === "events.iterate.com/stream/woken",
     );
-  // An alarm with no reason left behind (a dead incarnation's idle deadline, say) wakes a FRESH
-  // incarnation: its constructor reads the alarm, so its wake record says so.
+  const before = (await wokens()).length;
+  // An alarm with no reason left behind (a dead incarnation's idle deadline, say — set here on the
+  // quiet incarnation, which is then evicted) fires for real and wakes a FRESH incarnation: its
+  // constructor reads the alarm, so its wake record says so.
+  await runInDurableObject(s, (_inst, state) => state.storage.setAlarm(Date.now() + 300));
   await evictDurableObject(s);
-  await runInDurableObject(s, (_inst, state) => state.storage.setAlarm(Date.now() + 1));
-  const before = (await wokens()).length; // the incarnation that set the alarm woke by request
-  await untilRow(ctx, "config", (r) => (r?.cursor?.confirmedOffset ?? 0) > 0);
-  await evictDurableObject(s);
-  expect(await runDurableObjectAlarm(s)).toBe(true);
+  await new Promise((r) => setTimeout(r, 1_500)); // the alarm has fired; nothing else has touched the context
   const woken = await wokens();
   expect(woken).toHaveLength(before + 1);
   expect(woken.at(-1)!.payload).toMatchObject({ reason: "alarm" });

@@ -184,7 +184,7 @@ export class RpcStubDirectory {
     }
   }
 
-  /** Any stub borrowed right now (O(1)) — what makes the quiet clock worth arming. */
+  /** Any stub borrowed right now (O(1)) — what makes the idle deadline worth arming. */
   hasBorrowedRpcStubs(): boolean {
     return this.#borrowedRpcStubs.size > 0;
   }

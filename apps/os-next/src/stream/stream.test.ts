@@ -2,7 +2,7 @@
 // stream.test.ts — the `Stream` class (stream/stream.ts) over node:sqlite storage
 // (test-support.ts's nodeSqliteDurableObjectStorage — the same SQL the DO's storage runs; nothing here needs
 // workerd): waitForEvent's wait/settle/timeout mechanics, what construction writes, the wake record
-// (`appendCreatedAndWokenEvents()` — an explicit call here; in production the DO constructor's
+// (`appendBirthRecord()` + `appendWakeRecord()` — explicit calls here; in production the DO's
 // first act), the pause check and the reserved `core` at the append door, the zero-write ephemeral
 // contract and the step-1 refusals. Every test constructs a
 // BARE Stream with no-op host deps — no wake record unless the test appends one.
@@ -312,7 +312,7 @@ test("append with ZERO events is a pure no-op — no rows, no offsets, no fan-ou
   expect(persistedDurableMark(storage)).toBeUndefined();
   expect(stream.highestAssignedOffset()).toBe(0);
   expect(batches).toHaveLength(0);
-  // The wake record is `appendCreatedAndWokenEvents()`'s (the DO constructor's) — never append's: with no wake, the
+  // The wake record is `appendBirthRecord()`'s / `appendWakeRecord()`'s (the DO's) — never append's: with no wake, the
   // first real append is the log's first row, and the fan-out sees exactly that one event.
   const [receipt] = stream.append({ type: "hello" });
   expect(receipt.offset).toBe(1);
@@ -321,30 +321,36 @@ test("append with ZERO events is a pure no-op — no rows, no offsets, no fan-ou
   expect(batches[0].map((e) => e.type)).toEqual(["hello"]);
 });
 
-// ── THE WAKE RECORD (`appendCreatedAndWokenEvents()`): created + woken on a fresh store, woken only on a store with rows ──
+// ── THE BIRTH AND WAKE RECORDS (`appendBirthRecord()` / `appendWakeRecord()`): created + woken on a fresh store, woken only on a store with rows ──
 
-test('the wake record says WHY: a stored alarm at or before now is the one being delivered (`by: "alarm"`); a future one, or none, means a request', () => {
+test('the wake record says WHY, from the door that opened: a birth is a request\'s; a later incarnation records what its first door says — "alarm" from the alarm handler, "request" from any other — once', () => {
   const storage = nodeSqliteDurableObjectStorage();
-  const now = Date.now();
-  bareStream({ storage }).appendCreatedAndWokenEvents(now - 5);
-  bareStream({ storage }).appendCreatedAndWokenEvents(now + 60_000);
-  bareStream({ storage }).appendCreatedAndWokenEvents();
+  const first = bareStream({ storage });
+  first.appendBirthRecord();
+  first.appendWakeRecord("alarm"); // the birth already recorded this incarnation's wake
+  const second = bareStream({ storage });
+  second.appendBirthRecord(); // born once: nothing
+  second.appendWakeRecord("alarm");
+  second.appendWakeRecord("request"); // once per incarnation
+  const third = bareStream({ storage });
+  third.appendWakeRecord("request");
   const wokens = bareStream({ storage })
     .read(0)
     .events.filter((e) => e.type === "events.iterate.com/stream/woken")
     .map((e) => e.payload);
   expect(wokens).toEqual([
-    { incarnation: 1, reason: "alarm", alarmAt: now - 5 },
-    { incarnation: 2, reason: "request", alarmAt: now + 60_000 },
+    { incarnation: 1, reason: "request" },
+    { incarnation: 2, reason: "alarm" },
     { incarnation: 3, reason: "request" },
   ]);
 });
 
-test("appendCreatedAndWokenEvents(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch (core's delta takes 3); the first append lands at 4; a later incarnation over the same store gets woken only", () => {
+test("appendBirthRecord(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch (core's delta takes 3); the first append lands at 4; a later incarnation over the same store gets woken only, from its first door (appendWakeRecord)", () => {
   const storage = nodeSqliteDurableObjectStorage();
   const batches: StreamEvent[][] = [];
   const first = bareStream({ storage, batches });
-  first.appendCreatedAndWokenEvents();
+  first.appendBirthRecord();
+  first.appendWakeRecord("request");
   // the birth certificate + the wake record, one durable batch, both fanned out
   const page = first.read(0);
   expect(page.events.map((e) => [e.type, e.offset])).toEqual([
@@ -373,7 +379,8 @@ test("appendCreatedAndWokenEvents(): a fresh store gets created@1 + woken@2 in O
   expect(batches[2].map((e) => e.type)).toEqual(["hello"]);
   // a LATER incarnation over the same store: born once, so woken ONLY — as its first event
   const second = bareStream({ storage, batches }); // the SAME store
-  second.appendCreatedAndWokenEvents();
+  second.appendBirthRecord();
+  second.appendWakeRecord("request");
   expect(second.storage.incarnation).toBe(2);
   const all = second.read(0).events;
   expect(all.map((e) => e.type)).toEqual([
@@ -389,7 +396,8 @@ test("appendCreatedAndWokenEvents(): a fresh store gets created@1 + woken@2 in O
 
 test("a stream/paused event pauses the stream through its own core reduce: every non-control append refuses with STREAM_PAUSED, wholesale; the resume lands and reopens", () => {
   const stream = bareStream();
-  stream.appendCreatedAndWokenEvents(); // created@1, woken@2, core's delta@3
+  stream.appendBirthRecord();
+  stream.appendWakeRecord("request"); // created@1, woken@2, core's delta@3
   stream.append({ type: "events.iterate.com/stream/paused", payload: { reason: "x" } }); // @4
   expect(stream.coreReducedState.paused).toEqual({ reason: "x" });
   expect(stream.read(0).events.map((e) => e.type)).toEqual([
@@ -508,7 +516,7 @@ test("an ephemeral-only append writes NOTHING — no row, no high-water mark —
   const batches: StreamEvent[][] = [];
   const stream = bareStream({ storage, batches });
   // One durable first: this row mints storage and the mark (offset 1 — a bare stream has no wake
-  // record; see the appendCreatedAndWokenEvents() pins above for the DO's shape).
+  // record; see the appendBirthRecord() pins above for the DO's shape).
   stream.append({ type: "durable" });
   const markAfterDurable = persistedDurableMark(storage);
   expect(markAfterDurable).toBe(1);
@@ -532,7 +540,8 @@ test("an ephemeral-only append writes NOTHING — no row, no high-water mark —
 test("across incarnations an ephemeral-only tail's offsets are REUSED by the next durable — the documented contract, and why every checkpoint advances only on a durable", () => {
   const storage = nodeSqliteDurableObjectStorage();
   const first = bareStream({ storage });
-  first.appendCreatedAndWokenEvents(); // created@1, woken@2, core's delta@3 (ephemeral) — the DO's shape
+  first.appendBirthRecord();
+  first.appendWakeRecord("request"); // created@1, woken@2, core's delta@3 (ephemeral) — the DO's shape
   first.append({ type: "durable" }); // 4
   first.append({ type: "chunk", ephemeral: true }, { type: "chunk", ephemeral: true }); // 5, 6 — memory only
   expect(first.highestAssignedOffset()).toBe(6);
@@ -540,7 +549,8 @@ test("across incarnations an ephemeral-only tail's offsets are REUSED by the nex
   const second = bareStream({ storage }); // the SAME store
   expect(second.highestAssignedOffset()).toBe(4);
   // …so its wake record (durable) is handed 5 again, its delta 6, and its first durable 7.
-  second.appendCreatedAndWokenEvents();
+  second.appendBirthRecord();
+  second.appendWakeRecord("request");
   const [d] = second.append({ type: "durable" });
   expect(d.offset).toBe(7); // woken took 5, the delta 6 — both numbers the dead ephemerals held
   expect(persistedDurableMark(storage)).toBe(7);
@@ -650,7 +660,8 @@ test("expected offset: an input carrying `offset` lands exactly there or the who
 test("a paused stream ADMITS the replay of an event already in the log (the DO constructor's birth `config` row rides an idempotency key on every incarnation) — checked before the dedupe, a paused context could never be rebuilt after an eviction, so never resumed", () => {
   const storage = nodeSqliteDurableObjectStorage();
   const first = bareStream({ storage });
-  first.appendCreatedAndWokenEvents();
+  first.appendBirthRecord();
+  first.appendWakeRecord("request");
   const birthRow = {
     type: "events.iterate.com/stream/subscription-configured",
     payload: { name: "config", target: "itx.cd('/').worker.processEventBatch", consumes: ["*"] },
@@ -667,7 +678,8 @@ test("a paused stream ADMITS the replay of an event already in the log (the DO c
 
   // The next incarnation (what an eviction makes): its constructor's replay, then the resume.
   const second = bareStream({ storage });
-  second.appendCreatedAndWokenEvents();
+  second.appendBirthRecord();
+  second.appendWakeRecord("request");
   expect(second.append(birthRow)[0].offset).toBe(configured.offset);
   second.append({ type: "events.iterate.com/stream/resumed" });
   expect(second.coreReducedState.paused).toBeNull();

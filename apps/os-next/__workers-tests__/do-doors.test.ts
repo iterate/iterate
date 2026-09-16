@@ -13,8 +13,8 @@
 // literal; no event-builder helper stands between the caller and the event. The pins:
 //
 //   • the QUIET CLOCK's reason to exist: a probe (`itx.facets.get('core').snapshot()`) on a
-//     never-touched ctx MATERIALIZES it (the constructor's `Stream.appendCreatedAndWokenEvents()`
-//     writes created + woken before any door opens) yet arms NO alarm — #recordActivityForQuietClock
+//     never-touched ctx MATERIALIZES it (the constructor's `Stream.appendBirthRecord()` writes
+//     created + woken before any door opens) yet arms NO alarm — #lastPinUseMs
 //     arms only when there is something to quiesce (a live facet, a borrowed rpc stub); only
 //     storage.getAlarm() can see that (the e2e lane pins the records but cannot read the alarm);
 //   • the doors themselves: the four deleted configuration verbs are gone; the rewrite-rule EVENT's

@@ -2,7 +2,7 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "c
 import { expect, test, vi } from "vitest";
 import { scheduledAppendFacetSource } from "../e2e/support/scheduled-append-facet.ts";
 import type { StreamEvent } from "../src/stream/processor.ts";
-import { stub, quiesce } from "./support.ts";
+import { stub, quiesce, until } from "./support.ts";
 
 const at = "2035-01-01T00:00:00Z";
 async function fire(ctx: string, now = Date.parse(at)) {
@@ -180,7 +180,7 @@ test("an interval coalesces an idle gap across eviction and stops on explicit ca
   expect(
     afterFirstTick.filter((event) => event.type === "events.iterate.com/stream/woken").at(-1)
       ?.payload,
-  ).toMatchObject({ reason: "alarm", alarmAt: firstAt });
+  ).toMatchObject({ reason: "alarm" });
   expect(await s.invoke("itx.schedules.get('tick')")).toMatchObject({
     nextAt: new Date(firstAt + 70_000).toISOString(),
   });
@@ -308,7 +308,7 @@ test.each(["once", "interval"])(
   },
 );
 
-test("a cold context preserves its existing physical alarm even without a pending schedule", async () => {
+test("a cold context SUPERSEDES a stale physical alarm nothing durable wants: its first reconcile derives no reason for it, and once the wake's own delivery acks no alarm is left", async () => {
   const ctx = "prj_scheduled_existing_alarm";
   const s = stub(ctx);
   await s.invoke("itx.schedules.list()");
@@ -318,7 +318,13 @@ test("a cold context preserves its existing physical alarm even without a pendin
   });
   await evictDurableObject(s);
   await s.invoke("itx.schedules.list()");
+  // The stale time is gone at once (the constructor's reconcile); what may stand is the wake
+  // record's delivery claim, 20 s out, until the config row acks it.
   const alarm = await runInDurableObject(s, async (_instance, state) => state.storage.getAlarm());
-  expect(alarm).not.toBeNull();
-  expect(alarm!).toBeLessThanOrEqual(deadline);
+  expect(alarm === null || alarm > deadline).toBe(true);
+  await until(
+    "no alarm",
+    async () =>
+      (await runInDurableObject(s, async (_instance, state) => state.storage.getAlarm())) === null,
+  );
 });

@@ -101,7 +101,9 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
   const rowKv = (await s.invoke("itx.subscriptions.get('dig')")) as {
     cursor?: { confirmedOffset: number };
   };
-  expect(rowKv.cursor!.confirmedOffset).toBe(highestDurableOffset); // what kv held through the eviction
+  // What kv held through the eviction was the mark; the fresh incarnation's woken@mark+1 is a
+  // durable commit `dig` does not consume, so the cursor moved along past it without a call.
+  expect(rowKv.cursor!.confirmedOffset).toBe(highestDurableOffset + 1);
 
   await s.append({ type: "mark" }); // woken@mark+1 (the constructor's; its core delta took mark+2), mark@mark+3 — durable
   await sleep(600);
