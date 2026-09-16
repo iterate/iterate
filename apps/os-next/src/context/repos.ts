@@ -12,8 +12,8 @@
 //       log(path, { limit? })                   — the newest commits.
 //   The DOMAIN half — `itx.repos.get(path)`, a repo as a stream on its path with its birth
 //   certificate, its commit facts and the tip memoized — is the repo facet (src/repo/), a library root
-//   (library.ts) over this one. THAT is how a project interacts with its repos; this root is the
-//   physical door the facet reaches (and a test lends a fake at, `provide("itx.cfArtifacts", …)`).
+//   (library.ts) over this one. THAT is how a project interacts with its repos; this root is what the
+//   facet calls, and where a test lends a fake (`provide("itx.cfArtifacts", …)`).
 //
 // SCOPE, deliberately small: branch `main` only; stateless — a read is ONE shallow fetch of the whole
 // tip (`deepen: 1`; the repo facet is what memoizes it); a commit is compare-and-swapped on the tip
