@@ -67,7 +67,7 @@ const {
   selectPreviewAppsByDiff,
   selectPreviewAppsNeedingRetry,
   selectPreviewAppsForTesting,
-  selectPreviewSlotDataOwners,
+  selectPreviewCleanupApps,
   splitRepositoryFullName,
   syncPreviewInventory,
   waitForHttpReadiness,
@@ -229,7 +229,23 @@ describe("preview app dependency expansion", () => {
 });
 
 test("preview handover erases every app with slot-persistent data", () => {
-  expect(selectPreviewSlotDataOwners().map((app) => app.slug)).toEqual([
+  expect(selectPreviewCleanupApps([]).map((app) => app.slug)).toEqual([
+    "os",
+    "streams-example-app",
+  ]);
+});
+
+test("close cleanup sweeps retained repositories even with incomplete or obsolete app records", () => {
+  expect(selectPreviewCleanupApps(["semaphore"]).map((app) => app.slug)).toEqual([
+    "semaphore",
+    "os",
+    "streams-example-app",
+  ]);
+  expect(selectPreviewCleanupApps(["os"]).map((app) => app.slug)).toEqual([
+    "os",
+    "streams-example-app",
+  ]);
+  expect(selectPreviewCleanupApps(["removed-app"]).map((app) => app.slug)).toEqual([
     "os",
     "streams-example-app",
   ]);
