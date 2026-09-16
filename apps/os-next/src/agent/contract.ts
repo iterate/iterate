@@ -18,7 +18,7 @@
 // token accounting, summaries, mentions, and the capability host with its typecheck and preambles —
 // the script runs against this context's `itx` as it is.
 import { z } from "zod";
-import { defineProcessorContract } from "../stream/processor.ts";
+import { defineProcessorContract } from "iterate/next/stream/processor";
 
 /** The agent's identity — the certificate's payload: its context path. An agent IS its path. */
 const AgentIdentity = z.object({ path: z.string().min(1) });

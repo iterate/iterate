@@ -2,9 +2,9 @@ import { env, SELF, createExecutionContext, waitOnExecutionContext } from "cloud
 import { newWebSocketRpcSession, RpcTarget, RpcStub } from "capnweb";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
+import { appSession } from "iterate/next/app-server";
 import { directory } from "../src/directory.ts";
 import { browserAuthorization } from "../src/browser-client.ts";
-import { appSession } from "../src/client/app-auth.ts";
 import { oauthHelpers } from "../src/oauth.ts";
 import type { Env } from "../src/control-plane.ts";
 import type { IterateRpcTarget } from "../src/session.ts";

@@ -7,7 +7,7 @@
     "dev": "pnpm os dev",
     "eval": "node evals/run.ts",
     "build": "pnpm -r --parallel build",
-    "typecheck": "pnpm --filter os-next exec node build-sdk.mjs && pnpm -r --parallel typecheck && pnpm typecheck:specs",
+    "typecheck": "pnpm -r --parallel typecheck && pnpm typecheck:specs",
     "typecheck:specs": "tsc --noEmit -p specs/tsconfig.json",
     "format": "oxfmt",
     "format:check": "oxfmt --check",

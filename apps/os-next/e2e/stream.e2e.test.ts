@@ -28,9 +28,9 @@
 //     delivery on a dormant context self-wakes on the DO's alarm and the circuit breaker halts it
 
 import { expect, test } from "vitest";
-import type { LiveStateDelta } from "../src/client/live-state.ts";
+import type { LiveStateDelta } from "iterate/next/client";
+import type { StreamEvent } from "iterate/next/stream/processor";
 import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
-import type { StreamEvent } from "../src/stream/processor.ts";
 import {
   append,
   collector,

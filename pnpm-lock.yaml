@@ -41,6 +41,7 @@ overrides:
   baseline-browser-mapping: ^2.9.14
   capnweb: npm:@iterate-com/capnweb@0.10.0
   os-next>capnweb: npm:@iterate-com/capnweb@0.12.2
+  iterate>capnweb: npm:@iterate-com/capnweb@0.12.2
   '@iterate-com/dummy-petshop>capnweb': npm:@iterate-com/capnweb@0.12.2
   quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
   srvx: 0.11.12
@@ -193,9 +194,9 @@ importers:
       '@tanstack/react-start':
         specifier: 1.167.5
         version: 1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.16(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0))
-      os-next:
+      iterate:
         specifier: workspace:*
-        version: link:../os-next
+        version: link:../../packages/iterate
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -598,12 +599,12 @@ importers:
       esp-web-tools:
         specifier: ^10.4.0
         version: 10.4.0
+      iterate:
+        specifier: workspace:*
+        version: link:../../packages/iterate
       lucide-react:
         specifier: ^0.553.0
         version: 0.553.0(@types/react@19.2.17)(react@19.2.7)
-      os-next:
-        specifier: workspace:*
-        version: link:../os-next
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -898,9 +899,9 @@ importers:
       '@tanstack/react-start':
         specifier: 1.167.5
         version: 1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.16(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0))
-      os-next:
+      iterate:
         specifier: workspace:*
-        version: link:../os-next
+        version: link:../../packages/iterate
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -1263,6 +1264,9 @@ importers:
       capnweb:
         specifier: npm:@iterate-com/capnweb@0.12.2
         version: '@iterate-com/capnweb@0.12.2'
+      iterate:
+        specifier: workspace:*
+        version: link:../../packages/iterate
       json5:
         specifier: ^2.2.3
         version: 2.2.3
@@ -1610,9 +1614,9 @@ importers:
       '@tanstack/react-start':
         specifier: 1.167.5
         version: 1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.16(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0))
-      os-next:
+      iterate:
         specifier: workspace:*
-        version: link:../os-next
+        version: link:../../packages/iterate
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -1695,6 +1699,18 @@ importers:
       '@tanstack/react-query':
         specifier: 5.101.2
         version: 5.101.2(react@19.2.7)
+      '@tanstack/react-router':
+        specifier: 1.168.3
+        version: 1.168.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      capnweb:
+        specifier: npm:@iterate-com/capnweb@0.12.2
+        version: '@iterate-com/capnweb@0.12.2'
+      json5:
+        specifier: ^2.2.3
+        version: 2.2.3
+      oauth4webapi:
+        specifier: ^3.8.5
+        version: 3.8.5
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -1714,6 +1730,9 @@ importers:
         specifier: 4.5.4
         version: 4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)
     devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^5.20260831.1
+        version: 5.20260911.1
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../ui

@@ -33,8 +33,8 @@
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterAll, expect, test, vi } from "vitest";
-import type { ItxExpression } from "../src/context/expression.ts";
-import { errorCode } from "../src/lib.ts";
+import type { ItxExpression } from "iterate/next/expression";
+import { errorCode } from "iterate/next/lib";
 const codeOf = errorCode;
 import { stub, until } from "./support.ts";
 

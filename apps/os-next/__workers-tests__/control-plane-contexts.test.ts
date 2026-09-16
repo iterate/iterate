@@ -15,7 +15,6 @@
 // See apps/os-next/docs/control-plane-context-resolved-design.md.
 import { beforeAll, describe, expect, test } from "vitest";
 import { AccountProcessor } from "../src/account/processor.ts";
-import { ACCOUNT_PROCESSOR_SOURCE } from "../src/generated/account-processor-source.ts";
 import { adminCredentials, applyDirectorySchema, openSession, stub, until } from "./support.ts";
 
 beforeAll(applyDirectorySchema);
@@ -128,8 +127,6 @@ describe("account — foundation shape (passing)", () => {
     const email = "acct-live@sec.test";
     const s = await userSession(email);
     await s.user.processors.enable("account", {
-      source: ACCOUNT_PROCESSOR_SOURCE,
-      className: "AccountDurableObject",
       consumes: ["events.iterate.com/account/authenticated"],
     });
     // A processor subscribes from now; the fact this session's own authenticate published may have

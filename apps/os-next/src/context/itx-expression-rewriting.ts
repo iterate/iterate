@@ -60,7 +60,7 @@
 // the match as its canonical STRING (the table's key) and the target in the PARSED form; the core
 // reduce parses the match once and takes the target as it is.
 
-import { codedError, jsonEqual } from "../lib.ts";
+import { codedError, jsonEqual } from "iterate/next/lib";
 import {
   callOn,
   walkSteps,
@@ -74,7 +74,7 @@ import {
   type ItxExpression,
   type ItxExpressionInput,
   type ItxExpressionPrefix,
-} from "./expression.ts";
+} from "iterate/next/expression";
 
 /** One rewrite rule: a canonical match prefix and the target it rewrites to (both parsed once, at
  *  reduce; a call step pins literal args, `itx.ai.run('gpt-5')` — expression.ts). A `null` target is a

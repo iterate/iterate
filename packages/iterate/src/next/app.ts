@@ -1,14 +1,22 @@
-import { newWebSocketRpcSession } from "capnweb";
+import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import { redirect } from "@tanstack/react-router";
-import type { IterateRpcTarget } from "../session.ts";
-import { OAuthScopes } from "../oauth-scopes.ts";
+import type { IterateApi, IterateSessionApi } from "./api.ts";
+import { OAuthScopes } from "./oauth-scopes.ts";
+
+/** What `authenticate` resolves to: the session as a capnweb stub (pipelined; disposable) and the
+ *  bootstrap info it answered with. Declared, so the package's declarations stay serializable. */
+export type AuthenticatedApp = {
+  api: RpcStub<IterateSessionApi>;
+  info: ReturnType<IterateSessionApi["info"]>;
+};
+export type IterateClient = { authenticate(next?: string): Promise<AuthenticatedApp> };
 
 /** Create once per TanStack app. Call authenticate in a client-only route's
  * beforeLoad; route loaders and actions share the returned public RPC session. */
-export function createIterateClient(options: { scopes?: string[] } = {}) {
+export function createIterateClient(options: { scopes?: string[] } = {}): IterateClient {
   const scopes = OAuthScopes.parse(options.scopes || []);
-  let connecting: ReturnType<typeof connect> | undefined;
-  async function connect(next: string) {
+  let connecting: Promise<AuthenticatedApp> | undefined;
+  async function connect(next: string): Promise<AuthenticatedApp> {
     const login = `/.auth/login?${new URLSearchParams({ next, scope: scopes.join(" ") })}`;
     // HTTP distinguishes 401 from outages; a failed WebSocket is not evidence
     // that the visitor needs to log in. Errors reach the route's error boundary.
@@ -23,9 +31,9 @@ export function createIterateClient(options: { scopes?: string[] } = {}) {
     const url = new URL("/api", window.location.href);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = new WebSocket(url);
-    // The public root is the IterateRpcTarget; `authenticate({ from-server-cookie })` vends the
+    // The public root is the IterateApi (os-next's IterateRpcTarget satisfies it); `authenticate({ from-server-cookie })` vends the
     // session the OAuth gate already resolved. capnweb pipelines, so `api` is usable immediately.
-    const iterate = newWebSocketRpcSession<IterateRpcTarget>(socket);
+    const iterate = newWebSocketRpcSession<IterateApi>(socket);
     const api = iterate.authenticate({ type: "from-server-cookie" });
     const dispose = () => {
       iterate[Symbol.dispose]();
@@ -46,7 +54,8 @@ export function createIterateClient(options: { scopes?: string[] } = {}) {
         dispose();
         throw redirect({ href: login, reloadDocument: true });
       }
-      return { api, info };
+      // The pipelined  answer IS the session stub (capnweb: a promise that proxies).
+      return { api: api as unknown as RpcStub<IterateSessionApi>, info };
     } catch (error) {
       dispose();
       throw error;
@@ -62,6 +71,3 @@ export function createIterateClient(options: { scopes?: string[] } = {}) {
     },
   };
 }
-export type AuthenticatedApp = Awaited<
-  ReturnType<ReturnType<typeof createIterateClient>["authenticate"]>
->;

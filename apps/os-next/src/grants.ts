@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { OAuthProvider, type GrantSummary } from "@cloudflare/workers-oauth-provider";
 import { RpcTarget } from "capnweb";
+import { codedError, isLocalOrigin } from "iterate/next/lib";
+import { authorizationCodeRequest } from "iterate/next/oauth";
 import type { Env } from "./control-plane.ts";
-import { codedError, isLocalOrigin } from "./lib.ts";
 import { directory } from "./directory.ts";
 import {
   authorizationOf,
@@ -14,7 +15,6 @@ import {
   type GrantProps,
   type Authorization,
 } from "./oauth.ts";
-import { authorizationCodeRequest } from "./client/oauth.ts";
 
 const DisplayMetadata = z.object({
   clientName: z.string().optional(),

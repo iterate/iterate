@@ -1,9 +1,9 @@
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
+import { errorCode } from "iterate/next/lib";
 import type { Env } from "./control-plane.ts";
 import { directory, type Directory, type Reach } from "./directory.ts";
 import { DurableObjectNameCodec } from "./iterate-context.ts";
-import { errorCode } from "./lib.ts";
 import type { Authorization } from "./oauth.ts";
 
 // MCP uses the same verified authorization as Cap’n Web. It exposes ONE tool, `run`: a script

@@ -13,9 +13,9 @@
     "routes:generate": "node scripts/generate-route-tree.ts"
   },
   "dependencies": {
-    "os-next": "workspace:*",
     "@tanstack/react-router": "1.168.3",
     "@tanstack/react-start": "1.167.5",
+    "iterate": "workspace:*",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "zod": "^4.1.5"

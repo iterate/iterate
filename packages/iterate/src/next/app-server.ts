@@ -1,7 +1,7 @@
-import type { BrowserHost, BrowserSession } from "../browser-session.ts";
-import { cookieValueOf } from "../principal.ts";
-import { isSameOriginBrowserRequest, sameOriginPath } from "../lib.ts";
-import { OAuthScopes } from "../oauth-scopes.ts";
+import type { BrowserHost, BrowserSession } from "./app-session.ts";
+import { cookieValueOf } from "./principal.ts";
+import { isSameOriginBrowserRequest, sameOriginPath } from "./lib.ts";
+import { OAuthScopes } from "./oauth-scopes.ts";
 
 /** The port separates local apps sharing localhost's cookie jar. */
 function sessionCookieName(url: URL) {

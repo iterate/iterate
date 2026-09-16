@@ -9,13 +9,15 @@ import {
   RpcStub as CapnwebRpcStub,
   WebSocketTransport,
 } from "capnweb";
+import { auth } from "iterate/next/sdk";
+import { verifyClaims } from "iterate/next/principal";
+import { registerPipelinedRpcBrand } from "iterate/next/expression";
+import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/next/principal";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 // the one worker's env: the DO's bindings plus the in-process control plane's (control-plane.ts `Env`)
 import type { Env as WorkerEnv } from "./control-plane.ts";
-import { auth } from "./sdk/auth.ts";
 import { identityDoor } from "./identity.ts";
 import { isSecretOAuthState, SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.ts";
-import { verifyClaims } from "./principal.ts";
 import type { Reach } from "./directory.ts";
 import { oauthResponse } from "./api.ts";
 import { consoleHandler } from "./control-plane.ts";
@@ -24,11 +26,9 @@ import { projectHostOf, hostnameLabelsUnderBase } from "./hosts.ts";
 import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
 import { directory } from "./directory.ts";
-import { registerPipelinedRpcBrand } from "./context/expression.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./iterate-context.ts";
 import { IterateRpcTarget, SessionTeardown, type SessionInput } from "./session.ts";
-import { ITX_PRINCIPAL_HEADER, type Principal } from "./principal.ts";
 import { authorizationForToken, recordGrantUse, cleanGrantActivity } from "./oauth.ts";
 
 /** A project host's re-entry count — THE COUNT THE APP FORWARDS: an app that fetches its own host
@@ -194,8 +194,16 @@ registerPipelinedRpcBrand(CapnwebRpcPromise as unknown as abstract new () => unk
 registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknown);
 
 export { IterateContextDurableObject };
-export { BrowserSession } from "./browser-session.ts";
+export { BrowserSession } from "iterate/next/app-session";
 export { SecretDurableObject } from "./secret-durable-object.ts";
+// THE FIRST-PARTY FACETS: exported Durable Object classes hosted as facets of a context through
+// `ctx.exports` (first-party-facets.ts FIRST_PARTY_FACET_CLASSES) — ordinary bundled
+// worker code with the worker's real env, never a loaded source.
+export { AccountDurableObject } from "./account/durable-object.ts";
+export { AgentDurableObject } from "./agent/durable-object.ts";
+export { ProjectDurableObject } from "./project/durable-object.ts";
+export { RepoDurableObject } from "./repo/durable-object.ts";
+export { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 export { ItxEntrypoint } from "./iterate-context.ts";
 
 export default {
@@ -353,8 +361,8 @@ export default {
     if (browserResponse) return browserResponse;
     if (url.pathname.startsWith("/api")) return new Response("Not found", { status: 404 });
 
-    // THE STATIC ASSETS — the console's client bundle (dist/client, `vite build`) and the hosted /demo
-    // page (public/demo.html, build-sdk.mjs) — are the PLATFORM HOST's. Every request runs
+    // THE STATIC ASSETS — the console's client bundle (dist/client, `vite build`) — are the PLATFORM
+    // HOST's. Every request runs
     // worker-first (wrangler.jsonc `run_worker_first: true` — the patterns are paths, never hostnames,
     // so "every host but a project host" is spelled by asking the binding HERE, after the project
     // hosts and the platform's own doors): no asset ever answers on a project host, and a miss falls

@@ -6,7 +6,7 @@
 // through the repo is `repo/commit-completed`. The bytes are not here — they are git, in Artifacts,
 // spoken by the host (durable-object.ts over git-wire.ts) with a token and remote from `itx.cfArtifacts`.
 import { z } from "zod";
-import { defineProcessorContract } from "../stream/processor.ts";
+import { defineProcessorContract } from "iterate/next/stream/processor";
 
 /** The repo's identity — the request's payload, the certificate's, and the failure's: its context
  *  PATH. Any path can host a repo; `/repos/<name>` is the convention, not a rule. A workspace mounts

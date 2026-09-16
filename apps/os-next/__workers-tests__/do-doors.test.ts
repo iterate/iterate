@@ -34,7 +34,7 @@
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { parse, print, type ItxExpression } from "../src/context/expression.ts";
+import { parse, print, type ItxExpression } from "iterate/next/expression";
 import { restoreRuleTarget } from "../src/context/itx-expression-rewriting.ts";
 import { adminCredentials, openSession, stub, until } from "./support.ts";
 

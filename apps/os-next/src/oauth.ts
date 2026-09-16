@@ -7,10 +7,10 @@ import {
   type OAuthProviderOptions,
 } from "@cloudflare/workers-oauth-provider";
 import { z } from "zod";
-import { OAuthScope, OAuthScopes } from "./oauth-scopes.ts";
+import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
+import { verifyAdminSecret, type Principal } from "iterate/next/principal";
 import type { Env, Handler } from "./control-plane.ts";
 import { type Reach } from "./directory.ts";
-import { verifyAdminSecret, type Principal } from "./principal.ts";
 import { appConfigOf } from "./app-config.ts";
 
 /** Encrypted by the provider. Every grant is created through parseAuthorization,

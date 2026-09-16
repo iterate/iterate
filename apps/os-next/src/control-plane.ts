@@ -1,12 +1,12 @@
 // The fixed issuer shell. Authenticated UI uses the public Cap’n Web session.
 import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import type { ServerEntry } from "@tanstack/react-start/server-entry";
+import { codedError, errorCode, isSameOriginBrowserRequest } from "iterate/next/lib";
+import { verifyAdminSecret } from "iterate/next/principal";
+import type { BrowserSession } from "iterate/next/app-session";
 import { startIssuerSession } from "./issuer-session.ts";
-import { codedError, errorCode, isSameOriginBrowserRequest } from "./lib.ts";
 import { directory } from "./directory.ts";
 import { appConfigOf } from "./app-config.ts";
-import { verifyAdminSecret } from "./principal.ts";
-import type { BrowserSession } from "./browser-session.ts";
 import type { Env as DurableObjectEnv } from "./iterate-context-durable-object.ts";
 
 /** Platform bindings for the issuer, public APIs and project ingress. */

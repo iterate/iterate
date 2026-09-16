@@ -6,7 +6,7 @@
 // not here: the overlay lives in the host's own storage, and a commit is a repo fact, not a workspace
 // one; the mount table is derived from the project catalog, never stored.
 import { z } from "zod";
-import { defineProcessorContract } from "../stream/processor.ts";
+import { defineProcessorContract } from "iterate/next/stream/processor";
 
 /** The workspace's identity — the request's payload and the certificate's: its context path. A
  *  workspace IS its path. */

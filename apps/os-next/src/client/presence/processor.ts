@@ -7,7 +7,7 @@ import {
   type ProcessorState,
   type ReduceArgs,
   StreamProcessor,
-} from "../../stream/processor.ts";
+} from "iterate/next/stream/processor";
 import { PresenceContract, type PresenceView } from "./contract.ts";
 
 export class PresenceProcessor extends StreamProcessor<

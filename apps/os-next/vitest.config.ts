@@ -14,12 +14,13 @@
 //   • bench   — vitest's benchmark runner (tinybench) over the same client + worker (`pnpm bench`),
 //               files one at a time so scenarios never share the wire; `BENCH_OUT=<file.json>` writes
 //               the raw samples
-// The processor SDK bundle every lane needs (src/generated/*, gitignored) is built once by the root
-// globalSetup, and the Vite build the workers and e2e lanes run (dist/, gitignored) with it — skipped
-// when only the unit lane runs. Browser E2E is Playwright (playwright.config.ts + specs/**).
+// The injected SDK is a virtual module (scripts/vite-plugin-processor-sdk.ts) every project resolves;
+// the workers and e2e projects also need the Vite build (dist/, gitignored), run once by the root
+// globalSetup — skipped when only the unit project runs. Browser E2E is Playwright (playwright.config.ts + specs/**).
 
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
+import { processorSdkModules } from "./scripts/vite-plugin-processor-sdk.ts";
 
 /** Teardown/async-transport noise only: disposing a capnweb session whose peer still delivers (a
  *  deliberate move in the reconnect/unsubscribe tests, and pager sockets still parked at teardown)
@@ -34,6 +35,7 @@ export default defineConfig({
     globalSetup: ["./vitest.global-setup.ts"],
     projects: [
       {
+        plugins: [processorSdkModules()],
         test: {
           name: "unit",
           include: ["src/**/*.test.ts", "examples/**/*.test.ts"],
@@ -44,6 +46,7 @@ export default defineConfig({
       },
       {
         plugins: [
+          processorSdkModules(),
           cloudflareTest({
             main: "./dist/server/index.js", // the Vite build (vitest.global-setup.ts)
             wrangler: { configPath: "./wrangler.test.jsonc" },
@@ -60,6 +63,7 @@ export default defineConfig({
         },
       },
       {
+        plugins: [processorSdkModules()],
         test: {
           name: "e2e",
           environment: "node",
@@ -78,6 +82,7 @@ export default defineConfig({
         },
       },
       {
+        plugins: [processorSdkModules()],
         test: {
           name: "bench",
           environment: "node",

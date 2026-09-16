@@ -93,7 +93,7 @@ authorization contract.
 
 ## Build, run, deploy
 
-The build is Vite's (`vite.config.ts`: the Cloudflare plugin + TanStack Start + React; `build-sdk.mjs`
+The build is Vite's (`vite.config.ts`: the Cloudflare plugin + TanStack Start + React; the processor-SDK Vite plugin, `scripts/vite-plugin-processor-sdk.ts`,
 runs at config load for the processor SDK bundle and the hosted `/demo` page). `vite build` emits
 `dist/client` (the console's bundle + `public/`) and `dist/server` (the worker + `wrangler.json`,
 the config a deploy and both local lanes consume). The Cloudflare Vite plugin's own workerd is older

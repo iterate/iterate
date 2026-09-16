@@ -1,7 +1,7 @@
-import { appAuth } from "os-next/app-server";
-import type { BrowserSession } from "os-next/app-session";
+import { appAuth } from "iterate/next/app-server";
+import type { BrowserSession } from "iterate/next/app-session";
 import entry from "@tanstack/react-start/server-entry";
-export { BrowserSession } from "os-next/app-session";
+export { BrowserSession } from "iterate/next/app-session";
 
 /** The installer's own origin signs the person in through os-next's OAuth and proxies
  * the authenticated /api; the synced firmware binaries are static assets. */

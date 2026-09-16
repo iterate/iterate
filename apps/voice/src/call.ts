@@ -2,7 +2,7 @@
 // browser). Press = a fresh context: one `setupVoiceAgent` append puts the relay and the agent on
 // it and starts the call; a subscription brings the answer's frames and the call's facts back;
 // microphone frames go up as ephemeral appends, twenty a second; hanging up appends the terminal.
-import type { AuthenticatedApp } from "os-next/app";
+import type { AuthenticatedApp } from "iterate/next/app";
 import { base64ToInt16, int16ToBase64, type AudioSession } from "./audio.ts";
 
 const T = "events.iterate.com/voice-agent/";

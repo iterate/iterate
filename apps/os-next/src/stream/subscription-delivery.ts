@@ -33,9 +33,9 @@ import {
   walkSteps,
   FacetHandle,
   RpcStubHandle,
-} from "../context/expression.ts";
-import { errorCode, reportIssue, withTimeout } from "../lib.ts";
-import { type StreamEvent, consumesEvent, type ScannedRange } from "./processor.ts";
+} from "iterate/next/expression";
+import { errorCode, reportIssue, withTimeout } from "iterate/next/lib";
+import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/next/stream/processor";
 import { type Subscription, targetOwnsProgress } from "./core-processor.ts";
 import type { Stream, StreamPage, SubscriptionCursor } from "./stream.ts";
 

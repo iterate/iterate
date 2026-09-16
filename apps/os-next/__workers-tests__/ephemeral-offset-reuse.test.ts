@@ -8,7 +8,7 @@
 // read-verb cases below are also the pin for that fix: they evict at once after ONE quiesce.)
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
-import type { ItxExpression } from "../src/context/expression.ts";
+import type { ItxExpression } from "iterate/next/expression";
 import { quiesce, stub } from "./support.ts";
 
 const COUNTER_SRC = /* js */ `
