@@ -1,0 +1,58 @@
+name: CI trace report
+permissions:
+  contents: read
+  statuses: write
+on:
+  workflow_dispatch:
+    inputs:
+      source-workflow:
+        description: Depot preview workflow ID (empty repairs recent missing reports)
+        required: false
+        default: ""
+  schedule:
+    - cron: "*/15 * * * *"
+# Serialize publication and commit-status updates. This runs outside the
+# measured workflow, so it can include finish/cleanup and the final job times.
+concurrency:
+  group: ci-trace-reports
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
+      SOURCE_WORKFLOW: ${{ inputs.source-workflow }}
+      COLLECTOR_REF: ${{ github.head_ref || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Repair missing reports
+        if: ${{ !inputs.source-workflow }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/ci/tracing/cli.ts reconcile "$COLLECTOR_REF"
+      - name: Render completed trace
+        if: ${{ inputs.source-workflow }}
+        id: trace
+        run: >-
+          doppler run --project _shared --config preview --
+          pnpm exec trpc-cli scripts/ci/tracing/cli.ts render "$SOURCE_WORKFLOW" ci-trace.ignoreme
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.source-workflow }}
+        with:
+          name: ${{ steps.trace.outputs.artifact-name }}
+          path: ci-trace.ignoreme/trace.*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Link interactive trace
+        if: ${{ inputs.source-workflow }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/ci/tracing/cli.ts publish "$SOURCE_WORKFLOW"
