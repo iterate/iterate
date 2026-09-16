@@ -6,7 +6,7 @@
 // are reduced / delivered exactly as at-least-once promises. (Found by the r1 correctness review;
 // the same hunt found that an undisposed facet RPC RESULT pinned the parent after a quiesce — the
 // read-verb cases below are also the pin for that fix: they evict at once after ONE quiesce.)
-import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import type { ItxExpression } from "../src/context/expression.ts";
 import { quiesce, stub } from "./support.ts";
@@ -40,12 +40,6 @@ type Page = { events: { type: string; offset: number }[]; scannedThroughOffset: 
 const page = async (ctx: string): Promise<Page> =>
   (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as Page;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-/** The DO's scheduled alarm instant, or null. The quiet clock arms ONLY while a facet is live or an
- *  rpc stub is borrowed, so a pin that fires the alarm must first create one of the two and read
- *  this back — otherwise runDurableObjectAlarm fires into an empty schedule and proves nothing. */
-const alarmAt = (ctx: string): Promise<number | null> =>
-  runInDurableObject(stub(ctx), (_inst, state) => state.storage.getAlarm());
-
 /** The hosting door as an expression: `itx.facets.get(name, { source, className })` — the source is
  *  the worker's modules, literally. */
 const hostedFacet = (source: Record<string, string>, cls: string, name: string): ItxExpression => [
