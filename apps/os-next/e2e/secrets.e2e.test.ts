@@ -6,11 +6,15 @@
 // "a.b" })` for one field of a JSON value. THE PIN: a secret is sent to its pinned origins only — any
 // other is a 502 naming the pin to the caller, never sent anywhere; a secret cannot be set without one.
 // The positive half (the value arrives at a pinned origin) is deployed-only: it egresses to one of
-// THIS project's own apps on a real project host. The connection mechanisms that refresh a credential
-// are secrets-connections.e2e.test.ts.
+// THIS project's own apps on a real project host. Every dispatch through a secret is a
+// `secrets/used` fact (the request as received — placeholders, never values — and the status); a
+// WebSocket upgrade through a secret is a dispatch like any other (deployed-only: the petshop's
+// capnweb door over egress). The connection mechanisms that refresh a credential are
+// secrets-connections.e2e.test.ts.
 
 import { expect, test } from "vitest";
-import { freshCtx, openItx, readAll } from "./support/client.ts";
+import { freshCtx, openItx, readAll, workerUrl } from "./support/client.ts";
+import { petshopBaseUrl } from "./support/petshop.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
   deployedOnly,
@@ -174,6 +178,79 @@ export default class Echo extends WorkerEntrypoint {
     );
     expect(field.status).toBe(200);
     expect(await field.text()).toBe("(none) the-field");
+    // each dispatch is a `secrets/used` fact on the project's root log: the request AS RECEIVED
+    // (the placeholder, never the value) and the upstream's status
+    const used = await usedFacts(itx);
+    expect(used).toEqual([
+      { name: "arrives", method: "GET", url: `${origin}/`, status: 200 },
+      { name: "arrives-json", method: "GET", url: `${origin}/`, status: 200 },
+    ]);
+    expect(JSON.stringify(used)).not.toContain("the-value");
+    expect(JSON.stringify(used)).not.toContain("the-field");
+  },
+  30_000,
+);
+
+/** The `secrets/used` facts on a context's log, oldest first (appended off the response path, so
+ *  polled briefly). */
+async function usedFacts(itx: any, expected = 1): Promise<unknown[]> {
+  for (let i = 0; ; i += 1) {
+    const facts = (await readAll(itx))
+      .filter((e) => e.type === "events.iterate.com/secrets/used")
+      .map((e) => e.payload);
+    if (facts.length >= expected || i > 40) return facts;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
+test("a use is a fact: an egress through a secret appends `secrets/used` with the request as received and the status — the value never enters the log; a refusal is no use", async () => {
+  const itx = openItx(freshCtx("secrets-used"));
+  const origin = new URL(workerUrl("/version")).origin;
+  await itx.secrets.set("ver", "the-value", { urls: [origin] });
+  // /version ignores the header; what matters is that the credential was dispatched to a pinned host
+  const res = await itx.fetch(
+    new Request(workerUrl("/version"), { headers: { "x-secret": 'getSecret("/secrets/ver")' } }),
+  );
+  expect(res.status).toBe(200);
+  expect(await usedFacts(itx)).toEqual([
+    { name: "ver", method: "GET", url: workerUrl("/version"), status: 200 },
+  ]);
+  // a pin refusal dispatches nothing, so it is no use
+  const refused = await itx.fetch(
+    new Request("https://elsewhere.invalid/", {
+      headers: { "x-secret": 'getSecret("/secrets/ver")' },
+    }),
+  );
+  expect(refused.status).toBe(502);
+  expect((await usedFacts(itx)).length).toBe(1);
+  expect(JSON.stringify(await readAll(itx))).not.toContain("the-value");
+});
+
+deployedOnly(
+  "DEPLOYED: a WebSocket 101 through a secret — the petshop's capnweb door over egress, the bearer as a secret in the upgrade header; the socket comes back and the use is a fact with status 101",
+  async () => {
+    const shop = petshopBaseUrl();
+    const login = await fetch(`${shop}/api/legacy-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "secret-ws@example.com", password: "correct-horse" }),
+    });
+    expect(login.status).toBe(200);
+    const { accessToken } = (await login.json()) as { accessToken: string };
+    const itx = openItx(freshCtx("secrets-ws"));
+    await itx.secrets.set("shop", accessToken, { urls: [shop] });
+    const wsUrl = `${shop.replace(/^http/, "ws")}/capnweb`;
+    const options = JSON.stringify({
+      headers: { authorization: 'Bearer getSecret("/secrets/shop")' },
+    });
+    expect(
+      await itx.invoke(
+        `itx.connectToCapnweb(${JSON.stringify(wsUrl)}, ${options}).getPet('pet-1')`,
+      ),
+    ).toMatchObject({ id: "pet-1", name: "Biscuit" });
+    expect(await usedFacts(itx)).toEqual([
+      { name: "shop", method: "GET", url: `${shop}/capnweb`, status: 101 },
+    ]);
   },
   30_000,
 );

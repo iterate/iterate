@@ -1,6 +1,6 @@
-// secrets.test.ts — a project secret's pure half (secrets.ts + secret-oauth.ts): the placeholder
-// substitution as a table, the record normalization, the two refresh strategies against a scripted
-// fetch, and the OAuth first-token flow's two halves.
+// secrets.test.ts — a project secret's pure half (secrets.ts + secret-oauth.ts + secret-at-rest.ts):
+// the placeholder substitution as a table, the record normalization, the two refresh strategies
+// against a scripted fetch, the OAuth first-token flow's two halves, and the material at rest.
 
 import { expect, test } from "vitest";
 import {
@@ -9,6 +9,11 @@ import {
   isSecretOAuthState,
   normalizeSecretOAuth,
 } from "./secret-oauth.ts";
+import {
+  decryptSecretMaterial,
+  encryptSecretMaterial,
+  isEncryptedMaterial,
+} from "./secret-at-rest.ts";
 import {
   normalizeSecretRecord,
   originPinned,
@@ -579,4 +584,61 @@ test("isSecretOAuthState: the signed claims must carry the kind and every field 
   expect(isSecretOAuthState({ ...state, exp: "1" })).toBe(false);
   expect(isSecretOAuthState([state])).toBe(false);
   expect(isSecretOAuthState(null)).toBe(false);
+});
+
+// ── at rest (secret-at-rest.ts) ── the material never sits in storage in the clear, and a ciphertext
+// opens only at the binding it was written for.
+const binding = {
+  owner: "prj_1",
+  name: "tok",
+  urls: ["https://a.example", "https://b.example"],
+  revision: 3,
+};
+const keys = { current: "key-one" };
+
+test("encryptSecretMaterial / decryptSecretMaterial: a string and an object round-trip; the ciphertext carries neither", async () => {
+  for (const material of ["hunter2", { accessToken: "AT", nested: { deep: "D" } }] as const) {
+    const encrypted = await encryptSecretMaterial(material, binding, keys);
+    expect(encrypted.algorithm).toBe("AES-256-GCM+SECRET-V1");
+    expect(JSON.stringify(encrypted)).not.toContain("hunter2");
+    expect(JSON.stringify(encrypted)).not.toContain("AT");
+    expect(isEncryptedMaterial(encrypted)).toBe(true);
+    expect(await decryptSecretMaterial(encrypted, binding, keys)).toEqual({
+      material,
+      rotated: false,
+    });
+  }
+  expect(isEncryptedMaterial("hunter2")).toBe(false);
+  expect(isEncryptedMaterial({ iv: "x", ciphertext: "y" })).toBe(false);
+});
+
+test("the binding: another object, another name, another pin or another revision does not open it; the pin's spelling order does not matter", async () => {
+  const encrypted = await encryptSecretMaterial("v", binding, keys);
+  for (const elsewhere of [
+    { ...binding, owner: "prj_2" },
+    { ...binding, name: "other" },
+    { ...binding, urls: ["https://a.example"] },
+    { ...binding, revision: 4 },
+  ])
+    await expect(decryptSecretMaterial(encrypted, elsewhere, keys)).rejects.toThrow();
+  expect(
+    (
+      await decryptSecretMaterial(
+        encrypted,
+        { ...binding, urls: ["https://b.example", "https://a.example"] },
+        keys,
+      )
+    ).material,
+  ).toBe("v");
+});
+
+test("rotation: the previous key opens what the current cannot and says so; without a previous key a foreign ciphertext is refused", async () => {
+  const encrypted = await encryptSecretMaterial("v", binding, { current: "old-key" });
+  expect(
+    await decryptSecretMaterial(encrypted, binding, { current: "new-key", previous: "old-key" }),
+  ).toEqual({
+    material: "v",
+    rotated: true,
+  });
+  await expect(decryptSecretMaterial(encrypted, binding, { current: "new-key" })).rejects.toThrow();
 });

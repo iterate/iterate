@@ -8,7 +8,10 @@
 //
 // The catalog (name, pin, strategy kind) is a fact on the owner's root log (`secrets/changed`);
 // this object is the physical value — apps/os's Secret DO, minus its stream (the material sits in
-// this object's storage, never on a log). `beginOAuth` + `completeOAuth` are the OAuth first-token
+// this object's storage, never on a log — ENCRYPTED at rest, secret-at-rest.ts: AES-256-GCM under
+// the deployment's key, bound to this object, its pin and the write). Every dispatch through the
+// material is a fact on the catalog too (`secrets/used`, the request as received — placeholders,
+// never values). `beginOAuth` + `completeOAuth` are the OAuth first-token
 // flow (secret-oauth.ts): the pending attempt lives here too, and the code exchange writes the
 // record; the catalog fact is the root context's, appended by `itx.secrets.completeOAuth`
 // (built-ins.ts) in the same per-name order as `set` and `delete`. A refresh's outcome is a fact
@@ -18,6 +21,13 @@ import { DurableObject } from "cloudflare:workers";
 import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
 import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import { signClaims } from "./principal.ts";
+import {
+  decryptSecretMaterial,
+  encryptSecretMaterial,
+  isEncryptedMaterial,
+  type EncryptedMaterial,
+  type MaterialKeys,
+} from "./secret-at-rest.ts";
 import {
   beginSecretOAuth,
   completeSecretOAuth,
@@ -35,7 +45,8 @@ import {
   type SecretRecord,
 } from "./secrets.ts";
 
-/** What sits in storage. `stored` is the record with the revision it was written at; `revision` is
+/** What sits in storage. `stored` is the record with the revision it was written at — its material
+ *  ENCRYPTED (secret-at-rest.ts), bound to this object, the pin and that revision; `revision` is
  *  THE WRITE COUNTER every change to this object bumps (`set`, `clear`, `beginOAuth`) — a refresh
  *  commits only against the revision it read, and a code exchange only against the counter it
  *  started at, so a `set` or `clear` racing either never has its outcome overwritten by a mint or an
@@ -44,7 +55,10 @@ import {
  *  attempt in flight; `completed` the last one finished (its nonce and the revision it wrote), so its
  *  callback completes idempotently instead of exchanging twice.
  *  `catalog` is the owner's root context — the log the facts about this secret go to. */
-type Stored = { record: SecretRecord; revision: number };
+type Stored = {
+  record: Omit<SecretRecord, "material"> & { material: EncryptedMaterial };
+  revision: number;
+};
 
 type Env = AppConfigEnv & { ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject> };
 
@@ -60,11 +74,59 @@ export class SecretDurableObject extends DurableObject<Env> {
    *  the owner's root context name, where this object appends its own facts. */
   async set(record: SecretRecord, catalog: string): Promise<number> {
     const revision = await this.#bump();
-    await this.ctx.storage.put<Stored>("stored", { record, revision });
+    await this.ctx.storage.put<Stored>("stored", await this.#sealed(record, revision));
     await this.ctx.storage.put("catalog", catalog);
     // A set supersedes any OAuth attempt in flight: its callback must not overwrite this material.
     await this.ctx.storage.delete("pending");
     return revision;
+  }
+
+  /** The record as storage holds it: the material encrypted under the deployment's key, bound to
+   *  this object, the pin and the revision it is written at. */
+  async #sealed(record: SecretRecord, revision: number): Promise<Stored> {
+    const { owner, name } = this.#address();
+    const material = await encryptSecretMaterial(
+      record.material,
+      { owner, name, urls: record.urls, revision },
+      this.#keys(),
+    );
+    return { record: { ...record, material }, revision };
+  }
+
+  /** The stored record with its material in the clear, for this object's own use only. A record
+   *  the previous key opened (a rotation in progress) is written back under the current key here,
+   *  so a rotation completes one read at a time. A record neither key opens — one written before
+   *  material was encrypted, or under a key that is gone — is a refusal that names the fix. */
+  async #opened(stored: Stored): Promise<SecretRecord> {
+    const { owner, name } = this.#address();
+    const binding = { owner, name, urls: stored.record.urls, revision: stored.revision };
+    if (!isEncryptedMaterial(stored.record.material))
+      throw new ProjectSecretRefused(
+        `itx.fetch: the stored material of ${name} predates encryption at rest — set the secret again`,
+      );
+    let opened: Awaited<ReturnType<typeof decryptSecretMaterial>>;
+    try {
+      opened = await decryptSecretMaterial(stored.record.material, binding, this.#keys());
+    } catch {
+      throw new ProjectSecretRefused(
+        `itx.fetch: the stored material of ${name} cannot be opened (a rotated key, or a record from another object) — set the secret again`,
+      );
+    }
+    const record = { ...stored.record, material: opened.material };
+    if (opened.rotated) {
+      const current = await this.ctx.storage.get<Stored>("stored");
+      if (current?.revision === stored.revision)
+        await this.ctx.storage.put<Stored>("stored", await this.#sealed(record, stored.revision));
+    }
+    return record;
+  }
+
+  #keys(): MaterialKeys {
+    const config = appConfigOf(this.env);
+    return {
+      current: config.secretsKey.exposeSecret(),
+      previous: config.secretsKeyPrevious.exposeSecret() || undefined,
+    };
   }
 
   /** The write counter, bumped: the number the write that follows is fenced by. */
@@ -160,7 +222,10 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   /** Substitute, pin, dispatch — refresh and retry once on a mintable miss or a 401. A refusal is
-   *  a 502 to the caller with the reason (never the destination, never the value). */
+   *  a 502 to the caller with the reason (never the destination, never the value). Every dispatch
+   *  is a `secrets/used` fact on the catalog — the request AS RECEIVED (its placeholders, never a
+   *  value) and the upstream's status — appended off the response path. A WebSocket upgrade is a
+   *  dispatch like any other: the 101 and its socket go straight back. */
   override async fetch(request: Request): Promise<Response> {
     const { name } = this.#address();
     // The record AS OF NOW, its pin checked against THIS request every time it is read — after a
@@ -168,9 +233,19 @@ export class SecretDurableObject extends DurableObject<Env> {
     // request must honour the pin the new material was set with.
     const read = async () => {
       const stored = await this.ctx.storage.get<Stored>("stored");
-      if (stored && !originPinned(request.url, stored.record.urls))
+      if (!stored) return null;
+      if (!originPinned(request.url, stored.record.urls))
         throw pinRefusal(name, request.url, stored.record.urls);
-      return stored;
+      return { revision: stored.revision, record: await this.#opened(stored) };
+    };
+    const used = (response: Response): Response => {
+      this.ctx.waitUntil(
+        this.#appendOutcome({
+          type: "events.iterate.com/secrets/used",
+          payload: { name, method: request.method, url: request.url, status: response.status },
+        }),
+      );
+      return response;
     };
     try {
       let stored = await read();
@@ -207,16 +282,16 @@ export class SecretDurableObject extends DurableObject<Env> {
         retry = null; // one refresh per request: a just-minted token gets no second go
       }
       const response = await dispatch(substituted);
-      if (response.status !== 401 || !retry || !stored) return response;
+      if (response.status !== 401 || !retry || !stored) return used(response);
       try {
         await this.#refresh(stored.revision);
       } catch {
         // The provider (or the material) refused the refresh: the 401 is the caller's answer.
-        return response;
+        return used(response);
       }
       await response.body?.cancel();
       stored = await read();
-      return await dispatch(await substituteProjectSecrets(retry, resolve));
+      return used(await dispatch(await substituteProjectSecrets(retry, resolve)));
     } catch (error) {
       // A refusal is a 502 to the caller with the reason — never the destination, never the value.
       if (error instanceof ProjectSecretRefused)
@@ -256,12 +331,13 @@ export class SecretDurableObject extends DurableObject<Env> {
     // A set landed first: whatever it stored (new material, or no strategy any more) is the answer,
     // and the caller re-reads it — so the fence comes before any look at the strategy.
     if (stored?.revision !== revision) return;
-    const { refresh, urls } = stored.record;
+    const record = await this.#opened(stored);
+    const { refresh, urls } = record;
     if (!refresh) throw new Error("no refresh strategy"); // unreachable: this revision was read with one
     const { name } = this.#address();
     let next: Record<string, unknown>;
     try {
-      next = await refreshSecretMaterial(refresh, stored.record.material, (exchange) => {
+      next = await refreshSecretMaterial(refresh, record.material, (exchange) => {
         // Refresh moves bytes only toward pinned hosts, like any use.
         if (!originPinned(exchange.url, urls))
           throw new Error(
@@ -283,20 +359,20 @@ export class SecretDurableObject extends DurableObject<Env> {
     }
     const current = await this.ctx.storage.get<Stored>("stored");
     if (current?.revision !== revision) return;
-    await this.ctx.storage.put<Stored>("stored", {
-      ...current,
-      record: { ...current.record, material: next },
-    });
+    await this.ctx.storage.put<Stored>(
+      "stored",
+      await this.#sealed({ ...record, material: next }, revision),
+    );
     await this.#appendOutcome({
       type: "events.iterate.com/secrets/refreshed",
       payload: { name, kind: refresh.kind, ok: true },
     });
   }
 
-  /** A refresh's outcome onto the owner's root log — the platform's own append, no principal,
-   *  through THE one write (`itx.builtins.append`, iterate-context.ts), which no context can mask.
-   *  Best-effort: the outcome already happened, and a lost fact must not fail the request that
-   *  caused it. */
+  /** A fact about this secret onto the owner's root log — a refresh's outcome, a use — the
+   *  platform's own append, no principal, through THE one write (`itx.builtins.append`,
+   *  iterate-context.ts), which no context can mask. Best-effort: what it records already happened,
+   *  and a lost fact must not fail the request that caused it. */
   async #appendOutcome(event: { type: string; payload: Record<string, unknown> }): Promise<void> {
     const catalog = await this.ctx.storage.get<string>("catalog");
     if (!catalog) return;
