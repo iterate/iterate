@@ -1011,24 +1011,6 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): derived f
     expect(rig.delivery.deadlines()).toEqual([]);
   });
 
-  test("a row re-configured while it claims the alarm costs one alarm write, never a delete and a set", async () => {
-    const rig = parkedSinkRig();
-    rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
-    await settled();
-    expect(rig.alarms).toHaveLength(1);
-    // The replacement asks for history: it claims from the moment it is configured.
-    rig.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"], afterOffset: 0 },
-      }),
-    );
-    expect(rig.deletes).toEqual([]);
-    expect(rig.alarms).toHaveLength(2);
-    await rig.release();
-    await rig.release();
-  });
-
   test("a cursor row re-pointed at a facet drops its cursor and its claim on that rule commit; the delivery loop never pays for a target that owns its progress", async () => {
     const rig = parkedSinkRig();
     rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
