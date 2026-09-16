@@ -151,12 +151,45 @@ test("the runtime guard rejects a non-string or blank type, committing nothing",
   // Stream.append is the sole enforcement.
   const itx = openItx(freshCtx("guards"));
   const before = await readAll(itx);
-  for (const type of [12345, null, true, {}, [], undefined, "", "   "]) {
-    expect(await rejection(append(itx, { type: "sneaky" }, { type }))).toMatchObject({
-      message: expect.stringMatching(/non-empty type/i),
-    });
-    expect(await readAll(itx)).toEqual(before);
-  }
+  expect(await rejection(append(itx, { type: "sneaky" }, { type: 12345 }))).toMatchObject({
+    message: expect.stringMatching(/non-empty type/i),
+  });
+  expect(await readAll(itx)).toEqual(before);
+
+  expect(await rejection(append(itx, { type: "sneaky" }, { type: null }))).toMatchObject({
+    message: expect.stringMatching(/non-empty type/i),
+  });
+  expect(await readAll(itx)).toEqual(before);
+
+  expect(await rejection(append(itx, { type: "sneaky" }, { type: true }))).toMatchObject({
+    message: expect.stringMatching(/non-empty type/i),
+  });
+  expect(await readAll(itx)).toEqual(before);
+
+  expect(await rejection(append(itx, { type: "sneaky" }, { type: {} }))).toMatchObject({
+    message: expect.stringMatching(/non-empty type/i),
+  });
+  expect(await readAll(itx)).toEqual(before);
+
+  expect(await rejection(append(itx, { type: "sneaky" }, { type: [] }))).toMatchObject({
+    message: expect.stringMatching(/non-empty type/i),
+  });
+  expect(await readAll(itx)).toEqual(before);
+
+  expect(await rejection(append(itx, { type: "sneaky" }, { type: undefined }))).toMatchObject({
+    message: expect.stringMatching(/non-empty type/i),
+  });
+  expect(await readAll(itx)).toEqual(before);
+
+  expect(await rejection(append(itx, { type: "sneaky" }, { type: "" }))).toMatchObject({
+    message: expect.stringMatching(/non-empty type/i),
+  });
+  expect(await readAll(itx)).toEqual(before);
+
+  expect(await rejection(append(itx, { type: "sneaky" }, { type: "   " }))).toMatchObject({
+    message: expect.stringMatching(/non-empty type/i),
+  });
+  expect(await readAll(itx)).toEqual(before);
 });
 
 test("an in-batch idempotency dedupe hit is processed ONCE, not twice", async () => {
