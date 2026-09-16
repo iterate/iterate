@@ -57,6 +57,9 @@
   // Browser Run, the built-in root `itx.browser` (context/built-ins.ts). Quick Actions need the
   // remote binding in local wrangler; the workers test lane omits this the same way it omits `ai`.
   "browser": { "binding": "BROWSER" },
+  // R2, the built-in root `itx.r2` (`itx.files` on top). Local wrangler keeps it in .wrangler/state;
+  // a deployment's bucket is `<resourceNamePrefix>-files` (envs.ts, ensure-resources).
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "os-next-files" }],
   // Cloudflare Artifacts ("git for agents", beta) — the ONE bound namespace, project-scoped as the
   // built-in root `itx.cfArtifacts` (context/built-ins.ts forces every repo name under `${projectId}.`).
   // repo-create auto-provisions the namespace; APP_CONFIG_ARTIFACTS_ACCOUNT_ID/NAMESPACE (vars, below)

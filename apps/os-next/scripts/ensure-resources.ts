@@ -29,6 +29,15 @@ export default async function ensureResources(options: { env?: string } = {}) {
       }));
     resources[key] = namespace.id;
   }
+  // The one R2 bucket behind `itx.r2` (the wrangler generator names it `<resourceNamePrefix>-files`).
+  const bucketName = `${ctx.env.resourceNamePrefix}-files`;
+  const buckets = await ctx.cf<{ buckets: { name: string }[] }>("/r2/buckets?per_page=1000");
+  if (buckets.buckets.some((bucket) => bucket.name === bucketName)) {
+    console.log(`R2 bucket ${bucketName} exists`);
+  } else {
+    await ctx.cf("/r2/buckets", { method: "POST", body: JSON.stringify({ name: bucketName }) });
+    console.log(`created R2 bucket ${bucketName}`);
+  }
   const zones = await ctx.cfV4<{ id: string; name: string }[]>(
     `/zones?account.id=${ctx.env.cloudflareAccountId}&per_page=500`,
   );

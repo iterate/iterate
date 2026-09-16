@@ -10,7 +10,7 @@
 import { z } from "zod";
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
 import type { StreamEvent } from "../stream/processor.ts";
-import { type AgentView, DEFAULT_AGENT_SYSTEM_PROMPT } from "./contract.ts";
+import { type AgentView, DEFAULT_AGENT_SYSTEM_PROMPT, type FileAttachment } from "./contract.ts";
 import { AgentProcessor } from "./processor.ts";
 
 /** What Workers AI answers a text-generation `run`: `{ response }`, or the chat-completions shape
@@ -39,6 +39,7 @@ export class AgentDurableObject extends StreamProcessorDurableObject<AgentView> 
       return { text };
     },
     runScript: (code) => this.withItx((itx) => itx.run(code)),
+    readFile: (path) => this.withItx((itx) => itx.files.get(path).bytes()),
     now: () => Date.now(),
   });
 
@@ -70,14 +71,48 @@ export class AgentDurableObject extends StreamProcessorDurableObject<AgentView> 
     return { path };
   }
 
-  /** A person's words: ONE `context-added`, the trigger of the next turn. The event is answered so
-   *  a caller can wait for what follows it. */
-  async message(content: string): Promise<StreamEvent> {
+  /** A person's words: ONE `context-added`, the trigger of the next turn — with their attachments,
+   *  each stored first under this agent's path (`itx.files`, apps/os's `<path>/<8 of a uuid>-<name>`)
+   *  and named on the event; an image among them is what the model will see. The event is answered
+   *  so a caller can wait for what follows it. */
+  async message(
+    input:
+      | string
+      | {
+          message: string;
+          files?: {
+            contentType: string;
+            filename: string;
+            data: Uint8Array | ArrayBuffer | string;
+          }[];
+        },
+  ): Promise<StreamEvent> {
     await this.#created();
+    const { message, files = [] } = typeof input === "string" ? { message: input } : input;
+    const path = await this.#path();
+    const attachments: FileAttachment[] = [];
+    for (const file of files) {
+      const filename = file.filename.replace(/[^A-Za-z0-9._-]+/g, "-");
+      const storedAt = `${path}/${crypto.randomUUID().slice(0, 8)}-${filename}`;
+      const stored = await this.withItx((itx) =>
+        itx.files.get(storedAt).put({ contentType: file.contentType, data: file.data }),
+      );
+      attachments.push({
+        contentType: stored.contentType,
+        filename: file.filename,
+        path: stored.path,
+        size: stored.size,
+      });
+    }
     const appended = await this.withItx((itx) =>
       itx.append({
         type: "events.iterate.com/agents/context-added",
-        payload: { role: "user", content, actor: { type: "user" } },
+        payload: {
+          role: "user",
+          content: message,
+          actor: { type: "user" },
+          ...(attachments.length > 0 && { files: attachments }),
+        },
       }),
     );
     // Over the loopback stub the append's answer types as an RPC result, not the array the door

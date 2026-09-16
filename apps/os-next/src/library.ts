@@ -8,6 +8,7 @@
 //   repos       — `itx.repos.get(path)` / `.list()`: a repo as a stream on any path — its `repo` facet
 //   workspaces  — `itx.workspaces.get(path)` / `.list()`: the workspace of any context — its `workspace` facet
 //   agents      — `itx.agents.get(path)` / `.list()`: an agent on any path — its `agent` facet, the loop that acts by scripts
+//   files       — `itx.files.get(path)` / `.list()`: project file storage — a path, its bytes and content type, over `itx.r2`
 
 import {
   RpcSession,
@@ -18,7 +19,12 @@ import {
 } from "capnweb";
 import { z } from "zod";
 import type { BuiltInScope } from "./context/built-ins.ts";
-import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/expression.ts";
+import {
+  keySortedForPrint,
+  InvokeHandle,
+  print,
+  walkStepsOnRpcStub,
+} from "./context/expression.ts";
 import { WORKSPACE_PROCESSOR_SOURCE } from "./generated/workspace-processor-source.ts";
 import { REPO_PROCESSOR_SOURCE } from "./generated/repo-processor-source.ts";
 import { PROJECT_PROCESSOR_SOURCE } from "./generated/project-processor-source.ts";
@@ -40,7 +46,7 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 // pipelinable handle).
 //
 // The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `repos.get`/`list` ·
-// `workspaces.get`/`list` · `agents.get`/`list`. `run` is sugar over `itx.workers.get` (the run section); the entity handles
+// `workspaces.get`/`list` · `agents.get`/`list` · `files.get`/`list`. `run` is sugar over `itx.workers.get` (the run section); the entity handles
 // over `itx.cd(path).facets.get` (the entities section). The three connectors each
 // return a connection RpcTarget a caller can hold across calls, and each does ALL its HTTP through
 // `itx.fetch` (egress: `getSecret("/secrets/NAME")` placeholders in headers substitute for free; a user
@@ -61,7 +67,7 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
  *  what the library uses today — `fetch`, the connectors' HTTP; `workers`, the host `run` loads
  *  into; `cd`, the sibling a repo or workspace facet is hosted on. Widen it HERE when a module needs
  *  more of itx — never by importing something else. */
-export type LibraryItx = Pick<BuiltInScope, "fetch" | "workers" | "cd">;
+export type LibraryItx = Pick<BuiltInScope, "fetch" | "workers" | "cd" | "r2">;
 
 /** The library's roots, exactly as the built-ins record spreads them in: each verb closed over ONE
  *  `itx`. `BuiltInScope` (context/built-ins.ts) extends this, so the typed surface has them once. */
@@ -121,7 +127,30 @@ export interface LibraryRoots {
     get(path: string): InvokeHandle & AgentFacet;
     list(): Promise<{ path: string; createdAt: string }[]>;
   };
+  /** THE FILES (apps/os's `itx.files`, lean): project file storage as a PATH namespace over `itx.r2`
+   *  — a file is its path (leading slash), its bytes and a content type; last write wins, no
+   *  events, no URLs (a model gets an image's bytes as a data: URL; a script reads them with
+   *  `bytes()`). `get(path)` is a handle: `.put({ contentType, data })` (data: bytes, or a string that
+   *  is base64 or a `data:` URL) → the record, `.bytes()`, `.head()` (null when absent), `.delete()`.
+   *  `list(prefix?)` is what apps/os lacks and an agent needs: the records under a prefix. */
+  files: {
+    get(path: string): InvokeHandle & FileHandle;
+    list(prefix?: string): Promise<FileRecord[]>;
+  };
 }
+
+/** A stored file as `itx.files` answers it: its path, content type and size. */
+export type FileRecord = { path: string; contentType: string; size: number };
+/** What a file handle's dotted members reach. */
+export type FileHandle = {
+  put(input: {
+    contentType?: string;
+    data: Uint8Array | ArrayBuffer | string;
+  }): Promise<FileRecord>;
+  bytes(): Promise<Uint8Array>;
+  head(): Promise<FileRecord | null>;
+  delete(): Promise<{ ok: true }>;
+};
 
 /** What a repo handle's dotted members reach: the repo facet's own methods. */
 export type RepoFacet = Pick<
@@ -191,6 +220,15 @@ export function buildLibrary(itx: LibraryItx): {
           Object.entries((await projectCatalog(itx)).workspaces).map(([path, workspace]) => ({
             path,
             ...workspace,
+          })),
+      },
+      files: {
+        get: (path) => fileHandle(itx, path),
+        list: async (prefix = "") =>
+          (await itx.r2.list(fileKey(prefix))).objects.map((object) => ({
+            path: `/${object.key}`,
+            contentType: object.contentType,
+            size: object.size,
           })),
       },
       agents: {
@@ -304,6 +342,71 @@ function workspaceHandle(itx: LibraryItx, path: string): InvokeHandle & Workspac
     source: WORKSPACE_PROCESSOR_SOURCE,
     className: "WorkspaceDurableObject",
   }) as InvokeHandle & WorkspaceFacet;
+}
+
+// ── the files ── `itx.files.get(path)`: the path's object in `itx.r2` (already the owner's slice),
+// the key being the path without its leading slash, so `itx.r2.list()` shows the same objects.
+
+/** A file path's R2 key: leading slash off (a prefix may be empty). */
+const fileKey = (path: string): string => path.replace(/^\/+/, "");
+
+/** `put`'s data as bytes: bytes as they are; a string is base64, with or without a `data:` prefix
+ *  (apps/os's FileData rule — a string is never raw text). A `data:` URL's own content type wins. */
+function fileBytes(data: Uint8Array | ArrayBuffer | string): {
+  bytes: Uint8Array;
+  contentType?: string;
+} {
+  if (typeof data !== "string")
+    return { bytes: data instanceof Uint8Array ? data : new Uint8Array(data) };
+  const dataUrl = /^data:([^;,]*)(?:;[^,]*)?,(.*)$/s.exec(data);
+  const base64 = dataUrl ? dataUrl[2]! : data;
+  const binary = atob(base64.replace(/\s+/g, ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return { bytes, ...(dataUrl?.[1] && { contentType: dataUrl[1] }) };
+}
+
+/** The file at `path`: every dotted member is one of the handle's verbs over `itx.r2`. */
+function fileHandle(itx: LibraryItx, path: string): InvokeHandle & FileHandle {
+  const key = fileKey(path);
+  const record = (object: { size: number; contentType: string }): FileRecord => ({
+    path: `/${key}`,
+    contentType: object.contentType,
+    size: object.size,
+  });
+  const verbs: FileHandle = {
+    put: async (input) => {
+      const { bytes, contentType } = fileBytes(input.data);
+      const stored = await itx.r2.put(key, bytes, {
+        contentType: input.contentType || contentType || "application/octet-stream",
+      });
+      return record({
+        size: stored.size,
+        contentType: input.contentType || contentType || "application/octet-stream",
+      });
+    },
+    bytes: async () => {
+      const object = await itx.r2.get(key);
+      if (!object) throw new Error(`files: nothing at "/${key}"`);
+      return object.data;
+    },
+    head: async () => {
+      const object = await itx.r2.head(key);
+      return object ? record(object) : null;
+    },
+    delete: () => itx.r2.delete(key),
+  };
+  return new InvokeHandle(async (itxExpressionSteps) => {
+    const [step, ...rest] = itxExpressionSteps;
+    if (rest.length > 0 || !Array.isArray(step) || !(step[0] in verbs))
+      throw new Error(
+        `files.get(path): one of put({ contentType, data }) · bytes() · head() · delete(), got ${print(itxExpressionSteps)}`,
+      );
+    const [verb, ...args] = step as [keyof FileHandle, ...unknown[]];
+    // The verb's argument is wire-fed (an InvokeHandle's steps carry no validation); each verb
+    // reads what it needs and the runtime checks in fileBytes are the contract.
+    return (verbs[verb] as (...verbArgs: unknown[]) => unknown)(...args);
+  }) as InvokeHandle & FileHandle;
 }
 
 /** The `agent` facet's spec — ONE object for the library's hosting and the processor row it enables,

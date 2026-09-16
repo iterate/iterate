@@ -82,6 +82,15 @@ export type SubscriptionListEntry = {
   halted?: { afterOffset: number; attempts: number; error?: string };
 };
 
+/** One stored object as `itx.r2` answers it: the key (owner prefix stripped), its size and metadata. */
+export type R2ObjectRecord = {
+  key: string;
+  size: number;
+  contentType: string;
+  customMetadata: Record<string, string>;
+  uploaded: string;
+};
+
 /** THE built-in scope, as ONE interface — the clean-room's whole kernel surface; the library's verbs
  *  come in by `extends` (library.ts). The record is a PLAIN OBJECT of own-enumerable closures,
  *  not an RpcTarget class, on purpose: the resolver gates on `Object.hasOwn`, so a prototype-method
@@ -102,6 +111,20 @@ export interface BuiltInScope extends LibraryRoots {
     put(key: string, value: string): Promise<{ ok: true }>;
     delete(key: string): Promise<{ ok: true }>;
     list(prefix?: string): Promise<{ keys: string[] }>;
+  };
+  /** THE OBJECT STORE: the resource owner's slice of ONE R2 bucket (`FILES`), keys prefixed
+   *  `<owner.id>/` like kv's — the bucket's own verbs, answered as plain data (an R2 object is a
+   *  stream; over the wire it is its bytes). `itx.files` (library.ts) is the file semantics on top. */
+  r2: {
+    put(
+      key: string,
+      data: Uint8Array | ArrayBuffer | string,
+      options?: { contentType?: string; customMetadata?: Record<string, string> },
+    ): Promise<{ key: string; size: number; etag: string }>;
+    get(key: string): Promise<(R2ObjectRecord & { data: Uint8Array }) | null>;
+    head(key: string): Promise<R2ObjectRecord | null>;
+    list(prefix?: string): Promise<{ objects: R2ObjectRecord[] }>;
+    delete(key: string): Promise<{ ok: true }>;
   };
   /** The resource owner's secrets for egress (a project's; a global user's or organization's own —
    *  never a catalog shared across users) — each one its own Durable Object (secrets.ts,
@@ -274,6 +297,17 @@ type RootsAreTheSameSet = [Exclude<keyof BuiltInScope, "builtins">] extends [Bui
 const _rootsAreTheSameSet: RootsAreTheSameSet = true;
 void _rootsAreTheSameSet;
 
+/** An R2 object's head as `itx.r2` answers it, the owner prefix stripped off the key. */
+function r2ObjectRecord(object: R2Object, prefix: string): R2ObjectRecord {
+  return {
+    key: object.key.slice(prefix.length),
+    size: object.size,
+    contentType: object.httpMetadata?.contentType || "application/octet-stream",
+    customMetadata: object.customMetadata || {},
+    uploaded: object.uploaded.toISOString(),
+  };
+}
+
 /** What the CONTEXT (the DO) injects: identity, the bindings, and the seams only it can serve. */
 interface BuildBuiltInsDeps {
   projectId: string;
@@ -285,6 +319,8 @@ interface BuildBuiltInsDeps {
   env: {
     LOADER: WorkerLoader;
     ITX_KV: KVNamespace;
+    /** The one R2 bucket, every owner's objects under its own prefix — the built-in root `itx.r2`. */
+    FILES: R2Bucket;
     /** The secrets' Durable Objects (secret-durable-object.ts): one per secret, `<owner.id>:<name>` — the
      *  resource owner's id (iterate-context.ts `resourceScope`). */
     SECRET: DurableObjectNamespace<SecretDurableObject>;
@@ -344,6 +380,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   // `owner.id`; the secrets catalog lives in the log at `owner.rootPath`.
   const owner = resourceScope(projectId, path);
   const kvPrefix = `${owner.id}:`;
+  const r2Prefix = `${owner.id}/`;
   const ownContext = () => deps.context(path);
   // A secret's Durable Object is `<owner.id>:<name>` — the one the context DO's `#egress` forwards a
   // placeholder-bearing request to, by the same derivation (an owner id never holds a `:`). The
@@ -417,6 +454,41 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           if (page.list_complete) return { keys: out };
           cursor = page.cursor;
         }
+      },
+    },
+    r2: {
+      put: async (key, data, options = {}) => {
+        const object = await env.FILES.put(r2Prefix + key, data, {
+          httpMetadata: { contentType: options.contentType || "application/octet-stream" },
+          customMetadata: options.customMetadata || {},
+        });
+        return { key, size: object.size, etag: object.etag };
+      },
+      get: async (key) => {
+        const object = await env.FILES.get(r2Prefix + key);
+        if (!object) return null;
+        return {
+          ...r2ObjectRecord(object, r2Prefix),
+          data: new Uint8Array(await object.arrayBuffer()),
+        };
+      },
+      head: async (key) => {
+        const object = await env.FILES.head(r2Prefix + key);
+        return object ? r2ObjectRecord(object, r2Prefix) : null;
+      },
+      list: async (prefix = "") => {
+        // Paginate on the cursor, as kv does: one R2 page is at most 1000 objects.
+        const objects: R2ObjectRecord[] = [];
+        for (let cursor: string | undefined; ; ) {
+          const page = await env.FILES.list({ prefix: r2Prefix + prefix, cursor });
+          for (const object of page.objects) objects.push(r2ObjectRecord(object, r2Prefix));
+          if (!page.truncated) return { objects };
+          cursor = page.cursor;
+        }
+      },
+      delete: async (key) => {
+        await env.FILES.delete(r2Prefix + key);
+        return { ok: true };
       },
     },
     secrets: {

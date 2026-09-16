@@ -152,6 +152,8 @@ export interface Env extends AppConfigEnv {
   AI: Ai;
   /** Browser Run — the built-in root `itx.browser` (context/built-ins.ts). */
   BROWSER: BrowserRun;
+  /** The one R2 bucket — the built-in root `itx.r2`, every owner under its own prefix (context/built-ins.ts). */
+  FILES: R2Bucket;
   /** Cloudflare Artifacts (beta) — the ONE bound namespace behind `itx.cfArtifacts`, project-scoped. */
   ARTIFACTS: ArtifactsNamespace;
   /** THE SECRETS (secret-durable-object.ts): one Durable Object per secret, `<owner>:<name>` —

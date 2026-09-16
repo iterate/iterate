@@ -44,6 +44,7 @@ export function writeWranglerConfig() {
           assets: template.assets,
           version_metadata: template.version_metadata,
           artifacts: [{ binding: "ARTIFACTS", namespace: env.artifactsNamespace }],
+          r2_buckets: [{ binding: "FILES", bucket_name: `${env.resourceNamePrefix}-files` }],
           d1_databases: [
             {
               binding: "DB",

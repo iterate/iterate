@@ -134,7 +134,7 @@ test("the loop: a person's words → the model → a script run against itx → 
   });
   // The second call saw the whole conversation: prompt, person, its own script, the result.
   expect(ai.calls).toHaveLength(2);
-  expect(ai.calls[1]!.model).toBe("@cf/meta/llama-3.3-70b-instruct-fp8-fast");
+  expect(ai.calls[1]!.model).toBe("@cf/meta/llama-4-scout-17b-16e-instruct");
   expect(ai.calls[1]!.messages.map((m) => m.role)).toEqual([
     "system",
     "user",
@@ -256,6 +256,89 @@ test("bounded: a model that never stops scripting trips the autonomous-turn brea
   await sleep(1_500);
   expect(await readAll(support)).toHaveLength(quietFrom);
 });
+
+/** A 2×2 solid red PNG — what a vision model is asked about. */
+const RED_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR42mP4z8AARAwQCgAf7gP9Y167WwAAAABJRU5ErkJggg==";
+
+test("an attached image is stored under the agent's path and SHOWN to the model as an image part; a non-image is named", async () => {
+  const itx = openItx(freshCtx("agent-vision"));
+  const support = itx.cd("/agents/support");
+  const ai = new ScriptedAi(["A red square and a note."]);
+  await support.provide("itx.ai", ai);
+  const agent = itx.agents.get("/agents/support");
+  await agent.create({ systemPrompt: "Be terse." });
+  const asked = await agent.message({
+    message: "What do you see?",
+    files: [
+      { contentType: "image/png", filename: "red dot.png", data: RED_PNG_BASE64 },
+      { contentType: "text/plain", filename: "note.txt", data: btoa("a note") },
+    ],
+  });
+  expect(asked.payload.files).toEqual([
+    {
+      contentType: "image/png",
+      filename: "red dot.png",
+      path: expect.stringMatching(/^\/agents\/support\/[0-9a-f]{8}-red-dot\.png$/),
+      size: 73,
+    },
+    {
+      contentType: "text/plain",
+      filename: "note.txt",
+      path: expect.stringMatching(/^\/agents\/support\/[0-9a-f]{8}-note\.txt$/),
+      size: 6,
+    },
+  ]);
+  // Stored for real, under the agent's path.
+  expect(
+    (await itx.files.list("/agents/support"))
+      .map((f: { size: number }) => f.size)
+      .sort((a: number, b: number) => a - b),
+  ).toEqual([6, 73]);
+  const log = await until("the assistant's prose", async () => {
+    const all = await readAll(support);
+    return assistantWords(all).length === 1 ? all : undefined;
+  });
+  expect(assistantWords(log)).toEqual(["A red square and a note."]);
+  // The model saw the pixels (a data: URL of the stored bytes) and was told about the note.
+  const [call] = ai.calls;
+  const message = call!.messages[1] as unknown as {
+    role: string;
+    content: { type: string; text?: string; image_url?: { url: string } }[];
+  };
+  expect(message.role).toBe("user");
+  expect(message.content[0]).toMatchObject({ type: "text" });
+  expect(message.content[0]!.text).toMatch(
+    /^What do you see\?\n\[Attached file: note\.txt \(text\/plain, 6 bytes\) — read it with `await itx\.files\.get\("\/agents\/support\/[0-9a-f]{8}-note\.txt"\)\.bytes\(\)`\]$/,
+  );
+  expect(message.content[1]).toEqual({
+    type: "image_url",
+    image_url: { url: `data:image/png;base64,${RED_PNG_BASE64}` },
+  });
+});
+
+deployedOnly(
+  "DEPLOYED: the default model SEES an attached image — a red square is called red",
+  async () => {
+    const itx = openItx(freshCtx("agent-vision-real"));
+    const agent = itx.agents.get("/agents/support");
+    await agent.create();
+    await agent.message({
+      message: "What colour is this image? Answer with one word, no code block.",
+      files: [{ contentType: "image/png", filename: "square.png", data: RED_PNG_BASE64 }],
+    });
+    const words = await until(
+      "the assistant's answer",
+      async () => {
+        const said = assistantWords(await readAll(itx.cd("/agents/support")));
+        return said.length > 0 ? said : undefined;
+      },
+      120_000,
+    );
+    expect(words.join("\n")).toMatch(/red/i);
+  },
+  150_000,
+);
 
 deployedOnly(
   "DEPLOYED: one real turn through Workers AI — the default model answers a person in prose",

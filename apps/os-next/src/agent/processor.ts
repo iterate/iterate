@@ -18,7 +18,12 @@ import {
   type StreamEventInput,
   StreamProcessor,
 } from "../stream/processor.ts";
-import { AgentContract, type AgentView, type ChatMessage } from "./contract.ts";
+import {
+  AgentContract,
+  type AgentView,
+  type ChatMessage,
+  type FileAttachment,
+} from "./contract.ts";
 import { parseCodemodeResponse } from "./codemode-format.ts";
 
 /** What the host injects: the model and the script runner, both reached through `itx` there. */
@@ -27,8 +32,51 @@ export type AgentDeps = {
   chat(input: { model: string; messages: ChatMessage[] }): Promise<{ text: string }>;
   /** Run `async (itx) => …` against this context; what it returned (JSON), or a throw. */
   runScript(code: string): Promise<unknown>;
+  /** A stored file's bytes (`itx.files.get(path).bytes()`); throws when it is gone. */
+  readFile(path: string): Promise<Uint8Array>;
   now(): number;
 };
+
+/** The conversation as the model reads it. An item's images become image parts (a data: URL of the
+ *  bytes in `images`, keyed by path — a vision model sees the pixels); any other attachment, or an
+ *  image whose bytes are gone, is a line naming it and how a script reads it (apps/os's hint line).
+ *  The developer's notes read as system instructions. */
+export function buildChatMessages(
+  items: AgentView["contextItems"],
+  images: Map<string, { contentType: string; base64: string }>,
+): ChatMessage[] {
+  return items.map((item) => {
+    const role = item.role === "developer" ? "system" : item.role;
+    if (!item.files?.length) return { role, content: item.content };
+    const parts: Extract<ChatMessage["content"], unknown[]> = [];
+    const hints: string[] = [];
+    for (const file of item.files) {
+      const image = images.get(file.path);
+      if (image)
+        parts.push({
+          type: "image_url",
+          image_url: { url: `data:${image.contentType};base64,${image.base64}` },
+        });
+      else hints.push(fileHintLine(file));
+    }
+    const text = [item.content, ...hints].filter((line) => line !== "").join("\n");
+    if (parts.length === 0) return { role, content: text };
+    return { role, content: [{ type: "text", text }, ...parts] };
+  });
+}
+
+/** How a non-image (or gone) attachment is named to the model. */
+function fileHintLine(file: FileAttachment): string {
+  return `[Attached file: ${file.filename} (${file.contentType}, ${String(file.size)} bytes) — read it with \`await itx.files.get(${JSON.stringify(file.path)}).bytes()\`]`;
+}
+
+/** Bytes → base64, in chunks (a spread of a large array overflows the call stack). */
+function base64Of(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
 
 type AgentEvent = ConsumedEvent<typeof AgentContract>;
 type AgentArgs = ProcessEventArgs<AgentView, AgentEvent>;
@@ -92,6 +140,7 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
               content,
               actor,
               llmRequestOffset,
+              files: event.payload.files,
             },
           ],
         };
@@ -362,13 +411,23 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
   ): Promise<void> {
     const startedAt = this.deps.now();
     try {
-      // The model call's roles: the developer's notes read as system instructions.
-      const messages: ChatMessage[] = state.contextItems
-        .filter((item) => item.offset < open.requestedAtOffset)
-        .map((item) => ({
-          role: item.role === "developer" ? "system" : item.role,
-          content: item.content,
-        }));
+      const items = state.contextItems.filter((item) => item.offset < open.requestedAtOffset);
+      // The images the model will see: read now, the freshest bytes at the request; one that is
+      // gone (deleted meanwhile) is named instead of shown.
+      const images = new Map<string, { contentType: string; base64: string }>();
+      for (const item of items)
+        for (const file of item.files || []) {
+          if (!file.contentType.startsWith("image/") || images.has(file.path)) continue;
+          try {
+            images.set(file.path, {
+              contentType: file.contentType,
+              base64: base64Of(await this.deps.readFile(file.path)),
+            });
+          } catch {
+            // named by its hint line instead
+          }
+        }
+      const messages = buildChatMessages(items, images);
       let text: string;
       try {
         text = (await this.deps.chat({ model: open.model, messages })).text;

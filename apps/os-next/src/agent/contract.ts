@@ -33,8 +33,24 @@ export type Actor = z.infer<typeof Actor>;
 
 const Role = z.enum(["system", "developer", "user", "assistant"]);
 
-/** One message of the model's conversation, as the model call takes it. */
-export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+/** One message of the model's conversation, as the model call takes it: text, or the chat-completions
+ *  parts a vision model reads — text and images as data: URLs. */
+export type ChatMessage = {
+  role: "system" | "user" | "assistant";
+  content:
+    | string
+    | ({ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } })[];
+};
+
+/** A file attached to a context item (apps/os's attachment record, minus its signed URL): the
+ *  project file it was stored as (`itx.files`), its content type, original name and size. */
+const FileAttachment = z.object({
+  contentType: z.string().min(1),
+  filename: z.string().min(1),
+  path: z.string().min(1),
+  size: z.number().int().nonnegative(),
+});
+export type FileAttachment = z.infer<typeof FileAttachment>;
 
 /** What the model is told when `create()` is given no prompt of its own — mmkal's codemode-tag
  *  prompt (configs/codemode-tag), with this context's `itx` in place of apps/os's. */
@@ -55,13 +71,14 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "- Multi-step work is one tag per response: each result comes back to you, and you write the next step having seen it. A response with more than one `<codemode>` tag — or an unclosed one — is rejected with feedback and NOTHING runs; never queue future steps as extra tags.",
   "- To finish: write your final message with NO tag — prose alone ends your turn. Inside a tag, `return;` with no value (or falling off the end) also ends the loop; `return null` counts as a value and buys a pointless extra turn.",
   "- Each script runs fresh — no variable survives between scripts. Carry state by returning it or writing it.",
-  "- `itx` is this context's capability tree: `whoami()`, `kv.get(key)` / `kv.put(key, value)` / `kv.list()`, `repos.list()` and `repos.get(path).readFile(p)` / `.listFiles()` / `.commitFiles({ message, changes })` / `.log()`, `workspaces.list()`, `secrets.list()`, `fetch(url, init)` (the internet, through the project's egress), `cd(path)` (a sibling context: `append(event)`, `readEvents(after, limit)`), and `readEvents(after, limit)` (this conversation's log).",
+  "- `itx` is this context's capability tree: `whoami()`, `kv.get(key)` / `kv.put(key, value)` / `kv.list()`, `repos.list()` and `repos.get(path).readFile(p)` / `.listFiles()` / `.commitFiles({ message, changes })` / `.log()`, `workspaces.list()`, `files.list(prefix)` and `files.get(path).put({ contentType, data })` / `.bytes()` / `.delete()` (project file storage), `secrets.list()`, `fetch(url, init)` (the internet, through the project's egress), `cd(path)` (a sibling context: `append(event)`, `readEvents(after, limit)`), and `readEvents(after, limit)` (this conversation's log).",
+  "- Images a person attaches are shown to you directly. Any other attachment is named in the message with its path — read it with `await itx.files.get(path).bytes()`.",
 ].join("\n");
 
 /** The knobs `agent/configured` patches; every one defaulted, so `{}` is a whole config. */
 const AgentConfig = z.object({
   llm: z
-    .object({ model: z.string().min(1).default("@cf/meta/llama-3.3-70b-instruct-fp8-fast") })
+    .object({ model: z.string().min(1).default("@cf/meta/llama-4-scout-17b-16e-instruct") })
     .prefault({}),
   /** Consecutive self-triggered turns (script results, corrections) before the loop pauses. */
   maxAutonomousTurns: z.number().int().positive().default(20),
@@ -93,6 +110,7 @@ export const AgentView = z.object({
         content: z.string(),
         actor: Actor.optional(),
         llmRequestOffset: z.number().int().positive().optional(),
+        files: z.array(FileAttachment).optional(),
       }),
     )
     .default([]),
@@ -166,6 +184,8 @@ export const AgentContract = defineProcessorContract({
         role: Role,
         content: z.string(),
         actor: Actor.optional(),
+        /** What rides with the words: files stored under this agent's path (`message()` stores them). */
+        files: z.array(FileAttachment).optional(),
         llmRequestPolicy: z
           .object({ behaviour: z.enum(["dont-trigger-request", "after-current-request"]) })
           .optional(),

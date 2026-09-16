@@ -6,13 +6,14 @@
 import { describe, expect, test } from "vitest";
 import { reduceProcessor } from "../stream/test-support.ts";
 import { type AgentView } from "./contract.ts";
-import { AgentProcessor, renderScriptSettlement } from "./processor.ts";
+import { AgentProcessor, buildChatMessages, renderScriptSettlement } from "./processor.ts";
 import { parseCodemodeResponse } from "./codemode-format.ts";
 
 const processor = () =>
   new AgentProcessor({
     chat: () => Promise.reject(new Error("the reduce never calls the model")),
     runScript: () => Promise.reject(new Error("the reduce never runs a script")),
+    readFile: () => Promise.reject(new Error("the reduce never reads a file")),
     now: () => 0,
   });
 
@@ -260,6 +261,51 @@ describe("AgentProcessor — the reduce", () => {
   ];
   for (const { name, events, view } of rows)
     test(name, () => expect(reduceProcessor(processor(), events)).toMatchObject(view));
+});
+
+describe("the conversation as the model reads it (buildChatMessages)", () => {
+  const png = {
+    contentType: "image/png",
+    filename: "dot.png",
+    path: "/agents/a/x-dot.png",
+    size: 3,
+  };
+  const pdf = {
+    contentType: "application/pdf",
+    filename: "spec.pdf",
+    path: "/agents/a/y-spec.pdf",
+    size: 9,
+  };
+  const items = (files?: (typeof png)[]) => [
+    { offset: 1, role: "system" as const, content: "Be terse." },
+    { offset: 2, role: "developer" as const, content: "note" },
+    { offset: 3, role: "user" as const, content: "Look.", files },
+  ];
+  test("text items stay text; the developer's notes read as system", () =>
+    expect(buildChatMessages(items(), new Map())).toEqual([
+      { role: "system", content: "Be terse." },
+      { role: "system", content: "note" },
+      { role: "user", content: "Look." },
+    ]));
+  test("an image whose bytes are known becomes an image part beside the text — a data: URL", () =>
+    expect(
+      buildChatMessages(
+        items([png]),
+        new Map([[png.path, { contentType: "image/png", base64: "QUJD" }]]),
+      )[2],
+    ).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "Look." },
+        { type: "image_url", image_url: { url: "data:image/png;base64,QUJD" } },
+      ],
+    }));
+  test("a non-image attachment, or an image whose bytes are gone, is a hint line the model can act on", () => {
+    const [, , message] = buildChatMessages(items([pdf, png]), new Map());
+    expect(message!.content).toBe(
+      'Look.\n[Attached file: spec.pdf (application/pdf, 9 bytes) — read it with `await itx.files.get("/agents/a/y-spec.pdf").bytes()`]\n[Attached file: dot.png (image/png, 3 bytes) — read it with `await itx.files.get("/agents/a/x-dot.png").bytes()`]',
+    );
+  });
 });
 
 describe("the assistant's output, parsed (the codemode-tag grammar, codemode-format.ts)", () => {
