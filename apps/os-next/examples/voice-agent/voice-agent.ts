@@ -39,8 +39,13 @@ const LIVE = {
  */
 export const MAX_SPEAKER_PAYLOAD_BYTES = 3_200;
 
-/** One stream append carries no more than half a second of queued output. */
-const SPEAKER_APPEND_BATCH_MAX_FRAMES = 5;
+/**
+ * ONE frame per append. On os-next the facet's append is in-process (no stream
+ * round trip to batch away), and a client push carries every event folded
+ * behind it, so a multi-frame append can hand a device a batch larger than
+ * its inbox slot (16 KiB on the ESP32 firmware; one frame is ~4.3 KiB).
+ */
+const SPEAKER_APPEND_BATCH_MAX_FRAMES = 1;
 /** Match the device's bounded ten-second speaker capacity when an append stalls. */
 const SPEAKER_OUTBOX_MAX_BYTES = 10_000 * 32;
 
@@ -1612,6 +1617,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
             await append(
               ...frames.map((frame, index) => ({
                 type: "events.iterate.com/voice-agent/spk-frame" as const,
+                /* Stamped HERE: the engine's append stamps provenance, not the
+                 * catalog's ephemeral marker, and a persisted frame is a row. */
+                ephemeral: true as const,
                 payload: {
                   activation: dial.activation,
                   conversationId: dial.conversationId,

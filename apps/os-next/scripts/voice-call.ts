@@ -1,21 +1,20 @@
 // scripts/voice-call.ts — ONE voice conversation on a FRESH os-next context, the shape the ESP32
 // HAVPE has: a warm authenticated capnweb session, then "press the button = a new stream now".
 //
-// It loads examples/voice-agent/voice-agent.ts (bundled here with esbuild, the SDK left as the
-// injected "./processor.js") as the context's `voice-agent` processor, subscribes a live callback
-// for what the device would hear, sends microphone frames from a 16 kHz mono PCM16 WAV (or one
-// silent frame plus a `commentary` fact when there is nothing to say), writes what came back to
-// a WAV, and prints the timeline from the press.
+// It makes the device's exact calls: `root.voice.setupVoiceAgent({ streamPath })` (the project's
+// installed setup worker puts the voice facet and its backend on the fresh context — run
+// scripts/voice-install.ts once per build), a live subscription for what the device would hear,
+// microphone frames from a 16 kHz mono PCM16 WAV (or one silent frame plus a `commentary` fact
+// when there is nothing to say), the terminal. It writes what came back to a WAV and prints the
+// timeline from the press.
 //
-//   OPENAI_API_KEY=$(doppler secrets get OPENAI_API_KEY --project os --config dev --plain) \
 //   WORKER_BASE_URL=https://os.iterate2.com \
 //   ADMIN_API_SECRET=$(doppler secrets get APP_CONFIG_ADMIN_API_SECRET --project project-worker --config prd --plain) \
 //   pnpm exec tsx scripts/voice-call.ts --utterance ask.wav --out answer.wav
 //   pnpm exec tsx scripts/voice-call.ts --say "Say: ready."
 //
-// PROJECT=prj-voice (the project; its /secrets/openai is set from OPENAI_API_KEY on every run).
+// PROJECT=prj-voice.
 import { readFileSync, writeFileSync } from "node:fs";
-import { build } from "esbuild";
 import { adminCredentials, disposeSessions, session } from "../e2e/support/client.ts";
 
 const args = new Map<string, string>();
@@ -88,38 +87,16 @@ function wavFromPcm(pcm: Buffer): Buffer {
   return Buffer.concat([header, pcm]);
 }
 
-/** The example, bundled for the loader: ESM, `./processor.js` and cloudflare:workers left external. */
-async function voiceAgentSource(): Promise<Record<string, string>> {
-  const result = await build({
-    entryPoints: [new URL("../examples/voice-agent/voice-agent.ts", import.meta.url).pathname],
-    bundle: true,
-    write: false,
-    format: "esm",
-    platform: "neutral",
-    target: "es2022",
-    external: ["./processor.js", "cloudflare:workers"],
-    logLevel: "silent",
-  });
-  const code = result.outputFiles[0]?.text;
-  if (!code) throw new Error("esbuild produced no output");
-  return { "cap.js": code };
-}
-
 async function main(): Promise<void> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY unset");
   if (!UTTERANCE && !SAY) throw new Error("pass --utterance <wav> or --say <text>");
   const micPcm = UTTERANCE ? pcmFromWav(UTTERANCE) : Buffer.alloc(FRAME_MS * BYTES_PER_MS);
-  const source = await voiceAgentSource();
-  console.log(`voice worker bundled: ${(source["cap.js"]!.length / 1024).toFixed(0)} KiB`);
 
   // ONE warm authenticated session and the project root — what a connected device holds.
   const api = session();
   const root = api.authenticate(adminCredentials()).projects.get(PROJECT);
   const warm0 = now();
   await root.invoke(["itx", ["whoami"]]);
-  await root.secrets.set("openai", apiKey, { urls: ["https://api.openai.com"] });
-  console.log(`session + project root + secret ready in ${now() - warm0}ms`);
+  console.log(`session + project root ready in ${now() - warm0}ms`);
 
   // THE PRESS: a fresh context, the processor enabled on it, a live callback for the answer.
   const itx = root.cd(CONTEXT_PATH);
@@ -133,27 +110,13 @@ async function main(): Promise<void> {
   let accepted: (() => void) | null = null;
   const acceptedPromise = new Promise<void>((resolve) => (accepted = resolve));
 
-  // `consumes` IS the subscription's filter and ephemerals reach a processor only when NAMED — the
-  // same list as the contract's `consumes` in examples/voice-agent/voice-agent.ts.
-  await itx.processors.enable("voice-agent", {
-    source,
-    className: "VoiceAgentDurableObject",
-    consumes: [
-      `${T}created`,
-      `${T}configured`,
-      `${T}instructions`,
-      `${T}thinking`,
-      `${T}commentary`,
-      `${T}call-started`,
-      `${T}conversation-ended`,
-      `${T}provider-error`,
-      `${T}utterance-transcript`,
-      `${T}answer-transcript`,
-      `${T}mic-frame`,
-      `${T}keepalive`,
-    ],
-  });
-  marks.enabled = at();
+  // THE DEVICE'S SETUP CALL, unchanged from apps/os: the installed setup worker enables the
+  // voice facet and its backend on this fresh context.
+  const setup = JSON.parse(
+    JSON.stringify(await root.voice.setupVoiceAgent({ streamPath: CONTEXT_PATH })),
+  );
+  if (setup.streamPath !== CONTEXT_PATH) throw new Error(`setup answered ${JSON.stringify(setup)}`);
+  marks.setup = at();
 
   await itx.subscribe({
     name: "device",
