@@ -18,7 +18,7 @@
     "deploy": "tsx scripts/deploy.ts",
     "routes:generate": "node scripts/generate-route-tree.ts",
     "routes:check": "node scripts/generate-route-tree.ts --check",
-    "typecheck": "pnpm routes:check && node build-sdk.mjs && tsc --noEmit && tsc --noEmit -p tsconfig.client.json && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.scripts.json",
+    "typecheck": "pnpm routes:check && node build-sdk.mjs && tsc --noEmit && tsc --noEmit -p tsconfig.client.json && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.scripts.json && tsc --noEmit -p examples/voice-agent/tsconfig.json",
     "test": "vitest run --configLoader runner --project unit --project workers --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "e2e": "vitest run --configLoader runner --project e2e",
     "spec": "playwright test",
