@@ -607,7 +607,9 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
     switch (event.type) {
       case "events.iterate.com/voice-agent/delegation-requested": {
         /* The backend turn, in the facet that raised it: the answer is a `commentary` naming the
-         * delegation, which is also what marks it answered in the fold. */
+         * delegation, which is also what marks it answered in the fold. Not re-run after an
+         * eviction: the provider socket dies with the incarnation and the call ends as interrupted,
+         * so a late answer would have no one to speak it. */
         const { activation, delegationId, transcript } = event.payload;
         if (state.answeredDelegationIds.includes(delegationId)) return;
         if (this.#turnsInFlight.has(delegationId)) return;
