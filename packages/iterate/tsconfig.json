@@ -2,22 +2,13 @@
   "compilerOptions": {
     "target": "esnext",
     "module": "nodenext",
-    "lib": [
-      "esnext",
-      "dom"
-    ],
+    "lib": ["esnext", "dom"],
     "jsx": "react-jsx",
     "jsxImportSource": "@opentui/react",
-    "types": [
-      "node"
-    ],
+    "types": ["node"],
     "paths": {
-      "@iterate-com/auth-contract": [
-        "../../apps/auth-contract/src/index.ts"
-      ],
-      "@iterate-com/ui/*": [
-        "../ui/src/*"
-      ]
+      "@iterate-com/auth-contract": ["../../apps/auth-contract/src/index.ts"],
+      "@iterate-com/ui/*": ["../ui/src/*"]
     },
     "strict": true,
     "erasableSyntaxOnly": true,
@@ -30,14 +21,6 @@
     "rootDir": "../..",
     "skipLibCheck": true
   },
-  "include": [
-    "scripts/**/*.ts",
-    "src/**/*.ts",
-    "src/**/*.tsx"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "src/next"
-  ]
+  "include": ["scripts/**/*.ts", "src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["node_modules", "dist", "src/next"]
 }

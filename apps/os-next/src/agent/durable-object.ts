@@ -83,8 +83,10 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
   }
 
   /** Bring the agent into being: the certificate on `/` (the catalog) first, then on this path with
-   *  the system prompt beside it (nothing to provision, so nothing fails). Idempotent: a created agent
-   *  answers at once. `message()` refuses until this has run. */
+   *  the system prompt beside it (nothing to provision, so nothing fails). A caller's `systemPrompt`
+   *  is ADDED to the platform's rules (the codemode format, the itx surface), never a replacement:
+   *  an agent told only "be terse" must still know how to act. Idempotent: a created agent answers
+   *  at once. `message()` refuses until this has run. */
   async create(input: { systemPrompt?: string } = {}): Promise<{ path: string }> {
     const path = await this.#path();
     if ((await this.snapshot()).state.path !== null) return { path };
@@ -98,7 +100,12 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
       itx.append(certificate, {
         type: "events.iterate.com/agents/context-added",
         idempotencyKey: `agent/system-prompt:${path}`,
-        payload: { role: "system", content: input.systemPrompt || DEFAULT_AGENT_SYSTEM_PROMPT },
+        payload: {
+          role: "system",
+          content: input.systemPrompt
+            ? `${DEFAULT_AGENT_SYSTEM_PROMPT}\n\nINSTRUCTIONS FROM THE OPERATOR (they add to the rules above, never replace them):\n${input.systemPrompt}`
+            : DEFAULT_AGENT_SYSTEM_PROMPT,
+        },
       }),
     );
     this.#confirmedCreated = true;

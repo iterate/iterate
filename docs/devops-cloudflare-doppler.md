@@ -85,14 +85,19 @@ deletion at the edge) structurally impossible — there is no destroy, no
 
 ## Erasing an environment
 
-`pnpm erase-data --env <name>` (in apps/os) wipes the auth D1 rows and the
-project-directory KV. Durable Objects are addressed by project id, so with
-those gone every existing DO becomes a permanently unreachable orphan and
-the env is logically pristine with zero downtime — orphaned DO storage costs
-pennies and there is no Cloudflare API to delete DO instances. Redeploy auth
-afterwards (OAuth clients are data too; its deploy re-seeds them). Preview
-slots persist data across pushes; erasing is an explicit action, not part of
-deploys.
+`pnpm erase-data --env <name>` (in apps/os) retires ordinary Durable Object
+classes, wipes Auth D1 and project-directory KV, and sweeps Artifacts repos.
+The OS Worker stays deployed but serves 503 until redeployed. Current sandbox
+container classes are retained because of Cloudflare's recreation limitation;
+their existing idle cleanup remains responsible for stopping containers.
+Redeploy Auth too: its OAuth clients were erased and need reseeding.
+
+Normal preview runs reset before and after tests with `--preserve-artifacts`.
+The flag skips repository listing/deletion only; DO, D1, KV and R2 lifecycle
+handling stays unchanged. Full sweeps still run on PR close, explicit reclaim,
+expiry GC and ordinary operator erasure. `--preserve-auth` also continues to
+preserve repositories for deliberate project recreation. Manual lease release
+alone does not erase data.
 
 ## Bringing up a new environment
 

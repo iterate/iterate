@@ -659,6 +659,16 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     },
   },
 };
+/** apps/agents — the agents page (README there); the notes app's shape: its own workers.dev origin. */
+export const agentsEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "agents",
+    baseUrl: "https://agents.iterate.workers.dev",
+  },
+};
+
 export const notesEnvs = {
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
