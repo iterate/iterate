@@ -37,6 +37,8 @@ admin secret is a bearer on `/mcp` too (it reaches every project, so `run` must 
 
 ## Read next
 
+- [Scheduled appends](docs/scheduled-appends.md) — durable deadlines for userspace facets, cancellation, and executable examples
+
 - `docs/itx-surface-as-built.md` — every signature, transcribed from source (start here)
 - `docs/clean-room-api-walkthrough.md` — the long-form walkthrough, module by module
 - `docs/design-onion-subscriptions-processors.md` — the design of record for subscriptions + processors

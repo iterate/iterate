@@ -39,6 +39,7 @@ const MINIMAL_CONFIG = {
   projectHostnameBase: "",
   artifactsAccountId: "",
   artifactsNamespace: "",
+  recentEphemeralsBudgetChars: 1024 * 1024,
   sessionSecret: "cookie-secret",
   adminApiSecret: "admin-secret",
   deployId: "unversioned",

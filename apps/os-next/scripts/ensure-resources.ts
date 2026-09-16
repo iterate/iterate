@@ -35,8 +35,8 @@ export default async function ensureResources(options: { env?: string } = {}) {
   for (const host of [
     new URL(ctx.env.baseUrl).hostname,
     new URL(ctx.env.mcpBaseUrl).hostname,
-    `*.${ctx.env.projectHostnameBase}`,
-  ])
+    ...(ctx.env.projectHostnameBase ? [`*.${ctx.env.projectHostnameBase}`] : []),
+  ].filter((host) => !host.endsWith(".workers.dev")))
     await ensureProxiedDnsRecord(ctx, zones, host, "Clean-room OAuth deployment");
   reconcileResources(ctx.name, ctx.env.resources, resources);
 }

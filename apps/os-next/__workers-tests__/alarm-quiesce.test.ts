@@ -33,7 +33,10 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test, vi } from "vitest";
 import type { ItxExpression } from "../src/context/expression.ts";
-import { adminCredentials, Echo, openSession, quiesce, stub } from "./support.ts";
+import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
+import type { StreamEvent } from "../src/stream/processor.ts";
+import { STREAM_ALARM_TRACE_EVENT } from "../src/stream/stream.ts";
+import { adminCredentials, Echo, openSession, quiesce, stub, until } from "./support.ts";
 
 /** A tiny userspace processor: counts every durable event. The tally fixture's shape
  *  (e2e/support/sources.ts), reduced to one number — the pure `CounterProcessor` plus its host
@@ -59,13 +62,14 @@ export class CounterDurableObject extends StreamProcessorDurableObject {
 type FacetSnap = { offset: number; state: { n: number } };
 const snapCounter = (ctx: string, name = "counter") =>
   stub(ctx).invoke(["itx", "facets", ["get", name], ["snapshot"]]) as Promise<FacetSnap>;
-// The number of DURABLE events (read is durable-only). CounterProcessor consumes "*", so its `n` equals this
-// — the exact-once invariant. (Not `n === offset`: every processor's live-state delta is an
-// ephemeral that consumes an offset, so a durable event's offset exceeds the count of durable
-// events before it.)
+// The number of DURABLE events a "*" consumer sees (read is durable-only; the wake record is swept
+// by nobody — a wake makes no work). CounterProcessor consumes "*", so its `n` equals this — the
+// exact-once invariant. (Not `n === offset`: every processor's live-state delta is an ephemeral
+// that consumes an offset, so a durable event's offset exceeds the count of durable events before it.)
 const durableCount = async (ctx: string): Promise<number> =>
-  ((await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: unknown[] }).events
-    .length;
+  (
+    (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: { type: string }[] }
+  ).events.filter((event) => event.type !== "events.iterate.com/stream/woken").length;
 
 /** The `itx.processors.enable(name, { source, className })` root, spelled raw at the DO door: ONE
  *  subscription-configured event — a literal appended through `append` (normalized at the boundary)
@@ -170,7 +174,7 @@ test("QUIESCE THEN EVICT THEN WAKE: the facet re-drives from its durable checkpo
   await evictDurableObject(s);
 
   const after = await snapCounter(ctx); // wakes a fresh incarnation → catch-up from the durable checkpoint
-  expect(after.state.n).toBeGreaterThanOrEqual(7); // created + woken (2) + subscription-configured (1) + b/1..b/4 (4), + the new incarnation's woken
+  expect(after.state.n).toBeGreaterThanOrEqual(6); // created (1) + subscription-configured (1) + b/1..b/4 (4); no incarnation's woken is a "*" row's
   expect(after.state.n).toBe(await durableCount(ctx)); // EXACTLY one reduce per durable event across the eviction
 });
 
@@ -280,84 +284,61 @@ test("RE-ENABLE WITH NEW SOURCE: a materialized processor re-enabled under the s
   expect(after.state.n).toBe(before.state.n + 20);
 });
 
-// ─────────── THE BREAKER'S RESIDUAL: a facet call in flight at the halting pass ───────────
+// ─────────── THE ONE ALARM: no wake without a reason, and every decision observable ───────────
 
-/** A hosted class whose push takes a while: the call is IN FLIGHT while the alarm passes below. */
-const SLOW_PUSH_SRC = /* js */ `
-import { DurableObject } from "cloudflare:workers";
-export class SlowPushDurableObject extends DurableObject {
-  async processEventBatch() { await new Promise((r) => setTimeout(r, 3000)); }
-  catchUpFromLog() {}
-}
-`;
-
-// WHAT IT DIES OF: the breaker NEVER TRIPS on the "/" context. Every wake's `config` delivery —
-// `itx.cd('/').worker.processEventBatch`, and on the root context `cd('/')` IS this DO
-// (`deps.context(ownPath)` hands back the instance) — goes through `this.invoke`, the public door
-// (context/built-ins.ts `cd`): `#notePublicDoor` marks the incarnation as in use and clears the
-// durable streak before the alarm can count it, so an alarm-only wake of the root context is never a
-// self-wake. Behind it, unreachable until this moves, sits the halt's own residual: a facet call in
-// flight at the halting pass (`#facetWorkInFlight` — never abort a facet mid-reduce) finishes after
-// it and re-notes activity through `Stream.armAlarmNoLaterThan`, which the breaker gates — nothing
-// scheduled, the facet stays live, a live facet pins the actor (workerd#6800), billed for duration.
-// The fix is a NEW mechanism, not a flag: the own-context door must be a PRIVATE one (the resolver's
-// run door, the stream's append — never `this.invoke`), or the breaker must count doors at the RPC
-// entry only; and the quiet clock's arm must bypass the breaker (it is self-limiting — the quiesce
-// branch never re-arms). Staged: a facet consuming `stream/woken` (pushed by every wake) whose push
-// parks 3 s; a fresh incarnation woken with NO request (runInDurableObject touches no door); the
-// scheduled alarm fired eight times — eight alarm-only passes, and no halt fact.
-test.fails("the self-wake breaker never trips on the root context: the wake's own `config` delivery goes through this.invoke — a public door — so eight alarm-only passes append no halt fact (and the halt's residual, a facet left pinned mid-call, stays unreachable behind it)", async () => {
-  const ctx = "prj_q_halt_pinned";
+test("A BARE PROBE ON A DORMANT CONTEXT LEAVES NO ALARM: the config delivery acks, nothing is pinned, the alarm is deleted — the every-minute wake loop's negative", async () => {
+  const ctx = "prj_q_bare_probe";
   const s = stub(ctx);
-  await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
-    payload: {
-      name: "slow",
-      target: [
-        "itx",
-        "facets",
-        [
-          "get",
-          "slow",
-          { source: { "cap.js": SLOW_PUSH_SRC }, className: "SlowPushDurableObject" },
-        ],
-        "processEventBatch",
-      ],
-      consumes: ["events.iterate.com/stream/woken"],
-    },
-  });
-  await new Promise((r) => setTimeout(r, 300)); // materialized (catchUpFromLog)
-  await quiesce(ctx);
-  await evictDurableObject(s);
-  // THE WAKE, with no public door: the constructor's `woken` commit pushes the facet (its call parks
-  // 3 s) and the `config` row arms the cursor lane's insurance alarm. The push materializes the facet
-  // asynchronously (the loader) — wait until its call is IN FLIGHT before the alarm passes, else the
-  // first pass finds no live facet, arms nothing (alarm() re-arms only with something to quiesce),
-  // and there is no alarm left to fire.
-  await runInDurableObject(s, () => Promise.resolve());
-  await new Promise((r) => setTimeout(r, 600));
-  const haltFacts = () =>
-    runInDurableObject(s, (_instance, state) =>
-      Promise.resolve(
-        Number(
-          state.storage.sql
-            .exec("SELECT count(*) AS n FROM events WHERE body LIKE '%stream/self-wake-halted%'")
-            .one().n,
-        ),
-      ),
-    );
-  // Eight alarm-only passes — the facet is live throughout (its call parks, then stays materialized),
-  // so every pass re-arms the quiet clock and there is always an alarm to fire. A pass that finds
-  // NO alarm scheduled is a staging change, not the pinned failure: the guard turns the pin red.
-  for (let pass = 1; pass <= 8; pass++) {
-    if (await runDurableObjectAlarm(s)) continue;
-    console.warn(
-      `PIN MOVED — pinned: eight alarm-only passes — observed: no alarm scheduled at pass ${pass}`,
-    );
-    return;
+  // The probe materializes the context: created, woken, the config row — whose delivery is owed
+  // from that commit (the +20 s insurance is the alarm armed from birth)…
+  await s.invoke("itx.schedules.list()");
+  // …until the config worker (the bundled no-op default) acks and the row is caught up.
+  await untilRow(ctx, "config", (r) => (r?.cursor?.confirmedOffset ?? 0) > 0);
+  await until("no alarm", async () => (await alarmAt(ctx)) === null);
+  expect(await alarmAt(ctx)).toBeNull();
+});
+
+test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral trace, a read with includeEphemeral holds the whole pass, the durable log is untouched", async () => {
+  const ctx = "prj_q_observed";
+  const s = stub(ctx);
+  await enableCounter(ctx); // a live facet pins the DO: the idle deadline is what arms the alarm
+  await s.append({ type: "a/1" });
+  await new Promise((r) => setTimeout(r, 300));
+  expect(await alarmAt(ctx)).not.toBeNull();
+  const rowsBefore = await durableCount(ctx);
+  const observed = s.invoke([
+    "itx",
+    ["waitForEvent", { type: STREAM_ALARM_TRACE_EVENT, timeoutMs: 10_000 }],
+  ]) as Promise<StreamEvent>;
+  await new Promise((r) => setTimeout(r, 100)); // the waiter is registered
+  await quiesce(ctx); // the observed pass: its first trace answers the waiter
+  const trace = await observed;
+  expect(trace).toMatchObject({ type: STREAM_ALARM_TRACE_EVENT, ephemeral: true });
+  expect(trace.payload).toMatchObject({ reason: "alarm-fired", liveFacets: ["counter"] });
+  // The observer's own call resolving mid-pass IS activity (an RPC finished — stamped at the faked
+  // instant, +61 s), so that pass keeps the facet; an unobserved pass a full quiet period later
+  // releases it — and the ring has both.
+  vi.useFakeTimers({ now: Date.now() + 125_000, toFake: ["Date"] });
+  try {
+    expect(await runDurableObjectAlarm(s)).toBe(true);
+  } finally {
+    vi.useRealTimers();
   }
-  // WANTED: five alarm-only passes are a self-wake streak — the halt fact landed.
-  expect(await haltFacts()).toBe(1);
+  const ring = (
+    (await s.invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
+      events: StreamEvent[];
+    }
+  ).events
+    .filter((event) => event.type === STREAM_ALARM_TRACE_EVENT)
+    .map((event) => event.payload as unknown as AlarmTrace);
+  expect(ring.map((t) => t.reason).slice(-3)).toEqual(["alarm-fired", "quiesce", "alarm-pass"]);
+  expect(ring.filter((t) => t.reason === "alarm-fired")).toHaveLength(2);
+  const pass = ring.at(-1)!;
+  expect(pass.alarm.after).toBeNull(); // released everything: no deadline left, no alarm
+  expect(pass.liveFacets).toEqual([]);
+  expect(pass.lastExternalRequestMs).toBeGreaterThan(0);
+  expect(await durableCount(ctx)).toBe(rowsBefore);
+  expect(await alarmAt(ctx)).toBeNull();
 });
 
 test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with the alarm still answers", async () => {
@@ -540,4 +521,6 @@ test("ALARM PUMPS THE CURSOR LANE: a failed at-least-once delivery is retried fr
   expect(after.cursor!.nextAttemptAtMs).toBeUndefined();
   expect(after.halted).toBeUndefined();
   expect(await s.invoke(["itx", "kv", ["get", "flaky-digested"]])).toBe("1");
+  // Caught up, nothing pinned: the pass left no alarm behind.
+  expect(await alarmAt(ctx)).toBeNull();
 });

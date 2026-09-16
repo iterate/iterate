@@ -4,7 +4,7 @@
 // workerd): waitForEvent's wait/settle/timeout mechanics, what construction writes, the wake record
 // (`appendCreatedAndWokenEvents()` — an explicit call here; in production the DO constructor's
 // first act), the pause check and the reserved `core` at the append door, the zero-write ephemeral
-// contract, the step-1 refusals, and the self-wake billing circuit-breaker. Every test constructs a
+// contract and the step-1 refusals. Every test constructs a
 // BARE Stream with no-op host deps — no wake record unless the test appends one.
 
 import { expect, test } from "vitest";
@@ -22,6 +22,7 @@ function bareStream(
     storage?: DurableObjectStorageSlice;
     batches?: StreamEvent[][];
     onCommit?: (fresh: StreamEvent[]) => void;
+    recentEphemeralsBudgetChars?: number;
   } = {},
 ): Stream {
   return new Stream({
@@ -32,6 +33,7 @@ function bareStream(
       opts.batches?.push(fresh);
       opts.onCommit?.(fresh);
     },
+    recentEphemeralsBudgetChars: opts.recentEphemeralsBudgetChars,
   });
 }
 /** The fan-out minus core's live-state deltas — the batches a test's OWN appends produced. */
@@ -171,6 +173,93 @@ test("waitForEvent: an EPHEMERAL event resolves a waiting caller (and never hits
   expect(stream.read(0).events.some((e) => e.type === "blip")).toBe(false);
 });
 
+// ── THE RECENT-EPHEMERALS RING: `read(…, { includeEphemeral: true })` consults the ring AND the log ──
+
+test("read() is durable-only by default; with includeEphemeral the ring's ephemerals ride the page in offset order, under the log's own proof", () => {
+  const stream = bareStream();
+  stream.append({ type: "d1" }); // 1
+  const [e2] = stream.append({ type: "e2", ephemeral: true }); // 2
+  stream.append({ type: "d3" }); // 3
+  const [e4] = stream.append({ type: "e4", ephemeral: true }); // 4 — the head's tail, past the durable mark
+  const [e5] = stream.append({ type: "e5", ephemeral: true }); // 5
+  expect(stream.read(0).events.map((e) => e.type)).toEqual(["d1", "d3"]);
+  const page = stream.read(0, 500, { includeEphemeral: true });
+  expect(page.events.map((e) => e.type)).toEqual(["d1", "e2", "d3", "e4", "e5"]);
+  expect(page.events[1]).toBe(e2); // the event itself, not a copy
+  // The proof is the log's: the durable mark, never e5's offset.
+  expect({ scannedThroughOffset: page.scannedThroughOffset, atHead: page.atHead }).toEqual({
+    scannedThroughOffset: 3,
+    atHead: true,
+  });
+  // A reader that persisted the proof and reads on sees the head's tail again (it is not provable),
+  // and an ephemeral below the mark exactly once: it falls inside one page's span.
+  expect(stream.read(page.scannedThroughOffset, 500, { includeEphemeral: true }).events).toEqual([
+    e4,
+    e5,
+  ]);
+  expect(stream.read(2, 500, { includeEphemeral: true }).events.map((e) => e.type)).toEqual([
+    "d3",
+    "e4",
+    "e5",
+  ]);
+});
+
+test("a CUT page carries only the ephemerals inside its proven span; `limit` counts durable rows alone", () => {
+  const stream = bareStream();
+  stream.append({ type: "d1" });
+  stream.append({ type: "e2", ephemeral: true });
+  stream.append({ type: "d3" });
+  stream.append({ type: "e4", ephemeral: true });
+  stream.append({ type: "d5" });
+  stream.append({ type: "e6", ephemeral: true });
+  const first = stream.read(0, 2, { includeEphemeral: true });
+  expect(first.events.map((e) => e.offset)).toEqual([1, 2, 3]); // two durables, the ephemeral between them
+  expect({ scannedThroughOffset: first.scannedThroughOffset, atHead: first.atHead }).toEqual({
+    scannedThroughOffset: 3,
+    atHead: false,
+  });
+  const second = stream.read(first.scannedThroughOffset, 2, { includeEphemeral: true });
+  expect(second.events.map((e) => e.offset)).toEqual([4, 5, 6]);
+  expect(second.atHead).toBe(true);
+});
+
+test("a refused batch leaves no phantom in the ring: an ephemeral is remembered only once its batch has landed", () => {
+  const stream = bareStream();
+  stream.append({ type: "seed" });
+  // The ephemeral passes step 1; the durable beside it is refused inside the transaction.
+  expect(() =>
+    stream.append(
+      { type: "would-be-phantom", ephemeral: true },
+      { type: "too-big", payload: { blob: "x".repeat(8 * 1024 * 1024 + 1) } },
+    ),
+  ).toThrow("over the 8 MiB ceiling");
+  expect(stream.read(0, 500, { includeEphemeral: true }).events.map((e) => e.type)).toEqual([
+    "seed",
+  ]);
+  // The offsets the refused batch would have taken are handed out again, to nothing's confusion.
+  const [next] = stream.append({ type: "next", ephemeral: true });
+  expect(next.offset).toBe(2);
+  expect(stream.read(0, 500, { includeEphemeral: true }).events.map((e) => e.type)).toEqual([
+    "seed",
+    "next",
+  ]);
+});
+
+test("the ring is byte-bounded and configurable: oldest out first, an event over the whole budget is not kept", () => {
+  const stream = bareStream({ recentEphemeralsBudgetChars: 1000 });
+  stream.append({ type: "seed" });
+  for (let i = 0; i < 6; i++)
+    stream.append({ type: "big", ephemeral: true, payload: { i, blob: "x".repeat(300) } });
+  const kept = () =>
+    stream
+      .read(0, 500, { includeEphemeral: true })
+      .events.filter((e) => e.ephemeral)
+      .map((e) => e.payload?.i);
+  expect(kept()).toEqual([4, 5]); // ~380 chars each: two fit under 1000
+  stream.append({ type: "huge", ephemeral: true, payload: { blob: "x".repeat(2000) } });
+  expect(kept()).toEqual([4, 5]); // not kept, evicted nothing
+});
+
 test("waitForEvent: one event resolves MULTIPLE waiters, in registration order", async () => {
   const stream = bareStream();
   stream.append({ type: "seed" });
@@ -234,6 +323,23 @@ test("append with ZERO events is a pure no-op — no rows, no offsets, no fan-ou
 
 // ── THE WAKE RECORD (`appendCreatedAndWokenEvents()`): created + woken on a fresh store, woken only on a store with rows ──
 
+test('the wake record says WHY: a stored alarm at or before now is the one being delivered (`by: "alarm"`); a future one, or none, means a request', () => {
+  const storage = nodeSqliteDurableObjectStorage();
+  const now = Date.now();
+  bareStream({ storage }).appendCreatedAndWokenEvents(now - 5);
+  bareStream({ storage }).appendCreatedAndWokenEvents(now + 60_000);
+  bareStream({ storage }).appendCreatedAndWokenEvents();
+  const wokens = bareStream({ storage })
+    .read(0)
+    .events.filter((e) => e.type === "events.iterate.com/stream/woken")
+    .map((e) => e.payload);
+  expect(wokens).toEqual([
+    { incarnation: 1, reason: "alarm", alarmAt: now - 5 },
+    { incarnation: 2, reason: "request", alarmAt: now + 60_000 },
+    { incarnation: 3, reason: "request" },
+  ]);
+});
+
 test("appendCreatedAndWokenEvents(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch (core's delta takes 3); the first append lands at 4; a later incarnation over the same store gets woken only", () => {
   const storage = nodeSqliteDurableObjectStorage();
   const batches: StreamEvent[][] = [];
@@ -246,7 +352,7 @@ test("appendCreatedAndWokenEvents(): a fresh store gets created@1 + woken@2 in O
     ["events.iterate.com/stream/woken", 2],
   ]);
   expect(page.events[0].payload).toEqual({ projectId: "prj_bare", path: "/" });
-  expect(page.events[1].payload).toEqual({ incarnation: 1 });
+  expect(page.events[1].payload).toEqual({ incarnation: 1, reason: "request" }); // no alarm was stored: a request woke it
   expect(first.storage.incarnation).toBe(1);
   // the wake batch, then core's live-state delta (the reduce changed identity + incarnation) at 3
   expect(batches.map((b) => b.map((e) => [e.type, e.offset]))).toEqual([
@@ -476,7 +582,6 @@ test("a warm ephemeral-only append runs NO SQL at all (no read, no write, no tra
         counts.txn++;
         return base.transactionSync(closure);
       },
-      setAlarm: base.setAlarm,
     },
   });
   stream.append({ type: "tick" }); // the incarnation's first commit is durable — warms every cache
@@ -540,82 +645,6 @@ test("expected offset: an input carrying `offset` lands exactly there or the who
   expect(
     stream.append({ type: "keyed", idempotencyKey: "k", payload: {}, offset: 6 })[0].offset,
   ).toBe(5);
-});
-
-// ── THE BILLING CIRCUIT-BREAKER (wave-0 3b, Jonas: "we need runaway billing controls"): a durable
-// self-wake streak gates the single alarm-arm chokepoint (Stream.armAlarmNoLaterThan) — past the
-// ceiling, arming is a no-op until a public door clears the streak. Observed on setAlarm. ──
-
-/** A storage slice over node:sqlite that RECORDS every setAlarm — the arming the breaker gates. */
-function recordingStorage(base = nodeSqliteDurableObjectStorage()) {
-  const setAlarmAtMs: number[] = [];
-  const slice: DurableObjectStorageSlice = {
-    sql: base.sql,
-    transactionSync: base.transactionSync,
-    setAlarm: async (at) => {
-      setAlarmAtMs.push(typeof at === "number" ? at : at.getTime());
-    },
-  };
-  return { base, slice, setAlarmAtMs };
-}
-
-test("N alarm-only self-wakes stop alarm arming; a public door resumes it", () => {
-  const { slice, setAlarmAtMs } = recordingStorage();
-  const stream = bareStream({ storage: slice });
-
-  // Arming works normally.
-  stream.armAlarmNoLaterThan(Date.now() + 60_000);
-  expect(setAlarmAtMs.length).toBe(1);
-  expect(stream.selfWakeHalted()).toBe(false);
-
-  // Self-wake until halted — a SMALL, billing-safe ceiling (robust to the exact constant).
-  let selfWakes = 0;
-  while (!stream.selfWakeHalted() && selfWakes < 100) {
-    stream.noteAlarmFired(); // each alarm pass clears the arm memo, as the real one does
-    stream.noteSelfWake();
-    selfWakes++;
-  }
-  expect(stream.selfWakeHalted()).toBe(true);
-  expect(selfWakes).toBeLessThanOrEqual(10); // a few minutes of a loop, not hours
-
-  // Arming is now a no-op — the loop cannot re-arm from anywhere.
-  const armsBefore = setAlarmAtMs.length;
-  stream.noteAlarmFired();
-  stream.armAlarmNoLaterThan(Date.now() + 60_000);
-  expect(setAlarmAtMs.length).toBe(armsBefore);
-
-  // A real public door clears the streak and arming resumes.
-  stream.notePublicDoor();
-  expect(stream.selfWakeHalted()).toBe(false);
-  stream.armAlarmNoLaterThan(Date.now() + 60_000);
-  expect(setAlarmAtMs.length).toBe(armsBefore + 1);
-});
-
-test("the streak is DURABLE across incarnations — a reborn Stream over the same store stays halted", () => {
-  const { base, slice } = recordingStorage();
-  let stream = bareStream({ storage: slice });
-  while (!stream.selfWakeHalted()) stream.noteSelfWake();
-  expect(stream.selfWakeHalted()).toBe(true);
-
-  // A NEW incarnation over the SAME storage (the loop evicts between wakes — the streak must survive).
-  stream = bareStream({ storage: base });
-  expect(stream.selfWakeHalted()).toBe(true); // it persisted
-
-  // And a public door clears it durably: a third incarnation sees zero.
-  stream.notePublicDoor();
-  stream = bareStream({ storage: base });
-  expect(stream.selfWakeHalted()).toBe(false);
-});
-
-test("a public door is a NO-OP write when the streak is already zero (the common request path pays nothing)", () => {
-  const { slice } = recordingStorage();
-  const stream = bareStream({ storage: slice });
-  // Nothing to reset: notePublicDoor must not touch storage. (Observed by staying un-halted and by
-  // not throwing — the write path is only taken when the streak moves off zero.)
-  expect(stream.selfWakeHalted()).toBe(false);
-  stream.notePublicDoor();
-  stream.notePublicDoor();
-  expect(stream.selfWakeHalted()).toBe(false);
 });
 
 test("a paused stream ADMITS the replay of an event already in the log (the DO constructor's birth `config` row rides an idempotency key on every incarnation) — checked before the dedupe, a paused context could never be rebuilt after an eviction, so never resumed", () => {
