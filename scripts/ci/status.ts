@@ -4,6 +4,32 @@ import { z } from "zod";
 
 /** GitHub milestones, guarded by Depot job liveness. Run with trpc-cli. */
 export default class CiStatus {
+  private env = z
+    .object({
+      DEPOT_CI_TELEMETRY_TOKEN: z.string().min(1),
+      GITHUB_TOKEN: z.string().min(1),
+      DEPOT_JOB_URL: z.string().url(),
+      GITHUB_REPOSITORY: z.string().min(1),
+      CI_HEAD_SHA: z.string().min(1),
+      GITHUB_OUTPUT: z.string().min(1),
+    })
+    .parse(process.env);
+  private signal = AbortSignal.timeout(20 * 60_000);
+  private org: string;
+  private workflowId: string;
+  private jobId: string;
+  private attemptId: string;
+
+  constructor() {
+    const url = new URL(this.env.DEPOT_JOB_URL);
+    const path = /^\/orgs\/([^/]+)\/workflows\/([^/]+)$/.exec(url.pathname);
+    if (!path) throw new Error("DEPOT_JOB_URL must identify the current workflow and job attempt");
+    this.org = path[1];
+    this.workflowId = path[2];
+    this.jobId = z.string().min(1).parse(url.searchParams.get("job"));
+    this.attemptId = z.string().min(1).parse(url.searchParams.get("attempt"));
+  }
+
   /** Publish a milestone for this exact workflow execution and job attempt. */
   async set(milestone: string) {
     const workflow = await this.workflow();
@@ -137,32 +163,6 @@ export default class CiStatus {
     if (!response.ok)
       throw new Error(`${service} coordination API returned HTTP ${response.status}`);
     return response.json();
-  }
-
-  private env = z
-    .object({
-      DEPOT_CI_TELEMETRY_TOKEN: z.string().min(1),
-      GITHUB_TOKEN: z.string().min(1),
-      DEPOT_JOB_URL: z.string().url(),
-      GITHUB_REPOSITORY: z.string().min(1),
-      CI_HEAD_SHA: z.string().min(1),
-      GITHUB_OUTPUT: z.string().min(1),
-    })
-    .parse(process.env);
-  private signal = AbortSignal.timeout(20 * 60_000);
-  private org: string;
-  private workflowId: string;
-  private jobId: string;
-  private attemptId: string;
-
-  constructor() {
-    const url = new URL(this.env.DEPOT_JOB_URL);
-    const path = /^\/orgs\/([^/]+)\/workflows\/([^/]+)$/.exec(url.pathname);
-    if (!path) throw new Error("DEPOT_JOB_URL must identify the current workflow and job attempt");
-    this.org = path[1];
-    this.workflowId = path[2];
-    this.jobId = z.string().min(1).parse(url.searchParams.get("job"));
-    this.attemptId = z.string().min(1).parse(url.searchParams.get("attempt"));
   }
 }
 
