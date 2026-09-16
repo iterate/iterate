@@ -62,13 +62,14 @@ export class CounterDurableObject extends StreamProcessorDurableObject {
 type FacetSnap = { offset: number; state: { n: number } };
 const snapCounter = (ctx: string, name = "counter") =>
   stub(ctx).invoke(["itx", "facets", ["get", name], ["snapshot"]]) as Promise<FacetSnap>;
-// The number of DURABLE events (read is durable-only). CounterProcessor consumes "*", so its `n` equals this
-// — the exact-once invariant. (Not `n === offset`: every processor's live-state delta is an
-// ephemeral that consumes an offset, so a durable event's offset exceeds the count of durable
-// events before it.)
+// The number of DURABLE events a "*" consumer sees (read is durable-only; the wake record is swept
+// by nobody — a wake makes no work). CounterProcessor consumes "*", so its `n` equals this — the
+// exact-once invariant. (Not `n === offset`: every processor's live-state delta is an ephemeral
+// that consumes an offset, so a durable event's offset exceeds the count of durable events before it.)
 const durableCount = async (ctx: string): Promise<number> =>
-  ((await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: unknown[] }).events
-    .length;
+  (
+    (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: { type: string }[] }
+  ).events.filter((event) => event.type !== "events.iterate.com/stream/woken").length;
 
 /** The `itx.processors.enable(name, { source, className })` root, spelled raw at the DO door: ONE
  *  subscription-configured event — a literal appended through `append` (normalized at the boundary)
@@ -173,7 +174,7 @@ test("QUIESCE THEN EVICT THEN WAKE: the facet re-drives from its durable checkpo
   await evictDurableObject(s);
 
   const after = await snapCounter(ctx); // wakes a fresh incarnation → catch-up from the durable checkpoint
-  expect(after.state.n).toBeGreaterThanOrEqual(7); // created + woken (2) + subscription-configured (1) + b/1..b/4 (4), + the new incarnation's woken
+  expect(after.state.n).toBeGreaterThanOrEqual(6); // created (1) + subscription-configured (1) + b/1..b/4 (4); no incarnation's woken is a "*" row's
   expect(after.state.n).toBe(await durableCount(ctx)); // EXACTLY one reduce per durable event across the eviction
 });
 

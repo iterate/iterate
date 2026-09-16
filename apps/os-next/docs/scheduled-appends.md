@@ -101,6 +101,11 @@ none. Reconciliation runs after every commit, every activity note and every deli
 | Subscription delivery | per cursor row: a memory-only `deadlineAt` (+20 s insurance while a durable delivery is owed or in flight) or the persisted ladder time `nextAttemptAtMs`; a halted row owes nothing |
 | Idle quiesce          | `lastActivity + 60 s`, rounded up to the next 10 s, only while a facet, a borrowed rpc stub or a library connection pins the context                                                 |
 
+A wake makes no work: `stream/woken` is swept by no `*` subscription (`consumesEvent`, the one
+consumes rule) — only a row that names it sees it. On a project root the config row's target is a
+facet in the same context, and an alarm-only incarnation that delivered its own wake materialized
+that facet, counted the loopback as activity and re-armed: every root woke itself every 20 s.
+
 Two holds keep the alarm from being moved under a handler. An alarm read at construction is kept
 until a pass completes: workerd runs the constructor first, and a stored time later than the firing
 one cancels that run. Nothing is written while `alarm()` runs: its alarm stays stored, so a pass that

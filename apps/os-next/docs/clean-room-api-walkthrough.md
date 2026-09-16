@@ -1261,7 +1261,7 @@ await itx.append({ type: "events.iterate.com/stream/resumed" });
 | `events.iterate.com/rpc-stub/attached` / `detached` (ephemeral) | `{ rpcStubKey }`                                    | the rpc-stub directory, first/last pager of a key                                                                                             |
 | `events.iterate.com/live-state/changed` (ephemeral)             | `{ key, from, to, patch }`                          | `LiveState.set`                                                                                                                               |
 | `events.iterate.com/stream/created`                             | `{ projectId, path }`                               | the DO constructor (`Stream.appendCreatedAndWokenEvents`), offset 1, once                                                                     |
-| `events.iterate.com/stream/woken`                               | `{ incarnation }`                                   | the DO constructor (`Stream.appendCreatedAndWokenEvents`), every incarnation                                                                  |
+| `events.iterate.com/stream/woken`                               | `{ incarnation, reason, alarmAt? }`                 | the DO constructor (`Stream.appendCreatedAndWokenEvents`), every incarnation                                                                  |
 | `events.iterate.com/stream/paused` / `resumed`                  | `{ reason }` / `{}`                                 | you, or a policy facet such as `BreakerProcessor`                                                                                             |
 
 Refusals surface as coded errors (`src/lib.ts`): `STREAM_PAUSED`,

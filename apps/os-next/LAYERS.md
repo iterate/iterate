@@ -52,7 +52,7 @@ in the package advances only on a batch that carried a durable), idempotency at 
 `read` with the scanned-offset-range proof, and the alarm armer. `iterate-context-durable-object.ts`
 (`IterateContextDurableObject`, one DO per `{projectId, path}` context) holds a Stream and drives
 it — its constructor calls `Stream.appendCreatedAndWokenEvents()` before any door opens (the first incarnation appends
-`stream/created { projectId, path }` at offset 1, every incarnation `stream/woken { incarnation }`,
+`stream/created { projectId, path }` at offset 1, every incarnation `stream/woken { incarnation, reason, alarmAt? }`,
 so any door materializes a context), its injected callbacks run the core reduce in-transaction and
 the post-commit fan-out, and the pause check is one `if` in `Stream.append` reading the reduce's
 `paused` slice (control events — created/woken/paused/resumed — are exempt). Identity is

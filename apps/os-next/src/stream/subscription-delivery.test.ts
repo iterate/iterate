@@ -361,6 +361,57 @@ describe("subscribe({ afterOffset }) — the cursor lane starts where the row as
   });
 });
 
+describe("a wake makes no work", () => {
+  test('the wake record is delivered to NO "*" row — an alarm-only incarnation evaluates no target and arms no alarm', async () => {
+    const delivered: string[] = [];
+    const sink = {
+      push: (events: { type: string }[]) => void delivered.push(...events.map((e) => e.type)),
+    };
+    const first = incarnation((printed) => (printed === "itx.sink" ? sink : undefined));
+    first.stream.append(
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "config", target: "itx.sink.push", consumes: ["*"] },
+      }),
+    );
+    first.stream.append({ type: "demo/ping", payload: {} });
+    await settled();
+    expect(delivered).toEqual(["demo/ping"]); // the row works; the birth's created/woken were never its
+
+    // THE EVICTION AND THE WAKE: a fresh incarnation over the same storage appends its woken.
+    const second = incarnation(
+      (printed) => (printed === "itx.sink" ? sink : undefined),
+      first.storage,
+    );
+    await settled();
+    expect(delivered).toEqual(["demo/ping"]); // the wake reached nobody…
+    expect(second.evaluated).toEqual([]); // …no target was evaluated for it…
+    expect(second.delivery.deadlines()).toEqual([]); // …nothing is owed for it…
+    expect(second.alarms).toEqual([]); // …and nothing was armed: this incarnation can idle out
+  });
+
+  test("a row that NAMES stream/woken is the opt-in and does receive it", async () => {
+    const delivered: string[] = [];
+    const sink = {
+      push: (events: { type: string }[]) => void delivered.push(...events.map((e) => e.type)),
+    };
+    const first = incarnation((printed) => (printed === "itx.sink" ? sink : undefined));
+    first.stream.append(
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: {
+          name: "wakes",
+          target: "itx.sink.push",
+          consumes: ["events.iterate.com/stream/woken"],
+        },
+      }),
+    );
+    incarnation((printed) => (printed === "itx.sink" ? sink : undefined), first.storage);
+    await settled();
+    expect(delivered).toEqual(["events.iterate.com/stream/woken"]);
+  });
+});
+
 describe("the cursor lane across an eviction and a replace", () => {
   test("the alarm's cursor pass recovers a row whose FIRST delivery an eviction interrupted — ROW-driven (the cursor table holds nothing before the first ack), and the lane had armed the alarm to come back", async () => {
     let ackInterrupted!: () => void;
