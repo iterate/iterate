@@ -55,6 +55,11 @@ const READ_PAGE_BUDGET_BYTES = 8 * 1024 * 1024;
 /** The most rows one page returns whatever `limit` asks — the object overhead of tiny events, which
  *  the byte budget cannot see. */
 const READ_PAGE_MAX_EVENTS = 1000;
+/** THE RECENT-EPHEMERALS RING, in serialized JS chars: what an incarnation keeps of its ephemerals
+ *  after the moment they were appended (`recentEphemerals()` — the one way to see one after the
+ *  fact, since no ephemeral ever reaches a row). Oldest out first; an event over the whole budget is
+ *  not kept. Per incarnation, like every ephemeral offset. */
+const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
 
 /** THE ALARM TRACE — the DO's ephemeral record of one alarm decision (iterate-context-durable-object.ts
  *  `AlarmTrace`), appended only while an exact `waitForEvent` waiter for it is registered. */
@@ -109,6 +114,9 @@ export class Stream {
   #highestDurableOffset: number;
   /** FIFO; resolved from `freshEvents` in append's step 5. */
   readonly #waitForEventWaiters: WaitForEventWaiter[] = [];
+  /** This incarnation's newest ephemerals, oldest first, within RECENT_EPHEMERALS_BUDGET_CHARS. */
+  readonly #recentEphemerals: { event: StreamEvent; chars: number }[] = [];
+  #recentEphemeralsChars = 0;
   // ── THE CORE REDUCE's state: rehydrated by the constructor from the versioned checkpoint and caught
   // up to the durable mark, reduced inside every durable commit and checkpointed with it (the cursor
   // every batch, the state on change). Durable events only, so it rebuilds bit-identically. ──
@@ -188,8 +196,12 @@ export class Stream {
   /** THE WAKE RECORD — the DO constructor calls this before any door opens, so a probe on a
    *  never-seen context materializes it (what is worth reaching is worth recording). The first
    *  incarnation appends `stream/created { projectId, path }` at offset 1, every incarnation
-   *  `stream/woken { incarnation }`. Both are exempt from pause: a paused stream still records its wake. */
-  appendCreatedAndWokenEvents(): void {
+   *  `stream/woken { incarnation, by, alarmAt? }` — WHY it woke: `alarmAt` is the native alarm
+   *  stored as this incarnation started (workerd runs the constructor before the alarm handler),
+   *  and an alarm at or before now is the one being delivered, so the wake is `by: "alarm"`; any
+   *  other wake is `by: "request"` (an RPC, a fetch, a message on a hibernated socket). Both events
+   *  are exempt from pause: a paused stream still records its wake. */
+  appendCreatedAndWokenEvents(alarmAt: number | null = null): void {
     const born = this.#highestDurableOffset === 0;
     this.append(
       ...(born
@@ -202,15 +214,32 @@ export class Stream {
         : []),
       {
         type: "events.iterate.com/stream/woken",
-        payload: { incarnation: this.storage.incarnation },
+        payload: {
+          incarnation: this.storage.incarnation,
+          by: alarmAt !== null && alarmAt <= Date.now() ? "alarm" : "request",
+          // oxlint-disable-next-line iterate/simple-truthiness-check -- a durable record: an absent alarm stays ABSENT, never `alarmAt: null`
+          ...(alarmAt !== null && { alarmAt }),
+        },
       },
     );
   }
 
-  /** Whether a `waitForEvent` caller is waiting for exactly `type` right now — what makes the DO's
-   *  alarm trace lazy: no waiter, no ephemeral, no offset consumed. */
-  hasWaitForEventWaiter(type: string): boolean {
-    return this.#waitForEventWaiters.some((waiter) => waiter.type === type);
+  /** This incarnation's newest ephemerals, oldest first — the last RECENT_EPHEMERALS_BUDGET_CHARS
+   *  of them: a live-state delta, an rpc-stub presence change, an alarm trace, a userspace ephemeral,
+   *  each seen after the moment it was appended. `itx.facets.get('core').recentEphemerals()`. */
+  recentEphemerals(): StreamEvent[] {
+    return this.#recentEphemerals.map(({ event }) => event);
+  }
+
+  #rememberEphemeral(event: StreamEvent, chars: number): void {
+    if (chars > RECENT_EPHEMERALS_BUDGET_CHARS) return;
+    this.#recentEphemerals.push({ event, chars });
+    this.#recentEphemeralsChars += chars;
+    while (this.#recentEphemeralsChars > RECENT_EPHEMERALS_BUDGET_CHARS) {
+      const oldest = this.#recentEphemerals.shift();
+      if (!oldest) break;
+      this.#recentEphemeralsChars -= oldest.chars;
+    }
   }
 
   highestAssignedOffset(): number {
@@ -256,6 +285,7 @@ export class Stream {
   append(...events: StreamEventInput[]): StreamEvent[] {
     if (events.length === 0) return []; // a pure no-op: nothing checked, minted, or fanned out
     // 1. may this land? — this runtime check is the SOLE enforcement (no boundary validator).
+    const charsByEphemeralInput = new Map<StreamEventInput, number>(); // measured once, for the ring too
     for (const event of events) {
       // oxlint-disable-next-line iterate/simple-truthiness-check -- append is the SOLE enforcement door (no boundary validator); event.type arrives from callers/the wire, so the static string type is not a runtime guarantee
       if (typeof event.type !== "string" || event.type.trim() === "")
@@ -277,6 +307,7 @@ export class Stream {
       // the same delivery memory — the same ceiling, measured here (a durable is measured at its insert).
       if (event.ephemeral) {
         const chars = JSON.stringify(event).length;
+        charsByEphemeralInput.set(event, chars);
         if (chars > EVENT_BODY_MAX_CHARS)
           throw codedError(
             "EVENT_TOO_LARGE",
@@ -352,6 +383,8 @@ export class Stream {
         eventsByIdempotencyKey.set(eventInput.idempotencyKey, committedEvent);
       committedEvents.push(committedEvent);
       freshEvents.push(committedEvent);
+      if (committedEvent.ephemeral)
+        this.#rememberEphemeral(committedEvent, charsByEphemeralInput.get(event) ?? 0);
     }
     if (freshEvents.length === 0) return committedEvents; // every event deduped to an existing one
     // Only definitions can grow the projection. Completion/cancellation shrink it or advance a

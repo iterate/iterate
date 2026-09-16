@@ -2136,9 +2136,9 @@ push's `after` moves up, the span the subscriber heals from the log.
 The alarm itself is DERIVED, never requested: `src/alarm-coordinator.ts` arms the earliest of three
 deadlines — the next scheduled append (core state), the earliest owed cursor delivery
 (`subscription-delivery.ts` `deadlines()`), the idle quiesce — and deletes it when there is none, so
-a context with nothing owed never wakes itself. Every decision is an `AlarmTrace`
-(`itx.facets.get('core').alarmTraces()`, and an ephemeral event while an observer waits);
-`docs/scheduled-appends.md` has the model.
+a context with nothing owed never wakes itself. Every decision is an ephemeral `stream/trace/alarm`
+(live through `waitForEvent`, after the fact in `itx.facets.get('core').recentEphemerals()`), and
+`stream/woken { by, alarmAt }` says what woke each incarnation; `docs/scheduled-appends.md` has the model.
 
 ### Where it is proven
 

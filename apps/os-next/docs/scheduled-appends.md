@@ -111,14 +111,18 @@ runtime clamps a past time to now and refuses one at or before the epoch, which 
 rejects) and no keep-earlier rule; every `setAlarm` is a billed write, so the only dedupe is "the
 wanted time is what we last wrote".
 
-Every decision is an `AlarmTrace` (`src/iterate-context-durable-object.ts`): reason, the alarm before
-and after, the inherited hold, each source's deadline with the claiming rows, the durable head, the
-last activity and last external request, what is pinned. The current incarnation keeps its last 128
-in `itx.facets.get('core').alarmTraces()`; while an exact `waitForEvent({ type:
-"events.iterate.com/stream/trace/alarm" })` observer waits, each decision is also an ephemeral event
-(no waiter, no offset). A trace is never subscription input and never activity, so observing a
-context cannot keep it awake. Routine reconciles that moved nothing are not recorded; every alarm
-pass is (`alarm-fired`, `quiesce`, `alarm-pass`, `alarm-abandoned`).
+Every alarm pass is traced as ephemeral `events.iterate.com/stream/trace/alarm` events whose
+payload is an `AlarmTrace` (`src/iterate-context-durable-object.ts`): `alarm-fired` with what was
+armed and every deadline the pass found (each source's, with the claiming delivery rows), `quiesce`
+when it releases the idle context, `alarm-pass` with what it armed next or `alarm-abandoned` with
+what it threw — plus the durable head, the last activity and last external request, and what is
+pinned. Only a pass traces: a reconcile outside one consumes no offset. `waitForEvent({ type })`
+sees a trace live; the stream's recent-ephemerals ring, `itx.facets.get('core').recentEphemerals()`,
+holds the current incarnation's last 1 MiB of ephemerals of every kind (live-state deltas, rpc-stub
+presence, traces) after the fact. A trace is never subscription input and never activity, so
+observing a context cannot keep it awake. The durable `stream/woken { incarnation, by, alarmAt? }`
+says what woke each incarnation: the native alarm stored as it started, and `by: "alarm"` when that
+alarm was due (workerd runs the constructor before the alarm handler), else `by: "request"`.
 
 ## Bounds
 

@@ -99,32 +99,23 @@ const IDLE_QUIESCE_AFTER_MS = 60_000;
 /** How long one facet call may take before the facet is aborted (a call that never answers would
  *  hold the quiesce, and with it this actor, forever). */
 const FACET_CALL_WATCHDOG_MS = 60_000;
-/** How many alarm traces an incarnation keeps (`itx.facets.get('core').alarmTraces()`). */
-const ALARM_TRACE_RING = 128;
-
-/** ONE ALARM DECISION, as the DO saw it — the ring entry and the payload of the ephemeral
- *  `stream/trace/alarm` event. Recorded when the physical alarm moved and for every alarm pass; a
- *  `commit`/`activity`/`delivery` reconcile that moved nothing is not. The event is appended only
- *  while an exact `waitForEvent` waiter for it is registered (no waiter, no offset consumed), and
- *  the ring is the history that waiter cannot see (one event per wait). NEVER an input: the DO's
- *  commit hook hands no trace to subscription delivery, and appending one is not activity — either
- *  would trace the tracing. Gone with the incarnation, as every ephemeral is. */
+/** ONE ALARM PASS, as the DO saw it — the payload of the ephemeral `stream/trace/alarm` event,
+ *  appended as the pass starts (`alarm-fired`, with what was armed and every deadline it found),
+ *  when it releases the idle context (`quiesce`), and as it ends (`alarm-pass` with what it armed
+ *  next, or `alarm-abandoned` with what it threw). Only a pass traces: a reconcile outside one —
+ *  a commit, activity, a delivery settling — consumes no offset, so an incarnation that never
+ *  wakes by alarm leaves offsets exactly as its own events placed them. An ordinary ephemeral:
+ *  `waitForEvent` sees it live, the stream's recent-ephemerals ring
+ *  (`itx.facets.get('core').recentEphemerals()`) after the fact. NEVER an input: the DO's commit
+ *  hook hands no trace to subscription delivery, and appending one is not activity — either would
+ *  trace the tracing. Gone with the incarnation, as every ephemeral is. */
 export type AlarmTrace = {
   at: number;
   incarnation: number;
-  reason:
-    | "commit"
-    | "activity"
-    | "delivery"
-    | "alarm-fired"
-    | "alarm-pass"
-    | "alarm-abandoned"
-    | "quiesce";
-  /** The row a `delivery` reconcile was for. */
-  subscription?: string;
+  reason: "alarm-fired" | "quiesce" | "alarm-pass" | "alarm-abandoned";
   /** What an abandoned pass threw. */
   error?: string;
-  /** The physical alarm before and after: `before === after` is a pass that left it, or a pass phase. */
+  /** The physical alarm as the pass started (`before`) and now (`after`). */
   alarm: {
     before: number | null;
     after: number | null;
@@ -278,10 +269,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // completes (alarm-coordinator.ts), so constructor-time delivery cannot replace the alarm that
     // woke this incarnation — workerd runs the constructor first, and a later stored time cancels it.
     this.ctx.blockConcurrencyWhile(async () => {
-      this.#alarms.restore(await this.ctx.storage.getAlarm());
-      // Initialize the log before accepting requests. The root config worker subscribes once;
-      // its idempotency key preserves that subscription across incarnations.
-      this.#stream.appendCreatedAndWokenEvents();
+      const alarmAt = await this.ctx.storage.getAlarm();
+      this.#alarms.restore(alarmAt);
+      // Initialize the log before accepting requests — the wake record says whether that alarm is
+      // what woke this incarnation. The root config worker subscribes once; its idempotency key
+      // preserves that subscription across incarnations.
+      this.#stream.appendCreatedAndWokenEvents(alarmAt);
       this.#stream.append(
         normalizeControlEvent({
           type: "events.iterate.com/stream/subscription-configured",
@@ -308,7 +301,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       const events = freshEvents.filter((event) => event.type !== STREAM_ALARM_TRACE_EVENT);
       if (events.length === 0) return;
       this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
-      this.#reconcileAlarm("commit");
+      this.#alarms.reconcile();
     },
   });
 
@@ -537,7 +530,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // every row's target once, can never postpone its own quiesce.
     evaluateItxExpression: (itxExpression) => this.#itxExpressionResolver.invoke(itxExpression),
     recordActivityForQuietClock: () => this.#recordActivityForQuietClock(),
-    reconcileAlarm: (subscription) => this.#reconcileAlarm("delivery", subscription),
+    reconcileAlarm: () => this.#alarms.reconcile(),
   });
 
   // ── THE ONE ALARM (alarm-coordinator.ts): derived from three deadline sources, traced ──
@@ -551,20 +544,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#idleDeadlineAt(),
     ],
   });
-  /** This incarnation's last ALARM_TRACE_RING decisions, oldest first. */
-  readonly #alarmTraces: AlarmTrace[] = [];
-
-  /** Reconcile the alarm against the sources; a move is traced. */
-  #reconcileAlarm(reason: AlarmTrace["reason"], subscription?: string): void {
-    const { armedAt: before } = this.#alarms.snapshot();
-    this.#alarms.reconcile();
-    if (this.#alarms.snapshot().armedAt !== before)
-      this.#traceAlarm(reason, { before, subscription });
-  }
 
   #traceAlarm(
     reason: AlarmTrace["reason"],
-    extra: Pick<AlarmTrace, "subscription" | "error" | "dueSchedules"> & { before: number | null },
+    extra: Pick<AlarmTrace, "error" | "dueSchedules"> & { before: number | null },
   ): void {
     const { before, ...rest } = extra;
     const { armedAt: after, inheritedAt, passInProgress } = this.#alarms.snapshot();
@@ -589,9 +572,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       borrowedRpcStubs: this.#rpcStubs.hasBorrowedRpcStubs(),
       openLibraryConnections: this.#library.hasOpenConnections(),
     };
-    if (this.#alarmTraces.push(trace) > ALARM_TRACE_RING) this.#alarmTraces.shift();
-    if (!this.#stream.hasWaitForEventWaiter(STREAM_ALARM_TRACE_EVENT)) return;
-    // Straight onto the stream, not through the append door (a trace is not activity); an observer
+    // Straight onto the stream, not through the append door (a trace is not activity); a trace
     // must never fail an alarm pass.
     try {
       this.#stream.append({ type: STREAM_ALARM_TRACE_EVENT, ephemeral: true, payload: trace });
@@ -637,7 +618,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #lastExternalRequestMs = 0;
   #recordActivityForQuietClock(): void {
     this.#lastActivityMs = Date.now();
-    this.#reconcileAlarm("activity");
+    this.#alarms.reconcile();
   }
 
   /** THE IDLE DEADLINE: none with nothing to release — no live facet, no borrowed stub, no library
@@ -817,7 +798,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             value: {
               snapshot: () => this.#stream.coreReducedStateSnapshot(),
               liveSnapshot: () => this.#stream.coreLiveStateSnapshot(),
-              alarmTraces: () => [...this.#alarmTraces],
+              recentEphemerals: () => this.#stream.recentEphemerals(),
             },
             receiver: undefined,
           },

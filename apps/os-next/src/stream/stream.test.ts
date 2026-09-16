@@ -171,24 +171,31 @@ test("waitForEvent: an EPHEMERAL event resolves a waiting caller (and never hits
   expect(stream.read(0).events.some((e) => e.type === "blip")).toBe(false);
 });
 
-test("a waitForEvent waiter for a type is visible to the host (what keeps an alarm trace lazy) and gone once it settles", async () => {
+test("the recent-ephemerals ring: ephemerals are kept after the fact, oldest first, within the budget; durables are not (they are in the log)", () => {
   const stream = bareStream();
   stream.append({ type: "seed" });
-  expect(stream.hasWaitForEventWaiter(STREAM_ALARM_TRACE_EVENT)).toBe(false);
-  const pending = stream.waitForEvent({ type: STREAM_ALARM_TRACE_EVENT, timeoutMs: 5_000 });
-  expect(stream.hasWaitForEventWaiter(STREAM_ALARM_TRACE_EVENT)).toBe(true);
-  expect(stream.hasWaitForEventWaiter("other")).toBe(false);
+  const [blip] = stream.append({ type: "blip", ephemeral: true, payload: { n: 1 } });
   const [trace] = stream.append({
     type: STREAM_ALARM_TRACE_EVENT,
     ephemeral: true,
     payload: { reason: "unit-test" },
   });
-  expect((await pending).offset).toBe(trace.offset);
-  expect(stream.hasWaitForEventWaiter(STREAM_ALARM_TRACE_EVENT)).toBe(false);
-  // Ephemeral: the trace never reached a row.
-  expect(stream.read(0).events.some((event) => event.type === STREAM_ALARM_TRACE_EVENT)).toBe(
-    false,
-  );
+  stream.append({ type: "durable" });
+  const ring = stream.recentEphemerals();
+  // core's own live-state deltas ride the ring too — the seed commit changed nothing, so none here
+  expect(ring.map((e) => [e.type, e.offset])).toEqual([
+    ["blip", blip.offset],
+    [STREAM_ALARM_TRACE_EVENT, trace.offset],
+  ]);
+  expect(ring[0]).toBe(blip); // the event itself, not a copy
+  expect(stream.read(0).events.some((e) => e.ephemeral)).toBe(false);
+  // The budget is 1 MiB of serialized chars: a flood of 300 KiB ephemerals keeps the newest three.
+  for (let i = 0; i < 6; i++)
+    stream.append({ type: "big", ephemeral: true, payload: { i, blob: "x".repeat(300 * 1024) } });
+  expect(stream.recentEphemerals().map((e) => e.payload?.i)).toEqual([3, 4, 5]);
+  // An ephemeral over the whole budget is not kept, and evicts nothing.
+  stream.append({ type: "huge", ephemeral: true, payload: { blob: "x".repeat(1024 * 1024 + 1) } });
+  expect(stream.recentEphemerals().map((e) => e.payload?.i)).toEqual([3, 4, 5]);
 });
 
 test("waitForEvent: one event resolves MULTIPLE waiters, in registration order", async () => {
@@ -254,6 +261,23 @@ test("append with ZERO events is a pure no-op — no rows, no offsets, no fan-ou
 
 // ── THE WAKE RECORD (`appendCreatedAndWokenEvents()`): created + woken on a fresh store, woken only on a store with rows ──
 
+test('the wake record says WHY: a stored alarm at or before now is the one being delivered (`by: "alarm"`); a future one, or none, means a request', () => {
+  const storage = nodeSqliteDurableObjectStorage();
+  const now = Date.now();
+  bareStream({ storage }).appendCreatedAndWokenEvents(now - 5);
+  bareStream({ storage }).appendCreatedAndWokenEvents(now + 60_000);
+  bareStream({ storage }).appendCreatedAndWokenEvents();
+  const wokens = bareStream({ storage })
+    .read(0)
+    .events.filter((e) => e.type === "events.iterate.com/stream/woken")
+    .map((e) => e.payload);
+  expect(wokens).toEqual([
+    { incarnation: 1, by: "alarm", alarmAt: now - 5 },
+    { incarnation: 2, by: "request", alarmAt: now + 60_000 },
+    { incarnation: 3, by: "request" },
+  ]);
+});
+
 test("appendCreatedAndWokenEvents(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch (core's delta takes 3); the first append lands at 4; a later incarnation over the same store gets woken only", () => {
   const storage = nodeSqliteDurableObjectStorage();
   const batches: StreamEvent[][] = [];
@@ -266,7 +290,7 @@ test("appendCreatedAndWokenEvents(): a fresh store gets created@1 + woken@2 in O
     ["events.iterate.com/stream/woken", 2],
   ]);
   expect(page.events[0].payload).toEqual({ projectId: "prj_bare", path: "/" });
-  expect(page.events[1].payload).toEqual({ incarnation: 1 });
+  expect(page.events[1].payload).toEqual({ incarnation: 1, by: "request" }); // no alarm was stored: a request woke it
   expect(first.storage.incarnation).toBe(1);
   // the wake batch, then core's live-state delta (the reduce changed identity + incarnation) at 3
   expect(batches.map((b) => b.map((e) => [e.type, e.offset]))).toEqual([

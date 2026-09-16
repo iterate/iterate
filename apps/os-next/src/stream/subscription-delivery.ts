@@ -193,7 +193,7 @@ type SubscriptionDeliveryDeps = {
   recordActivityForQuietClock: () => void;
   /** A row's deadline changed OFF the commit path (a commit's own tail reconciles): the DO
    *  reconciles its alarm against `deadlines()`. */
-  reconcileAlarm: (subscription: string) => void;
+  reconcileAlarm: () => void;
 };
 
 /** One row's claim on the DO's alarm, for `deadlines()`: `at` is the earlier of its insurance and
@@ -481,7 +481,7 @@ export class SubscriptionDelivery {
   #forgetSubscription(name: string): void {
     this.#stream.storage.deleteSubscriptionCursor(name);
     this.#deliveryRecordByName.delete(name);
-    this.#reconcileAlarm(name);
+    this.#reconcileAlarm();
   }
 
   /** The row's target OWNS ITS PROGRESS (a facet, a lent rpc stub): nothing of the cursor lane's
@@ -496,7 +496,7 @@ export class SubscriptionDelivery {
       record.cursor = undefined;
       this.#stream.storage.deleteSubscriptionCursor(name);
     }
-    this.#reconcileAlarm(name);
+    this.#reconcileAlarm();
   }
 
   /** Memory always; the table only when `persist` (a durable boundary moved, a ladder step, a halt,
@@ -637,7 +637,7 @@ export class SubscriptionDelivery {
   ): void {
     const current = this.#stream.coreReducedState.subscriptions[name];
     if (current?.configuredAtOffset !== configuredAtOffset || current.halted) {
-      this.#reconcileAlarm(name); // the failed attempt's insurance may be this row's last claim
+      this.#reconcileAlarm(); // the failed attempt's insurance may be this row's last claim
       return;
     }
     // A halted row owes nothing; the fact's own commit reconciles the alarm.
@@ -746,7 +746,7 @@ export class SubscriptionDelivery {
           // The ladder's own time is the row's deadline; an insurance set meanwhile would only wake
           // this lane into this same wait.
           this.#deliveryRecordFor(name).deadlineAt = undefined;
-          this.#reconcileAlarm(name);
+          this.#reconcileAlarm();
           return;
         }
         // The batch: the pushed one when contiguous (ephemerals ride it); else a page of the log, read
@@ -777,7 +777,7 @@ export class SubscriptionDelivery {
               // CAUGHT UP: nothing owed, no deadline (the finally releases the room). This is the
               // row's normal end — a wake that found nothing to do must not arm another.
               record.deadlineAt = undefined;
-              this.#reconcileAlarm(name);
+              this.#reconcileAlarm();
               return;
             }
             eventBatch = {
@@ -842,7 +842,7 @@ export class SubscriptionDelivery {
             // batch cannot be redelivered, so it is not).
             if (durable) {
               record.deadlineAt ??= Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS;
-              this.#reconcileAlarm(name);
+              this.#reconcileAlarm();
             }
             const target = evaluatedTarget;
             await withTimeout(
@@ -887,7 +887,7 @@ export class SubscriptionDelivery {
             // The ladder's time IS the row's deadline from here (durable, so it survives eviction).
             this.#adoptCursor(name, { ...cursor, attempt, nextAttemptAtMs }, true);
             record.deadlineAt = undefined;
-            this.#reconcileAlarm(name);
+            this.#reconcileAlarm();
             return;
           }
         } finally {

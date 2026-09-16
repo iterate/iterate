@@ -174,7 +174,13 @@ test("an interval coalesces an idle gap across eviction and stops on explicit ca
   const firstAt = Date.parse(schedule.nextAt);
   await evictDurableObject(s);
   await fire(ctx, firstAt + 65_000);
-  expect((await read(ctx)).events.filter((event) => event.type === "tick")).toHaveLength(1);
+  const { events: afterFirstTick } = await read(ctx);
+  expect(afterFirstTick.filter((event) => event.type === "tick")).toHaveLength(1);
+  // The incarnation the alarm constructed says so: the stored alarm was the tick's, and due.
+  expect(
+    afterFirstTick.filter((event) => event.type === "events.iterate.com/stream/woken").at(-1)
+      ?.payload,
+  ).toMatchObject({ by: "alarm", alarmAt: firstAt });
   expect(await s.invoke("itx.schedules.get('tick')")).toMatchObject({
     nextAt: new Date(firstAt + 70_000).toISOString(),
   });

@@ -30,6 +30,7 @@
 import { expect, test } from "vitest";
 import type { LiveStateDelta } from "../src/client/live-state.ts";
 import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
+import type { StreamEvent } from "../src/stream/processor.ts";
 import {
   append,
   collector,
@@ -578,11 +579,11 @@ export default class Waiter extends WorkerEntrypoint {
   expect(got.offset).toBeGreaterThan(head);
 });
 
-// ── THE WAKE TRACE PROBE (opt-in, deployed): `stream/woken` is the durable incarnation boundary;
-// every alarm decision of the CURRENT incarnation is in `itx.facets.get('core').alarmTraces()` (an
-// ephemeral `events.iterate.com/stream/trace/alarm` rides each one while an exact waitForEvent
-// observer waits). A stuck cursor delivery is the fastest self-waker (its ladder is 1s·2ⁿ); this
-// prints each wake's story from the ring, landing inside the incarnation each wake made:
+// ── THE WAKE TRACE PROBE (opt-in, deployed): `stream/woken { by, alarmAt }` is the durable
+// incarnation boundary and says what woke it; every alarm decision of the CURRENT incarnation is an
+// ephemeral `events.iterate.com/stream/trace/alarm` in `itx.facets.get('core').recentEphemerals()`.
+// A stuck cursor delivery is the fastest self-waker (its ladder is 1s·2ⁿ); this prints each wake's
+// story from the ring, landing inside the incarnation each wake made:
 //
 //   RUN_WAKE_LOOP_PROBE=1 WORKER_BASE_URL=https://os.iterate2.com \
 //     pnpm e2e stream.e2e ──
@@ -605,13 +606,15 @@ probe(
   { timeout: 5 * 60_000 },
   async () => {
     const ctx = freshCtx("wake-loop");
-    const traces = (client: ReturnType<typeof openItx>) =>
-      client.invoke("itx.facets.get('core').alarmTraces()") as Promise<AlarmTrace[]>;
+    const traces = async (client: ReturnType<typeof openItx>) =>
+      ((await client.invoke("itx.facets.get('core').recentEphemerals()")) as StreamEvent[])
+        .filter((event) => event.type === "events.iterate.com/stream/trace/alarm")
+        .map((event) => event.payload as unknown as AlarmTrace);
     const story = (ring: AlarmTrace[]) =>
       ring
         .map(
           (t) =>
-            `  ${new Date(t.at).toISOString()} ${t.reason}${t.subscription ? `(${t.subscription})` : ""} ` +
+            `  ${new Date(t.at).toISOString()} ${t.reason} ` +
             `${t.alarm.before}→${t.alarm.after} inherited=${t.alarm.inheritedAt} idle=${t.deadlines.idle} ` +
             `delivery=${JSON.stringify(t.deadlines.delivery.map((d) => [d.name, d.at, d.attempt]))} ` +
             `facets=${JSON.stringify(t.liveFacets)} external=${t.lastExternalRequestMs}`,
@@ -642,7 +645,10 @@ probe(
       disposeSessions();
     }
     const events = await readAll(openItx(ctx));
-    console.log(`wake-loop OBSERVE: woken=${events.filter((e) => e.type === WOKEN).length}`);
+    const wokens = events.filter((e) => e.type === WOKEN);
+    console.log(
+      `wake-loop OBSERVE: woken=${wokens.length} by=${JSON.stringify(wokens.map((e) => (e.payload as { by?: string }).by))}`,
+    );
     // The context is never poisoned by the loop; the durable log survives.
     const [ev] = await append(openItx(ctx), { type: "after-observe" });
     expect(ev.offset).toBeGreaterThan(0);
