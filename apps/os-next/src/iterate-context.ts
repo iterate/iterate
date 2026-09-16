@@ -232,7 +232,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       },
     };
     const pager = await lendRpcStubOverPager(
-      this.#durableObject,
+      () => this.#durableObject,
       target,
       matchString,
       [ruleEvent],
@@ -289,7 +289,7 @@ export class IterateContextRpcTarget extends RpcTarget {
         },
       };
       const pager = await lendRpcStubOverPager(
-        this.#durableObject,
+        () => this.#durableObject,
         input.target as ClientRpcStub,
         rpcStubKey,
         [row],
