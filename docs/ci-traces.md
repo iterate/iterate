@@ -37,21 +37,25 @@ including cancellations. Collector failures fail that workflow visibly.
 Reports are Depot artifacts containing `trace.html` and `trace.json`, uploaded
 with `actions/upload-artifact`. No generated files or per-run commits go into Git.
 The public `iterate/config` worker serves `/depot/artifacts/<artifact-id>`:
-it uses the existing `/secrets/depot-ci-token` secret to download and unpack the
-archive on demand. It verifies the artifact belongs to `iterate/iterate`'s
-`ci-trace.yml` workflow and is a named CI trace before serving either fixed file.
-The HTML runs in a CSP sandbox without access to the host's cookies or storage.
+it uses the existing `/secrets/depot-ci-token` secret and ZIP range reads to
+serve the requested file. Named CI traces from `iterate/iterate`'s `ci-trace.yml`
+workflow remain accepted; other reports opt in with a `public-` artifact name.
+Each artifact redirects to its own app origin, separate from the project's
+cookies/storage. CSP limits executable content to that artifact's paths.
+See [browser reports](./depot-ci.md#browser-reports-from-artifacts) for root
+index selection, attachments and Playwright reports.
 
 The collector verifies that the public report is viewable before setting the
 **CI trace** commit status. Its description stores the source execution time,
 so reconciliation skips already-published executions and older runs cannot
 replace newer links on the same commit. A scheduled repair dispatches the same
-render/upload/link workflow for missing reports. Collectors are serialized.
+render/upload/link workflow for missing traces, or repairs a missing Playwright
+report status independently when the trace already exists. Collectors are serialized.
 A successful status means the report is available; preview checks carry the
 test outcome. Publication failures fail the collector visibly. Permissions
 are `contents: read` and `statuses: write`; PR bodies are never edited.
 
-Only timings, status, source names and locations are published. No raw logs,
+Trace artifacts contain only timings, status, source names and locations. No raw logs,
 exception payloads, credentials or signed URLs are copied. Reports are public,
 like this repository. Uploads request 30-day retention from Depot; links depend
 on the artifact remaining available and return 404 after it expires or is deleted.
