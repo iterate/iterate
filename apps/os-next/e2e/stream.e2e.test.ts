@@ -150,10 +150,13 @@ test("the runtime guard rejects a non-string or blank type, committing nothing",
   // There is no TS-type allow-list on the RPC boundary; the ONE explicit runtime guard in
   // Stream.append is the sole enforcement.
   const itx = openItx(freshCtx("guards"));
-  expect((await rejection(append(itx, { type: 12345 }))).message).toMatch(/non-empty type/i);
-  expect((await rejection(append(itx, { type: "" }))).message).toMatch(/non-empty type/i);
-  expect((await rejection(append(itx, { type: "   " }))).message).toMatch(/non-empty type/i);
-  expect((await readAll(itx)).map((e) => e.type)).not.toContain("sneaky"); // nothing committed
+  const before = await readAll(itx);
+  for (const type of [12345, null, true, {}, [], undefined, "", "   "]) {
+    expect(await rejection(append(itx, { type: "sneaky" }, { type }))).toMatchObject({
+      message: expect.stringMatching(/non-empty type/i),
+    });
+    expect(await readAll(itx)).toEqual(before);
+  }
 });
 
 test("an in-batch idempotency dedupe hit is processed ONCE, not twice", async () => {

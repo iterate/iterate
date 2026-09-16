@@ -40,10 +40,13 @@ const DELIVERY_ERRORS = /delivery\.push\.dropped|subscription-delivery\.dispatch
 const deliveryErrors = () => countMatches(worker.logs(), DELIVERY_ERRORS);
 const tallySnapshot = async (itx: any): Promise<any> =>
   itx.invoke("itx.facets.get('tally').snapshot()");
-/** Expected tally counts = groupBy(type) over the DURABLE log (tally consumes "*", durable only). */
-const durableCountsByType = (events: any[]): Record<string, number> => {
+/** Tally consumes "*": durable events except wake records, which require an explicit subscription. */
+const wildcardCountsByType = (events: any[]): Record<string, number> => {
   const counts: Record<string, number> = {};
-  for (const e of events) counts[e.type] = (counts[e.type] ?? 0) + 1;
+  for (const e of events) {
+    if (e.type === "events.iterate.com/stream/woken") continue;
+    counts[e.type] = (counts[e.type] || 0) + 1;
+  }
   return counts;
 };
 /** The config-worker funnel auto-subscribes `config` in the DO constructor, so EVERY context is born
@@ -103,7 +106,7 @@ test("disable mid-drive: appends survive, no ongoing error storm, re-enable rebu
   // inherited from the dead lineage (disable deleted the facet, storage included).
   await enableFixtureProcessor(itx, "tally");
   const head = await readHead(itx);
-  const expected = durableCountsByType(await readAll(itx));
+  const expected = wildcardCountsByType(await readAll(itx));
   const snap: any = await until("re-enabled tally reduced the whole log", async () => {
     const s: any = await tallySnapshot(itx).catch(() => undefined);
     return s && s.offset >= head && s;

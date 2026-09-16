@@ -156,10 +156,13 @@ const BIRTH_CONFIG_SUBSCRIPTION = {
   configuredAtOffset: 4,
   cursor: expect.objectContaining({ attempt: 0 }),
 };
-/** Expected tally counts = groupBy(type) over the DURABLE log (tally consumes "*", durable only). */
-const durableCountsByType = (events: any[]): Record<string, number> => {
+/** Tally consumes "*": durable events except wake records, which require an explicit subscription. */
+const wildcardCountsByType = (events: any[]): Record<string, number> => {
   const counts: Record<string, number> = {};
-  for (const e of events) counts[e.type] = (counts[e.type] ?? 0) + 1;
+  for (const e of events) {
+    if (e.type === "events.iterate.com/stream/woken") continue;
+    counts[e.type] = (counts[e.type] || 0) + 1;
+  }
   return counts;
 };
 
@@ -263,7 +266,7 @@ test("processors.enable('tally') from two sessions concurrently: one effective l
 
   for (let i = 0; i < 3; i++) await append(itxA, { type: "seen", payload: { i } });
   const head = await readHead(itxA);
-  const expected = durableCountsByType(await readAll(itxA));
+  const expected = wildcardCountsByType(await readAll(itxA));
   expect(expected["events.iterate.com/stream/subscription-configured"]).toBe(3); // one per enable (2) + the birth config subscription — the verb is literally "append the event"
   const snap = await until("tally reduced the whole log exactly once", async () => {
     const s: any = await tallySnapshot(itxA);
@@ -297,7 +300,7 @@ test("re-enable while WARM appends ONE more configured event (same name REPLACES
   expect((await processorNames(itx)).filter((s) => s === "tally")).toHaveLength(1);
   await append(itx, { type: "mark" });
   const head2 = await readHead(itx);
-  const expected = durableCountsByType(await readAll(itx));
+  const expected = wildcardCountsByType(await readAll(itx));
   const s2: any = await until("tally at head after re-enable", async () => {
     const s: any = await tallySnapshot(itx);
     return s.offset >= head2 && s;
