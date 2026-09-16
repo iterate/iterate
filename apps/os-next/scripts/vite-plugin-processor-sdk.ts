@@ -1,5 +1,5 @@
 // scripts/vite-plugin-processor-sdk.ts — THE INJECTED SDK, built where the worker is built. Two
-// virtual modules, served by Vite to the worker bundle (vite.config.ts) and to the vitest lanes
+// virtual modules, served by Vite to the worker bundle (vite.config.ts) and to the vitest projects
 // (vitest.config.ts) alike — no generated file in the tree:
 //   virtual:processor-sdk             — the text of `iterate/next/sdk` bundled for a loaded isolate:
 //                                       what context/worker-loader.ts injects into every loaded

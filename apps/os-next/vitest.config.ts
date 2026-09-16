@@ -15,8 +15,8 @@
 //               files one at a time so scenarios never share the wire; `BENCH_OUT=<file.json>` writes
 //               the raw samples
 // The injected SDK is a virtual module (scripts/vite-plugin-processor-sdk.ts) every project resolves;
-// the workers and e2e lanes also need the Vite build (dist/, gitignored), run once by the root
-// globalSetup — skipped when only the unit lane runs. Browser E2E is Playwright (playwright.config.ts + specs/**).
+// the workers and e2e projects also need the Vite build (dist/, gitignored), run once by the root
+// globalSetup — skipped when only the unit project runs. Browser E2E is Playwright (playwright.config.ts + specs/**).
 
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";

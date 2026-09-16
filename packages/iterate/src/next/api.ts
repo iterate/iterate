@@ -3,7 +3,7 @@
 // platform's classes: os-next asserts that `IterateRpcTarget` satisfies `IterateApi` and that
 // `IterateContextRpcTarget` satisfies `IterateContextApi` (src/session.ts, src/iterate-context.ts),
 // so an app built against this package types against exactly what the deployment answers. A context
-// is ONE door — `invoke(call, ...args)`, a dotted itx expression — and a capnweb stub proxies the
+// has ONE method — `invoke(call, ...args)`, a dotted itx expression — and a capnweb stub proxies the
 // dotted spelling (`itx.repos.get(path).readFile(file)`) onto it; the roots declared below are the
 // ones the SDK and the first-party facets spell, with the platform's own signatures (context/built-ins.ts).
 import type { FacetHandle, InvokeHandle, ItxExpressionInput } from "./expression.ts";
@@ -53,7 +53,7 @@ export type WorkerSource = Record<string, string> | ItxExpressionInput;
 /** What hosts a class as a durable facet — `facets.get(name, spec)`, `processors.enable(name, spec)`. */
 export type FacetSpec = { source: WorkerSource; cacheKey?: string; className: string };
 
-/** A context (a project, a user, an organization): every `itx` root behind one door. */
+/** A context (a project, a user, an organization): every `itx` root, reached through `invoke`. */
 export interface IterateContextApi {
   invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown>;
   /** Another context of this project, by path (`..` and `/` allowed; the global namespace is not). */
@@ -195,7 +195,7 @@ export interface IterateSessionApi {
     endCurrent(): Promise<unknown>;
     mint(input: unknown): Promise<{ token: string; expiresAt: number }>;
   };
-  /** The consent screen's door (the OAuth authorize flow): describe a request, approve it. */
+  /** The consent screen's methods (the OAuth authorize flow): describe a request, approve it. */
   consent: {
     describe(query: string): Promise<ConsentAnswer>;
     approve(input: {

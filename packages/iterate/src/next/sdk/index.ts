@@ -79,7 +79,7 @@ export type ItxScope = IterateContextApi;
 /** What hands the scope over: the loopback entrypoint a loaded worker has as `env.ITX`, or the one a
  *  class of the platform's own worker mints from `ctx.exports`. */
 export type ItxEntrypointService = { get(): ItxScope };
-/** The least a host needs of its scope: the fixed-point log doors the engine rides. The platform's own
+/** The least a host needs of its scope: the fixed-point log calls the engine makes. The platform's own
  *  facets pass the Workers-RPC STUB of a context (every dotted step pipelined; a property there is a
  *  promise), which no plain-promise interface can name — so the constraint is this, not `ItxScope`. */
 export type ProcessorScope = {

@@ -4,7 +4,7 @@
 // with props mints the DurableObjectClass `ctx.facets.get` takes, and inside the facet those props
 // are `this.ctx.props`; the class runs with the worker's real env and reaches its context through
 // the loopback it mints itself from them (sdk/index.ts `#itxEntrypoint`). Pinned in the workers
-// lane because it needs a real DurableObjectState (`state.facets`, `state.exports`); measured
+// project because it needs a real DurableObjectState (`state.facets`, `state.exports`); measured
 // 2026-09-16, wrangler 4.107 / workerd via @cloudflare/vitest-plugin 1.1.7.
 import { runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
