@@ -903,13 +903,13 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): derived f
     }
   });
 
-  test("a batch that kills its caller mid-call fourteen times is not tried a fifteenth: the row halts, as the ladder's end would halt it", async () => {
+  test("a batch that kills its caller mid-call fifteen times is not tried a sixteenth: the row halts, as fifteen refusals would halt it", async () => {
     let rig = parkedSinkRig();
     rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
     await settled();
     vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
     try {
-      for (let deaths = 1; deaths < 14; deaths++) {
+      for (let deaths = 1; deaths < 15; deaths++) {
         const claim = rig.delivery.cursor("s")!;
         expect(claim.attempt).toBe(deaths);
         rig = parkedSinkRig(rig); // died mid-call; the next incarnation comes back at the claim's time
@@ -918,13 +918,12 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): derived f
         await settled();
         expect(rig.pushes).toEqual([[1]]); // tried again (and parked again)
       }
-      const fourteenth = rig.delivery.cursor("s")!;
-      expect(fourteenth.attempt).toBe(14);
+      const fifteenth = rig.delivery.cursor("s")!;
+      expect(fifteenth.attempt).toBe(15);
       rig = parkedSinkRig(rig);
-      vi.setSystemTime(fourteenth.nextAttemptAtMs! + 1);
-      await rig.pass();
-      await settled();
-      expect(rig.pushes).toEqual([]); // no fifteenth call
+      vi.setSystemTime(fifteenth.nextAttemptAtMs! + 1);
+      await rig.pass(); // no call to park: the pass completes on its own
+      expect(rig.pushes).toEqual([]); // no sixteenth call
       expect(rig.stream.coreReducedState.subscriptions.s.halted).toMatchObject({ attempts: 15 });
       expect(rig.delivery.cursor("s")).toMatchObject({ attempt: 0 });
       expect(rig.delivery.cursor("s")?.nextAttemptAtMs).toBeUndefined();

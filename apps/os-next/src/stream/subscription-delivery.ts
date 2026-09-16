@@ -850,21 +850,22 @@ export class SubscriptionDelivery {
             if (durable) {
               // THE CLAIM, durable, before the call: die mid-call and the next incarnation reads it
               // from the cursor table — the attempt this is, and a time past the call's watchdog to
-              // come back by. Fifteen such deaths halt the row, as fifteen refusals would (a batch
-              // that kills its caller is a refusal that can only repeat). The row is written, not
-              // re-armed: the alarm already stands at the row's earlier claim (its commit's), and the
-              // ack, a failure or a pass re-arms from what the row says then.
+              // come back by. Fifteen claims with neither an ack nor a failure halt the row, as
+              // fifteen refusals would (a batch that kills its caller is a refusal that can only
+              // repeat) — a sixteenth is never claimed. The row is written, not re-armed: the alarm
+              // already stands at the row's earlier claim (its commit's), and the ack, a failure or
+              // a pass re-arms from what the row says then.
               const attempt = cursor.attempt + 1;
-              if (attempt >= 15) {
+              if (attempt > 15) {
                 const { nextAttemptAtMs: _spent, ...settled } = cursor;
                 this.#adoptCursor(name, { ...settled, attempt: 0 }, true);
                 this.#haltRow(
                   name,
                   row.configuredAtOffset,
                   cursor.confirmedOffset,
-                  attempt,
+                  cursor.attempt,
                   new Error(
-                    `${attempt - 1} deliveries of this batch ended without an ack or a failure (the context died mid-call)`,
+                    `${cursor.attempt} deliveries of this batch ended without an ack or a failure (the context died mid-call)`,
                   ),
                 );
                 return;
