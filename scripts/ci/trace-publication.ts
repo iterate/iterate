@@ -1,29 +1,17 @@
-import { z } from "zod";
-import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
-
-export function tracePullRequestBody(body: string, currentHead: string, run: ReportLink) {
-  if (run.headSha !== currentHead) return body;
-  const block = markdownAnnotator(body, "ci-trace");
-  const previous = block.current?.match(/<!-- ci-trace-run (.+) -->/);
-  if (previous) {
-    const prior = ReportLink.parse(JSON.parse(previous[1]));
-    if (prior.headSha === run.headSha && Date.parse(prior.createdAt) > Date.parse(run.createdAt))
-      return body;
-  }
-  return block.update(
-    [
-      `[Open interactive CI trace](${run.url}) — ${run.status}, \`${run.headSha.slice(0, 8)}\`.`,
-      "Workflow → jobs → setup / wait / test → Playwright attempts and retries. Includes an OTLP JSON download.",
-      `<!-- ci-trace-run ${JSON.stringify(run)} -->`,
-    ].join("\n\n"),
-  );
+/** The status says the report is available; preview checks retain the test outcome. */
+export function traceCommitStatus(
+  previous: { description: string | null; target_url: string | null } | undefined,
+  run: { headSha: string; createdAt: string; url: string },
+) {
+  // Store the source execution's time, not publication time: reconciliation can
+  // revisit old runs. Normalized ISO dates sort chronologically in this format.
+  const description = `Open trace · ${new Date(run.createdAt).toISOString()}`;
+  if (previous?.target_url === run.url || (previous?.description || "") > description) return null;
+  return {
+    sha: run.headSha,
+    context: "CI trace",
+    state: "success" as const,
+    description,
+    target_url: run.url,
+  };
 }
-
-const ReportLink = z.object({
-  headSha: z.string(),
-  createdAt: z.string(),
-  workflowId: z.string(),
-  status: z.string(),
-  url: z.string().url(),
-});
-type ReportLink = z.infer<typeof ReportLink>;

@@ -1,8 +1,8 @@
 # Interactive CI traces
 
-Preview PRs get an **Open interactive CI trace** link in their body after the
-workflow finishes. The report shows jobs, setup/wait/test/finish phases, measured
-shell steps and individual Playwright attempts. Expand rows, search for a test,
+Preview runs get a **CI trace** commit status after the workflow finishes.
+Its **Details** link opens the report for that tested commit. The report shows
+jobs, setup/wait/test/finish phases, measured shell steps and individual Playwright attempts. Expand rows, search for a test,
 click a bar, or zoom to a selected span. Download the same trace as OTLP JSON.
 
 Expand the `pnpm preview ci-prepare` step to compare **Provision and deploy
@@ -38,8 +38,12 @@ Reports live on `codex/ci-trace-artifacts`, separately from application source.
 Each execution adds an HTML file and OTLP JSON under `explainers/`. URLs pin the
 artifact commit SHA and use the existing `iterate.iterate.app/explainers/` host;
 no app deploy or third-party artifact viewer is required. Repeated publication
-reuses the report. The managed `ci-trace` PR-body block preserves surrounding
-text, checks the current PR head and refuses an older execution's link.
+reuses the report and status. The status description includes the source execution
+time so reconciliation cannot replace a newer run's link with an older one on
+the same commit. Collectors are serialized by the workflow concurrency group.
+A successful status means the report is available; preview checks still carry
+the test outcome. Publication failures fail the collector visibly. The collector
+does not read or edit PR bodies and needs `statuses: write`, not PR write access.
 
 Only timings, status, source names and locations are published. No raw logs,
 exception payloads or credentials are copied. Reports are public, like this
@@ -58,8 +62,8 @@ depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
 ```
 
 Local commands require `DEPOT_CI_TELEMETRY_TOKEN`; publishing also needs
-`GITHUB_TOKEN` with repository contents and PR write access. CI obtains the
-Depot token from Doppler `_shared/preview`.
+`GITHUB_TOKEN` with repository contents and commit-status write access. CI obtains
+the Depot token from Doppler `_shared/preview`.
 
 ```sh
 pnpm exec trpc-cli scripts/ci/trace.ts render <workflow-id> /tmp/ci-trace

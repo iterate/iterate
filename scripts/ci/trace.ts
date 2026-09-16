@@ -4,7 +4,7 @@ import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 import { assembleTrace, Workflow } from "./trace-model.ts";
 import { renderTrace } from "./trace-viewer.ts";
-import { tracePullRequestBody } from "./trace-publication.ts";
+import { traceCommitStatus } from "./trace-publication.ts";
 import { stepCommands } from "./trace-commands.ts";
 
 /** Completed-run CI traces. Invoke with `pnpm exec trpc-cli scripts/ci/trace.ts`. */
@@ -26,7 +26,7 @@ export default class CiTrace {
     console.log(`Dispatched trace collector for ${workflowId}`);
   }
 
-  /** Collect a completed workflow, publish an immutable report and update its PR. */
+  /** Collect a completed workflow, publish an immutable report and link it from a commit status. */
   async publish(workflowId: string) {
     const workflow = await this.waitForWorkflow(workflowId);
     const execution = [...workflow.executions].sort((a, b) => b.execution - a.execution)[0];
@@ -49,30 +49,16 @@ export default class CiTrace {
       await delay(3_000);
     }
     const octokit = this.github();
-    const pullRequest = /refs\/pull\/(\d+)\//.exec(workflow.ref);
-    const numbers = pullRequest
-      ? [Number(pullRequest[1])]
-      : (
-          await octokit.repos.listPullRequestsAssociatedWithCommit({
-            ...repo,
-            commit_sha: workflow.headSha,
-          })
-        ).data
-          .filter((pr) => pr.state === "open")
-          .map((pr) => pr.number);
-    for (const number of numbers) {
-      const { data: pr } = await octokit.pulls.get({ ...repo, pull_number: number });
-      if (pr.state !== "open") continue;
-      const body = tracePullRequestBody(pr.body || "", pr.head.sha, {
-        headSha: workflow.headSha,
-        createdAt: execution.createdAt,
-        workflowId,
-        status: workflow.workflowStatus,
-        url,
-      });
-      if (body !== (pr.body || ""))
-        await octokit.pulls.update({ ...repo, pull_number: number, body });
-    }
+    const statuses = await octokit.paginate(octokit.repos.listCommitStatusesForRef, {
+      ...repo,
+      ref: workflow.headSha,
+      per_page: 100,
+    });
+    const status = traceCommitStatus(
+      statuses.find((item) => item.context === "CI trace"),
+      { headSha: workflow.headSha, createdAt: execution.createdAt, url },
+    );
+    if (status) await octokit.repos.createCommitStatus({ ...repo, ...status });
     if (process.env.GITHUB_STEP_SUMMARY)
       await appendFile(process.env.GITHUB_STEP_SUMMARY, `\n[Open CI trace](${url})\n`);
     console.log(url);
@@ -113,7 +99,7 @@ export default class CiTrace {
     if (failures.length) throw new AggregateError(failures, "CI trace reconciliation failed");
   }
 
-  /** Build local HTML/OTLP files without publishing or changing a PR. */
+  /** Build local HTML/OTLP files without publishing or changing a commit status. */
   async render(workflowId: string, directory: string) {
     const report = await this.collect(await this.waitForWorkflow(workflowId));
     await mkdir(directory, { recursive: true });

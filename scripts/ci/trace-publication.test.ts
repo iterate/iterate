@@ -1,30 +1,29 @@
 import { expect, test } from "vitest";
-import { tracePullRequestBody } from "./trace-publication.ts";
+import { traceCommitStatus } from "./trace-publication.ts";
 import { renderTrace } from "./trace-viewer.ts";
 import { assembleTrace } from "./trace-model.ts";
 
-test("publishing preserves human text, replaces only its block, and rejects stale runs/heads", () => {
-  const original = "Human notes\n\n<!-- preview -->\nOther automation\n<!-- /preview -->";
+test("the trace status points at the tested commit and keeps the newest execution on replay", () => {
   const run = {
-    headSha: "current",
+    headSha: "tested-head",
     createdAt: "2026-09-16T12:00:00Z",
-    workflowId: "run1",
-    status: "finished",
     url: "https://iterate.iterate.app/explainers/ci-trace-run1?sha=abc",
   };
-  const first = tracePullRequestBody(original, "current", run);
-  expect(first).toContain(original);
-  expect(first).toContain(`[Open interactive CI trace](${run.url})`);
-  const next = tracePullRequestBody(first, "current", {
+  const first = traceCommitStatus(undefined, run);
+  expect(first).toMatchObject({
+    sha: "tested-head",
+    context: "CI trace",
+    state: "success",
+    target_url: run.url,
+  });
+  const next = traceCommitStatus(first!, {
     ...run,
     createdAt: "2026-09-16T13:00:00Z",
-    workflowId: "run2",
     url: run.url.replace("run1", "run2"),
   });
-  expect(next).not.toContain("ci-trace-run1?");
-  expect(tracePullRequestBody(next, "current", run)).toBe(next);
-  expect(tracePullRequestBody(next, "new-head", run)).toBe(next);
-  expect(tracePullRequestBody(first, "current", run)).toBe(first);
+  expect(next).toMatchObject({ target_url: run.url.replace("run1", "run2") });
+  expect(traceCommitStatus(next!, run)).toBeNull();
+  expect(traceCommitStatus(first!, run)).toBeNull();
 });
 
 test("the standalone report embeds OTLP without allowing source names to break out of JSON", async () => {

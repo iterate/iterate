@@ -1,7 +1,7 @@
 name: CI trace report
 permissions:
   contents: write
-  pull-requests: write
+  statuses: write
 on:
   workflow_dispatch:
     inputs:
@@ -11,7 +11,7 @@ on:
         default: ""
   schedule:
     - cron: "*/15 * * * *"
-# Serialize artifact commits and managed PR-body updates. This runs outside the
+# Serialize artifact commits and commit-status updates. This runs outside the
 # measured workflow, so it can include finish/cleanup and the final job times.
 concurrency:
   group: ci-trace-reports

@@ -5,11 +5,11 @@ size: medium
 
 # Clickable CI trace reports
 
-Implemented in PR #2681. Real preview runs automatically published interactive reports and updated the PR; the anonymous browser click-through, drilldown and OTLP download work. Commands come from the triggering workflow revision with Doppler wrappers removed. Built on main after #2658 and #2659.
+Implemented in PR #2681. Real preview runs automatically published interactive reports; the latest follow-up moves the link from the PR body to a **CI trace** commit status. The anonymous browser click-through, drilldown and OTLP download work. Commands come from the triggering workflow revision with Doppler wrappers removed. Built on main after #2658 and #2659.
 
 ## Request
 
-Automatically add a link to each PR body that opens a useful interactive trace of its preview CI run. The user's acceptance check is clicking that link and seeing the trace. Scope: workflow, jobs, steps and Playwright test attempts. Deployed request tracing and Vitest test instrumentation are excluded.
+Automatically publish a **CI trace** commit status whose Details link opens an interactive trace of that commit's preview CI run. The user's acceptance check is clicking that link and seeing the trace. This replaces the initially requested PR-body link. Scope: workflow, jobs, steps and Playwright test attempts. Deployed request tracing and Vitest test instrumentation are excluded.
 
 ## Decisions and assumptions
 
@@ -18,7 +18,7 @@ Automatically add a link to each PR body that opens a useful interactive trace o
 - Publish through the existing branch-aware Iterate explainer host. Keep generated run reports separate from application source commits; determine the smallest durable storage mechanism during implementation.
 - Prefer completed-run reports initially. A collector outside the observed workflow must handle its final timestamps; the existing periodic CI telemetry workflow can provide reconciliation for cancellation/missing finalizers.
 - Only sanitized names, timings, statuses and source locations belong in the public report. No raw logs, error payloads, auth data or signed download URLs.
-- Update a dedicated managed PR-body section, preserving human text and other automation. An older run must not replace the latest run for the current head.
+- Publish to the tested head SHA, with one **CI trace** status per commit. Replays are idempotent and older executions must not replace newer links. The collector no longer needs PR write access.
 - No product changes, extra test retries, or timeout increases to make this work. No merge without the user's request.
 
 ## Acceptance
@@ -48,3 +48,5 @@ Session: `01a09f64-ea4e-7c61-ab0a-c15eb65df3bc`.
 - Follow-up: preparation now has measured nested operations for provisioning/deployment, slot acquisition and erase, per-app build/deploy and HTTP readiness, and shared rollout/smoke/TUI readiness. Async context keeps concurrent app children under the right parent; failed results and incomplete operations remain visible. A child-process integration regression exercises recording through OTLP assembly, alongside the preview regressions.
 
 - Live follow-up found progress output without a newline joining two operation markers; the regression now reproduces that exact output shape and markers start on a fresh line. Also declared Kit’s actual Worker entry in Knip: removing the generated Wrangler config reproduced CI’s unused-file failure, and the explicit entry fixes the race with parallel typecheck generation.
+
+- Follow-up: publish the report as a **CI trace** commit status with an external target URL. Removed PR-body writes and changed collector permissions to `statuses: write`; replay/newest-execution coverage remains. Replayed the real published run and verified its status ID was unchanged, then checked its external target URL. 357 scripts tests, scripts typecheck and scoped lint passed.

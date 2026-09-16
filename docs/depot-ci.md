@@ -380,7 +380,8 @@ must not be accepted. Normal Playwright/Vitest test retries are unchanged.
 
 ## Interactive trace reports
 
-Preview workflows publish a clickable trace in the PR body after completion:
+Preview workflows publish a **CI trace** commit status after completion; its
+**Details** link opens the report:
 workflow → jobs → setup/wait/test/finish → shell steps → Playwright attempts.
 See [CI traces](./ci-traces.md) for the timing model, publishing, replay commands
 and OTLP JSON export.
