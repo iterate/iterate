@@ -1,11 +1,11 @@
 ---
-status: in-progress
+status: complete
 size: medium
 ---
 
 # Publish Playwright HTML reports through Depot artifacts
 
-Initial implementation and final-head CI passed. Follow-up underway: move status publication to config webhooks, simplify artifact URLs, and remove CI publication commands while retaining trace generation and missed-run repair.
+Complete: the project publishes report statuses from completed-job webhooks. A fresh green CI run uploaded both reports without publication commands; iterate[bot] linked each subdomain root and browser checks passed.
 
 ## Request and decisions
 
@@ -36,7 +36,11 @@ The first report includes one existing flaky REPL test: its original Durable Obj
 
 ## Authorized follow-up
 
-- [ ] Move status links to config webhook handling with an explicit artifact-name allowlist.
-- [ ] Remove `publish` / `publish-playwright` commands and CI write permissions; keep trace rendering/upload and missed-run repair.
-- [ ] Document subdomain-root serving and webhook-owned statuses.
-- [ ] Verify a new CI run publishes both report links without publication commands.
+- [x] Move status links to config webhook handling with an explicit artifact-name allowlist. _Config `apps/depot/reports.ts` handles completed Depot jobs; only Playwright HTML and named CI traces add statuses._
+- [x] Remove `publish` / `publish-playwright` commands and CI write permissions; keep trace rendering/upload and missed-run repair. _The CLI retains dispatch/render/reconcile; the collector has read-only GitHub permissions._
+- [x] Document subdomain-root serving and webhook-owned statuses. _`docs/ci-traces.md` and `docs/depot-ci.md`; old links redirect._
+- [x] Verify a new CI run publishes both report links without publication commands. _Preview `0dz18dhd7r` and collector `8wd5gcj96f` passed at code head d3e897fd6; both statuses were posted by iterate[bot]._
+
+## Final follow-up proof
+
+[Playwright report](https://depot-01a0ac68-d8cf-714b-8f01-518fd506b278--iterate.iterate.app/) was linked at 22:49:18 UTC, eight seconds after the finalizer completed. [CI trace](https://depot-01a0ac6a-05e6-76f2-a6f0-c8e202b1d3be--iterate.iterate.app/) was linked at 22:50:32 UTC. Both are exact-head statuses from `iterate[bot]`; collector commands only render/upload. Fresh report and embedded trace, legacy redirects, and CI trace root were checked in the isolated browser. Seventeen config integration tests, eight tracing tests, typechecks, lint and knip pass; CI also ran the full unit suite. Independent review findings were fixed and re-reviewed.
