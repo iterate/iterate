@@ -36,7 +36,6 @@ type Health = Record<string, unknown> & {
   conversation?: string;
   framesSent?: number;
   spkWrites?: number;
-  spkAnswerStarts?: number;
   uptimeMs?: number;
 };
 

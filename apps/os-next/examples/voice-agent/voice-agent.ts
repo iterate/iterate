@@ -1,9 +1,8 @@
 /**
- * GPT-Live relay and durable call fold for one voice conversation, hosted as an
- * os-next facet processor — one facet per conversation context, holding the
- * provider socket, forwarding microphone frames in and speaker frames out,
- * folding the transcript, and answering the live model's delegations with one
- * chat-model turn (delegation-turn.ts).
+ * One GPT-Live voice call as an os-next facet processor, one facet per
+ * conversation context: it holds the provider socket, forwards microphone
+ * frames in and speaker frames out, folds the transcript, and answers the live
+ * model's delegations with one chat-model turn (delegation-turn.ts).
  */
 import {
   StreamProcessor,
@@ -20,10 +19,6 @@ import {
   type DelegationTurnDeps,
 } from "./delegation-turn.ts";
 
-/* ========================================================================== */
-/* CONSTANTS                                                                  */
-/* ========================================================================== */
-
 /** Fixed GPT-Live session configuration. */
 const LIVE = {
   url: "https://api.openai.com/v1/live/sessions",
@@ -32,175 +27,54 @@ const LIVE = {
   rate: 16_000,
 } as const;
 
-/**
- * The most audio one speaker frame may carry, in bytes.
- *
- * 3,200 bytes is one 100 ms GPT-Live delta. It fits the device's 4,800-byte
- * decoded chunk, 6,912-byte base64 buffer and 7,600-byte message envelope.
- */
-export const MAX_SPEAKER_PAYLOAD_BYTES = 3_200;
-
-/** Match the device's bounded ten-second speaker capacity when an append stalls. */
-const SPEAKER_OUTBOX_MAX_BYTES = 10_000 * 32;
-
 /** 16 kHz mono PCM16: two bytes per sample, sixteen samples per millisecond. */
 const PCM16_BYTES_PER_MS = 32;
 
-/**
- * A delta whose loudest sample is under this is silence.
- *
- * Measured on the wire (live-probe, 2026-09-10): idle deltas are exact
- * digital zero — 740 of 873 in one 87 s session — with a few dozen
- * near-zero ones at speech edges (peaks under 20, a handful under 100).
- * Speech onsets sit in the thousands. 100 is far above the noise and far
- * below the quietest speech seen; a quiet first syllable clipped by this
- * threshold would be a 100 ms loss, which is why the threshold errs low.
- */
-const SPEECH_PEAK = 100;
+/** The most audio one speaker frame may carry: one 100 ms GPT-Live delta, which fits the
+ * device's 4,800-byte decoded chunk and 6,912-byte base64 buffer. */
+const MAX_SPEAKER_PAYLOAD_BYTES = 3_200;
 
-/**
- * Trailing silence that ends an answer. The provider has no end-of-answer
- * event ("track playback in your client" — the docs), and the clients need
- * `lastFrameOfAnswer`, so the end is inferred: this much silence after
- * speech and the answer is over. Pauses INSIDE an answer are shorter — the
- * count-slowly probe paused ~500 ms between numbers — so a spurious end is
- * possible on a very deliberate speaker; it costs one extra `answer_done`
- * on the device, never audio. The silence up to this bound is SENT, so the
- * device plays the natural tail; silence past it is dropped.
- */
-const ANSWER_TAIL_SILENCE_MS = 700;
+/** The device holds ten seconds of speaker audio; more than that queued here means an append
+ * has stalled. */
+const SPEAKER_OUTBOX_MAX_BYTES = 10_000 * PCM16_BYTES_PER_MS;
 
-/**
- * A transcript fragment this far (on the session timeline) after the same
- * speaker's previous one starts a new turn. Fragments carry no turn
- * boundaries — "these events do not define complete turns" — so the durable
- * per-turn transcript is grouped here. Both speakers may overlap
- * (backchannels), which is why the buffers are per speaker.
- */
+/** A transcript fragment this far (on the session timeline) after the same speaker's previous
+ * one starts a new turn; the fragments themselves carry no turn boundaries. The two speakers may
+ * overlap, so the open rows are per speaker. */
 const TURN_GAP_MS = 1_200;
 
-/** No input from the device for this long and the call is over. Exported
- * for the tests that drive it. */
-export const IDLE_TIMEOUT_MS = 60_000;
+/** No input from the device for this long and the call is over. */
+const IDLE_TIMEOUT_MS = 60_000;
 
-/**
- * The provider hears silence when the device sends nothing. GPT-Live's
- * session timeline is driven by INPUT audio ("keep input audio running,
- * including silence" — its docs), and a client that goes quiet between
- * utterances (a released button, the C driver's converse mode) starved it:
- * measured on preview-7 (2026-09-11) the answer to "count to sixty" died
- * after "Okay. one two" when the client sent nothing, and ran to sixty when
- * it sent silence frames. So the facet fills the gaps itself: whenever no
- * device audio has been forwarded for this long, one frame of digital
- * silence of this length goes to the provider instead. A device that streams
- * continuously never triggers it.
- */
-export const SILENCE_FILL_MS = 100;
-/**
- * A delayed Durable Object must not burst an unbounded amount of synthetic
- * input ahead of a person who has started speaking again. One second is long
- * enough to recover ordinary scheduling jitter. A larger discontinuity leaves
- * the provider's input timeline untrustworthy, so the call ends with a
- * classified reason rather than dropping that debt without an explanation.
- */
-const MAX_SILENCE_FILL_CATCH_UP_MS = 1_000;
-/**
- * How often a background loop waiting for work re-checks that its dial is
- * still the live one. See #startSpeakerSender.
- */
-const BACKGROUND_LOOP_TICK_MS = 1_000;
-const SILENCE_FILL_FRAME_B64 = bytesToBase64(new Uint8Array(SILENCE_FILL_MS * 32));
+/** GPT-Live's session timeline runs on INPUT audio, silence included; a device that goes quiet
+ * starves it and an answer dies mid-sentence. Whenever no device audio covers the clock, one
+ * frame of digital silence this long goes to the provider instead. */
+const SILENCE_FILL_MS = 100;
+const SILENCE_FILL_FRAME_B64 = bytesToBase64(new Uint8Array(SILENCE_FILL_MS * PCM16_BYTES_PER_MS));
 
-/**
- * The idle stamp advances in steps of this, not per frame. Folding every mic
- * frame's commit stamp made EVERY delivery batch dirty the reduced state; the
- * deadline is sixty seconds, so knowing the device's last input to five is
- * every bit as good, and the fold is a no-op for ~95% of mic batches.
- */
+/** The idle stamp in the fold advances in steps of this, not per frame: the deadline is a
+ * minute, so most microphone batches leave the reduced state untouched. */
 const IDLE_STAMP_STEP_MS = 5_000;
-
-/** How often the idle countdown looks at the facet clock. */
-const IDLE_TICK_MS = 5_000;
 
 /** Socket creation and `session.started` must both finish within this bound. */
 const OPENING_DEADLINE_MS = 15_000;
 
-/**
- * Agent commentary with `hangUp: true` arms a goodbye before GPT-Live speaks
- * it. Wait for the first answer ending after that event, or this bounded
- * grace if no answer arrives. An already quiet speaker is not proof that
- * the goodbye has played.
- */
+/** Commentary with `hangUp: true` arms a goodbye before GPT-Live speaks it: the call ends at the
+ * first answer ending after that, or after this grace when no answer arrives. */
 const HANG_UP_GOODBYE_GRACE_MS = 8_000;
 
-/**
- * Once the goodbye's end marker has gone out, how long the device is given
- * to play what it still holds before the call is ended. The relay hands
- * frames over as they arrive. The device now prefills 400 ms and production
- * one-way delivery can add roughly 300 ms, so one second preserves the tail.
- */
-const GOODBYE_PLAYOUT_ALLOWANCE_MS = 1_000;
-/**
- * How much conversation the fold remembers, and so how much a fresh provider
- * session is seeded with. Turns beyond the newest TRANSCRIPT_MAX_TURNS fall
- * off the front; a single turn longer than TRANSCRIPT_TURN_MAX_CHARS is kept
- * head-first. The provider's `input` history takes 128 messages / 8,192
- * tokens; these bounds sit well inside it.
- */
-const TRANSCRIPT_MAX_TURNS = 20;
-const TRANSCRIPT_TURN_MAX_CHARS = 600;
+/** Microphone audio held while the provider completes its handshake: 21 s covers the clients'
+ * 20 s opening capture. Overflow ends the call with a reason, because keeping a truncated request
+ * would tell the model a different one. */
+const MAX_HELD_MIC_BYTES = 21_000 * PCM16_BYTES_PER_MS;
 
-/** A fold transcript turn: who spoke, and what the provider heard them say. */
-interface TranscriptTurn {
-  role: "listener" | "assistant";
-  text: string;
-}
+/** Delegations already answered stay in the fold so a redelivered request is not answered twice. */
+const MAX_ANSWERED_DELEGATIONS_REMEMBERED = 50;
 
-/** Fold one finished turn onto the recap, applying both bounds. */
-function foldTranscriptTurn(transcript: TranscriptTurn[], turn: TranscriptTurn): TranscriptTurn[] {
-  const text =
-    turn.text.length > TRANSCRIPT_TURN_MAX_CHARS
-      ? `${turn.text.slice(0, TRANSCRIPT_TURN_MAX_CHARS)}…`
-      : turn.text;
-  return [...transcript, { role: turn.role, text }].slice(-TRANSCRIPT_MAX_TURNS);
-}
-
-/** Each Live context append allows 500 tokens. UTF-8 bytes are a conservative
- * upper bound, independent of language/tokenizer; split at spaces where possible. */
-function* commentaryChunks(text: string): Generator<string> {
-  const encoder = new TextEncoder();
-  let chunk = "";
-  let bytes = 0;
-  for (const character of text) {
-    const size = encoder.encode(character).length;
-    if (bytes + size > 500) {
-      const space = chunk.lastIndexOf(" ");
-      const boundary = space > 0 ? space + 1 : chunk.length;
-      yield chunk.slice(0, boundary);
-      chunk = chunk.slice(boundary);
-      bytes = encoder.encode(chunk).length;
-    }
-    chunk += character;
-    bytes += size;
-  }
-  if (chunk) yield chunk;
-}
-
-/* ========================================================================== */
-/* BACKEND                                                                     */
-/* ========================================================================== */
-
-/**
- * What the voice is told about the arrangement, after the certificate's own
- * persona. Structured the way the provider's prompting guide asks — role,
- * backchannel policy, interruption policy, a labelled delegation policy —
- * because the live model has a small context and reads these labels.
- *
- * TRANSPARENT ON PURPOSE, as the second cut learned: a model forbidden to
- * mention its backend rounded every status down to "I'm working on it" and
- * invented explanations for delays. The person may know there is a backend;
- * what they must never get is a made-up story.
- */
+/** What the live model is told about the arrangement, structured the way the provider's prompting
+ * guide asks (role, backchannel policy, interruption policy, a labelled delegation policy). It is
+ * transparent about the backend on purpose: a model forbidden to mention it invented explanations
+ * for delays. */
 const LIVE_DELEGATION_POLICY = [
   "Backchannel policy: Use moderate backchannels. Acknowledge naturally without competing",
   "with the main response.",
@@ -235,25 +109,42 @@ const LIVE_DELEGATION_POLICY = [
   "— never invent an explanation for a delay or a result you have not seen.",
 ].join("\n");
 
-/**
- * How much decoded microphone audio may be held while the provider completes
- * its handshake. The wire accepts any even PCM byte length, so a frame count
- * cannot bound memory or stale speech. Twenty-one seconds covers the
- * clients' twenty-second opening capture budget without silently truncating
- * a request.
- *
- * Overflow ends this opening once with a durable reason. Keeping the prefix
- * while silently discarding its ending would tell the model a different
- * request, so the next activation is the only honest recovery.
- */
-const MAX_HELD_MIC_BYTES = 16_000 * 2 * 21;
+/** A fold transcript turn: who spoke, and what the provider heard them say. */
+interface TranscriptTurn {
+  role: "listener" | "assistant";
+  text: string;
+}
 
-/* ========================================================================== */
-/* AUDIO                                                                      */
-/* ========================================================================== */
-/* Base64 is handled here. There is NO rate conversion in this pipeline any
- * more: the device, the stream and GPT-Live all speak 16 kHz PCM16, so every
- * frame crosses as the string it arrived as. */
+/** Fold one finished turn onto the recap: the newest 20 turns, each cut to 600 characters, well
+ * inside the provider's 128-message / 8,192-token `input` history. */
+function foldTranscriptTurn(transcript: TranscriptTurn[], turn: TranscriptTurn): TranscriptTurn[] {
+  const text = turn.text.length > 600 ? `${turn.text.slice(0, 600)}…` : turn.text;
+  return [...transcript, { role: turn.role, text }].slice(-20);
+}
+
+/** Each Live context append allows 500 tokens. UTF-8 bytes are a conservative upper bound,
+ * independent of language and tokenizer; split at spaces where possible. */
+function* commentaryChunks(text: string): Generator<string> {
+  const encoder = new TextEncoder();
+  let chunk = "";
+  let bytes = 0;
+  for (const character of text) {
+    const size = encoder.encode(character).length;
+    if (bytes + size > 500) {
+      const space = chunk.lastIndexOf(" ");
+      const boundary = space > 0 ? space + 1 : chunk.length;
+      yield chunk.slice(0, boundary);
+      chunk = chunk.slice(boundary);
+      bytes = encoder.encode(chunk).length;
+    }
+    chunk += character;
+    bytes += size;
+  }
+  if (chunk) yield chunk;
+}
+
+/* Audio crosses this file as base64 strings: the device, the stream and GPT-Live all speak
+ * 16 kHz PCM16, so a frame is never re-encoded, only measured. */
 
 /** Bytes to base64, chunked so a long buffer cannot blow the argument list. */
 function bytesToBase64(bytes: Uint8Array): string {
@@ -265,7 +156,6 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/** Base64 back to bytes. */
 function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -273,11 +163,7 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
-/**
- * Decoded byte length of a base64 string, WITHOUT decoding it — how the
- * pipeline does its byte arithmetic on audio it never decodes. Also what
- * puts `deltaBytes` on the mirrored provider events.
- */
+/** Decoded byte length of a base64 string, without decoding it. */
 function base64ByteLength(base64: string): number {
   const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
   return Math.floor(base64.length / 4) * 3 - padding;
@@ -286,12 +172,8 @@ function base64ByteLength(base64: string): number {
 /** All-zero bytes encode to nothing but `A`s (plus padding). */
 const ALL_ZERO_BASE64 = /^A+=*$/;
 
-/**
- * The loudest sample in a base64 PCM16 delta, as a non-negative integer.
- * Exact digital silence — the idle stream's whole content — is recognised
- * off the STRING, so the common case never decodes; anything else decodes
- * once (3,200 bytes per 100 ms delta, trivial) and scans.
- */
+/** The loudest sample in a base64 PCM16 delta. Exact digital silence, the idle stream's whole
+ * content, is recognised off the string; anything else decodes once and scans. */
 function peakOfBase64Pcm16(base64: string): number {
   if (base64 === "" || ALL_ZERO_BASE64.test(base64)) return 0;
   const bytes = base64ToBytes(base64);
@@ -304,117 +186,75 @@ function peakOfBase64Pcm16(base64: string): number {
   return peak;
 }
 
-/* ========================================================================== */
-/* CONTRACT                                                                   */
-/* ========================================================================== */
-
-/** A client-local call identity; opaque to the backend and durable fold. */
+/** The device's call identity: the press mints it, the frames carry it. */
 const Activation = z.string().min(1).max(64);
 
-/* Firmware holds at most two terminals while its ordered sender waits for
- * stream capacity. Remember that exact bounded set, so either delayed
- * terminal still fences its own queued microphone audio. */
-const RECENT_ENDED_ACTIVATIONS_CAPACITY = 2;
-const MAX_ANSWERED_DELEGATIONS_REMEMBERED = 50;
-
-/**
- * Everything that outlives the Durable Object holding the socket.
- *
- * Note what is NOT here: no queues, no byte counts, no "is speaking" flag.
- * Reduced state that depends on a buffer no restart can replay is a lie.
- */
+/** Everything that outlives the Durable Object holding the socket. No queues, no byte counts, no
+ * "is speaking" flag: reduced state that depends on a buffer no restart can replay is a lie. */
 const VoiceState = z.object({
-  /** The voice's persona. Empty means the delegation policy alone. */
-  instructions: z.string().default(""),
-  /**
-   * The rolling recap: the newest finished turns, in words, both sides.
-   * Folded from the durable transcript events and seeded as history into
-   * every fresh provider session, so a re-dial resumes the conversation.
-   */
+  /** The rolling recap of finished turns, folded from the transcript events and seeded as history
+   * into every fresh provider session, so a re-dial resumes the conversation. */
   transcript: z
     .array(z.strictObject({ role: z.enum(["listener", "assistant"]), text: z.string() }))
     .default([]),
   /** Delegations already answered (a `commentary` naming them landed), newest first. */
   answeredDelegationIds: z.array(z.string()).max(MAX_ANSWERED_DELEGATIONS_REMEMBERED).default([]),
-  /** Recent client terminals, newest first; see RECENT_ENDED_ACTIVATIONS_CAPACITY. */
-  recentEndedActivations: z.array(Activation).max(RECENT_ENDED_ACTIVATIONS_CAPACITY).default([]),
   call: z
     .object({
       conversationId: z.string(),
       activation: Activation,
-      /**
-       * When the Stream DO committed the device's most recent input — a mic
-       * frame or a button edge. THE DEVICE'S INPUT, not "the last thing
-       * anybody said": the agent's own speech leaves no durable event.
-       */
+      /** When the stream committed the device's most recent input (a mic frame or a keepalive).
+       * The device's input only: the agent's own speech leaves no durable event. */
       lastDeviceInputAtStreamMs: z.number(),
     })
     .nullable()
     .default(null),
 });
 
-const EPH = { ephemeral: true as const };
-
-export const VoiceAgentContract = defineProcessorContract({
+const VoiceAgentContract = defineProcessorContract({
   slug: "voice-agent",
   version: "1.0.0",
   description:
-    "Runs a GPT-Live voice call in the stream's own Durable Object, relaying audio both ways as it arrives.",
+    "Runs a GPT-Live voice call in the conversation's own Durable Object, relaying audio both ways as it arrives.",
   stateSchema: VoiceState,
   events: {
-    "events.iterate.com/voice-agent/configured": {
-      description: "The agent configuration. An absent field resets to its default.",
-      payloadSchema: z.strictObject({ instructions: z.string().optional() }),
-    },
-    /*
-     * THE DEVICE'S HALF is one verb and a heartbeat: here is audio, I am
-     * still here. Whether a call exists, what it is called and when it ends
-     * are the server's. A button, where a client has one, only unmutes its
-     * microphone while held; nothing about it travels.
-     */
+    /* The device's half is one verb and a heartbeat: here is audio, I am still here. */
     "events.iterate.com/voice-agent/keepalive": {
       description:
         "The client's call UI is alive, said every ~20s: feeds the idle deadline so a caller " +
         "who waits quietly is not reaped at 60s of mic silence.",
-      ...EPH,
+      ephemeral: true,
       payloadSchema: z.strictObject({}),
     },
     "events.iterate.com/voice-agent/mic-frame": {
-      description:
-        "One capture chunk. A client writes mic and terminal events from one ordered local sender; " +
-        "the first frame on a quiet stream opens its activation.",
-      ...EPH,
+      description: "One capture chunk of the call named by its activation.",
+      ephemeral: true,
       payloadSchema: z.looseObject({
         activation: Activation,
-        /** 16 kHz mono PCM16, base64. The only encoding these frames carry. */
+        /** 16 kHz mono PCM16, base64. */
         pcm: z.string(),
       }),
     },
     "events.iterate.com/voice-agent/call-started": {
       description:
-        "The server opened a client activation and assigned its authoritative conversation id.",
-      payloadSchema: z.looseObject({
-        activation: Activation,
-        conversationId: z.string(),
-        streamPath: z.string().optional(),
-      }),
+        "The press opened the call: the device's activation and the conversation id derived from it.",
+      payloadSchema: z.looseObject({ activation: Activation, conversationId: z.string() }),
     },
     "events.iterate.com/voice-agent/conversation-accepted": {
       description: "The provider started the session; the call is live.",
       payloadSchema: z.looseObject({
         activation: Activation,
         conversationId: z.string(),
-        /** Facet clock: dial to usable, the number a cold call is judged on. */
+        /** Facet clock: dial to usable. */
         handshakeTookMs: z.number(),
-        /** Facet clock: dial to the provider's 101 — the egress and upgrade share of the handshake. */
+        /** Facet clock: dial to the provider's 101, the egress and upgrade share of the handshake. */
         upgradeTookMs: z.number().optional(),
         /** Capture held during the handshake and released in one go. */
         heldMicFrames: z.number(),
       }),
     },
     "events.iterate.com/voice-agent/conversation-ended": {
-      description:
-        "The local activation is over. A client may append this before the server assigns a conversation id.",
+      description: "The call is over; the device appends it too (the hang-up button).",
       payloadSchema: z.looseObject({ activation: Activation, reason: z.string() }),
     },
     "events.iterate.com/voice-agent/provider-error": {
@@ -425,14 +265,8 @@ export const VoiceAgentContract = defineProcessorContract({
       description: "The provider's session or socket closed under a live call.",
       payloadSchema: z.looseObject({ conversationId: z.string(), reason: z.string() }),
     },
-
-    /*
-     * THE DURABLE TRANSCRIPT — what was actually said, in words, one event
-     * per finished turn per side, grouped from the provider's timeline
-     * fragments. The fold keeps a bounded recap of these and every new
-     * session is seeded with it, and an instrument or an eval can read off
-     * the stream what the voice actually said.
-     */
+    /* The durable transcript: one event per finished turn per side, grouped from the provider's
+     * timeline fragments. The fold keeps a recap of these and seeds every new session with it. */
     "events.iterate.com/voice-agent/utterance-transcript": {
       description: "The provider's transcription of one finished listener turn.",
       payloadSchema: z.looseObject({
@@ -451,16 +285,8 @@ export const VoiceAgentContract = defineProcessorContract({
         key: z.string().optional(),
       }),
     },
-    "events.iterate.com/voice-agent/instructions": {
-      description: "A standard Agent instruction for the live model's behaviour.",
-      payloadSchema: z.object({
-        activation: Activation,
-        delegationId: z.string().nullable(),
-        content: z.string().min(1).max(8_000),
-      }),
-    },
     "events.iterate.com/voice-agent/thinking": {
-      description: "A standard Agent factual update for the live model to use quietly.",
+      description: "A backend note for the live model to use quietly.",
       payloadSchema: z.object({
         activation: Activation,
         delegationId: z.string().nullable(),
@@ -468,7 +294,7 @@ export const VoiceAgentContract = defineProcessorContract({
       }),
     },
     "events.iterate.com/voice-agent/commentary": {
-      description: "A standard Agent fact for the live model to paraphrase aloud.",
+      description: "The backend's answer for the live model to paraphrase aloud.",
       payloadSchema: z.object({
         activation: Activation,
         delegationId: z.string().nullable(),
@@ -478,7 +304,7 @@ export const VoiceAgentContract = defineProcessorContract({
     },
     "events.iterate.com/voice-agent/delegation-requested": {
       description:
-        "The live model handed a request to the backend. The words said so far ride along; a sibling processor answers with commentary/thinking/instructions carrying the same activation and delegationId.",
+        "The live model handed a request to the backend, with the words said so far; the answer is a commentary naming the same delegationId.",
       payloadSchema: z.looseObject({
         activation: Activation,
         conversationId: z.string(),
@@ -488,57 +314,35 @@ export const VoiceAgentContract = defineProcessorContract({
         ),
       }),
     },
-    /*
-     * THE SPEAKER FRAMES. Two events, and between them the device's entire buffer
-     * policy: play frames in sequence order, and throw away anything at or
-     * below a watermark.
-     */
     "events.iterate.com/voice-agent/spk-frame": {
-      description:
-        "One chunk of the answer, forwarded as it arrived, numbered within the conversation.",
-      ...EPH,
+      description: "One chunk of the answer, forwarded as it arrived.",
+      ephemeral: true,
       payloadSchema: z.looseObject({
         activation: Activation,
         conversationId: z.string(),
-        /** Monotonic within the call. The only ordering the device trusts. */
-        deviceSpeakerFrameSeq: z.number(),
-        /** 16 kHz mono PCM16, base64, of no particular length. EMPTY on a
-         * frame whose only job is the clear or the end marker. */
+        /** 16 kHz mono PCM16, base64. Empty on a frame whose only job is the end marker. */
         pcm: z.string(),
-        /** Throw away everything queued, then play this frame. Bound to a
-         * numbered frame so a late one cannot touch a replacing answer. */
+        /** Throw away everything queued, then play this frame. */
         clearSpeakerBufferBeforeFrame: z.boolean().optional(),
-        /** Nothing more is coming for this answer. Raised only once the
-         * queue behind it is empty, as its own frame when it has to be. */
+        /** Nothing more is coming for this answer. */
         lastFrameOfAnswer: z.boolean().optional(),
-        /** Facet clock, at the moment this frame was handed to the stream. */
-        sentAtFacetMs: z.number(),
-        /** Facet clock when the provider callback delivered this PCM. */
-        receivedAtFacetMs: z.number().optional(),
       }),
     },
   },
   consumes: [
-    "events.iterate.com/voice-agent/configured",
-    "events.iterate.com/voice-agent/instructions",
     "events.iterate.com/voice-agent/thinking",
     "events.iterate.com/voice-agent/commentary",
     "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/conversation-ended",
     "events.iterate.com/voice-agent/delegation-requested",
-    /* Consumed so the fold sees its own appends and the recap survives an
-     * eviction — processEvent has no arm for them on purpose. */
+    /* Consumed so the fold sees its own appends and the recap survives an eviction. */
     "events.iterate.com/voice-agent/utterance-transcript",
     "events.iterate.com/voice-agent/answer-transcript",
-    /* The live half. Naming them is the whole opt-in — `"*"` never matches an
-     * ephemeral event, so nobody gets this firehose by accident. */
+    /* Ephemeral: named here because `"*"` never matches an ephemeral event. */
     "events.iterate.com/voice-agent/mic-frame",
-    /* The client's "still here" heartbeat — consumed only for the idle
-     * stamp; processEvent has no arm for it. */
     "events.iterate.com/voice-agent/keepalive",
   ],
   emits: [
-    "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/delegation-requested",
     "events.iterate.com/voice-agent/commentary",
     "events.iterate.com/voice-agent/thinking",
@@ -551,34 +355,20 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/spk-frame",
   ],
 });
-export type VoiceAgentContract = typeof VoiceAgentContract;
+type VoiceAgentContract = typeof VoiceAgentContract;
 
 type VoiceState = z.infer<typeof VoiceState>;
 
-function rememberEndedActivation(state: VoiceState, activation: string): string[] {
-  if (state.recentEndedActivations.includes(activation)) return state.recentEndedActivations;
-  return [activation, ...state.recentEndedActivations].slice(0, RECENT_ENDED_ACTIVATIONS_CAPACITY);
-}
-
-/**
- * Everything whose lifetime is ONE ANSWER — one run of speech on the
- * provider's continuous output stream. REPLACED WHOLESALE at the onset of
- * speech, instead of hand-reset field by field: an object that is swapped
- * cannot forget a field.
- */
+/** One run of speech on the provider's continuous output stream. Replaced wholesale at the onset
+ * of speech, so no field can be forgotten in a reset. */
 interface Answer {
-  /**
-   *   "speaking"  the stream is carrying speech (or a pause shorter than
-   *               ANSWER_TAIL_SILENCE_MS inside it); deltas go to the device.
-   *   "settled"   between answers: idle silence is dropped here.
-   */
+  /** "speaking": deltas go to the device (pauses shorter than the tail bound included);
+   * "settled": between answers, idle silence is dropped. */
   phase: "speaking" | "settled";
-  /** Silence received since the last speech in this answer, in audio ms —
-   * the counter that ends it. */
+  /** Silence received since the last speech in this answer, in audio ms. */
   trailingSilenceMs: number;
 }
 
-/** The between-answers state: nothing playing, nothing owed. */
 const freshAnswer = (): Answer => ({ phase: "settled", trailingSilenceMs: 0 });
 
 /** One speaker's open transcript row: fragments not yet closed by a gap. */
@@ -589,103 +379,64 @@ interface TurnBuffer {
   endTimelineMs: number;
 }
 
-/**
- * Everything whose lifetime is one provider dial.
- *
- * CREATED BEFORE THE AWAITED DIAL — `socket` stays null while the dial is in
- * flight, which is what lets the mic path keep queueing during the handshake
- * — and dropped whole when the dial fails, its socket closes, or the call is
- * hung up. One object where hand-maintained reset lists used to disagree.
- */
+/** Everything whose lifetime is one provider dial. Created before the awaited dial (`socket`
+ * stays null while it is in flight, which is what lets the mic path queue during the handshake)
+ * and dropped whole when the dial fails, its socket closes, or the call is hung up. */
 interface Dial {
-  /** The call this dial serves. A re-dial of the same call is a NEW Dial. */
   readonly conversationId: string;
-  /** The local activation this server call belongs to. */
   readonly activation: string;
-  /** This dial's own identity, for keys that must not collide with the
-   * previous dial of the SAME call — a timestamp is not enough on a virtual
-   * clock. */
+  /** This dial's own identity, for keys that must not collide with an earlier dial of the same
+   * call. */
   readonly dialId: string;
-  /** The provider's socket, or null while the dial is still in flight. */
+  /** The provider's socket, or null while the dial is in flight. */
   socket: WebSocket | null;
   /** True once `session.started` arrived and audio may flow. */
   ready: boolean;
-  /** Facet clock when the provider's 101 came back — the upgrade's own cost. */
+  /** Facet clock when the provider's 101 came back. */
   socketReadyAtFacetMs: number;
-  /** Capture held while this Dial's handshake completes, oldest first. */
+  /** Capture held while the handshake completes, oldest first, and its decoded byte count. */
   micQueue: string[];
-  /** Decoded PCM bytes in micQueue. */
   micQueueBytes: number;
-  /**
-   * Frames awaiting hand-over to the stream, oldest first — the delta's own
-   * base64, or an empty frame carrying the end marker. NUMBERED WHEN SENT,
-   * not when queued, so an obituary that drops queued frames leaves no hole
-   * in the numbering. In the ordinary course this holds one frame for the
-   * duration of one append.
-   */
-  speakerOutbox: { pcm: string; receivedAtFacetMs?: number; lastFrameOfAnswer?: true }[];
-  /** Decoded PCM presently queued for the speaker sender. Markers cost nothing. */
+  /** Frames awaiting hand-over to the stream, oldest first: the delta's own base64, or an empty
+   * frame carrying the end marker. Ordinarily one frame for the duration of one append. */
+  speakerOutbox: { pcm: string; lastFrameOfAnswer?: true }[];
+  /** Decoded PCM bytes presently queued; markers cost nothing. */
   speakerOutboxBytes: number;
-  /** Once this queue overflows, ignore later provider deltas while the terminal is appended. */
+  /** Once the outbox overflows, later deltas are ignored while the terminal is appended. */
   speakerOutboxOverflowed: boolean;
-  /**
-   * ONE sender per live dial, started with its first output and waiting while
-   * the outbox is empty. One keepalive registration per dial: registering it
-   * per FRAME (ten a second) arms the
-   * recovery record and its alarm ten times a second, each a storage write
-   * ahead of the append — measured 2026-09-11 as one frame reaching the
-   * device every ~1.5 s while the provider sent ten.
-   */
+  /** One sender per live dial, started with its first output, waiting while the outbox is empty. */
   sending: boolean;
   /** Wakes the sender waiting on an empty outbox; null while it is sending or gone. */
   wakeSender: (() => void) | null;
-  /** Facet clock at the last speaker frame handed over — the "this end is
-   * busy" reading the idle deadline uses. */
+  /** Facet clock at the last speaker frame handed over: the "this end is busy" reading the idle
+   * deadline uses. */
   lastSpeakerFrameAtFacetMs: number;
-  /** Last speaker-frame sequence number minted, for this call. */
-  lastDeviceSpeakerFrameSeq: number;
-  /**
-   * The next frame out must tell the device to empty its speaker first.
-   * TRUE FROM THE MOMENT THE DIAL IS DECIDED: the device may still hold
-   * frames from the incarnation that died, numbered higher than the ones
-   * about to arrive. Consumed by the sender.
-   */
+  /** The next frame out tells the device to empty its speaker first. True from the moment the
+   * dial is decided: the device may still hold frames from the incarnation that died. */
   clearSpeakerBufferBeforeNextFrame: boolean;
-  /**
-   * The backend decided the call is over, with this reason; the call ends
-   * once the goodbye's end marker has gone out (or the grace runs out).
-   * Runtime on purpose: evicted, the idle deadline backstops.
-   */
+  /** The backend decided the call is over, with this reason; the call ends once the goodbye's end
+   * marker has gone out (or the grace runs out). Runtime only: evicted, the idle deadline backstops. */
   hangUpReason: string | null;
-  /** Facet clock when the hang-up was decided — see HANG_UP_GOODBYE_GRACE_MS. */
+  /** Facet clock when the hang-up was decided. */
   hangUpArmedAtFacetMs: number;
   /** An acknowledgement already playing at the decision is not the goodbye. */
   answerBeforeHangUp: Answer | null;
-  /** Bounded conversation context, including turns closed since the dial began. */
+  /** The recap, including turns closed since the dial began. */
   transcript: TranscriptTurn[];
-  /** The answer in flight — replaced wholesale at the onset of speech. */
+  /** The answer in flight. */
   answer: Answer;
-  /** How far, on the facet clock, the device's forwarded audio reaches:
-   * each forwarded chunk extends it by its own duration, so a burst of 500 ms
-   * sent in one append covers the next 500 ms and the silence fill starts
-   * only past it — filling INSIDE a
-   * burst chops the person's words with silence (measured: "count to sixty"
-   * reached the model as "count to six"). */
+  /** How far, on the facet clock, the device's forwarded audio reaches: each forwarded chunk
+   * extends it by its own duration, so the silence fill covers only the gaps and never chops a
+   * burst of speech. */
   micAudioCoveredUntilFacetMs: number;
-  /**
-   * The furthest point on the provider's SESSION TIMELINE seen so far —
-   * transcript `end_ms`, delegation `offset_ms`, and the running total of
-   * output audio, whichever is largest. What closes a transcript row: a row
-   * whose last fragment is TURN_GAP_MS behind the timeline is a finished
-   * turn. Output audio is the metronome — it arrives every 100 ms whether or
-   * not anything is being said — so rows close without any timer.
-   */
+  /** The furthest point on the provider's session timeline seen so far: transcript `end_ms` and
+   * the running total of output audio. Output audio arrives every 100 ms whether or not anything
+   * is said, so transcript rows close against it without any timer. */
   timelineMs: number;
   /** The two open transcript rows, one per speaker; both may be open at once. */
   turns: { user: TurnBuffer | null; assistant: TurnBuffer | null };
 }
 
-/** A dial just decided: no socket yet, nothing sent, a clear owed first. */
 const freshDial = (conversationId: string, activation: string): Dial => ({
   conversationId,
   activation,
@@ -701,7 +452,6 @@ const freshDial = (conversationId: string, activation: string): Dial => ({
   sending: false,
   wakeSender: null,
   lastSpeakerFrameAtFacetMs: 0,
-  lastDeviceSpeakerFrameSeq: 0,
   clearSpeakerBufferBeforeNextFrame: true,
   hangUpReason: null,
   hangUpArmedAtFacetMs: 0,
@@ -713,19 +463,12 @@ const freshDial = (conversationId: string, activation: string): Dial => ({
   turns: { user: null, assistant: null },
 });
 
-/* ========================================================================== */
-/* PROCESSOR                                                                  */
-/* ========================================================================== */
-
 /** What the host injects; every wait and every clock in this file comes from here. */
 export type VoiceAgentDeps = {
-  /** The facet clock. Every `...AtFacetMs` in this file comes from here. */
   nowAtFacetMs(): number;
-  /** The only way this processor waits, injected so tests use a fake clock. */
+  /** The only way this processor waits, injected so tests can use a fake clock. */
   sleep(ms: number): Promise<void>;
   dialProvider(): Promise<WebSocket | null>;
-  /** The context this processor serves, for the facts it records about itself. */
-  path: string;
   /** The backend turn's model call and script tool (delegation-turn.ts). */
   complete: DelegationTurnDeps["complete"];
   runScript: DelegationTurnDeps["runScript"];
@@ -733,73 +476,36 @@ export type VoiceAgentDeps = {
 
 type VoiceArgs = ProcessEventArgs<VoiceState, ConsumedEvent<VoiceAgentContract>>;
 
-export class VoiceAgentProcessor extends StreamProcessor<
-  VoiceState,
-  ConsumedEvent<VoiceAgentContract>
-> {
+class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<VoiceAgentContract>> {
   readonly contract = VoiceAgentContract;
 
   constructor(private readonly deps: VoiceAgentDeps) {
     super();
   }
 
-  /**
-   * The engine's fire-and-forget helper as last handed over by `processEvent`
-   * — for work that starts from a provider message, outside any delivery.
-   */
-  #background: (work: () => Promise<unknown>) => void = (work) => {
-    void work().catch((error: unknown) => {
-      console.error("voice-agent background work failed before any delivery", { error });
-    });
-  };
+  /** The engine's `append` and fire-and-forget helper as handed over by the latest delivery.
+   * Provider messages arrive outside any delivery and use these. */
+  #append!: VoiceArgs["append"];
+  #background!: VoiceArgs["runInBackground"];
 
-  /* --------------------------------------------------------- runtime state */
-  /* Every one of these dies with the incarnation on purpose. Anything that
-   * must outlive an eviction is in the fold above. */
-
-  /**
-   * The dial this incarnation is running, or null when there is none.
-   *
-   * ONE DIAL AT A TIME: created synchronously the moment a dial is decided —
-   * so two caught-up deliveries cannot open two sockets — and null again
-   * when the dial fails, its socket closes, or the call is hung up. Every
-   * closure the dial spawns fences itself with `this.#dial !== dial`.
-   */
+  /** The dial this incarnation runs, or null. Created synchronously the moment a dial is decided,
+   * so two deliveries cannot open two sockets, and null again when it fails, its socket closes or
+   * the call is hung up. Every closure the dial spawns fences itself with `this.#dial !== dial`. */
   #dial: Dial | null = null;
-  /**
-   * A call has been ASKED for, and the log has not caught up yet. A board
-   * streams microphone frames continuously, so the window between asking
-   * and the fold showing a call is never empty — without this every frame in
-   * it minted its own conversation.
-   */
-  #callRequestedForActivation: string | null = null;
-  /**
-   * The fold's `lastDeviceInputAtStreamMs`, refreshed on every delivery. A
-   * MIRROR, never a second source of truth: the idle loop runs between
-   * deliveries and has no way to read the fold.
-   */
+  /** The fold's `lastDeviceInputAtStreamMs`, mirrored for the idle tick that runs between
+   * deliveries and cannot read the fold. */
   #lastDeviceInputAtStreamMsMirror = 0;
-  /** The activation whose terminal event is still travelling through the log. */
+  /** The activation whose terminal event is travelling through the log. */
   #endingActivation: string | null = null;
   /** Delegations this incarnation is answering right now. */
   readonly #turnsInFlight = new Set<string>();
-  /* ------------------------------------------------------------------ fold */
 
   reduce({ state, event }: ReduceArgs<VoiceState, ConsumedEvent<VoiceAgentContract>>) {
     const committedAtStreamMs = Date.parse(event.createdAt);
     switch (event.type) {
-      case "events.iterate.com/voice-agent/configured":
-        /* REPLACED WHOLESALE, defaults and all: an absent field resets rather
-         * than survives. */
-        return { ...state, instructions: event.payload.instructions || "" };
-
       case "events.iterate.com/voice-agent/call-started":
-        /* The id was minted INTO the event rather than here, so this is
-         * deterministic under replay. The deadline starts here too: opening a
-         * call IS the device saying something. */
-        if (state.call || state.recentEndedActivations.includes(event.payload.activation)) {
-          return state;
-        }
+        /* Opening a call is the device's first input, so the deadline starts here. */
+        if (state.call) return state;
         return {
           ...state,
           call: {
@@ -810,26 +516,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
         };
 
       case "events.iterate.com/voice-agent/mic-frame":
-        /* Their BODIES never reach the fold, but their commit stamps are as
-         * durable as any event's, and folding the newest is what makes the
-         * idle deadline outlive an eviction. `max` so a redelivered batch
-         * cannot walk the deadline backwards. */
-        return !state.call ||
-          state.call.activation !== event.payload.activation ||
-          committedAtStreamMs - state.call.lastDeviceInputAtStreamMs < IDLE_STAMP_STEP_MS
-          ? state
-          : {
-              ...state,
-              call: {
-                ...state.call,
-                lastDeviceInputAtStreamMs: Math.max(
-                  state.call.lastDeviceInputAtStreamMs,
-                  committedAtStreamMs,
-                ),
-              },
-            };
-
       case "events.iterate.com/voice-agent/keepalive":
+        /* Their bodies never reach the fold, but their commit stamps are durable, and folding the
+         * newest is what makes the idle deadline outlive an eviction. `max` so a redelivered batch
+         * cannot walk it backwards. */
         return !state.call ||
           committedAtStreamMs - state.call.lastDeviceInputAtStreamMs < IDLE_STAMP_STEP_MS
           ? state
@@ -845,22 +535,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
             };
 
       case "events.iterate.com/voice-agent/conversation-ended":
-        /* Retain both terminals the client can have in flight. A late A must
-         * not erase B's fence, and a B terminal before its first mic must
-         * still block that mic. */
-        if (!state.call) {
-          return {
-            ...state,
-            recentEndedActivations: rememberEndedActivation(state, event.payload.activation),
-          };
-        }
-        return state.call.activation !== event.payload.activation
-          ? state
-          : {
-              ...state,
-              call: null,
-              recentEndedActivations: rememberEndedActivation(state, event.payload.activation),
-            };
+        return state.call?.activation === event.payload.activation
+          ? { ...state, call: null }
+          : state;
 
       case "events.iterate.com/voice-agent/commentary": {
         const { delegationId } = event.payload;
@@ -874,7 +551,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         };
       }
 
-      case "events.iterate.com/voice-agent/utterance-transcript": {
+      case "events.iterate.com/voice-agent/utterance-transcript":
         if (event.payload.text === "") return state;
         return {
           ...state,
@@ -883,9 +560,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
             text: event.payload.text,
           }),
         };
-      }
 
-      case "events.iterate.com/voice-agent/answer-transcript": {
+      case "events.iterate.com/voice-agent/answer-transcript":
         if (event.payload.text === "") return state;
         return {
           ...state,
@@ -894,55 +570,35 @@ export class VoiceAgentProcessor extends StreamProcessor<
             text: event.payload.text,
           }),
         };
-      }
 
       default:
         return state;
     }
   }
 
-  /* ----------------------------------------------------------------- react */
-
   processEvent(args: VoiceArgs): undefined {
-    const { state, event, delivery, runInBackground } = args;
-    const append = args.append;
-    this.#background = runInBackground;
+    const { state, event, delivery } = args;
+    this.#append = args.append;
+    this.#background = args.runInBackground;
+    if (state.call) this.#lastDeviceInputAtStreamMsMirror = state.call.lastDeviceInputAtStreamMs;
 
-    /* The log has caught up with an opening append we were remembering. */
-    if (state.call) {
-      this.#callRequestedForActivation = null;
-      this.#lastDeviceInputAtStreamMsMirror = state.call.lastDeviceInputAtStreamMs;
-    }
-
-    /*
-     * Setup may put `call-started` in this facet's first batch (it knows the
-     * device's activation). Dialling HERE overlaps the provider handshake with
-     * the device's downlink bind and its first microphone frames.
-     *
-     * Deliberately narrower than "a call exists": after an eviction the durable
-     * call still exists but this live event is absent, so the recovery branch
-     * below records the interruption instead of re-dialling a socket whose
-     * previous side effects are unknowable.
-     */
+    /* The press put `call-started` in this facet's first batch, so dialling here overlaps the
+     * provider handshake with the device's downlink bind and its first microphone frames. Only
+     * the live event dials: a crash inside that batch re-delivers it and re-dials, which is right;
+     * past its checkpoint the durable call without its event is the interruption recorded below. */
     if (
       event?.type === "events.iterate.com/voice-agent/call-started" &&
       state.call?.activation === event.payload.activation &&
       this.#dial === null
     ) {
-      this.#openProviderConnection(
-        state.call.conversationId,
-        state.call.activation,
-        state,
-        append,
-        runInBackground,
-      );
+      this.#openProviderConnection(state.call.conversationId, state.call.activation, state);
     }
 
-    /* A provider session is volatile. Its durable record cannot revive it. */
+    /* A provider session is volatile; its durable record cannot revive it. */
     const owedCall = delivery.caughtUp ? state.call : null;
     if (owedCall && this.#dial?.activation !== owedCall.activation) {
       args.blockProcessorWhile(() =>
-        this.#end(owedCall.activation, "the voice session was interrupted", append),
+        this.#end(owedCall.activation, "the voice session was interrupted"),
       );
     }
 
@@ -950,25 +606,24 @@ export class VoiceAgentProcessor extends StreamProcessor<
 
     switch (event.type) {
       case "events.iterate.com/voice-agent/delegation-requested": {
-        /* THE BACKEND TURN, in the facet that raised it: the answer is a
-         * `commentary` naming the delegation, which is also its durable settle
-         * — an evicted turn re-runs from the log because no commentary landed. */
+        /* The backend turn, in the facet that raised it: the answer is a `commentary` naming the
+         * delegation, which is also what marks it answered in the fold. */
         const { activation, delegationId, transcript } = event.payload;
         if (state.answeredDelegationIds.includes(delegationId)) return;
         if (this.#turnsInFlight.has(delegationId)) return;
         this.#turnsInFlight.add(delegationId);
-        runInBackground(async () => {
+        this.#background(async () => {
           try {
             const turn = await runDelegationTurn(transcript, {
               complete: this.deps.complete,
               runScript: this.deps.runScript,
               progress: (note) =>
-                append({
+                this.#append({
                   type: "events.iterate.com/voice-agent/thinking",
                   payload: { activation, delegationId: null, content: note },
                 }),
             });
-            await append({
+            await this.#append({
               type: "events.iterate.com/voice-agent/commentary",
               idempotencyKey: this.idempotencyKey(`commentary:${delegationId}`),
               payload: {
@@ -985,30 +640,22 @@ export class VoiceAgentProcessor extends StreamProcessor<
         return;
       }
 
-      case "events.iterate.com/voice-agent/instructions":
       case "events.iterate.com/voice-agent/thinking":
       case "events.iterate.com/voice-agent/commentary": {
         const dial = this.#dial;
         const update = event.payload;
-        if (!dial || dial.activation !== update.activation) {
-          /* A dial dies with its incarnation. Its absence cannot tell us that
-           * a redelivered update was not forwarded; only the durable fold can. */
-          return;
-        }
+        /* A dial dies with its incarnation; a redelivered update with no dial is not forwarded. */
+        if (!dial || dial.activation !== update.activation) return;
         const sessionType =
-          event.type === "events.iterate.com/voice-agent/instructions"
-            ? "instructions"
-            : event.type === "events.iterate.com/voice-agent/thinking"
-              ? "thinking"
-              : "commentary";
+          event.type === "events.iterate.com/voice-agent/thinking" ? "thinking" : "commentary";
         if (event.type === "events.iterate.com/voice-agent/commentary" && event.payload.hangUp) {
           dial.hangUpReason = "the Agent hung up";
           dial.hangUpArmedAtFacetMs = this.deps.nowAtFacetMs();
           dial.answerBeforeHangUp = dial.answer;
-          runInBackground(async () => {
+          this.#background(async () => {
             await this.deps.sleep(HANG_UP_GOODBYE_GRACE_MS);
             if (this.#dial !== dial || dial.answer.phase === "speaking") return;
-            await this.#settleHangUp(dial, append);
+            await this.#settleHangUp(dial);
           });
         }
         let chunkIndex = 0;
@@ -1024,128 +671,66 @@ export class VoiceAgentProcessor extends StreamProcessor<
       }
 
       case "events.iterate.com/voice-agent/mic-frame": {
-        /* NOT DECODED HERE, on purpose. The frame stays the device's own
-         * base64 string all the way to the wire. */
+        /* The frame stays the device's own base64 string all the way to the wire. */
         const micB64 = event.payload.pcm;
-        const activation = event.payload.activation;
-        /* An empty frame is a client bug, not audio: the provider rejects
-         * "audio/pcm audio must not be empty" and it can open no call. */
+        /* An empty frame is a client bug, not audio: the provider rejects it. */
         if (micB64 === "") return;
-        /* Input only ever reaches the matching local activation. A client
-         * output is ordered, so a mic from an ended activation must not
-         * arrive after its successor has itself ended. */
-        if (state.call && state.call.activation !== activation) return;
-        if (!state.call && state.recentEndedActivations.includes(activation)) return;
-        if (!state.call && this.#endingActivation === activation) return;
-        if (!state.call && this.#callRequestedForActivation !== activation) {
-          const conversationId = `conv_${crypto.randomUUID()}`;
-          this.#callRequestedForActivation = activation;
-          /* THE IDLE DEADLINE ARMS AT MINT: opening a call IS the device's
-           * initial input. `max` so a mint can never walk a fresher stamp back. */
-          this.#lastDeviceInputAtStreamMsMirror = Math.max(
-            this.#lastDeviceInputAtStreamMsMirror,
-            this.deps.nowAtFacetMs(),
-          );
-          /* The call is not live until this append succeeds. */
-          args.blockProcessorWhile(() =>
-            append({
-              type: "events.iterate.com/voice-agent/call-started",
-              idempotencyKey: this.idempotencyKey(`call:${activation}`),
-              payload: { activation, conversationId, streamPath: this.deps.path },
-            }).catch((error: unknown) => {
-              if (this.#callRequestedForActivation === activation) {
-                this.#callRequestedForActivation = null;
-              }
-              if (this.#dial?.activation === activation) this.#hangUp();
-              throw error;
-            }),
-          );
-          /*
-           * DIAL NOW, NOT WHEN THE LOG AGREES. Waiting for the append to come
-           * back and be folded put a full stream round trip in front of every
-           * first word — measured at 7.4 seconds. And NO return: the frame
-           * that opened the call falls through to the hold site below.
-           */
-          this.#openProviderConnection(conversationId, activation, state, append, runInBackground);
-        }
-
         const dial = this.#dial;
-        if (dial && dial.activation === activation && dial.ready && dial.socket) {
-          /* Capture duration is the only credit.  Anchoring each frame to
-           * its arrival time silently counts a slow transport gap as audio:
-           * 50 ms frames every 55 ms then keep the provider clock five ms
-           * behind on every frame.  The silence clock accumulates those gaps
-           * into its next 100 ms fill instead. */
-          dial.micAudioCoveredUntilFacetMs += base64ByteLength(micB64) / PCM16_BYTES_PER_MS;
+        if (!dial || dial.activation !== event.payload.activation) return;
+        const micBytes = base64ByteLength(micB64);
+        if (dial.ready && dial.socket) {
+          /* Capture duration is the only credit: anchoring frames to their arrival time would
+           * count a slow transport gap as audio and keep the provider clock behind on every frame;
+           * the silence fill covers the gaps instead. */
+          dial.micAudioCoveredUntilFacetMs += micBytes / PCM16_BYTES_PER_MS;
           this.#sendMicAudio(dial.socket, micB64);
-        } else {
-          const micBytes = base64ByteLength(micB64);
-          const openingDial = dial?.activation === activation ? dial : null;
-          if (!openingDial) return;
-          if (openingDial.micQueueBytes + micBytes <= MAX_HELD_MIC_BYTES) {
-            openingDial.micQueue.push(micB64);
-            openingDial.micQueueBytes += micBytes;
-            return;
-          }
-          this.#hangUp();
-          runInBackground(() =>
-            this.#end(
-              activation,
-              `the provider did not become ready before ${MAX_HELD_MIC_BYTES / 32}ms of microphone audio accumulated`,
-              append,
-            ),
-          );
+          return;
         }
+        if (dial.micQueueBytes + micBytes <= MAX_HELD_MIC_BYTES) {
+          dial.micQueue.push(micB64);
+          dial.micQueueBytes += micBytes;
+          return;
+        }
+        this.#hangUp();
+        this.#background(() =>
+          this.#end(
+            dial.activation,
+            `the provider did not become ready before ${MAX_HELD_MIC_BYTES / PCM16_BYTES_PER_MS}ms of microphone audio accumulated`,
+          ),
+        );
         return;
       }
 
       case "events.iterate.com/voice-agent/conversation-ended": {
-        /*
-         * A DEVICE-appended obituary (the hang-up button) takes this path
-         * without any end-requested ever existing, so the caught-up
-         * settlement never runs, and without this arm the DIAL stays alive:
-         * a zombie provider socket squatting `#dial`, blocking every new dial
-         * until the idle tick finally kills it (measured on HAVPE 2026-08-19).
-         * The fence is the DIAL's own conversation, which a stale obituary
-         * cannot name. And the device is silenced NOW.
-         */
+        /* The device's own obituary (the hang-up button) reaches the dial only here; without this
+         * arm a dead provider socket would squat `#dial` until the idle tick. */
         const dial = this.#dial;
         if (dial && dial.activation === event.payload.activation) {
-          this.#flushTurns(dial, append, true);
+          this.#flushTurns(dial, true);
           this.#hangUp();
         }
         return;
       }
-
-      case "events.iterate.com/voice-agent/configured":
-        return;
 
       default:
         return;
     }
   }
 
-  /**
-   * Open a provider connection for this call, now.
-   *
-   * The mint dials immediately: waiting for the log to fold `call-started`
-   * puts a stream round trip in front of the first word.
-   */
+  /** Open a provider connection for this call, now. */
   #openProviderConnection(
     conversationId: string,
     activation: string,
     state: VoiceArgs["state"],
-    append: VoiceArgs["append"],
-    runInBackground: VoiceArgs["runInBackground"],
   ): void {
     if (this.#dial !== null) return;
-    /* CREATED BEFORE THE AWAITED DIAL, so a second caller finds `#dial`
-     * taken and the mic path queues for the whole handshake. */
+    /* Created before the awaited dial, so a second caller finds `#dial` taken and the mic path
+     * queues for the whole handshake. */
     const dial = freshDial(conversationId, activation);
     dial.transcript = state.transcript;
     this.#dial = dial;
     const dialStartedAtFacetMs = this.deps.nowAtFacetMs();
-    runInBackground(async () => {
+    this.#background(async () => {
       await this.deps.sleep(OPENING_DEADLINE_MS);
       if (this.#dial !== dial || dial.ready) return;
       this.#dial = null;
@@ -1157,13 +742,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
       await this.#end(
         activation,
         `the provider did not become ready within ${OPENING_DEADLINE_MS}ms`,
-        append,
       );
     });
-    runInBackground(async () => {
-      /* A dial can REJECT (DNS, TLS), not just refuse — and an uncaught
-       * throw here was measured as sixty seconds of dead air. A throw IS a
-       * refusal, and both failures share one exit. */
+    this.#background(async () => {
+      /* A dial can reject (DNS, TLS), not just refuse; both failures share one exit. */
       let socket: WebSocket | null = null;
       let failure = "the provider refused the connection";
       try {
@@ -1174,12 +756,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
       if (!socket) {
         if (this.#dial !== dial) return;
         this.#dial = null;
-        await this.#end(activation, failure, append);
+        await this.#end(activation, failure);
         return;
       }
       if (this.#dial !== dial) {
-        /* Hung up while dialling: adopting the socket would resurrect a
-         * buried conversation. */
+        /* Hung up while dialling: adopting the socket would resurrect a buried conversation. */
         try {
           socket.close();
         } catch {
@@ -1190,21 +771,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
       dial.socket = socket;
       dial.socketReadyAtFacetMs = this.deps.nowAtFacetMs();
 
-      /*
-       * THE THIRD SWITCH, AND WHY IT IS NOT A STREAM EVENT. Everything else
-       * in this file reaches `processEvent` by being appended. The provider's
-       * messages do not, and the reason is measured rather than stylistic:
-       * ephemeral delivery coalesces, delivering in clumps seconds late.
-       * Routing an audio delta through it would put a full stream round trip
-       * in front of every word.
-       */
+      /* The provider's messages are handled here, not appended to the stream: ephemeral delivery
+       * coalesces and would put a stream round trip in front of every word. */
       socket.addEventListener("message", (message: MessageEvent) => {
-        /*
-         * A SUPERSEDED SOCKET IS STILL A TALKING SOCKET, and this is the
-         * fence: without it a late message from an abandoned socket marked
-         * the call ready again and emptied the microphone queue into a dead
-         * connection. The fence is the DIAL's identity.
-         */
+        /* A superseded socket is still a talking socket; the fence is the dial's identity. */
         if (this.#dial !== dial) return;
         if (typeof message.data !== "string") return;
         let live: Record<string, unknown>;
@@ -1215,95 +785,53 @@ export class VoiceAgentProcessor extends StreamProcessor<
         }
         const type = String(live.type ?? "");
         const receivedAtFacetMs = this.deps.nowAtFacetMs();
-        this.#onLiveEvent(
-          dial,
-          live,
-          type,
-          receivedAtFacetMs,
-          dialStartedAtFacetMs,
-          append,
-          runInBackground,
-        );
-        /* THE METRONOME: every message — the 10 Hz audio stream above all —
-         * moves the session timeline, and a transcript row TURN_GAP_MS behind
-         * it is a finished turn. No timer anywhere. */
-        this.#flushTurns(dial, append, false);
+        this.#onLiveEvent(dial, live, type, receivedAtFacetMs, dialStartedAtFacetMs);
+        /* Every message moves the session timeline, and a transcript row TURN_GAP_MS behind it
+         * is a finished turn. */
+        this.#flushTurns(dial, false);
       });
 
       socket.addEventListener("close", (event: CloseEvent) => {
         if (this.#dial !== dial) return;
         this.#dial = null;
-        this.#flushTurns(dial, append, true);
+        this.#flushTurns(dial, true);
         this.#providerClosed(
           conversationId,
           activation,
           `the provider's socket closed (${String(event.code)}${event.reason ? ` ${event.reason}` : ""})`,
-          append,
-          runInBackground,
         );
       });
 
-      /*
-       * THE SESSION STARTS THE MOMENT THE SOCKET IS OURS. There is no
-       * `session.created` to wait for: `session.start` is the first message,
-       * carrying the model, the audio format, the voice, the instructions,
-       * the seeded history and the backend — everything a fresh session needs
-       * to be this stream's assistant instead of a stranger.
-       */
+      /* `session.start` is the first message, carrying the model, the audio format, the voice,
+       * the policy and the seeded history; there is no `session.created` to wait for. */
       this.#startSession(dial, state);
     });
 
-    /*
-     * THE IDLE COUNTDOWN ARMS THE MOMENT THE DIAL IS DECIDED, so a dial that
-     * never resolves still gets buried. A SELF-RESCHEDULING TICK CHAIN, not a
-     * loop: one background closure that settles only when the call ends is
-     * indistinguishable from a wedge to the facet keepalive's busy-refire
-     * detector.
-     */
+    /* The idle countdown arms the moment the dial is decided, so a dial that never resolves is
+     * still buried. A self-rescheduling tick chain rather than one long-lived closure, which the
+     * facet keepalive's busy-refire detector would take for a wedge. */
     const idleTick = async (): Promise<void> => {
-      await this.deps.sleep(IDLE_TICK_MS);
+      await this.deps.sleep(5_000);
       if (this.#dial !== dial) return;
       const nowAtFacetMs = this.deps.nowAtFacetMs();
-      /*
-       * IDLE SINCE THE LAST THING THAT HAPPENED, whichever end it happened
-       * at. The durable stamp records only the DEVICE's input; a listener
-       * hearing out a long answer sends nothing, so the answer's frames
-       * count too — `lastSpeakerFrameAtFacetMs` is when this end last
-       * spoke. In-memory ON PURPOSE: after an eviction nothing was said, and
-       * the durable stamp alone still bites.
-       */
+      /* Idle since the last thing that happened at either end: a listener hearing out a long
+       * answer sends nothing, so this end's speaker frames count too. */
       const lastActivityAtFacetMs = Math.max(
         this.#lastDeviceInputAtStreamMsMirror,
         dial.lastSpeakerFrameAtFacetMs,
       );
       if (nowAtFacetMs - lastActivityAtFacetMs < IDLE_TIMEOUT_MS) {
-        runInBackground(idleTick);
+        this.#background(idleTick);
         return;
       }
-      await this.#end(
-        activation,
-        `no input from the device for ${IDLE_TIMEOUT_MS / 1000}s`,
-        append,
-      );
+      await this.#end(activation, `no input from the device for ${IDLE_TIMEOUT_MS / 1000}s`);
     };
-    runInBackground(idleTick);
+    this.#background(idleTick);
   }
 
-  /* ---------------------------------------------------------- the session */
-
-  /**
-   * Start client delegation with persona, delegation policy, and transcript
-   * history. Record the exact configuration durably for inspection.
-   */
+  /** Start client delegation with the policy and the recap as history. */
   #startSession(dial: Dial, state: VoiceArgs["state"]): void {
     if (!dial.socket) return;
-    const instructions = [
-      ...(state.instructions === "" ? [] : [state.instructions]),
-      LIVE_DELEGATION_POLICY,
-    ].join("\n\n");
-
-    /* The recap: a fresh provider session is a stranger, and the fold
-     * remembers so it does not have to be. As the history it is. */
     const input = state.transcript.map((turn) =>
       turn.role === "listener"
         ? {
@@ -1317,14 +845,13 @@ export class VoiceAgentProcessor extends StreamProcessor<
             content: [{ type: "output_text" as const, text: turn.text }],
           },
     );
-
     dial.socket.send(
       JSON.stringify({
         type: "session.start",
         event_id: `start_${dial.dialId}`,
         session: {
           model: LIVE.model,
-          instructions,
+          instructions: LIVE_DELEGATION_POLICY,
           ...(input.length > 0 && { input }),
           audio: {
             format: { type: "audio/pcm", rate: LIVE.rate },
@@ -1343,8 +870,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
     type: string,
     receivedAtFacetMs: number,
     dialStartedAtFacetMs: number,
-    append: VoiceArgs["append"],
-    runInBackground: VoiceArgs["runInBackground"],
   ): void {
     const { conversationId } = dial;
     switch (type) {
@@ -1356,11 +881,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
         dial.micQueue = [];
         dial.micQueueBytes = 0;
         dial.micAudioCoveredUntilFacetMs = receivedAtFacetMs;
-        this.#startSilenceFill(dial, append, runInBackground);
+        this.#startSilenceFill(dial);
         this.#background(() =>
-          append({
+          this.#append({
             type: "events.iterate.com/voice-agent/conversation-accepted",
-            /* Per dial: each provider session reports its own handshake time. */
             idempotencyKey: this.idempotencyKey(`accepted:${conversationId}:${dial.dialId}`),
             payload: {
               activation: dial.activation,
@@ -1376,7 +900,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
 
       case "session.output_audio.delta": {
         if (typeof live.delta !== "string") return;
-        this.#onOutputAudio(dial, live.delta, receivedAtFacetMs, append, runInBackground);
+        this.#onOutputAudio(dial, live.delta, receivedAtFacetMs);
         return;
       }
 
@@ -1389,18 +913,12 @@ export class VoiceAgentProcessor extends StreamProcessor<
         dial.timelineMs = Math.max(dial.timelineMs, endTimelineMs);
         const open = dial.turns[speaker];
         if (open && startTimelineMs - open.endTimelineMs >= TURN_GAP_MS) {
-          /* A fragment landing well after the row's last: the row was a
-           * finished turn (the metronome usually closes it first; this is
-           * the fragment arriving faster than the audio). */
-          this.#closeTurn(dial, speaker, append);
+          /* A fragment landing well after the row's last: the row was a finished turn. */
+          this.#closeTurn(dial, speaker);
         }
         const row = dial.turns[speaker];
         if (!row) {
-          dial.turns[speaker] = {
-            text: live.delta,
-            startTimelineMs,
-            endTimelineMs,
-          };
+          dial.turns[speaker] = { text: live.delta, startTimelineMs, endTimelineMs };
         } else {
           row.text += live.delta;
           row.endTimelineMs = Math.max(row.endTimelineMs, endTimelineMs);
@@ -1415,28 +933,24 @@ export class VoiceAgentProcessor extends StreamProcessor<
           })
           .safeParse(live);
         if (!parsed.success) return;
-        this.#delegate(dial, parsed.data.delegation.id, append);
+        this.#delegate(dial, parsed.data.delegation.id);
         return;
       }
 
       case "session.closed": {
-        /* The provider finalized the session. The close handler records the
-         * classified terminal outcome. */
-        this.#flushTurns(dial, append, true);
+        this.#flushTurns(dial, true);
         if (this.#dial === dial) this.#dial = null;
         this.#providerClosed(
           conversationId,
           dial.activation,
           `the provider closed the session (${String(live.reason ?? "unknown")})`,
-          append,
-          runInBackground,
         );
         return;
       }
 
       case "error":
         this.#background(() =>
-          append({
+          this.#append({
             type: "events.iterate.com/voice-agent/provider-error",
             payload: {
               conversationId,
@@ -1447,58 +961,41 @@ export class VoiceAgentProcessor extends StreamProcessor<
         return;
 
       default:
-        /* Acknowledgements and usage updates require no audio action. */
+        /* Acknowledgements and usage updates need no action. */
         return;
     }
   }
 
-  /**
-   * One 100 ms delta of the provider's CONTINUOUS output stream.
-   *
-   * THE STREAM NEVER STOPS, so "is the voice speaking" is read off the audio
-   * itself: a delta is speech or it is silence. Idle silence is dropped here
-   * — the device's ring being empty IS silence, and the downlink carries
-   * speech only. Speech opens an answer (a fresh Answer, the face told) and
-   * goes straight to the device; silence inside an answer rides along up to
-   * ANSWER_TAIL_SILENCE_MS so the natural pauses play; silence past that
-   * ends the answer, and `lastFrameOfAnswer` follows the last frame out.
-   */
-  #onOutputAudio(
-    dial: Dial,
-    delta: string,
-    receivedAtFacetMs: number,
-    append: VoiceArgs["append"],
-    runInBackground: VoiceArgs["runInBackground"],
-  ): void {
+  /** One 100 ms delta of the provider's continuous output stream. The stream never stops, so
+   * "is the voice speaking" is read off the audio: idle silence is dropped, speech opens an
+   * answer and goes straight to the device, silence inside an answer rides along until the tail
+   * bound ends the answer and `lastFrameOfAnswer` follows the last frame out. */
+  #onOutputAudio(dial: Dial, delta: string, receivedAtFacetMs: number): void {
     const deltaMs = base64ByteLength(delta) / PCM16_BYTES_PER_MS;
-    /* The metronome: every delta advances the session timeline. */
     dial.timelineMs += deltaMs;
-    const speaking = peakOfBase64Pcm16(delta) >= SPEECH_PEAK;
+    /* Idle deltas are exact digital zero and speech onsets peak in the thousands. */
+    const speaking = peakOfBase64Pcm16(delta) >= 100;
 
     if (dial.answer.phase === "settled") {
       if (!speaking) return;
-      /* THE ONSET: a new answer, replaced wholesale. */
       dial.answer = { phase: "speaking", trailingSilenceMs: 0 };
     } else if (speaking) {
       dial.answer.trailingSilenceMs = 0;
     } else {
       dial.answer.trailingSilenceMs += deltaMs;
-      if (dial.answer.trailingSilenceMs >= ANSWER_TAIL_SILENCE_MS) {
-        /* THE ANSWER IS OVER, and the device does have to be told: silence
-         * on the wire is indistinguishable from a provider taking its time,
-         * so a client waiting for the end of a turn waits for ever. */
-        this.#endAnswer(dial, receivedAtFacetMs, append, runInBackground);
+      /* 700 ms of silence after speech ends the answer: the provider has no end-of-answer event
+       * and pauses inside an answer are shorter. */
+      if (dial.answer.trailingSilenceMs >= 700) {
+        this.#endAnswer(dial, receivedAtFacetMs);
         return;
       }
     }
 
-    /* STRAIGHT THROUGH. The provider's 16 kHz bytes ARE the pipeline's
-     * bytes, so the delta goes out as the base64 it arrived as — GPT-Live's
-     * 100 ms delta is exactly the device's frame ceiling. A larger delta
-     * (no provider sends one today) is decoded and cut, because the device
-     * silently drops an oversize frame. */
+    /* The delta goes out as the base64 it arrived as; a larger delta than the device's frame
+     * ceiling (no provider sends one today) is decoded and cut, because the device silently drops
+     * an oversize frame. */
     if (base64ByteLength(delta) <= MAX_SPEAKER_PAYLOAD_BYTES) {
-      this.#sendSpeakerFrame(dial, delta, receivedAtFacetMs, append, runInBackground);
+      this.#sendSpeakerFrame(dial, delta, receivedAtFacetMs);
       return;
     }
     const pcm16 = base64ToBytes(delta);
@@ -1507,117 +1004,78 @@ export class VoiceAgentProcessor extends StreamProcessor<
         dial,
         bytesToBase64(pcm16.subarray(cut, Math.min(cut + MAX_SPEAKER_PAYLOAD_BYTES, pcm16.length))),
         receivedAtFacetMs,
-        append,
-        runInBackground,
       );
     }
   }
 
-  /**
-   * One frame to the device, now, with the next sequence number. The face
-   * folds at hand-over time, on the frame the device is about to play; the
-   * clear a fresh dial owes rides on its first frame.
-   */
-  #sendSpeakerFrame(
-    dial: Dial,
-    pcm: string,
-    nowAtFacetMs: number,
-    append: VoiceArgs["append"],
-    runInBackground: VoiceArgs["runInBackground"],
-  ): void {
+  #sendSpeakerFrame(dial: Dial, pcm: string, nowAtFacetMs: number): void {
     if (dial.speakerOutboxOverflowed) return;
     const pcmBytes = base64ByteLength(pcm);
     if (dial.speakerOutboxBytes + pcmBytes > SPEAKER_OUTBOX_MAX_BYTES) {
       dial.speakerOutboxOverflowed = true;
-      runInBackground(() =>
+      this.#background(() =>
         this.#end(
           dial.activation,
           "the device speaker append stalled with more than ten seconds of queued audio",
-          append,
         ),
       );
       return;
     }
     dial.lastSpeakerFrameAtFacetMs = nowAtFacetMs;
-    dial.speakerOutbox.push({ pcm, receivedAtFacetMs: nowAtFacetMs });
+    dial.speakerOutbox.push({ pcm });
     dial.speakerOutboxBytes += pcmBytes;
-    this.#startSpeakerSender(dial, append, runInBackground);
+    this.#startSpeakerSender(dial);
   }
 
-  /**
-   * The answer ended: the mouth closes, the marker goes out behind the last
-   * frame, and a hang-up armed before this answer ended is now settleable.
-   */
-  #endAnswer(
-    dial: Dial,
-    nowAtFacetMs: number,
-    append: VoiceArgs["append"],
-    runInBackground: VoiceArgs["runInBackground"],
-  ): void {
+  /** The answer ended: the marker goes out behind the last frame, and a hang-up armed before this
+   * answer ended is now settleable. */
+  #endAnswer(dial: Dial, nowAtFacetMs: number): void {
     const endedAnswer = dial.answer;
     dial.answer = freshAnswer();
     dial.speakerOutbox.push({ pcm: "", lastFrameOfAnswer: true });
-    this.#startSpeakerSender(dial, append, runInBackground);
+    this.#startSpeakerSender(dial);
     if (
       dial.hangUpReason &&
       (endedAnswer !== dial.answerBeforeHangUp ||
         nowAtFacetMs - dial.hangUpArmedAtFacetMs >= HANG_UP_GOODBYE_GRACE_MS)
     ) {
-      /* The goodbye has been handed over whole; leave room for delivery and playout. */
-      runInBackground(async () => {
-        await this.deps.sleep(GOODBYE_PLAYOUT_ALLOWANCE_MS);
-        await this.#settleHangUp(dial, append);
+      this.#background(async () => {
+        /* The device prefills 400 ms and delivery adds a few hundred; a second preserves the
+         * goodbye's tail. */
+        await this.deps.sleep(1_000);
+        await this.#settleHangUp(dial);
       });
     }
   }
 
-  /**
-   * End the call the backend asked to end — unless the dial is already gone.
-   * Idempotent: the reason is consumed on the way out.
-   */
-  async #settleHangUp(dial: Dial, append: VoiceArgs["append"]): Promise<void> {
+  /** End the call the backend asked to end, unless the dial is already gone. Idempotent. */
+  async #settleHangUp(dial: Dial): Promise<void> {
     if (this.#dial !== dial || !dial.hangUpReason) return;
     const reason = dial.hangUpReason;
     dial.hangUpReason = null;
-    await this.#end(dial.activation, reason, append);
+    await this.#end(dial.activation, reason);
   }
 
-  /**
-   * Send queued speaker frames in order for the lifetime of the dial.
-   * Assign sequence numbers and timestamps at append time so instrumentation
-   * distinguishes sender delays from network delays. A rejected append ends
-   * the call: losing audio, the initial clear, or the answer's final marker
-   * cannot be recovered by continuing with the next frame.
-   */
-  #startSpeakerSender(
-    dial: Dial,
-    append: VoiceArgs["append"],
-    runInBackground: VoiceArgs["runInBackground"],
-  ): void {
+  /** Send queued speaker frames in order for the lifetime of the dial, one frame per append (a
+   * client push carries every event folded behind it, and the ESP32's inbox slot holds 16 KiB).
+   * A rejected append ends the call: lost audio, a lost clear or a lost end marker cannot be
+   * recovered by continuing with the next frame. */
+  #startSpeakerSender(dial: Dial): void {
     if (dial.sending) {
       dial.wakeSender?.();
       return;
     }
     dial.sending = true;
-    runInBackground(async () => {
+    this.#background(async () => {
       try {
         while (this.#dial === dial) {
-          /* ONE frame per append: a client push carries every event folded behind it, and the
-           * ESP32's inbox slot holds 16 KiB (one frame is ~4.3 KiB). */
           const frame = dial.speakerOutbox.shift();
           if (!frame) {
-            /* Keep one background registration for the dial. A sender
-             * that let go whenever the outbox drained re-registered for
-             * nearly every frame — ten storage writes and alarm arms a
-             * second inside the Durable Object. Measured on preview-7
-             * (2026-09-11 afternoon, `voicelab duplex`): provider→facet gaps
-             * p99 456 ms while the facet's own sends gapped p99 5.1 s, max
-             * 9.6 s, and a mic append's round trip reached 4.3 s. The sender
-             * now waits for the next frame; the tick is only so a dial that
-             * ended is noticed. */
+            /* One background registration per dial: the sender waits for the next frame, and
+             * the tick only notices a dial that ended. */
             await new Promise<void>((resolve) => {
               dial.wakeSender = resolve;
-              void this.deps.sleep(BACKGROUND_LOOP_TICK_MS).then(resolve);
+              void this.deps.sleep(1_000).then(resolve);
             });
             dial.wakeSender = null;
             continue;
@@ -1626,30 +1084,21 @@ export class VoiceAgentProcessor extends StreamProcessor<
           const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
           dial.clearSpeakerBufferBeforeNextFrame = false;
           try {
-            await append({
+            await this.#append({
               type: "events.iterate.com/voice-agent/spk-frame",
-              /* Stamped HERE: the engine's append stamps provenance, not the
-               * catalog's ephemeral marker, and a persisted frame is a row. */
+              /* The engine's append stamps provenance, not the catalog's ephemeral marker, and a
+               * persisted frame is a row. */
               ephemeral: true,
               payload: {
                 activation: dial.activation,
                 conversationId: dial.conversationId,
-                deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
                 pcm: frame.pcm,
                 ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
                 ...(frame.lastFrameOfAnswer && { lastFrameOfAnswer: true }),
-                ...(typeof frame.receivedAtFacetMs === "number" && {
-                  receivedAtFacetMs: frame.receivedAtFacetMs,
-                }),
-                sentAtFacetMs: this.deps.nowAtFacetMs(),
               },
             });
           } catch {
-            await this.#end(
-              dial.activation,
-              "the device speaker frame could not be appended",
-              append,
-            );
+            await this.#end(dial.activation, "the device speaker frame could not be appended");
             return;
           }
         }
@@ -1660,23 +1109,19 @@ export class VoiceAgentProcessor extends StreamProcessor<
     });
   }
 
-  #flushTurns(dial: Dial, append: VoiceArgs["append"], force: boolean): void {
+  #flushTurns(dial: Dial, force: boolean): void {
     for (const speaker of ["user", "assistant"] as const) {
       const row = dial.turns[speaker];
       if (!row) continue;
       if (force || dial.timelineMs - row.endTimelineMs >= TURN_GAP_MS) {
-        this.#closeTurn(dial, speaker, append);
+        this.#closeTurn(dial, speaker);
       }
     }
   }
 
-  /**
-   * One finished turn leaves one durable event carrying its words — the
-   * fold's recap and the stream's only readable record hang off these. Keyed
-   * on the dial and the row's start, so a redelivered close cannot write a
-   * turn twice.
-   */
-  #closeTurn(dial: Dial, speaker: "user" | "assistant", append: VoiceArgs["append"]): void {
+  /** One finished turn leaves one durable event carrying its words, keyed on the dial and the
+   * row's start so a redelivered close cannot write a turn twice. */
+  #closeTurn(dial: Dial, speaker: "user" | "assistant"): void {
     const row = dial.turns[speaker];
     dial.turns[speaker] = null;
     if (!row) return;
@@ -1690,12 +1135,12 @@ export class VoiceAgentProcessor extends StreamProcessor<
     const transcriptKey = `voice-agent/transcript:${dial.dialId}:${speaker}:${String(row.startTimelineMs)}`;
     this.#background(() =>
       speaker === "user"
-        ? append({
+        ? this.#append({
             type: "events.iterate.com/voice-agent/utterance-transcript",
             idempotencyKey: this.idempotencyKey(key),
             payload: { conversationId: dial.conversationId, text, key: transcriptKey },
           })
-        : append({
+        : this.#append({
             type: "events.iterate.com/voice-agent/answer-transcript",
             idempotencyKey: this.idempotencyKey(key),
             payload: { conversationId: dial.conversationId, text, key: transcriptKey },
@@ -1703,29 +1148,21 @@ export class VoiceAgentProcessor extends StreamProcessor<
     );
   }
 
-  #startSilenceFill(
-    dial: Dial,
-    append: VoiceArgs["append"],
-    runInBackground: VoiceArgs["runInBackground"],
-  ): void {
-    runInBackground(async () => {
+  #startSilenceFill(dial: Dial): void {
+    this.#background(async () => {
       while (this.#dial === dial && dial.socket && dial.ready) {
         await this.deps.sleep(SILENCE_FILL_MS);
         if (this.#dial !== dial || !dial.socket || !dial.ready) return;
-        /* PACED TO THE WALL CLOCK, never to the loop: a sleep that wakes
-         * late still owes the provider every millisecond since the device
-         * was last heard, so as many whole frames as are owed go out — an
-         * input stream that drifts even a few percent slow starves the
-         * provider's clock a few seconds into a long answer. Device audio
-         * moves the stamp forward itself, so the fill covers only the gaps. */
+        /* Paced to the wall clock, never to the loop: a sleep that wakes late still owes the
+         * provider every millisecond since the device was last heard. Device audio moves the
+         * stamp itself, so the fill covers only the gaps. */
         const nowAtFacetMs = this.deps.nowAtFacetMs();
         let owedMs = nowAtFacetMs - dial.micAudioCoveredUntilFacetMs;
-        if (owedMs > MAX_SILENCE_FILL_CATCH_UP_MS) {
-          await this.#end(
-            dial.activation,
-            `the provider input clock fell ${owedMs}ms behind`,
-            append,
-          );
+        /* A second of debt is scheduling jitter; more leaves the provider's input timeline
+         * untrustworthy, so the call ends with a reason rather than bursting synthetic input
+         * ahead of a person who has started speaking again. */
+        if (owedMs > 1_000) {
+          await this.#end(dial.activation, `the provider input clock fell ${owedMs}ms behind`);
           return;
         }
         while (owedMs >= SILENCE_FILL_MS) {
@@ -1743,38 +1180,27 @@ export class VoiceAgentProcessor extends StreamProcessor<
   }
 
   /** A provider close ends the uncertain session; it is never replayed. */
-  #providerClosed(
-    conversationId: string,
-    activation: string,
-    reason: string,
-    append: VoiceArgs["append"],
-    runInBackground: VoiceArgs["runInBackground"],
-  ): void {
-    /* The dial's state snapshot predates its own call-started fold, so the
-     * call's standing is read from this instance: an end already requested
-     * for it, or a conversation ended since the dial began, is not ours. */
-    if (this.#endingActivation === activation) {
-      return;
-    }
-    runInBackground(async () => {
-      await this.#end(activation, reason, append);
-      await append({
+  #providerClosed(conversationId: string, activation: string, reason: string): void {
+    if (this.#endingActivation === activation) return;
+    this.#background(async () => {
+      await this.#end(activation, reason);
+      await this.#append({
         type: "events.iterate.com/voice-agent/provider-disconnected",
         payload: { conversationId, reason },
       });
     });
   }
 
-  async #end(activation: string, reason: string, append: VoiceArgs["append"]): Promise<void> {
+  async #end(activation: string, reason: string): Promise<void> {
     if (this.#endingActivation === activation) return;
     this.#endingActivation = activation;
     const dial = this.#dial;
     if (dial?.activation === activation) {
-      this.#flushTurns(dial, append, true);
+      this.#flushTurns(dial, true);
       this.#hangUp();
     }
     try {
-      await append({
+      await this.#append({
         type: "events.iterate.com/voice-agent/conversation-ended",
         idempotencyKey: this.idempotencyKey(`ended:${activation}`),
         payload: { activation, reason },
@@ -1785,24 +1211,13 @@ export class VoiceAgentProcessor extends StreamProcessor<
     }
   }
 
-  /* ------------------------------------------------------------- Agent */
-
-  /**
-   * One client delegation becomes durable Agent context immediately. Its
-   * metadata is platform context, separate from untrusted spoken text; the
-   * Agent sees later completed transcript rows as additional context.
-   */
-  /**
-   * The live model handed a request to "the backend". There is no backend in
-   * this facet: the request is RECORDED, with the words said so far, and a
-   * sibling processor answers with `commentary`/`thinking`/`instructions`
-   * events carrying the same activation and delegationId.
-   */
-  #delegate(dial: Dial, delegationId: string, append: VoiceArgs["append"]): void {
+  /** The live model handed a request to the backend: record it with the words said so far (the
+   * `delegation-requested` arm above answers it) and tell the voice it may keep talking. */
+  #delegate(dial: Dial, delegationId: string): void {
     const transcript = this.#delegationTranscript(dial);
     this.#background(async () => {
       try {
-        await append({
+        await this.#append({
           type: "events.iterate.com/voice-agent/delegation-requested",
           idempotencyKey: this.idempotencyKey(`delegation:${dial.dialId}:${delegationId}`),
           payload: {
@@ -1824,14 +1239,13 @@ export class VoiceAgentProcessor extends StreamProcessor<
         await this.#end(
           dial.activation,
           `the delegation could not be recorded: ${String(error).slice(0, 200)}`,
-          append,
         );
       }
     });
   }
 
   /** The words so far: the recap (closed turns) and both open rows. */
-  #delegationTranscript(dial: Dial): { role: "listener" | "assistant"; text: string }[] {
+  #delegationTranscript(dial: Dial): TranscriptTurn[] {
     const open = (["user", "assistant"] as const).flatMap((speaker) => {
       const row = dial.turns[speaker];
       const text = row?.text.replace(/\s+/g, " ").trim() ?? "";
@@ -1841,25 +1255,19 @@ export class VoiceAgentProcessor extends StreamProcessor<
     return [...dial.transcript, ...open];
   }
 
-  /**
-   * Send one client command to the provider.
-   */
   #sendControl(dial: Dial, message: Record<string, unknown>): void {
     if (!dial.socket) return;
     dial.socket.send(JSON.stringify(message));
   }
 
-  /**
-   * Let the dial and everything hanging off it go. Safe to call twice. The
-   * provider is asked to close first — `session.close` is what makes it
-   * finalize usage — and the socket is closed behind it without waiting: a
-   * hang-up must not depend on the far end's manners.
-   */
+  /** Let the dial and everything hanging off it go. Safe to call twice. The provider is asked to
+   * close first (`session.close` is what makes it finalize usage) and the socket is closed behind
+   * it without waiting. */
   #hangUp(): void {
     const dial = this.#dial;
     this.#dial = null;
     try {
-      if (dial?.socket !== null && dial?.ready) {
+      if (dial?.ready && dial.socket) {
         dial.socket.send(JSON.stringify({ type: "session.close" }));
       }
     } catch {
@@ -1873,16 +1281,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
   }
 }
 
-/* ========================================================================== */
-/* FACET                                                                      */
-/* ========================================================================== */
-
-/**
- * Open the provider's WebSocket. No query parameters — the model rides
- * `session.start` — and the bearer is the platform's `getSecret` grammar,
- * substituted at egress so the key never enters this isolate.
- */
-export async function dialProviderSocket(): Promise<WebSocket | null> {
+/** Open the provider's WebSocket. No query parameters (the model rides `session.start`), and the
+ * bearer is the platform's `getSecret` grammar, substituted at egress so the key never enters this
+ * isolate. */
+async function dialProviderSocket(): Promise<WebSocket | null> {
   const response = await fetch(LIVE.url, {
     headers: { Upgrade: "websocket", Authorization: 'Bearer getSecret("/secrets/openai")' },
   });
@@ -1893,22 +1295,14 @@ export async function dialProviderSocket(): Promise<WebSocket | null> {
   return socket;
 }
 
-/* ========================================================================== */
-/* HOST                                                                       */
-/* ========================================================================== */
-
-/**
- * The facet os-next hosts:
- *   itx.processors.enable("voice-agent", { source, className: "VoiceAgentDurableObject" })
- */
+/** The class the loader hosts: `facets.get("voice-agent", { source, className: "VoiceAgentDurableObject" })`. */
 export class VoiceAgentDurableObject extends StreamProcessorDurableObject<VoiceState> {
   processor = new VoiceAgentProcessor({
     nowAtFacetMs: () => Date.now(),
-    /* Safe as a bare setTimeout BECAUSE of where it is awaited: every wait
-     * here happens inside a background closure the host keeps alive. */
+    /* A bare setTimeout is safe because every wait happens inside a background closure the host
+     * keeps alive. */
     sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
     dialProvider: dialProviderSocket,
-    path: this.ctx.props.iterateContextName,
     complete: completeWithOpenAi,
     runScript: async (script) => {
       const itx = this.env.ITX.get() as unknown as { run(script: string): Promise<unknown> };

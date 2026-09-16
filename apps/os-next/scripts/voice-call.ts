@@ -1,9 +1,9 @@
 // scripts/voice-call.ts — ONE voice conversation on a FRESH os-next context, the shape the ESP32
 // HAVPE has: a warm authenticated capnweb session, then "press the button = a new stream now".
 //
-// It makes the device's exact calls: `root.voice.setupVoiceAgent({ streamPath })` (the project's
-// installed setup worker puts the voice facet and its backend on the fresh context — run
-// scripts/voice-install.ts once per build), a live subscription for what the device would hear,
+// It makes the device's exact calls: `root.voice.setupVoiceAgent({ streamPath, activation })` (the
+// project's root worker puts the voice facet and `call-started` on the fresh context in one append;
+// run scripts/voice-install.ts once per build), a live subscription for what the device would hear,
 // microphone frames from a 16 kHz mono PCM16 WAV (or one silent frame plus a `commentary` fact
 // when there is nothing to say), the terminal. It writes what came back to a WAV and prints the
 // timeline from the press.
@@ -109,18 +109,16 @@ async function main(): Promise<void> {
   let accepted: (() => void) | null = null;
   const acceptedPromise = new Promise<void>((resolve) => (accepted = resolve));
 
-  // THE DEVICE'S SETUP CALL, unchanged from apps/os: the installed setup worker enables the
-  // voice facet and its backend on this fresh context and, given the activation, starts the call.
-  // PIPELINED with the subscription: neither depends on the other's answer, so both go out now.
+  // THE PRESS: the root worker appends the voice facet's subscription row and `call-started` on
+  // this fresh context in one append. PIPELINED with the subscription below: neither depends on
+  // the other's answer, so both go out now.
   const setupPromise = Promise.resolve(
     root.voice.setupVoiceAgent({ streamPath: CONTEXT_PATH, activation }),
   ).then((result: unknown) => {
     marks.setup = at();
     const parsed = JSON.parse(JSON.stringify(result)) as {
       streamPath: string;
-      phases?: Record<string, number>;
     };
-    for (const [phase, ms] of Object.entries(parsed.phases || {})) marks[`setup.${phase}`] = ms;
     return parsed;
   });
 
@@ -130,7 +128,6 @@ async function main(): Promise<void> {
       `${T}call-started`,
       `${T}conversation-accepted`,
       `${T}conversation-ended`,
-      `${T}session-configured`,
       `${T}spk-frame`,
       `${T}utterance-transcript`,
       `${T}answer-transcript`,
