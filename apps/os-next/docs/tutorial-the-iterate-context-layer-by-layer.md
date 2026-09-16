@@ -2080,16 +2080,16 @@ the DO. Losing the borrowed stubs at idle costs exactly one page on the next cal
 
 ### The idle quiesce
 
-Two things pin a context awake: a borrowed stub and a held library connection. A materialized facet
+Two things pin a context awake: a borrowed stub and an open capnweb socket. A materialized facet
 does not — on the edge it does not keep the actor resident and dies with it, so nothing arms an alarm
-for one. The pins carry the clock: sixty seconds after the last use of one — a borrowed stub called,
-a library connection used; a request, an append, a delivery or a facet call moves nothing — the
+for one. The pins carry the clock: thirty seconds after the last use of one — a borrowed stub called,
+an open socket used; a request, an append, a delivery or a facet call moves nothing — the
 alarm returns every borrowed stub, releases every connection and aborts every live facet, so the
 actor can hibernate:
 
 ```ts
 // iterate-context-durable-object.ts — alarm(), abridged
-const IDLE_QUIESCE_AFTER_MS = 60_000;
+const IDLE_QUIESCE_AFTER_MS = 30_000;
 async alarm(): Promise<void> {
   await this.#subscriptionDelivery.deliverEveryCursorSubscription(); // 1. due retries — AWAITED, so the deadline it leaves is the one derived after
   const lastPinUseMs = this.#lastPinUseMs(); // null with nothing pinned (a borrowed stub, a library connection)

@@ -133,19 +133,24 @@ export type WorkspaceFacet = Pick<
  *  pays nothing for the library until a verb runs. */
 export function buildLibrary(itx: LibraryItx): {
   roots: LibraryRoots;
-  /** Whether the library holds any live connection — one thing the idle quiesce must wait for (they
-   *  pin this actor awake the same way a live facet or a borrowed stub does). */
-  hasOpenConnections(): boolean;
+  /** Whether the library holds an open SOCKET — a capnweb WebSocket session — the one kind of
+   *  connection that keeps this actor resident (measured: like a borrowed stub), so the idle quiesce
+   *  arms for it. An MCP or OpenAPI client is HTTP handshakes: it holds nothing and pins nothing. */
+  holdsOpenSocket(): boolean;
   /** Close every connection the library holds (the idle quiesce's call); the next use reopens. */
   releaseConnections(): void;
 } {
-  const liveConnections = new Map<string, Promise<unknown>>();
-  const memoized = <T>(key: unknown[], open: () => Promise<T>): Promise<T> => {
+  const liveConnections = new Map<string, { connection: Promise<unknown>; holdsSocket: boolean }>();
+  const memoized = <T>(
+    key: unknown[],
+    holdsSocket: boolean,
+    open: () => Promise<T>,
+  ): Promise<T> => {
     const memoKey = JSON.stringify(key, keySortedForPrint); // keys sorted: two spellings, one key
-    let connection = liveConnections.get(memoKey) as Promise<T> | undefined;
+    let connection = liveConnections.get(memoKey)?.connection as Promise<T> | undefined;
     if (!connection) {
       connection = open();
-      liveConnections.set(memoKey, connection);
+      liveConnections.set(memoKey, { connection, holdsSocket });
       // a connect that FAILS is not kept — the next call retries (the caller sees the rejection)
       connection.catch(() => liveConnections.delete(memoKey));
     }
@@ -155,11 +160,15 @@ export function buildLibrary(itx: LibraryItx): {
     roots: {
       run: (script) => runScript(itx, script),
       connectToMcp: (url, options) =>
-        memoized(["mcp", url, options], () => connectToMcp(itx, url, options)),
+        memoized(["mcp", url, options], false, () => connectToMcp(itx, url, options)),
       connectToOpenApi: (specOrUrl, options) =>
-        memoized(["openapi", specOrUrl, options], () => connectToOpenApi(itx, specOrUrl, options)),
+        memoized(["openapi", specOrUrl, options], false, () =>
+          connectToOpenApi(itx, specOrUrl, options),
+        ),
       connectToCapnweb: (url, options) =>
-        memoized(["capnweb", url, options], () => connectToCapnweb(itx, url, options)),
+        memoized(["capnweb", url, options], options?.transport !== "batch", () =>
+          connectToCapnweb(itx, url, options),
+        ),
       repos: {
         get: (path) => repoHandle(itx, path),
         list: async () =>
@@ -177,11 +186,11 @@ export function buildLibrary(itx: LibraryItx): {
           })),
       },
     },
-    hasOpenConnections: () => liveConnections.size > 0,
+    holdsOpenSocket: () => [...liveConnections.values()].some((c) => c.holdsSocket),
     releaseConnections: () => {
       // `close()` where a connection has one (the graceful half-close), else its dispose; a release
       // that throws is REPORTED — a connection that will not close is a fact worth a log line.
-      for (const [memoKey, connection] of liveConnections)
+      for (const [memoKey, { connection }] of liveConnections)
         void connection
           .then((c) => {
             const held = c as { close?: () => unknown; [Symbol.dispose]?: () => void };

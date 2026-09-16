@@ -2,7 +2,7 @@
 // INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, a capnweb session
 // over SELF's /api (disposed at teardown — importing this module registers the afterAll), a live
 // value to lend (`Echo`, tagged per instance), the directory schema into this lane's empty D1, the
-// production 60s idle quiesce reproduced on demand, and the one poll-until.
+// production idle quiesce's release on demand, and the one poll-until.
 import { runInDurableObject, SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
