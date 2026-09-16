@@ -1,11 +1,11 @@
 ---
-status: complete
+status: in-progress
 size: medium
 ---
 
 # Publish Playwright HTML reports through Depot artifacts
 
-Implemented and verified end to end. Full local checks and the first complete CI run pass; both commit statuses were published automatically. The config viewer is deployed, with real report, screenshot and interactive trace proof.
+Initial implementation and final-head CI passed. Follow-up underway: move status publication to config webhooks, simplify artifact URLs, and remove CI publication commands while retaining trace generation and missed-run repair.
 
 ## Request and decisions
 
@@ -33,3 +33,10 @@ Implementation reuses the existing serialized report collector for both status l
 Publication verifies the hosted report and uses its final canonical entry URL. Exact attempt matching prevents retained old artifacts from being relabeled as new rerun results. Missing Playwright links can be repaired independently of an already-published CI trace.
 
 The first report includes one existing flaky REPL test: its original Durable Object disconnect, passing retry and trace are visible. The viewer proof also caught a zip.js global extraction queue hang; the config fix includes a failing-then-passing slow-reader regression and is deployed in `iterate/config` (`2a18a7d`).
+
+## Authorized follow-up
+
+- [ ] Move status links to config webhook handling with an explicit artifact-name allowlist.
+- [ ] Remove `publish` / `publish-playwright` commands and CI write permissions; keep trace rendering/upload and missed-run repair.
+- [ ] Document subdomain-root serving and webhook-owned statuses.
+- [ ] Verify a new CI run publishes both report links without publication commands.
