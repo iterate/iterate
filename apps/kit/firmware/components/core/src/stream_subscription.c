@@ -70,13 +70,10 @@ static void callback_disposed(void *context) {
 }
 
 /*
- * THE CALLEE IS THE STUB ITSELF, AND IT TAKES TWO ARGUMENTS.
- *
- * os-next evaluates a lent target whose last step is a call, so `method` is
- * undefined and the wire call carries an EMPTY path — which is why nothing here
- * reads `call->path`. Argument 0 is what the subscription is for (a stream's
- * events array, live state's snapshot); argument 1 is the delivery range,
- * absent on anything but a stream push.
+ * THE CALLEE IS THE STUB ITSELF, AND IT TAKES TWO ARGUMENTS. os-next evaluates
+ * a lent target whose last step is a call, so `method` is undefined and the
+ * wire call carries an EMPTY path — which is why nothing here reads
+ * `call->path`. The argument shape is in stream_subscription.h.
  */
 static enum capnweb_status callback_dispatch(
     void *context,
@@ -96,11 +93,8 @@ static enum capnweb_status callback_dispatch(
         subscription->owner, subscription->owner_epoch, &update,
         has_range ? &range : NULL);
   }
-  /*
-   * A NULL reply nobody waits for. Delivery to a live client is fire-and-forget
-   * on os-next — the awaited call acknowledges only a cursor row — so this is
-   * protocol hygiene, never back-pressure.
-   */
+  /* Protocol hygiene, never back-pressure: delivery is fire-and-forget (the
+   * contract is in stream_subscription.h) and nobody waits for this reply. */
   return capnweb_reply_set_null(reply);
 }
 

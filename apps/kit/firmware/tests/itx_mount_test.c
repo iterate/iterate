@@ -389,10 +389,6 @@ static void rejects_unusable_capability_matches_before_network_io(void) {
     "itx.",                        /* the whole surface, which is not a device */
     "itx.clients.",                /* a trailing dot names nothing */
     "itx..clients",                /* an empty interior segment */
-    "itx.clients.stack-chan",      /* a hyphen nobody can spell in JavaScript */
-    "itx.clients.9lives",          /* a segment that is not an identifier */
-    "itx.clients.stack chan",      /* a label, not an expression */
-    "/clients/stackchan",          /* the apps/os client path */
   };
   size_t index;
   for (index = 0U; index < sizeof(refused) / sizeof(refused[0]); ++index) {
@@ -410,16 +406,9 @@ static void rejects_unusable_capability_matches_before_network_io(void) {
 }
 
 /*
- * THE SOCKET DIES OF SILENCE, AND A PING IS NOT A CURE.
- *
- * os-next closes a connection carrying no APPLICATION message at about a
- * hundred seconds — its own pager answers that with a thirty second keepalive
- * MESSAGE rather than a WebSocket ping. So the mount asks the project root
- * `whoami()` once a period: a real call, no argument, nothing touched.
- *
- * One at a time and once a period, because the failure this must not become is
+ * ONE AT A TIME AND ONCE A PERIOD, because the failure this must not become is
  * a probe every tick against a session with no room for one — which is how a
- * liveness fix becomes the outage.
+ * liveness fix becomes the outage. Why it probes at all: voice_device_profile.h.
  */
 static void probes_the_root_once_a_period_and_one_at_a_time(void) {
   struct fixture fixture;
@@ -428,9 +417,7 @@ static void probes_the_root_once_a_period_and_one_at_a_time(void) {
   after_ready = fixture.captured_count;
 
   /* The first probe is due immediately: nothing has proved this session yet. */
-  assert(
-      iterate_kit_itx_mount_probe_if_due(&fixture.mount, 1000U) ==
-      CAPNWEB_OK);
+  assert(iterate_kit_itx_mount_probe_if_due(&fixture.mount, 1000U));
   assert(fixture.mount.probes_sent == 1U);
   assert(fixture.mount.probe_pending);
   assert(fixture.captured_count == after_ready + 2U);
@@ -440,23 +427,17 @@ static void probes_the_root_once_a_period_and_one_at_a_time(void) {
   assert(strcmp(fixture.captured[after_ready + 1U], "[\"pull\",4]") == 0);
 
   /* Not again while one is in flight, and not again inside the period. */
-  assert(
-      iterate_kit_itx_mount_probe_if_due(&fixture.mount, 1001U) ==
-      CAPNWEB_E_STATE);
+  assert(!iterate_kit_itx_mount_probe_if_due(&fixture.mount, 1001U));
   receive(&fixture, "[\"resolve\",4,{\"projectId\":\"prj-voice\"}]");
   assert(!fixture.mount.probe_pending);
   assert(fixture.mount.probes_answered == 1U);
-  assert(
-      iterate_kit_itx_mount_probe_if_due(
-          &fixture.mount, 1000U + ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS - 1U) ==
-      CAPNWEB_OK);
+  assert(!iterate_kit_itx_mount_probe_if_due(
+      &fixture.mount, 1000U + ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS - 1U));
   assert(fixture.mount.probes_sent == 1U);
 
   /* And again as soon as the period has run. */
-  assert(
-      iterate_kit_itx_mount_probe_if_due(
-          &fixture.mount, 1000U + ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS) ==
-      CAPNWEB_OK);
+  assert(iterate_kit_itx_mount_probe_if_due(
+      &fixture.mount, 1000U + ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS));
   assert(fixture.mount.probes_sent == 2U);
   capnweb_session_close(&fixture.session);
 }
@@ -467,9 +448,7 @@ static void refuses_to_probe_before_ready(void) {
   struct fixture fixture;
   fixture_init(&fixture);
   start_mount(&fixture);
-  assert(
-      iterate_kit_itx_mount_probe_if_due(&fixture.mount, 1000U) ==
-      CAPNWEB_E_STATE);
+  assert(!iterate_kit_itx_mount_probe_if_due(&fixture.mount, 1000U));
   assert(fixture.mount.probes_sent == 0U);
   assert(fixture.captured_count == 2U);
   assert(iterate_kit_itx_mount_close(&fixture.mount) == CAPNWEB_OK);

@@ -2116,23 +2116,15 @@ static size_t health_json(char *out, size_t capacity) {
      */
     {"batches", runtime.voicelab->batches_on_connection},
     {"connGeneration", runtime.voicelab->connection_generation},
-    /*
-     * DELIVERIES THAT NEVER ARRIVED, WHICH NOTHING ELSE CAN SHOW.
-     *
-     * os-next pushes to a live client fire-and-forget: a push past its
-     * in-flight budget is dropped server-side and never retried, and an
-     * ephemeral cannot be read back, so a lost speaker frame has no symptom
-     * but a gap in the sound. Each delivery names the range it believes it
-     * sent; this counts the times that did not continue the last one.
-     */
+    /* Deliveries that never arrived: the times a range did not continue the
+     * last one. Nothing else can show one (stream_subscription.h). */
     {"deliveryGaps", runtime.voicelab->delivery_gaps},
     /* Hop liveness only — never application delivery credit. */
     {"wsPongs", metrics.websocket_pongs_received},
-    /*
-     * The session's own pulse, sent and answered. Sent climbing while answered
-     * stands still is a socket that is open and a server that is not there —
-     * the state a ping cannot tell from health.
-     */
+    /* The session's own pulse, sent and answered, and the liveness watchdog's
+     * stronger evidence. Sent climbing while answered stands still is a socket
+     * that is open and a server that is not there. Counted per connection
+     * generation, unlike wsPongs, which counts per transport lifetime. */
     {"rootProbes", runtime.connection.mount.probes_sent},
     {"rootProbeAnswers", runtime.connection.mount.probes_answered},
     /* Inbound capability dispatches served — the reachability proof. */
@@ -2485,13 +2477,8 @@ bool iterate_kit_voice_loop_init(
   if (facts->device_name == NULL || facts->device_name[0] == '\0') {
     return false;
   }
-  /*
-   * A DEVICE SLUG'S HYPHENS BECOME UNDERSCORES, because the far end writes this
-   * name out in JavaScript: `root.clients.home_assistant_voice_preview_edition
-   * .health()`. `provide` keys the lent stub by the canonical dotted prefix, so
-   * a hyphen would be a name nobody can spell at the call site even where the
-   * codec would lex it.
-   */
+  /* A device slug's hyphens become underscores: the far end writes this name
+   * out in JavaScript (itx_mount.h), where a hyphen cannot be spelled. */
   const int capability_match_length = snprintf(
       capability_match, sizeof(capability_match), "itx.clients.%s",
       facts->device_name);
@@ -2958,13 +2945,9 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
      * Deliberately OUTSIDE the voicelab's gate below: that block runs only
      * while a conversation is bound and ready, which is precisely when the
      * socket is busy anyway. The connection this keeps alive is the one
-     * between calls — os-next closes a connection carrying no APPLICATION
-     * message at about a hundred seconds, and the PONG the watchdog above
-     * reads is not one.
-     *
-     * Gated on outbox headroom like every other producer: exhaustion is
-     * session-fatal in this peer, and a probe that cannot be queued is simply
-     * the next period's probe.
+     * between calls (itx_mount.h). Gated on outbox headroom like every other
+     * producer: exhaustion is session-fatal in this peer, and a probe that
+     * cannot be queued is simply the next period's probe.
      */
     if (runtime.connection.state == ITERATE_KIT_ITX_CONNECTION_READY) {
       struct iterate_kit_spsc_ring_metrics probe_outbox;

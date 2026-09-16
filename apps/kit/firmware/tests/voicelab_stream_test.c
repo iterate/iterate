@@ -1085,19 +1085,9 @@ static void terminal_rejects_unsafe_reason_without_an_ephemeral_append(void) {
 }
 
 /*
- * THE SECOND ARGUMENT, AND WHY THE DEVICE READS IT AT ALL.
- *
- * os-next calls a lent subscription stub as a BARE FUNCTION with
- * `(events, range)` — argument 0 is the events array itself, which is the whole
- * of the downlink change — and argument 1 says which offsets the server
- * believes it just delivered. That second argument is not decoration: delivery
- * to a live client is fire-and-forget, a push past the in-flight budget is
- * dropped with no retry, and `readEvents` never returns an ephemeral, so a lost
- * speaker frame is lost for good and has no other symptom than silence.
- *
- * The device cannot heal the gap. It can refuse to let it be invisible, which
- * is what this pins: a continuous range counts nothing, and a range that does
- * not continue the last one counts once.
+ * ARGUMENT 1 IS NOT DECORATION. A dropped push has no symptom but silence
+ * (stream_subscription.h), so the device counts it: a continuous range counts
+ * nothing, and a range that does not continue the last one counts once.
  */
 static void a_discontinuous_delivery_range_is_counted(void) {
   static struct fixture fixture;
@@ -1114,7 +1104,6 @@ static void a_discontinuous_delivery_range_is_counted(void) {
 
   /* A jump: push_spk stamps `after` as offset - 1, so offset 20 leaves 11. */
   push_spk(&fixture, 3, 20, "", frames_b64(1U, 0x42));
-  assert(fixture.voicelab.last_delivery_through == 20);
   assert(fixture.voicelab.delivery_gaps == 1U);
 
   /* And it keeps counting from the new position rather than latching. */

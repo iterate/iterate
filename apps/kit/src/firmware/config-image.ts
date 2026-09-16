@@ -106,13 +106,8 @@ export function encodeDeviceConfiguration(
         name: "project id",
         value: configuration.iterate.projectId,
         maxBytes: projectIdMaxBytes,
-        /*
-         * A SLUG, WITH NO PREFIX TO INSIST ON. os-next has no minted project
-         * id — a project's id IS its DNS-safe slug — and `projects.get`
-         * validates exactly this set. Demanding `prj_` here refused a valid
-         * board configuration at the flasher, and the firmware's own decoder
-         * (configuration.c `valid_project_id`) refused it again at boot.
-         */
+        /* A SLUG, WITH NO PREFIX TO INSIST ON: on os-next a project's id IS
+         * its DNS-safe slug, and `projects.get` validates exactly this set. */
         validate: (value) => /^[A-Za-z0-9_-]+$/.test(value),
       },
       {

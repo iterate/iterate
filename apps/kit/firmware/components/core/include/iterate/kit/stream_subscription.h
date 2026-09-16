@@ -57,9 +57,12 @@ struct iterate_kit_stream {
  * stub as a BARE FUNCTION with `(events, range)`: `update` is argument 0 — for
  * a stream subscription, the events array itself — and `range` is argument 1,
  * `{after, through}`, or NULL when the callee passed none (live state does).
- * The range is the only way a client learns that a delivery it never saw
- * existed, because delivery is fire-and-forget and an ephemeral dropped in
- * flight cannot be read back.
+ *
+ * THE DELIVERY CONTRACT, STATED ONCE HERE. Delivery is fire-and-forget: nothing
+ * is awaited, nothing is retried, a push past the server's in-flight budget is
+ * dropped, and `readEvents` never returns an ephemeral — so a speaker frame
+ * lost in flight cannot be read back and is simply gone. The range is the only
+ * way a client learns that a delivery it never saw existed.
  *
  * `owner_epoch` lets callers reject a callback after they have repurposed their
  * own higher-level call storage. */

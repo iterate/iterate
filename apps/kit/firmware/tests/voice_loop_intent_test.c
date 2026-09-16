@@ -1263,12 +1263,9 @@ static void an_unaccepted_activation_times_out_once(void) {
 /*
  * AN IDLE BOARD KEEPS ITS OWN SOCKET, AND THIS IS THE ONE THING THAT DOES IT.
  *
- * os-next closes a connection carrying no APPLICATION message at about a
- * hundred seconds. Between calls this device sends none: no mic frames, no
- * keepalive (that one is for an accepted call), and a WebSocket PING is not an
- * application message. So the mount asks the project root `whoami()` once a
- * period — and the period has to be reached from the loop's own clock while
- * NOTHING else is happening, which is exactly the state this drives.
+ * Between calls this device sends no application message at all, which is the
+ * only kind os-next's idle close counts (voice_device_profile.h), so the period
+ * has to be reached from the loop's own clock while NOTHING else is happening.
  *
  * PINNED BECAUSE THE FIRST ATTEMPT GOT IT WRONG. The probe was first put beside
  * the call keepalive, inside a block that runs only while a voicelab is bound

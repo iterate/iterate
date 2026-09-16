@@ -1731,11 +1731,7 @@ static void cli_main_reconcile_call(
       outbox_free >= CLI_MAIN_CALL_OUTBOX_SLOTS) {
     (void)iterate_kit_voicelab_keepalive_if_due(&runtime->voicelab);
   }
-  /*
-   * And the session's own pulse, which needs no call: os-next closes a socket
-   * carrying no application message at about a hundred seconds, and neither a
-   * WebSocket ping nor a quiet terminal is one.
-   */
+  /* And the session's own pulse, which needs no call (itx_mount.h). */
   if (outbox_free >= CLI_MAIN_CALL_OUTBOX_SLOTS) {
     (void)iterate_kit_itx_mount_probe_if_due(&runtime->connection.mount, now_ms);
   }

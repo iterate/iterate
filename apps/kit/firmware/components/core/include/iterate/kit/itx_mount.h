@@ -65,16 +65,12 @@ struct iterate_kit_itx_mount_options {
    * The itx expression this device's capability answers, e.g.
    * "itx.clients.home_assistant_voice_preview_edition".
    *
-   * A MATCH, NOT A PATH. `projects.connect` took a stream path and mounted the
-   * capability under a fixed member name; os-next has one front door instead —
-   * `provide(match, stub)` makes every call that STARTS with `match` run
-   * against the lent stub, so a caller reaches this board as
+   * A MATCH, NOT A PATH: `provide(match, stub)` makes every call that STARTS
+   * with `match` run against the lent stub, so a caller reaches this board as
    * `root.clients.home_assistant_voice_preview_edition.health()` and the
    * remaining steps arrive as the Cap'n Web path this device already
-   * dispatches.
-   *
-   * Every segment is a JavaScript identifier because the server spells the
-   * call in JavaScript: a device slug's hyphens must be written as
+   * dispatches. Every segment is a JavaScript identifier because the server
+   * spells the call in JavaScript: a device slug's hyphens must be written as
    * underscores by whoever builds this string.
    */
   const char *capability_match;
@@ -91,10 +87,8 @@ struct iterate_kit_itx_mount_options {
  *   projects.get("<project id>")                   -> the project's ROOT itx
  *   provide("<capability match>", <this device>)   -> a rewrite rule handle
  *
- * apps/os bundled all three into `projects.connect`, which addressed the
- * project AND provided the capability in one trip. os-next splits addressing
- * from lending: `projects.get` is pure addressing and takes one string, and
- * `provide` is the ONE front door for making a name mean this device.
+ * `projects.get` is pure addressing and takes one string; `provide` is the ONE
+ * front door for making a name mean this device.
  *
  * WHAT READY OWNS: the project import, and the rewrite-rule handle that IS the
  * live provision — releasing it un-does the rule and recalls the lent stub, so
@@ -102,15 +96,12 @@ struct iterate_kit_itx_mount_options {
  * Dropping the rule handle instead of releasing it would leave the match
  * pointing at a stub this session no longer answers for.
  *
- * READY does not prove future network liveness. `probe_if_due` is what keeps
- * asking, because os-next closes a socket carrying no APPLICATION message at
- * about a hundred seconds.
- *
  * The state machine is single-owner and callback-driven. At each stage the
  * mount owns only the handles marked by `has_*`; these booleans are the cleanup
  * ledger, not redundant cache. No retry occurs inside the mount because auth
  * rejection, protocol corruption, and transport loss require different outer
- * recovery policy and diagnostics.
+ * recovery policy and diagnostics. READY does not prove future liveness;
+ * `probe_if_due` is what keeps asking.
  */
 struct iterate_kit_itx_mount {
   struct iterate_kit_itx_mount_options options;
@@ -139,24 +130,14 @@ enum capnweb_status iterate_kit_itx_mount_start(
     const struct iterate_kit_itx_mount_options *options);
 
 /**
- * THE SESSION'S OWN LIVENESS, WHICH A WEBSOCKET PING DOES NOT PROVE.
- *
- * os-next closes an idle socket at roughly a hundred seconds and counts
- * APPLICATION messages doing it — its own pager answers that with a thirty
- * second keepalive MESSAGE, not a ping. The transport's quiet-hop PING still
- * runs and still answers a different question (is this TCP hop half-open), and
- * its PONG is what the liveness watchdog keys on, so both stay: on a mounted
- * board this call is what keeps the socket, and the ping is what covers the
- * window before a mount exists.
- *
- * `whoami()` on the project root is the cheapest thing that is a real call: no
- * argument, no storage touched, and `{projectId, path}` back.
- *
- * Unconditional once due rather than only after silence: one call a minute
- * costs less than the state needed to decide it was unnecessary, and a board
- * in a call already sends twenty appends a second.
+ * Sends `whoami()` on the project root once a period, because os-next's idle
+ * close counts APPLICATION messages and a PING is not one; the timing and the
+ * ping's division of labour are in voice_device_profile.h. `whoami()` is the
+ * cheapest real call: no argument, no storage touched. Returns whether a probe
+ * left the device — false covers not mounted, one already pending, not yet due,
+ * and a session with no room, none of which a caller acts on differently.
  */
-enum capnweb_status iterate_kit_itx_mount_probe_if_due(
+bool iterate_kit_itx_mount_probe_if_due(
     struct iterate_kit_itx_mount *mount, uint64_t now_ms);
 
 /**

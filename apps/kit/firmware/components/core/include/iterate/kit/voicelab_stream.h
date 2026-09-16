@@ -199,14 +199,8 @@ struct iterate_kit_voicelab {
   int64_t last_event_offset;
   /**
    * The `through` of the last delivery this subscription saw, and how many
-   * times the next delivery's `after` did not match it.
-   *
-   * THE ONLY WAY A DROPPED PUSH IS VISIBLE. os-next's delivery to a live client
-   * is fire-and-forget: a push past its in-flight budget is dropped with a
-   * server-side warning and no retry, and `readEvents` never returns an
-   * ephemeral, so a lost spk-frame is lost for good. The range is the server
-   * telling us what it believes it has sent; a mismatch here is the difference
-   * between a gap and a silence, which from outside look identical.
+   * times the next delivery's `after` did not match it. The only symptom a
+   * dropped push has, delivery being fire-and-forget (stream_subscription.h).
    */
   int64_t last_delivery_through;
   uint32_t delivery_gaps;

@@ -47,21 +47,15 @@ FIELDS = {
     "project-id": 4,
     "project-api-key": 5,
 }
-# The firmware's own bounds (configuration.h), copied EXACTLY: these are the C
-# array sizes, so the longest value each holds is one less. Refusing here means
-# a board rejects nothing at boot — a truncated field is a device that silently
-# never connects, with no symptom but silence.
-#
-# Four of these were one short of the header, which cost nothing while the key
-# was a 60-character `itxk_` string and refuses a 128-byte one outright. An
-# operator secret is long; a tool that will not write a value the firmware
-# accepts is the same silent failure pointed the other way.
+# The longest value each field holds, spelled as in config-image.ts and one less
+# than the C array size in configuration.h. Four were one short here, which
+# refused a 128-byte operator secret outright.
 CAPACITY = {
-    "wifi-ssid": 33,
-    "wifi-password": 65,
-    "os-base-url": 129,
-    "project-id": 65,
-    "project-api-key": 129,
+    "wifi-ssid": 32,
+    "wifi-password": 64,
+    "os-base-url": 128,
+    "project-id": 64,
+    "project-api-key": 128,
 }
 
 
@@ -72,10 +66,9 @@ def build(values: dict[str, str]) -> bytes:
         if value is None:
             continue
         encoded = value.encode("utf-8")
-        # capacity includes the NUL the firmware writes when copying out.
-        if len(encoded) + 1 > CAPACITY[name]:
+        if len(encoded) > CAPACITY[name]:
             raise SystemExit(
-                f"{name} is {len(encoded)} bytes; the firmware holds {CAPACITY[name] - 1}"
+                f"{name} is {len(encoded)} bytes; the firmware holds {CAPACITY[name]}"
             )
         payload += bytes([field]) + len(encoded).to_bytes(2, "little") + encoded
     crc = binascii.crc32(bytes(payload)) & 0xFFFFFFFF

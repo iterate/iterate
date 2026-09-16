@@ -137,17 +137,10 @@ static bool valid_base_url(const char *value) {
 }
 
 /*
- * A PROJECT ID IS A SLUG, AND THE `prj_` PREFIX IS GONE.
- *
- * This demanded `prj_`, which was true of the minted ids apps/os handed out
- * and is true of nothing on os-next: there a project's id IS its DNS-safe
- * slug (`prj-voice`, `templestein`), and `projects.get` validates exactly
- * `/^[A-Za-z0-9_-]+$/`. A board flashed with a slug refused its own blob at
- * boot with INVALID_VALUE and never dialled, which from outside is
- * indistinguishable from a dead board.
- *
- * Mirror the server's rule rather than a narrower guess: the same character
- * set, non-empty, and no opinion about what it starts with.
+ * A PROJECT ID IS A SLUG, AND THE `prj_` PREFIX IS GONE. On os-next a project's
+ * id IS its DNS-safe slug, and `projects.get` validates exactly
+ * `/^[A-Za-z0-9_-]+$/`. Mirror the server's rule rather than a narrower guess:
+ * a board that refuses its own blob at boot never dials and looks dead.
  */
 static bool valid_project_id(const char *value) {
   const char *cursor;

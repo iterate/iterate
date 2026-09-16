@@ -5,28 +5,10 @@
 #include "iterate/kit/voice_device_profile.h"
 
 /*
- * Mounting is a small asynchronous ownership state machine:
- *
- *   authenticate({type: "admin-secret", secret})
- *     -> authenticated session capability
- *     -> projects.get(projectId)
- *     -> the project's ROOT itx
- *     -> provide(capabilityMatch, <this device>)
- *     -> the rewrite-rule handle that IS the live provision
- *
- * THREE ROUND TRIPS, AND THE MIDDLE ONE IS FREE OF POLICY. apps/os had
- * `projects.connect` do addressing and lending together; os-next separates
- * them, so `projects.get` is one bare string and `provide` is the one front
- * door that makes a name mean this device.
- *
- * READY therefore owns TWO imports: the project root, which everything else is
- * addressed from, and the rule handle, which is the revocable thing. Releasing
- * the rule un-does the match and recalls the lent stub; releasing the project
- * merely stops addressing it. Every `has_*` flag is an ownership ledger used by
- * both success transitions and cleanup. Collapsing the chain into nested
- * generic helpers or retrying stages in place was rejected: each
- * rejection/result/protocol failure needs a stable, diagnosable class, and
- * retry belongs to a fresh outer connection generation.
+ * The three-call mount and its ownership ledger are documented in itx_mount.h.
+ * Collapsing the chain into nested generic helpers or retrying stages in place
+ * was rejected: each rejection/result/protocol failure needs a stable,
+ * diagnosable class, and retry belongs to a fresh outer connection generation.
  *
  * Callbacks and all mutations run on the Cap'n Web session owner task. Options
  * are borrowed for the mount lifetime; call-expression stack values need live
@@ -41,49 +23,30 @@ static bool nonempty(const char *value) {
   return value != NULL && value[0] != '\0';
 }
 
-static bool identifier_character(char character, bool first) {
-  if (character >= 'A' && character <= 'Z') return true;
-  if (character >= 'a' && character <= 'z') return true;
-  if (character == '_') return true;
-  return !first && character >= '0' && character <= '9';
-}
-
+/*
+ * A profile that forgot to spell its device name as an itx expression must fail
+ * before authentication bytes leave the device, rather than become a reconnect
+ * loop mislabeled as networking. Both callers already produce identifier-safe
+ * segments (voice_loop.c sanitizes, cli_options.c refuses), so this bounds the
+ * shape and nothing more: rooted at "itx.", within the capacity, no empty
+ * segment, and at least one segment past the root.
+ */
 static bool valid_capability_match(const char *match) {
   size_t index;
-  size_t segments = 0U;
   bool at_segment_start = true;
-
-  /*
-   * A MATCH IS AN ITX EXPRESSION, AND THE SERVER SPELLS IT IN JAVASCRIPT.
-   *
-   * `provide` canonicalizes a dotted prefix and the caller reaches this board
-   * by writing it out — `root.clients.home_assistant_voice_preview_edition
-   * .health()` — so every segment must be an ordinary identifier. A device
-   * slug's hyphens therefore arrive here as underscores, and a profile that
-   * forgot to do that must fail before authentication bytes leave the device
-   * rather than become a reconnect loop mislabeled as networking.
-   *
-   * Explicit ASCII tests are intentional. ctype predicates are locale-aware
-   * while the server contract is not, so accepting a locale-specific letter
-   * would recreate that cross-peer disagreement for non-ASCII bytes.
-   */
   if (!nonempty(match)) return false;
   if (strncmp(match, "itx.", sizeof("itx.") - 1U) != 0) return false;
   for (index = sizeof("itx.") - 1U; match[index] != '\0'; ++index) {
     if (index >= ITERATE_KIT_ITX_MOUNT_CAPABILITY_MATCH_CAPACITY) return false;
-    if (match[index] == '.') {
-      if (at_segment_start) return false;
-      at_segment_start = true;
+    if (match[index] != '.') {
+      at_segment_start = false;
       continue;
     }
-    if (!identifier_character(match[index], at_segment_start)) return false;
-    if (at_segment_start) {
-      at_segment_start = false;
-      ++segments;
-    }
+    if (at_segment_start) return false;
+    at_segment_start = true;
   }
   /* "itx." alone names the whole surface, and a trailing dot names nothing. */
-  return segments > 0U && !at_segment_start;
+  return !at_segment_start;
 }
 
 static bool valid_options(
@@ -458,11 +421,10 @@ static void probe_completed(
   }
   mount->probe_pending = false;
   /*
-   * A PROBE IS EVIDENCE, NOT POLICY. An answer proves the session; a rejection
-   * or a lost session is already the business of the stage that owns recovery,
-   * and demoting READY from here would turn one unlucky round trip into a
-   * remount. What it must never do is stay silently pending: that is what the
-   * two counters are for.
+   * A PROBE IS EVIDENCE, NOT POLICY. An answer proves the session and feeds the
+   * liveness watchdog (voice_loop.c); a rejection or a lost session is already
+   * the business of the stage that owns recovery, and demoting READY from here
+   * would turn one unlucky round trip into a remount.
    */
   if (result->kind == CAPNWEB_RESULT_VALUE &&
       result->status == CAPNWEB_OK &&
@@ -471,22 +433,20 @@ static void probe_completed(
   }
 }
 
-enum capnweb_status iterate_kit_itx_mount_probe_if_due(
+bool iterate_kit_itx_mount_probe_if_due(
     struct iterate_kit_itx_mount *mount, uint64_t now_ms) {
   static const char no_arguments[] = "[]";
   enum capnweb_status status;
-  if (mount == NULL) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  if (mount->state != ITERATE_KIT_ITX_MOUNT_READY ||
+  if (mount == NULL ||
+      mount->state != ITERATE_KIT_ITX_MOUNT_READY ||
       !mount->has_project_capability ||
       mount->probe_pending) {
-    return CAPNWEB_E_STATE;
+    return false;
   }
   if (mount->last_probe_ms != 0U &&
       iterate_kit_voice_elapsed_ms(now_ms, mount->last_probe_ms) <
           ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS) {
-    return CAPNWEB_OK;
+    return false;
   }
   status = capnweb_session_call_path(
       mount->options.session,
@@ -503,11 +463,10 @@ enum capnweb_status iterate_kit_itx_mount_probe_if_due(
    * tick; the period is the bound on how hard this tries.
    */
   mount->last_probe_ms = now_ms == 0U ? 1U : now_ms;
-  if (status == CAPNWEB_OK) {
-    mount->probe_pending = true;
-    if (mount->probes_sent < UINT32_MAX) ++mount->probes_sent;
-  }
-  return status;
+  if (status != CAPNWEB_OK) return false;
+  mount->probe_pending = true;
+  if (mount->probes_sent < UINT32_MAX) ++mount->probes_sent;
+  return true;
 }
 
 enum capnweb_status iterate_kit_itx_mount_close(

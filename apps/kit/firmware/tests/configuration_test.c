@@ -143,15 +143,10 @@ static void rejects_invalid_or_truncated_itx_websocket_endpoints(void) {
 }
 
 /*
- * THE BLOB A BOARD IS ACTUALLY FLASHED WITH FOR os-next.
- *
- * Two things in it were refused until now, and each refusal is a board that
- * boots, reads its own partition, rejects it and never dials — which from
- * outside is exactly a dead board. A project id here is a DNS-safe SLUG,
- * because in this deployment a project's id IS its slug; and an operator secret
- * runs to the field's full 128 bytes, where the writer's capacity table used to
- * stop one byte short. This image comes from tools/make-config-image.py, so it
- * is the same cross-language proof the TypeScript golden image gives.
+ * THE BLOB A BOARD IS ACTUALLY FLASHED WITH FOR os-next: a DNS-safe SLUG
+ * project id, and an operator secret running to the field's full 128 bytes.
+ * Both were refused until this port, and each refusal is a board that reads its
+ * own partition, rejects it, never dials, and from outside looks dead.
  */
 static void decodes_the_os_next_image_with_a_slug_and_a_full_length_key(void) {
   struct iterate_kit_configuration configuration;

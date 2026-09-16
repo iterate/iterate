@@ -349,16 +349,9 @@ static void handle_spk_frame(
   }
 }
 
-/*
- * WHAT THE SERVER BELIEVES IT HAS SENT, CHECKED AGAINST WHAT WE HAVE SEEN.
- *
- * `range` is `{after, through}`. Delivery to a live client is fire-and-forget
- * on os-next — nothing is awaited, nothing is retried, and a push past the
- * in-flight budget is simply dropped — so a gap has no other symptom. It cannot
- * be HEALED here either: `readEvents` never returns an ephemeral, and every
- * syllable of an answer is one. Counting it is the whole remedy, and it is
- * still worth more than the silence it replaces.
- */
+/* What the server believes it has sent, checked against what we have seen.
+ * A gap cannot be healed — an ephemeral is never re-read — so counting is the
+ * whole remedy; see stream_subscription.h for why there is no other symptom. */
 static void observe_delivery_range(
     struct iterate_kit_voicelab *voicelab,
     const struct capnweb_value *range) {
@@ -401,12 +394,8 @@ static void process_batch(
         voicelab->options.now_ms(voicelab->options.clock_context);
     observe_delivery_range(voicelab, range);
   }
-  /*
-   * ARGUMENT 0 IS THE ARRAY ITSELF. `openConnection` delivered `{events: [...]}`
-   * as one object; os-next calls the lent stub as a bare function whose first
-   * argument IS the events array. Application arrays still ride the wire
-   * escaped as [[item, ...]], which is what this unwraps.
-   */
+  /* Argument 0 IS the events array (stream_subscription.h). Application arrays
+   * ride the wire escaped as [[item, ...]], which is what this unwraps. */
   if (!capnweb_value_get_expression_array(delivered_events, &events)) {
     return;
   }
