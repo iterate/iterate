@@ -1,13 +1,9 @@
 /**
- * GPT-Live relay and durable call fold for one voice context, hosted as an
- * os-next facet processor (`itx.processors.enable("voice-agent", …)`).
- *
- * Ported from packages/voice-agent (apps/os). The wire logic, the fold and
- * the event contract are the same; what changed is the host: os-next's
- * `StreamProcessorDurableObject` instead of apps/os's `StreamProcessorFacet`,
- * deps through the constructor, and no ordinary-Agent plumbing — a delegation
- * is recorded as a durable `delegation-requested` event for a sibling
- * processor to answer with `commentary`/`thinking`/`instructions`.
+ * GPT-Live relay and durable call fold for one voice conversation, hosted as an
+ * os-next facet processor — one facet per conversation context, holding the
+ * provider socket, forwarding microphone frames in and speaker frames out,
+ * folding the transcript, and answering the live model's delegations with one
+ * chat-model turn (delegation-turn.ts).
  */
 import {
   StreamProcessor,
@@ -18,6 +14,11 @@ import {
   type ProcessEventArgs,
   type ReduceArgs,
 } from "./processor.js";
+import {
+  completeWithOpenAi,
+  runDelegationTurn,
+  type DelegationTurnDeps,
+} from "./delegation-turn.ts";
 
 /* ========================================================================== */
 /* CONSTANTS                                                                  */
@@ -39,13 +40,6 @@ const LIVE = {
  */
 export const MAX_SPEAKER_PAYLOAD_BYTES = 3_200;
 
-/**
- * ONE frame per append. On os-next the facet's append is in-process (no stream
- * round trip to batch away), and a client push carries every event folded
- * behind it, so a multi-frame append can hand a device a batch larger than
- * its inbox slot (16 KiB on the ESP32 firmware; one frame is ~4.3 KiB).
- */
-const SPEAKER_APPEND_BATCH_MAX_FRAMES = 1;
 /** Match the device's bounded ten-second speaker capacity when an append stalls. */
 const SPEAKER_OUTBOX_MAX_BYTES = 10_000 * 32;
 
@@ -161,9 +155,6 @@ interface TranscriptTurn {
   role: "listener" | "assistant";
   text: string;
 }
-
-/** A finished turn not yet folded into the recap by its durable transcript event. */
-type PendingTranscript = { speaker: "user" | "assistant"; text: string };
 
 /** Fold one finished turn onto the recap, applying both bounds. */
 function foldTranscriptTurn(transcript: TranscriptTurn[], turn: TranscriptTurn): TranscriptTurn[] {
@@ -324,6 +315,7 @@ const Activation = z.string().min(1).max(64);
  * stream capacity. Remember that exact bounded set, so either delayed
  * terminal still fences its own queued microphone audio. */
 const RECENT_ENDED_ACTIVATIONS_CAPACITY = 2;
+const MAX_ANSWERED_DELEGATIONS_REMEMBERED = 50;
 
 /**
  * Everything that outlives the Durable Object holding the socket.
@@ -335,12 +327,6 @@ const VoiceState = z.object({
   /** The voice's persona. Empty means the delegation policy alone. */
   instructions: z.string().default(""),
   /**
-   * Classify the answer's audio into mouth shapes and publish the newest one
-   * in the runtime bag, where a face-rendering board's 10 Hz poll reads it.
-   * Certificate data because it is a fact about the CLIENT.
-   */
-  visemes: z.boolean().default(false),
-  /**
    * The rolling recap: the newest finished turns, in words, both sides.
    * Folded from the durable transcript events and seeded as history into
    * every fresh provider session, so a re-dial resumes the conversation.
@@ -348,6 +334,8 @@ const VoiceState = z.object({
   transcript: z
     .array(z.strictObject({ role: z.enum(["listener", "assistant"]), text: z.string() }))
     .default([]),
+  /** Delegations already answered (a `commentary` naming them landed), newest first. */
+  answeredDelegationIds: z.array(z.string()).max(MAX_ANSWERED_DELEGATIONS_REMEMBERED).default([]),
   /** Recent client terminals, newest first; see RECENT_ENDED_ACTIVATIONS_CAPACITY. */
   recentEndedActivations: z.array(Activation).max(RECENT_ENDED_ACTIVATIONS_CAPACITY).default([]),
   call: z
@@ -368,29 +356,15 @@ const VoiceState = z.object({
 const EPH = { ephemeral: true as const };
 
 export const VoiceAgentContract = defineProcessorContract({
-  /* THE SAME SLUG AS THE FIRST CUT, because the slug IS the contract selector:
-   * the live subscription is named for it, and the device speaks these event
-   * names already. */
   slug: "voice-agent",
-  version: "24.0.1",
+  version: "1.0.0",
   description:
     "Runs a GPT-Live voice call in the stream's own Durable Object, relaying audio both ways as it arrives.",
   stateSchema: VoiceState,
   events: {
-    "events.iterate.com/voice-agent/created": {
-      description:
-        "The voice agent exists on this stream. Existence and nothing else — appended once, " +
-        "under a stable key; configuration rides `configured`.",
-      payloadSchema: z.strictObject({}),
-    },
     "events.iterate.com/voice-agent/configured": {
       description: "The agent configuration. An absent field resets to its default.",
-      /* v23 accepted a tools array. Ignore that historic field while replaying
-       * an existing stream; v24 neither accepts it as setup nor emits it. */
-      payloadSchema: z.looseObject({
-        instructions: z.string().optional(),
-        visemes: z.boolean().optional(),
-      }),
+      payloadSchema: z.strictObject({ instructions: z.string().optional() }),
     },
     /*
      * THE DEVICE'S HALF is one verb and a heartbeat: here is audio, I am
@@ -514,17 +488,6 @@ export const VoiceAgentContract = defineProcessorContract({
         ),
       }),
     },
-    "events.iterate.com/voice-agent/session-configured": {
-      description:
-        "The whole briefing one provider session was started with — recorded so the stream shows how the voice was initialized.",
-      /* Loose for v23 rows that included backend fields. */
-      payloadSchema: z.looseObject({
-        activation: Activation,
-        conversationId: z.string(),
-        instructions: z.string(),
-      }),
-    },
-
     /*
      * THE SPEAKER FRAMES. Two events, and between them the device's entire buffer
      * policy: play frames in sequence order, and throw away anything at or
@@ -556,14 +519,13 @@ export const VoiceAgentContract = defineProcessorContract({
     },
   },
   consumes: [
-    "events.iterate.com/voice-agent/created",
     "events.iterate.com/voice-agent/configured",
     "events.iterate.com/voice-agent/instructions",
     "events.iterate.com/voice-agent/thinking",
     "events.iterate.com/voice-agent/commentary",
     "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/conversation-ended",
-    "events.iterate.com/voice-agent/provider-error",
+    "events.iterate.com/voice-agent/delegation-requested",
     /* Consumed so the fold sees its own appends and the recap survives an
      * eviction — processEvent has no arm for them on purpose. */
     "events.iterate.com/voice-agent/utterance-transcript",
@@ -578,13 +540,14 @@ export const VoiceAgentContract = defineProcessorContract({
   emits: [
     "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/delegation-requested",
+    "events.iterate.com/voice-agent/commentary",
+    "events.iterate.com/voice-agent/thinking",
     "events.iterate.com/voice-agent/conversation-accepted",
     "events.iterate.com/voice-agent/conversation-ended",
     "events.iterate.com/voice-agent/provider-error",
     "events.iterate.com/voice-agent/provider-disconnected",
     "events.iterate.com/voice-agent/utterance-transcript",
     "events.iterate.com/voice-agent/answer-transcript",
-    "events.iterate.com/voice-agent/session-configured",
     "events.iterate.com/voice-agent/spk-frame",
   ],
 });
@@ -763,6 +726,9 @@ export type VoiceAgentDeps = {
   dialProvider(): Promise<WebSocket | null>;
   /** The context this processor serves, for the facts it records about itself. */
   path: string;
+  /** The backend turn's model call and script tool (delegation-turn.ts). */
+  complete: DelegationTurnDeps["complete"];
+  runScript: DelegationTurnDeps["runScript"];
 };
 
 type VoiceArgs = ProcessEventArgs<VoiceState, ConsumedEvent<VoiceAgentContract>>;
@@ -815,26 +781,17 @@ export class VoiceAgentProcessor extends StreamProcessor<
   #lastDeviceInputAtStreamMsMirror = 0;
   /** The activation whose terminal event is still travelling through the log. */
   #endingActivation: string | null = null;
-  /** Closed rows whose durable transcript event is still in flight; see #closeTurn. */
-  #pendingTranscriptContexts = new Map<string, PendingTranscript>();
+  /** Delegations this incarnation is answering right now. */
+  readonly #turnsInFlight = new Set<string>();
   /* ------------------------------------------------------------------ fold */
 
   reduce({ state, event }: ReduceArgs<VoiceState, ConsumedEvent<VoiceAgentContract>>) {
     const committedAtStreamMs = Date.parse(event.createdAt);
     switch (event.type) {
-      case "events.iterate.com/voice-agent/created":
-        /* Existence is the event's whole content, and the fold's defaults
-         * already ARE the unconfigured agent. */
-        return state;
-
       case "events.iterate.com/voice-agent/configured":
         /* REPLACED WHOLESALE, defaults and all: an absent field resets rather
          * than survives. */
-        return {
-          ...state,
-          instructions: event.payload.instructions || "",
-          visemes: event.payload.visemes ?? false,
-        };
+        return { ...state, instructions: event.payload.instructions || "" };
 
       case "events.iterate.com/voice-agent/call-started":
         /* The id was minted INTO the event rather than here, so this is
@@ -904,6 +861,18 @@ export class VoiceAgentProcessor extends StreamProcessor<
               call: null,
               recentEndedActivations: rememberEndedActivation(state, event.payload.activation),
             };
+
+      case "events.iterate.com/voice-agent/commentary": {
+        const { delegationId } = event.payload;
+        if (!delegationId || state.answeredDelegationIds.includes(delegationId)) return state;
+        return {
+          ...state,
+          answeredDelegationIds: [delegationId, ...state.answeredDelegationIds].slice(
+            0,
+            MAX_ANSWERED_DELEGATIONS_REMEMBERED,
+          ),
+        };
+      }
 
       case "events.iterate.com/voice-agent/utterance-transcript": {
         if (event.payload.text === "") return state;
@@ -980,12 +949,39 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (event === null) return;
 
     switch (event.type) {
-      case "events.iterate.com/voice-agent/utterance-transcript":
-      case "events.iterate.com/voice-agent/answer-transcript": {
-        /* The durable row landed: the fold has it now (reduce), nothing owes it. */
-        this.#pendingTranscriptContexts.delete(
-          event.payload.key || `voice-agent/transcript:${event.offset}`,
-        );
+      case "events.iterate.com/voice-agent/delegation-requested": {
+        /* THE BACKEND TURN, in the facet that raised it: the answer is a
+         * `commentary` naming the delegation, which is also its durable settle
+         * — an evicted turn re-runs from the log because no commentary landed. */
+        const { activation, delegationId, transcript } = event.payload;
+        if (state.answeredDelegationIds.includes(delegationId)) return;
+        if (this.#turnsInFlight.has(delegationId)) return;
+        this.#turnsInFlight.add(delegationId);
+        runInBackground(async () => {
+          try {
+            const turn = await runDelegationTurn(transcript, {
+              complete: this.deps.complete,
+              runScript: this.deps.runScript,
+              progress: (note) =>
+                append({
+                  type: "events.iterate.com/voice-agent/thinking",
+                  payload: { activation, delegationId: null, content: note },
+                }),
+            });
+            await append({
+              type: "events.iterate.com/voice-agent/commentary",
+              idempotencyKey: this.idempotencyKey(`commentary:${delegationId}`),
+              payload: {
+                activation,
+                delegationId,
+                content: turn.content,
+                ...(turn.hangUp && { hangUp: true }),
+              },
+            });
+          } finally {
+            this.#turnsInFlight.delete(delegationId);
+          }
+        });
         return;
       }
 
@@ -1121,9 +1117,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
         return;
       }
 
-      case "events.iterate.com/voice-agent/provider-error":
-        return;
-
       case "events.iterate.com/voice-agent/configured":
         return;
 
@@ -1257,7 +1250,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
        * the seeded history and the backend — everything a fresh session needs
        * to be this stream's assistant instead of a stranger.
        */
-      this.#startSession(dial, state, append);
+      this.#startSession(dial, state);
     });
 
     /*
@@ -1302,7 +1295,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * Start client delegation with persona, delegation policy, and transcript
    * history. Record the exact configuration durably for inspection.
    */
-  #startSession(dial: Dial, state: VoiceArgs["state"], append: VoiceArgs["append"]): void {
+  #startSession(dial: Dial, state: VoiceArgs["state"]): void {
     if (!dial.socket) return;
     const instructions = [
       ...(state.instructions === "" ? [] : [state.instructions]),
@@ -1325,17 +1318,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
           },
     );
 
-    this.#background(() =>
-      append({
-        type: "events.iterate.com/voice-agent/session-configured",
-        idempotencyKey: this.idempotencyKey(`session-configured:${dial.dialId}`),
-        payload: {
-          activation: dial.activation,
-          conversationId: dial.conversationId,
-          instructions: instructions.slice(0, 8_000),
-        },
-      }),
-    );
     dial.socket.send(
       JSON.stringify({
         type: "session.start",
@@ -1620,8 +1602,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
     runInBackground(async () => {
       try {
         while (this.#dial === dial) {
-          const frames = dial.speakerOutbox.splice(0, SPEAKER_APPEND_BATCH_MAX_FRAMES);
-          if (frames.length === 0) {
+          /* ONE frame per append: a client push carries every event folded behind it, and the
+           * ESP32's inbox slot holds 16 KiB (one frame is ~4.3 KiB). */
+          const frame = dial.speakerOutbox.shift();
+          if (!frame) {
             /* Keep one background registration for the dial. A sender
              * that let go whenever the outbox drained re-registered for
              * nearly every frame — ten storage writes and alarm arms a
@@ -1638,33 +1622,28 @@ export class VoiceAgentProcessor extends StreamProcessor<
             dial.wakeSender = null;
             continue;
           }
-          dial.speakerOutboxBytes -= frames.reduce(
-            (total, frame) => total + base64ByteLength(frame.pcm),
-            0,
-          );
+          dial.speakerOutboxBytes -= base64ByteLength(frame.pcm);
           const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
           dial.clearSpeakerBufferBeforeNextFrame = false;
           try {
-            await append(
-              ...frames.map((frame, index) => ({
-                type: "events.iterate.com/voice-agent/spk-frame" as const,
-                /* Stamped HERE: the engine's append stamps provenance, not the
-                 * catalog's ephemeral marker, and a persisted frame is a row. */
-                ephemeral: true as const,
-                payload: {
-                  activation: dial.activation,
-                  conversationId: dial.conversationId,
-                  deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
-                  pcm: frame.pcm,
-                  ...(clearFirst && index === 0 && { clearSpeakerBufferBeforeFrame: true }),
-                  ...(frame.lastFrameOfAnswer && { lastFrameOfAnswer: true }),
-                  ...(typeof frame.receivedAtFacetMs === "number" && {
-                    receivedAtFacetMs: frame.receivedAtFacetMs,
-                  }),
-                  sentAtFacetMs: this.deps.nowAtFacetMs(),
-                },
-              })),
-            );
+            await append({
+              type: "events.iterate.com/voice-agent/spk-frame",
+              /* Stamped HERE: the engine's append stamps provenance, not the
+               * catalog's ephemeral marker, and a persisted frame is a row. */
+              ephemeral: true,
+              payload: {
+                activation: dial.activation,
+                conversationId: dial.conversationId,
+                deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
+                pcm: frame.pcm,
+                ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
+                ...(frame.lastFrameOfAnswer && { lastFrameOfAnswer: true }),
+                ...(typeof frame.receivedAtFacetMs === "number" && {
+                  receivedAtFacetMs: frame.receivedAtFacetMs,
+                }),
+                sentAtFacetMs: this.deps.nowAtFacetMs(),
+              },
+            });
           } catch {
             await this.#end(
               dial.activation,
@@ -1709,7 +1688,6 @@ export class VoiceAgentProcessor extends StreamProcessor<
     });
     const key = `live-turn:${dial.dialId}:${speaker}:${String(row.startTimelineMs)}`;
     const transcriptKey = `voice-agent/transcript:${dial.dialId}:${speaker}:${String(row.startTimelineMs)}`;
-    this.#pendingTranscriptContexts.set(transcriptKey, { speaker, text });
     this.#background(() =>
       speaker === "user"
         ? append({
@@ -1852,19 +1830,15 @@ export class VoiceAgentProcessor extends StreamProcessor<
     });
   }
 
-  /** The words so far: the recap, the closed rows still in flight, and both open rows. */
+  /** The words so far: the recap (closed turns) and both open rows. */
   #delegationTranscript(dial: Dial): { role: "listener" | "assistant"; text: string }[] {
-    const inFlight = Array.from(this.#pendingTranscriptContexts.values(), ({ speaker, text }) => ({
-      role: speaker === "user" ? ("listener" as const) : ("assistant" as const),
-      text,
-    }));
     const open = (["user", "assistant"] as const).flatMap((speaker) => {
       const row = dial.turns[speaker];
       const text = row?.text.replace(/\s+/g, " ").trim() ?? "";
       if (!row || text === "") return [];
       return [{ role: speaker === "user" ? ("listener" as const) : ("assistant" as const), text }];
     });
-    return [...dial.transcript, ...inFlight, ...open];
+    return [...dial.transcript, ...open];
   }
 
   /**
@@ -1935,5 +1909,14 @@ export class VoiceAgentDurableObject extends StreamProcessorDurableObject<VoiceS
     sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
     dialProvider: dialProviderSocket,
     path: this.ctx.props.iterateContextName,
+    complete: completeWithOpenAi,
+    runScript: async (script) => {
+      const itx = this.env.ITX.get() as unknown as { run(script: string): Promise<unknown> };
+      try {
+        return JSON.stringify((await itx.run(script)) ?? null).slice(0, 8_000);
+      } catch (error) {
+        return `ERROR: ${String(error instanceof Error ? error.message : error).slice(0, 8_000)}`;
+      }
+    },
   });
 }

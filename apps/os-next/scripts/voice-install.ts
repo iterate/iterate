@@ -1,10 +1,10 @@
 // scripts/voice-install.ts — put the voice agent on an os-next project.
 //
-// Bundles examples/voice-agent/{voice-agent,voice-backend,voice-setup}.ts (esbuild; the SDK stays
-// the injected "./processor.js"), writes the three bundles to the project's KV (edge-cached: a
-// fresh conversation's facet loads from it without a git read), points the project root's
-// `itx.voice` at the setup worker (a rewrite rule), and sets /secrets/openai.
-// After this, a device's `root.voice.setupVoiceAgent({ streamPath })` works with no source on it.
+// Bundles examples/voice-agent/{voice-agent,worker}.ts (esbuild; the SDK stays the injected
+// "./processor.js"), writes both bundles to the project's KV (edge-cached: a fresh conversation's
+// facet loads without a git read), makes worker.js the project's root worker (`itx.worker`) and
+// `itx.voice` an alias of it, and sets /secrets/openai. NOTE: this replaces any config worker the
+// project already had — `itx.worker` is one rule per project.
 //
 //   OPENAI_API_KEY=… WORKER_BASE_URL=https://os.iterate2.com ADMIN_API_SECRET=… \
 //   PROJECT=prj-voice pnpm exec tsx scripts/voice-install.ts
@@ -32,58 +32,55 @@ async function bundle(file: string): Promise<string> {
 
 const hash8 = (text: string): string => createHash("sha256").update(text).digest("hex").slice(0, 8);
 
-export async function installVoice(): Promise<{
-  voiceAgentKey: string;
-  voiceBackendKey: string;
-  setupKey: string;
-}> {
+/** A durable rewrite rule (a provided one is undone when this installer's session ends). */
+const rule = (match: string, target: unknown) => ({
+  type: "events.iterate.com/itx/rewrite-rule-configured",
+  payload: { match, target },
+});
+
+async function main(): Promise<void> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY unset");
-  const [voiceAgent, voiceBackend, setupSource] = await Promise.all([
-    bundle("voice-agent.ts"),
-    bundle("voice-backend.ts"),
-    bundle("voice-setup.ts"),
-  ]);
+  const voiceAgent = await bundle("voice-agent.ts");
   const voiceAgentKey = `voice-agent:${hash8(voiceAgent)}`;
-  const voiceBackendKey = `voice-backend:${hash8(voiceBackend)}`;
-  const setup = setupSource
-    .replace('"voice-agent:dev"', JSON.stringify(voiceAgentKey))
-    .replace('"voice-backend:dev"', JSON.stringify(voiceBackendKey));
-  if (!setup.includes(voiceAgentKey) || !setup.includes(voiceBackendKey))
-    throw new Error("the setup worker's cache keys were not substituted");
-  const setupKey = `voice-setup:${hash8(setup)}`;
+  const worker = (await bundle("worker.ts")).replace(
+    '"voice-agent:dev"',
+    JSON.stringify(voiceAgentKey),
+  );
+  if (!worker.includes(voiceAgentKey))
+    throw new Error("the worker's facet cache key was not substituted");
+  const workerKey = `voice-worker:${hash8(worker)}`;
 
   const root = session().authenticate(adminCredentials()).projects.get(PROJECT);
   await root.invoke(["itx", ["whoami"]]);
   await root.secrets.set("openai", apiKey, { urls: ["https://api.openai.com"] });
-  for (const [key, text] of [
-    ["voice-agent.js", voiceAgent],
-    ["voice-backend.js", voiceBackend],
-    ["voice-setup.js", setup],
-  ] as const) {
-    await root.kv.put(key, text);
-    console.log(`kv ${key}: ${(text.length / 1024).toFixed(0)} KiB`);
-  }
-  // The raw event, not `provide`: a provided rule is a session-scoped handle, undone when this
-  // installer's session ends. The event IS the durable rule.
-  await root.append({
-    type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: {
-      match: "itx.voice",
-      target: [
-        "itx",
-        "workers",
-        ["get", { source: "itx.kv.get('voice-setup.js')", cacheKey: setupKey }],
-      ],
-    },
-  });
+  await root.kv.put("voice-agent.js", voiceAgent);
+  await root.kv.put("worker.js", worker);
+  await root.append(
+    rule("itx.worker", [
+      "itx",
+      "workers",
+      ["get", { source: "itx.kv.get('worker.js')", cacheKey: workerKey }],
+    ]),
+    rule("itx.voice", "itx.worker"),
+  );
   const health = JSON.parse(JSON.stringify(await root.voice.health()));
-  console.log(`itx.voice healthy: ${JSON.stringify(health)}`);
-  return { voiceAgentKey, voiceBackendKey, setupKey };
-}
-
-if (process.argv[1]?.endsWith("voice-install.ts")) {
-  console.log(JSON.stringify(await installVoice(), null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        project: PROJECT,
+        voiceAgentKiB: Math.round(voiceAgent.length / 1024),
+        workerKiB: Math.round(worker.length / 1024),
+        voiceAgentKey,
+        workerKey,
+        health,
+      },
+      null,
+      2,
+    ),
+  );
   disposeSessions();
   process.exit(0);
 }
+
+await main();

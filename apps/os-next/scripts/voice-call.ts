@@ -31,8 +31,6 @@ const SAY = args.get("say");
 const OUT = args.get("out") || `/tmp/voice-call-${Date.now().toString(36)}.wav`;
 /** How long to keep the microphone open with silence after the utterance (the model answers then). */
 const LISTEN_MS = Number(args.get("listen-ms") || 12_000);
-/** Hold microphone frames on the client until the call is accepted (the facet queues them anyway). */
-const MIC_AFTER_ACCEPTED = args.get("mic-after-accepted") === "true";
 const FRAME_MS = 50;
 const BYTES_PER_MS = 32; // 16 kHz mono PCM16
 const T = "events.iterate.com/voice-agent/";
@@ -185,7 +183,6 @@ async function main(): Promise<void> {
   marks.subscribed = at();
   const setup = await setupPromise;
   if (setup.streamPath !== CONTEXT_PATH) throw new Error(`setup answered ${JSON.stringify(setup)}`);
-  if (MIC_AFTER_ACCEPTED) await acceptedPromise;
 
   // THE MICROPHONE: 50 ms frames on a wall clock, never awaited one by one (a device's outbox),
   // then silence until the answer had its say. The first frame mints the call server-side.

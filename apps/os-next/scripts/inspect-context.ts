@@ -1,6 +1,7 @@
 // scripts/inspect-context.ts — print a context's durable log and subscription rows on the worker
 // WORKER_BASE_URL/ADMIN_API_SECRET point at (an operator's `tail -f` for one conversation).
-//   PROJECT=prj-voice CTX_PATH=/calls/abc pnpm exec tsx scripts/inspect-context.ts
+//   WORKER_BASE_URL=… ADMIN_API_SECRET=… PROJECT=prj-voice CTX_PATH=/calls/abc pnpm exec tsx scripts/inspect-context.ts
+// (CTX_PATH is the context to print; a voice conversation reports its own in `health().conversation`.)
 import { adminCredentials, disposeSessions, session } from "../e2e/support/client.ts";
 
 const project = process.env.PROJECT || "prj-voice";
