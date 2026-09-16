@@ -47,15 +47,7 @@ export default class PlaywrightTelemetryReporter implements Reporter {
       lane: "playwright",
       workspace,
     });
-    // Separate runners can have identical PIDs and start in the same millisecond.
-    // The shard identity keeps their artifacts distinct when reports are joined.
-    this.artifactId = testTelemetryArtifactId(
-      "playwright",
-      workspace,
-      config.shard ? `${config.shard.current}-of-${config.shard.total}` : "unsharded",
-      process.pid,
-      startedAtMs,
-    );
+    this.artifactId = testTelemetryArtifactId("playwright", workspace, process.pid, startedAtMs);
     this.ci = ciTelemetrySourceFromEnvironment(process.env, `local-${this.artifactId}`);
     writeTestTelemetryFailureSentinel({
       artifactId: this.artifactId,

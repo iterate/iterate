@@ -10,12 +10,16 @@ explainer route. No deployment of the product is needed to publish this page.
 
 ## Experiment
 
-Change only the fixed `previewPlaywrightWorkers` value for each measured
-configuration: 16, 32, 64 and 92, then useful control/finalist repeats. Keep
+The controlled series changes only the fixed `previewPlaywrightWorkers` value
+in each recorded commit: 16, 32, 64 and 92, then control/finalist repeats.
+The final configuration lives directly in `playwright.config.ts`; the unused
+sharding code was removed after the controlled series. Keep
 application code, test catalogue, worker machine size, retries, readiness and
 cleanup unchanged. Each push must wait for the previous preview's cleanup to
 finish. The normal single-runner workflow runs `pnpm preview run` and then
-erases the slot; it does not call the six-shard reusable workflow.
+erases the slot. The sharded implementation remains reproducible at its
+recorded commits (`2996ffc9c` and `ec079ad53`), rather than remaining unused in
+the final CI code.
 
 All worker experiments use the same named Depot image tag, but we cannot prove
 the resolved image digest is identical. Log the exact commit, run, slot,
@@ -77,3 +81,9 @@ unsharded run's known workflow, install, Playwright, Vitest and retry totals.
   That expected wrapper outcome is distinguished from a real body failure.
 - Historical runs use the same catalogue but differ in PR/slot and deployment
   reuse. They motivate the experiment; they are not a controlled comparison.
+
+The final implementation differs from application baseline `611c3769b` only
+in the root Playwright worker setting and documentation/evidence. The measured
+application, package and spec trees are identical across the controlled trials.
+Final validation after removing unused sharding code is recorded separately;
+it does not replace any earlier failed measurement.

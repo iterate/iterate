@@ -7,11 +7,7 @@ import {
   SPEC_TEST_TIMEOUT_MS,
 } from "@iterate-com/shared/test-support/e2e-policy";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
-import { previewPlaywrightWorkers } from "./scripts/preview/playwright-capacity-reporter.ts";
 import { localOsDevServer } from "./apps/os/scripts/dev.ts";
-
-const shardIndex = process.env.PLAYWRIGHT_SHARD_INDEX;
-const shardRoot = `test-results/playwright-shard-${shardIndex}`;
 
 const videoMode = process.env.VIDEO_MODE === "1";
 // Preview is the latency-sensitive full suite. Queue the deliberately long
@@ -51,23 +47,17 @@ export default defineConfig({
   // (docs/testing.md#retries-and-timeouts). A burst that defeats it fails
   // the run on purpose: platform weather should be visible, not absorbed.
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
-  // Experiment: one 16-core / 64-GB preview runner, with a fixed worker count.
-  // Compare 16, 32, 64 and 92 before choosing the final concurrency.
-  workers: process.env.CI ? previewPlaywrightWorkers : 1,
-  outputDir: shardIndex ? `${shardRoot}/output` : "test-results/playwright-output",
-  reporter: shardIndex
-    ? [
-        ["list"],
-        ["blob", { outputDir: "test-results/playwright-blobs" }],
-        ["./scripts/preview/playwright-capacity-reporter.ts"],
-        ["./scripts/ci/playwright-telemetry-reporter.ts"],
-      ]
-    : [
-        ["list"],
-        ["html", { outputFolder: "test-results/playwright-html", open: "never" }],
-        ["json", { outputFile: "test-results/playwright-results.json" }],
-        ["./scripts/ci/playwright-telemetry-reporter.ts"],
-      ],
+  // Measured on the 16-core preview runner: 32 workers puts Playwright below
+  // the concurrent Vitest suite. Higher counts used more memory for little
+  // wall-time gain. See explainers/playwright-parallelisation.html.
+  workers: process.env.CI ? 32 : 1,
+  outputDir: "test-results/playwright-output",
+  reporter: [
+    ["list"],
+    ["html", { outputFolder: "test-results/playwright-html", open: "never" }],
+    ["json", { outputFile: "test-results/playwright-results.json" }],
+    ["./scripts/ci/playwright-telemetry-reporter.ts"],
+  ],
   timeout: SPEC_TEST_TIMEOUT_MS,
   expect: { timeout: SPEC_EXPECT_TIMEOUT_MS },
   use: {

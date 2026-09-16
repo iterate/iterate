@@ -6,5 +6,6 @@
   "workers-32",
   "workers-64",
   "workers-92",
-  "workers-16-repeat"
+  "workers-16-repeat",
+  "workers-32-repeat"
 ]

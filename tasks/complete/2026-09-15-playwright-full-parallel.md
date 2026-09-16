@@ -5,7 +5,7 @@ size: large
 
 # Run the preview Playwright catalogue fully in parallel
 
-Status: implemented and validated on Depot. Six browser runners provide 96 slots, share one deployment/readiness barrier, and preserve reports, telemetry and cleanup. The code commit is fully green; overall CI latency still needs work outside test scheduling.
+Status: historical experiment, superseded by the worker-count comparison in PR #2659. The six-shard implementation remains at commits `2996ffc9c` and `ec079ad53`; it was removed from the final branch because the full preview was slower. Its measured traces remain in `explainers/playwright-parallelisation.html`. The notes below describe that earlier implementation.
 
 The user wants fixed shard/worker counts with `shards * workers >= num_tests`, not an adaptive scheduling algorithm. Use six independent CI runners with sixteen Playwright workers each (96 slots). Keep local runs at one worker.
 

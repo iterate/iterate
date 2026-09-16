@@ -43,7 +43,6 @@ on:
       - synchronize
     paths:
       - .depot/workflows/cloudflare-previews.yml
-      - .depot/workflows/cloudflare-preview-sharded.yml
       - packages/shared/**
       - packages/ui/**
       - pnpm-lock.yaml
@@ -86,7 +85,7 @@ jobs:
     runs-on:
       size: 16x64
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    # Hard backstop on one attempt. Each parallel test suite retains its own
+    # Hard backstop on one attempt. Each parallel sub-lane retains its own
     # tighter watchdog; this outer bound catches setup, deploy, and reporting
     # runaways while leaving enough time to preserve failure artifacts.
     timeout-minutes: 20
@@ -102,14 +101,14 @@ jobs:
       # Permanent breaking-change floor: an old branch would deploy Auth first,
       # then fail or deploy an OS revision that cannot call the default RPC
       # entrypoint. Refuse before any app or credential is touched. This is an
-      # epoch assertion; merge current main to meet the deployment contract.
+      # epoch assertion, not a compatibility path; rebase is the only remedy.
       - name: Enforce preview deployment epoch
         run: |-
           set -euo pipefail
           expected="os-auth-rpc-v1"
           actual="$(cat scripts/preview/deployment-epoch 2>/dev/null || true)"
           if [ "$actual" != "$expected" ]; then
-            echo "This branch predates preview deployment epoch $expected. Merge main before deploying." >&2
+            echo "This branch predates preview deployment epoch $expected. Rebase onto main before deploying." >&2
             exit 1
           fi
       - name: Reconcile dependencies (baked)

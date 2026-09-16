@@ -678,7 +678,7 @@ describe("preview workflow scope", () => {
 
   test("rejects pre-RPC branches before the preview orchestrator can deploy Auth", () => {
     const workflow = readFileSync(
-      resolve(repoRoot, ".depot/workflows/cloudflare-preview-sharded.yml"),
+      resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
       "utf8",
     );
     const epoch = readFileSync(resolve(repoRoot, "scripts/preview/deployment-epoch"), "utf8");
@@ -686,7 +686,7 @@ describe("preview workflow scope", () => {
     expect(epoch.trim()).toBe("os-auth-rpc-v1");
     expect(workflow).toContain('expected="os-auth-rpc-v1"');
     expect(workflow.indexOf("Enforce preview deployment epoch")).toBeLessThan(
-      workflow.indexOf("pnpm preview ci-prepare"),
+      workflow.indexOf("pnpm preview run"),
     );
   });
 
@@ -932,7 +932,7 @@ describe("preview test commands", () => {
 
   test("normalizes OS preview artifacts before Depot upload", () => {
     const workflow = readFileSync(
-      resolve(repoRoot, ".depot/workflows/cloudflare-preview-sharded.yml"),
+      resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
       "utf8",
     );
 
@@ -1051,11 +1051,11 @@ describe("preview test commands", () => {
     expect(cloudflarePreviewApps.auth.previewTestRolloutGate).toBeUndefined();
 
     const workflow = parseYaml(
-      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-preview-sharded.yml"), "utf8"),
-    ) as { jobs: { prepare: { "timeout-minutes": number } } };
+      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
+    ) as { jobs: { preview: { "timeout-minutes": number } } };
     // This is a diagnostic backstop, not the expected duration. Individual
     // lanes retain tighter watchdogs and only tests own retries.
-    expect(workflow.jobs.prepare["timeout-minutes"]).toBe(20);
+    expect(workflow.jobs.preview["timeout-minutes"]).toBe(20);
   });
 });
 

@@ -5,7 +5,7 @@ size: large
 
 # Playwright parallelisation experimentation
 
-Status: all four worker counts measured and published, including the failed 92-worker run. The 16-worker repeat confirms the control; 32 is repeating next. Final recommendation/configuration and validation remain.
+Status: six controlled trials recorded and published. The final candidate is one runner with 32 workers; unused sharding code is removed. Local script tests and typechecking pass. Final preview validation, review and task completion remain.
 
 ## Request and assumptions
 
@@ -28,8 +28,8 @@ The user wants PR #2659 renamed and used for an overnight experiment: push commi
 - [x] Push and measure 32 workers. *Run 3nc3m3tfjd: preview success, 532.6s overall, 114.1s Playwright, 124.6s Vitest, one dashboard retry and the same quarantined mobile-photo failure. All unit/lint checks pass.*
 - [x] Push and measure 64 workers. *Run g5bvvvj3s3: 623.3s preview, 108.6s Playwright, 120.6s Vitest, two successful browser retries, all 88 browser bodies passed, peak memory 36.1 GB.*
 - [x] Push and measure 92 workers. *Run ttxw7whjw1: preview failed, 604.4s overall; Playwright 104.5s, Vitest 119.0s; three browser retries (dashboard still failed), one Vitest retry, peak memory 45.5 GB.*
-- [ ] Repeat the useful control/finalist comparison and account for failures and cache variability.
-- [ ] Commit a permanent, self-contained explainer and update it with each result; retain reproducible sanitized evidence and trace-generation code.
+- [x] Repeat the useful control/finalist comparison and account for failures and cache variability. *16: 147.8 / 149.3s, no retries. 32: 114.1 / 105.9s, one successful retry each; install/deployment variation reported separately.*
+- [x] Commit a permanent, self-contained explainer and update it with each result; retain reproducible sanitized evidence and trace-generation code. *Six controlled trials plus three historical runs; collector, sanitized JSON, renderer and interactive page are committed.*
 - [x] Verify the branch-served explainer and put the working URL in the PR body. *HTTP 200 and headless browser interaction verified on the branch-serving route; link is in the PR.*
 - [ ] Review the final diff, run relevant checks, address review/CI feedback, and document the recommendation.
 
@@ -57,3 +57,7 @@ The user wants PR #2659 renamed and used for an overnight experiment: push commi
 - 92-worker evidence: `runs/workers-92.json`. First starts span only 2.2s (87 active attempts), so the capacity goal was met. Mobile fixture median grew to 59.3s; local plain-HTML screenshotting also exceeded 1s once. No timeouts or tests changed to make the run pass. Next: repeat the 16-worker control and 32-worker candidate.
 
 - Repeated 16-worker control: `437023ccf`, run `48vk6h0d1h`, 578.7s preview / 149.3s Playwright / 125.3s Vitest, no retries, all 88 non-skipped bodies passed. Install 10.0s, peak memory 15.6 GB. Evidence: `runs/workers-16-repeat.json`.
+
+- Repeated 32-worker candidate: `2338f67ea`, run `w44shj04gp`, 519.3s preview / 105.9s Playwright / 122.3s Vitest; all 88 non-skipped bodies passed. One mobile signup retry (Organization name; spinner middleware’s 1ms fail-fast branch), no app retries. Install 8.8s, peak memory 22.2 GB.
+
+- Final code selection: root CI workers 32, local workers 1. Removed the unused sharding implementation; relative to baseline `611c3769b`, all runtime/CI code except this worker setting is unchanged. The old sharded commits and traces remain available. Local verification after removal: 311 script tests and script typecheck pass.

@@ -35,7 +35,6 @@ export async function finalizeTestTelemetry(options: {
   cancelled?: boolean;
   dryRun?: boolean;
   expectedWorkspaces?: readonly string[];
-  scope?: "job" | "workflow";
 }) {
   const artifactRoot = resolve(options.artifactRoot);
   const rawDirectory = join(artifactRoot, "raw");
@@ -50,7 +49,6 @@ export async function finalizeTestTelemetry(options: {
   const completeness = analyzeTestTelemetryCompleteness(
     loaded.map(({ artifact }) => artifact),
     options.expectedWorkspaces ?? [],
-    options.scope || "job",
   );
   const {
     expectedArtifactSources,
@@ -225,6 +223,5 @@ if (isMainModule(import.meta.url)) {
     cancelled,
     dryRun: cancelled || process.argv.includes("--dry-run"),
     expectedWorkspaces,
-    scope: process.argv.includes("--workflow-scope") ? "workflow" : "job",
   });
 }
