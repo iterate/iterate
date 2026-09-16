@@ -513,19 +513,25 @@ static uint32_t speaker_queued_bytes(void) {
 
 static void on_session_ended(void *context) {
   (void)context;
+  /*
+   * A CALL CANNOT OUTLIVE THE SESSION UNDER IT. Its frames and answers rode
+   * this session, and the acceptance that made it live never comes again on
+   * the next one — so it ends now: its terminal rides the next session, and
+   * the next press opens a fresh call instead of streaming into a dead one.
+   * A press made before any session has no call under it yet, and waits.
+   */
+  if (runtime.activation_live) end_local_activation("session-lost", "call ended");
   for (size_t index = 0U; index < 4U; ++index) {
     iterate_kit_stream_subscription_session_ended(&runtime.subscriptions[index]);
   }
   for (size_t index = 0U; index < 2U; ++index) {
     iterate_kit_stream_session_ended(&runtime.streams[index]);
     (void)iterate_kit_voicelab_close(&runtime.voicelabs[index]);
-    runtime.setup[index].ready = false;
   }
   iterate_kit_stream_session_ended(&runtime.terminal_stream);
   for (size_t index = 0U; index < TERMINAL_PENDING_CAPACITY; ++index) {
     runtime.pending_terminals[index].stream = NULL;
   }
-  runtime.voicelab_generation = 0U;
 }
 
 static uint64_t now_ms(void *context) {
@@ -1294,6 +1300,7 @@ static void fence_activation(void) {
 }
 
 static void end_local_activation(const char *reason, const char *status) {
+  if (runtime.activation_live) ESP_LOGI(tag, "call ended here: %s", reason);
   bool queued;
   /* Every local end is immediately audible: discard the old answer before
    * fencing capture or waiting for its terminal to reach the stream. */
@@ -1332,6 +1339,7 @@ static void end_local_activation(const char *reason, const char *status) {
 /* The server has already accepted the terminal; fence only local audio. */
 static void end_authoritative_activation(const char *status) {
   if (!runtime.activation_live) return;
+  ESP_LOGI(tag, "call ended by the server");
   fence_activation();
   runtime.activation[0] = '\0';
   stream_path[0] = '\0';
@@ -3155,32 +3163,14 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        */
 
       /*
-       * THE DOWNLINK NEEDS ITS OWN PROOF.
-       *
-       * Everything above trusts that if the bridge appends something, this
-       * device hears it. That is one lane, held by the platform as a
-       * callback registration inside the stream's Durable Object, and it can
-       * be lost on its own: measured here, a device whose uplink was resolving
-       * happily while eight conversation-accepted events and eleven more
-       * besides were appended by live bridges and NOT ONE of
-       * them arrived. Its batch counter did not move for 68 seconds. The UI
-       * said "starting call" the whole time, which is exactly what a person
-       * sees, and nothing in the device was ever going to notice: the socket
-       * was fine, the session was fine, the appends were fine.
-       *
-       * Silence is only evidence when traffic is expected, and with GPT-Live
-       * that is narrower than "a call is wanted": the facet drops idle
-       * silence, so an accepted call with nothing owed delivers NOTHING while
-       * the person thinks and the model listens. Read as a dead lane, that
-       * recycled the connection every ten seconds of ordinary conversation
-       * (18 times in a six-minute call, 2026-09-11), each one a TLS round
-       * trip on this task. Traffic is owed while a wanted call has not been
-       * accepted yet, or an answer has begun and its `last` has not come —
-       * iterate_kit_voicelab_downlink_expected() — and ten seconds of
-       * nothing in either state means the lane is dead, not quiet.
-       * The cure is the recycle that already exists — make-before-break, one
-       * round trip — and if three of those change nothing then it is not the
-       * connection that is broken, it is the session under it.
+       * THE DOWNLINK WATCHDOG. Silence is evidence only while traffic is owed —
+       * a wanted call not yet accepted, or an answer begun whose `last` has not
+       * come (iterate_kit_voicelab_downlink_expected) — since the facet drops
+       * idle silence and an accepted call with nothing owed delivers nothing.
+       * Ten seconds of nothing in either state is a dead lane: recycle the
+       * connection (make-before-break, one round trip); three recycles that
+       * change nothing mean the session under it is broken, so replace it —
+       * and the call under that session ends with it (the rule above).
        */
       if (wants_call && runtime.voicelab->state == ITERATE_KIT_VOICELAB_READY &&
           runtime.voicelab->subscription != NULL &&
@@ -3255,16 +3245,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         }
       }
 
-      /*
-       * THE 180-SECOND REMOUNT WATCHDOG WAS HERE, restarting the transport
-       * after any three quiet minutes because the platform once dropped
-       * mounts silently. Measured 2026-08-20: that metronome was the fleet's
-       * dominant Durable Object churn — one incarnation per board per cycle,
-       * ~480/day/stream — and the platform faults it papered over have their
-       * own reactive answers now (the voicelab-FAILED remount and the
-       * mic-jam restart below, both keyed on evidence instead of a clock).
-       * A quiet afternoon is allowed to be quiet.
-       */
 
       /* The pressed-button audit, owed since its press, sent when the
        * session can carry it. */

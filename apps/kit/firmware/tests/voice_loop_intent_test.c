@@ -963,6 +963,49 @@ static void queued_terminal_survives_session_loss_before_b(void) {
   quiescent();
 }
 
+/* A call cannot outlive the session under it: once the next session is up the loop
+ * ends the call, its terminal rides that session, and the next press opens a NEW
+ * child instead of streaming into the dead one (measured 2026-09-16: a deploy roll
+ * cut the session mid-call and the board sat wanting the old call for 20 minutes). */
+static void losing_the_session_ends_the_call_and_the_next_press_opens_a_new_one(void) {
+  size_t after_reconnect;
+  quiescent();
+  remote_call("conversation", "start");
+  step();
+  pump();
+  speak_frames(1U);
+  run_ms(100U);
+  deliver_accepted_latest();
+  step();
+  assert(board.last_view.wants_call);
+
+  iterate_kit_itx_connection_lost(iterate_kit_fake_platform_connection());
+  iterate_kit_fake_platform_drain_control_outbox();
+  next_inbound_call_id = 1;
+  pending_open_connection_count = 0U;
+  pending_stream_path_count = 0U;
+  memset(open_connections, 0, sizeof(open_connections));
+  memset(stream_capabilities, 0, sizeof(stream_capabilities));
+  iterate_kit_fake_platform_connect();
+  after_reconnect = iterate_kit_fake_platform_sent_count();
+  pump();
+  step();
+  step(); /* the end lands in one pass; the board sees the view on the next */
+  assert(!board.last_view.wants_call);
+  assert(sent_after_count(
+      after_reconnect, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\"") == 1U);
+  assert(sent_after_contains(after_reconnect, "\"reason\":\"session-lost\""));
+
+  remote_call("conversation", "start");
+  step();
+  pump();
+  speak_frames(1U);
+  run_ms(100U);
+  assert(board.last_view.wants_call);
+  assert(sent_after_contains(after_reconnect, "\"pcm\":"));
+  quiescent();
+}
+
 /* B may already have captured while A's terminal waits for outbox space, but
  * that PCM waits for B's own newly opened child rather than using A's stub. */
 static void b_pcm_waits_for_its_own_child_after_a_terminal(void) {
@@ -1338,6 +1381,7 @@ int main(void) {
   assert(sent_after_count(0U, "\"authenticate\"") == 1U);
   assert(iterate_kit_fake_platform_connection()->generation == 1U);
   queued_terminal_survives_session_loss_before_b();
+  losing_the_session_ends_the_call_and_the_next_press_opens_a_new_one();
   b_pcm_waits_for_its_own_child_after_a_terminal();
   failed_microphone_append_ends_the_activation();
   return 0;
