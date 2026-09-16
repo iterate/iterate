@@ -670,6 +670,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  owed deliveries, the idle quiesce. Then the next deadline is derived from what is left. */
   async alarm(): Promise<void> {
     const { armedAt: fired } = this.#alarms.snapshot();
+    const pinnedAtStart = this.#lastPinUseMs() !== null;
     try {
       await this.#alarms.pass(async () => {
         // An incarnation the alarm woke records its wake HERE, inside the hold — the one door that
@@ -749,14 +750,31 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // the deadline it leaves is the one derived below. A cursor delivery pins nothing local (a
         // facet it calls into is counted by #facetWorkInFlight), so the quiesce needs no count of its own.
         await this.#subscriptionDelivery.deliverEveryCursorSubscription();
+        // …and the pushes this pass caused (its own wake record's, to every "*" facet): a facet is
+        // judged below only once its push has landed, never released mid-push.
+        await this.#subscriptionDelivery.pushesSettled();
         // THE QUIET BOUNDARY (the #6800 quiesce): nothing pinned, nothing to release; a pin used
         // within the quiet period (a facet call in flight counts as used now — the facet watchdog
         // bounds it, and its finish moves the clock) keeps everything, and the next deadline derived
         // below is a full quiet period after that use. Against the fired time, not just now: a clock
         // a hair behind the alarm must not keep a pin one more period.
+        // A PASS THAT BEGAN WITH NOTHING PINNED ENDS WITH NOTHING PINNED, unless durable work is due
+        // within the quiet period: what it pinned, its own deliveries pinned (a "*" facet materialized
+        // for this incarnation's wake record), and an idle alarm for that would find this actor gone
+        // — on the edge a live facet does not keep an actor resident, it hibernates within seconds
+        // like any other — and construct the next incarnation to do the same: a wake per quiet period,
+        // forever. Released now, the next request re-materializes the facet from its checkpoint, as
+        // a hibernation would have made it do anyway.
         const lastPinUseMs = this.#lastPinUseMs();
         if (lastPinUseMs === null) return;
-        if (Math.max(Date.now(), fired ?? 0) - lastPinUseMs < IDLE_QUIESCE_AFTER_MS) return;
+        const boundaryMs = Math.max(Date.now(), fired ?? 0);
+        const nextDurableAt = Math.min(
+          this.#stream.nextScheduledAppendAt() ?? Infinity,
+          this.#subscriptionDelivery.deadlines()[0]?.at ?? Infinity,
+        );
+        const endsReleased = !pinnedAtStart && nextDurableAt > boundaryMs + IDLE_QUIESCE_AFTER_MS;
+        if (!endsReleased && boundaryMs - lastPinUseMs < IDLE_QUIESCE_AFTER_MS) return;
+        if (this.#facetWorkInFlight > 0) return; // a call still in flight: its finish moves the clock
         for (const facetName of this.#liveFacetNames.keys())
           this.#abortFacetIfRunning(facetName, "idle quiesce");
         this.#liveFacetNames.clear(); // aborted facets re-materialize on their next call

@@ -352,6 +352,37 @@ test("THE PINS CARRY THE CLOCK: a call that touches no pin leaves the idle deadl
   }
 });
 
+test("A PASS THAT BEGAN WITH NOTHING PINNED ENDS WITH NOTHING PINNED: an alarm-woken incarnation whose wake record materializes a '*' facet releases it at the pass end and leaves no alarm — one woken, then quiet", async () => {
+  const ctx = "prj_q_star_facet_wake";
+  const s = stub(ctx);
+  await enableCounter(ctx); // a "*" facet: every incarnation's wake record is pushed to it
+  await s.append({ type: "a/1" });
+  await new Promise((r) => setTimeout(r, 300));
+  await quiesce(ctx); // released: nothing pinned, no alarm
+  await until("no alarm", async () => (await alarmAt(ctx)) === null);
+  const wokens = async () =>
+    ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events.filter(
+      (event) => event.type === "events.iterate.com/stream/woken",
+    );
+  const before = (await wokens()).length;
+  // A stale alarm fires into an evicted actor: the fresh incarnation's wake record materializes
+  // the counter for the push — the pass's own pin — and the pass ends released, with no alarm.
+  await runInDurableObject(s, (_inst, state) => state.storage.setAlarm(Date.now() + 300));
+  await evictDurableObject(s);
+  await new Promise((r) => setTimeout(r, 2_500));
+  expect(await alarmAt(ctx)).toBeNull(); // (a read constructs nothing: the alarm is storage)
+  await new Promise((r) => setTimeout(r, 1_500));
+  const woken = await wokens(); // this read is a request: at most one more incarnation, by request
+  expect(woken.slice(before).map((event) => (event.payload as { reason: string }).reason)).toEqual(
+    expect.arrayContaining(["alarm"]),
+  );
+  expect(woken.length).toBeLessThanOrEqual(before + 2);
+  expect(
+    woken.slice(before).filter((e) => (e.payload as { reason: string }).reason === "alarm"),
+  ).toHaveLength(1);
+  expect((await snapCounter(ctx)).state.n).toBe(await durableCount(ctx)); // the wake record reached the "*" facet exactly once
+});
+
 test("A WAKE MAKES NO LOOP: an incarnation the alarm woke delivers its own wake record to the config row, acks, and ends with no alarm — one woken per incarnation, never a second", async () => {
   const ctx = "prj_q_wake_no_loop";
   const s = stub(ctx);

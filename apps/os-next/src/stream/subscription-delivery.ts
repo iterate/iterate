@@ -508,6 +508,15 @@ export class SubscriptionDelivery {
     for (const record of this.#deliveryRecordByName.values()) record.behindSince = undefined;
   }
 
+  /** Every push chain settled — what the alarm's pass awaits before judging the pins its own
+   *  deliveries made. A live client's push is fire-and-forget and settles at once; a facet push is
+   *  bounded by the facet watchdog. */
+  async pushesSettled(): Promise<void> {
+    await Promise.all(
+      [...this.#deliveryRecordByName.values()].map((record) => record.deliveryChain),
+    );
+  }
+
   /** The cursor of a subscription the stream delivers at-least-once — absent for a push target. */
   cursor(name: string): SubscriptionCursor | undefined {
     return this.#deliveryRecordByName.get(name)?.cursor;
