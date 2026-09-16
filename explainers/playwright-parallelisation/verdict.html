@@ -1,4 +1,5 @@
-<strong>24 workers looks like the better balance; the repeat is running next.</strong>
-It finished Playwright in 121 seconds, before Vitest, with zero retries and 18.3 GB peak memory. 16
-took 148–149 seconds. All three 32-worker runs were faster at 106–114 seconds but needed one browser
-retry each. 64 and 92 brought little extra benefit; 92 failed.
+<strong>Use 24 workers on one runner.</strong> Both trials finished the browser suite before Vitest,
+in 121–123 seconds, with zero retries and 18–20 GB peak memory. At 16 workers it took 148–149
+seconds. At 32 it was faster, but all three runs needed a retry and Vitest still finished last.
+Higher counts brought little benefit; 92 failed. This is the best balance in this sample, not proof
+that flakes are gone.

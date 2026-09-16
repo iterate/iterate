@@ -746,10 +746,10 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
           </p>
         </details>
         <p>
-          Same application revision and 92 named root browser cases; 16, 32, 64 or 92 workers; one
-          unsharded runner; the same Playwright retry, timeout, trace and video settings; the same
-          readiness, lease and cleanup policy. Every run gets a fresh runner. The image uses the
-          same mutable tag, so an identical resolved image is not proven. Preview slot, test
+          Same application revision and 92 named root browser cases; 16, 24, 32, 64 or 92 workers;
+          one unsharded runner; the same Playwright retry, timeout, trace and video settings; the
+          same readiness, lease and cleanup policy. Every run gets a fresh runner. The image uses
+          the same mutable tag, so an identical resolved image is not proven. Preview slot, test
           retries, deploy reuse, remote-service latency and cold filesystem reads can still vary.
         </p>
         <p>
@@ -781,7 +781,8 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
             Source: <code>explainers/playwright-parallelisation/</code>. The README describes
             collection and rendering. Committed JSON contains sanitized timestamps, durations, test
             names and outcomes, not raw auth data or signed artifact URLs. Each run links to its
-            Depot workflow and Git commit.
+            Depot workflow and Git commit. The table covers the named measurement series; later
+            report-publication checks remain linked in the PR check history.
           </p>
           <p>
             Source facts:

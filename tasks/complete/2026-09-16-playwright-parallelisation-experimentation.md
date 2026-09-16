@@ -1,11 +1,11 @@
 ---
-status: in-progress
+status: complete
 size: large
 ---
 
 # Playwright parallelisation experimentation
 
-Status: the 24-worker follow-up passed every body with no retries, finishing Playwright before Vitest at 120.5s / 126.5s and using 18.3 GB peak memory. Repeating the unchanged configuration next. All earlier trials, including failures, are published; final recommendation and completion remain.
+Status: complete. Nine one-runner measurements plus three historical traces are published. The selected configuration is 24 CI workers on one runner, with two zero-retry trials finishing before Vitest. The unused sharding code is removed; lint, typecheck, unit checks, preview runs and desktop/mobile explainer checks pass. PR remains draft for review.
 
 ## Request and assumptions
 
@@ -31,8 +31,8 @@ The user wants PR #2659 renamed and used for an overnight experiment: push commi
 - [x] Repeat the useful control/finalist comparison and account for failures and cache variability. *16: 147.8 / 149.3s, no retries. 32: 114.1 / 105.9s, one successful retry each; install/deployment variation reported separately.*
 - [x] Commit a permanent, self-contained explainer and update it with each result; retain reproducible sanitized evidence and trace-generation code. *Six controlled trials plus three historical runs; collector, sanitized JSON, renderer and interactive page are committed.*
 - [x] Verify the branch-served explainer and put the working URL in the PR body. *HTTP 200 and headless browser interaction verified on the branch-serving route; link is in the PR.*
-- [ ] Measure 24 workers and repeat if it retains the useful speedup without retries.
-- [ ] Review the final diff, run relevant checks, address review/CI feedback, and document the recommendation.
+- [x] Measure 24 workers and repeat if it retains the useful speedup without retries. *Runs br3nx3qc7d and gmkp9k5gdh: 120.5 / 123.0s Playwright, both before Vitest, all 88 non-skipped bodies pass, zero retries.*
+- [x] Review the final diff, run relevant checks, address review/CI feedback, and document the recommendation. *24 workers selected. All checks on both measured 24-worker heads pass; 311 local script tests, typecheck, lint and format pass. No unresolved review threads. Final publication-only checks remain visible on the PR.*
 
 ## Evidence before this experiment
 
@@ -61,12 +61,14 @@ The user wants PR #2659 renamed and used for an overnight experiment: push commi
 
 - Repeated 32-worker candidate: `2338f67ea`, run `w44shj04gp`, 519.3s preview / 105.9s Playwright / 122.3s Vitest; all 88 non-skipped bodies passed. One mobile signup retry (Organization name; spinner middleware’s 1ms fail-fast branch), no app retries. Install 8.8s, peak memory 22.2 GB.
 
-- Final code selection: root CI workers 32, local workers 1. Removed the unused sharding implementation; relative to baseline `611c3769b`, all runtime/CI code except this worker setting and two equivalent telemetry lint fixes is unchanged. The old sharded commits and traces remain available. Local verification after removal: 311 script tests and script typecheck pass.
+- Initial candidate after the four-count sweep: root CI workers 32, local workers 1. Removed the unused sharding implementation; relative to baseline `611c3769b`, all runtime/CI code except this worker setting and two equivalent telemetry lint fixes is unchanged. The old sharded commits and traces remain available. Local verification after removal: 311 script tests and script typecheck pass.
 
-- Final validation at `d07758ade`: general test check passed; lint exposed two pre-existing baseline expressions restored with the old telemetry file. Replaced an object/null comparison with truthiness and wrote the optional jobName property directly. Full repository lint and all 311 script tests pass locally after the correction. Preview continues through normal cleanup before the correction is pushed.
+- Validation of the simplified 32-worker candidate at `d07758ade`: general test check passed; lint exposed two pre-existing baseline expressions restored with the old telemetry file. Replaced an object/null comparison with truthiness and wrote the optional jobName property directly. Full repository lint and all 311 script tests pass locally after the correction. Preview continues through normal cleanup before the correction is pushed.
 
 - Evidence-led follow-up: all three measured 32-worker browser runs passed but each needed one retry (dashboard, mobile signup, REPL click). Both 16-worker controls needed none. Add one 24-worker trial; repeat if it stays near/below the concurrent Vitest duration without retries. This tests a compromise, not a claim that concurrency caused each failure. Application/spec code and retry/timeout policy remain frozen.
 
 - Simplified 32-worker evidence: `d07758ade`, run `cj5ss7ntq6`, preview success in 634.5s; Playwright 111.0s, Vitest 129.3s. One REPL click retry. The deliberately random monthly flake sentinel fired once and is labeled separately from real failures; no other final body failures. The lint correction ships with the 24-worker follow-up.
 
 - First 24-worker follow-up: `543b8eea4`, run `br3nx3qc7d`, all checks pass; preview 559.3s, Playwright 120.5s, Vitest 126.5s. All 88 non-skipped browser bodies passed; zero browser/app retries, 18.3 GB peak memory. This meets the criterion for an unchanged repeat.
+
+- Repeated 24-worker evidence: `0bf376b72`, run `gmkp9k5gdh`; preview 528.8s, Playwright 123.0s, Vitest 125.7s, zero browser/app retries, all 88 non-skipped bodies pass, 19.7 GB peak memory. Final choice: 24 workers. No further tuning trials planned.

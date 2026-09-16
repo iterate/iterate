@@ -92,3 +92,13 @@ required by current lint rules, and documentation/evidence. The measured
 application, package and spec trees are identical across the controlled trials.
 Final validation after removing unused sharding code is recorded separately;
 it does not replace any earlier failed measurement.
+
+## Result
+
+Keep 24 CI workers on one runner (local runs remain at one). Both measured
+24-worker trials passed all 88 non-skipped browser bodies without retries in
+120.5–123.0 seconds, before the concurrent OS Vitest suite. The report retains
+all nine one-runner measurements and three historical traces, including the
+failed 92-worker run. This small sample supports a performance tradeoff, not
+a proven long-term failure rate. Later report-publication checks are linked
+in the PR check history; the comparison data is a fixed measurement snapshot.
