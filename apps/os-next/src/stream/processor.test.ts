@@ -8,7 +8,7 @@
 // processor-rules.test.ts.
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
-import { applyPatch, type PatchOp } from "../lib.ts";
+import { applyPatch, type PatchOp } from "iterate/next/lib";
 import {
   defineProcessorContract,
   type StreamEvent,
@@ -19,7 +19,7 @@ import {
   type ReduceArgs,
   sameIdempotentEvent,
   LiveState,
-} from "./processor.ts";
+} from "iterate/next/stream/processor";
 import { memoryStorage, memoryStream, settle } from "./test-support.ts";
 
 // ── a counter processor exercising every hook ──

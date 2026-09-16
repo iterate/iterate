@@ -5,7 +5,7 @@
 // `itx.agents.list()` read. It OWNS no event — the certificates are the repo's, the workspace's and
 // the agent's, consumed through `processorDeps`.
 import { z } from "zod";
-import { defineProcessorContract } from "../stream/processor.ts";
+import { defineProcessorContract } from "iterate/next/stream/processor";
 import { RepoContract } from "../repo/contract.ts";
 import { WorkspaceContract } from "../workspace/contract.ts";
 import { AgentContract } from "../agent/contract.ts";

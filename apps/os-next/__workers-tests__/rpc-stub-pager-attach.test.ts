@@ -19,11 +19,11 @@
 import { runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "cloudflare:workers";
 import { expect, test } from "vitest";
+import type { StreamEventInput } from "iterate/next/stream/processor";
 import {
   encodeRpcStubPagerAttachRequest,
   RPC_STUB_PAGER_WEBSOCKET_HEADER,
 } from "../src/context/rpc-stubs.ts";
-import type { StreamEventInput } from "../src/stream/processor.ts";
 import { adminCredentials, Echo, openSession, stub, until } from "./support.ts";
 
 /** Open a pager upgrade straight at the DO's fetch door (what lendRpcStubOverPager does relay-side):

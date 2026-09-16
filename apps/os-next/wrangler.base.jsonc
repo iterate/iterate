@@ -5,7 +5,7 @@
   // runs the worker in workerd, `vite build` bundles it (with the console's routes and their server
   // functions) to dist/server/index.js beside a resolved copy of this config,
   // dist/server/wrangler.json, which `pnpm deploy` and the local lanes consume. The processor
-  // SDK bundle (src/generated/*, gitignored) and public/demo.html are built by build-sdk.mjs at Vite
+  // The injected SDK is a virtual module of the Vite build (scripts/vite-plugin-processor-sdk.ts).
   // config load.
   "main": "src/worker.ts",
   // nodejs_compat, spelled out: the DO's AsyncLocalStorage (node:async_hooks) and the console's Start
@@ -42,7 +42,7 @@
   "limits": { "subrequests": 1000000, "cpu_ms": 300000 },
 
   // THE STATIC ASSETS: the console's client bundle (Vite's dist/client) plus public/ verbatim — the
-  // hosted /demo page build-sdk.mjs writes there (255 KiB kept out of every /api and DO isolate). The
+  // console's /demo route renders the demo (src/routes/demo.tsx). The
   // Vite plugin sets the directory. `run_worker_first: true`, on purpose: the patterns are paths, never
   // hostnames, and a project host (`<app>--<project>.<base>`) must never answer with a platform asset —
   // so src/worker.ts asks the ASSETS binding itself, on the platform host only, after the project

@@ -18,6 +18,27 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { DurableObject } from "cloudflare:workers";
+import { codedError, errorCode, reportIssue, withTimeout } from "iterate/next/lib";
+import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
+import {
+  normalizedItxExpression,
+  canonicalItxExpressionPrefix,
+  itxExpressionStepName,
+  parse,
+  print,
+  type ItxExpression,
+  type ItxExpressionInput,
+  walkSteps,
+  FacetHandle,
+  InvokeHandle,
+  RpcStubHandle,
+} from "iterate/next/expression";
+import {
+  ITX_PRINCIPAL_HEADER,
+  stampPrincipal,
+  type Caller,
+  type Principal,
+} from "iterate/next/principal";
 import {
   assertFacetSourceWithinCeiling,
   facetLoaderOwner,
@@ -32,21 +53,6 @@ import {
   normalizeControlEvent,
 } from "./stream/core-processor.ts";
 import { firstPartyFacetClassOf } from "./first-party-facets.ts";
-import { codedError, errorCode, reportIssue, withTimeout } from "./lib.ts";
-import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
-import {
-  normalizedItxExpression,
-  canonicalItxExpressionPrefix,
-  itxExpressionStepName,
-  parse,
-  print,
-  type ItxExpression,
-  type ItxExpressionInput,
-  walkSteps,
-  FacetHandle,
-  InvokeHandle,
-  RpcStubHandle,
-} from "./context/expression.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   itxExpressionEndingInFetch,
@@ -77,7 +83,6 @@ import {
   type ItxExpressionRewriteRule,
   BUILT_IN_ROOTS,
 } from "./context/itx-expression-rewriting.ts";
-import { ITX_PRINCIPAL_HEADER, stampPrincipal, type Caller, type Principal } from "./principal.ts";
 import { signedFileUrl } from "./context/file-urls.ts";
 import {
   buildBuiltIns,

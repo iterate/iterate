@@ -13,7 +13,7 @@
 
 import { SELF } from "cloudflare:test";
 import { beforeAll, expect, test } from "vitest";
-import { errorCode } from "../src/lib.ts";
+import { errorCode } from "iterate/next/lib";
 import { adminCredentials, applyDirectorySchema, openSession, stub } from "./support.ts";
 
 beforeAll(applyDirectorySchema);

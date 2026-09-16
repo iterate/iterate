@@ -33,9 +33,9 @@
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test, vi } from "vitest";
-import type { ItxExpression } from "../src/context/expression.ts";
+import type { ItxExpression } from "iterate/next/expression";
+import type { StreamEvent } from "iterate/next/stream/processor";
 import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
-import type { StreamEvent } from "../src/stream/processor.ts";
 import { STREAM_ALARM_TRACE_EVENT } from "../src/stream/stream.ts";
 import { adminCredentials, Echo, openSession, quiesce, stub, until } from "./support.ts";
 

@@ -1,11 +1,11 @@
 import * as oauth from "oauth4webapi";
 import { z } from "zod";
+import { errorCode, sameOriginPath } from "iterate/next/lib";
+import { cookieValueOf, signClaims, verifyClaims } from "iterate/next/principal";
 import type { Env } from "./control-plane.ts";
 import { appConfigOf } from "./app-config.ts";
 import { startIssuerSession } from "./issuer-session.ts";
 import { directory } from "./directory.ts";
-import { errorCode, sameOriginPath } from "./lib.ts";
-import { cookieValueOf, signClaims, verifyClaims } from "./principal.ts";
 
 const issuer = new URL("https://accounts.google.com");
 const cookie = "__Host-itx-identity-flow";

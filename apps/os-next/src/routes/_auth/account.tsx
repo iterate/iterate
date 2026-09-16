@@ -7,7 +7,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo } from "react";
 import { z } from "zod";
-import { useLiveState } from "../../client/react.tsx";
+import { useLiveState } from "iterate/next/react";
 import { useItx } from "../-itx.tsx";
 import { AccountContract, AccountView } from "../../account/contract.ts";
 

@@ -9,8 +9,9 @@
 // and after every eviction. Hosted from `ctx.exports` (first-party-facets.ts):
 // ordinary bundled worker code.
 import { z } from "zod";
-import { StreamProcessorDurableObject } from "../sdk/index.ts";
-import type { StreamEvent } from "../stream/processor.ts";
+import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
+import type { StreamEvent } from "iterate/next/stream/processor";
+import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { type AgentView, DEFAULT_AGENT_SYSTEM_PROMPT, type FileAttachment } from "./contract.ts";
 import { AgentProcessor } from "./processor.ts";
 
@@ -21,7 +22,11 @@ const ChatAnswer = z.union([
   z.object({ choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1) }),
 ]);
 
-export class AgentDurableObject extends StreamProcessorDurableObject<AgentView> {
+export class AgentDurableObject extends StreamProcessorDurableObject<
+  AgentView,
+  { ITX?: ItxEntrypointService },
+  ItxEntrypointScope
+> {
   processor = new AgentProcessor({
     chat: async ({ model, messages }) => {
       // Two routes by the model's name: a `@cf/…` model is Workers AI (`itx.ai`, the binding under

@@ -16,7 +16,7 @@ import {
   type LiveStateItx,
   type LiveStateDelta,
   type LiveStateSeed,
-} from "../src/client/live-state.ts";
+} from "iterate/next/client";
 import { append, freshCtx, openItx, until } from "./support/client.ts";
 import { SOURCES } from "./support/sources.ts";
 

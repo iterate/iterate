@@ -14,7 +14,8 @@
 // a test lends a fake proxy there (`provide("itx.cfArtifacts", …)`, e2e/support/fake-artifacts.ts).
 // Hosted from `ctx.exports` (first-party-facets.ts): ordinary bundled worker code, reached as
 // `itx.facets.get("workspace")` (library.ts).
-import { StreamProcessorDurableObject } from "../sdk/index.ts";
+import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
+import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { RepoFileChange, RepoLogEntry } from "../repo/git-wire.ts";
 import type { WorkspaceView } from "./contract.ts";
 import { WorkspaceProcessor } from "./processor.ts";
@@ -55,7 +56,11 @@ export function routeMount(
   return best;
 }
 
-export class WorkspaceDurableObject extends StreamProcessorDurableObject<WorkspaceView> {
+export class WorkspaceDurableObject extends StreamProcessorDurableObject<
+  WorkspaceView,
+  { ITX?: ItxEntrypointService },
+  ItxEntrypointScope
+> {
   processor = new WorkspaceProcessor();
 
   #pathRead?: string;
@@ -297,7 +302,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
       commitOid: committed.commitOid,
       mount: mountPath,
       repo: mount.repo,
-      changedPaths: committed.changedPaths.map((path) => `${mountPath}/${path}`),
+      changedPaths: committed.changedPaths.map((path: string) => `${mountPath}/${path}`),
     };
   }
 

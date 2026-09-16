@@ -1,3 +1,3 @@
-import { createIterateClient } from "../client/browser.ts";
+import { createIterateClient } from "iterate/next/app";
 
 export const iterate = createIterateClient({ scopes: ["iterate", "account"] });

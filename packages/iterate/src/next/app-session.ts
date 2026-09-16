@@ -138,7 +138,7 @@ export class BrowserSession extends DurableObject {
           if (!probe.ok)
             throw new Error(`Sign-out could not reach Iterate (${probe.status}). Try again.`);
           // eslint-disable-next-line iterate/no-capnweb-http-batch -- A bounded logout command returns no live capabilities.
-          using api = newHttpBatchRpcSession<IterateRpcTarget>(
+          using api = newHttpBatchRpcSession<IterateApi>(
             new Request(data.resource, {
               headers: { Authorization: `Bearer ${token}` },
               signal: AbortSignal.timeout(10_000),

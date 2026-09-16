@@ -13,7 +13,8 @@
 // refuses it — no merge; the caller reads again and retries).
 // Hosted from `ctx.exports` (first-party-facets.ts): ordinary bundled worker code, git-wire.ts and pako
 // with it, reached as `itx.facets.get("repo")` (library.ts).
-import { StreamProcessorDurableObject } from "../sdk/index.ts";
+import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
+import type { ItxEntrypointScope } from "../iterate-context.ts";
 import {
   AUTHOR,
   REF,
@@ -54,7 +55,11 @@ function filePath(path: string): string {
   return path;
 }
 
-export class RepoDurableObject extends StreamProcessorDurableObject<RepoView> {
+export class RepoDurableObject extends StreamProcessorDurableObject<
+  RepoView,
+  { ITX?: ItxEntrypointService },
+  ItxEntrypointScope
+> {
   processor = new RepoProcessor();
 
   /** The context this facet is hosted on IS the repo: its path is the one name it goes by, here and

@@ -65,7 +65,8 @@
     "./next/expression": "./src/next/expression.ts",
     "./next/principal": "./src/next/principal.ts",
     "./next/stream/processor": "./src/next/stream/processor.ts",
-    "./next/oauth-scopes": "./src/next/oauth-scopes.ts"
+    "./next/oauth-scopes": "./src/next/oauth-scopes.ts",
+    "./next/oauth": "./src/next/client/oauth.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -206,7 +207,7 @@
         "default": "./dist/document-review.mjs"
       },
       "./next/sdk": {
-        "types": "./dist/next/sdk.d.ts",
+        "types": "./dist/next/sdk/index.d.ts",
         "import": "./dist/next/sdk.mjs"
       },
       "./next/app": {
@@ -222,19 +223,19 @@
         "import": "./dist/next/app-session.mjs"
       },
       "./next/client": {
-        "types": "./dist/next/client.d.ts",
+        "types": "./dist/next/client/live-state.d.ts",
         "import": "./dist/next/client.mjs"
       },
       "./next/react": {
-        "types": "./dist/next/react.d.ts",
+        "types": "./dist/next/client/react.d.ts",
         "import": "./dist/next/react.mjs"
       },
       "./next/dashboard": {
-        "types": "./dist/next/dashboard.d.ts",
+        "types": "./dist/next/client/dashboard.d.ts",
         "import": "./dist/next/dashboard.mjs"
       },
       "./next/dashboard-data": {
-        "types": "./dist/next/dashboard-data.d.ts",
+        "types": "./dist/next/client/dashboard-data.d.ts",
         "import": "./dist/next/dashboard-data.mjs"
       },
       "./next/api": {
@@ -260,6 +261,10 @@
       "./next/oauth-scopes": {
         "types": "./dist/next/oauth-scopes.d.ts",
         "import": "./dist/next/oauth-scopes.mjs"
+      },
+      "./next/oauth": {
+        "types": "./dist/next/client/oauth.d.ts",
+        "import": "./dist/next/oauth.mjs"
       }
     }
   },
@@ -272,7 +277,7 @@
   ],
   "scripts": {
     "build": "node scripts/build.ts",
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "tsgo --noEmit && tsc --noEmit -p tsconfig.next.json",
     "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "prepack": "pnpm build"
   },
@@ -308,20 +313,21 @@
     }
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260831.1",
     "@iterate-com/ui": "workspace:*",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.27.4",
     "fflate": "^0.8.3",
+    "jsdom": "27.4.0",
     "miniflare": "catalog:cloudflare",
     "octokit": "^5.0.5",
+    "react-dom": "^19.2.7",
+    "roughdraft": "0.1.10",
     "tsdown": "0.22.2",
     "typescript": "^5.9.3",
-    "vitest": "4.0.15",
-    "react-dom": "^19.2.7",
-    "@types/react-dom": "^19.2.3",
-    "jsdom": "27.4.0",
-    "roughdraft": "0.1.10"
+    "vitest": "4.0.15"
   }
 }

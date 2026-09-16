@@ -4,7 +4,7 @@
 // and build a push's), the protocol-v2 framing (pkt-line, ls-refs, fetch, receive-pack report-status)
 // and the one HTTP transport against an Artifacts remote (`createGitWireTransport`). The repo facet is
 // the ONLY thing that speaks git; `itx.cfArtifacts` is the binding proxy that mints the token and
-// names the remote. This module runs INSIDE the facet's dynamic worker (build-sdk.mjs bundles it,
+// names the remote. This module runs INSIDE the repo facet (this worker's own class,
 // pako included) and in Node for the local e2e run's fake remote (e2e/support/fake-git-server.ts),
 // which reuses the same codecs — so a pack the fake serves is a pack the client parses.
 //

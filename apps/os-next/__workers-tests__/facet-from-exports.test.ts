@@ -20,7 +20,7 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
     async (_instance, state) => {
       const exportsOf = (state as unknown as { exports: Record<string, unknown> }).exports;
       const entry = exportsOf.ProjectDurableObject as ExportedFacetClass;
-      const props = { iterateContextName: state.id.name, name: "project" };
+      const props = { iterateContextName: state.id.name!, name: "project" };
       const klass = entry({ props });
       const facet = state.facets.get("project", () => ({ class: klass as never })) as unknown as {
         snapshot(): Promise<{ offset: number; state: unknown }>;

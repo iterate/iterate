@@ -18,13 +18,13 @@ import {
   RpcTarget,
 } from "capnweb";
 import { z } from "zod";
-import type { BuiltInScope } from "./context/built-ins.ts";
 import {
   keySortedForPrint,
   InvokeHandle,
   print,
   walkStepsOnRpcStub,
-} from "./context/expression.ts";
+} from "iterate/next/expression";
+import type { BuiltInScope } from "./context/built-ins.ts";
 import type { AgentDurableObject } from "./agent/durable-object.ts";
 import type { ProjectView } from "./project/contract.ts";
 import type { RepoDurableObject } from "./repo/durable-object.ts";
@@ -325,7 +325,7 @@ export function runScript(itx: LibraryItx, script: unknown): Promise<unknown> {
 // restarts it), so nothing is appended to get one; `create()` appends the birth certificate (on its
 // path, cross-posted to `/`). Every call on the handle is one dotted expression
 // on that facet, run in the sibling under ITS rules (a test lends a fake `itx.cfArtifacts` on a repo's
-// context). The specs' sources are the SDK-bundled facets (build-sdk.mjs) — strings a userspace worker
+// context). A first-party facet is this worker's own class (first-party-facets.ts); a userspace one
 // could carry just the same. `list()` for both — and `agents.list()`, the agents having no
 // first-party facet to `get` — reads THE CATALOG: the `project` facet on `/` (src/project/), which
 // folds the cross-posted certificates; hosted the same way, on first read.

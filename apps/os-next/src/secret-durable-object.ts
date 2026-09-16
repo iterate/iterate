@@ -18,9 +18,9 @@
 // this object appends itself (`secrets/refreshed`).
 
 import { DurableObject } from "cloudflare:workers";
+import { signClaims } from "iterate/next/principal";
 import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
 import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
-import { signClaims } from "./principal.ts";
 import {
   decryptSecretMaterial,
   encryptSecretMaterial,

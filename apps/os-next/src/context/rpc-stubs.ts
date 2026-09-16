@@ -5,10 +5,10 @@
 //   rpc stub fetch     — the fetch-shaped transport under both (`dialRpcStubFetch`, `RpcStubFetchServer`)
 
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
-import { codedError, errorCode } from "../lib.ts";
-import type { StreamEventInput } from "../stream/processor.ts";
+import { codedError, errorCode } from "iterate/next/lib";
+import type { StreamEventInput } from "iterate/next/stream/processor";
+import { type ItxExpression, walkStepsOnRpcStub } from "iterate/next/expression";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
-import { type ItxExpression, walkStepsOnRpcStub } from "./expression.ts";
 
 // ── rpc stub directory ── THE RPC STUBS, DO side: the `itx.rpcStubs` built-in's backing
 // table — physical, never event-sourced. Two layers, in the order the tutorial builds them:

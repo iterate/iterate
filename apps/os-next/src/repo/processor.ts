@@ -7,7 +7,7 @@ import {
   type ProcessorState,
   type ReduceArgs,
   StreamProcessor,
-} from "../stream/processor.ts";
+} from "iterate/next/stream/processor";
 import { RepoContract, type RepoView } from "./contract.ts";
 
 export class RepoProcessor extends StreamProcessor<

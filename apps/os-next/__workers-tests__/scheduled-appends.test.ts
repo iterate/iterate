@@ -1,7 +1,7 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test, vi } from "vitest";
+import type { StreamEvent } from "iterate/next/stream/processor";
 import { scheduledAppendFacetSource } from "../e2e/support/scheduled-append-facet.ts";
-import type { StreamEvent } from "../src/stream/processor.ts";
 import { stub, quiesce, until } from "./support.ts";
 
 const at = "2035-01-01T00:00:00Z";

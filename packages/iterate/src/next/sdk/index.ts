@@ -1,5 +1,5 @@
 // sdk/index.ts — THE userspace SDK surface, bundled (zod included — the owner's call) into every
-// loaded isolate as `processor.js` by build-sdk.mjs:
+// loaded isolate as `processor.js` (os-next's scripts/vite-plugin-processor-sdk.ts bundles it):
 //
 //   import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 //
@@ -8,17 +8,18 @@
 //   ConfigWorker                 — the stateless `WorkerEntrypoint` a project's one event handler extends
 
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+import type { IterateContextApi, StreamPage } from "../api.ts";
+import { parse } from "../expression.ts";
 import {
   ProcessorEngine,
   type ScannedRange,
   type StreamProcessor,
   ReduceCheckpointTable,
   type StreamEvent,
+  type StreamEventInput,
 } from "../stream/processor.ts";
-
-import { parse } from "../expression.ts";
 import { auth } from "./auth.ts";
-
+export { auth };
 export {
   StreamProcessor,
   defineProcessorContract,
@@ -44,11 +45,10 @@ export { z } from "zod";
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- userspace one-shot remote calls; see above
 export { newHttpBatchRpcSession, newWebSocketRpcSession, newWorkersRpcResponse } from "capnweb";
 export { applyPatch, diff, type PatchOp } from "../lib.ts";
-
+export { LiveState, type LiveStateSink } from "../stream/processor.ts";
 // LIVE STATE for a mini-app DO that is NOT a processor (a processor's base owns one internally):
 // `new LiveState({ append: (e) => env.ITX.get().append(e) }, "chat", {…})` — a field initializer
 // cannot await — then `set` to mutate and `snapshot()` as the client seed door (stream/processor.ts).
-export { LiveState, type LiveStateSink } from "../stream/processor.ts";
 // ── StreamProcessorDurableObject ── THE SDK HOST: the `DurableObject` shell that hosts ONE
 // `StreamProcessor` as a facet of its context. An author writes the pure processor and its host,
 // one line long:
@@ -73,12 +73,26 @@ export { LiveState, type LiveStateSink } from "../stream/processor.ts";
 /** What the parent mints the class with — the whole identity. */
 export type StreamProcessorProps = { iterateContextName: string; name: string };
 
-/** The itx scope as `env.ITX.get()` hands it over: the pipelined `IterateContextRpcTarget` stub. */
-type ItxScope = ReturnType<Service<ItxEntrypoint>["get"]>;
+/** The itx scope as `env.ITX.get()` hands it over: a context's declared API (api.ts) — a capnweb stub
+ *  of os-next's `IterateContextRpcTarget`, which satisfies it. */
+export type ItxScope = IterateContextApi;
+/** What hands the scope over: the loopback entrypoint a loaded worker has as `env.ITX`, or the one a
+ *  class of the platform's own worker mints from `ctx.exports`. */
+export type ItxEntrypointService = { get(): ItxScope };
+/** The least a host needs of its scope: the fixed-point log doors the engine rides. The platform's own
+ *  facets pass the Workers-RPC STUB of a context (every dotted step pipelined; a property there is a
+ *  promise), which no plain-promise interface can name — so the constraint is this, not `ItxScope`. */
+export type ProcessorScope = {
+  builtins: {
+    append(...events: StreamEventInput[]): Promise<unknown>;
+    readEvents(afterOffset?: number, limit?: number): Promise<unknown>;
+  };
+};
 
 export abstract class StreamProcessorDurableObject<
   State = unknown,
-  Env extends { ITX: Service<ItxEntrypoint> } = { ITX: Service<ItxEntrypoint> },
+  Env extends { ITX?: ItxEntrypointService } = { ITX: ItxEntrypointService },
+  Scope extends ProcessorScope = ItxScope,
 > extends DurableObject<Env, StreamProcessorProps> {
   /** The processor this object hosts — `processor = new PresenceProcessor()` at the top of the subclass. */
   abstract readonly processor: StreamProcessor<State>;
@@ -118,15 +132,17 @@ export abstract class StreamProcessorDurableObject<
    *  stub in, worker-loader.ts); a class of THIS worker hosted through `ctx.exports` has the
    *  worker's real env and mints the same stub itself from its props — `ctx.exports` is populated
    *  inside a facet (__workers-tests__/facet-props.test.ts). */
-  #itxEntrypoint(): Service<ItxEntrypoint> {
-    return (
-      this.env.ITX ??
+  #itxEntrypoint(): { get(): Scope } {
+    return (this.env.ITX ??
       (
-        this.ctx.exports as {
-          ItxEntrypoint: (options: { props: object }) => Service<ItxEntrypoint>;
+        this.ctx.exports as unknown as {
+          ItxEntrypoint: (options: { props: object }) => ItxEntrypointService;
         }
-      ).ItxEntrypoint({ props: { iterateContextName: this.ctx.props.iterateContextName } })
-    );
+      ).ItxEntrypoint({
+        props: { iterateContextName: this.ctx.props.iterateContextName },
+      })) as unknown as {
+      get(): Scope;
+    };
   }
   // ── the engine: one ProcessorEngine over `processor` and this object's storage, built on first use —
   // `processor` is a subclass field, which does not exist yet while this base class constructs. ──
@@ -137,8 +153,12 @@ export abstract class StreamProcessorDurableObject<
       // the fixed point, `itx.builtins.…` — a context's rows (a whole-context override, a mask at
       // `itx.append`) redirect the processor's calls to `itx.…`, never its log traffic.
       stream: {
-        append: (...events) => this.withItx((itx) => itx.builtins.append(...events)),
-        read: (after, limit) => this.withItx((itx) => itx.builtins.readEvents(after, limit)),
+        // A stub scope's answers are pipelined shapes by type and plain data on the wire (the
+        // engine awaits them): the engine's own types, asserted.
+        append: (...events) =>
+          this.withItx((itx) => itx.builtins.append(...events)) as Promise<StreamEvent[]>,
+        read: (after, limit) =>
+          this.withItx((itx) => itx.builtins.readEvents(after, limit)) as Promise<StreamPage>,
       },
       storage: new ReduceCheckpointTable(this.ctx.storage.sql),
     }));
@@ -149,7 +169,7 @@ export abstract class StreamProcessorDurableObject<
    *  fixes in the other direction). Await the answer — plain data, the wire already copied it —
    *  then dispose the call AND the get. Protected: a host with methods of its own (the workspace,
    *  src/workspace/durable-object.ts) reaches its context the same way. */
-  protected async withItx<T>(call: (itx: ItxScope) => T): Promise<Awaited<T>> {
+  protected async withItx<T>(call: (itx: Scope) => T): Promise<Awaited<T>> {
     const itx = this.#itxEntrypoint().get();
     const result = call(itx);
     try {
@@ -188,7 +208,7 @@ export abstract class StreamProcessorDurableObject<
 
 /** The itx scope handed to `processEvent`: `env.ITX.get()` for this batch — the genuine
  *  `IterateContextRpcTarget` RpcTarget, disposed after the batch so it does not pin the parent DO past the turn. */
-export type ConfigWorkerItx = ReturnType<Service<ItxEntrypoint>["get"]>;
+export type ConfigWorkerItx = ItxScope;
 
 /** One committed event handed to the config worker, with the batch's range and the batch's itx scope. */
 export type ConfigEventArgs = { event: StreamEvent; range: ScannedRange; itx: ConfigWorkerItx };
@@ -250,7 +270,7 @@ async function followCommittedSource(event: StreamEvent, itx: ConfigWorkerItx): 
  *  `processEventBatch`, the subscription target) and `fetch` (a project host with no app label).
  *  Nothing to construct, no contract, no reduce. */
 export abstract class ConfigWorker<
-  Env extends { ITX: Service<ItxEntrypoint> } = { ITX: Service<ItxEntrypoint> },
+  Env extends { ITX: ItxEntrypointService } = { ITX: ItxEntrypointService },
 > extends WorkerEntrypoint<Env> {
   /** At fetch entry: `const denied = this.auth.require(request); if (denied) return denied;` */
   protected readonly auth = auth;

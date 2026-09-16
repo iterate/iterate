@@ -10,6 +10,19 @@
 // Dynamic code has two doors, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
+import { stampPrincipal, type Caller } from "iterate/next/principal";
+import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
+import { codedError } from "iterate/next/lib";
+import {
+  itxExpressionStepName,
+  print,
+  type ItxExpression,
+  type ItxExpressionInput,
+  type ItxExpressionStep,
+  FacetHandle,
+  InvokeHandle,
+  RpcStubHandle,
+} from "iterate/next/expression";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   ScheduleKey,
@@ -18,8 +31,6 @@ import {
   type ScheduledAppend,
 } from "../stream/scheduled-appends.ts";
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
-import { stampPrincipal, type Caller } from "../principal.ts";
-import type { StreamEvent, StreamEventInput } from "../stream/processor.ts";
 import type { LibraryRoots } from "../library.ts";
 import {
   DurableObjectNameCodec,
@@ -27,7 +38,6 @@ import {
   resolveContextPath,
   resourceScope,
 } from "../iterate-context.ts";
-import { codedError } from "../lib.ts";
 import {
   assertSecretName,
   normalizeSecretRecord,
@@ -45,16 +55,6 @@ import {
   type WorkerCacheKey,
   type WorkerSource,
 } from "./worker-loader.ts";
-import {
-  itxExpressionStepName,
-  print,
-  type ItxExpression,
-  type ItxExpressionInput,
-  type ItxExpressionStep,
-  FacetHandle,
-  InvokeHandle,
-  RpcStubHandle,
-} from "./expression.ts";
 import type { BuiltInRoot } from "./itx-expression-rewriting.ts";
 import { cfBrowser } from "./browser.ts";
 import { projectScopedArtifacts, type ArtifactsNamespace, type ArtifactsScope } from "./repos.ts";

@@ -1,3 +1,4 @@
+/** @jsxImportSource react */
 import { useState, type FormEvent } from "react";
 import type { loadDashboard } from "./dashboard-data.ts";
 

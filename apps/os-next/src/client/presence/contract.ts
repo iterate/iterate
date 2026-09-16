@@ -6,7 +6,7 @@
 // ephemeral bumps the field in processEvent, and the engine re-projects after the batch and emits the
 // delta itself (the reduce never touches it).
 import { z } from "zod";
-import { defineProcessorContract } from "../../stream/processor.ts";
+import { defineProcessorContract } from "iterate/next/stream/processor";
 
 export const PresenceView = z.object({ ticks: z.number().default(0) });
 export type PresenceView = z.infer<typeof PresenceView>;

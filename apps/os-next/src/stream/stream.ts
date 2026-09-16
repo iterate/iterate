@@ -20,11 +20,9 @@
 // its last RECENT_EPHEMERALS_BUDGET_CHARS of them, and `read(…, { includeEphemeral: true })` merges
 // them into a page — under the same proof, which never names one.
 
-import { codedError, errorCode, reportIssue } from "../lib.ts";
-import type { ItxExpressionInput } from "../context/expression.ts";
-import type { Caller } from "../principal.ts";
-import { reduceScheduledAppends } from "./scheduled-appends.ts";
-import { CoreContract, reduceCoreEventBatch, type CoreState } from "./core-processor.ts";
+import { codedError, errorCode, reportIssue } from "iterate/next/lib";
+import type { ItxExpressionInput } from "iterate/next/expression";
+import type { Caller } from "iterate/next/principal";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
@@ -33,7 +31,9 @@ import {
   LiveState,
   ReduceCheckpointTable,
   type SqlStorageHandle,
-} from "./processor.ts";
+} from "iterate/next/stream/processor";
+import { reduceScheduledAppends } from "./scheduled-appends.ts";
+import { CoreContract, reduceCoreEventBatch, type CoreState } from "./core-processor.ts";
 
 /** One page of the log: the events after an offset, how far the scan reached (the range a client
  *  chains for contiguity), and whether that reached the durable head — a page is CUT by `limit` or

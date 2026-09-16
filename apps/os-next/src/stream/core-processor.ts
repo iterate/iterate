@@ -22,8 +22,6 @@
 // (Stream.appendBirthRecord / appendWakeRecord); the pause exemptions are Stream.append's.
 //   subscriptions — a literal `subscription-configured` event, THE SUBSCRIPTIONS TABLE's one command (the rows are core state)
 
-import { firstPartyFacetClassOf } from "../first-party-facets.ts";
-import { isRefreshKind, type SecretCatalogEntry } from "../secrets.ts";
 import {
   normalizedItxExpression,
   type ItxExpressionInput,
@@ -32,7 +30,11 @@ import {
   type ItxExpression,
   type ItxExpressionPrefix,
   print,
-} from "../context/expression.ts";
+} from "iterate/next/expression";
+import { jsonEqual } from "iterate/next/lib";
+import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/next/stream/processor";
+import { firstPartyFacetClassOf } from "../first-party-facets.ts";
+import { isRefreshKind, type SecretCatalogEntry } from "../secrets.ts";
 import {
   isBuiltInRoot,
   isBuiltInsRooted,
@@ -40,7 +42,6 @@ import {
   resolveItxExpression,
   type ItxExpressionRewriteRule,
 } from "../context/itx-expression-rewriting.ts";
-import { jsonEqual } from "../lib.ts";
 import {
   ScheduledAppendInput,
   ScheduledAppendCancelled,
@@ -48,7 +49,6 @@ import {
   reduceScheduledAppends,
   type ScheduledAppend,
 } from "./scheduled-appends.ts";
-import type { StreamEvent, ReduceArgs, StreamEventInput } from "./processor.ts";
 
 /** A hosting spec, read off a RESOLVED target. */
 export type HostingFacetSpec = {

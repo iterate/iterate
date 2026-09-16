@@ -3,8 +3,8 @@
 // there is no producer to fetch it. Each test names the fixture it uses:
 //   ...source: SOURCES.site...
 
+import PRESENCE_PROCESSOR_SOURCE from "virtual:presence-processor-source";
 import type { WorkerSource } from "../../src/context/worker-loader.ts";
-import { PRESENCE_PROCESSOR_SOURCE } from "../../src/generated/presence-processor-source.ts";
 
 /** THE fixture sources, keyed by fixture NAME — each value is the worker's modules, handed over
  *  literally at every load site (`itx.workers.get({ source: SOURCES.probe })`, `facets.get(name, { source: … })`). */

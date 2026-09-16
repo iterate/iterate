@@ -4,7 +4,7 @@
   // truth. The divergences, each deliberate and test-only:
   //
   //  1. no "build" block: the plugin imports the worker through Vite (same isolate as the tests).
-  //     The generated SDK bundle (src/generated/*) is built by vitest.global-setup.ts.
+  //     The injected SDK is a virtual module of the Vite build (scripts/vite-plugin-processor-sdk.ts).
   //  2. no `ai` / `browser` binding (see the note by the bindings below); the in-process control plane's D1 +
   //     OAuth KV are fresh local namespaces with no schema — control-plane.test.ts applies
   //     control-plane.sql itself (the e2e lane does the same in its global-setup).

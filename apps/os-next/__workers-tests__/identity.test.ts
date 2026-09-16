@@ -1,6 +1,6 @@
 import { env, SELF, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import { appSession } from "../src/client/app-auth.ts";
+import { appSession } from "iterate/next/app-server";
 import { authorizationForToken } from "../src/oauth.ts";
 import { directory } from "../src/directory.ts";
 import { cleanGrantActivity } from "../src/oauth.ts";

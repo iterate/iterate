@@ -3,6 +3,9 @@
 
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
+import type { IterateApi } from "iterate/next/api";
+import { codedError } from "iterate/next/lib";
+import { verifyAdminSecret, type Principal } from "iterate/next/principal";
 import type { Consent } from "./consent.ts";
 import type { Grants } from "./grants.ts";
 import {
@@ -20,8 +23,6 @@ import {
   type Reach,
 } from "./directory.ts";
 import type { AppConfig } from "./app-config.ts";
-import { codedError } from "./lib.ts";
-import { verifyAdminSecret, type Principal } from "./principal.ts";
 import type { AuthenticationFact } from "./account/contract.ts";
 
 /** One DNS-safe name — the directory row, the DO name, the host label; in this deployment a project's
@@ -462,3 +463,7 @@ export class SessionTeardown {
     this.#undoByKey.clear();
   }
 }
+
+// THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/next/api): this root satisfies it, checked here.
+const _iterateApi: IterateApi = null as unknown as IterateRpcTarget;
+void _iterateApi;

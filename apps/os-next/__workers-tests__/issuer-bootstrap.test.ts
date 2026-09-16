@@ -1,13 +1,13 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { appSession } from "iterate/next/app-server";
+import { authorizationCodeRequest } from "iterate/next/oauth";
 import type { Env } from "../src/control-plane.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { directory } from "../src/directory.ts";
-import { appSession } from "../src/client/app-auth.ts";
 import { startIssuerSession } from "../src/issuer-session.ts";
 import { oauthHelpers } from "../src/oauth.ts";
-import { authorizationCodeRequest } from "../src/client/oauth.ts";
 import { applyDirectorySchema } from "./support.ts";
 
 const bindings = env as unknown as Env;
