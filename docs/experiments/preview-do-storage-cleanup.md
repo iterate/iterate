@@ -1,6 +1,7 @@
 # Preview storage cleanup experiment
 
-Status: running. No adoption recommendation yet. PR #2693 keeps the Worker
+Status: running. The first live sweep missed new objects, so the current
+REST-inventory approach is not safe to adopt. PR #2693 keeps the Worker
 code deployed and replaces the slot's class-retirement cleanup with per-object
 `deleteAll()`, `sync()` and abort. Only this PR enables it.
 
@@ -28,7 +29,45 @@ the same deployment. Completely deleting inert data is a separate question.
 | Baseline post-erase inventory                                    | Six sandbox namespaces remain; 242 SandboxLite and 161 SandboxBasic objects still report stored data            | Full erase already retains some inert container-host storage                                                                                                                    |
 | Real workerd/Miniflare probes                                    | Six pass                                                                                                        | SQL/KV/alarm/memory wipe, cold inventory-ID lookup, version mismatch rejection, in-flight request abort, known facet storage deletion, running-alarm reset and later recreation |
 | Whole repository checks                                          | Typecheck, tests, lint, knip, formatting pass                                                                   | No detected local regression before the first live run                                                                                                                          |
-| First storage run `5fj6v8h8hk`, commit `5a6ce661d`               | In progress                                                                                                     | First pre-deploy cleanup bootstraps the parked worker; final cleanup is the experiment                                                                                          |
+| First storage run `5fj6v8h8hk`, commit `5a6ce661d`               | OS deploy blocked: SHA-pinned packages were unpublished while the PR conflicted with main                       | Not evidence about storage cleanup; fixed by merging main                                                                                                                       |
+| Normal run `t1vb9scrlp`, commit `98f89966e`                      | All test consumers passed; 403/403 attempted resets passed in 61.6s (65.1s wrapper)                             | Same deployment survived the sweep, but discovery omitted new objects                                                                                                           |
+
+## First live finding: discovery misses active objects
+
+The normal run deployed OS version `2c6c84e7-f30a-4c69-955a-11233c932ef9`.
+The native Worker tail observed a successful Stream append at 22:40:11 UTC.
+The REST object inventory still omitted it at 22:42:29. Re-reading namespace
+IDs confirmed we were querying the current namespaces.
+
+Across the tests, the tail observed at least 1,045 distinct non-container DOs:
+872 Streams, 85 Projects, 28 Repos, 24 Secrets, seven Schedulers, 24 build
+coordinators, one Device, three Workspaces and one StatefulWorker. None were
+in the cleanup inventory. Tail sampling means this is a lower bound.
+
+The sweep ran from 22:42:47.958 to 22:43:49.532 UTC and reset only the 403
+historic sandbox objects. The next REST inventory, around 22:44:06, finally
+listed 224 non-container objects with stored data. Cloudflare's discovery
+index is delayed enough to miss objects created and used within an entire
+short test run. A successful per-object reset cannot compensate for an
+incomplete inventory.
+
+The same delayed index also still marked wiped sandbox objects as having
+stored data. That flag alone therefore cannot prove either failed deletion
+or current activity. Native invocations and delayed GraphQL activity are the
+separate checks below.
+
+## Reuse probe
+
+At 22:47:24 UTC, a new project created after cleanup successfully executed a
+five-second recurring schedule and appended a heartbeat event. The Worker
+version remained `2c6c84e7-f30a-4c69-955a-11233c932ef9`, unchanged since the
+normal test deployment. This is stronger than a health check: fresh product
+work can run without redeployment.
+
+`scripts/preview/cleanup-probe.ts seed-heartbeat` creates this controlled work.
+It intentionally releases client handles without cancelling the schedule, so
+cleanup has actual recurring work to stop. The active scheduler was then
+reset directly by its known ID at 22:48:40; observation is still in progress.
 
 ## Limits to investigate
 

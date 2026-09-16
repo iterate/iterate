@@ -6,8 +6,9 @@ size: large
 # Experiment: clear preview DO storage without replacing the deployment
 
 Draft PR #2693 is open. The operator sweep and real-runtime probes are in place;
-six runtime checks pass. Baseline full erase took 69 seconds. Live storage-wipe
-experiments, interruption cases and the viability report remain.
+six runtime checks pass. The first live suite passed, but REST discovery missed
+at least 1,045 new DOs and reset only 403 old sandbox objects. Reuse probes,
+interruption cases, delayed metrics and the final recommendation remain.
 
 ## Request
 
@@ -82,3 +83,9 @@ post-cleanup DO active time with Cloudflare GraphQL. Do not merge automatically.
   suppressing GitHub PR publication. Merged current main (including #2680,
   CLI-help fixes and os-next SDK moves); full `down` remains outside the
   experiment, and only normal `reset` selects storage cleanup.
+
+- 22:44 UTC: normal run `t1vb9scrlp` passed all consumers and reset 403/403
+  inventoried sandbox objects in 61.6s (65.1s wrapper). Tail-to-inventory
+  correlation proves at least 1,045 new non-container DOs were omitted. A
+  subsequent inventory starts returning those objects only after the sweep.
+  This invalidates the current discovery strategy despite a green job.
