@@ -38,13 +38,18 @@ test("a project label outside the DNS grammar is not a project host: the edge na
 test("kv list returns EVERY key, not silently the first 1000", async () => {
   // Cloudflare KV caps a list page at 1000 keys; `kv.list()` paginates on the cursor until
   // `list_complete`, so key 1001+ is never a permanent orphan for a sweep/GC/inventory caller.
-  const itx = openItx(freshCtx("kvlist"));
+  // The writes go through a session PER BATCH: one WebSocket is one worker request, and the
+  // runtime caps a request's subrequests (every RPC hop to the context, every KV put) at 1000 —
+  // 1001 puts over one socket is the socket dying ("Network connection lost"), deployed, which
+  // says nothing about `kv.list()`.
+  const ctx = freshCtx("kvlist");
   const total = 1001;
   const names = Array.from({ length: total }, (_, i) => `k${String(i).padStart(4, "0")}`);
   for (let i = 0; i < names.length; i += 100) {
-    await Promise.all(names.slice(i, i + 100).map((n) => itx.kv.put(n, "1")));
+    const writer = openItx(ctx);
+    await Promise.all(names.slice(i, i + 100).map((n) => writer.kv.put(n, "1")));
   }
-  const listed = await itx.invoke(["itx", "kv", ["list"]]);
+  const listed = await openItx(ctx).invoke(["itx", "kv", ["list"]]);
   expect(listed.keys).toHaveLength(total);
 }, 60_000);
 
