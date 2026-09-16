@@ -45,11 +45,6 @@ test("a config file mention is materialized before the model sees the turn", asy
   expect(materializedContext).not.toContain("includedBytes");
 });
 
-// The deterministic sibling of agent-chat.spec.ts: same UI journey (composer →
-// feed), but the "model" is this spec's own interceptor serving intercepted/* —
-// so a THREE-turn conversation completes in seconds, free, with scripted
-// replies. The real agent loop runs end to end: journaled llm-request events,
-// codemode script execution, web-message-sent, feed paint.
 test("multi-turn chat with a sarcastic agent served by the spec's own fake-model interceptor", async ({
   helpers,
   page,
