@@ -6,7 +6,7 @@ size: large
 # Experiment: clear preview DO storage without replacing the deployment
 
 Draft PR #2693 is open. The operator sweep and real-runtime probes are in place;
-five runtime checks pass. Baseline full erase took 69 seconds. Live storage-wipe
+six runtime checks pass. Baseline full erase took 69 seconds. Live storage-wipe
 experiments, interruption cases and the viability report remain.
 
 ## Request
@@ -41,7 +41,7 @@ post-cleanup DO active time with Cloudflare GraphQL. Do not merge automatically.
 
 ## Work
 
-- [x] Implement the smallest useful cleanup experiment with a real runtime test. *`storage-cleanup.ts` plus five Miniflare probes; live proof pending.*
+- [x] Implement the smallest useful cleanup experiment with a real runtime test. *`storage-cleanup.ts` plus six Miniflare probes; live proof pending.*
 - [x] Open a draft PR and register it with the global review monitor. *PR #2693, registered through September 17.*
 - [ ] Establish a baseline and test normal post-test cleanup and reuse.
 - [ ] Push during preparation, active tests and cleanup; record outcomes.
@@ -68,3 +68,11 @@ post-cleanup DO active time with Cloudflare GraphQL. Do not merge automatically.
   timed out). Full erase succeeded in 69.0 seconds (71.2s command wrapper).
   Namespace deletion prevents a complete delayed GraphQL cost baseline; do not
   misreport empty/deleted namespace metrics as zero usage.
+
+- Independent review: cold Stream initialization can announce to ancestors,
+  potentially recreating an already-wiped parent; removed/relocated facets are
+  not enumerable through the current subscription catalog. Measure both rather
+  than asserting a successful sweep means permanent retirement. Reset also
+  removes the persisted name, so a stale ID-only retry can fail initialization.
+  Post-run unsupported/503 must fail instead of falling back to full erase.
+- Full repository typecheck, tests, lint, knip and formatting passed locally.

@@ -8,6 +8,8 @@ import { envs, streamsExampleEnvs } from "../../envs.ts";
  * `doppler run --project _shared --config preview -- pnpm exec trpc-cli`:
  *
  * scripts/preview/cleanup-metrics.ts snapshot --env preview_15 --output /tmp/namespaces.json
+ * scripts/preview/cleanup-metrics.ts inventory --env preview_15 \
+ *   --namespace-snapshot /tmp/namespaces.json --output /tmp/objects.json
  * scripts/preview/cleanup-metrics.ts capture --env preview_15 \
  *   --start 2026-09-16T22:00:00Z --end 2026-09-16T22:30:00Z \
  *   --namespace-snapshot /tmp/namespaces.json --output /tmp/metrics.json
@@ -53,6 +55,69 @@ export default class CleanupMetrics {
     };
   }
 
+  /** List object IDs and stored-data flags through REST, without waking any DO. */
+  async inventory(options: { env: string; namespaceSnapshot: string; output: string }) {
+    const target = resolveTarget(options.env);
+    const snapshot = await readNamespaceSnapshot(options.namespaceSnapshot, target);
+    const captureStartedAt = new Date().toISOString();
+    const results = [];
+    for (const namespace of snapshot.namespaces) {
+      const objects: z.infer<typeof StoredObject>[] = [];
+      const cursors = new Set<string>();
+      let cursor = "";
+      do {
+        const query = new URLSearchParams({ limit: "1000" });
+        if (cursor) query.set("cursor", cursor);
+        const response = await fetch(
+          `https://api.cloudflare.com/client/v4/accounts/${target.accountId}/workers/durable_objects/namespaces/${namespace.id}/objects?${query}`,
+          { headers: target.headers, signal: AbortSignal.timeout(30_000) },
+        );
+        const raw = await response.json();
+        if (!response.ok) {
+          throw new Error(
+            `Object inventory failed for ${namespace.name} (${response.status}): ${JSON.stringify(raw)}`,
+          );
+        }
+        const body = ObjectPage.parse(raw);
+        if (!body.success)
+          throw new Error(`Object inventory failed: ${JSON.stringify(body.errors)}`);
+        objects.push(...body.result);
+        cursor = body.result_info?.cursor || "";
+        if (cursor && cursors.has(cursor))
+          throw new Error(`Repeated inventory cursor for ${namespace.name}`);
+        if (cursor) cursors.add(cursor);
+      } while (cursor);
+      results.push({
+        namespace,
+        listed: objects.length,
+        withStoredData: objects.filter((object) => object.hasStoredData).length,
+        objects,
+      });
+    }
+    const summary = results.map(({ namespace, listed, withStoredData }) => ({
+      worker: namespace.script,
+      class: namespace.class,
+      listed,
+      withStoredData,
+    }));
+    await mkdir(dirname(options.output), { recursive: true });
+    await writeFile(
+      options.output,
+      JSON.stringify(
+        {
+          captureStartedAt,
+          captureFinishedAt: new Date().toISOString(),
+          snapshot,
+          summary,
+          results,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    return { output: options.output, summary };
+  }
+
   /** Capture per-object duration and invocations for an explicit UTC window. */
   async capture(options: {
     env: string;
@@ -66,13 +131,7 @@ export default class CleanupMetrics {
     if (Date.parse(start) >= Date.parse(end)) throw new Error("Start must precede end");
     if (Date.parse(end) > Date.now()) throw new Error("End must not be in the future");
     const target = resolveTarget(options.env);
-    const snapshot = Snapshot.parse(JSON.parse(await readFile(options.namespaceSnapshot, "utf8")));
-    if (snapshot.env !== options.env || snapshot.accountId !== target.accountId) {
-      throw new Error("Namespace snapshot must belong to the requested environment and account");
-    }
-    if (!snapshot.namespaces.every((entry) => target.workers.includes(entry.script))) {
-      throw new Error("Namespace snapshot includes a worker outside the requested environment");
-    }
+    const snapshot = await readNamespaceSnapshot(options.namespaceSnapshot, target);
     const captureStartedAt = new Date().toISOString();
     const results = [];
     for (const namespace of snapshot.namespaces) {
@@ -139,10 +198,22 @@ function resolveTarget(name: string) {
   if (!os || !streams) throw new Error(`Unknown deployed environment ${name}`);
   const token = z.string().min(1).parse(process.env.CLOUDFLARE_API_TOKEN);
   return {
+    env: name,
     accountId: os.cloudflareAccountId,
     workers: [os.osWorkerName, streams.workerName],
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
   };
+}
+
+async function readNamespaceSnapshot(path: string, target: ReturnType<typeof resolveTarget>) {
+  const snapshot = Snapshot.parse(JSON.parse(await readFile(path, "utf8")));
+  if (snapshot.env !== target.env || snapshot.accountId !== target.accountId) {
+    throw new Error("Namespace snapshot must belong to the requested environment and account");
+  }
+  if (!snapshot.namespaces.every((entry) => target.workers.includes(entry.script))) {
+    throw new Error("Namespace snapshot includes a worker outside the requested environment");
+  }
+  return snapshot;
 }
 
 const Namespace = z.object({
@@ -161,6 +232,13 @@ const NamespacePage = z.object({
   success: z.boolean(),
   result: z.array(Namespace),
   result_info: z.object({ total_count: z.number() }),
+  errors: z.unknown(),
+});
+const StoredObject = z.object({ id: z.string(), hasStoredData: z.boolean() });
+const ObjectPage = z.object({
+  success: z.boolean(),
+  result: z.array(StoredObject),
+  result_info: z.object({ cursor: z.string().nullish() }).nullish(),
   errors: z.unknown(),
 });
 const Periodic = z.object({

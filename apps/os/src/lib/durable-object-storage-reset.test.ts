@@ -59,6 +59,16 @@ test("wiping a known hosted facet discards its private storage too", async () =>
   expect(await runtime.request("/child-read")).toEqual({ value: null });
 });
 
+test("an alarm already waiting on external work loses its pending record and instance", async () => {
+  await using runtime = await startRuntime();
+  const created = await runtime.request("/create");
+  await runtime.request("/start-alarm");
+  await runtime.outboundStarted;
+  expect(await runtime.request(`/reset?id=${created.id}`)).toMatchObject({ reset: true });
+  runtime.finishOutbound();
+  expect(await runtime.request("/read")).toMatchObject({ kv: null, sql: null, alarm: null });
+});
+
 test("a late caller can recreate an old identity: a reset does not retire it", async () => {
   await using runtime = await startRuntime();
   const created = await runtime.request("/create");
@@ -100,7 +110,15 @@ async function startRuntime() {
               alarm: await this.ctx.storage.getAlarm(), memory: this.memory,
             };
           }
-          alarm() {}
+          async startAlarm() {
+            this.ctx.storage.kv.put('pending', true);
+            await this.ctx.storage.setAlarm(Date.now());
+            return { armed: true };
+          }
+          async alarm() {
+            if (!this.ctx.storage.kv.get('pending')) return;
+            await this.pending();
+          }
           kill() { this.ctx.abort('test eviction'); }
           async pending() {
             await fetch('http://pending-operation');
@@ -136,6 +154,7 @@ async function startRuntime() {
             catch (error) { if (!error.durableObjectReset) throw error; return Response.json({ aborted: true }); }
           }
           if (url.pathname.startsWith('/child-')) return Response.json(await stub.child(url.pathname === '/child-write'));
+          if (url.pathname === '/start-alarm') return Response.json(await stub.startAlarm());
           return Response.json(await (url.pathname === '/create' ? stub.create() : stub.read()));
         }};
       `,

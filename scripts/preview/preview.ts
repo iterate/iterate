@@ -4931,9 +4931,13 @@ function makePreviewSlotDataEraser(runtime: {
   return async ({ dopplerConfig, slug }) => {
     const startedAt = Date.now();
     logPreview(`erasing ${slug} data (doppler config ${dopplerConfig})`);
-    if (runtime.commandEnvironment.PREVIEW_DO_STORAGE_RESET === "1") {
+    const storageResetMode = runtime.commandEnvironment.PREVIEW_DO_STORAGE_RESET;
+    if (storageResetMode === "1" || storageResetMode === "allow-bootstrap") {
       const { resetPreviewStorage } = await import("./storage-cleanup.ts");
-      const result = await resetPreviewStorage({ env: dopplerConfig, allowUnsupported: true });
+      const result = await resetPreviewStorage({
+        env: dopplerConfig,
+        allowUnsupported: storageResetMode === "allow-bootstrap",
+      });
       if (result.supported) {
         logPreview(
           `cleared ${slug} object storage without redeploying (${formatDurationMs(Date.now() - startedAt)})`,

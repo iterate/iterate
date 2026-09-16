@@ -113,7 +113,7 @@ async function fetchWithoutWideLog(
   config: AppConfig,
 ) {
   if (new URL(request.url).pathname === "/api/__internal/reset-storage") {
-    if (!config.environmentName.startsWith("preview_"))
+    if (!config.environmentName?.startsWith("preview_"))
       return new Response("Not a preview", { status: 403 });
     if (!authenticateAdminApiSecret({ config }, request))
       return new Response("Unauthorized", { status: 401 });
