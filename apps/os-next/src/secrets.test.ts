@@ -593,11 +593,17 @@ const binding = {
 const keys = { current: "key-one" };
 
 test("encryptSecretMaterial / decryptSecretMaterial: a string and an object round-trip; the ciphertext carries neither", async () => {
-  for (const material of ["hunter2", { accessToken: "AT", nested: { deep: "D" } }] as const) {
+  // The needles are long: a two-letter one ("AT") shows up in a random base64 IV about once in a
+  // hundred runs and made this test flaky (CI, 2026-09-16).
+  for (const material of [
+    "hunter2",
+    { accessToken: "ACCESS-TOKEN-PLAINTEXT", nested: { deep: "DEEP-PLAINTEXT" } },
+  ] as const) {
     const encrypted = await encryptSecretMaterial(material, binding, keys);
     expect(encrypted.algorithm).toBe("AES-256-GCM+SECRET-V1");
     expect(JSON.stringify(encrypted)).not.toContain("hunter2");
-    expect(JSON.stringify(encrypted)).not.toContain("AT");
+    expect(JSON.stringify(encrypted)).not.toContain("ACCESS-TOKEN-PLAINTEXT");
+    expect(JSON.stringify(encrypted)).not.toContain("DEEP-PLAINTEXT");
     expect(await decryptSecretMaterial(encrypted, binding, keys)).toEqual({
       material,
       rotated: false,
