@@ -55,7 +55,8 @@ raise the budget automatically.
 - OS Vitest gives every current file a worker immediately and permits at most
   two concurrent tests per file in CI. Each file owns isolated projects; the
   examples matrix still overlaps its isolated runtimes inside each case.
-- Root Playwright uses 32 workers on the 16-core / 64-GB preview runner.
+- Root Playwright is testing 24 workers on the 16-core / 64-GB preview runner
+  after three 32-worker browser runs each required one retry.
   Deployment, app tests, Playwright and post-test cleanup share that runner.
   The concurrency experiment measured 16 / 32 / 64 / 92 workers: the first
   browser runs took 148 / 114 / 109 / 104 seconds, respectively. Vitest

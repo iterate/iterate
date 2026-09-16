@@ -1,6 +1,4 @@
-<strong>Keep one runner and 32 Playwright workers.</strong> The two 16-worker runs took 148–149
-seconds; the two 32-worker runs took 106–114 seconds. At 32, Vitest already finishes last. 64 and 92
-brought little extra browser gain, while memory rose from ~22 GB at 32 to 36 / 46 GB. The 92-worker
-preview failed. Both 32-worker runs passed with one browser retry each; this is a performance
-recommendation, not proof that the suite is flake-free. Final configuration validation is next; all
-six trials and the historical sharded runs remain below.
+<strong>32 workers was faster; we are checking 24 before choosing the final count.</strong>
+16 took 148–149 seconds with no retries. The three 32-worker runs took 106–114 seconds but each
+needed one browser retry. At 32, Vitest already finishes last. 64 and 92 brought little extra
+benefit; 92 failed. The next trial tests whether 24 keeps the useful speedup with fewer retries.

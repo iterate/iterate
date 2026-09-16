@@ -140,13 +140,16 @@ add(pw_group, "Global setup + mobile web server", pw_start, pool_start, "other",
 pool = add(pw_group, "Worker pool + reporting", pool_start, pw_end, "test", "Each bar is one actual attempt. Worker IDs in the inspector show process reuse and retries.") or pw_group
 active_intervals = []
 first_starts = []
-green = skipped = body_failures = retries = 0
+green = skipped = body_failures = retries = sentinel_failures = 0
 if root_pw:
     for t in root_pw["tests"]:
         retries += t.get("retryCount", 0)
         if t["state"] == "skipped":
             skipped += 1
             continue
+        sentinel_test = t.get("expectedState") == "failed" and " › flake-sentinel.spec.ts › " in t["fullName"]
+        if sentinel_test and any("monthly flake sentinel" in e.get("message", "") for e in t.get("errors", [])):
+            sentinel_failures += 1
         wrapper_pass = t.get("expectedState") == "failed" and any("Flaky test passed this run" in e.get("message", "") for e in t.get("errors", []))
         if t["state"] == "passed" or wrapper_pass:
             green += 1
@@ -160,9 +163,10 @@ if root_pw:
             active_intervals.append((start, finish))
             if a.get("attemptIndex", 0) == 0:
                 first_starts.append(start)
-            outcome = "body passed; quarantine wrapper throws as expected" if "Flaky test passed this run" in a.get("error", {}).get("message", "") else a["state"]
+            sentinel_attempt = sentinel_test and "monthly flake sentinel" in a.get("error", {}).get("message", "")
+            outcome = "deliberate monthly flake sentinel (expected)" if sentinel_attempt else "body passed; quarantine wrapper throws as expected" if "Flaky test passed this run" in a.get("error", {}).get("message", "") else a["state"]
             module = t["moduleId"].replace("/home/runner/work/iterate/iterate/", "")
-            attempt_node = add(pool, t["fullName"] + (f' · retry {a["attemptIndex"]}' if a.get("attemptIndex") else ""), start, finish, "test", f"{module} · {outcome} · worker {a.get('workerIndex')} / slot {a.get('parallelIndex')} · attempt {a.get('attemptIndex', 0)}.", "Playwright per-attempt telemetry", test=True, failed=a["state"] not in ["passed", "skipped"] and "Flaky test passed this run" not in a.get("error", {}).get("message", ""))
+            attempt_node = add(pool, t["fullName"] + (f' · retry {a["attemptIndex"]}' if a.get("attemptIndex") else ""), start, finish, "test", f"{module} · {outcome} · worker {a.get('workerIndex')} / slot {a.get('parallelIndex')} · attempt {a.get('attemptIndex', 0)}.", "Playwright per-attempt telemetry", test=True, failed=not sentinel_attempt and a["state"] not in ["passed", "skipped"] and "Flaky test passed this run" not in a.get("error", {}).get("message", ""))
             for phase in a.get("phases", []):
                 if phase["name"] in ["Before Hooks", "After Hooks", "create project fixture", "create mobile fixture", "connect admin itx"] and phase.get("startedAt") and phase.get("durationMs", 0) >= 100:
                     phase_start = sec(phase["startedAt"])
@@ -185,7 +189,7 @@ resources = json.loads(args.resources.read_text())
 samples = [dict(time=sec(s["timestamp"]), **({"cpu": s["cpu_utilization"]} if "cpu_utilization" in s else {}), **({"memory": s["memory_utilization"]} if "memory_utilization" in s else {})) for s in resources["attempt"].get("samples", [])]
 metrics = dict(result=j["job"]["conclusion"], playwright=root_pw["run"]["durationMs"] / 1000 if root_pw else None,
                vitest=os_vit["run"]["durationMs"] / 1000 if os_vit else None, browserRetries=retries,
-               appRetries=app_retries, browserGreen=green, browserSkipped=skipped, browserBodyFailures=body_failures,
+               appRetries=app_retries, browserGreen=green, browserSkipped=skipped, browserBodyFailures=body_failures, browserSentinelFailures=sentinel_failures,
                readiness=ready_end - ready if ready is not None and ready_end is not None else None,
                erase=[float(m[2]) for _, m in erases])
 browser_window = [sec(root_pw["run"]["startedAt"]), sec(root_pw["run"]["finishedAt"])] if root_pw else [pw_start or test_start or 0, pw_end or test_end or root["end"]]

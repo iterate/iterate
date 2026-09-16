@@ -764,7 +764,9 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
             are shown separately in the trace. The existing flake wrapper marks some tests as
             expected failures; when their bodies pass it deliberately throws “Flaky test passed this
             run”. Those are body passes, not regressions. A quarantined body failure is called out
-            separately. Skipped cases never occupy an active worker slot.
+            separately. The monthly flake sentinel deliberately throws at random to test failure
+            reporting; its expected outcome is labeled separately from real body failures. Skipped
+            cases never occupy an active worker slot.
           </p>
           <p>
             Playwright runs one test at a time in each worker process. More workers let waiting
@@ -1027,7 +1029,7 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
       document.getElementById("results").innerHTML = comparisonEntries
         .map(([key, r]) => {
           const m = r.metrics || {};
-          return `<tr data-result="${key}" tabindex="0" role="button" aria-label="Open ${escape(r.label)} trace"><td><strong>${escape(r.label)}</strong><br><small>${escape(r.run)} · ${escape((r.head || "").slice(0, 9))}</small></td><td>${duration(r.total)}</td><td>${duration(r.installWall)}</td><td>${m.playwright == null ? "—" : duration(m.playwright)}${r.normal ? "" : " longest shard"}</td><td>${m.vitest == null ? "—" : duration(m.vitest)}</td><td>${m.browserRetries == null ? "—" : m.browserRetries}</td><td>${m.appRetries == null ? "—" : m.appRetries}</td><td>${m.browserBodyFailures == null ? "—" : m.browserBodyFailures}</td><td class="${m.result === "success" ? "good" : "bad"}">${escape(m.result || "unknown")}</td></tr>`;
+          return `<tr data-result="${key}" tabindex="0" role="button" aria-label="Open ${escape(r.label)} trace"><td><strong>${escape(r.label)}</strong><br><small>${escape(r.run)} · ${escape((r.head || "").slice(0, 9))}</small></td><td>${duration(r.total)}</td><td>${duration(r.installWall)}</td><td>${m.playwright == null ? "—" : duration(m.playwright)}${r.normal ? "" : " longest shard"}</td><td>${m.vitest == null ? "—" : duration(m.vitest)}</td><td>${m.browserRetries == null ? "—" : m.browserRetries}</td><td>${m.appRetries == null ? "—" : m.appRetries}</td><td>${m.browserBodyFailures == null ? "—" : m.browserBodyFailures - (m.browserSentinelFailures || 0)}${m.browserSentinelFailures ? " + " + m.browserSentinelFailures + " deliberate sentinel" : ""}</td><td class="${m.result === "success" ? "good" : "bad"}">${escape(m.result || "unknown")}</td></tr>`;
         })
         .join("");
       document.querySelectorAll("[data-result]").forEach((row) => {

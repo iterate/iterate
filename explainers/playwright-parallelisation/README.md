@@ -6,12 +6,16 @@ PR: https://github.com/iterate/iterate/pull/2659
 
 `../playwright-parallelisation.html` is a generated, self-contained page. It
 works locally and through the Iterate project's existing branch-aware
-explainer route. No deployment of the product is needed to publish this page.
+explainer route. No deployment of the product is needed to publish this page. For a stable
+review link, replace the branch in `?sha=` with the full report commit SHA;
+branch-name requests can briefly serve a cached earlier revision.
 
 ## Experiment
 
 The controlled series changes only the fixed `previewPlaywrightWorkers` value
 in each recorded commit: 16, 32, 64 and 92, then control/finalist repeats.
+A 24-worker follow-up checks a narrower compromise after all three measured
+32-worker browser runs needed one retry and both 16-worker runs needed none.
 The final configuration lives directly in `playwright.config.ts`; the unused
 sharding code was removed after the controlled series. Keep
 application code, test catalogue, worker machine size, retries, readiness and
@@ -83,7 +87,8 @@ unsharded run's known workflow, install, Playwright, Vitest and retry totals.
   reuse. They motivate the experiment; they are not a controlled comparison.
 
 The final implementation differs from application baseline `611c3769b` only
-in the root Playwright worker setting and documentation/evidence. The measured
+in the root Playwright worker setting, two equivalent telemetry expressions
+required by current lint rules, and documentation/evidence. The measured
 application, package and spec trees are identical across the controlled trials.
 Final validation after removing unused sharding code is recorded separately;
 it does not replace any earlier failed measurement.

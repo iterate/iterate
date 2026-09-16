@@ -47,10 +47,10 @@ export default defineConfig({
   // (docs/testing.md#retries-and-timeouts). A burst that defeats it fails
   // the run on purpose: platform weather should be visible, not absorbed.
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
-  // Measured on the 16-core preview runner: 32 workers puts Playwright below
-  // the concurrent Vitest suite. Higher counts used more memory for little
-  // wall-time gain. See explainers/playwright-parallelisation.html.
-  workers: process.env.CI ? 32 : 1,
+  // Compare 24 workers after three 32-worker trials each needed a retry.
+  // Keep the fixed count explicit; measure the browser tail alongside Vitest.
+  // See explainers/playwright-parallelisation.html for all recorded runs.
+  workers: process.env.CI ? 24 : 1,
   outputDir: "test-results/playwright-output",
   reporter: [
     ["list"],
