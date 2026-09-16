@@ -147,7 +147,7 @@ describe("Depot deployment safety", () => {
     expect(deployKit?.run).toContain('source "$IDF_PATH/export.sh"');
     expect(workflow.on?.push?.paths).toEqual(
       expect.arrayContaining([
-        "packages/voice-agent/**",
+        "apps/os-next/**", // the page is an app of os-next (workspace dependency)
         "package.json",
         "pnpm-lock.yaml",
         "pnpm-workspace.yaml",
