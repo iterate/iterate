@@ -12,7 +12,7 @@
 //      progress — a stateless Worker-Loader entrypoint) whose retry is due is delivered from its
 //      cursor row; the awaited call is the ack, the ladder resets. AWAITED before step 2, so the quiesce never aborts a
 //      delivery in flight and a later retry's re-arm lands before the actor hibernates.
-//   2. the idle QUIESCE: 60s without a PIN being used (and nothing in flight) aborts every live facet and
+//   2. the idle QUIESCE: 30s without a PIN being used (and nothing in flight) aborts every live facet and
 //      RETURNS every borrowed stub, so the actor can hibernate. A MEASURED PROPERTY, load-bearing
 //      below: a materialized facet or a borrowed stub PINS the DO non-hibernatable (workerd#6800)
 //      — evictDurableObject on such a DO times out after 30s ("still has active references"). You
@@ -433,10 +433,39 @@ test("A WAKE MAKES NO LOOP: an incarnation the alarm woke delivers its own wake 
   expect(await wokens()).toHaveLength(before + 1);
 });
 
+test("A BORROW IS A USE: the first call through a stub arms the idle deadline a quiet period out — never an instant already past, which would fire an alarm pass for nothing", async () => {
+  const ctx = "prj_q_first_borrow";
+  const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
+  await clientItx.provide("itx.p0", new Echo(0));
+  const caller = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
+  // The first borrow through a PUSH: a live "*" subscriber's callback is lent, and the commit that
+  // pushes to it acks the config row meanwhile — a reconcile lands while the stub's first call is
+  // still in flight, with the borrow already counted.
+  const seen: unknown[] = [];
+  await clientItx.subscribe({
+    name: "live",
+    consumes: ["*"],
+    target: (events: unknown[]) => void seen.push(...events),
+  });
+  const before = Date.now();
+  await stub(ctx).append({ type: "mark" });
+  expect(await caller.invoke("itx.p0.echo('first')")).toBe("echo-0:first"); // and a direct borrow
+  await new Promise((r) => setTimeout(r, 800)); // an alarm armed in the past would have fired by now
+  const armed = await alarmAt(ctx);
+  expect(armed).not.toBeNull();
+  expect(armed!).toBeGreaterThanOrEqual(before + 30_000);
+  const ring = (
+    (await stub(ctx).invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
+      events: StreamEvent[];
+    }
+  ).events.filter((event) => event.type === STREAM_ALARM_TRACE_EVENT);
+  expect(ring).toEqual([]); // no pass ran: nothing was due
+});
+
 test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with the alarm still answers", async () => {
   // A quiesce RETURNS borrowed stubs (#borrowed) but never touches a PENDING page (#rpcStubPagesInFlight),
   // and the borrow the invoke makes is the pin's use that keeps the actor warm. PINS: an invoke that
-  // borrows a stub while the 60s alarm fires resolves with the right per-client answer (the stub it
+  // borrows a stub while the 30s alarm fires resolves with the right per-client answer (the stub it
   // is borrowing is not returned out from under it).
   const ctx = "prj_pagein";
   const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
@@ -596,7 +625,7 @@ test("ALARM PUMPS THE CURSOR LANE: a failed at-least-once delivery is retried fr
   expect(await s.invoke(["itx", "kv", ["get", "flaky-digested"]])).toBeNull();
 
   // Heal the target, then fire the alarm with Date faked PAST the retry instant (30s clears every
-  // early rung of the 1s·2ⁿ ladder; well short of the 60s quiesce).
+  // early rung of the 1s·2ⁿ ladder; a rung the 30s quiesce is not part of).
   await s.invoke(["itx", "kv", ["put", "flaky-mode", "ok"]]);
   vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
   try {
