@@ -16,7 +16,7 @@ the same deployment. Completely deleting inert data is a separate question.
 - Fail when an attempted reset fails. Save each object result and deployment ID;
   inventory completeness needs independent evidence.
 - Inspect the inventory again without calling the objects. Observe native
-  invocations and billed duration through GraphQL after ingestion settles.
+  invocations and reported duration through GraphQL after ingestion settles.
 - Create fresh work against the same deployment, then clean that up too.
 - Push during prepare, tests and cleanup to exercise the existing cancellation
   and next-run recovery behavior.
@@ -27,7 +27,7 @@ the same deployment. Completely deleting inert data is a separate question.
 | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Original cleanup, run `v11zj80d0s`, task-only commit `1367f9dad` | Full erase 69.0s; command wrapper 71.2s                                                                         | Baseline cleanup latency; nine OS classes and the streams class retired                                                                                                         |
 | Baseline tests                                                   | Six browser shards green; app suite red on the existing abandoned-project expected-failure test's setup timeout | The baseline is not a clean whole-suite comparison                                                                                                                              |
-| Baseline post-erase inventory                                    | Six sandbox namespaces remain; 242 SandboxLite and 161 SandboxBasic objects still report stored data            | Full erase already retains some inert container-host storage                                                                                                                    |
+| Baseline post-erase inventory                                    | Six sandbox namespaces remain; 242 SandboxLite and 161 SandboxBasic objects still report stored data            | Full erase already retains some container-host storage                                                                                                                          |
 | Real workerd/Miniflare probes                                    | Six pass                                                                                                        | SQL/KV/alarm/memory wipe, cold inventory-ID lookup, version mismatch rejection, in-flight request abort, known facet storage deletion, running-alarm reset and later recreation |
 | Whole repository checks                                          | Typecheck, tests, lint, knip, formatting pass                                                                   | No detected local regression before the first live run                                                                                                                          |
 | First storage run `5fj6v8h8hk`, commit `5a6ce661d`               | OS deploy blocked: SHA-pinned packages were unpublished while the PR conflicted with main                       | Not evidence about storage cleanup; fixed by merging main                                                                                                                       |
@@ -36,9 +36,11 @@ the same deployment. Completely deleting inert data is a separate question.
 ## First live finding: discovery misses active objects
 
 The normal run deployed OS version `2c6c84e7-f30a-4c69-955a-11233c932ef9`.
-The native Worker tail observed a successful Stream append at 22:40:11 UTC.
-The REST object inventory still omitted it at 22:42:29. Re-reading namespace
-IDs confirmed we were querying the current namespaces.
+The native Worker tail observed a successful Stream append at 22:40:12.927 UTC.
+The REST object inventory still omitted that exact object during the
+22:44:06–22:44:25 capture, then listed it during 22:46:25–22:46:51.
+Re-reading namespace IDs confirmed they were unchanged. This proves a delay
+in this trial, not a fixed delay or a platform consistency guarantee.
 
 Across the tests, the tail observed at least 1,045 distinct non-container DOs:
 872 Streams, 85 Projects, 28 Repos, 24 Secrets, seven Schedulers, 24 build
@@ -60,11 +62,12 @@ activity are the separate checks below.
 
 ## Reuse probe
 
-At 22:47:24 UTC, a new project created after cleanup successfully executed a
+At 22:47:24 UTC, a new project created after the partial sandbox sweep executed a
 five-second recurring schedule and appended a heartbeat event. The Worker
 version remained `2c6c84e7-f30a-4c69-955a-11233c932ef9`, unchanged since the
 normal test deployment. This is stronger than a health check: fresh product
-work can run without redeployment.
+work can run without redeployment after that partial sweep. Reuse after
+clearing all inventoried OS objects remains unproven.
 
 `scripts/preview/cleanup-probe.ts seed-heartbeat` creates this controlled work.
 It intentionally releases client handles without cancelling the schedule, so
