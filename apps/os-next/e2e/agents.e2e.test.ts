@@ -9,7 +9,7 @@
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { freshCtx, openItx, readAll, sleep, until } from "./support/client.ts";
-import { deployedOnly } from "./support/project-host.ts";
+import { deployedOnly, projectHostsAreLocal } from "./support/project-host.ts";
 
 /** A model that answers from a script of replies, in order, recording what it was asked. */
 class ScriptedAi extends RpcTarget {
@@ -29,6 +29,21 @@ const short = (log: { type: string }[]) =>
   log
     .filter((e) => /agent|context-added|script-run/.test(e.type) && !/subscription/.test(e.type))
     .map((e) => e.type.replace("events.iterate.com/", ""));
+/** The default model is OpenAI's astra; a local story pins Workers AI so the fake `itx.ai` answers. */
+const WORKERS_AI_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
+const onWorkersAi = (
+  support: { append: (event: unknown) => Promise<unknown> },
+  model = WORKERS_AI_MODEL,
+) =>
+  support.append({
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llm: { model } } },
+  });
+/** A deployed story that speaks to OpenAI: the run's key becomes the project's `openai` secret. */
+const openaiKey = (): string => process.env.OPENAI_API_KEY || "";
+const withOpenAi = (itx: { secrets: { set: (...a: unknown[]) => Promise<unknown> } }) =>
+  itx.secrets.set("openai", openaiKey(), { urls: ["https://api.openai.com"] });
+
 const assistantWords = (log: { type: string; payload?: unknown }[]) =>
   log
     .filter((e) => e.type === "events.iterate.com/agents/context-added")
@@ -75,6 +90,7 @@ test("the loop: a person's words → the model → a script run against itx → 
   await support.provide("itx.ai", ai);
   const agent = itx.agents.get("/agents/support");
   await agent.create({ systemPrompt: "Be terse." });
+  await onWorkersAi(support);
   const asked = await agent.message("Store 42 under the key answer and tell me when done.");
   expect(asked).toMatchObject({
     type: "events.iterate.com/agents/context-added",
@@ -99,6 +115,7 @@ test("the loop: a person's words → the model → a script run against itx → 
   expect(short(log)).toEqual([
     "agent/created",
     "agents/context-added", // the system prompt
+    "agent/configured", // the story pins Workers AI
     "agents/context-added", // the person
     "agent/llm-request-requested",
     "agent/llm-request-settled",
@@ -134,7 +151,7 @@ test("the loop: a person's words → the model → a script run against itx → 
   });
   // The second call saw the whole conversation: prompt, person, its own script, the result.
   expect(ai.calls).toHaveLength(2);
-  expect(ai.calls[1]!.model).toBe("@cf/meta/llama-4-scout-17b-16e-instruct");
+  expect(ai.calls[1]!.model).toBe(WORKERS_AI_MODEL);
   expect(ai.calls[1]!.messages.map((m) => m.role)).toEqual([
     "system",
     "user",
@@ -163,6 +180,7 @@ test("a script that returns nothing ends the turn: no result item, no further re
   await support.provide("itx.ai", ai);
   const agent = itx.agents.get("/agents/support");
   await agent.create({ systemPrompt: "Be terse." });
+  await onWorkersAi(support);
   await agent.message("Write the note.");
   const settled = await until("the script's settlement", async () => {
     const all = await readAll(support);
@@ -199,7 +217,13 @@ test("bounded: a model that never stops scripting trips the autonomous-turn brea
   await agent.create({ systemPrompt: "Be terse." });
   await support.append({
     type: "events.iterate.com/agent/configured",
-    payload: { config: { maxAutonomousTurns: 2, llmRequestRetryPolicy: { maxAttempts: 2 } } },
+    payload: {
+      config: {
+        llm: { model: WORKERS_AI_MODEL },
+        maxAutonomousTurns: 2,
+        llmRequestRetryPolicy: { maxAttempts: 2 },
+      },
+    },
   });
   await agent.message("go");
   const paused = await until("the autonomous breaker", async () => {
@@ -268,6 +292,7 @@ test("an attached image is stored under the agent's path and SHOWN to the model 
   await support.provide("itx.ai", ai);
   const agent = itx.agents.get("/agents/support");
   await agent.create({ systemPrompt: "Be terse." });
+  await onWorkersAi(support);
   const asked = await agent.message({
     message: "What do you see?",
     files: [
@@ -317,10 +342,35 @@ test("an attached image is stored under the agent's path and SHOWN to the model 
   });
 });
 
-deployedOnly(
+/** The deployed stories that speak to the real default model need the run's OpenAI key. */
+const deployedWithOpenAi = test.skipIf(projectHostsAreLocal() || !openaiKey());
+
+deployedWithOpenAi(
+  "DEPLOYED: one real turn through the default model, OpenAI's astra read fast — a person answered in prose",
+  async () => {
+    const itx = openItx(freshCtx("agent-real"));
+    await withOpenAi(itx);
+    const agent = itx.agents.get("/agents/support");
+    await agent.create();
+    await agent.message("Reply with the single word: pong. No code block.");
+    const words = await until(
+      "the assistant's prose",
+      async () => {
+        const said = assistantWords(await readAll(itx.cd("/agents/support")));
+        return said.length > 0 ? said : undefined;
+      },
+      120_000,
+    );
+    expect(words.join("\n")).toMatch(/pong/i);
+  },
+  150_000,
+);
+
+deployedWithOpenAi(
   "DEPLOYED: the default model SEES an attached image — a red square is called red",
   async () => {
     const itx = openItx(freshCtx("agent-vision-real"));
+    await withOpenAi(itx);
     const agent = itx.agents.get("/agents/support");
     await agent.create();
     await agent.message({
@@ -341,22 +391,26 @@ deployedOnly(
 );
 
 deployedOnly(
-  "DEPLOYED: one real turn through Workers AI — the default model answers a person in prose",
+  "DEPLOYED: a Workers AI model, pinned by agent/configured, sees the image too — no OpenAI key needed",
   async () => {
-    const itx = openItx(freshCtx("agent-real"));
+    const itx = openItx(freshCtx("agent-vision-cf"));
+    const support = itx.cd("/agents/support");
     const agent = itx.agents.get("/agents/support");
     await agent.create();
-    await agent.message("Reply with the single word: pong. No code block.");
+    await onWorkersAi(support);
+    await agent.message({
+      message: "What colour is this image? Answer with one word, no code block.",
+      files: [{ contentType: "image/png", filename: "square.png", data: RED_PNG_BASE64 }],
+    });
     const words = await until(
-      "the assistant's prose",
+      "the assistant's answer",
       async () => {
-        const all = await readAll(itx.cd("/agents/support"));
-        const said = assistantWords(all);
+        const said = assistantWords(await readAll(support));
         return said.length > 0 ? said : undefined;
       },
       120_000,
     );
-    expect(words.join("\n")).toMatch(/pong/i);
+    expect(words.join("\n")).toMatch(/red/i);
   },
   150_000,
 );

@@ -13,8 +13,8 @@ import type { StreamEvent } from "../stream/processor.ts";
 import { type AgentView, DEFAULT_AGENT_SYSTEM_PROMPT, type FileAttachment } from "./contract.ts";
 import { AgentProcessor } from "./processor.ts";
 
-/** What Workers AI answers a text-generation `run`: `{ response }`, or the chat-completions shape
- *  `{ choices: [{ message: { content } }] }` some models speak. */
+/** What a chat model answers: Workers AI's `{ response }`, or the chat-completions shape
+ *  `{ choices: [{ message: { content } }] }` — OpenAI's, and some Workers AI models'. */
 const ChatAnswer = z.union([
   z.object({ response: z.string() }),
   z.object({ choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1) }),
@@ -23,14 +23,41 @@ const ChatAnswer = z.union([
 export class AgentDurableObject extends StreamProcessorDurableObject<AgentView> {
   processor = new AgentProcessor({
     chat: async ({ model, messages }) => {
-      const raw = await this.withItx((itx) =>
-        // workers-types keys `run`'s inputs by model-name literal; the model is configuration here,
-        // and the answer is validated below rather than trusted from the type.
-        (itx.ai as unknown as { run(model: string, inputs: unknown): Promise<unknown> }).run(
-          model,
-          { messages },
-        ),
-      );
+      // Two routes by the model's name: a `@cf/…` model is Workers AI (`itx.ai`, the binding under
+      // THIS context's rules — a test lends a fake there); anything else is OpenAI's chat completions
+      // through this context's egress, the project's `openai` secret riding as a placeholder — the
+      // FAST reading of a reasoning model: low effort, the priority tier (the voice example's).
+      const raw = model.startsWith("@cf/")
+        ? await this.withItx((itx) =>
+            // workers-types keys `run`'s inputs by model-name literal; the model is configuration here,
+            // and the answer is validated below rather than trusted from the type.
+            (itx.ai as unknown as { run(model: string, inputs: unknown): Promise<unknown> }).run(
+              model,
+              { messages },
+            ),
+          )
+        : await this.withItx(async (itx) => {
+            const response = await itx.fetch(
+              new Request("https://api.openai.com/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                  authorization: 'Bearer getSecret("/secrets/openai")',
+                  "content-type": "application/json",
+                },
+                body: JSON.stringify({
+                  model,
+                  messages,
+                  reasoning_effort: "low",
+                  service_tier: "priority",
+                }),
+              }),
+            );
+            if (!response.ok)
+              throw new Error(
+                `openai ${String(response.status)}: ${(await response.text()).slice(0, 400)}`,
+              );
+            return response.json();
+          });
       const answer = ChatAnswer.parse(raw);
       const text = (
         "response" in answer ? answer.response : answer.choices[0]!.message.content
