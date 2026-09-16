@@ -8,22 +8,19 @@ then flashes a checked source-built release and its private configuration direct
 
 ## What a person needs
 
-Choose a board release, enter Wi-Fi, the OS URL, project slug and that project's
-API key, then click **Prepare device** and **Flash device**. The prepare step installs
-this Kit build's isolated VoiceAgent guest, checks `/secrets/openai`, resolves
-the canonical project ID, and mounts the voice setup capability. On each
-activation the board chooses a fresh `/agents/voice/v23/<device_id>/<timestamp>-<activation>`
-path and starts the installed voice agent there. Capture begins immediately;
-buffered audio is sent directly to that stream once setup completes.
-It requires a valid OS host and project
-slug/key before writing.
+Sign in with your Iterate account (the page sends you through OS's OAuth and
+back), choose a board release, enter Wi-Fi, pick one of your projects, then click
+**Prepare device** and **Flash device**. The prepare step checks that the project
+has a voice agent installed (`apps/os-next/scripts/voice-install.ts` installs it;
+the project also needs `/secrets/openai`) and mints a ten-year personal access
+token scoped to that project, named `Kit <board> <date>` in your OS sessions list.
+The token is written to the board and revoked from that list, never refreshed.
 
-Wi-Fi stays in browser memory until it is written to the connected board's
-`iterate_kit` partition. The project key authenticates directly to the chosen OS
-host and is also written to the board. Neither credential goes to the Kit worker
-or a URL. The board validates the versioned CRC-protected image at boot, joins Wi-Fi, authenticates,
-mounts `/clients/<device_id>` and is ready for its activation button or optional
-wake word.
+Wi-Fi and the token stay in browser memory until they are written to the
+connected board's `iterate_kit` partition. Neither goes to the Kit worker or a
+URL. The board validates the versioned CRC-protected image at boot, joins Wi-Fi,
+presents the token as a bearer on OS's `/api`, and is ready for its activation
+button or optional wake word.
 
 ## Release a firmware build
 
