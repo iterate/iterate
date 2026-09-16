@@ -15,6 +15,7 @@ const processor = () =>
     runScript: () => Promise.reject(new Error("the reduce never runs a script")),
     readFile: () => Promise.reject(new Error("the reduce never reads a file")),
     now: () => 0,
+    sleep: () => Promise.resolve(),
   });
 
 const born = { type: "events.iterate.com/agent/created", payload: { path: "/agents/support" } };
@@ -232,7 +233,8 @@ describe("AgentProcessor — the reduce", () => {
           llm: { model: "@cf/x" },
           maxAutonomousTurns: 2,
           llmRequestExpiryMs: 600_000,
-          llmRequestRetryPolicy: { maxAttempts: 3 },
+          llmRequestDebounceMs: 250,
+          llmRequestRetryPolicy: { maxAttempts: 3, backoffBaseMs: 10_000, backoffMaxMs: 60_000 },
         },
       },
     },

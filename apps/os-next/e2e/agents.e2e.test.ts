@@ -174,6 +174,47 @@ test("the loop: a person's words → the model → a script run against itx → 
   expect(await itx.agents.list()).toHaveLength(1);
 });
 
+test("debounced: two messages inside the window are answered by ONE request that saw both; a message after the answer is another turn", async () => {
+  const itx = openItx(freshCtx("agent-debounce"));
+  const support = itx.cd("/agents/support");
+  const ai = new ScriptedAi(["Both noted.", "Third noted."]);
+  await support.provide("itx.ai", ai);
+  const agent = itx.agents.get("/agents/support");
+  await agent.create({ systemPrompt: "Be terse." });
+  await support.append({
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llm: { model: WORKERS_AI_MODEL }, llmRequestDebounceMs: 1_500 } },
+  });
+  await agent.message("First.");
+  await agent.message("Second, right after.");
+  const first = await until("the one answer", async () => {
+    const all = await readAll(support);
+    return assistantWords(all).length === 1 ? all : undefined;
+  });
+  expect(assistantWords(first)).toEqual(["Both noted."]);
+  // ONE request opened and ran (the second message's late intent is a harmless fact the reduce
+  // ignores — apps/os's rule — so the intents may number two; the settlements never do).
+  expect(short(first).filter((t) => t === "agent/llm-request-settled")).toHaveLength(1);
+  expect(ai.calls).toHaveLength(1);
+  // The one call saw both messages — the prompt is built from the log at run time.
+  expect(ai.calls[0]!.messages.map((m) => m.role)).toEqual(["system", "user", "user"]);
+  // The window, not a coincidence: the request landed at least the window after the FIRST words
+  // (said[0] is the system prompt).
+  const said = first.filter((e) => e.type === "events.iterate.com/agents/context-added");
+  const requested = first.find((e) => e.type === "events.iterate.com/agent/llm-request-requested");
+  expect(Date.parse(requested.createdAt) - Date.parse(said[1].createdAt)).toBeGreaterThanOrEqual(
+    1_400,
+  );
+  // Words after the answer are a new trigger: a second window, a second request.
+  await agent.message("Third.");
+  const second = await until("the second answer", async () => {
+    const all = await readAll(support);
+    return assistantWords(all).length === 2 ? all : undefined;
+  });
+  expect(assistantWords(second)).toEqual(["Both noted.", "Third noted."]);
+  expect(ai.calls).toHaveLength(2);
+});
+
 test("a script that returns nothing ends the turn: no result item, no further request — over every RPC hop", async () => {
   const itx = openItx(freshCtx("agent-quiet"));
   const support = itx.cd("/agents/support");
@@ -225,7 +266,8 @@ test("bounded: a model that never stops scripting trips the autonomous-turn brea
       config: {
         llm: { model: WORKERS_AI_MODEL },
         maxAutonomousTurns: 2,
-        llmRequestRetryPolicy: { maxAttempts: 2 },
+        // A short backoff so the retry (and the pause after it) lands within the story's patience.
+        llmRequestRetryPolicy: { maxAttempts: 2, backoffBaseMs: 50, backoffMaxMs: 100 },
       },
     },
   });
