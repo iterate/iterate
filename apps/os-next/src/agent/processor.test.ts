@@ -27,10 +27,10 @@ const user = (content: string) => ({
   type: "events.iterate.com/agents/context-added",
   payload: { role: "user", content, actor: { type: "user" } },
 });
-const requested = {
+const requested = (triggerOffset: number) => ({
   type: "events.iterate.com/agent/llm-request-requested",
-  payload: { model: "m", expiresAt: 999_999 },
-};
+  payload: { model: "m", expiresAt: 999_999, triggerOffset },
+});
 const settled = (requestOffset: number, result: unknown) => ({
   type: "events.iterate.com/agent/llm-request-settled",
   payload: { requestOffset, result },
@@ -65,7 +65,7 @@ describe("AgentProcessor — the reduce", () => {
     },
     {
       name: "a person's words raise an external trigger; the request records against it and clears it",
-      events: [born, system, user("hi"), requested],
+      events: [born, system, user("hi"), requested(3)],
       view: {
         pendingLlmRequestTrigger: null,
         openRequest: {
@@ -79,7 +79,7 @@ describe("AgentProcessor — the reduce", () => {
     },
     {
       name: "a late intent — no trigger pending — is a harmless fact; so is one while a request is open",
-      events: [born, system, user("hi"), requested, requested],
+      events: [born, system, user("hi"), requested(3), requested(3)],
       view: {
         openRequest: {
           requestedAtOffset: 4,
@@ -95,7 +95,7 @@ describe("AgentProcessor — the reduce", () => {
         born,
         system,
         user("hi"),
-        requested,
+        requested(3),
         settled(4, { status: "succeeded", text: "ok" }),
         assistant("ok", 4),
       ],
@@ -116,7 +116,7 @@ describe("AgentProcessor — the reduce", () => {
         born,
         system,
         user("hi"),
-        requested,
+        requested(3),
         settled(4, { status: "failed", errorMessage: "boom" }),
       ],
       view: {
@@ -131,7 +131,7 @@ describe("AgentProcessor — the reduce", () => {
         born,
         system,
         user("hi"),
-        requested,
+        requested(3),
         settled(4, { status: "cancelled", reason: "expired" }),
       ],
       view: { openRequest: null, pendingLlmRequestTrigger: null, consecutiveLlmFailures: 0 },
@@ -142,7 +142,7 @@ describe("AgentProcessor — the reduce", () => {
         born,
         system,
         user("hi"),
-        requested,
+        requested(3),
         settled(99, { status: "succeeded", text: "?" }),
       ],
       view: {
@@ -160,7 +160,7 @@ describe("AgentProcessor — the reduce", () => {
         born,
         system,
         user("hi"),
-        requested,
+        requested(3),
         {
           type: "events.iterate.com/capability-host/script-run-requested",
           payload: { code: "async (itx) => 1", executionId: "agent-output:6", expiresAt: 7 },
@@ -174,7 +174,7 @@ describe("AgentProcessor — the reduce", () => {
         },
         settled(4, { status: "succeeded", text: "```ts\nasync (itx) => 1\n```" }),
         scriptResult("agent-output:6"),
-        requested,
+        requested(8),
       ],
       view: {
         activeScriptExecutions: {},
@@ -194,7 +194,7 @@ describe("AgentProcessor — the reduce", () => {
         born,
         system,
         user("hi"),
-        requested,
+        requested(3),
         settled(4, { status: "failed", errorMessage: "boom" }),
         { type: "events.iterate.com/agent/paused", payload: { reason: "enough" } },
       ],
@@ -206,7 +206,7 @@ describe("AgentProcessor — the reduce", () => {
         born,
         system,
         scriptResult("x"),
-        requested,
+        requested(3),
         settled(4, { status: "failed", errorMessage: "boom" }),
         { type: "events.iterate.com/agent/paused", payload: { reason: "enough" } },
         user("again"),

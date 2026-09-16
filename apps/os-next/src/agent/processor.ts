@@ -186,10 +186,13 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
       }
 
       case "events.iterate.com/agent/llm-request-requested": {
-        // A late intent (its trigger already answered, or a request already open) is a harmless
-        // stream fact: the request's identity is the offset of the intent that was FIRST.
+        // A late intent — its trigger answered, moved on, or a request already open — is a harmless
+        // stream fact: only the intent naming THE pending trigger opens a request, so a sleep the
+        // debounce left behind for a trigger that moved can neither skip the new trigger's window
+        // nor a failure's backoff. The request's identity is the offset of the intent that opened it.
         const trigger = state.pendingLlmRequestTrigger;
-        if (!trigger || state.openRequest) return undefined;
+        if (!trigger || state.openRequest || trigger.offset !== event.payload.triggerOffset)
+          return undefined;
         return {
           ...state,
           pendingLlmRequestTrigger: null,
@@ -370,9 +373,10 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
       }
       // THE DEBOUNCE (apps/os's): wait for more content, plus the failure backoff — one window,
       // anchored at the trigger. The delayed append IS the intent (no wake event): more words inside
-      // the window move the trigger, and the late intent then opens the request for them all — the
-      // prompt is built from the log at run time — while the moved trigger's own intent finds a
-      // request open and is a harmless fact. Every at-head pass inside the window schedules another
+      // the window move the trigger; the old trigger's intent then lands as a harmless fact (the
+      // reduce opens a request only for the trigger it names) and the moved trigger's own intent, a
+      // window later, opens the one request for them all — the prompt is built from the log at run
+      // time. Every at-head pass inside the window schedules another
       // sleep-then-append for the same trigger, so the body is DETERMINISTIC from trigger + config
       // (expiresAt anchored at the trigger's time, never `now`): identical bodies dedupe on the key.
       // A droppable attempt: dying mid-window, the revival pass re-runs this with the window long
@@ -382,7 +386,11 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
       const intent = {
         type: "events.iterate.com/agent/llm-request-requested",
         idempotencyKey: this.idempotencyKey(`request/${String(trigger.offset)}`),
-        payload: { model: llm.model, expiresAt: trigger.atMs + llmRequestExpiryMs },
+        payload: {
+          model: llm.model,
+          expiresAt: trigger.atMs + llmRequestExpiryMs,
+          triggerOffset: trigger.offset,
+        },
       };
       runInBackground(async () => {
         if (windowClosesInMs > 0) await this.deps.sleep(windowClosesInMs);

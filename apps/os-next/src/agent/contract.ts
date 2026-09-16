@@ -281,8 +281,12 @@ export const AgentContract = defineProcessorContract({
     },
     "events.iterate.com/agent/llm-request-requested": {
       description:
-        "The loop recorded its intent to run the model; the event's offset is the request's identity.",
-      payloadSchema: z.object({ model: z.string().min(1), expiresAt: z.number() }),
+        "The loop recorded its intent to run the model for ONE trigger (the offset it names); the event's offset is the request's identity. An intent whose trigger has moved on is a harmless fact.",
+      payloadSchema: z.object({
+        model: z.string().min(1),
+        expiresAt: z.number(),
+        triggerOffset: z.number().int().positive(),
+      }),
     },
     "events.iterate.com/agent/llm-request-settled": {
       description: "The request's terminal fact: the model's text, its failure, or its expiry.",
