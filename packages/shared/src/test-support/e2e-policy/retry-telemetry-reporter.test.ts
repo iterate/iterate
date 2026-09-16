@@ -131,6 +131,7 @@ it("records the first failed attempt when a retry passes", async () => {
   expect(telemetry.tests).toEqual([
     expect.objectContaining({
       fullName: "network > reconnects",
+      leafName: "reconnects",
       moduleId: "/repo/network.e2e.test.ts",
       retryCount: 1,
       passedAfterRetry: true,

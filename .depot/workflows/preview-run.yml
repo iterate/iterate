@@ -1,12 +1,12 @@
-# Called only by preview.yml. Its caller holds the PR lifecycle
-# lock until every job here, including cleanup, has finished.
+# Called by PR and main workflows. Each caller holds its lifecycle lock
+# until every job here, including cleanup, has finished.
 name: Preview run
 on:
   workflow_call:
     inputs:
       pull-request-number:
         type: string
-        required: true
+        default: ""
       head-sha:
         type: string
         required: true
@@ -22,6 +22,8 @@ permissions:
   statuses: write
 env:
   CI_HEAD_SHA: ${{ inputs.head-sha }}
+  TEST_TELEMETRY_HEAD_SHA: ${{ inputs.head-sha }}
+  PREVIEW_TARGET_ARGS: ${{ inputs.pull-request-number && format('--pull-request-number {0}', inputs.pull-request-number) || format('--commit {0}', inputs.head-sha) }}
   TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
 jobs:
   prepare:
@@ -71,7 +73,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
-          pnpm preview ci-prepare --pull-request-number "${{ inputs.pull-request-number }}"
+          pnpm preview ci-prepare $PREVIEW_TARGET_ARGS
           ${{ inputs.all-apps && '--all-apps' || '' }}
       - name: Publish prepared deployment identity
         uses: actions/upload-artifact@v4
@@ -133,7 +135,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
-          pnpm preview ci-test --pull-request-number "${{ inputs.pull-request-number }}"
+          pnpm preview ci-test $PREVIEW_TARGET_ARGS
       - name: Collect test artifacts
         if: always()
         run: scripts/preview/collect-test-artifacts.sh test-results
@@ -187,7 +189,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
-          pnpm preview ci-test --pull-request-number "${{ inputs.pull-request-number }}"
+          pnpm preview ci-test $PREVIEW_TARGET_ARGS
           --shard ${{ matrix.shard }}
       - name: Upload results
         if: always()
@@ -245,7 +247,7 @@ jobs:
                   GITHUB_TOKEN: ${{ github.token }}
                 run: >-
                   doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
-                  pnpm preview ci-finish --pull-request-number "${{ inputs.pull-request-number }}"
+                  pnpm preview ci-finish $PREVIEW_TARGET_ARGS
           - name: Erase slot data after all tests
             if: always() && steps.consumers.outputs.settled == 'true'
             env:
@@ -256,13 +258,13 @@ jobs:
             # on the next run's pre-deploy erase as its backstop.
             run: >-
               doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
-              pnpm preview erase --pull-request-number "${{ inputs.pull-request-number }}"
+              pnpm preview erase $PREVIEW_TARGET_ARGS
               --ran-head-sha "${{ inputs.head-sha }}"
       - name: Normalize and send preview test telemetry
         if: always()
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts --workflow-scope ${{ cancelled() && '--cancelled' || '' }}
+        run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts --workflow-scope --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4

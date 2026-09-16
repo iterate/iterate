@@ -47,13 +47,14 @@ jobs:
         if: always()
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           TEST_TELEMETRY_EXPECTED_WORKSPACES: "@iterate-com/auth,@iterate-com/docs,@iterate-com/dummy-petshop,@iterate-com/kit,@iterate-com/mobile,@iterate-com/mobile-website,@iterate-com/os,@iterate-com/semaphore,@iterate/lint,iterate,@iterate-com/shared,@iterate-com/typm,@iterate-com/scripts,@iterate-com/workspace-documents,@iterate-com/voice-agent,@iterate-com/ui,os-next"
         # A superseded run still normalizes and uploads its raw evidence, but
         # GitHub's job telemetry owns the cancelled outcome; do not turn killed
         # runner sentinels into test failures.
         # Test execution uses test/dev, but analytics always belongs to the
         # canonical production PostHog project shared with preview telemetry.
-        run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts ${{ cancelled() && '--cancelled' || '' }}
+        run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites unit ${{ cancelled() && '--cancelled' || '' }}
       # The whole flake-reporting contract from CI's side: publish the
       # recorder lines as a workflow artifact. The platform ingests it when
       # GitHub's workflow_run webhook lands (flake-dashboard starter app),
