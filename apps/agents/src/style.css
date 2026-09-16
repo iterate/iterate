@@ -1,0 +1,221 @@
+:root {
+  font:
+    16px/1.5 system-ui,
+    sans-serif;
+  color: #1c2530;
+  background: #f7f7f4;
+}
+body {
+  margin: 0;
+}
+main {
+  max-width: 820px;
+  margin: 4vh auto;
+  padding: 0 16px 40vh;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+h1 {
+  font-size: 1.9rem;
+  line-height: 1.1;
+  margin: 6px 0 14px;
+  font-weight: 600;
+}
+.eyebrow {
+  font-size: 0.72rem;
+  letter-spacing: 0.15em;
+  font-weight: 700;
+  margin: 0;
+}
+.muted {
+  color: #6b7580;
+  font-size: 0.9rem;
+}
+a {
+  color: #1f5f8b;
+}
+nav.agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 10px 0 18px;
+  font-size: 0.95rem;
+}
+nav.agents a[aria-current="page"] {
+  font-weight: 600;
+  text-decoration: none;
+  color: inherit;
+}
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 8px;
+  vertical-align: middle;
+  background: #9aa4ad;
+}
+.dot-green {
+  background: #2f9e5d;
+}
+.dot-amber {
+  background: #d9902a;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .dot-live {
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 16px;
+  font-size: 0.9rem;
+}
+.feed {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+/* The end marker scrolls into view above the sticky composer, never under it. */
+.feed-end {
+  scroll-margin-bottom: 200px;
+}
+.row {
+  max-width: 100%;
+}
+.row.user {
+  align-self: flex-end;
+  max-width: 85%;
+  background: #e5efe9;
+  border-radius: 14px 14px 4px 14px;
+  padding: 10px 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.row.user img {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 8px;
+  margin-top: 8px;
+}
+.row.assistant {
+  max-width: 92%;
+}
+.row.assistant p {
+  margin: 0 0 10px;
+}
+.row.assistant p:last-child {
+  margin-bottom: 0;
+}
+.row.assistant pre,
+details pre {
+  background: #eef0ee;
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  margin: 8px 0;
+}
+.row.note {
+  font-size: 0.85rem;
+  color: #6b7580;
+}
+.row.note.amber {
+  color: #a6640f;
+}
+details.script {
+  font-size: 0.9rem;
+}
+details.script summary {
+  cursor: pointer;
+  color: #3d4954;
+  list-style: none;
+}
+details.script summary::-webkit-details-marker {
+  display: none;
+}
+details.script summary::before {
+  content: "▸ ";
+}
+details.script[open] summary::before {
+  content: "▾ ";
+}
+form.composer {
+  position: sticky;
+  bottom: 0;
+  background: #f7f7f4;
+  padding: 14px 0 12px;
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+form.composer textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 84px;
+  padding: 12px 14px;
+  resize: vertical;
+  border: 1px solid #c9d0d6;
+  border-radius: 10px;
+  font: inherit;
+  color: inherit;
+  background: #fffefb;
+}
+form.composer textarea:focus {
+  outline: 2px solid #1f5f8b;
+  outline-offset: 2px;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+button {
+  border: 1px solid #1f3b52;
+  border-radius: 6px;
+  background: #1f3b52;
+  color: white;
+  font: inherit;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+button.quiet,
+header button {
+  color: #1f3b52;
+  background: transparent;
+}
+form.new-agent {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+form.new-agent input {
+  flex: 1 1 200px;
+  padding: 8px 10px;
+  border: 1px solid #c9d0d6;
+  border-radius: 6px;
+  font: inherit;
+}
+#error {
+  color: #a33423;
+  overflow-wrap: anywhere;
+}

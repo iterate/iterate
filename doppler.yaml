@@ -36,3 +36,5 @@ setup:
     path: apps/os-next/
   - project: notes
     path: apps/notes/
+  - project: agents
+    path: apps/agents/
