@@ -13,11 +13,6 @@ import {
   type ProcessEventArgs,
   type ReduceArgs,
 } from "./processor.js";
-import {
-  completeWithOpenAi,
-  runDelegationTurn,
-  type DelegationTurnDeps,
-} from "./delegation-turn.ts";
 
 /** Fixed GPT-Live session configuration. */
 const LIVE = {
@@ -67,9 +62,6 @@ const HANG_UP_GOODBYE_GRACE_MS = 8_000;
  * 20 s opening capture. Overflow ends the call with a reason, because keeping a truncated request
  * would tell the model a different one. */
 const MAX_HELD_MIC_BYTES = 21_000 * PCM16_BYTES_PER_MS;
-
-/** Delegations already answered stay in the fold so a redelivered request is not answered twice. */
-const MAX_ANSWERED_DELEGATIONS_REMEMBERED = 50;
 
 /** What the live model is told about the arrangement, structured the way the provider's prompting
  * guide asks (role, backchannel policy, interruption policy, a labelled delegation policy). It is
@@ -197,8 +189,6 @@ const VoiceState = z.object({
   transcript: z
     .array(z.strictObject({ role: z.enum(["listener", "assistant"]), text: z.string() }))
     .default([]),
-  /** Delegations already answered (a `commentary` naming them landed), newest first. */
-  answeredDelegationIds: z.array(z.string()).max(MAX_ANSWERED_DELEGATIONS_REMEMBERED).default([]),
   call: z
     .object({
       conversationId: z.string(),
@@ -334,7 +324,6 @@ const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/commentary",
     "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/conversation-ended",
-    "events.iterate.com/voice-agent/delegation-requested",
     /* Consumed so the fold sees its own appends and the recap survives an eviction. */
     "events.iterate.com/voice-agent/utterance-transcript",
     "events.iterate.com/voice-agent/answer-transcript",
@@ -469,9 +458,6 @@ export type VoiceAgentDeps = {
   /** The only way this processor waits, injected so tests can use a fake clock. */
   sleep(ms: number): Promise<void>;
   dialProvider(): Promise<WebSocket | null>;
-  /** The backend turn's model call and script tool (delegation-turn.ts). */
-  complete: DelegationTurnDeps["complete"];
-  runScript: DelegationTurnDeps["runScript"];
 };
 
 type VoiceArgs = ProcessEventArgs<VoiceState, ConsumedEvent<VoiceAgentContract>>;
@@ -497,8 +483,6 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
   #lastDeviceInputAtStreamMsMirror = 0;
   /** The activation whose terminal event is travelling through the log. */
   #endingActivation: string | null = null;
-  /** Delegations this incarnation is answering right now. */
-  readonly #turnsInFlight = new Set<string>();
 
   reduce({ state, event }: ReduceArgs<VoiceState, ConsumedEvent<VoiceAgentContract>>) {
     const committedAtStreamMs = Date.parse(event.createdAt);
@@ -538,18 +522,6 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
         return state.call?.activation === event.payload.activation
           ? { ...state, call: null }
           : state;
-
-      case "events.iterate.com/voice-agent/commentary": {
-        const { delegationId } = event.payload;
-        if (!delegationId || state.answeredDelegationIds.includes(delegationId)) return state;
-        return {
-          ...state,
-          answeredDelegationIds: [delegationId, ...state.answeredDelegationIds].slice(
-            0,
-            MAX_ANSWERED_DELEGATIONS_REMEMBERED,
-          ),
-        };
-      }
 
       case "events.iterate.com/voice-agent/utterance-transcript":
         if (event.payload.text === "") return state;
@@ -605,43 +577,6 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
     if (event === null) return;
 
     switch (event.type) {
-      case "events.iterate.com/voice-agent/delegation-requested": {
-        /* The backend turn, in the facet that raised it: the answer is a `commentary` naming the
-         * delegation, which is also what marks it answered in the fold. Not re-run after an
-         * eviction: the provider socket dies with the incarnation and the call ends as interrupted,
-         * so a late answer would have no one to speak it. */
-        const { activation, delegationId, transcript } = event.payload;
-        if (state.answeredDelegationIds.includes(delegationId)) return;
-        if (this.#turnsInFlight.has(delegationId)) return;
-        this.#turnsInFlight.add(delegationId);
-        this.#background(async () => {
-          try {
-            const turn = await runDelegationTurn(transcript, {
-              complete: this.deps.complete,
-              runScript: this.deps.runScript,
-              progress: (note) =>
-                this.#append({
-                  type: "events.iterate.com/voice-agent/thinking",
-                  payload: { activation, delegationId: null, content: note },
-                }),
-            });
-            await this.#append({
-              type: "events.iterate.com/voice-agent/commentary",
-              idempotencyKey: this.idempotencyKey(`commentary:${delegationId}`),
-              payload: {
-                activation,
-                delegationId,
-                content: turn.content,
-                ...(turn.hangUp && { hangUp: true }),
-              },
-            });
-          } finally {
-            this.#turnsInFlight.delete(delegationId);
-          }
-        });
-        return;
-      }
-
       case "events.iterate.com/voice-agent/thinking":
       case "events.iterate.com/voice-agent/commentary": {
         const dial = this.#dial;
@@ -1213,8 +1148,9 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
     }
   }
 
-  /** The live model handed a request to the backend: record it with the words said so far (the
-   * `delegation-requested` arm above answers it) and tell the voice it may keep talking. */
+  /** The live model handed a request to the backend: emit `delegation-requested` with the words
+   * said so far (the agent facet on this context answers it with `commentary`) and tell the voice
+   * it may keep talking. */
   #delegate(dial: Dial, delegationId: string): void {
     const transcript = this.#delegationTranscript(dial);
     this.#background(async () => {
@@ -1305,14 +1241,5 @@ export class VoiceAgentDurableObject extends StreamProcessorDurableObject<VoiceS
      * keeps alive. */
     sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
     dialProvider: dialProviderSocket,
-    complete: completeWithOpenAi,
-    runScript: async (script) => {
-      const itx = this.env.ITX.get() as unknown as { run(script: string): Promise<unknown> };
-      try {
-        return JSON.stringify((await itx.run(script)) ?? null).slice(0, 8_000);
-      } catch (error) {
-        return `ERROR: ${String(error instanceof Error ? error.message : error).slice(0, 8_000)}`;
-      }
-    },
   });
 }

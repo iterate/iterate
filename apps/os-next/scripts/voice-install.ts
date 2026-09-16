@@ -1,10 +1,11 @@
 // scripts/voice-install.ts — put the voice agent on an os-next project.
 //
-// Bundles examples/voice-agent/{voice-agent,worker}.ts (esbuild; the SDK stays the injected
-// "./processor.js"), writes both bundles to the project's KV (edge-cached: a fresh conversation's
-// facet loads without a git read), makes worker.js the project's root worker (`itx.worker`) and
-// `itx.voice` an alias of it, and sets /secrets/openai. NOTE: this replaces any config worker the
-// project already had — `itx.worker` is one rule per project.
+// Bundles examples/voice-agent/{voice-agent,agent,worker}.ts (esbuild; the SDK stays the injected
+// "./processor.js"), writes the three bundles to the project's KV (edge-cached: a fresh
+// conversation's facets load without a git read), makes worker.js the project's root worker
+// (`itx.worker`) and `itx.voice` an alias of it, sets /secrets/openai, and runs one throwaway
+// conversation so the loader has both facet isolates warm before the first real press. NOTE: this
+// replaces any config worker the project already had — `itx.worker` is one rule per project.
 //
 //   OPENAI_API_KEY=… WORKER_BASE_URL=https://os.iterate2.com ADMIN_API_SECRET=… \
 //   PROJECT=prj-voice pnpm exec tsx scripts/voice-install.ts
@@ -43,18 +44,20 @@ async function main(): Promise<void> {
   if (!apiKey) throw new Error("OPENAI_API_KEY unset");
   const voiceAgent = await bundle("voice-agent.ts");
   const voiceAgentKey = `voice-agent:${hash8(voiceAgent)}`;
-  const worker = (await bundle("worker.ts")).replace(
-    '"voice-agent:dev"',
-    JSON.stringify(voiceAgentKey),
-  );
-  if (!worker.includes(voiceAgentKey))
-    throw new Error("the worker's facet cache key was not substituted");
+  const agent = await bundle("agent.ts");
+  const agentKey = `agent:${hash8(agent)}`;
+  const worker = (await bundle("worker.ts"))
+    .replace('"voice-agent:dev"', JSON.stringify(voiceAgentKey))
+    .replace('"agent:dev"', JSON.stringify(agentKey));
+  if (!worker.includes(voiceAgentKey) || !worker.includes(agentKey))
+    throw new Error("a facet cache key was not substituted into the worker");
   const workerKey = `voice-worker:${hash8(worker)}`;
 
   const root = session().authenticate(adminCredentials()).projects.get(PROJECT);
   await root.invoke(["itx", ["whoami"]]);
   await root.secrets.set("openai", apiKey, { urls: ["https://api.openai.com"] });
   await root.kv.put("voice-agent.js", voiceAgent);
+  await root.kv.put("agent.js", agent);
   await root.kv.put("worker.js", worker);
   await root.append(
     rule("itx.worker", [
@@ -65,14 +68,29 @@ async function main(): Promise<void> {
     rule("itx.voice", "itx.worker"),
   );
   const health = JSON.parse(JSON.stringify(await root.voice.health()));
+
+  // Warm both facet isolates under their new cache keys with ONE throwaway conversation, so the
+  // first real press does not pay the cold load (measured 2.3s vs 1.3s to accepted). Install-time
+  // only; the dial fails without a mic, which is fine — the isolates are what we are warming.
+  const warmPath = `/agents/voice/warm-${hash8(worker)}`;
+  const warmStartedAt = Date.now();
+  await root.voice.setupVoiceAgent({ streamPath: warmPath, activation: `warm-${hash8(worker)}` });
+  const warmupMs = Date.now() - warmStartedAt;
+  await root.cd(warmPath).append({
+    type: "events.iterate.com/voice-agent/conversation-ended",
+    payload: { activation: `warm-${hash8(worker)}`, reason: "install warm-up" },
+  });
   console.log(
     JSON.stringify(
       {
         project: PROJECT,
         voiceAgentKiB: Math.round(voiceAgent.length / 1024),
+        agentKiB: Math.round(agent.length / 1024),
         workerKiB: Math.round(worker.length / 1024),
         voiceAgentKey,
+        agentKey,
         workerKey,
+        warmupMs,
         health,
       },
       null,

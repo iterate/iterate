@@ -67,5 +67,6 @@ PROJECT=prj-voice pnpm exec tsx scripts/voice-board.ts --device home_assistant_v
 Measured 2026-09-16 on the deployed worker, fresh context per press: setup 0.26–0.38 s with
 `call-started` inside it, `conversation-accepted` 1.4–1.65 s from the press, the delegated "Two
 plus two is four" spoken from ~9 s. The HAVPE proof: press to active call 1.95–2.06 s, "Banana."
-and "The result is 132." spoken back. `--expect` matches the spoken transcript, and models say
-numbers in words.
+and "The result is 132." spoken back. `--expect` is a case-insensitive regular expression tested
+against the spoken transcript; models say numbers as digits or as words, so ask for either:
+`--expect "132|thirty-two"`.

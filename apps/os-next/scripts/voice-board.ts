@@ -11,6 +11,9 @@
 //   WORKER_BASE_URL=https://os.iterate2.com ADMIN_API_SECRET=… PROJECT=prj-voice \
 //   pnpm exec tsx scripts/voice-board.ts --device home_assistant_voice_preview_edition \
 //     --prompt "Hello there. Please reply with the single word banana." --expect banana
+//
+// `--expect` is a case-insensitive regular expression tested against what the board said back;
+// models say numbers as digits or as words, so ask for either: --expect "132|thirty-two".
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { adminCredentials, disposeSessions, session } from "../e2e/support/client.ts";
@@ -28,7 +31,7 @@ for (let i = 2; i < process.argv.length; i += 2) {
 const PROJECT = process.env.PROJECT || "prj-voice";
 const DEVICE = args.get("device") || "home_assistant_voice_preview_edition";
 const PROMPT = args.get("prompt") || "Hello there. Please reply with the single word banana.";
-const EXPECT = (args.get("expect") || "banana").toLowerCase();
+const EXPECT = new RegExp(args.get("expect") || "banana", "i");
 const T = "events.iterate.com/voice-agent/";
 
 type Health = Record<string, unknown> & {
@@ -120,7 +123,7 @@ async function main(): Promise<void> {
   let after: Health = before;
   for (let attempt = 0; attempt < 40; attempt++) {
     after = await healthWithRetry(kit);
-    if (saidBack.toLowerCase().includes(EXPECT) && answers > 0) break;
+    if (EXPECT.test(saidBack) && answers > 0) break;
     await sleep(1000);
   }
   await sleep(1500);
@@ -133,7 +136,7 @@ async function main(): Promise<void> {
   const framesSent = Number(after.framesSent ?? 0) - Number(before.framesSent ?? 0);
   const spkWrites = Number(after.spkWrites ?? 0) - Number(before.spkWrites ?? 0);
   const verdict =
-    framesSent > 0 && spkWrites > 0 && saidBack.toLowerCase().includes(EXPECT)
+    framesSent > 0 && spkWrites > 0 && EXPECT.test(saidBack)
       ? "PASS"
       : `FAIL: framesSent ${String(framesSent)}, spkWrites ${String(spkWrites)}, heard "${heardUs.trim()}", said "${saidBack.trim()}"`;
   console.log(
