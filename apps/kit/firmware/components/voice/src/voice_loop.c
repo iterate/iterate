@@ -1439,14 +1439,9 @@ static void start_voice_setup(struct voice_setup_ticket *ticket) {
     CAPNWEB_EXPRESSION_STRING,
     {.string = {ticket->activation, strlen(ticket->activation)}},
   };
-  const struct capnweb_expression visemes = {
-    CAPNWEB_EXPRESSION_BOOLEAN,
-    {.boolean = runtime.board->observe_answer != NULL},
-  };
   const struct capnweb_object_field fields[] = {
     {{"streamPath", sizeof("streamPath") - 1U}, &path},
     {{"activation", sizeof("activation") - 1U}, &activation},
-    {{"visemes", sizeof("visemes") - 1U}, &visemes},
   };
   const struct capnweb_expression args = {
     CAPNWEB_EXPRESSION_OBJECT,
