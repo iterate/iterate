@@ -41,6 +41,13 @@ export async function seedHeartbeat(options: { env: string; output: string }) {
     eventTypes: [eventType],
     timeoutMs: 30_000,
   });
+  const after = await fetch(new URL("/api/__internal/reset-storage", baseUrl), {
+    headers: { authorization: `Bearer ${secret}` },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!after.ok || (await after.json()).version !== deployment.version) {
+    throw new Error("Deployment changed during the heartbeat probe; reuse is not established");
+  }
   const result = {
     env: options.env,
     slug,
