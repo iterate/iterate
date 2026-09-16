@@ -68,6 +68,8 @@ const TestTelemetryAttempt = z.object({
 
 const TestTelemetryRecord = z.object({
   fullName: z.string(),
+  /** Bare title, shared with createFlake/createFailing records. */
+  leafName: z.string().optional(),
   moduleId: z.string(),
   testNumber: z.number().int().optional(),
   testLine: z.number().int().optional(),

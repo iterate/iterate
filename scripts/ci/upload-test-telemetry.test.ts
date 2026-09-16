@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -555,20 +555,29 @@ it("delivers completed runner errors without misclassifying their evidence as in
   rmSync(root, { recursive: true });
 });
 
-it("retains an explicit empty manifest when cancellation happens before a reporter starts", async () => {
-  const root = mkdtempSync(join(tmpdir(), "test-telemetry-cancelled-"));
+it.each([undefined, "unit", "preview"] as const)(
+  "retains an empty cancelled manifest without inventing a %s suite result before reporters start",
+  async (flakeSuites) => {
+    const root = mkdtempSync(join(tmpdir(), "test-telemetry-cancelled-"));
+    using _cleanup = { [Symbol.dispose]: () => rmSync(root, { recursive: true }) };
+    const artifactRoot = join(root, "ci-telemetry");
 
-  const result = await finalizeTestTelemetry({ scope: "job", artifactRoot: root, cancelled: true });
+    const result = await finalizeTestTelemetry({
+      scope: "job",
+      artifactRoot,
+      cancelled: true,
+      flakeSuites,
+    });
 
-  expect(result).toEqual({ artifacts: [], events: [] });
-  expect(sendPostHogEventsMock).not.toHaveBeenCalled();
-  const manifest = JSON.parse(readFileSync(join(root, "normalized", "manifest.json"), "utf8")) as {
-    artifactCount: number;
-    cancelled: boolean;
-  };
-  expect(manifest).toMatchObject({ artifactCount: 0, cancelled: true });
-  rmSync(root, { recursive: true });
-});
+    expect(result).toEqual({ artifacts: [], events: [] });
+    expect(sendPostHogEventsMock).not.toHaveBeenCalled();
+    const manifest = JSON.parse(
+      readFileSync(join(artifactRoot, "normalized", "manifest.json"), "utf8"),
+    );
+    expect(manifest).toMatchObject({ artifactCount: 0, cancelled: true });
+    expect(existsSync(join(root, "flake-records"))).toBe(false);
+  },
+);
 
 it("rejects duplicate artifact IDs instead of double-counting a retried upload", async () => {
   const root = mkdtempSync(join(tmpdir(), "test-telemetry-duplicates-"));

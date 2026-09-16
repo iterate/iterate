@@ -130,7 +130,8 @@ it("retains the preview slot when deployment fails after an app lane completes",
     environment: { TEST_TELEMETRY_ARTIFACT_DIR: artifactDirectory },
     headSha: "abcdef0123456789",
     operation: "deploy",
-    pullRequestNumber: 42,
+    pullRequestNumber: null,
+    branch: "feature-branch",
     runUrl: null,
   });
   telemetry.deployRunStarted();
@@ -152,10 +153,16 @@ it("retains the preview slot when deployment fails after an app lane completes",
     error: new Error("readiness failed"),
   });
 
-  expect(telemetry.artifactForTest().deployment).toMatchObject({
-    status: "failed",
-    previewSlot: "preview-3",
-    error: { message: "readiness failed" },
+  expect(telemetry.artifactForTest()).toMatchObject({
+    ci: {
+      branch: "feature-branch",
+      workflowRunId: expect.stringMatching(/^local-preview-nopr-/),
+    },
+    deployment: {
+      status: "failed",
+      previewSlot: "preview-3",
+      error: { message: "readiness failed" },
+    },
   });
   rmSync(artifactDirectory, { recursive: true });
 });

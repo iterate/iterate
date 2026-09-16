@@ -3,10 +3,10 @@ import { resolve } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { PreviewReport, type PreviewTarget } from "./target.ts";
+import { CloudflarePreviewAppEntry, CloudflarePreviewSlotDisplay } from "./state.ts";
 import {
-  CloudflarePreviewAppEntry,
   CloudflarePreviewAppSlug,
-  CloudflarePreviewSlotDisplay,
   cloudflarePreviewApps,
   cloudflarePreviewAdditionalTriggerPaths,
   cloudflarePreviewSharedPaths,
@@ -64,7 +64,7 @@ const {
   resolvePreviewTestTelemetryEnvironment,
   resolvePreviewTestWorkerVersionOverrides,
   selectExpiredLeasesForGc,
-  selectPreviewAppsForPullRequest,
+  selectPreviewAppsByDiff,
   selectPreviewAppsNeedingRetry,
   selectPreviewAppsForTesting,
   selectPreviewSlotDataOwners,
@@ -131,7 +131,7 @@ test("a requested slot move is not reported as a stolen lapsed lease", () => {
       requestedEnvironment: "preview-17",
     }),
   ).toBe(
-    "This PR requested preview-17 via preview_environment, so its slot changed from preview-6 to preview-17 at 2026-07-21T10:00:00.000Z. Everything below refers to the new slot.",
+    "This preview requested preview-17 via preview_environment, so its slot changed from preview-6 to preview-17 at 2026-07-21T10:00:00.000Z. Everything below refers to the new slot.",
   );
 });
 
@@ -479,16 +479,15 @@ describe("preview workflow scope", () => {
   });
 
   test("selects OS and its dependencies for a root Playwright-only change", async () => {
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       githubToken: "test-token",
       previousState: {
         apps: {},
         environmentConfigLease: null,
         notice: null,
       },
-      pullRequestBaseSha: "base-sha",
-      pullRequestHeadSha: "current-head",
-      pullRequestNumber: 2140,
+      baseSha: "base-sha",
+      headSha: "current-head",
       repositoryFullName: "iterate/iterate",
       fetchCompare: async () => ({
         status: "ahead",
@@ -504,16 +503,15 @@ describe("preview workflow scope", () => {
     // The cap truncates an ORDERED list, so a big diff loses its tail: 300
     // firmware files that select nothing, and the `apps/os/**` changes that
     // would have selected OS never appear in the response at all.
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       githubToken: "test-token",
       previousState: {
         apps: {},
         environmentConfigLease: null,
         notice: null,
       },
-      pullRequestBaseSha: "base-sha",
-      pullRequestHeadSha: "current-head",
-      pullRequestNumber: 2376,
+      baseSha: "base-sha",
+      headSha: "current-head",
       repositoryFullName: "iterate/iterate",
       fetchCompare: async () => ({
         status: "ahead",
@@ -529,16 +527,15 @@ describe("preview workflow scope", () => {
   });
 
   test("still selects by diff when the comparison is comfortably under the cap", async () => {
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       githubToken: "test-token",
       previousState: {
         apps: {},
         environmentConfigLease: null,
         notice: null,
       },
-      pullRequestBaseSha: "base-sha",
-      pullRequestHeadSha: "current-head",
-      pullRequestNumber: 2376,
+      baseSha: "base-sha",
+      headSha: "current-head",
       repositoryFullName: "iterate/iterate",
       fetchCompare: async () => ({
         status: "ahead",
@@ -900,15 +897,10 @@ describe("preview test commands", () => {
     expect(
       resolvePreviewTestTelemetryEnvironment({
         app: "os",
-        context: {
-          githubToken: "token",
-          pullRequestBaseSha: "base-sha",
-          pullRequestBody: "",
-          pullRequestHeadSha: "head-sha",
-          pullRequestHeadRef: "telemetry-branch",
+        run: {
+          headSha: "head-sha",
+          branch: "telemetry-branch",
           pullRequestNumber: 2237,
-          repositoryFullName: "iterate/iterate",
-          workflowRunUrl: "https://github.com/iterate/iterate/actions/runs/123",
         },
         previewSlot: "preview-19",
       }),
@@ -1121,7 +1113,7 @@ describe("preview compare base", () => {
           environmentConfigLease: null,
           notice: null,
         },
-        pullRequestBaseSha: "base-sha",
+        baseSha: "base-sha",
       }),
     ).toBe("base-sha");
   });
@@ -1142,7 +1134,7 @@ describe("preview compare base", () => {
           environmentConfigLease: null,
           notice: null,
         },
-        pullRequestBaseSha: "base-sha",
+        baseSha: "base-sha",
       }),
     ).toBe("previous-preview-sha");
   });
@@ -1175,7 +1167,7 @@ describe("preview OS container rollout", () => {
         nextSlotSlug: "preview-7",
         previousSlotSlug: "preview-7",
         previousState,
-        pullRequestHeadSha: currentHead,
+        headSha: currentHead,
         repositoryFullName: "iterate/iterate",
         fetchCompare: async (basehead) => {
           expect(basehead).toBe(`${previousHead}...${currentHead}`);
@@ -1199,7 +1191,7 @@ describe("preview OS container rollout", () => {
         nextSlotSlug: "preview-7",
         previousSlotSlug: "preview-7",
         previousState,
-        pullRequestHeadSha: currentHead,
+        headSha: currentHead,
         repositoryFullName: "iterate/iterate",
         fetchCompare: async () => ({
           status: "ahead",
@@ -1221,7 +1213,7 @@ describe("preview OS container rollout", () => {
         nextSlotSlug: "preview-7",
         previousSlotSlug: "preview-6",
         previousState,
-        pullRequestHeadSha: currentHead,
+        headSha: currentHead,
         repositoryFullName: "iterate/iterate",
         fetchCompare,
       }),
@@ -1315,9 +1307,8 @@ describe("preview deploy selection", () => {
   const currentHead = "current-head";
   const selectionInput = {
     githubToken: "test-token",
-    pullRequestBaseSha: "base-sha",
-    pullRequestHeadSha: currentHead,
-    pullRequestNumber: 1793,
+    baseSha: "base-sha",
+    headSha: currentHead,
     repositoryFullName: "iterate/iterate",
   };
 
@@ -1348,7 +1339,7 @@ describe("preview deploy selection", () => {
   };
 
   test("selects nothing when the head is unchanged, every app is green, and every app is serving", async () => {
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       ...selectionInput,
       previousState: {
         apps: { os: recordedApp("os", "OS"), auth: recordedApp("auth", "Auth") },
@@ -1363,7 +1354,7 @@ describe("preview deploy selection", () => {
   });
 
   test("selects OS and its dependencies for an iterate package-only change", async () => {
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       ...selectionInput,
       previousState: {
         apps: {},
@@ -1384,7 +1375,7 @@ describe("preview deploy selection", () => {
   });
 
   test("selects Docs for an auth-only change because OS Playwright reviews a seeded document", async () => {
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       ...selectionInput,
       previousState: {
         apps: {},
@@ -1402,7 +1393,7 @@ describe("preview deploy selection", () => {
   });
 
   test("selects the full fleet for an e2e policy-only change", async () => {
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       ...selectionInput,
       previousState: {
         apps: {},
@@ -1436,7 +1427,7 @@ describe("preview deploy selection", () => {
     // os worker, and dependency expansion brings auth (which re-seeds its
     // OAuth clients on deploy) along.
     const probedUrls: string[] = [];
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       ...selectionInput,
       previousState: {
         apps: {
@@ -1473,7 +1464,7 @@ describe("preview deploy selection", () => {
   test("retries failed apps even when the push's diff does not touch them", async () => {
     // A slot whose deploy failed at an old head must not stay wedged just
     // because the next push's diff selects other apps.
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       ...selectionInput,
       previousState: {
         apps: {
@@ -1503,7 +1494,7 @@ describe("preview deploy selection", () => {
   });
 
   test("deploys the full fleet when the compare 404s because a force-push rewrote the deployed head away", async () => {
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       ...selectionInput,
       previousState: {
         apps: {
@@ -1532,7 +1523,7 @@ describe("preview deploy selection", () => {
     // A diverged (or behind) compare diffs from the merge base and cannot see
     // changes that existed only on the deployed side — which the slot still
     // runs. An empty file list here must not read as "nothing affected".
-    const apps = await selectPreviewAppsForPullRequest({
+    const apps = await selectPreviewAppsByDiff({
       ...selectionInput,
       previousState: {
         apps: {
@@ -1557,7 +1548,7 @@ describe("preview deploy selection", () => {
 
   test("propagates non-404 compare failures instead of guessing a selection", async () => {
     await expect(
-      selectPreviewAppsForPullRequest({
+      selectPreviewAppsByDiff({
         ...selectionInput,
         previousState: {
           apps: {
@@ -2122,31 +2113,37 @@ const noopEraseSlotData = async () => {};
 describe("eraseHeldSlotAfterRun", () => {
   const { eraseHeldSlotAfterRun } = previewInternals;
 
-  test("erases the slot the semaphore attributes to this holder and keeps the lease", async () => {
-    const eraseSlotData = vi.fn(async () => {});
-    const semaphore = fakeSemaphore({
-      acquireSpecific: vi.fn(async () => fakeLease({ expiresAt: 1_800_000_000_000 })),
-      list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
-    });
+  test.each(["pr-1600", "main-preview"])(
+    "%s erases only its own slot and keeps the lease",
+    async (holder) => {
+      const eraseSlotData = vi.fn(async () => {});
+      const semaphore = fakeSemaphore({
+        acquireSpecific: vi.fn(async () => fakeLease({ holder, expiresAt: 1_800_000_000_000 })),
+        list: vi.fn(async () => [
+          leasedResource("preview-2", holder),
+          leasedResource("preview-3", "someone-else"),
+        ]),
+      });
 
-    const result = await eraseHeldSlotAfterRun({
-      context: { pullRequestBody: "", pullRequestHeadSha: "abc1234", pullRequestNumber: 1600 },
-      eraseSlotData,
-      ranHeadSha: "abc1234",
-      semaphore,
-    });
+      const result = await eraseHeldSlotAfterRun({
+        target: previewTarget(holder, "abc1234"),
+        eraseSlotData,
+        ranHeadSha: "abc1234",
+        semaphore,
+      });
 
-    expect(result).toEqual({ erased: true, reason: null, slug: "preview-2" });
-    expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
-      dopplerConfig: "preview_2",
-      slug: "preview-2",
-    });
-    // Adopting re-issues (renews) the lease; the PR still owns the slot.
-    expect(semaphore.acquireSpecific).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ slug: "preview-2", holder: "pr-1600", force: true }),
-    );
-    expect(semaphore.release).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({ erased: true, reason: null, slug: "preview-2" });
+      expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
+        dopplerConfig: "preview_2",
+        slug: "preview-2",
+      });
+      // Adopting re-issues (renews) the lease; the target still owns the slot.
+      expect(semaphore.acquireSpecific).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ slug: "preview-2", holder, force: true }),
+      );
+      expect(semaphore.release).not.toHaveBeenCalled();
+    },
+  );
 
   test("skips when the PR head moved on since the run — that push's run erases before it deploys", async () => {
     const eraseSlotData = vi.fn(async () => {});
@@ -2155,7 +2152,7 @@ describe("eraseHeldSlotAfterRun", () => {
     });
 
     const result = await eraseHeldSlotAfterRun({
-      context: { pullRequestBody: "", pullRequestHeadSha: "def5678", pullRequestNumber: 1600 },
+      target: previewTarget("pr-1600", "def5678"),
       eraseSlotData,
       ranHeadSha: "abc1234",
       semaphore,
@@ -2171,7 +2168,7 @@ describe("eraseHeldSlotAfterRun", () => {
     const semaphore = fakeSemaphore();
 
     const result = await eraseHeldSlotAfterRun({
-      context: { pullRequestBody: "", pullRequestHeadSha: "abc1234", pullRequestNumber: 1600 },
+      target: previewTarget("pr-1600", "abc1234"),
       eraseSlotData,
       ranHeadSha: null,
       semaphore,
@@ -2183,37 +2180,37 @@ describe("eraseHeldSlotAfterRun", () => {
 });
 
 describe("claimEnvironmentConfigLease", () => {
-  test("adopts (and thereby renews) the slot the semaphore attributes to this holder", async () => {
-    // The PR body's copy is never consulted for ownership: the semaphore says
-    // pr-1600 holds preview-2, so the claim re-issues that lease. The slot
-    // carries this PR's own deployment and is still erased: fresh on every
-    // deploy.
-    const eraseSlotData = vi.fn(async () => {});
-    const semaphore = fakeSemaphore({
-      acquireSpecific: vi.fn(async () => fakeLease({ expiresAt: 1_800_000_000_000 })),
-      list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
-    });
+  test.each(["pr-1600", "main-preview"])(
+    "%s renews its existing slot without a recorded state",
+    async (holder) => {
+      // Ownership survives between runs in Semaphore, even without PR body state.
+      const eraseSlotData = vi.fn(async () => {});
+      const semaphore = fakeSemaphore({
+        acquireSpecific: vi.fn(async () => fakeLease({ holder, expiresAt: 1_800_000_000_000 })),
+        list: vi.fn(async () => [leasedResource("preview-2", holder)]),
+      });
 
-    const lease = await claimEnvironmentConfigLease({
-      eraseSlotData,
-      holder: "pr-1600",
-      leaseMs: 1000,
-      recordedSlug: "preview-2",
-      semaphore,
-      waitTotalMs: 0,
-    });
+      const lease = await claimEnvironmentConfigLease({
+        eraseSlotData,
+        holder,
+        leaseMs: 1000,
+        recordedSlug: null,
+        semaphore,
+        waitTotalMs: 0,
+      });
 
-    expect(lease.slug).toBe("preview-2");
-    expect(lease.leasedUntil).toBe(1_800_000_000_000);
-    expect(semaphore.acquireSpecific).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ slug: "preview-2", holder: "pr-1600", force: true }),
-    );
-    expect(semaphore.acquire).not.toHaveBeenCalled();
-    expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
-      dopplerConfig: "preview_2",
-      slug: "preview-2",
-    });
-  });
+      expect(lease.slug).toBe("preview-2");
+      expect(lease.leasedUntil).toBe(1_800_000_000_000);
+      expect(semaphore.acquireSpecific).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ slug: "preview-2", holder, force: true }),
+      );
+      expect(semaphore.acquire).not.toHaveBeenCalled();
+      expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
+        dopplerConfig: "preview_2",
+        slug: "preview-2",
+      });
+    },
+  );
 
   test("a failed erase hands the slot back, and taking it back erases again — never a dirty deploy", async () => {
     // The adopt's erase dies half-way, so the lease is released. The recorded
@@ -3293,3 +3290,21 @@ describe("assignEnvironmentConfigLease", () => {
     );
   });
 });
+
+function previewTarget(holder: string, headSha: string): PreviewTarget {
+  return {
+    run: {
+      holder,
+      headSha,
+      branch: "test-branch",
+      githubToken: "test",
+      repositoryFullName: "iterate/iterate",
+      workflowRunUrl: null,
+      pullRequestNumber: null,
+    },
+    report: new PreviewReport(parseCloudflarePreviewState(""), async () => {}),
+    baseSha: null,
+    requestedEnvironment: null,
+    reviewProject: null,
+  };
+}

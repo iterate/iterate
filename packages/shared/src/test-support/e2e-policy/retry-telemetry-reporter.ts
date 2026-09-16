@@ -54,7 +54,11 @@ interface ReportedTestCase {
 
 interface ReportedTestModule {
   moduleId: string;
-  children: { allTests(): Iterable<ReportedTestCase> };
+  errors?(): unknown[];
+  children: {
+    allTests(): Iterable<ReportedTestCase>;
+    allSuites?(): Iterable<{ errors(): unknown[] }>;
+  };
   diagnostic?(): {
     environmentSetupDuration: number;
     prepareDuration: number;
@@ -164,7 +168,6 @@ export class RetryTelemetryReporter {
   ): Promise<void> {
     try {
       const tests: TestTelemetryRecord[] = [];
-      const reportedNames: (string | undefined)[] = [];
       const modules: ModuleTelemetryRecord[] = [];
       for (const testModule of testModules) {
         const moduleDiagnostic = testModule.diagnostic?.();
@@ -219,9 +222,9 @@ export class RetryTelemetryReporter {
             normalizeTestTelemetryError(error, "Unknown test-attempt error"),
           );
           const firstFailure = compactRetryFailure(errors[0]);
-          reportedNames.push(test.name);
           tests.push({
             fullName: test.fullName,
+            leafName: test.name,
             moduleId: testModule.moduleId,
             ...(test.location && {
               testLine: test.location.line,
@@ -285,24 +288,28 @@ export class RetryTelemetryReporter {
       // record it for the test-health dashboard, error sample included, so it
       // can be adopted into createFlake (see flake-record.ts). The bare test
       // name keys the record so a later createFlake wrap keeps the same row.
-      for (const [index, telemetryRecord] of tests.entries()) {
-        const unknownFlake = unknownFlakeRecordFromTelemetry({
-          ...telemetryRecord,
-          leafName: reportedNames[index],
-        });
+      for (const telemetryRecord of tests) {
+        const unknownFlake = unknownFlakeRecordFromTelemetry(telemetryRecord);
         if (unknownFlake) await appendFlakeRecord(unknownFlake);
       }
       const retried = tests.filter((test) => test.retryCount > 0);
-      const unhandled = unhandledErrors.map((error) =>
-        normalizeTestTelemetryError(error, "Unknown unhandled Vitest error"),
-      );
+      // Vitest keeps import and suite-hook errors on the module/suite, not
+      // in unhandledErrors or the individual test results. Without these a
+      // failed file beside a passing file looks like complete clean coverage.
+      const runErrors = [
+        ...unhandledErrors,
+        ...testModules.flatMap((module) => [
+          ...(module.errors?.() || []),
+          ...Array.from(module.children.allSuites?.() || []).flatMap((suite) => suite.errors()),
+        ]),
+      ].map((error) => normalizeTestTelemetryError(error, "Unknown Vitest run error"));
 
       const finishedAtMs = Date.now();
       const status =
         reason === "interrupted"
           ? "interrupted"
           : reason === "failed" ||
-              unhandled.length > 0 ||
+              runErrors.length > 0 ||
               tests.some((test) => test.state === "failed")
             ? "failed"
             : "passed";
@@ -318,7 +325,7 @@ export class RetryTelemetryReporter {
           startedAt: new Date(this.runStartedAtMs).toISOString(),
           finishedAt: new Date(finishedAtMs).toISOString(),
           durationMs: Math.max(0, finishedAtMs - this.runStartedAtMs),
-          ...(unhandled[0] && { error: unhandled[0] }),
+          ...(runErrors[0] && { error: runErrors[0] }),
         },
         lanes: [
           {
@@ -327,7 +334,7 @@ export class RetryTelemetryReporter {
             durationMs: Math.max(0, finishedAtMs - this.runStartedAtMs),
             testCount: tests.length,
             retryCount: tests.reduce((total, test) => total + test.retryCount, 0),
-            collectionErrors: unhandled.map((error) => error.message),
+            collectionErrors: runErrors.map((error) => error.message),
           },
         ],
         tests,

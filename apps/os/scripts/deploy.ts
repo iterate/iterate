@@ -360,8 +360,8 @@ export default async function deploy(
 
       // Sha-pin the template's iterate/iterate pkg.pr.new specs so project
       // seeds and every dynamic build install exact immutable tarballs
-      // instead of the moving @main/@<pr> refs. Preview deploys pass their PR
-      // head sha (scripts/preview/preview.ts) so e2e exercises the branch
+      // instead of the moving @main/@<pr> refs. Preview deploys pass their tested
+      // commit sha (scripts/preview/preview.ts) so e2e exercises the branch
       // tip; prd deploys pass their own main commit (deploy-os.yml) so live
       // config repos build in lockstep with the deployed platform — a
       // mutable @main is also CACHED by the dynamic worker host, which left
@@ -372,8 +372,7 @@ export default async function deploy(
       // every push (PRs and main alike), and the pinned URLs are awaited as
       // deployment prerequisites below. Unset for dev/local deploys, where no
       // sha build exists for uncommitted state.
-      const pinnedHeadSha =
-        process.env.PREVIEW_PULL_REQUEST_HEAD_SHA || process.env.PLATFORM_DEPLOY_HEAD_SHA;
+      const pinnedHeadSha = process.env.PLATFORM_DEPLOY_HEAD_SHA;
       if (pinnedHeadSha) {
         secretValues.APP_CONFIG_ITERATE_REPO_PKG_REF = pinnedHeadSha;
       }

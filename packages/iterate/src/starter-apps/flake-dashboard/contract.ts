@@ -1,5 +1,8 @@
+import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 import { z } from "zod";
 import { defineProcessorContract } from "../../processors/index.ts";
+
+export { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 
 export const flakeEventTypes = {
   created: "events.iterate.com/flakes/created",
@@ -56,7 +59,15 @@ const FlakeRunRecorded = z.object({
   suite: z.string().min(1).max(200),
   branch: z.string().min(1).max(500),
   commit: z.string().min(1).max(100),
-  records: z.array(FlakeRecord).min(1).max(10_000),
+  records: z.array(FlakeRecord).max(10_000),
+  // Historical events have records only; they cannot certify a complete suite.
+  summary: FlakeSuiteSummary.optional(),
+});
+
+const MainSuiteRun = z.object({
+  runId: z.string(),
+  commit: z.string(),
+  summary: FlakeSuiteSummary,
 });
 
 export const FlakeTransition = z.enum(["unwrap", "switch-to-failing", "unwrap-failing"]);
@@ -112,17 +123,15 @@ const TrackedTest = z.object({
    */
   lastSeenOffset: z.record(z.string(), StreamOffset).default({}),
   /**
-   * The last (up to) 10 recorded outcomes on any branch, oldest first — the
+   * The latest (up to) 10 outcomes on any branch, ordered by test time — the
    * render's emoji streak bar, each entry carrying the commit that produced
    * it so the square can link straight to that commit's checks. All branches,
-   * like the counts: the specs and preview-e2e suites only run on pull
-   * requests, so a default-branch-only bar would stay empty forever for the
-   * suites where most flakes live. The numeric defaultBranchStreak below
-   * stays main-only and carries the transition-threshold counts past what 10
-   * entries can show.
+   * like the counts, for debugging PR failures too. The numeric
+   * defaultBranchStreak below stays main-only and carries the
+   * transition-threshold counts past what 10 entries can show.
    */
   recent: z
-    .array(z.object({ outcome: FlakeOutcome, commit: z.string().min(1).max(100) }))
+    .array(z.object({ outcome: FlakeOutcome, commit: z.string().min(1).max(100), at: z.string() }))
     .max(10)
     .default([]),
   /** Keyed by outcome value ("pass", "pinned-fail", …). */
@@ -140,6 +149,8 @@ const TrackedTest = z.object({
   firstRecordedAt: z.string(),
   lastRecordedAt: z.string(),
   defaultBranchStreak: DefaultBranchStreak.nullable().default(null),
+  /** Older retry evidence cannot undo a wrapper observed on main in this suite. */
+  lastMainWrapperAt: z.record(z.string(), z.string()).default({}),
   /**
    * One entry per proposal already made, keyed `${transition}:${streak.firstAt}`
    * — a streak proposes at most once however long it grows.
@@ -151,14 +162,45 @@ export const FlakeDashboardState = z.object({
   birthCertificate: z.object({ config: FlakeDashboardConfig }).nullable().default(null),
   tests: z.record(z.string(), TrackedTest).default({}),
   /**
-   * Per suite, the offsets of its newest (up to 3) run-recorded events across
-   * ALL branches, oldest first — the reference window for retiring absent
-   * tests. All branches because the specs and preview-e2e suites only ever
-   * run on pull requests (preview.yml has no push trigger), so a
-   * default-branch reference point would never exist for them and their rows
-   * could never retire. A window of 3 rather than the single latest run so
-   * one PR push that deletes or renames a test — or a partial, push-cancelled
-   * run — cannot hide a row repo-wide by itself.
+   * Main-only unknowns, isolated by suite. Healthy rows are hidden, retaining
+   * their streak so late failures can correct an apparent recovery.
+   */
+  unknownFlakes: z
+    .record(
+      z.string(),
+      z.record(
+        z.string(),
+        z.object({
+          record: FlakeRecord,
+          passStreak: z.number().int().nonnegative(),
+          /** Newest run that actually contained this test, including skips. */
+          lastRunAt: z.string(),
+          recent: z
+            .array(z.object({ outcome: FlakeOutcome, commit: z.string(), at: z.string() }))
+            .max(10),
+        }),
+      ),
+    )
+    .default({}),
+  mainRuns: z
+    .record(
+      z.string(),
+      z.object({
+        latest: MainSuiteRun,
+        complete: MainSuiteRun.nullable(),
+        // Keep the last full test list even if a newer legacy summary has only counts.
+        inventory: z
+          .object({ startedAt: z.iso.datetime(), names: z.array(z.string()) })
+          .nullable()
+          .default(null),
+      }),
+    )
+    .default({}),
+  /**
+   * The newest three ingested results across all branches retire absent
+   * tracked tests. This preserves visibility during partial PR runs. Unknown
+   * flakes retire after 20 main passes, wrapper adoption, or proven absence
+   * from their suite's full main inventory.
    */
   suites: z
     .record(z.string(), z.object({ recentRunOffsets: z.array(StreamOffset).max(3).default([]) }))
@@ -180,14 +222,14 @@ export const FlakeDashboardState = z.object({
 });
 
 /**
- * Thresholds for the data-provable lifecycle transitions (grilled decision:
- * unwrap after 50 consecutive default-branch passes over >=5 days; propose
- * `createFailing` after 25 consecutive matched failures over >=2 days).
+ * Suggest unwrapping createFlake after 20 consecutive main passes, regardless
+ * of elapsed time. Unknown flakes retire automatically at the same count.
+ * Propose createFailing after 25 matched failures over >=2 days.
  * Tunable constants. Sentinel tests are excluded from proposals entirely —
  * they are designed to flake.
  */
 export const flakeTransitionThresholds = {
-  unwrap: { runs: 50, minSpanMs: 5 * 24 * 60 * 60 * 1000 },
+  unwrap: { runs: 20, minSpanMs: 0 },
   "switch-to-failing": { runs: 25, minSpanMs: 2 * 24 * 60 * 60 * 1000 },
   // A pin that keeps passing unexpectedly looks fixed: propose deleting the
   // createFailing wrapper after a sustained streak.
@@ -225,7 +267,7 @@ export const CheckRunWebhookEvent = z.object({
 
 export const FlakeDashboardProcessorContract = defineProcessorContract({
   slug: "flake-dashboard",
-  version: "0.5.0",
+  version: "0.8.0",
   description:
     "Folds createFlake test outcomes reported by CI into per-test flake stats, renders the GitHub 'Flake dashboard' issue, and proposes data-provable lifecycle transitions.",
   stateSchema: FlakeDashboardState,
