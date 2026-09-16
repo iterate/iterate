@@ -1,0 +1,76 @@
+{
+  "observedEnvironment": "preview_15",
+  "workerVersion": "2c6c84e7-f30a-4c69-955a-11233c932ef9",
+  "recoveryRun": "7zzc4tr2fv",
+  "recoveryWorkflow": "8jp447qqgm",
+  "sweep": {
+    "startedAt": "2026-09-16T22:54:20.808Z",
+    "finishedAt": "2026-09-16T23:01:58.704Z",
+    "attempted": 6339,
+    "resetSucceeded": 6322,
+    "requestFailures": 17,
+    "failureClasses": {
+      "SchedulerDurableObject": 11,
+      "StreamDurableObject": 6
+    }
+  },
+  "observation": {
+    "start": "2026-09-16T23:02:00Z",
+    "end": "2026-09-16T23:04:49.5Z",
+    "newProductCallsFromExperiment": false,
+    "nativeDoInvocations": 256,
+    "idsPreviouslyResetSuccessfully": 21,
+    "nativeAlarms": 97
+  },
+  "selectedSuccessfulResets": [
+    {
+      "objectId": "c3d6ea5bcc6652af7458365af7386cc94ac0577151333a682ddb0e1b8da1bee3",
+      "class": "StreamDurableObject",
+      "resetCompletedAt": ["2026-09-16T23:00:49.709000+00:00"],
+      "laterAlarmStarts": [
+        "2026-09-16T23:02:05.447000+00:00",
+        "2026-09-16T23:02:21.637000+00:00",
+        "2026-09-16T23:02:42.633000+00:00",
+        "2026-09-16T23:02:42.666000+00:00",
+        "2026-09-16T23:03:21.246000+00:00",
+        "2026-09-16T23:03:42.292000+00:00",
+        "2026-09-16T23:03:54.741000+00:00",
+        "2026-09-16T23:04:15.733000+00:00",
+        "2026-09-16T23:04:15.760000+00:00",
+        "2026-09-16T23:04:36.736000+00:00",
+        "2026-09-16T23:04:36.761000+00:00"
+      ]
+    },
+    {
+      "objectId": "7f62bbcdac0bceca51c3057048bbc3c41e6c5fb731d7fd524908e240a7da6af2",
+      "class": "WorkerBuildCoordinatorDurableObject",
+      "resetCompletedAt": ["2026-09-16T22:57:05.221000+00:00"],
+      "laterAlarmStarts": [
+        "2026-09-16T23:02:46.810000+00:00",
+        "2026-09-16T23:02:48.620000+00:00",
+        "2026-09-16T23:03:22.052000+00:00",
+        "2026-09-16T23:03:44.981000+00:00",
+        "2026-09-16T23:03:46.941000+00:00",
+        "2026-09-16T23:03:58.481000+00:00"
+      ]
+    },
+    {
+      "objectId": "0ac4ff67854aece669f4530408332252aed71b42515f9a2aca17d79fe4824359",
+      "class": "StreamDurableObject",
+      "resetCompletedAt": ["2026-09-16T22:58:19.339000+00:00"],
+      "laterAlarmStarts": [
+        "2026-09-16T23:03:10.397000+00:00",
+        "2026-09-16T23:03:31.429000+00:00",
+        "2026-09-16T23:03:52.431000+00:00",
+        "2026-09-16T23:04:13.433000+00:00",
+        "2026-09-16T23:04:34.434000+00:00"
+      ]
+    }
+  ],
+  "limits": [
+    "Native traces are sampled; these are observed events, not a full inventory.",
+    "Reset completion timestamps come from the deliberate post-sync abort exception, corroborated by reset:true in the CI artifact.",
+    "Failed or unseen actors may have sent new work to successfully reset objects.",
+    "This is not evidence that a complete simultaneous wipe would resume."
+  ]
+}

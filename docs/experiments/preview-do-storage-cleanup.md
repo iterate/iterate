@@ -127,6 +127,12 @@ the original slot's native trace recorded 256 DO invocations on 21 IDs whose
 resets had returned success. This included 97 native alarms. None of those
 observed IDs were among the 17 failed resets or absent from the inventory.
 
+![Captured reset completions followed by later alarms](preview-do-storage-cleanup-alarms.png)
+
+Three examples with captured reset-completion timestamps, from the 21 affected
+IDs. [Selected event data](preview-do-storage-cleanup-evidence.json) includes
+the timestamps and sampling limits.
+
 This proves successful individual wipes did not leave those objects quiet.
 Failed or unseen actors may have sent them new work; the data does not show
 that a perfectly complete simultaneous wipe would resume. Cold constructors,
