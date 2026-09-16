@@ -93,11 +93,11 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
   return DurableObjectNameCodec.parse(name);
 }
 
-/** How long a context's PINS stay unused — no facet call finished, no borrowed stub called, no
- *  library connection used — before the alarm aborts its idle facets, returns its borrowed rpc stubs
- *  and closes its connections so the actor can hibernate. THE PINS CARRY THE CLOCK: nothing else
- *  moves it — not an append, not a request, not a delivery, not a loaded worker's loopback — so an
- *  incarnation whose only work was its own wake record ends holding nothing and arming nothing. */
+/** How long a context's PINS stay unused — no borrowed rpc stub called, no library connection
+ *  used — before the alarm returns the stubs, closes the connections and aborts every live facet so
+ *  the actor can hibernate. THE PINS CARRY THE CLOCK: nothing else moves it — not an append, not a
+ *  request, not a delivery, not a facet call, not a loaded worker's loopback — so an incarnation
+ *  whose only work was its own wake record ends holding nothing and arming nothing. */
 const IDLE_QUIESCE_AFTER_MS = 60_000;
 /** How long one facet call may take before the facet is aborted (a call that never answers would
  *  hold the quiesce, and with it this actor, forever). */
@@ -580,7 +580,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       durableHead: this.#stream.highestDurableOffset(),
       lastPinUseMs: this.#lastPinUseMs(),
       facetWorkInFlight: this.#facetWorkInFlight,
-      liveFacets: [...this.#liveFacetNames.keys()].slice(0, 32),
+      liveFacets: [...this.#liveFacetNames].slice(0, 32),
       borrowedRpcStubs: this.#rpcStubs.hasBorrowedRpcStubs(),
       openLibraryConnections: this.#library.hasOpenConnections(),
     };
@@ -630,14 +630,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** When the library last made a call — a connection opening, or a call through one. */
   #libraryLastUsedMs = 0;
 
-  /** THE PINS' CLOCK: when a pin was last used — a facet call finished (each live facet keeps its
-   *  own), a borrowed stub called, a library connection used; a facet call IN FLIGHT is in use now.
-   *  Null with nothing pinned — no live facet, no borrowed stub, no library connection — so a bare
-   *  probe arms nothing (one storage write and one billed wake for nothing). */
+  /** THE PINS' CLOCK: when a pin was last used — a borrowed stub called, a library connection
+   *  used. Null with nothing pinned, so a bare probe arms nothing (one storage write and one billed
+   *  wake for nothing). A FACET IS NOT A PIN: on the edge a live facet does not keep the actor
+   *  resident — it hibernates within seconds like any other, and the facet dies with it — so nothing
+   *  arms an alarm for one. An alarm for a pin that dies with the actor could only construct the
+   *  next incarnation, whose wake record would materialize the facet again: a wake per quiet period. */
   #lastPinUseMs(): number | null {
     const lastUsedMs = Math.max(
-      ...this.#liveFacetNames.values(),
-      this.#facetWorkInFlight > 0 ? Date.now() : -Infinity,
       this.#rpcStubs.hasBorrowedRpcStubs() ? this.#rpcStubsLastUsedMs : -Infinity,
       this.#library.hasOpenConnections() ? this.#libraryLastUsedMs : -Infinity,
     );
@@ -645,7 +645,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** THE IDLE DEADLINE: the end of the pins' quiet period, rounded UP to the next 10 s: a flood of
-   *  facet calls on a pinned context then moves the alarm six times a minute at most (every
+   *  stub calls on a pinned context then moves the alarm six times a minute at most (every
    *  `setAlarm` is a billed write). */
   #idleDeadlineAt(): number | null {
     const lastPinUseMs = this.#lastPinUseMs();
@@ -653,10 +653,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return Math.ceil((lastPinUseMs + IDLE_QUIESCE_AFTER_MS) / 10_000) * 10_000;
   }
 
-  /** EVERY facet materialized this incarnation, with when its last call finished — the set the
-   *  quiesce alarm aborts so no LIVE facet pins this actor awake. In memory on purpose: facets die
-   *  with the incarnation, and a fresh call re-materializes from the durable startup memo. */
-  readonly #liveFacetNames = new Map<string, number>();
+  /** EVERY facet materialized this incarnation — what a release aborts. In memory on purpose:
+   *  facets die with the incarnation, and a fresh call re-materializes from the durable startup memo. */
+  readonly #liveFacetNames = new Set<string>();
   /** Each facet's startup memo (`facet:<name>` in kv), read ONCE per incarnation: every push then
    *  hands the loader the SAME object, so its identity-keyed content hash (worker-loader.ts) runs once
    *  per source per incarnation, not once per push. */
@@ -670,7 +669,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  owed deliveries, the idle quiesce. Then the next deadline is derived from what is left. */
   async alarm(): Promise<void> {
     const { armedAt: fired } = this.#alarms.snapshot();
-    const pinnedAtStart = this.#lastPinUseMs() !== null;
     try {
       await this.#alarms.pass(async () => {
         // An incarnation the alarm woke records its wake HERE, inside the hold — the one door that
@@ -750,38 +748,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // the deadline it leaves is the one derived below. A cursor delivery pins nothing local (a
         // facet it calls into is counted by #facetWorkInFlight), so the quiesce needs no count of its own.
         await this.#subscriptionDelivery.deliverEveryCursorSubscription();
-        // …and the pushes this pass caused (its own wake record's, to every "*" facet): a facet is
-        // judged below only once its push has landed, never released mid-push.
-        await this.#subscriptionDelivery.pushesSettled();
         // THE QUIET BOUNDARY (the #6800 quiesce): nothing pinned, nothing to release; a pin used
-        // within the quiet period (a facet call in flight counts as used now — the facet watchdog
-        // bounds it, and its finish moves the clock) keeps everything, and the next deadline derived
-        // below is a full quiet period after that use. Against the fired time, not just now: a clock
-        // a hair behind the alarm must not keep a pin one more period.
-        // A PASS THAT BEGAN WITH NOTHING PINNED ENDS WITH NOTHING PINNED, unless durable work is due
-        // within the quiet period: what it pinned, its own deliveries pinned (a "*" facet materialized
-        // for this incarnation's wake record), and an idle alarm for that would find this actor gone
-        // — on the edge a live facet does not keep an actor resident, it hibernates within seconds
-        // like any other — and construct the next incarnation to do the same: a wake per quiet period,
-        // forever. Released now, the next request re-materializes the facet from its checkpoint, as
-        // a hibernation would have made it do anyway.
+        // within the quiet period keeps everything, and the next deadline derived below is a full
+        // quiet period after that use. Against the fired time, not just now: a clock a hair behind
+        // the alarm must not keep a pin one more period.
         const lastPinUseMs = this.#lastPinUseMs();
         if (lastPinUseMs === null) return;
-        const boundaryMs = Math.max(Date.now(), fired ?? 0);
-        const nextDurableAt = Math.min(
-          this.#stream.nextScheduledAppendAt() ?? Infinity,
-          this.#subscriptionDelivery.deadlines()[0]?.at ?? Infinity,
-        );
-        const endsReleased = !pinnedAtStart && nextDurableAt > boundaryMs + IDLE_QUIESCE_AFTER_MS;
-        if (!endsReleased && boundaryMs - lastPinUseMs < IDLE_QUIESCE_AFTER_MS) return;
-        if (this.#facetWorkInFlight > 0) return; // a call still in flight: its finish moves the clock
-        for (const facetName of this.#liveFacetNames.keys())
-          this.#abortFacetIfRunning(facetName, "idle quiesce");
-        this.#liveFacetNames.clear(); // aborted facets re-materialize on their next call
-        // Borrowed stubs and the library's live connections pin this actor the same way: returned
-        // and released here, borrowed and reopened on use.
-        this.#rpcStubs.returnBorrowedRpcStubs();
-        this.#library.releaseConnections();
+        if (Math.max(Date.now(), fired ?? 0) - lastPinUseMs < IDLE_QUIESCE_AFTER_MS) return;
+        this.#releasePins();
         this.#traceAlarm("quiesce", { before: fired });
       });
     } catch (error) {
@@ -789,6 +763,30 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       throw error;
     }
     this.#traceAlarm("alarm-pass", { before: fired });
+  }
+
+  /** THE RELEASE: every borrowed stub returned, every library connection closed — the pins — and
+   *  every live facet aborted: where the runtime keeps a facet-pinned actor resident (workerd's
+   *  harness, workerd#6800) this is what un-pins it, and on the edge the facet would have died with
+   *  the actor anyway. Never a facet mid-call (a reduce aborted midway is the stall its gap repair
+   *  would have to heal): with a call in flight the facets wait for the next release, or the actor's
+   *  end. Aborted facets re-materialize from their startup memo on their next call. */
+  #releasePins(): void {
+    if (this.#facetWorkInFlight === 0) {
+      for (const facetName of this.#liveFacetNames)
+        this.#abortFacetIfRunning(facetName, "idle quiesce");
+      this.#liveFacetNames.clear();
+    }
+    this.#rpcStubs.returnBorrowedRpcStubs();
+    this.#library.releaseConnections();
+  }
+
+  /** DO-only, for the workers lane: the release step, run directly. A facet arms no alarm, and
+   *  workerd keeps a facet-pinned actor resident, so a test that must evict a facet-hosting context
+   *  releases first (`quiesce` in __workers-tests__/support.ts). */
+  releasePins(): void {
+    this.#releasePins();
+    this.#alarms.reconcile(); // what a pass end does: nothing pinned, nothing armed for it
   }
 
   // ── FACETS: loaded DurableObject classes hosted here ──
@@ -911,7 +909,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           throw error;
         }
       });
-      this.#liveFacetNames.set(name, Date.now()); // live from here
+      this.#liveFacetNames.add(name); // live from here
       // The call walks the steps receiver-preservingly — a `.fetch(request)` included (plain HTTP;
       // the upgrade was refused above). The watchdog (FACET_CALL_WATCHDOG_MS) aborts a facet that
       // never answers: its pending call rejects, the counter drains, the next call re-materializes it.
@@ -956,10 +954,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       return result;
     } finally {
       this.#facetWorkInFlight--;
-      // A finished call is the pin's use: a fresh quiet period from now (a facet aborted or never
-      // started is no pin, and stamps nothing).
-      if (this.#liveFacetNames.has(name)) this.#liveFacetNames.set(name, Date.now());
-      this.#alarms.reconcile();
     }
   }
 

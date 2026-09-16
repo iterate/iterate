@@ -2080,10 +2080,11 @@ the DO. Losing the borrowed stubs at idle costs exactly one page on the next cal
 
 ### The idle quiesce
 
-Three things pin a context awake: a materialized facet, a borrowed stub, a held library connection.
-The pins carry the clock: sixty seconds after the last use of one — a facet call finishing, a
-borrowed stub called, a library connection used; a request, an append or a delivery moves nothing —
-the alarm aborts every idle facet, returns every borrowed stub and releases every connection, so the
+Two things pin a context awake: a borrowed stub and a held library connection. A materialized facet
+does not — on the edge it does not keep the actor resident and dies with it, so nothing arms an alarm
+for one. The pins carry the clock: sixty seconds after the last use of one — a borrowed stub called,
+a library connection used; a request, an append, a delivery or a facet call moves nothing — the
+alarm returns every borrowed stub, releases every connection and aborts every live facet, so the
 actor can hibernate:
 
 ```ts
@@ -2091,9 +2092,9 @@ actor can hibernate:
 const IDLE_QUIESCE_AFTER_MS = 60_000;
 async alarm(): Promise<void> {
   await this.#subscriptionDelivery.deliverEveryCursorSubscription(); // 1. due retries — AWAITED, so the deadline it leaves is the one derived after
-  const lastPinUseMs = this.#lastPinUseMs(); // null with nothing pinned; a facet call in flight counts as used now
+  const lastPinUseMs = this.#lastPinUseMs(); // null with nothing pinned (a borrowed stub, a library connection)
   if (lastPinUseMs !== null && Date.now() - lastPinUseMs >= IDLE_QUIESCE_AFTER_MS) { // 2. the idle QUIESCE
-    for (const facetName of this.#liveFacetNames.keys()) this.#abortFacetIfRunning(facetName, "idle quiesce");
+    for (const facetName of this.#liveFacetNames) this.#abortFacetIfRunning(facetName, "idle quiesce");
     this.#liveFacetNames.clear(); // aborted facets re-materialize on their next call
     this.#rpcStubs.returnBorrowedRpcStubs();
     this.#library.releaseConnections();
