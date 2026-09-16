@@ -109,8 +109,12 @@ only a pin's own use keeps the idle deadline. The alarm handler records the wake
 (`stream/woken { reason: "alarm" }`, inside its pass — workerd hides a firing alarm from `getAlarm()`
 for the whole run, so no constructor can tell; every other door records `"request"`), and its
 delivery acks within the pass, so an alarm wake that finds nothing else owed writes no alarm at all.
-The one accepted cost: a `*` row whose target is a facet materializes it for the wake, and one idle
-alarm 60 s later, in the same incarnation, releases it.
+A pass that began with nothing pinned ends with nothing pinned, unless durable work is due within the
+quiet period: what it pinned, its own deliveries pinned (a `*` facet materialized for the wake record),
+and an idle alarm for that would find the actor gone — on the edge a live facet does not keep an actor
+resident; it hibernates within seconds like any other — and construct the next incarnation to do the
+same, a wake per quiet period. So an alarm-woken incarnation releases what its own pass materialized
+and leaves no alarm; the next request re-materializes the facet from its checkpoint.
 
 One hold keeps the alarm from being moved under a handler: nothing is written while `alarm()` runs —
 its alarm stays stored, so a pass that throws is retried by the runtime (2s·2ⁿ, six tries), and a
