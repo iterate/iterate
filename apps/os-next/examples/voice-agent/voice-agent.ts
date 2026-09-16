@@ -199,7 +199,21 @@ const VoiceState = z.object({
     })
     .nullable()
     .default(null),
+  /** How the last call ended, for the live view a browser renders after hanging up. */
+  lastEnd: z.object({ activation: Activation, reason: z.string() }).nullable().default(null),
 });
+
+/** What a client renders live (`itx.facets.get('voice-agent').liveSnapshot()` seeds it, the
+ * `live-state/changed` deltas keep it current): the fold plus the two runtime facts a page wants. */
+export type VoiceLiveView = {
+  /** No call; a call whose provider dial is not ready; a live call; the last call's aftermath. */
+  phase: "idle" | "dialing" | "live" | "ended";
+  activation: string | null;
+  /** The provider is speaking right now (the answer's frames are going to the device). */
+  answering: boolean;
+  transcript: TranscriptTurn[];
+  lastEnd: { activation: string; reason: string } | null;
+};
 
 const VoiceAgentContract = defineProcessorContract({
   slug: "voice-agent",
@@ -520,7 +534,11 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
 
       case "events.iterate.com/voice-agent/conversation-ended":
         return state.call?.activation === event.payload.activation
-          ? { ...state, call: null }
+          ? {
+              ...state,
+              call: null,
+              lastEnd: { activation: event.payload.activation, reason: event.payload.reason },
+            }
           : state;
 
       case "events.iterate.com/voice-agent/utterance-transcript":
@@ -546,6 +564,25 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
       default:
         return state;
     }
+  }
+
+  /** The engine publishes this after every batch — twenty microphone batches a second during a
+   * call, so the runtime facts (dial ready, answer speaking) reach the page within a frame. */
+  projectLiveState(state: VoiceState): VoiceLiveView {
+    const dial = this.#dial;
+    return {
+      phase: state.call
+        ? dial?.activation === state.call.activation && dial.ready
+          ? "live"
+          : "dialing"
+        : state.lastEnd
+          ? "ended"
+          : "idle",
+      activation: state.call?.activation ?? null,
+      answering: Boolean(dial?.ready) && dial?.answer.phase === "speaking",
+      transcript: state.transcript,
+      lastEnd: state.lastEnd,
+    };
   }
 
   processEvent(args: VoiceArgs): undefined {
