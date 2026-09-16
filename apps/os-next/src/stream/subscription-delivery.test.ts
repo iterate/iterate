@@ -877,13 +877,15 @@ describe("the delivery loop's deadline on the DO's alarm (`deadlines()`)", () =>
     expect(second.delivery.deadlines()).toMatchObject([{ name: "s", at: failed.nextAttemptAtMs }]);
   });
 
-  test("a DUE ladder time is no claim — the pass acts on it; one the pass could not act on never re-arms an alarm into the same state", async () => {
-    let refuse = true;
+  test("a due retry stays a claim until a pass acts on it, and a pass that finds the row held moves the retry along with the insurance", async () => {
+    let mode: "throw" | "park" = "throw";
+    const parked: (() => void)[] = [];
     const rig = incarnation((printed) =>
       printed === "itx.sink"
         ? {
             push: () => {
-              if (refuse) throw new Error("sink down");
+              if (mode === "throw") throw new Error("sink down");
+              return new Promise<void>((resolve) => parked.push(resolve));
             },
           }
         : undefined,
@@ -897,24 +899,51 @@ describe("the delivery loop's deadline on the DO's alarm (`deadlines()`)", () =>
     rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
     await settled();
     const failed = rig.delivery.cursor("s")!;
-    expect(rig.delivery.deadlines()).toMatchObject([{ at: failed.nextAttemptAtMs }]); // ahead: a claim
+    expect(rig.delivery.deadlines()).toMatchObject([{ at: failed.nextAttemptAtMs }]);
     vi.useFakeTimers({ now: failed.nextAttemptAtMs! + 1, toFake: ["Date"] });
     try {
-      expect(rig.delivery.deadlines()).toEqual([]); // due: the pass's, not the alarm's
-      await rig.pass(); // the retry fails again → a new rung, ahead again
-      const again = rig.delivery.cursor("s")!;
-      expect(again.attempt).toBe(2);
-      expect(rig.delivery.deadlines()).toMatchObject([{ at: again.nextAttemptAtMs }]);
-      expect(rig.alarms.at(-1)).toBe(again.nextAttemptAtMs);
-      refuse = false;
-      vi.setSystemTime(again.nextAttemptAtMs! + 1);
-      await rig.pass(); // acked: caught up, nothing claimed — and the spent alarm needs no delete
+      // Due, and still the claim: nothing that reconciles meanwhile may delete the alarm under it.
+      expect(rig.delivery.deadlines()).toMatchObject([{ at: failed.nextAttemptAtMs }]);
+      mode = "park";
+      rig.stream.append({ type: "demo/ping", payload: { n: 2 } }); // the retry starts, and parks
+      await settled();
+      expect(rig.delivery.deadlines()[0]).toMatchObject({ inFlight: true });
+      await rig.pass(); // the pass finds the row held: the due retry moves ahead with the insurance
+      const [moved] = rig.delivery.deadlines();
+      expect(moved.at).toBeGreaterThan(Date.now());
+      expect(rig.alarms.at(-1)).toBe(moved.at);
+      for (const resolve of parked.splice(0)) resolve();
+      await settled();
+      for (const resolve of parked.splice(0)) resolve(); // n=2, queued behind the retry
+      await settled();
+      expect(rig.delivery.cursor("s")).toMatchObject({ attempt: 0 });
       expect(rig.delivery.deadlines()).toEqual([]);
-      expect(rig.coordinator.snapshot().armedAt).toBeNull();
-      expect(rig.deletes).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test("a row an unreadable event stops is HALTED, not retried into forever", async () => {
+    const delivered: number[] = [];
+    const rig = incarnation((printed) =>
+      printed === "itx.sink"
+        ? { push: (events: { payload?: { n?: number } }[]) => void delivered.push(...ns(events)) }
+        : undefined,
+    );
+    rig.stream.append(
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
+      }),
+    );
+    const [ping] = rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+    // Corrupt the stored row before the loop's read (the push's chain runs after this turn).
+    rig.storage.sql.exec("UPDATE events SET body = 'not json' WHERE offset = ?", ping.offset);
+    await settled();
+    expect(delivered).toEqual([]);
+    expect(rig.stream.coreReducedState.subscriptions.s.halted).toMatchObject({ attempts: 1 });
+    expect(rig.delivery.deadlines()).toEqual([]);
+    expect(rig.deletes).toEqual([1]); // the insurance withdrawn with the halt; nothing re-arms
   });
 
   test("a cursor row whose subscription is gone claims nothing", async () => {

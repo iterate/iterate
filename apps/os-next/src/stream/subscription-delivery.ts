@@ -34,7 +34,7 @@ import {
 import { errorCode, reportIssue, withTimeout } from "../lib.ts";
 import { type StreamEvent, consumesEvent, type ScannedRange } from "./processor.ts";
 import type { Subscription } from "./core-processor.ts";
-import type { Stream, SubscriptionCursor } from "./stream.ts";
+import type { Stream, StreamPage, SubscriptionCursor } from "./stream.ts";
 
 /** A cursor delivery's awaited call is bounded by this; it is also how far ahead a row's insurance
  *  deadline sits — by the time it fires the call has acked (the cursor row is written) or failed
@@ -249,22 +249,17 @@ export class SubscriptionDelivery {
   /** Every row with a claim on the alarm, earliest first: the delivery loop's deadline is `[0]?.at`.
    *  A HALTED row owes nothing (its persisted cursor may still carry the retry time of the attempt
    *  that halted it), nor does a cursor row whose subscription is gone (a removal the delete did
-   *  not outlive). A ladder time is a claim only while it is AHEAD: once due it is the alarm pass's
-   *  or the next commit's to act on, and one left in the past — the pass found the row held by a
-   *  running loop, or its read threw — must not re-arm an alarm into the same state. */
+   *  not outlive). A ladder time is a claim ahead or due alike — a due one keeps the alarm armed
+   *  until its pass runs, whatever else reconciles meanwhile — and no due one outlives a pass
+   *  (`deliverEveryCursorSubscription`'s sweep). */
   deadlines(): DeliveryDeadline[] {
     const rows = this.#stream.coreReducedState.subscriptions;
-    const now = Date.now();
     const deadlines: DeliveryDeadline[] = [];
     for (const [name, record] of this.#deliveryRecordByName) {
       const row = rows[name];
       if (!row || row.halted) continue;
       const { deadlineAt, cursor } = record;
-      const ladderAt = cursor?.nextAttemptAtMs;
-      const at = Math.min(
-        deadlineAt ?? Infinity,
-        ladderAt !== undefined && ladderAt > now ? ladderAt : Infinity,
-      );
+      const at = Math.min(deadlineAt ?? Infinity, cursor?.nextAttemptAtMs ?? Infinity);
       if (at === Infinity) continue;
       deadlines.push({
         name,
@@ -469,16 +464,35 @@ export class SubscriptionDelivery {
           ),
         ),
     );
-    // NO PAST DEADLINE LEAVES A PASS — the alarm this pass ends with would be due at once and fire
+    // NO PAST CLAIM LEAVES A PASS — the alarm this pass ends with would be due at once and fire
     // again into the same state. A row a loop still holds (a call in flight, a budget wait) is
-    // insured afresh; a row the pass could not deliver (its read threw) is left to the next commit,
-    // which queues it again.
+    // insured afresh, and a due retry of its moves with it (the loop retries once its call
+    // settles). The insurance of a row nobody holds is left to the next commit, which queues the
+    // row again. A due retry nobody acted on has no path here that this loop knows: it is reported
+    // and spent, so that next commit re-insures the row instead of an alarm re-firing into it.
+    const rows = this.#stream.coreReducedState.subscriptions;
     const now = Date.now();
-    for (const [name, record] of this.#deliveryRecordByName)
+    for (const [name, record] of this.#deliveryRecordByName) {
+      const held = this.#cursorDeliveryRunning.has(name);
       if (record.deadlineAt !== undefined && record.deadlineAt <= now)
-        record.deadlineAt = this.#cursorDeliveryRunning.has(name)
-          ? now + CURSOR_DELIVERY_CALL_WATCHDOG_MS
-          : undefined;
+        record.deadlineAt = held ? now + CURSOR_DELIVERY_CALL_WATCHDOG_MS : undefined;
+      const { cursor } = record;
+      if (!cursor || cursor.nextAttemptAtMs === undefined || cursor.nextAttemptAtMs > now) continue;
+      if (rows[name]?.halted) continue;
+      if (held)
+        record.cursor = { ...cursor, nextAttemptAtMs: now + CURSOR_DELIVERY_CALL_WATCHDOG_MS };
+      else {
+        const { nextAttemptAtMs, ...settled } = cursor;
+        record.cursor = settled;
+        reportIssue(
+          "subscription-delivery.retry-unactioned",
+          new Error(
+            `subscription "${name}": a due retry the alarm pass could not act on was spent`,
+          ),
+          { name, nextAttemptAtMs },
+        );
+      }
+    }
   }
 
   /** The cursor of a subscription the stream delivers at-least-once — absent for a push target. */
@@ -784,14 +798,33 @@ export class SubscriptionDelivery {
           } else {
             await this.#cursorReadCharsInFlight.acquire(CURSOR_READ_BUDGET_CHARS);
             inFlightRoomHeld = CURSOR_READ_BUDGET_CHARS;
-            const page = this.#stream.read(cursor.confirmedOffset, 100);
+            let page: StreamPage;
+            try {
+              page = this.#stream.read(cursor.confirmedOffset, 100);
+            } catch (error) {
+              // A row this subscription can never read past (EVENT_UNREADABLE) is a refusal that
+              // can only repeat: halt now, as the ladder's end would — never a retry into it.
+              this.#haltRow(
+                name,
+                row.configuredAtOffset,
+                cursor.confirmedOffset,
+                cursor.attempt + 1,
+                error,
+              );
+              return;
+            }
             const ceiling = pushedEventBatch
               ? Math.min(page.scannedThroughOffset, pushedEventBatch.after)
               : page.scannedThroughOffset;
             if (ceiling <= cursor.confirmedOffset) {
               // CAUGHT UP: nothing owed, no deadline (the finally releases the room). This is the
-              // row's normal end — a wake that found nothing to do must not arm another.
+              // row's normal end — a wake that found nothing to do must not arm another. A ladder
+              // still set (its batch was ephemeral, and is gone) is spent with it.
               record.deadlineAt = undefined;
+              if (cursor.nextAttemptAtMs !== undefined) {
+                const { nextAttemptAtMs: _spent, ...settled } = cursor;
+                this.#adoptCursor(name, { ...settled, attempt: 0 }, true);
+              }
               this.#reconcileAlarm();
               return;
             }

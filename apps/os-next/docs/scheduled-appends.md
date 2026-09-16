@@ -95,11 +95,11 @@ request: each source answers "when next?" from state it already keeps, and `Alar
 (`src/alarm-coordinator.ts`, ~40 lines) arms the earliest answer or deletes the alarm when there is
 none. Reconciliation runs after every commit, every activity note and every delivery change.
 
-| Source                | Its deadline                                                                                                                                                                         |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Scheduled appends     | the earliest pending `nextAt` in core state (none while paused or when every definition is parked)                                                                                   |
-| Subscription delivery | per cursor row: a memory-only `deadlineAt` (+20 s insurance while a durable delivery is owed or in flight) or the persisted ladder time `nextAttemptAtMs`; a halted row owes nothing |
-| Idle quiesce          | `lastActivity + 60 s`, rounded up to the next 10 s, only while a facet, a borrowed rpc stub or a library connection pins the context                                                 |
+| Source                | Its deadline                                                                                                                                                                                                                                 |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scheduled appends     | the earliest pending `nextAt` in core state (none while paused or when every definition is parked)                                                                                                                                           |
+| Subscription delivery | per cursor row: a memory-only `deadlineAt` (+20 s insurance while a durable delivery is owed or in flight) or the persisted ladder time `nextAttemptAtMs`, ahead or due alike; a halted row, or one whose subscription is gone, owes nothing |
+| Idle quiesce          | `lastActivity + 60 s`, rounded up to the next 10 s, only while a facet, a borrowed rpc stub or a library connection pins the context                                                                                                         |
 
 A wake makes no work: `stream/woken` is swept by no `*` subscription (`consumesEvent`, the one
 consumes rule) — only a row that names it sees it. On a project root the config row's target is a
@@ -110,8 +110,9 @@ Two holds keep the alarm from being moved under a handler. An alarm read at cons
 until a pass completes: workerd runs the constructor first, and a stored time later than the firing
 one cancels that run. Nothing is written while `alarm()` runs: its alarm stays stored, so a pass that
 throws is retried by the runtime (2s·2ⁿ, six tries) with the inherited hold intact, and a completed
-pass sets the next deadline once. No past delivery deadline leaves a pass: a row a loop still holds is
-insured afresh, a row the pass could not deliver waits for the next commit. There is no clamp (the
+pass sets the next deadline once. No past delivery claim leaves a pass: a row a loop still holds is
+insured afresh and its due retry moves with it, a row the pass could not deliver waits for the next
+commit, and a row an unreadable event stops is halted. There is no clamp (the
 runtime clamps a past time to now and refuses one at or before the epoch, which schedule validation
 rejects) and no keep-earlier rule; every `setAlarm` is a billed write, so the only dedupe is "the
 wanted time is what we last wrote".
