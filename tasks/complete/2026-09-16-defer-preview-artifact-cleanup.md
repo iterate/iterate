@@ -46,5 +46,6 @@ Resource evidence after the changed run:
 - Historical comparison: the recorded unsharded run spent 4.5s/9.2s on OS reset plus D1/KV and 93.6s/92.5s in artifact cleanup windows before/after tests. These intervals are not isolated DO measurements.
 
 - Independent review caught interrupted-preparation cleanup: the slot can be leased before app records exist. Close cleanup now includes both data owners, while filtering obsolete app names. No runtime/core changes.
+- Merged #2658's shared main/PR preview targets; 216 preview tests pass. CI exposed a pre-existing Kit/Knip race: typecheck generates the Wrangler config in parallel with Knip. Declaring Kit's Worker entrypoint makes the check independent of that generated file (reproduced without the file before the fix).
 
 Session: `01a0ab0a-7542-7223-8003-e996bc9bce72`.
