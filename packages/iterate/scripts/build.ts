@@ -27,6 +27,7 @@ export default async function build(): Promise<void> {
   await checkPhysicalWorkerBundles();
 
   await runPhase("emit declarations", ["exec", "tsc", "-p", "tsconfig.sdk.json"]);
+  await runPhase("emit declarations", ["exec", "tsc", "-p", "tsconfig.next.json"]);
 }
 
 async function runPhase(name: string, args: string[]): Promise<void> {

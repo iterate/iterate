@@ -11,9 +11,10 @@
 // the tip's whole snapshot in one shallow fetch (`deepen: 1`) only when the tip moved — memoized in
 // memory under the tip it was read at. A commit is compare-and-swapped on the tip (a concurrent push
 // refuses it — no merge; the caller reads again and retries).
-// build-sdk.mjs bundles THIS module (git-wire.ts and pako with it) into REPO_PROCESSOR_SOURCE, the spec
-// library.ts hands to `facets.get`.
-import { StreamProcessorDurableObject } from "../sdk/index.ts";
+// Hosted from `ctx.exports` (first-party-facets.ts): ordinary bundled worker code, git-wire.ts and pako
+// with it, reached as `itx.facets.get("repo")` (library.ts).
+import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
+import type { ItxEntrypointScope } from "../iterate-context.ts";
 import {
   AUTHOR,
   REF,
@@ -54,7 +55,11 @@ function filePath(path: string): string {
   return path;
 }
 
-export class RepoDurableObject extends StreamProcessorDurableObject<RepoView> {
+export class RepoDurableObject extends StreamProcessorDurableObject<
+  RepoView,
+  { ITX?: ItxEntrypointService },
+  ItxEntrypointScope
+> {
   processor = new RepoProcessor();
 
   /** The context this facet is hosted on IS the repo: its path is the one name it goes by, here and

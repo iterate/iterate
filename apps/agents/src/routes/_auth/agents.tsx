@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
-import type { AuthenticatedApp } from "os-next/app";
-import { useLiveState } from "os-next/react";
+import type { AuthenticatedApp } from "iterate/next/app";
+import { useLiveState } from "iterate/next/react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";

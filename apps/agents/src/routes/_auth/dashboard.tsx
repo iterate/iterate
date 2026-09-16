@@ -1,6 +1,6 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
-import { Dashboard } from "os-next/dashboard";
-import { loadDashboard } from "os-next/dashboard-data";
+import { Dashboard } from "iterate/next/dashboard";
+import { loadDashboard } from "iterate/next/dashboard-data";
 
 export const Route = createFileRoute("/_auth/dashboard")({
   loader: ({ context }) => loadDashboard(context),

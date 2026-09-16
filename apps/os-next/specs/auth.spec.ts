@@ -8,8 +8,8 @@ import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- Bounded fixture setup; browser actions use the app's real WebSocket.
 import { newHttpBatchRpcSession } from "capnweb";
 import { transformSync } from "esbuild";
+import { authorizationCodeRequest } from "iterate/next/oauth";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { authorizationCodeRequest } from "../src/client/oauth.ts";
 
 const claudeClient = "https://claude.ai/oauth/claude-code-client-metadata";
 const stamp = () => `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`;

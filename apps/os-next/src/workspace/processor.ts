@@ -6,7 +6,7 @@ import {
   type ProcessorState,
   type ReduceArgs,
   StreamProcessor,
-} from "../stream/processor.ts";
+} from "iterate/next/stream/processor";
 import { WorkspaceContract, type WorkspaceView } from "./contract.ts";
 
 export class WorkspaceProcessor extends StreamProcessor<

@@ -79,3 +79,8 @@ invocations and periodic activity for an explicit UTC window.
 Raw local evidence: `/tmp/preview-do-storage-experiment/`. The final report
 will retain concise measured results and CI links rather than depend on those
 temporary files for its conclusions.
+
+The branch subsequently merged `a9f5eddef6` from main. This includes #2680,
+which defers artifact deletion during normal preview runs. The original 69s
+baseline therefore includes work current main no longer does; it is not a
+controlled comparison for the final branch.

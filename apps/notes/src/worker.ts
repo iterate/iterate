@@ -1,7 +1,7 @@
-import { appAuth } from "os-next/app-server";
-import type { BrowserSession } from "os-next/app-session";
+import { appAuth } from "iterate/next/app-server";
+import type { BrowserSession } from "iterate/next/app-session";
 import entry from "@tanstack/react-start/server-entry";
-export { BrowserSession } from "os-next/app-session";
+export { BrowserSession } from "iterate/next/app-session";
 
 /** The public shell works both on this origin and through project ingress.
  * On its own origin the same SDK provides OAuth and the authenticated /api proxy. */

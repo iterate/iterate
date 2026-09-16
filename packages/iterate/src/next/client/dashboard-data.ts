@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { AuthenticatedApp } from "./browser.ts";
+import type { AuthenticatedApp } from "../app.ts";
 
 const AppRows = z.array(z.object({ match: z.string(), target: z.unknown() }));
 

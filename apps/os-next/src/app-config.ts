@@ -11,7 +11,7 @@
 
 import { parseAppConfigFromEnv, redacted, type Redacted } from "@iterate-com/shared/config";
 import { z } from "zod";
-import { isLocalOrigin } from "./lib.ts";
+import { isLocalOrigin } from "iterate/next/lib";
 
 /** A field's failure message names the SHAPE; `parseAppConfig` prefixes the env var it came from. */
 const REQUIRED = "required, but unset or blank";

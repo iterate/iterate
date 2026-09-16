@@ -8,8 +8,8 @@
 // BARE Stream with no-op host deps — no wake record unless the test appends one.
 
 import { expect, test } from "vitest";
-import { errorCode } from "../lib.ts";
-import type { StreamEvent, SqlStorageHandle } from "./processor.ts";
+import { errorCode } from "iterate/next/lib";
+import type { StreamEvent, SqlStorageHandle } from "iterate/next/stream/processor";
 import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 

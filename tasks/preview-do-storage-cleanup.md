@@ -76,3 +76,9 @@ post-cleanup DO active time with Cloudflare GraphQL. Do not merge automatically.
   removes the persisted name, so a stale ID-only retry can fail initialization.
   Post-run unsupported/503 must fail instead of falling back to full erase.
 - Full repository typecheck, tests, lint, knip and formatting passed locally.
+
+- 22:36 UTC: first implementation run failed before OS deployment because
+  SHA-pinned packages were absent. PR had become conflicting with main's #2680,
+  suppressing GitHub PR publication. Merged current main (including #2680,
+  CLI-help fixes and os-next SDK moves); full `down` remains outside the
+  experiment, and only normal `reset` selects storage cleanup.

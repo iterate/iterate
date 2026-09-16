@@ -12,8 +12,10 @@
 // ONE writer, no policies. The repo facets speak git themselves (src/repo/git-wire.ts) and reach the
 // Artifacts binding — their token and remote — as `itx.cfArtifacts` through THEIR context's rules, so
 // a test lends a fake proxy there (`provide("itx.cfArtifacts", …)`, e2e/support/fake-artifacts.ts).
-// build-sdk.mjs bundles THIS module into WORKSPACE_PROCESSOR_SOURCE, the spec library.ts hands to `facets.get`.
-import { StreamProcessorDurableObject } from "../sdk/index.ts";
+// Hosted from `ctx.exports` (first-party-facets.ts): ordinary bundled worker code, reached as
+// `itx.facets.get("workspace")` (library.ts).
+import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
+import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { RepoFileChange, RepoLogEntry } from "../repo/git-wire.ts";
 import type { WorkspaceView } from "./contract.ts";
 import { WorkspaceProcessor } from "./processor.ts";
@@ -54,7 +56,11 @@ export function routeMount(
   return best;
 }
 
-export class WorkspaceDurableObject extends StreamProcessorDurableObject<WorkspaceView> {
+export class WorkspaceDurableObject extends StreamProcessorDurableObject<
+  WorkspaceView,
+  { ITX?: ItxEntrypointService },
+  ItxEntrypointScope
+> {
   processor = new WorkspaceProcessor();
 
   #pathRead?: string;
@@ -296,7 +302,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<Workspa
       commitOid: committed.commitOid,
       mount: mountPath,
       repo: mount.repo,
-      changedPaths: committed.changedPaths.map((path) => `${mountPath}/${path}`),
+      changedPaths: committed.changedPaths.map((path: string) => `${mountPath}/${path}`),
     };
   }
 

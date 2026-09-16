@@ -1,11 +1,11 @@
 import { AuthorizationError, CimdFetchError } from "@cloudflare/workers-oauth-provider";
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
+import { codedError } from "iterate/next/lib";
 import type { Env } from "./control-plane.ts";
 import { directory, type Org, type Project } from "./directory.ts";
 import { projectHostOf } from "./hosts.ts";
 import { appConfigOf } from "./app-config.ts";
-import { codedError } from "./lib.ts";
 import {
   authorizationOf,
   oauthAddresses,

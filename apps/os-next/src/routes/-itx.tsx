@@ -7,7 +7,7 @@
 // threading. LiveState hooks (client/react.tsx) take a handle off `useItx()` and are client-only by
 // nature — exactly what a live WebSocket view wants.
 import { createContext, useContext, type ReactNode } from "react";
-import type { AuthenticatedApp } from "../client/browser.ts";
+import type { AuthenticatedApp } from "iterate/next/app";
 
 const ItxContext = createContext<AuthenticatedApp | null>(null);
 

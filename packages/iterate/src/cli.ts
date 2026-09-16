@@ -1487,7 +1487,7 @@ export const getCli = async () => {
   applyDefaultBareInvocation();
   const requestedRootCommand = firstNonFlagArgument(process.argv.slice(2));
   const shouldLoadRemoteRouters =
-    !requestedRootCommand ||
+    requestedRootCommand &&
     !Object.prototype.hasOwnProperty.call(launcherProcedures, requestedRootCommand);
 
   const errorProcedure = (problem: string) => (e: Error) => {
@@ -1499,8 +1499,8 @@ export const getCli = async () => {
 
   const routers: Record<string, import("@orpc/server").Router<any, any>>[] = [launcherProcedures];
 
-  // Launcher commands are fully local and should not wait on remote discovery before
-  // they can run or print command-specific help.
+  // Top-level help and launcher commands work offline. Only discover remote
+  // procedures when the caller asks for a remote command (including its help).
   if (shouldLoadRemoteRouters) {
     const resolved = resolveConfig(process.cwd());
     if (resolved instanceof Error) {
@@ -1529,7 +1529,7 @@ export const getCli = async () => {
     router,
     name: "iterate",
     version: "0.0.1",
-    description: "Iterate CLI",
+    description: "Iterate CLI\n\nRun `iterate os --help` to discover OS commands.",
   });
 
   return { cli, prompts: isAgent ? undefined : prompts };

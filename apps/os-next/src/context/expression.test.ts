@@ -1,7 +1,6 @@
 // Executable spec for the expression codec — two directions over one table.
 import { describe, expect, test, it } from "vitest";
 import { RpcStub, RpcTarget } from "capnweb";
-import type { ItxExpressionRewriteRule } from "./itx-expression-rewriting.ts";
 import {
   normalizedItxExpression,
   parse,
@@ -11,7 +10,8 @@ import {
   registerPipelinedRpcBrand,
   walkSteps,
   installPrototypeInvokeFallback,
-} from "./expression.ts";
+} from "iterate/next/expression";
+import type { ItxExpressionRewriteRule } from "./itx-expression-rewriting.ts";
 import { ItxExpressionResolver } from "./itx-expression-rewriting.ts";
 
 // Plausible itx expressions in CANONICAL form — exactly what `print` emits (single-quoted strings,

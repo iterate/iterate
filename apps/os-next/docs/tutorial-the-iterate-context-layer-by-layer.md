@@ -1268,7 +1268,7 @@ event type, keeps its key, applies a payload whose `from` matches its held rev, 
 on any mismatch. The shipped client does exactly that:
 
 ```ts
-import { connectLiveState } from "os-next/client"; // the package's `./client` export; the lane imports src/client/live-state.ts
+import { connectLiveState } from "iterate/next/client"; // the package's `./client` export; the lane imports src/client/live-state.ts
 
 await itx.provide("itx.chat", [
   "itx",

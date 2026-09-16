@@ -1,3 +1,4 @@
+/** @jsxImportSource react */
 // client/react.tsx — the REACT binding for clean-room live state, shared by every UI (the hosted
 // /demo and the control-plane console). `useLiveState` subscribes a component to a producer's live
 // state (a processor slug, a mini-app key), seeds through its door, and re-renders on every synced

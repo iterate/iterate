@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from "./routes/__root.tsx";
 import { Route as LoginRouteImport } from "./routes/login.tsx";
+import { Route as DemoRouteImport } from "./routes/demo.tsx";
 import { Route as AuthorizeRouteImport } from "./routes/authorize.tsx";
 import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as AuthIndexRouteImport } from "./routes/_auth/index.tsx";
@@ -19,6 +20,11 @@ import { Route as AuthAccountRouteImport } from "./routes/_auth/account.tsx";
 const LoginRoute = LoginRouteImport.update({
   id: "/login",
   path: "/login",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const DemoRoute = DemoRouteImport.update({
+  id: "/demo",
+  path: "/demo",
   getParentRoute: () => rootRouteImport,
 } as any);
 const AuthorizeRoute = AuthorizeRouteImport.update({
@@ -49,12 +55,14 @@ const AuthAccountRoute = AuthAccountRouteImport.update({
 export interface FileRoutesByFullPath {
   "/": typeof AuthIndexRoute;
   "/authorize": typeof AuthorizeRoute;
+  "/demo": typeof DemoRoute;
   "/login": typeof LoginRoute;
   "/account": typeof AuthAccountRoute;
   "/sessions": typeof AuthSessionsRoute;
 }
 export interface FileRoutesByTo {
   "/authorize": typeof AuthorizeRoute;
+  "/demo": typeof DemoRoute;
   "/login": typeof LoginRoute;
   "/account": typeof AuthAccountRoute;
   "/sessions": typeof AuthSessionsRoute;
@@ -64,6 +72,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/_auth": typeof AuthRouteWithChildren;
   "/authorize": typeof AuthorizeRoute;
+  "/demo": typeof DemoRoute;
   "/login": typeof LoginRoute;
   "/_auth/account": typeof AuthAccountRoute;
   "/_auth/sessions": typeof AuthSessionsRoute;
@@ -71,13 +80,14 @@ export interface FileRoutesById {
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: "/" | "/authorize" | "/login" | "/account" | "/sessions";
+  fullPaths: "/" | "/authorize" | "/demo" | "/login" | "/account" | "/sessions";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/authorize" | "/login" | "/account" | "/sessions" | "/";
+  to: "/authorize" | "/demo" | "/login" | "/account" | "/sessions" | "/";
   id:
     | "__root__"
     | "/_auth"
     | "/authorize"
+    | "/demo"
     | "/login"
     | "/_auth/account"
     | "/_auth/sessions"
@@ -87,6 +97,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   AuthRoute: typeof AuthRouteWithChildren;
   AuthorizeRoute: typeof AuthorizeRoute;
+  DemoRoute: typeof DemoRoute;
   LoginRoute: typeof LoginRoute;
 }
 
@@ -97,6 +108,13 @@ declare module "@tanstack/react-router" {
       path: "/login";
       fullPath: "/login";
       preLoaderRoute: typeof LoginRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/demo": {
+      id: "/demo";
+      path: "/demo";
+      fullPath: "/demo";
+      preLoaderRoute: typeof DemoRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/authorize": {
@@ -154,6 +172,7 @@ const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren);
 const rootRouteChildren: RootRouteChildren = {
   AuthRoute: AuthRouteWithChildren,
   AuthorizeRoute: AuthorizeRoute,
+  DemoRoute: DemoRoute,
   LoginRoute: LoginRoute,
 };
 export const routeTree = rootRouteImport

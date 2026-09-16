@@ -3,6 +3,7 @@
  * (workers, routes, DNS, resource IDs) in place:
  *
  *   pnpm erase-data --env preview_3
+ *   pnpm erase-data --env preview_3 --preserve-artifacts  # normal CI reset
  *   pnpm erase-data --env prd --yes-i-mean-prd
  *   pnpm erase-data --env prd --yes-i-mean-prd --preserve-auth
  *
@@ -31,8 +32,10 @@
  *     git repos backing project repos, each carrying a long-lived write
  *     token. With every project erased they are all orphans; leaving them
  *     grew the dev/preview account to ~783k repos before this pass existed
- *     (backfill for that pile: scripts/artifacts-gc.ts). Skipped under
- *     `--preserve-auth`, where they are the recreated projects' git history.
+ *     (backfill for that pile: scripts/artifacts-gc.ts). Normal CI resets use
+ *     `--preserve-artifacts` and defer this sweep until PR close or slot GC.
+ *     Also skipped under `--preserve-auth`, where they are the recreated
+ *     projects' git history.
  *   - normally, the auth D1 database (identities, orgs, projects — the source
  *     of every project id) and project-directory KV. `--preserve-auth` keeps
  *     both for a planned production recreation: selected OS projects can then
@@ -73,6 +76,8 @@ export default async function eraseData(options: {
   yesIMeanPrd?: boolean;
   /** Keep Auth D1 and project-directory KV while erasing OS state. */
   preserveAuth?: boolean;
+  /** Keep Artifacts repositories; normal preview runs defer their sweep until PR close or slot GC. */
+  preserveArtifacts?: boolean;
 }) {
   const ctx = await resolveEnvContext({ envs, dopplerProject: "os", env: options.env });
   const { env, cf } = ctx;
@@ -254,7 +259,10 @@ export default async function eraseData(options: {
   // (partial progress carries over: the next erase continues). Under
   // --preserve-auth the repos are the recreated projects' git history
   // (getOrCreateArtifact adopts an existing repo), so they must survive.
-  if (!options.preserveAuth) {
+  if (options.preserveArtifacts) {
+    console.log(`Artifacts ${env.osWorkerName}-repos: preserved (--preserve-artifacts)`);
+  }
+  if (!options.preserveAuth && !options.preserveArtifacts) {
     const artifactsNamespace = `${env.osWorkerName}-repos`;
     const artifactsDeadline = Date.now() + 90_000;
     try {

@@ -20,7 +20,7 @@ import {
   type ReduceArgs,
   type StreamEventInput,
   StreamProcessor,
-} from "../stream/processor.ts";
+} from "iterate/next/stream/processor";
 import {
   AgentContract,
   type AgentView,

@@ -19,16 +19,16 @@
 
 import { memoryUsage } from "node:process";
 import { deserialize, serialize } from "node:v8";
-import { FacetHandle } from "../context/expression.ts";
-import { errorCode } from "../lib.ts";
-import { CoreContract, normalizeControlEvent } from "./core-processor.ts";
+import { FacetHandle } from "iterate/next/expression";
+import { errorCode } from "iterate/next/lib";
 import {
   type StreamEvent,
   ProcessorEngine,
   StreamProcessor,
   type ReduceArgs,
   ReduceCheckpointTable,
-} from "./processor.ts";
+} from "iterate/next/stream/processor";
+import { CoreContract, normalizeControlEvent } from "./core-processor.ts";
 import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 import { SubscriptionDelivery } from "./subscription-delivery.ts";

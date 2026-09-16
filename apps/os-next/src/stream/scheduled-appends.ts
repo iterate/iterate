@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { StreamEvent, StreamEventInput } from "./processor.ts";
+import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 
 const keyPart = z.string().min(1);
 const normalizedKey = keyPart

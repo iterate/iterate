@@ -8,7 +8,7 @@
 // credentials, works locally (the e2e worker serves project hosts under `localhost`); the price is
 // that bytes flow through the worker, bounded by the request-body limit.
 import { z } from "zod";
-import { signClaims, verifyClaims } from "../principal.ts";
+import { signClaims, verifyClaims } from "iterate/next/principal";
 
 /** What a signed file URL carries: the project it belongs to, the object key (owner prefix NOT
  *  included — ingress applies it), the one method it permits, and when it stops working. */

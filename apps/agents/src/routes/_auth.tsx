@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { createIterateClient } from "os-next/app";
+import { createIterateClient } from "iterate/next/app";
 const iterate = createIterateClient();
 export const Route = createFileRoute("/_auth")({
   ssr: false,

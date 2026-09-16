@@ -31,10 +31,10 @@ import {
   registerPipelinedRpcBrand,
   type ItxExpression,
   FacetHandle,
-} from "../context/expression.ts";
-import { codedError } from "../lib.ts";
+} from "iterate/next/expression";
+import { codedError } from "iterate/next/lib";
+import type { StreamEvent, ScannedRange } from "iterate/next/stream/processor";
 import { AlarmCoordinator } from "../alarm-coordinator.ts";
-import type { StreamEvent, ScannedRange } from "./processor.ts";
 import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 import { SubscriptionDelivery } from "./subscription-delivery.ts";

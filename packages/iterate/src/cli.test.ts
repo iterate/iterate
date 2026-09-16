@@ -1,9 +1,15 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { os } from "@orpc/server";
+import { parseRouter } from "trpc-cli";
 import { describe, expect, test, vi } from "vitest";
+import { z } from "zod/v4";
+import { listenOnFetchSafePort } from "../../shared/src/test-support/fetch-safe-port.ts";
 import {
   buildChatCommand,
   defaultBareInvocationToChat,
@@ -218,18 +224,57 @@ describe("replaceWithInheritedProcess", () => {
 });
 
 describe("bin wrapper", () => {
-  test("can load repo source through Node's strip-only TypeScript loader", () => {
+  test("loads repo source through Node's strip-only loader and prints help without contacting OS", async () => {
     const binPath = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
     const packageRoot = fileURLToPath(new URL("..", import.meta.url));
-    const result = spawnSync(process.execPath, [binPath, "--help"], {
+    const requests: string[] = [];
+    await using server = createServer((request, response) => {
+      requests.push(request.url!);
+      response.writeHead(503).end("OS unavailable");
+    });
+    const port = await listenOnFetchSafePort(server);
+    using config = cliConfig(`http://127.0.0.1:${port}`);
+
+    const result = await promisify(execFile)(process.execPath, [binPath, "--help"], {
       cwd: packageRoot,
       encoding: "utf8",
-      env: { ...process.env, NO_COLOR: "1" },
+      env: { ...process.env, NO_COLOR: "1", XDG_CONFIG_HOME: config.directory },
+      timeout: 5000,
     });
 
     expect(result.stderr).not.toContain("ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX");
-    expect(result.status, result.stderr || result.stdout).toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).toContain("iterate");
+    expect(result.stdout).toContain("os");
+    expect(requests).toEqual([]);
+  });
+
+  test("OS command help still discovers the configured server's commands", async () => {
+    const requests: string[] = [];
+    await using server = createServer((request, response) => {
+      requests.push(request.url!);
+      response.setHeader("content-type", "application/json");
+      response.end(
+        JSON.stringify({
+          procedures: parseRouter({
+            router: {
+              status: os.input(z.object({})).handler(() => ({ ok: true })),
+            },
+          }),
+        }),
+      );
+    });
+    const port = await listenOnFetchSafePort(server);
+    using config = cliConfig(`http://127.0.0.1:${port}`);
+    const binPath = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
+
+    const result = await promisify(execFile)(process.execPath, [binPath, "os", "--help"], {
+      encoding: "utf8",
+      env: { ...process.env, NO_COLOR: "1", XDG_CONFIG_HOME: config.directory },
+      timeout: 5000,
+    });
+
+    expect(result.stdout).toContain("Available subcommands: status");
+    expect(requests).toEqual(["/api/trpc-cli-procedures"]);
   });
 
   test("npx-style execution uses the published package instead of repo source", () => {
@@ -688,3 +733,18 @@ describe("resolveChatProject", () => {
     ).rejects.toThrow(/Accessible projects: one \(prj_one, created\), two \(prj_two, created\)/);
   });
 });
+
+function cliConfig(osBaseUrl: string) {
+  const directory = mkdtempSync(join(tmpdir(), "iterate-cli-config-"));
+  mkdirSync(join(directory, "iterate"));
+  writeFileSync(
+    join(directory, "iterate/config.json"),
+    JSON.stringify({ default: "test", configs: { test: { osBaseUrl } } }),
+  );
+  return {
+    directory,
+    [Symbol.dispose]() {
+      rmSync(directory, { recursive: true, force: true });
+    },
+  };
+}
