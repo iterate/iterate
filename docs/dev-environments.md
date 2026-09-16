@@ -471,7 +471,7 @@ No slots are reserved and no Semaphore policy changes are needed.
 
 The main workflow finishes its active deploy/test/erase before starting the
 newest queued commit. PR cancellation behavior is unchanged. Dispatch it with
-`depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow cloudflare-main-preview.yml --ref <branch>`.
+`depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-main.yml --ref <branch>`.
 Local `--commit` invocations are refused because they bypass that workflow lock.
 
 `preview ci-prepare --commit` requires a clean checkout at the exact SHA and that commit's

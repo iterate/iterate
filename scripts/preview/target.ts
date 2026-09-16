@@ -80,12 +80,9 @@ export function createMainPreview(input: {
   // The fixed main holder is serialized by this workflow's concurrency
   // group across all jobs in the called workflow. A local invocation would
   // bypass that lock and could erase CI.
-  if (
-    !input.environment.DEPOT_JOB_URL ||
-    input.environment.GITHUB_WORKFLOW !== "Main Preview (Depot CI)"
-  ) {
+  if (!input.environment.DEPOT_JOB_URL || input.environment.GITHUB_WORKFLOW !== "Preview Main") {
     throw new Error(
-      "Run main previews through the serialized cloudflare-main-preview.yml Depot workflow; use depot ci dispatch instead of invoking preview commands with --commit locally.",
+      "Run main previews through the serialized preview-main.yml Depot workflow; use depot ci dispatch instead of invoking preview commands with --commit locally.",
     );
   }
   // Dispatching this workflow on a feature branch is useful for validation,

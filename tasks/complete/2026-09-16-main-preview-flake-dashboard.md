@@ -5,14 +5,14 @@ size: large
 
 # Main preview runs and a current flake dashboard
 
-Status: latest main (#2659) is merged. Both distributed PR/main workflows passed at `33fa8e639`, including all six browser shards, app tests, complete summaries and cleanup. Three review edge cases are fixed and locally verified; their follow-up commit still needs CI. The live dashboard needs its normal package update/deployment after merge.
+Status: latest main (#2659) is merged. Both distributed PR/main workflows passed at `33fa8e639`, including all six browser shards, app tests, complete summaries and cleanup. The dashboard review fixes also passed CI at `92e1335d5`. The requested workflow rename passes its 12 local target tests; its new CI run remains. The live dashboard needs its normal package update/deployment after merge.
 
 ## Current scope
 
 - [x] Keep `pnpm preview run --pull-request-number <n>` working. Support the exact checked-out main commit through the same command with `--commit <sha>`. *Removed `run-main`; the workflow now uses shared `run` and `erase` commands.*
 - [x] Share deployment, readiness, tests and cleanup between PR/main callers. Extract PR reporting/context from the shared implementation where needed; keep the extraction focused. *`PreviewTarget` supplies run identity, report, comparison base, slot preference and review project to shared commands; source-specific setup stays at the boundary.*
 - [x] Main takes an ordinary preview lease under `main-preview`, renews it across runs, and keeps it after cleanup. Use the existing 3h expiry and GC; make no Semaphore policy changes. *Semaphore matches the base commit; shared claim tests cover `main-preview` renewal.*
-- [x] Trigger the full preview suite on main pushes. Serialize main deployment/test/cleanup on its ordinary slot without cancelling an active run; newer queued commits replace older queued commits. Keep current PR cancellation behavior. *`cloudflare-main-preview.yml` uses one concurrency group with cancellation disabled.*
+- [x] Trigger the full preview suite on main pushes. Serialize main deployment/test/cleanup on its ordinary slot without cancelling an active run; newer queued commits replace older queued commits. Keep current PR cancellation behavior. *`preview-main.yml` uses one concurrency group with cancellation disabled.*
 - [x] Upload complete suite results even when no unknown flakes occur. Preserve historical records. *Suite summaries carry branch/head, completeness and per-test results using the same bare title as retry records.*
 - [x] Any main retry adds an unknown flake; retain it until 20 consecutive actual passes in that suite, wrapper adoption on main, or absence from a complete main test inventory. Suggest removing known flake wrappers after 20 main passes, with no time minimum. *Reducer/rendering tests cover retention, resets, skipped/absent/incomplete results, PR isolation, adoption and late delivery.*
 - [x] Explain all outcome emojis, including unexpected errors (❌). *Both legend rows describe ❌ as an unexpected error.*
@@ -24,7 +24,7 @@ Status: latest main (#2659) is merged. Both distributed PR/main workflows passed
 - [x] Reopen PR #2658 after the final human-review fixes, with a current description and risk map. *Reopened at `f951e6897`; global monitoring is active through September 16.*
 - [x] Inspect successful CI artifacts for the final retention/absence changes and finish review. *Run `9hdx326789` at `64085197f`: all three suite summaries complete; every result matches raw telemetry, including one unknown E2E retry and one known flake strike. Cleanup and retained lease verified; all review threads resolved.*
 - [x] Merge #2659's distributed workflow from latest main and validate both PR/main callers plus complete sharded summaries. *At `33fa8e639`, PR run `r2rxcv57jj` and main-workflow trial `qwlvgkp1n5` passed all nine jobs. Both reported 92 specs and 232 E2E tests; cleanup retained ordinary leases.*
-- [ ] Finish CI/review for the follow-up dashboard edge-case fixes. *42 dashboard tests, 12 summary tests, affected typechecks and scoped lint pass; real distributed artifacts replay with unchanged complete results.*
+- [x] Finish CI/review for the follow-up dashboard edge-case fixes. *CI passed at `92e1335d5`; all three review threads are resolved. 42 dashboard tests, 12 summary tests, affected typechecks and scoped lint pass; real distributed artifacts replay with unchanged complete results.*
 
 ## Decisions and limits
 
@@ -114,3 +114,5 @@ Codex session: `01a0a1e6-0135-7902-91aa-b4bb07026de2`.
 - Both finalizers waited for all test jobs, erased DO/D1/KV state and kept leases (PR preview-13 until 18:47:12Z; main preview-7 until 18:47:50Z). The PR's inert artifact repositories hit the existing bounded cleanup deadline and remain for a later release; main cleanup completed. No cleanup policy was changed.
 - Assessed all three Bugbot findings independently and reproduced them. A missing suite no longer blocks healthy sibling-suite completeness; malformed JSON/schema skips only the damaged artifact with an error log; a late older wrapper cannot duplicate a newer unknown row. Processor 0.8.0 refolds cached state. All 42 dashboard and 12 summary tests pass, as do affected typechecks and scoped lint. Replaying the final summary code against both downloaded workflows preserves complete 92/232 results and the main trial's retry count.
 - Evidence: `/tmp/main-preview-merge-{pr,main}-complete.zip`, `/tmp/main-preview-merge-unit.zip`, `/tmp/main-preview-merge-{pr,main}-replayed/`, `/tmp/main-preview-finish-{f5dcd79hnn,hjv5s40mkz}.log`.
+
+- Human review: renamed the main workflow to `preview-main.yml`, display name `Preview Main`, and concurrency group `preview-main`; updated the command guard, regression fixtures and documentation together. Added a Change/Purpose table to the PR body covering the significant code, workflow, telemetry, dashboard and test changes.

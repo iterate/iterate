@@ -844,7 +844,7 @@ Each suite shows its latest complete main commit, run, test count and failure
 count. An incomplete attempt keeps that provenance visible with a warning,
 while any observed retry/failure still adds or resets its unknown-flake row.
 
-`cloudflare-main-preview.yml` calls the same `preview-run.yml` workflow as PR CI:
+`preview-main.yml` calls the same `preview-run.yml` workflow as PR CI:
 one deployment, six browser shards, app tests, then report collection and cleanup.
 The finalizer combines sibling-job telemetry and requires the declared runner
 count before certifying a complete test list. Missing or foreign shards cannot

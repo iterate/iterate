@@ -1,7 +1,7 @@
 # Same preview deploy/readiness/tests/erase as PRs, using the ordinary preview pool.
 # Let the active run finish. Depot keeps the newest pending push, so frequent
 # merges cannot starve the dashboard of a complete baseline.
-name: Main Preview (Depot CI)
+name: Preview Main
 
 permissions:
   contents: read
@@ -14,12 +14,12 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: cloudflare-main-preview
+  group: preview-main
   cancel-in-progress: false
 
 jobs:
   preview:
-    name: Main preview / deploy + e2e
+    name: Preview main / deploy + e2e
     uses: ./.depot/workflows/preview-run.yml
     with:
       head-sha: ${{ github.sha }}

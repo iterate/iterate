@@ -12,13 +12,10 @@ test.each(["prepare", "apps", "playwright", "finish"])(
   async (job) => {
     using repo = repository();
     const workflow = parseYaml(
-      readFileSync(
-        resolve(import.meta.dirname, "../../.depot/workflows/cloudflare-main-preview.yml"),
-        "utf8",
-      ),
+      readFileSync(resolve(import.meta.dirname, "../../.depot/workflows/preview-main.yml"), "utf8"),
     );
     expect(workflow).toMatchObject({
-      concurrency: { group: "cloudflare-main-preview", "cancel-in-progress": false },
+      concurrency: { group: "preview-main", "cancel-in-progress": false },
       on: { push: { branches: ["main"] } },
     });
     expect(workflow.jobs.preview).toMatchObject({ uses: "./.depot/workflows/preview-run.yml" });
@@ -151,7 +148,7 @@ function repository() {
       repositoryRoot: path,
       environment: {
         DEPOT_JOB_URL: "https://depot.dev/jobs/test",
-        GITHUB_WORKFLOW: "Main Preview (Depot CI)",
+        GITHUB_WORKFLOW: "Preview Main",
         GITHUB_JOB: "preview",
         GITHUB_REF_NAME: "main",
       },
