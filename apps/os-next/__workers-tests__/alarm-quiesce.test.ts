@@ -12,13 +12,14 @@
 //      progress — a stateless Worker-Loader entrypoint) whose retry is due is delivered from its
 //      cursor row; the awaited call is the ack, the ladder resets. AWAITED before step 2, so the quiesce never aborts a
 //      delivery in flight and a later retry's re-arm lands before the actor hibernates.
-//   2. the idle QUIESCE: 30s without a PIN being used (and nothing in flight) aborts every live facet and
-//      RETURNS every borrowed stub, so the actor can hibernate. A MEASURED PROPERTY, load-bearing
-//      below: a materialized facet or a borrowed stub PINS the DO non-hibernatable (workerd#6800)
-//      — evictDurableObject on such a DO times out after 30s ("still has active references"). You
-//      must quiesce BEFORE you can evict — the exact production sequence (support.ts's `quiesce`).
-//      It is also what ARMS the alarm at all: a context with no live facet and no borrowed stub
-//      schedules nothing, so every pin below that fires the alarm creates one of the two FIRST.
+//   2. the idle QUIESCE: 30s without a PIN being used RETURNS every borrowed stub and closes every
+//      open socket — the two things that keep an actor resident on the edge (measured) — and aborts
+//      every live facet on the way, so the actor can hibernate. A facet is NOT a pin: on the edge it
+//      dies with the actor, so it arms nothing; here in workerd a materialized facet or a borrowed
+//      stub does keep the DO non-hibernatable (workerd#6800 — evictDurableObject on such a DO times
+//      out after 30s, "still has active references"), so a test must release BEFORE it can evict
+//      (support.ts's `quiesce` runs the release directly). Only a borrowed stub ARMS the alarm:
+//      every pin below that fires the alarm borrows one FIRST.
 //
 // PROCESSORS here are what they are everywhere: userspace two-class sources — a pure
 // `StreamProcessor` (`CounterProcessor`) and its one-line `StreamProcessorDurableObject` host

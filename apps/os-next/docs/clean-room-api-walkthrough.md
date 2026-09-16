@@ -1360,7 +1360,7 @@ removed when its handle is disposed or the session ends (capnweb disposes the
 exported handle); `processors.enable` returns no handle, so a processor's row
 stays until `processors.disable`. The DO's
 idle quiesce is 30 s from the last use of a pin (a
-borrowed stub called, a library connection used — a request moves nothing): the
+borrowed stub called, an open capnweb socket used — a request moves nothing): the
 alarm then aborts every live facet and returns every borrowed
 stub; the next call re-materializes them (a facet delete — `processors.disable`'s
 one effect — that lands while a facet's source is loading wins: the load refuses with `NO_FACET` instead of

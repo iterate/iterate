@@ -93,9 +93,9 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
   return DurableObjectNameCodec.parse(name);
 }
 
-/** How long a context's PINS stay unused — no borrowed rpc stub called, no library connection
- *  used — before the alarm returns the stubs, closes the connections and aborts every live facet so
- *  the actor can hibernate. THE PINS CARRY THE CLOCK: nothing else moves it — not an append, not a
+/** How long a context's PINS stay unused — no borrowed rpc stub called, no open socket used —
+ *  before the alarm returns the stubs, closes the sockets and aborts every live facet so the actor
+ *  can hibernate. THE PINS CARRY THE CLOCK: nothing else moves it — not an append, not a
  *  request, not a delivery, not a facet call, not a loaded worker's loopback — so an incarnation
  *  whose only work was its own wake record ends holding nothing and arming nothing. */
 const IDLE_QUIESCE_AFTER_MS = 30_000;
@@ -631,11 +631,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** When a borrowed rpc stub was last called (any of them: the quiesce returns them all at once). */
   #rpcStubsLastUsedMs = 0;
-  /** When the library last made a call — a connection opening, or a call through one. */
+  /** When the library last made a call — a socket opening, or a call through one. */
   #libraryLastUsedMs = 0;
 
-  /** THE PINS' CLOCK: when a pin was last used — a borrowed stub called, a library connection
-   *  used. Null with nothing pinned, so a bare probe arms nothing (one storage write and one billed
+  /** THE PINS' CLOCK: when a pin was last used — a borrowed stub called, an open capnweb socket
+   *  used (the two things that keep an actor resident on the edge, both measured). Null with
+   *  nothing pinned, so a bare probe arms nothing (one storage write and one billed
    *  wake for nothing). A FACET IS NOT A PIN: on the edge a live facet does not keep the actor
    *  resident — it hibernates within seconds like any other, and the facet dies with it — so nothing
    *  arms an alarm for one. An alarm for a pin that dies with the actor could only construct the
