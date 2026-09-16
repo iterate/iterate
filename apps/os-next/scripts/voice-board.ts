@@ -133,12 +133,13 @@ async function main(): Promise<void> {
     errors.push(`end: ${String(error).slice(0, 100)}`);
   }
 
-  const framesSent = Number(after.framesSent ?? 0) - Number(before.framesSent ?? 0);
-  const spkWrites = Number(after.spkWrites ?? 0) - Number(before.spkWrites ?? 0);
-  const verdict =
-    framesSent > 0 && spkWrites > 0 && EXPECT.test(saidBack)
-      ? "PASS"
-      : `FAIL: framesSent ${String(framesSent)}, spkWrites ${String(spkWrites)}, heard "${heardUs.trim()}", said "${saidBack.trim()}"`;
+  // The words are the verdict. The board's frame and speaker counters are per call and the
+  // last health read may land in the next one, so they are reported, not judged.
+  const framesSent = Number(after.framesSent ?? 0);
+  const spkWrites = Number(after.spkWrites ?? 0);
+  const verdict = EXPECT.test(saidBack)
+    ? "PASS"
+    : `FAIL: heard "${heardUs.trim()}", said "${saidBack.trim()}" (expected /${EXPECT.source}/i)`;
   console.log(
     JSON.stringify(
       {
