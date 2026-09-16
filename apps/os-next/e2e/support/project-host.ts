@@ -16,6 +16,12 @@ export const projectHostsAreLocal = (): boolean => LOCAL_HOSTNAMES.has(worker().
 /** `test`, skipped against the local worker — for what only a real deployment can prove (Artifacts,
  *  the real AI binding, an app's fetch back into its own host). The ONE gate; never copy the regex. */
 export const deployedOnly = test.skipIf(projectHostsAreLocal());
+/** `test`, skipped against a DEPLOYED worker — for rows that lend the fake git remote
+ *  (support/fake-git-server.ts, listening on THIS machine's 127.0.0.1): the repo facet fetches its
+ *  remote over the worker's egress, and a deployed worker cannot reach a loopback address (the
+ *  platform answers 403). Rows that only touch the proxy (create, its failure) still run deployed —
+ *  the fake proxy is called back over the WebSocket — and the real binding's rows run `deployedOnly`. */
+export const localOnly = test.skipIf(!projectHostsAreLocal());
 
 /** The base project hosts hang under: `localhost` for the local worker (worker-config.ts), the
  *  deployed worker's `APP_CONFIG_PROJECT_HOSTNAME_BASE` (wrangler.jsonc) otherwise. */

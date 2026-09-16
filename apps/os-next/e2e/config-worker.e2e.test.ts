@@ -7,10 +7,10 @@
 //     `itx.worker.processEventBatch` — a ping commits, the worker's processEvent appends a pong
 //   • THE FUNNEL: every stream auto-subscribes the "/" context's worker (the DO constructor appends the
 //     `config` row), so a CHILD context's ping reaches the ROOT's config worker with no manual wiring
-//   • A COMMIT TAKES EFFECT: with the source in a repo (locally a fake `itx.cfArtifacts` proxy over a
-//     fake git REMOTE, support/fake-artifacts.ts — the repo facet speaks the real wire to it), a commit
-//     to that repo re-points `itx.worker` at the new commit — the base ConfigWorker's one convention —
-//     so the next event is answered by the new code
+//   • A COMMIT TAKES EFFECT (`localOnly`: the source sits in a repo over a fake git REMOTE on this
+//     machine's loopback, support/fake-artifacts.ts — the repo facet speaks the real wire to it, and a
+//     deployed worker's egress cannot reach it), a commit to that repo re-points `itx.worker` at the
+//     new commit — the base ConfigWorker's one convention — so the next event is answered by the new code
 //   • DEPLOYED ONLY: the same worker with its source in a real Artifacts repo — the rewrite's producer
 //     is `itx.repos.get('/repos/config').readFile('worker.ts')` and nothing else changes
 //     (`WORKER_BASE_URL=https://os.iterate2.com pnpm e2e config-worker`)
@@ -18,7 +18,7 @@
 import { expect, test } from "vitest";
 import { append, freshCtx, openItx, readAll, until } from "./support/client.ts";
 import { FakeArtifacts } from "./support/fake-artifacts.ts";
-import { deployedOnly } from "./support/project-host.ts";
+import { deployedOnly, localOnly } from "./support/project-host.ts";
 
 // ── source in KV, on ONE context ──
 
@@ -141,116 +141,125 @@ export default class Config extends ConfigWorker {
   }
 }`;
 
-test("a commit to the repo itx.worker reads from takes effect: the base ConfigWorker re-points the rule at the new commit", async () => {
-  const itx = openItx(freshCtx("follow"));
-  await itx.cd("/repos/config").provide("itx.cfArtifacts", await FakeArtifacts.start());
-  const repo = itx.repos.get("/repos/config");
-  await repo.create();
-  await repo.writeFile("worker.ts", followSource("v1"));
+localOnly(
+  "a commit to the repo itx.worker reads from takes effect: the base ConfigWorker re-points the rule at the new commit",
+  async () => {
+    const itx = openItx(freshCtx("follow"));
+    await itx.cd("/repos/config").provide("itx.cfArtifacts", await FakeArtifacts.start());
+    const repo = itx.repos.get("/repos/config");
+    await repo.create();
+    await repo.writeFile("worker.ts", followSource("v1"));
 
-  // The rule, DURABLE (the raw event, as a project would keep it): the source read from the repo.
-  await itx.append({
-    type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: {
-      match: "itx.worker",
-      target: [
-        "itx",
-        "workers",
-        ["get", { source: "itx.repos.get('/repos/config').readFile('worker.ts')", cacheKey: "v1" }],
-      ],
-    },
-  });
-  const [first] = await append(itx, { type: FOLLOW_PING });
-  await until(
-    "v1 answered the first ping",
-    async () =>
-      (await readAll(itx)).some(
-        (e) =>
-          e.type === FOLLOW_PONG &&
-          e.payload?.pinged === first.offset &&
-          e.payload?.version === "v1",
-      ),
-    20_000,
-  );
-
-  // A commit lands on the repo: its commit-completed reaches /'s worker through the funnel, and the
-  // base class re-points the rule at the commit — the next ping is answered by v2.
-  const { commitOid } = await repo.writeFile("worker.ts", followSource("v2"));
-  await until(
-    "the rule follows the commit",
-    async () => {
-      const rule = await itx.rewriteRules.get("itx.worker");
-      return rule?.target.includes(commitOid) ? rule : undefined;
-    },
-    20_000,
-  );
-  const [second] = await append(itx, { type: FOLLOW_PING });
-  await until(
-    "v2 answered the second ping",
-    async () =>
-      (await readAll(itx)).some(
-        (e) =>
-          e.type === FOLLOW_PONG &&
-          e.payload?.pinged === second.offset &&
-          e.payload?.version === "v2",
-      ),
-    20_000,
-  );
-});
-
-test("a rule the commit-follow cannot spell out is skipped, never halting /'s worker: the old code keeps answering", async () => {
-  const itx = openItx(freshCtx("follow-skip"));
-  await itx.cd("/repos/config").provide("itx.cfArtifacts", await FakeArtifacts.start());
-  const repo = itx.repos.get("/repos/config");
-  await repo.create();
-  await repo.writeFile("worker.ts", followSource("v1"));
-  // A spec whose PRINTED form is past the codec's string cap (a long `props` literal): the worker
-  // loads fine (props are just handed to the entrypoint), but the reader cannot parse the rule back.
-  await itx.append({
-    type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: {
-      match: "itx.worker",
-      target: [
-        "itx",
-        "workers",
-        [
-          "get",
-          {
-            source: "itx.repos.get('/repos/config').readFile('worker.ts')",
-            cacheKey: "v1",
-            props: { padding: "x".repeat(3000) },
-          },
+    // The rule, DURABLE (the raw event, as a project would keep it): the source read from the repo.
+    await itx.append({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx.worker",
+        target: [
+          "itx",
+          "workers",
+          [
+            "get",
+            { source: "itx.repos.get('/repos/config').readFile('worker.ts')", cacheKey: "v1" },
+          ],
         ],
-      ],
-    },
-  });
-  const [first] = await append(itx, { type: FOLLOW_PING });
-  await until(
-    "v1 answered the first ping",
-    async () =>
-      (await readAll(itx)).some(
-        (e) =>
-          e.type === FOLLOW_PONG &&
-          e.payload?.pinged === first.offset &&
-          e.payload?.version === "v1",
-      ),
-    20_000,
-  );
-  await repo.writeFile("worker.ts", followSource("v2")); // the commit's follow is skipped, not fatal
-  const [second] = await append(itx, { type: FOLLOW_PING });
-  await until(
-    "v1 still answers — the rule was left alone and the worker was not halted",
-    async () =>
-      (await readAll(itx)).some(
-        (e) =>
-          e.type === FOLLOW_PONG &&
-          e.payload?.pinged === second.offset &&
-          e.payload?.version === "v1",
-      ),
-    20_000,
-  );
-  expect((await itx.rewriteRules.get("itx.worker")).target).toContain("cacheKey:'v1'");
-});
+      },
+    });
+    const [first] = await append(itx, { type: FOLLOW_PING });
+    await until(
+      "v1 answered the first ping",
+      async () =>
+        (await readAll(itx)).some(
+          (e) =>
+            e.type === FOLLOW_PONG &&
+            e.payload?.pinged === first.offset &&
+            e.payload?.version === "v1",
+        ),
+      20_000,
+    );
+
+    // A commit lands on the repo: its commit-completed reaches /'s worker through the funnel, and the
+    // base class re-points the rule at the commit — the next ping is answered by v2.
+    const { commitOid } = await repo.writeFile("worker.ts", followSource("v2"));
+    await until(
+      "the rule follows the commit",
+      async () => {
+        const rule = await itx.rewriteRules.get("itx.worker");
+        return rule?.target.includes(commitOid) ? rule : undefined;
+      },
+      20_000,
+    );
+    const [second] = await append(itx, { type: FOLLOW_PING });
+    await until(
+      "v2 answered the second ping",
+      async () =>
+        (await readAll(itx)).some(
+          (e) =>
+            e.type === FOLLOW_PONG &&
+            e.payload?.pinged === second.offset &&
+            e.payload?.version === "v2",
+        ),
+      20_000,
+    );
+  },
+);
+
+localOnly(
+  "a rule the commit-follow cannot spell out is skipped, never halting /'s worker: the old code keeps answering",
+  async () => {
+    const itx = openItx(freshCtx("follow-skip"));
+    await itx.cd("/repos/config").provide("itx.cfArtifacts", await FakeArtifacts.start());
+    const repo = itx.repos.get("/repos/config");
+    await repo.create();
+    await repo.writeFile("worker.ts", followSource("v1"));
+    // A spec whose PRINTED form is past the codec's string cap (a long `props` literal): the worker
+    // loads fine (props are just handed to the entrypoint), but the reader cannot parse the rule back.
+    await itx.append({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx.worker",
+        target: [
+          "itx",
+          "workers",
+          [
+            "get",
+            {
+              source: "itx.repos.get('/repos/config').readFile('worker.ts')",
+              cacheKey: "v1",
+              props: { padding: "x".repeat(3000) },
+            },
+          ],
+        ],
+      },
+    });
+    const [first] = await append(itx, { type: FOLLOW_PING });
+    await until(
+      "v1 answered the first ping",
+      async () =>
+        (await readAll(itx)).some(
+          (e) =>
+            e.type === FOLLOW_PONG &&
+            e.payload?.pinged === first.offset &&
+            e.payload?.version === "v1",
+        ),
+      20_000,
+    );
+    await repo.writeFile("worker.ts", followSource("v2")); // the commit's follow is skipped, not fatal
+    const [second] = await append(itx, { type: FOLLOW_PING });
+    await until(
+      "v1 still answers — the rule was left alone and the worker was not halted",
+      async () =>
+        (await readAll(itx)).some(
+          (e) =>
+            e.type === FOLLOW_PONG &&
+            e.payload?.pinged === second.offset &&
+            e.payload?.version === "v1",
+        ),
+      20_000,
+    );
+    expect((await itx.rewriteRules.get("itx.worker")).target).toContain("cacheKey:'v1'");
+  },
+);
 
 // ── THE PAYOFF (deployed only): the source in a real Artifacts repo, the rewrite's producer swapped ──
 
