@@ -46,3 +46,5 @@ Session: `01a09f64-ea4e-7c61-ab0a-c15eb65df3bc`.
 - Reports are immutable, public files on the separate `codex/ci-trace-artifacts` branch. Pruning and live OTLP export remain separate future work; shell/Playwright instrumentation is complete for this scope.
 
 - Follow-up: preparation now has measured nested operations for provisioning/deployment, slot acquisition and erase, per-app build/deploy and HTTP readiness, and shared rollout/smoke/TUI readiness. Async context keeps concurrent app children under the right parent; failed results and incomplete operations remain visible. A child-process integration regression exercises recording through OTLP assembly, alongside the preview regressions.
+
+- Live follow-up found progress output without a newline joining two operation markers; the regression now reproduces that exact output shape and markers start on a fresh line. Also declared Kit’s actual Worker entry in Knip: removing the generated Wrangler config reproduced CI’s unused-file failure, and the explicit entry fixes the race with parallel typecheck generation.

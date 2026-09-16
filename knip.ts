@@ -103,7 +103,8 @@ function makeTanstackTodoWorkspace(): WorkspaceConfig {
 
 function makeKitWorkspace(): WorkspaceConfig {
   return {
-    entry: ["vite.config.ts", "vitest.config.ts", "scripts/**/*.ts"],
+    // Knip runs alongside typecheck, which generates the Wrangler entry config.
+    entry: ["vite.config.ts", "vitest.config.ts", "src/worker.ts!", "scripts/**/*.ts"],
     project: ["scripts/**/*.ts", "src/**/*.{ts,tsx}!", "!dist/**!"],
     vite: false,
     // TanStack Start resolves this factory by convention, while Wrangler and

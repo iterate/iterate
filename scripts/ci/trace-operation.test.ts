@@ -15,11 +15,15 @@ test("nested concurrent deploys and readiness become measured children of their 
         let release;
         let started = 0;
         const bothStarted = new Promise(resolve => { release = resolve; });
+        process.stdout.write("transforming...");
         const result = await traceOperation("Deploy", async () => {
           await Promise.all(["OS", "Auth"].map(name => traceOperation(name, async () => {
             if (++started === 2) release();
             await bothStarted;
-            return traceOperation("HTTP readiness", async () => name);
+            return traceOperation("HTTP readiness", async () => {
+              process.stdout.write("transforming...");
+              return name;
+            });
           })));
           return "deployed";
         });
@@ -80,6 +84,7 @@ test("nested concurrent deploys and readiness become measured children of their 
     expect(app).toMatchObject({ parentSpanId: deploy.spanId });
     expect(spans.find((span) => span.parentSpanId === app.spanId)).toMatchObject({
       name: "HTTP readiness",
+      attributes: expect.arrayContaining([{ key: "ci.status", value: { stringValue: "passed" } }]),
     });
   }
   expect(byName("Shared readiness")).toMatchObject({

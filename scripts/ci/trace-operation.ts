@@ -9,9 +9,10 @@ export async function traceOperation<T>(
   const enabled = process.env.CI_TRACE_ENABLED === "1";
   const id = randomUUID();
   let status = "passed";
+  // Build tools write progress without a newline. Keep each marker on its own line.
   if (enabled)
     console.log(
-      `@@ci-trace ${JSON.stringify({
+      `\n@@ci-trace ${JSON.stringify({
         kind: "span-start",
         id,
         parentId: parent.getStore() || "",
@@ -34,7 +35,7 @@ export async function traceOperation<T>(
     // Names, status and times only: never copy exception payloads into public reports.
     if (enabled)
       console.log(
-        `@@ci-trace ${JSON.stringify({ kind: "span-end", id, status, time: Date.now() })}`,
+        `\n@@ci-trace ${JSON.stringify({ kind: "span-end", id, status, time: Date.now() })}`,
       );
   }
 }
