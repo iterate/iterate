@@ -155,8 +155,8 @@ static void mount_to_ready(struct fixture *fixture) {
 
 /*
  * THE WHOLE HANDSHAKE, LITERALLY. os-next splits what apps/os did in two calls
- * into three, and every one of them changed shape: the operator door
- * authenticates in-band with an admin secret and no projectId, `projects.get`
+ * into three, and every one of them changed shape: `authenticate` asks for the
+ * session the bearer on the upgrade resolved and carries no secret, `projects.get`
  * is pure addressing with one bare string argument, and lending this device
  * back is `provide(match, stub)` — one front door instead of a `capabilities`
  * field inside `connect`.
@@ -177,15 +177,13 @@ static void mounts_and_retains_the_project_and_the_rule(void) {
       ITERATE_KIT_ITX_MOUNT_AUTHENTICATING);
   assert(fixture.captured_count == 2U);
   /*
-   * TWO FIELDS, NOT THREE. `/internal/rpc` carries no HTTP gate and no project
-   * scope: the secret alone is the credential, and naming a project here would
-   * be a field the door does not read.
+   * ONE FIELD AND NO SECRET. The token rode the upgrade as `Authorization:
+   * Bearer` and os-next's gate resolved it; this call asks for that session.
    */
   assert(strcmp(
       fixture.captured[0],
       "[\"push\",[\"pipeline\",0,[\"authenticate\"],"
-      "[{\"type\":\"admin-secret\","
-      "\"secret\":\"operator-secret-never-log\"}]]]") == 0);
+      "[{\"type\":\"bearer\"}]]]") == 0);
   assert(strcmp(fixture.captured[1], "[\"pull\",1]") == 0);
 
   receive(&fixture, "[\"resolve\",1,[\"export\",-10]]");

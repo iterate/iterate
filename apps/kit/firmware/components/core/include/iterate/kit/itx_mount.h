@@ -55,10 +55,10 @@ struct iterate_kit_itx_mount_options {
    */
   const char *project_id;
   /**
-   * The blob's key field, spoken as the deployment admin secret on the
-   * operator door. It is the deployment's ROOT credential and reaches every
-   * project, so a board holding one is a bench board; a device-scoped grant
-   * will replace it without changing this call's shape.
+   * The blob's key field: a personal access token the Kit page minted for the
+   * person who set this device up, scoped to this project. The transport
+   * presents it as `Authorization: Bearer` on the upgrade; it is revoked from
+   * that person's sessions list.
    */
   const char *project_api_key;
   /**
@@ -83,7 +83,7 @@ struct iterate_kit_itx_mount_options {
  *
  * THREE CALLS:
  *
- *   authenticate({type: "admin-secret", secret})   -> the session capability
+ *   authenticate({type: "bearer"})                 -> the session the upgrade resolved
  *   projects.get("<project id>")                   -> the project's ROOT itx
  *   provide("<capability match>", <this device>)   -> a rewrite rule handle
  *

@@ -171,8 +171,12 @@ export function providerOptions(
         throw new OAuthError("invalid_grant", { description: "The session has expired." });
       if (grant.kind === "personal" && input.grantType !== "authorization_code")
         throw new OAuthError("invalid_grant", { description: "Personal tokens cannot refresh." });
-      const ttl = grant.kind === "personal" ? 30 * 24 * 3600 : 3600;
-      const accessTokenTTL = Math.min(ttl, Math.floor((grant.deadline - Date.now()) / 1000));
+      // A personal token lives until its deadline (30 days by default, up to ten years for a
+      // device — grants.ts `mint`); an interactive session's token is renewed hourly.
+      const accessTokenTTL =
+        grant.kind === "personal"
+          ? Math.floor((grant.deadline - Date.now()) / 1000)
+          : Math.min(3600, Math.floor((grant.deadline - Date.now()) / 1000));
       return {
         accessTokenTTL,
         accessTokenProps: {
@@ -244,9 +248,10 @@ SET revoked_at = COALESCE(oauth_activity.revoked_at, excluded.revoked_at), clean
 
 const notFound: Handler = { fetch: () => new Response("Not found", { status: 404 }) };
 
-/** All issued grants last at most thirty days. Keep completed revocation markers
- * another day beyond their last possible authority; failed cleanup stays visible.
- * Each hourly cron does at most one thousand deletes. */
+/** Completed revocation markers are kept a day past the thirty days an interactive grant can
+ * last; a personal token may live years (grants.ts `mint`), but revoking one deletes its provider
+ * rows outright, so the marker is not what denies it. Failed cleanup stays visible. Each hourly
+ * cron does at most one thousand deletes. */
 export async function cleanGrantActivity(env: Env) {
   const cutoff = Date.now() - 31 * 24 * 3600_000;
   const result = await env.DB.prepare(`DELETE FROM oauth_activity WHERE rowid IN (

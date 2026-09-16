@@ -41,7 +41,10 @@ afterEach(() => {
   for (const session of sessions.splice(0)) session[Symbol.dispose]();
 });
 
-async function rpc(token: string) {
+async function rpc(
+  token: string,
+  credential: "from-server-cookie" | "bearer" = "from-server-cookie",
+) {
   const response = await call("/api", {
     headers: { Upgrade: "websocket", Authorization: `Bearer ${token}`, Origin: ORIGIN },
   });
@@ -51,7 +54,7 @@ async function rpc(token: string) {
     response.webSocket! as unknown as WebSocket,
   );
   sessions.push(transport);
-  const root = transport.authenticate({ type: "from-server-cookie" });
+  const root = transport.authenticate({ type: credential });
   return { root };
 }
 
@@ -485,6 +488,28 @@ test("console and project browsers use the same CIMD flow and independent grants
     expect((await personalApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
       "browser-a",
     ]);
+    // A device says `bearer` for the same act: the token rode the upgrade, hand me that session.
+    const { root: bearerApi } = await rpc(personal.token, "bearer");
+    expect((await bearerApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
+      "browser-a",
+    ]);
+    // Bound to a project, the token opens none of the person's own: no `.user` context.
+    await expect(Promise.resolve().then(() => personalApi.user.whoami())).rejects.toThrow(
+      /bound to projects/,
+    );
+    // A device's token: `expiresAt` asks for years, capped at ten; the provider's token agrees.
+    const device = await consoleLogin.root.grants.mint({
+      name: "Kit HAVPE",
+      projects: ["browser-a"],
+      expiresAt: Date.now() + 20 * 365 * 24 * 3600_000,
+    });
+    expect(device.expiresAt - Date.now()).toBeGreaterThan(9 * 365 * 24 * 3600_000);
+    expect(device.expiresAt - Date.now()).toBeLessThan(11 * 365 * 24 * 3600_000);
+    const storedDevice = await helpers().unwrapToken(device.token);
+    expect(Math.abs(storedDevice!.expiresAt * 1000 - device.expiresAt)).toBeLessThan(2000);
+    await expect(
+      consoleLogin.root.grants.mint({ name: "Stale", projects: ["browser-a"], expiresAt: 1 }),
+    ).rejects.toThrow(/at least a minute/);
     expect(
       (
         await call("/oauth/token", {

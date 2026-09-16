@@ -14,7 +14,7 @@ on:
       - scripts/lib/**
       - apps/kit/**
       - packages/ui/**
-      - packages/voice-agent/**
+      - apps/os-next/**
       - package.json
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
