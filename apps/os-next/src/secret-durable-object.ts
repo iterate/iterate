@@ -122,13 +122,20 @@ export class SecretDurableObject extends DurableObject<Env> {
    *  material. IDEMPOTENT for the attempt it completed: the same callback again (a refreshed tab,
    *  or the root context retrying after its catalog append failed) runs no second exchange and
    *  answers the same pin, as long as the record is still the one this attempt wrote — so the
-   *  catalog can always catch up with a live object. */
-  async completeOAuth(input: { code: string; nonce: string }): Promise<{ urls: string[] }> {
+   *  catalog can always catch up with a live object. `exchanged` says which happened: THIS call
+   *  wrote the record (the caller may undo it if its catalog write fails), or a replay found it. */
+  async completeOAuth(input: {
+    code: string;
+    nonce: string;
+  }): Promise<{ urls: string[]; exchanged: boolean }> {
     const completed = await this.ctx.storage.get<{ nonce: string; revision: number }>("completed");
     if (completed?.nonce === input.nonce) {
       const stored = await this.ctx.storage.get<Stored>("stored");
-      if (stored?.revision === completed.revision) return { urls: stored.record.urls };
-      throw new Error("this attempt completed, but the secret was written since — begin again");
+      if (stored?.revision === completed.revision)
+        return { urls: stored.record.urls, exchanged: false };
+      throw new Error(
+        "this attempt completed, but the secret was written or cleared since — begin again",
+      );
     }
     const pending = await this.ctx.storage.get<PendingSecretOAuth>("pending");
     if (!pending || pending.nonce !== input.nonce)
@@ -149,7 +156,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       );
     const revision = await this.set(record, (await this.ctx.storage.get<string>("catalog")) ?? "");
     await this.ctx.storage.put("completed", { nonce: input.nonce, revision });
-    return { urls: record.urls };
+    return { urls: record.urls, exchanged: true };
   }
 
   /** Substitute, pin, dispatch — refresh and retry once on a mintable miss or a 401. A refusal is

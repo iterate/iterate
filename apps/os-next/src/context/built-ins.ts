@@ -423,22 +423,24 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           secretStore(name).beginOAuth(normalizeSecretOAuth(options), secretsCatalog),
         ),
       // The object FIRST here (the exchange most often fails on the provider's side — a junk code,
-      // a stale attempt — and must leave no row), then the fact; a refused append clears the object
-      // again, so what `list()` says and what egress finds never disagree — and the object answers
-      // the same callback idempotently, so a retried callback after a lost fact catches the catalog
-      // up. Serialized per name with `set` and `delete`, like every catalog write.
+      // a stale attempt — and must leave no row), then the fact. A refused append undoes the write
+      // THIS call made (`exchanged`), so what `list()` says and what egress finds never disagree; a
+      // replayed callback (the object answers it idempotently) undoes nothing — the catalog may
+      // already advertise the secret, and a failed re-append must not erase live material — so a
+      // retried callback after a lost fact catches the catalog up. Serialized per name with `set`
+      // and `delete`, like every catalog write.
       completeOAuth: (name, input) =>
         onRootContext(["completeOAuth", name, input], () =>
           serializeSecretMutation(name, async () => {
             const store = secretStore(name);
-            const { urls } = await store.completeOAuth(input);
+            const { urls, exchanged } = await store.completeOAuth(input);
             try {
               await append({
                 type: "events.iterate.com/secrets/changed",
                 payload: { name, urls, refresh: "oauth-refresh-token" },
               });
             } catch (error) {
-              await store.clear();
+              if (exchanged) await store.clear();
               throw error;
             }
             return { ok: true as const };
