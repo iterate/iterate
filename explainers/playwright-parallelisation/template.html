@@ -563,47 +563,47 @@
               <tr>
                 <th>Measured phase</th>
                 <th>Earlier 6 × 16 repeat</th>
-                <th>Overlapping setup</th>
+                <th>Overlapping setup · successful repeat</th>
               </tr>
             </thead>
             <tbody>
               <tr>
                 <td>Start → shared readiness complete</td>
                 <td>5m50s</td>
-                <td>6m53s</td>
+                <td>5m59s</td>
               </tr>
               <tr>
                 <td>Readiness complete → workflow end</td>
                 <td>7m40s</td>
-                <td>4m45s</td>
+                <td>4m09s</td>
               </tr>
               <tr>
                 <td>Longest browser shard</td>
                 <td>86s</td>
-                <td>74s</td>
+                <td>68s</td>
               </tr>
               <tr>
                 <td>OS Vitest</td>
                 <td>146s</td>
-                <td>144s</td>
+                <td>116s</td>
               </tr>
               <tr>
                 <td>Whole preview</td>
                 <td>13m31s · green</td>
-                <td>11m38s · red</td>
+                <td>10m09s · green</td>
               </tr>
               <tr>
                 <td>Sum of runner time</td>
                 <td>23.5 runner-minutes</td>
-                <td>68.0 runner-minutes</td>
+                <td>59.2 runner-minutes</td>
               </tr>
             </tbody>
           </table>
         </div>
         <p class="note">
           These are two observed runs, not a controlled speedup estimate. The new OS deployment took
-          126s. Installation also varied: 7.5–43.6s across consumers. Idle waiting increases
-          allocated runner time about 2.9× versus the earlier sharded run; this is not a dollar-cost
+          69s. Installation also varied: 9.2–42.8s across consumers. Idle waiting increases
+          allocated runner time about 2.5× versus the earlier sharded run; this is not a dollar-cost
           calculation.
         </p>
         <details>
@@ -615,34 +615,31 @@
             have a deadline.
           </p>
           <p>
-            Shard 1 saw readiness 0.35s after publication and downloaded the plan successfully. The
-            finalizer saw shard 5 fail, kept waiting for the backend tests, then merged all six
-            reports and erased the slot. The last consumer ended at +571s; the barrier released at
-            +575s. Teardown’s 10s install had finished at +434s. Cleanup took 112s and continued
-            after report merging reported the test failure.
+            The latest run completed every job successfully. All six reports merged; the finalizer
+            accepted all 17 telemetry artifacts. The last consumer ended at +489.5s and the cleanup
+            barrier released at +489.9s. Teardown’s 54s install had finished at +442s. Resource
+            cleanup took 109s.
           </p>
           <p>
-            A telemetry wiring bug also made this run red: the finalizer’s old job scope rejected
-            valid sibling reports. The report commit adds workflow scope, preserves
-            repository/run/attempt checks, and passes a dry-run replay of all 17 retained artifacts.
-            Fresh validation is linked from the PR. Job-only retries are deliberately rejected:
-            after cleanup, tests need a fresh deployment.
+            The first run remains in the history. Its Docs test failed, but the finalizer waited for
+            the backend tests and completed cleanup. It also exposed a telemetry scope bug, fixed
+            before the successful repeat. Job-only retries are deliberately rejected: after cleanup,
+            tests need a fresh deployment.
           </p>
         </details>
         <details>
           <summary>Does this beat one runner with 24 workers?</summary>
           <p>
-            Not in these measurements. The two 24-worker runs took 8m49s–9m19s overall, with browser
-            times of 121–123s and no retries. The overlapping run’s browsers were faster, but Vitest
-            still took 144s, versus about 126s on those runs. After shared readiness, this run took
-            about 39s longer than the 24-worker repeat. A faster browser suite alone cannot remove
-            that backend bottleneck.
+            The successful sharded run took 10m09s overall; the two 24-worker runs took 8m49s–9m19s.
+            But preparation differed: after shared readiness, the successful sharded run took 249s,
+            almost the same as 246s for the 24-worker repeat. Browser time fell from 121–123s to
+            68s; backend tests still finished last. That distinction is why the phase view matters.
           </p>
           <p>
-            The sharded run’s median attempt was 20.6s, close to 20.5s on the 24-worker repeat; p95
-            was 43.0s versus 37.8s. Sharding avoided the large per-test slowdown seen at extreme
-            worker counts on one machine, but did not eliminate retries. One sample cannot establish
-            a failure rate.
+            The successful run’s median attempt was 19.7s, close to 20.5s on the 24-worker repeat;
+            p95 was 40.6s versus 37.8s. Splitting machines avoided the large individual-test
+            slowdown seen with extreme worker counts on one machine. One green run and one red run
+            do not establish a failure rate.
           </p>
         </details>
       </section>
@@ -707,8 +704,9 @@
       <section id="interactive-trace">
         <h2>Interactive trace</h2>
         <p>
-          Choose a run. Expand a phase, then a test pool to see test attempts. Tap any bar for
-          timestamps and evidence. Scroll sideways on mobile.
+          Each browser shard opens to Setup → Wait → Run Playwright → Upload results. Expand Setup
+          for installation details or Run Playwright for individual tests. Tap a bar for timestamps
+          and evidence. Scroll sideways on mobile.
         </p>
         <label for="run-picker">Run</label
         ><select id="run-picker"></select>
@@ -856,6 +854,21 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
           not just whole-run totals.
         </p>
         <details>
+          <summary>How the four shard phases map to spans</summary>
+          <p>
+            These are reconstructed spans from logs and reporter timestamps. The job is the parent;
+            Setup, Wait, Run Playwright and Upload results are its sequential children. Installation
+            steps and overlapping test attempts are nested beneath their own phase. Expansion is a
+            display setting; it does not change the parent/child relationships.
+          </p>
+          <p>
+            Setup ends when the wait step starts; Wait ends when readiness is acknowledged. Run
+            Playwright includes downloading the deployment plan, startup, tests and report writing.
+            Upload results includes artifact upload and final job teardown. Each inspector states
+            its timing source. Unlogged gaps are not assigned invented durations.
+          </p>
+        </details>
+        <details>
           <summary>How to interpret a “retry”, a quarantine result and a queue</summary>
           <p>
             A test retry is a second attempt of one test, not a rerun of the whole CI job. Retries
@@ -933,20 +946,25 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
         walk(data.root, null);
         byId = new Map(flat.map((n) => [n.id, n]));
         jobs = data.root.children;
-        open = new Set([
-          data.root.id,
-          ...jobs.map((n) => n.id),
-          ...flat
-            .filter((n) =>
-              [
-                "Run app suites + OS readiness",
-                "Shared OS readiness",
-                "Prepare deployment + readiness",
-                "Shared readiness",
-              ].includes(n.label),
-            )
-            .map((n) => n.id),
-        ]);
+        open = data.groupedShardPhases
+          ? new Set([data.root.id, ...jobs.filter((n) => n.shard).map((n) => n.id)])
+          : new Set([
+              data.root.id,
+              ...jobs.map((n) => n.id),
+              ...flat
+                .filter((n) =>
+                  [
+                    "Run app suites + OS readiness",
+                    "Shared OS readiness",
+                    "Prepare deployment + readiness",
+                    "Shared readiness",
+                  ].includes(n.label),
+                )
+                .map((n) => n.id),
+            ]);
+        document.getElementById("expand").textContent = data.groupedShardPhases
+          ? "Show job phases"
+          : "Expand phases";
         selected = data.root.id;
         range = [0, maxTime];
         mode = "all";
@@ -1073,9 +1091,11 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
       };
       document.getElementById("expand").onclick = () => {
         mode = "all";
-        open = new Set(
-          flat.filter((n) => !n.test && !n.children.some((c) => c.test)).map((n) => n.id),
-        );
+        open = data.groupedShardPhases
+          ? new Set([data.root.id, ...jobs.filter((n) => n.shard).map((n) => n.id)])
+          : new Set(
+              flat.filter((n) => !n.test && !n.children.some((c) => c.test)).map((n) => n.id),
+            );
         document
           .querySelectorAll("[data-preset]")
           .forEach((b) => b.setAttribute("aria-pressed", b.dataset.preset === "all"));
@@ -1131,7 +1151,7 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
       }
       const entries = Object.entries(runs);
       const comparisonEntries = [
-        ...entries.filter(([key, r]) => r.overlappedSetup),
+        ...entries.filter(([key, r]) => r.overlappedSetup).reverse(),
         ...entries
           .filter(([key, r]) => r.workers && !r.overlappedSetup)
           .sort((a, b) => a[1].workers - b[1].workers),

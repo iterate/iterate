@@ -139,3 +139,17 @@ The trace retains the failed sample. Its catalogue hash matches the worker-count
 series, and the measured application/package/spec trees are unchanged. No test
 or timeout was adjusted. Final publication checks are linked in the PR rather
 than changing the frozen comparison dataset.
+
+Successful repeat: `0cvh1fw749`, implementation `1dd7a8147`. All nine jobs,
+report merging, workflow-scoped telemetry and cleanup passed. It is the default
+trace; the failed run remains in the picker. Both overlapping runs now have four
+contiguous child spans per browser job: setup, readiness wait, Playwright execution,
+and result upload/job teardown. The collector checks containment and keeps raw
+test timestamps unchanged. The default UI expands only the browser jobs to those
+four phases; a second expansion reveals installations or individual attempts.
+
+These phase spans are reconstructed from observed boundaries, not emitted OTel
+spans. The same parent/child structure can be emitted directly later. Setup ends
+at the wait step; the acknowledgement releases the run phase, which includes
+plan download and startup. Upload begins at its first log and includes post-action
+job teardown. No time is invented to fill unlogged subdivisions.

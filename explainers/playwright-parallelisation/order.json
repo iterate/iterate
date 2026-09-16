@@ -11,5 +11,6 @@
   "workers-32-simplified",
   "workers-24",
   "workers-24-repeat",
-  "overlapped-shards"
+  "overlapped-shards",
+  "overlapped-shards-success"
 ]

@@ -4,7 +4,7 @@ size: large
 ---
 # Playwright shards with overlapping preparation
 
-Status: implementation and first live experiment complete in PR #2659. Nine-job coordination and cleanup worked. The retained run is red on a Docs click and a telemetry scope bug; the latter is fixed and replay-tested. The publication commit receives a fresh CI validation; results and review status live in the PR.
+Status: implementation and successful repeat complete in PR #2659. All nine jobs, merged reports, telemetry and cleanup passed in run `0cvh1fw749`. The permanent explainer defaults to that green run with expandable setup/wait/test/upload phases; the first failed measurement remains in history.
 
 Run the nine-job experiment: prepare, six identical 16-worker Playwright shards, app/backend tests, and teardown/reporting. Test jobs start immediately and install before waiting inside the job. Teardown needs only prepare, installs while tests run, waits for every consumer to terminate, then independently merges reports and erases the environment.
 
@@ -36,3 +36,6 @@ Run the nine-job experiment: prepare, six identical 16-worker Playwright shards,
 - No application/spec code, timeouts, retries, or quarantine patterns changed. Earlier measurements remain intact. Shard-only reruns remain intentionally unsupported after cleanup.
 
 - User review: switched status.ts to a default-exported trpc-cli command class, commands first; removed the ad-hoc argv parser, injected test configuration and status.test.ts.
+
+- Successful repeat `0cvh1fw749` / `1dd7a8147`: 608.512s total, longest browser reporter 67.835s, OS Vitest 115.571s. All 88 active browser bodies passed with zero retries; one OS Vitest retry. All 17 telemetry artifacts were complete and matched the workflow.
+- User-requested trace hierarchy: each browser job defaults open to four sequential phases. Setup exposes install steps; Run Playwright exposes individual attempts directly. Both overlapping datasets retain measured boundaries and unchanged test timings. No run was interrupted to publish this update.

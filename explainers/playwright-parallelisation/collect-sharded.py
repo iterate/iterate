@@ -41,7 +41,7 @@ def add(parent, label, start, end, kind, note, basis="Timestamped log boundaries
 
 root = add(None, a.label, 0, sec(wf["finished_at"]), "job",
            "Prepare, app tests and six browser shards start together. Test runners prepare before waiting for readiness. Finalizer setup overlaps testing.", "Depot workflow timestamps", failed=wf["status"] != "finished")
-job_nodes, logs, installs, erasings = {}, {}, [], []
+job_nodes, logs, installs, erasings, shard_phases = {}, {}, [], [], {}
 job_order = ["prepare", "apps"] + [f"playwright:matrix-{i}" for i in range(6)] + ["finish"]
 
 def mark(lines, text, after=-1):
@@ -68,17 +68,32 @@ for j in w["jobs"]:
     checkout = mark(lines, "Syncing repository")
     install = mark(lines, "##[group]Run pnpm install")
     installed = mark(lines, "using pnpm v10.24.0")
-    add(job, "Runner startup / unlogged setup", job["start"], checkout, "other", "Runner startup before the first checkout log.")
-    add(job, "Checkout", checkout, install, "other", "Checkout the exact candidate into the baked workspace.")
-    add(job, "pnpm install", install, installed, "install", "Frozen, prefer-offline dependency reconciliation.")
-    if installed is not None:
-        installs.append(dict(job=label, start=install, end=installed, order=job_order.index(key)))
-    waiting = mark(lines, "[ci:status] waiting for prepare/preview-ready")
+    waiting = next((t for t, line in lines if line.startswith("##[group]Run ") and "status.ts wait-for prepare preview-ready" in line), None)
     ready = next((t for t, line in lines if "[ci:status] reached ci/" in line and line.endswith("/preview-ready")), None)
     browser_start = mark(lines, "##[group]Run pnpm exec playwright install chromium")
     browser_end = mark(lines, "##[group]Run doppler run", browser_start) if browser_start else None
-    add(job, "Chromium install/check", browser_start, browser_end, "browser", "Reconcile browsers before waiting. End is the next step boundary.")
-    add(job, "Wait for shared readiness", waiting, ready, "readiness", "Exact producer-attempt milestone, guarded by Depot producer liveness.")
+    setup = job
+    if key.startswith("playwright:"):
+        job["shard"] = int(key.rsplit("-", 1)[1]) + 1
+        uploading = mark(lines, "With the provided path, there will be", ready)
+        uploaded = mark(lines, f"Artifact preview-ci-playwright-{job['shard']} has been successfully uploaded!", uploading)
+        assert all(t is not None for t in [waiting, ready, uploading, uploaded]), f"Missing phase boundary: {key}"
+        setup = add(job, "Setup", job["start"], waiting, "other", "Runner startup, checkout, dependencies and Chromium. Expand to see the measured components.", "Job start to readiness-wait step start")
+        testing = add(job, "Run Playwright", ready, uploading, "test", "Download the prepared deployment plan, validate it, run Playwright and write its reports. Expand for startup and individual test attempts.", "Readiness acknowledgement to first result-upload log")
+        shard_phases[key] = testing
+        upload_phase = add(job, "Upload results", uploading, job["end"], "artifact", "Upload the report artifact and finish the job. The cleanup barrier waits for this job to terminate.", "First upload log to job completion")
+        add(upload_phase, "Upload artifact", uploading, uploaded, "artifact", "Report ZIP upload and finalization.")
+        add(upload_phase, "Job teardown", uploaded, job["end"], "other", "Post-action cleanup and remaining job completion time.")
+        download_start = mark(lines, "Downloading single artifact", ready)
+        download_end = mark(lines, "Artifact download completed successfully.", download_start)
+        add(testing, "Download deployment plan", download_start, download_end, "artifact", "Download the immutable plan published before the readiness milestone.")
+    add(setup, "Runner startup / unlogged setup", job["start"], checkout, "other", "Runner startup before the first checkout log.")
+    add(setup, "Checkout", checkout, install, "other", "Checkout the exact candidate into the baked workspace.")
+    add(setup, "pnpm install", install, installed, "install", "Frozen, prefer-offline dependency reconciliation.")
+    if installed is not None:
+        installs.append(dict(job=label, start=install, end=installed, order=job_order.index(key)))
+    add(setup, "Chromium install/check", browser_start, browser_end, "browser", "Reconcile browsers before waiting. End is the next step boundary.")
+    add(job, "Wait for preview readiness", waiting, ready, "readiness", "Exact producer-attempt milestone, guarded by Depot producer liveness. Includes waiter startup and polling.")
     for t, line in lines:
         match = re.search(r"\[preview\] erased (preview-\d+) data \(([\d.]+)s\)", line)
         if match:
@@ -138,9 +153,15 @@ for r in root_reports:
     key = f"playwright:matrix-{int(match[1])-1}"
     assert key in candidates, (key, start, end)
     command = mark(logs[key], "> playwright test --config")
-    if command is not None and command < start:
-        add(job_nodes[key], "Playwright startup / global setup", command, start, "other", "CLI start until the reporter begins; no invented subdivisions.")
-    suite = add(job_nodes[key], "Playwright reporter interval · 16 workers", start, end, "test", "Actual reporter interval. CLI setup may precede it.", "Test telemetry")
+    suite = shard_phases[key]
+    suite["failed"] = r["run"]["status"] != "passed"
+    suite["note"] += f" The reporter interval is {r['run']['durationMs']/1000:.1f}s within this phase; the phase also includes plan download and command overhead."
+    first_test = min(sec(attempt["startedAt"]) for test in r["tests"] for attempt in test.get("attempts", []) if attempt.get("startedAt") and attempt["state"] != "skipped")
+    last_test = max(sec(attempt["startedAt"])+attempt["durationMs"]/1000 for test in r["tests"] for attempt in test.get("attempts", []) if attempt.get("startedAt") and attempt["state"] != "skipped")
+    download_end = mark(logs[key], "Artifact download completed successfully.", suite["start"])
+    add(suite, "Resolve preview and start CLI", download_end, command, "other", "Validate deployment identity and slot ownership; start the spec command.")
+    add(suite, "Playwright startup / global setup", command, first_test, "other", "CLI invocation until the first test attempt starts, including global setup, the web server and worker startup. Reporter timing begins within this interval.", "CLI log to first reporter-recorded attempt")
+    add(suite, "Write reports / command finish", round(last_test, 3), suite["end"], "artifact", "Final reporter output and command completion before the first upload log.", "Last attempt end to first upload log")
     for t in r["tests"]:
         catalogue.append(t["fullName"])
         retries += t.get("retryCount", 0)
@@ -218,12 +239,12 @@ prepare_install = next(i["end"]-i["start"] for i in installs if i["job"] == "Pre
 consumer_install_tail = max([0] + [i["end"]-ready_signal for i in installs if i["job"] not in ["Prepare", "Teardown + reporting"]])
 finish_install_tail = max([0] + [i["end"]-consumer_end for i in installs if i["job"] == "Teardown + reporting"])
 record = dict(root=root, total=root["end"], run=m["run"]["run_id"], workflow=wf["workflow_id"], head=m["run"]["head_sha"],
-              label=a.label, normal=False, overlappedSetup=True, workers=16, shards=6, slot=erasings[0][3] if erasings else "unknown", metrics=metrics,
+              label=a.label, normal=False, overlappedSetup=True, groupedShardPhases=True, workers=16, shards=6, slot=erasings[0][3] if erasings else "unknown", metrics=metrics,
               installs=installs, installWall=prepare_install+consumer_install_tail+finish_install_tail, installUnion=sum(e-s for s,e in merged), installTail=finish_install_tail, installSum=sum(i["end"]-i["start"] for i in installs),
               windows={"prepare":[job_nodes["prepare"]["start"],job_nodes["prepare"]["end"]], "tests":[min(first_starts),wait_end], "finish":[job_nodes["finish"]["start"],root["end"]]},
               browserWindow=[min(sec(r["run"]["startedAt"]) for r in root_reports),max(sec(r["run"]["finishedAt"]) for r in root_reports)],
               catalogueCount=len(catalogue), catalogueHash=hashlib.sha256(json.dumps(sorted(catalogue)).encode()).hexdigest(),
               context=f"Nine jobs; six × sixteen browser workers. Run {m['run']['run_id']}; commit {m['run']['head_sha'][:9]}.",
-              findings=f"{green} browser bodies passed, {skipped} skipped, {failures} body failures. {retries} browser retries. Setup overlaps readiness; cleanup waits for all consumers.")
+              findings=f"{green} browser bodies passed, {skipped} skipped, {failures-sentinel_failures} body failures, {sentinel_failures} deliberate sentinel outcomes. {retries} browser retries. Setup overlaps readiness; cleanup waits for all consumers.")
 (here / "runs" / f"{a.key}.json").write_text(json.dumps(record, separators=(",", ":"))+"\n")
 print(json.dumps({"total":record["total"], **metrics}, indent=2))
