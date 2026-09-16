@@ -9,11 +9,7 @@ import {
   isSecretOAuthState,
   normalizeSecretOAuth,
 } from "./secret-oauth.ts";
-import {
-  decryptSecretMaterial,
-  encryptSecretMaterial,
-  isEncryptedMaterial,
-} from "./secret-at-rest.ts";
+import { decryptSecretMaterial, encryptSecretMaterial } from "./secret-at-rest.ts";
 import {
   normalizeSecretRecord,
   originPinned,
@@ -602,14 +598,11 @@ test("encryptSecretMaterial / decryptSecretMaterial: a string and an object roun
     expect(encrypted.algorithm).toBe("AES-256-GCM+SECRET-V1");
     expect(JSON.stringify(encrypted)).not.toContain("hunter2");
     expect(JSON.stringify(encrypted)).not.toContain("AT");
-    expect(isEncryptedMaterial(encrypted)).toBe(true);
     expect(await decryptSecretMaterial(encrypted, binding, keys)).toEqual({
       material,
       rotated: false,
     });
   }
-  expect(isEncryptedMaterial("hunter2")).toBe(false);
-  expect(isEncryptedMaterial({ iv: "x", ciphertext: "y" })).toBe(false);
 });
 
 test("the binding: another object, another name, another pin or another revision does not open it; the pin's spelling order does not matter", async () => {

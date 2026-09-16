@@ -24,7 +24,6 @@ import { signClaims } from "./principal.ts";
 import {
   decryptSecretMaterial,
   encryptSecretMaterial,
-  isEncryptedMaterial,
   type EncryptedMaterial,
   type MaterialKeys,
 } from "./secret-at-rest.ts";
@@ -96,20 +95,17 @@ export class SecretDurableObject extends DurableObject<Env> {
   /** The stored record with its material in the clear, for this object's own use only. A record
    *  the previous key opened (a rotation in progress) is written back under the current key here,
    *  so a rotation completes one read at a time. A record neither key opens — one written before
-   *  material was encrypted, or under a key that is gone — is a refusal that names the fix. */
+   *  material was encrypted, under a key that is gone, or bound elsewhere — is a refusal that names
+   *  the fix. */
   async #opened(stored: Stored): Promise<SecretRecord> {
     const { owner, name } = this.#address();
     const binding = { owner, name, urls: stored.record.urls, revision: stored.revision };
-    if (!isEncryptedMaterial(stored.record.material))
-      throw new ProjectSecretRefused(
-        `itx.fetch: the stored material of ${name} predates encryption at rest — set the secret again`,
-      );
     let opened: Awaited<ReturnType<typeof decryptSecretMaterial>>;
     try {
       opened = await decryptSecretMaterial(stored.record.material, binding, this.#keys());
     } catch {
       throw new ProjectSecretRefused(
-        `itx.fetch: the stored material of ${name} cannot be opened (a rotated key, or a record from another object) — set the secret again`,
+        `itx.fetch: the stored material of ${name} cannot be opened (a record from before encryption at rest, a rotated key, or another object's) — set the secret again`,
       );
     }
     const record = { ...stored.record, material: opened.material };

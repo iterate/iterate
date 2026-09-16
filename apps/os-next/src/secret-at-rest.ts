@@ -74,28 +74,21 @@ export async function decryptSecretMaterial(
   }
 }
 
-export function isEncryptedMaterial(value: unknown): value is EncryptedMaterial {
-  return (
-    typeof value === "object" &&
-    !!value &&
-    (value as EncryptedMaterial).algorithm === "AES-256-GCM+SECRET-V1" &&
-    typeof (value as EncryptedMaterial).iv === "string" &&
-    typeof (value as EncryptedMaterial).ciphertext === "string"
-  );
-}
-
 /** The binding as bytes: a fixed tag and version, then the fields in one order (the pin sorted, so
- *  the same set of origins in any spelling is the same binding). */
-function additionalDataOf(binding: MaterialBinding): Uint8Array {
-  return new TextEncoder().encode(
-    JSON.stringify([
-      "iterate-secret",
-      1,
-      binding.owner,
-      binding.name,
-      [...new Set(binding.urls)].sort(),
-      binding.revision,
-    ]),
+ *  the same set of origins in any spelling is the same binding). Copied into a plain ArrayBuffer —
+ *  what WebCrypto's BufferSource asks for. */
+function additionalDataOf(binding: MaterialBinding): Uint8Array<ArrayBuffer> {
+  return Uint8Array.from(
+    new TextEncoder().encode(
+      JSON.stringify([
+        "iterate-secret",
+        1,
+        binding.owner,
+        binding.name,
+        [...new Set(binding.urls)].sort(),
+        binding.revision,
+      ]),
+    ),
   );
 }
 
@@ -110,7 +103,7 @@ function base64Of(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function bytesOf(base64: string): Uint8Array {
+function bytesOf(base64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);

@@ -180,7 +180,7 @@ export default class Echo extends WorkerEntrypoint {
     expect(await field.text()).toBe("(none) the-field");
     // each dispatch is a `secrets/used` fact on the project's root log: the request AS RECEIVED
     // (the placeholder, never the value) and the upstream's status
-    const used = await usedFacts(itx);
+    const used = await usedFacts(itx, 2);
     expect(used).toEqual([
       { name: "arrives", method: "GET", url: `${origin}/`, status: 200 },
       { name: "arrives-json", method: "GET", url: `${origin}/`, status: 200 },
