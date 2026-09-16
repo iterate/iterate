@@ -1,4 +1,4 @@
-// fake-git-server.ts — an in-memory git REMOTE for the local lane: a Node `http` server on
+// fake-git-server.ts — an in-memory git REMOTE for the local e2e run: a Node `http` server on
 // 127.0.0.1 speaking exactly the protocol-v2 subset the repo facet speaks (src/repo/git-wire.ts,
 // whose codecs this reuses — so a pack this serves is a pack the facet parses, and a pack the facet
 // pushes is one this parses): `ls-refs` for the tip of `refs/heads/main`, a shallow `fetch` (wants +

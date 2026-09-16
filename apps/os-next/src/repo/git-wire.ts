@@ -5,7 +5,7 @@
 // and the one HTTP transport against an Artifacts remote (`createGitWireTransport`). The repo facet is
 // the ONLY thing that speaks git; `itx.cfArtifacts` is the binding proxy that mints the token and
 // names the remote. This module runs INSIDE the facet's dynamic worker (build-sdk.mjs bundles it,
-// pako included) and in Node for the local lane's fake remote (e2e/support/fake-git-server.ts),
+// pako included) and in Node for the local e2e run's fake remote (e2e/support/fake-git-server.ts),
 // which reuses the same codecs — so a pack the fake serves is a pack the client parses.
 //
 // The endpoint's load-bearing behaviors (probed against Artifacts, "gitty/1.0"): see the transport

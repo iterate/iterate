@@ -2,7 +2,7 @@
 // Artifacts binding on the DEPLOYED worker (env.ARTIFACTS → the `project-worker-repos` namespace),
 // and the repo facet's git wire (src/repo/git-wire.ts) against the real remote that proxy names: what
 // the unit tests over fakes (src/context/repos.test.ts, src/repo/git-wire.test.ts) and the local
-// lane's fake remote (support/fake-git-server.ts) cannot prove — the binding is wired, the remote URL
+// e2e run's fake remote (support/fake-git-server.ts) cannot prove — the binding is wired, the remote URL
 // and the token the proxy hands out open the real git-over-HTTPS endpoint, and the project scoping
 // holds end to end across /api. DEPLOYED-TARGET ONLY: every row skips against a local worker (plain
 // `pnpm e2e`) — run them with `WORKER_BASE_URL=https://os.iterate2.com pnpm e2e cfartifacts`. A repo is
