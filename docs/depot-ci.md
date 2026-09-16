@@ -385,3 +385,24 @@ Preview workflows publish a **CI trace** commit status after completion; its
 workflow → jobs → setup/wait/test/finish → shell steps → Playwright attempts.
 See [CI traces](./ci-traces.md) for the timing model, publishing, replay commands
 and OTLP JSON export.
+
+## Browser reports from artifacts
+
+The preview finalizer uploads the merged Playwright HTML directory as
+`public-playwright-report`, even after test failures. The existing report
+collector adds a **Playwright report** commit status alongside **CI trace**.
+These statuses mean the reports are available; the preview check retains the
+actual test outcome. Links use Depot artifact UUIDs and expire with their
+30-day retention.
+
+The config worker serves `https://iterate.iterate.app/depot/artifacts/<id>`.
+It opens a root `index.html`, redirects a single-file artifact to that file,
+or generates an index linking all files. Relative assets and binary attachments
+are served from the ZIP using range reads. Each artifact gets a separate
+`depot-<id>--iterate.iterate.app` origin, so HTML reports can use browser storage
+and service workers without sharing the project's origin.
+
+Additional artifacts opt into public serving with a `public-` name prefix.
+The viewer only accepts artifacts from `iterate/iterate`; existing `ci-trace-*`
+artifacts remain supported. Upload only files intended to be public. Append
+`?download` to a file link to download it instead of displaying it.

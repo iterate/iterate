@@ -2,7 +2,13 @@ import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { expect, test } from "vitest";
-import { assembleTrace, renderTrace, stepCommands, reportCommitStatus } from "./tracing.ts";
+import {
+  assembleTrace,
+  renderTrace,
+  stepCommands,
+  reportCommitStatus,
+  reportAttempt,
+} from "./tracing.ts";
 
 test("the shell hook preserves failures and does not double-count nested bash", async () => {
   const result = await promisify(execFile)("bash", ["-c", "bash -c 'echo nested'; exit 7"], {
@@ -398,6 +404,24 @@ jobs:
     "finish/erase": "pnpm preview erase",
     "finish/merge_reports": "pnpm preview ci-finish",
   });
+});
+
+test("a report from an older finish attempt cannot be relabelled as the latest rerun", () => {
+  const workflow = {
+    executions: [
+      { executionId: "new", execution: 2, createdAt: at(100) },
+      { executionId: "old", execution: 1, createdAt: at(0) },
+    ],
+    jobs: [
+      {
+        jobKey: "preview.yml:preview:finish",
+        attempts: [{ attemptId: "old-finish", attempt: 1, startedAt: at(10) }],
+      },
+    ],
+  };
+  expect(reportAttempt(workflow, "finish")).toBeUndefined();
+  workflow.jobs[0].attempts.push({ attemptId: "new-finish", attempt: 2, startedAt: at(110) });
+  expect(reportAttempt(workflow, "finish")).toMatchObject({ attemptId: "new-finish" });
 });
 
 test.for(["CI trace", "Playwright report"])(

@@ -376,6 +376,25 @@ export function stepCommands(source: string) {
   return commands;
 }
 
+/** A rerun can retain old jobs: only publish an attempt started in this execution. */
+export function reportAttempt(
+  workflow: {
+    executions: { execution: number; createdAt: string }[];
+    jobs: {
+      jobKey: string;
+      attempts: { attemptId: string; attempt: number; startedAt: string }[];
+    }[];
+  },
+  producer: string,
+) {
+  const execution = [...workflow.executions].sort((a, b) => b.execution - a.execution)[0];
+  if (!execution) throw new Error("Workflow has no execution");
+  const job = workflow.jobs.find((job) => job.jobKey.endsWith(`:${producer}`));
+  return [...(job?.attempts || [])]
+    .filter((attempt) => Date.parse(attempt.startedAt) >= Date.parse(execution.createdAt))
+    .sort((a, b) => b.attempt - a.attempt)[0];
+}
+
 /** The status says the report is available; preview checks retain the test outcome. */
 export function reportCommitStatus(
   previous: { description: string | null; target_url: string | null } | undefined,

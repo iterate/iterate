@@ -7,6 +7,7 @@ import {
   Workflow,
   renderTrace,
   reportCommitStatus,
+  reportAttempt,
   stepCommands,
 } from "./tracing.ts";
 
@@ -43,8 +44,7 @@ export default class CiTrace {
   /** Link the merged HTML report, including reports from failed test runs. */
   async publishPlaywright(workflowId: string) {
     const workflow = await this.waitForWorkflow(workflowId);
-    const finish = workflow.jobs.find((job) => job.jobKey.endsWith(":finish"));
-    const attempt = [...(finish?.attempts || [])].sort((a, b) => b.attempt - a.attempt)[0];
+    const attempt = reportAttempt(workflow, "finish");
     if (!attempt) return { skipped: "No finish job attempt" };
     const artifact = await this.uploadedArtifact(
       workflowId,
@@ -140,6 +140,20 @@ export default class CiTrace {
           )
         )
           await this.dispatchCollector(ref, workflow.workflowId);
+        else if (
+          reportCommitStatus(
+            statuses.find((item) => item.context === "Playwright report"),
+            {
+              context: "Playwright report",
+              headSha: source.headSha,
+              createdAt: execution.createdAt,
+              url: "",
+            },
+          )
+        )
+          // A trace may publish before report hosting/GitHub fails. Repair that
+          // missing link independently; absent reports return without dispatching.
+          await this.publishPlaywright(workflow.workflowId);
       } catch (error) {
         failures.push(
           new Error(`Trace publication failed for ${workflow.workflowId}`, { cause: error }),
