@@ -1,0 +1,10 @@
+{
+  "status": 200,
+  "result": {
+    "enabled": false,
+    "previews_enabled": false
+  },
+  "success": true,
+  "errors": [],
+  "messages": []
+}

@@ -1,0 +1,43 @@
+{
+  "playwrightSpanCount": 9,
+  "attempts": 3,
+  "concurrentInitialAttempts": true,
+  "failedAttemptsPreserved": true,
+  "nativePropagationEnabled": false,
+  "connections": [
+    {
+      "client": "API HTTP GET",
+      "clientTraceId": "ba98d7c2156c5f54ee4672268b26d265",
+      "clientSpanId": "da88d702065bffa5",
+      "testAttemptSpanId": "d5c7d967267e9818",
+      "nativeTraceId": "9bab73a7e36e3512fc758f9e4c8df712",
+      "nativeRootSpanId": "ef4e9ccd33467d4a",
+      "nativeSpanCount": 6,
+      "durableObjectTraceId": "a3d2835c34ed1d30049ad64e13c9043b",
+      "durableObjectCorrectlyAttributed": false
+    },
+    {
+      "client": "browser HTTP GET",
+      "clientTraceId": "ba98d7c2156c5f54ee4672268b26d265",
+      "clientSpanId": "6ab5c48e16469fde",
+      "testAttemptSpanId": "8c608bc24fca73e9",
+      "nativeTraceId": "a3d2835c34ed1d30049ad64e13c9043b",
+      "nativeRootSpanId": "cf8eba4c3f805f1e",
+      "nativeSpanCount": 10,
+      "durableObjectTraceId": "a3d2835c34ed1d30049ad64e13c9043b",
+      "durableObjectCorrectlyAttributed": true
+    },
+    {
+      "client": "API HTTP GET",
+      "clientTraceId": "ba98d7c2156c5f54ee4672268b26d265",
+      "clientSpanId": "7a22500fe028269f",
+      "testAttemptSpanId": "d80cb03049f31c7f",
+      "nativeTraceId": "c7d21c97e00dc18ba25e7ea2bee7fde6",
+      "nativeRootSpanId": "7bc91e605a699d87",
+      "nativeSpanCount": 8,
+      "durableObjectTraceId": "c7d21c97e00dc18ba25e7ea2bee7fde6",
+      "durableObjectCorrectlyAttributed": true
+    }
+  ],
+  "allDurableObjectsCorrectlyAttributed": false
+}

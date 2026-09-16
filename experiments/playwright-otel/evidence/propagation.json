@@ -1,0 +1,12 @@
+{
+  "status": 403,
+  "result": null,
+  "success": false,
+  "errors": [
+    {
+      "code": 100342,
+      "message": "propagation_policy requires the trace propagation feature to be enabled."
+    }
+  ],
+  "messages": []
+}

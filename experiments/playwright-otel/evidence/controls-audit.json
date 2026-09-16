@@ -1,0 +1,215 @@
+[
+  {
+    "scenario": "shared-concurrent",
+    "requests": 8,
+    "misattributed": 7,
+    "connections": [
+      {
+        "index": 0,
+        "traceparent": "00-6ae7ea5d3e020d6b5214e93fcf61cd17-31302234d5dd73ee-01",
+        "object": "ef62de463c25b73d",
+        "workerTraceId": "014b5f38b77fd5f66a81d2cf7279bdd2",
+        "durableObjectTraceId": "028e728df7d30395ba2d929e4a7afe06",
+        "correctlyAttributed": false
+      },
+      {
+        "index": 1,
+        "traceparent": "00-666d31ca2e8f109c64b08b831a50a7bb-528d80c9aafc7d6d-01",
+        "object": "ef62de463c25b73d",
+        "workerTraceId": "3a65a79f5f356ae65cdbe544dc4ee984",
+        "durableObjectTraceId": "028e728df7d30395ba2d929e4a7afe06",
+        "correctlyAttributed": false
+      },
+      {
+        "index": 2,
+        "traceparent": "00-351df247cb7d0114237d9d447c72b04d-35a80ab6502139fe-01",
+        "object": "ef62de463c25b73d",
+        "workerTraceId": "2c457541050b961d5333a4e1a6b52935",
+        "durableObjectTraceId": "028e728df7d30395ba2d929e4a7afe06",
+        "correctlyAttributed": false
+      },
+      {
+        "index": 3,
+        "traceparent": "00-bbbb689cbb328023f1e16fb180185871-dd0ce17b3b952432-01",
+        "object": "ef62de463c25b73d",
+        "workerTraceId": "96b0a6904e0449b27a08fc463a7a6fc6",
+        "durableObjectTraceId": "028e728df7d30395ba2d929e4a7afe06",
+        "correctlyAttributed": false
+      },
+      {
+        "index": 4,
+        "traceparent": "00-c6aaf20b6c9bf90b2954afb40f814d3a-d214edd6563bbbab-01",
+        "object": "ef62de463c25b73d",
+        "workerTraceId": "ff5a2ce145e1fb72bbe855e8e8abd7a8",
+        "durableObjectTraceId": "028e728df7d30395ba2d929e4a7afe06",
+        "correctlyAttributed": false
+      },
+      {
+        "index": 5,
+        "traceparent": "00-1c9a5041adc69412d4b80e3876989b74-6cbf4a8aa3ae54ac-01",
+        "object": "ef62de463c25b73d",
+        "workerTraceId": "b8647a1d8980ec76b76198ddae045afe",
+        "durableObjectTraceId": "028e728df7d30395ba2d929e4a7afe06",
+        "correctlyAttributed": false
+      },
+      {
+        "index": 6,
+        "traceparent": "00-f46bf5cbd77816d15a6dcdf9819e965c-e6a26fdb8963ddc7-01",
+        "object": "ef62de463c25b73d",
+        "workerTraceId": "f4042fbe1af711fc3b2ab51146c77564",
+        "durableObjectTraceId": "028e728df7d30395ba2d929e4a7afe06",
+        "correctlyAttributed": false
+      },
+      {
+        "index": 7,
+        "traceparent": "00-d74897269f3b0aa2c794de8fb4c1885c-b12c07abb719126a-01",
+        "object": "ef62de463c25b73d",
+        "workerTraceId": "028e728df7d30395ba2d929e4a7afe06",
+        "durableObjectTraceId": "028e728df7d30395ba2d929e4a7afe06",
+        "correctlyAttributed": true
+      }
+    ]
+  },
+  {
+    "scenario": "isolated-concurrent",
+    "requests": 8,
+    "misattributed": 0,
+    "connections": [
+      {
+        "index": 0,
+        "traceparent": "00-5a9f66b921649ad70b7f7a2b2c8c5afb-3ed5f9d3bdb44457-01",
+        "object": "1ace3718a91f3b26-0",
+        "workerTraceId": "5242e2aeb2c97daf5fd0c5424feebd63",
+        "durableObjectTraceId": "5242e2aeb2c97daf5fd0c5424feebd63",
+        "correctlyAttributed": true
+      },
+      {
+        "index": 1,
+        "traceparent": "00-5d1ace5b15943379193d541427b0327a-51f4072a8bf6055c-01",
+        "object": "1ace3718a91f3b26-1",
+        "workerTraceId": "b67903319eafe037f504970a6ff17067",
+        "durableObjectTraceId": "b67903319eafe037f504970a6ff17067",
+        "correctlyAttributed": true
+      },
+      {
+        "index": 2,
+        "traceparent": "00-2cf88edb2f7001f2fbf32e7da94a206d-596071cf8852a776-01",
+        "object": "1ace3718a91f3b26-2",
+        "workerTraceId": "181002e5832cc3da08f03681e8817beb",
+        "durableObjectTraceId": "181002e5832cc3da08f03681e8817beb",
+        "correctlyAttributed": true
+      },
+      {
+        "index": 3,
+        "traceparent": "00-a2f2a19959a787b50e98647b71bf740a-a4c17f5d045628ba-01",
+        "object": "1ace3718a91f3b26-3",
+        "workerTraceId": "bb45f813533dd8335a36905d6f9fd34b",
+        "durableObjectTraceId": "bb45f813533dd8335a36905d6f9fd34b",
+        "correctlyAttributed": true
+      },
+      {
+        "index": 4,
+        "traceparent": "00-08466483ea408fc6b51e15c1315627ee-e847e3190425c67a-01",
+        "object": "1ace3718a91f3b26-4",
+        "workerTraceId": "e9f250a29ddd15eaf63ee4c480cdf2f8",
+        "durableObjectTraceId": "e9f250a29ddd15eaf63ee4c480cdf2f8",
+        "correctlyAttributed": true
+      },
+      {
+        "index": 5,
+        "traceparent": "00-9b1158bb24d8eeeab924fcc45d97cd1c-ea43fb2ffb401e0f-01",
+        "object": "1ace3718a91f3b26-5",
+        "workerTraceId": "5ceabbd9f9d17da2678185873d98cb69",
+        "durableObjectTraceId": "5ceabbd9f9d17da2678185873d98cb69",
+        "correctlyAttributed": true
+      },
+      {
+        "index": 6,
+        "traceparent": "00-4fc3240626b3abeca862dad329517161-250b64092a108c4f-01",
+        "object": "1ace3718a91f3b26-6",
+        "workerTraceId": "d48fc5427122a0d35376a3c493887418",
+        "durableObjectTraceId": "d48fc5427122a0d35376a3c493887418",
+        "correctlyAttributed": true
+      },
+      {
+        "index": 7,
+        "traceparent": "00-acaae8770e3e63592f89a93e255829b2-88aee6f928659170-01",
+        "object": "1ace3718a91f3b26-7",
+        "workerTraceId": "b8d94812007411a72e84e38aed8d891a",
+        "durableObjectTraceId": "b8d94812007411a72e84e38aed8d891a",
+        "correctlyAttributed": true
+      }
+    ]
+  },
+  {
+    "scenario": "shared-sequential",
+    "requests": 8,
+    "misattributed": 0,
+    "connections": [
+      {
+        "index": 0,
+        "traceparent": "00-a01407f5f631a6f7f22850550fe3e1e5-d0e52babaa9ee7e2-01",
+        "object": "645e7554b173422c",
+        "workerTraceId": "a757e392e5f8f5e6ffe5f6652161eff7",
+        "durableObjectTraceId": "a757e392e5f8f5e6ffe5f6652161eff7",
+        "correctlyAttributed": true
+      },
+      {
+        "index": 1,
+        "traceparent": "00-ee9f10ee2049ecfbbe1a3c1d527aa87f-9be7b5bc8948859d-01",
+        "object": "645e7554b173422c",
+        "workerTraceId": "01132fbba198609d8ff1495af4fca81a",
+        "durableObjectTraceId": "01132fbba198609d8ff1495af4fca81a",
+        "correctlyAttributed": true
+      },
+      {
+        "index": 2,
+        "traceparent": "00-77fefeca9283f97efe6ca4f8f96556e5-634771cb89308fd3-01",
+        "object": "645e7554b173422c",
+        "workerTraceId": "cd8798dcaec9f3fa6ae98b9ddc30dd36",
+        "durableObjectTraceId": "cd8798dcaec9f3fa6ae98b9ddc30dd36",
+        "correctlyAttributed": true
+      },
+      {
+        "index": 3,
+        "traceparent": "00-462780ce5fc1f1621bb792c9f13a8d3a-a4c82c50290824f8-01",
+        "object": "645e7554b173422c",
+        "workerTraceId": "6d79e980a74b8c74d2a7f0d832bffff7",
+        "durableObjectTraceId": "6d79e980a74b8c74d2a7f0d832bffff7",
+        "correctlyAttributed": true
+      },
+      {
+        "index": 4,
+        "traceparent": "00-fbbd612df513edc09cf4f7b218e1eba4-37a4619910ecd933-01",
+        "object": "645e7554b173422c",
+        "workerTraceId": "719fea3fdbec63cf3b7ff0673beda710",
+        "durableObjectTraceId": "719fea3fdbec63cf3b7ff0673beda710",
+        "correctlyAttributed": true
+      },
+      {
+        "index": 5,
+        "traceparent": "00-f797793e290e1be8b3b7a13a320ad281-48dc7858f38c70c5-01",
+        "object": "645e7554b173422c",
+        "workerTraceId": "a1fde41d91d5d6b6a3f38bc7197cb6aa",
+        "durableObjectTraceId": "a1fde41d91d5d6b6a3f38bc7197cb6aa",
+        "correctlyAttributed": true
+      },
+      {
+        "index": 6,
+        "traceparent": "00-97131c660b644fde300a39e0a1e0f836-71dd5b71b64cf030-01",
+        "object": "645e7554b173422c",
+        "workerTraceId": "5022ba586ab938fd89c1a3ab4124abb2",
+        "durableObjectTraceId": "5022ba586ab938fd89c1a3ab4124abb2",
+        "correctlyAttributed": true
+      },
+      {
+        "index": 7,
+        "traceparent": "00-7b8ba6674bc8eb7ec6853fe96e90ad42-06921e90d10d8f6e-01",
+        "object": "645e7554b173422c",
+        "workerTraceId": "da98e5055da1fa7fd5c472a5fc991c4e",
+        "durableObjectTraceId": "da98e5055da1fa7fd5c472a5fc991c4e",
+        "correctlyAttributed": true
+      }
+    ]
+  }
+]

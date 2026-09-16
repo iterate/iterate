@@ -1,0 +1,10 @@
+{
+  "name": "playwright-otel-probe",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@opentelemetry/api": "1.9.0",
+    "@opentelemetry/sdk-trace-node": "2.11.0",
+    "@opentelemetry/exporter-trace-otlp-http": "0.222.0"
+  }
+}
