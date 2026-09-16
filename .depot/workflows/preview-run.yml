@@ -20,7 +20,12 @@ permissions:
   contents: read
   pull-requests: write
   statuses: write
+defaults:
+  run:
+    shell: bash
 env:
+  BASH_ENV: ${{ github.workspace }}/scripts/ci/tracing/shell.sh
+  CI_TRACE_ENABLED: "1"
   CI_HEAD_SHA: ${{ inputs.head-sha }}
   TEST_TELEMETRY_HEAD_SHA: ${{ inputs.head-sha }}
   PREVIEW_TARGET_ARGS: ${{ inputs.pull-request-number && format('--pull-request-number {0}', inputs.pull-request-number) || format('--commit {0}', inputs.head-sha) }}
@@ -40,10 +45,13 @@ jobs:
           clean: false
           ref: ${{ inputs.head-sha }}
       - name: Reconcile dependencies (baked)
+        id: install_dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Reset test artifacts
+        id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
       - name: Enforce preview deployment epoch
+        id: deployment_epoch
         run: |-
           set -euo pipefail
           expected="os-auth-rpc-v1"
@@ -53,6 +61,7 @@ jobs:
             exit 1
           fi
       - name: Verify coordination and signal preparing
+        id: signal_preparing
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -60,6 +69,7 @@ jobs:
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
           pnpm exec trpc-cli scripts/ci/status.ts set preparing
       - name: Check fixed Playwright capacity
+        id: catalogue
         env:
           CI: "true"
           APP_CONFIG_BASE_URL: https://os.iterate-preview-1.com
@@ -82,6 +92,7 @@ jobs:
           path: test-results/preview-ci-plan.json
           if-no-files-found: error
       - name: Signal prepared preview
+        id: signal_ready
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -89,6 +100,7 @@ jobs:
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
           pnpm exec trpc-cli scripts/ci/status.ts set preview-ready
       - name: Collect test artifacts
+        id: collect_artifacts
         if: always()
         run: scripts/preview/collect-test-artifacts.sh test-results
       - name: Upload results
@@ -112,12 +124,16 @@ jobs:
           clean: false
           ref: ${{ inputs.head-sha }}
       - name: Reconcile dependencies (baked)
+        id: install_dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Reset test artifacts
+        id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
       - name: Reconcile browser installation
+        id: install_browser
         run: pnpm exec playwright install chromium
       - name: Wait for prepared preview
+        id: wait_for_preview
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -130,6 +146,7 @@ jobs:
           name: preview-ci-plan
           path: test-results
       - name: Run app tests alongside browser shards
+        id: app_tests
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -137,6 +154,7 @@ jobs:
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
           pnpm preview ci-test $PREVIEW_TARGET_ARGS
       - name: Collect test artifacts
+        id: collect_artifacts
         if: always()
         run: scripts/preview/collect-test-artifacts.sh test-results
       - name: Upload results
@@ -166,12 +184,16 @@ jobs:
           clean: false
           ref: ${{ inputs.head-sha }}
       - name: Reconcile dependencies (baked)
+        id: install_dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Reset test artifacts
+        id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
       - name: Reconcile browser installation
+        id: install_browser
         run: pnpm exec playwright install chromium
       - name: Wait for prepared preview
+        id: wait_for_preview
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -184,6 +206,7 @@ jobs:
           name: preview-ci-plan
           path: test-results
       - name: Run Playwright shard
+        id: playwright
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -214,8 +237,10 @@ jobs:
           clean: false
           ref: ${{ inputs.head-sha }}
       - name: Reconcile dependencies (baked)
+        id: install_dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Reset test artifacts
+        id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
       - name: Wait for every test job to settle
         id: consumers
@@ -241,6 +266,7 @@ jobs:
                   merge-multiple: true
                   path: test-results
               - name: Merge reports and publish full preview result
+                id: merge_reports
                 if: always() && steps.consumers.outputs.settled == 'true' && needs.prepare.result == 'success'
                 env:
                   DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -249,6 +275,7 @@ jobs:
                   doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
                   pnpm preview ci-finish $PREVIEW_TARGET_ARGS
           - name: Erase slot data after all tests
+            id: erase
             if: always() && steps.consumers.outputs.settled == 'true'
             env:
               DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -261,6 +288,7 @@ jobs:
               pnpm preview erase $PREVIEW_TARGET_ARGS
               --ran-head-sha "${{ inputs.head-sha }}"
       - name: Normalize and send preview test telemetry
+        id: telemetry
         if: always()
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -290,6 +318,7 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
       - name: Require preparation and every consumer to succeed
+        id: outcome
         if: always()
         env:
           PREPARE_RESULT: ${{ needs.prepare.result }}
@@ -299,3 +328,12 @@ jobs:
           test "$PREPARE_RESULT" = success
           test "$CONSUMERS_SETTLED" = true
           test "$CONSUMERS_SUCCEEDED" = true
+      - name: Dispatch completed-run trace collector
+        id: trace_collector
+        if: always()
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          CI_TRACE_REF: ${{ github.head_ref || github.ref_name }}
+        run: >-
+          doppler run --project _shared --config preview --
+          pnpm exec trpc-cli scripts/ci/tracing/cli.ts dispatch "$CI_TRACE_REF"
