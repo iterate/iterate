@@ -26,7 +26,11 @@ export default async function deploy(options: { env?: string } = {}) {
     workerName: (env) => env.workerName,
     servingUrl: (env) => env.baseUrl,
     resources: (env) => env.resources,
-    requiredSecrets: ["APP_CONFIG_ADMIN_API_SECRET", "APP_CONFIG_SESSION_SECRET"],
+    requiredSecrets: [
+      "APP_CONFIG_ADMIN_API_SECRET",
+      "APP_CONFIG_SESSION_SECRET",
+      "APP_CONFIG_SECRETS_KEY",
+    ],
     optionalSecrets: ["APP_CONFIG_GOOGLE_CLIENT_ID", "APP_CONFIG_GOOGLE_CLIENT_SECRET"],
     async prepare(ctx) {
       const sql = readFileSync(new URL("../src/control-plane.sql", import.meta.url), "utf8");

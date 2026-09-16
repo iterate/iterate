@@ -205,9 +205,9 @@ already logged). Each re-verified here, then fixed with a test where determinist
   (the write lands in the secret's own Durable Object), unserialized on the root DO; a concurrent pair
   could land the object writes opposite to the log order, leaving egress a value the catalog says is
   gone. Serialized per name on the root DO (the chain lives in #builtIns, one per DO instance).
-  FOLLOW-UP: an eviction BETWEEN a delete's append and the object's clear can still strand a value —
-  a reconciliation sweep (walk the catalog's deleted names, clear their objects) is the deeper fix;
-  deferred. (context/built-ins.ts)
+  RESOLVED 2026-09-16 without a sweep: `delete` now clears the object FIRST and appends after, so an
+  eviction between the two leaves a catalog row egress answers 502 for (loud, retry the delete) —
+  never live material behind a catalog that says it is gone. (context/built-ins.ts)
 - **[bug] #2 an older facet load could clobber a newer one.** A stale load's post-load check only
   confirmed the facet still existed; a reconfigure during the load then had its newer code aborted and
   replaced by the older. Now the post-load check compares the desired spec (facet:<name>) to what was

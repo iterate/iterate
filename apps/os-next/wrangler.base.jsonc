@@ -104,9 +104,10 @@
 
   // Configuration (src/worker.ts `parseAppConfig`): `APP_CONFIG_*` vars — the ONE door, parsed once per isolate,
   // loud on a bad or unknown one. Bindings are declared above; a var is what differs between
-  // deployments of the same code. The two secrets — APP_CONFIG_SESSION_SECRET (the login flow's
-  // cookie) and APP_CONFIG_ADMIN_API_SECRET (the admin secret: `authenticate({ type: "admin-secret" })`,
-  // the test configs' admin bearer) — are wrangler secrets, never committed vars; both are required.
+  // deployments of the same code. The three secrets — APP_CONFIG_SESSION_SECRET (the login flow's
+  // cookie), APP_CONFIG_ADMIN_API_SECRET (the admin secret: `authenticate({ type: "admin-secret" })`,
+  // the test configs' admin bearer) and APP_CONFIG_SECRETS_KEY (project secrets' material at rest,
+  // secret-at-rest.ts) — are wrangler secrets, never committed vars; all three are required.
   "vars": {
     "APP_CONFIG_ENVIRONMENT_NAME": "poc",
     "APP_CONFIG_PLATFORM_ORIGIN": "https://os.iterate2.com",

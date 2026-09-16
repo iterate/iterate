@@ -55,6 +55,14 @@ export const AppConfig = z.object({
   /** The deployment's admin secret — `authenticate({ type: "admin-secret" })` and the project host's
    *  admin bearer: every project. */
   adminApiSecret: requiredSecret,
+  /** The key a project secret's material is encrypted with at rest (secret-at-rest.ts) — any string;
+   *  the AES-256 key is its SHA-256. Losing it loses every stored secret's material (the catalog
+   *  survives; each secret is set again). */
+  secretsKey: requiredSecret,
+  /** The key before a rotation, decrypt-only: a record it opens is written back under `secretsKey`
+   *  on that read, so the old key can be dropped once every record has been read once. Blank when
+   *  not rotating. */
+  secretsKeyPrevious: redacted(z.string().trim().default("")),
   /** The Cloudflare account + Artifacts namespace `itx.git` builds git remotes from; blank where no
    *  Artifacts binding exists (the workers lane). */
   artifactsAccountId: z.string().trim().default(""),
