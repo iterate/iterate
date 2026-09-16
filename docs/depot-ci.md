@@ -377,3 +377,11 @@ secret or copy a personal token. GitHub milestones use the job token with
 For this experiment, use a fresh push or workflow dispatch, not retry/rerun:
 individual test retries would reuse an erased deployment, and old plan artifacts
 must not be accepted. Normal Playwright/Vitest test retries are unchanged.
+
+## Interactive trace reports
+
+Preview workflows publish a **CI trace** commit status after completion; its
+**Details** link opens the report:
+workflow → jobs → setup/wait/test/finish → shell steps → Playwright attempts.
+See [CI traces](./ci-traces.md) for the timing model, publishing, replay commands
+and OTLP JSON export.

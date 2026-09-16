@@ -4,6 +4,9 @@
 // so a unit test constructs it with `new` (processor.test.ts, in node); the model and the script runner
 // come in as functions (`AgentDeps`) — the host (durable-object.ts) reaches both through `itx`.
 //
+// A request is DEBOUNCED as in apps/os (the at-head scheduling below): one window after its trigger,
+// the failure backoff folded in, the delayed append being the intent.
+//
 // Two kinds of effect, chosen at the dispatch site (apps/os's rule): a PER-EVENT consequence — the
 // assistant's output parsed into a script request, a script's settlement rendered into the next
 // developer item — is BLOCKED (`blockProcessorWhile`): the event is delivered once, so losing the
@@ -35,7 +38,19 @@ export type AgentDeps = {
   /** A stored file's bytes (`itx.files.get(path).bytes()`); throws when it is gone. */
   readFile(path: string): Promise<Uint8Array>;
   now(): number;
+  /** The debounce window's wait — injected so a test can make it instant. */
+  sleep(ms: number): Promise<void>;
 };
+
+/** apps/os's failure backoff, folded into the debounce window: doubling from the policy's base per
+ *  consecutive failure, capped at its ceiling; nothing after a success. */
+export function retryBackoffMs(
+  state: Pick<AgentView, "consecutiveLlmFailures" | "config">,
+): number {
+  const { backoffBaseMs, backoffMaxMs } = state.config.llmRequestRetryPolicy;
+  if (state.consecutiveLlmFailures <= 0) return 0;
+  return Math.min(2 ** (state.consecutiveLlmFailures - 1) * backoffBaseMs, backoffMaxMs);
+}
 
 /** The conversation as the model reads it. An item's images become image parts (a data: URL of the
  *  bytes in `images`, keyed by path — a vision model sees the pixels); any other attachment, or an
@@ -119,10 +134,17 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
             llm: { model: patch.llm?.model ?? state.config.llm.model },
             maxAutonomousTurns: patch.maxAutonomousTurns ?? state.config.maxAutonomousTurns,
             llmRequestExpiryMs: patch.llmRequestExpiryMs ?? state.config.llmRequestExpiryMs,
+            llmRequestDebounceMs: patch.llmRequestDebounceMs ?? state.config.llmRequestDebounceMs,
             llmRequestRetryPolicy: {
               maxAttempts:
                 patch.llmRequestRetryPolicy?.maxAttempts ??
                 state.config.llmRequestRetryPolicy.maxAttempts,
+              backoffBaseMs:
+                patch.llmRequestRetryPolicy?.backoffBaseMs ??
+                state.config.llmRequestRetryPolicy.backoffBaseMs,
+              backoffMaxMs:
+                patch.llmRequestRetryPolicy?.backoffMaxMs ??
+                state.config.llmRequestRetryPolicy.backoffMaxMs,
             },
           },
         };
@@ -164,10 +186,13 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
       }
 
       case "events.iterate.com/agent/llm-request-requested": {
-        // A late intent (its trigger already answered, or a request already open) is a harmless
-        // stream fact: the request's identity is the offset of the intent that was FIRST.
+        // A late intent — its trigger answered, moved on, or a request already open — is a harmless
+        // stream fact: only the intent naming THE pending trigger opens a request, so a sleep the
+        // debounce left behind for a trigger that moved can neither skip the new trigger's window
+        // nor a failure's backoff. The request's identity is the offset of the intent that opened it.
         const trigger = state.pendingLlmRequestTrigger;
-        if (!trigger || state.openRequest) return undefined;
+        if (!trigger || state.openRequest || trigger.offset !== event.payload.triggerOffset)
+          return undefined;
         return {
           ...state,
           pendingLlmRequestTrigger: null,
@@ -336,23 +361,41 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
           : state.consecutiveLlmFailures >= llmRequestRetryPolicy.maxAttempts
             ? `the model failed ${String(state.consecutiveLlmFailures)} times in a row`
             : null;
-      runInBackground(() =>
-        append(
-          breaker
-            ? {
-                type: "events.iterate.com/agent/paused",
-                idempotencyKey: this.idempotencyKey(`pause/${String(trigger.offset)}`),
-                payload: { reason: breaker, triggerOffset: trigger.offset },
-              }
-            : {
-                type: "events.iterate.com/agent/llm-request-requested",
-                // Keyed on the trigger, its body derived from trigger + config: a second pass over
-                // the same fold appends the same intent, which dedupes.
-                idempotencyKey: this.idempotencyKey(`request/${String(trigger.offset)}`),
-                payload: { model: llm.model, expiresAt: trigger.atMs + llmRequestExpiryMs },
-              },
-        ),
-      );
+      if (breaker) {
+        runInBackground(() =>
+          append({
+            type: "events.iterate.com/agent/paused",
+            idempotencyKey: this.idempotencyKey(`pause/${String(trigger.offset)}`),
+            payload: { reason: breaker, triggerOffset: trigger.offset },
+          }),
+        );
+        return;
+      }
+      // THE DEBOUNCE (apps/os's): wait for more content, plus the failure backoff — one window,
+      // anchored at the trigger. The delayed append IS the intent (no wake event): more words inside
+      // the window move the trigger; the old trigger's intent then lands as a harmless fact (the
+      // reduce opens a request only for the trigger it names) and the moved trigger's own intent, a
+      // window later, opens the one request for them all — the prompt is built from the log at run
+      // time. Every at-head pass inside the window schedules another
+      // sleep-then-append for the same trigger, so the body is DETERMINISTIC from trigger + config
+      // (expiresAt anchored at the trigger's time, never `now`): identical bodies dedupe on the key.
+      // A droppable attempt: dying mid-window, the revival pass re-runs this with the window long
+      // closed and appends at once.
+      const windowMs = state.config.llmRequestDebounceMs + retryBackoffMs(state);
+      const windowClosesInMs = trigger.atMs + windowMs - now;
+      const intent = {
+        type: "events.iterate.com/agent/llm-request-requested",
+        idempotencyKey: this.idempotencyKey(`request/${String(trigger.offset)}`),
+        payload: {
+          model: llm.model,
+          expiresAt: trigger.atMs + llmRequestExpiryMs,
+          triggerOffset: trigger.offset,
+        },
+      };
+      runInBackground(async () => {
+        if (windowClosesInMs > 0) await this.deps.sleep(windowClosesInMs);
+        await append(intent);
+      });
       return;
     }
 

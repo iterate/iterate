@@ -39,6 +39,7 @@ import {
   renderCloudflareWorkerVersionOverrides,
 } from "../../packages/shared/src/test-support/cloudflare-worker-version-overrides.ts";
 import { PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV } from "../../packages/shared/src/test-support/preview-rollout-gate.ts";
+import { traceOperation } from "../ci/tracing/tracing.ts";
 import {
   parseWorkerSizeFromDeployOutput,
   parseWorkerSizeStatusDescription,
@@ -380,8 +381,10 @@ export async function ciPrepare(options: DeployCommandOptions = {}) {
   if (checkedOutSha !== run.headSha)
     throw new Error("Preview head changed before CI preparation; refusing to deploy.");
   return await withPreviewE2eTelemetry(run, runtime, "deploy", async (telemetry) => {
-    const { state } = await measurePreviewDeployRun(telemetry, () =>
-      deployPreviewApps({ target, runtime, allApps: Boolean(options.allApps), telemetry }),
+    const { state } = await traceOperation("Provision and deploy preview", () =>
+      measurePreviewDeployRun(telemetry, () =>
+        deployPreviewApps({ target, runtime, allApps: Boolean(options.allApps), telemetry }),
+      ),
     );
     const slot = state.environmentConfigLease;
     if (!slot) throw new Error("Preview deployment produced no slot.");
@@ -415,16 +418,18 @@ export async function ciPrepare(options: DeployCommandOptions = {}) {
     // This invokes the very same readiness commands as the single-machine
     // preview run. The environment flag exits after all setup processes join.
     if (apps.some((app) => app.slug === "os")) {
-      const result = await runPreviewCiCommand(
-        plan,
-        run,
-        runtime,
-        "os",
-        cloudflarePreviewApps.os.previewTestCommandArgs,
-        { PREVIEW_OS_READINESS_ONLY: "1" },
-      );
-      if (result.exitCode !== 0)
-        throw new Error(commandFailureMessage(result, "OS readiness failed"));
+      await traceOperation("Shared readiness: rollout, agent smoke and TUI", async () => {
+        const result = await runPreviewCiCommand(
+          plan,
+          run,
+          runtime,
+          "os",
+          cloudflarePreviewApps.os.previewTestCommandArgs,
+          { PREVIEW_OS_READINESS_ONLY: "1" },
+        );
+        if (result.exitCode !== 0)
+          throw new Error(commandFailureMessage(result, "OS readiness failed"));
+      });
     }
     await mkdir(resolve(runtime.repositoryRoot, "test-results"), { recursive: true });
     await writeFile(
@@ -891,35 +896,37 @@ async function deployPreviewApps({
   let environmentConfigLease: EnvironmentConfigLease;
   try {
     const recordedSlug = current.environmentConfigLease?.slug ?? null;
-    environmentConfigLease = requestedEnvironment
-      ? (
-          await assignEnvironmentConfigLease({
+    environmentConfigLease = await traceOperation("Acquire and clean preview slot", async () =>
+      requestedEnvironment
+        ? (
+            await assignEnvironmentConfigLease({
+              eraseSlotData: makePreviewSlotDataEraser(runtime, "reset"),
+              holder,
+              leaseMs: defaultPreviewLeaseMs,
+              recordedSlug,
+              semaphore,
+              wantedSlug: requestedEnvironment,
+            })
+          ).lease
+        : await claimEnvironmentConfigLease({
             eraseSlotData: makePreviewSlotDataEraser(runtime, "reset"),
             holder,
             leaseMs: defaultPreviewLeaseMs,
+            // Surface the wait in the report as soon as every slot is busy.
+            onFirstWait: async (holderTable) => {
+              await report.update((state) => ({
+                ...state,
+                notice: [
+                  `All preview slots are leased — this run is waiting for one (since ${new Date().toISOString()}).`,
+                  holderTable,
+                ].join("\n"),
+              }));
+            },
             recordedSlug,
             semaphore,
-            wantedSlug: requestedEnvironment,
-          })
-        ).lease
-      : await claimEnvironmentConfigLease({
-          eraseSlotData: makePreviewSlotDataEraser(runtime, "reset"),
-          holder,
-          leaseMs: defaultPreviewLeaseMs,
-          // Surface the wait in the report as soon as every slot is busy.
-          onFirstWait: async (holderTable) => {
-            await report.update((state) => ({
-              ...state,
-              notice: [
-                `All preview slots are leased — this run is waiting for one (since ${new Date().toISOString()}).`,
-                holderTable,
-              ].join("\n"),
-            }));
-          },
-          recordedSlug,
-          semaphore,
-          waitTotalMs: resolveSlotWaitTotalMs(runtime.commandEnvironment),
-        });
+            waitTotalMs: resolveSlotWaitTotalMs(runtime.commandEnvironment),
+          }),
+    );
   } catch (error) {
     await report.update((state) => ({
       ...state,
@@ -1006,27 +1013,31 @@ async function deployPreviewApps({
       batch,
       defaultPreviewDeployConcurrency,
       async (app) => {
-        const entry = await deployPreviewAppWithStatus({
-          app,
-          existingEntry: current.apps[app.slug] ?? null,
-          commandEnvironment: {
-            ...runtime.commandEnvironment,
-            // apps/os/scripts/deploy.ts turns this into
-            // APP_CONFIG_ITERATE_REPO_PKG_REF so project seeds and dynamic
-            // builds pin every iterate/iterate pkg.pr.new dependency to this
-            // head's builds, not @main. The sha, not @<pr>: pkg.pr.new PR refs
-            // are moving targets, while the sha pins the exact builds this
-            // deploy shipped.
-            PLATFORM_DEPLOY_HEAD_SHA: run.headSha,
-            ...(app.slug === "os" &&
-              osContainerRollout && { OS_CONTAINERS_ROLLOUT: osContainerRollout.mode }),
-          },
-          dopplerConfig: environmentConfigLease.dopplerConfig,
-          mainWorkerSize: workerSizeBaselines[app.slug] ?? null,
-          headSha: run.headSha,
-          repositoryRoot: runtime.repositoryRoot,
-          runUrl: run.workflowRunUrl,
-          signal: runtime.signal,
+        const entry = await traceOperation(`Deploy ${app.slug}`, async (span) => {
+          const result = await deployPreviewAppWithStatus({
+            app,
+            existingEntry: current.apps[app.slug] ?? null,
+            commandEnvironment: {
+              ...runtime.commandEnvironment,
+              // apps/os/scripts/deploy.ts turns this into
+              // APP_CONFIG_ITERATE_REPO_PKG_REF so project seeds and dynamic
+              // builds pin every iterate/iterate pkg.pr.new dependency to this
+              // head's builds, not @main. The sha, not @<pr>: pkg.pr.new PR refs
+              // are moving targets, while the sha pins the exact builds this
+              // deploy shipped.
+              PLATFORM_DEPLOY_HEAD_SHA: run.headSha,
+              ...(app.slug === "os" &&
+                osContainerRollout && { OS_CONTAINERS_ROLLOUT: osContainerRollout.mode }),
+            },
+            dopplerConfig: environmentConfigLease.dopplerConfig,
+            mainWorkerSize: workerSizeBaselines[app.slug] ?? null,
+            headSha: run.headSha,
+            repositoryRoot: runtime.repositoryRoot,
+            runUrl: run.workflowRunUrl,
+            signal: runtime.signal,
+          });
+          if (result.status === "deploy-failed") span.fail();
+          return result;
         });
         // Capture this before waiting for slower siblings in the batch. The
         // lane timestamp must describe this app's own completion, not the tail
@@ -2592,6 +2603,8 @@ export const cloudflarePreviewSharedPaths = [
   ...cloudflareAppSharedPaths,
   "scripts/preview/**",
   "scripts/ci/status.ts",
+  "scripts/ci/tracing/**",
+  ".depot/workflows/ci-trace.yml",
   // Every app's generated wrangler config (routes, worker names, resource
   // IDs) derives from the root envs.ts — an envs.ts change (e.g. recreating a
   // slot's deleted D1) must redeploy the fleet or the fix never ships.
@@ -4749,14 +4762,21 @@ async function deployPreviewApp(input: {
   }
 
   const commandStartedAt = Date.now();
-  const deployResult = await runPreviewDeployCommand({
-    app: input.app,
-    commandEnvironment: input.commandEnvironment,
-    dopplerConfig: input.dopplerConfig,
-    operation: "up",
-    repositoryRoot: input.repositoryRoot,
-    signal: input.signal,
-  });
+  const deployResult = await traceOperation(
+    `Build/deploy command: ${input.app.slug}`,
+    async (span) => {
+      const result = await runPreviewDeployCommand({
+        app: input.app,
+        commandEnvironment: input.commandEnvironment,
+        dopplerConfig: input.dopplerConfig,
+        operation: "up",
+        repositoryRoot: input.repositoryRoot,
+        signal: input.signal,
+      });
+      if (result.exitCode !== 0) span.fail();
+      return result;
+    },
+  );
   const deployCommandDurationMs = Date.now() - commandStartedAt;
   // Wrangler prints "Total Upload: … KiB / gzip: … KiB" on every upload —
   // lift it out of the captured deploy output for the PR table's size column.
@@ -4797,15 +4817,19 @@ async function deployPreviewApp(input: {
   }
 
   const readinessStartedAt = Date.now();
-  const readiness = await waitForPreviewAppReadiness({
-    publicUrl: appConfig.baseUrl,
-    readyUrlPath: input.app.previewReadyUrlPath,
-    signal: input.signal,
-    timeoutMs: defaultPreviewReadyTimeoutMs,
-    workerVersion:
-      deployedWorkerVersion && input.app.previewReadyWorkerVersion
-        ? { expected: deployedWorkerVersion }
-        : undefined,
+  const readiness = await traceOperation(`HTTP readiness: ${input.app.slug}`, async (span) => {
+    const result = await waitForPreviewAppReadiness({
+      publicUrl: appConfig.baseUrl,
+      readyUrlPath: input.app.previewReadyUrlPath,
+      signal: input.signal,
+      timeoutMs: defaultPreviewReadyTimeoutMs,
+      workerVersion:
+        deployedWorkerVersion && input.app.previewReadyWorkerVersion
+          ? { expected: deployedWorkerVersion }
+          : undefined,
+    });
+    if (!result.ok) span.fail();
+    return result;
   });
   const deployReadinessDurationMs = Date.now() - readinessStartedAt;
   if (!readiness.ok) {
@@ -5327,10 +5351,12 @@ async function eraseAcquiredSlotOrGiveItBack(input: {
   semaphore: PreviewSemaphoreResourceClient;
 }) {
   try {
-    await input.eraseSlotData({
-      dopplerConfig: parseEnvironmentConfigLeaseData(input.lease.data).dopplerConfig,
-      slug: input.lease.slug,
-    });
+    await traceOperation("Erase acquired preview slot", () =>
+      input.eraseSlotData({
+        dopplerConfig: parseEnvironmentConfigLeaseData(input.lease.data).dopplerConfig,
+        slug: input.lease.slug,
+      }),
+    );
     return true;
   } catch (error) {
     logPreview(
