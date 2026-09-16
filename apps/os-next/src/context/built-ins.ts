@@ -126,11 +126,16 @@ export interface BuiltInScope extends LibraryRoots {
     ): Promise<{ ok: true }>;
     /** OAUTH, THE FIRST TOKENS (secret-oauth.ts): hand back the provider's authorize URL for the
      *  project's own OAuth client — send a human there. The provider redirects the human to the
-     *  platform's callback (`/.secrets/oauth/callback`; the human must be signed in to Iterate as a
-     *  member of the project), and the secret's own Durable Object exchanges the code, becomes an
-     *  `oauth-refresh-token` secret and appends the catalog fact. Until then nothing is stored under
-     *  `name` but the attempt. */
+     *  platform's callback (`/.secrets/oauth/callback`; the human must be signed in to Iterate as
+     *  someone who reaches the secret's owner — a project's member, the user themself for a user's
+     *  own secret), and the secret's own Durable Object exchanges the code, becomes an
+     *  `oauth-refresh-token` secret, and the catalog fact is appended. Until then nothing is stored
+     *  under `name` but the attempt. */
     beginOAuth(name: string, options: SecretOAuthOptions): Promise<{ authorizationUrl: string }>;
+    /** The platform's callback completes the attempt through here — the exchange in the secret's
+     *  object, then the catalog fact, in the same per-name order as `set` and `delete`. You never
+     *  call this: the code and the nonce reach only the callback. */
+    completeOAuth(name: string, input: { code: string; nonce: string }): Promise<{ ok: true }>;
     delete(name: string): Promise<{ ok: true }>;
     list(): Promise<SecretCatalogEntry[]>;
   };
@@ -411,12 +416,32 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             return { ok: true as const };
           }),
         ),
-      // No append here: the catalog learns of the secret when the exchange succeeds (the object
-      // appends the fact then), so an abandoned attempt leaves no row that advertises a pin and a
-      // strategy the object does not hold.
+      // No append here: the catalog learns of the secret when the exchange succeeds, so an
+      // abandoned attempt leaves no row that advertises a pin and a strategy the object does not hold.
       beginOAuth: (name, options) =>
         onRootContext(["beginOAuth", name, options], () =>
           secretStore(name).beginOAuth(normalizeSecretOAuth(options), secretsCatalog),
+        ),
+      // The object FIRST here (the exchange most often fails on the provider's side — a junk code,
+      // a stale attempt — and must leave no row), then the fact; a refused append clears the object
+      // again, so what `list()` says and what egress finds never disagree. Serialized per name with
+      // `set` and `delete`, like every catalog write.
+      completeOAuth: (name, input) =>
+        onRootContext(["completeOAuth", name, input], () =>
+          serializeSecretMutation(name, async () => {
+            const store = secretStore(name);
+            const { urls } = await store.completeOAuth(input);
+            try {
+              await append({
+                type: "events.iterate.com/secrets/changed",
+                payload: { name, urls, refresh: "oauth-refresh-token" },
+              });
+            } catch (error) {
+              await store.clear();
+              throw error;
+            }
+            return { ok: true as const };
+          }),
         ),
       delete: (name) =>
         onRootContext(["delete", name], () =>

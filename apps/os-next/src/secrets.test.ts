@@ -573,7 +573,7 @@ test("client_secret_post puts client_id + client_secret in the form for both gra
 });
 
 test("isSecretOAuthState: the signed claims must carry the kind and every field with its type — another claim set signed by the same key is not a state", () => {
-  const state = { kind: "secret-oauth", projectId: "p", name: "n", nonce: "x", exp: 1 };
+  const state = { kind: "secret-oauth", owner: "p", name: "n", nonce: "x", exp: 1 };
   expect(isSecretOAuthState(state)).toBe(true);
   expect(isSecretOAuthState({ ...state, kind: "google-login" })).toBe(false);
   expect(isSecretOAuthState({ ...state, exp: "1" })).toBe(false);

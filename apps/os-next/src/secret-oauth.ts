@@ -64,10 +64,13 @@ export type PendingSecretOAuth = {
 };
 
 /** The claims the platform signs into the `state` parameter — how the callback finds the secret.
- *  `kind` keeps these claims apart from every other claim set the same key signs. */
+ *  `owner` is the RESOURCE OWNER's id (iterate-context.ts `resourceScope`): a project's id, or
+ *  `global--users--<id>` / `global--organizations--<id>` for a user's or an organization's own
+ *  secret — the callback admits the human by it. `kind` keeps these claims apart from every other
+ *  claim set the same key signs. */
 export type SecretOAuthState = {
   kind: "secret-oauth";
-  projectId: string;
+  owner: string;
   name: string;
   nonce: string;
   exp: number;
@@ -186,7 +189,7 @@ export function isSecretOAuthState(claims: unknown): claims is SecretOAuthState 
   return (
     isRecord(claims) &&
     claims.kind === "secret-oauth" &&
-    typeof claims.projectId === "string" &&
+    typeof claims.owner === "string" &&
     typeof claims.name === "string" &&
     typeof claims.nonce === "string" &&
     typeof claims.exp === "number"

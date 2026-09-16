@@ -10,7 +10,9 @@
 // this object is the physical value — apps/os's Secret DO, minus its stream (the material sits in
 // this object's storage, never on a log). `beginOAuth` + `completeOAuth` are the OAuth first-token
 // flow (secret-oauth.ts): the pending attempt lives here too, and the code exchange writes the
-// record and appends the catalog fact. A refresh's outcome is a fact too (`secrets/refreshed`).
+// record; the catalog fact is the root context's, appended by `itx.secrets.completeOAuth`
+// (built-ins.ts) in the same per-name order as `set` and `delete`. A refresh's outcome is a fact
+// this object appends itself (`secrets/refreshed`).
 
 import { DurableObject } from "cloudflare:workers";
 import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
@@ -87,11 +89,11 @@ export class SecretDurableObject extends DurableObject<Env> {
     catalog: string,
   ): Promise<{ authorizationUrl: string }> {
     const config = appConfigOf(this.env);
-    const { projectId, name } = this.#address();
+    const { owner, name } = this.#address();
     const nonce = crypto.randomUUID();
     const state: SecretOAuthState = {
       kind: "secret-oauth",
-      projectId,
+      owner,
       name,
       nonce,
       exp: Date.now() + 10 * 60_000,
@@ -107,14 +109,16 @@ export class SecretDurableObject extends DurableObject<Env> {
     return { authorizationUrl };
   }
 
-  /** OAUTH, step two (the callback): the code for the pending attempt the nonce names → the
-   *  exchange → the record, as a `set`, and the catalog fact. A stale or foreign callback (a back
-   *  button, an older authorize URL, a replay with a junk code) fails without touching the live
-   *  attempt; the attempt is consumed only when its exchange succeeds, and the nonce is remembered
-   *  so the same callback cannot complete twice. The exchange lands only if nothing else wrote this
-   *  object while the provider was answering: a `set` or `clear` in that window wins and the tokens
-   *  are discarded. */
-  async completeOAuth(input: { code: string; nonce: string }): Promise<void> {
+  /** OAUTH, step two (the callback, through `itx.secrets.completeOAuth` on the owner's root
+   *  context): the code for the pending attempt the nonce names → the exchange → the record, as a
+   *  `set`. A stale or foreign callback (a back button, an older authorize URL, a replay with a junk
+   *  code) fails without touching the live attempt; the attempt is consumed only when its exchange
+   *  succeeds, and the nonce is remembered so the same callback cannot complete twice. The exchange
+   *  lands only if nothing else wrote this object while the provider was answering: a `set` or
+   *  `clear` in that window wins and the tokens are discarded (from the fence to the nonce only
+   *  storage awaits follow, which the input gate holds together). Answers the pin the record was
+   *  stored with — what the catalog fact carries; never the material. */
+  async completeOAuth(input: { code: string; nonce: string }): Promise<{ urls: string[] }> {
     if ((await this.ctx.storage.get<string>("consumedNonce")) === input.nonce)
       throw new Error("this callback already completed — the secret holds its tokens");
     const pending = await this.ctx.storage.get<PendingSecretOAuth>("pending");
@@ -134,14 +138,9 @@ export class SecretDurableObject extends DurableObject<Env> {
       throw new Error(
         "the secret was changed while the provider was answering — the tokens were discarded; begin again",
       );
-    const catalog = (await this.ctx.storage.get<string>("catalog")) ?? "";
-    await this.set(record, catalog);
+    await this.set(record, (await this.ctx.storage.get<string>("catalog")) ?? "");
     await this.ctx.storage.put("consumedNonce", input.nonce);
-    const { name } = this.#address();
-    await this.#appendToCatalog({
-      type: "events.iterate.com/secrets/changed",
-      payload: { name, urls: record.urls, refresh: "oauth-refresh-token" },
-    });
+    return { urls: record.urls };
   }
 
   /** Substitute, pin, dispatch — refresh and retry once on a mintable miss or a 401. A refusal is
@@ -213,10 +212,10 @@ export class SecretDurableObject extends DurableObject<Env> {
   /** This object's name, `<owner>:<name>` — the left half is the RESOURCE OWNER's id
    *  (iterate-context.ts `resourceScope`: a project's id, or `global--users--<id>` /
    *  `global--organizations--<id>`), which never holds a `:`. */
-  #address(): { projectId: string; name: string } {
+  #address(): { owner: string; name: string } {
     const id = this.ctx.id.name ?? ":";
     const colon = id.indexOf(":");
-    return { projectId: id.slice(0, colon), name: id.slice(colon + 1) };
+    return { owner: id.slice(0, colon), name: id.slice(colon + 1) };
   }
 
   #refresh(revision: number): Promise<void> {
@@ -255,7 +254,7 @@ export class SecretDurableObject extends DurableObject<Env> {
         return dispatch(exchange);
       });
     } catch (error) {
-      await this.#appendToCatalog({
+      await this.#appendOutcome({
         type: "events.iterate.com/secrets/refreshed",
         payload: {
           name,
@@ -272,28 +271,27 @@ export class SecretDurableObject extends DurableObject<Env> {
       ...current,
       record: { ...current.record, material: next },
     });
-    await this.#appendToCatalog({
+    await this.#appendOutcome({
       type: "events.iterate.com/secrets/refreshed",
       payload: { name, kind: refresh.kind, ok: true },
     });
   }
 
-  /** A fact about this secret onto the owner's root log — the platform's own append, no principal,
-   *  best-effort: the outcome it records already happened, and a lost fact must not fail the
-   *  request that caused it. */
-  async #appendToCatalog(event: { type: string; payload: Record<string, unknown> }): Promise<void> {
+  /** A refresh's outcome onto the owner's root log — the platform's own append, no principal,
+   *  through THE one write (`itx.builtins.append`, iterate-context.ts), which no context can mask.
+   *  Best-effort: the outcome already happened, and a lost fact must not fail the request that
+   *  caused it. */
+  async #appendOutcome(event: { type: string; payload: Record<string, unknown> }): Promise<void> {
     const catalog = await this.ctx.storage.get<string>("catalog");
     if (!catalog) return;
     try {
-      await this.env.ITERATE_CONTEXT.getByName(catalog).invoke(["itx", ["append", event]], [], {
-        principal: null,
-      });
+      await this.env.ITERATE_CONTEXT.getByName(catalog).invoke(
+        ["itx", "builtins", ["append", event]],
+        [],
+        { principal: null },
+      );
     } catch (error) {
-      console.error("secrets.catalog_append_failed", {
-        catalog,
-        type: event.type,
-        error: String(error),
-      });
+      console.error("secrets.catalog_append_failed", { type: event.type, error: String(error) });
     }
   }
 }

@@ -14,6 +14,7 @@ import { auth } from "./sdk/auth.ts";
 import { identityDoor } from "./identity.ts";
 import { isSecretOAuthState, SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.ts";
 import { verifyClaims } from "./principal.ts";
+import type { Reach } from "./directory.ts";
 import { oauthResponse } from "./api.ts";
 import { consoleHandler } from "./control-plane.ts";
 import { appConfigOf } from "./app-config.ts";
@@ -22,7 +23,7 @@ import { appCookies, browserAuthorization, browserClient } from "./browser-clien
 import { directory } from "./directory.ts";
 import { registerPipelinedRpcBrand } from "./context/expression.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
-import { DurableObjectNameCodec } from "./iterate-context.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./iterate-context.ts";
 import { IterateRpcTarget, SessionTeardown, type SessionInput } from "./session.ts";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "./principal.ts";
 import { authorizationForToken, recordGrantUse, cleanGrantActivity } from "./oauth.ts";
@@ -70,12 +71,55 @@ function projectHostRequestTo(
   return new Request(request, { headers });
 }
 
-/** A project secret's OAuth callback: the provider redirected the human here with `code` and the
- *  platform-signed `state` (secret-oauth.ts) naming project, secret and nonce. WHO completes it is
- *  admitted the way a project host admits a visitor — the same platform session (a member's browser
- *  cookie, or a bearer) — and must reach that project: a stranger who saw the authorize URL cannot
- *  plant their own provider account into the project's secret. The secret's Durable Object then
- *  exchanges the code; a failure is a plain-text 4xx with the reason, never a credential. */
+/** A secret's OWNER (iterate-context.ts `resourceScope`), read back from its id: a project's id,
+ *  or `global--users--<id>` / `global--organizations--<id>`; `root` is the owner's root context —
+ *  the catalog, where `itx.secrets` runs. */
+function secretOwnerOf(owner: string): {
+  kind: "project" | "users" | "organizations";
+  id: string;
+  root: string;
+} {
+  const [, kind, id] = /^global--(users|organizations)--(.+)$/.exec(owner) ?? [];
+  if (kind !== "users" && kind !== "organizations")
+    return {
+      kind: "project",
+      id: owner,
+      root: DurableObjectNameCodec.stringify({ projectId: owner, path: "/" }),
+    };
+  return {
+    kind,
+    id: id ?? "",
+    root: DurableObjectNameCodec.stringify({
+      projectId: GLOBAL_PROJECT_ID,
+      path: `/${kind}/${id}`,
+    }),
+  };
+}
+
+/** WHO may complete a secret's OAuth: a session that reaches the secret's owner — for a project's
+ *  secret, a session reaching that project; for a user's own, that user; for an organization's, a
+ *  member; the admin reaches every one. A project-bound bearer reaches no user's or organization's
+ *  own secrets; nothing but the admin reaches the global root's. */
+async function reachesSecretOwner(
+  directory: SessionInput["directory"],
+  reach: Reach,
+  owner: ReturnType<typeof secretOwnerOf>,
+): Promise<boolean> {
+  if (reach === "every") return true;
+  if (owner.kind === "project")
+    return owner.id !== GLOBAL_PROJECT_ID && directory.reachesProject(reach, owner.id);
+  if (!("userId" in reach)) return false;
+  if (owner.kind === "users") return reach.userId === owner.id;
+  return (await directory.listOrgs(reach.userId)).some((org) => org.id === owner.id);
+}
+
+/** A secret's OAuth callback: the provider redirected the human here with `code` and the
+ *  platform-signed `state` (secret-oauth.ts) naming the secret's owner, its name and the nonce. WHO
+ *  completes it is admitted the way a project host admits a visitor — the same platform session (a
+ *  browser cookie, or a bearer) — and must reach the owner (`reachesSecretOwner`): a stranger who saw
+ *  the authorize URL cannot plant their own provider account into someone else's secret. The
+ *  secret's Durable Object then exchanges the code; a failure is a plain-text 4xx with the reason,
+ *  never a credential. */
 async function secretOAuthCallback(
   request: Request,
   env: WorkerEnv,
@@ -103,17 +147,22 @@ async function secretOAuthCallback(
       401,
       "Sign in to Iterate in this browser first, then open this link again — the tokens go into a project you must be a member of.",
     );
-  if (!(await sessionInput.directory.reachesProject(authorization.reach, claims.projectId)))
-    return answer(403, `Your session cannot access project ${claims.projectId}.`);
+  const owner = secretOwnerOf(claims.owner);
+  if (!(await reachesSecretOwner(sessionInput.directory, authorization.reach, owner)))
+    return answer(403, `Your session cannot access the secrets of ${claims.owner}.`);
   const denied = url.searchParams.get("error");
   if (denied) return answer(400, `The provider declined: ${denied}`);
   const code = url.searchParams.get("code");
   if (!code) return answer(400, "The provider sent no authorization code.");
+  // Through the owner's root context — `itx.secrets.completeOAuth` (built-ins.ts) runs the exchange
+  // in the secret's object and appends the catalog fact, serialized with every other write to
+  // that name; the platform's own call, no principal.
   try {
-    await env.SECRET.getByName(`${claims.projectId}:${claims.name}`).completeOAuth({
-      code,
-      nonce: claims.nonce,
-    });
+    await env.ITERATE_CONTEXT.getByName(owner.root).invoke(
+      ["itx", "builtins", "secrets", ["completeOAuth", claims.name, { code, nonce: claims.nonce }]],
+      [],
+      { principal: null },
+    );
   } catch (error) {
     return answer(
       400,
@@ -122,7 +171,7 @@ async function secretOAuthCallback(
   }
   return answer(
     200,
-    `Done: the secret "${claims.name}" of project ${claims.projectId} holds the tokens. You can close this tab.`,
+    `Done: the secret "${claims.name}" of ${claims.owner} holds the tokens. You can close this tab.`,
   );
 }
 
