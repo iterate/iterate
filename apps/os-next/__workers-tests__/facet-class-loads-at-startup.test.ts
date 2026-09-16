@@ -136,7 +136,7 @@ test("hosting a facet is one LOADER.get + one getDurableObjectClass; 20 warm cal
   expect(last).toEqual({ calls: 21, instance: first.instance }); // running the whole time
   expect({ gets: tap.gets.length, classGets: tap.classGets }).toEqual({ gets: 1, classGets: 1 });
 
-  // The idle quiesce aborts the live facet (support.ts reproduces production's 60 s). The next call
+  // The idle quiesce aborts the live facet (support.ts runs production's release directly). The next call
   // re-materializes it: a fresh instance, one more LOADER.get + class mint — the isolate itself is
   // the loader's to keep (no cold build) — and the calls after that are warm again.
   await quiesce(ctx);

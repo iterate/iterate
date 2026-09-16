@@ -26,7 +26,7 @@
 //       stubs is pinned non-hibernatable (workerd#6800, the reason the quiesce alarm exists). So
 //       each eviction here reproduces the production sequence first: quiesce (return the stubs) →
 //       evict — see quiesceLikeProduction().
-//   (c) runDurableObjectAlarm() to fire the 60s quiesce — NOT VIABLE as the eviction ITSELF: the
+//   (c) runDurableObjectAlarm() to fire the 30s quiesce — NOT VIABLE as the eviction ITSELF: the
 //       alarm body re-arms without quiescing unless 60 REAL seconds of idle have passed (alarm()
 //       checks Date.now() - lastActivity >= 60_000), and even then it only returns the borrowed
 //       stubs — the weaker assertion, subsumed by (b). It IS however the production-shaped way
@@ -66,7 +66,7 @@ async function incarnationNow(): Promise<number> {
 
 let callerItx: any; // a SEPARATE caller session (it lends nothing of its own)
 
-/** The production 60s idle quiesce on demand (support.ts's `quiesce`), then the two facts this
+/** The production idle quiesce's release on demand (support.ts's `quiesce`), then the two facts this
  *  file leans on: every borrowed stub returned, the DO dormant — evictDurableObject's de-facto
  *  precondition (see mechanism note (b) in the header: evicting a warm DO times out on "active
  *  references", exactly the production #6800 pin). */

@@ -99,7 +99,7 @@ none. Reconciliation runs after every commit, every pin use and every delivery c
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Scheduled appends     | the earliest pending `nextAt` in core state (none while paused or when every definition is parked)                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Subscription delivery | per cursor row (a target that, through the rules, resolves to neither a facet nor a lent rpc stub — decided statically, never by evaluating it): the time its cursor carries — a ladder rung, or the claim written before every awaited call (attempt + 1, now + 30 s, durable: a death mid-call is retried by the next incarnation, fifteen deaths halt the row) — else, while the cursor sits behind the durable mark, 20 s from when it was first seen behind; a row a loop holds claims that 20 s, renewed at every pass end; a halted row owes nothing |
-| Idle quiesce          | the pins' last use + 60 s, rounded up to the next 10 s — a facet call finishing, a borrowed rpc stub called, a library connection used, a facet call in flight; nothing else moves it — and none while nothing is pinned                                                                                                                                                                                                                                                                                                                                    |
+| Idle quiesce          | the pins' last use + 30 s, rounded up to the next 10 s — a borrowed rpc stub called, an open capnweb socket used (the two things that keep an actor resident, both measured; an HTTP client holds nothing); nothing else moves it, and none while nothing is pinned. A facet is not a pin: on the edge it does not keep the actor resident (it dies with the actor within seconds), so nothing arms an alarm for it; a release that runs for a pin aborts live facets too                                                                                   |
 
 A wake makes no loop: `stream/woken` is a durable event like any other, and every `*` subscription
 receives it (`consumesEvent`, the one consumes rule, has no carve-out). What keeps it from looping is
@@ -109,12 +109,13 @@ only a pin's own use keeps the idle deadline. The alarm handler records the wake
 (`stream/woken { reason: "alarm" }`, inside its pass — workerd hides a firing alarm from `getAlarm()`
 for the whole run, so no constructor can tell; every other door records `"request"`), and its
 delivery acks within the pass, so an alarm wake that finds nothing else owed writes no alarm at all.
-A pass that began with nothing pinned ends with nothing pinned, unless durable work is due within the
-quiet period: what it pinned, its own deliveries pinned (a `*` facet materialized for the wake record),
-and an idle alarm for that would find the actor gone — on the edge a live facet does not keep an actor
-resident; it hibernates within seconds like any other — and construct the next incarnation to do the
-same, a wake per quiet period. So an alarm-woken incarnation releases what its own pass materialized
-and leaves no alarm; the next request re-materializes the facet from its checkpoint.
+A facet is not a pin. On the edge a live facet does not keep an actor resident — it hibernates within
+seconds like any other, and the facet dies with it — so nothing arms an alarm for a facet: such an
+alarm could only construct the next incarnation, whose wake record would materialize the facet again,
+a wake per quiet period. A `*` processor facet therefore costs a wake nothing beyond its own
+materialization. Only a borrowed rpc stub or an open capnweb socket (measured: both keep the actor
+resident; an HTTP client does not) arms the idle deadline, and the release that runs for them aborts live facets too — which is
+what un-pins a facet-hosting actor where the runtime does keep it resident (workerd's harness).
 
 One hold keeps the alarm from being moved under a handler: nothing is written while `alarm()` runs —
 its alarm stays stored, so a pass that throws is retried by the runtime (2s·2ⁿ, six tries), and a

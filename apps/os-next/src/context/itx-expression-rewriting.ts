@@ -94,6 +94,8 @@ export const BUILT_IN_ROOTS = [
   "kv",
   "secrets",
   "ai",
+  "browser",
+  "r2",
   "cfArtifacts",
   "append",
   "schedules",
@@ -114,6 +116,8 @@ export const BUILT_IN_ROOTS = [
   "connectToCapnweb",
   "repos",
   "workspaces",
+  "agents",
+  "files",
 ] as const;
 
 export type BuiltInRoot = (typeof BUILT_IN_ROOTS)[number];

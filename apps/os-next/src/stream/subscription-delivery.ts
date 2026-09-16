@@ -508,15 +508,6 @@ export class SubscriptionDelivery {
     for (const record of this.#deliveryRecordByName.values()) record.behindSince = undefined;
   }
 
-  /** Every push chain settled — what the alarm's pass awaits before judging the pins its own
-   *  deliveries made. A live client's push is fire-and-forget and settles at once; a facet push is
-   *  bounded by the facet watchdog. */
-  async pushesSettled(): Promise<void> {
-    await Promise.all(
-      [...this.#deliveryRecordByName.values()].map((record) => record.deliveryChain),
-    );
-  }
-
   /** The cursor of a subscription the stream delivers at-least-once — absent for a push target. */
   cursor(name: string): SubscriptionCursor | undefined {
     return this.#deliveryRecordByName.get(name)?.cursor;
@@ -865,12 +856,13 @@ export class SubscriptionDelivery {
             if (!this.cursor(name)) continue; // replaced while the target was evaluated
             if (durable) {
               // THE CLAIM, durable, before the call: die mid-call and the next incarnation reads it
-              // from the cursor table — the attempt this is, and a time past the call's watchdog to
-              // come back by. Fifteen claims with neither an ack nor a failure halt the row, as
-              // fifteen refusals would (a batch that kills its caller is a refusal that can only
-              // repeat) — a sixteenth is never claimed. The row is written, not re-armed: the alarm
-              // already stands at the row's earlier claim (its commit's), and the ack, a failure or
-              // a pass re-arms from what the row says then.
+              // from the cursor table — the attempt this is, and when to come back: THE SAME INSTANT
+              // the alarm already holds for this row (its commit's claim, `behindSince` + 20 s), so
+              // one wake delivers, never one to find the claim not yet due and a second for it.
+              // Fifteen claims with neither an ack nor a failure halt the row, as fifteen refusals
+              // would (a batch that kills its caller is a refusal that can only repeat) — a sixteenth
+              // is never claimed. The row is written, not re-armed: the ack, a failure or a pass
+              // re-arms from what the row says then.
               const attempt = cursor.attempt + 1;
               if (attempt > 15) {
                 const { nextAttemptAtMs: _spent, ...settled } = cursor;
@@ -891,7 +883,8 @@ export class SubscriptionDelivery {
                 {
                   ...cursor,
                   attempt,
-                  nextAttemptAtMs: Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS + 10_000,
+                  nextAttemptAtMs:
+                    (record.behindSince ?? Date.now()) + CURSOR_DELIVERY_CALL_WATCHDOG_MS,
                 },
                 true,
               );
@@ -917,8 +910,11 @@ export class SubscriptionDelivery {
             );
           } catch (error) {
             if (!this.cursor(name)) continue; // replaced mid-flight: re-evaluated for the new row
-            // The target DANGLES (`danglingUnder` says what follows): no rung, no halt, no claim.
+            // The target DANGLES (`danglingUnder` says what follows): no rung, no halt, no claim —
+            // and no attempt spent: a claim written before a CALL that was then refused as
+            // unresolvable (a sibling context's rule missing) is withdrawn.
             if (errorCode(error) === "NO_ITX_EXPRESSION_MATCH") {
+              this.#adoptCursor(name, cursor, durable);
               record.danglingUnder = this.#stream.coreReducedState.itxExpressionRewriteRules;
               return;
             }

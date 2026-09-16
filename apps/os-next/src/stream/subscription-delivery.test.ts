@@ -881,7 +881,7 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): derived f
     const [claim] = first.stream.storage.listSubscriptionCursors();
     expect(claim[0]).toBe("s");
     expect(claim[1].attempt).toBe(1);
-    expect(claim[1].nextAttemptAtMs).toBeGreaterThan(Date.now() + 20_000);
+    expect(claim[1].nextAttemptAtMs).toBe(first.alarms[0]); // the same instant the alarm holds: one wake, not two
     // THE DEATH MID-CALL: the next incarnation finds the claim in the cursor table — the row is
     // behind, and the claim's time is when to come back.
     const second = parkedSinkRig(first);
@@ -983,6 +983,31 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): derived f
     });
     await settled();
     expect(delivered).toEqual([[1]]);
+    expect(rig.delivery.deadlines()).toEqual([]);
+  });
+
+  test("a target whose CALL is refused as unresolvable (a sibling context's rule missing) dangles like an unresolvable head: the claim written before the call is withdrawn — no attempt spent, no rung, no halt", async () => {
+    const rig = incarnation((printed) =>
+      printed === "itx.far"
+        ? {
+            push: () => {
+              throw codedError("NO_ITX_EXPRESSION_MATCH", "no rewrite rule matches in /x");
+            },
+          }
+        : undefined,
+    );
+    rig.stream.append(
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "s", target: "itx.far.push", consumes: ["demo/ping"] },
+      }),
+    );
+    rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+    await settled();
+    expect(rig.stream.coreReducedState.subscriptions.s.halted).toBeUndefined();
+    expect(rig.delivery.cursor("s")).toMatchObject({ attempt: 0 });
+    expect(rig.delivery.cursor("s")?.nextAttemptAtMs).toBeUndefined();
+    expect(rig.stream.storage.listSubscriptionCursors()).toMatchObject([["s", { attempt: 0 }]]);
     expect(rig.delivery.deadlines()).toEqual([]);
   });
 

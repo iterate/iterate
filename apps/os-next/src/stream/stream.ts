@@ -211,7 +211,6 @@ export class Stream {
    *  pause: a paused stream still records its wake. */
   appendBirthRecord(): void {
     if (this.#highestDurableOffset !== 0) return;
-    this.#wakeRecorded = true;
     this.append(
       {
         type: "events.iterate.com/stream/created",
@@ -222,6 +221,7 @@ export class Stream {
         payload: { incarnation: this.storage.incarnation, reason: "request" },
       },
     );
+    this.#wakeRecorded = true; // after the append: a refused wake record is not a recorded one
   }
 
   /** THE WAKE RECORD, once per incarnation: `stream/woken { incarnation, reason }` — `"alarm"` from
@@ -229,11 +229,11 @@ export class Stream {
    *  socket). The first door to open appends it, before its own work; the ones after find it done. */
   appendWakeRecord(reason: "alarm" | "request"): void {
     if (this.#wakeRecorded) return;
-    this.#wakeRecorded = true;
     this.append({
       type: "events.iterate.com/stream/woken",
       payload: { incarnation: this.storage.incarnation, reason },
     });
+    this.#wakeRecorded = true;
   }
   #wakeRecorded = false;
 

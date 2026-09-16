@@ -542,7 +542,7 @@ class ProjectCollection extends RpcTarget {
 } // list/create need a signed-in user or the admin: a token session holds its one project
 
 // iterate-context.ts — A PROXY IN FRONT OF THE DO. Declares only what must be edge code, in the order the tutorial builds them;
-// every DO built-in root (append · readEvents · waitForEvent · fetch · whoami · kv · secrets · ai · cfArtifacts · repos · rpcStubs.get/list · rewriteRules · facets · subscriptions · workers · connectToMcp · connectToOpenApi · connectToCapnweb)
+// every DO built-in root (append · readEvents · waitForEvent · fetch · whoami · kv · secrets · ai · browser · cfArtifacts · repos · rpcStubs.get/list · rewriteRules · facets · subscriptions · workers · connectToMcp · connectToOpenApi · connectToCapnweb)
 // and every rewrite rule ride the prototype hop into ONE invoke(expression) with ZERO code here.
 class IterateContext extends RpcTarget {
   cd(path: string): IterateContext; // pure addressing, zero DO hops; returns an EDGE context
